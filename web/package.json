@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "pages:build": "next build",
+    "deploy": "wrangler pages deploy .open-next/worker --project-name=paddock",
     "start": "next start",
     "lint": "eslint",
     "storybook": "storybook dev -p 6006",
