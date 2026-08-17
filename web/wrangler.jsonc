@@ -1,22 +1,32 @@
 {
+  "$schema": "node_modules/wrangler/config-schema.json",
   "name": "paddock",
-  "pages_build_output_dir": ".open-next/worker",
   "compatibility_date": "2024-11-21",
-  "compatibility_flags": ["nodejs_compat"],
-  "observability": {
-    "enabled": true
+  "main": ".open-next/worker.js",
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
   },
+  "services": [
+    {
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "paddock"
+    }
+  ],
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "kv_namespaces": [
     {
-      "binding": "NEXT_CACHE_WORKERS_KV",
+      "binding": "NEXT_INC_CACHE_KV",
       "id": "YOUR_KV_NAMESPACE_ID"
     }
   ],
   "d1_databases": [
     {
-      "binding": "NEXT_CACHE_WORKERS_D1",
-      "database_name": "paddock-cache",
-      "database_id": "YOUR_D1_DATABASE_ID"
+      "binding": "NEXT_TAG_CACHE_D1",
+      "database_id": "YOUR_D1_DATABASE_ID",
+      "database_name": "paddock-tag-cache"
     }
-  ]
+  ],
+  "workers_dev": false,
+  "preview_urls": false
 }

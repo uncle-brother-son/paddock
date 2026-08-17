@@ -3,12 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
     "build": "next build",
-    "pages:build": "next build",
-    "deploy": "wrangler pages deploy .open-next/worker --project-name=paddock",
+    "dev": "next dev",
     "start": "next start",
     "lint": "eslint",
+    "pages:build": "rm -rf .next/cache && opennextjs-cloudflare build",
+    "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
+    "upload": "opennextjs-cloudflare build && opennextjs-cloudflare upload",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build"
   },
