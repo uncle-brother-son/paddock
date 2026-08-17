@@ -1,23 +1,11 @@
-export default {
-  default: {
-    override: {
-      wrapper: "cloudflare-node",
-      converter: "edge",
-      proxyExternalRequest: "fetch",
-      incrementalCache: "dummy",
-      tagCache: "dummy",
-      queue: "dummy",
-    },
-  },
-  middleware: {
-    external: true,
-    override: {
-      wrapper: "cloudflare-edge",
-      converter: "edge",
-      proxyExternalRequest: "fetch",
-      incrementalCache: "dummy",
-      tagCache: "dummy",
-      queue: "dummy",
-    },
-  },
-};
+// default open-next.config.ts file created by @opennextjs/cloudflare
+import { defineCloudflareConfig } from "@opennextjs/cloudflare";
+import kvIncrementalCache from "@opennextjs/cloudflare/overrides/incremental-cache/kv-incremental-cache";
+import d1NextTagCache from "@opennextjs/cloudflare/overrides/tag-cache/d1-next-tag-cache";
+
+export default defineCloudflareConfig({
+    // Enable KV caching for ISR
+    incrementalCache: kvIncrementalCache,
+    // Enable D1 tag cache for on-demand revalidation (revalidatePath/revalidateTag)
+    tagCache: d1NextTagCache
+});
