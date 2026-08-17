@@ -1,0 +1,44 @@
+{
+  "packages": [
+    {
+      "name": "Resend + React Email",
+      "description": "Email sending service with React Email templates",
+      "packages": ["resend", "react-email", "react", "react-dom"],
+      "devPackages": ["@react-email/ui"],
+      "installCommand": "npm install resend react-email react react-dom -E && npm install -D @react-email/ui -E",
+      "setupNotes": "Create /web/emails/ folder for email templates. Import components from 'react-email'. Add RESEND_API_KEY to .env.local"
+    },
+    {
+      "name": "Storybook",
+      "description": "Component development and documentation tool",
+      "packages": [],
+      "devPackages": ["storybook", "@storybook/react", "@storybook/nextjs"],
+      "installCommand": "npx storybook@latest init --type nextjs --skip-install && npm install",
+      "setupNotes": "Run 'npm run storybook' to start. Stories go in /web/src/app/components/**/*.stories.tsx"
+    },
+    {
+      "name": "Lenis Smooth Scroll",
+      "description": "Smooth scrolling library with momentum and parallax support",
+      "packages": ["@studio-freight/lenis"],
+      "devPackages": [],
+      "installCommand": "npm install @studio-freight/lenis",
+      "setupNotes": "Initialize in layout.tsx or create a useLenis hook. Example in components/smoothScroll.tsx"
+    },
+    {
+      "name": "React Hook Form",
+      "description": "Performant form validation library",
+      "packages": ["react-hook-form", "@hookform/resolvers", "zod"],
+      "devPackages": [],
+      "installCommand": "npm install react-hook-form @hookform/resolvers zod",
+      "setupNotes": "Use with Zod for type-safe form validation"
+    },
+    {
+      "name": "Zustand",
+      "description": "Lightweight state management",
+      "packages": ["zustand"],
+      "devPackages": [],
+      "installCommand": "npm install zustand",
+      "setupNotes": "Create stores in /web/src/app/lib/stores/"
+    }
+  ]
+}
