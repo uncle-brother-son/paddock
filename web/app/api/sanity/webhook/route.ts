@@ -2,12 +2,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import crypto from 'crypto'
 
-// Initialize Supabase client with service role key for admin operations
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
-
 // Verify webhook signature from Sanity
 function verifySignature(body: string, signature: string): boolean {
   const secret = process.env.SANITY_WEBHOOK_SECRET
@@ -44,6 +38,12 @@ function getThumbnailUrl(image: any): string | null {
 
 export async function POST(request: NextRequest) {
   try {
+    // Initialize Supabase client with service role key for admin operations
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    )
+
     // Verify webhook signature
     const signature = request.headers.get('x-sanity-signature')
     const body = await request.text()
@@ -68,19 +68,19 @@ export async function POST(request: NextRequest) {
     // Route to appropriate handler based on document type
     switch (_type) {
       case 'serviceType':
-        await handleServiceType(payload)
+        await handleServiceType(payload, supabase)
         break
       case 'product':
-        await handleProduct(payload)
+        await handleProduct(payload, supabase)
         break
       case 'addon':
-        await handleAddon(payload)
+        await handleAddon(payload, supabase)
         break
       case 'membershipPlan':
-        await handleMembershipPlan(payload)
+        await handleMembershipPlan(payload, supabase)
         break
       case 'sessionPassType':
-        await handleSessionPassType(payload)
+        await handleSessionPassType(payload, supabase)
         break
       default:
         // Ignore non-catalog types (page, blogPost, galleryImage)
@@ -97,7 +97,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-async function handleServiceType(payload: any) {
+async function handleServiceType(payload: any, supabase: any) {
   const { _id, name, images, duration, capacity } = payload
   
   const thumbnailUrl = images?.[0] ? getThumbnailUrl(images[0]) : null
@@ -147,7 +147,7 @@ async function handleServiceType(payload: any) {
   }
 }
 
-async function handleProduct(payload: any) {
+async function handleProduct(payload: any, supabase: any) {
   const { _id, name, category, images } = payload
   
   const thumbnailUrl = images?.[0] ? getThumbnailUrl(images[0]) : null
@@ -192,7 +192,7 @@ async function handleProduct(payload: any) {
   }
 }
 
-async function handleAddon(payload: any) {
+async function handleAddon(payload: any, supabase: any) {
   const { _id, name, category, images } = payload
   
   const thumbnailUrl = images?.[0] ? getThumbnailUrl(images[0]) : null
@@ -236,7 +236,7 @@ async function handleAddon(payload: any) {
   }
 }
 
-async function handleMembershipPlan(payload: any) {
+async function handleMembershipPlan(payload: any, supabase: any) {
   const { _id, name, images } = payload
   
   const thumbnailUrl = images?.[0] ? getThumbnailUrl(images[0]) : null
@@ -278,7 +278,7 @@ async function handleMembershipPlan(payload: any) {
   }
 }
 
-async function handleSessionPassType(payload: any) {
+async function handleSessionPassType(payload: any, supabase: any) {
   const { _id, name, images } = payload
   
   const thumbnailUrl = images?.[0] ? getThumbnailUrl(images[0]) : null
