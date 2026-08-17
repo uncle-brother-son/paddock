@@ -1,0 +1,22 @@
+{
+  "name": "paddock",
+  "pages_build_output_dir": ".open-next/worker",
+  "compatibility_date": "2024-11-21",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "kv_namespaces": [
+    {
+      "binding": "NEXT_CACHE_WORKERS_KV",
+      "id": "YOUR_KV_NAMESPACE_ID"
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "NEXT_CACHE_WORKERS_D1",
+      "database_name": "paddock-cache",
+      "database_id": "YOUR_D1_DATABASE_ID"
+    }
+  ]
+}
