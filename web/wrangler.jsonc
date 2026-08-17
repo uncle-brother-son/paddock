@@ -17,13 +17,13 @@
   "kv_namespaces": [
     {
       "binding": "NEXT_INC_CACHE_KV",
-      "id": "2834606a6ecd4caf858055363f872fbe"
+      "id": "623c1cfa23d340e9bd435c2d5664d06d"
     }
   ],
   "d1_databases": [
     {
       "binding": "NEXT_TAG_CACHE_D1",
-      "database_id": "e45a7bd6-2265-435a-abe8-49f3b7da000a",
+      "database_id": "9b8c0eea-ef00-409c-867b-fc03fa5c0f85",
       "database_name": "paddock-tag-cache"
     }
   ],
