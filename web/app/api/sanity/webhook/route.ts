@@ -30,13 +30,10 @@ function verifySignature(body: string, signature: string): boolean {
     .update(signedPayload)
     .digest('base64')
 
-  console.log('Signature verification:', {
-    timestamp,
+  console.log('Signature verification FULL:', {
     receivedHash,
     computedHash,
-    match: computedHash === receivedHash,
-    bodyLength: body.length,
-    signedPayload: signedPayload.substring(0, 50) + '...'
+    match: computedHash === receivedHash
   })
 
   return computedHash === receivedHash
