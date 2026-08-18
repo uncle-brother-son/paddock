@@ -32,9 +32,11 @@ function verifySignature(body: string, signature: string): boolean {
 
   console.log('Signature verification:', {
     timestamp,
-    receivedHash: receivedHash.substring(0, 10) + '...',
-    computedHash: computedHash.substring(0, 10) + '...',
-    match: computedHash === receivedHash
+    receivedHash,
+    computedHash,
+    match: computedHash === receivedHash,
+    bodyLength: body.length,
+    signedPayload: signedPayload.substring(0, 50) + '...'
   })
 
   return computedHash === receivedHash
