@@ -27,7 +27,7 @@
       "database_name": "paddock-tag-cache"
     }
   ],
-  "workers_dev": false,
+  "workers_dev": tru,
   "preview_urls": false,
   "observability": {
     "enabled": false,
