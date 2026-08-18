@@ -29,12 +29,9 @@ function verifySignature(body: string, signature: string): boolean {
     .createHmac('sha256', secret)
     .update(signedPayload)
     .digest('base64')
-
-  console.log('Signature verification FULL:', {
-    receivedHash,
-    computedHash,
-    match: computedHash === receivedHash
-  })
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '')
 
   return computedHash === receivedHash
 }
