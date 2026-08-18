@@ -116,7 +116,7 @@ export async function POST(request: NextRequest) {
 }
 
 async function handleServiceType(payload: any, supabase: any) {
-  const { _id, name, images, duration, capacity } = payload
+  const { _id, name, images } = payload
   
   const thumbnailUrl = images?.[0] ? getThumbnailUrl(images[0]) : null
 
@@ -142,15 +142,14 @@ async function handleServiceType(payload: any, supabase: any) {
     console.log(`Updated service_type: ${_id}`)
   } else {
     // Create new record
-    // Note: price, booking_type, and tiers must be set manually in Retool
+    // Note: duration, capacity, booking_type, price, and tiers are Postgres-owned
+    // and must be set manually in Retool after initial sync
     const { data, error } = await supabase
       .from('service_types')
       .insert({
         sanity_service_type_id: _id,
         name,
         thumbnail_url: thumbnailUrl,
-        duration: duration || 60,
-        capacity: capacity || 6,
         active: true
       })
       .select('id')
@@ -326,9 +325,7 @@ async function handleSessionPassType(payload: any, supabase: any) {
         sanity_session_pass_type_id: _id,
         name,
         thumbnail_url: thumbnailUrl,
-        active: true,
-        session_count: 10, // Default, edit in Retool
-        expiry_months: 12  // Default, edit in Retool
+        active: true
       })
       .select('id')
       .single()
