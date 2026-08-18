@@ -10,12 +10,27 @@ function verifySignature(body: string, signature: string): boolean {
     return false
   }
 
-  const hash = crypto
+  // Parse Sanity signature format: t=timestamp,v1=hash
+  const signatureParts = signature.split(',')
+  const timestampPart = signatureParts.find((part) => part.startsWith('t='))
+  const hashPart = signatureParts.find((part) => part.startsWith('v1='))
+  
+  if (!timestampPart || !hashPart) {
+    console.error('Invalid signature format')
+    return false
+  }
+  
+  const timestamp = timestampPart.split('=')[1]
+  const receivedHash = hashPart.split('=')[1]
+  
+  // Create HMAC with timestamp and body
+  const signedPayload = `${timestamp}.${body}`
+  const computedHash = crypto
     .createHmac('sha256', secret)
-    .update(body)
-    .digest('hex')
+    .update(signedPayload)
+    .digest('base64')
 
-  return hash === signature
+  return computedHash === receivedHash
 }
 
 // Extract thumbnail URL from Sanity image object
@@ -45,7 +60,7 @@ export async function POST(request: NextRequest) {
     )
 
     // Verify webhook signature
-    const signature = request.headers.get('x-sanity-signature')
+    const signature = request.headers.get('sanity-webhook-signature')
     const body = await request.text()
     
     if (!signature || !verifySignature(body, signature)) {
