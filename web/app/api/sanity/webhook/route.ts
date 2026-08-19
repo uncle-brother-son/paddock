@@ -5,7 +5,7 @@ import Stripe from 'stripe'
 
 // Initialize Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2024-12-18.acacia',
+  apiVersion: '2026-07-29.dahlia',
 })
 
 // Verify webhook signature from Sanity
@@ -211,28 +211,7 @@ async function handleProduct(payload: any, supabase: any) {
       })
       .eq('id', existing.id)
 
-    if Create Stripe Product
-    try {
-      const stripeProduct = await stripe.products.create({
-        name,
-        images: thumbnailUrl ? [thumbnailUrl] : undefined,
-        active: true,
-        metadata: {
-          sanity_id: _id,
-          type: 'product',
-          category: category || ''
-        }
-      })
-      
-      await supabase
-        .from('products')
-        .update({ stripe_product_id: stripeProduct.id })
-        .eq('id', data.id)
-      
-      console.log(`Created Stripe product for product: ${stripeProduct.id}`)
-    } catch (stripeError) {
-      console.error('Error creating Stripe product:', stripeError)
-    }
+    if (error) throw error
     console.log(`Updated product: ${_id}`)
   } else {
     const { data, error } = await supabase
@@ -250,8 +229,6 @@ async function handleProduct(payload: any, supabase: any) {
 
     if (error) throw error
     console.log(`Created product: ${_id}`)
-
-    // TODO: Create Stripe Product
   }
 }
 
@@ -274,28 +251,7 @@ async function handleAddon(payload: any, supabase: any) {
         category,
         thumbnail_url: thumbnailUrl,
         updated_at: new Date().toISOString()
-      }Create Stripe Product
-    try {
-      const stripeProduct = await stripe.products.create({
-        name,
-        images: thumbnailUrl ? [thumbnailUrl] : undefined,
-        active: true,
-        metadata: {
-          sanity_id: _id,
-          type: 'addon',
-          category: category || ''
-        }
       })
-      
-      await supabase
-        .from('addons')
-        .update({ stripe_product_id: stripeProduct.id })
-        .eq('id', data.id)
-      
-      console.log(`Created Stripe product for addon: ${stripeProduct.id}`)
-    } catch (stripeError) {
-      console.error('Error creating Stripe product:', stripeError)
-    }
       .eq('id', existing.id)
 
     if (error) throw error
@@ -316,27 +272,7 @@ async function handleAddon(payload: any, supabase: any) {
     if (error) throw error
     console.log(`Created addon: ${_id}`)
 
-    // Create Stripe Product
-    try {
-      const stripeProduct = await stripe.products.create({
-        name,
-        images: thumbnailUrl ? [thumbnailUrl] : undefined,
-        active: true,
-        metadata: {
-          sanity_id: _id,
-          type: 'membership_plan'
-        }
-      })
-      
-      await supabase
-        .from('membership_plans')
-        .update({ stripe_product_id: stripeProduct.id })
-        .eq('id', data.id)
-      
-      console.log(`Created Stripe product for membership_plan: ${stripeProduct.id}`)
-    } catch (stripeError) {
-      console.error('Error creating Stripe product:', stripeError)
-    }
+    // TODO: Create Stripe Product
   }
 }
 
@@ -358,27 +294,7 @@ async function handleMembershipPlan(payload: any, supabase: any) {
         name,
         thumbnail_url: thumbnailUrl,
         updated_at: new Date().toISOString()
-      }Create Stripe Product
-    try {
-      const stripeProduct = await stripe.products.create({
-        name,
-        images: thumbnailUrl ? [thumbnailUrl] : undefined,
-        active: true,
-        metadata: {
-          sanity_id: _id,
-          type: 'session_pass_type'
-        }
       })
-      
-      await supabase
-        .from('session_pass_types')
-        .update({ stripe_product_id: stripeProduct.id })
-        .eq('id', data.id)
-      
-      console.log(`Created Stripe product for session_pass_type: ${stripeProduct.id}`)
-    } catch (stripeError) {
-      console.error('Error creating Stripe product:', stripeError)
-    }
       .eq('id', existing.id)
 
     if (error) throw error
