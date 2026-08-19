@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import Stripe from 'stripe'
 
-// Initialize Stripe
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2026-07-29.dahlia',
-})
+function getStripe() {
+  return new Stripe(process.env.STRIPE_SECRET_KEY!, {
+    apiVersion: '2026-07-29.dahlia',
+  })
+}
 
 type CatalogItemType = 'service_type' | 'product' | 'addon' | 'membership_plan' | 'session_pass_type'
 
@@ -35,7 +36,7 @@ function verifyRetoolAuth(request: NextRequest): boolean {
 // Create Stripe product and prices for an item
 async function createStripeProduct(item: any, itemType: CatalogItemType): Promise<any> {
   // Create Stripe Product
-  const product = await stripe.products.create({
+  const product = await getStripe().products.create({
     name: item.name,
     description: item.description || undefined,
     images: item.thumbnail_url ? [item.thumbnail_url] : undefined,
@@ -54,7 +55,7 @@ async function createStripeProduct(item: any, itemType: CatalogItemType): Promis
   if (itemType === 'service_type') {
     // Service types only have base_price
     if (item.base_price !== null && item.base_price !== undefined) {
-      const price = await stripe.prices.create({
+      const price = await getStripe().prices.create({
         product: product.id,
         unit_amount: Math.round(item.base_price * 100),
         currency: 'usd',
@@ -64,7 +65,7 @@ async function createStripeProduct(item: any, itemType: CatalogItemType): Promis
   } else {
     // Products, addons, membership plans have three-tier pricing
     if (item.base_price !== null && item.base_price !== undefined) {
-      const price = await stripe.prices.create({
+      const price = await getStripe().prices.create({
         product: product.id,
         unit_amount: Math.round(item.base_price * 100),
         currency: 'usd',
@@ -73,7 +74,7 @@ async function createStripeProduct(item: any, itemType: CatalogItemType): Promis
     }
     
     if (item.member_price !== null && item.member_price !== undefined) {
-      const price = await stripe.prices.create({
+      const price = await getStripe().prices.create({
         product: product.id,
         unit_amount: Math.round(item.member_price * 100),
         currency: 'gbp',
@@ -82,7 +83,7 @@ async function createStripeProduct(item: any, itemType: CatalogItemType): Promis
     }
     
     if (item.sale_price !== null && item.sale_price !== undefined) {
-      const price = await stripe.prices.create({
+      const price = await getStripe().prices.create({
         product: product.id,
         unit_amount: Math.round(item.sale_price * 100),
         currency: 'gbp',

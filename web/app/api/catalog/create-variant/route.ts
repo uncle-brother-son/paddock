@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import Stripe from 'stripe'
 
-// Initialize Stripe
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2026-07-29.dahlia',
-})
+function getStripe() {
+  return new Stripe(process.env.STRIPE_SECRET_KEY!, {
+    apiVersion: '2026-07-29.dahlia',
+  })
+}
 
 interface CreateVariantRequest {
   productId: string
@@ -110,7 +111,7 @@ export async function POST(request: NextRequest) {
     // Create Stripe Price
     let stripePriceId: string
     try {
-      const price = await stripe.prices.create({
+      const price = await getStripe().prices.create({
         product: product.stripe_product_id,
         unit_amount: Math.round(variantPrice * 100), // Convert pounds to pence
         currency: 'gbp',
@@ -147,7 +148,7 @@ export async function POST(request: NextRequest) {
       
       // If Supabase fails, archive the Stripe price we just created
       try {
-        await stripe.prices.update(stripePriceId, { active: false })
+        await getStripe().prices.update(stripePriceId, { active: false })
       } catch (cleanupError) {
         console.error('Error cleaning up Stripe price:', cleanupError)
       }

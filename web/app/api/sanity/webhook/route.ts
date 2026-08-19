@@ -3,10 +3,11 @@ import { createClient } from '@supabase/supabase-js'
 import crypto from 'crypto'
 import Stripe from 'stripe'
 
-// Initialize Stripe
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2026-07-29.dahlia',
-})
+function getStripe() {
+  return new Stripe(process.env.STRIPE_SECRET_KEY!, {
+    apiVersion: '2026-07-29.dahlia',
+  })
+}
 
 // Verify webhook signature from Sanity
 function verifySignature(body: string, signature: string): boolean {
@@ -166,7 +167,7 @@ async function handleServiceType(payload: any, supabase: any) {
 
     // Create Stripe Product
     try {
-      const stripeProduct = await stripe.products.create({
+      const stripeProduct = await getStripe().products.create({
         name,
         images: thumbnailUrl ? [thumbnailUrl] : undefined,
         active: true,

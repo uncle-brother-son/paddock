@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import Stripe from 'stripe'
 
-// Initialize Stripe
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2026-07-29.dahlia',
-})
+function getStripe() {
+  return new Stripe(process.env.STRIPE_SECRET_KEY!, {
+    apiVersion: '2026-07-29.dahlia',
+  })
+}
 
 interface UpdateTierPriceRequest {
   tierId: string
@@ -40,14 +41,14 @@ async function upsertStripePrice(
   // If there's an existing price, archive it
   if (existingPriceId) {
     try {
-      await stripe.prices.update(existingPriceId, { active: false })
+      await getStripe().prices.update(existingPriceId, { active: false })
     } catch (error) {
       console.error('Error archiving old Stripe price:', error)
     }
   }
   
   // Create new price
-  const price = await stripe.prices.create({
+  const price = await getStripe().prices.create({
     product: stripeProductId,
     unit_amount: Math.round(unitAmount * 100), // Convert pounds to pence
     currency,

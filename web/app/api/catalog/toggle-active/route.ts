@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import Stripe from 'stripe'
 
-// Initialize Stripe
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2026-07-29.dahlia',
-})
+function getStripe() {
+  return new Stripe(process.env.STRIPE_SECRET_KEY!, {
+    apiVersion: '2026-07-29.dahlia',
+  })
+}
 
 type CatalogItemType = 'service_type' | 'product' | 'addon' | 'membership_plan' | 'session_pass_type'
 
@@ -81,7 +82,7 @@ export async function POST(request: NextRequest) {
     // Update Stripe product if it exists
     if (item.stripe_product_id) {
       try {
-        await stripe.products.update(item.stripe_product_id, {
+        await getStripe().products.update(item.stripe_product_id, {
           active,
         })
       } catch (error) {
