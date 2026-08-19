@@ -46,10 +46,9 @@ https://thepaddockwellnessclub.co.uk/api/sanity/webhook
 - **Filter**: Leave empty (all document types)
 - **HTTP method**: `POST`
 - **HTTP Headers**:
-  - Add header: `x-sanity-signature`
+   - Add header: `sanity-webhook-signature`
   - Value: Use the HMAC SHA256 signature
-- **Secret**: `fS9Ge4qBkVUhOlF7vxvpLMQpNgmqPD3fsooVRImxbLQ=`
-  - ⚠️ **IMPORTANT**: This must match `SANITY_WEBHOOK_SECRET` in `.env.local`
+- **Secret**: Use the value configured in `SANITY_WEBHOOK_SECRET` in `.env.local`
 - **Projection**: Leave as default (full document)
 - **Dataset**: `production`
 
