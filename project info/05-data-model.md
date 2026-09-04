@@ -49,7 +49,7 @@ Type (Session), and each individual customer's reservation into it (Booking). Th
 because multiple unrelated customers can each book into the same public session, and capacity
 (max 6) is a property of the slot as a whole, not of any single customer's booking.
 
-### Service Type (catalog — see 08-sanity-supabase-field-split.md for the full Sanity/Postgres
+### Service Type (catalog — see 06-sanity-supabase-field-split.md for the full Sanity/Postgres
 split)
 
 - Service Type ID
@@ -266,7 +266,7 @@ shared catalog, no shared admin view, and no stock/inventory tracking.
 - SKU — Postgres only, sits directly on this record since Add-ons have no Variant layer
   beneath them (unlike Product, where SKU lives on the Variant)
 - **Base price, member price, sale price** — Postgres only, same three-tier model as Products
-  (see 09-write-architecture.md for the selection priority and Stripe Price-per-tier design)
+  (see 07-write-architecture.md for the selection priority and Stripe Price-per-tier design)
 - Active/inactive flag — Postgres only
 - Stripe product ID reference — Postgres only
 
@@ -318,7 +318,7 @@ full stock/variant tracking since these are physical, shippable goods.
   only (e.g. "also available in black" on the white tee's page); colour variants are separate
   Products, not a Variant attribute — Sanity only
 - Base price, member price, **sale price** — three independently priced tiers, each with its
-  own Stripe Price ID (see 09-write-architecture.md for the selection priority: member always
+  own Stripe Price ID (see 07-write-architecture.md for the selection priority: member always
   wins over sale; sale applies over base when active; promo codes apply on top of whichever
   tier was selected) — Postgres only
 - Category/type (Sanity + Postgres mirror)

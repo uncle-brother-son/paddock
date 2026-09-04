@@ -14,6 +14,7 @@
 | Staff dashboard | Retool | retool.com | Free tier expected sufficient | Database connection | Agency |
 | Reporting | Metabase (TBC) | metabase.com | Self-hosted | Database connection, self-hosted deployment | Agency |
 | Staff calendar visibility | Google Calendar API | developers.google.com/calendar | One-way push, display only | OAuth setup (one-time) | Client (their Google Workspace account) |
+| In-person payments | Stripe Terminal (physical reader — BBPOS Chipper 2X or WisePOS E) | docs.stripe.com/terminal | One reader, controlled via Terminal SDK from the Retool app | Terminal SDK setup, connection token endpoint, physical device order/pairing | Client (business owns the Stripe account and reader hardware) |
 | Tracking | Google Analytics | | Frontend tracking tool | ID | Agency |
 
 > Note: the Notion "Auth" row still shows "(TBC)" / "Decision pending" — per this project's

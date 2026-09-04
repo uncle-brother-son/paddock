@@ -1,4 +1,4 @@
-# 08. Sanity vs. Supabase — Field Ownership
+# 06. Sanity vs. Supabase — Field Ownership
 
 ## The rule
 
@@ -51,7 +51,7 @@ touches these, even on republish):
   pricing) and staff need to change any tier in Retool instantly without a Sanity publish/
   webhook round-trip. Each tier has its own Stripe Price object under the same Stripe Product —
   a Retool edit to any one tier creates a new Stripe Price for that tier specifically (Stripe
-  Prices are immutable) and writes it to that tier's own field. See 09-write-architecture.md
+  Prices are immutable) and writes it to that tier's own field. See 07-write-architecture.md
   for the full tier-selection priority (member always wins over sale; sale applies over base;
   promo codes apply on top of whichever tier was selected).
 - Fulfillment method: shipping / pickup only / both
@@ -191,6 +191,8 @@ Stripe subscription ID, status, dates, credits remaining, credits reset date.
 - `sanity_pass_type_id`
 - Price
 - Sessions included
+- `expiry_months` — staff-configurable, how many months after purchase a pass's unused sessions
+  expire (see 05-data-model.md for full context)
 - Active flag
 - Stripe product ID, Stripe price ID
 

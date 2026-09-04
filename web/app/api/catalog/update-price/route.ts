@@ -165,8 +165,23 @@ export async function POST(request: NextRequest) {
         )
         updates.stripe_price_id = stripePriceId
       }
+    } else if (itemType === 'membership_plan' || itemType === 'session_pass_type') {
+      // Membership plans and session pass types have a single price field,
+      // same shape as service_type — no base/member/sale tiers on these tables
+      if (basePrice !== undefined) {
+        updates.price = basePrice
+        priceUpdates.price = basePrice
+
+        const stripePriceId = await upsertStripePrice(
+          item.stripe_product_id,
+          basePrice,
+          'gbp',
+          item.stripe_price_id
+        )
+        updates.stripe_price_id = stripePriceId
+      }
     } else {
-      // Products, addons, membership plans, session passes have three-tier pricing
+      // Products and addons have three-tier pricing
       if (basePrice !== undefined) {
         updates.base_price = basePrice
         priceUpdates.base_price = basePrice

@@ -1,11 +1,29 @@
-# 09. Write Architecture — Sanity / Retool / Postgres / Stripe
+# 07. Write Architecture — Sanity / Retool / Postgres / Stripe
 
 Rule for the agent: **the backend (Cloudflare Workers) is the only thing that ever writes to
 Stripe.** Postgres is passive storage — it never calls Stripe itself, and nothing should call
 Stripe directly from Retool or the frontend. Every write that touches both Postgres and Stripe
 must go through a single backend endpoint that does both as one operation.
 
-## Three write flows
+## In-person payments — build spec
+
+**Hardware:** one Stripe Terminal physical reader (BBPOS Chipper 2X or WisePOS E), paired to the
+Retool app via Bluetooth/WiFi. No Tap to Pay (native or Dashboard app) — reader only.
+
+**Build:**
+- Backend endpoint issuing short-lived Terminal connection tokens (SDK auth)
+- Terminal SDK integration in the Retool app to discover/connect to the reader and collect
+  payment on command
+- One combined flow: creating a booking/order in Retool and charging the reader happens as a
+  single staff action, not two separate steps
+- Every card-present transaction through the reader also saves the card via SetupIntent (same
+  mechanism as the existing online saved-card flow)
+
+**Expected outcome:**
+- Staff create a booking or order in Retool for a walk-in customer
+- Reader prompts for tap/insert/PIN as part of that same action
+- Payment confirms, booking/order is marked paid, and the customer's card is saved for future
+  saved-card charges (add-on upsells, repeat visits) without needing the reader again
 
 ### 1. Sanity publish → new/updated catalog row
 
@@ -16,7 +34,7 @@ Flow: `Sanity webhook → backend → Postgres (create/update mirrored fields) �
 shell Product on first creation, store returned stripe_product_id back onto the row)`.
 
 This flow only ever touches the **Sanity-owned mirror fields** (name, thumbnail, category where
-applicable) — see `08-sanity-supabase-field-split.md` for which fields are mirrored per entity.
+applicable) — see `06-sanity-supabase-field-split.md` for which fields are mirrored per entity.
 It must never touch price.
 
 ### 2. Staff action in Retool → price/stock change, or new Variant creation
@@ -90,7 +108,7 @@ only case where deletion is actually safe, since there's nothing downstream to p
 | Product | Name, description, product info, images, `productGroup`, category | Base/member/sale price, active flag, fulfillment method, shipping weight/dimensions |
 | Product Variant | — (no Sanity equivalent) | SKU, price override, stock quantity |
 | Add-on | Name, description, images, category | SKU, base/member/sale price, active flag |
-| Service Type | Name, description, images | Duration, capacity, price (public only), active flag |
+| Service Type | Name, description, images | Duration, capacity, booking type (public/private), price (public only), active flag |
 | Service Type Price Tier | — (no Sanity equivalent) | Min/max people, price per band |
 | Membership Plan | Name, description, images | Price, billing frequency, sessions included, add-ons included, active flag |
 | Session Pass Type | Name, description, images | Price, sessions included, `expiry_months`, active flag |
@@ -112,7 +130,27 @@ Two options were considered and rejected for this specific case:
   change). An explicit backend endpoint can return a clear success/failure Retool can surface
   directly to the user.
 
-## Practical rule for building Retool screens
+## Atomicity applies beyond Postgres + Stripe too
+
+The "must succeed or fail together, never partially" rule isn't only about Postgres-vs-Stripe.
+It applies to **any multi-statement write where one statement records a result and another
+records the reason/audit trail for that result.** If those are two independent writes, one can
+succeed while the other fails, leaving the system in a state that's internally inconsistent —
+same failure mode as a Postgres/Stripe mismatch, just contained entirely within Postgres.
+
+**Known instance of this bug:** membership credit adjustments (see 05-data-model.md → 5.5
+Memberships → ad-hoc credit adjustments). Adjusting a membership's credit balance and inserting
+the corresponding row into `membership_credit_adjustments` (staff ID, amount, reason, date) are
+currently two separate writes run with `Promise.all`. If the balance update succeeds but the
+audit insert fails (or vice versa), the balance and the audit trail disagree — there's a record
+of credits changing with no explanation, or an explanation with no matching balance change. Both
+writes must be wrapped in a **single database transaction**, rolling back together on either
+failure — not run as independent parallel operations.
+
+**This pattern generalizes** — any future feature that pairs a state change with an audit/log
+entry (for example: booking cancellation + refund-method record, gift card issuance + origin
+tracking) should be checked for the same risk and wrapped in a transaction rather than assumed
+safe because it doesn't involve Stripe.
 
 Any Retool action that touches a Postgres-owned field with a Stripe counterpart (price, and any
 future field with the same shape) must call the backend API, never write to the Supabase table
