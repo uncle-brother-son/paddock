@@ -86,22 +86,38 @@ export async function POST(request: NextRequest) {
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     )
 
-    // Fetch the tier and its parent service type
+    // Fetch the tier
     const { data: tier, error: tierError } = await supabase
       .from('service_type_price_tiers')
-      .select('*, service_types!inner(stripe_product_id, name)')
+      .select('*')
       .eq('id', tierId)
       .single()
 
     if (tierError || !tier) {
+      console.error('Tier lookup error:', tierError)
       return NextResponse.json(
-        { error: 'Tier not found' },
+        { error: 'Tier not found', details: tierError?.message },
+        { status: 404 }
+      )
+    }
+
+    // Fetch its parent service type separately (avoids relying on a PostgREST
+    // relational embed, which was swallowing the real error on failure)
+    const { data: serviceType, error: serviceTypeError } = await supabase
+      .from('service_types')
+      .select('stripe_product_id, name')
+      .eq('id', tier.service_type_id)
+      .single()
+
+    if (serviceTypeError || !serviceType) {
+      console.error('Parent service type lookup error:', serviceTypeError)
+      return NextResponse.json(
+        { error: 'Parent service type not found for this tier', details: serviceTypeError?.message },
         { status: 404 }
       )
     }
 
     // Verify the parent service type has a Stripe product
-    const serviceType = tier.service_types
     if (!serviceType.stripe_product_id) {
       return NextResponse.json(
         { error: 'Service type has no Stripe product. Sync from Sanity first.' },
