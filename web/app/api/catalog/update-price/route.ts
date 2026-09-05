@@ -5,6 +5,7 @@ import Stripe from 'stripe'
 function getStripe() {
   return new Stripe(process.env.STRIPE_SECRET_KEY!, {
     apiVersion: '2026-07-29.dahlia',
+    httpClient: Stripe.createFetchHttpClient(), // Workers' runtime doesn't support the SDK's default Node socket client
   })
 }
 
