@@ -331,7 +331,7 @@ async function handleMembershipPlan(payload: any, supabase: any) {
   const { data: existing } = await supabase
     .from('membership_plans')
     .select('id, stripe_product_id')
-    .eq('sanity_membership_plan_id', _id)
+    .eq('sanity_plan_id', _id)
     .single()
 
   if (existing) {
@@ -350,7 +350,7 @@ async function handleMembershipPlan(payload: any, supabase: any) {
     const { data, error } = await supabase
       .from('membership_plans')
       .insert({
-        sanity_membership_plan_id: _id,
+        sanity_plan_id: _id,
         name,
         thumbnail_url: thumbnailUrl,
         active: true
@@ -394,7 +394,7 @@ async function handleSessionPassType(payload: any, supabase: any) {
   const { data: existing } = await supabase
     .from('session_pass_types')
     .select('id, stripe_product_id')
-    .eq('sanity_session_pass_type_id', _id)
+    .eq('sanity_pass_type_id', _id)
     .single()
 
   if (existing) {
@@ -413,7 +413,7 @@ async function handleSessionPassType(payload: any, supabase: any) {
     const { data, error } = await supabase
       .from('session_pass_types')
       .insert({
-        sanity_session_pass_type_id: _id,
+        sanity_pass_type_id: _id,
         name,
         thumbnail_url: thumbnailUrl,
         active: true
