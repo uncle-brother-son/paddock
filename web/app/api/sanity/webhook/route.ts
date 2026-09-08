@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import crypto from 'crypto'
 import Stripe from 'stripe'
+import { createImageUrlBuilder } from '@sanity/image-url'
+
+const imageBuilder = createImageUrlBuilder({
+  projectId: process.env.NEXT_PUBLIC_SANITY_PROJECT_ID!,
+  dataset: process.env.NEXT_PUBLIC_SANITY_DATASET!,
+})
 
 function getStripe() {
   return new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -44,22 +50,47 @@ function verifySignature(body: string, signature: string): boolean {
   return computedHash === receivedHash
 }
 
-// Extract thumbnail URL from Sanity image object
+// Extract thumbnail URL from a Sanity image object, resized to 80px wide (height scales
+// proportionally, no crop). Uses the actual @sanity/image-url builder rather than hand-parsing
+// the asset reference string \u2014 the builder correctly reads the real dimensions Sanity bakes
+// into the asset filename, which a manually constructed URL was missing entirely.
 function getThumbnailUrl(image: any): string | null {
   if (!image || !image.asset || !image.asset._ref) return null
-  
-  const projectId = process.env.NEXT_PUBLIC_SANITY_PROJECT_ID
-  const dataset = process.env.NEXT_PUBLIC_SANITY_DATASET
-  
-  // Extract image ID from reference (format: image-{assetId}-{dimensions}-{format})
-  const parts = image.asset._ref.split('-')
-  if (parts.length < 3) return null
-  
-  const assetId = parts[1]
-  const format = parts[parts.length - 1]
-  
-  // Build Sanity CDN URL
-  return `https://cdn.sanity.io/images/${projectId}/${dataset}/${assetId}.${format}`
+  return imageBuilder.image(image).width(80).url()
+}
+
+// Deactivates whichever catalog table has a row matching this Sanity document id. Used for
+// delete/unpublish events, which never reliably include `_type` in the payload body once the
+// document no longer exists — matching by id across all catalog tables avoids depending on
+// that. Per 07-write-architecture.md: Sanity-side deletion always means "deactivate", never a
+// raw table delete.
+async function deactivateBySanityId(sanityId: string, supabase: any) {
+  const tables: Array<{ table: string; column: string }> = [
+    { table: 'service_types', column: 'sanity_service_type_id' },
+    { table: 'products', column: 'sanity_product_id' },
+    { table: 'addons', column: 'sanity_addon_id' },
+    { table: 'membership_plans', column: 'sanity_plan_id' },
+    { table: 'session_pass_types', column: 'sanity_pass_type_id' },
+  ]
+
+  for (const { table, column } of tables) {
+    const { data, error } = await supabase
+      .from(table)
+      .update({ active: false, updated_at: new Date().toISOString() })
+      .eq(column, sanityId)
+      .select('id')
+
+    if (error) {
+      console.error(`Error deactivating ${table} for deleted Sanity doc ${sanityId}:`, error)
+      continue
+    }
+    if (data && data.length > 0) {
+      console.log(`Deactivated ${table} row for deleted Sanity document: ${sanityId}`)
+      return
+    }
+  }
+
+  console.log(`No matching catalog row found for deleted Sanity document: ${sanityId}`)
 }
 
 export async function POST(request: NextRequest) {
@@ -79,6 +110,33 @@ export async function POST(request: NextRequest) {
         { error: 'Invalid signature' },
         { status: 401 }
       )
+    }
+
+    // Sanity always sends this header regardless of payload shape — relied on here instead of
+    // inferring create/update/delete from the body, since a delete event's body may not
+    // reliably include every field once the document no longer exists.
+    const operation = request.headers.get('sanity-operation')
+
+    if (operation === 'delete') {
+      const headerDocumentId = request.headers.get('sanity-document-id')
+      let bodyDocumentId: string | null = null
+      try {
+        bodyDocumentId = JSON.parse(body)?._id ?? null
+      } catch {
+        // Body may be empty/non-JSON for a delete event — the header is the reliable source.
+      }
+      const documentId = headerDocumentId ?? bodyDocumentId
+
+      if (!documentId) {
+        console.error('Delete event received with no document id in header or body')
+        return NextResponse.json({ message: 'No document id on delete event' })
+      }
+      if (documentId.startsWith('drafts.')) {
+        return NextResponse.json({ message: 'Draft delete ignored' })
+      }
+
+      await deactivateBySanityId(documentId, supabase)
+      return NextResponse.json({ success: true })
     }
 
     const payload = JSON.parse(body)
@@ -129,11 +187,17 @@ async function handleServiceType(payload: any, supabase: any) {
   const thumbnailUrl = images?.[0] ? getThumbnailUrl(images[0]) : null
 
   // Check if service type already exists
-  const { data: existing } = await supabase
+  const { data: existing, error: lookupError } = await supabase
     .from('service_types')
     .select('id, stripe_product_id')
     .eq('sanity_service_type_id', _id)
     .single()
+
+  // PGRST116 = "no rows found", the expected case for a new document. Any other error is a
+  // real query failure and must not be silently treated as "doesn't exist yet".
+  if (lookupError && lookupError.code !== 'PGRST116') {
+    throw lookupError
+  }
 
   if (existing) {
     // Update existing record (only mirror fields)
@@ -196,11 +260,15 @@ async function handleProduct(payload: any, supabase: any) {
   
   const thumbnailUrl = images?.[0] ? getThumbnailUrl(images[0]) : null
 
-  const { data: existing } = await supabase
+  const { data: existing, error: lookupError } = await supabase
     .from('products')
     .select('id, stripe_product_id')
     .eq('sanity_product_id', _id)
     .single()
+
+  if (lookupError && lookupError.code !== 'PGRST116') {
+    throw lookupError
+  }
 
   if (existing) {
     const { error } = await supabase
@@ -262,11 +330,15 @@ async function handleAddon(payload: any, supabase: any) {
   
   const thumbnailUrl = images?.[0] ? getThumbnailUrl(images[0]) : null
 
-  const { data: existing } = await supabase
+  const { data: existing, error: lookupError } = await supabase
     .from('addons')
     .select('id, stripe_product_id')
     .eq('sanity_addon_id', _id)
     .single()
+
+  if (lookupError && lookupError.code !== 'PGRST116') {
+    throw lookupError
+  }
 
   if (existing) {
     const { error } = await supabase
@@ -328,11 +400,15 @@ async function handleMembershipPlan(payload: any, supabase: any) {
   
   const thumbnailUrl = images?.[0] ? getThumbnailUrl(images[0]) : null
 
-  const { data: existing } = await supabase
+  const { data: existing, error: lookupError } = await supabase
     .from('membership_plans')
     .select('id, stripe_product_id')
     .eq('sanity_plan_id', _id)
     .single()
+
+  if (lookupError && lookupError.code !== 'PGRST116') {
+    throw lookupError
+  }
 
   if (existing) {
     const { error } = await supabase
@@ -391,11 +467,15 @@ async function handleSessionPassType(payload: any, supabase: any) {
   
   const thumbnailUrl = images?.[0] ? getThumbnailUrl(images[0]) : null
 
-  const { data: existing } = await supabase
+  const { data: existing, error: lookupError } = await supabase
     .from('session_pass_types')
     .select('id, stripe_product_id')
     .eq('sanity_pass_type_id', _id)
     .single()
+
+  if (lookupError && lookupError.code !== 'PGRST116') {
+    throw lookupError
+  }
 
   if (existing) {
     const { error } = await supabase
