@@ -212,6 +212,31 @@ async function handleServiceType(payload: any, supabase: any) {
 
     if (error) throw error
     console.log(`Updated service_type: ${_id}`)
+
+    // Keep Stripe's name/image in sync on every republish, not just at creation
+    try {
+      if (existing.stripe_product_id) {
+        await getStripe().products.update(existing.stripe_product_id, {
+          name,
+          images: thumbnailUrl ? [thumbnailUrl] : [],
+        })
+        console.log(`Updated Stripe product for service_type: ${existing.stripe_product_id}`)
+      } else {
+        // Never got a Stripe product at creation (e.g. Stripe was down at the time) —
+        // self-heal by creating it now instead of leaving this permanently unsynced.
+        const stripeProduct = await getStripe().products.create({
+          name,
+          images: thumbnailUrl ? [thumbnailUrl] : undefined,
+          active: true,
+          metadata: { sanity_id: _id, type: 'service_type' },
+        })
+        await supabase.from('service_types').update({ stripe_product_id: stripeProduct.id }).eq('id', existing.id)
+        console.log(`Created Stripe product for service_type (self-healed): ${stripeProduct.id}`)
+      }
+    } catch (stripeError) {
+      console.error('Error syncing Stripe product:', stripeError)
+      // Don't fail the whole operation if Stripe fails
+    }
   } else {
     // Create new record
     // Note: duration, capacity, booking_type, price, and tiers are Postgres-owned
@@ -283,6 +308,29 @@ async function handleProduct(payload: any, supabase: any) {
 
     if (error) throw error
     console.log(`Updated product: ${_id}`)
+
+    // Keep Stripe's name/image in sync on every republish, not just at creation
+    try {
+      if (existing.stripe_product_id) {
+        await getStripe().products.update(existing.stripe_product_id, {
+          name,
+          images: thumbnailUrl ? [thumbnailUrl] : [],
+        })
+        console.log(`Updated Stripe product for product: ${existing.stripe_product_id}`)
+      } else {
+        const stripeProduct = await getStripe().products.create({
+          name,
+          images: thumbnailUrl ? [thumbnailUrl] : undefined,
+          active: true,
+          metadata: { sanity_id: _id, type: 'product', category: category || '' },
+        })
+        await supabase.from('products').update({ stripe_product_id: stripeProduct.id }).eq('id', existing.id)
+        console.log(`Created Stripe product for product (self-healed): ${stripeProduct.id}`)
+      }
+    } catch (stripeError) {
+      console.error('Error syncing Stripe product:', stripeError)
+      // Don't fail the whole operation if Stripe fails
+    }
   } else {
     const { data, error } = await supabase
       .from('products')
@@ -353,6 +401,29 @@ async function handleAddon(payload: any, supabase: any) {
 
     if (error) throw error
     console.log(`Updated addon: ${_id}`)
+
+    // Keep Stripe's name/image in sync on every republish, not just at creation
+    try {
+      if (existing.stripe_product_id) {
+        await getStripe().products.update(existing.stripe_product_id, {
+          name,
+          images: thumbnailUrl ? [thumbnailUrl] : [],
+        })
+        console.log(`Updated Stripe product for addon: ${existing.stripe_product_id}`)
+      } else {
+        const stripeProduct = await getStripe().products.create({
+          name,
+          images: thumbnailUrl ? [thumbnailUrl] : undefined,
+          active: true,
+          metadata: { sanity_id: _id, type: 'addon', category: category || '' },
+        })
+        await supabase.from('addons').update({ stripe_product_id: stripeProduct.id }).eq('id', existing.id)
+        console.log(`Created Stripe product for addon (self-healed): ${stripeProduct.id}`)
+      }
+    } catch (stripeError) {
+      console.error('Error syncing Stripe product:', stripeError)
+      // Don't fail the whole operation if Stripe fails
+    }
   } else {
     const { data, error } = await supabase
       .from('addons')
@@ -422,6 +493,29 @@ async function handleMembershipPlan(payload: any, supabase: any) {
 
     if (error) throw error
     console.log(`Updated membership_plan: ${_id}`)
+
+    // Keep Stripe's name/image in sync on every republish, not just at creation
+    try {
+      if (existing.stripe_product_id) {
+        await getStripe().products.update(existing.stripe_product_id, {
+          name,
+          images: thumbnailUrl ? [thumbnailUrl] : [],
+        })
+        console.log(`Updated Stripe product for membership_plan: ${existing.stripe_product_id}`)
+      } else {
+        const stripeProduct = await getStripe().products.create({
+          name,
+          images: thumbnailUrl ? [thumbnailUrl] : undefined,
+          active: true,
+          metadata: { sanity_id: _id, type: 'membership_plan' },
+        })
+        await supabase.from('membership_plans').update({ stripe_product_id: stripeProduct.id }).eq('id', existing.id)
+        console.log(`Created Stripe product for membership_plan (self-healed): ${stripeProduct.id}`)
+      }
+    } catch (stripeError) {
+      console.error('Error syncing Stripe product:', stripeError)
+      // Don't fail the whole operation if Stripe fails
+    }
   } else {
     const { data, error } = await supabase
       .from('membership_plans')
@@ -489,6 +583,29 @@ async function handleSessionPassType(payload: any, supabase: any) {
 
     if (error) throw error
     console.log(`Updated session_pass_type: ${_id}`)
+
+    // Keep Stripe's name/image in sync on every republish, not just at creation
+    try {
+      if (existing.stripe_product_id) {
+        await getStripe().products.update(existing.stripe_product_id, {
+          name,
+          images: thumbnailUrl ? [thumbnailUrl] : [],
+        })
+        console.log(`Updated Stripe product for session_pass_type: ${existing.stripe_product_id}`)
+      } else {
+        const stripeProduct = await getStripe().products.create({
+          name,
+          images: thumbnailUrl ? [thumbnailUrl] : undefined,
+          active: true,
+          metadata: { sanity_id: _id, type: 'session_pass_type' },
+        })
+        await supabase.from('session_pass_types').update({ stripe_product_id: stripeProduct.id }).eq('id', existing.id)
+        console.log(`Created Stripe product for session_pass_type (self-healed): ${stripeProduct.id}`)
+      }
+    } catch (stripeError) {
+      console.error('Error syncing Stripe product:', stripeError)
+      // Don't fail the whole operation if Stripe fails
+    }
   } else {
     const { data, error } = await supabase
       .from('session_pass_types')
