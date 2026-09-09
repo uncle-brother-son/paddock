@@ -9,7 +9,14 @@ function getStripe() {
   })
 }
 
-type CatalogItemType = 'service_type' | 'product' | 'addon' | 'membership_plan' | 'session_pass_type'
+type CatalogItemType =
+  | 'service_type'
+  | 'product'
+  | 'addon'
+  | 'membership_plan'
+  | 'session_pass_type'
+  | 'gift_card_type'
+  | 'gift_card_preset'
 
 interface ToggleActiveRequest {
   itemType: CatalogItemType
@@ -80,8 +87,22 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Update Stripe product if it exists
-    if (item.stripe_product_id) {
+    // Update Stripe product if it exists. Presets have no stripe_product_id of their own —
+    // instead sync the active flag on their own Stripe Price, since that's the object a
+    // customer could actually still be charged against.
+    if (itemType === 'gift_card_preset') {
+      if (item.stripe_price_id) {
+        try {
+          await getStripe().prices.update(item.stripe_price_id, { active })
+        } catch (error) {
+          console.error('Error updating Stripe price:', error)
+          return NextResponse.json(
+            { error: 'Failed to update Stripe price' },
+            { status: 500 }
+          )
+        }
+      }
+    } else if (item.stripe_product_id) {
       try {
         await getStripe().products.update(item.stripe_product_id, {
           active,

@@ -1,6 +1,6 @@
 import type {StructureResolver} from 'sanity/structure'
 import {createElement, type ComponentProps} from 'react'
-import {CupSoda, House, IdCard, Info, Newspaper, ShoppingBag, Ticket, Waves} from 'lucide-react'
+import {CupSoda, Gift, House, IdCard, Info, Newspaper, ShoppingBag, Ticket, Waves} from 'lucide-react'
 
 const VerticalWaves = (props: ComponentProps<typeof Waves>) =>
   createElement(Waves, {
@@ -32,6 +32,10 @@ export const structure: StructureResolver = (S) =>
         .title('Products')
         .icon(ShoppingBag)
         .child(S.documentTypeList('product').title('Products')),
+      S.listItem()
+        .title('Gift Cards')
+        .icon(Gift)
+        .child(S.documentTypeList('giftCardType').title('Gift Cards')),
       S.divider(),
       S.listItem()
         .title('Website')

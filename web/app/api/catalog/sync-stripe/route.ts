@@ -9,7 +9,7 @@ function getStripe() {
   })
 }
 
-type CatalogItemType = 'service_type' | 'product' | 'addon' | 'membership_plan' | 'session_pass_type'
+type CatalogItemType = 'service_type' | 'product' | 'addon' | 'membership_plan' | 'session_pass_type' | 'gift_card_type'
 
 interface SyncStripeRequest {
   itemType: CatalogItemType
@@ -63,6 +63,9 @@ async function createStripeProduct(item: any, itemType: CatalogItemType): Promis
       })
       updates.stripe_price_id = price.id
     }
+  } else if (itemType === 'gift_card_type') {
+    // Gift card types have no price field of their own — pricing lives entirely at the
+    // preset level (see create-gift-card-preset). Nothing further to sync here.
   } else {
     // Products, addons, membership plans have three-tier pricing
     if (item.base_price !== null && item.base_price !== undefined) {

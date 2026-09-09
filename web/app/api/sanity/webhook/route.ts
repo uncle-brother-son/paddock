@@ -71,6 +71,7 @@ async function deactivateBySanityId(sanityId: string, supabase: any) {
     { table: 'addons', column: 'sanity_addon_id' },
     { table: 'membership_plans', column: 'sanity_plan_id' },
     { table: 'session_pass_types', column: 'sanity_pass_type_id' },
+    { table: 'gift_card_types', column: 'sanity_gift_card_type_id' },
   ]
 
   for (const { table, column } of tables) {
@@ -165,6 +166,9 @@ export async function POST(request: NextRequest) {
         break
       case 'sessionPassType':
         await handleSessionPassType(payload, supabase)
+        break
+      case 'giftCardType':
+        await handleGiftCardType(payload, supabase)
         break
       default:
         // Ignore non-catalog types (page, blogPost, galleryImage)
@@ -639,6 +643,98 @@ async function handleSessionPassType(payload: any, supabase: any) {
         .eq('id', data.id)
 
       console.log(`Created Stripe product for session_pass_type: ${stripeProduct.id}`)
+    } catch (stripeError) {
+      console.error('Error creating Stripe product:', stripeError)
+      // Don't fail the whole operation if Stripe fails
+    }
+  }
+}
+
+async function handleGiftCardType(payload: any, supabase: any) {
+  const { _id, name, images } = payload
+
+  const thumbnailUrl = images?.[0] ? getThumbnailUrl(images[0]) : null
+
+  const { data: existing, error: lookupError } = await supabase
+    .from('gift_card_types')
+    .select('id, stripe_product_id')
+    .eq('sanity_gift_card_type_id', _id)
+    .single()
+
+  if (lookupError && lookupError.code !== 'PGRST116') {
+    throw lookupError
+  }
+
+  if (existing) {
+    const { error } = await supabase
+      .from('gift_card_types')
+      .update({
+        name,
+        thumbnail_url: thumbnailUrl,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', existing.id)
+
+    if (error) throw error
+    console.log(`Updated gift_card_type: ${_id}`)
+
+    // Keep Stripe's name/image in sync on every republish, not just at creation
+    try {
+      if (existing.stripe_product_id) {
+        await getStripe().products.update(existing.stripe_product_id, {
+          name,
+          images: thumbnailUrl ? [thumbnailUrl] : [],
+        })
+        console.log(`Updated Stripe product for gift_card_type: ${existing.stripe_product_id}`)
+      } else {
+        const stripeProduct = await getStripe().products.create({
+          name,
+          images: thumbnailUrl ? [thumbnailUrl] : undefined,
+          active: true,
+          metadata: { sanity_id: _id, type: 'gift_card_type' },
+        })
+        await supabase.from('gift_card_types').update({ stripe_product_id: stripeProduct.id }).eq('id', existing.id)
+        console.log(`Created Stripe product for gift_card_type (self-healed): ${stripeProduct.id}`)
+      }
+    } catch (stripeError) {
+      console.error('Error syncing Stripe product:', stripeError)
+      // Don't fail the whole operation if Stripe fails
+    }
+  } else {
+    // Note: custom_amount_enabled/min/max and presets are Postgres-owned and must be
+    // set manually in Retool after initial sync — same pattern as the other 5 types.
+    const { data, error } = await supabase
+      .from('gift_card_types')
+      .insert({
+        sanity_gift_card_type_id: _id,
+        name,
+        thumbnail_url: thumbnailUrl,
+        active: true
+      })
+      .select('id')
+      .single()
+
+    if (error) throw error
+    console.log(`Created gift_card_type: ${_id}`)
+
+    // Create Stripe Product
+    try {
+      const stripeProduct = await getStripe().products.create({
+        name,
+        images: thumbnailUrl ? [thumbnailUrl] : undefined,
+        active: true,
+        metadata: {
+          sanity_id: _id,
+          type: 'gift_card_type'
+        }
+      })
+
+      await supabase
+        .from('gift_card_types')
+        .update({ stripe_product_id: stripeProduct.id })
+        .eq('id', data.id)
+
+      console.log(`Created Stripe product for gift_card_type: ${stripeProduct.id}`)
     } catch (stripeError) {
       console.error('Error creating Stripe product:', stripeError)
       // Don't fail the whole operation if Stripe fails
