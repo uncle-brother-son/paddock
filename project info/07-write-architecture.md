@@ -5,6 +5,23 @@ Stripe.** Postgres is passive storage — it never calls Stripe itself, and noth
 Stripe directly from Retool or the frontend. Every write that touches both Postgres and Stripe
 must go through a single backend endpoint that does both as one operation.
 
+## Storefront requirement — not yet built
+
+The customer-facing product page and checkout flow (not yet built) must check each catalog
+item's `active` status from Postgres before allowing a purchase, independent of whether the
+corresponding Sanity document is published. A product can be published/visible in Sanity while
+`active = false` in Postgres (a deliberate staff decision, e.g. temporarily out of stock or
+discontinued) — in that case, customers may see the product's content, but "Add to Cart" /
+checkout must be disabled or show "currently unavailable." This applies to all catalog entities
+with an active flag (Products, Add-ons, Service Types, Membership Plans, Session Pass Types),
+not just Products.
+
+This is why Retool's active toggle deliberately does not get reactivated automatically when a
+Sanity document is republished — the two systems represent different things: Sanity controls
+content visibility, Postgres `active` controls purchasability. As long as this storefront check
+is correctly built, that separation is safe and doesn't risk customers reaching checkout on
+something unpurchasable.
+
 ## In-person payments — build spec
 
 **Hardware:** one Stripe Terminal physical reader (BBPOS Chipper 2X or WisePOS E), paired to the
