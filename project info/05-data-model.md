@@ -128,28 +128,49 @@ field.
 - Status: pending / confirmed / cancelled / completed / no-show
 - Price paid
 - Stripe payment/session reference
-- Redemption source: paid directly / membership credit / session pass credit / gift card
+- Redemption source: paid directly / membership credit / session pass credit / gift card.
+  **Membership and session pass credits — existing or newly-purchased — can only ever be
+  redeemed against PUBLIC bookings.** Private bookings must always be paid with real money
+  (card, cash, or gift card) — never any credit, and never stacking multiple credits together.
+  This is enforced both in the UI (credit options aren't shown for a private booking) and
+  server-side (a private booking attempting a credit redemption source is rejected outright).
 - Linked add-on order items
 - Created at
 - Cancelled/rescheduled at (if applicable)
 - Checked-in at (timestamp, set by staff when the customer arrives — null if not yet checked in)
 
-### Scheduling rules & business hours
+### Scheduling rules
 
 - Booking window: customers can book up to 12 months in advance
-- Operating days: open every day except Wednesday
-- Daily hours: vary by day of week — requires a per-day-of-week open/close configuration
-- Session length: 60 minutes
-- Buffer between sessions: 15 minutes
-- Private 120-minute booking = 2× 60-minute Sessions + the 15-min buffer between them
-  (135 minutes of wall-clock time reserved, in reality)
+- **`business_hours` has been fully retired as a session-generation input.** Each Service Type
+  now has its own explicit, staff-defined schedule instead of inheriting a venue-wide rule.
+- **Service Type Schedule Slot** (new entity, Postgres-only): one row per (day of week, start
+  time) a given Service Type actually runs. Staff add/remove these manually via a "Weekly
+  schedule" section on the Service Types page — not generated from any rule, and not edited
+  often (schedules are set roughly a year ahead).
+  - Slot ID, Service Type ID (FK), day of week, start time
+- The rolling session generator reads only this table (joined against each active Service
+  Type's own duration) to produce bookable Session rows — it no longer consults business hours
+  at all.
+- One-off closures on an otherwise-scheduled day (holidays, emergencies) are handled entirely by
+  the existing block-day/block-session feature, not by editing a venue-wide hours table. Blocking
+  a day or session with existing confirmed bookings requires staff to move or cancel each one
+  first — there is no bypass.
+- Private 120-minute bookings claim two consecutive 60-minute Sessions (no separate "120-minute
+  slot" grid) + the 15-min buffer between them (135 minutes of wall-clock time reserved, in
+  reality).
 
-> ⚠️ See 00-README.md flag #1 — private pricing has since been updated to 60 min / 120 min
-> from £210 (per 6.1 Content & Structure). This isn't yet reflected in the rule above; the
-> mechanic (2 consecutive Sessions) still holds, only the price point needs updating.
+**Confirmed public Service Types (per the live site's actual schedule):**
 
-**Open:** exact opening/closing time for each operating day, and minimum booking notice period
-(e.g. can someone book 10 minutes before a session starts, or is there a cut-off?).
+| Service Type | Days | Price |
+|---|---|---|
+| Weekday Contrast Therapy — 60 min | Mon–Thu | £15 |
+| Friday–Sunday Contrast Therapy — 60 min | Fri–Sun | £17.50 |
+| Contrast Therapy — 90 min | *(days/times not yet confirmed with client)* | £25 |
+
+Exact start times per Service Type are staff-entered data (see Service Type Schedule Slot,
+above), not hardcoded — the times observed on the live site were used as initial seed values,
+pending the client's own review/confirmation.
 
 ### Core booking rules
 
@@ -174,6 +195,24 @@ later books 3 people into the same 2pm session → total = 5/6. A further bookin
 rejected (5 + 2 > 6). If instead someone had tried to book the 2pm slot privately before Sarah's
 booking, that would have worked and blocked Sarah's public booking entirely — but once Sarah's
 booking exists, private is no longer available for that slot.
+
+### Adding a guest to an already-created booking
+
+Adding a guest after a booking exists can increase what's owed, and this is never charged
+automatically — staff are always prompted to resolve the difference before the guest is added:
+
+- **Private booking:** adding a guest may cross into a higher headcount tier (see Service Type
+  Price Tier). If it does, staff must collect the price difference (card/reader/cash/gift card
+  — same payment step as checkout) before the guest is added; declining leaves the booking
+  unchanged.
+- **Public booking, credit-redeemed:** one credit covers one person's admission. Adding a guest
+  requires either redeeming another credit (if the same membership/pass has one remaining) or
+  paying for that additional person directly — never silently free.
+- **Public booking, paid directly or by gift card:** no price change — the per-person rate
+  already scales with party size at time of original payment, so this case needs no additional
+  action.
+- Whichever path applies, the difference (if any) posts as a new line item on the booking's
+  original order and bumps `price_paid`/party size/order total accordingly.
 
 ### Blocking slots or days
 
@@ -210,9 +249,10 @@ immediately.
 
 ### Booking Guest (waiver tracking + attendee list for group and private bookings)
 
-Covers the full attendee list for a booking — minimum 1, maximum 10 people — and waiver
-completion tracking for each. Relevant for public bookings with party size >1 and every private
-booking.
+Covers the full attendee list for a booking. **Maximum guest count depends on booking type:
+public bookings are capped at 6 (matching the real public session capacity); private bookings
+allow up to 10.** Minimum is always 1. Waiver completion is tracked for each guest. Relevant for
+public bookings with party size >1 and every private booking.
 
 - Guest ID
 - Booking ID
@@ -323,13 +363,17 @@ full stock/variant tracking since these are physical, shippable goods.
   tier was selected) — Postgres only
 - Category/type (Sanity + Postgres mirror)
 - Active/inactive flag — Postgres only
-- Shipping weight/dimensions (for shipping rate calculation) — Postgres only
 - Fulfillment method: shipping / pickup only / both — Postgres only
 - Stripe product ID — Postgres only
 - Stripe price IDs: `stripe_price_id_base`, `stripe_price_id_sale`, `stripe_price_id_member` —
   Postgres only, one per tier, not a single shared field
 - No SKU on the Product record — SKU lives on the Variant (see below), since a bare Product
   isn't directly sellable
+
+**Removed:** `shipping_weight`/`shipping_dimensions` — per-product shipping data couldn't
+actually solve real shipping cost (a multi-item order's parcel size depends on packing, not a
+sum of individual product dimensions). Shipping/parcel details are handled manually by staff
+with the courier at time of shipment, not tracked in this system.
 
 ### Product variant
 
@@ -340,9 +384,32 @@ bag gets a single "default" Variant), so SKU/stock/price always come from one co
 - Size *(colour removed — handled via `productGroup` on the Product, not as a Variant
   attribute)*
 - SKU
-- Price override (if different from base price)
-- Stock quantity
+- Stock quantity — **derived from the Stock Adjustment ledger below, not directly editable**
 - Stripe price ID reference
+
+**Removed:** price override — predates the base/sale/member three-tier pricing model and
+became inconsistent with it once that model existed (unclear which tier it would override).
+Variants always share the parent Product's pricing tiers.
+
+### Stock Adjustment (audit ledger)
+
+Stock is never edited as a raw overwrite. Every change to a Variant's stock — staff correction,
+a sale, a refund restock — is its own logged row, so `stock_quantity` is the running total of
+this ledger rather than a directly-editable field.
+
+- Adjustment ID
+- Variant ID (FK)
+- Change amount (positive or negative)
+- Reason: Delivery / Damage / Recount / Sale / Refund Restock / Other (+ free-text note when
+  "Other" is selected)
+- Staff ID (null for system-generated entries — sales and refund restocks are logged
+  automatically, with no human staff attribution)
+- Created at
+
+A new Variant's "Initial Stock" at creation also writes a first ledger entry ("Initial stock"),
+so the running total ties out from day one. An adjustment that would take stock negative is
+rejected. The most recent ~10 entries show by default per Variant, with a "view full history"
+option for the complete record.
 
 ---
 
@@ -425,16 +492,50 @@ No category — small, fixed set of pass sizes, not enough to warrant grouping.
 
 ## 5.7 Gift Cards
 
-Gift cards can be monetary value or session-based, and can be sent by the purchaser to someone
-else. A single representative image for the Gift Cards page — no design picker, no per-card
-artwork choice — is ordinary Sanity page content, unrelated to the fields below; it isn't
-attached to individual issued Gift Card records at all.
+Gift cards are **monetary only** (session-based gift cards were considered and dropped — never
+built, not a real use case). A representative image, name, and description are managed as a
+proper Sanity-synced catalog entity (like Products/Memberships), not a page-level image, so the
+client can update gift card presentation without a code change.
+
+### Gift Card Type (catalog — see 06-sanity-supabase-field-split.md for the Sanity/Postgres
+split)
+
+- Gift Card Type ID
+- `sanity_gift_card_type_id`
+- Name (Sanity + Postgres mirror)
+- `thumbnail_url` (Sanity + Postgres mirror)
+- Description, images — Sanity only
+- Active flag — Postgres only
+- Stripe product ID — Postgres only
+- `custom_amount_enabled` (boolean), `custom_amount_min`, `custom_amount_max` — Postgres only,
+  staff-configurable. Governs whether a customer can type their own amount at purchase (see
+  Gift Card Preset, below, for fixed amounts)
+
+### Gift Card Preset (Postgres-only, same pattern as Product Variant)
+
+Fixed, staff-defined amounts a Gift Card Type can be sold for (e.g. £20/£30/£50/£80/£105/£150).
+
+- Preset ID
+- Gift Card Type ID (FK)
+- Amount
+- Active flag — independently retireable without affecting the parent type or its other
+  presets
+- Stripe price ID — one real Stripe Price per preset
+
+**Custom amounts never create a preset row.** A customer-entered amount (only available when
+`custom_amount_enabled` is true, constrained to `custom_amount_min`/`max`) is priced inline at
+the point of charge, not pre-created as a Stripe Price object.
+
+### Issued Gift Card (the actual purchased/redeemable instance)
+
+This is unchanged by the catalog addition above — a Gift Card Type/Preset is what's purchased;
+the record below is what gets created as a result, same relationship as Membership Plan →
+Customer Membership Instance.
 
 ### Fields to store
 
 - Gift card ID
 - Unique redemption code
-- Type: monetary / session-based
 - Original value, remaining balance
 - Purchaser customer ID
 - Recipient name, recipient email
@@ -443,17 +544,26 @@ attached to individual issued Gift Card records at all.
 - Issue date
 - Expiry date
 - Redemption status and history (which orders/bookings it's been applied to)
-- **`Origin`: customer purchase / issued as cancellation credit** — required by the Bookings
-  cancellation policy (5.2) but not yet formally listed on this page in Notion. Included here
-  as it's a confirmed dependency — recommend adding it to the Notion page directly.
+- **`Origin`: customer purchase / issued as cancellation credit**
+- **`Voided`** (boolean) — distinguishes a refunded/cancelled card from one that naturally
+  expired, same pattern as `Origin`
 
 ### Resolved decisions
 
+- **Gift cards are monetary only.** No session-based type.
 - **Monetary gift cards expire after 12 months** (extended from the current site's 6 months).
 - **Fulfillment: manual, two options — send as digital e-card, or buy & pick up in person.** No
-  postal/shipping fulfillment. This **removes the need for shipping address/shipping status
-  fields** on the gift card record that were originally scoped assuming postal delivery — see
-  00-README.md flag #2.
+  postal/shipping fulfillment.
+
+### A recurring gotcha worth remembering for this and any future catalog type
+
+Adding a new catalog type requires **two** separate updates, not one: the webhook handler code
+(`switch (_type)` dispatch), **and** Sanity's own webhook Filter field (a GROQ query hardcoded to
+a fixed list of `_type` values, configured in Sanity's dashboard, not in code). Missing the
+second one means the webhook is never even called for the new type — the code can be perfectly
+correct and still never run, because Sanity itself silently doesn't forward the event. This bit
+the Gift Card Type rollout specifically and will repeat for any future sixth-plus catalog type
+unless both places are updated together.
 
 ---
 

@@ -26,7 +26,7 @@ npm run deploy  # Deploy to Cloudflare Pages
 
 Your webhook URL will be:
 ```
-https://thepaddockwellnessclub.co.uk/api/sanity/webhook
+https://paddock.paddock-55d.workers.dev/api/sanity/webhook
 ```
 
 ### 2. Configure webhook in Sanity
@@ -38,12 +38,19 @@ https://thepaddockwellnessclub.co.uk/api/sanity/webhook
 
 **Configuration:**
 - **Name**: `Supabase Sync`
-- **URL**: `https://thepaddockwellnessclub.co.uk/api/sanity/webhook`
+- **URL**: `https://paddock.paddock-55d.workers.dev/api/sanity/webhook`
 - **Trigger on**:
   - ✅ Create
   - ✅ Update
   - ✅ Delete (optional - currently not handled but safe to enable)
-- **Filter**: Leave empty (all document types)
+- **Filter**: `_type in ["serviceType", "product", "addon", "membershipPlan", "sessionPassType", "giftCardType"]`
+
+  ⚠️ **This is a hardcoded list, not a wildcard.** Adding a new catalog type to the webhook
+  code (a new `case` in the `switch` inside `route.ts`) does nothing on its own — Sanity
+  never even calls the webhook for that document type unless its name is added here too.
+  This exact gap caused a real incident: `giftCardType` was fully implemented in code but
+  silently never fired for weeks because this Filter field was never updated. When adding
+  a 7th+ catalog type, update this filter in Sanity's dashboard in the same change.
 - **HTTP method**: `POST`
 - **HTTP Headers**:
    - Add header: `sanity-webhook-signature`
@@ -105,6 +112,8 @@ https://thepaddockwellnessclub.co.uk/api/sanity/webhook
 
 ### Data not appearing in Supabase
 - Check webhook was triggered (Sanity webhook History tab)
+- **Check the Filter field lists this document's `_type`** — if it's not in the list, Sanity
+  never calls the webhook at all, and no delivery will even appear in the History tab
 - Verify you published (not just saved draft)
 - Check RLS policies - webhook uses service role key so should bypass RLS
 - Query directly: `SELECT * FROM products WHERE sanity_product_id = 'YOUR_SANITY_ID'`

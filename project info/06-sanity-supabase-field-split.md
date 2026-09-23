@@ -55,24 +55,29 @@ touches these, even on republish):
   for the full tier-selection priority (member always wins over sale; sale applies over base;
   promo codes apply on top of whichever tier was selected).
 - Fulfillment method: shipping / pickup only / both
-- Shipping weight/dimensions
 - Stripe product ID
 - Active flag
 - No SKU on the Product record itself — SKU lives on the Variant, since a bare Product isn't
   directly sellable (see Variant, below)
 
+**Removed:** `shipping_weight`/`shipping_dimensions` — couldn't actually solve real shipping
+cost (depends on how a multi-item order gets packed, not a sum of individual product
+dimensions). Handled manually by staff with the courier at time of shipment instead.
+
 **Product Variant** — fully Postgres-owned, no Sanity equivalent at all. A Product isn't
-directly sellable on its own — the Variant is the real sellable unit, which is why SKU, stock,
-and price override all live here rather than on the Product record. Every Product has at least
-one Variant, even where there's no visible size choice on the frontend (e.g. a tote bag gets a
-single "default" Variant), so SKU/stock/price always come from exactly one consistent place with
-no special case to remember. Colour is *not* a Variant attribute — colour options are handled as
-separate linked Products via `productGroup` (see above), not as a variant of one product.
+directly sellable on its own — the Variant is the real sellable unit, which is why SKU and stock
+live here rather than on the Product record. Every Product has at least one Variant, even where
+there's no visible size choice on the frontend (e.g. a tote bag gets a single "default"
+Variant), so SKU/stock always come from exactly one consistent place with no special case to
+remember. Colour is *not* a Variant attribute — colour options are handled as separate linked
+Products via `productGroup` (see above), not as a variant of one product. Price override was
+removed from Variant entirely — it predated and became inconsistent with the base/sale/member
+three-tier pricing model; Variants always share the parent Product's tiers.
 - Variant ID, linked Product ID
 - Size
 - SKU
-- Price override
-- Stock quantity
+- Stock quantity — derived from the Stock Adjustment ledger (see 05-data-model.md), not a
+  directly-editable field
 - Stripe price ID
 
 ---
@@ -143,6 +148,10 @@ section covers only the Sanity/Postgres split.
 
 No category — too few service types to warrant a grouping mechanism.
 
+**Service Type Schedule Slot** — fully Postgres-owned, no Sanity equivalent. Staff-defined (day
+of week, start time) rows per Service Type, replacing the earlier venue-wide `business_hours`
+generation input entirely (retired — see 05-data-model.md for the full scheduling rules).
+
 Every generated **Session** references this Service Type ID rather than duplicating its price/
 duration/capacity — Sessions and Bookings themselves are fully operational (see below), never
 Sanity content.
@@ -203,16 +212,56 @@ purchase date, sessions remaining, expiry date.
 
 ---
 
+## Gift Cards — catalog table (needs the split, added after initial launch)
+
+Originally scoped as a single page-level image with no catalog entity — later upgraded to a
+proper Sanity-synced catalog type, same pattern as Products/Memberships, so the client can
+manage gift card presentation without a code change.
+
+**Sanity only:**
+- Description
+- Images (no fixed limit)
+
+**Supabase — mirrored from Sanity:**
+- Name
+- `thumbnail_url` (resized URL, generated from image[0])
+
+**Supabase — Postgres-owned:**
+- Gift Card Type ID (auto-generated)
+- `sanity_gift_card_type_id`
+- Active flag
+- Stripe product ID
+- `custom_amount_enabled`, `custom_amount_min`, `custom_amount_max`
+
+No category — a small, fixed concept (one gift card type, potentially a couple of variants at
+most).
+
+**Gift Card Preset** — fully Postgres-owned, no Sanity equivalent, same pattern as Product
+Variant: fixed staff-defined amounts (Preset ID, Gift Card Type ID FK, amount, active flag,
+Stripe price ID — one real Stripe Price per preset). A customer-entered custom amount (only
+when `custom_amount_enabled`) is priced inline at charge time, never pre-created as a preset row
+or a Stripe Price object.
+
+**Issued Gift Card instance** — fully operational, Supabase only, unaffected by the catalog
+layer above: code, balance, purchaser, expiry, `origin`, `voided`. Same relationship as
+Membership Plan → Customer Membership Instance — the catalog type/preset is what's purchased,
+this record is what gets created as a result.
+
+**Important — a webhook filter gotcha specific to adding this type:** Sanity's webhook has its
+own hardcoded Filter field (GROQ, configured in Sanity's dashboard, separate from the webhook's
+own code) listing which `_type` values it forwards. Adding `giftCardType` to the webhook's code
+`switch` statement was not sufficient on its own — the Filter field also needed updating, or
+Sanity never calls the webhook for the new type at all, regardless of how correct the handler
+code is. This applies to any future sixth-plus catalog type as well.
+
+---
+
 ## Everything else — no split needed, Supabase only
 
 These were never Sanity content and don't need this treatment at all:
 
-- **Bookings** (Session, Booking, Booking Guest) — generated/managed operationally, not
-  client-authored
-- **Gift Cards (issued instances)** — transactional records, not content, no split needed. A
-  single representative image for the Gift Cards page (no design picker, no per-card artwork
-  choice) is ordinary Sanity page content — see 05-data-model.md for where it lives. Not a
-  database entity.
+- **Bookings** (Session, Booking, Booking Guest, Service Type Schedule Slot) —
+  generated/managed operationally, not client-authored
 - **Orders / Checkout**
 - **Customers / Accounts**
 - **Staff / Admin Users**

@@ -22,30 +22,54 @@ content visibility, Postgres `active` controls purchasability. As long as this s
 is correctly built, that separation is safe and doesn't risk customers reaching checkout on
 something unpurchasable.
 
-## In-person payments — build spec
+## In-person payments — as actually built (redesigned from the original spec)
 
-**Hardware:** one Stripe Terminal physical reader (BBPOS Chipper 2X or WisePOS E), paired to the
-Retool app via Bluetooth/WiFi. No Tap to Pay (native or Dashboard app) — reader only.
+**Hardware:** Stripe Terminal, physical reader for production; a Stripe-provided simulated
+reader (`simulated: true` on `discoverReaders`, no dashboard registration needed) for
+development/testing. No Tap to Pay (native or Dashboard app) — reader only.
 
-**Build:**
-- Backend endpoint issuing short-lived Terminal connection tokens (SDK auth)
-- Terminal SDK integration in the Retool app to discover/connect to the reader and collect
-  payment on command
-- One combined flow: creating a booking/order in Retool and charging the reader happens as a
-  single staff action, not two separate steps
-- Every card-present transaction through the reader also saves the card via SetupIntent (same
-  mechanism as the existing online saved-card flow)
+**The original spec below described a two-step "save card, then charge the saved card" flow —
+this was a real design flaw, not just an implementation detail, discovered once the reader was
+actually exercised end-to-end.** It only existed because no PaymentIntent-creation endpoint was
+available when the reader integration started; it forced staff to capture a card and charge it
+as two separate actions even for a simple in-person sale.
 
-**Expected outcome:**
-- Staff create a booking or order in Retool for a walk-in customer
-- Reader prompts for tap/insert/PIN as part of that same action
-- Payment confirms, booking/order is marked paid, and the customer's card is saved for future
-  saved-card charges (add-on upsells, repeat visits) without needing the reader again
+**What's actually built — one tap, one action:**
+- `POST /api/terminal/create-payment-intent` — `{ customerId, amount, saveCard: boolean }`.
+  Creates a real Stripe PaymentIntent for the order total (`payment_method_types:
+  ['card_present']`), with `setup_future_usage: 'off_session'` attached only when `saveCard` is
+  true — consent for saving the card is expressed server-side via this flag, not a client-side
+  SDK parameter (the Terminal SDK's `collectPaymentMethod` has no consent field at all, unlike
+  the SetupIntent-only flow below).
+- Frontend: one "Charge £X.XX via Reader" action — `collectPaymentMethod` → `processPayment` in
+  a single step — with an **unticked-by-default** "Save this card for future charges?" checkbox
+  (customer must actively opt in, staff shouldn't assume).
+- `createOrder.ts` records the reader's returned `paymentIntentId` directly as proof of payment
+  and never separately calls `chargeSavedCard` afterward — no double-charge risk.
+- A defensive check rejects (with a clear manual-refund instruction) if the amount actually
+  charged and the order's authoritative computed total have drifted apart between tap and
+  submission (e.g. a stale price).
+- **Real trade-off, not a bug:** the reader charges *before* the order exists in Postgres. If
+  checkout then fails for an unrelated reason, the money has already moved and the order rolls
+  back — staff must refund that specific PaymentIntent manually. This matches how physical POS
+  terminals actually work; it isn't something a later fix removes.
+
+**The separate SetupIntent-only flow still exists, for a different purpose.** `CollectCardDialog`
+(a standalone "save a card with no immediate charge" admin tool) uses
+`collectSetupIntentPaymentMethod`, which genuinely does require an explicit client-side consent
+argument (`customer_consent_collected`, confirmed against the real installed SDK types — not the
+newer-version object shape assumed at first draft). This flow is deliberately left untouched by
+the PaymentIntent rework above — proactively saving a card with no purchase happening is a
+different, valid use case from paying for an order right now.
+
+**Card display:** the Terminal SDK doesn't reliably return expanded card details (last4/brand)
+in this execution environment — a separate `GET /api/payments/method/:id` endpoint fetches them
+directly from Stripe after a successful save, rather than relying on the SDK's response shape.
 
 ### 1. Sanity publish → new/updated catalog row
 
-Trigger: Sanity webhook fires on publish (Products, Add-ons, Session/Service Types, Membership
-Plans, Session Passes).
+Trigger: Sanity webhook fires on publish (Products, Add-ons, Service Types, Membership Plans,
+Session Pass Types, Gift Card Types — six catalog types as of the Gift Card Type addition).
 
 Flow: `Sanity webhook → backend → Postgres (create/update mirrored fields) → Stripe (create
 shell Product on first creation, store returned stripe_product_id back onto the row)`.
@@ -53,6 +77,21 @@ shell Product on first creation, store returned stripe_product_id back onto the 
 This flow only ever touches the **Sanity-owned mirror fields** (name, thumbnail, category where
 applicable) — see `06-sanity-supabase-field-split.md` for which fields are mirrored per entity.
 It must never touch price.
+
+**On republish (not just first creation):** the webhook must also push the corrected
+name/image to the existing Stripe Product via `stripe.products.update()` — the original
+implementation only set Stripe's name/image once, at creation, leaving them permanently stale on
+any later rename or image change. Fixed across all six handlers.
+
+**Adding a seventh (or any future) catalog type requires updating two separate places, not
+one.** The webhook's own `switch (_type)` code is necessary but not sufficient — Sanity's
+webhook configuration has its own hardcoded Filter field (a GROQ query, set in Sanity's
+dashboard, entirely separate from the webhook's code) listing which `_type` values it forwards
+at all. Missing the Filter update means Sanity never calls the webhook for the new type — the
+handler code can be perfectly correct and still never execute, with no error anywhere to signal
+why. This cost significant debugging time on the Gift Card Type rollout specifically because
+every code-level and infrastructure-level check (URL, project, deployment, swallowed errors,
+live runtime logs) came back clean — the fault was sitting in a completely different tool.
 
 ### 2. Staff action in Retool → price/stock change, or new Variant creation
 
@@ -122,16 +161,21 @@ only case where deletion is actually safe, since there's nothing downstream to p
 
 | Entity | Managed in Sanity | Managed in Retool |
 |---|---|---|
-| Product | Name, description, product info, images, `productGroup`, category | Base/member/sale price, active flag, fulfillment method, shipping weight/dimensions |
-| Product Variant | — (no Sanity equivalent) | SKU, price override, stock quantity |
+| Product | Name, description, product info, images, `productGroup`, category | Base/member/sale price, active flag, fulfillment method |
+| Product Variant | — (no Sanity equivalent) | SKU, stock quantity (via Stock Adjustment ledger, never a raw edit) |
 | Add-on | Name, description, images, category | SKU, base/member/sale price, active flag |
 | Service Type | Name, description, images | Duration, capacity, booking type (public/private), price (public only), active flag |
 | Service Type Price Tier | — (no Sanity equivalent) | Min/max people, price per band |
+| Service Type Schedule Slot | — (no Sanity equivalent) | Day of week, start time — replaces the retired `business_hours` generation input |
 | Membership Plan | Name, description, images | Price, billing frequency, sessions included, add-ons included, active flag |
 | Session Pass Type | Name, description, images | Price, sessions included, `expiry_months`, active flag |
+| Gift Card Type | Name, description, images | Active flag, `custom_amount_enabled`/min/max |
+| Gift Card Preset | — (no Sanity equivalent) | Amount, active flag |
 
 "Deleting" any row in the right-hand column always means flipping Active to false via the
-backend endpoint described above — never a raw table delete.
+backend endpoint described above — never a raw table delete. Price override (Product Variant)
+and shipping weight/dimensions (Product) have both been removed from the model entirely — see
+`05-data-model.md` for why.
 
 ## Why not write straight from Retool to Postgres and let something else notice
 
