@@ -164,7 +164,7 @@ export async function POST(request: NextRequest) {
       const code = await generateUniqueGiftCardCode(supabase)
       const issueDate = new Date()
       const expiryDate = new Date(issueDate)
-      expiryDate.setMonth(expiryDate.getMonth() + 12) // monetary gift cards expire after 12 months
+      expiryDate.setMonth(expiryDate.getMonth() + 3) // store credit issued by refunds expires after 3 months
 
       const { data: createdGiftCard, error: giftCardError } = await supabase
         .from('gift_cards')
