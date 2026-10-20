@@ -12,7 +12,8 @@
     "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
     "upload": "opennextjs-cloudflare build && opennextjs-cloudflare upload",
     "storybook": "storybook dev -p 6006",
-    "build-storybook": "storybook build"
+    "build-storybook": "storybook build",
+    "test:unit": "vitest run --config vitest.unit.config.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "5.9.0",
