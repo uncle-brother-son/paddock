@@ -59,20 +59,42 @@ async function createStripeProduct(item: any, itemType: CatalogItemType): Promis
       const price = await getStripe().prices.create({
         product: product.id,
         unit_amount: Math.round(item.base_price * 100),
-        currency: 'usd',
+        currency: 'gbp',
       })
       updates.stripe_price_id = price.id
     }
   } else if (itemType === 'gift_card_type') {
     // Gift card types have no price field of their own — pricing lives entirely at the
     // preset level (see create-gift-card-preset). Nothing further to sync here.
+  } else if (itemType === 'membership_plan') {
+    // Membership plans are monthly/yearly recurring subscriptions, not the one-off
+    // base/member/sale tiers used by products/addons.
+    if (item.price_monthly !== null && item.price_monthly !== undefined) {
+      const price = await getStripe().prices.create({
+        product: product.id,
+        unit_amount: Math.round(item.price_monthly * 100),
+        currency: 'gbp',
+        recurring: { interval: 'month' },
+      })
+      updates.stripe_price_id = price.id
+    }
+
+    if (item.price_yearly !== null && item.price_yearly !== undefined) {
+      const price = await getStripe().prices.create({
+        product: product.id,
+        unit_amount: Math.round(item.price_yearly * 100),
+        currency: 'gbp',
+        recurring: { interval: 'year' },
+      })
+      updates.stripe_price_id_yearly = price.id
+    }
   } else {
-    // Products, addons, membership plans have three-tier pricing
+    // Products and addons have three-tier pricing
     if (item.base_price !== null && item.base_price !== undefined) {
       const price = await getStripe().prices.create({
         product: product.id,
         unit_amount: Math.round(item.base_price * 100),
-        currency: 'usd',
+        currency: 'gbp',
       })
       updates.stripe_price_id_base = price.id
     }

@@ -18,6 +18,8 @@ interface UpdatePriceRequest {
   basePrice?: number
   memberPrice?: number
   salePrice?: number
+  monthlyPrice?: number
+  yearlyPrice?: number
 }
 
 // Verify Retool API key
@@ -60,7 +62,8 @@ async function upsertStripePrice(
   stripeProductId: string,
   unitAmount: number,
   currency: string = 'gbp',
-  existingPriceId?: string | null
+  existingPriceId?: string | null,
+  recurring?: Stripe.PriceCreateParams.Recurring
 ): Promise<string> {
   // If there's an existing price, archive it and create a new one
   // (Stripe prices are immutable once created)
@@ -78,6 +81,7 @@ async function upsertStripePrice(
     product: stripeProductId,
     unit_amount: Math.round(unitAmount * 100), // Convert pounds to pence
     currency,
+    ...(recurring ? { recurring } : {}),
   })
   
   return price.id
@@ -95,7 +99,7 @@ export async function POST(request: NextRequest) {
 
     // Parse request body
     const body: UpdatePriceRequest = await request.json()
-    const { itemType, itemId, basePrice, memberPrice, salePrice } = body
+    const { itemType, itemId, basePrice, memberPrice, salePrice, monthlyPrice, yearlyPrice } = body
 
     // Validate required fields
     if (!itemType || !itemId) {
@@ -166,9 +170,42 @@ export async function POST(request: NextRequest) {
         )
         updates.stripe_price_id = stripePriceId
       }
-    } else if (itemType === 'membership_plan' || itemType === 'session_pass_type') {
-      // Membership plans and session pass types have a single price field,
-      // same shape as service_type — no base/member/sale tiers on these tables
+    } else if (itemType === 'membership_plan') {
+      // Membership plans are monthly/yearly recurring subscriptions — price_monthly and
+      // price_yearly are independent, each with their own Stripe recurring price. There is no
+      // single 'price' column on this table (unlike session_pass_type/service_type).
+      if (monthlyPrice !== undefined) {
+        updates.price_monthly = monthlyPrice
+        priceUpdates.price_monthly = monthlyPrice
+
+        const stripePriceId = await upsertStripePrice(
+          item.stripe_product_id,
+          monthlyPrice,
+          'gbp',
+          item.stripe_price_id,
+          { interval: 'month' }
+        )
+        updates.stripe_price_id = stripePriceId
+      }
+
+      if (yearlyPrice !== undefined) {
+        updates.price_yearly = yearlyPrice
+        priceUpdates.price_yearly = yearlyPrice
+
+        // item.stripe_price_id_yearly may not exist yet — upsertStripePrice just creates a
+        // new one in that case, there's nothing to archive.
+        const stripePriceId = await upsertStripePrice(
+          item.stripe_product_id,
+          yearlyPrice,
+          'gbp',
+          item.stripe_price_id_yearly,
+          { interval: 'year' }
+        )
+        updates.stripe_price_id_yearly = stripePriceId
+      }
+    } else if (itemType === 'session_pass_type') {
+      // Session pass types have a single price field, same shape as service_type — no
+      // base/member/sale tiers and no recurring interval on this table.
       if (basePrice !== undefined) {
         updates.price = basePrice
         priceUpdates.price = basePrice
