@@ -10,6 +10,7 @@ This folder contains SQL migrations for The Paddock Wellness Club database schem
 - `004_refactored_schema.sql` - **CURRENT** - Refactored schema implementing Sanity/Supabase field split + three-tier pricing
 - `005_seed_service_types.sql` - Seed data for service types and price tiers
 - `009_membership_periods_and_lapse.sql` - Membership credit periods engine, past_due/lapse flow, and the `stripe_webhook_events` idempotency table (already applied directly against the live project; this file records it so schema history matches)
+- `010_store_credit.sql` - Store credit ledger (`customers.store_credit_balance`, `store_credit_transactions`, `store_credit_apply()`) replacing credit-style gift cards; migrates existing `issued_as_credit` gift cards into balance and voids them (already applied directly against the live project; this file records it so schema history matches)
 
 ## How to Apply Migrations (Fresh Setup)
 
