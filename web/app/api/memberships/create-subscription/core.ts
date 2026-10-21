@@ -45,8 +45,11 @@ export interface StripeDeps {
 // API versions (2026-07-29.dahlia) — confirmed against the installed Stripe SDK's types; the
 // older top-level invoice.payment_intent field no longer exists on the typed Invoice object at
 // all (the only `payment_intent` field left on Invoice-related types belongs to
-// Invoice.LastFinalizationError, an unrelated error object). Read defensively as a runtime
-// fallback in case of an older-shaped payload, same pattern as the webhook's field helpers.
+// Invoice.LastFinalizationError, an unrelated error object). Stripe only expands the LIST
+// (`invoice.payments`) here — expanding the nested payment_intent itself would push the expand
+// path past Stripe's 4-level limit (`latest_invoice.payments.data.payment.payment_intent`
+// errors with "You cannot expand more than 4 levels of a property") — so in practice this is
+// always the plain id string, with the object case and a legacy fallback handled defensively.
 export function getInvoicePaymentIntentId(invoice: Stripe.Invoice): string | undefined {
   const paymentIntent = invoice.payments?.data?.[0]?.payment?.payment_intent
   if (paymentIntent) {
@@ -153,7 +156,7 @@ export async function createMembershipSubscription(
           membership_plan_id: membershipPlanId,
           billing_frequency: billingFrequency,
         },
-        expand: ['latest_invoice.payments.data.payment.payment_intent'],
+        expand: ['latest_invoice.payments'],
       },
       idempotencyKey ? { idempotencyKey } : undefined
     )
@@ -163,6 +166,16 @@ export async function createMembershipSubscription(
 
     // payment_behavior: 'error_if_incomplete' means Stripe does not create the subscription at
     // all when the first invoice can't be paid immediately — there is nothing to clean up here.
+    // Only an actual card failure is a real decline — everything else (bad params, a Stripe API
+    // error, our own expand mistake, etc.) must NOT be mislabelled payment_failed, or a real bug
+    // looks identical to "card declined" and hides forever.
+    const isCardFailure =
+      stripeError instanceof Stripe.errors.StripeCardError || stripeErr.code === 'authentication_required'
+
+    if (!isCardFailure) {
+      return { success: false, status: 500, error: stripeErr.message ?? 'Unexpected error creating subscription', code: 'unexpected' }
+    }
+
     let message = stripeErr.message ?? 'Payment failed'
     if (stripeErr.code === 'authentication_required') {
       message = 'This card requires additional authentication — ask the customer to re-enter their card.'

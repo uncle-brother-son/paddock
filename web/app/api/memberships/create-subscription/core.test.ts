@@ -1,6 +1,15 @@
 import { describe, it, expect, vi } from 'vitest'
-import type Stripe from 'stripe'
+import Stripe from 'stripe'
 import { createMembershipSubscription, getInvoicePaymentIntentId, type StripeDeps } from './core'
+
+// Makes `instanceof Stripe.errors.StripeCardError` true without needing to satisfy that class's
+// real constructor (which expects a full raw Stripe error payload).
+function fakeCardError(message: string, code?: string): Stripe.errors.StripeCardError {
+  const error = new Error(message) as any
+  error.code = code
+  Object.setPrototypeOf(error, Stripe.errors.StripeCardError.prototype)
+  return error
+}
 
 function fakeSupabase(opts: { customer?: any; plan?: any; customerError?: any; planError?: any }) {
   const from = vi.fn((table: string) => {
@@ -181,7 +190,7 @@ describe('createMembershipSubscription', () => {
 
   it('returns 402 payment_failed on a decline and leaves no subscription behind', async () => {
     const supabase = fakeSupabase({ customer: baseCustomer, plan: basePlan })
-    const declineError = Object.assign(new Error('Your card was declined.'), { code: 'card_declined', type: 'StripeCardError' })
+    const declineError = fakeCardError('Your card was declined.', 'card_declined')
     const stripe = fakeStripe({ subscriptionsCreate: vi.fn().mockRejectedValue(declineError) })
 
     const result = await createMembershipSubscription(
@@ -248,5 +257,44 @@ describe('createMembershipSubscription', () => {
       expect.anything(),
       { idempotencyKey: 'idem-key-1' }
     )
+  })
+
+  it('never passes an expand path deeper than Stripe\'s 4-level limit (max 3 dots)', async () => {
+    const supabase = fakeSupabase({ customer: baseCustomer, plan: basePlan })
+    const stripe = fakeStripe()
+
+    await createMembershipSubscription(
+      { customerId: 'cust_1', membershipPlanId: 'plan_1', billingFrequency: 'monthly' },
+      supabase,
+      stripe
+    )
+
+    const [params] = stripe.subscriptionsCreate.mock.calls[0]
+    for (const path of params.expand ?? []) {
+      expect(path.split('.').length - 1).toBeLessThanOrEqual(3)
+    }
+  })
+
+  it('does not mislabel a non-card Stripe error (e.g. a bad request) as payment_failed', async () => {
+    const supabase = fakeSupabase({ customer: baseCustomer, plan: basePlan })
+    const invalidRequestError = Object.assign(new Error('You cannot expand more than 4 levels of a property.'), {
+      code: undefined,
+      type: 'StripeInvalidRequestError',
+    })
+    const stripe = fakeStripe({ subscriptionsCreate: vi.fn().mockRejectedValue(invalidRequestError) })
+
+    const result = await createMembershipSubscription(
+      { customerId: 'cust_1', membershipPlanId: 'plan_1', billingFrequency: 'monthly' },
+      supabase,
+      stripe
+    )
+
+    expect(result).toEqual({
+      success: false,
+      status: 500,
+      error: 'You cannot expand more than 4 levels of a property.',
+      code: 'unexpected',
+    })
+    expect(stripe.subscriptionsCancel).not.toHaveBeenCalled()
   })
 })
