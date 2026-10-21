@@ -36,29 +36,6 @@ function verifyRetoolAuth(request: NextRequest): boolean {
   return token === retoolApiKey
 }
 
-function toDateOnly(date: Date): string {
-  return date.toISOString().slice(0, 10)
-}
-
-const GIFT_CARD_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789' // excludes ambiguous chars
-
-function generateGiftCardCode(): string {
-  let code = ''
-  for (let i = 0; i < 10; i++) {
-    code += GIFT_CARD_CODE_CHARS[Math.floor(Math.random() * GIFT_CARD_CODE_CHARS.length)]
-  }
-  return `GC-${code.slice(0, 5)}-${code.slice(5)}`
-}
-
-async function generateUniqueGiftCardCode(supabase: any): Promise<string> {
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const code = generateGiftCardCode()
-    const { data } = await supabase.from('gift_cards').select('id').eq('code', code).maybeSingle()
-    if (!data) return code
-  }
-  throw new Error('Failed to generate a unique gift card code')
-}
-
 // Rejects amounts with more than 2 decimal places (e.g. 10.001), not just non-positive ones.
 function isValidAmount(amount: unknown): amount is number {
   if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) return false
@@ -154,7 +131,7 @@ export async function POST(request: NextRequest) {
     }
 
     let refundId: string | null = null
-    let giftCard: Record<string, unknown> | null = null
+    let storeCreditBalance: number | null = null
 
     if (refundMethod === 'card') {
       if (!booking.stripe_payment_id) {
@@ -181,35 +158,26 @@ export async function POST(request: NextRequest) {
         )
       }
     } else {
-      // refundMethod === 'credit' — issue a new store-credit gift card for the partial
-      // amount. A gift card payment becomes a new credit, never a restoration to the
-      // original gift card balance (per cancellation policy).
-      const code = await generateUniqueGiftCardCode(supabase)
-      const issueDate = new Date()
-      const expiryDate = new Date(issueDate)
-      expiryDate.setMonth(expiryDate.getMonth() + 3) // store credit issued by refunds expires after 3 months
+      // refundMethod === 'credit' — add to the customer's non-expiring store credit balance via
+      // the ledger function, for the partial amount. A gift-card payment becomes store credit,
+      // never a restoration to the original gift card's balance (per cancellation policy).
+      const { data: creditResult, error: creditError } = await supabase.rpc('store_credit_apply', {
+        p_customer_id: booking.customer_id,
+        p_amount: amount,
+        p_reason: 'refund',
+        p_booking_id: bookingId,
+        p_note: 'Refund to store credit: partial booking refund',
+      })
 
-      const { data: createdGiftCard, error: giftCardError } = await supabase
-        .from('gift_cards')
-        .insert({
-          code,
-          type: 'monetary',
-          original_value: amount,
-          remaining_balance: amount,
-          purchaser_id: booking.customer_id,
-          origin: 'issued_as_credit',
-          issue_date: toDateOnly(issueDate),
-          expiry_date: toDateOnly(expiryDate),
-        })
-        .select()
-        .single()
-
-      if (giftCardError || !createdGiftCard) {
-        console.error('Error creating credit gift card:', giftCardError)
-        return NextResponse.json({ error: 'Failed to issue credit' }, { status: 500 })
+      if (creditError || !creditResult?.ok) {
+        console.error('Error applying store credit:', creditError ?? creditResult)
+        return NextResponse.json(
+          { error: `Failed to issue store credit${creditResult?.reason ? `: ${creditResult.reason}` : ''}` },
+          { status: 500 }
+        )
       }
 
-      giftCard = createdGiftCard
+      storeCreditBalance = creditResult.balance
     }
 
     // Deliberately does NOT cancel the booking, change sessions.total_booked, or modify
@@ -218,7 +186,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       refundId,
-      giftCard,
+      storeCreditBalance,
     })
   } catch (error) {
     console.error('Error processing partial refund:', error)
