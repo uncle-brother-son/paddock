@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import Stripe from 'stripe'
+import { londonWallClockToUtc } from '@/lib/london-time'
 
 function getStripe() {
   return new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -137,7 +138,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Session not found for this booking' }, { status: 404 })
     }
 
-    const hoursUntilStart = (new Date(session.start_time).getTime() - Date.now()) / (1000 * 60 * 60)
+    const hoursUntilStart = (londonWallClockToUtc(session.start_time).getTime() - Date.now()) / (1000 * 60 * 60)
     if (hoursUntilStart < 24) {
       return NextResponse.json(
         { error: 'Not eligible for refund or credit — within 24 hours of session start.' },
