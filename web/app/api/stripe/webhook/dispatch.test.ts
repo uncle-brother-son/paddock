@@ -81,6 +81,7 @@ describe('dispatchStripeEvent', () => {
     const subscription = {
       id: 'sub_999',
       cancel_at_period_end: true,
+      cancel_at: null,
       items: { data: [{ current_period_end: 1700000000 }] },
     }
     const result = await dispatchStripeEvent(fakeEvent('customer.subscription.updated', subscription), supabase)
@@ -88,9 +89,28 @@ describe('dispatchStripeEvent', () => {
     expect(supabase.rpc).toHaveBeenCalledWith('membership_sync_cancel_at_period_end', {
       p_stripe_subscription_id: 'sub_999',
       p_cancel_at_period_end: true,
+      p_cancel_at: null,
       p_period_end: new Date(1700000000 * 1000).toISOString(),
     })
     expect(result).toEqual({ outcome: 'processed', detail: { found: true, action: 'cancel_scheduled' } })
+  })
+
+  it('customer.subscription.updated forwards a set cancel_at as an ISO timestamp', async () => {
+    const supabase = fakeRpcClient({ data: { found: true, action: 'cancel_scheduled' }, error: null })
+    const subscription = {
+      id: 'sub_999',
+      cancel_at_period_end: false,
+      cancel_at: 1700000000,
+      items: { data: [{ current_period_end: 1702592000 }] },
+    }
+    await dispatchStripeEvent(fakeEvent('customer.subscription.updated', subscription), supabase)
+
+    expect(supabase.rpc).toHaveBeenCalledWith('membership_sync_cancel_at_period_end', {
+      p_stripe_subscription_id: 'sub_999',
+      p_cancel_at_period_end: false,
+      p_cancel_at: new Date(1700000000 * 1000).toISOString(),
+      p_period_end: new Date(1702592000 * 1000).toISOString(),
+    })
   })
 
   it('ignores event types that are not handled, without calling the RPC', async () => {

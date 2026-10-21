@@ -102,6 +102,7 @@ export async function dispatchStripeEvent(event: Stripe.Event, supabase: RpcClie
       const { data, error } = await supabase.rpc('membership_sync_cancel_at_period_end', {
         p_stripe_subscription_id: subscription.id,
         p_cancel_at_period_end: subscription.cancel_at_period_end,
+        p_cancel_at: subscription.cancel_at ? unixSecondsToIso(subscription.cancel_at) : null,
         p_period_end: unixSecondsToIso(periodEndSeconds),
       })
       if (error) throw error
