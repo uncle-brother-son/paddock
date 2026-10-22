@@ -7,6 +7,10 @@ export interface CreateSubscriptionParams {
   membershipPlanId: string
   billingFrequency: BillingFrequency
   idempotencyKey?: string
+  // Pounds already covered by a gift card and/or store credit that Retool has taken. Applied to
+  // the FIRST invoice only, as a one-off Stripe coupon; the saved card pays the remainder. All
+  // renewals are charged in full to the saved card.
+  discountAmount?: number
 }
 
 export interface CreateSubscriptionSuccess {
@@ -18,6 +22,7 @@ export interface CreateSubscriptionSuccess {
   latestInvoiceId: string | null
   paymentIntentId: string | null
   amountPaid: number
+  discountApplied: number
 }
 
 export interface CreateSubscriptionFailure {
@@ -39,6 +44,9 @@ export interface StripeDeps {
     options?: Stripe.RequestOptions
   ) => Promise<Stripe.Subscription>
   subscriptionsCancel: (id: string) => Promise<Stripe.Subscription>
+  // Only needed when discountAmount > 0.
+  couponsCreate?: (params: Stripe.CouponCreateParams) => Promise<Stripe.Coupon>
+  couponsDel?: (id: string) => Promise<unknown>
 }
 
 // invoice.payments.data[0].payment.payment_intent is where the PaymentIntent id lives in recent
@@ -62,12 +70,22 @@ export function getInvoicePaymentIntentId(invoice: Stripe.Invoice): string | und
   return undefined
 }
 
+// Best-effort: a leftover one-off coupon is harmless, but don't leave them lying around.
+async function deleteCouponQuietly(stripe: StripeDeps, couponId: string | undefined) {
+  if (!couponId || !stripe.couponsDel) return
+  try {
+    await stripe.couponsDel(couponId)
+  } catch (error) {
+    console.error('Error deleting unused coupon:', couponId, error instanceof Error ? error.message : error)
+  }
+}
+
 export async function createMembershipSubscription(
   params: CreateSubscriptionParams,
   supabase: any,
   stripe: StripeDeps
 ): Promise<CreateSubscriptionResult> {
-  const { customerId, membershipPlanId, billingFrequency, idempotencyKey } = params
+  const { customerId, membershipPlanId, billingFrequency, idempotencyKey, discountAmount = 0 } = params
 
   const { data: customer, error: customerError } = await supabase
     .from('customers')
@@ -133,6 +151,25 @@ export async function createMembershipSubscription(
     }
   }
 
+  if (!Number.isFinite(discountAmount) || discountAmount < 0) {
+    return { success: false, status: 400, error: 'discountAmount must be zero or more.', code: 'invalid_discount' }
+  }
+  const discountPence = Math.round(discountAmount * 100)
+  if (discountPence > 0) {
+    const firstInvoicePence = price.unit_amount ?? 0
+    if (discountPence > firstInvoicePence) {
+      return {
+        success: false,
+        status: 400,
+        error: 'discountAmount is more than the first payment.',
+        code: 'discount_exceeds_total',
+      }
+    }
+    if (!stripe.couponsCreate) {
+      return { success: false, status: 500, error: 'Discounts are not available.', code: 'unexpected' }
+    }
+  }
+
   try {
     await stripe.customersUpdate(customer.stripe_customer_id, {
       invoice_settings: { default_payment_method: customer.saved_payment_method_id },
@@ -142,6 +179,23 @@ export async function createMembershipSubscription(
     return { success: false, status: 500, error: 'Failed to set default payment method' }
   }
 
+  let couponId: string | undefined
+  if (discountPence > 0) {
+    try {
+      const coupon = await stripe.couponsCreate!({
+        amount_off: discountPence,
+        currency: 'gbp',
+        duration: 'once',
+        name: 'Gift card / store credit',
+        metadata: { supabase_customer_id: customerId, membership_plan_id: membershipPlanId },
+      })
+      couponId = coupon.id
+    } catch (stripeError) {
+      console.error('Error creating discount coupon:', customerId, stripeError instanceof Error ? stripeError.message : stripeError)
+      return { success: false, status: 500, error: 'Failed to apply the discount', code: 'unexpected' }
+    }
+  }
+
   let subscription: Stripe.Subscription
   try {
     subscription = await stripe.subscriptionsCreate(
@@ -149,6 +203,7 @@ export async function createMembershipSubscription(
         customer: customer.stripe_customer_id,
         items: [{ price: priceId }],
         default_payment_method: customer.saved_payment_method_id,
+        ...(couponId ? { discounts: [{ coupon: couponId }] } : {}),
         off_session: true,
         payment_behavior: 'error_if_incomplete',
         metadata: {
@@ -169,6 +224,7 @@ export async function createMembershipSubscription(
     // Only an actual card failure is a real decline — everything else (bad params, a Stripe API
     // error, our own expand mistake, etc.) must NOT be mislabelled payment_failed, or a real bug
     // looks identical to "card declined" and hides forever.
+    await deleteCouponQuietly(stripe, couponId)
     const isCardFailure =
       stripeError instanceof Stripe.errors.StripeCardError || stripeErr.code === 'authentication_required'
 
@@ -186,6 +242,7 @@ export async function createMembershipSubscription(
   // Defensive cleanup: payment_behavior: 'error_if_incomplete' should make this unreachable,
   // but never leave a non-functional subscription behind if Stripe returns one anyway.
   if (subscription.status !== 'active' && subscription.status !== 'trialing') {
+    await deleteCouponQuietly(stripe, couponId)
     try {
       await stripe.subscriptionsCancel(subscription.id)
     } catch (cancelError) {
@@ -217,5 +274,6 @@ export async function createMembershipSubscription(
     latestInvoiceId: invoice?.id ?? null,
     paymentIntentId,
     amountPaid: invoice ? invoice.amount_paid / 100 : 0,
+    discountApplied: discountPence / 100,
   }
 }

@@ -167,6 +167,7 @@ describe('createMembershipSubscription', () => {
       latestInvoiceId: 'in_123',
       paymentIntentId: 'pi_123',
       amountPaid: 25,
+      discountApplied: 0,
     })
   })
 
@@ -296,5 +297,73 @@ describe('createMembershipSubscription', () => {
       code: 'unexpected',
     })
     expect(stripe.subscriptionsCancel).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('createMembershipSubscription with discountAmount (gift card / store credit)', () => {
+  const params = { customerId: 'cust_1', membershipPlanId: 'plan_1', billingFrequency: 'monthly' as const }
+  const supabase = () => fakeSupabase({ customer: baseCustomer, plan: basePlan })
+  const priced = (unit_amount: number) =>
+    vi.fn().mockResolvedValue({ recurring: { interval: 'month' }, currency: 'gbp', unit_amount })
+
+  it('creates a one-off coupon for the discount and attaches it to the subscription', async () => {
+    const couponsCreate = vi.fn().mockResolvedValue({ id: 'coupon_1' })
+    const stripe = fakeStripe({ pricesRetrieve: priced(4500), couponsCreate })
+    const result = await createMembershipSubscription({ ...params, discountAmount: 15 }, supabase(), stripe)
+    expect(result.success).toBe(true)
+    expect(couponsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ amount_off: 1500, currency: 'gbp', duration: 'once' })
+    )
+    expect(stripe.subscriptionsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ discounts: [{ coupon: 'coupon_1' }] }),
+      undefined
+    )
+    if (result.success) expect(result.discountApplied).toBe(15)
+  })
+
+  it('allows a discount equal to the whole first payment', async () => {
+    const couponsCreate = vi.fn().mockResolvedValue({ id: 'coupon_full' })
+    const stripe = fakeStripe({ pricesRetrieve: priced(4500), couponsCreate })
+    const result = await createMembershipSubscription({ ...params, discountAmount: 45 }, supabase(), stripe)
+    expect(result.success).toBe(true)
+    expect(couponsCreate).toHaveBeenCalledWith(expect.objectContaining({ amount_off: 4500 }))
+  })
+
+  it('refuses a discount larger than the first payment and creates nothing', async () => {
+    const couponsCreate = vi.fn()
+    const stripe = fakeStripe({ pricesRetrieve: priced(4500), couponsCreate })
+    const result = await createMembershipSubscription({ ...params, discountAmount: 50 }, supabase(), stripe)
+    expect(result).toMatchObject({ success: false, status: 400, code: 'discount_exceeds_total' })
+    expect(couponsCreate).not.toHaveBeenCalled()
+    expect(stripe.subscriptionsCreate).not.toHaveBeenCalled()
+  })
+
+  it('refuses a negative discount', async () => {
+    const stripe = fakeStripe({ pricesRetrieve: priced(4500), couponsCreate: vi.fn() })
+    const result = await createMembershipSubscription({ ...params, discountAmount: -1 }, supabase(), stripe)
+    expect(result).toMatchObject({ success: false, status: 400, code: 'invalid_discount' })
+  })
+
+  it('deletes the unused coupon when the card is declined', async () => {
+    const declineError = fakeCardError('Your card was declined.', 'card_declined')
+    const couponsCreate = vi.fn().mockResolvedValue({ id: 'coupon_2' })
+    const couponsDel = vi.fn().mockResolvedValue({})
+    const stripe = fakeStripe({
+      pricesRetrieve: priced(4500),
+      couponsCreate,
+      couponsDel,
+      subscriptionsCreate: vi.fn().mockRejectedValue(declineError),
+    })
+    const result = await createMembershipSubscription({ ...params, discountAmount: 15 }, supabase(), stripe)
+    expect(result).toMatchObject({ success: false, status: 402, code: 'payment_failed' })
+    expect(couponsDel).toHaveBeenCalledWith('coupon_2')
+  })
+
+  it('sends no discounts when there is no discount', async () => {
+    const stripe = fakeStripe({ pricesRetrieve: priced(4500) })
+    await createMembershipSubscription(params, supabase(), stripe)
+    const sent = (stripe.subscriptionsCreate as any).mock.calls[0][0]
+    expect(sent.discounts).toBeUndefined()
   })
 })

@@ -16,9 +16,15 @@ owns those writes and stores `subscriptionId`, `paymentIntentId`, and the invoic
   "customerId": "uuid",
   "membershipPlanId": "uuid",
   "billingFrequency": "monthly | yearly",
-  "idempotencyKey": "optional string, forwarded to Stripe's subscriptions.create"
+  "idempotencyKey": "optional string, forwarded to Stripe's subscriptions.create",
+  "discountAmount": "optional number, pounds. Gift card / store credit applied to the FIRST payment only"
 }
 ```
+
+`discountAmount` creates a one-off Stripe coupon (amount_off, GBP, duration once) attached to the
+subscription, so only the first invoice is reduced; renewals charge the full price. A discount equal
+to the full price gives a £0 first invoice (`paymentIntentId` may be null). The coupon is deleted if
+the card is declined. The saved card is still required either way.
 
 ### Success response (200)
 ```json
@@ -30,7 +36,8 @@ owns those writes and stores `subscriptionId`, `paymentIntentId`, and the invoic
   "currentPeriodEnd": "2026-02-01T00:00:00.000Z",
   "latestInvoiceId": "in_...",
   "paymentIntentId": "pi_...",
-  "amountPaid": 25
+  "amountPaid": 25,
+  "discountApplied": 0
 }
 ```
 
@@ -42,5 +49,7 @@ owns those writes and stores `subscriptionId`, `paymentIntentId`, and the invoic
 | 400 | — | Membership plan is not active. |
 | 400 | `plan_not_synced` | Plan has no Stripe price for the requested billing frequency. |
 | 400 | `price_not_recurring` | The plan's price for that frequency isn't a recurring GBP price matching the frequency — never subscribes to a mismatched price. |
+| 400 | `invalid_discount` | `discountAmount` is negative or not a number. |
+| 400 | `discount_exceeds_total` | `discountAmount` is larger than the plan's first payment. |
 | 402 | `payment_failed` | Stripe declined the first charge (card declined, `authentication_required`, etc.) — no subscription is left behind. |
 | 500 | — | Internal error (Stripe/Supabase failure unrelated to the card itself). |

@@ -43,6 +43,9 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       )
     }
+    if (body.discountAmount !== undefined && typeof body.discountAmount !== 'number') {
+      return NextResponse.json({ error: 'discountAmount must be a number of pounds' }, { status: 400 })
+    }
     if (billingFrequency !== 'monthly' && billingFrequency !== 'yearly') {
       return NextResponse.json({ error: 'billingFrequency must be "monthly" or "yearly"' }, { status: 400 })
     }
@@ -58,6 +61,8 @@ export async function POST(request: NextRequest) {
       customersUpdate: (id, params) => stripeClient.customers.update(id, params),
       subscriptionsCreate: (params, options) => stripeClient.subscriptions.create(params, options),
       subscriptionsCancel: (id) => stripeClient.subscriptions.cancel(id),
+      couponsCreate: (params) => stripeClient.coupons.create(params),
+      couponsDel: (id) => stripeClient.coupons.del(id),
     }
 
     const result = await createMembershipSubscription(body, supabase, stripeDeps)
