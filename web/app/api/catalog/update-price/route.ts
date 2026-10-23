@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import Stripe from 'stripe'
+import { migrateSubscriptionsToPlanPrices, type MigratableMembership, type PriceMigrationResult } from '@/lib/membership-price-migration'
 
 function getStripe() {
   return new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -276,10 +277,62 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Existing members move to the new price from their NEXT renewal: each active subscription's
+    // item is switched to the plan's current Stripe price with no proration, so the current period
+    // stays as paid. Idempotent, and a failure here never undoes the (already saved) price change;
+    // failures are reported so staff can re-save the plan to retry.
+    let subscriptionMigration: PriceMigrationResult | null = null
+    if (itemType === 'membership_plan' && (monthlyPrice !== undefined || yearlyPrice !== undefined)) {
+      try {
+        const { data: memberships, error: membershipsError } = await supabase
+          .from('customer_memberships')
+          .select('id, stripe_subscription_id, billing_frequency')
+          .eq('plan_id', itemId)
+          .not('stripe_subscription_id', 'is', null)
+          .in('subscription_status', ['active', 'past_due'])
+        if (membershipsError) throw membershipsError
+        const stripe = getStripe()
+        subscriptionMigration = await migrateSubscriptionsToPlanPrices(
+          (memberships ?? []) as MigratableMembership[],
+          { monthly: updatedItem.stripe_price_id ?? null, yearly: updatedItem.stripe_price_id_yearly ?? null },
+          {
+            retrieveSubscription: async (id) => {
+              const sub = await stripe.subscriptions.retrieve(id)
+              return {
+                status: sub.status,
+                items: sub.items.data.map((i) => ({ id: i.id, priceId: i.price.id })),
+              }
+            },
+            switchSubscriptionItemPrice: async (id, itemId, priceId) => {
+              await stripe.subscriptions.update(id, {
+                items: [{ id: itemId, price: priceId }],
+                proration_behavior: 'none',
+              })
+            },
+          }
+        )
+      } catch (migrationError) {
+        console.error('Membership price migration failed:', migrationError)
+        subscriptionMigration = {
+          migrated: 0,
+          alreadyCurrent: 0,
+          skipped: 0,
+          failed: [
+            {
+              membershipId: 'all',
+              subscriptionId: 'all',
+              error: migrationError instanceof Error ? migrationError.message : 'Unknown error',
+            },
+          ],
+        }
+      }
+    }
+
     return NextResponse.json({
       success: true,
       item: updatedItem,
       pricesUpdated: priceUpdates,
+      ...(subscriptionMigration ? { subscriptionMigration } : {}),
     })
 
   } catch (error) {
