@@ -11,6 +11,9 @@ export interface CreateSubscriptionParams {
   // the FIRST invoice only, as a one-off Stripe coupon; the saved card pays the remainder. All
   // renewals are charged in full to the saved card.
   discountAmount?: number
+  // Optional name for the one-off coupon shown on the Stripe invoice (e.g. "Paid on card reader"
+  // when the first payment was taken in person). Defaults to "Gift card / store credit".
+  discountLabel?: string
 }
 
 export interface CreateSubscriptionSuccess {
@@ -85,7 +88,7 @@ export async function createMembershipSubscription(
   supabase: any,
   stripe: StripeDeps
 ): Promise<CreateSubscriptionResult> {
-  const { customerId, membershipPlanId, billingFrequency, idempotencyKey, discountAmount = 0 } = params
+  const { customerId, membershipPlanId, billingFrequency, idempotencyKey, discountAmount = 0, discountLabel } = params
 
   const { data: customer, error: customerError } = await supabase
     .from('customers')
@@ -186,7 +189,7 @@ export async function createMembershipSubscription(
         amount_off: discountPence,
         currency: 'gbp',
         duration: 'once',
-        name: 'Gift card / store credit',
+        name: (discountLabel?.trim() || 'Gift card / store credit').slice(0, 40),
         metadata: { supabase_customer_id: customerId, membership_plan_id: membershipPlanId },
       })
       couponId = coupon.id

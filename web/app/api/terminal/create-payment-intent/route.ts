@@ -13,6 +13,25 @@ interface CreatePaymentIntentRequest {
   customerId: string
   amount: number
   saveCard: boolean
+  // Optional link back to the Retool record this charge pays for, so a pending order can be
+  // matched to its PaymentIntent later (finalise / cancel / scheduled check).
+  // Only these keys are accepted: order_id, flow, record_id.
+  metadata?: Record<string, string>
+  description?: string
+}
+
+const ALLOWED_METADATA_KEYS = ['order_id', 'flow', 'record_id'] as const
+
+function cleanMetadata(input: unknown): Record<string, string> | null | 'invalid' {
+  if (input === undefined || input === null) return null
+  if (typeof input !== 'object' || Array.isArray(input)) return 'invalid'
+  const out: Record<string, string> = {}
+  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+    if (!(ALLOWED_METADATA_KEYS as readonly string[]).includes(key)) return 'invalid'
+    if (typeof value !== 'string' || value.length === 0 || value.length > 200) return 'invalid'
+    out[key] = value
+  }
+  return Object.keys(out).length ? out : null
 }
 
 // Verify Retool API key
@@ -46,6 +65,16 @@ export async function POST(request: NextRequest) {
     // Parse request body
     const body: CreatePaymentIntentRequest = await request.json()
     const { customerId, amount, saveCard } = body
+    const metadata = cleanMetadata(body.metadata)
+    if (metadata === 'invalid') {
+      return NextResponse.json(
+        { error: 'metadata may only contain non-empty string values for: order_id, flow, record_id' },
+        { status: 400 }
+      )
+    }
+    if (body.description !== undefined && typeof body.description !== 'string') {
+      return NextResponse.json({ error: 'description must be a string' }, { status: 400 })
+    }
 
     if (!customerId) {
       return NextResponse.json(
@@ -157,6 +186,8 @@ export async function POST(request: NextRequest) {
         customer: stripeCustomerId,
         payment_method_types: ['card_present'],
         ...(saveCard ? { setup_future_usage: 'off_session' as const } : {}),
+        metadata: { supabase_customer_id: customerId, ...(metadata ?? {}) },
+        ...(body.description ? { description: body.description.slice(0, 500) } : {}),
       })
     } catch (stripeError) {
       const stripeErr = stripeError as Stripe.errors.StripeError

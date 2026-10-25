@@ -330,6 +330,16 @@ describe('createMembershipSubscription with discountAmount (gift card / store cr
     expect(couponsCreate).toHaveBeenCalledWith(expect.objectContaining({ amount_off: 4500 }))
   })
 
+  it('names the coupon with discountLabel when given, and defaults otherwise', async () => {
+    const couponsCreate = vi.fn().mockResolvedValue({ id: 'coupon_label' })
+    const stripe = fakeStripe({ pricesRetrieve: priced(4500), couponsCreate })
+    await createMembershipSubscription({ ...params, discountAmount: 45, discountLabel: 'Paid on card reader' }, supabase(), stripe)
+    expect(couponsCreate).toHaveBeenCalledWith(expect.objectContaining({ name: 'Paid on card reader' }))
+    const couponsCreate2 = vi.fn().mockResolvedValue({ id: 'coupon_default' })
+    await createMembershipSubscription({ ...params, discountAmount: 10 }, supabase(), fakeStripe({ pricesRetrieve: priced(4500), couponsCreate: couponsCreate2 }))
+    expect(couponsCreate2).toHaveBeenCalledWith(expect.objectContaining({ name: 'Gift card / store credit' }))
+  })
+
   it('refuses a discount larger than the first payment and creates nothing', async () => {
     const couponsCreate = vi.fn()
     const stripe = fakeStripe({ pricesRetrieve: priced(4500), couponsCreate })

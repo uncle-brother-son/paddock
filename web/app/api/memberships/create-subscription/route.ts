@@ -46,6 +46,9 @@ export async function POST(request: NextRequest) {
     if (body.discountAmount !== undefined && typeof body.discountAmount !== 'number') {
       return NextResponse.json({ error: 'discountAmount must be a number of pounds' }, { status: 400 })
     }
+    if (body.discountLabel !== undefined && typeof body.discountLabel !== 'string') {
+      return NextResponse.json({ error: 'discountLabel must be a string' }, { status: 400 })
+    }
     if (billingFrequency !== 'monthly' && billingFrequency !== 'yearly') {
       return NextResponse.json({ error: 'billingFrequency must be "monthly" or "yearly"' }, { status: 400 })
     }
