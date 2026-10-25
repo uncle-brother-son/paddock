@@ -18,8 +18,8 @@ Agency standards: follow the `ubs-frontend-standards` skill for every website ta
 - `npx tsc --noEmit`: type check (Claude runs this).
 - `npm run test:unit`: unit tests. Wayne runs them; Vitest does not run in Claude's shell.
 - `npm run storybook`: Storybook on port 6006.
-- `npm run deploy`: build and deploy to Cloudflare. Wayne only.
-- Wayne commits and deploys. Claude never commits, pushes, deploys, installs packages or deletes files without his yes.
+- Deploying: pushing to `main` on GitHub (uncle-brother-son/paddock) triggers a Cloudflare build and deploy automatically. No manual `npm run deploy` needed.
+- Wayne commits and pushes. Claude never commits, pushes, deploys, installs packages or deletes files without his yes.
 
 ## Design
 - **Figma file:** "Website" (UBS workspace).

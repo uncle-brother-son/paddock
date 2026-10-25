@@ -117,6 +117,21 @@ export async function POST(request: NextRequest) {
 
     const generatedCardId = extractGeneratedCardId(cardPresent)
 
+    // The SetupIntent flow's SetupAttempt.card_present carries no last4/brand (only the
+    // generated_card id), so read them from the reusable generated card itself when missing.
+    let last4 = cardPresent?.last4 ?? null
+    let brand = cardPresent?.brand ?? null
+    if ((!last4 || !brand) && generatedCardId) {
+      try {
+        const generated = await getStripe().paymentMethods.retrieve(generatedCardId)
+        last4 = last4 ?? generated.card?.last4 ?? null
+        brand = brand ?? generated.card?.brand ?? null
+      } catch (lookupError) {
+        // Card details are display-only — never fail the save because of them.
+        console.error('Could not read card details from the generated card:', lookupError)
+      }
+    }
+
     return NextResponse.json({
       success: true,
       // The id to actually save. Falls back to the raw card_present id when Stripe hasn't
@@ -125,8 +140,8 @@ export async function POST(request: NextRequest) {
       // billing until the card is re-tapped on hardware that does produce a generated_card.
       paymentMethodId: generatedCardId ?? rawPaymentMethodId,
       reusable: Boolean(generatedCardId),
-      last4: cardPresent?.last4 ?? null,
-      brand: cardPresent?.brand ?? null,
+      last4,
+      brand,
     })
   } catch (error) {
     console.error('Error resolving saved card:', error)
