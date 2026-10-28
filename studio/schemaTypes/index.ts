@@ -4,6 +4,7 @@ import { addon } from './addon'
 import { membershipPlan } from './membershipPlan'
 import { sessionPassType } from './sessionPassType'
 import { giftCardType } from './giftCardType'
+import { event } from './event'
 import { page } from './page'
 import { blogPost } from './blogPost'
 import { galleryImage } from './galleryImage'
@@ -16,6 +17,7 @@ export const schemaTypes = [
   membershipPlan,
   sessionPassType,
   giftCardType,
+  event,
   
   // Content types (Sanity-only)
   page,

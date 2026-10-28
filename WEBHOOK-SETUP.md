@@ -10,6 +10,7 @@ When you publish content in Sanity Studio:
 3. **Add-ons** → syncs `name`, `category`, `thumbnail_url` to `addons` table
 4. **Membership Plans** → syncs `name`, `thumbnail_url` to `membership_plans` table
 5. **Session Pass Types** → syncs `name`, `thumbnail_url` to `session_pass_types` table
+7. **Events** → syncs `name`, `thumbnail_url`, `has_extra_waiver`, `extra_waiver_version` to `events` (new events arrive off sale; date, capacity, access, prices and refund cut-off are set in Retool). No Stripe product.
 
 **Content-only types** (Page, Blog Post, Gallery Image) are **not synced** - they stay Sanity-only.
 
@@ -43,7 +44,7 @@ https://paddock.paddock-55d.workers.dev/api/sanity/webhook
   - ✅ Create
   - ✅ Update
   - ✅ Delete (optional - currently not handled but safe to enable)
-- **Filter**: `_type in ["serviceType", "product", "addon", "membershipPlan", "sessionPassType", "giftCardType"]`
+- **Filter**: `_type in ["serviceType", "product", "addon", "membershipPlan", "sessionPassType", "giftCardType", "event"]`
 
   ⚠️ **This is a hardcoded list, not a wildcard.** Adding a new catalog type to the webhook
   code (a new `case` in the `switch` inside `route.ts`) does nothing on its own — Sanity

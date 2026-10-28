@@ -72,6 +72,7 @@ async function deactivateBySanityId(sanityId: string, supabase: any) {
     { table: 'membership_plans', column: 'sanity_plan_id' },
     { table: 'session_pass_types', column: 'sanity_pass_type_id' },
     { table: 'gift_card_types', column: 'sanity_gift_card_type_id' },
+    { table: 'events', column: 'sanity_event_id' },
   ]
 
   for (const { table, column } of tables) {
@@ -169,6 +170,9 @@ export async function POST(request: NextRequest) {
         break
       case 'giftCardType':
         await handleGiftCardType(payload, supabase)
+        break
+      case 'event':
+        await handleEvent(payload, supabase)
         break
       default:
         // Ignore non-catalog types (page, blogPost, galleryImage)
@@ -739,5 +743,51 @@ async function handleGiftCardType(payload: any, supabase: any) {
       console.error('Error creating Stripe product:', stripeError)
       // Don't fail the whole operation if Stripe fails
     }
+  }
+}
+
+// Events: Sanity owns the content; the booking system keeps name, thumbnail and whether there is
+// an extra waiver (with a short fingerprint of its text as the version, so a changed waiver is a
+// new version for attendees who accept it later). A new event arrives OFF sale with no date,
+// capacity or prices: staff set those in Retool (Catalog -> Events) before putting it on sale.
+// No Stripe product: event lines are charged as order amounts, like bookings.
+async function handleEvent(payload: any, supabase: any) {
+  const { _id, name, images, extraWaiver } = payload
+
+  const thumbnailUrl = images?.[0] ? getThumbnailUrl(images[0]) : null
+  const waiverText = typeof extraWaiver === 'string' ? extraWaiver.trim() : ''
+  const hasExtraWaiver = waiverText.length > 0
+  const extraWaiverVersion = hasExtraWaiver
+    ? crypto.createHash('sha256').update(waiverText).digest('hex').slice(0, 12)
+    : null
+
+  const { data: existing, error: lookupError } = await supabase
+    .from('events')
+    .select('id')
+    .eq('sanity_event_id', _id)
+    .single()
+
+  if (lookupError && lookupError.code !== 'PGRST116') {
+    throw lookupError
+  }
+
+  const mirror = {
+    name,
+    thumbnail_url: thumbnailUrl,
+    has_extra_waiver: hasExtraWaiver,
+    extra_waiver_version: extraWaiverVersion,
+    updated_at: new Date().toISOString(),
+  }
+
+  if (existing) {
+    const { error } = await supabase.from('events').update(mirror).eq('id', existing.id)
+    if (error) throw error
+    console.log(`Updated event: ${_id}`)
+  } else {
+    const { error } = await supabase
+      .from('events')
+      .insert({ sanity_event_id: _id, ...mirror, active: false })
+    if (error) throw error
+    console.log(`Created event: ${_id}`)
   }
 }
