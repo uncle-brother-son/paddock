@@ -113,6 +113,66 @@ describe('dispatchStripeEvent', () => {
     })
   })
 
+  // Payment date change (/api/memberships/change-payment-date) sets trial_end on an active
+  // subscription. The subscription reports 'trialing' until the new date; these events must keep
+  // the membership as it is and move next_renewal_date to the new date.
+  const trialEnd = Date.UTC(2026, 11, 25) / 1000 // 25 Dec 2026 00:00 London (GMT)
+
+  it('payment date change: the £0 trial invoice marks paid with the trial end as the period end', async () => {
+    const supabase = fakeRpcClient({ data: { found: true, action: 'reactivated', was: 'active' }, error: null })
+    const invoice = {
+      billing_reason: 'subscription_update',
+      amount_paid: 0,
+      parent: { subscription_details: { subscription: 'sub_123' } },
+      lines: { data: [{ amount: 0, period: { start: Date.UTC(2026, 10, 29) / 1000, end: trialEnd } }] },
+    }
+    const result = await dispatchStripeEvent(fakeEvent('invoice.paid', invoice), supabase)
+
+    expect(supabase.rpc).toHaveBeenCalledWith('membership_mark_paid', {
+      p_stripe_subscription_id: 'sub_123',
+      p_period_end: new Date(trialEnd * 1000).toISOString(),
+    })
+    expect(result.outcome).toBe('processed')
+  })
+
+  it('payment date change: subscription.updated while trialing only syncs the (cleared) cancellation', async () => {
+    const supabase = fakeRpcClient({ data: { found: true, action: 'unchanged', cancel_effective_date: null }, error: null })
+    const subscription = {
+      id: 'sub_123',
+      status: 'trialing',
+      trial_end: trialEnd,
+      cancel_at_period_end: false,
+      cancel_at: null,
+      items: { data: [{ current_period_end: trialEnd }] },
+    }
+    const result = await dispatchStripeEvent(fakeEvent('customer.subscription.updated', subscription), supabase)
+
+    expect(supabase.rpc).toHaveBeenCalledTimes(1)
+    expect(supabase.rpc).toHaveBeenCalledWith('membership_sync_cancel_at_period_end', {
+      p_stripe_subscription_id: 'sub_123',
+      p_cancel_at_period_end: false,
+      p_cancel_at: null,
+      p_period_end: new Date(trialEnd * 1000).toISOString(),
+    })
+    expect(result).toEqual({ outcome: 'processed', detail: { found: true, action: 'unchanged', cancel_effective_date: null } })
+  })
+
+  it('payment date change: the first full invoice on the new date marks paid for the month after it', async () => {
+    const supabase = fakeRpcClient({ data: { found: true, action: 'reactivated' }, error: null })
+    const nextPeriodEnd = Date.UTC(2027, 0, 25) / 1000
+    const invoice = {
+      billing_reason: 'subscription_cycle',
+      parent: { subscription_details: { subscription: 'sub_123' } },
+      lines: { data: [{ period: { start: trialEnd, end: nextPeriodEnd } }] },
+    }
+    await dispatchStripeEvent(fakeEvent('invoice.paid', invoice), supabase)
+
+    expect(supabase.rpc).toHaveBeenCalledWith('membership_mark_paid', {
+      p_stripe_subscription_id: 'sub_123',
+      p_period_end: new Date(nextPeriodEnd * 1000).toISOString(),
+    })
+  })
+
   it('ignores event types that are not handled, without calling the RPC', async () => {
     const supabase = fakeRpcClient({ data: null, error: null })
     const result = await dispatchStripeEvent(fakeEvent('charge.succeeded', {}), supabase)
