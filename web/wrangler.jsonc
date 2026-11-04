@@ -30,7 +30,11 @@
   "hyperdrive": [
     {
       "binding": "HYPERDRIVE",
-      "id": "6947ef9003b84e0581dba6509bc4f5bc"
+      "id": "6947ef9003b84e0581dba6509bc4f5bc",
+      // Only used by local tools (wrangler dev, and the OpenNext deploy step, which reads the
+      // bindings locally and fails without it). The live Worker always uses the Hyperdrive id above.
+      // No password here: it points at a local Supabase, never the real database.
+      "localConnectionString": "postgres://postgres:postgres@127.0.0.1:54322/postgres"
     }
   ],
   "version_metadata": {
