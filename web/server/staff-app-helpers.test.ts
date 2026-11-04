@@ -399,9 +399,10 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
       expect(await shadowCompare(user, 'cannotRecord', async () => 'old', async () => 'new')).toBe('old')
     })
 
-    it('passes on a failure of the old function: it is the source of truth', async () => {
+    it('passes on a failure of the old function, and records that the Worker answered', async () => {
       const { shadowCompare, SHADOW_ACTIONS } = await load('shadowCompare')
       SHADOW_ACTIONS.oldFails = true
+      rawRequest.mockResolvedValue(success({ recorded: true }))
 
       await expect(
         shadowCompare(
@@ -413,6 +414,33 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
           async () => 'new'
         )
       ).rejects.toThrow('old failed')
+
+      expect(parityCalls()[0]?.[0].body).toMatchObject({
+        action: 'oldFails',
+        oldResult: { error: 'old failed' },
+        newResult: 'new',
+        diff: [{ path: '', oldValue: 'old failed', newValue: 'new' }],
+      })
+    })
+
+    it('the same failure on both sides is not a mismatch', async () => {
+      const { shadowCompare, SHADOW_ACTIONS } = await load('shadowCompare')
+      SHADOW_ACTIONS.bothFail = true
+
+      await expect(
+        shadowCompare(
+          user,
+          'bothFail',
+          async () => {
+            throw new Error('Not configured.')
+          },
+          async () => {
+            throw new Error('Not configured. (INTERNAL, request abc)')
+          }
+        )
+      ).rejects.toThrow('Not configured.')
+
+      expect(parityCalls()).toHaveLength(0)
     })
   })
 })

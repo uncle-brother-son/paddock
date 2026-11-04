@@ -37,6 +37,8 @@
     "zustand": "5.0.15"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.15",
+    "@electric-sql/pglite-socket": "0.2.18",
     "@opennextjs/cloudflare": "1.20.12",
     "@react-email/ui": "6.11.3",
     "@storybook/addon-a11y": "^10.5.8",

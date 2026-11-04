@@ -57,17 +57,22 @@ function sessionOn(sql: PostgresClient): DriverSession {
   return { run: (text, params) => run(sql, text, params) }
 }
 
+export const driverOptions = {
+  max: MAX_CONNECTIONS,
+  connect_timeout: CONNECT_TIMEOUT_SECONDS,
+  // Left on: without the array types, a JS array bound to `= ANY($1::uuid[])` is sent as
+  // "a,b" and array columns come back as text. It costs one small query per request.
+  fetch_types: true,
+  prepare: true,
+  types: pgTypes,
+  onnotice: () => {},
+  // Rules cast timestamptz to date (`s.start_time::date`), which depends on the session's time
+  // zone. UTC is what the staff app's connection uses; set here rather than left to a default.
+  connection: { TimeZone: 'UTC' },
+}
+
 export function createPostgresDriver(connectionString: string): DbDriver {
-  const sql = postgres(connectionString, {
-    max: MAX_CONNECTIONS,
-    connect_timeout: CONNECT_TIMEOUT_SECONDS,
-    // Left on: without the array types, a JS array bound to `= ANY($1::uuid[])` is sent as
-    // "a,b" and array columns come back as text. It costs one small query per request.
-    fetch_types: true,
-    prepare: true,
-    types: pgTypes,
-    onnotice: () => {},
-  }) as unknown as PostgresClient
+  const sql = postgres(connectionString, driverOptions) as unknown as PostgresClient
 
   return {
     ...sessionOn(sql),
