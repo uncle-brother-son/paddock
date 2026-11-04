@@ -33,35 +33,30 @@ Agency standards: follow the `ubs-frontend-standards` skill for every website ta
 - **Fonts:** GT typefaces from Wayne's Figma text styles, self-hosted WOFF2 via `next/font/local`. The licensed web files still need adding. Use his existing text styles; never invent new ones without asking.
 - **Tokens:** to be taken from the Figma variables and text styles into `app/globals.css` `@theme` at the start of the build.
 
+## Architecture (agreed at the start; restated 4 Nov 2026)
+- This Worker is the ONE backend for both the website and the Retool staff app. Every booking, pricing, credit, order, payment, refund and admin action runs here; only this Worker talks to Stripe. The staff app is becoming screens only, calling `/api/v1/staff/...`; the website calls `/api/v1/customer/...` and `/api/v1/public/...`.
+- Business rules were built inside Retool backend functions by mistake; they are being moved here action by action (plan: claude.ai project doc `claude/paddock-rules-to-worker-plan.md`; master checklist: `claude/paddock-worker-migration-checklist.md`). Until an action is moved, the Retool code is the source of truth for its behaviour, and the port must match it exactly (parity check).
+- Database writes that must be all-or-nothing run in one Postgres transaction. Stripe calls are made outside transactions, always with an idempotency key, with a recorded pending state so a failure can be reconciled.
+
 ## Business rules the website must respect
-These are enforced server-side, and the website must never compute them on its own.
-- **Ages:** visitors and customers are 18+. Date of birth is collected for every attending guest, plus an 18+ check when booking as an attendee or buying a membership or pass.
-- **Session times:** stored as London wall-clock digits labelled UTC. Display them as stored; do not convert time zones. Credit and expiry checks use the London date.
-- **Booking:** pick a time, booking type and people, then Book, then add-ons, then checkout or add to bag.
-  - Spaces are held only once checkout opens, not while sitting in the bag.
-  - A customer can book for others; the booker need not attend.
-  - One booking per day is checked against the paying customer.
-  - Party size can be changed in the bag and at checkout.
-  - A full session flagged in the bag stays there and is left out of checkout.
-- **Members:**
-  - Sessions show the price per person, with "1 credit for you" underneath.
-  - The member is assumed to attend.
-  - Band names are Off-Peak, Core and Peak.
-  - Add-on credits are only usable by Herd members.
-- **Bag:** can hold bookings, events, shop products (including gift cards), memberships and session passes. A membership or pass bought in the same bag can pay for a booking in that order.
-- **Sign-in:** an email with a link and a 6-digit code (Supabase Auth).
-  - Sign-in is needed to buy a membership or pass.
-  - New accounts give their name only.
-  - The header says "Account" when signed in.
-  - Social sign-in is parked.
-  - A known email at checkout gets a sign-in offer but can continue as a guest.
-- **Events:** a new feature, not in the backend yet. They can be members-only, public or both, with a member-first window, per-level member pricing and an optional event waiver. Guests are allowed. Events use no session credits and no add-ons, and do not count towards the one-booking-per-day rule.
-- **Payment order:** promo code, then store credit, then gift card, then card. Postage is Standard or Express at a flat rate, with a free-Standard threshold. UK only.
+These are enforced server-side in this Worker; the front end never computes them on its own. Full detail: claude.ai project doc `claude/paddock-website-backend-log.md`.
+- **Ages:** every attendee is 18+. Only the account holder gives a date of birth (when attending, or buying a membership or pass). Guests give name and email only; the booker ticks "Everyone else in this booking is 18 or over" (required, checked on the server).
+- **Session times:** stored as London wall-clock digits labelled UTC. Display them as stored (24-hour, e.g. 16:00); do not convert time zones. Credit and expiry checks use the London date.
+- **Spaces are never held** (not in the bag, not at checkout). Everything is re-checked when checkout opens and again at Pay, before any charge.
+- **Booking:** a customer can book for others (the booker need not attend); one booking per day is checked against the paying customer; party size can change in the bag and at checkout; a full session flagged in the bag stays there and is left out of checkout.
+- **Members:** per-person price with "1 credit for you"; bands are Off-Peak, Core and Peak; add-on credits only for Herd members; a membership or pass bought in the same order can pay for a booking or event in that order.
+- **Guest checkout:** a new email can buy anything (including a membership or pass). An email already on file can attach orders but never changes that customer's details or card; buying a membership or pass with it needs the emailed code.
+- **Saved card:** one per customer; replacing it also updates every membership's renewal card.
+- **Website payment methods:** card, Apple Pay and Google Pay only.
+- **Payment order:** membership/pass credits, then store credit, then gift card, then card or wallet. A discount code reduces prices first (never gift cards or postage). Postage: Standard or Express, flat rate, free Standard over the threshold, UK only.
+- **Customers online:** move or cancel a session booking up to 24 hours before (cancel = store credit, never a card refund online); add add-ons up to 2 hours before (no removal online); events cancel to store credit before the event's own cut-off.
+- **Events:** members-only, public or members-first; Public / Pre-Herd / Herd prices; guests pay public; no session credits, no add-ons; not counted in one booking per day.
 
 ## Integrations
 - **Stripe** (test mode until go-live): card entry only through Elements or Checkout. Memberships are subscriptions created through `app/api/memberships/create-subscription`.
-- **Retool → Worker routes:** authorised with a `Bearer RETOOL_API_KEY` header. Website routes must use their own auth (Supabase session), never this key on the client.
+- **Retool → Worker routes:** legacy routes use `Bearer RETOOL_API_KEY`. New staff routes (`/api/v1/staff/...`) use the staff auth from brief W01 (key plus the acting staff member's email, permissions checked here). Website routes use the customer's Supabase session, never a staff key in the browser.
 - **Email:** Resend + React Email (templates not built yet). Marketing goes through Klaviyo after consent.
+- **react-email** is a dev dependency until the email templates are built; move it back to dependencies if templates render at runtime.
 - **Analytics:** GA4 (`NEXT_PUBLIC_GA_ID`) loads only after consent.
 
 ## Environment notes

@@ -6,6 +6,9 @@ const nextConfig: NextConfig = {
   // React Compiler: automatic memoisation (ubs-frontend-standards §7). Requires
   // babel-plugin-react-compiler in devDependencies.
   reactCompiler: true,
+  // Left out of Next's bundle so OpenNext's Worker build picks the package's own `workerd` entry
+  // (which uses Cloudflare sockets) instead of the Node one.
+  serverExternalPackages: ["postgres"],
 };
 
 export default nextConfig;
