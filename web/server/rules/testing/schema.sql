@@ -39,7 +39,7 @@ CREATE TABLE public.bookings (
   cancel_reason text,
   special_requests text,
   guests_over_18_confirmed_at timestamp with time zone,
-  CONSTRAINT bookings_redemption_source_check CHECK ((redemption_source = ANY (ARRAY['paid'::text, 'membership_credit'::text, 'session_pass_credit'::text, 'gift_card'::text]))),
+  CONSTRAINT bookings_redemption_source_check CHECK ((redemption_source = ANY (ARRAY['paid'::text, 'membership_credit'::text, 'session_pass_credit'::text]))),
   CONSTRAINT bookings_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'confirmed'::text, 'payment_needed'::text, 'cancelled'::text, 'completed'::text, 'no-show'::text]))),
   CONSTRAINT bookings_pkey PRIMARY KEY (id)
 );

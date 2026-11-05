@@ -16,7 +16,7 @@ Agency standards: follow the `ubs-frontend-standards` skill for every website ta
 ## Commands
 - `npm run dev`: local dev (run by Wayne on his Mac).
 - `npx tsc --noEmit`: type check (Claude runs this).
-- `npm run test:unit`: unit tests. Wayne runs them; Vitest does not run in Claude's shell.
+- `npm run test:unit`: unit tests.
 - `npm run storybook`: Storybook on port 6006.
 - Deploying: pushing to `main` on GitHub (uncle-brother-son/paddock) triggers a Cloudflare build and deploy automatically. No manual `npm run deploy` needed.
 - Wayne commits and pushes. Claude never commits, pushes, deploys, installs packages or deletes files without his yes.

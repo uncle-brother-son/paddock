@@ -91,7 +91,8 @@ export const fixtures = {
     insert(db, 'service_types', { name: `Sauna ${next()}`, booking_type: 'public', ...row }),
 
   band: (db: Db, row: Record<string, unknown> = {}) =>
-    insert(db, 'session_bands', { code: `band_${'abcdefghij'[next() % 10]}${'abcdefghij'[next() % 10]}${'abcdefghij'[next() % 10]}`, name: 'Core', price: '20.00', ...row }),
+    // The counter spelled in letters: session_bands.code allows only a-z and underscores.
+    insert(db, 'session_bands', { code: `band_${String(next()).replace(/\d/g, (digit) => 'abcdefghij'.charAt(Number(digit)))}`, name: 'Core', price: '20.00', ...row }),
 
   session: (db: Db, row: Record<string, unknown>) =>
     insert(db, 'sessions', { start_time: '2030-06-15 10:00:00+00', end_time: '2030-06-15 11:00:00+00', type: 'public', capacity: 10, ...row }),

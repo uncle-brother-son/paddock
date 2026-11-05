@@ -1,6 +1,7 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
+import { availableSessionsInputSchema, sessionTimeConflictInputSchema } from '@/contracts'
 import type { Queryable } from '@/server/db'
 import { authenticateStaff } from './auth/staff'
 
@@ -292,6 +293,3173 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
       rawRequest.mockRejectedValue(new Error('socket hang up'))
 
       await expect(callWorker(user, { path: '/x' })).rejects.toThrow('Could not reach the Worker: socket hang up')
+    })
+  })
+
+  describe('callWorker time limit', () => {
+    const hang = () => new Promise<never>(() => {})
+    const TIMED_OUT = "The booking system didn't answer in time. Please try again."
+
+    beforeEach(() => {
+      vi.useFakeTimers()
+    })
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('throws WORKER_UNREACHABLE when the limit passes, and not before', async () => {
+      const { callWorker, WorkerError } = await load('callWorker')
+      rawRequest.mockImplementation(hang)
+      const settled = vi.fn()
+
+      const call = callWorker(user, { path: '/x', timeoutMs: 1_000 }).catch((e: unknown) => {
+        settled()
+        return e
+      })
+
+      await vi.advanceTimersByTimeAsync(999)
+      expect(settled).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      const err = await call
+      expect(err).toBeInstanceOf(WorkerError)
+      expect(err).toMatchObject({ code: 'WORKER_UNREACHABLE' })
+      const requestId = rawRequest.mock.calls[0]?.[0].headers['X-Request-Id']
+      expect((err as Error).message).toBe(`${TIMED_OUT} (WORKER_UNREACHABLE, request ${requestId})`)
+    })
+
+    it('an answer inside the limit comes back, with no timer left running', async () => {
+      const { callWorker } = await load('callWorker')
+      rawRequest.mockResolvedValue(success({ id: 'x' }))
+
+      await expect(callWorker(user, { path: '/x', timeoutMs: 1_000 })).resolves.toEqual({ id: 'x' })
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it("a refusal inside the limit keeps the Worker's own error, with no timer left running", async () => {
+      const { callWorker } = await load('callWorker')
+      rawRequest.mockResolvedValue(refusal('FORBIDDEN', 'Admins only.'))
+
+      await expect(callWorker(user, { path: '/x', timeoutMs: 1_000 })).rejects.toThrow('Admins only. (FORBIDDEN, request worker-request)')
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('a late answer or late failure after the limit changes nothing', async () => {
+      const { callWorker } = await load('callWorker')
+      for (const finish of ['resolve', 'reject'] as const) {
+        const late = Promise.withResolvers<unknown>()
+        rawRequest.mockReturnValue(late.promise)
+
+        const call = callWorker(user, { path: '/x', timeoutMs: 1_000 }).catch((e: unknown) => e)
+        await vi.advanceTimersByTimeAsync(1_000)
+        const err = await call
+
+        if (finish === 'resolve') late.resolve(success({ id: 'late' }))
+        else late.reject(new Error('socket hang up'))
+        await vi.advanceTimersByTimeAsync(0)
+        expect((err as Error).message).toContain(TIMED_OUT)
+      }
+    })
+
+    it('has no default: a call without timeoutMs sets no timer and keeps waiting', async () => {
+      const { callWorker } = await load('callWorker')
+      rawRequest.mockImplementation(hang)
+      const settled = vi.fn()
+
+      void callWorker(user, { path: '/x', method: 'POST', body: {}, idempotencyKey: 'k' }).finally(settled)
+
+      expect(vi.getTimerCount()).toBe(0)
+      await vi.advanceTimersByTimeAsync(60 * 60 * 1000)
+      expect(settled).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('the nine quote and availability reads', () => {
+    const customerId = '00000000-0000-4000-8000-000000000001'
+    const sessionId = '00000000-0000-4000-8000-000000000002'
+    const serviceTypeId = '00000000-0000-4000-8000-000000000003'
+    const startTime = '2030-07-01T10:30:00.000Z'
+    const endTime = '2030-07-01T11:30:00.000Z'
+
+    interface Read {
+      name: string
+      params?: Record<string, unknown>
+      path: string
+      method: 'GET' | 'POST'
+      queryParams?: Record<string, string>
+      body?: unknown
+    }
+
+    const seats = { sessionId, customerId, partySize: 2, newMembershipPlanId: serviceTypeId }
+    const event = { eventId: sessionId, customerId, places: 2, accountHolderAttending: true, newMembershipFrequency: 'monthly' }
+    const promo = { code: 'TEN', customerId, lines: [{ key: 'seat:0', itemType: 'booking', amount: 20, isMemberPriced: false }] }
+    const conflict = { sessionId, serviceTypeId, startTime, endTime }
+
+    const reads: Read[] = [
+      { name: 'quoteBookingSeats', params: seats, path: '/api/v1/staff/quotes/booking-seats', method: 'POST', body: seats },
+      { name: 'quoteEvent', params: event, path: '/api/v1/staff/quotes/event', method: 'POST', body: event },
+      { name: 'validatePromoCode', params: promo, path: '/api/v1/staff/promo-codes/validate', method: 'POST', body: promo },
+      {
+        name: 'getCustomerCreditOptions',
+        params: { customerId },
+        path: '/api/v1/staff/customers/credit-options',
+        method: 'GET',
+        queryParams: { customerId },
+      },
+      {
+        name: 'getAvailableSessions',
+        params: { date: '2030-06-15' },
+        path: '/api/v1/staff/sessions/available',
+        method: 'GET',
+        queryParams: { date: '2030-06-15' },
+      },
+      {
+        name: 'checkCustomerDayConflict',
+        params: { customerId, sessionId },
+        path: '/api/v1/staff/bookings/day-conflict',
+        method: 'GET',
+        queryParams: { customerId, sessionId },
+      },
+      { name: 'checkSessionTimeConflict', params: conflict, path: '/api/v1/staff/sessions/time-conflict', method: 'GET', queryParams: conflict },
+      { name: 'getPricingConfig', path: '/api/v1/staff/pricing/config', method: 'GET' },
+      { name: 'getPostageSettings', path: '/api/v1/staff/postage/settings', method: 'GET' },
+    ]
+    // The optional filters, on top of one case per function.
+    const calls: Read[] = [
+      ...reads,
+      {
+        name: 'getCustomerCreditOptions',
+        params: { customerId, sessionId },
+        path: '/api/v1/staff/customers/credit-options',
+        method: 'GET',
+        queryParams: { customerId, sessionId },
+      },
+      {
+        name: 'getAvailableSessions',
+        params: { date: '2030-06-15', serviceTypeId },
+        path: '/api/v1/staff/sessions/available',
+        method: 'GET',
+        queryParams: { date: '2030-06-15', serviceTypeId },
+      },
+    ]
+
+    const wrapper = async (name: string) => (await load(`../${name}`)).default as (req: unknown) => Promise<unknown>
+    const run = async (read: Read) => (await wrapper(read.name))({ ...(read.params ? { params: read.params } : {}), user })
+
+    it.each(calls)('$name $queryParams: right path, method and input, as the user, returning data unchanged', async (read) => {
+      const query = vi.fn()
+      vi.stubGlobal('paddockData', { query })
+      const answer = { any: 'shape', nested: [{ price: '20.00' }] }
+      rawRequest.mockResolvedValue(success(answer))
+
+      expect(await run(read)).toBe(answer)
+
+      expect(rawRequest).toHaveBeenCalledTimes(1)
+      const call = rawRequest.mock.calls[0]?.[0]
+      expect(call.path).toBe(read.path)
+      expect(call.method).toBe(read.method)
+      expect(call.headers['X-Staff-Email']).toBe(user.email)
+      expect(call.headers['Idempotency-Key']).toBeUndefined()
+      expect(call.queryParams).toEqual(read.queryParams)
+      expect(call.body).toEqual(read.body)
+      expect(query).not.toHaveBeenCalled()
+    })
+
+    it.each(reads)("$name: a Worker error is thrown with the Worker's message", async (read) => {
+      rawRequest.mockResolvedValue(refusal('FORBIDDEN', 'This staff account is inactive. Ask an admin to reactivate it.'))
+
+      await expect(run(read)).rejects.toThrow('This staff account is inactive. Ask an admin to reactivate it. (FORBIDDEN, request worker-request)')
+    })
+
+    it.each(reads)('$name: gives up at 15 seconds', async (read) => {
+      // Loaded first: an import doesn't finish on a frozen clock, so the call would start too late.
+      const fn = await wrapper(read.name)
+      vi.useFakeTimers()
+      try {
+        rawRequest.mockImplementation(() => new Promise<never>(() => {}))
+        const settled = vi.fn()
+
+        const call = fn({ ...(read.params ? { params: read.params } : {}), user }).catch((e: unknown) => {
+          settled()
+          return e
+        })
+
+        await vi.advanceTimersByTimeAsync(14_999)
+        expect(settled).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(1)
+        expect(await call).toMatchObject({ code: 'WORKER_UNREACHABLE' })
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('messages returned in a field pass through as answers, not errors', async () => {
+      const unpriced = { seats: [], band: null, paidTotal: 0, unpriced: true, error: 'No band is assigned to this session.' }
+      const blocked = { blockReason: 'event_members_only', blockMessage: 'This event is for members only.', places: [], total: 0, placesLeft: 4 }
+      const refused = { ok: false, reason: 'not_found', message: 'That promo code does not exist.' }
+
+      for (const [name, answer] of [['quoteBookingSeats', unpriced], ['quoteEvent', blocked], ['validatePromoCode', refused]] as const) {
+        rawRequest.mockResolvedValue(success(answer))
+        expect(await (await wrapper(name))({ params: {}, user })).toBe(answer)
+      }
+    })
+
+    it('none of them reads the database or shadows any more', async () => {
+      const { SHADOW_ACTIONS } = await load('shadowCompare')
+      for (const { name } of reads) {
+        const source = readFileSync(path.join(appDir, `backend/paddock/${name}.ts`), 'utf8')
+        expect(source, name).not.toContain('paddockData')
+        expect(source, name).not.toContain('shadowCompare')
+        expect(SHADOW_ACTIONS[name], name).toBeUndefined()
+      }
+    })
+  })
+
+  describe('date box checks', () => {
+    const dateInput = () => import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/dateInput'))
+    const anId = '00000000-0000-4000-8000-000000000001'
+
+    it.each(['2026-11-05', '2026-12-31', '2028-02-29', '0001-01-01', '9999-12-31'])('%s is sent, and the Worker accepts it', async (date) => {
+      const { isValidIsoDate } = await dateInput()
+      expect(isValidIsoDate(date)).toBe(true)
+      expect(availableSessionsInputSchema.safeParse({ date }).success).toBe(true)
+    })
+
+    it.each([
+      ['a cleared box', ''],
+      ['a 5 digit year', '12026-01-01'],
+      ['a 6 digit year', '123456-01-01'],
+      ['a day that does not exist', '2026-02-30'],
+      ['29 February outside a leap year', '2027-02-29'],
+      ['month 13', '2026-13-01'],
+      ['month 0', '2026-00-10'],
+      ['day 0', '2026-01-00'],
+      ['year 0000, which Postgres refuses', '0000-01-01'],
+      ['no leading zeros', '2026-1-5'],
+      ['a date with a time', '2026-11-05T10:00'],
+      ['stray spaces', ' 2026-11-05'],
+    ])('%s is not sent', async (_label, date) => {
+      const { isValidIsoDate } = await dateInput()
+      expect(isValidIsoDate(date)).toBe(false)
+    })
+
+    it.each(['2026-11-05T14:30:00.000Z', '2028-02-29T00:00:00.000Z', '0001-01-01T00:00:00.000Z'])('%s is sent, and the Worker accepts it', async (time) => {
+      const { isValidIsoDateTime } = await dateInput()
+      expect(isValidIsoDateTime(time)).toBe(true)
+      const input = { sessionId: anId, serviceTypeId: anId, startTime: time, endTime: time }
+      expect(sessionTimeConflictInputSchema.safeParse(input).success).toBe(true)
+    })
+
+    it.each([
+      ['a cleared box', ':00.000Z'],
+      ['a 5 digit year', '12026-11-05T14:30:00.000Z'],
+      ['what toISOString gives past year 9999', '+010000-01-01T00:30:00.000Z'],
+      ['a day that does not exist', '2026-02-30T10:00:00.000Z'],
+      ['hour 25', '2026-11-05T25:00:00.000Z'],
+      ['a time that already had seconds', '2026-11-05T14:30:15:00.000Z'],
+    ])('%s is not sent as a time', async (_label, time) => {
+      const { isValidIsoDateTime } = await dateInput()
+      expect(isValidIsoDateTime(time)).toBe(false)
+    })
+
+    it.each([
+      ['New Order', 'frontend/components/checkout/BookingSection.tsx'],
+      ['Move', 'frontend/components/MoveBookingDialog.tsx'],
+    ])('%s checks the date before it loads sessions, and shows the empty list', (_label, file) => {
+      const source = readFileSync(path.join(appDir, file), 'utf8')
+      const guard = source.indexOf('if (!isValidIsoDate(')
+      expect(guard).toBeGreaterThan(-1)
+      expect(guard).toBeLessThan(source.indexOf('loadSessions('))
+      expect(source.slice(guard, source.indexOf('loadSessions('))).toContain('setSessionsList([])')
+    })
+  })
+
+  describe('Edit Start Time save check', () => {
+    const dateInput = () => import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/dateInput'))
+
+    it.each([
+      ['an empty box', '', 'Choose a new start time'],
+      ['a 5 digit year', '12026-11-05T14:30', 'Enter a valid date and time.'],
+      ['a 6 digit year', '123456-11-05T14:30', 'Enter a valid date and time.'],
+      ['a day that does not exist', '2026-02-30T10:00', 'Enter a valid date and time.'],
+      ['year 0000', '0000-01-01T10:00', 'Enter a valid date and time.'],
+    ])('%s is refused', async (_label, value, message) => {
+      const { startTimeSaveError } = await dateInput()
+      expect(startTimeSaveError(value)).toBe(message)
+    })
+
+    it('a real time saves', async () => {
+      const { startTimeSaveError, datetimeLocalToIsoUtc } = await dateInput()
+      expect(startTimeSaveError('2026-11-05T14:30')).toBeNull()
+      expect(datetimeLocalToIsoUtc('2026-11-05T14:30')).toBe('2026-11-05T14:30:00.000Z')
+    })
+
+    it('the dialog runs the check before it saves', () => {
+      const source = readFileSync(path.join(appDir, 'frontend/components/EditSessionStartTimeDialog.tsx'), 'utf8')
+      const check = source.indexOf('startTimeSaveError(value)')
+      expect(check).toBeGreaterThan(-1)
+      expect(check).toBeLessThan(source.indexOf('await setSessionStartTime('))
+    })
+  })
+
+  describe('setSessionStartTime', () => {
+    const save = async (startTime: unknown) => {
+      const query = vi.fn(async (sql: string) => {
+        if (sql.includes('staff')) {
+          return { data: [{ id: 'staff-1', email: user.email, role: 'admin', can_issue_refunds: true, can_manage_pricing: true, active: true }] }
+        }
+        if (sql.includes('COUNT(*)')) return { data: [{ count: '0' }] }
+        if (sql.includes('UPDATE sessions')) return { data: [{ id: 'session-1', start_time: startTime, end_time: startTime }] }
+        if (sql.includes('session_bands')) return { data: [] }
+        return { data: [{ id: 'session-1', duration: 60 }] }
+      })
+      vi.stubGlobal('paddockData', { query })
+      const fn = (await import(/* @vite-ignore */ path.join(appDir, 'backend/paddock/setSessionStartTime'))).default
+      const result = await fn({ params: { sessionId: 'session-1', startTime }, user })
+      return { result, sql: query.mock.calls.map(([sql]) => sql as string) }
+    }
+
+    it.each([
+      ['a 5 digit year, which Postgres would store', '12026-11-05T14:30:00.000Z'],
+      ['a day that does not exist', '2026-02-30T10:00:00.000Z'],
+      ['year 0000', '0000-01-01T10:00:00.000Z'],
+      ['an empty value', ''],
+      ['no timezone', '2026-11-05T14:30'],
+      ['not a string', 20261105],
+    ])('refuses %s with the same words, and writes nothing', async (_label, startTime) => {
+      const { result, sql } = await save(startTime)
+      expect(result).toEqual({ updated: false, reason: 'invalid_start_time', message: 'Enter a valid date and time.' })
+      expect(sql.some((text) => text.includes('UPDATE sessions'))).toBe(false)
+      expect(sql.some((text) => text.includes('FROM sessions'))).toBe(false)
+    })
+
+    it('saves a real time', async () => {
+      const { result, sql } = await save('2026-11-05T14:30:00.000Z')
+      expect(result.updated).toBe(true)
+      expect(sql.some((text) => text.includes('UPDATE sessions'))).toBe(true)
+    })
+
+    it('the screen shows the refusal in the same words', () => {
+      const source = readFileSync(path.join(appDir, 'frontend/components/EditSessionStartTimeDialog.tsx'), 'utf8')
+      expect(source).toContain("invalid_start_time: 'Enter a valid date and time.'")
+    })
+
+    it('agrees with the screen on what is valid', async () => {
+      const { isValidIsoDateTime: onScreen } = await import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/dateInput'))
+      const { isValidIsoDateTime: onServer } = await load('isoDateTime')
+      for (const value of ['2026-11-05T14:30:00.000Z', '2028-02-29T00:00:00.000Z', '0001-01-01T00:00:00.000Z', '12026-11-05T14:30:00.000Z', '2026-02-30T10:00:00.000Z', '2026-11-05T25:00:00.000Z', '0000-01-01T00:00:00.000Z', '']) {
+        expect(onServer(value), value).toBe(onScreen(value))
+      }
+    })
+  })
+
+  describe('New Order price checks', () => {
+    const readiness = () => import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/quoteReadiness'))
+    const BOOKING = "Couldn't get the price for this booking. Please try again."
+    const EVENT = "Couldn't get the price for this event. Please try again."
+    const LOADING = 'Getting the price…'
+    const inputs = { sessionId: 's1', bookingType: 'public', customerId: 'c1', partySize: 2, planId: null }
+
+    describe('booking', () => {
+      it('a current, priced quote is used', async () => {
+        const { bookingQuoteKey, bookingPriceProblem, currentBookingPrice } = await readiness()
+        const key = bookingQuoteKey(inputs)
+        const report = { key, status: 'ready', price: 40 }
+        expect(bookingPriceProblem(report, key)).toBeNull()
+        expect(currentBookingPrice(report, key)).toBe(40)
+      })
+
+      it('a free booking is a price, not a missing one', async () => {
+        const { bookingQuoteKey, bookingPriceProblem, currentBookingPrice } = await readiness()
+        const key = bookingQuoteKey(inputs)
+        expect(bookingPriceProblem({ key, status: 'ready', price: 0 }, key)).toBeNull()
+        expect(currentBookingPrice({ key, status: 'ready', price: 0 }, key)).toBe(0)
+      })
+
+      it.each([
+        ['failed', BOOKING],
+        ['loading', LOADING],
+      ])('a %s quote is refused and gives no price', async (status, message) => {
+        const { bookingQuoteKey, bookingPriceProblem, currentBookingPrice } = await readiness()
+        const key = bookingQuoteKey(inputs)
+        const report = { key, status, price: null }
+        expect(bookingPriceProblem(report, key)).toBe(message)
+        expect(currentBookingPrice(report, key)).toBeNull()
+      })
+
+      it('no report yet is refused, as still loading', async () => {
+        const { bookingQuoteKey, bookingPriceProblem } = await readiness()
+        expect(bookingPriceProblem(null, bookingQuoteKey(inputs))).toBe(LOADING)
+      })
+
+      it.each([
+        ['customer', { customerId: 'c2' }],
+        ['party size', { partySize: 3 }],
+        ['session', { sessionId: 's2' }],
+        ['membership being bought', { planId: 'p1' }],
+      ])('a quote for another %s is stale, even a good one', async (_label, change) => {
+        const { bookingQuoteKey, bookingPriceProblem, currentBookingPrice } = await readiness()
+        const report = { key: bookingQuoteKey(inputs), status: 'ready', price: 40 }
+        const key = bookingQuoteKey({ ...inputs, ...change })
+        expect(bookingPriceProblem(report, key)).toBe(LOADING)
+        expect(currentBookingPrice(report, key)).toBeNull()
+      })
+
+      it('a private price does not depend on the customer', async () => {
+        const { bookingQuoteKey } = await readiness()
+        const privateInputs = { ...inputs, bookingType: 'private' }
+        expect(bookingQuoteKey({ ...privateInputs, customerId: 'c2' })).toBe(bookingQuoteKey(privateInputs))
+        expect(bookingQuoteKey({ ...privateInputs, partySize: 3 })).not.toBe(bookingQuoteKey(privateInputs))
+      })
+
+      it('prices that trying again cannot fix say what to do instead', async () => {
+        const { bookingQuoteKey, bookingPriceProblem, BAND_UNPRICED_MESSAGE, PRIVATE_PRICE_NOT_SET_MESSAGE } = await readiness()
+        const key = bookingQuoteKey(inputs)
+        expect(bookingPriceProblem({ key, status: 'unpriced', price: null }, key)).toBe(BAND_UNPRICED_MESSAGE)
+        expect(bookingPriceProblem({ key, status: 'no_private_price', price: null }, key)).toBe(PRIVATE_PRICE_NOT_SET_MESSAGE)
+      })
+
+      it('no session means nothing to price', async () => {
+        const { bookingQuoteKey, bookingPriceProblem } = await readiness()
+        const key = bookingQuoteKey({ ...inputs, sessionId: null })
+        expect(key).toBeNull()
+        expect(bookingPriceProblem(null, key)).toBeNull()
+      })
+    })
+
+    describe('event', () => {
+      const event = { eventId: 'e1', customerId: 'c1', places: 2, attending: true, newMembershipFrequency: null }
+      const quote = { blockMessage: null }
+
+      it('a current quote is used', async () => {
+        const { eventQuoteKey, currentEventQuote, eventPriceProblem } = await readiness()
+        const key = eventQuoteKey(event)
+        const report = { key, status: 'ready', quote }
+        expect(currentEventQuote(report, key)).toBe(quote)
+        expect(eventPriceProblem(report, key)).toBeNull()
+      })
+
+      it('a failed quote is refused', async () => {
+        const { eventQuoteKey, eventPriceProblem } = await readiness()
+        const key = eventQuoteKey(event)
+        expect(eventPriceProblem({ key, status: 'failed', quote: null }, key)).toBe(EVENT)
+      })
+
+      it('no quote yet is refused, as still loading', async () => {
+        const { eventQuoteKey, eventPriceProblem } = await readiness()
+        expect(eventPriceProblem(null, eventQuoteKey(event))).toBe(LOADING)
+      })
+
+      it('a failure for older inputs is not a failure for these', async () => {
+        const { eventQuoteKey, eventPriceProblem } = await readiness()
+        const report = { key: eventQuoteKey(event), status: 'failed', quote: null }
+        expect(eventPriceProblem(report, eventQuoteKey({ ...event, places: 3 }))).toBe(LOADING)
+      })
+
+      it.each([
+        ['places', { places: 3 }],
+        ['customer', { customerId: 'c2' }],
+        ['attending switch', { attending: false }],
+        ['membership being bought', { newMembershipFrequency: 'monthly' }],
+      ])('a quote for other %s is stale', async (_label, change) => {
+        const { eventQuoteKey, currentEventQuote, eventPriceProblem } = await readiness()
+        const report = { key: eventQuoteKey(event), status: 'ready', quote }
+        const key = eventQuoteKey({ ...event, ...change })
+        expect(currentEventQuote(report, key)).toBeNull()
+        expect(eventPriceProblem(report, key)).toBe(LOADING)
+      })
+
+      it('a blocked event shows its own message, because the total would leave it out', async () => {
+        const { eventQuoteKey, eventPriceProblem } = await readiness()
+        const key = eventQuoteKey(event)
+        expect(eventPriceProblem({ key, status: 'ready', quote: { blockMessage: 'Members only.' } }, key)).toBe('Members only.')
+      })
+
+      it('no event means nothing to price', async () => {
+        const { eventQuoteKey, eventPriceProblem } = await readiness()
+        expect(eventPriceProblem(null, eventQuoteKey({ ...event, eventId: null }))).toBeNull()
+      })
+    })
+
+    describe('the other values in the total', () => {
+      it('membership', async () => {
+        const { membershipPriceProblem: problem, MEMBERSHIP_PRICE_MESSAGE, MEMBERSHIP_PRICE_NOT_SET_MESSAGE } = await readiness()
+        const plan = { price_monthly: '30.00', price_yearly: null }
+        expect(problem(null, undefined, 'monthly', false)).toBeNull()
+        expect(problem('p1', plan, 'monthly', false)).toBeNull()
+        expect(problem('p1', undefined, 'monthly', false)).toBe(MEMBERSHIP_PRICE_MESSAGE)
+        expect(problem('p1', undefined, 'monthly', true)).toBe(LOADING)
+        expect(problem('p1', plan, 'yearly', true)).toBe(MEMBERSHIP_PRICE_NOT_SET_MESSAGE)
+      })
+
+      it('session pass', async () => {
+        const { sessionPassPriceProblem: problem, SESSION_PASS_PRICE_MESSAGE } = await readiness()
+        expect(problem(null, undefined, false)).toBeNull()
+        expect(problem('t1', { price: '50.00' }, false)).toBeNull()
+        expect(problem('t1', { price: '0.00' }, false)).toBeNull()
+        expect(problem('t1', undefined, false)).toBe(SESSION_PASS_PRICE_MESSAGE)
+        expect(problem('t1', undefined, true)).toBe(LOADING)
+        expect(problem('t1', { price: null }, true)).toBe(SESSION_PASS_PRICE_MESSAGE)
+      })
+
+      it('postage', async () => {
+        const { postagePriceProblem: problem, POSTAGE_PRICE_MESSAGE } = await readiness()
+        expect(problem(false, false, true)).toBeNull()
+        expect(problem(true, true, false)).toBeNull()
+        expect(problem(true, false, false)).toBe(LOADING)
+        expect(problem(true, false, true)).toBe(POSTAGE_PRICE_MESSAGE)
+        expect(problem(true, true, true)).toBe(POSTAGE_PRICE_MESSAGE)
+      })
+
+      it('promo: a discount only counts for the basket it was checked against', async () => {
+        const { promoProblem: problem, promoCheckKey, PROMO_CHECK_MESSAGE } = await readiness()
+        const key = promoCheckKey('c1', 'SAVE', '[lines]')
+        expect(problem(false, null, key)).toBeNull()
+        expect(problem(true, { key, status: 'ok' }, key)).toBeNull()
+        expect(problem(true, null, key)).toBe(LOADING)
+        expect(problem(true, { key, status: 'failed' }, key)).toBe(PROMO_CHECK_MESSAGE)
+        expect(problem(true, { key, status: 'ok' }, promoCheckKey('c1', 'SAVE', '[other lines]'))).toBe(LOADING)
+        expect(problem(true, { key, status: 'ok' }, promoCheckKey('c2', 'SAVE', '[lines]'))).toBe(LOADING)
+      })
+
+      it('only the loading line counts as loading', async () => {
+        const { isPriceLoading } = await readiness()
+        expect(isPriceLoading(LOADING)).toBe(true)
+        expect(isPriceLoading(BOOKING)).toBe(false)
+        expect(isPriceLoading(null)).toBe(false)
+      })
+
+      it('the first problem wins, and none means null', async () => {
+        const { firstProblem } = await readiness()
+        expect(firstProblem(null, 'a', 'b')).toBe('a')
+        expect(firstProblem(null, null)).toBeNull()
+      })
+    })
+
+    describe('what the screen does with them', () => {
+      const checkout = () => readFileSync(path.join(appDir, 'frontend/components/CheckoutDialog.tsx'), 'utf8')
+
+      it('Continue, Delivery and Complete Order all refuse', () => {
+        const source = checkout()
+        const body = (name: string) => source.slice(source.indexOf(`function ${name}(`), source.indexOf('\n  }\n', source.indexOf(`function ${name}(`)))
+        expect(body('validateBasket')).toContain('return blockingProblem')
+        expect(body('handleContinueFromDelivery')).toContain('blockingProblem')
+        expect(body('handleContinueFromDelivery')).toContain('postageProblem')
+        expect(body('validatePayment')).toContain('firstProblem(blockingProblem, postageProblem)')
+      })
+
+      it('both summaries and the payment step show the line instead of a total', () => {
+        const source = checkout()
+        expect(source.match(/\{summaryProblem \? \(/g)).toHaveLength(2)
+        expect(source).toContain('priceProblem={summaryProblem}')
+        // Every total on the screen is behind that check.
+        expect(source.match(/formatCurrency\(amountDue\.toFixed\(2\)\)/g)).toHaveLength(2)
+      })
+
+      it('the cash confirmation is hidden while the amount cannot be trusted', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/checkout/PaymentStep.tsx'), 'utf8')
+        expect(source).toContain("state.method === 'cash' && !hasMembership && !priceProblem")
+      })
+
+      it('a promo check that fails at Complete Order stops the order', () => {
+        const source = checkout()
+        expect(source).not.toContain('proceed with the code')
+        expect(source).toContain('setErrorMessage(PROMO_CHECK_MESSAGE)')
+      })
+
+      it('a refusal while loading opens the section, so the quote can run', () => {
+        const source = checkout()
+        expect(source).toContain("bookingProblem === BOOKING_PRICE_MESSAGE || isPriceLoading(bookingProblem)")
+        expect(source).toContain("eventProblem === EVENT_PRICE_MESSAGE || isPriceLoading(eventProblem)")
+      })
+
+      it('Delivery shows the postage problem itself, loading or failed', async () => {
+        const source = checkout()
+        const start = source.indexOf('function handleContinueFromDelivery')
+        const body = source.slice(start, source.indexOf('\n  }\n', start))
+        expect(body).toContain('if (postageProblem) {\n      setErrorMessage(postageProblem)')
+        expect(source).not.toContain('Postage prices are not configured yet')
+        const { postagePriceProblem, POSTAGE_PRICE_MESSAGE } = await readiness()
+        expect(POSTAGE_PRICE_MESSAGE).toBe("Couldn't get the postage price. Please try again.")
+        expect(postagePriceProblem(true, false, true)).toBe(POSTAGE_PRICE_MESSAGE)
+        expect(postagePriceProblem(true, false, false)).toBe(LOADING)
+      })
+
+      describe('no customer chosen', () => {
+        const CHOOSE = 'Choose a customer to see the price.'
+        const key = 'the-key'
+
+        it('a booking says so, instead of saying the price is coming', async () => {
+          const { bookingPriceProblem } = await readiness()
+          expect(bookingPriceProblem(null, key, true)).toBe(CHOOSE)
+          expect(bookingPriceProblem({ key: 'older', status: 'loading', price: null }, key, true)).toBe(CHOOSE)
+          expect(bookingPriceProblem(null, key)).toBe(LOADING)
+        })
+
+        it('an event says so', async () => {
+          const { eventPriceProblem } = await readiness()
+          expect(eventPriceProblem(null, key, true)).toBe(CHOOSE)
+          expect(eventPriceProblem(null, key)).toBe(LOADING)
+        })
+
+        it('a promo code says so', async () => {
+          const { promoProblem } = await readiness()
+          expect(promoProblem(true, null, key, true)).toBe(CHOOSE)
+          expect(promoProblem(true, null, key)).toBe(LOADING)
+        })
+
+        it('nothing selected is still no problem', async () => {
+          const { bookingPriceProblem, eventPriceProblem, promoProblem } = await readiness()
+          expect(bookingPriceProblem(null, null, true)).toBeNull()
+          expect(eventPriceProblem(null, null, true)).toBeNull()
+          expect(promoProblem(false, null, key, true)).toBeNull()
+        })
+
+        it('it looks like waiting, not an error, and doesn\'t open a section', async () => {
+          const { isPriceWaiting, isPriceLoading } = await readiness()
+          expect(isPriceWaiting(CHOOSE)).toBe(true)
+          expect(isPriceWaiting(LOADING)).toBe(true)
+          expect(isPriceWaiting("Couldn't get the postage price. Please try again.")).toBe(false)
+          expect(isPriceLoading(CHOOSE)).toBe(false)
+        })
+
+        it('New Order passes it on, for public bookings only: a private price needs no customer', () => {
+          const source = checkout()
+          expect(source).toContain("bookingPriceProblem(bookingPriceReport, bookingKey, booking.selectedSession?.booking_type === 'public' && !customer)")
+          expect(source).toContain('eventPriceProblem(eventQuoteReport, eventKey, !customer)')
+          expect(source).toContain('promoProblem(promoApplied !== null, promoCheck, currentPromoCheckKey, !customer)')
+          expect(source.match(/isPriceWaiting\(summaryProblem\)/g)).toHaveLength(2)
+        })
+      })
+
+      describe('a section with an out of date price', () => {
+        const stale = (key: string) => [{ section: 'booking', key, priceLoading: true }]
+
+        it('opens when its inputs changed while it was closed', async () => {
+          const { sectionsToOpen } = await readiness()
+          expect(sectionsToOpen([], stale('customer-b'), { booking: 'customer-a' }).toOpen).toEqual(['booking'])
+        })
+
+        it('stays closed once staff collapse it, until its inputs change', async () => {
+          const { sectionsToOpen } = await readiness()
+          // Open while the quote runs, so these are the inputs it was last open for.
+          const open = sectionsToOpen(['booking'], stale('customer-a'), {})
+          expect(open.toOpen).toEqual([])
+          const collapsed = sectionsToOpen([], stale('customer-a'), open.keysSeenOpen)
+          expect(collapsed.toOpen).toEqual([])
+          expect(sectionsToOpen([], stale('customer-b'), collapsed.keysSeenOpen).toOpen).toEqual(['booking'])
+        })
+
+        it('a second change after that opens it again', async () => {
+          const { sectionsToOpen } = await readiness()
+          const reopened = sectionsToOpen(['booking'], stale('customer-b'), { booking: 'customer-a' })
+          expect(sectionsToOpen([], stale('customer-c'), reopened.keysSeenOpen).toOpen).toEqual(['booking'])
+        })
+
+        it('stays closed with a price, a failed price or nothing selected', async () => {
+          const { sectionsToOpen } = await readiness()
+          expect(sectionsToOpen([], [{ section: 'booking', key: 'customer-b', priceLoading: false }], { booking: 'customer-a' }).toOpen).toEqual([])
+          expect(sectionsToOpen([], [{ section: 'booking', key: null, priceLoading: false }], { booking: 'customer-a' }).toOpen).toEqual([])
+        })
+
+        it('treats the two sections separately', async () => {
+          const { sectionsToOpen } = await readiness()
+          const sections = [
+            { section: 'booking', key: 'a', priceLoading: false },
+            { section: 'event', key: 'b', priceLoading: true },
+          ]
+          expect(sectionsToOpen(['booking'], sections, { event: 'old' }).toOpen).toEqual(['event'])
+        })
+
+        it('the screen checks both sections, on the basket only, and keeps what is open', () => {
+          const source = checkout()
+          const start = source.indexOf('const { toOpen, keysSeenOpen } = sectionsToOpen(')
+          expect(start).toBeGreaterThan(0)
+          const effect = source.slice(source.lastIndexOf('useEffect(', start), source.indexOf('\n  }, [', start))
+          expect(effect).toContain("if (phase !== 'basket') return")
+          expect(effect).toContain("{ section: 'booking', key: bookingKey, priceLoading: isPriceLoading(bookingProblem) }")
+          expect(effect).toContain("{ section: 'event', key: eventKey, priceLoading: isPriceLoading(eventProblem) }")
+          expect(effect).toContain('setSectionsOverride([...opened, ...toOpen])')
+        })
+      })
+
+      it('the loading line does not look like an error', () => {
+        const summaries = checkout().match(/isPriceWaiting\(summaryProblem\) \? 'text-muted-foreground' : 'text-destructive'/g)
+        expect(summaries).toHaveLength(2)
+        const step = readFileSync(path.join(appDir, 'frontend/components/checkout/PaymentStep.tsx'), 'utf8')
+        expect(step).toContain("isPriceLoading(priceProblem) ? 'text-muted-foreground' : 'text-destructive'")
+      })
+    })
+
+    describe('credits', () => {
+      const MESSAGE = "Couldn't load this customer's credits and member prices. Please try again."
+
+      const LOADING_CREDITS = "Getting this customer's credits and member prices…"
+
+      it('a failure says so', async () => {
+        const { creditLoadProblem } = await readiness()
+        expect(creditLoadProblem('failed')).toBe(MESSAGE)
+      })
+
+      it('still loading blocks the order too, without saying it failed', async () => {
+        const { creditLoadProblem } = await readiness()
+        expect(creditLoadProblem('loading')).toBe(LOADING_CREDITS)
+      })
+
+      it('both loading lines go once they stop being the problem', async () => {
+        const { bannerStillApplies } = await readiness()
+        expect(bannerStillApplies(LOADING_CREDITS, LOADING_CREDITS)).toBe(true)
+        expect(bannerStillApplies(LOADING, LOADING)).toBe(true)
+        expect(bannerStillApplies(LOADING_CREDITS, LOADING)).toBe(false)
+        expect(bannerStillApplies(LOADING, null)).toBe(false)
+      })
+
+      it('a "please try again" line stays through the retry, and goes once nothing is wrong', async () => {
+        const { bannerStillApplies } = await readiness()
+        expect(bannerStillApplies(MESSAGE, MESSAGE)).toBe(true)
+        expect(bannerStillApplies(MESSAGE, LOADING)).toBe(true)
+        expect(bannerStillApplies(MESSAGE, null)).toBe(false)
+        expect(bannerStillApplies("Couldn't get the postage price. Please try again.", null)).toBe(false)
+      })
+
+      it('any other banner is left alone', async () => {
+        const { bannerStillApplies } = await readiness()
+        expect(bannerStillApplies('Select a customer.', null)).toBe(true)
+        expect(bannerStillApplies(null, LOADING)).toBe(true)
+      })
+
+      it('the credits line never counts as a price, so it can\'t open a section', async () => {
+        const { isPriceLoading } = await readiness()
+        expect(isPriceLoading(LOADING_CREDITS)).toBe(false)
+      })
+
+      it('New Order clears a loading line once it stops being the problem', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/CheckoutDialog.tsx'), 'utf8')
+        expect(source).toContain('bannerStillApplies(current, currentProblem) ? current : null')
+      })
+
+      it('Add Guest clears the line when the lookup finishes', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/AddGuestDialog.tsx'), 'utf8')
+        expect(source).toContain("if (creditStatus === 'loading') return")
+        expect(source).toContain("current === CREDIT_LOADING_MESSAGE || (current === CREDIT_LOAD_MESSAGE && creditStatus === 'ready') ? null : current")
+      })
+
+      it('loaded does not', async () => {
+        const { creditLoadProblem } = await readiness()
+        expect(creditLoadProblem('ready')).toBeNull()
+      })
+
+      it('Add Guest checks before its first call, which can add the guest', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/AddGuestDialog.tsx'), 'utf8')
+        const start = source.indexOf('async function handleInitialSubmit')
+        const check = source.indexOf('creditLoadProblem(creditStatus)', start)
+        expect(check).toBeGreaterThan(start)
+        expect(check).toBeLessThan(source.indexOf('await addGuest(', start))
+      })
+    })
+
+    describe('member prices arriving after a line was added', () => {
+      it('a line at the system price follows it', async () => {
+        const { repriceLine } = await readiness()
+        expect(repriceLine({ unitPrice: 10, systemUnitPrice: 10 }, 8)).toEqual({ unitPrice: 8, systemUnitPrice: 8 })
+        expect(repriceLine({ unitPrice: 8, systemUnitPrice: 8 }, 10)).toEqual({ unitPrice: 10, systemUnitPrice: 10 })
+      })
+
+      it('a price staff changed stays, with its reason', async () => {
+        const { repriceLine } = await readiness()
+        const line = { unitPrice: 5, systemUnitPrice: 10, priceOverrideReason: 'Damaged' }
+        expect(repriceLine(line, 8)).toEqual({ unitPrice: 5, systemUnitPrice: 8, priceOverrideReason: 'Damaged' })
+      })
+
+      it('a changed price that now matches needs no reason', async () => {
+        const { repriceLine } = await readiness()
+        expect(repriceLine({ unitPrice: 8, systemUnitPrice: 10, priceOverrideReason: 'Member' }, 8)).toEqual({ unitPrice: 8, systemUnitPrice: 8 })
+      })
+
+      it('an unknown item or an unchanged price leaves the line alone', async () => {
+        const { repriceLine } = await readiness()
+        const line = { unitPrice: 10, systemUnitPrice: 10 }
+        expect(repriceLine(line, null)).toBe(line)
+        expect(repriceLine(line, 10)).toBe(line)
+      })
+    })
+
+    describe('cash recorded above what was confirmed', () => {
+      it('gives the difference', async () => {
+        const { cashShortfall } = await readiness()
+        expect(cashShortfall('cash', 25, 30)).toBe(5)
+        expect(cashShortfall('cash', 0.1, 0.3)).toBe(0.2)
+      })
+
+      it.each([
+        ['the same', 'cash', 30, 30],
+        ['less than confirmed', 'cash', 30, 25],
+        ['a rounding difference', 'cash', 30, 30.004],
+        ['a card payment', 'card', 25, 30],
+        ['no method', null, 25, 30],
+        ['no recorded amount', 'cash', 25, undefined],
+      ])('nothing for %s', async (_label, method, confirmed, recorded) => {
+        const { cashShortfall } = await readiness()
+        expect(cashShortfall(method, confirmed, recorded)).toBe(0)
+      })
+    })
+
+    describe('empty session list', () => {
+      it('an outage does not read as an empty day', async () => {
+        const { sessionListEmptyText } = await readiness()
+        expect(sessionListEmptyText(true)).toBe("Couldn't load sessions. Please try again.")
+        expect(sessionListEmptyText(false)).toBe('No sessions scheduled for this date.')
+      })
+
+      it.each([
+        ['New Order', 'frontend/components/checkout/BookingSection.tsx'],
+        ['Move', 'frontend/components/MoveBookingDialog.tsx'],
+      ])('%s tells the list when the load failed', (_label, file) => {
+        const source = readFileSync(path.join(appDir, file), 'utf8')
+        expect(source).toContain('setSessionsLoadFailed(true)')
+        expect(source).toContain('loadFailed={sessionsLoadFailed}')
+        // A guarded date is an empty list, not a failed load.
+        expect(source.indexOf('setSessionsLoadFailed(false)')).toBeLessThan(source.indexOf('if (!isValidIsoDate('))
+      })
+    })
+  })
+
+  describe('cash must match what was confirmed', () => {
+    const CHANGED = (amount: string) => `The amount due has changed to £${amount}. Check it with the customer and confirm again.`
+    const NOTHING_LEFT = "The amount due has changed. There's nothing left to collect in cash. Check it with the customer and confirm again."
+    const AMOUNT_CHANGED = 'The amount due has changed. Check it with the customer and confirm again.'
+    const staffRow = { id: 'staff-1', email: user.email, role: 'admin', can_issue_refunds: true, can_manage_pricing: false, active: true }
+    const screen = () => import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/cashConfirmation'))
+    const backend = (name: string) => import(/* @vite-ignore */ path.join(appDir, `backend/paddock/${name}`))
+    const isWrite = (sql: string) => /\b(INSERT INTO|UPDATE|DELETE FROM)\b/.test(sql)
+
+    /** A fake database: the first matching pattern answers, and anything else returns no rows. */
+    function stubDatabase(answers: Array<[RegExp, (params: unknown[]) => unknown[]]>) {
+      const sql: string[] = []
+      const query = vi.fn(async (text: string, params: unknown[] = []) => {
+        sql.push(text)
+        if (/FROM staff/.test(text)) return { data: [staffRow] }
+        const answer = answers.find(([pattern]) => pattern.test(text))
+        return { data: answer ? answer[1](params) : [] }
+      })
+      vi.stubGlobal('paddockData', { query })
+      return { sql, writes: () => sql.filter(isWrite) }
+    }
+
+    describe('the rule', () => {
+      it('refuses a higher figure, with the new amount', async () => {
+        const { cashDifferenceRefusal } = await load('cashConfirmation')
+        expect(cashDifferenceRefusal('cash', 25, 20)).toEqual({ reason: 'cash_amount_changed', message: CHANGED('25.00'), amountToCollect: 25 })
+      })
+
+      it('refuses one penny more', async () => {
+        const { cashDifferenceRefusal } = await load('cashConfirmation')
+        expect(cashDifferenceRefusal('cash', 20.01, 20)?.message).toBe(CHANGED('20.01'))
+      })
+
+      it('refuses a lower figure the same way', async () => {
+        const { cashDifferenceRefusal } = await load('cashConfirmation')
+        expect(cashDifferenceRefusal('cash', 15, 20)).toEqual({ reason: 'cash_amount_changed', message: CHANGED('15.00'), amountToCollect: 15 })
+      })
+
+      it('refuses one penny less', async () => {
+        const { cashDifferenceRefusal } = await load('cashConfirmation')
+        expect(cashDifferenceRefusal('cash', 19.99, 20)?.message).toBe(CHANGED('19.99'))
+      })
+
+      it('refuses when nothing is left to collect but cash was confirmed', async () => {
+        const { cashDifferenceRefusal } = await load('cashConfirmation')
+        expect(cashDifferenceRefusal('cash', 0, 20)).toEqual({ reason: 'cash_amount_changed', message: NOTHING_LEFT, amountToCollect: 0 })
+      })
+
+      it('only says nothing is left when the figure really is £0.00', async () => {
+        const { cashDifferenceRefusal } = await load('cashConfirmation')
+        expect(cashDifferenceRefusal('cash', 0.004, 20)?.message).toBe(NOTHING_LEFT)
+        expect(cashDifferenceRefusal('cash', 0.01, 20)?.message).toBe(CHANGED('0.01'))
+      })
+
+      it.each([
+        ['the same amount', 'cash', 20, 20],
+        ['half a penny more', 'cash', 20.005, 20],
+        ['half a penny less', 'cash', 19.995, 20],
+        // Both come out a hair over half a penny. Refusing them would show staff the figure they
+        // had just confirmed, every time they confirmed it.
+        ['a tick rounded up', 'cash', 8.995, 9],
+        ['a tick rounded down', 'cash', 12.345, 12.34],
+        ['adding up noise', 'cash', 0.1 + 0.2, 0.3],
+        ['a card', 'card', 25, 20],
+        ['the reader', 'reader', 25, 20],
+        ['no method', undefined, 25, 20],
+      ])('lets through %s', async (_label, method, due, confirmed) => {
+        const { cashDifferenceRefusal } = await load('cashConfirmation')
+        expect(cashDifferenceRefusal(method, due, confirmed)).toBeNull()
+      })
+
+      it.each([
+        ['missing', undefined],
+        ['null', null],
+        ['not a number', Number.NaN],
+        ['infinite', Number.POSITIVE_INFINITY],
+      ])('a %s figure counts as nothing confirmed', async (_label, confirmed) => {
+        const { cashDifferenceRefusal } = await load('cashConfirmation')
+        expect(cashDifferenceRefusal('cash', 25, confirmed)?.reason).toBe('cash_amount_changed')
+        expect(cashDifferenceRefusal('cash', 0, confirmed)).toBeNull()
+      })
+    })
+
+    describe('pennies', () => {
+      const both = async () => [await load('cashConfirmation'), await screen()]
+
+      it.each([
+        ['nothing left', [1, 0.95, 0.05], 0],
+        ['nothing left, with noise above nothing', [6.95, 6.85, 0.1], 0],
+        ['a real remainder', [10, 3], 7],
+        ['one penny', [0.01], 0.01],
+        ['more credit than due', [5, 10], 0],
+      ])('amountLeftToPay: %s', async (_label, [due, ...parts], left) => {
+        for (const side of await both()) expect(side.amountLeftToPay(due, ...parts)).toBe(left)
+      })
+
+      it.each([
+        ['adding up noise', 6.95 - 2.9 + 2.9, 6.95, false],
+        ['the same amount', 6.95, 6.95, false],
+        ['one penny more', 6.96, 6.95, true],
+        ['one penny less', 6.94, 6.95, false],
+      ])('exceedsAmount: %s', async (_label, parts, amount, exceeds) => {
+        for (const side of await both()) expect(side.exceedsAmount(parts, amount)).toBe(exceeds)
+      })
+
+      it('the gift card and store credit boxes hold pennies', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/checkout/PaymentStep.tsx'), 'utf8')
+        expect(source).toContain('giftCardAmount: toPennies(Math.max(0, defaultAmount))')
+        expect(source).toContain('? toPennies(Math.max(0, Math.min(parsed, balance, totalDueNow - storeCreditAppliedAmount)))')
+        expect(source).toContain('toPennies(Math.max(0, Math.min(parsed, max)))')
+        expect(source).toContain('const remainder = amountLeftToPay(amountDueNow, giftCardAppliedAmount, storeCreditAppliedAmount)')
+      })
+
+      it.each(['AddGuestDialog', 'MoveBookingDialog', 'SettleLapsedPaymentDialog', 'CheckoutDialog'])('%s compares credit to the penny', (name) => {
+        const source = readFileSync(path.join(appDir, `frontend/components/${name}.tsx`), 'utf8')
+        expect(source).toMatch(/exceedsAmount\(giftCardAmount \+ storeCreditAmount, /)
+        expect(source).not.toMatch(/giftCardAmount \+ storeCreditAmount > /)
+      })
+    })
+
+    describe('New Order', () => {
+      const product = (unitPrice = 20) => ({ productVariantId: 'variant-1', quantity: 1, unitPrice })
+      const order = async (payment: Record<string, unknown>) => {
+        const database = stubDatabase([
+          [/FROM product_variants/, () => [{
+            id: 'variant-1',
+            stock_quantity: 5,
+            product_name: 'Robe',
+            product_active: true,
+            product_member_price: null,
+            product_sale_price: null,
+            product_base_price: '20.00',
+            price_override: null,
+            product_fulfillment_method: 'pickup',
+          }]],
+          [/UPDATE product_variants/, () => [{ id: 'variant-1', stock_quantity: 4 }]],
+          [/store_credit_balance/, () => [{ store_credit_balance: '50.00' }]],
+          [/store_credit_apply/, () => [{ result: { ok: true, balance: 45, transaction_id: 'tx-1' } }]],
+          [/UPDATE gift_cards/, () => [{ id: 'gift-1', remaining_balance: '40.00' }]],
+          [/INSERT INTO gift_card_redemptions/, () => [{ id: 'redemption-1' }]],
+          [/FROM gift_cards/, () => [{ id: 'gift-1', remaining_balance: '50.00', voided: false, expiry_date: '2099-01-01', type: 'standard' }]],
+          [/INSERT INTO orders/, () => [{ id: 'order-1' }]],
+          [/INSERT INTO stock_adjustments/, () => [{ id: 'adjustment-1' }]],
+          [/FROM customers|customer_memberships/, () => [{ id: 'customer-1' }]],
+        ])
+        const fn = (await backend('createOrder')).default
+        const result = await fn({ params: { customerId: 'customer-1', products: [product()], payment }, user })
+        return { result, ...database }
+      }
+
+      it('refuses a figure below its own, and gives the stock back', async () => {
+        const { result, sql } = await order({ method: 'cash', confirmedCashAmount: 15 })
+        expect(result).toEqual({ success: false, stage: 'payment', reason: 'cash_amount_changed', message: CHANGED('20.00'), amountDueTotal: 20 })
+        expect(sql.some((text) => text.includes('INSERT INTO orders'))).toBe(false)
+        const claim = sql.findIndex((text) => /UPDATE product_variants/.test(text) && text.includes('stock_quantity - '))
+        const giveBack = sql.findIndex((text) => /UPDATE product_variants/.test(text) && text.includes('stock_quantity + '))
+        expect(claim).toBeGreaterThanOrEqual(0)
+        expect(giveBack).toBeGreaterThan(claim)
+      })
+
+      it('refuses a figure above its own, and gives the stock back', async () => {
+        const { result, sql } = await order({ method: 'cash', confirmedCashAmount: 25 })
+        expect(result).toEqual({ success: false, stage: 'payment', reason: 'cash_amount_changed', message: CHANGED('20.00'), amountDueTotal: 20 })
+        expect(sql.some((text) => text.includes('INSERT INTO orders'))).toBe(false)
+        expect(sql.some((text) => /UPDATE product_variants/.test(text) && text.includes('stock_quantity + '))).toBe(true)
+      })
+
+      it('gives the new figure when the price fell below the store credit', async () => {
+        const { result, sql } = await order({ method: 'cash', confirmedCashAmount: 5, storeCredit: { amount: 25 } })
+        expect(result).toMatchObject({ reason: 'cash_amount_changed', message: NOTHING_LEFT, amountDueTotal: 20 })
+        expect(sql.some((text) => text.includes('store_credit_apply'))).toBe(false)
+      })
+
+      it('refuses credit above the total when no cash is involved, with the total, and gives the stock back', async () => {
+        const { result, sql } = await order({ storeCredit: { amount: 25 } })
+        expect(result).toEqual({ success: false, stage: 'payment', reason: 'store_credit_amount_exceeds_total', amountDueTotal: 20 })
+        expect(sql.some((text) => text.includes('INSERT INTO orders'))).toBe(false)
+        expect(sql.some((text) => /UPDATE product_variants/.test(text) && text.includes('stock_quantity + '))).toBe(true)
+      })
+
+      it('refuses a gift card above the total, with the total', async () => {
+        const { result } = await order({ giftCard: { giftCardId: 'gift-1', amount: 25 } })
+        expect(result).toEqual({ success: false, stage: 'payment', reason: 'gift_card_amount_exceeds_total', amountDueTotal: 20 })
+      })
+
+      it('refuses the two together above the total, with the total', async () => {
+        const { result } = await order({ giftCard: { giftCardId: 'gift-1', amount: 15 }, storeCredit: { amount: 10 } })
+        expect(result).toEqual({ success: false, stage: 'payment', reason: 'store_credit_amount_exceeds_total', amountDueTotal: 20 })
+      })
+
+      it('with nothing left for the reader, says the amount changed and gives the total', async () => {
+        const { result, sql } = await order({ method: 'reader', storeCredit: { amount: 20 } })
+        expect(result).toEqual({ success: false, stage: 'payment', reason: 'reader_nothing_to_charge', message: AMOUNT_CHANGED, amountDueTotal: 20 })
+        expect(sql.some((text) => /UPDATE product_variants/.test(text) && text.includes('stock_quantity + '))).toBe(true)
+      })
+
+      it.each([[0.05, 19.95], [0.15, 19.85]])('takes credit that exactly covers the total: %s and %s', async (storeCredit, gift) => {
+        const { result } = await order({ storeCredit: { amount: storeCredit }, giftCard: { giftCardId: 'gift-1', amount: gift } })
+        expect(result.reason).toBeUndefined()
+        expect(result.success).toBe(true)
+      })
+
+      it('with nothing on screen to pay, gives the total so the choices appear, and gives the stock back', async () => {
+        const { result, sql } = await order({})
+        expect(result).toEqual({ success: false, stage: 'payment', reason: 'payment_method_required', amountDueTotal: 20 })
+        expect(sql.some((text) => text.includes('INSERT INTO orders'))).toBe(false)
+        expect(sql.some((text) => /UPDATE product_variants/.test(text) && text.includes('stock_quantity + '))).toBe(true)
+      })
+
+      it('includes the membership in that total, as the screen\'s amount due does', async () => {
+        const database = stubDatabase([
+          [/FROM product_variants/, () => [{
+            id: 'variant-1',
+            stock_quantity: 5,
+            product_name: 'Robe',
+            product_active: true,
+            product_member_price: null,
+            product_sale_price: null,
+            product_base_price: '20.00',
+            price_override: null,
+            product_fulfillment_method: 'pickup',
+          }]],
+          [/UPDATE product_variants/, () => [{ id: 'variant-1', stock_quantity: 4 }]],
+          [/FROM membership_plans/, () => [{ id: 'plan-1', name: 'Core', price_monthly: '30.00', price_yearly: '300.00', active: true, is_unlimited: false, sessions_included: 4, addons_included: 0 }]],
+          [/FROM customers|customer_memberships/, () => [{ id: 'customer-1', saved_payment_method_id: 'pm_1' }]],
+        ])
+        const fn = (await backend('createOrder')).default
+        const result = await fn({
+          params: { customerId: 'customer-1', products: [product()], membershipPlanId: 'plan-1', membershipBillingFrequency: 'monthly', payment: {} },
+          user,
+        })
+        expect(result).toMatchObject({ reason: 'payment_method_required', amountDueTotal: 50 })
+        expect(database.sql.some((text) => text.includes('INSERT INTO orders'))).toBe(false)
+      })
+
+      it('counts the total before store credit for that refusal too', async () => {
+        const { result } = await order({ storeCredit: { amount: 5 } })
+        expect(result).toMatchObject({ reason: 'payment_method_required', amountDueTotal: 20 })
+      })
+
+      it('refuses cash with no figure', async () => {
+        const { result } = await order({ method: 'cash' })
+        expect(result.reason).toBe('cash_amount_changed')
+      })
+
+      it('takes the confirmed figure', async () => {
+        const { result, sql } = await order({ method: 'cash', confirmedCashAmount: 20 })
+        expect(result.success).toBe(true)
+        expect(result.cardAmount).toBe(20)
+        expect(sql.some((text) => text.includes('INSERT INTO orders'))).toBe(true)
+      })
+
+      it('compares the cash left after store credit', async () => {
+        const { result } = await order({ method: 'cash', confirmedCashAmount: 15, storeCredit: { amount: 5 } })
+        expect(result.success).toBe(true)
+        const short = await order({ method: 'cash', confirmedCashAmount: 10, storeCredit: { amount: 5 } })
+        expect(short.result.message).toBe(CHANGED('15.00'))
+        expect(short.result.amountDueTotal).toBe(20)
+        // Refused before the store credit is claimed, so there is none to give back.
+        expect(short.sql.some((text) => text.includes('store_credit_apply'))).toBe(false)
+      })
+
+      describe('a method held after the choices went', () => {
+        const choice = () => import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/paymentMethodChoice'))
+        const held = (method: string | null, confirmedCashAmount: number | null = null) => ({ method, confirmedCashAmount })
+
+        /** Complete Order, from what the screen holds to what it does with the response. */
+        const complete = async (state: { method: string | null; confirmedCashAmount: number | null }, storeCredit: number) => {
+          const { amountLeftToPay } = await screen()
+          const { clearHiddenMethod, orderMethodFields, paymentChoicesShown, readerReferenceMissing } = await choice()
+          const remainder = amountLeftToPay(20, storeCredit)
+          const onScreen = clearHiddenMethod(state, paymentChoicesShown(remainder, false))
+          const sent = { ...(storeCredit > 0 ? { storeCredit: { amount: storeCredit } } : {}), ...orderMethodFields(onScreen, remainder, 0, false) }
+          const { result, sql } = await order(sent)
+          return {
+            onScreen,
+            sent,
+            result,
+            sql,
+            toldToRetry: result.success === true && readerReferenceMissing(sent.method, result.pendingReaderPayment),
+          }
+        }
+        const claims = (sql: string[]) => sql.filter((text) => text.includes('store_credit_apply')).length
+
+        it('sequence A: reader picked, then store credit raised to the total: the order finishes, with no retry and one claim', async () => {
+          const { onScreen, sent, result, sql, toldToRetry } = await complete(held('reader'), 20)
+          expect(onScreen.method).toBeNull()
+          expect(sent).toEqual({ storeCredit: { amount: 20 } })
+          expect(result).toMatchObject({ success: true, storeCreditRedeemedAmount: 20 })
+          expect(toldToRetry).toBe(false)
+          expect(claims(sql)).toBe(1)
+          expect(sql.filter((text) => text.includes('INSERT INTO orders'))).toHaveLength(1)
+        })
+
+        it('sequence B: reader picked, then the booking goes on Membership Credit: it is booked once, with no retry', async () => {
+          const { amountLeftToPay } = await screen()
+          const { clearHiddenMethod, orderMethodFields, paymentChoicesShown, readerReferenceMissing } = await choice()
+          const remainder = amountLeftToPay(0)
+          const onScreen = clearHiddenMethod(held('reader'), paymentChoicesShown(remainder, false))
+          expect(onScreen.method).toBeNull()
+          const payment = orderMethodFields(onScreen, remainder, 0, false)
+          expect(payment).toEqual({})
+
+          const { sql } = stubDatabase([
+            [/quote_booking/, () => [{ seat_no: 1, seat_kind: 'account_holder', band_id: 'band-1', list_price: '25.00', unit_price: '25.00', credit_eligible: true, membership_level: 'core', discount_percent: '0' }]],
+            [/FROM sessions s\s+JOIN service_types st[\s\S]*WHERE s\.id = \$1/, () => [{ id: 'session-1', start_time: '2099-12-01T10:00:00', end_time: '2099-12-01T11:00:00', capacity: 8, total_booked: 0, status: 'open', service_type_id: 'type-1', band_id: 'band-1', booking_type: 'public', started: false }]],
+            [/FROM customer_memberships cm\s+LEFT JOIN membership_current_credits/, () => [{ id: 'membership-1', period_id: 'period-1', is_unlimited: true, credits_remaining: null }]],
+            [/FROM membership_current_credits mcc/, () => [{ period_id: 'period-1', is_unlimited: true }]],
+            [/UPDATE sessions/, () => [{ id: 'session-1' }]],
+            [/INSERT INTO bookings/, () => [{ id: 'booking-1' }]],
+            [/INSERT INTO orders/, () => [{ id: 'order-1' }]],
+            [/FROM customers|customer_memberships/, () => [{ id: 'customer-1' }]],
+          ])
+          const fn = (await backend('createOrder')).default
+          const booking = { sessionId: 'session-1', guests: [{ name: 'Jo', dateOfBirth: '1990-01-01' }], redemptionSource: 'membership_credit', membershipId: 'membership-1' }
+          const result = await fn({ params: { customerId: 'customer-1', booking, payment }, user })
+          expect(result).toMatchObject({ success: true, cardCharged: false })
+          expect(readerReferenceMissing(undefined, result.pendingReaderPayment)).toBe(false)
+          expect(sql.filter((text) => text.includes('INSERT INTO bookings'))).toHaveLength(1)
+        })
+
+        it('with the method somehow still held, nothing is sent and the order still finishes', async () => {
+          const { orderMethodFields, readerReferenceMissing } = await choice()
+          expect(orderMethodFields(held('reader'), 0, 0, false)).toEqual({})
+          expect(orderMethodFields(held('cash', 5), 0, 0, false)).toEqual({})
+          expect(orderMethodFields(held('card'), 0, 0, false)).toEqual({})
+          expect(readerReferenceMissing(undefined, undefined)).toBe(false)
+        })
+
+        it('the message stays for a reader that was sent and came back with no reference', async () => {
+          const { readerReferenceMissing } = await choice()
+          expect(readerReferenceMissing('reader', undefined)).toBe(true)
+          expect(readerReferenceMissing('reader', { orderId: 'order-1' })).toBe(false)
+          expect(readerReferenceMissing('cash', undefined)).toBe(false)
+          expect(readerReferenceMissing('card', undefined)).toBe(false)
+        })
+
+        it('a reader with something left to pay still goes to the reader', async () => {
+          vi.stubGlobal('paddockBackendApi2', { rawRequest: vi.fn(async () => ({ data: { paymentIntentId: 'pi_1', clientSecret: 'secret_1', stripeCustomerId: 'cus_1' } })) })
+          const { onScreen, sent, result, toldToRetry } = await complete(held('reader'), 5)
+          expect(onScreen.method).toBe('reader')
+          expect(sent).toEqual({ storeCredit: { amount: 5 }, method: 'reader', readerSaveCard: false })
+          expect(result.pendingReaderPayment).toMatchObject({ clientSecret: 'secret_1', amount: 15 })
+          expect(toldToRetry).toBe(false)
+        })
+
+        it('a membership keeps the reader with nothing else left to pay, and forces the save', async () => {
+          const { clearHiddenMethod, orderMethodFields, paymentChoicesShown } = await choice()
+          expect(paymentChoicesShown(0, true)).toBe(true)
+          expect(clearHiddenMethod(held('reader'), paymentChoicesShown(0, true)).method).toBe('reader')
+          expect(orderMethodFields(held('reader'), 0, 30, false)).toEqual({ method: 'reader', readerSaveCard: true })
+        })
+
+        it('clearing takes the tick with it, and leaves everything else alone', async () => {
+          const { clearHiddenMethod } = await choice()
+          const state = { ...held('cash', 20), storeCreditAmount: 20, giftCardAmount: 0 }
+          expect(clearHiddenMethod(state, false)).toEqual({ method: null, confirmedCashAmount: null, storeCreditAmount: 20, giftCardAmount: 0 })
+          expect(clearHiddenMethod(state, true)).toBe(state)
+          const none = held(null)
+          expect(clearHiddenMethod(none, false)).toBe(none)
+        })
+
+        it('held cash that was never sent can\'t raise the cash warning', async () => {
+          const { cashShortfall } = await import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/quoteReadiness'))
+          expect(cashShortfall(null, 0, 20)).toBe(0)
+          expect(cashShortfall('cash', 15, 20)).toBe(5)
+        })
+
+        it('the method going by itself isn\'t staff acting on a refusal, so its banner stays', async () => {
+          const { methodOnlyCleared, paymentInputChanged } = await screen()
+          const base = { method: 'cash', selectedGiftCard: null, giftCardAmount: 0, storeCreditAmount: 5, confirmedCashAmount: null }
+          expect(paymentInputChanged(base, { ...base, method: null })).toBe(false)
+          expect(paymentInputChanged({ ...base, method: null }, base)).toBe(true)
+          expect(paymentInputChanged(base, { ...base, method: 'card' })).toBe(true)
+          expect(paymentInputChanged(base, { ...base, method: null, storeCreditAmount: 6 })).toBe(true)
+          expect(methodOnlyCleared('reader', null)).toBe(true)
+          expect(methodOnlyCleared(null, 'reader')).toBe(false)
+          expect(methodOnlyCleared(null, null)).toBe(false)
+        })
+      })
+    })
+
+    describe('Add Guest', () => {
+      const addGuest = async (payment: Record<string, unknown>, seatPrice = '25.00') => {
+        const database = stubDatabase([
+          [/FROM bookings b/, () => [{
+            id: 'booking-1',
+            customer_id: 'customer-1',
+            price_paid: '20.00',
+            status: 'confirmed',
+            session_id: 'session-1',
+            booking_type: 'public',
+            session_started: false,
+            guest_count: 1,
+            seat_quote: { unit_price: seatPrice },
+            tier_row: null,
+          }]],
+          [/UPDATE sessions/, () => [{ id: 'session-1' }]],
+          [/store_credit_apply/, () => [{ result: { ok: true, balance: 45, transaction_id: 'tx-1' } }]],
+          [/WITH claim AS/, () => [{ id: 'gift-1', remaining_balance: '40.00' }]],
+          [/WITH p AS/, () => [{ guest: { id: 'guest-1' }, order_id: 'order-1', addon_line_ids: null }]],
+        ])
+        const fn = (await backend('addBookingGuest')).default
+        const result = await fn({ params: { bookingId: 'booking-1', guestName: 'Sam', guestsOver18Confirmed: true, payment }, user })
+        return { result, ...database }
+      }
+
+      it('refuses a figure below its own, with the new figures, and writes nothing', async () => {
+        const { result, writes } = await addGuest({ method: 'cash', confirmedCashAmount: 20 })
+        expect(result).toEqual({
+          added: false,
+          reason: 'cash_amount_changed',
+          message: CHANGED('25.00'),
+          priceImpact: { amountDue: 25, guestAmount: 25, addonsAmount: 0, creditAvailable: false },
+        })
+        expect(writes()).toEqual([])
+      })
+
+      it('refuses a figure above its own, with the new figures, and writes nothing', async () => {
+        const { result, writes } = await addGuest({ method: 'cash', confirmedCashAmount: 30 })
+        expect(result).toMatchObject({ added: false, reason: 'cash_amount_changed', message: CHANGED('25.00'), priceImpact: { amountDue: 25 } })
+        expect(writes()).toEqual([])
+      })
+
+      it('refuses confirmed cash when the price has dropped to nothing', async () => {
+        const { result, writes } = await addGuest({ method: 'cash', confirmedCashAmount: 25 }, '0.00')
+        expect(result).toMatchObject({ added: false, reason: 'cash_amount_changed', message: NOTHING_LEFT, priceImpact: { amountDue: 0 } })
+        expect(writes()).toEqual([])
+      })
+
+      it('gives the new figures when the price fell below the store credit', async () => {
+        const { result, writes } = await addGuest({ method: 'cash', confirmedCashAmount: 5, storeCredit: { amount: 20 } }, '15.00')
+        expect(result).toMatchObject({ reason: 'cash_amount_changed', message: NOTHING_LEFT, priceImpact: { amountDue: 15 } })
+        expect(writes()).toEqual([])
+      })
+
+      it('takes the confirmed figure', async () => {
+        const { result } = await addGuest({ method: 'cash', confirmedCashAmount: 25 })
+        expect(result.added).toBe(true)
+      })
+
+      it('goes through with cash left selected and nothing to collect', async () => {
+        const { result } = await addGuest({ method: 'cash', storeCredit: { amount: 25 } })
+        expect(result.reason).not.toBe('cash_amount_changed')
+      })
+
+      it('compares the cash left after store credit', async () => {
+        const { result, writes } = await addGuest({ method: 'cash', confirmedCashAmount: 10, storeCredit: { amount: 5 } })
+        expect(result.message).toBe(CHANGED('20.00'))
+        expect(writes()).toEqual([])
+      })
+
+      const figures = (amountDue: number) => ({ amountDue, guestAmount: amountDue, addonsAmount: 0, creditAvailable: false })
+
+      it.each([
+        ['nothing to pay with', {}, 'payment_method_required'],
+        ['a gift card above the price', { giftCard: { giftCardId: 'gift-1', amount: 30 } }, 'gift_card_amount_exceeds_total'],
+        ['store credit above the price', { storeCredit: { amount: 30 } }, 'store_credit_amount_exceeds_total'],
+        ['the two together above the price', { storeCredit: { amount: 15 }, giftCard: { giftCardId: 'gift-1', amount: 15 } }, 'store_credit_amount_exceeds_total'],
+      ])('%s gets the figures, and writes nothing', async (_label, payment, reason) => {
+        const { result, writes } = await addGuest(payment)
+        expect(result).toEqual({ added: false, reason, priceImpact: figures(25) })
+        expect(writes()).toEqual([])
+      })
+
+      it('never takes store credit for a guest whose price fell to nothing', async () => {
+        const { result, sql } = await addGuest({ storeCredit: { amount: 20 } }, '0.00')
+        expect(result).toEqual({ added: false, reason: 'store_credit_amount_exceeds_total', priceImpact: figures(0) })
+        expect(sql.some((text) => text.includes('store_credit_apply'))).toBe(false)
+      })
+
+      it('never takes a gift card for a guest whose price fell to nothing', async () => {
+        const { result, writes } = await addGuest({ giftCard: { giftCardId: 'gift-1', amount: 20 } }, '0.00')
+        expect(result).toEqual({ added: false, reason: 'gift_card_amount_exceeds_total', priceImpact: figures(0) })
+        expect(writes()).toEqual([])
+      })
+
+      it.each([
+        ['credit covers it', { method: 'reader', storeCredit: { amount: 25 } }, '25.00', 25],
+        ['the price fell to nothing', { method: 'reader' }, '0.00', 0],
+      ])('with nothing left for the reader because %s, says the amount changed and gets the figures', async (_label, payment, seat, due) => {
+        const { result, writes } = await addGuest(payment, seat)
+        expect(result).toEqual({ added: false, reason: 'payment_method_required', message: AMOUNT_CHANGED, priceImpact: figures(due) })
+        expect(writes()).toEqual([])
+      })
+
+      it('adds a free guest with no payment parts', async () => {
+        const { result } = await addGuest({}, '0.00')
+        expect(result.added).toBe(true)
+      })
+
+      it.each([[2.9, 4.05], [2.9, 6.95 - 2.9], [0.1, 6.85]])('takes credit that exactly covers £6.95: %s and %s', async (storeCredit, gift) => {
+        const { result } = await addGuest({ storeCredit: { amount: storeCredit }, giftCard: { giftCardId: 'gift-1', amount: gift } }, '6.95')
+        expect(result.reason).toBeUndefined()
+      })
+    })
+
+    describe('Move', () => {
+      const move = async (payment: Record<string, unknown> | undefined, tierPrice = '65.00') => {
+        const session = { id: 'session-2', start_time: '2026-12-01T10:00:00', end_time: '2026-12-01T11:00:00', capacity: 8, total_booked: 0, status: 'open', service_type_id: 'type-1', band_id: 'band-2', booking_type: 'private', started: false }
+        const database = stubDatabase([
+          [/FROM bookings b\s+LEFT JOIN sessions/, () => [{
+            id: 'booking-1',
+            customer_id: 'customer-1',
+            session_id: 'session-1',
+            party_size: 2,
+            status: 'confirmed',
+            price_paid: '40.00',
+            redemption_source: 'paid',
+            redeemed_membership_id: null,
+            redeemed_session_pass_id: null,
+            start_time: '2026-11-30T10:00:00',
+            end_time: '2026-11-30T11:00:00',
+            band_id: 'band-1',
+            credit_period_id: null,
+            booking_type: 'private',
+          }]],
+          [/FROM sessions s\s+JOIN service_types/, () => [session]],
+          [/FROM service_type_price_tiers/, () => [{ price: tierPrice }]],
+        ])
+        const fn = (await backend('moveBooking')).default
+        const result = await fn({ params: { bookingId: 'booking-1', newSessionId: 'session-2', confirmed: true, ...(payment ? { payment } : {}) }, user })
+        return { result, ...database }
+      }
+
+      it('refuses a figure below its own, with the new figures, and writes nothing', async () => {
+        const { result, writes } = await move({ method: 'cash', confirmedCashAmount: 20 })
+        expect(result).toMatchObject({ moved: false, reason: 'cash_amount_changed', message: CHANGED('25.00'), priceImpact: { amountDue: 25 } })
+        expect(writes()).toEqual([])
+      })
+
+      it('compares the cash left after store credit', async () => {
+        const { result, writes } = await move({ method: 'cash', confirmedCashAmount: 10, storeCredit: { amount: 5 } })
+        expect(result.message).toBe(CHANGED('20.00'))
+        expect(writes()).toEqual([])
+      })
+
+      it('refuses a figure above its own, with the new figures, and writes nothing', async () => {
+        const { result, writes } = await move({ method: 'cash', confirmedCashAmount: 30 })
+        expect(result).toMatchObject({ moved: false, reason: 'cash_amount_changed', message: CHANGED('25.00'), priceImpact: { amountDue: 25 } })
+        expect(writes()).toEqual([])
+      })
+
+      it('refuses confirmed cash when the difference has dropped to nothing', async () => {
+        const { result, writes } = await move({ method: 'cash', confirmedCashAmount: 25 }, '40.00')
+        expect(result).toMatchObject({ moved: false, reason: 'cash_amount_changed', message: NOTHING_LEFT, priceImpact: { amountDue: 0 } })
+        expect(writes()).toEqual([])
+      })
+
+      it('refuses confirmed cash when the difference has turned into a refund', async () => {
+        const { result, writes } = await move({ method: 'cash', confirmedCashAmount: 25 }, '30.00')
+        expect(result).toMatchObject({ moved: false, reason: 'cash_amount_changed', message: NOTHING_LEFT, priceImpact: { amountDue: -10, refundDue: true } })
+        expect(writes()).toEqual([])
+      })
+
+      it('gives the new figures when the difference fell below the store credit', async () => {
+        const { result, writes } = await move({ method: 'cash', confirmedCashAmount: 5, storeCredit: { amount: 20 } }, '55.00')
+        expect(result).toMatchObject({ reason: 'cash_amount_changed', message: NOTHING_LEFT, priceImpact: { amountDue: 15 } })
+        expect(writes()).toEqual([])
+      })
+
+      it('gets past the check with the confirmed figure', async () => {
+        const { result } = await move({ method: 'cash', confirmedCashAmount: 25 })
+        expect(result.reason).not.toBe('cash_amount_changed')
+      })
+
+      it('with nothing on screen to pay, gives the new figures so the choices appear', async () => {
+        const { result, writes } = await move(undefined)
+        expect(result).toMatchObject({ moved: false, reason: 'payment_method_required', priceImpact: { amountDue: 25, customerId: 'customer-1' } })
+        expect(writes()).toEqual([])
+      })
+
+      it('with nothing left for the reader, says the amount changed and gets the figures', async () => {
+        const { result, writes } = await move({ method: 'reader', storeCredit: { amount: 25 } })
+        expect(result).toMatchObject({ moved: false, reason: 'payment_method_required', message: AMOUNT_CHANGED, priceImpact: { amountDue: 25 } })
+        expect(writes()).toEqual([])
+      })
+
+      it('never starts a reader payment when the difference has gone to nothing', async () => {
+        const { result, writes } = await move({ method: 'reader' }, '40.00')
+        expect(result).toMatchObject({ moved: false, reason: 'payment_method_required', message: AMOUNT_CHANGED, priceImpact: { amountDue: 0 } })
+        expect(writes()).toEqual([])
+      })
+
+      it('the reader refused on a refund keeps its words and gets the figures', async () => {
+        const { result, writes } = await move({ method: 'reader' }, '30.00')
+        expect(result.message).toContain('a card reader cannot refund')
+        expect(result).toMatchObject({ moved: false, reason: 'payment_method_required', priceImpact: { amountDue: -10, refundDue: true } })
+        expect(writes()).toEqual([])
+      })
+
+      it.each([
+        ['a gift card above the difference', { giftCard: { giftCardId: 'gift-1', amount: 30 } }, 'gift_card_amount_exceeds_total'],
+        ['store credit above the difference', { storeCredit: { amount: 30 } }, 'store_credit_amount_exceeds_total'],
+        ['the two together above the difference', { storeCredit: { amount: 15 }, giftCard: { giftCardId: 'gift-1', amount: 15 } }, 'store_credit_amount_exceeds_total'],
+      ])('%s gets the figures, and writes nothing', async (_label, payment, reason) => {
+        const { result, writes } = await move(payment)
+        expect(result).toMatchObject({ moved: false, reason, priceImpact: { amountDue: 25 } })
+        expect(writes()).toEqual([])
+      })
+
+      it('a difference that turned into a refund gets the figures, so the refund choices appear', async () => {
+        const { result, writes } = await move({ method: 'card' }, '30.00')
+        expect(result).toMatchObject({ moved: false, reason: 'refund_method_required', priceImpact: { amountDue: -10, refundDue: true } })
+        expect(writes()).toEqual([])
+      })
+
+      it.each([[0.05, 24.95], [2.9, 22.1]])('accepts credit that exactly covers £25: %s and %s', async (storeCredit, gift) => {
+        const { result } = await move({ storeCredit: { amount: storeCredit }, giftCard: { giftCardId: 'gift-1', amount: gift } })
+        expect(['payment_method_required', 'gift_card_amount_exceeds_total', 'store_credit_amount_exceeds_total']).not.toContain(result.reason)
+      })
+    })
+
+    describe('Settle lapsed payment', () => {
+      const settle = async (payment: Record<string, unknown>, seatPrice = '30.00') => {
+        const database = stubDatabase([
+          [/UPDATE bookings/, () => [{ id: 'booking-1', status: 'confirmed', redemption_source: 'paid', price_paid: '30.00', payment_due_by: null }]],
+          [/FROM bookings b/, () => [{
+            id: 'booking-1',
+            customer_id: 'customer-1',
+            session_id: 'session-1',
+            party_size: 1,
+            status: 'payment_needed',
+            price_paid: '0.00',
+            redemption_source: 'membership_credit',
+            redeemed_membership_id: 'membership-1',
+            credit_period_id: 'period-1',
+            payment_due_by: null,
+            seat1_unit_price: seatPrice,
+            seat1_pay_by: 'membership_credit',
+          }]],
+        ])
+        const fn = (await backend('settleLapsedBooking')).default
+        const result = await fn({ params: { bookingId: 'booking-1', payment }, user })
+        return { result, ...database }
+      }
+
+      it('refuses a figure below its own, with the new figure, and writes nothing', async () => {
+        const { result, writes } = await settle({ method: 'cash', confirmedCashAmount: 20 })
+        expect(result).toEqual({ settled: false, reason: 'cash_amount_changed', message: CHANGED('30.00'), amountDue: 30 })
+        expect(writes()).toEqual([])
+      })
+
+      it('compares the cash left after store credit, and gives the full figure back', async () => {
+        const { result, writes } = await settle({ method: 'cash', confirmedCashAmount: 20, storeCredit: { amount: 5 } })
+        expect(result).toMatchObject({ message: CHANGED('25.00'), amountDue: 30 })
+        expect(writes()).toEqual([])
+      })
+
+      it('refuses a figure above its own, with the new figure, and writes nothing', async () => {
+        const { result, writes } = await settle({ method: 'cash', confirmedCashAmount: 35 })
+        expect(result).toEqual({ settled: false, reason: 'cash_amount_changed', message: CHANGED('30.00'), amountDue: 30 })
+        expect(writes()).toEqual([])
+      })
+
+      it('gives the new figure when the price fell below the store credit', async () => {
+        const { result, writes } = await settle({ method: 'cash', confirmedCashAmount: 5, storeCredit: { amount: 25 } }, '20.00')
+        expect(result).toEqual({ settled: false, reason: 'cash_amount_changed', message: NOTHING_LEFT, amountDue: 20 })
+        expect(writes()).toEqual([])
+      })
+
+      it('takes the confirmed figure', async () => {
+        const { result } = await settle({ method: 'cash', confirmedCashAmount: 30 })
+        expect(result.settled).toBe(true)
+      })
+
+      it.each([
+        ['nothing to pay with', {}, 'payment_method_required'],
+        ['a gift card above the price', { giftCard: { giftCardId: 'gift-1', amount: 35 } }, 'gift_card_amount_exceeds_total'],
+        ['store credit above the price', { storeCredit: { amount: 35 } }, 'store_credit_amount_exceeds_total'],
+        ['the two together above the price', { storeCredit: { amount: 20 }, giftCard: { giftCardId: 'gift-1', amount: 20 } }, 'store_credit_amount_exceeds_total'],
+      ])('%s gets the figure, and writes nothing', async (_label, payment, reason) => {
+        const { result, writes } = await settle(payment)
+        expect(result).toEqual({ settled: false, reason, amountDue: 30 })
+        expect(writes()).toEqual([])
+      })
+
+      it('with nothing left for the reader, says the amount changed and gets the figure', async () => {
+        const { result, writes } = await settle({ method: 'reader', storeCredit: { amount: 30 } })
+        expect(result).toEqual({ settled: false, reason: 'payment_method_required', message: AMOUNT_CHANGED, amountDue: 30 })
+        expect(writes()).toEqual([])
+      })
+
+      describe('a part of the payment that can\'t be claimed', () => {
+        const SPENT = 'That gift card no longer has enough balance remaining.'
+        /** A £15 seat. `balance` follows the store credit, and each `credit` answers a movement in
+         *  turn (an Error throws, false refuses). `claims` answers each gift card claim. */
+        const world = (options: { credit?: Array<boolean | Error | { reason: string }>; claims?: Array<boolean | Error> } = {}) => {
+          const state = { balance: 40, movements: [] as Array<{ amount: number; reason: unknown }> }
+          const credit = [...(options.credit ?? [])]
+          const claims = [...(options.claims ?? [])]
+          const database = stubDatabase([
+            [/store_credit_apply/, (params) => {
+              const next = credit.shift()
+              if (next instanceof Error) throw next
+              if (next === false) return [{ result: { ok: false } }]
+              if (typeof next === 'object') return [{ result: { ok: false, ...next } }]
+              state.balance += Number(params[1])
+              state.movements.push({ amount: Number(params[1]), reason: params[2] })
+              return [{ result: { ok: true, balance: state.balance } }]
+            }],
+            [/UPDATE gift_cards SET remaining_balance = remaining_balance - /, () => {
+              const next = claims.shift() ?? true
+              if (next instanceof Error) throw next
+              return next ? [{ id: 'gift-1', remaining_balance: '5.00' }] : []
+            }],
+            [/UPDATE bookings/, () => [{ id: 'booking-1', status: 'confirmed', redemption_source: 'paid', price_paid: '15.00', payment_due_by: null }]],
+            [/FROM bookings b/, () => [{
+              id: 'booking-1', customer_id: 'customer-1', session_id: 'session-1', party_size: 1, status: 'payment_needed', price_paid: '0.00',
+              redemption_source: 'membership_credit', redeemed_membership_id: 'membership-1', credit_period_id: 'period-1', payment_due_by: null,
+              seat1_unit_price: '15.00', seat1_pay_by: 'membership_credit',
+            }]],
+          ])
+          const take = async () => {
+            const fn = (await backend('settleLapsedBooking')).default
+            return fn({ params: { bookingId: 'booking-1', payment: { storeCredit: { amount: 10 }, giftCard: { giftCardId: 'gift-1', amount: 5 } } }, user })
+          }
+          return { state, take, ...database }
+        }
+        const bookingWrites = (sql: string[]) => sql.filter((text) => /UPDATE bookings/.test(text))
+
+        it('the review\'s sequence: the gift card has gone, so the store credit goes back, the booking stays, and a retry takes it once', async () => {
+          const { state, take, sql } = world({ claims: [false, true] })
+          expect(await take()).toEqual({ settled: false, reason: 'gift_card_insufficient_or_invalid' })
+          expect(state.balance).toBe(40)
+          expect(state.movements).toEqual([{ amount: -10, reason: 'redemption' }, { amount: 10, reason: 'redemption_reversal' }])
+          expect(bookingWrites(sql)).toEqual([])
+          expect((await take()).settled).toBe(true)
+          expect(state.balance).toBe(30)
+        })
+
+        it.each([
+          ['refused', false],
+          ['throwing', new Error('connection lost')],
+        ])('giving the store credit back %s: says so, and what to do', async (_label, answer) => {
+          const { take, sql } = world({ claims: [false], credit: [true, answer] })
+          expect(await take()).toEqual({
+            settled: false,
+            reason: 'gift_card_insufficient_or_invalid',
+            message: `${SPENT} Giving the £10.00 store credit back failed — check their balance, then add it by hand if it isn't there.`,
+          })
+          expect(bookingWrites(sql)).toEqual([])
+        })
+
+        it('the claim itself failing gives the store credit back too, and doesn\'t blame the balance', async () => {
+          const { state, take, sql } = world({ claims: [new Error('connection lost')] })
+          expect(await take()).toEqual({
+            settled: false,
+            reason: 'gift_card_insufficient_or_invalid',
+            message: "Claiming the gift card failed (connection lost). The store credit was given back. Check the gift card's balance before trying again.",
+          })
+          expect(state.balance).toBe(40)
+          expect(bookingWrites(sql)).toEqual([])
+        })
+
+        it('the claim failing and the store credit not going back: both are said', async () => {
+          const { take } = world({ claims: [new Error('connection lost')], credit: [true, false] })
+          expect((await take()).message).toBe(
+            "Claiming the gift card failed (connection lost). Giving the £10.00 store credit back failed — check their balance, then add it by hand if it isn't there. Check the gift card's balance before trying again."
+          )
+        })
+
+        it('with no store credit in the payment, nothing is given back', async () => {
+          const { state, sql } = world({ claims: [false] })
+          const fn = (await backend('settleLapsedBooking')).default
+          const result = await fn({ params: { bookingId: 'booking-1', payment: { giftCard: { giftCardId: 'gift-1', amount: 15 } } }, user })
+          expect(result).toEqual({ settled: false, reason: 'gift_card_insufficient_or_invalid' })
+          expect(state.movements).toEqual([])
+          expect(sql.some((text) => text.includes('store_credit_apply'))).toBe(false)
+        })
+
+        it.each([
+          ['not enough store credit', { reason: 'insufficient_store_credit' }, 'store_credit_insufficient_or_invalid'],
+          ['any other refusal', { reason: 'customer_not_found' }, 'store_credit_failed'],
+        ])('%s: a reason with words, and the gift card is never touched', async (_label, answer, reason) => {
+          const { take, sql } = world({ credit: [answer] })
+          expect(await take()).toEqual({ settled: false, reason })
+          expect(sql.some((text) => text.includes('UPDATE gift_cards'))).toBe(false)
+        })
+
+        it('the screen has words for every reason, and nothing throws a raw code', () => {
+          const dialog = readFileSync(path.join(appDir, 'frontend/components/SettleLapsedPaymentDialog.tsx'), 'utf8')
+          expect(dialog).toContain("store_credit_insufficient_or_invalid: 'The customer no longer has enough store credit remaining. Nothing was taken.'")
+          expect(dialog).toContain("store_credit_failed: 'Applying the store credit failed — nothing was taken.'")
+          expect(dialog).toContain(`gift_card_insufficient_or_invalid: '${SPENT} Nothing was taken.'`)
+          const fn = readFileSync(path.join(appDir, 'backend/paddock/settleLapsedBooking.ts'), 'utf8')
+          expect(fn).not.toContain("throw new Error('store_credit_insufficient_or_invalid')")
+          expect(fn).not.toContain("throw new Error('gift_card_insufficient_or_invalid')")
+        })
+      })
+    })
+
+    describe('Remove Guest', () => {
+      const remove = async (params: Record<string, unknown>, seat: { unit_price: string | null; pay_by: string } = { unit_price: '25.00', pay_by: 'paid' }) => {
+        const database = stubDatabase([
+          [/FROM booking_guests g/, () => [{
+            id: 'guest-1',
+            booking_id: 'booking-1',
+            guest_type: 'additional',
+            guest_name: 'Sam',
+            ...seat,
+            bk_id: 'booking-1',
+            customer_id: 'customer-1',
+            party_size: 2,
+            price_paid: '50.00',
+            status: 'confirmed',
+            session_id: 'session-1',
+            booking_type: 'public',
+          }]],
+        ])
+        const fn = (await backend('removeBookingGuest')).default
+        const result = await fn({ params: { guestId: 'guest-1', ...params }, user })
+        return { result, ...database }
+      }
+      const quote = (refundAmount: number, refundable = true) => ({ bookingId: 'booking-1', bookingType: 'public', refundAmount, refundable, partySize: 2 })
+
+      it('a confirmed refund that differs gets the new figure, and writes nothing', async () => {
+        const { result, writes } = await remove({ confirmedRefundAmount: 20, refundMethod: 'credit' })
+        expect(result).toEqual({ removed: false, blocked: false, guestId: 'guest-1', reason: 'refund_amount_mismatch', message: AMOUNT_CHANGED, quote: quote(25) })
+        expect(writes()).toEqual([])
+      })
+
+      it('no refund method gets the figure, and writes nothing', async () => {
+        const { result, writes } = await remove({ confirmedRefundAmount: 25 })
+        expect(result).toEqual({ removed: false, blocked: false, guestId: 'guest-1', reason: 'refund_method_required', quote: quote(25) })
+        expect(writes()).toEqual([])
+      })
+
+      it('a seat that stopped being refundable is refused, not removed with no refund', async () => {
+        const { result, writes } = await remove({ confirmedRefundAmount: 25, refundMethod: 'credit' }, { unit_price: '25.00', pay_by: 'membership_credit' })
+        expect(result).toMatchObject({ removed: false, reason: 'refund_amount_mismatch', quote: quote(0, false) })
+        expect(writes()).toEqual([])
+      })
+
+      describe('what staff are told when it fails', () => {
+        const DIDNT_GO_THROUGH = "The refund didn't go through, so the guest hasn't been removed. Please try again."
+        const NOTHING_REFUNDED = "The guest couldn't be removed and nothing was refunded. Please try again."
+        const WENT_THROUGH = "The refund went through, but the guest couldn't be removed. Check the booking before trying again."
+        const PART_WENT_THROUGH = "Part of the refund went through, but the guest couldn't be removed. Check the booking before trying again."
+        const CARD_REFUND_FAILED = 'The card refund failed, so nothing was refunded: card_declined'
+        const CREDIT_FAILED = 'Adding the store credit failed, so nothing was refunded.'
+
+        /** A seat of £25 on one order. `cardPortion` is what that order's card took (0: no card
+         *  money to return). `credit` answers each store credit movement in turn. */
+        const run = async (options: {
+          params?: Record<string, unknown>
+          seat?: { unit_price: string | null; pay_by: string }
+          cardPortion?: number
+          cardRefund?: { error: string } | { ok: true }
+          credit?: boolean[]
+          deleted?: boolean | Error
+          lowerSeatFails?: boolean
+          status?: string
+        }) => {
+          const credit = [...(options.credit ?? [])]
+          const database = stubDatabase([
+            [/FROM booking_guests g/, () => [{
+              id: 'guest-1',
+              booking_id: 'booking-1',
+              guest_type: 'additional',
+              guest_name: 'Sam',
+              ...(options.seat ?? { unit_price: '25.00', pay_by: 'paid' }),
+              bk_id: 'booking-1',
+              customer_id: 'customer-1',
+              party_size: 2,
+              price_paid: '50.00',
+              status: options.status ?? 'confirmed',
+              session_id: 'session-1',
+              booking_type: 'public',
+            }]],
+            [/WHERE oli\.booking_id = \$1 AND oli\.item_type = 'booking'/, () => [{ id: 'line-1', order_id: 'order-1', net_remaining: '25.00' }]],
+            [/FROM orders o WHERE o\.id/, () => [{
+              customer_id: 'customer-1',
+              stripe_payment_intent_id: (options.cardPortion ?? 0) > 0 ? 'pi_1' : null,
+              payment_method: 'card',
+              order_total: String(options.cardPortion ?? 0),
+              order_discount_amount: '0',
+              gift_card_used: '0',
+              store_credit_used: '0',
+              membership_net: '0',
+              already_card_refunded: '0',
+            }]],
+            [/store_credit_apply/, () => [{ result: credit.shift() === false ? { ok: false } : { ok: true, balance: 25 } }]],
+            [/WITH del AS/, () => {
+              if (options.deleted instanceof Error) throw options.deleted
+              return [{ deleted: options.deleted ?? true }]
+            }],
+            [/WITH g AS \(UPDATE booking_guests/, () => {
+              if (options.lowerSeatFails) throw new Error('no connection')
+              return []
+            }],
+          ])
+          const rawRefund = vi.fn(async () => ({ data: options.cardRefund ?? { ok: true } }))
+          vi.stubGlobal('paddockBackendApi2', { rawRequest: rawRefund })
+          const fn = (await backend('removeBookingGuest')).default
+          const result = await fn({
+            params: { guestId: 'guest-1', confirmedRefundAmount: 25, refundMethod: 'card', ...options.params },
+            user,
+          })
+          return { result, rawRefund, ...database }
+        }
+        const credit = { refundMethod: 'credit' }
+        const cardWentBack = (amount: string) =>
+          `£${amount} had already gone back to the card; it was taken off the guest's seat, so retrying refunds only the rest.`
+
+        it('a cancelled booking is refused with its reason at both steps, and nothing moves', async () => {
+          for (const params of [{ confirmedRefundAmount: undefined }, {}]) {
+            const { result, writes, rawRefund } = await run({ params, status: 'cancelled', cardPortion: 25 })
+            expect(result).toEqual({ removed: false, blocked: false, guestId: 'guest-1', reason: 'booking_cancelled' })
+            expect(writes()).toEqual([])
+            expect(rawRefund).not.toHaveBeenCalled()
+          }
+        })
+
+        it('a card refund that fails: nothing moved and the guest stays', async () => {
+          const { result, writes } = await run({ cardPortion: 25, cardRefund: { error: 'card_declined' } })
+          expect(result).toEqual({
+            removed: false,
+            blocked: false,
+            guestId: 'guest-1',
+            reason: `refund_failed: ${CARD_REFUND_FAILED}`,
+            message: `${DIDNT_GO_THROUGH} (${CARD_REFUND_FAILED})`,
+          })
+          expect(writes()).toEqual([])
+        })
+
+        it('store credit that fails: nothing moved and the guest stays', async () => {
+          const { result, sql, writes } = await run({ params: credit, credit: [false] })
+          expect(result.message).toBe(`${DIDNT_GO_THROUGH} (${CREDIT_FAILED})`)
+          expect(writes()).toEqual([])
+          expect(sql.some((text) => /WITH del AS/.test(text))).toBe(false)
+        })
+
+        it('no refund was due: says nothing was refunded, not that a refund went through', async () => {
+          const { result, rawRefund } = await run({
+            params: { confirmedRefundAmount: 0, refundMethod: undefined },
+            seat: { unit_price: null, pay_by: 'membership_credit' },
+            deleted: new Error('deadlock detected'),
+          })
+          expect(result).toEqual({
+            removed: false,
+            blocked: false,
+            guestId: 'guest-1',
+            reason: 'guest_remove_failed: deadlock detected',
+            message: `${NOTHING_REFUNDED} (deadlock detected)`,
+          })
+          expect(rawRefund).not.toHaveBeenCalled()
+        })
+
+        it('store credit taken back: nothing is refunded in the end', async () => {
+          const { result } = await run({ params: credit, deleted: new Error('deadlock detected') })
+          expect(result.message).toBe(`${NOTHING_REFUNDED} The £25.00 store credit was taken back. (deadlock detected)`)
+          expect(result.quote).toBeUndefined()
+        })
+
+        it('store credit that could not be taken back: the refund stands', async () => {
+          const { result } = await run({ params: credit, credit: [true, false], deleted: new Error('deadlock detected') })
+          expect(result.message).toBe(`${WENT_THROUGH} Taking back the £25.00 store credit failed — remove it by hand. (deadlock detected)`)
+          expect(result.quote).toBeUndefined()
+        })
+
+        it('all of it back on the card: the refund stands, and the screen moves to the £0.00 left', async () => {
+          const { result } = await run({ cardPortion: 25, deleted: new Error('deadlock detected') })
+          expect(result.reason).toBe('guest_remove_failed: deadlock detected')
+          expect(result.message).toBe(`${WENT_THROUGH} ${cardWentBack('25.00')} (deadlock detected)`)
+          expect(result.quote).toEqual(quote(0))
+          expect(result.removed).toBe(false)
+        })
+
+        it('part on the card and the store credit taken back: only that part stands', async () => {
+          const { result } = await run({ cardPortion: 15, deleted: new Error('deadlock detected') })
+          expect(result.message).toBe(
+            `${PART_WENT_THROUGH} The £10.00 store credit was taken back. ${cardWentBack('15.00')} (deadlock detected)`
+          )
+          expect(result.quote).toEqual(quote(10))
+        })
+
+        it('the figure left on the seat is in whole pennies', async () => {
+          const { result } = await run({
+            params: { confirmedRefundAmount: 25.3 },
+            seat: { unit_price: '25.30', pay_by: 'paid' },
+            cardPortion: 15.1,
+            deleted: new Error('deadlock detected'),
+          })
+          expect(result.quote).toEqual(quote(10.2))
+        })
+
+        it('part on the card and the store credit not taken back: all of it stands', async () => {
+          const { result } = await run({ cardPortion: 15, credit: [true, false], deleted: new Error('deadlock detected') })
+          expect(result.message).toContain(WENT_THROUGH)
+          expect(result.quote).toEqual(quote(10))
+        })
+
+        it('keeps what the refund itself warned about', async () => {
+          const { result } = await run({ cardPortion: 15, credit: [false], deleted: new Error('deadlock detected') })
+          expect(result.message).toBe(
+            `${PART_WENT_THROUGH} The other £10.00 wasn't added to store credit, so it's still to refund. ${cardWentBack('15.00')} (deadlock detected)`
+          )
+        })
+
+        it('a seat that could not be lowered keeps its figure and says to check', async () => {
+          const { result } = await run({ cardPortion: 25, deleted: new Error('deadlock detected'), lowerSeatFails: true })
+          expect(result.message).toBe(`${WENT_THROUGH} £25.00 had already gone back to the card — check before retrying. (deadlock detected)`)
+          expect(result.quote).toBeUndefined()
+        })
+
+        it('a guest already gone: no seat to lower, so no promise about retrying', async () => {
+          const { result } = await run({ cardPortion: 25, deleted: false })
+          expect(result.message).toBe(
+            `${WENT_THROUGH} £25.00 had already gone back to the card; it was taken off the booking's price paid. (the guest was already removed)`
+          )
+          expect(result.quote).toBeUndefined()
+        })
+
+        it('the detail is always last, in brackets', async () => {
+          const { result } = await run({ params: credit, deleted: new Error('deadlock detected') })
+          expect(result.message.endsWith('(deadlock detected)')).toBe(true)
+          expect(result.warning).toBeUndefined()
+        })
+
+        it('a guest that has gone says so', async () => {
+          stubDatabase([])
+          const fn = (await backend('removeBookingGuest')).default
+          const result = await fn({ params: { guestId: 'guest-1' }, user })
+          expect(result).toEqual({ removed: false, blocked: false, guestId: 'guest-1', reason: 'guest_not_found' })
+        })
+      })
+    })
+
+    describe('refund safety', () => {
+      const FAR_OFF = '2099-01-01T10:00:00Z'
+      const BROKEN = new Error('connection lost')
+      type Answer = [RegExp, (params: unknown[]) => unknown[]]
+
+      /** Two orders paid for the booking, newest first. `portions` is what each order's card took,
+       *  or an Error for a read that fails. `credit` answers each store credit movement in turn
+       *  (an Error throws) and `refunds` each card refund. */
+      const setUp = (options: {
+        portions?: Record<string, number | Error>
+        credit?: Array<boolean | Error>
+        refunds?: Array<{ error: string } | { ok: true }>
+        linesFail?: boolean
+        thirdOrder?: boolean
+        answers?: Answer[]
+      } = {}) => {
+        const credit = [...(options.credit ?? [])]
+        const refunds = [...(options.refunds ?? [])]
+        const portions = options.portions ?? { 'order-new': 15, 'order-old': 25 }
+        const database = stubDatabase([
+          ...(options.answers ?? []),
+          [/WHERE oli\.booking_id = \$1 AND oli\.item_type = 'booking'/, () => {
+            if (options.linesFail) throw BROKEN
+            return [
+              { id: 'line-new', order_id: 'order-new', net_remaining: '15.00' },
+              { id: 'line-old', order_id: 'order-old', net_remaining: '25.00' },
+              ...(options.thirdOrder ? [{ id: 'line-oldest', order_id: 'order-oldest', net_remaining: '25.00' }] : []),
+            ]
+          }],
+          [/FROM orders o WHERE o\.id/, (params) => {
+            const portion = portions[String(params[0])] ?? 0
+            if (portion instanceof Error) throw portion
+            return [{
+              customer_id: 'customer-1',
+              stripe_payment_intent_id: portion > 0 ? `pi_${String(params[0])}` : null,
+              payment_method: 'card',
+              order_total: String(portion),
+              order_discount_amount: '0',
+              gift_card_used: '0',
+              store_credit_used: '0',
+              membership_net: '0',
+              already_card_refunded: '0',
+            }]
+          }],
+          [/store_credit_apply/, () => {
+            const next = credit.shift()
+            if (next instanceof Error) throw next
+            return [{ result: next === false ? { ok: false } : { ok: true, balance: 40 } }]
+          }],
+        ])
+        const rawRefund = vi.fn(async () => ({ data: refunds.shift() ?? { ok: true } }))
+        vi.stubGlobal('paddockBackendApi2', { rawRequest: rawRefund })
+        return { rawRefund, ...database }
+      }
+      const giveBack = async (amount = 25, method: 'card' | 'credit' = 'card') => {
+        const { giveBookingMoneyBack } = await load('bookingRefund')
+        return giveBookingMoneyBack({ bookingId: 'booking-1', customerId: 'customer-1', amount, method, staffId: 'staff-1', note: 'Refund', recordCardOnLines: true })
+      }
+      const refundedTo = (rawRefund: ReturnType<typeof vi.fn>) => rawRefund.mock.calls.map(([call]) => (call as { body: unknown }).body)
+
+      describe('giveBookingMoneyBack', () => {
+        it('nothing moved: a failed lookup of the payments is reported, not thrown', async () => {
+          const { rawRefund, writes } = setUp({ linesFail: true })
+          expect(await giveBack()).toEqual({ ok: false, message: "Looking up the booking's payments failed, so nothing was refunded: connection lost" })
+          expect(rawRefund).not.toHaveBeenCalled()
+          expect(writes()).toEqual([])
+        })
+
+        it('nothing moved: reading the first order failing is reported, not thrown', async () => {
+          const { rawRefund, sql } = setUp({ portions: { 'order-new': BROKEN } })
+          expect(await giveBack()).toEqual({ ok: false, message: 'Checking the card payment failed, so nothing was refunded: connection lost' })
+          expect(rawRefund).not.toHaveBeenCalled()
+          expect(sql.some((text) => /store_credit_apply/.test(text))).toBe(false)
+        })
+
+        it('nothing moved: an order with no card before the failure still counts as nothing', async () => {
+          const { rawRefund } = setUp({ portions: { 'order-new': 0, 'order-old': BROKEN } })
+          expect(await giveBack()).toMatchObject({ ok: false })
+          expect(rawRefund).not.toHaveBeenCalled()
+        })
+
+        it('nothing moved: store credit throwing is reported with its detail', async () => {
+          setUp({ credit: [BROKEN] })
+          expect(await giveBack(25, 'credit')).toEqual({ ok: false, message: 'Adding the store credit failed, so nothing was refunded: connection lost' })
+        })
+
+        it('reading the next order failing after a card refund: the rest goes to store credit, and the card money stands', async () => {
+          const { rawRefund, sql } = setUp({ portions: { 'order-new': 15, 'order-old': BROKEN } })
+          const given = await giveBack()
+          expect(given).toMatchObject({
+            ok: true,
+            result: {
+              cardRefunded: 15,
+              storeCreditRefunded: 10,
+              cardByLine: [{ lineId: 'line-new', orderId: 'order-new', amount: 15 }],
+              warning: 'Checking the next card payment failed (connection lost), so the rest went to store credit.',
+            },
+          })
+          expect(given.result.shortfall).toBeUndefined()
+          expect(refundedTo(rawRefund)).toEqual([{ paymentIntentId: 'pi_order-new', amount: 15 }])
+          expect(sql.filter((text) => /UPDATE order_line_items SET card_refunded_amount/.test(text))).toHaveLength(1)
+        })
+
+        it('stops at the failure: no card refund is tried on an older order after it', async () => {
+          const { rawRefund } = setUp({ portions: { 'order-new': 15, 'order-old': BROKEN, 'order-oldest': 25 }, thirdOrder: true })
+          expect(await giveBack()).toMatchObject({ ok: true, result: { cardRefunded: 15, storeCreditRefunded: 10 } })
+          expect(rawRefund).toHaveBeenCalledTimes(1)
+        })
+
+        it('that and store credit refused: no false claim about store credit, and the shortfall is named', async () => {
+          setUp({ portions: { 'order-new': 15, 'order-old': BROKEN }, credit: [false] })
+          const { result } = await giveBack()
+          expect(result.warning).toBe(
+            'Checking the next card payment failed (connection lost). £15.00 went back to the card, but adding the £10.00 remainder to store credit failed — add it by hand.'
+          )
+          expect(result).toMatchObject({ cardRefunded: 15, storeCreditRefunded: 0, shortfall: 10 })
+          expect(result.warningWithoutShortfall).toBe('Checking the next card payment failed (connection lost).')
+        })
+
+        it('a further card refund failing keeps its words', async () => {
+          setUp({ refunds: [{ ok: true }, { error: 'card_declined' }] })
+          const { result } = await giveBack()
+          expect(result.warning).toBe('A further card refund of £10.00 failed (card_declined), so the rest went to store credit.')
+        })
+
+        it('a further card refund failing and store credit refused: no false claim either', async () => {
+          setUp({ refunds: [{ ok: true }, { error: 'card_declined' }], credit: [false] })
+          const { result } = await giveBack()
+          expect(result.warning).toBe(
+            'A further card refund of £10.00 failed (card_declined). £15.00 went back to the card, but adding the £10.00 remainder to store credit failed — add it by hand.'
+          )
+        })
+
+        it('store credit throwing after a card refund: the card money stands, and staff check the balance first', async () => {
+          const { sql } = setUp({ portions: { 'order-new': 15 }, credit: [BROKEN] })
+          const given = await giveBack()
+          expect(given).toMatchObject({ ok: true, result: { cardRefunded: 15, storeCreditRefunded: 0, shortfall: 10 } })
+          expect(given.result.warning).toBe(
+            "£15.00 went back to the card, but adding the £10.00 remainder to store credit failed (connection lost) — check their balance, then add it by hand if it isn't there."
+          )
+          expect(given.result.warningWithoutShortfall).toBeUndefined()
+          expect(sql.filter((text) => /UPDATE order_line_items SET card_refunded_amount/.test(text))).toHaveLength(1)
+        })
+
+        it('every read and write failing after the first card refund still returns what went back', async () => {
+          const { rawRefund } = setUp({
+            portions: { 'order-new': 15, 'order-old': BROKEN },
+            credit: [BROKEN],
+            answers: [[/UPDATE order_line_items SET card_refunded_amount/, () => { throw BROKEN }], [/orders SET payment_status|COUNT\(\*\)/, () => { throw BROKEN }]],
+          })
+          const given = await giveBack()
+          expect(given).toMatchObject({ ok: true, result: { cardRefunded: 15, shortfall: 10 } })
+          expect(given.result.warning).toContain('recording it on its order failed — check before refunding this booking again')
+          expect(rawRefund).toHaveBeenCalledTimes(1)
+        })
+      })
+
+      describe('Remove Guest', () => {
+        const guestRow = {
+          id: 'guest-1', booking_id: 'booking-1', guest_type: 'additional', guest_name: 'Sam', unit_price: '25.00', pay_by: 'paid',
+          bk_id: 'booking-1', customer_id: 'customer-1', party_size: 2, price_paid: '50.00', status: 'confirmed', session_id: 'session-1', booking_type: 'public',
+        }
+        const removal = async (options: Parameters<typeof setUp>[0] & { deleted?: boolean | Error; lowerSeatFails?: boolean; refundMethod?: string }) => {
+          const stubs = setUp({
+            ...options,
+            answers: [
+              [/FROM booking_guests g/, () => [guestRow]],
+              [/WITH del AS/, () => {
+                if (options.deleted instanceof Error) throw options.deleted
+                return [{ deleted: options.deleted ?? true }]
+              }],
+              [/WITH g AS \(UPDATE booking_guests/, () => {
+                if (options.lowerSeatFails) throw BROKEN
+                return []
+              }],
+            ],
+          })
+          const fn = (await backend('removeBookingGuest')).default
+          const result = await fn({ params: { guestId: 'guest-1', confirmedRefundAmount: 25, refundMethod: options.refundMethod ?? 'card' }, user })
+          return { result, ...stubs }
+        }
+        const STILL_TO_REFUND = "The other £10.00 wasn't added to store credit, so it's still to refund."
+        const CARD_OFF_SEAT = "£15.00 had already gone back to the card; it was taken off the guest's seat, so retrying refunds only the rest."
+
+        it('a database error before any money moved: the guest stays and it is worded, not thrown', async () => {
+          const { result, rawRefund, writes } = await removal({ portions: { 'order-new': BROKEN } })
+          expect(result).toEqual({
+            removed: false,
+            blocked: false,
+            guestId: 'guest-1',
+            reason: 'refund_failed: Checking the card payment failed, so nothing was refunded: connection lost',
+            message: "The refund didn't go through, so the guest hasn't been removed. Please try again. (Checking the card payment failed, so nothing was refunded: connection lost)",
+          })
+          expect(rawRefund).not.toHaveBeenCalled()
+          expect(writes()).toEqual([])
+        })
+
+        it('store credit throwing after the card refund: the guest is still removed and the seat comes off, so nothing can refund it again', async () => {
+          const { result, sql, rawRefund } = await removal({ portions: { 'order-new': 15 }, credit: [BROKEN] })
+          expect(result).toMatchObject({ removed: true, cardRefundedAmount: 15, storeCreditRefundedAmount: 0 })
+          expect(result.warning).toContain('add it by hand')
+          expect(sql.some((text) => /WITH del AS/.test(text))).toBe(true)
+          expect(rawRefund).toHaveBeenCalledTimes(1)
+        })
+
+        it('the next order failing after the card refund: the same, with the rest on store credit', async () => {
+          const { result } = await removal({ portions: { 'order-new': 15, 'order-old': BROKEN } })
+          expect(result).toMatchObject({
+            removed: true,
+            refundedAmount: 25,
+            cardRefundedAmount: 15,
+            storeCreditRefundedAmount: 10,
+            storeCreditBalance: 40,
+            warning: 'Checking the next card payment failed (connection lost), so the rest went to store credit.',
+          })
+        })
+
+        it('a removal tells the screen how the refund split', async () => {
+          const { result } = await removal({ portions: { 'order-new': 15 } })
+          expect(result).toEqual({
+            removed: true,
+            blocked: false,
+            guestId: 'guest-1',
+            refundedAmount: 25,
+            cardRefundedAmount: 15,
+            storeCreditRefundedAmount: 10,
+            storeCreditBalance: 40,
+          })
+        })
+
+        it('store credit short and the guest stuck: says it is still to refund, never to add it by hand as well', async () => {
+          const { result } = await removal({ portions: { 'order-new': 15 }, credit: [false], deleted: new Error('deadlock detected') })
+          expect(result.message).toBe(
+            `Part of the refund went through, but the guest couldn't be removed. Check the booking before trying again. ${STILL_TO_REFUND} ${CARD_OFF_SEAT} (deadlock detected)`
+          )
+          expect(result.message).not.toContain('by hand')
+          expect(result.quote.refundAmount).toBe(10)
+          expect(result.retryLocked).toBeUndefined()
+        })
+
+        it('keeps the refund\'s other warnings when the shortfall line is dropped', async () => {
+          const { result } = await removal({ portions: { 'order-new': 15, 'order-old': BROKEN }, credit: [false], deleted: new Error('deadlock detected') })
+          expect(result.message).toContain(`Checking the next card payment failed (connection lost). ${STILL_TO_REFUND}`)
+        })
+
+        describe('the lock', () => {
+          it('store credit that could not be taken back locks Remove', async () => {
+            const { result } = await removal({ refundMethod: 'credit', credit: [true, false], deleted: new Error('deadlock detected') })
+            expect(result.retryLocked).toBe(true)
+          })
+
+          it('store credit that threw on the way back locks Remove', async () => {
+            const { result } = await removal({ refundMethod: 'credit', credit: [true, BROKEN], deleted: new Error('deadlock detected') })
+            expect(result.retryLocked).toBe(true)
+          })
+
+          it('a seat that could not be lowered locks Remove', async () => {
+            const { result } = await removal({ portions: { 'order-new': 15, 'order-old': 25 }, deleted: new Error('deadlock detected'), lowerSeatFails: true })
+            expect(result.retryLocked).toBe(true)
+          })
+
+          it('store credit not taken back locks Remove even with the card part off the seat', async () => {
+            const { result } = await removal({ portions: { 'order-new': 15 }, credit: [true, false], deleted: new Error('deadlock detected') })
+            expect(result.retryLocked).toBe(true)
+            expect(result.quote.refundAmount).toBe(10)
+          })
+
+          it('a failure where a retry is safe does not lock', async () => {
+            for (const options of [
+              { refundMethod: 'credit', deleted: new Error('deadlock detected') },
+              { portions: { 'order-new': 25 }, deleted: new Error('deadlock detected') },
+              { portions: { 'order-new': 15 }, deleted: new Error('deadlock detected') },
+            ]) {
+              const { result } = await removal(options)
+              expect(result.removed).toBe(false)
+              expect(result.retryLocked).toBeUndefined()
+            }
+          })
+
+          it('a guest already gone does not lock: a retry only finds them gone', async () => {
+            for (const options of [
+              { refundMethod: 'credit', credit: [true, false], deleted: false },
+              { portions: { 'order-new': 25 }, deleted: false, lowerSeatFails: true },
+            ]) {
+              const { result } = await removal(options)
+              expect(result.retryLocked).toBeUndefined()
+            }
+          })
+
+          it('a refund that moved nothing does not lock', async () => {
+            const { result } = await removal({ refunds: [{ error: 'card_declined' }] })
+            expect(result.retryLocked).toBeUndefined()
+          })
+        })
+      })
+
+      describe('Cancel & Refund', () => {
+        const cancel = async (options: Parameters<typeof setUp>[0] & { statementFails?: boolean }) => {
+          const stubs = setUp({
+            ...options,
+            answers: [
+              [/FROM bookings b JOIN sessions s/, () => [{ customer_id: 'customer-1', status: 'confirmed', price_paid: '25.00', party_size: 1, session_id: 'session-1', start_time: FAR_OFF, booking_type: 'public' }]],
+              [/WITH p AS/, () => {
+                if (options.statementFails) throw new Error('deadlock detected')
+                return [{ id: 'booking-1' }]
+              }],
+            ],
+          })
+          const fn = (await backend('refundBooking')).default
+          const run = fn({ params: { bookingId: 'booking-1', refundMethod: 'card' }, user })
+          return { run, ...stubs }
+        }
+
+        it('store credit throwing after the card refund: cancelled, with the card money recorded', async () => {
+          const { run, sql } = await cancel({ portions: { 'order-new': 15 }, credit: [BROKEN] })
+          const result = await run
+          expect(result).toMatchObject({ cardRefundedAmount: 15, storeCreditRefundedAmount: 0 })
+          expect(result.warning).toContain('add it by hand')
+          expect(sql.some((text) => /WITH p AS/.test(text))).toBe(true)
+        })
+
+        it('the next order failing after a card refund: cancelled, with the rest on store credit', async () => {
+          const { run } = await cancel({ portions: { 'order-new': 15, 'order-old': BROKEN } })
+          expect(await run).toMatchObject({ cardRefundedAmount: 15, storeCreditRefundedAmount: 10 })
+        })
+
+        it('a database error before any money moved says nothing was refunded, and cancels nothing', async () => {
+          const { run, sql } = await cancel({ linesFail: true })
+          await expect(run).rejects.toThrow("Looking up the booking's payments failed, so nothing was refunded: connection lost")
+          expect(sql.some((text) => /WITH p AS/.test(text))).toBe(false)
+        })
+
+        it('a failed cancel after a shortfall says a retry refunds the rest, never to add it by hand', async () => {
+          const { run } = await cancel({ portions: { 'order-new': 15 }, credit: [BROKEN], statementFails: true })
+          const error = await run.catch((err: Error) => err)
+          expect((error as Error).message).toContain("£15.00 had already gone back to the card; it is recorded on the order and taken off the booking's price paid, so retrying refunds only the rest.")
+          expect((error as Error).message).not.toContain('by hand')
+        })
+      })
+
+      describe('refundBooking with an amount', () => {
+        const partial = async (options: Parameters<typeof setUp>[0] & { lowerFails?: boolean }) => {
+          const stubs = setUp({
+            ...options,
+            answers: [
+              [/SELECT customer_id, price_paid FROM bookings/, () => [{ customer_id: 'customer-1', price_paid: '50.00' }]],
+              [/UPDATE bookings SET price_paid/, () => {
+                if (options.lowerFails) throw BROKEN
+                return []
+              }],
+            ],
+          })
+          const fn = (await backend('refundBooking')).default
+          return { run: fn({ params: { bookingId: 'booking-1', refundMethod: 'card', amount: 25 }, user }), ...stubs }
+        }
+
+        it('price paid not lowered after the refund: reported as a warning with the amounts, not thrown', async () => {
+          const { run } = await partial({ lowerFails: true })
+          expect(await run).toEqual({
+            cardRefundedAmount: 25,
+            storeCreditRefundedAmount: 0,
+            warning: "The refund went through, but taking it off the booking's price paid failed — check before refunding this booking again: connection lost",
+          })
+        })
+
+        it('keeps the refund\'s own warning beside it', async () => {
+          const { run } = await partial({ portions: { 'order-new': 15 }, credit: [BROKEN], lowerFails: true })
+          const result = await run
+          expect(result.warning).toContain('add it by hand')
+          expect(result.warning).toContain("taking it off the booking's price paid failed")
+        })
+
+        it('still lowers price paid by the amount', async () => {
+          const { run, sql } = await partial({})
+          expect(await run).toEqual({ cardRefundedAmount: 25, storeCreditRefundedAmount: 0 })
+          expect(sql.some((text) => /UPDATE bookings SET price_paid/.test(text))).toBe(true)
+        })
+      })
+
+      describe('Move', () => {
+        const session = { id: 'session-2', start_time: '2099-12-01T10:00:00', end_time: '2099-12-01T11:00:00', capacity: 8, total_booked: 0, status: 'open', service_type_id: 'type-1', band_id: 'band-2', booking_type: 'private', started: false }
+        const moved = async (options: Parameters<typeof setUp>[0]) => {
+          const stubs = setUp({
+            ...options,
+            answers: [
+              [/FROM bookings b\s+LEFT JOIN sessions/, () => [{
+                id: 'booking-1', customer_id: 'customer-1', session_id: 'session-1', party_size: 2, status: 'confirmed', price_paid: '50.00',
+                redemption_source: 'paid', redeemed_membership_id: null, redeemed_session_pass_id: null,
+                start_time: '2099-11-30T10:00:00', end_time: '2099-11-30T11:00:00', band_id: 'band-1', credit_period_id: null, booking_type: 'private',
+              }]],
+              [/FROM sessions s\s+JOIN service_types/, () => [session]],
+              [/FROM service_type_price_tiers/, () => [{ price: '25.00' }]],
+              [/UPDATE sessions[\s\S]*RETURNING/, () => [{ id: 'session-2' }]],
+              [/UPDATE bookings\s+SET session_id/, () => [{ id: 'booking-1' }]],
+            ],
+          })
+          const fn = (await backend('moveBooking')).default
+          const result = await fn({ params: { bookingId: 'booking-1', newSessionId: 'session-2', confirmed: true, refundMethod: 'card' }, user })
+          return { result, ...stubs }
+        }
+        const undone = (sql: string[]) => sql.filter((text) => /UPDATE bookings\s+SET session_id/.test(text)).length
+
+        it('store credit throwing after the card refund: the move stands, and is not undone with the money gone', async () => {
+          const { result, sql, rawRefund } = await moved({ portions: { 'order-new': 15 }, credit: [BROKEN] })
+          expect(result).toMatchObject({ moved: true, booking: { id: 'booking-1', price_paid: 25 } })
+          expect(result.warning).toContain('add it by hand')
+          expect(rawRefund).toHaveBeenCalledTimes(1)
+          expect(undone(sql)).toBe(1)
+        })
+
+        it('the next order failing after a card refund: the move stands, with the rest on store credit', async () => {
+          const { result, sql } = await moved({ portions: { 'order-new': 15, 'order-old': BROKEN } })
+          expect(result).toMatchObject({ moved: true, warning: 'Checking the next card payment failed (connection lost), so the rest went to store credit.' })
+          expect(undone(sql)).toBe(1)
+        })
+
+        it('a database error before any money moved: the move stands and the refund is reported as failed', async () => {
+          const { result, rawRefund } = await moved({ linesFail: true })
+          expect(result).toMatchObject({ moved: true, reason: "refund_failed: Looking up the booking's payments failed, so nothing was refunded: connection lost" })
+          expect(rawRefund).not.toHaveBeenCalled()
+        })
+      })
+
+      describe('the same gap elsewhere', () => {
+        describe('refundOrder', () => {
+          const refund = async (options: { credit: Array<boolean | Error>; portion: number }) => {
+            const stubs = setUp({
+              portions: { 'order-1': options.portion },
+              credit: options.credit,
+              answers: [
+                [/SELECT id, customer_id, stripe_payment_intent_id, order_total FROM orders/, () => [{ id: 'order-1', customer_id: 'customer-1', stripe_payment_intent_id: 'pi_order-1', order_total: '25.00' }]],
+                [/SELECT \* FROM order_line_items/, () => [{ id: 'line-1', item_type: 'product', line_total: '25.00', discount_amount: '0', quantity: 1, refunded_at: null, product_variant_id: 'variant-1', gift_card_id: null }]],
+              ],
+            })
+            const fn = (await backend('refundOrder')).default
+            const result = await fn({ params: { orderId: 'order-1', lineItemIds: ['line-1'], refundMethod: 'card', restock: { 'line-1': false } }, user })
+            return { result, ...stubs }
+          }
+
+          it('store credit throwing after the card refund: reported, and the card money recorded so it can\'t go back twice', async () => {
+            const { result, sql, rawRefund } = await refund({ portion: 15, credit: [BROKEN] })
+            expect(result).toMatchObject({ success: true, cardRefundedAmount: 15, storeCreditRefundedAmount: 0 })
+            expect(result.warning).toContain('applying the 10.00 remainder to store credit failed and needs a manual check')
+            expect(sql.filter((text) => /UPDATE order_line_items SET card_refunded_amount/.test(text))).toHaveLength(1)
+            expect(rawRefund).toHaveBeenCalledTimes(1)
+          })
+
+          it('store credit throwing with no card money: says no refund was processed', async () => {
+            const { result } = await refund({ portion: 0, credit: [BROKEN] })
+            expect(result).toEqual({ success: false, reason: 'store_credit_failed', message: 'Applying the store credit failed — no refund was processed.' })
+          })
+        })
+
+        describe('event places', () => {
+          const cancelPlaces = async (options: { credit: Array<boolean | Error>; portion: number }) => {
+            const stubs = setUp({
+              portions: { 'order-1': options.portion },
+              credit: options.credit,
+              answers: [
+                [/event_cancellation_quote/, () => [{
+                  quote: { ok: true, event_id: 'event-1', customer_id: 'customer-1', attendee_ids: ['place-1'], places: 1, whole_booking: true, value: 25, before_cutoff: true },
+                  status: 'confirmed',
+                  places: 1,
+                }]],
+                [/FROM event_attendees ea\s+WHERE ea\.id = ANY/, () => [{ id: 'place-1', unit_price: '25.00' }]],
+                [/oli\.event_booking_id = \$1 AND oli\.item_type = 'event'/, () => [{ id: 'line-1', order_id: 'order-1', unallocated_card: '0' }]],
+              ],
+            })
+            const { cancelEventBookingPlaces } = await load('eventCancellation')
+            const result = await cancelEventBookingPlaces({ eventBookingId: 'event-booking-1', refund: 'card', reason: null, staffId: 'staff-1' })
+            return { result, ...stubs }
+          }
+
+          it('store credit throwing after the card refund: the places are cancelled with the card money recorded', async () => {
+            const { result, sql } = await cancelPlaces({ portion: 15, credit: [BROKEN] })
+            expect(result).toMatchObject({ ok: true, cardRefundedAmount: 15, storeCreditRefundedAmount: 0, refundedAmount: 15 })
+            expect(result.warning).toBe('£15.00 went back to the card, but adding the £10.00 remainder to store credit failed and needs a manual check.')
+            expect(sql.some((text) => /WITH p AS/.test(text))).toBe(true)
+          })
+
+          it('store credit throwing with no card money: nothing cancelled', async () => {
+            const { result, sql } = await cancelPlaces({ portion: 0, credit: [BROKEN] })
+            expect(result).toEqual({ ok: false, reason: 'store_credit_failed', message: 'Adding the store credit failed, so nothing was cancelled.' })
+            expect(sql.some((text) => /WITH p AS/.test(text))).toBe(false)
+          })
+        })
+
+        describe('booking add-ons', () => {
+          const addonLine = (id: string, order: string | null, extra: Record<string, unknown> = {}) => ({
+            id, addon_name: id, quantity: 1, price_at_purchase: '10.00', redemption_source: 'paid', redeemed_membership_id: null, order_id: order, ...extra,
+          })
+          const cancelAddons = async (options: {
+            lines: unknown[]
+            portions?: Record<string, number | Error>
+            credit?: Array<boolean | Error>
+            unclaimFails?: boolean
+            creditReturnFails?: boolean
+          }) => {
+            const stubs = setUp({
+              ...(options.portions ? { portions: options.portions } : {}),
+              ...(options.credit ? { credit: options.credit } : {}),
+              answers: [
+                [/FROM bookings b JOIN sessions s/, () => [{ customer_id: 'customer-1', start_time: FAR_OFF }]],
+                [/UPDATE addon_order_lines aol\s+SET removed_at/, () => options.lines],
+                [/UPDATE addon_order_lines SET removed_at = NULL/, () => {
+                  if (options.unclaimFails) throw BROKEN
+                  return []
+                }],
+                [/UPDATE customer_memberships/, () => {
+                  if (options.creditReturnFails) throw BROKEN
+                  return [{ id: 'membership-1' }]
+                }],
+              ],
+            })
+            const { cancelBookingAddonLines } = await load('bookingAddonCancellation')
+            const lineIds = (options.lines as Array<{ id: string }>).map((line) => line.id)
+            const result = await cancelBookingAddonLines({ bookingId: 'booking-1', lineIds, refund: 'card', returnCredits: true, includePaidLines: true, staffId: 'staff-1' })
+            return { result, ...stubs }
+          }
+          const recorded = (sql: string[]) => sql.some((text) => /SET refunded_amount = s\.refunded/.test(text))
+
+          it('store credit throwing after the card refund: the card money is recorded on the add-on', async () => {
+            const { result, sql } = await cancelAddons({ lines: [addonLine('sauna-towel', 'order-1')], portions: { 'order-1': 6 }, credit: [BROKEN] })
+            expect(result).toMatchObject({ cardRefundedAmount: 6, storeCreditRefundedAmount: 0, cancelledLineIds: ['sauna-towel'] })
+            expect(result.warning).toBe('£6.00 went back to the card, but adding the £4.00 remainder to store credit failed — add it manually.')
+            expect(recorded(sql)).toBe(true)
+          })
+
+          it('store credit throwing with no card money: the add-on goes back on the booking', async () => {
+            const { result, sql } = await cancelAddons({ lines: [addonLine('sauna-towel', 'order-1')], portions: { 'order-1': 0 }, credit: [BROKEN] })
+            expect(result.cancelledLineIds).toEqual([])
+            expect(result.warning).toContain('it was left on the booking')
+            expect(sql.some((text) => /UPDATE addon_order_lines SET removed_at = NULL/.test(text))).toBe(true)
+          })
+
+          it('the next order failing after one was refunded: the first is still recorded, the second goes back on the booking', async () => {
+            const { result, sql, rawRefund } = await cancelAddons({
+              lines: [addonLine('first', 'order-1'), addonLine('second', 'order-2')],
+              portions: { 'order-1': 10, 'order-2': BROKEN },
+            })
+            expect(result).toMatchObject({ cardRefundedAmount: 10, cancelledLineIds: ['first'] })
+            expect(result.warning).toBe('Checking the card payment for second failed (connection lost), so it was left on the booking — refund it manually.')
+            expect(recorded(sql)).toBe(true)
+            expect(rawRefund).toHaveBeenCalledTimes(1)
+          })
+
+          it('putting an add-on back failing as well does not lose the first order\'s refund', async () => {
+            const { result, sql } = await cancelAddons({
+              lines: [addonLine('first', 'order-1'), addonLine('second', 'order-2')],
+              portions: { 'order-1': 10, 'order-2': BROKEN },
+              unclaimFails: true,
+            })
+            expect(result.cardRefundedAmount).toBe(10)
+            expect(result.warning).toContain('Putting an add-on back on the booking failed, so it may show as removed — check it: connection lost')
+            expect(recorded(sql)).toBe(true)
+          })
+
+          it('returning a membership credit failing does not lose a paid line\'s refund', async () => {
+            const { result, sql } = await cancelAddons({
+              lines: [addonLine('paid', 'order-1'), addonLine('credit', null, { redemption_source: 'membership_credit', redeemed_membership_id: 'membership-1' })],
+              portions: { 'order-1': 10 },
+              creditReturnFails: true,
+            })
+            expect(result).toMatchObject({ cardRefundedAmount: 10, creditsReturned: 0, cancelledLineIds: ['paid', 'credit'] })
+            expect(result.warning).toBe('Returning the add-on credit for credit failed and needs a manual check: connection lost')
+            expect(recorded(sql)).toBe(true)
+          })
+        })
+      })
+
+      describe('refundOrder run twice', () => {
+        type Line = { id: string; item_type: string; line_total: string; discount_amount: string; card_refunded_amount: string; refunded_at: string | null; refund_method?: string; quantity: number; product_variant_id: string; gift_card_id: null }
+        const product = (id: string, total: number, card = 0): Line => ({
+          id, item_type: 'product', line_total: total.toFixed(2), discount_amount: '0', card_refunded_amount: card.toFixed(2), refunded_at: null, quantity: 1, product_variant_id: 'variant-1', gift_card_id: null,
+        })
+
+        /** An order with lines that remember what happened to them. `cardTook` is what its card
+         *  took. `markFails` throws on the line's normal final write, `stampFails` on the stamp
+         *  that records it instead. */
+        const world = (options: { lines: Line[]; cardTook: number; credit?: Array<boolean | Error>; refunds?: Array<{ error: string } | { ok: true }>; markFails?: boolean; stampFails?: boolean; answers?: Answer[] }) => {
+          const lines = options.lines
+          const credited: number[] = []
+          const credit = [...(options.credit ?? [])]
+          const line = (id: unknown) => lines.find((l) => l.id === id)!
+          const addCard = (id: unknown, amount: unknown) => {
+            line(id).card_refunded_amount = (Number.parseFloat(line(id).card_refunded_amount) + Number(amount)).toFixed(2)
+          }
+          let marksLeft = options.markFails ? 1 : 0
+          const stubs = setUp({
+            ...(options.refunds ? { refunds: options.refunds } : {}),
+            answers: [
+              ...(options.answers ?? []),
+              [/SELECT id, customer_id, stripe_payment_intent_id, order_total FROM orders/, () => [{ id: 'order-1', customer_id: 'customer-1', stripe_payment_intent_id: 'pi_order-1', order_total: '40.00' }]],
+              [/SELECT \* FROM order_line_items/, (params) => lines.filter((l) => (params[0] as string[]).includes(l.id)).map((l) => ({ ...l }))],
+              [/FROM orders o WHERE o\.id/, () => [{
+                customer_id: 'customer-1', stripe_payment_intent_id: 'pi_order-1', payment_method: 'card', order_total: String(options.cardTook), order_discount_amount: '0',
+                gift_card_used: '0', store_credit_used: '0', membership_net: '0',
+                already_card_refunded: String(lines.reduce((sum, l) => sum + Number.parseFloat(l.card_refunded_amount), 0)),
+              }]],
+              [/UPDATE order_line_items SET card_refunded_amount = card_refunded_amount \+ \$1 WHERE id = \$2/, (params) => {
+                addCard(params[1], params[0])
+                return []
+              }],
+              [/SET refunded_at = now\(\), refund_method = \$1, restocked = \$2/, (params) => {
+                if (marksLeft-- > 0) throw BROKEN
+                line(params[3]).refunded_at = 'now'
+                line(params[3]).refund_method = String(params[0])
+                addCard(params[3], params[2])
+                return []
+              }],
+              [/SET refunded_at = now\(\), refund_method = \$1, card_refunded_amount/, (params) => {
+                if (options.stampFails) throw BROKEN
+                line(params[2]).refunded_at = 'now'
+                line(params[2]).refund_method = String(params[0])
+                addCard(params[2], params[1])
+                return []
+              }],
+              [/store_credit_apply/, (params) => {
+                const next = credit.shift()
+                if (next instanceof Error) throw next
+                if (next === false) return [{ result: { ok: false } }]
+                credited.push(Number(params[1]))
+                return [{ result: { ok: true, balance: 40 } }]
+              }],
+            ],
+          })
+          const refund = async (ids: string[], method: 'card' | 'credit' = 'card') => {
+            const fn = (await backend('refundOrder')).default
+            return fn({ params: { orderId: 'order-1', lineItemIds: ids, refundMethod: method, restock: Object.fromEntries(ids.map((id) => [id, false])) }, user })
+          }
+          return { refund, credited, line, ...stubs }
+        }
+        const backToCustomer = (rawRefund: ReturnType<typeof vi.fn>, credited: number[]) =>
+          refundedTo(rawRefund).reduce((sum: number, body) => sum + (body as { amount: number }).amount, 0) + credited.reduce((sum, n) => sum + n, 0)
+
+        it('the review\'s sequence: £20 card then failed store credit, then a retry: £30 back on a £30 line, not £50', async () => {
+          const { refund, credited, line, rawRefund } = world({ lines: [product('line-1', 30)], cardTook: 20, credit: [BROKEN] })
+          const first = await refund(['line-1'])
+          expect(first).toMatchObject({ success: true, cardRefundedAmount: 20, storeCreditRefundedAmount: 0 })
+          expect(line('line-1')).toMatchObject({ card_refunded_amount: '20.00', refunded_at: null })
+
+          const retry = await refund(['line-1'])
+          expect(retry).toMatchObject({ success: true, refundedAmount: 10, storeCreditRefundedAmount: 10 })
+          expect(retry.cardRefundedAmount).toBeUndefined()
+          expect(rawRefund).toHaveBeenCalledTimes(1)
+          expect(credited).toEqual([10])
+          expect(backToCustomer(rawRefund, credited)).toBe(30)
+          expect(line('line-1')).toMatchObject({ card_refunded_amount: '20.00', refunded_at: 'now', refund_method: 'card' })
+        })
+
+        it('the same when the first store credit was refused, and the retry goes to store credit', async () => {
+          const { refund, credited, rawRefund } = world({ lines: [product('line-1', 30)], cardTook: 20, credit: [false] })
+          await refund(['line-1'])
+          expect(await refund(['line-1'], 'credit')).toMatchObject({ success: true, refundedAmount: 10 })
+          expect(backToCustomer(rawRefund, credited)).toBe(30)
+        })
+
+        it('a third press is refused', async () => {
+          const { refund, credited, rawRefund } = world({ lines: [product('line-1', 30)], cardTook: 20, credit: [BROKEN] })
+          await refund(['line-1'])
+          await refund(['line-1'])
+          expect(await refund(['line-1'])).toMatchObject({ success: false, reason: 'already_refunded' })
+          expect(backToCustomer(rawRefund, credited)).toBe(30)
+        })
+
+        it('a line with all its money back on the card pays nothing on a retry, and is finished', async () => {
+          const { refund, credited, line, rawRefund } = world({ lines: [product('line-1', 30, 30)], cardTook: 30 })
+          expect(await refund(['line-1'])).toMatchObject({ success: true, refundedAmount: 0 })
+          expect(rawRefund).not.toHaveBeenCalled()
+          expect(credited).toEqual([])
+          expect(line('line-1').refunded_at).toBe('now')
+        })
+
+        it('a promo comes off as well as what the line has had back', async () => {
+          const { refund, credited } = world({ lines: [{ ...product('line-1', 30, 10), discount_amount: '5.00' }], cardTook: 10 })
+          expect(await refund(['line-1'])).toMatchObject({ refundedAmount: 15, storeCreditRefundedAmount: 15 })
+          expect(credited).toEqual([15])
+        })
+
+        it('card money is spread over what each line can still take, on the failure path and on success', async () => {
+          for (const credit of [[BROKEN], []]) {
+            const { refund, line } = world({ lines: [product('line-a', 30, 20), product('line-b', 10)], cardTook: 35, credit })
+            await refund(['line-a', 'line-b'])
+            expect(line('line-a').card_refunded_amount).toBe('30.00')
+            expect(line('line-b').card_refunded_amount).toBe('5.00')
+          }
+        })
+
+        it('the line that had nothing back still refunds in full', async () => {
+          const { refund, rawRefund, credited } = world({ lines: [product('line-1', 30)], cardTook: 30 })
+          expect(await refund(['line-1'])).toMatchObject({ refundedAmount: 30, cardRefundedAmount: 30 })
+          expect(backToCustomer(rawRefund, credited)).toBe(30)
+        })
+
+        describe('a database error after the money has gone', () => {
+          it('card only: recorded, so a retry refunds nothing', async () => {
+            const { refund, line, rawRefund, credited } = world({ lines: [product('line-1', 30)], cardTook: 30, markFails: true })
+            const first = await refund(['line-1'])
+            expect(first).toMatchObject({ success: true, cardRefundedAmount: 30 })
+            expect(first.warning).toBe(
+              "The refund/credit succeeded, but recording it locally failed partway through and needs a manual check: connection lost The money is recorded on the order lines, so they can't be refunded twice. Check any restock, gift card, session pass or membership on them by hand."
+            )
+            expect(line('line-1')).toMatchObject({ card_refunded_amount: '30.00', refunded_at: 'now', refund_method: 'card' })
+            expect(await refund(['line-1'])).toMatchObject({ success: false, reason: 'already_refunded' })
+            expect(backToCustomer(rawRefund, credited)).toBe(30)
+          })
+
+          it('card and store credit: a retry can\'t pay the store credit part twice either', async () => {
+            const { refund, rawRefund, credited } = world({ lines: [product('line-1', 30)], cardTook: 20, markFails: true })
+            await refund(['line-1'])
+            expect(await refund(['line-1'])).toMatchObject({ success: false, reason: 'already_refunded' })
+            expect(credited).toEqual([10])
+            expect(backToCustomer(rawRefund, credited)).toBe(30)
+          })
+
+          it('only the lines left unfinished are recorded, so none takes its card money twice', async () => {
+            const { line } = world({
+              lines: [product('line-a', 10), product('line-b', 20)],
+              cardTook: 30,
+              answers: [[/UPDATE product_variants|INSERT INTO stock_adjustments/, () => { throw BROKEN }]],
+            })
+            const fn = (await backend('refundOrder')).default
+            const result = await fn({ params: { orderId: 'order-1', lineItemIds: ['line-a', 'line-b'], refundMethod: 'card', restock: { 'line-a': false, 'line-b': true } }, user })
+            expect(result.success).toBe(true)
+            expect(line('line-a').card_refunded_amount).toBe('10.00')
+            expect(line('line-b').card_refunded_amount).toBe('20.00')
+          })
+
+          it('only the order status failing: every line is finished, so nothing more is said about them', async () => {
+            const { refund, sql } = world({
+              lines: [product('line-1', 30)],
+              cardTook: 30,
+              answers: [[/FROM order_line_items oli\s+LEFT JOIN bookings b/, () => { throw BROKEN }]],
+            })
+            expect((await refund(['line-1'])).warning).toBe(
+              'The refund/credit succeeded, but recording it locally failed partway through and needs a manual check: connection lost'
+            )
+            expect(sql.some((text) => /SET refunded_at = now\(\), refund_method = \$1, card_refunded_amount/.test(text))).toBe(false)
+          })
+
+          it('recording failing as well: staff are told to check Stripe first', async () => {
+            const { refund } = world({ lines: [product('line-1', 30)], cardTook: 30, markFails: true, stampFails: true })
+            expect((await refund(['line-1'])).warning).toContain(
+              'Recording it on the order lines also failed, so check in Stripe before refunding this order again: connection lost'
+            )
+          })
+
+          it('with no money gone, it still undoes itself and records nothing', async () => {
+            const { refund, line, credited, sql } = world({ lines: [product('line-1', 30)], cardTook: 0, markFails: true })
+            expect(await refund(['line-1'], 'credit')).toMatchObject({ success: false, reason: 'unexpected_error' })
+            expect(line('line-1').refunded_at).toBeNull()
+            expect(credited).toEqual([30, -30])
+            expect(sql.some((text) => /SET refunded_at = now\(\), refund_method = \$1, card_refunded_amount/.test(text))).toBe(false)
+          })
+        })
+
+        it('a subscription that won\'t cancel after the card refund: recorded too, so a retry can\'t refund it again', async () => {
+          const membership: Line = { ...product('line-1', 30), item_type: 'membership' }
+          const { refund, line, rawRefund, credited } = world({
+            lines: [membership],
+            cardTook: 30,
+            refunds: [{ ok: true }, { error: 'stripe down' }],
+            answers: [[/FROM customer_memberships WHERE order_line_item_id/, () => [{ id: 'membership-1', stripe_subscription_id: 'sub_1', cancel_effective_date: null }]]],
+          })
+          const first = await refund(['line-1'])
+          expect(first).toMatchObject({ success: true, cardRefundedAmount: 30 })
+          expect(first.warning).toContain('failed and needs a manual check: stripe down')
+          expect(first.warning).toContain("so they can't be refunded twice")
+          expect(line('line-1')).toMatchObject({ card_refunded_amount: '30.00', refunded_at: 'now' })
+          expect(await refund(['line-1'])).toMatchObject({ success: false, reason: 'already_refunded' })
+          expect(refundedTo(rawRefund).filter((body) => 'amount' in (body as object))).toHaveLength(1)
+          expect(credited).toEqual([])
+        })
+      })
+
+      describe('Cancel & Refund after the money has gone', () => {
+        const READ_FAILED = 'The booking was cancelled and refunded, but reading its orders failed, so their payment status needs a manual check: connection lost'
+        const cancel = async (addonLineIds?: string[]) => {
+          const stubs = setUp({
+            portions: { 'order-new': 15, 'order-old': 25 },
+            answers: [
+              [/FROM bookings b JOIN sessions s/, () => [{ customer_id: 'customer-1', status: 'confirmed', price_paid: '25.00', party_size: 1, session_id: 'session-1', start_time: FAR_OFF, booking_type: 'public' }]],
+              [/WITH p AS/, () => [{ id: 'booking-1' }]],
+              [/SELECT DISTINCT order_id FROM order_line_items/, () => { throw BROKEN }],
+              [/UPDATE addon_order_lines aol\s+SET removed_at/, () => [{ id: 'addon-1', addon_name: 'Towel', quantity: 1, price_at_purchase: '10.00', redemption_source: 'paid', redeemed_membership_id: null, order_id: 'order-new' }]],
+            ],
+          })
+          const fn = (await backend('refundBooking')).default
+          const result = await fn({ params: { bookingId: 'booking-1', refundMethod: 'card', ...(addonLineIds ? { addonLineIds } : {}) }, user })
+          return { result, ...stubs }
+        }
+
+        it('the read failing is a warning with what went back, not an error', async () => {
+          const { result, rawRefund } = await cancel()
+          expect(result).toEqual({ cardRefundedAmount: 25, storeCreditRefundedAmount: 0, warning: READ_FAILED })
+          expect(rawRefund).toHaveBeenCalledTimes(2)
+        })
+
+        it('the ticked add-ons still go, and are refunded', async () => {
+          const { result, sql } = await cancel(['addon-1'])
+          expect(result.warning).toContain(READ_FAILED)
+          expect(result.addons).toMatchObject({ cancelledLineIds: ['addon-1'] })
+          expect(sql.some((text) => /UPDATE addon_order_lines aol\s+SET removed_at/.test(text))).toBe(true)
+        })
+
+        it('the orders it does know of still get their status worked out', async () => {
+          const { sql } = await cancel()
+          expect(sql.filter((text) => /FROM order_line_items oli\s+LEFT JOIN bookings b/.test(text)).length).toBeGreaterThan(0)
+        })
+      })
+    })
+
+    describe('the screens', () => {
+      it('the tick keeps the figure its words show', async () => {
+        const { cashTickFigure } = await screen()
+        expect(cashTickFigure(20)).toBe(20)
+        expect(cashTickFigure(0.1 + 0.2)).toBe(0.3)
+        expect(cashTickFigure(19.999)).toBe(20)
+      })
+
+      it('sends the figure only for confirmed cash', async () => {
+        const { confirmedCashFields } = await screen()
+        expect(confirmedCashFields({ method: 'cash', confirmedCashAmount: 20 })).toEqual({ confirmedCashAmount: 20 })
+        expect(confirmedCashFields({ method: 'cash', confirmedCashAmount: null })).toEqual({})
+        expect(confirmedCashFields({ method: 'card', confirmedCashAmount: 20 })).toEqual({})
+      })
+
+      const refused = { quotedTotal: 20, serverTotal: 25, paymentParts: 5, message: 'changed' }
+
+      it('a refused total stands in until the screen\'s own total moves', async () => {
+        const { amountDueAfterRefusal } = await screen()
+        expect(amountDueAfterRefusal(20, refused)).toBe(25)
+        expect(amountDueAfterRefusal(30, refused)).toBe(30)
+        expect(amountDueAfterRefusal(20, null)).toBe(20)
+      })
+
+      it('the message stays until staff confirm again or its figure stops being right', async () => {
+        const { amountRefusalNotice } = await screen()
+        expect(amountRefusalNotice(refused, 20, 5, false)).toBe('changed')
+        expect(amountRefusalNotice(refused, 20, 5, true)).toBeNull()
+        expect(amountRefusalNotice(refused, 20, 6, false)).toBeNull()
+        expect(amountRefusalNotice(refused, 30, 5, false)).toBeNull()
+        expect(amountRefusalNotice(null, 20, 5, false)).toBeNull()
+      })
+
+      it('a refusal with its words in the banner has no notice, but still moves the total', async () => {
+        const { amountDueAfterRefusal, amountRefusalNotice } = await screen()
+        const noWords = { ...refused, message: null }
+        expect(amountRefusalNotice(noWords, 20, 5, false)).toBeNull()
+        expect(amountDueAfterRefusal(20, noWords)).toBe(25)
+      })
+
+      it.each([
+        ['New Order', 'frontend/components/CheckoutDialog.tsx'],
+        ['Add Guest', 'frontend/components/AddGuestDialog.tsx'],
+        ['Move', 'frontend/components/MoveBookingDialog.tsx'],
+        ['Settle', 'frontend/components/SettleLapsedPaymentDialog.tsx'],
+      ])('%s sends the figure, and clears the tick on a refusal', (_label, file) => {
+        const source = readFileSync(path.join(appDir, file), 'utf8')
+        expect(source).toMatch(/(confirmedCashFields|orderMethodFields)\(payment/)
+        const refusal = ['result?.reason && result.priceImpact', 'result?.reason && result.amountDue !== undefined', "response?.reason === 'cash_amount_changed'"]
+          .map((marker) => source.indexOf(marker))
+          .find((index) => index >= 0) ?? -1
+        expect(refusal).toBeGreaterThan(0)
+        expect(source.slice(refusal, refusal + 500)).toContain('confirmedCashAmount: null')
+      })
+
+      it('the tick records what it shows', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/checkout/PaymentStep.tsx'), 'utf8')
+        expect(source).toContain('e.target.checked ? cashTickFigure(remainder) : null')
+        expect(source).toContain('I confirm {formatCurrency(remainder.toFixed(2))} in cash was received.')
+      })
+
+      it('New Order works from the refused total everywhere', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/CheckoutDialog.tsx'), 'utf8')
+        expect(source).toContain('const amountDue = amountDueAfterRefusal(quotedAmountDue, amountRefusal)')
+        expect(source).toContain('amountDue={amountDue}')
+        expect(source).toContain('{cashNotice ? (')
+      })
+
+      it('New Order moves to the total on every refusal over the amount', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/CheckoutDialog.tsx'), 'utf8')
+        const start = source.indexOf('response?.reason && response.amountDueTotal !== undefined')
+        expect(start).toBeGreaterThan(0)
+        const branch = source.slice(start, source.indexOf('} else {', start))
+        expect(branch).toContain('setAmountRefusal(refusalAt(response.amountDueTotal, null))')
+        expect(branch).toContain('[FAILURE_MESSAGES[response.reason], response.message].filter(Boolean).join')
+      })
+
+      it('Add Guest moves to the figures on every refusal over the amount', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/AddGuestDialog.tsx'), 'utf8')
+        const start = source.indexOf('if (result?.reason && result.priceImpact) {')
+        expect(start).toBeGreaterThan(0)
+        const branch = source.slice(start, source.indexOf('return', start))
+        expect(branch).toContain('setAmountDue(result.priceImpact.amountDue)')
+        expect(branch).toContain('setAmountParts({ guest: result.priceImpact.guestAmount, addons: result.priceImpact.addonsAmount })')
+        expect(branch).toContain('confirmedCashAmount: null')
+        expect(branch).toContain('setErrorMessage(refusalText(result))')
+      })
+
+      it('Move moves to the figures on every refusal over the amount, and fetches the customer the payment step needs', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/MoveBookingDialog.tsx'), 'utf8')
+        const start = source.indexOf('if (result?.reason && result.priceImpact) {')
+        expect(start).toBeGreaterThan(0)
+        const branch = source.slice(start, source.indexOf('return', start))
+        expect(branch).toContain('setPriceImpact(result.priceImpact)')
+        expect(branch).toContain('confirmedCashAmount: null')
+        expect(branch).toContain('setErrorMessage(result.message ?? FAILURE_MESSAGES[result.reason as MoveBookingFailureReason] ?? result.reason)')
+        expect(branch).toContain('if (result.priceImpact.amountDue > 0.001 && !customer) await loadPayingCustomer(result.priceImpact.customerId)')
+      })
+
+      it('Move shows the server\'s own words on any other refusal', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/MoveBookingDialog.tsx'), 'utf8')
+        expect(source).toContain('} else if (result?.reason) {\n        setErrorMessage(result.message ?? FAILURE_MESSAGES')
+      })
+
+      it('Move clears the tick on Back, because the next session\'s amount can differ', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/MoveBookingDialog.tsx'), 'utf8')
+        const start = source.indexOf("setStep('pick')\n                    setPriceImpact(null)")
+        expect(start).toBeGreaterThan(0)
+        expect(source.slice(start, source.indexOf('}}', start))).toContain('confirmedCashAmount: null')
+      })
+
+      it.each(['AddGuestDialog', 'MoveBookingDialog'])('%s only sends a method with something left to pay', (name) => {
+        const source = readFileSync(path.join(appDir, `frontend/components/${name}.tsx`), 'utf8')
+        expect(source).toMatch(/amountLeftToPay\([^)]*\) > 0 && payment\.method\n\s+\? \{ method: payment\.method \}/)
+      })
+
+      it.each(['AddGuestDialog', 'MoveBookingDialog', 'SettleLapsedPaymentDialog'])('%s clears its banner once the payment changes', (name) => {
+        const source = readFileSync(path.join(appDir, `frontend/components/${name}.tsx`), 'utf8')
+        expect(source).toContain('if (paymentInputChanged(payment, next)) setErrorMessage(null)')
+      })
+
+      it('a change to any payment input counts, and nothing else does', async () => {
+        const { paymentInputChanged } = await screen()
+        const base = { method: 'cash', selectedGiftCard: null, giftCardAmount: 0, storeCreditAmount: 5, confirmedCashAmount: null }
+        expect(paymentInputChanged(base, { ...base })).toBe(false)
+        for (const change of [{ method: 'card' }, { selectedGiftCard: {} }, { giftCardAmount: 1 }, { storeCreditAmount: 4 }, { confirmedCashAmount: 5 }]) {
+          expect(paymentInputChanged(base, { ...base, ...change })).toBe(true)
+        }
+      })
+
+      it('Add Guest and Settle show the server\'s own words', () => {
+        const addGuest = readFileSync(path.join(appDir, 'frontend/components/AddGuestDialog.tsx'), 'utf8')
+        expect(addGuest).toContain('return result?.message ?? (result?.reason ? messages[result.reason] ?? result.reason')
+        expect(addGuest).not.toContain("setErrorMessage(result?.reason ? REASON_MESSAGES")
+        const settle = readFileSync(path.join(appDir, 'frontend/components/SettleLapsedPaymentDialog.tsx'), 'utf8')
+        expect(settle).toContain('result?.message ??\n            (result?.reason')
+      })
+
+      it('Remove Guest moves to the new figure and shows words, not a code', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/RemoveGuestDialog.tsx'), 'utf8')
+        expect(source).toContain('if (result?.quote) setQuote(result.quote)')
+        expect(source).toContain("setErrorMessage(refusalText(result, 'Failed to remove guest.'))")
+        expect(source).not.toContain("setErrorMessage(result?.reason ??")
+      })
+
+      it('Remove Guest has words for a cancelled booking and a guest that has gone', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/RemoveGuestDialog.tsx'), 'utf8')
+        expect(source).toContain("booking_cancelled: 'This booking has been cancelled, so guests can no longer be removed.'")
+        expect(source).toContain("guest_not_found: 'This guest has already been removed.'")
+      })
+
+      it('Remove Guest no longer has a branch for a removal whose refund failed, which can\'t happen', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/RemoveGuestDialog.tsx'), 'utf8')
+        expect(source).not.toContain('Guest removed, but the refund failed')
+      })
+
+      it('Remove Guest locks on the server\'s flag, and only closing clears it', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/RemoveGuestDialog.tsx'), 'utf8')
+        expect(source).toContain("const RETRY_LOCKED_MESSAGE = 'Check the booking first. Close this and reopen it to try again.'")
+        expect(source).toContain('if (result?.retryLocked) setRetryLocked(true)')
+        expect(source).toContain('disabled={submitting || retryLocked ||')
+        expect(source).toContain('if (!quote || retryLocked) return')
+        expect(source).toContain('{retryLocked ? <div className="mt-1 font-medium">{RETRY_LOCKED_MESSAGE}</div> : null}')
+        expect(source.match(/setRetryLocked\(false\)/g)).toHaveLength(1)
+        expect(source).toMatch(/function resetAndClose\(\) \{[\s\S]*?setRetryLocked\(false\)[\s\S]*?\n  \}/)
+      })
+
+      it('Remove Guest has no way back to a fresh quote while locked', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/RemoveGuestDialog.tsx'), 'utf8')
+        expect(source).toMatch(/\{retryLocked \? \(\s+<Button variant="outline" onClick=\{resetAndClose\}/)
+      })
+
+      it('Remove Guest keeps its success panel up: the row only goes on close', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/RemoveGuestDialog.tsx'), 'utf8')
+        const confirm = source.slice(source.indexOf('async function handleConfirm'), source.indexOf('return (\n    <>'))
+        expect(confirm).toContain('removedOnClose.current = true')
+        expect(confirm).not.toContain('onRemoved(guestId)')
+        expect(source).toMatch(/if \(removedOnClose\.current\) \{\s+removedOnClose\.current = false\s+onRemoved\(guestId\)/)
+      })
+
+      it('Remove Guest words a split refund like Cancel Event Places, from what actually went back', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/RemoveGuestDialog.tsx'), 'utf8')
+        expect(source).toContain('`${total} refunded (${formatCurrency(card.toFixed(2))} card, ${formatCurrency(credit.toFixed(2))} store credit).`')
+        expect(source).toContain('credit > 0 ? `${total} refunded to store credit.` : `${total} refunded.`')
+        expect(source).toContain('result.cardRefundedAmount ?? 0')
+        expect(source).toContain('result.storeCreditRefundedAmount ?? 0')
+        expect(source).toContain('{success.warning ? <div className="mt-1 text-warning">{success.warning}</div> : null}')
+      })
+
+      it('Remove Guest says nothing is left on a paid seat, and keeps the old reason for an unpaid one', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/RemoveGuestDialog.tsx'), 'utf8')
+        expect(source).toMatch(/\{quote\.refundable\s+\? 'Nothing left to refund on this seat\.'\s+: 'Nothing to refund — this seat was not paid with money \(legacy booking or credit-covered\)\.'\}/)
+      })
+
+      it('Remove Guest reloads the booking when it closes after a refusal, and the parent does', () => {
+        const dialog = readFileSync(path.join(appDir, 'frontend/components/RemoveGuestDialog.tsx'), 'utf8')
+        expect(dialog.match(/reloadOnClose\.current = true/g)).toHaveLength(3)
+        expect(dialog).toContain('if (reloadOnClose.current) {')
+        expect(dialog).toContain('onBookingStale()')
+        const parent = readFileSync(path.join(appDir, 'frontend/components/BookingDetailContent.tsx'), 'utf8')
+        expect(parent).toContain('onBookingStale={handleGuestRemovalRefused}')
+        expect(parent).toMatch(/function handleGuestRemovalRefused\(\) \{\s+trigger\(\{ bookingId \}, \{ skipCache: true \}\)/)
+      })
+
+      it('add-ons-only mode has its own words for how to pay, from the screen and from the server', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/AddGuestDialog.tsx'), 'utf8')
+        expect(source).toContain("const ADDONS_PAYMENT_MESSAGE = 'Select how to pay for the add-ons.'")
+        expect(source).toContain('payment_method_required: ADDONS_PAYMENT_MESSAGE')
+        expect(source).toContain("if (!payment.method) return addonsOnly ? ADDONS_PAYMENT_MESSAGE : 'Select how to pay the difference.'")
+        expect(source).toContain('const messages = addonsOnly ? ADDONS_REASON_MESSAGES : REASON_MESSAGES')
+        // Guest mode keeps its words.
+        expect(source).toContain("payment_method_required: 'Select how to pay the seat price.'")
+      })
+
+      it('add-ons-only mode never talks about a guest', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/AddGuestDialog.tsx'), 'utf8')
+        expect(source).toContain("booking_cancelled: 'This booking has been cancelled and can no longer take add-ons.'")
+        expect(source).toContain("const failedMessage = addonsOnly ? 'Failed to add the add-ons.' : 'Failed to add guest.'")
+        expect(source).toContain("const adding = addonsOnly ? 'these add-ons' : 'this guest'")
+        expect(source).toContain("title: addonsOnly ? 'Add-ons not added' : 'Guest not added'")
+        expect(source).not.toContain("'Failed to add guest.')\n")
+        expect(source).not.toContain('do not retry adding this guest')
+        const server = readFileSync(path.join(appDir, 'backend/paddock/addBookingGuest.ts'), 'utf8')
+        expect(server).toContain("the ${addingGuest ? 'guest was' : 'add-ons were'} removed and nothing was charged")
+      })
+
+      describe('the customer behind the payment step', () => {
+        const readiness = () => import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/quoteReadiness'))
+
+        it('a customer means ready; no customer or no answer is a failure, not still loading', async () => {
+          const { customerLoadOutcome } = await readiness()
+          expect(customerLoadOutcome([{ id: 'customer-1' }])).toEqual({ customer: { id: 'customer-1' }, status: 'ready' })
+          expect(customerLoadOutcome([])).toEqual({ customer: null, status: 'failed' })
+          expect(customerLoadOutcome(null)).toEqual({ customer: null, status: 'failed' })
+          expect(customerLoadOutcome(undefined)).toEqual({ customer: null, status: 'failed' })
+        })
+
+        it('has the agreed words and a Try again button', async () => {
+          const { CUSTOMER_LOAD_MESSAGE } = await readiness()
+          expect(CUSTOMER_LOAD_MESSAGE).toBe("Couldn't load this customer's payment details. Please try again.")
+          const source = readFileSync(path.join(appDir, 'frontend/components/checkout/PaymentCustomerLoad.tsx'), 'utf8')
+          expect(source).toContain("if (status !== 'failed') {")
+          expect(source).toContain('{CUSTOMER_LOAD_MESSAGE}')
+          expect(source).toMatch(/onClick=\{onRetry\}>\s+Try again/)
+        })
+
+        it('a load that fails or arrives late is handled', () => {
+          const source = readFileSync(path.join(appDir, 'frontend/hooks/usePaymentCustomer.ts'), 'utf8')
+          // The second argument to then: without it a failed load would hang on the loading line.
+          expect(source).toMatch(/\.result\.then\(\s+\(rows: CustomerRow\[\]\) => \{[\s\S]+\},\s+\(\) => \{[\s\S]+setStatus\('failed'\)/)
+          expect(source.match(/if \(requestRef\.current !== requestId\) return/g)).toHaveLength(2)
+          expect(source).toMatch(/function clear\(\) \{\s+requestRef\.current \+= 1/)
+        })
+
+        it.each([
+          ['AddGuestDialog', 'onRetry={() => void loadCustomer(customerId)}', 'disabled={submitting || !customer}'],
+          ['SettleLapsedPaymentDialog', 'onRetry={() => void loadCustomer(customerId)}', 'disabled={submitting || amountDue === null || !customer}'],
+          ['MoveBookingDialog', 'onRetry={() => void loadPayingCustomer(priceImpact.customerId)}', '|| ((priceImpact?.amountDue ?? 0) > 0.001 && !customer)}'],
+        ])('%s offers Try again, clears on close, and Confirm waits for the customer', (name, retry, gate) => {
+          const source = readFileSync(path.join(appDir, `frontend/components/${name}.tsx`), 'utf8')
+          expect(source).toContain('<PaymentCustomerLoad status={customerStatus}')
+          expect(source).toContain(retry)
+          expect(source).toContain(gate)
+          expect(source).toContain('clearCustomer()')
+          expect(source).not.toContain('Loading customer payment details')
+          expect(source).not.toContain('useGetCustomers')
+        })
+      })
+
+      it('Settle asks the parent to reload the booking on the refusal, and the parent does', () => {
+        const dialog = readFileSync(path.join(appDir, 'frontend/components/SettleLapsedPaymentDialog.tsx'), 'utf8')
+        const start = dialog.indexOf('if (result?.reason && result.amountDue !== undefined) {')
+        expect(start).toBeGreaterThan(0)
+        const branch = dialog.slice(start, dialog.indexOf('return', start))
+        expect(branch).toContain('setServerAmountDue(result.amountDue)')
+        expect(branch).toContain('confirmedCashAmount: null')
+        expect(branch).toContain('onAmountChanged()')
+        const parent = readFileSync(path.join(appDir, 'frontend/components/BookingDetailContent.tsx'), 'utf8')
+        expect(parent).toContain('onAmountChanged={() => trigger({ bookingId }, { skipCache: true })}')
+        // Reloading must not take the dialog away: only a first load shows the skeleton.
+        expect(parent).toContain('if (loading && !detail) return <Skeleton')
+      })
+
+      describe('what a move leaves staff to do', () => {
+        const notices = async (result: Record<string, unknown>) => (await import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/paymentMethodChoice'))).moveNotices(result)
+        const dialog = () => readFileSync(path.join(appDir, 'frontend/components/MoveBookingDialog.tsx'), 'utf8')
+
+        it('a failed refund and a warning both stay, in the words accepted before', async () => {
+          expect(await notices({ moved: true, reason: 'refund_failed: The card refund failed, so nothing was refunded: declined', warning: 'Check the pass.' })).toEqual([
+            'Booking moved, but the refund failed: The card refund failed, so nothing was refunded: declined',
+            'Check the pass.',
+          ])
+        })
+
+        it('a clean move leaves nothing', async () => {
+          expect(await notices({ moved: true })).toEqual([])
+        })
+
+        it('every way a move finishes goes the same way, and none is only a toast', () => {
+          const source = dialog()
+          expect(source).not.toContain('toast.warning')
+          expect(source.match(/finishMove\(/g)).toHaveLength(5)
+          expect(source.match(/finishMove\(moveNotices\(result\)\)/g)).toHaveLength(2)
+          expect(source.match(/toast\.success\('Booking moved'\)/g)).toHaveLength(1)
+        })
+
+        it('held open, the parent hears on close, and there is no way to move it again', () => {
+          const source = dialog()
+          const finish = source.slice(source.indexOf('function finishMove'), source.indexOf('/** PaymentStep needs the customer'))
+          expect(finish).toMatch(/if \(lines\.length > 0\) \{\s+movedOnClose\.current = true\s+setNotices\(lines\)\s+return\s+\}/)
+          expect(source).toMatch(/function resetAndClose\(\) \{\s+if \(movedOnClose\.current\) \{\s+movedOnClose\.current = false\s+onMoved\(\)/)
+          expect(source).toMatch(/\{notices \? \(\s+<Button onClick=\{resetAndClose\}>Done<\/Button>/)
+          expect(source.match(/onMoved\(\)/g)).toHaveLength(2)
+        })
+      })
+
+      describe('warnings that used to go with a toast', () => {
+        const read = (name: string) => readFileSync(path.join(appDir, `frontend/components/${name}.tsx`), 'utf8')
+
+        it.each(['RemoveBookingAddonDialog', 'CancelEventPlacesDialog', 'CancelCreditBookingDialog', 'CancelPaymentNeededDialog'])('%s has no warning in a toast', (name) => {
+          expect(read(name)).not.toContain('toast.warning')
+        })
+
+        it('Remove Add-on stays open on a warning, and the row goes on close', () => {
+          const source = read('RemoveBookingAddonDialog')
+          const confirm = source.slice(source.indexOf('async function handleConfirm'), source.indexOf('return (\n    <>'))
+          expect(confirm).toMatch(/if \(result\.warning\) \{\s+removedOnClose\.current = true\s+setDone\(\{ summary: result\.summary, notes: result\.notes, warning: result\.warning \}\)\s+return\s+\}/)
+          expect(source).toMatch(/function close\(\) \{[\s\S]*?if \(removedOnClose\.current\) \{\s+removedOnClose\.current = false\s+onRemoved\(\)/)
+          expect(source).toContain('<div className="mt-1 text-warning">{done.warning}</div>')
+          expect(source).toMatch(/\{done \? \(\s+<Button onClick=\{close\}>Done<\/Button>/)
+          expect(source).toContain('next ? setOpen(true) : close()')
+        })
+
+        it('Cancel Event Places keeps refusals and thrown errors in the dialog', () => {
+          const source = read('CancelEventPlacesDialog')
+          expect(source).not.toContain('toast.error')
+          expect(source).toContain("setErrorMessage([result.message, result.warning].filter(Boolean).join(' '))")
+          expect(source).toContain("setErrorMessage(err instanceof Error ? err.message : 'Failed to cancel')")
+          expect(source).toContain('<div>{errorMessage}</div>')
+        })
+
+        it('Cancel Event Places stays open on a warning, and the page hears on close', () => {
+          const source = read('CancelEventPlacesDialog')
+          expect(source).toMatch(/if \(result\.warning\) \{\s+cancelledOnClose\.current = \(\) => onCancelled\(result\.booking, result\.eventPlacesBooked\)\s+setDone\(\{ summary, warning: result\.warning \}\)\s+return\s+\}/)
+          expect(source).toMatch(/function close\(\) \{[\s\S]*?cancelledOnClose\.current\?\.\(\)/)
+          expect(source).toContain('<div className="mt-1 text-warning">{done.warning}</div>')
+          expect(source).toMatch(/\{done \? \(\s+<Button onClick=\{close\}>Done<\/Button>/)
+        })
+
+        it('Cancel & Return Credit shows the warning, and only reloads on close when there is one', () => {
+          const source = read('CancelCreditBookingDialog')
+          expect(source).toContain('{result.warning ? <div className="mt-1 text-warning">{result.warning}</div> : null}')
+          expect(source).toMatch(/if \(response\.warning\) cancelledOnClose\.current = true\s+else onCancelled\(bookingId\)/)
+          expect(source).toMatch(/function resetAndClose\(\) \{\s+if \(cancelledOnClose\.current\) \{\s+cancelledOnClose\.current = false\s+onCancelled\(bookingId\)/)
+        })
+
+        it('Cancel Booking stays open on a warning, and only reloads on close', () => {
+          const source = read('CancelPaymentNeededDialog')
+          expect(source).toMatch(/if \(response\.warning\) \{\s+setDone\(\{ summary, notes: response\.addons\?\.notes \?\? \[\], warning: response\.warning \}\)\s+return\s+\}/)
+          expect(source).toMatch(/function resetAndClose\(\) \{[\s\S]*?if \(done\) onCancelled\(bookingId\)/)
+          expect(source).toContain('<div className="mt-1 text-warning">{done.warning}</div>')
+        })
+      })
+
+      it('Remove Guest locks and reloads when the call itself fails, because the refund may have gone', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/RemoveGuestDialog.tsx'), 'utf8')
+        const confirm = source.slice(source.indexOf('async function handleConfirm'), source.indexOf('return (\n    <>'))
+        const failed = confirm.slice(confirm.indexOf('} catch (err) {'))
+        expect(failed).toContain('reloadOnClose.current = true')
+        expect(failed).toContain('setRetryLocked(true)')
+        // Fetching the quote moves no money, so it stays retryable.
+        const quote = source.slice(source.indexOf('async function handleQuote'), source.indexOf('async function handleConfirm'))
+        expect(quote).not.toContain('setRetryLocked(true)')
+      })
+
+      it('New Order goes by what it sent and what came back, and never by the method held on screen', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/CheckoutDialog.tsx'), 'utf8')
+        const after = source.slice(source.indexOf('if (response?.success) {'), source.indexOf('async function handleCancelReaderWait'))
+        expect(after).not.toContain("payment.method === 'reader'")
+        expect(after).not.toMatch(/\bpayment\.method\b/)
+        expect(after).toContain('if (readerReferenceMissing(paymentInput.method, response.pendingReaderPayment)) {')
+        expect(after).toContain('const pending = response.pendingReaderPayment\n        if (pending) {')
+        expect(after).toContain('cashShortfall(paymentInput.method ?? null, cashConfirmed, response.cardAmount)')
+        expect(source).toContain('...orderMethodFields(payment, remainder, membershipAmount, readerSaveCard),')
+      })
+
+      it('New Order keeps a refusal\'s banner when the method goes by itself', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/CheckoutDialog.tsx'), 'utf8')
+        expect(source).toContain('const clearedByItself = methodOnlyCleared(methodSeen.current, payment.method)')
+        expect(source).toContain("if (phase !== 'payment' || clearedByItself) return")
+      })
+
+      it('the payment step clears the held method, after the tick, and shows the choices by the same rule', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/checkout/PaymentStep.tsx'), 'utf8')
+        expect(source).toContain('const cleared = clearHiddenMethod(state, choicesShown)')
+        expect(source).toContain('if (cleared !== state) onChange(cleared)')
+        expect(source).toContain('}, [choicesShown, state.method])')
+        expect(source).toContain('{choicesShown ? (')
+        expect(source.indexOf('clearHiddenMethod(state')).toBeGreaterThan(source.indexOf('if (state.confirmedCashAmount !== null) onChange'))
+      })
+
+      it('the result screen warning stays as a last line of defence', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/CheckoutDialog.tsx'), 'utf8')
+        expect(source).toContain('cashShortfall(paymentInput.method ?? null, cashConfirmed, response.cardAmount)')
+      })
+    })
+  })
+
+  describe('Redemption Source "Gift Card" is gone', () => {
+    const MESSAGE = 'Gift Card is no longer a booking option. Choose Paid and apply the gift card at payment.'
+    const booking = { sessionId: 'session-1', guests: [], redemptionSource: 'gift_card' }
+
+    it('createOrder refuses it before touching the database', async () => {
+      const query = vi.fn(async () => ({ data: [] }))
+      vi.stubGlobal('paddockData', { query })
+      const fn = (await import(/* @vite-ignore */ path.join(appDir, 'backend/paddock/createOrder'))).default
+      const result = await fn({ params: { customerId: 'customer-1', booking, payment: {} }, user })
+      expect(result).toEqual({ success: false, stage: 'validation', reason: 'gift_card_source_removed', message: MESSAGE })
+      expect(query).not.toHaveBeenCalled()
+    })
+
+    it('createBooking refuses it before touching the database', async () => {
+      const query = vi.fn(async () => ({ data: [] }))
+      vi.stubGlobal('paddockData', { query })
+      const { createBookingUnguarded } = await import(/* @vite-ignore */ path.join(appDir, 'backend/paddock/createBooking'))
+      const result = await createBookingUnguarded({ params: { ...booking, customerId: 'customer-1' }, user })
+      expect(result).toEqual({ created: false, reason: 'gift_card_source_removed', message: MESSAGE })
+      expect(query).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['backend/paddock/createOrder.ts'],
+      ['backend/paddock/createBooking.ts'],
+      ['frontend/components/CheckoutDialog.tsx'],
+      ['frontend/components/BookingDetailContent.tsx'],
+      ['frontend/components/BlockSessionDialog.tsx'],
+      ['frontend/components/BlockDayDialog.tsx'],
+    ])('%s has no special case for it', (file) => {
+      const source = readFileSync(path.join(appDir, file), 'utf8')
+      expect(source).not.toMatch(/[rR]edemption_?[sS]ource\s*[!=]==\s*'gift_card'/)
+      expect(source).not.toMatch(/pay_by === 'gift_card'/)
+    })
+
+    it('a booking counts towards what is owed, whatever pays for it', () => {
+      const source = readFileSync(path.join(appDir, 'backend/paddock/createOrder.ts'), 'utf8')
+      expect(source).toContain("      cardAmount += bookingPrice - (currentPromo()?.bookingDiscount ?? 0)\n    }\n")
+      expect(source).toContain('writtenBookingSeatPromoLines(bookingId, bookingPrice)')
+    })
+
+    it('neither list on the booking screen offers it', () => {
+      const source = readFileSync(path.join(appDir, 'frontend/components/checkout/BookingSection.tsx'), 'utf8')
+      expect(source).not.toContain("value: 'gift_card'")
+    })
+  })
+
+  describe('changing the customer in New Order', () => {
+    const change = () => import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/customerChange'))
+
+    it('clears the money that belonged to the old customer', async () => {
+      const { paymentForNewCustomer } = await change()
+      const payment = { selectedGiftCard: { id: 'card-1' }, giftCardAmount: 10, storeCreditAmount: 5, method: 'cash', confirmedCashAmount: 20 }
+      expect(paymentForNewCustomer(payment)).toEqual({ selectedGiftCard: null, giftCardAmount: 0, storeCreditAmount: 0, method: 'cash', confirmedCashAmount: null })
+    })
+
+    it('clears their membership and session pass', async () => {
+      const { bookingForNewCustomer } = await change()
+      const booking = { membershipId: 'm1', sessionPassId: 'p1', cancelExhaustedMembershipId: 'm0', redemptionSource: 'membership_credit', addons: [] }
+      expect(bookingForNewCustomer(booking)).toEqual({ membershipId: null, sessionPassId: null, cancelExhaustedMembershipId: null, redemptionSource: 'membership_credit', addons: [] })
+    })
+
+    it('an add-on on their credit becomes paid, at the price on the line', async () => {
+      const { bookingForNewCustomer } = await change()
+      const line = { addonId: 'a1', quantity: 1, unitPrice: 7, redemptionSource: 'membership_credit', membershipId: 'm1', systemUnitPrice: 9, priceOverrideReason: 'Staff' }
+      const { addons } = bookingForNewCustomer({ addons: [line] })
+      expect(addons).toEqual([{ addonId: 'a1', quantity: 1, unitPrice: 7, redemptionSource: 'paid', systemUnitPrice: 9, priceOverrideReason: 'Staff' }])
+    })
+
+    it('leaves paid lines and typed prices alone', async () => {
+      const { bookingForNewCustomer } = await change()
+      const line = { addonId: 'a1', quantity: 2, unitPrice: 3.5, redemptionSource: 'paid', priceOverrideReason: 'Staff' }
+      expect(bookingForNewCustomer({ addons: [line] }).addons[0]).toBe(line)
+    })
+
+    it('the picker goes through them, and only for a different customer', () => {
+      const source = readFileSync(path.join(appDir, 'frontend/components/CheckoutDialog.tsx'), 'utf8')
+      expect(source).toContain('onSelect={handleCustomerSelected}')
+      const start = source.indexOf('function handleCustomerSelected')
+      const body = source.slice(start, source.indexOf('\n  }\n', start))
+      expect(body).toContain('if (next?.id !== customer?.id)')
+      expect(body).toContain('setPayment(paymentForNewCustomer)')
+      expect(body).toContain('setBooking(bookingForNewCustomer)')
+      expect(body).toContain('setDeliveryAddress(emptyDeliveryAddress())')
+      expect(body).toContain('addressPrefilledForRef.current = null')
+      expect(body).toContain('setReaderSaveCard(false)')
+      // Saving a card on the reader updates the same customer, and must keep the payment.
+      expect(source).toContain('onCustomerUpdated={(updated) => setCustomer(updated)}')
     })
   })
 

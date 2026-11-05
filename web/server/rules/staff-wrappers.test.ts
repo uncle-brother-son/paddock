@@ -5,13 +5,15 @@ import type { Db, SqlParam } from '@/server/db'
 import { fixtures, insert, startTestDatabase, type TestDatabase } from '@/server/rules/testing/database'
 import { stepBRoutes } from '@/server/rules/testing/routes'
 
-// Old logic against new logic: the staff app's nine functions, with shadowCompare on, against the
-// real Worker routes, on one database. The old side runs the old SQL; the new side goes through
-// callWorker into the route. Any difference reaches /parity and fails the test.
+// The staff app's nine functions against the real Worker routes, on one database: what a screen
+// gets, end to end. staff-app-helpers.test.ts checks each wrapper against a fake rawRequest; this
+// file sends the same calls through the real route, so it also proves the route reads each query
+// and body the way the wrapper sends it.
 //
-// This proves the two sets of code agree. It does NOT compare the two database drivers: paddockData
-// is stubbed with the Worker's own db here, so both sides see the same column types. That
-// comparison is in driver-parity.test.ts. Skipped when the staff app's checkout isn't beside this repo.
+// Until W02b this compared the old Retool code with the routes through shadowCompare. That old code
+// is gone, so there is nothing left to compare: every input below is kept as a check that the
+// wrapper returns exactly what the route answered, and that the route's output matches its contract.
+// Skipped when the staff app's checkout isn't beside this repo.
 
 const KEY = 'test-staff-api-key'
 const appDir = process.env.RETOOL_APP_DIR ?? path.resolve(__dirname, '../../../../paddock-retool-app')
@@ -28,9 +30,9 @@ const load = async (name: string) =>
 
 const user = { email: 'jo@example.com' }
 
-describe.skipIf(!existsSync(functions))('old and new logic through shadowCompare, on one driver', () => {
+describe.skipIf(!existsSync(functions))('the staff app wrappers through the real routes', () => {
   let t: TestDatabase
-  const parity: Array<{ action: string; diff: unknown }> = []
+  let answered: unknown
   let tamper: ((data: unknown) => unknown) | null = null
   let customer: string, member: string, herd: string, session: string, peakSession: string, noBand: string, corePlan: string, sauna: string, plunge: string
 
@@ -42,15 +44,12 @@ describe.skipIf(!existsSync(functions))('old and new logic through shadowCompare
     await insert(db, 'staff', { first_name: 'A', last_name: 'B', email: user.email, role: 'staff', can_issue_refunds: false, can_manage_pricing: true, active: true })
 
     vi.stubGlobal('paddockData', {
-      query: async (sql: string, params: readonly SqlParam[] = []) => ({ data: await db.query(sql, params) }),
+      query: async (sql: string) => {
+        throw new Error(`A wrapper went to the database itself: ${sql}`)
+      },
     })
     vi.stubGlobal('paddockWorkerV1', {
       async rawRequest(options: { path: string; method: string; headers: Record<string, string>; queryParams?: Record<string, string>; body?: unknown }) {
-        if (options.path === '/api/v1/staff/parity') {
-          const entry = options.body as { action: string; diff: unknown }
-          parity.push({ action: entry.action, diff: entry.diff })
-          return { data: { ok: true, data: { recorded: true }, requestId: 'r' } }
-        }
         const route = stepBRoutes[options.path]
         if (!route) throw new Error(`No route ${options.path}`)
         const url = new URL(`https://worker.test${options.path}`)
@@ -64,6 +63,7 @@ describe.skipIf(!existsSync(functions))('old and new logic through shadowCompare
         )
         const body = (await response.json()) as { ok: boolean; data?: unknown }
         if (tamper && body.ok) body.data = tamper(body.data)
+        answered = body.data
         return { data: body }
       },
     })
@@ -95,14 +95,15 @@ describe.skipIf(!existsSync(functions))('old and new logic through shadowCompare
   })
 
   beforeEach(() => {
-    parity.length = 0
+    answered = undefined
     tamper = null
   })
 
   async function same(name: string, params?: unknown) {
     const fn = await load(name)
     const result = await fn({ params, user })
-    expect(parity, `${name} ${JSON.stringify(params)}`).toEqual([])
+    expect(result, `${name} ${JSON.stringify(params)}`).toBe(answered)
+    expect(result, `${name} ${JSON.stringify(params)}`).toBeDefined()
     return result
   }
 
@@ -239,23 +240,106 @@ describe.skipIf(!existsSync(functions))('old and new logic through shadowCompare
     expect(await same('getPricingConfig')).toMatchObject({ canManagePricing: true })
   })
 
-  it('getPostageSettings: a failure on both sides with the same text is not a mismatch', async () => {
+  it('getPostageSettings: not set up yet, then set up', async () => {
     const fn = await load('getPostageSettings')
 
-    await expect(fn({ user })).rejects.toThrow('Postage settings have not been configured yet.')
-    expect(parity).toEqual([])
+    await expect(fn({ user })).rejects.toThrow(
+      /^Postage settings have not been configured yet\. Run the postage_settings migration \(CREATE TABLE \+ seed row\) to set them up\. \(INTERNAL, request [0-9a-f-]{36}\)$/
+    )
 
     await t.db.query('INSERT INTO postage_settings (standard_price, express_price, free_shipping_threshold) VALUES ($1, $2, $3)', ['4.95', '9.95', '75.00'])
-    await same('getPostageSettings')
+    expect(await same('getPostageSettings')).toEqual({ standardPrice: 4.95, expressPrice: 9.95, freeShippingThreshold: 75 })
   })
 
-  it('a real difference does reach parity, and the screen still gets the old answer', async () => {
+  it('messages in a field reach the screen as answers', async () => {
+    const quote = (await same('quoteBookingSeats', { sessionId: noBand, customerId: customer, partySize: 1 })) as { unpriced: boolean; error: string }
+    expect(quote).toMatchObject({ unpriced: true, error: 'No band is assigned to this session.' })
+
+    const membersOnly = await fixtures.event(t.db, { access: 'members_only' })
+    const event = (await same('quoteEvent', { eventId: membersOnly, customerId: customer, places: 1, accountHolderAttending: true })) as { blockReason: string }
+    expect(event.blockReason).toBe('event_members_only')
+
+    expect(await same('validatePromoCode', { code: 'NOPE', customerId: customer, lines: [] })).toEqual({
+      ok: false,
+      reason: 'not_found',
+      message: 'That promo code does not exist.',
+    })
+  })
+
+  it('the screen gets exactly what the Worker sent', async () => {
     tamper = (data) => ({ ...(data as object), paidTotal: 999 })
-    const fn = await load('quoteBookingSeats')
 
-    const result = (await fn({ params: { sessionId: session, customerId: customer, partySize: 1 }, user })) as { paidTotal: number }
+    const result = (await same('quoteBookingSeats', { sessionId: session, customerId: customer, partySize: 1 })) as { paidTotal: number }
 
-    expect(result.paidTotal).toBe(20)
-    expect(parity).toEqual([{ action: 'quoteBookingSeats', diff: [{ path: 'paidTotal', oldValue: 20, newValue: 999 }] }])
+    expect(result.paidTotal).toBe(999)
+  })
+
+  // Why the date boxes are checked on the screen: these are what the Worker says otherwise.
+  it.each(['', '12026-01-01'])('getAvailableSessions refuses the date %j', async (date) => {
+    const fn = await load('getAvailableSessions')
+
+    await expect(fn({ params: { date }, user })).rejects.toThrow(
+      /^date: Must be a date in the form YYYY-MM-DD \(VALIDATION, request [0-9a-f-]{36}\)$/
+    )
+  })
+
+  it('a year as low as the date check allows is answered, not refused', async () => {
+    expect(await same('getAvailableSessions', { date: '0001-01-01' })).toEqual([])
+  })
+
+  it('an unexpected database error shows the generic message', async () => {
+    const real = t.db
+    holder.db = Object.assign(Object.create(real), {
+      query: (sql: string, params: readonly SqlParam[]) => {
+        if (sql.includes('session_bands')) throw new Error('relation "session_bands" is broken')
+        return real.query(sql, params)
+      },
+    })
+    try {
+      const fn = await load('getPricingConfig')
+
+      await expect(fn({ user })).rejects.toThrow(
+        /^Something went wrong and the action may not have finished\. Check before trying again\. \(INTERNAL, request [0-9a-f-]{36}\)$/
+      )
+    } finally {
+      holder.db = real
+    }
+  })
+
+  describe('who is refused', () => {
+    const allNine: Array<[string, unknown]> = [
+      ['quoteBookingSeats', () => ({ sessionId: session, customerId: customer, partySize: 1 })],
+      ['quoteEvent', () => ({ eventId: session, customerId: customer, places: 1, accountHolderAttending: true })],
+      ['validatePromoCode', () => ({ code: 'NOPE', customerId: customer, lines: [] })],
+      ['getCustomerCreditOptions', () => ({ customerId: customer })],
+      ['getAvailableSessions', () => ({ date: '2030-06-15' })],
+      ['checkCustomerDayConflict', () => ({ customerId: customer, sessionId: session })],
+      [
+        'checkSessionTimeConflict',
+        () => ({ sessionId: session, serviceTypeId: sauna, startTime: '2030-07-01T10:30:00.000Z', endTime: '2030-07-01T11:30:00.000Z' }),
+      ],
+      ['getPricingConfig', () => undefined],
+      ['getPostageSettings', () => undefined],
+    ]
+
+    it.each(allNine)('%s: no staff row', async (name, params) => {
+      const fn = await load(name)
+      const email = 'nobody@example.com'
+
+      await expect(fn({ params: (params as () => unknown)(), user: { email } })).rejects.toThrow(
+        /^No staff record matches the logged-in user's email \(nobody@example\.com\)\. Ask an admin to add you as staff before performing this action\. \(UNAUTHORISED, request [0-9a-f-]{36}\)$/
+      )
+    })
+
+    it.each(allNine)('%s: inactive staff', async (name, params) => {
+      const email = 'gone@example.com'
+      await t.db.query('DELETE FROM staff WHERE email = $1', [email])
+      await insert(t.db, 'staff', { first_name: 'C', last_name: 'D', email, role: 'staff', can_issue_refunds: false, can_manage_pricing: false, active: false })
+      const fn = await load(name)
+
+      await expect(fn({ params: (params as () => unknown)(), user: { email } })).rejects.toThrow(
+        /^This staff account is inactive\. Ask an admin to reactivate it\. \(FORBIDDEN, request [0-9a-f-]{36}\)$/
+      )
+    })
   })
 })
