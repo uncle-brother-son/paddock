@@ -5,10 +5,13 @@ import type { Db, SqlParam } from '@/server/db'
 import { fixtures, insert, startTestDatabase, type TestDatabase } from '@/server/rules/testing/database'
 import { stepBRoutes } from '@/server/rules/testing/routes'
 
-// The real thing end to end: the staff app's nine functions, with shadowCompare on, against the
-// real Worker routes, on one database. The old side runs the old SQL through paddockData; the new
-// side goes through callWorker into the route. Any difference reaches /parity and fails the test.
-// Skipped when the staff app's checkout isn't beside this repo.
+// Old logic against new logic: the staff app's nine functions, with shadowCompare on, against the
+// real Worker routes, on one database. The old side runs the old SQL; the new side goes through
+// callWorker into the route. Any difference reaches /parity and fails the test.
+//
+// This proves the two sets of code agree. It does NOT compare the two database drivers: paddockData
+// is stubbed with the Worker's own db here, so both sides see the same column types. That
+// comparison is in driver-parity.test.ts. Skipped when the staff app's checkout isn't beside this repo.
 
 const KEY = 'test-staff-api-key'
 const appDir = process.env.RETOOL_APP_DIR ?? path.resolve(__dirname, '../../../../paddock-retool-app')
@@ -25,7 +28,7 @@ const load = async (name: string) =>
 
 const user = { email: 'jo@example.com' }
 
-describe.skipIf(!existsSync(functions))('shadowCompare, end to end', () => {
+describe.skipIf(!existsSync(functions))('old and new logic through shadowCompare, on one driver', () => {
   let t: TestDatabase
   const parity: Array<{ action: string; diff: unknown }> = []
   let tamper: ((data: unknown) => unknown) | null = null
@@ -160,6 +163,28 @@ describe.skipIf(!existsSync(functions))('shadowCompare, end to end', () => {
     await same('getCustomerCreditOptions', { customerId: herd })
   })
 
+  it('getCustomerCreditOptions: unlimited, and memberships and passes that tie', async () => {
+    const period = { period_start: '2020-01-01', period_end: '2099-01-01', credits_allocated: 2, is_unlimited: false }
+    const unlimited = await fixtures.customer(t.db)
+    const unlimitedId = await fixtures.membership(t.db, { customer_id: unlimited, plan_id: corePlan })
+    await insert(t.db, 'membership_credit_periods', { ...period, membership_id: unlimitedId, credits_allocated: 0, is_unlimited: true })
+
+    const tied = await fixtures.customer(t.db)
+    for (const id of ['ffffffff-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000001']) {
+      await fixtures.membership(t.db, { id, customer_id: tied, plan_id: corePlan })
+      await insert(t.db, 'membership_credit_periods', { ...period, membership_id: id })
+    }
+    const passType = await fixtures.passType(t.db, { level: 'all_access' })
+    for (const id of ['ffffffff-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000002']) {
+      await fixtures.pass(t.db, { id, customer_id: tied, pass_type_id: passType })
+    }
+
+    await same('getCustomerCreditOptions', { customerId: unlimited })
+    await same('getCustomerCreditOptions', { customerId: tied })
+    const options = (await same('getCustomerCreditOptions', { customerId: tied, sessionId: session })) as { membershipsWithSessionCredit: Array<{ id: string }> }
+    expect(options.membershipsWithSessionCredit[0]?.id).toBe('00000000-0000-4000-8000-000000000001')
+  })
+
   it('getAvailableSessions', async () => {
     const booked = await fixtures.session(t.db, { service_type_id: plunge, start_time: '2030-06-16 10:00:00+00', end_time: '2030-06-16 11:00:00+00' })
     await fixtures.session(t.db, { service_type_id: sauna, start_time: '2030-06-16 10:00:00+00', end_time: '2030-06-16 11:00:00+00' })
@@ -171,6 +196,15 @@ describe.skipIf(!existsSync(functions))('shadowCompare, end to end', () => {
     await same('getAvailableSessions', { date: '2030-06-16' })
     await same('getAvailableSessions', { date: '2020-06-16' })
     await same('getAvailableSessions', { date: '2031-01-01' })
+  })
+
+  it('getAvailableSessions: sessions at the same time', async () => {
+    const twin = await fixtures.serviceType(t.db, { name: 'Sauna' })
+    await fixtures.session(t.db, { service_type_id: sauna, start_time: '2030-06-17 10:00:00+00', end_time: '2030-06-17 11:00:00+00' })
+    await fixtures.session(t.db, { service_type_id: twin, start_time: '2030-06-17 10:00:00+00', end_time: '2030-06-17 11:00:00+00' })
+    await fixtures.session(t.db, { service_type_id: plunge, start_time: '2030-06-17 10:00:00+00', end_time: '2030-06-17 11:00:00+00' })
+
+    expect(await same('getAvailableSessions', { date: '2030-06-17' })).toHaveLength(3)
   })
 
   it('checkCustomerDayConflict', async () => {
@@ -189,6 +223,16 @@ describe.skipIf(!existsSync(functions))('shadowCompare, end to end', () => {
 
     expect(await same('checkSessionTimeConflict', { ...params, startTime: '2030-07-01T10:30:00.000Z', endTime: '2030-07-01T11:30:00.000Z' })).toMatchObject({ conflict: true })
     await same('checkSessionTimeConflict', { ...params, startTime: '2030-07-01T12:00:00.000Z', endTime: '2030-07-01T13:00:00.000Z' })
+  })
+
+  it('checkSessionTimeConflict: several conflicts at the same time', async () => {
+    const third = await fixtures.serviceType(t.db, { name: 'Third' })
+    for (const type of [plunge, third]) {
+      const clash = await fixtures.session(t.db, { service_type_id: type, start_time: '2030-07-02 10:00:00+00', end_time: '2030-07-02 11:00:00+00' })
+      await fixtures.booking(t.db, { session_id: clash, customer_id: await fixtures.customer(t.db) })
+    }
+
+    await same('checkSessionTimeConflict', { sessionId: session, serviceTypeId: sauna, startTime: '2030-07-02T10:00:00.000Z', endTime: '2030-07-02T11:00:00.000Z' })
   })
 
   it('getPricingConfig', async () => {

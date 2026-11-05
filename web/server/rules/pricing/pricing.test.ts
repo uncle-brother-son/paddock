@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ApiError } from '@/server/http/errors'
-import { fixtures, insert, startTestDatabase, type TestDatabase } from '@/server/rules/testing/database'
+import { fixtures, HIGH_ID, insert, LOW_ID, startTestDatabase, type TestDatabase } from '@/server/rules/testing/database'
 import { getPostageSettings } from './postage-settings'
 import { getPricingConfig } from './pricing-config'
 import { quoteBookingSeats } from './quote-booking-seats'
@@ -82,6 +82,16 @@ describe('quoteBookingSeats', () => {
     expect(six.paidTotal).toBe([1, 2, 3, 4, 5, 6].reduce((sum) => sum + Number.parseFloat('25.50'), 0))
   })
 
+  it('paidTotal is the plain float sum, not rounded to pence', async () => {
+    const cheap = await fixtures.band(t.db, { code: 'cheap', name: 'Cheap', price: '0.10' })
+    const type = await fixtures.serviceType(t.db)
+    const cheapSession = await fixtures.session(t.db, { service_type_id: type, band_id: cheap })
+
+    const quote = await quoteBookingSeats(t.db, { sessionId: cheapSession, customerId: visitor, partySize: 3 })
+
+    expect(quote.paidTotal).toBe(0.30000000000000004)
+  })
+
   it('a new membership plan replaces seat 1 only (plan_seat_terms)', async () => {
     const quote = await quoteBookingSeats(t.db, { sessionId: peakSession, customerId: visitor, partySize: 2, newMembershipPlanId: allAccessPlan })
 
@@ -139,6 +149,34 @@ describe('getPricingConfig', () => {
     expect(allowed.bands[0]).toMatchObject({ price: expect.any(String), sort_order: expect.any(Number), active: true })
     expect(allowed.membershipTerms[0]?.discount_percent).toEqual(expect.any(String))
     expect(allowed.membershipLevels).toEqual(['all_access', 'core'])
+  })
+})
+
+describe('getPricingConfig order', () => {
+  it('bands go by sort_order, then id', async () => {
+    const tiedHigh = await fixtures.band(t.db, { id: HIGH_ID, code: 'tied_high', sort_order: 9 })
+    const tiedLow = await fixtures.band(t.db, { id: LOW_ID, code: 'tied_low', sort_order: 9 })
+    const first = await fixtures.band(t.db, { code: 'sorted_first', sort_order: 5 })
+
+    const ids = (await getPricingConfig(t.db, true)).bands.map((b) => b.id).filter((id) => [tiedHigh, tiedLow, first].includes(id))
+
+    expect(ids).toEqual([first, LOW_ID, HIGH_ID])
+  })
+
+  it('band rules go by day, then start time, then id', async () => {
+    await insert(t.db, 'band_rules', { id: HIGH_ID, band_id: core, day_of_week: 5, from_time: '09:00', to_time: '12:00' })
+    await insert(t.db, 'band_rules', { id: LOW_ID, band_id: peak, day_of_week: 5, from_time: '09:00', to_time: '11:00' })
+
+    const ids = (await getPricingConfig(t.db, true)).bandRules.filter((r) => r.day_of_week === 5).map((r) => r.id)
+
+    expect(ids).toEqual([LOW_ID, HIGH_ID])
+  })
+
+  it('membership terms go by level, then band', async () => {
+    const terms = (await getPricingConfig(t.db, true)).membershipTerms.map((m) => `${m.membership_level} ${m.band_id}`)
+
+    expect(terms.length).toBeGreaterThan(2)
+    expect(terms).toEqual([...terms].sort())
   })
 })
 

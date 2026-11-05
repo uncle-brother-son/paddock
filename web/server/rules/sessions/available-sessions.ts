@@ -42,7 +42,7 @@ export async function getAvailableSessions(db: Queryable, input: AvailableSessio
            AND s2.start_time < s.end_time
            AND s2.end_time > s.start_time
        )
-     ORDER BY s.start_time`,
+     ORDER BY s.start_time, st.name, s.id`,
     [date, serviceTypeId ?? null, serviceTypeId ?? null]
   )
 }

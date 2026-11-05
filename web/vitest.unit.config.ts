@@ -17,5 +17,9 @@ export default defineConfig({
     name: 'unit',
     environment: 'node',
     include: ['app/**/*.test.ts', 'lib/**/*.test.ts', 'server/**/*.test.ts', 'contracts/**/*.test.ts'],
+    // Each rule test file starts its own PGlite, which compiles a 9 MB WebAssembly Postgres. That
+    // is quick alone but passes the 10-second default once the CPU is busy: four suites at once
+    // failed every time, and pass in 20 to 30 seconds with this limit. Ten at once still fail.
+    hookTimeout: 60_000,
   },
 })

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { driverOptions } from '@/server/db/postgres-driver'
-import { fixtures, startTestDatabase, type TestDatabase } from '@/server/rules/testing/database'
+import { findDuplicateDayBooking } from '@/server/rules/pricing/band-pricing'
+import { fixtures, freezeNow, HIGH_ID, LOW_ID, startTestDatabase, unfreezeNow, type TestDatabase } from '@/server/rules/testing/database'
 import { getAvailableSessions } from './available-sessions'
 import { checkCustomerDayConflict } from './customer-day-conflict'
 import { checkSessionTimeConflict } from './session-time-conflict'
@@ -60,6 +61,51 @@ describe('getAvailableSessions', () => {
     await session('2020-01-11', '09')
 
     expect((await getAvailableSessions(t.db, { date: '2020-01-11' }))[0]?.started).toBe(true)
+  })
+
+  it('started goes by London wall-clock, not raw UTC', async () => {
+    // 12:30 UTC is 13:30 in London in July: the 13:00 session has started, though 13:00 UTC hasn't come.
+    const begun = await session('2030-07-01', '13')
+    const notYet = await session('2030-07-01', '14')
+    await freezeNow(t.pg, '2030-07-01 12:30:00+00')
+    try {
+      const rows = await getAvailableSessions(t.db, { date: '2030-07-01' })
+      expect(rows.map((r) => [r.id, r.started])).toEqual([
+        [begun, true],
+        [notYet, false],
+      ])
+    } finally {
+      await unfreezeNow(t.pg)
+    }
+  })
+
+  it('sessions at the same time go by service type name, then id', async () => {
+    const zebra = await fixtures.serviceType(t.db, { name: 'Zebra' })
+    const apple = await fixtures.serviceType(t.db, { name: 'Apple' })
+    const twin = await fixtures.serviceType(t.db, { name: 'Zebra' })
+    await session('2030-07-02', '10', { id: HIGH_ID, service_type_id: zebra })
+    await session('2030-07-02', '10', { id: LOW_ID, service_type_id: twin })
+    const first = await session('2030-07-02', '10', { service_type_id: apple })
+
+    expect((await getAvailableSessions(t.db, { date: '2030-07-02' })).map((r) => r.id)).toEqual([first, LOW_ID, HIGH_ID])
+  })
+
+  it('sessions that only touch a booked one are not hidden, on either side', async () => {
+    const booked = await session('2030-07-03', '10', { service_type_id: plunge })
+    const before = await session('2030-07-03', '09')
+    const after = await session('2030-07-03', '11')
+    await fixtures.booking(t.db, { session_id: booked, customer_id: await fixtures.customer(t.db) })
+
+    expect((await getAvailableSessions(t.db, { date: '2030-07-03' })).map((r) => r.id)).toEqual([before, booked, after])
+  })
+
+  it.each(['pending', 'payment_needed'])('a %s booking on another type hides nothing', async (status) => {
+    const day = status === 'pending' ? '2030-07-04' : '2030-07-05'
+    const booked = await session(day, '10', { service_type_id: plunge })
+    const other = await session(day, '10')
+    await fixtures.booking(t.db, { session_id: booked, customer_id: await fixtures.customer(t.db), status })
+
+    expect((await getAvailableSessions(t.db, { date: day })).map((r) => r.id).sort()).toEqual([booked, other].sort())
   })
 
   it('a confirmed booking on another type hides the overlapping session, and only that one', async () => {
@@ -153,6 +199,18 @@ describe('checkCustomerDayConflict', () => {
   })
 })
 
+describe('findDuplicateDayBooking', () => {
+  it('gives the lowest id if two active bookings ever share a day', async () => {
+    const customer = await fixtures.customer(t.db)
+    const morning = await session('2030-11-08', '09')
+    const evening = await session('2030-11-08', '18')
+    await fixtures.booking(t.db, { id: HIGH_ID, session_id: morning, customer_id: customer })
+    await fixtures.booking(t.db, { id: LOW_ID, session_id: evening, customer_id: customer })
+
+    expect(await findDuplicateDayBooking(t.db, customer, '2030-11-08T12:00:00.000Z')).toMatchObject({ id: LOW_ID })
+  })
+})
+
 describe('checkSessionTimeConflict', () => {
   it('finds a confirmed booking on another type at an overlapping time', async () => {
     const editing = await session('2030-02-01', '09')
@@ -176,6 +234,24 @@ describe('checkSessionTimeConflict', () => {
         end_time: '2030-02-01T11:00:00.000Z',
       },
     })
+  })
+
+  it('of several conflicts it names the earliest, then the lowest id', async () => {
+    const third = await fixtures.serviceType(t.db, { name: 'Third' })
+    const editing = await session('2030-02-04', '09')
+    const later = await session('2030-02-04', '11', { service_type_id: plunge })
+    const tiedHigh = await session('2030-02-04', '10', { id: 'eeeeeeee-0000-4000-8000-00000000000c', service_type_id: plunge })
+    const tiedLow = await session('2030-02-04', '10', { id: '11111111-0000-4000-8000-00000000000d', service_type_id: third })
+    for (const id of [later, tiedHigh, tiedLow]) await fixtures.booking(t.db, { session_id: id, customer_id: await fixtures.customer(t.db) })
+
+    const found = await checkSessionTimeConflict(t.db, {
+      sessionId: editing,
+      serviceTypeId: sauna,
+      startTime: '2030-02-04T09:30:00.000Z',
+      endTime: '2030-02-04T12:00:00.000Z',
+    })
+
+    expect(found.conflictingSession?.id).toBe(tiedLow)
   })
 
   it('touching end to start is not a conflict', async () => {

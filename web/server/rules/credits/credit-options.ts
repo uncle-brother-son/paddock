@@ -32,7 +32,7 @@ export async function getCustomerCreditOptions(db: Queryable, customerId: string
        WHERE cm.customer_id = $1
          AND cm.subscription_status = 'active'
          AND (cm.cancel_effective_date IS NULL OR cm.cancel_effective_date >= (now() AT TIME ZONE 'Europe/London')::date)
-       ORDER BY mcc.period_end ASC NULLS LAST`,
+       ORDER BY mcc.period_end ASC NULLS LAST, cm.id`,
       [customerId]
     ),
     // Two forms so the $N placeholders stay in ascending order in the SQL text.
@@ -43,7 +43,7 @@ export async function getCustomerCreditOptions(db: Queryable, customerId: string
            FROM customer_session_passes csp
            JOIN session_pass_types spt ON spt.id = csp.pass_type_id
            WHERE csp.customer_id = $2 AND csp.expiry_date >= (now() AT TIME ZONE 'Europe/London')::date
-           ORDER BY csp.expiry_date ASC`,
+           ORDER BY csp.expiry_date ASC, csp.id`,
           [sessionId, customerId]
         )
       : db.query<SessionPassCreditCandidate>(
@@ -52,7 +52,7 @@ export async function getCustomerCreditOptions(db: Queryable, customerId: string
            FROM customer_session_passes csp
            JOIN session_pass_types spt ON spt.id = csp.pass_type_id
            WHERE csp.customer_id = $1 AND csp.expiry_date >= (now() AT TIME ZONE 'Europe/London')::date
-           ORDER BY csp.expiry_date ASC`,
+           ORDER BY csp.expiry_date ASC, csp.id`,
           [customerId]
         ),
   ])

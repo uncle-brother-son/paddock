@@ -41,6 +41,7 @@ export async function findDuplicateDayBooking(
        AND b.status IN ('pending', 'confirmed', 'payment_needed')
        AND (s.start_time AT TIME ZONE 'UTC')::date = ($2 AT TIME ZONE 'UTC')::date
        AND ($3::uuid IS NULL OR b.id != $4::uuid)
+     ORDER BY b.id
      LIMIT 1`,
     [customerId, sessionStartTime, excludeBookingId ?? null, excludeBookingId ?? null]
   )

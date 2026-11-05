@@ -307,14 +307,24 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
       expect(stableDiff(['a'], ['a', 'b'])).toEqual([{ path: '1', oldValue: undefined, newValue: 'b' }])
     })
 
-    it('compares money in pence', async () => {
+    it('a string and a number always differ', async () => {
       const { stableDiff } = await load('stableDiff')
-      expect(stableDiff({ price: '12.50' }, { price: 12.5 })).toEqual([])
-      expect(stableDiff({ price: '12.50' }, { price: '12.5' })).toEqual([])
-      expect(stableDiff({ price: '0.10' }, { price: 0.1 })).toEqual([])
-      expect(stableDiff({ price: '12.50' }, { price: '12.51' })).toEqual([
-        { path: 'price', oldValue: '12.50', newValue: '12.51' },
-      ])
+      expect(stableDiff({ price: '20.00' }, { price: 20 })).toEqual([{ path: 'price', oldValue: '20.00', newValue: 20 }])
+      expect(stableDiff({ qty: 10 }, { qty: '10' })).toEqual([{ path: 'qty', oldValue: 10, newValue: '10' }])
+      expect(stableDiff('0.10', 0.1)).toHaveLength(1)
+    })
+
+    it('two spellings of a number differ', async () => {
+      const { stableDiff } = await load('stableDiff')
+      expect(stableDiff({ discount: '15' }, { discount: '15.00' })).toEqual([{ path: 'discount', oldValue: '15', newValue: '15.00' }])
+      expect(stableDiff({ price: '12.50' }, { price: '12.5' })).toHaveLength(1)
+    })
+
+    it('compares numbers exactly, with no rounding to pence', async () => {
+      const { stableDiff } = await load('stableDiff')
+      expect(stableDiff({ total: 12.5 }, { total: 12.504 })).toEqual([{ path: 'total', oldValue: 12.5, newValue: 12.504 }])
+      expect(stableDiff({ total: 0.1 + 0.2 }, { total: 0.3 })).toHaveLength(1)
+      expect(stableDiff({ total: 12.5, price: '12.50' }, { total: 12.5, price: '12.50' })).toEqual([])
     })
 
     it('does not treat ordinary text as money', async () => {
@@ -353,7 +363,7 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
       const { shadowCompare, SHADOW_ACTIONS } = await load('shadowCompare')
       SHADOW_ACTIONS.matching = true
 
-      const result = await shadowCompare(user, 'matching', async () => ({ price: '5.00' }), async () => ({ price: 5 }))
+      const result = await shadowCompare(user, 'matching', async () => ({ price: '5.00' }), async () => ({ price: '5.00' }))
 
       expect(result).toEqual({ price: '5.00' })
       expect(parityCalls()).toHaveLength(0)
@@ -441,6 +451,116 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
       ).rejects.toThrow('Not configured.')
 
       expect(parityCalls()).toHaveLength(0)
+    })
+
+    describe('time limits', () => {
+      const hang = () => new Promise<never>(() => {})
+      const NEVER_ANSWERS = { path: '/api/v1/staff/anything' }
+
+      /** Tracks a shadowCompare call, so a test can ask whether the screen has its answer yet. */
+      function watch<T>(call: Promise<T>) {
+        const state: { settled: boolean; value?: T; error?: Error } = { settled: false }
+        call.then(
+          (value) => Object.assign(state, { settled: true, value }),
+          (error: Error) => Object.assign(state, { settled: true, error })
+        )
+        return state
+      }
+
+      beforeEach(() => {
+        vi.useFakeTimers()
+      })
+      afterEach(() => {
+        vi.useRealTimers()
+      })
+
+      it('the Worker hanging on both calls: the screen gets the old answer at 7 seconds', async () => {
+        const { shadowCompare, SHADOW_ACTIONS } = await load('shadowCompare')
+        const { callWorker } = await load('callWorker')
+        SHADOW_ACTIONS.hangs = true
+        rawRequest.mockImplementation(hang)
+
+        const screen = watch(shadowCompare(user, 'hangs', async () => 'old', () => callWorker(user, NEVER_ANSWERS)))
+
+        await vi.advanceTimersByTimeAsync(6_999)
+        expect(screen.settled).toBe(false)
+        await vi.advanceTimersByTimeAsync(1)
+        expect(screen).toEqual({ settled: true, value: 'old' })
+        expect(parityCalls()[0]?.[0].body.diff[0].newValue).toBe('No answer from the Worker within 5 seconds')
+      })
+
+      it('the old side failing while the Worker hangs: the screen gets the old error at 7 seconds', async () => {
+        const { shadowCompare, SHADOW_ACTIONS } = await load('shadowCompare')
+        const { callWorker } = await load('callWorker')
+        SHADOW_ACTIONS.oldFailsWorkerHangs = true
+        rawRequest.mockImplementation(hang)
+        const failure = new Error('old failed')
+
+        const screen = watch(
+          shadowCompare(
+            user,
+            'oldFailsWorkerHangs',
+            async () => {
+              throw failure
+            },
+            () => callWorker(user, NEVER_ANSWERS)
+          )
+        )
+
+        await vi.advanceTimersByTimeAsync(6_999)
+        expect(screen.settled).toBe(false)
+        await vi.advanceTimersByTimeAsync(1)
+        expect(screen.error).toBe(failure)
+      })
+
+      it('newFn throwing synchronously leaves the screen alone', async () => {
+        const { shadowCompare, SHADOW_ACTIONS } = await load('shadowCompare')
+        SHADOW_ACTIONS.syncThrow = true
+        rawRequest.mockResolvedValue(success({ recorded: true }))
+        const newFn = () => {
+          throw new Error('thrown straight away')
+        }
+
+        await expect(shadowCompare(user, 'syncThrow', async () => 'old', newFn)).resolves.toBe('old')
+        expect(parityCalls()[0]?.[0].body.diff[0].newValue).toBe('thrown straight away')
+
+        const failure = new Error('old failed')
+        const oldFn = async () => {
+          throw failure
+        }
+        await expect(shadowCompare(user, 'syncThrow', oldFn, newFn)).rejects.toBe(failure)
+      })
+
+      it('a mismatch with a healthy Worker waits no longer than the record cap', async () => {
+        const { shadowCompare, SHADOW_ACTIONS } = await load('shadowCompare')
+        SHADOW_ACTIONS.slowRecord = true
+        rawRequest.mockImplementation(hang)
+
+        const screen = watch(shadowCompare(user, 'slowRecord', async () => 'old', async () => 'new'))
+
+        await vi.advanceTimersByTimeAsync(1_999)
+        expect(screen.settled).toBe(false)
+        await vi.advanceTimersByTimeAsync(1)
+        expect(screen).toEqual({ settled: true, value: 'old' })
+      })
+
+      it('the two sides run in parallel, and a clean match sets no timer running', async () => {
+        const { shadowCompare, SHADOW_ACTIONS } = await load('shadowCompare')
+        SHADOW_ACTIONS.parallel = true
+        const started: string[] = []
+        const after = (ms: number, name: string) => () => {
+          started.push(name)
+          return new Promise<string>((resolve) => setTimeout(() => resolve('same'), ms))
+        }
+
+        const screen = watch(shadowCompare(user, 'parallel', after(3_000, 'old'), after(3_000, 'new')))
+
+        await vi.advanceTimersByTimeAsync(0)
+        expect(started.sort()).toEqual(['new', 'old'])
+        await vi.advanceTimersByTimeAsync(3_000)
+        expect(screen).toEqual({ settled: true, value: 'same' })
+        expect(vi.getTimerCount()).toBe(0)
+      })
     })
   })
 })

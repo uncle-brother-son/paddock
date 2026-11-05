@@ -122,6 +122,46 @@ describe('validatePromoCode', () => {
     expect(await validate(code, [{ ...seat(4), key: 'a' }])).toMatchObject({ discountTotal: 4, perLine: [{ key: 'a', discount: 4 }] })
   })
 
+  it('a line of half a penny or less is not eligible', async () => {
+    const code = await promo({})
+
+    expect(await validate(code, [seat(0.004)])).toMatchObject({ reason: 'nothing_eligible' })
+    expect(await validate(code, [seat(0.005)])).toMatchObject({ reason: 'nothing_eligible' })
+    expect(await validate(code, [seat(0.006)])).toMatchObject({ ok: true })
+  })
+
+  it('minimum spend allows half a penny of tolerance, and no more', async () => {
+    expect(await validate(await promo({ min_spend: '30.004' }), [seat(30)])).toMatchObject({ ok: true })
+    expect(await validate(await promo({ min_spend: '30.006' }), [seat(30)])).toMatchObject({ reason: 'below_min_spend' })
+  })
+
+  it('percentage: multiplies by the rate, then divides by 100, in that float order', async () => {
+    const code = await promo({ discount_type: 'percentage', discount_value: '10' })
+
+    // Dividing the rate first gives 0.03 and 0.29 for these two.
+    expect(await validate(code, [{ ...seat(0.35), key: 'a' }])).toMatchObject({ perLine: [{ key: 'a', discount: 0.04 }] })
+    expect(await validate(code, [{ ...seat(2.85), key: 'b' }])).toMatchObject({ perLine: [{ key: 'b', discount: 0.28 }] })
+  })
+
+  it('discountTotal is rounded to pence, for both kinds of code', async () => {
+    const lines = [{ ...seat(1), key: 'a' }, { ...seat(2), key: 'b' }]
+
+    // 0.1 + 0.2 is 0.30000000000000004 as a float.
+    const percentage = await validate(await promo({ discount_type: 'percentage', discount_value: '10' }), lines)
+    expect(percentage).toMatchObject({ discountTotal: 0.3, perLine: [{ discount: 0.1 }, { discount: 0.2 }] })
+
+    const fixed = await validate(await promo({ discount_type: 'fixed', discount_value: '0.30' }), lines)
+    expect(fixed).toMatchObject({ discountTotal: 0.3, perLine: [{ discount: 0.1 }, { discount: 0.2 }] })
+  })
+
+  it('the single-customer check comes before the one-per-customer check', async () => {
+    const code = await promo({ restricted_customer_id: other, one_use_per_customer: true })
+    const [row] = await t.db.query<{ id: string }>('SELECT id FROM promo_codes WHERE code = $1', [code])
+    await fixtures.redemption(t.db, { promo_code_id: row?.id, customer_id: customer })
+
+    expect(await validate(code)).toMatchObject({ reason: 'not_for_this_customer' })
+  })
+
   it('member-price lines are left out unless the code allows them', async () => {
     const standard = await promo({ applies_on_member_prices: false })
     const all = await promo({ applies_on_member_prices: true })
@@ -157,6 +197,10 @@ describe('validatePromoCode', () => {
 describe('spreadFixedDiscount', () => {
   it('hands out leftover pence from the last line', () => {
     expect(spreadFixedDiscount(1, [10, 10, 10])).toEqual([0.33, 0.33, 0.34])
+  })
+
+  it('floors each share rather than rounding it', () => {
+    expect(spreadFixedDiscount(1, [2, 1])).toEqual([0.66, 0.34])
   })
 
   it('never gives more than the lines hold, or anything for nothing', () => {

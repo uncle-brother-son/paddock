@@ -49,6 +49,31 @@ export async function startTestDatabase(): Promise<TestDatabase> {
   }
 }
 
+/**
+ * Makes now() in a rule's SQL return a fixed instant, by putting a stand-in ahead of pg_catalog on
+ * the search path. PGlite is one session, so this holds for every connection until unfreezeNow.
+ * Views and database functions keep the real now(): they were bound when they were created.
+ */
+export async function freezeNow(pg: PGlite, instant: string): Promise<void> {
+  await pg.exec(`
+    RESET ROLE;
+    CREATE SCHEMA IF NOT EXISTS frozen_clock;
+    CREATE OR REPLACE FUNCTION frozen_clock.now() RETURNS timestamptz LANGUAGE sql STABLE AS $$ SELECT '${instant}'::timestamptz $$;
+    GRANT USAGE ON SCHEMA frozen_clock TO paddock_worker;
+    GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA frozen_clock TO paddock_worker;
+    SET search_path = frozen_clock, pg_catalog, public, extensions;
+    SET ROLE paddock_worker;
+  `)
+}
+
+export async function unfreezeNow(pg: PGlite): Promise<void> {
+  await pg.exec('RESET ROLE; SET search_path = public, extensions; SET ROLE paddock_worker;')
+}
+
+/** Ids in a known order, for tie-break tests: rows go in high id first, so storage order is wrong. */
+export const LOW_ID = '00000000-0000-4000-8000-00000000000a'
+export const HIGH_ID = 'ffffffff-0000-4000-8000-00000000000b'
+
 /** Inserts one row and returns its id. Test data only: the table and column names are literals. */
 export async function insert(db: Db, table: string, row: Record<string, unknown>): Promise<string> {
   const columns = Object.keys(row)

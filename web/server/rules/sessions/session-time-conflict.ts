@@ -22,6 +22,7 @@ export async function checkSessionTimeConflict(db: Queryable, input: SessionTime
        AND s2.service_type_id != $2
        AND s2.start_time < $3
        AND s2.end_time > $4
+     ORDER BY s2.start_time, s2.id
      LIMIT 1`,
     [sessionId, serviceTypeId, endTime, startTime]
   )

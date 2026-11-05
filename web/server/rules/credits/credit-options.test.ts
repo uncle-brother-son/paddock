@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { fixtures, insert, startTestDatabase, type TestDatabase } from '@/server/rules/testing/database'
+import { fixtures, freezeNow, HIGH_ID, insert, LOW_ID, startTestDatabase, unfreezeNow, type TestDatabase } from '@/server/rules/testing/database'
 import { getCustomerCreditOptions } from './credit-options'
 
 let t: TestDatabase
@@ -19,6 +19,20 @@ async function memberWithCredits(remaining: number, row: Record<string, unknown>
     is_unlimited: false,
   })
   return { customer, membership }
+}
+
+/** A second (or third) membership for a customer, with its period ending `endsIn` days from now. */
+async function addMembership(customer: string, endsIn: number, row: Record<string, unknown> = {}, period: Record<string, unknown> = {}) {
+  const membership = await fixtures.membership(t.db, { customer_id: customer, plan_id: corePlan, next_renewal_date: inDays(20), ...row })
+  await insert(t.db, 'membership_credit_periods', {
+    membership_id: membership,
+    period_start: inDays(-5),
+    period_end: inDays(endsIn),
+    credits_allocated: 3,
+    is_unlimited: false,
+    ...period,
+  })
+  return membership
 }
 
 beforeAll(async () => {
@@ -99,6 +113,99 @@ describe('getCustomerCreditOptions', () => {
   it('a past_due membership is not usable', async () => {
     const { customer } = await memberWithCredits(1, { subscription_status: 'past_due' })
     expect((await getCustomerCreditOptions(t.db, customer)).membershipsWithSessionCredit).toEqual([])
+  })
+
+  it('an unlimited membership is offered as unlimited, and is never exhausted', async () => {
+    const customer = await fixtures.customer(t.db)
+    const membership = await addMembership(customer, 25, {}, { credits_allocated: 0, is_unlimited: true })
+
+    const options = await getCustomerCreditOptions(t.db, customer)
+
+    expect(options.membershipsWithSessionCredit).toHaveLength(1)
+    expect(options.membershipsWithSessionCredit[0]).toMatchObject({ id: membership, is_unlimited: true, credits_remaining: null })
+    expect(options.exhaustedMembership).toBeNull()
+  })
+
+  it('an unlimited membership beside an exhausted one: only the exhausted one is flagged', async () => {
+    const customer = await fixtures.customer(t.db)
+    const unlimited = await addMembership(customer, 10, {}, { credits_allocated: 0, is_unlimited: true })
+    const used = await addMembership(customer, 25, {}, { credits_allocated: 0 })
+
+    const options = await getCustomerCreditOptions(t.db, customer)
+
+    expect(options.membershipsWithSessionCredit.map((m) => m.id)).toEqual([unlimited])
+    expect(options.exhaustedMembership?.id).toBe(used)
+  })
+
+  it('two memberships: the period ending soonest comes first', async () => {
+    const customer = await fixtures.customer(t.db)
+    const later = await addMembership(customer, 25)
+    const sooner = await addMembership(customer, 10)
+
+    expect((await getCustomerCreditOptions(t.db, customer)).membershipsWithSessionCredit.map((m) => m.id)).toEqual([sooner, later])
+  })
+
+  it('two memberships ending the same day go by id', async () => {
+    const customer = await fixtures.customer(t.db)
+    await addMembership(customer, 25, { id: HIGH_ID })
+    await addMembership(customer, 25, { id: LOW_ID })
+
+    expect((await getCustomerCreditOptions(t.db, customer)).membershipsWithSessionCredit.map((m) => m.id)).toEqual([LOW_ID, HIGH_ID])
+  })
+
+  it('a membership with no current period comes after those with one', async () => {
+    const customer = await fixtures.customer(t.db)
+    const noPeriod = await fixtures.membership(t.db, { customer_id: customer, plan_id: corePlan, is_herd: true, addon_credits_remaining: 2 })
+    const withPeriod = await addMembership(customer, 25, { is_herd: true, addon_credits_remaining: 2 }, { credits_allocated: 0 })
+
+    const options = await getCustomerCreditOptions(t.db, customer)
+
+    expect(options.membershipsWithAddonCredit.map((m) => m.id)).toEqual([withPeriod, noPeriod])
+    expect(options.exhaustedMembership?.id).toBe(withPeriod)
+  })
+
+  it('with a session, passes still come soonest-expiring first', async () => {
+    const customer = await fixtures.customer(t.db)
+    const later = await fixtures.pass(t.db, { customer_id: customer, pass_type_id: allAccessPass, expiry_date: inDays(30) })
+    const sooner = await fixtures.pass(t.db, { customer_id: customer, pass_type_id: allAccessPass, expiry_date: inDays(10) })
+
+    expect((await getCustomerCreditOptions(t.db, customer, coreSession)).sessionPasses.map((p) => p.id)).toEqual([sooner, later])
+  })
+
+  it('passes expiring the same day go by id, with and without a session', async () => {
+    const customer = await fixtures.customer(t.db)
+    await fixtures.pass(t.db, { id: HIGH_ID, customer_id: customer, pass_type_id: allAccessPass, expiry_date: inDays(10) })
+    await fixtures.pass(t.db, { id: LOW_ID, customer_id: customer, pass_type_id: allAccessPass, expiry_date: inDays(10) })
+
+    expect((await getCustomerCreditOptions(t.db, customer)).sessionPasses.map((p) => p.id)).toEqual([LOW_ID, HIGH_ID])
+    expect((await getCustomerCreditOptions(t.db, customer, coreSession)).sessionPasses.map((p) => p.id)).toEqual([LOW_ID, HIGH_ID])
+  })
+
+  describe('late evening in British Summer Time, when London is a day ahead of UTC', () => {
+    // 23:30 UTC on the 15th is 00:30 on the 16th in London.
+    beforeAll(() => freezeNow(t.pg, '2030-06-15 23:30:00+00'))
+    afterAll(() => unfreezeNow(t.pg))
+
+    it('now() really is frozen', async () => {
+      expect(await t.db.query("SELECT (now() AT TIME ZONE 'Europe/London')::date::text AS day")).toEqual([{ day: '2030-06-16' }])
+    })
+
+    it('a pass goes by the London date, with and without a session', async () => {
+      const customer = await fixtures.customer(t.db)
+      await fixtures.pass(t.db, { customer_id: customer, pass_type_id: allAccessPass, expiry_date: '2030-06-15' })
+      const lastDay = await fixtures.pass(t.db, { customer_id: customer, pass_type_id: allAccessPass, expiry_date: '2030-06-16' })
+
+      expect((await getCustomerCreditOptions(t.db, customer)).sessionPasses.map((p) => p.id)).toEqual([lastDay])
+      expect((await getCustomerCreditOptions(t.db, customer, coreSession)).sessionPasses.map((p) => p.id)).toEqual([lastDay])
+    })
+
+    it('a scheduled cancellation goes by the London date', async () => {
+      const gone = await memberWithCredits(1, { cancel_effective_date: '2030-06-15' })
+      expect((await getCustomerCreditOptions(t.db, gone.customer)).membershipsWithSessionCredit).toEqual([])
+
+      const lastDay = await memberWithCredits(1, { cancel_effective_date: '2030-06-16' })
+      expect((await getCustomerCreditOptions(t.db, lastDay.customer)).membershipsWithSessionCredit).toHaveLength(1)
+    })
   })
 
   it('passes come soonest-expiring first; without a session covers_session is null', async () => {

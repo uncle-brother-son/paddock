@@ -10,11 +10,11 @@ import type { Queryable } from '@/server/db'
 export async function getPricingConfig(db: Queryable, canManagePricing: boolean): Promise<PricingConfigOutput> {
   const [bands, rules, terms, levels] = await Promise.all([
     db.query<PricingConfigOutput['bands'][number]>(
-      'SELECT id, code, name, price, sort_order, active FROM session_bands ORDER BY sort_order',
+      'SELECT id, code, name, price, sort_order, active FROM session_bands ORDER BY sort_order, id',
       []
     ),
     db.query<PricingConfigOutput['bandRules'][number]>(
-      'SELECT id, band_id, day_of_week, from_time, to_time FROM band_rules ORDER BY day_of_week, from_time',
+      'SELECT id, band_id, day_of_week, from_time, to_time FROM band_rules ORDER BY day_of_week, from_time, id',
       []
     ),
     db.query<PricingConfigOutput['membershipTerms'][number]>(

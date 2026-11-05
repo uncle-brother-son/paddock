@@ -1,0 +1,33 @@
+{
+  "uuid_value": "00000000-0000-4000-8000-000000000001",
+  "text_value": "text",
+  "bool_value": true,
+  "bool_null": null,
+  "int2_value": 3,
+  "int4_value": 10,
+  "int4_null": null,
+  "int8_value": "42",
+  "count_value": "1",
+  "count_filter_value": "1",
+  "numeric_scaled": "20.00",
+  "numeric_percent": "15.00",
+  "numeric_zero": "0",
+  "numeric_unscaled": "12.5",
+  "numeric_null": null,
+  "date_value": "2026-11-04",
+  "date_text": "2026-11-04",
+  "date_null": null,
+  "time_value": "09:30:00",
+  "timestamptz_value": "2026-11-04T19:56:05.983Z",
+  "timestamptz_whole": "2026-11-04T10:00:00.000Z",
+  "timestamp_value": "2026-11-04T19:56:05.983Z",
+  "timestamptz_null": null,
+  "text_array": [
+    "booking",
+    "addon"
+  ],
+  "text_array_empty": [],
+  "jsonb_value": {
+    "a": 1
+  }
+}
