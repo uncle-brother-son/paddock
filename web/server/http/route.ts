@@ -37,7 +37,7 @@ export type RouteContext<A extends AuthMode, I extends z.ZodType> = {
   input: z.output<I>
   db: Db
   requestId: string
-  /** The request's Idempotency-Key on an idempotent route, for stripeIdempotencyKey. */
+  /** The request's Idempotency-Key on an idempotent route. Stripe keys never use it: see stripeIdempotencyKey. */
   idempotencyKey: string | null
   request: Request
 } & ActorFor<A>

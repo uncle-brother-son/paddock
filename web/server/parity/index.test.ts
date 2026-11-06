@@ -13,7 +13,8 @@ describe('recordParity', () => {
     )
 
     expect(query.mock.calls[0]?.[0]).toContain('INSERT INTO parity_log')
-    expect(query.mock.calls[0]?.[1]).toEqual(['getBookings', 'req-1', [{ a: 1 }], [{ a: 2 }], false, [{ path: '0.a' }]])
+    // Encoded here, so the driver takes each as JSON text. jsonb-writes.test.ts reads them back.
+    expect(query.mock.calls[0]?.[1]).toEqual(['getBookings', 'req-1', '[{"a":1}]', '[{"a":2}]', false, '[{"path":"0.a"}]'])
   })
 
   it('stores a missing result as null, not undefined', async () => {

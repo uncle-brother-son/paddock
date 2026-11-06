@@ -1,0 +1,6334 @@
+{
+ "postgres": "17.6",
+ "extensions": [
+  {
+   "name": "btree_gist",
+   "schema": "public"
+  },
+  {
+   "name": "pg_cron",
+   "schema": "pg_catalog"
+  },
+  {
+   "name": "pg_stat_statements",
+   "schema": "extensions"
+  },
+  {
+   "name": "pgcrypto",
+   "schema": "extensions"
+  },
+  {
+   "name": "plpgsql",
+   "schema": "pg_catalog"
+  },
+  {
+   "name": "supabase_vault",
+   "schema": "vault"
+  },
+  {
+   "name": "uuid-ossp",
+   "schema": "extensions"
+  }
+ ],
+ "tables": [
+  {
+   "name": "addon_order_lines",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "booking_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "addon_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "quantity",
+     "type": "integer",
+     "notNull": true,
+     "default": "1",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "price_at_purchase",
+     "type": "numeric(10,2)",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "sku_at_purchase",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "redemption_source",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "stripe_price_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "prepared",
+     "type": "boolean",
+     "notNull": true,
+     "default": "false",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "prepared_at",
+     "type": "timestamp with time zone",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "prepared_by",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "redeemed_membership_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "order_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "removed_at",
+     "type": "timestamp with time zone",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "removed_by",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "refunded_amount",
+     "type": "numeric",
+     "notNull": true,
+     "default": "0",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "card_refunded_amount",
+     "type": "numeric",
+     "notNull": true,
+     "default": "0",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "refund_method",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "addons",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "sanity_addon_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "name",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "thumbnail_url",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "category",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "sku",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "base_price",
+     "type": "numeric(10,2)",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "member_price",
+     "type": "numeric(10,2)",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "sale_price",
+     "type": "numeric(10,2)",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "stripe_product_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "stripe_price_id_base",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "stripe_price_id_member",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "stripe_price_id_sale",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "active",
+     "type": "boolean",
+     "notNull": false,
+     "default": "true",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "api_idempotency",
+   "columns": [
+    {
+     "name": "key",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "actor_type",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "actor_id",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "endpoint",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "request_hash",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "status",
+     "type": "text",
+     "notNull": true,
+     "default": "'in_progress'::text",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "response",
+     "type": "jsonb",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "http_status",
+     "type": "integer",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "audit_log",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "gen_random_uuid()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "actor_type",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "actor_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "action",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "entity_type",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "entity_id",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "request_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "details",
+     "type": "jsonb",
+     "notNull": true,
+     "default": "'{}'::jsonb",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "band_rules",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "band_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "day_of_week",
+     "type": "smallint",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "from_time",
+     "type": "time without time zone",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "to_time",
+     "type": "time without time zone",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "booking_guests",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "booking_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "guest_type",
+     "type": "text",
+     "notNull": true,
+     "default": "'additional_guest'::text",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "guest_name",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "guest_email",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "waiver_accepted",
+     "type": "boolean",
+     "notNull": false,
+     "default": "false",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "waiver_version",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "waiver_accepted_at",
+     "type": "timestamp with time zone",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "waiver_method",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "reminder_sent_at",
+     "type": "timestamp with time zone",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "date_of_birth",
+     "type": "date",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "unit_price",
+     "type": "numeric(10,2)",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "pay_by",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "bookings",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "session_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "customer_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "party_size",
+     "type": "integer",
+     "notNull": true,
+     "default": "1",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "status",
+     "type": "text",
+     "notNull": true,
+     "default": "'pending'::text",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "price_paid",
+     "type": "numeric(10,2)",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "stripe_payment_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "redemption_source",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "cancelled_at",
+     "type": "timestamp with time zone",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "checked_in_at",
+     "type": "timestamp with time zone",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "start_time",
+     "type": "timestamp with time zone",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "end_time",
+     "type": "timestamp with time zone",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "redeemed_membership_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "redeemed_session_pass_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "band_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "credit_period_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "payment_due_by",
+     "type": "timestamp with time zone",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "cancel_reason",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "special_requests",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "guests_over_18_confirmed_at",
+     "type": "timestamp with time zone",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "customer_memberships",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "customer_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "plan_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "stripe_subscription_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "subscription_status",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "start_date",
+     "type": "date",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "next_renewal_date",
+     "type": "date",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "addon_credits_remaining",
+     "type": "integer",
+     "notNull": true,
+     "default": "0",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "bonus_addon_credits",
+     "type": "integer",
+     "notNull": true,
+     "default": "0",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "order_line_item_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "billing_frequency",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "cancel_effective_date",
+     "type": "date",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "is_herd",
+     "type": "boolean",
+     "notNull": true,
+     "default": "false",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "herd_override",
+     "type": "boolean",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "customer_session_passes",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "customer_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "pass_type_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "purchase_date",
+     "type": "date",
+     "notNull": true,
+     "default": "CURRENT_DATE",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "sessions_remaining",
+     "type": "integer",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "expiry_date",
+     "type": "date",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "order_line_item_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "customers",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "auth_user_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "first_name",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "last_name",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "email",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "phone",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "stripe_customer_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "saved_payment_method_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "marketing_consent",
+     "type": "boolean",
+     "notNull": false,
+     "default": "false",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "birthday_marketing_consent",
+     "type": "boolean",
+     "notNull": false,
+     "default": "false",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "address_line1",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "address_line2",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "city",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "postcode",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "country",
+     "type": "text",
+     "notNull": false,
+     "default": "'GB'::text",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "waiver_accepted",
+     "type": "boolean",
+     "notNull": false,
+     "default": "false",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "waiver_version",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "waiver_accepted_at",
+     "type": "timestamp with time zone",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "date_of_birth",
+     "type": "date",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "saved_card_last4",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "saved_card_brand",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "store_credit_balance",
+     "type": "numeric(10,2)",
+     "notNull": true,
+     "default": "0",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "event_attendees",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "event_booking_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "attendee_type",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "name",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "email",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "date_of_birth",
+     "type": "date",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "unit_price",
+     "type": "numeric(10,2)",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "price_level",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "waiver_accepted",
+     "type": "boolean",
+     "notNull": true,
+     "default": "false",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "waiver_version",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "waiver_accepted_at",
+     "type": "timestamp with time zone",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "waiver_method",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "event_waiver_accepted",
+     "type": "boolean",
+     "notNull": true,
+     "default": "false",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "event_waiver_version",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "event_waiver_accepted_at",
+     "type": "timestamp with time zone",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "checked_in_at",
+     "type": "timestamp with time zone",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "event_waiver_method",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "cancelled_at",
+     "type": "timestamp with time zone",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "cancelled_by",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "cancel_reason",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "cancelled_value",
+     "type": "numeric",
+     "notNull": true,
+     "default": "0",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "refunded_amount",
+     "type": "numeric",
+     "notNull": true,
+     "default": "0",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "card_refunded_amount",
+     "type": "numeric",
+     "notNull": true,
+     "default": "0",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "refund_method",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "refund_after_cutoff",
+     "type": "boolean",
+     "notNull": true,
+     "default": "false",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "event_bookings",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "event_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "customer_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "places",
+     "type": "integer",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "status",
+     "type": "text",
+     "notNull": true,
+     "default": "'confirmed'::text",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "account_holder_attending",
+     "type": "boolean",
+     "notNull": true,
+     "default": "true",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "price_paid",
+     "type": "numeric(10,2)",
+     "notNull": true,
+     "default": "0",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_by_staff_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "cancelled_at",
+     "type": "timestamp with time zone",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "cancel_reason",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "guests_over_18_confirmed_at",
+     "type": "timestamp with time zone",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "cancelled_by",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "events",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "sanity_event_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "name",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "thumbnail_url",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "has_extra_waiver",
+     "type": "boolean",
+     "notNull": true,
+     "default": "false",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "extra_waiver_version",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "starts_at",
+     "type": "timestamp with time zone",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "ends_at",
+     "type": "timestamp with time zone",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "capacity",
+     "type": "integer",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "places_booked",
+     "type": "integer",
+     "notNull": true,
+     "default": "0",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "access",
+     "type": "text",
+     "notNull": true,
+     "default": "'public'::text",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "public_release_at",
+     "type": "timestamp with time zone",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "price_public",
+     "type": "numeric(10,2)",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "price_pre_herd",
+     "type": "numeric(10,2)",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "price_herd",
+     "type": "numeric(10,2)",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "refund_cutoff_at",
+     "type": "timestamp with time zone",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "active",
+     "type": "boolean",
+     "notNull": true,
+     "default": "false",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "cancelled_at",
+     "type": "timestamp with time zone",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "cancelled_by",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "cancel_reason",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "gift_card_presets",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "gift_card_type_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "amount",
+     "type": "numeric(10,2)",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "active",
+     "type": "boolean",
+     "notNull": true,
+     "default": "true",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "stripe_price_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "gift_card_redemptions",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "gift_card_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "order_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "booking_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "amount_used",
+     "type": "numeric(10,2)",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "redeemed_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "event_booking_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "gift_card_types",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "sanity_gift_card_type_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "name",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "thumbnail_url",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "active",
+     "type": "boolean",
+     "notNull": true,
+     "default": "true",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "stripe_product_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "custom_amount_enabled",
+     "type": "boolean",
+     "notNull": true,
+     "default": "false",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "custom_amount_min",
+     "type": "numeric(10,2)",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "custom_amount_max",
+     "type": "numeric(10,2)",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "expiry_months",
+     "type": "integer",
+     "notNull": true,
+     "default": "12",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "gift_cards",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "code",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "type",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "original_value",
+     "type": "numeric(10,2)",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "remaining_balance",
+     "type": "numeric(10,2)",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "purchaser_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "recipient_name",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "recipient_email",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "gift_message",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "origin",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "issue_date",
+     "type": "date",
+     "notNull": true,
+     "default": "CURRENT_DATE",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "expiry_date",
+     "type": "date",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "redeemed_at",
+     "type": "timestamp with time zone",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "fulfillment_method",
+     "type": "text",
+     "notNull": true,
+     "default": "'digital'::text",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "picked_up",
+     "type": "boolean",
+     "notNull": true,
+     "default": "false",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "picked_up_at",
+     "type": "timestamp with time zone",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "picked_up_by",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "voided",
+     "type": "boolean",
+     "notNull": false,
+     "default": "false",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "shipped_at",
+     "type": "timestamp with time zone",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "shipped_by",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "membership_band_terms",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "membership_level",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "band_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "credit_eligible",
+     "type": "boolean",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "discount_percent",
+     "type": "numeric(5,2)",
+     "notNull": true,
+     "default": "0",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_by",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "membership_credit_adjustments",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "membership_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "credit_type",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "amount",
+     "type": "integer",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "reason",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "staff_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "membership_credit_periods",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "membership_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "period_start",
+     "type": "date",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "period_end",
+     "type": "date",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "credits_allocated",
+     "type": "integer",
+     "notNull": true,
+     "default": "0",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "is_unlimited",
+     "type": "boolean",
+     "notNull": true,
+     "default": "false",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "membership_payment_date_changes",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "membership_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "old_renewal_date",
+     "type": "date",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "new_renewal_date",
+     "type": "date",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "extra_days",
+     "type": "integer",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "amount_charged",
+     "type": "numeric",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "stripe_payment_intent_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "order_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "staff_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "override_reason",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "status",
+     "type": "text",
+     "notNull": true,
+     "default": "'pending'::text",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "failure_message",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "membership_plans",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "sanity_plan_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "name",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "thumbnail_url",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "sessions_included",
+     "type": "integer",
+     "notNull": false,
+     "default": "0",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "addons_included",
+     "type": "integer",
+     "notNull": false,
+     "default": "0",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "stripe_product_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "stripe_price_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "active",
+     "type": "boolean",
+     "notNull": false,
+     "default": "true",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "price_monthly",
+     "type": "numeric",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "price_yearly",
+     "type": "numeric",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "level",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "is_unlimited",
+     "type": "boolean",
+     "notNull": true,
+     "default": "false",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "stripe_price_id_yearly",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "membership_settings",
+   "columns": [
+    {
+     "name": "id",
+     "type": "boolean",
+     "notNull": true,
+     "default": "true",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "addon_credit_wait_months",
+     "type": "integer",
+     "notNull": true,
+     "default": "6",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "order_line_items",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "order_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "booking_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "product_variant_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "membership_plan_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "session_pass_type_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "gift_card_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "item_type",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "quantity",
+     "type": "integer",
+     "notNull": true,
+     "default": "1",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "unit_price",
+     "type": "numeric(10,2)",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "line_total",
+     "type": "numeric(10,2)",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "addon_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "refunded_at",
+     "type": "timestamp with time zone",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "refund_method",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "restocked",
+     "type": "boolean",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "fulfillment_status",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "card_refunded_amount",
+     "type": "numeric",
+     "notNull": true,
+     "default": "0",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "system_unit_price",
+     "type": "numeric",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "price_override_reason",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "discount_amount",
+     "type": "numeric",
+     "notNull": true,
+     "default": "0",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "event_booking_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "orders",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "customer_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "order_total",
+     "type": "numeric(10,2)",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "payment_status",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "stripe_payment_intent_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "promo_code",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "discount_amount",
+     "type": "numeric(10,2)",
+     "notNull": false,
+     "default": "0",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "shipping_address",
+     "type": "jsonb",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "shipping_status",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "tracking_number",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "order_source",
+     "type": "text",
+     "notNull": false,
+     "default": "'online'::text",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "payment_method",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "reader_payment",
+     "type": "jsonb",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "parity_log",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "gen_random_uuid()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "action",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "request_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "old_result",
+     "type": "jsonb",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "new_result",
+     "type": "jsonb",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "matches",
+     "type": "boolean",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "diff",
+     "type": "jsonb",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "pending_reader_payments",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "gen_random_uuid()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "flow",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "record_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "order_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "payment_intent_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "expected_amount",
+     "type": "numeric",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "snapshot",
+     "type": "jsonb",
+     "notNull": true,
+     "default": "'{}'::jsonb",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "status",
+     "type": "text",
+     "notNull": true,
+     "default": "'pending'::text",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "postage_settings",
+   "columns": [
+    {
+     "name": "id",
+     "type": "boolean",
+     "notNull": true,
+     "default": "true",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "standard_price",
+     "type": "numeric(10,2)",
+     "notNull": true,
+     "default": "4.95",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "express_price",
+     "type": "numeric(10,2)",
+     "notNull": true,
+     "default": "9.95",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "free_shipping_threshold",
+     "type": "numeric(10,2)",
+     "notNull": true,
+     "default": "75.00",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "product_variants",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "product_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "size",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "sku",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "price_override",
+     "type": "numeric(10,2)",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "stock_quantity",
+     "type": "integer",
+     "notNull": true,
+     "default": "0",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "stripe_price_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "products",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "sanity_product_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "name",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "thumbnail_url",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "category",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "base_price",
+     "type": "numeric(10,2)",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "member_price",
+     "type": "numeric(10,2)",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "sale_price",
+     "type": "numeric(10,2)",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "fulfillment_method",
+     "type": "text",
+     "notNull": false,
+     "default": "'both'::text",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "stripe_product_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "stripe_price_id_base",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "stripe_price_id_member",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "stripe_price_id_sale",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "active",
+     "type": "boolean",
+     "notNull": false,
+     "default": "true",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "promo_code_redemptions",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "gen_random_uuid()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "promo_code_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "order_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "customer_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "discount_amount",
+     "type": "numeric",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "promo_codes",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "gen_random_uuid()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "code",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "description",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "discount_type",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "discount_value",
+     "type": "numeric",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "applies_to",
+     "type": "text[]",
+     "notNull": true,
+     "default": "ARRAY['booking'::text, 'addon'::text, 'product'::text, 'session_pass'::text, 'membership'::text]",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "applies_on_member_prices",
+     "type": "boolean",
+     "notNull": true,
+     "default": "false",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "expires_on",
+     "type": "date",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "max_total_uses",
+     "type": "integer",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "one_use_per_customer",
+     "type": "boolean",
+     "notNull": true,
+     "default": "false",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "min_spend",
+     "type": "numeric",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "restricted_customer_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "active",
+     "type": "boolean",
+     "notNull": true,
+     "default": "true",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_by",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "service_type_price_tiers",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "service_type_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "min_people",
+     "type": "integer",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "max_people",
+     "type": "integer",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "price",
+     "type": "numeric(10,2)",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "stripe_price_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "band_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "service_type_schedule_slots",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "gen_random_uuid()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "service_type_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "day_of_week",
+     "type": "smallint",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "start_time",
+     "type": "time without time zone",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "service_types",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "sanity_service_type_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "name",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "thumbnail_url",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "duration",
+     "type": "integer",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "capacity",
+     "type": "integer",
+     "notNull": false,
+     "default": "6",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "booking_type",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "price",
+     "type": "numeric(10,2)",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "active",
+     "type": "boolean",
+     "notNull": false,
+     "default": "true",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "stripe_product_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "stripe_price_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "session_bands",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "code",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "name",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "price",
+     "type": "numeric(10,2)",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "sort_order",
+     "type": "integer",
+     "notNull": true,
+     "default": "0",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "active",
+     "type": "boolean",
+     "notNull": true,
+     "default": "true",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "session_pass_types",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "sanity_pass_type_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "name",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "thumbnail_url",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "price",
+     "type": "numeric(10,2)",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "sessions_included",
+     "type": "integer",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "expiry_months",
+     "type": "integer",
+     "notNull": true,
+     "default": "12",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "stripe_product_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "stripe_price_id",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "active",
+     "type": "boolean",
+     "notNull": false,
+     "default": "true",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "level",
+     "type": "text",
+     "notNull": true,
+     "default": "'all_access'::text",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "sessions",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "resource_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "service_type_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "start_time",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "end_time",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "type",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "capacity",
+     "type": "integer",
+     "notNull": true,
+     "default": "6",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "total_booked",
+     "type": "integer",
+     "notNull": true,
+     "default": "0",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "status",
+     "type": "text",
+     "notNull": true,
+     "default": "'open'::text",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "blocked_reason",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "blocked_by",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "band_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "band_overridden",
+     "type": "boolean",
+     "notNull": true,
+     "default": "false",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "staff",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "uuid_generate_v4()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "role",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "can_issue_refunds",
+     "type": "boolean",
+     "notNull": false,
+     "default": "false",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "active",
+     "type": "boolean",
+     "notNull": false,
+     "default": "true",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "first_name",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "last_name",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "email",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "can_manage_pricing",
+     "type": "boolean",
+     "notNull": true,
+     "default": "false",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "stock_adjustments",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "gen_random_uuid()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "variant_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "change_amount",
+     "type": "integer",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "reason",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "staff_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "store_credit_transactions",
+   "columns": [
+    {
+     "name": "id",
+     "type": "uuid",
+     "notNull": true,
+     "default": "gen_random_uuid()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "customer_id",
+     "type": "uuid",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "amount",
+     "type": "numeric(10,2)",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "balance_after",
+     "type": "numeric(10,2)",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "reason",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "order_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "booking_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "gift_card_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "staff_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "note",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "event_booking_id",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
+   "name": "stripe_webhook_events",
+   "columns": [
+    {
+     "name": "event_id",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "event_type",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "received_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "processed_at",
+     "type": "timestamp with time zone",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "outcome",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "detail",
+     "type": "jsonb",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "error",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  }
+ ],
+ "constraints": [
+  {
+   "table": "addon_order_lines",
+   "name": "addon_order_lines_addon_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (addon_id) REFERENCES addons(id)"
+  },
+  {
+   "table": "addon_order_lines",
+   "name": "addon_order_lines_booking_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (booking_id) REFERENCES bookings(id) ON DELETE CASCADE"
+  },
+  {
+   "table": "addon_order_lines",
+   "name": "addon_order_lines_card_refunded_amount_check",
+   "type": "c",
+   "definition": "CHECK ((card_refunded_amount >= (0)::numeric))"
+  },
+  {
+   "table": "addon_order_lines",
+   "name": "addon_order_lines_order_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (order_id) REFERENCES orders(id)"
+  },
+  {
+   "table": "addon_order_lines",
+   "name": "addon_order_lines_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "addon_order_lines",
+   "name": "addon_order_lines_prepared_by_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (prepared_by) REFERENCES staff(id)"
+  },
+  {
+   "table": "addon_order_lines",
+   "name": "addon_order_lines_redeemed_membership_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (redeemed_membership_id) REFERENCES customer_memberships(id)"
+  },
+  {
+   "table": "addon_order_lines",
+   "name": "addon_order_lines_redemption_source_check",
+   "type": "c",
+   "definition": "CHECK ((redemption_source = ANY (ARRAY['paid'::text, 'membership_credit'::text])))"
+  },
+  {
+   "table": "addon_order_lines",
+   "name": "addon_order_lines_refund_method_check",
+   "type": "c",
+   "definition": "CHECK ((refund_method = ANY (ARRAY['card'::text, 'credit'::text, 'none'::text, 'credit_returned'::text])))"
+  },
+  {
+   "table": "addon_order_lines",
+   "name": "addon_order_lines_refunded_amount_check",
+   "type": "c",
+   "definition": "CHECK ((refunded_amount >= (0)::numeric))"
+  },
+  {
+   "table": "addon_order_lines",
+   "name": "addon_order_lines_removed_by_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (removed_by) REFERENCES staff(id)"
+  },
+  {
+   "table": "addons",
+   "name": "addons_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "addons",
+   "name": "addons_sanity_addon_id_key",
+   "type": "u",
+   "definition": "UNIQUE (sanity_addon_id)"
+  },
+  {
+   "table": "addons",
+   "name": "addons_sku_key",
+   "type": "u",
+   "definition": "UNIQUE (sku)"
+  },
+  {
+   "table": "addons",
+   "name": "addons_stripe_price_id_base_key",
+   "type": "u",
+   "definition": "UNIQUE (stripe_price_id_base)"
+  },
+  {
+   "table": "addons",
+   "name": "addons_stripe_price_id_member_key",
+   "type": "u",
+   "definition": "UNIQUE (stripe_price_id_member)"
+  },
+  {
+   "table": "addons",
+   "name": "addons_stripe_price_id_sale_key",
+   "type": "u",
+   "definition": "UNIQUE (stripe_price_id_sale)"
+  },
+  {
+   "table": "addons",
+   "name": "addons_stripe_product_id_key",
+   "type": "u",
+   "definition": "UNIQUE (stripe_product_id)"
+  },
+  {
+   "table": "api_idempotency",
+   "name": "api_idempotency_actor_type_check",
+   "type": "c",
+   "definition": "CHECK ((actor_type = ANY (ARRAY['staff'::text, 'customer'::text, 'public'::text])))"
+  },
+  {
+   "table": "api_idempotency",
+   "name": "api_idempotency_check",
+   "type": "c",
+   "definition": "CHECK (((status <> 'done'::text) OR ((response IS NOT NULL) AND (http_status IS NOT NULL))))"
+  },
+  {
+   "table": "api_idempotency",
+   "name": "api_idempotency_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (actor_type, actor_id, endpoint, key)"
+  },
+  {
+   "table": "api_idempotency",
+   "name": "api_idempotency_status_check",
+   "type": "c",
+   "definition": "CHECK ((status = ANY (ARRAY['in_progress'::text, 'done'::text])))"
+  },
+  {
+   "table": "audit_log",
+   "name": "audit_log_actor_type_check",
+   "type": "c",
+   "definition": "CHECK ((actor_type = ANY (ARRAY['staff'::text, 'customer'::text, 'system'::text])))"
+  },
+  {
+   "table": "audit_log",
+   "name": "audit_log_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "band_rules",
+   "name": "band_rules_band_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (band_id) REFERENCES session_bands(id) ON DELETE RESTRICT"
+  },
+  {
+   "table": "band_rules",
+   "name": "band_rules_day_of_week_check",
+   "type": "c",
+   "definition": "CHECK (((day_of_week >= 0) AND (day_of_week <= 6)))"
+  },
+  {
+   "table": "band_rules",
+   "name": "band_rules_no_overlap",
+   "type": "x",
+   "definition": "EXCLUDE USING gist (day_of_week WITH =, tsrange(('2000-01-01'::date + from_time), ('2000-01-01'::date + to_time), '[)'::text) WITH &&)"
+  },
+  {
+   "table": "band_rules",
+   "name": "band_rules_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "band_rules",
+   "name": "band_rules_valid_window",
+   "type": "c",
+   "definition": "CHECK ((from_time < to_time))"
+  },
+  {
+   "table": "booking_guests",
+   "name": "booking_guests_booking_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (booking_id) REFERENCES bookings(id) ON DELETE CASCADE"
+  },
+  {
+   "table": "booking_guests",
+   "name": "booking_guests_guest_type_check",
+   "type": "c",
+   "definition": "CHECK ((guest_type = ANY (ARRAY['account_holder'::text, 'additional_guest'::text])))"
+  },
+  {
+   "table": "booking_guests",
+   "name": "booking_guests_pay_by_check",
+   "type": "c",
+   "definition": "CHECK ((pay_by = ANY (ARRAY['paid'::text, 'membership_credit'::text, 'session_pass_credit'::text])))"
+  },
+  {
+   "table": "booking_guests",
+   "name": "booking_guests_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "booking_guests",
+   "name": "booking_guests_unit_price_check",
+   "type": "c",
+   "definition": "CHECK ((unit_price >= (0)::numeric))"
+  },
+  {
+   "table": "booking_guests",
+   "name": "booking_guests_waiver_method_check",
+   "type": "c",
+   "definition": "CHECK ((waiver_method = ANY (ARRAY['email_link'::text, 'in_person'::text])))"
+  },
+  {
+   "table": "bookings",
+   "name": "bookings_band_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (band_id) REFERENCES session_bands(id)"
+  },
+  {
+   "table": "bookings",
+   "name": "bookings_credit_period_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (credit_period_id) REFERENCES membership_credit_periods(id)"
+  },
+  {
+   "table": "bookings",
+   "name": "bookings_customer_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE"
+  },
+  {
+   "table": "bookings",
+   "name": "bookings_no_cross_session_overlap",
+   "type": "x",
+   "definition": "EXCLUDE USING gist (tstzrange(start_time, end_time, '[)'::text) WITH &&, session_id WITH <>) WHERE ((status = ANY (ARRAY['pending'::text, 'confirmed'::text, 'payment_needed'::text])))"
+  },
+  {
+   "table": "bookings",
+   "name": "bookings_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "bookings",
+   "name": "bookings_redeemed_membership_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (redeemed_membership_id) REFERENCES customer_memberships(id)"
+  },
+  {
+   "table": "bookings",
+   "name": "bookings_redeemed_session_pass_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (redeemed_session_pass_id) REFERENCES customer_session_passes(id)"
+  },
+  {
+   "table": "bookings",
+   "name": "bookings_redemption_source_check",
+   "type": "c",
+   "definition": "CHECK ((redemption_source = ANY (ARRAY['paid'::text, 'membership_credit'::text, 'session_pass_credit'::text])))"
+  },
+  {
+   "table": "bookings",
+   "name": "bookings_session_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE"
+  },
+  {
+   "table": "bookings",
+   "name": "bookings_status_check",
+   "type": "c",
+   "definition": "CHECK ((status = ANY (ARRAY['pending'::text, 'confirmed'::text, 'payment_needed'::text, 'cancelled'::text, 'completed'::text, 'no-show'::text])))"
+  },
+  {
+   "table": "customer_memberships",
+   "name": "customer_memberships_customer_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE"
+  },
+  {
+   "table": "customer_memberships",
+   "name": "customer_memberships_order_line_item_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (order_line_item_id) REFERENCES order_line_items(id)"
+  },
+  {
+   "table": "customer_memberships",
+   "name": "customer_memberships_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "customer_memberships",
+   "name": "customer_memberships_plan_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (plan_id) REFERENCES membership_plans(id)"
+  },
+  {
+   "table": "customer_memberships",
+   "name": "customer_memberships_stripe_subscription_id_key",
+   "type": "u",
+   "definition": "UNIQUE (stripe_subscription_id)"
+  },
+  {
+   "table": "customer_memberships",
+   "name": "customer_memberships_subscription_status_check",
+   "type": "c",
+   "definition": "CHECK ((subscription_status = ANY (ARRAY['active'::text, 'paused'::text, 'cancelled'::text, 'past_due'::text])))"
+  },
+  {
+   "table": "customer_session_passes",
+   "name": "customer_session_passes_customer_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE"
+  },
+  {
+   "table": "customer_session_passes",
+   "name": "customer_session_passes_order_line_item_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (order_line_item_id) REFERENCES order_line_items(id)"
+  },
+  {
+   "table": "customer_session_passes",
+   "name": "customer_session_passes_pass_type_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (pass_type_id) REFERENCES session_pass_types(id)"
+  },
+  {
+   "table": "customer_session_passes",
+   "name": "customer_session_passes_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "customers",
+   "name": "customers_auth_user_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (auth_user_id) REFERENCES auth.users(id) ON DELETE CASCADE"
+  },
+  {
+   "table": "customers",
+   "name": "customers_email_key",
+   "type": "u",
+   "definition": "UNIQUE (email)"
+  },
+  {
+   "table": "customers",
+   "name": "customers_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "customers",
+   "name": "customers_store_credit_balance_nonneg",
+   "type": "c",
+   "definition": "CHECK ((store_credit_balance >= (0)::numeric))"
+  },
+  {
+   "table": "customers",
+   "name": "customers_stripe_customer_id_key",
+   "type": "u",
+   "definition": "UNIQUE (stripe_customer_id)"
+  },
+  {
+   "table": "event_attendees",
+   "name": "event_attendees_attendee_type_check",
+   "type": "c",
+   "definition": "CHECK ((attendee_type = ANY (ARRAY['account_holder'::text, 'guest'::text])))"
+  },
+  {
+   "table": "event_attendees",
+   "name": "event_attendees_cancelled_by_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (cancelled_by) REFERENCES staff(id)"
+  },
+  {
+   "table": "event_attendees",
+   "name": "event_attendees_cancelled_value_check",
+   "type": "c",
+   "definition": "CHECK ((cancelled_value >= (0)::numeric))"
+  },
+  {
+   "table": "event_attendees",
+   "name": "event_attendees_card_refunded_amount_check",
+   "type": "c",
+   "definition": "CHECK ((card_refunded_amount >= (0)::numeric))"
+  },
+  {
+   "table": "event_attendees",
+   "name": "event_attendees_event_booking_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (event_booking_id) REFERENCES event_bookings(id) ON DELETE CASCADE"
+  },
+  {
+   "table": "event_attendees",
+   "name": "event_attendees_event_waiver_method_check",
+   "type": "c",
+   "definition": "CHECK ((event_waiver_method = ANY (ARRAY['email_link'::text, 'in_person'::text, 'checkout'::text])))"
+  },
+  {
+   "table": "event_attendees",
+   "name": "event_attendees_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "event_attendees",
+   "name": "event_attendees_price_level_check",
+   "type": "c",
+   "definition": "CHECK ((price_level = ANY (ARRAY['public'::text, 'pre_herd'::text, 'herd'::text])))"
+  },
+  {
+   "table": "event_attendees",
+   "name": "event_attendees_refund_method_check",
+   "type": "c",
+   "definition": "CHECK ((refund_method = ANY (ARRAY['card'::text, 'credit'::text, 'none'::text])))"
+  },
+  {
+   "table": "event_attendees",
+   "name": "event_attendees_refunded_amount_check",
+   "type": "c",
+   "definition": "CHECK ((refunded_amount >= (0)::numeric))"
+  },
+  {
+   "table": "event_attendees",
+   "name": "event_attendees_unit_price_check",
+   "type": "c",
+   "definition": "CHECK ((unit_price >= (0)::numeric))"
+  },
+  {
+   "table": "event_attendees",
+   "name": "event_attendees_waiver_method_check",
+   "type": "c",
+   "definition": "CHECK ((waiver_method = ANY (ARRAY['email_link'::text, 'in_person'::text, 'checkout'::text])))"
+  },
+  {
+   "table": "event_bookings",
+   "name": "event_bookings_cancelled_by_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (cancelled_by) REFERENCES staff(id)"
+  },
+  {
+   "table": "event_bookings",
+   "name": "event_bookings_created_by_staff_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (created_by_staff_id) REFERENCES staff(id)"
+  },
+  {
+   "table": "event_bookings",
+   "name": "event_bookings_customer_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (customer_id) REFERENCES customers(id)"
+  },
+  {
+   "table": "event_bookings",
+   "name": "event_bookings_event_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (event_id) REFERENCES events(id)"
+  },
+  {
+   "table": "event_bookings",
+   "name": "event_bookings_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "event_bookings",
+   "name": "event_bookings_places_check",
+   "type": "c",
+   "definition": "CHECK (((places > 0) OR ((places = 0) AND (status = 'cancelled'::text))))"
+  },
+  {
+   "table": "event_bookings",
+   "name": "event_bookings_price_paid_check",
+   "type": "c",
+   "definition": "CHECK ((price_paid >= (0)::numeric))"
+  },
+  {
+   "table": "event_bookings",
+   "name": "event_bookings_status_check",
+   "type": "c",
+   "definition": "CHECK ((status = ANY (ARRAY['pending'::text, 'confirmed'::text, 'cancelled'::text])))"
+  },
+  {
+   "table": "events",
+   "name": "events_access_check",
+   "type": "c",
+   "definition": "CHECK ((access = ANY (ARRAY['public'::text, 'members_only'::text, 'members_first'::text])))"
+  },
+  {
+   "table": "events",
+   "name": "events_cancelled_by_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (cancelled_by) REFERENCES staff(id)"
+  },
+  {
+   "table": "events",
+   "name": "events_capacity_check",
+   "type": "c",
+   "definition": "CHECK (((capacity IS NULL) OR (capacity > 0)))"
+  },
+  {
+   "table": "events",
+   "name": "events_cutoff_before_start",
+   "type": "c",
+   "definition": "CHECK (((refund_cutoff_at IS NULL) OR (starts_at IS NULL) OR (refund_cutoff_at <= starts_at)))"
+  },
+  {
+   "table": "events",
+   "name": "events_ends_after_start",
+   "type": "c",
+   "definition": "CHECK (((ends_at IS NULL) OR (starts_at IS NULL) OR (ends_at > starts_at)))"
+  },
+  {
+   "table": "events",
+   "name": "events_on_sale_complete",
+   "type": "c",
+   "definition": "CHECK (((NOT active) OR ((starts_at IS NOT NULL) AND (capacity IS NOT NULL) AND (refund_cutoff_at IS NOT NULL) AND (price_public IS NOT NULL) AND (price_pre_herd IS NOT NULL) AND (price_herd IS NOT NULL) AND ((access <> 'members_first'::text) OR (public_release_at IS NOT NULL)) AND (cancelled_at IS NULL))))"
+  },
+  {
+   "table": "events",
+   "name": "events_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "events",
+   "name": "events_places_booked_check",
+   "type": "c",
+   "definition": "CHECK ((places_booked >= 0))"
+  },
+  {
+   "table": "events",
+   "name": "events_places_within_capacity",
+   "type": "c",
+   "definition": "CHECK (((capacity IS NULL) OR (places_booked <= capacity)))"
+  },
+  {
+   "table": "events",
+   "name": "events_price_herd_check",
+   "type": "c",
+   "definition": "CHECK (((price_herd IS NULL) OR (price_herd >= (0)::numeric)))"
+  },
+  {
+   "table": "events",
+   "name": "events_price_pre_herd_check",
+   "type": "c",
+   "definition": "CHECK (((price_pre_herd IS NULL) OR (price_pre_herd >= (0)::numeric)))"
+  },
+  {
+   "table": "events",
+   "name": "events_price_public_check",
+   "type": "c",
+   "definition": "CHECK (((price_public IS NULL) OR (price_public >= (0)::numeric)))"
+  },
+  {
+   "table": "events",
+   "name": "events_release_before_start",
+   "type": "c",
+   "definition": "CHECK (((public_release_at IS NULL) OR (starts_at IS NULL) OR (public_release_at < starts_at)))"
+  },
+  {
+   "table": "events",
+   "name": "events_sanity_event_id_key",
+   "type": "u",
+   "definition": "UNIQUE (sanity_event_id)"
+  },
+  {
+   "table": "gift_card_presets",
+   "name": "gift_card_presets_gift_card_type_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (gift_card_type_id) REFERENCES gift_card_types(id) ON DELETE CASCADE"
+  },
+  {
+   "table": "gift_card_presets",
+   "name": "gift_card_presets_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "gift_card_presets",
+   "name": "gift_card_presets_stripe_price_id_key",
+   "type": "u",
+   "definition": "UNIQUE (stripe_price_id)"
+  },
+  {
+   "table": "gift_card_redemptions",
+   "name": "gift_card_redemptions_booking_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (booking_id) REFERENCES bookings(id)"
+  },
+  {
+   "table": "gift_card_redemptions",
+   "name": "gift_card_redemptions_event_booking_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (event_booking_id) REFERENCES event_bookings(id)"
+  },
+  {
+   "table": "gift_card_redemptions",
+   "name": "gift_card_redemptions_gift_card_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (gift_card_id) REFERENCES gift_cards(id) ON DELETE CASCADE"
+  },
+  {
+   "table": "gift_card_redemptions",
+   "name": "gift_card_redemptions_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "gift_card_types",
+   "name": "gift_card_types_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "gift_card_types",
+   "name": "gift_card_types_sanity_gift_card_type_id_key",
+   "type": "u",
+   "definition": "UNIQUE (sanity_gift_card_type_id)"
+  },
+  {
+   "table": "gift_card_types",
+   "name": "gift_card_types_stripe_product_id_key",
+   "type": "u",
+   "definition": "UNIQUE (stripe_product_id)"
+  },
+  {
+   "table": "gift_cards",
+   "name": "gift_cards_code_key",
+   "type": "u",
+   "definition": "UNIQUE (code)"
+  },
+  {
+   "table": "gift_cards",
+   "name": "gift_cards_fulfillment_method_check",
+   "type": "c",
+   "definition": "CHECK ((fulfillment_method = ANY (ARRAY['digital'::text, 'pickup'::text, 'shipping'::text])))"
+  },
+  {
+   "table": "gift_cards",
+   "name": "gift_cards_origin_check",
+   "type": "c",
+   "definition": "CHECK ((origin = ANY (ARRAY['customer_purchase'::text, 'issued_as_credit'::text])))"
+  },
+  {
+   "table": "gift_cards",
+   "name": "gift_cards_picked_up_by_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (picked_up_by) REFERENCES staff(id)"
+  },
+  {
+   "table": "gift_cards",
+   "name": "gift_cards_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "gift_cards",
+   "name": "gift_cards_purchaser_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (purchaser_id) REFERENCES customers(id)"
+  },
+  {
+   "table": "gift_cards",
+   "name": "gift_cards_shipped_by_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (shipped_by) REFERENCES staff(id)"
+  },
+  {
+   "table": "gift_cards",
+   "name": "gift_cards_type_check",
+   "type": "c",
+   "definition": "CHECK ((type = ANY (ARRAY['monetary'::text, 'session_based'::text])))"
+  },
+  {
+   "table": "membership_band_terms",
+   "name": "membership_band_terms_band_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (band_id) REFERENCES session_bands(id) ON DELETE CASCADE"
+  },
+  {
+   "table": "membership_band_terms",
+   "name": "membership_band_terms_discount_percent_check",
+   "type": "c",
+   "definition": "CHECK (((discount_percent >= (0)::numeric) AND (discount_percent <= (100)::numeric)))"
+  },
+  {
+   "table": "membership_band_terms",
+   "name": "membership_band_terms_membership_level_band_id_key",
+   "type": "u",
+   "definition": "UNIQUE (membership_level, band_id)"
+  },
+  {
+   "table": "membership_band_terms",
+   "name": "membership_band_terms_membership_level_check",
+   "type": "c",
+   "definition": "CHECK ((membership_level = ANY (ARRAY['core'::text, 'all_access'::text])))"
+  },
+  {
+   "table": "membership_band_terms",
+   "name": "membership_band_terms_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "membership_band_terms",
+   "name": "membership_band_terms_updated_by_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (updated_by) REFERENCES staff(id)"
+  },
+  {
+   "table": "membership_credit_adjustments",
+   "name": "membership_credit_adjustments_credit_type_check",
+   "type": "c",
+   "definition": "CHECK ((credit_type = ANY (ARRAY['session'::text, 'addon'::text])))"
+  },
+  {
+   "table": "membership_credit_adjustments",
+   "name": "membership_credit_adjustments_membership_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (membership_id) REFERENCES customer_memberships(id) ON DELETE CASCADE"
+  },
+  {
+   "table": "membership_credit_adjustments",
+   "name": "membership_credit_adjustments_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "membership_credit_adjustments",
+   "name": "membership_credit_adjustments_staff_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (staff_id) REFERENCES staff(id)"
+  },
+  {
+   "table": "membership_credit_periods",
+   "name": "membership_credit_periods_credits_allocated_check",
+   "type": "c",
+   "definition": "CHECK ((credits_allocated >= 0))"
+  },
+  {
+   "table": "membership_credit_periods",
+   "name": "membership_credit_periods_membership_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (membership_id) REFERENCES customer_memberships(id) ON DELETE CASCADE"
+  },
+  {
+   "table": "membership_credit_periods",
+   "name": "membership_credit_periods_no_overlap",
+   "type": "x",
+   "definition": "EXCLUDE USING gist (membership_id WITH =, daterange(period_start, period_end, '[]'::text) WITH &&)"
+  },
+  {
+   "table": "membership_credit_periods",
+   "name": "membership_credit_periods_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "membership_credit_periods",
+   "name": "membership_credit_periods_unique_start",
+   "type": "u",
+   "definition": "UNIQUE (membership_id, period_start)"
+  },
+  {
+   "table": "membership_credit_periods",
+   "name": "membership_credit_periods_valid",
+   "type": "c",
+   "definition": "CHECK ((period_end >= period_start))"
+  },
+  {
+   "table": "membership_payment_date_changes",
+   "name": "membership_payment_date_changes_amount_charged_check",
+   "type": "c",
+   "definition": "CHECK ((amount_charged >= (0)::numeric))"
+  },
+  {
+   "table": "membership_payment_date_changes",
+   "name": "membership_payment_date_changes_check",
+   "type": "c",
+   "definition": "CHECK ((new_renewal_date > old_renewal_date))"
+  },
+  {
+   "table": "membership_payment_date_changes",
+   "name": "membership_payment_date_changes_extra_days_check",
+   "type": "c",
+   "definition": "CHECK ((extra_days > 0))"
+  },
+  {
+   "table": "membership_payment_date_changes",
+   "name": "membership_payment_date_changes_membership_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (membership_id) REFERENCES customer_memberships(id)"
+  },
+  {
+   "table": "membership_payment_date_changes",
+   "name": "membership_payment_date_changes_order_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (order_id) REFERENCES orders(id)"
+  },
+  {
+   "table": "membership_payment_date_changes",
+   "name": "membership_payment_date_changes_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "membership_payment_date_changes",
+   "name": "membership_payment_date_changes_staff_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (staff_id) REFERENCES staff(id)"
+  },
+  {
+   "table": "membership_payment_date_changes",
+   "name": "membership_payment_date_changes_status_check",
+   "type": "c",
+   "definition": "CHECK ((status = ANY (ARRAY['pending'::text, 'done'::text, 'failed'::text])))"
+  },
+  {
+   "table": "membership_plans",
+   "name": "membership_plans_level_check",
+   "type": "c",
+   "definition": "CHECK ((level = ANY (ARRAY['core'::text, 'all_access'::text])))"
+  },
+  {
+   "table": "membership_plans",
+   "name": "membership_plans_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "membership_plans",
+   "name": "membership_plans_sanity_plan_id_key",
+   "type": "u",
+   "definition": "UNIQUE (sanity_plan_id)"
+  },
+  {
+   "table": "membership_plans",
+   "name": "membership_plans_stripe_price_id_key",
+   "type": "u",
+   "definition": "UNIQUE (stripe_price_id)"
+  },
+  {
+   "table": "membership_plans",
+   "name": "membership_plans_stripe_price_id_yearly_key",
+   "type": "u",
+   "definition": "UNIQUE (stripe_price_id_yearly)"
+  },
+  {
+   "table": "membership_plans",
+   "name": "membership_plans_stripe_product_id_key",
+   "type": "u",
+   "definition": "UNIQUE (stripe_product_id)"
+  },
+  {
+   "table": "membership_settings",
+   "name": "membership_settings_addon_credit_wait_months_check",
+   "type": "c",
+   "definition": "CHECK (((addon_credit_wait_months >= 0) AND (addon_credit_wait_months <= 60)))"
+  },
+  {
+   "table": "membership_settings",
+   "name": "membership_settings_id_check",
+   "type": "c",
+   "definition": "CHECK (id)"
+  },
+  {
+   "table": "membership_settings",
+   "name": "membership_settings_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "order_line_items",
+   "name": "order_line_items_addon_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (addon_id) REFERENCES addons(id)"
+  },
+  {
+   "table": "order_line_items",
+   "name": "order_line_items_booking_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (booking_id) REFERENCES bookings(id)"
+  },
+  {
+   "table": "order_line_items",
+   "name": "order_line_items_event_booking_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (event_booking_id) REFERENCES event_bookings(id)"
+  },
+  {
+   "table": "order_line_items",
+   "name": "order_line_items_fulfillment_status_check",
+   "type": "c",
+   "definition": "CHECK ((fulfillment_status = ANY (ARRAY['pending'::text, 'fulfilled'::text])))"
+  },
+  {
+   "table": "order_line_items",
+   "name": "order_line_items_gift_card_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (gift_card_id) REFERENCES gift_cards(id)"
+  },
+  {
+   "table": "order_line_items",
+   "name": "order_line_items_item_type_check",
+   "type": "c",
+   "definition": "CHECK ((item_type = ANY (ARRAY['booking'::text, 'product'::text, 'membership'::text, 'session_pass'::text, 'gift_card'::text, 'addon'::text, 'postage'::text, 'event'::text])))"
+  },
+  {
+   "table": "order_line_items",
+   "name": "order_line_items_membership_plan_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (membership_plan_id) REFERENCES membership_plans(id)"
+  },
+  {
+   "table": "order_line_items",
+   "name": "order_line_items_order_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE"
+  },
+  {
+   "table": "order_line_items",
+   "name": "order_line_items_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "order_line_items",
+   "name": "order_line_items_product_variant_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (product_variant_id) REFERENCES product_variants(id)"
+  },
+  {
+   "table": "order_line_items",
+   "name": "order_line_items_refund_method_check",
+   "type": "c",
+   "definition": "CHECK ((refund_method = ANY (ARRAY['card'::text, 'credit'::text])))"
+  },
+  {
+   "table": "order_line_items",
+   "name": "order_line_items_session_pass_type_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (session_pass_type_id) REFERENCES session_pass_types(id)"
+  },
+  {
+   "table": "orders",
+   "name": "orders_customer_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (customer_id) REFERENCES customers(id)"
+  },
+  {
+   "table": "orders",
+   "name": "orders_order_source_check",
+   "type": "c",
+   "definition": "CHECK ((order_source = ANY (ARRAY['online'::text, 'staff_created'::text])))"
+  },
+  {
+   "table": "orders",
+   "name": "orders_payment_method_check",
+   "type": "c",
+   "definition": "CHECK ((payment_method = ANY (ARRAY['card'::text, 'reader'::text, 'cash'::text, 'gift_card'::text, 'split'::text])))"
+  },
+  {
+   "table": "orders",
+   "name": "orders_payment_status_check",
+   "type": "c",
+   "definition": "CHECK ((payment_status = ANY (ARRAY['pending'::text, 'paid'::text, 'failed'::text, 'refunded'::text, 'partially_refunded'::text])))"
+  },
+  {
+   "table": "orders",
+   "name": "orders_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "orders",
+   "name": "orders_shipping_status_check",
+   "type": "c",
+   "definition": "CHECK ((shipping_status = ANY (ARRAY['pending'::text, 'shipped'::text, 'delivered'::text])))"
+  },
+  {
+   "table": "parity_log",
+   "name": "parity_log_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "pending_reader_payments",
+   "name": "pending_reader_payments_flow_check",
+   "type": "c",
+   "definition": "CHECK ((flow = ANY (ARRAY['checkout'::text, 'move'::text, 'settle'::text, 'add_guest'::text])))"
+  },
+  {
+   "table": "pending_reader_payments",
+   "name": "pending_reader_payments_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "pending_reader_payments",
+   "name": "pending_reader_payments_status_check",
+   "type": "c",
+   "definition": "CHECK ((status = ANY (ARRAY['pending'::text, 'finalised'::text, 'cancelled'::text])))"
+  },
+  {
+   "table": "postage_settings",
+   "name": "postage_settings_id_check",
+   "type": "c",
+   "definition": "CHECK (id)"
+  },
+  {
+   "table": "postage_settings",
+   "name": "postage_settings_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "product_variants",
+   "name": "product_variants_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "product_variants",
+   "name": "product_variants_product_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE"
+  },
+  {
+   "table": "product_variants",
+   "name": "product_variants_sku_key",
+   "type": "u",
+   "definition": "UNIQUE (sku)"
+  },
+  {
+   "table": "product_variants",
+   "name": "product_variants_stripe_price_id_key",
+   "type": "u",
+   "definition": "UNIQUE (stripe_price_id)"
+  },
+  {
+   "table": "products",
+   "name": "products_fulfillment_method_check",
+   "type": "c",
+   "definition": "CHECK ((fulfillment_method = ANY (ARRAY['shipping'::text, 'pickup'::text, 'both'::text])))"
+  },
+  {
+   "table": "products",
+   "name": "products_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "products",
+   "name": "products_sanity_product_id_key",
+   "type": "u",
+   "definition": "UNIQUE (sanity_product_id)"
+  },
+  {
+   "table": "products",
+   "name": "products_stripe_price_id_base_key",
+   "type": "u",
+   "definition": "UNIQUE (stripe_price_id_base)"
+  },
+  {
+   "table": "products",
+   "name": "products_stripe_price_id_member_key",
+   "type": "u",
+   "definition": "UNIQUE (stripe_price_id_member)"
+  },
+  {
+   "table": "products",
+   "name": "products_stripe_price_id_sale_key",
+   "type": "u",
+   "definition": "UNIQUE (stripe_price_id_sale)"
+  },
+  {
+   "table": "products",
+   "name": "products_stripe_product_id_key",
+   "type": "u",
+   "definition": "UNIQUE (stripe_product_id)"
+  },
+  {
+   "table": "promo_code_redemptions",
+   "name": "promo_code_redemptions_customer_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (customer_id) REFERENCES customers(id)"
+  },
+  {
+   "table": "promo_code_redemptions",
+   "name": "promo_code_redemptions_discount_amount_check",
+   "type": "c",
+   "definition": "CHECK ((discount_amount >= (0)::numeric))"
+  },
+  {
+   "table": "promo_code_redemptions",
+   "name": "promo_code_redemptions_order_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE"
+  },
+  {
+   "table": "promo_code_redemptions",
+   "name": "promo_code_redemptions_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "promo_code_redemptions",
+   "name": "promo_code_redemptions_promo_code_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (promo_code_id) REFERENCES promo_codes(id)"
+  },
+  {
+   "table": "promo_code_redemptions",
+   "name": "promo_code_redemptions_promo_code_id_order_id_key",
+   "type": "u",
+   "definition": "UNIQUE (promo_code_id, order_id)"
+  },
+  {
+   "table": "promo_codes",
+   "name": "promo_codes_applies_to_valid",
+   "type": "c",
+   "definition": "CHECK (((applies_to <@ ARRAY['booking'::text, 'addon'::text, 'product'::text, 'session_pass'::text, 'membership'::text, 'event'::text]) AND (cardinality(applies_to) > 0)))"
+  },
+  {
+   "table": "promo_codes",
+   "name": "promo_codes_discount_type_check",
+   "type": "c",
+   "definition": "CHECK ((discount_type = ANY (ARRAY['percentage'::text, 'fixed'::text])))"
+  },
+  {
+   "table": "promo_codes",
+   "name": "promo_codes_discount_value_check",
+   "type": "c",
+   "definition": "CHECK ((discount_value > (0)::numeric))"
+  },
+  {
+   "table": "promo_codes",
+   "name": "promo_codes_max_total_uses_check",
+   "type": "c",
+   "definition": "CHECK (((max_total_uses IS NULL) OR (max_total_uses > 0)))"
+  },
+  {
+   "table": "promo_codes",
+   "name": "promo_codes_min_spend_check",
+   "type": "c",
+   "definition": "CHECK (((min_spend IS NULL) OR (min_spend >= (0)::numeric)))"
+  },
+  {
+   "table": "promo_codes",
+   "name": "promo_codes_percentage_max",
+   "type": "c",
+   "definition": "CHECK (((discount_type <> 'percentage'::text) OR (discount_value <= (100)::numeric)))"
+  },
+  {
+   "table": "promo_codes",
+   "name": "promo_codes_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "promo_codes",
+   "name": "promo_codes_restricted_customer_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (restricted_customer_id) REFERENCES customers(id)"
+  },
+  {
+   "table": "service_type_price_tiers",
+   "name": "check_people_range",
+   "type": "c",
+   "definition": "CHECK ((min_people <= max_people))"
+  },
+  {
+   "table": "service_type_price_tiers",
+   "name": "service_type_price_tiers_band_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (band_id) REFERENCES session_bands(id)"
+  },
+  {
+   "table": "service_type_price_tiers",
+   "name": "service_type_price_tiers_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "service_type_price_tiers",
+   "name": "service_type_price_tiers_service_band_min_key",
+   "type": "u",
+   "definition": "UNIQUE (service_type_id, band_id, min_people)"
+  },
+  {
+   "table": "service_type_price_tiers",
+   "name": "service_type_price_tiers_service_type_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (service_type_id) REFERENCES service_types(id) ON DELETE CASCADE"
+  },
+  {
+   "table": "service_type_price_tiers",
+   "name": "service_type_price_tiers_stripe_price_id_key",
+   "type": "u",
+   "definition": "UNIQUE (stripe_price_id)"
+  },
+  {
+   "table": "service_type_schedule_slots",
+   "name": "service_type_schedule_slots_day_of_week_check",
+   "type": "c",
+   "definition": "CHECK (((day_of_week >= 0) AND (day_of_week <= 6)))"
+  },
+  {
+   "table": "service_type_schedule_slots",
+   "name": "service_type_schedule_slots_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "service_type_schedule_slots",
+   "name": "service_type_schedule_slots_service_type_id_day_of_week_sta_key",
+   "type": "u",
+   "definition": "UNIQUE (service_type_id, day_of_week, start_time)"
+  },
+  {
+   "table": "service_type_schedule_slots",
+   "name": "service_type_schedule_slots_service_type_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (service_type_id) REFERENCES service_types(id) ON DELETE CASCADE"
+  },
+  {
+   "table": "service_types",
+   "name": "service_types_booking_type_check",
+   "type": "c",
+   "definition": "CHECK ((booking_type = ANY (ARRAY['public'::text, 'private'::text])))"
+  },
+  {
+   "table": "service_types",
+   "name": "service_types_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "service_types",
+   "name": "service_types_sanity_service_type_id_key",
+   "type": "u",
+   "definition": "UNIQUE (sanity_service_type_id)"
+  },
+  {
+   "table": "service_types",
+   "name": "service_types_stripe_product_id_key",
+   "type": "u",
+   "definition": "UNIQUE (stripe_product_id)"
+  },
+  {
+   "table": "session_bands",
+   "name": "session_bands_code_check",
+   "type": "c",
+   "definition": "CHECK ((code ~ '^[a-z_]+$'::text))"
+  },
+  {
+   "table": "session_bands",
+   "name": "session_bands_code_key",
+   "type": "u",
+   "definition": "UNIQUE (code)"
+  },
+  {
+   "table": "session_bands",
+   "name": "session_bands_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "session_bands",
+   "name": "session_bands_price_check",
+   "type": "c",
+   "definition": "CHECK ((price >= (0)::numeric))"
+  },
+  {
+   "table": "session_pass_types",
+   "name": "session_pass_types_level_check",
+   "type": "c",
+   "definition": "CHECK ((level = ANY (ARRAY['core'::text, 'all_access'::text])))"
+  },
+  {
+   "table": "session_pass_types",
+   "name": "session_pass_types_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "session_pass_types",
+   "name": "session_pass_types_sanity_pass_type_id_key",
+   "type": "u",
+   "definition": "UNIQUE (sanity_pass_type_id)"
+  },
+  {
+   "table": "session_pass_types",
+   "name": "session_pass_types_stripe_price_id_key",
+   "type": "u",
+   "definition": "UNIQUE (stripe_price_id)"
+  },
+  {
+   "table": "session_pass_types",
+   "name": "session_pass_types_stripe_product_id_key",
+   "type": "u",
+   "definition": "UNIQUE (stripe_product_id)"
+  },
+  {
+   "table": "sessions",
+   "name": "sessions_band_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (band_id) REFERENCES session_bands(id)"
+  },
+  {
+   "table": "sessions",
+   "name": "sessions_blocked_by_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (blocked_by) REFERENCES staff(id)"
+  },
+  {
+   "table": "sessions",
+   "name": "sessions_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "sessions",
+   "name": "sessions_service_type_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (service_type_id) REFERENCES service_types(id)"
+  },
+  {
+   "table": "sessions",
+   "name": "sessions_service_type_start_time_key",
+   "type": "u",
+   "definition": "UNIQUE (service_type_id, start_time)"
+  },
+  {
+   "table": "sessions",
+   "name": "sessions_status_check",
+   "type": "c",
+   "definition": "CHECK ((status = ANY (ARRAY['open'::text, 'blocked'::text])))"
+  },
+  {
+   "table": "sessions",
+   "name": "sessions_type_check",
+   "type": "c",
+   "definition": "CHECK ((type = ANY (ARRAY['public'::text, 'private'::text])))"
+  },
+  {
+   "table": "staff",
+   "name": "staff_email_key",
+   "type": "u",
+   "definition": "UNIQUE (email)"
+  },
+  {
+   "table": "staff",
+   "name": "staff_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "staff",
+   "name": "staff_role_check",
+   "type": "c",
+   "definition": "CHECK ((role = ANY (ARRAY['admin'::text, 'manager'::text, 'staff'::text])))"
+  },
+  {
+   "table": "stock_adjustments",
+   "name": "stock_adjustments_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "stock_adjustments",
+   "name": "stock_adjustments_staff_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (staff_id) REFERENCES staff(id)"
+  },
+  {
+   "table": "stock_adjustments",
+   "name": "stock_adjustments_variant_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (variant_id) REFERENCES product_variants(id)"
+  },
+  {
+   "table": "store_credit_transactions",
+   "name": "store_credit_transactions_amount_check",
+   "type": "c",
+   "definition": "CHECK ((amount <> (0)::numeric))"
+  },
+  {
+   "table": "store_credit_transactions",
+   "name": "store_credit_transactions_balance_after_check",
+   "type": "c",
+   "definition": "CHECK ((balance_after >= (0)::numeric))"
+  },
+  {
+   "table": "store_credit_transactions",
+   "name": "store_credit_transactions_booking_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (booking_id) REFERENCES bookings(id)"
+  },
+  {
+   "table": "store_credit_transactions",
+   "name": "store_credit_transactions_customer_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (customer_id) REFERENCES customers(id)"
+  },
+  {
+   "table": "store_credit_transactions",
+   "name": "store_credit_transactions_event_booking_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (event_booking_id) REFERENCES event_bookings(id)"
+  },
+  {
+   "table": "store_credit_transactions",
+   "name": "store_credit_transactions_gift_card_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (gift_card_id) REFERENCES gift_cards(id)"
+  },
+  {
+   "table": "store_credit_transactions",
+   "name": "store_credit_transactions_order_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (order_id) REFERENCES orders(id)"
+  },
+  {
+   "table": "store_credit_transactions",
+   "name": "store_credit_transactions_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "store_credit_transactions",
+   "name": "store_credit_transactions_reason_check",
+   "type": "c",
+   "definition": "CHECK ((reason = ANY (ARRAY['refund'::text, 'manual_adjustment'::text, 'redemption'::text, 'redemption_reversal'::text, 'migrated_from_gift_card'::text])))"
+  },
+  {
+   "table": "store_credit_transactions",
+   "name": "store_credit_transactions_staff_id_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (staff_id) REFERENCES staff(id)"
+  },
+  {
+   "table": "stripe_webhook_events",
+   "name": "stripe_webhook_events_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (event_id)"
+  }
+ ],
+ "indexes": [
+  {
+   "name": "api_idempotency_created_at_idx",
+   "definition": "CREATE INDEX api_idempotency_created_at_idx ON public.api_idempotency USING btree (created_at)"
+  },
+  {
+   "name": "audit_log_actor_idx",
+   "definition": "CREATE INDEX audit_log_actor_idx ON public.audit_log USING btree (actor_id, at)"
+  },
+  {
+   "name": "audit_log_entity_idx",
+   "definition": "CREATE INDEX audit_log_entity_idx ON public.audit_log USING btree (entity_type, entity_id)"
+  },
+  {
+   "name": "customers_auth_user_id_key",
+   "definition": "CREATE UNIQUE INDEX customers_auth_user_id_key ON public.customers USING btree (auth_user_id) WHERE (auth_user_id IS NOT NULL)"
+  },
+  {
+   "name": "event_attendees_booking_idx",
+   "definition": "CREATE INDEX event_attendees_booking_idx ON public.event_attendees USING btree (event_booking_id)"
+  },
+  {
+   "name": "event_attendees_one_account_holder",
+   "definition": "CREATE UNIQUE INDEX event_attendees_one_account_holder ON public.event_attendees USING btree (event_booking_id) WHERE (attendee_type = 'account_holder'::text)"
+  },
+  {
+   "name": "event_bookings_customer_id_idx",
+   "definition": "CREATE INDEX event_bookings_customer_id_idx ON public.event_bookings USING btree (customer_id)"
+  },
+  {
+   "name": "event_bookings_event_id_idx",
+   "definition": "CREATE INDEX event_bookings_event_id_idx ON public.event_bookings USING btree (event_id)"
+  },
+  {
+   "name": "idx_addon_lines_booking",
+   "definition": "CREATE INDEX idx_addon_lines_booking ON public.addon_order_lines USING btree (booking_id)"
+  },
+  {
+   "name": "idx_addons_active",
+   "definition": "CREATE INDEX idx_addons_active ON public.addons USING btree (active)"
+  },
+  {
+   "name": "idx_addons_category",
+   "definition": "CREATE INDEX idx_addons_category ON public.addons USING btree (category)"
+  },
+  {
+   "name": "idx_band_rules_band",
+   "definition": "CREATE INDEX idx_band_rules_band ON public.band_rules USING btree (band_id)"
+  },
+  {
+   "name": "idx_booking_guests_booking",
+   "definition": "CREATE INDEX idx_booking_guests_booking ON public.booking_guests USING btree (booking_id)"
+  },
+  {
+   "name": "idx_bookings_created",
+   "definition": "CREATE INDEX idx_bookings_created ON public.bookings USING btree (created_at)"
+  },
+  {
+   "name": "idx_bookings_credit_period",
+   "definition": "CREATE INDEX idx_bookings_credit_period ON public.bookings USING btree (credit_period_id) WHERE (credit_period_id IS NOT NULL)"
+  },
+  {
+   "name": "idx_bookings_customer",
+   "definition": "CREATE INDEX idx_bookings_customer ON public.bookings USING btree (customer_id)"
+  },
+  {
+   "name": "idx_bookings_customer_active",
+   "definition": "CREATE INDEX idx_bookings_customer_active ON public.bookings USING btree (customer_id) WHERE (status = ANY (ARRAY['pending'::text, 'confirmed'::text, 'payment_needed'::text]))"
+  },
+  {
+   "name": "idx_bookings_payment_due",
+   "definition": "CREATE INDEX idx_bookings_payment_due ON public.bookings USING btree (payment_due_by) WHERE (status = 'payment_needed'::text)"
+  },
+  {
+   "name": "idx_bookings_session",
+   "definition": "CREATE INDEX idx_bookings_session ON public.bookings USING btree (session_id)"
+  },
+  {
+   "name": "idx_bookings_status",
+   "definition": "CREATE INDEX idx_bookings_status ON public.bookings USING btree (status)"
+  },
+  {
+   "name": "idx_credit_adjustments_membership",
+   "definition": "CREATE INDEX idx_credit_adjustments_membership ON public.membership_credit_adjustments USING btree (membership_id)"
+  },
+  {
+   "name": "idx_customers_auth_user",
+   "definition": "CREATE INDEX idx_customers_auth_user ON public.customers USING btree (auth_user_id)"
+  },
+  {
+   "name": "idx_customers_email",
+   "definition": "CREATE INDEX idx_customers_email ON public.customers USING btree (email)"
+  },
+  {
+   "name": "idx_customers_stripe_id",
+   "definition": "CREATE INDEX idx_customers_stripe_id ON public.customers USING btree (stripe_customer_id)"
+  },
+  {
+   "name": "idx_gift_card_presets_type",
+   "definition": "CREATE INDEX idx_gift_card_presets_type ON public.gift_card_presets USING btree (gift_card_type_id)"
+  },
+  {
+   "name": "idx_gift_card_types_sanity",
+   "definition": "CREATE INDEX idx_gift_card_types_sanity ON public.gift_card_types USING btree (sanity_gift_card_type_id)"
+  },
+  {
+   "name": "idx_giftcards_code",
+   "definition": "CREATE INDEX idx_giftcards_code ON public.gift_cards USING btree (code)"
+  },
+  {
+   "name": "idx_giftcards_purchaser",
+   "definition": "CREATE INDEX idx_giftcards_purchaser ON public.gift_cards USING btree (purchaser_id)"
+  },
+  {
+   "name": "idx_membership_plans_active",
+   "definition": "CREATE INDEX idx_membership_plans_active ON public.membership_plans USING btree (active)"
+  },
+  {
+   "name": "idx_memberships_customer",
+   "definition": "CREATE INDEX idx_memberships_customer ON public.customer_memberships USING btree (customer_id)"
+  },
+  {
+   "name": "idx_memberships_status",
+   "definition": "CREATE INDEX idx_memberships_status ON public.customer_memberships USING btree (subscription_status)"
+  },
+  {
+   "name": "idx_order_lines_order",
+   "definition": "CREATE INDEX idx_order_lines_order ON public.order_line_items USING btree (order_id)"
+  },
+  {
+   "name": "idx_orders_created",
+   "definition": "CREATE INDEX idx_orders_created ON public.orders USING btree (created_at)"
+  },
+  {
+   "name": "idx_orders_customer",
+   "definition": "CREATE INDEX idx_orders_customer ON public.orders USING btree (customer_id)"
+  },
+  {
+   "name": "idx_orders_status",
+   "definition": "CREATE INDEX idx_orders_status ON public.orders USING btree (payment_status)"
+  },
+  {
+   "name": "idx_pass_types_active",
+   "definition": "CREATE INDEX idx_pass_types_active ON public.session_pass_types USING btree (active)"
+  },
+  {
+   "name": "idx_passes_customer",
+   "definition": "CREATE INDEX idx_passes_customer ON public.customer_session_passes USING btree (customer_id)"
+  },
+  {
+   "name": "idx_passes_expiry",
+   "definition": "CREATE INDEX idx_passes_expiry ON public.customer_session_passes USING btree (expiry_date)"
+  },
+  {
+   "name": "idx_price_tiers_service_type",
+   "definition": "CREATE INDEX idx_price_tiers_service_type ON public.service_type_price_tiers USING btree (service_type_id)"
+  },
+  {
+   "name": "idx_products_active",
+   "definition": "CREATE INDEX idx_products_active ON public.products USING btree (active)"
+  },
+  {
+   "name": "idx_products_category",
+   "definition": "CREATE INDEX idx_products_category ON public.products USING btree (category)"
+  },
+  {
+   "name": "idx_redemptions_giftcard",
+   "definition": "CREATE INDEX idx_redemptions_giftcard ON public.gift_card_redemptions USING btree (gift_card_id)"
+  },
+  {
+   "name": "idx_service_types_active",
+   "definition": "CREATE INDEX idx_service_types_active ON public.service_types USING btree (active)"
+  },
+  {
+   "name": "idx_service_types_booking_type",
+   "definition": "CREATE INDEX idx_service_types_booking_type ON public.service_types USING btree (booking_type)"
+  },
+  {
+   "name": "idx_sessions_band",
+   "definition": "CREATE INDEX idx_sessions_band ON public.sessions USING btree (band_id)"
+  },
+  {
+   "name": "idx_sessions_service_type",
+   "definition": "CREATE INDEX idx_sessions_service_type ON public.sessions USING btree (service_type_id)"
+  },
+  {
+   "name": "idx_sessions_start_time",
+   "definition": "CREATE INDEX idx_sessions_start_time ON public.sessions USING btree (start_time)"
+  },
+  {
+   "name": "idx_sessions_status",
+   "definition": "CREATE INDEX idx_sessions_status ON public.sessions USING btree (status)"
+  },
+  {
+   "name": "idx_sessions_type",
+   "definition": "CREATE INDEX idx_sessions_type ON public.sessions USING btree (type)"
+  },
+  {
+   "name": "idx_staff_role",
+   "definition": "CREATE INDEX idx_staff_role ON public.staff USING btree (role)"
+  },
+  {
+   "name": "idx_stock_adjustments_variant_created",
+   "definition": "CREATE INDEX idx_stock_adjustments_variant_created ON public.stock_adjustments USING btree (variant_id, created_at DESC)"
+  },
+  {
+   "name": "idx_variants_product",
+   "definition": "CREATE INDEX idx_variants_product ON public.product_variants USING btree (product_id)"
+  },
+  {
+   "name": "idx_variants_sku",
+   "definition": "CREATE INDEX idx_variants_sku ON public.product_variants USING btree (sku)"
+  },
+  {
+   "name": "membership_payment_date_changes_membership_idx",
+   "definition": "CREATE INDEX membership_payment_date_changes_membership_idx ON public.membership_payment_date_changes USING btree (membership_id, created_at DESC)"
+  },
+  {
+   "name": "parity_log_action_idx",
+   "definition": "CREATE INDEX parity_log_action_idx ON public.parity_log USING btree (action, at DESC)"
+  },
+  {
+   "name": "pending_reader_payments_record_idx",
+   "definition": "CREATE INDEX pending_reader_payments_record_idx ON public.pending_reader_payments USING btree (record_id)"
+  },
+  {
+   "name": "pending_reader_payments_status_idx",
+   "definition": "CREATE INDEX pending_reader_payments_status_idx ON public.pending_reader_payments USING btree (status, created_at)"
+  },
+  {
+   "name": "promo_code_redemptions_code_idx",
+   "definition": "CREATE INDEX promo_code_redemptions_code_idx ON public.promo_code_redemptions USING btree (promo_code_id)"
+  },
+  {
+   "name": "promo_code_redemptions_customer_idx",
+   "definition": "CREATE INDEX promo_code_redemptions_customer_idx ON public.promo_code_redemptions USING btree (promo_code_id, customer_id)"
+  },
+  {
+   "name": "promo_codes_code_upper_key",
+   "definition": "CREATE UNIQUE INDEX promo_codes_code_upper_key ON public.promo_codes USING btree (upper(code))"
+  },
+  {
+   "name": "store_credit_transactions_customer_idx",
+   "definition": "CREATE INDEX store_credit_transactions_customer_idx ON public.store_credit_transactions USING btree (customer_id, created_at DESC)"
+  }
+ ],
+ "views": [
+  {
+   "name": "membership_credit_period_balances",
+   "definition": " SELECT p.id,\n    p.membership_id,\n    p.period_start,\n    p.period_end,\n    p.credits_allocated,\n    p.is_unlimited,\n    count(b.id) AS credits_used,\n        CASE\n            WHEN p.is_unlimited THEN NULL::bigint\n            ELSE p.credits_allocated - count(b.id)\n        END AS credits_remaining\n   FROM membership_credit_periods p\n     LEFT JOIN bookings b ON b.credit_period_id = p.id AND b.redemption_source = 'membership_credit'::text AND (b.status = ANY (ARRAY['pending'::text, 'confirmed'::text, 'completed'::text, 'no-show'::text]))\n  GROUP BY p.id;"
+  },
+  {
+   "name": "membership_current_credits",
+   "definition": " SELECT p.membership_id,\n    p.id AS period_id,\n    p.period_start,\n    p.period_end,\n    p.is_unlimited,\n    p.credits_allocated,\n    COALESCE(u.used, 0::bigint)::integer AS credits_used,\n        CASE\n            WHEN p.is_unlimited THEN NULL::bigint\n            ELSE GREATEST(p.credits_allocated - COALESCE(u.used, 0::bigint), 0::bigint)\n        END::integer AS credits_remaining\n   FROM membership_credit_periods p\n     LEFT JOIN LATERAL ( SELECT count(*) AS used\n           FROM bookings b\n          WHERE b.credit_period_id = p.id AND b.redemption_source = 'membership_credit'::text AND b.status <> 'cancelled'::text) u ON true\n  WHERE (now() AT TIME ZONE 'Europe/London'::text)::date >= p.period_start AND (now() AT TIME ZONE 'Europe/London'::text)::date <= p.period_end;"
+  }
+ ],
+ "viewDependencies": null,
+ "functions": [
+  {
+   "name": "allocate_membership_credit_periods",
+   "identity": "",
+   "definition": "CREATE OR REPLACE FUNCTION public.allocate_membership_credit_periods()\n RETURNS integer\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\ndeclare\n  today date := (now() at time zone 'Europe/London')::date;\n  inserted integer := 0;\nbegin\n  with eligible as (\n    select cm.id as membership_id, cm.start_date, cm.cancel_effective_date,\n           p.sessions_included, p.is_unlimited,\n           -- whole months elapsed since start (anchored to start day), never negative\n           greatest(0,\n             (extract(year from age(today, cm.start_date))::int * 12\n              + extract(month from age(today, cm.start_date))::int)) as n\n    from customer_memberships cm\n    join membership_plans p on p.id = cm.plan_id\n    where cm.start_date is not null\n      and cm.start_date <= today\n      and (\n        cm.subscription_status = 'active'\n        or (cm.subscription_status = 'cancelled' and cm.cancel_effective_date >= today)\n      )\n  ), periods as (\n    select membership_id, sessions_included, is_unlimited, cancel_effective_date,\n           (start_date + make_interval(months => n))::date as period_start,\n           ((start_date + make_interval(months => n + 1))::date - 1) as period_end\n    from eligible\n  ), ins as (\n    insert into membership_credit_periods\n      (membership_id, period_start, period_end, credits_allocated, is_unlimited)\n    select membership_id, period_start,\n           least(period_end, coalesce(cancel_effective_date, period_end)),\n           case when is_unlimited then 0 else coalesce(sessions_included, 0) end,\n           is_unlimited\n    from periods\n    where period_start <= today and period_end >= today\n    on conflict (membership_id, period_start) do nothing\n    returning 1\n  )\n  select count(*) into inserted from ins;\n  return inserted;\nend;\n$function$\n"
+  },
+  {
+   "name": "band_for_session_start",
+   "identity": "p_start timestamp with time zone",
+   "definition": "CREATE OR REPLACE FUNCTION public.band_for_session_start(p_start timestamp with time zone)\n RETURNS uuid\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT r.band_id\n  FROM band_rules r\n  WHERE r.day_of_week = EXTRACT(DOW FROM (p_start AT TIME ZONE 'UTC'))::SMALLINT\n    AND (p_start AT TIME ZONE 'UTC')::TIME >= r.from_time\n    AND (p_start AT TIME ZONE 'UTC')::TIME <  r.to_time\n  LIMIT 1\n$function$\n"
+  },
+  {
+   "name": "claim_event_places",
+   "identity": "p_event_id uuid, p_places integer",
+   "definition": "CREATE OR REPLACE FUNCTION public.claim_event_places(p_event_id uuid, p_places integer)\n RETURNS boolean\n LANGUAGE sql\nAS $function$\n  WITH u AS (\n    UPDATE public.events SET places_booked = places_booked + p_places, updated_at = now()\n    WHERE id = p_event_id AND active AND cancelled_at IS NULL AND places_booked + p_places <= capacity\n    RETURNING id\n  ) SELECT EXISTS (SELECT 1 FROM u);\n$function$\n"
+  },
+  {
+   "name": "enforce_one_booking_per_customer_day",
+   "identity": "",
+   "definition": "CREATE OR REPLACE FUNCTION public.enforce_one_booking_per_customer_day()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nDECLARE\n  v_day DATE;\nBEGIN\n  IF NEW.status NOT IN ('pending', 'confirmed', 'payment_needed') THEN\n    RETURN NEW;\n  END IF;\n\n  SELECT (s.start_time AT TIME ZONE 'UTC')::DATE INTO v_day\n  FROM sessions s WHERE s.id = NEW.session_id;\n\n  PERFORM pg_advisory_xact_lock(hashtextextended(NEW.customer_id::TEXT || v_day::TEXT, 0));\n\n  IF EXISTS (\n    SELECT 1\n    FROM bookings b\n    JOIN sessions s ON s.id = b.session_id\n    WHERE b.customer_id = NEW.customer_id\n      AND b.id <> NEW.id\n      AND b.status IN ('pending', 'confirmed', 'payment_needed')\n      AND (s.start_time AT TIME ZONE 'UTC')::DATE = v_day\n  ) THEN\n    RAISE EXCEPTION 'This customer already has a booking on %. Only one booking per customer per day is allowed.',\n      to_char(v_day, 'DD Mon YYYY');\n  END IF;\n\n  RETURN NEW;\nEND;\n$function$\n"
+  },
+  {
+   "name": "event_booking_block_reason",
+   "identity": "p_event_id uuid, p_customer_id uuid, p_new_membership_frequency text",
+   "definition": "CREATE OR REPLACE FUNCTION public.event_booking_block_reason(p_event_id uuid, p_customer_id uuid, p_new_membership_frequency text DEFAULT NULL::text)\n RETURNS text\n LANGUAGE plpgsql\n STABLE\nAS $function$\nDECLARE\n  e public.events%ROWTYPE;\n  v_now timestamp := now() AT TIME ZONE 'Europe/London';\n  v_member boolean := public.event_member_level_with_new(p_customer_id, p_new_membership_frequency) IS NOT NULL;\nBEGIN\n  SELECT * INTO e FROM public.events WHERE id = p_event_id;\n  IF NOT FOUND THEN RETURN 'event_not_found'; END IF;\n  IF e.cancelled_at IS NOT NULL THEN RETURN 'event_cancelled'; END IF;\n  IF NOT e.active THEN RETURN 'event_not_on_sale'; END IF;\n  IF (e.starts_at AT TIME ZONE 'UTC') <= v_now THEN RETURN 'event_started'; END IF;\n  IF e.access = 'members_only' AND NOT v_member THEN RETURN 'event_members_only'; END IF;\n  IF e.access = 'members_first' AND NOT v_member AND (e.public_release_at AT TIME ZONE 'UTC') > v_now THEN\n    RETURN 'event_not_released_yet';\n  END IF;\n  RETURN NULL;\nEND; $function$\n"
+  },
+  {
+   "name": "event_cancellation_quote",
+   "identity": "p_event_booking_id uuid, p_attendee_ids uuid[]",
+   "definition": "CREATE OR REPLACE FUNCTION public.event_cancellation_quote(p_event_booking_id uuid, p_attendee_ids uuid[] DEFAULT NULL::uuid[])\n RETURNS jsonb\n LANGUAGE plpgsql\n STABLE\nAS $function$\nDECLARE\n  b record;\n  v_line_total numeric := 0;\n  v_line_discount numeric := 0;\n  v_net_line numeric;\n  v_cancelled_value numeric;\n  v_remaining_value numeric;\n  v_remaining_count int;\n  v_remaining_units numeric;\n  v_sel_count int;\n  v_sel_units numeric;\n  v_sel_ids uuid[];\n  v_value numeric;\n  v_now_london timestamp := (now() AT TIME ZONE 'Europe/London');\nBEGIN\n  SELECT eb.id, eb.status, eb.event_id, eb.customer_id, e.refund_cutoff_at, e.starts_at, e.ends_at,\n         e.cancelled_at AS event_cancelled_at\n  INTO b\n  FROM public.event_bookings eb JOIN public.events e ON e.id = eb.event_id\n  WHERE eb.id = p_event_booking_id;\n  IF NOT FOUND THEN RETURN jsonb_build_object('ok', false, 'reason', 'booking_not_found'); END IF;\n  IF b.status <> 'confirmed' THEN RETURN jsonb_build_object('ok', false, 'reason', 'booking_not_confirmed'); END IF;\n\n  SELECT COALESCE(SUM(oli.line_total), 0), COALESCE(SUM(oli.discount_amount), 0)\n  INTO v_line_total, v_line_discount\n  FROM public.order_line_items oli\n  WHERE oli.event_booking_id = p_event_booking_id AND oli.item_type = 'event';\n  v_net_line := GREATEST(v_line_total - v_line_discount, 0);\n\n  SELECT COALESCE(SUM(cancelled_value), 0) INTO v_cancelled_value\n  FROM public.event_attendees WHERE event_booking_id = p_event_booking_id AND cancelled_at IS NOT NULL;\n  v_remaining_value := GREATEST(v_net_line - v_cancelled_value, 0);\n\n  SELECT COUNT(*), COALESCE(SUM(unit_price), 0) INTO v_remaining_count, v_remaining_units\n  FROM public.event_attendees WHERE event_booking_id = p_event_booking_id AND cancelled_at IS NULL;\n\n  IF p_attendee_ids IS NULL THEN\n    SELECT array_agg(id) INTO v_sel_ids FROM public.event_attendees\n    WHERE event_booking_id = p_event_booking_id AND cancelled_at IS NULL;\n  ELSE\n    SELECT array_agg(DISTINCT x) INTO v_sel_ids FROM unnest(p_attendee_ids) x;\n    IF EXISTS (SELECT 1 FROM unnest(v_sel_ids) x\n               WHERE NOT EXISTS (SELECT 1 FROM public.event_attendees ea WHERE ea.id = x AND ea.event_booking_id = p_event_booking_id)) THEN\n      RETURN jsonb_build_object('ok', false, 'reason', 'attendee_not_found');\n    END IF;\n    IF EXISTS (SELECT 1 FROM public.event_attendees WHERE id = ANY(v_sel_ids) AND cancelled_at IS NOT NULL) THEN\n      RETURN jsonb_build_object('ok', false, 'reason', 'already_cancelled');\n    END IF;\n  END IF;\n  IF v_sel_ids IS NULL OR cardinality(v_sel_ids) = 0 THEN\n    RETURN jsonb_build_object('ok', false, 'reason', 'nothing_to_cancel');\n  END IF;\n  IF EXISTS (SELECT 1 FROM public.event_attendees WHERE id = ANY(v_sel_ids) AND checked_in_at IS NOT NULL) THEN\n    RETURN jsonb_build_object('ok', false, 'reason', 'attendee_checked_in');\n  END IF;\n\n  SELECT COUNT(*), COALESCE(SUM(unit_price), 0) INTO v_sel_count, v_sel_units\n  FROM public.event_attendees WHERE id = ANY(v_sel_ids);\n\n  IF v_sel_count = v_remaining_count THEN\n    v_value := v_remaining_value;  -- the last places take whatever is left, so rounding never drifts\n  ELSIF v_remaining_units > 0 THEN\n    v_value := LEAST(ROUND(v_remaining_value * v_sel_units / v_remaining_units, 2), v_remaining_value);\n  ELSE\n    v_value := 0;\n  END IF;\n\n  RETURN jsonb_build_object(\n    'ok', true,\n    'event_id', b.event_id,\n    'customer_id', b.customer_id,\n    'attendee_ids', to_jsonb(v_sel_ids),\n    'places', v_sel_count,\n    'whole_booking', v_sel_count = v_remaining_count,\n    'value', v_value,\n    'refund_cutoff_at', b.refund_cutoff_at,\n    'before_cutoff', b.refund_cutoff_at IS NOT NULL AND v_now_london < (b.refund_cutoff_at AT TIME ZONE 'UTC'),\n    'event_started', b.starts_at IS NOT NULL AND v_now_london >= (b.starts_at AT TIME ZONE 'UTC'),\n    'event_cancelled', b.event_cancelled_at IS NOT NULL\n  );\nEND;\n$function$\n"
+  },
+  {
+   "name": "event_member_level",
+   "identity": "p_customer_id uuid",
+   "definition": "CREATE OR REPLACE FUNCTION public.event_member_level(p_customer_id uuid)\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT CASE WHEN bool_or(cm.is_herd) THEN 'herd' WHEN count(*) > 0 THEN 'pre_herd' ELSE NULL END\n  FROM public.customer_memberships cm\n  WHERE cm.customer_id = p_customer_id\n    AND cm.subscription_status = 'active'\n    AND (cm.cancel_effective_date IS NULL OR cm.cancel_effective_date >= (now() AT TIME ZONE 'Europe/London')::date);\n$function$\n"
+  },
+  {
+   "name": "event_member_level_with_new",
+   "identity": "p_customer_id uuid, p_new_membership_frequency text",
+   "definition": "CREATE OR REPLACE FUNCTION public.event_member_level_with_new(p_customer_id uuid, p_new_membership_frequency text DEFAULT NULL::text)\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT CASE\n    WHEN public.event_member_level(p_customer_id) = 'herd' OR p_new_membership_frequency = 'yearly' THEN 'herd'\n    WHEN public.event_member_level(p_customer_id) = 'pre_herd' OR p_new_membership_frequency = 'monthly' THEN 'pre_herd'\n    ELSE NULL\n  END;\n$function$\n"
+  },
+  {
+   "name": "flag_uncovered_credit_bookings",
+   "identity": "p_membership_id uuid, p_covered_through date",
+   "definition": "CREATE OR REPLACE FUNCTION public.flag_uncovered_credit_bookings(p_membership_id uuid, p_covered_through date)\n RETURNS integer\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\nDECLARE n integer;\nBEGIN\n  WITH upd AS (\n    UPDATE bookings b\n    SET status = 'payment_needed',\n        payment_due_by = LEAST(\n          now() + interval '72 hours',\n          ((b.start_time AT TIME ZONE 'UTC') AT TIME ZONE 'Europe/London')),\n        updated_at = now()\n    WHERE b.redeemed_membership_id = p_membership_id\n      AND b.redemption_source = 'membership_credit'\n      AND b.status = 'confirmed'\n      AND (b.start_time AT TIME ZONE 'UTC')::date > p_covered_through\n      AND (b.start_time AT TIME ZONE 'UTC') > (now() AT TIME ZONE 'Europe/London')\n    RETURNING 1)\n  SELECT count(*) INTO n FROM upd;\n  RETURN n;\nEND $function$\n"
+  },
+  {
+   "name": "generate_upcoming_sessions",
+   "identity": "horizon_days integer",
+   "definition": "CREATE OR REPLACE FUNCTION public.generate_upcoming_sessions(horizon_days integer DEFAULT 98)\n RETURNS integer\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\ndeclare v_edge date; v_target date; v_inserted int;\nbegin\n  v_target := (now() at time zone 'Europe/London')::date + horizon_days;\n  select coalesce(max(start_time)::date, (now() at time zone 'Europe/London')::date - 1)\n    into v_edge from sessions;\n  if v_edge >= v_target then return 0; end if;\n\n  insert into sessions (service_type_id, start_time, end_time, type, capacity, status)\n  select svc.id, (d.day + sl.start_time),\n         (d.day + sl.start_time) + (svc.duration || ' minutes')::interval,\n         svc.booking_type, svc.capacity, 'open'\n  from generate_series((v_edge + 1)::timestamp, v_target::timestamp, interval '1 day') as g(day_ts)\n  cross join lateral (select g.day_ts::date as day) d\n  join service_type_schedule_slots sl on sl.day_of_week = extract(dow from d.day)::smallint\n  join service_types svc on svc.id = sl.service_type_id\n  where svc.active and svc.duration is not null and svc.duration > 0 and svc.booking_type is not null\n  on conflict (service_type_id, start_time) do nothing;\n\n  get diagnostics v_inserted = row_count;\n  return v_inserted;\nend $function$\n"
+  },
+  {
+   "name": "lapse_sweep_expired_bookings",
+   "identity": "",
+   "definition": "CREATE OR REPLACE FUNCTION public.lapse_sweep_expired_bookings()\n RETURNS integer\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\nDECLARE n integer := 0; r record;\nBEGIN\n  FOR r IN\n    SELECT b.id, b.session_id, b.party_size\n    FROM bookings b\n    WHERE b.status = 'payment_needed' AND b.payment_due_by <= now() AND COALESCE(b.price_paid, 0) = 0\n    FOR UPDATE OF b\n  LOOP\n    UPDATE bookings SET status = 'cancelled', cancelled_at = now(), cancel_reason = 'membership_lapsed', updated_at = now()\n    WHERE id = r.id;\n    UPDATE sessions SET total_booked = GREATEST(total_booked - r.party_size, 0), updated_at = now()\n    WHERE id = r.session_id;\n    n := n + 1;\n  END LOOP;\n  RETURN n;\nEND $function$\n"
+  },
+  {
+   "name": "membership_mark_cancelled_by_stripe",
+   "identity": "p_stripe_subscription_id text",
+   "definition": "CREATE OR REPLACE FUNCTION public.membership_mark_cancelled_by_stripe(p_stripe_subscription_id text)\n RETURNS jsonb\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\nDECLARE m customer_memberships%ROWTYPE; covered date; today date := (now() AT TIME ZONE 'Europe/London')::date; flagged integer;\nBEGIN\n  SELECT * INTO m FROM customer_memberships WHERE stripe_subscription_id = p_stripe_subscription_id FOR UPDATE;\n  IF NOT FOUND THEN RETURN jsonb_build_object('found', false); END IF;\n  -- Involuntary end (was past_due) or Stripe-side cancel: access ends today unless an end date was already set.\n  covered := COALESCE(m.cancel_effective_date,\n                      CASE WHEN m.subscription_status = 'past_due'\n                           THEN (SELECT COALESCE(max(period_end), today - 1) FROM membership_credit_periods WHERE membership_id = m.id)\n                           ELSE today END);\n  UPDATE customer_memberships\n  SET subscription_status = 'cancelled',\n      cancel_effective_date = COALESCE(cancel_effective_date, covered),\n      updated_at = now()\n  WHERE id = m.id;\n  flagged := public.flag_uncovered_credit_bookings(m.id, covered);\n  RETURN jsonb_build_object('found', true, 'action', 'cancelled', 'covered_through', covered, 'bookings_flagged', flagged);\nEND $function$\n"
+  },
+  {
+   "name": "membership_mark_paid",
+   "identity": "p_stripe_subscription_id text, p_period_end timestamp with time zone",
+   "definition": "CREATE OR REPLACE FUNCTION public.membership_mark_paid(p_stripe_subscription_id text, p_period_end timestamp with time zone)\n RETURNS jsonb\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\nDECLARE m customer_memberships%ROWTYPE; restored integer := 0; periods integer;\nBEGIN\n  SELECT * INTO m FROM customer_memberships WHERE stripe_subscription_id = p_stripe_subscription_id FOR UPDATE;\n  IF NOT FOUND THEN RETURN jsonb_build_object('found', false); END IF;\n  IF m.subscription_status = 'cancelled' THEN\n    RETURN jsonb_build_object('found', true, 'action', 'ignored_cancelled');\n  END IF;\n  UPDATE customer_memberships\n  SET subscription_status = 'active',\n      next_renewal_date = COALESCE((p_period_end AT TIME ZONE 'Europe/London')::date, next_renewal_date),\n      updated_at = now()\n  WHERE id = m.id;\n  WITH r AS (\n    UPDATE bookings SET status = 'confirmed', payment_due_by = NULL, updated_at = now()\n    WHERE redeemed_membership_id = m.id AND redemption_source = 'membership_credit' AND status = 'payment_needed'\n    RETURNING 1)\n  SELECT count(*) INTO restored FROM r;\n  SELECT public.allocate_membership_credit_periods() INTO periods;\n  RETURN jsonb_build_object('found', true, 'action', 'reactivated', 'was', m.subscription_status,\n                            'bookings_restored', restored, 'periods_created', periods);\nEND $function$\n"
+  },
+  {
+   "name": "membership_mark_payment_failed",
+   "identity": "p_stripe_subscription_id text",
+   "definition": "CREATE OR REPLACE FUNCTION public.membership_mark_payment_failed(p_stripe_subscription_id text)\n RETURNS jsonb\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\nDECLARE m customer_memberships%ROWTYPE; covered date; flagged integer;\nBEGIN\n  SELECT * INTO m FROM customer_memberships WHERE stripe_subscription_id = p_stripe_subscription_id FOR UPDATE;\n  IF NOT FOUND THEN RETURN jsonb_build_object('found', false); END IF;\n  IF m.subscription_status = 'cancelled' THEN\n    RETURN jsonb_build_object('found', true, 'action', 'ignored_cancelled');\n  END IF;\n  UPDATE customer_memberships SET subscription_status = 'past_due', updated_at = now() WHERE id = m.id;\n  SELECT COALESCE(max(period_end), (now() AT TIME ZONE 'Europe/London')::date - 1) INTO covered\n  FROM membership_credit_periods WHERE membership_id = m.id;\n  flagged := public.flag_uncovered_credit_bookings(m.id, covered);\n  RETURN jsonb_build_object('found', true, 'action', 'past_due', 'covered_through', covered, 'bookings_flagged', flagged);\nEND $function$\n"
+  },
+  {
+   "name": "membership_period_for",
+   "identity": "p_anchor date, p_day date",
+   "definition": "CREATE OR REPLACE FUNCTION public.membership_period_for(p_anchor date, p_day date)\n RETURNS TABLE(period_start date, period_end date)\n LANGUAGE plpgsql\n IMMUTABLE\nAS $function$\nDECLARE\n  n INTEGER;\nBEGIN\n  IF p_day < p_anchor THEN\n    RETURN;\n  END IF;\n  n := (EXTRACT(YEAR FROM p_day)::INTEGER - EXTRACT(YEAR FROM p_anchor)::INTEGER) * 12\n     + (EXTRACT(MONTH FROM p_day)::INTEGER - EXTRACT(MONTH FROM p_anchor)::INTEGER);\n  WHILE (p_anchor + make_interval(months => n))::DATE > p_day LOOP\n    n := n - 1;\n  END LOOP;\n  WHILE (p_anchor + make_interval(months => n + 1))::DATE <= p_day LOOP\n    n := n + 1;\n  END LOOP;\n  period_start := (p_anchor + make_interval(months => n))::DATE;\n  period_end   := (p_anchor + make_interval(months => n + 1))::DATE - 1;\n  RETURN NEXT;\nEND;\n$function$\n"
+  },
+  {
+   "name": "membership_sync_cancel_at_period_end",
+   "identity": "p_stripe_subscription_id text, p_cancel_at_period_end boolean, p_cancel_at timestamp with time zone, p_period_end timestamp with time zone",
+   "definition": "CREATE OR REPLACE FUNCTION public.membership_sync_cancel_at_period_end(p_stripe_subscription_id text, p_cancel_at_period_end boolean, p_cancel_at timestamp with time zone, p_period_end timestamp with time zone)\n RETURNS jsonb\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\nDECLARE m customer_memberships%ROWTYPE; new_date date;\nBEGIN\n  SELECT * INTO m FROM customer_memberships WHERE stripe_subscription_id = p_stripe_subscription_id FOR UPDATE;\n  IF NOT FOUND THEN RETURN jsonb_build_object('found', false); END IF;\n  IF m.subscription_status = 'cancelled' THEN\n    RETURN jsonb_build_object('found', true, 'action', 'ignored_cancelled');\n  END IF;\n\n  IF p_cancel_at IS NOT NULL THEN\n    new_date := (p_cancel_at AT TIME ZONE 'Europe/London')::date - 1;\n  ELSIF p_cancel_at_period_end THEN\n    new_date := (p_period_end AT TIME ZONE 'Europe/London')::date - 1;\n  ELSE\n    new_date := NULL;\n  END IF;\n\n  IF m.cancel_effective_date IS NOT DISTINCT FROM new_date THEN\n    RETURN jsonb_build_object('found', true, 'action', 'unchanged', 'cancel_effective_date', new_date);\n  END IF;\n\n  UPDATE customer_memberships SET cancel_effective_date = new_date, updated_at = now() WHERE id = m.id;\n  RETURN jsonb_build_object(\n    'found', true,\n    'action', CASE WHEN new_date IS NULL THEN 'cancel_cleared' ELSE 'cancel_scheduled' END,\n    'cancel_effective_date', new_date\n  );\nEND $function$\n"
+  },
+  {
+   "name": "pass_covers_session",
+   "identity": "p_pass_type_id uuid, p_session_id uuid",
+   "definition": "CREATE OR REPLACE FUNCTION public.pass_covers_session(p_pass_type_id uuid, p_session_id uuid)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE((\n    SELECT CASE\n      WHEN s.type <> 'public' OR s.band_id IS NULL THEN false\n      WHEN spt.level = 'all_access' THEN true\n      ELSE COALESCE((\n        SELECT t.credit_eligible FROM public.membership_band_terms t\n        WHERE t.membership_level = spt.level AND t.band_id = s.band_id\n      ), false)\n    END\n    FROM public.session_pass_types spt\n    CROSS JOIN public.sessions s\n    WHERE spt.id = p_pass_type_id AND s.id = p_session_id\n  ), false);\n$function$\n"
+  },
+  {
+   "name": "plan_seat_terms",
+   "identity": "p_plan_id uuid, p_session_id uuid",
+   "definition": "CREATE OR REPLACE FUNCTION public.plan_seat_terms(p_plan_id uuid, p_session_id uuid)\n RETURNS TABLE(credit_eligible boolean, discount_percent numeric, list_price numeric, unit_price numeric)\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(t.credit_eligible, false),\n         COALESCE(t.discount_percent, 0),\n         b.price,\n         ROUND(b.price * (1 - COALESCE(t.discount_percent, 0) / 100), 2)\n  FROM public.sessions s\n  JOIN public.session_bands b ON b.id = s.band_id\n  JOIN public.membership_plans mp ON mp.id = p_plan_id\n  LEFT JOIN public.membership_band_terms t ON t.membership_level = mp.level AND t.band_id = s.band_id\n  WHERE s.id = p_session_id AND s.type = 'public';\n$function$\n"
+  },
+  {
+   "name": "purge_api_idempotency",
+   "identity": "",
+   "definition": "CREATE OR REPLACE FUNCTION public.purge_api_idempotency()\n RETURNS integer\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\nDECLARE n integer;\nBEGIN\n  DELETE FROM api_idempotency WHERE created_at < now() - interval '7 days';\n  GET DIAGNOSTICS n = ROW_COUNT;\n  RETURN n;\nEND $function$\n"
+  },
+  {
+   "name": "purge_parity_log",
+   "identity": "",
+   "definition": "CREATE OR REPLACE FUNCTION public.purge_parity_log()\n RETURNS integer\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\nDECLARE n integer;\nBEGIN\n  DELETE FROM parity_log WHERE at < now() - interval '30 days';\n  GET DIAGNOSTICS n = ROW_COUNT;\n  RETURN n;\nEND $function$\n"
+  },
+  {
+   "name": "quote_booking",
+   "identity": "p_session_id uuid, p_customer_id uuid, p_party_size integer",
+   "definition": "CREATE OR REPLACE FUNCTION public.quote_booking(p_session_id uuid, p_customer_id uuid, p_party_size integer)\n RETURNS TABLE(seat_no integer, seat_kind text, band_id uuid, list_price numeric, unit_price numeric, credit_eligible boolean, membership_level text, discount_percent numeric)\n LANGUAGE plpgsql\n STABLE\nAS $function$\nDECLARE\n  v_band UUID;\n  v_price NUMERIC;\n  v_level TEXT;\n  v_eligible BOOLEAN := false;\n  v_discount NUMERIC := 0;\nBEGIN\n  IF p_party_size IS NULL OR p_party_size < 1 THEN\n    RAISE EXCEPTION 'Party size must be at least 1';\n  END IF;\n\n  SELECT s.band_id INTO v_band\n  FROM sessions s\n  WHERE s.id = p_session_id AND s.type = 'public';\n\n  IF v_band IS NULL THEN\n    RAISE EXCEPTION 'Session % is not a public session with a band', p_session_id;\n  END IF;\n\n  SELECT b.price INTO v_price FROM session_bands b WHERE b.id = v_band;\n\n  SELECT mp.level INTO v_level\n  FROM customer_memberships cm\n  JOIN membership_plans mp ON mp.id = cm.plan_id\n  WHERE cm.customer_id = p_customer_id\n    AND cm.subscription_status = 'active'\n    AND mp.level IS NOT NULL\n  ORDER BY cm.created_at DESC\n  LIMIT 1;\n\n  IF v_level IS NOT NULL THEN\n    SELECT t.credit_eligible, t.discount_percent\n      INTO v_eligible, v_discount\n    FROM membership_band_terms t\n    WHERE t.membership_level = v_level AND t.band_id = v_band;\n\n    v_eligible := COALESCE(v_eligible, false);\n    v_discount := COALESCE(v_discount, 0);\n  END IF;\n\n  RETURN QUERY\n  SELECT\n    g,\n    CASE WHEN g = 1 THEN 'account_holder' ELSE 'guest' END,\n    v_band,\n    v_price,\n    CASE WHEN g = 1 THEN ROUND(v_price * (1 - v_discount / 100), 2) ELSE v_price END,\n    (g = 1 AND v_eligible),\n    CASE WHEN g = 1 THEN v_level ELSE NULL END,\n    CASE WHEN g = 1 THEN v_discount ELSE 0::NUMERIC END\n  FROM generate_series(1, p_party_size) AS g;\nEND;\n$function$\n"
+  },
+  {
+   "name": "quote_event",
+   "identity": "p_event_id uuid, p_customer_id uuid, p_places integer, p_account_holder_attending boolean, p_new_membership_frequency text",
+   "definition": "CREATE OR REPLACE FUNCTION public.quote_event(p_event_id uuid, p_customer_id uuid, p_places integer, p_account_holder_attending boolean, p_new_membership_frequency text DEFAULT NULL::text)\n RETURNS TABLE(place_no integer, attendee_type text, price_level text, unit_price numeric)\n LANGUAGE plpgsql\n STABLE\nAS $function$\nDECLARE\n  e public.events%ROWTYPE;\n  v_level text := public.event_member_level_with_new(p_customer_id, p_new_membership_frequency);\nBEGIN\n  IF p_places IS NULL OR p_places < 1 THEN RAISE EXCEPTION 'Places must be at least 1'; END IF;\n  IF p_new_membership_frequency IS NOT NULL AND p_new_membership_frequency NOT IN ('monthly', 'yearly') THEN\n    RAISE EXCEPTION 'Membership frequency must be monthly or yearly';\n  END IF;\n  SELECT * INTO e FROM public.events WHERE id = p_event_id;\n  IF NOT FOUND THEN RAISE EXCEPTION 'Event % not found', p_event_id; END IF;\n  IF e.price_public IS NULL OR e.price_pre_herd IS NULL OR e.price_herd IS NULL THEN\n    RAISE EXCEPTION 'Event % has no prices set', p_event_id;\n  END IF;\n  RETURN QUERY\n  SELECT g,\n    CASE WHEN g = 1 AND p_account_holder_attending THEN 'account_holder' ELSE 'guest' END,\n    CASE WHEN g = 1 AND p_account_holder_attending AND v_level IS NOT NULL THEN v_level ELSE 'public' END,\n    CASE\n      WHEN g = 1 AND p_account_holder_attending AND v_level = 'herd' THEN e.price_herd\n      WHEN g = 1 AND p_account_holder_attending AND v_level = 'pre_herd' THEN e.price_pre_herd\n      ELSE e.price_public\n    END\n  FROM generate_series(1, p_places) AS g;\nEND; $function$\n"
+  },
+  {
+   "name": "reassign_session_bands",
+   "identity": "p_from timestamp with time zone",
+   "definition": "CREATE OR REPLACE FUNCTION public.reassign_session_bands(p_from timestamp with time zone DEFAULT now())\n RETURNS integer\n LANGUAGE plpgsql\nAS $function$\nDECLARE\n  v_count INTEGER;\nBEGIN\n  UPDATE sessions s\n  SET band_id = band_for_session_start(s.start_time)\n  WHERE s.type = 'public'\n    AND s.band_overridden = false\n    AND s.start_time >= p_from\n    AND s.band_id IS DISTINCT FROM band_for_session_start(s.start_time);\n\n  GET DIAGNOSTICS v_count = ROW_COUNT;\n  RETURN v_count;\nEND;\n$function$\n"
+  },
+  {
+   "name": "refresh_herd_flags",
+   "identity": "",
+   "definition": "CREATE OR REPLACE FUNCTION public.refresh_herd_flags()\n RETURNS integer\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\ndeclare\n  wait_months integer;\n  changed integer;\nbegin\n  select addon_credit_wait_months into wait_months from public.membership_settings where id;\n  wait_months := coalesce(wait_months, 6);\n  update public.customer_memberships cm\n     set is_herd = (cm.billing_frequency = 'yearly'\n                    or cm.start_date <= (now() at time zone 'Europe/London')::date - (wait_months || ' months')::interval),\n         updated_at = now()\n   where cm.herd_override is null\n     and cm.is_herd is distinct from (cm.billing_frequency = 'yearly'\n                    or cm.start_date <= (now() at time zone 'Europe/London')::date - (wait_months || ' months')::interval);\n  get diagnostics changed = row_count;\n  return changed;\nend $function$\n"
+  },
+  {
+   "name": "release_event_places",
+   "identity": "p_event_id uuid, p_places integer",
+   "definition": "CREATE OR REPLACE FUNCTION public.release_event_places(p_event_id uuid, p_places integer)\n RETURNS void\n LANGUAGE sql\nAS $function$\n  UPDATE public.events SET places_booked = GREATEST(places_booked - p_places, 0), updated_at = now()\n  WHERE id = p_event_id;\n$function$\n"
+  },
+  {
+   "name": "rls_auto_enable",
+   "identity": "",
+   "definition": "CREATE OR REPLACE FUNCTION public.rls_auto_enable()\n RETURNS event_trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'pg_catalog'\nAS $function$\nDECLARE\n  cmd record;\nBEGIN\n  FOR cmd IN\n    SELECT *\n    FROM pg_event_trigger_ddl_commands()\n    WHERE command_tag IN ('CREATE TABLE', 'CREATE TABLE AS', 'SELECT INTO')\n      AND object_type IN ('table','partitioned table')\n  LOOP\n     IF cmd.schema_name IS NOT NULL AND cmd.schema_name IN ('public') AND cmd.schema_name NOT IN ('pg_catalog','information_schema') AND cmd.schema_name NOT LIKE 'pg_toast%' AND cmd.schema_name NOT LIKE 'pg_temp%' THEN\n      BEGIN\n        EXECUTE format('alter table if exists %s enable row level security', cmd.object_identity);\n        RAISE LOG 'rls_auto_enable: enabled RLS on %', cmd.object_identity;\n      EXCEPTION\n        WHEN OTHERS THEN\n          RAISE LOG 'rls_auto_enable: failed to enable RLS on %', cmd.object_identity;\n      END;\n     ELSE\n        RAISE LOG 'rls_auto_enable: skip % (either system schema or not in enforced list: %.)', cmd.object_identity, cmd.schema_name;\n     END IF;\n  END LOOP;\nEND;\n$function$\n"
+  },
+  {
+   "name": "run_membership_maintenance",
+   "identity": "",
+   "definition": "CREATE OR REPLACE FUNCTION public.run_membership_maintenance()\n RETURNS jsonb\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\nDECLARE p integer; s integer;\nBEGIN\n  p := public.allocate_membership_credit_periods();\n  s := public.lapse_sweep_expired_bookings();\n  RETURN jsonb_build_object('periods_created', p, 'lapsed_bookings_cancelled', s);\nEND $function$\n"
+  },
+  {
+   "name": "sessions_assign_band",
+   "identity": "",
+   "definition": "CREATE OR REPLACE FUNCTION public.sessions_assign_band()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.band_id IS NULL THEN\n      NEW.band_id := band_for_session_start(NEW.start_time);\n    END IF;\n  ELSIF NEW.start_time IS DISTINCT FROM OLD.start_time AND NOT NEW.band_overridden THEN\n    NEW.band_id := band_for_session_start(NEW.start_time);\n  END IF;\n  RETURN NEW;\nEND;\n$function$\n"
+  },
+  {
+   "name": "store_credit_apply",
+   "identity": "p_customer_id uuid, p_amount numeric, p_reason text, p_order_id uuid, p_booking_id uuid, p_staff_id uuid, p_note text, p_gift_card_id uuid",
+   "definition": "CREATE OR REPLACE FUNCTION public.store_credit_apply(p_customer_id uuid, p_amount numeric, p_reason text, p_order_id uuid DEFAULT NULL::uuid, p_booking_id uuid DEFAULT NULL::uuid, p_staff_id uuid DEFAULT NULL::uuid, p_note text DEFAULT NULL::text, p_gift_card_id uuid DEFAULT NULL::uuid)\n RETURNS jsonb\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\nDECLARE v_balance numeric; v_new numeric; v_txn uuid;\nBEGIN\n  IF p_amount IS NULL OR p_amount = 0 THEN\n    RETURN jsonb_build_object('ok', false, 'reason', 'amount_required');\n  END IF;\n  SELECT store_credit_balance INTO v_balance FROM customers WHERE id = p_customer_id FOR UPDATE;\n  IF NOT FOUND THEN\n    RETURN jsonb_build_object('ok', false, 'reason', 'customer_not_found');\n  END IF;\n  v_new := round(v_balance + p_amount, 2);\n  IF v_new < 0 THEN\n    RETURN jsonb_build_object('ok', false, 'reason', 'insufficient_store_credit', 'balance', v_balance);\n  END IF;\n  UPDATE customers SET store_credit_balance = v_new, updated_at = now() WHERE id = p_customer_id;\n  INSERT INTO store_credit_transactions (customer_id, amount, balance_after, reason, order_id, booking_id, gift_card_id, staff_id, note)\n  VALUES (p_customer_id, round(p_amount,2), v_new, p_reason, p_order_id, p_booking_id, p_gift_card_id, p_staff_id, p_note)\n  RETURNING id INTO v_txn;\n  RETURN jsonb_build_object('ok', true, 'transaction_id', v_txn, 'balance', v_new);\nEND $function$\n"
+  },
+  {
+   "name": "update_updated_at_column",
+   "identity": "",
+   "definition": "CREATE OR REPLACE FUNCTION public.update_updated_at_column()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  NEW.updated_at = NOW();\n  RETURN NEW;\nEND;\n$function$\n"
+  }
+ ],
+ "triggers": [
+  {
+   "table": "addons",
+   "name": "update_addons_updated_at",
+   "definition": "CREATE TRIGGER update_addons_updated_at BEFORE UPDATE ON public.addons FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+  },
+  {
+   "table": "band_rules",
+   "name": "update_band_rules_updated_at",
+   "definition": "CREATE TRIGGER update_band_rules_updated_at BEFORE UPDATE ON public.band_rules FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+  },
+  {
+   "table": "bookings",
+   "name": "bookings_one_per_customer_day",
+   "definition": "CREATE TRIGGER bookings_one_per_customer_day BEFORE INSERT OR UPDATE OF status, session_id, customer_id ON public.bookings FOR EACH ROW EXECUTE FUNCTION enforce_one_booking_per_customer_day()"
+  },
+  {
+   "table": "bookings",
+   "name": "update_bookings_updated_at",
+   "definition": "CREATE TRIGGER update_bookings_updated_at BEFORE UPDATE ON public.bookings FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+  },
+  {
+   "table": "customer_memberships",
+   "name": "update_customer_memberships_updated_at",
+   "definition": "CREATE TRIGGER update_customer_memberships_updated_at BEFORE UPDATE ON public.customer_memberships FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+  },
+  {
+   "table": "customer_session_passes",
+   "name": "update_customer_session_passes_updated_at",
+   "definition": "CREATE TRIGGER update_customer_session_passes_updated_at BEFORE UPDATE ON public.customer_session_passes FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+  },
+  {
+   "table": "customers",
+   "name": "update_customers_updated_at",
+   "definition": "CREATE TRIGGER update_customers_updated_at BEFORE UPDATE ON public.customers FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+  },
+  {
+   "table": "gift_card_presets",
+   "name": "update_gift_card_presets_updated_at",
+   "definition": "CREATE TRIGGER update_gift_card_presets_updated_at BEFORE UPDATE ON public.gift_card_presets FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+  },
+  {
+   "table": "gift_card_types",
+   "name": "update_gift_card_types_updated_at",
+   "definition": "CREATE TRIGGER update_gift_card_types_updated_at BEFORE UPDATE ON public.gift_card_types FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+  },
+  {
+   "table": "gift_cards",
+   "name": "update_gift_cards_updated_at",
+   "definition": "CREATE TRIGGER update_gift_cards_updated_at BEFORE UPDATE ON public.gift_cards FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+  },
+  {
+   "table": "membership_band_terms",
+   "name": "update_membership_band_terms_updated_at",
+   "definition": "CREATE TRIGGER update_membership_band_terms_updated_at BEFORE UPDATE ON public.membership_band_terms FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+  },
+  {
+   "table": "membership_plans",
+   "name": "update_membership_plans_updated_at",
+   "definition": "CREATE TRIGGER update_membership_plans_updated_at BEFORE UPDATE ON public.membership_plans FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+  },
+  {
+   "table": "orders",
+   "name": "update_orders_updated_at",
+   "definition": "CREATE TRIGGER update_orders_updated_at BEFORE UPDATE ON public.orders FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+  },
+  {
+   "table": "product_variants",
+   "name": "update_product_variants_updated_at",
+   "definition": "CREATE TRIGGER update_product_variants_updated_at BEFORE UPDATE ON public.product_variants FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+  },
+  {
+   "table": "products",
+   "name": "update_products_updated_at",
+   "definition": "CREATE TRIGGER update_products_updated_at BEFORE UPDATE ON public.products FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+  },
+  {
+   "table": "service_type_price_tiers",
+   "name": "update_price_tiers_updated_at",
+   "definition": "CREATE TRIGGER update_price_tiers_updated_at BEFORE UPDATE ON public.service_type_price_tiers FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+  },
+  {
+   "table": "service_types",
+   "name": "update_service_types_updated_at",
+   "definition": "CREATE TRIGGER update_service_types_updated_at BEFORE UPDATE ON public.service_types FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+  },
+  {
+   "table": "session_bands",
+   "name": "update_session_bands_updated_at",
+   "definition": "CREATE TRIGGER update_session_bands_updated_at BEFORE UPDATE ON public.session_bands FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+  },
+  {
+   "table": "session_pass_types",
+   "name": "update_session_pass_types_updated_at",
+   "definition": "CREATE TRIGGER update_session_pass_types_updated_at BEFORE UPDATE ON public.session_pass_types FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+  },
+  {
+   "table": "sessions",
+   "name": "sessions_assign_band",
+   "definition": "CREATE TRIGGER sessions_assign_band BEFORE INSERT OR UPDATE OF start_time ON public.sessions FOR EACH ROW EXECUTE FUNCTION sessions_assign_band()"
+  },
+  {
+   "table": "sessions",
+   "name": "update_sessions_updated_at",
+   "definition": "CREATE TRIGGER update_sessions_updated_at BEFORE UPDATE ON public.sessions FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+  },
+  {
+   "table": "staff",
+   "name": "update_staff_updated_at",
+   "definition": "CREATE TRIGGER update_staff_updated_at BEFORE UPDATE ON public.staff FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+  }
+ ]
+}

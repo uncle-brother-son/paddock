@@ -1,0 +1,139 @@
+[
+  {
+    "name": "object",
+    "value": {
+      "a": 1
+    },
+    "type": "object",
+    "stored": {
+      "a": 1
+    }
+  },
+  {
+    "name": "nested_object",
+    "value": {
+      "a": {
+        "b": [
+          1,
+          {
+            "c": null
+          }
+        ]
+      },
+      "d": "x",
+      "e": true
+    },
+    "type": "object",
+    "stored": {
+      "a": {
+        "b": [
+          1,
+          {
+            "c": null
+          }
+        ]
+      },
+      "d": "x",
+      "e": true
+    }
+  },
+  {
+    "name": "json_string_of_object",
+    "value": "{\"a\":1}",
+    "type": "object",
+    "stored": {
+      "a": 1
+    }
+  },
+  {
+    "name": "json_string_of_array",
+    "value": "[1,2]",
+    "type": "array",
+    "stored": [
+      1,
+      2
+    ]
+  },
+  {
+    "name": "json_string_of_string",
+    "value": "\"hello\"",
+    "type": "string",
+    "stored": "hello"
+  },
+  {
+    "name": "json_string_null",
+    "value": "null",
+    "type": "null",
+    "stored": null
+  },
+  {
+    "name": "plain_string",
+    "value": "hello",
+    "refused": "invalid input syntax for type json"
+  },
+  {
+    "name": "empty_string",
+    "value": "",
+    "refused": "invalid input syntax for type json"
+  },
+  {
+    "name": "array_of_numbers",
+    "value": [
+      1,
+      2
+    ],
+    "refused": "invalid input syntax for type json"
+  },
+  {
+    "name": "array_of_strings",
+    "value": [
+      "a",
+      "b"
+    ],
+    "refused": "invalid input syntax for type json"
+  },
+  {
+    "name": "array_of_objects",
+    "value": [
+      {
+        "a": 1
+      },
+      {
+        "b": 2
+      }
+    ],
+    "refused": "invalid input syntax for type json"
+  },
+  {
+    "name": "array_of_booleans",
+    "value": [
+      true,
+      false
+    ],
+    "refused": "invalid input syntax for type json"
+  },
+  {
+    "name": "empty_array",
+    "value": [],
+    "type": "object",
+    "stored": {}
+  },
+  {
+    "name": "number",
+    "value": 5,
+    "type": "number",
+    "stored": 5
+  },
+  {
+    "name": "boolean",
+    "value": true,
+    "type": "boolean",
+    "stored": true
+  },
+  {
+    "name": "null",
+    "value": null,
+    "type": null,
+    "stored": null
+  }
+]

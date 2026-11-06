@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { PGlite } from '@electric-sql/pglite'
+import { btree_gist } from '@electric-sql/pglite/contrib/btree_gist'
+import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto'
 import { uuid_ossp } from '@electric-sql/pglite/contrib/uuid_ossp'
 import { PGLiteSocketServer } from '@electric-sql/pglite-socket'
 import { createDb, type Db } from '@/server/db/client'
@@ -14,25 +16,49 @@ export interface TestDatabase {
   stop(): Promise<void>
 }
 
+export interface TestDatabaseOptions {
+  /**
+   * 'rules' (the default) is schema.sql: the tables the read rules use, with no foreign keys or
+   * triggers, so fixtures can set ids directly. 'live' is live-schema.sql: every table, foreign
+   * key, trigger and function from the live catalog, for anything that writes.
+   */
+  schema?: 'rules' | 'live'
+}
+
+/** What live-schema.sql needs in place first. Shared with real-postgres.ts. */
+export const LIVE_EXTENSIONS_SQL = `
+  CREATE SCHEMA extensions;
+  CREATE EXTENSION "uuid-ossp" SCHEMA extensions;
+  CREATE EXTENSION pgcrypto SCHEMA extensions;
+  CREATE EXTENSION btree_gist SCHEMA public;
+  SET search_path = public, extensions;
+`
+
+/** The role the Worker logs in as, set up like paddock_worker on live. */
+export const WORKER_ROLE_SQL = `
+  CREATE ROLE paddock_worker LOGIN BYPASSRLS NOINHERIT NOSUPERUSER NOCREATEROLE NOCREATEDB;
+  GRANT USAGE ON SCHEMA public, extensions TO paddock_worker;
+  GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO paddock_worker;
+  GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO paddock_worker;
+`
+
 /**
- * A real Postgres (PGlite) with the live schema for the rules (testing/schema.sql), reached over a
- * socket through the real driver, so column types and parameters behave as in production.
+ * A real Postgres (PGlite) with a copy of the live schema, reached over a socket through the real
+ * driver, so column types and parameters behave as in production. One session only: anything
+ * about locks between connections needs real-postgres.ts.
  */
-export async function startTestDatabase(): Promise<TestDatabase> {
-  const pg = await PGlite.create({ extensions: { uuid_ossp } })
-  await pg.exec(`
-    CREATE SCHEMA extensions;
-    CREATE EXTENSION "uuid-ossp" SCHEMA extensions;
-    SET search_path = public, extensions;
-  `)
-  await pg.exec(readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'))
-  await pg.exec(`
-    CREATE ROLE paddock_worker LOGIN BYPASSRLS NOINHERIT NOSUPERUSER NOCREATEROLE NOCREATEDB;
-    GRANT USAGE ON SCHEMA public, extensions TO paddock_worker;
-    GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO paddock_worker;
-    GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO paddock_worker;
-    SET ROLE paddock_worker;
-  `)
+export async function startTestDatabase({ schema = 'rules' }: TestDatabaseOptions = {}): Promise<TestDatabase> {
+  const live = schema === 'live'
+  const pg = await PGlite.create({ extensions: live ? { uuid_ossp, btree_gist, pgcrypto } : { uuid_ossp } })
+  await pg.exec(
+    live
+      ? LIVE_EXTENSIONS_SQL
+      : `CREATE SCHEMA extensions;
+         CREATE EXTENSION "uuid-ossp" SCHEMA extensions;
+         SET search_path = public, extensions;`
+  )
+  await pg.exec(readFileSync(path.join(__dirname, live ? 'live-schema.sql' : 'schema.sql'), 'utf8'))
+  await pg.exec(`${WORKER_ROLE_SQL} SET ROLE paddock_worker;`)
 
   const server = new PGLiteSocketServer({ db: pg, port: 0, host: '127.0.0.1', maxConnections: 20 })
   await server.start()

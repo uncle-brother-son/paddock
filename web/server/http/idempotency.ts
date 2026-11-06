@@ -118,10 +118,12 @@ export async function completeIdempotencyKey(db: Queryable, scope: IdempotencySc
 }
 
 /**
- * The idempotency key for one Stripe call inside a request. It stays the same however many times
- * the request is retried, and differs between the steps of one request (e.g. 'charge', 'refund').
+ * The idempotency key for one Stripe call. It is built from the id of the record written before
+ * the call (the order, or a pending change's row), never from the request's Idempotency-Key: a
+ * new request key after a crash must still reach the same Stripe key, or the customer could be
+ * charged twice. `step` tells the calls for one record apart (e.g. 'charge', 'refund-charge').
  */
-export function stripeIdempotencyKey(requestKey: string, step: string): string {
+export function stripeIdempotencyKey(recordId: string, step: string): string {
   if (!STRIPE_STEP.test(step)) throw new Error(`Invalid Stripe idempotency step: ${step}`)
-  return `${requestKey}:${step}`
+  return `${recordId}:${step}`
 }

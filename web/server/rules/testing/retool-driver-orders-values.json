@@ -1,0 +1,81 @@
+{
+  "reads": {
+    "json_agg_value": [
+      {
+        "a": 1,
+        "c": "b"
+      }
+    ],
+    "jsonb_built": {
+      "at": "2026-11-04T19:56:05.983+00:00",
+      "amount": 12.5
+    },
+    "jsonb_array": [
+      1,
+      {
+        "a": null
+      }
+    ],
+    "jsonb_json_null": null,
+    "sum_numeric": "1.50",
+    "sum_int": "1",
+    "extract_value": "1793750400",
+    "float8_value": 1.5,
+    "real_value": 2.5,
+    "uuid_array": [
+      "00000000-0000-4000-8000-000000000001"
+    ],
+    "numeric_array": [
+      1.5
+    ],
+    "int_array": [
+      1,
+      2
+    ],
+    "bool_array": [
+      true
+    ],
+    "timestamptz_as_date": "2026-11-04",
+    "time_plus_interval": "10:00:00"
+  },
+  "params": {
+    "string_to_jsonb": {
+      "v": "object"
+    },
+    "object_to_jsonb": {
+      "v": "object"
+    },
+    "uuid_array": {
+      "v": [
+        "00000000-0000-4000-8000-000000000001"
+      ]
+    },
+    "empty_array": {
+      "v": []
+    },
+    "numeric_array": {
+      "v": [
+        1.5,
+        2
+      ]
+    },
+    "text_array": {
+      "v": [
+        "a",
+        "b,c"
+      ]
+    },
+    "number_to_numeric": {
+      "v": "12.5"
+    },
+    "float_noise": {
+      "v": "0.30000000000000004"
+    },
+    "null_jsonb": {
+      "v": null
+    },
+    "date_param": {
+      "v": "2026-11-04T10:00:00.000Z"
+    }
+  }
+}

@@ -218,10 +218,10 @@ describe('stableStringify and hashRequest', () => {
 })
 
 describe('stripeIdempotencyKey', () => {
-  it('is stable for a request and step, and unique per step', () => {
+  it('is stable for a record and step, and unique per step', () => {
     expect(stripeIdempotencyKey(KEY, 'charge')).toBe(stripeIdempotencyKey(KEY, 'charge'))
     expect(stripeIdempotencyKey(KEY, 'charge')).not.toBe(stripeIdempotencyKey(KEY, 'refund'))
-    expect(stripeIdempotencyKey(KEY, 'charge')).not.toBe(stripeIdempotencyKey('another-request-key', 'charge'))
+    expect(stripeIdempotencyKey(KEY, 'charge')).not.toBe(stripeIdempotencyKey('another-record-id', 'charge'))
   })
 
   it("stays within Stripe's 255 characters for the longest key", () => {

@@ -1,0 +1,27 @@
+{
+  "scenario": "saved-card-declined-rolls-back",
+  "results": [
+    {
+      "success": false,
+      "stage": "payment",
+      "reason": "charge_failed",
+      "message": "Failed to charge saved card: Your card was declined."
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "paymentIntents.create",
+      "params": {
+        "amount": 5400,
+        "currency": "gbp",
+        "customer": "cus_seed",
+        "payment_method": "pm_seed",
+        "off_session": true,
+        "confirm": true,
+        "description": "Staff-created order for booking, add-ons, merchandise"
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {}
+}

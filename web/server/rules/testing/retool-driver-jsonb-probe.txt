@@ -1,0 +1,34 @@
+// Paste into `retool resource explore --json` from the staff app checkout (classified read-only; no
+// table is read). retool-driver-jsonb-values.json holds each input with what the real Retool resource
+// did with it on 5 Nov 2026. A .txt so the Worker does not type check it: paddockData is a Retool global.
+const cases: Array<[string, unknown]> = [
+  ['object', { a: 1 }],
+  ['nested_object', { a: { b: [1, { c: null }] }, d: 'x', e: true }],
+  ['json_string_of_object', JSON.stringify({ a: 1 })],
+  ['json_string_of_array', JSON.stringify([1, 2])],
+  ['json_string_of_string', JSON.stringify('hello')],
+  ['json_string_null', 'null'],
+  ['plain_string', 'hello'],
+  ['empty_string', ''],
+  ['array_of_numbers', [1, 2]],
+  ['array_of_strings', ['a', 'b']],
+  ['array_of_objects', [{ a: 1 }, { b: 2 }]],
+  ['array_of_booleans', [true, false]],
+  ['empty_array', []],
+  ['number', 5],
+  ['boolean', true],
+  ['null', null],
+]
+const out: Record<string, unknown> = {}
+for (const [name, value] of cases) {
+  try {
+    const r = await paddockData.query<{ t: string | null; v: unknown }>(
+      `SELECT jsonb_typeof(x) AS t, x AS v FROM (SELECT $1::jsonb AS x) s`,
+      [value as never]
+    )
+    out[name] = r.data[0]
+  } catch (err) {
+    out[name] = { error: err instanceof Error ? err.message : String(err) }
+  }
+}
+return out

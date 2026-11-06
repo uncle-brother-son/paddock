@@ -1,6 +1,15 @@
 import 'server-only'
 import type { StaffParityInput } from '@/contracts'
-import type { Queryable, SqlParam } from '@/server/db'
+import type { Queryable } from '@/server/db'
+
+/**
+ * These columns take any JSON value, and the driver reads a bound string as JSON text, so each is
+ * encoded here: a result that is the string "123" stays a string, and one that isn't JSON still
+ * stores. Null and a missing value stay SQL NULL.
+ */
+function jsonColumn(value: unknown): string | null {
+  return value === undefined || value === null ? null : JSON.stringify(value)
+}
 
 /** Stores one old-versus-new comparison from the staff app's shadowCompare. */
 export async function recordParity(db: Queryable, entry: StaffParityInput, requestId: string): Promise<void> {
@@ -10,10 +19,10 @@ export async function recordParity(db: Queryable, entry: StaffParityInput, reque
     [
       entry.action,
       requestId,
-      (entry.oldResult ?? null) as SqlParam,
-      (entry.newResult ?? null) as SqlParam,
+      jsonColumn(entry.oldResult),
+      jsonColumn(entry.newResult),
       entry.matches,
-      (entry.diff ?? null) as SqlParam,
+      jsonColumn(entry.diff),
     ]
   )
 }

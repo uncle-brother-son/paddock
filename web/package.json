@@ -14,6 +14,7 @@
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
     "test:unit": "vitest run --config vitest.unit.config.ts",
+    "schema:test": "node scripts/generate-test-schema.mjs",
     "export:contracts": "node scripts/export-contracts.mjs",
     "check:contracts": "node scripts/export-contracts.mjs --check"
   },
@@ -53,6 +54,7 @@
     "@vitest/browser-playwright": "5.0.5",
     "@vitest/coverage-v8": "5.0.5",
     "babel-plugin-react-compiler": "^1.0.0",
+    "embedded-postgres": "17.6.0-beta.15",
     "eslint": "^9",
     "eslint-config-next": "16.4.2",
     "eslint-plugin-storybook": "^10.5.8",

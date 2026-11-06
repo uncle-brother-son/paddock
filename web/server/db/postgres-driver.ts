@@ -34,6 +34,20 @@ function toIso(value: string, raw: string): string {
   return Number.isNaN(parsed.getTime()) ? raw : parsed.toISOString()
 }
 
+/**
+ * A value bound to json or jsonb, as Retool's resource binds it: a string is already JSON text and
+ * goes to Postgres as it is, so the old code's JSON.stringify(x) stores an object, not a string.
+ * postgres.js would encode that string a second time, with no error. A string that isn't JSON is
+ * refused by Postgres. To store a plain string as a JSON string, bind JSON.stringify(text).
+ */
+export function serializeJsonParam(value: unknown): string {
+  return typeof value === 'string' ? value : JSON.stringify(value)
+}
+
+function parseJson(raw: string): unknown {
+  return JSON.parse(raw)
+}
+
 export function serializeDateParam(value: unknown): string {
   return value instanceof Date ? value.toISOString() : String(value)
 }
@@ -42,6 +56,8 @@ const pgTypes = {
   paddockDate: { to: 1082, from: [1082], serialize: serializeDateParam, parse: parseDate },
   paddockTimestamp: { to: 1114, from: [1114], serialize: serializeDateParam, parse: parseTimestamp },
   paddockTimestamptz: { to: 1184, from: [1184], serialize: serializeDateParam, parse: parseTimestamptz },
+  // 114 is json, 3802 is jsonb. Reads parse as postgres.js's own json type does.
+  paddockJson: { to: 3802, from: [114, 3802], serialize: serializeJsonParam, parse: parseJson },
 }
 
 type PostgresClient = postgres.Sql<Record<string, unknown>>
