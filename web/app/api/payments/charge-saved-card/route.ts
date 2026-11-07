@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import Stripe from 'stripe'
-import { chargeSavedCard, type ChargeSavedCardParams, type StripeChargeDeps } from './core'
+import { chargeSavedCard, type ChargeDb, type ChargeSavedCardParams, type StripeChargeDeps } from './core'
 
 function getStripe() {
   return new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -43,10 +43,12 @@ export async function POST(request: NextRequest) {
 
     const stripeClient = getStripe()
     const stripeDeps: StripeChargeDeps = {
-      paymentIntentsCreate: (params) => stripeClient.paymentIntents.create(params),
+      paymentIntentsCreate: (params, options) => stripeClient.paymentIntents.create(params, options),
     }
 
-    const result = await chargeSavedCard(body, supabase, stripeDeps)
+    // supabase-js's builder types are too deep for TypeScript to compare with ChargeDb, which names
+    // only the calls core.ts makes on it.
+    const result = await chargeSavedCard(body, supabase as unknown as ChargeDb, stripeDeps)
 
     if (!result.success) {
       const { status, ...rest } = result

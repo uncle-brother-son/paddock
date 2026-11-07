@@ -1,0 +1,395 @@
+{
+  "scenario": "owed-then-a-dearer-move-then-cancel",
+  "results": [
+    {
+      "success": true,
+      "orderId": "orders#1",
+      "bookingId": "bookings#1",
+      "cardCharged": true,
+      "cardAmount": 140,
+      "paymentMethodUsed": "card"
+    },
+    {
+      "moved": false,
+      "priceImpact": {
+        "amountDue": -40,
+        "refundDue": true,
+        "seatDeltas": [],
+        "legacyPricing": false,
+        "customerId": "10000000-0000-4000-8000-000000000005"
+      }
+    },
+    {
+      "moved": true,
+      "booking": {
+        "id": "bookings#1",
+        "price_paid": 140
+      },
+      "reason": "refund_failed: Adding the store credit failed, so nothing was refunded.",
+      "warning": "The £40.00 is still on the booking: check their store credit balance, then use Refund the rest if it isn't there."
+    },
+    {
+      "moved": false,
+      "priceImpact": {
+        "amountDue": 40,
+        "refundDue": false,
+        "seatDeltas": [],
+        "legacyPricing": false,
+        "customerId": "10000000-0000-4000-8000-000000000005"
+      }
+    },
+    {
+      "moved": true,
+      "booking": {
+        "id": "bookings#1",
+        "price_paid": 180
+      }
+    },
+    {
+      "cardRefundedAmount": 180,
+      "storeCreditRefundedAmount": 0
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "paymentIntents.create",
+      "params": {
+        "amount": 14000,
+        "currency": "gbp",
+        "customer": "cus_seed",
+        "payment_method": "pm_seed",
+        "off_session": true,
+        "confirm": true,
+        "description": "Staff-created order for booking"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "paymentIntents.create",
+      "params": {
+        "amount": 4000,
+        "currency": "gbp",
+        "customer": "cus_seed",
+        "payment_method": "pm_seed",
+        "off_session": true,
+        "confirm": true,
+        "description": "Booking moved to a differently priced session (bookings#1)"
+      },
+      "idempotencyKey": "booking-charge:move:bookings#1:<time>00"
+    },
+    {
+      "method": "refunds.create",
+      "params": {
+        "payment_intent": "pi_fake_0004",
+        "amount": 4000,
+        "metadata": {
+          "refund_key": "booking-refund:order_line_items#2:18000:0:4000:0"
+        }
+      },
+      "idempotencyKey": "booking-refund:order_line_items#2:18000:0:4000:0"
+    },
+    {
+      "method": "refunds.create",
+      "params": {
+        "payment_intent": "pi_fake_0002",
+        "amount": 14000,
+        "metadata": {
+          "refund_key": "booking-refund:order_line_items#1:14000:0:14000:0"
+        }
+      },
+      "idempotencyKey": "booking-refund:order_line_items#1:14000:0:14000:0"
+    }
+  ],
+  "tables": {
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "booking.press_finished",
+          "entity_type": "booking",
+          "entity_id": "bookings#1",
+          "request_id": null,
+          "details": {
+            "claim": "audit_log#2",
+            "press": "gone#1",
+            "pending": null
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "booking.refund_claimed",
+          "entity_type": "booking",
+          "entity_id": "bookings#1",
+          "request_id": null,
+          "details": {
+            "kind": "move",
+            "amount": 40,
+            "method": "credit",
+            "reason": null,
+            "pricePaidBefore": 140
+          }
+        },
+        {
+          "id": "audit_log#3",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "booking.refund_finished",
+          "entity_type": "booking",
+          "entity_id": "bookings#1",
+          "request_id": null,
+          "details": {
+            "owed": 40,
+            "claimId": "audit_log#2",
+            "outcome": "owed",
+            "cardRefunded": 0,
+            "storeCreditRefunded": 0
+          }
+        },
+        {
+          "id": "audit_log#4",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "booking.card_charge_started",
+          "entity_type": "booking",
+          "entity_id": "bookings#1",
+          "request_id": null,
+          "details": {
+            "key": "booking-charge:move:bookings#1:<time>00",
+            "flow": "move",
+            "amount": 40
+          }
+        },
+        {
+          "id": "audit_log#5",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "booking.card_charge_finished",
+          "entity_type": "booking",
+          "entity_id": "bookings#1",
+          "request_id": null,
+          "details": {
+            "by": "audit_log#4",
+            "key": "booking-charge:move:bookings#1:<time>00",
+            "resumed": false,
+            "partsFrom": "audit_log#4",
+            "paymentIntentId": "pi_fake_0004"
+          }
+        },
+        {
+          "id": "audit_log#6",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "booking.refund_claimed",
+          "entity_type": "booking",
+          "entity_id": "bookings#1",
+          "request_id": null,
+          "details": {
+            "kind": "cancel",
+            "amount": 180,
+            "method": "card",
+            "reason": null,
+            "pricePaidBefore": 180
+          }
+        },
+        {
+          "id": "audit_log#7",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "booking.refund_finished",
+          "entity_type": "booking",
+          "entity_id": "bookings#1",
+          "request_id": null,
+          "details": {
+            "owed": 0,
+            "claimId": "audit_log#6",
+            "outcome": "given",
+            "cardRefunded": 180,
+            "storeCreditRefunded": 0
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 2
+    },
+    "booking_guests": {
+      "added": [
+        {
+          "id": "booking_guests#1",
+          "booking_id": "bookings#1",
+          "guest_type": "account_holder",
+          "guest_name": "Sam Test",
+          "guest_email": "sam@example.com",
+          "waiver_accepted": false,
+          "waiver_version": null,
+          "waiver_accepted_at": null,
+          "waiver_method": null,
+          "reminder_sent_at": null,
+          "created_at": "<set>",
+          "date_of_birth": "1990-01-01",
+          "unit_price": null,
+          "pay_by": "paid"
+        },
+        {
+          "id": "booking_guests#2",
+          "booking_id": "bookings#1",
+          "guest_type": "additional_guest",
+          "guest_name": "Alex Guest",
+          "guest_email": "alex@example.com",
+          "waiver_accepted": false,
+          "waiver_version": null,
+          "waiver_accepted_at": null,
+          "waiver_method": null,
+          "reminder_sent_at": null,
+          "created_at": "<set>",
+          "date_of_birth": null,
+          "unit_price": null,
+          "pay_by": "paid"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "bookings": {
+      "added": [
+        {
+          "id": "bookings#1",
+          "session_id": "10000000-0000-4000-8000-000000000040",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "party_size": 2,
+          "status": "cancelled",
+          "price_paid": "180.00",
+          "stripe_payment_id": null,
+          "redemption_source": "paid",
+          "created_at": "<set>",
+          "cancelled_at": "<set>",
+          "checked_in_at": null,
+          "updated_at": "<set>",
+          "start_time": "<set>",
+          "end_time": "<set>",
+          "redeemed_membership_id": null,
+          "redeemed_session_pass_id": null,
+          "band_id": "10000000-0000-4000-8000-00000000000c",
+          "credit_period_id": null,
+          "payment_due_by": null,
+          "cancel_reason": null,
+          "special_requests": null,
+          "guests_over_18_confirmed_at": "<set>",
+          "part_refunded_amount": "0.00",
+          "refund_owed_amount": "0.00"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "order_line_items": {
+      "added": [
+        {
+          "id": "order_line_items#1",
+          "order_id": "orders#1",
+          "booking_id": "bookings#1",
+          "product_variant_id": null,
+          "membership_plan_id": null,
+          "session_pass_type_id": null,
+          "gift_card_id": null,
+          "item_type": "booking",
+          "quantity": 1,
+          "unit_price": "140.00",
+          "line_total": "140.00",
+          "created_at": "<set>",
+          "addon_id": null,
+          "refunded_at": "<set>",
+          "refund_method": "card",
+          "restocked": null,
+          "fulfillment_status": null,
+          "card_refunded_amount": "140.00",
+          "system_unit_price": null,
+          "price_override_reason": null,
+          "discount_amount": "0.00",
+          "event_booking_id": null
+        },
+        {
+          "id": "order_line_items#2",
+          "order_id": "orders#2",
+          "booking_id": "bookings#1",
+          "product_variant_id": null,
+          "membership_plan_id": null,
+          "session_pass_type_id": null,
+          "gift_card_id": null,
+          "item_type": "booking",
+          "quantity": 1,
+          "unit_price": "40.00",
+          "line_total": "40.00",
+          "created_at": "<set>",
+          "addon_id": null,
+          "refunded_at": "<set>",
+          "refund_method": "card",
+          "restocked": null,
+          "fulfillment_status": null,
+          "card_refunded_amount": "40.00",
+          "system_unit_price": null,
+          "price_override_reason": null,
+          "discount_amount": "0.00",
+          "event_booking_id": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "orders": {
+      "added": [
+        {
+          "id": "orders#1",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "order_total": "140.00",
+          "payment_status": "refunded",
+          "stripe_payment_intent_id": "pi_fake_0002",
+          "promo_code": null,
+          "discount_amount": "0.00",
+          "shipping_address": null,
+          "shipping_status": null,
+          "tracking_number": null,
+          "order_source": "staff_created",
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "payment_method": "card",
+          "reader_payment": null
+        },
+        {
+          "id": "orders#2",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "order_total": "40.00",
+          "payment_status": "refunded",
+          "stripe_payment_intent_id": "pi_fake_0004",
+          "promo_code": null,
+          "discount_amount": "0.00",
+          "shipping_address": null,
+          "shipping_status": null,
+          "tracking_number": null,
+          "order_source": "staff_created",
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "payment_method": null,
+          "reader_payment": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

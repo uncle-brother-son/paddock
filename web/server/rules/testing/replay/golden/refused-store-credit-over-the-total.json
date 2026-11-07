@@ -1,0 +1,13 @@
+{
+  "scenario": "refused-store-credit-over-the-total",
+  "results": [
+    {
+      "success": false,
+      "stage": "payment",
+      "reason": "store_credit_amount_exceeds_total",
+      "amountDueTotal": 24
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

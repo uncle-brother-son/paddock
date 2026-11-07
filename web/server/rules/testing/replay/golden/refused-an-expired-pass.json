@@ -1,0 +1,13 @@
+{
+  "scenario": "refused-an-expired-pass",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "insufficient_session_pass_credit",
+      "bookingFailureReason": "insufficient_session_pass_credit"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

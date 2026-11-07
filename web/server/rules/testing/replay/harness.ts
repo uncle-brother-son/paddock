@@ -4,8 +4,9 @@ import { vi } from 'vitest'
 import type { Db, SqlParam } from '@/server/db'
 import { FakeStripe } from '@/server/stripe/fake'
 import { startTestDatabase, type TestDatabase } from '../database'
+import { staffAppDir } from '../staff-app-dir'
 import { buildRecording, TABLES, type Recording, type Row, type TableDump } from './compare'
-import { bindLegacyRoutes } from './legacy-routes'
+import { bindLegacyRoutes, bindStaffRoutes } from './legacy-routes'
 
 /**
  * Replays a scenario from the same seed through either side, and records what it did: the rows
@@ -16,8 +17,7 @@ import { bindLegacyRoutes } from './legacy-routes'
  * stale. Statements still get different created_at values, as they do in production.
  */
 
-const appDir = process.env.RETOOL_APP_DIR ?? path.resolve(__dirname, '../../../../../../paddock-retool-app')
-export const backendDir = path.join(appDir, 'backend/paddock')
+export const backendDir = path.join(staffAppDir(), 'backend/paddock')
 const goldenDir = path.join(__dirname, 'golden')
 
 /** Tuesday, in winter, so London time and UTC agree. */
@@ -97,6 +97,7 @@ export function oldSide(db: Db, stripe: FakeStripe): ReplaySide {
   }
   vi.stubGlobal('paddockData', { query })
   vi.stubGlobal('paddockBackendApi2', { rawRequest: bindLegacyRoutes(db, stripe) })
+  vi.stubGlobal('paddockWorkerV1', { rawRequest: bindStaffRoutes() })
 
   return {
     name: 'old',

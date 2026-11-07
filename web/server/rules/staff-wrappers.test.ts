@@ -1,9 +1,9 @@
-import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Db, SqlParam } from '@/server/db'
 import { fixtures, insert, startTestDatabase, type TestDatabase } from '@/server/rules/testing/database'
 import { stepBRoutes } from '@/server/rules/testing/routes'
+import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
 
 // The staff app's nine functions against the real Worker routes, on one database: what a screen
 // gets, end to end. staff-app-helpers.test.ts checks each wrapper against a fake rawRequest; this
@@ -13,11 +13,9 @@ import { stepBRoutes } from '@/server/rules/testing/routes'
 // Until W02b this compared the old Retool code with the routes through shadowCompare. That old code
 // is gone, so there is nothing left to compare: every input below is kept as a check that the
 // wrapper returns exactly what the route answered, and that the route's output matches its contract.
-// Skipped when the staff app's checkout isn't beside this repo.
 
 const KEY = 'test-staff-api-key'
-const appDir = process.env.RETOOL_APP_DIR ?? path.resolve(__dirname, '../../../../paddock-retool-app')
-const functions = path.join(appDir, 'backend/paddock')
+const functions = path.join(staffAppDir(), 'backend/paddock')
 
 const holder = vi.hoisted(() => ({ db: null as unknown }))
 vi.mock('@/server/db/connection', () => ({
@@ -30,7 +28,7 @@ const load = async (name: string) =>
 
 const user = { email: 'jo@example.com' }
 
-describe.skipIf(!existsSync(functions))('the staff app wrappers through the real routes', () => {
+describe('the staff app wrappers through the real routes', () => {
   let t: TestDatabase
   let answered: unknown
   let tamper: ((data: unknown) => unknown) | null = null

@@ -20,6 +20,12 @@ const ROUTES: Record<string, () => Promise<unknown>> = {
   '/api/memberships/cancel-subscription': () => import('@/app/api/memberships/cancel-subscription/route'),
   '/api/terminal/create-payment-intent': () => import('@/app/api/terminal/create-payment-intent/route'),
   '/api/terminal/payment-intent': () => import('@/app/api/terminal/payment-intent/route'),
+  '/api/terminal/resolve-saved-card': () => import('@/app/api/terminal/resolve-saved-card/route'),
+}
+
+/** The /api/v1/staff routes the old functions call, beyond the quote shadow's own. */
+const STAFF_ROUTES: Record<string, () => Promise<unknown>> = {
+  '/api/v1/staff/payments/refunds': () => import('@/app/api/v1/staff/payments/refunds/route'),
 }
 
 const active: { stripe: FakeStripe | null; db: Db | null } = { stripe: null, db: null }
@@ -110,6 +116,12 @@ function install(): void {
   vi.doMock('@supabase/supabase-js', () => ({
     createClient: () => ({ from: (table: string) => new SupabaseQuery(table) }),
   }))
+  // The staff routes open the same test database. A test file that mocks this itself keeps its own,
+  // which points at the same database.
+  vi.doMock('@/server/db/connection', () => ({
+    openRequestDb: () => active.db,
+    closeRequestDb: () => {},
+  }))
 }
 
 export interface LegacyCall {
@@ -138,6 +150,46 @@ export function bindLegacyRoutes(db: Db, stripe: FakeStripe) {
       body: JSON.stringify(body ?? {}),
     })
     const response = await route.POST(request as never)
+    return { data: await response.json() }
+  }
+}
+
+export interface StaffCall {
+  path: string
+  method?: string
+  headers?: Record<string, string>
+  queryParams?: Record<string, string>
+  body?: unknown
+}
+
+/**
+ * A stand-in for paddockWorkerV1.rawRequest, running the real /api/v1/staff route. The resource
+ * adds the key, as the "Paddock Worker v1" resource does; callWorker adds who is acting. Uses the
+ * key a test file already set, so its own routes keep working.
+ */
+export function bindStaffRoutes() {
+  install()
+  let key = process.env.STAFF_API_KEY
+  if (!key) {
+    key = 'replay-staff-key'
+    vi.stubEnv('STAFF_API_KEY', key)
+  }
+  const staffKey = key
+  return async function rawRequest({ path, method = 'GET', headers = {}, queryParams, body }: StaffCall): Promise<{ data: unknown }> {
+    const load = STAFF_ROUTES[path]
+    if (!load) throw new Error(`The replay harness has no staff route ${path}.`)
+    const route = (await load()) as Record<string, (request: Request) => Promise<Response>>
+    const handler = route[method]
+    if (!handler) throw new Error(`${path} has no ${method}.`)
+    const url = new URL(`http://replay.test${path}`)
+    for (const [name, value] of Object.entries(queryParams ?? {})) url.searchParams.set(name, value)
+    const response = await handler(
+      new Request(url, {
+        method,
+        headers: { ...headers, authorization: `Bearer ${staffKey}`, 'content-type': 'application/json' },
+        ...(method !== 'GET' && body !== undefined ? { body: JSON.stringify(body) } : {}),
+      })
+    )
     return { data: await response.json() }
   }
 }

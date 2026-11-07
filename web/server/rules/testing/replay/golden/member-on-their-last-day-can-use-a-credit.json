@@ -1,0 +1,141 @@
+{
+  "scenario": "member-on-their-last-day-can-use-a-credit",
+  "results": [
+    {
+      "success": true,
+      "orderId": "orders#1",
+      "bookingId": "bookings#1",
+      "cardCharged": false,
+      "cardAmount": 0,
+      "paymentMethodUsed": null
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "booking_guests": {
+      "added": [
+        {
+          "id": "booking_guests#1",
+          "booking_id": "bookings#1",
+          "guest_type": "account_holder",
+          "guest_name": "Mo Member",
+          "guest_email": "mo@example.com",
+          "waiver_accepted": false,
+          "waiver_version": null,
+          "waiver_accepted_at": null,
+          "waiver_method": null,
+          "reminder_sent_at": null,
+          "created_at": "<set>",
+          "date_of_birth": "1985-05-05",
+          "unit_price": "20.00",
+          "pay_by": "membership_credit"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "bookings": {
+      "added": [
+        {
+          "id": "bookings#1",
+          "session_id": "10000000-0000-4000-8000-000000000004",
+          "customer_id": "10000000-0000-4000-8000-00000000000f",
+          "party_size": 1,
+          "status": "confirmed",
+          "price_paid": "0.00",
+          "stripe_payment_id": null,
+          "redemption_source": "membership_credit",
+          "created_at": "<set>",
+          "cancelled_at": null,
+          "checked_in_at": null,
+          "updated_at": "<set>",
+          "start_time": "<set>",
+          "end_time": "<set>",
+          "redeemed_membership_id": "10000000-0000-4000-8000-000000000010",
+          "redeemed_session_pass_id": null,
+          "band_id": "10000000-0000-4000-8000-000000000003",
+          "credit_period_id": "10000000-0000-4000-8000-000000000021",
+          "payment_due_by": null,
+          "cancel_reason": null,
+          "special_requests": null,
+          "guests_over_18_confirmed_at": null,
+          "part_refunded_amount": "0.00",
+          "refund_owed_amount": "0.00"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "order_line_items": {
+      "added": [
+        {
+          "id": "order_line_items#1",
+          "order_id": "orders#1",
+          "booking_id": "bookings#1",
+          "product_variant_id": null,
+          "membership_plan_id": null,
+          "session_pass_type_id": null,
+          "gift_card_id": null,
+          "item_type": "booking",
+          "quantity": 1,
+          "unit_price": "0.00",
+          "line_total": "0.00",
+          "created_at": "<set>",
+          "addon_id": null,
+          "refunded_at": null,
+          "refund_method": null,
+          "restocked": null,
+          "fulfillment_status": null,
+          "card_refunded_amount": "0.00",
+          "system_unit_price": null,
+          "price_override_reason": null,
+          "discount_amount": "0.00",
+          "event_booking_id": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "orders": {
+      "added": [
+        {
+          "id": "orders#1",
+          "customer_id": "10000000-0000-4000-8000-00000000000f",
+          "order_total": "0.00",
+          "payment_status": "paid",
+          "stripe_payment_intent_id": null,
+          "promo_code": null,
+          "discount_amount": "0.00",
+          "shipping_address": null,
+          "shipping_status": null,
+          "tracking_number": null,
+          "order_source": "staff_created",
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "payment_method": null,
+          "reader_payment": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "sessions": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000004",
+          "total_booked": [
+            0,
+            1
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

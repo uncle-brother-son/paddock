@@ -1,0 +1,13 @@
+{
+  "scenario": "refused-private-price-not-set",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "private_price_not_set",
+      "bookingFailureReason": "private_price_not_set"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

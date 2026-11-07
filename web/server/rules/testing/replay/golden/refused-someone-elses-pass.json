@@ -1,0 +1,13 @@
+{
+  "scenario": "refused-someone-elses-pass",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "session_pass_not_found",
+      "bookingFailureReason": "session_pass_not_found"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

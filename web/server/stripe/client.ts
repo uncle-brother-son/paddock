@@ -18,6 +18,7 @@ export interface StripeClient {
   }
   refunds: {
     create(params: Stripe.RefundCreateParams, options?: Stripe.RequestOptions): Promise<Stripe.Refund>
+    list(params: Stripe.RefundListParams): Promise<Stripe.ApiList<Stripe.Refund>>
   }
   subscriptions: {
     create(params: Stripe.SubscriptionCreateParams, options?: Stripe.RequestOptions): Promise<Stripe.Subscription>

@@ -1,0 +1,12 @@
+{
+  "scenario": "refused-exhausted-membership-not-found",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "exhausted_membership_not_found"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

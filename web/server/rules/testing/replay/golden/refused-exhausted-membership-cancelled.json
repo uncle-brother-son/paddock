@@ -1,0 +1,12 @@
+{
+  "scenario": "refused-exhausted-membership-cancelled",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "exhausted_membership_not_active"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

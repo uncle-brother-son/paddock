@@ -1,9 +1,8 @@
-import { existsSync } from 'node:fs'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { Db } from '@/server/db'
 import type { FakeStripe } from '@/server/stripe/fake'
 import { buildRecording, compareRecordings, type Difference, type RawRun, type Recording } from './compare'
-import { backendDir, oldSide, readGolden, replay, startReplay, writeGolden, type ReplayEnvironment, type ReplayOptions, type ReplaySide } from './harness'
+import { oldSide, readGolden, replay, startReplay, writeGolden, type ReplayEnvironment, type ReplayOptions, type ReplaySide } from './harness'
 import { scenarios } from './scenarios'
 
 // To re-record after a deliberate change to an old function or scenario:
@@ -19,7 +18,7 @@ const byName = (name: string) => {
 const CASH = 'cash-booking-two-guests-addon'
 const CARD = 'saved-card-product-gift-card-store-credit'
 
-describe.skipIf(!existsSync(backendDir))('replay of the old functions', () => {
+describe('replay of the old functions', () => {
   let environment: ReplayEnvironment
 
   beforeAll(async () => {

@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Stripe from 'stripe'
+import { readStripeFailure } from '@/server/stripe/outcome'
+import { REFUND_KEY_METADATA } from '@/server/rules/payments/payment-intent-refunds'
 
 function getStripe() {
   return new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -11,6 +13,9 @@ function getStripe() {
 interface RefundOrderRequest {
   paymentIntentId: string
   amount?: number // pounds; partial refund if provided, full refund otherwise
+  // Stripe answers a repeat of this key with the first refund, so a retry can't pay twice. The
+  // caller builds it: only it knows what the retry of a refund is.
+  idempotencyKey?: string
 }
 
 // Verify Retool API key
@@ -43,7 +48,7 @@ export async function POST(request: NextRequest) {
 
     // Parse request body
     const body: RefundOrderRequest = await request.json()
-    const { paymentIntentId, amount } = body
+    const { paymentIntentId, amount, idempotencyKey } = body
 
     // Validate required fields
     if (!paymentIntentId) {
@@ -63,15 +68,24 @@ export async function POST(request: NextRequest) {
     // Issue the Stripe refund (full refund if amount is omitted)
     let refund: Stripe.Refund
     try {
-      refund = await getStripe().refunds.create({
-        payment_intent: paymentIntentId,
-        ...(amount !== undefined ? { amount: Math.round(amount * 100) } : {}),
-      })
+      // The key also goes on the refund itself, because Stripe forgets keys after 24 hours: a refund
+      // with no clear answer older than that is found by its key in the PaymentIntent's refunds
+      // (/api/v1/staff/payments/refunds), never by sending it again.
+      refund = await getStripe().refunds.create(
+        {
+          payment_intent: paymentIntentId,
+          ...(amount !== undefined ? { amount: Math.round(amount * 100) } : {}),
+          ...(idempotencyKey ? { metadata: { [REFUND_KEY_METADATA]: idempotencyKey } } : {}),
+        },
+        idempotencyKey ? { idempotencyKey } : undefined
+      )
     } catch (stripeError) {
-      const stripeErr = stripeError as Stripe.errors.StripeError
       console.error('Error creating Stripe refund:', stripeError)
+      const failure = readStripeFailure(stripeError)
+      // `unsure`: Stripe never said no. The refund may have happened, so the caller mustn't treat
+      // this as a refusal and offer the money again.
       return NextResponse.json(
-        { error: 'Failed to refund payment', details: stripeErr.message ?? 'Unknown error' },
+        { error: 'Failed to refund payment', details: failure.message, ...(failure.outcome === 'unknown' ? { unsure: true } : {}) },
         { status: 500 }
       )
     }

@@ -121,7 +121,9 @@ CREATE TABLE public.bookings (
   payment_due_by timestamp with time zone,
   cancel_reason text,
   special_requests text,
-  guests_over_18_confirmed_at timestamp with time zone
+  guests_over_18_confirmed_at timestamp with time zone,
+  part_refunded_amount numeric(10,2) DEFAULT 0 NOT NULL,
+  refund_owed_amount numeric(10,2) DEFAULT 0 NOT NULL
 );
 
 CREATE TABLE public.customer_memberships (
@@ -1187,6 +1189,8 @@ BEGIN
   JOIN membership_plans mp ON mp.id = cm.plan_id
   WHERE cm.customer_id = p_customer_id
     AND cm.subscription_status = 'active'
+    AND (cm.cancel_effective_date IS NULL
+         OR cm.cancel_effective_date >= (now() AT TIME ZONE 'Europe/London')::date)
     AND mp.level IS NOT NULL
   ORDER BY cm.created_at DESC
   LIMIT 1;
@@ -1419,8 +1423,10 @@ ALTER TABLE public.booking_guests ADD CONSTRAINT booking_guests_pkey PRIMARY KEY
 ALTER TABLE public.booking_guests ADD CONSTRAINT booking_guests_unit_price_check CHECK ((unit_price >= (0)::numeric));
 ALTER TABLE public.booking_guests ADD CONSTRAINT booking_guests_waiver_method_check CHECK ((waiver_method = ANY (ARRAY['email_link'::text, 'in_person'::text])));
 ALTER TABLE public.bookings ADD CONSTRAINT bookings_no_cross_session_overlap EXCLUDE USING gist (tstzrange(start_time, end_time, '[)'::text) WITH &&, session_id WITH <>) WHERE ((status = ANY (ARRAY['pending'::text, 'confirmed'::text, 'payment_needed'::text])));
+ALTER TABLE public.bookings ADD CONSTRAINT bookings_part_refunded_amount_check CHECK ((part_refunded_amount >= (0)::numeric));
 ALTER TABLE public.bookings ADD CONSTRAINT bookings_pkey PRIMARY KEY (id);
 ALTER TABLE public.bookings ADD CONSTRAINT bookings_redemption_source_check CHECK ((redemption_source = ANY (ARRAY['paid'::text, 'membership_credit'::text, 'session_pass_credit'::text])));
+ALTER TABLE public.bookings ADD CONSTRAINT bookings_refund_owed_amount_check CHECK ((refund_owed_amount >= (0)::numeric));
 ALTER TABLE public.bookings ADD CONSTRAINT bookings_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'confirmed'::text, 'payment_needed'::text, 'cancelled'::text, 'completed'::text, 'no-show'::text])));
 ALTER TABLE public.customer_memberships ADD CONSTRAINT customer_memberships_pkey PRIMARY KEY (id);
 ALTER TABLE public.customer_memberships ADD CONSTRAINT customer_memberships_stripe_subscription_id_key UNIQUE (stripe_subscription_id);

@@ -1,0 +1,13 @@
+{
+  "scenario": "refused-time-conflict",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "time_conflict",
+      "bookingFailureReason": "time_conflict"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

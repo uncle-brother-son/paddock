@@ -1,0 +1,13 @@
+{
+  "scenario": "refused-standalone-addon-on-a-credit-with-no-membership",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "standalone_addon_credit_not_allowed",
+      "message": "An add-on credit can only pay for an add-on on a booking. Charge this add-on, or add it to the booking."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

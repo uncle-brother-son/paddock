@@ -1,0 +1,13 @@
+{
+  "scenario": "refused-session-already-started",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "session_already_started",
+      "bookingFailureReason": "session_already_started"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

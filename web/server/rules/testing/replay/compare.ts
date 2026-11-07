@@ -65,6 +65,11 @@ const RANDOM_COLUMNS: Readonly<Record<string, readonly string[]>> = {
 
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
 const ISO_TIME = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}(:\d{2})?)?$/
+/** A booking's updated_at inside a Stripe key, wherever the key is. The clock moves per statement, and
+ *  the shadow adds some. */
+const TIME_IN_KEY = /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?[+-]\d{2}(:\d{2})?/g
+const EVENT_KEY_IDS = /^(event-refund:[^:]+:\d+:\d+:)[0-9a-f]{8}(:)/
+const ORDER_KEY_IDS = /^(order-refund:[^:]+:)[0-9a-f]{8}(:)/
 
 function collectUuids(value: unknown, into: Set<string>): void {
   if (typeof value === 'string') {
@@ -102,6 +107,12 @@ class Labeller {
   text(value: string): string {
     if (ISO_TIME.test(value)) return '<time>'
     let result = value.replace(UUID, (raw) => this.uuid(raw))
+    // A charge's key is also written to audit_log before the charge (W05j), so its time is hidden
+    // there too, as in the Stripe calls below.
+    if (result.startsWith('booking-charge:')) result = result.replace(TIME_IN_KEY, '<time>')
+    // An event or order refund's key names its places or lines by a hash of their ids, which are new
+    // on every run (W05j); W05k's scenarios are the first to record one.
+    result = result.replace(EVENT_KEY_IDS, '$1<ids>$2').replace(ORDER_KEY_IDS, '$1<ids>$2')
     for (const [raw, label] of this.labels) {
       if (!raw.match(UUID) && result.includes(raw)) result = result.split(raw).join(label)
     }
@@ -236,7 +247,7 @@ export function buildRecording(run: RawRun): Recording {
     stripeCalls: run.stripeCalls.map((call) => ({
       method: call.method,
       params: labeller.value(call.params),
-      idempotencyKey: call.idempotencyKey === null ? null : labeller.text(call.idempotencyKey),
+      idempotencyKey: call.idempotencyKey === null ? null : labeller.text(call.idempotencyKey).replace(TIME_IN_KEY, '<time>'),
     })),
     tables,
   }

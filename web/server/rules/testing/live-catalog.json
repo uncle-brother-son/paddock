@@ -831,6 +831,22 @@
      "default": null,
      "generated": "",
      "identity": ""
+    },
+    {
+     "name": "part_refunded_amount",
+     "type": "numeric(10,2)",
+     "notNull": true,
+     "default": "0",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "refund_owed_amount",
+     "type": "numeric(10,2)",
+     "notNull": true,
+     "default": "0",
+     "generated": "",
+     "identity": ""
     }
    ]
   },
@@ -4599,6 +4615,12 @@
   },
   {
    "table": "bookings",
+   "name": "bookings_part_refunded_amount_check",
+   "type": "c",
+   "definition": "CHECK ((part_refunded_amount >= (0)::numeric))"
+  },
+  {
+   "table": "bookings",
    "name": "bookings_pkey",
    "type": "p",
    "definition": "PRIMARY KEY (id)"
@@ -4620,6 +4642,12 @@
    "name": "bookings_redemption_source_check",
    "type": "c",
    "definition": "CHECK ((redemption_source = ANY (ARRAY['paid'::text, 'membership_credit'::text, 'session_pass_credit'::text])))"
+  },
+  {
+   "table": "bookings",
+   "name": "bookings_refund_owed_amount_check",
+   "type": "c",
+   "definition": "CHECK ((refund_owed_amount >= (0)::numeric))"
   },
   {
    "table": "bookings",
@@ -6171,7 +6199,7 @@
   {
    "name": "quote_booking",
    "identity": "p_session_id uuid, p_customer_id uuid, p_party_size integer",
-   "definition": "CREATE OR REPLACE FUNCTION public.quote_booking(p_session_id uuid, p_customer_id uuid, p_party_size integer)\n RETURNS TABLE(seat_no integer, seat_kind text, band_id uuid, list_price numeric, unit_price numeric, credit_eligible boolean, membership_level text, discount_percent numeric)\n LANGUAGE plpgsql\n STABLE\nAS $function$\nDECLARE\n  v_band UUID;\n  v_price NUMERIC;\n  v_level TEXT;\n  v_eligible BOOLEAN := false;\n  v_discount NUMERIC := 0;\nBEGIN\n  IF p_party_size IS NULL OR p_party_size < 1 THEN\n    RAISE EXCEPTION 'Party size must be at least 1';\n  END IF;\n\n  SELECT s.band_id INTO v_band\n  FROM sessions s\n  WHERE s.id = p_session_id AND s.type = 'public';\n\n  IF v_band IS NULL THEN\n    RAISE EXCEPTION 'Session % is not a public session with a band', p_session_id;\n  END IF;\n\n  SELECT b.price INTO v_price FROM session_bands b WHERE b.id = v_band;\n\n  SELECT mp.level INTO v_level\n  FROM customer_memberships cm\n  JOIN membership_plans mp ON mp.id = cm.plan_id\n  WHERE cm.customer_id = p_customer_id\n    AND cm.subscription_status = 'active'\n    AND mp.level IS NOT NULL\n  ORDER BY cm.created_at DESC\n  LIMIT 1;\n\n  IF v_level IS NOT NULL THEN\n    SELECT t.credit_eligible, t.discount_percent\n      INTO v_eligible, v_discount\n    FROM membership_band_terms t\n    WHERE t.membership_level = v_level AND t.band_id = v_band;\n\n    v_eligible := COALESCE(v_eligible, false);\n    v_discount := COALESCE(v_discount, 0);\n  END IF;\n\n  RETURN QUERY\n  SELECT\n    g,\n    CASE WHEN g = 1 THEN 'account_holder' ELSE 'guest' END,\n    v_band,\n    v_price,\n    CASE WHEN g = 1 THEN ROUND(v_price * (1 - v_discount / 100), 2) ELSE v_price END,\n    (g = 1 AND v_eligible),\n    CASE WHEN g = 1 THEN v_level ELSE NULL END,\n    CASE WHEN g = 1 THEN v_discount ELSE 0::NUMERIC END\n  FROM generate_series(1, p_party_size) AS g;\nEND;\n$function$\n"
+   "definition": "CREATE OR REPLACE FUNCTION public.quote_booking(p_session_id uuid, p_customer_id uuid, p_party_size integer)\n RETURNS TABLE(seat_no integer, seat_kind text, band_id uuid, list_price numeric, unit_price numeric, credit_eligible boolean, membership_level text, discount_percent numeric)\n LANGUAGE plpgsql\n STABLE\nAS $function$\nDECLARE\n  v_band UUID;\n  v_price NUMERIC;\n  v_level TEXT;\n  v_eligible BOOLEAN := false;\n  v_discount NUMERIC := 0;\nBEGIN\n  IF p_party_size IS NULL OR p_party_size < 1 THEN\n    RAISE EXCEPTION 'Party size must be at least 1';\n  END IF;\n\n  SELECT s.band_id INTO v_band\n  FROM sessions s\n  WHERE s.id = p_session_id AND s.type = 'public';\n\n  IF v_band IS NULL THEN\n    RAISE EXCEPTION 'Session % is not a public session with a band', p_session_id;\n  END IF;\n\n  SELECT b.price INTO v_price FROM session_bands b WHERE b.id = v_band;\n\n  SELECT mp.level INTO v_level\n  FROM customer_memberships cm\n  JOIN membership_plans mp ON mp.id = cm.plan_id\n  WHERE cm.customer_id = p_customer_id\n    AND cm.subscription_status = 'active'\n    AND (cm.cancel_effective_date IS NULL\n         OR cm.cancel_effective_date >= (now() AT TIME ZONE 'Europe/London')::date)\n    AND mp.level IS NOT NULL\n  ORDER BY cm.created_at DESC\n  LIMIT 1;\n\n  IF v_level IS NOT NULL THEN\n    SELECT t.credit_eligible, t.discount_percent\n      INTO v_eligible, v_discount\n    FROM membership_band_terms t\n    WHERE t.membership_level = v_level AND t.band_id = v_band;\n\n    v_eligible := COALESCE(v_eligible, false);\n    v_discount := COALESCE(v_discount, 0);\n  END IF;\n\n  RETURN QUERY\n  SELECT\n    g,\n    CASE WHEN g = 1 THEN 'account_holder' ELSE 'guest' END,\n    v_band,\n    v_price,\n    CASE WHEN g = 1 THEN ROUND(v_price * (1 - v_discount / 100), 2) ELSE v_price END,\n    (g = 1 AND v_eligible),\n    CASE WHEN g = 1 THEN v_level ELSE NULL END,\n    CASE WHEN g = 1 THEN v_discount ELSE 0::NUMERIC END\n  FROM generate_series(1, p_party_size) AS g;\nEND;\n$function$\n"
   },
   {
    "name": "quote_event",

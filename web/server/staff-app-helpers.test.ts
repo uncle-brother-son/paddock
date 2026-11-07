@@ -1,13 +1,14 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { availableSessionsInputSchema, sessionTimeConflictInputSchema } from '@/contracts'
 import type { Queryable } from '@/server/db'
 import { authenticateStaff } from './auth/staff'
+import { staffAppDir } from './rules/testing/staff-app-dir'
 
 // The staff app has no test runner, so its Worker helpers are tested here, from its checkout
-// beside this repo (the same place export:contracts writes to). Skipped when it isn't there.
-const appDir = process.env.RETOOL_APP_DIR ?? path.resolve(__dirname, '../../../paddock-retool-app')
+// beside this repo (the same place export:contracts writes to).
+const appDir = staffAppDir()
 const shared = path.join(appDir, 'backend/paddock/shared')
 
 const load = (name: string) => import(/* @vite-ignore */ path.join(shared, name))
@@ -18,7 +19,7 @@ const refusal = (code: string, message: string) => ({
   data: { ok: false, error: { code, message }, requestId: 'worker-request' },
 })
 
-describe.skipIf(!existsSync(shared))('staff app helpers', () => {
+describe('staff app helpers', () => {
   const rawRequest = vi.fn()
 
   beforeEach(() => {
@@ -1131,6 +1132,8 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
     const screen = () => import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/cashConfirmation'))
     const backend = (name: string) => import(/* @vite-ignore */ path.join(appDir, `backend/paddock/${name}`))
     const isWrite = (sql: string) => /\b(INSERT INTO|UPDATE|DELETE FROM)\b/.test(sql)
+    /** The writes that move money or change the booking: a claim's finishing row isn't one. */
+    const notAudit = (sql: string) => !/^\s*INSERT INTO audit_log/.test(sql)
 
     /** A fake database: the first matching pattern answers, and anything else returns no rows. */
     function stubDatabase(answers: Array<[RegExp, (params: unknown[]) => unknown[]]>) {
@@ -1508,6 +1511,7 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
     describe('Add Guest', () => {
       const addGuest = async (payment: Record<string, unknown>, seatPrice = '25.00') => {
         const database = stubDatabase([
+          [/WITH p AS/, () => [{ guest: { id: 'guest-1' }, order_id: 'order-1', addon_line_ids: null, allowed: true }]],
           [/FROM bookings b/, () => [{
             id: 'booking-1',
             customer_id: 'customer-1',
@@ -1523,7 +1527,6 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
           [/UPDATE sessions/, () => [{ id: 'session-1' }]],
           [/store_credit_apply/, () => [{ result: { ok: true, balance: 45, transaction_id: 'tx-1' } }]],
           [/WITH claim AS/, () => [{ id: 'gift-1', remaining_balance: '40.00' }]],
-          [/WITH p AS/, () => [{ guest: { id: 'guest-1' }, order_id: 'order-1', addon_line_ids: null }]],
         ])
         const fn = (await backend('addBookingGuest')).default
         const result = await fn({ params: { bookingId: 'booking-1', guestName: 'Sam', guestsOver18Confirmed: true, payment }, user })
@@ -1631,6 +1634,8 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
             party_size: 2,
             status: 'confirmed',
             price_paid: '40.00',
+            part_refunded_amount: '0.00',
+            refund_owed_amount: '0.00',
             redemption_source: 'paid',
             redeemed_membership_id: null,
             redeemed_session_pass_id: null,
@@ -1971,10 +1976,9 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
           params?: Record<string, unknown>
           seat?: { unit_price: string | null; pay_by: string }
           cardPortion?: number
-          cardRefund?: { error: string } | { ok: true }
+          cardRefund?: { error: string } | { success: true }
           credit?: boolean[]
           deleted?: boolean | Error
-          lowerSeatFails?: boolean
           status?: string
         }) => {
           const credit = [...(options.credit ?? [])]
@@ -1982,6 +1986,7 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
             [/FROM booking_guests g/, () => [{
               id: 'guest-1',
               booking_id: 'booking-1',
+              claim_id: 'claim-1',
               guest_type: 'additional',
               guest_name: 'Sam',
               ...(options.seat ?? { unit_price: '25.00', pay_by: 'paid' }),
@@ -2010,12 +2015,8 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
               if (options.deleted instanceof Error) throw options.deleted
               return [{ deleted: options.deleted ?? true }]
             }],
-            [/WITH g AS \(UPDATE booking_guests/, () => {
-              if (options.lowerSeatFails) throw new Error('no connection')
-              return []
-            }],
           ])
-          const rawRefund = vi.fn(async () => ({ data: options.cardRefund ?? { ok: true } }))
+          const rawRefund = vi.fn(async () => ({ data: options.cardRefund ?? { success: true } }))
           vi.stubGlobal('paddockBackendApi2', { rawRequest: rawRefund })
           const fn = (await backend('removeBookingGuest')).default
           const result = await fn({
@@ -2046,13 +2047,13 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
             reason: `refund_failed: ${CARD_REFUND_FAILED}`,
             message: `${DIDNT_GO_THROUGH} (${CARD_REFUND_FAILED})`,
           })
-          expect(writes()).toEqual([])
+          expect(writes().filter(notAudit)).toEqual([expect.stringContaining('WITH seat AS'), expect.stringContaining('WITH seat AS (UPDATE booking_guests')])
         })
 
         it('store credit that fails: nothing moved and the guest stays', async () => {
           const { result, sql, writes } = await run({ params: credit, credit: [false] })
           expect(result.message).toBe(`${DIDNT_GO_THROUGH} (${CREDIT_FAILED})`)
-          expect(writes()).toEqual([])
+          expect(writes().filter(notAudit).filter((text) => !/store_credit_apply/.test(text))).toEqual([expect.stringContaining('WITH seat AS'), expect.stringContaining('WITH seat AS (UPDATE booking_guests')])
           expect(sql.some((text) => /WITH del AS/.test(text))).toBe(false)
         })
 
@@ -2123,12 +2124,6 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
           )
         })
 
-        it('a seat that could not be lowered keeps its figure and says to check', async () => {
-          const { result } = await run({ cardPortion: 25, deleted: new Error('deadlock detected'), lowerSeatFails: true })
-          expect(result.message).toBe(`${WENT_THROUGH} £25.00 had already gone back to the card — check before retrying. (deadlock detected)`)
-          expect(result.quote).toBeUndefined()
-        })
-
         it('a guest already gone: no seat to lower, so no promise about retrying', async () => {
           const { result } = await run({ cardPortion: 25, deleted: false })
           expect(result.message).toBe(
@@ -2159,16 +2154,18 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
 
       /** Two orders paid for the booking, newest first. `portions` is what each order's card took,
        *  or an Error for a read that fails. `credit` answers each store credit movement in turn
-       *  (an Error throws) and `refunds` each card refund. */
+       *  (an Error throws, and so does looking for it afterwards, so nobody can say whether it
+       *  landed: W05j's read-back is tested in the replay tests) and `refunds` each card refund. */
       const setUp = (options: {
         portions?: Record<string, number | Error>
         credit?: Array<boolean | Error>
-        refunds?: Array<{ error: string } | { ok: true }>
+        refunds?: Array<{ error: string } | { success: true }>
         linesFail?: boolean
         thirdOrder?: boolean
         answers?: Answer[]
       } = {}) => {
         const credit = [...(options.credit ?? [])]
+        let creditThrew = false
         const refunds = [...(options.refunds ?? [])]
         const portions = options.portions ?? { 'order-new': 15, 'order-old': 25 }
         const database = stubDatabase([
@@ -2198,19 +2195,29 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
           }],
           [/store_credit_apply/, () => {
             const next = credit.shift()
+            creditThrew = next instanceof Error
             if (next instanceof Error) throw next
             return [{ result: next === false ? { ok: false } : { ok: true, balance: 40 } }]
           }],
+          [/FOR SHARE/, () => {
+            if (creditThrew) throw BROKEN
+            return []
+          }],
         ])
-        const rawRefund = vi.fn(async () => ({ data: refunds.shift() ?? { ok: true } }))
+        const rawRefund = vi.fn(async () => ({ data: refunds.shift() ?? { success: true } }))
         vi.stubGlobal('paddockBackendApi2', { rawRequest: rawRefund })
         return { rawRefund, ...database }
       }
       const giveBack = async (amount = 25, method: 'card' | 'credit' = 'card') => {
         const { giveBookingMoneyBack } = await load('bookingRefund')
-        return giveBookingMoneyBack({ bookingId: 'booking-1', customerId: 'customer-1', amount, method, staffId: 'staff-1', note: 'Refund', recordCardOnLines: true })
+        return giveBookingMoneyBack({ bookingId: 'booking-1', customerId: 'customer-1', amount, method, staffId: 'staff-1', note: 'Refund', recordCardOnLines: true, pricePaidBefore: 50 })
       }
-      const refundedTo = (rawRefund: ReturnType<typeof vi.fn>) => rawRefund.mock.calls.map(([call]) => (call as { body: unknown }).body)
+      const refundedTo = (rawRefund: ReturnType<typeof vi.fn>) =>
+        rawRefund.mock.calls.map(([call]) => {
+          const body = { ...(call as { body: Record<string, unknown> }).body }
+          delete body['idempotencyKey']
+          return body
+        })
 
       describe('giveBookingMoneyBack', () => {
         it('nothing moved: a failed lookup of the payments is reported, not thrown', async () => {
@@ -2233,9 +2240,14 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
           expect(rawRefund).not.toHaveBeenCalled()
         })
 
-        it('nothing moved: store credit throwing is reported with its detail', async () => {
+        it('store credit throwing can\'t say whether it landed: unsure, with its detail', async () => {
           setUp({ credit: [BROKEN] })
-          expect(await giveBack(25, 'credit')).toEqual({ ok: false, message: 'Adding the store credit failed, so nothing was refunded: connection lost' })
+          expect(await giveBack(25, 'credit')).toEqual({ ok: false, unsure: true, message: 'Adding the store credit gave no clear answer: connection lost; checking whether it landed failed too: connection lost' })
+        })
+
+        it('store credit refused is still a clear no', async () => {
+          setUp({ credit: [false] })
+          expect(await giveBack(25, 'credit')).toEqual({ ok: false, message: 'Adding the store credit failed, so nothing was refunded.' })
         })
 
         it('reading the next order failing after a card refund: the rest goes to store credit, and the card money stands', async () => {
@@ -2272,13 +2284,13 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
         })
 
         it('a further card refund failing keeps its words', async () => {
-          setUp({ refunds: [{ ok: true }, { error: 'card_declined' }] })
+          setUp({ refunds: [{ success: true }, { error: 'card_declined' }] })
           const { result } = await giveBack()
           expect(result.warning).toBe('A further card refund of £10.00 failed (card_declined), so the rest went to store credit.')
         })
 
         it('a further card refund failing and store credit refused: no false claim either', async () => {
-          setUp({ refunds: [{ ok: true }, { error: 'card_declined' }], credit: [false] })
+          setUp({ refunds: [{ success: true }, { error: 'card_declined' }], credit: [false] })
           const { result } = await giveBack()
           expect(result.warning).toBe(
             'A further card refund of £10.00 failed (card_declined). £15.00 went back to the card, but adding the £10.00 remainder to store credit failed — add it by hand.'
@@ -2290,7 +2302,7 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
           const given = await giveBack()
           expect(given).toMatchObject({ ok: true, result: { cardRefunded: 15, storeCreditRefunded: 0, shortfall: 10 } })
           expect(given.result.warning).toBe(
-            "£15.00 went back to the card, but adding the £10.00 remainder to store credit failed (connection lost) — check their balance, then add it by hand if it isn't there."
+            "£15.00 went back to the card, but adding the £10.00 remainder to store credit failed (connection lost; checking whether it landed failed too: connection lost) — check their balance, then add it by hand if it isn't there."
           )
           expect(given.result.warningWithoutShortfall).toBeUndefined()
           expect(sql.filter((text) => /UPDATE order_line_items SET card_refunded_amount/.test(text))).toHaveLength(1)
@@ -2311,10 +2323,10 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
 
       describe('Remove Guest', () => {
         const guestRow = {
-          id: 'guest-1', booking_id: 'booking-1', guest_type: 'additional', guest_name: 'Sam', unit_price: '25.00', pay_by: 'paid',
+          id: 'guest-1', claim_id: 'claim-1', booking_id: 'booking-1', guest_type: 'additional', guest_name: 'Sam', unit_price: '25.00', pay_by: 'paid',
           bk_id: 'booking-1', customer_id: 'customer-1', party_size: 2, price_paid: '50.00', status: 'confirmed', session_id: 'session-1', booking_type: 'public',
         }
-        const removal = async (options: Parameters<typeof setUp>[0] & { deleted?: boolean | Error; lowerSeatFails?: boolean; refundMethod?: string }) => {
+        const removal = async (options: Parameters<typeof setUp>[0] & { deleted?: boolean | Error; putBackFails?: boolean; refundMethod?: string }) => {
           const stubs = setUp({
             ...options,
             answers: [
@@ -2323,8 +2335,8 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
                 if (options.deleted instanceof Error) throw options.deleted
                 return [{ deleted: options.deleted ?? true }]
               }],
-              [/WITH g AS \(UPDATE booking_guests/, () => {
-                if (options.lowerSeatFails) throw BROKEN
+              [/WITH seat AS \(UPDATE booking_guests/, () => {
+                if (options.putBackFails) throw BROKEN
                 return []
               }],
             ],
@@ -2346,13 +2358,14 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
             message: "The refund didn't go through, so the guest hasn't been removed. Please try again. (Checking the card payment failed, so nothing was refunded: connection lost)",
           })
           expect(rawRefund).not.toHaveBeenCalled()
-          expect(writes()).toEqual([])
+          expect(writes().filter(notAudit)).toEqual([expect.stringContaining('WITH seat AS'), expect.stringContaining('WITH seat AS (UPDATE booking_guests')])
         })
 
-        it('store credit throwing after the card refund: the guest is still removed and the seat comes off, so nothing can refund it again', async () => {
+        it('store credit throwing after the card refund: the guest is still removed, and the rest stays on the booking to refund again', async () => {
           const { result, sql, rawRefund } = await removal({ portions: { 'order-new': 15 }, credit: [BROKEN] })
-          expect(result).toMatchObject({ removed: true, cardRefundedAmount: 15, storeCreditRefundedAmount: 0 })
-          expect(result.warning).toContain('add it by hand')
+          expect(result).toMatchObject({ removed: true, refundedAmount: 15, cardRefundedAmount: 15, storeCreditRefundedAmount: 0 })
+          expect(result.warning).toContain('is still on the booking')
+          expect(result.warning).not.toContain('by hand')
           expect(sql.some((text) => /WITH del AS/.test(text))).toBe(true)
           expect(rawRefund).toHaveBeenCalledTimes(1)
         })
@@ -2408,9 +2421,10 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
             expect(result.retryLocked).toBe(true)
           })
 
-          it('a seat that could not be lowered locks Remove', async () => {
-            const { result } = await removal({ portions: { 'order-new': 15, 'order-old': 25 }, deleted: new Error('deadlock detected'), lowerSeatFails: true })
+          it('a seat that could not be put back locks Remove', async () => {
+            const { result } = await removal({ portions: { 'order-new': 15 }, deleted: new Error('deadlock detected'), putBackFails: true })
             expect(result.retryLocked).toBe(true)
+            expect(result.message).toContain("Putting the £10.00 back on the booking failed, so its price paid is that much too low")
           })
 
           it('store credit not taken back locks Remove even with the card part off the seat', async () => {
@@ -2434,7 +2448,7 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
           it('a guest already gone does not lock: a retry only finds them gone', async () => {
             for (const options of [
               { refundMethod: 'credit', credit: [true, false], deleted: false },
-              { portions: { 'order-new': 25 }, deleted: false, lowerSeatFails: true },
+              { portions: { 'order-new': 15 }, deleted: false, putBackFails: true },
             ]) {
               const { result } = await removal(options)
               expect(result.retryLocked).toBeUndefined()
@@ -2454,6 +2468,7 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
             ...options,
             answers: [
               [/FROM bookings b JOIN sessions s/, () => [{ customer_id: 'customer-1', status: 'confirmed', price_paid: '25.00', party_size: 1, session_id: 'session-1', start_time: FAR_OFF, booking_type: 'public' }]],
+              [/UPDATE bookings b\s+SET status = 'cancelled'/, () => [{ id: 'booking-1' }]],
               [/WITH p AS/, () => {
                 if (options.statementFails) throw new Error('deadlock detected')
                 return [{ id: 'booking-1' }]
@@ -2465,8 +2480,17 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
           return { run, ...stubs }
         }
 
-        it('store credit throwing after the card refund: cancelled, with the card money recorded', async () => {
+        it('store credit throwing after the card refund: not cancelled, the card money recorded and the rest owed', async () => {
           const { run, sql } = await cancel({ portions: { 'order-new': 15 }, credit: [BROKEN] })
+          const result = await run
+          expect(result.unsure.message).toContain('£15.00 went back to the card, and the other £10.00 is still on the booking.')
+          expect(sql.some((text) => /WITH p AS/.test(text))).toBe(false)
+          expect(sql.some((text) => /refund_owed_amount = price_paid/.test(text))).toBe(true)
+          expect(sql.some((text) => /UPDATE order_line_items SET card_refunded_amount/.test(text))).toBe(true)
+        })
+
+        it('store credit refused after the card refund: cancelled, and staff add it by hand, as nothing can have landed', async () => {
+          const { run, sql } = await cancel({ portions: { 'order-new': 15 }, credit: [false] })
           const result = await run
           expect(result).toMatchObject({ cardRefundedAmount: 15, storeCreditRefundedAmount: 0 })
           expect(result.warning).toContain('add it by hand')
@@ -2482,10 +2506,11 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
           const { run, sql } = await cancel({ linesFail: true })
           await expect(run).rejects.toThrow("Looking up the booking's payments failed, so nothing was refunded: connection lost")
           expect(sql.some((text) => /WITH p AS/.test(text))).toBe(false)
+          expect(sql.some((text) => /SET status = \$1, cancelled_at = NULL/.test(text))).toBe(true)
         })
 
         it('a failed cancel after a shortfall says a retry refunds the rest, never to add it by hand', async () => {
-          const { run } = await cancel({ portions: { 'order-new': 15 }, credit: [BROKEN], statementFails: true })
+          const { run } = await cancel({ portions: { 'order-new': 15 }, credit: [false], statementFails: true })
           const error = await run.catch((err: Error) => err)
           expect((error as Error).message).toContain("£15.00 had already gone back to the card; it is recorded on the order and taken off the booking's price paid, so retrying refunds only the rest.")
           expect((error as Error).message).not.toContain('by hand')
@@ -2493,41 +2518,47 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
       })
 
       describe('refundBooking with an amount', () => {
-        const partial = async (options: Parameters<typeof setUp>[0] & { lowerFails?: boolean }) => {
+        const partial = async (options: Parameters<typeof setUp>[0] & { putBackFails?: boolean; claimRefused?: boolean }) => {
           const stubs = setUp({
             ...options,
             answers: [
-              [/SELECT customer_id, price_paid FROM bookings/, () => [{ customer_id: 'customer-1', price_paid: '50.00' }]],
-              [/UPDATE bookings SET price_paid/, () => {
-                if (options.lowerFails) throw BROKEN
+              [/SELECT status, customer_id, price_paid, refund_owed_amount FROM bookings/, () => [{ customer_id: 'customer-1', price_paid: '50.00', refund_owed_amount: '0.00', status: 'confirmed' }]],
+              [/UPDATE bookings b\s+SET price_paid/, () => (options.claimRefused ? [] : [{ id: 'booking-1', claim_id: 'claim-1' }])],
+              [/UPDATE bookings\s+SET price_paid/, () => {
+                if (options.putBackFails) throw BROKEN
                 return []
               }],
             ],
           })
           const fn = (await backend('refundBooking')).default
-          return { run: fn({ params: { bookingId: 'booking-1', refundMethod: 'card', amount: 25 }, user }), ...stubs }
+          return { run: fn({ params: { bookingId: 'booking-1', refundMethod: 'card', amount: 25, reason: 'Goodwill' }, user }), ...stubs }
         }
 
-        it('price paid not lowered after the refund: reported as a warning with the amounts, not thrown', async () => {
-          const { run } = await partial({ lowerFails: true })
-          expect(await run).toEqual({
-            cardRefundedAmount: 25,
-            storeCreditRefundedAmount: 0,
-            warning: "The refund went through, but taking it off the booking's price paid failed — check before refunding this booking again: connection lost",
-          })
-        })
-
-        it('keeps the refund\'s own warning beside it', async () => {
-          const { run } = await partial({ portions: { 'order-new': 15 }, credit: [BROKEN], lowerFails: true })
+        it('what fell short can\'t be put back: a warning with the amount, not thrown, as the rest has gone', async () => {
+          const { run } = await partial({ refunds: [{ success: true }, { error: 'declined' }], credit: [BROKEN], putBackFails: true })
           const result = await run
-          expect(result.warning).toContain('add it by hand')
-          expect(result.warning).toContain("taking it off the booking's price paid failed")
+          expect(result).toMatchObject({ cardRefundedAmount: 15, storeCreditRefundedAmount: 0 })
+          expect(result.pricePaid).toBeUndefined()
+          expect(result.warning).toContain('is still on the booking')
+          expect(result.warning).toContain("Putting the £10.00 that didn't go back on the booking failed, so it shows as refunded")
         })
 
-        it('still lowers price paid by the amount', async () => {
-          const { run, sql } = await partial({})
-          expect(await run).toEqual({ cardRefundedAmount: 25, storeCreditRefundedAmount: 0 })
-          expect(sql.some((text) => /UPDATE bookings SET price_paid/.test(text))).toBe(true)
+        it('nothing went and it can\'t be put back: staff are told the booking is that much too low', async () => {
+          const { run } = await partial({ refunds: [{ error: 'declined' }], putBackFails: true })
+          await expect(run).rejects.toThrow("Putting the £25.00 back on the booking failed, so its price paid is that much too low: connection lost")
+        })
+
+        it('lowers price paid by the amount before any money moves, and not again after', async () => {
+          const { run, sql, rawRefund } = await partial({})
+          expect(await run).toEqual({ cardRefundedAmount: 25, storeCreditRefundedAmount: 0, pricePaid: 25 })
+          expect(sql.filter((text) => /UPDATE bookings/.test(text)).length).toBe(1)
+          expect(rawRefund).toHaveBeenCalled()
+        })
+
+        it('a claim that touches no row moves nothing, and answers with the new figures', async () => {
+          const { run, rawRefund } = await partial({ claimRefused: true })
+          expect(await run).toMatchObject({ refused: { message: 'The figures on this booking have just changed. Check them and confirm again.', figures: { pricePaid: 50 } } })
+          expect(rawRefund).not.toHaveBeenCalled()
         })
       })
 
@@ -2539,25 +2570,27 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
             answers: [
               [/FROM bookings b\s+LEFT JOIN sessions/, () => [{
                 id: 'booking-1', customer_id: 'customer-1', session_id: 'session-1', party_size: 2, status: 'confirmed', price_paid: '50.00',
-                redemption_source: 'paid', redeemed_membership_id: null, redeemed_session_pass_id: null,
+                part_refunded_amount: '0.00', refund_owed_amount: '0.00', redemption_source: 'paid', redeemed_membership_id: null, redeemed_session_pass_id: null,
                 start_time: '2099-11-30T10:00:00', end_time: '2099-11-30T11:00:00', band_id: 'band-1', credit_period_id: null, booking_type: 'private',
               }]],
               [/FROM sessions s\s+JOIN service_types/, () => [session]],
               [/FROM service_type_price_tiers/, () => [{ price: '25.00' }]],
               [/UPDATE sessions[\s\S]*RETURNING/, () => [{ id: 'session-2' }]],
-              [/UPDATE bookings\s+SET session_id/, () => [{ id: 'booking-1' }]],
+              [/WITH bk AS/, () => [{ id: 'booking-1', pending_id: null }]],
             ],
           })
           const fn = (await backend('moveBooking')).default
           const result = await fn({ params: { bookingId: 'booking-1', newSessionId: 'session-2', confirmed: true, refundMethod: 'card' }, user })
           return { result, ...stubs }
         }
-        const undone = (sql: string[]) => sql.filter((text) => /UPDATE bookings\s+SET session_id/.test(text)).length
+        const undone = (sql: string[]) => sql.filter((text) => /SET session_id/.test(text)).length
 
         it('store credit throwing after the card refund: the move stands, and is not undone with the money gone', async () => {
           const { result, sql, rawRefund } = await moved({ portions: { 'order-new': 15 }, credit: [BROKEN] })
-          expect(result).toMatchObject({ moved: true, booking: { id: 'booking-1', price_paid: 25 } })
-          expect(result.warning).toContain('add it by hand')
+          // The £10 store credit couldn't give stays on price_paid, to refund again.
+          expect(result).toMatchObject({ moved: true, booking: { id: 'booking-1', price_paid: 35 } })
+          expect(result.warning).toContain('is still on the booking')
+          expect(result.warning).not.toContain('by hand')
           expect(rawRefund).toHaveBeenCalledTimes(1)
           expect(undone(sql)).toBe(1)
         })
@@ -2591,17 +2624,19 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
             return { result, ...stubs }
           }
 
-          it('store credit throwing after the card refund: reported, and the card money recorded so it can\'t go back twice', async () => {
+          // W05j: store credit nobody can say landed is counted as given, so the line is stamped and
+          // can't be refunded again, and staff are told to check the balance.
+          it('store credit throwing after the card refund: counted as given, the line stamped, and staff told to check', async () => {
             const { result, sql, rawRefund } = await refund({ portion: 15, credit: [BROKEN] })
-            expect(result).toMatchObject({ success: true, cardRefundedAmount: 15, storeCreditRefundedAmount: 0 })
-            expect(result.warning).toContain('applying the 10.00 remainder to store credit failed and needs a manual check')
-            expect(sql.filter((text) => /UPDATE order_line_items SET card_refunded_amount/.test(text))).toHaveLength(1)
+            expect(result).toMatchObject({ success: true, cardRefundedAmount: 15, storeCreditRefundedAmount: 10 })
+            expect(result.warning).toContain('Adding the £10.00 store credit gave no clear answer')
+            expect(sql.filter((text) => /SET refunded_at = now\(\), refund_method = \$1, restocked = \$2/.test(text))).toHaveLength(1)
             expect(rawRefund).toHaveBeenCalledTimes(1)
           })
 
-          it('store credit throwing with no card money: says no refund was processed', async () => {
+          it('store credit throwing with no card money: counted as given too, never "no refund was processed"', async () => {
             const { result } = await refund({ portion: 0, credit: [BROKEN] })
-            expect(result).toEqual({ success: false, reason: 'store_credit_failed', message: 'Applying the store credit failed — no refund was processed.' })
+            expect(result).toMatchObject({ success: true, storeCreditRefundedAmount: 25, warning: expect.stringContaining('gave no clear answer') })
           })
         })
 
@@ -2625,17 +2660,19 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
             return { result, ...stubs }
           }
 
-          it('store credit throwing after the card refund: the places are cancelled with the card money recorded', async () => {
+          // W05j: store credit nobody can say landed is counted as given, so the places are cancelled
+          // and can't be refunded again, and staff are told to check the balance.
+          it('store credit throwing after the card refund: the places are cancelled with it counted as given', async () => {
             const { result, sql } = await cancelPlaces({ portion: 15, credit: [BROKEN] })
-            expect(result).toMatchObject({ ok: true, cardRefundedAmount: 15, storeCreditRefundedAmount: 0, refundedAmount: 15 })
-            expect(result.warning).toBe('£15.00 went back to the card, but adding the £10.00 remainder to store credit failed and needs a manual check.')
+            expect(result).toMatchObject({ ok: true, cardRefundedAmount: 15, storeCreditRefundedAmount: 10, refundedAmount: 25 })
+            expect(result.warning).toContain('Adding the £10.00 store credit gave no clear answer')
             expect(sql.some((text) => /WITH p AS/.test(text))).toBe(true)
           })
 
-          it('store credit throwing with no card money: nothing cancelled', async () => {
+          it('store credit throwing with no card money: cancelled with it counted as given, never "nothing was cancelled"', async () => {
             const { result, sql } = await cancelPlaces({ portion: 0, credit: [BROKEN] })
-            expect(result).toEqual({ ok: false, reason: 'store_credit_failed', message: 'Adding the store credit failed, so nothing was cancelled.' })
-            expect(sql.some((text) => /WITH p AS/.test(text))).toBe(false)
+            expect(result).toMatchObject({ ok: true, storeCreditRefundedAmount: 25, warning: expect.stringContaining('gave no clear answer') })
+            expect(sql.some((text) => /WITH p AS/.test(text))).toBe(true)
           })
         })
 
@@ -2673,15 +2710,29 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
           }
           const recorded = (sql: string[]) => sql.some((text) => /SET refunded_amount = s\.refunded/.test(text))
 
-          it('store credit throwing after the card refund: the card money is recorded on the add-on', async () => {
+          it('store credit throwing after the card refund: the card money is recorded on the add-on, and the rest owed', async () => {
             const { result, sql } = await cancelAddons({ lines: [addonLine('sauna-towel', 'order-1')], portions: { 'order-1': 6 }, credit: [BROKEN] })
             expect(result).toMatchObject({ cardRefundedAmount: 6, storeCreditRefundedAmount: 0, cancelledLineIds: ['sauna-towel'] })
+            expect(result.warning).toContain('£4.00 for sauna-towel: This may have gone through.')
+            expect(recorded(sql)).toBe(true)
+            expect(sql.some((text) => /refund_owed_amount = refund_owed_amount \+/.test(text))).toBe(true)
+          })
+
+          it('store credit refused after the card refund: the card money is recorded, and staff add the rest by hand', async () => {
+            const { result, sql } = await cancelAddons({ lines: [addonLine('sauna-towel', 'order-1')], portions: { 'order-1': 6 }, credit: [false] })
             expect(result.warning).toBe('£6.00 went back to the card, but adding the £4.00 remainder to store credit failed — add it manually.')
             expect(recorded(sql)).toBe(true)
           })
 
-          it('store credit throwing with no card money: the add-on goes back on the booking', async () => {
+          it('store credit throwing with no card money: the claim stands, as it may have landed', async () => {
             const { result, sql } = await cancelAddons({ lines: [addonLine('sauna-towel', 'order-1')], portions: { 'order-1': 0 }, credit: [BROKEN] })
+            expect(result.cancelledLineIds).toEqual(['sauna-towel'])
+            expect(result.warning).toContain('£10.00 for sauna-towel: This may have gone through.')
+            expect(sql.some((text) => /UPDATE addon_order_lines SET removed_at = NULL/.test(text))).toBe(false)
+          })
+
+          it('store credit refused with no card money: the add-on goes back on the booking', async () => {
+            const { result, sql } = await cancelAddons({ lines: [addonLine('sauna-towel', 'order-1')], portions: { 'order-1': 0 }, credit: [false] })
             expect(result.cancelledLineIds).toEqual([])
             expect(result.warning).toContain('it was left on the booking')
             expect(sql.some((text) => /UPDATE addon_order_lines SET removed_at = NULL/.test(text))).toBe(true)
@@ -2731,7 +2782,7 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
         /** An order with lines that remember what happened to them. `cardTook` is what its card
          *  took. `markFails` throws on the line's normal final write, `stampFails` on the stamp
          *  that records it instead. */
-        const world = (options: { lines: Line[]; cardTook: number; credit?: Array<boolean | Error>; refunds?: Array<{ error: string } | { ok: true }>; markFails?: boolean; stampFails?: boolean; answers?: Answer[] }) => {
+        const world = (options: { lines: Line[]; cardTook: number; credit?: Array<boolean | Error>; refunds?: Array<{ error: string } | { success: true }>; markFails?: boolean; stampFails?: boolean; answers?: Answer[] }) => {
           const lines = options.lines
           const credited: number[] = []
           const credit = [...(options.credit ?? [])]
@@ -2913,7 +2964,7 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
           const { refund, line, rawRefund, credited } = world({
             lines: [membership],
             cardTook: 30,
-            refunds: [{ ok: true }, { error: 'stripe down' }],
+            refunds: [{ success: true }, { error: 'stripe down' }],
             answers: [[/FROM customer_memberships WHERE order_line_item_id/, () => [{ id: 'membership-1', stripe_subscription_id: 'sub_1', cancel_effective_date: null }]]],
           })
           const first = await refund(['line-1'])
@@ -2934,6 +2985,7 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
             portions: { 'order-new': 15, 'order-old': 25 },
             answers: [
               [/FROM bookings b JOIN sessions s/, () => [{ customer_id: 'customer-1', status: 'confirmed', price_paid: '25.00', party_size: 1, session_id: 'session-1', start_time: FAR_OFF, booking_type: 'public' }]],
+              [/UPDATE bookings b\s+SET status = 'cancelled'/, () => [{ id: 'booking-1' }]],
               [/WITH p AS/, () => [{ id: 'booking-1' }]],
               [/SELECT DISTINCT order_id FROM order_line_items/, () => { throw BROKEN }],
               [/UPDATE addon_order_lines aol\s+SET removed_at/, () => [{ id: 'addon-1', addon_name: 'Towel', quantity: 1, price_at_purchase: '10.00', redemption_source: 'paid', redeemed_membership_id: null, order_id: 'order-new' }]],
@@ -3527,14 +3579,16 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
       expect(rawRequest).not.toHaveBeenCalled()
     })
 
-    it('returns the old result and records nothing when the two match', async () => {
+    it('returns the old result and records a bare match row, so a clean log proves it ran', async () => {
       const { shadowCompare, SHADOW_ACTIONS } = await load('shadowCompare')
       SHADOW_ACTIONS.matching = true
+      rawRequest.mockResolvedValue(success({ recorded: true }))
 
       const result = await shadowCompare(user, 'matching', async () => ({ price: '5.00' }), async () => ({ price: '5.00' }))
 
       expect(result).toEqual({ price: '5.00' })
-      expect(parityCalls()).toHaveLength(0)
+      expect(parityCalls()).toHaveLength(1)
+      expect(parityCalls()[0]?.[0].body).toEqual({ action: 'matching', oldResult: null, newResult: null, matches: true, diff: null })
     })
 
     it('still returns the old result, and records a mismatch through the Worker', async () => {
@@ -3601,9 +3655,10 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
       })
     })
 
-    it('the same failure on both sides is not a mismatch', async () => {
+    it('the same failure on both sides is recorded as a match', async () => {
       const { shadowCompare, SHADOW_ACTIONS } = await load('shadowCompare')
       SHADOW_ACTIONS.bothFail = true
+      rawRequest.mockResolvedValue(success({ recorded: true }))
 
       await expect(
         shadowCompare(
@@ -3618,7 +3673,7 @@ describe.skipIf(!existsSync(shared))('staff app helpers', () => {
         )
       ).rejects.toThrow('Not configured.')
 
-      expect(parityCalls()).toHaveLength(0)
+      expect(parityCalls().map(([options]) => (options.body as { matches: boolean }).matches)).toEqual([true])
     })
 
     describe('time limits', () => {

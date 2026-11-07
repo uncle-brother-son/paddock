@@ -41,3 +41,28 @@ export type StaffParityInput = z.infer<typeof staffParityInputSchema>
 
 export const staffParityOutputSchema = z.object({ recorded: z.literal(true) })
 export type StaffParityOutput = z.infer<typeof staffParityOutputSchema>
+
+/**
+ * GET /api/v1/staff/payments/refunds: one PaymentIntent's refunds, newest first, each with the
+ * Stripe key it was sent with. Stripe forgets a key after 24 hours, but the refund keeps it in its
+ * metadata, so a refund with no clear answer can be found later without sending it again.
+ */
+export const paymentIntentRefundsInputSchema = z.object({
+  paymentIntentId: z.string().regex(/^pi_[A-Za-z0-9_]+$/, 'A PaymentIntent id starts pi_.'),
+})
+export type PaymentIntentRefundsInput = z.infer<typeof paymentIntentRefundsInputSchema>
+
+export const paymentIntentRefundSchema = z.object({
+  id: z.string(),
+  /** Pounds. */
+  amount: z.number(),
+  /** Stripe's status: succeeded, pending, requires_action, failed or canceled. */
+  status: z.string(),
+  /** The key it was sent with, or null for a refund made without one (or in Stripe by hand). */
+  key: z.string().nullable(),
+  createdAt: z.string(),
+})
+export type PaymentIntentRefund = z.infer<typeof paymentIntentRefundSchema>
+
+export const paymentIntentRefundsOutputSchema = z.object({ refunds: z.array(paymentIntentRefundSchema) })
+export type PaymentIntentRefundsOutput = z.infer<typeof paymentIntentRefundsOutputSchema>

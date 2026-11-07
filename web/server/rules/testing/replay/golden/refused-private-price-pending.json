@@ -1,0 +1,13 @@
+{
+  "scenario": "refused-private-price-pending",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "price_pending",
+      "bookingFailureReason": "price_pending"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

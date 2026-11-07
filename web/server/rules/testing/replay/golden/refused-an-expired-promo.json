@@ -1,0 +1,13 @@
+{
+  "scenario": "refused-an-expired-promo",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "promo_code_invalid",
+      "message": "Promo code \"OLDCODE\" cannot be used: That promo code has expired."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

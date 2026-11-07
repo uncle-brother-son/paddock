@@ -1,0 +1,13 @@
+{
+  "scenario": "refused-no-membership-credit-left",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "insufficient_membership_credit",
+      "bookingFailureReason": "insufficient_membership_credit"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

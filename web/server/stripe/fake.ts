@@ -30,6 +30,11 @@ export type FakeFault =
   | { kind: 'unreachable' }
   /** The call took effect, but the answer never came back. */
   | { kind: 'lost_response' }
+  /** Nothing goes wrong: queued first, so that the fault after it hits the second call. */
+  | { kind: 'none' }
+  /** Another request with the same key is still running at Stripe: a 409, and nothing is saved
+   *  against the key, so the request that is running decides what the key holds. */
+  | { kind: 'key_in_use' }
 
 export const fakeStripeErrors = {
   cardDeclined: () =>
@@ -51,6 +56,15 @@ export const fakeStripeErrors = {
     new Stripe.errors.StripeIdempotencyError({
       type: 'idempotency_error',
       message: 'Keys for idempotent requests can only be used with the same parameters they were first used with.',
+    }),
+  /** A 409: the SDK makes it a StripeAPIError, so outcome.ts reads it as unknown, which it is. */
+  keyInUse: () =>
+    new Stripe.errors.StripeAPIError({
+      type: 'invalid_request_error',
+      code: 'idempotency_key_in_use',
+      statusCode: 409,
+      message:
+        'There is currently another in-progress request using this Idempotent Key (that probably means you submitted twice, and the other request is still going through). Please try again later.',
     }),
 }
 
@@ -76,6 +90,16 @@ interface FakePaymentIntent {
   setup_future_usage: string | null
   created: number
   latest_charge: string | null
+}
+
+interface FakeRefund {
+  id: string
+  object: 'refund'
+  amount: number
+  payment_intent: string
+  status: 'succeeded'
+  metadata: Record<string, string>
+  created: number
 }
 
 interface FakeSubscription {
@@ -116,6 +140,8 @@ export class FakeStripe implements StripeClient {
   private readonly faults = new Map<string, FakeFault[]>()
   private readonly intents = new Map<string, FakePaymentIntent>()
   private readonly refunded = new Map<string, number>()
+  private readonly refundsMade: FakeRefund[] = []
+  private readonly generatedCards = new Map<string, string>()
   private readonly subs = new Map<string, FakeSubscription>()
   private readonly couponsById = new Map<string, Stripe.Coupon>()
   private readonly customersById = new Map<string, Record<string, unknown>>()
@@ -143,18 +169,48 @@ export class FakeStripe implements StripeClient {
     })
   }
 
+  /** An active subscription that already exists, as a membership bought earlier would have. */
+  addSubscription(id: string, customer: string, priceId: string): void {
+    const start = seconds()
+    const interval = (this.pricesById.get(priceId)?.['recurring'] as { interval: string } | null | undefined)?.interval ?? 'month'
+    const invoice: FakeInvoice = { id: this.nextId('in'), object: 'invoice', amount_paid: 0, payments: { data: [] } }
+    this.subs.set(id, {
+      id,
+      object: 'subscription',
+      status: 'active',
+      customer,
+      metadata: {},
+      items: { data: [{ price: { id: priceId }, current_period_start: start, current_period_end: addPeriod(start, interval) }] },
+      latest_invoice: invoice.id,
+      invoice,
+    })
+  }
+
+  /** Stripe keeps a key for at least 24 hours, then may drop it: a repeat after that is a new
+   *  request. This drops them all, as if that time had passed. */
+  forgetIdempotencyKeys(): void {
+    this.saved.clear()
+  }
+
   /** The next call to this method (e.g. 'paymentIntents.create') meets this fault. */
   failNext(method: string, fault: FakeFault): void {
     this.faults.set(method, [...(this.faults.get(method) ?? []), fault])
   }
 
-  /** The customer taps the reader: the PaymentIntent succeeds, as the Terminal flow would. */
-  completeReaderPayment(id: string): void {
+  /**
+   * The customer taps the reader: the PaymentIntent succeeds, as the Terminal flow would. A tap that
+   * saves the card names the reusable card Stripe generates for it.
+   */
+  completeReaderPayment(id: string, options: { generatedCard?: string } = {}): void {
     const intent = this.intents.get(id)
     if (!intent) throw new Error(`The fake has no PaymentIntent ${id}.`)
     intent.status = 'succeeded'
     intent.amount_received = intent.amount
     intent.latest_charge = this.nextId('ch')
+    if (options.generatedCard) {
+      intent.payment_method = `${id}_card_present`
+      this.generatedCards.set(id, options.generatedCard)
+    }
   }
 
   // What happened, for tests.
@@ -164,6 +220,21 @@ export class FakeStripe implements StripeClient {
     let total = 0
     for (const intent of this.intents.values()) total += intent.amount_received - (this.refunded.get(intent.id) ?? 0)
     return total
+  }
+
+  /** Pence each PaymentIntent actually took, by id, before refunds. */
+  get chargedByIntent(): Map<string, number> {
+    return new Map([...this.intents.values()].filter((i) => i.amount_received > 0).map((i) => [i.id, i.amount_received]))
+  }
+
+  /** Pence refunded on each PaymentIntent, by id: what really left Stripe for it. */
+  get refundedByIntent(): Map<string, number> {
+    return new Map(this.refunded)
+  }
+
+  /** Pence refunded in all: what really left Stripe, however many calls asked for it. */
+  get refundedPence(): number {
+    return [...this.refunded.values()].reduce((sum, pence) => sum + pence, 0)
   }
 
   get liveSubscriptions(): string[] {
@@ -182,6 +253,8 @@ export class FakeStripe implements StripeClient {
 
     const fingerprint = stableStringify(params ?? null)
     const saved = key === null ? undefined : this.saved.get(key)
+    // Only while the other request hasn't finished: once it has, its answer is saved and replayed.
+    if (fault?.kind === 'key_in_use' && !saved) throw fakeStripeErrors.keyInUse()
     if (saved) {
       if (saved.method !== method || saved.params !== fingerprint) throw fakeStripeErrors.idempotency()
       if (saved.error) throw saved.error
@@ -257,8 +330,11 @@ export class FakeStripe implements StripeClient {
 
     retrieve: (id, params) =>
       this.run('paymentIntents.retrieve', { id, ...params }, undefined, () => {
-        if (params?.expand) throw new Error('The fake has not modelled paymentIntents.retrieve with expand.')
-        return this.intent(id)
+        const intent = this.intent(id)
+        if (!params?.expand) return intent
+        if (params.expand.join() !== 'latest_charge') throw new Error('The fake has not modelled expanding anything but latest_charge.')
+        const card_present = { last4: '4242', brand: 'visa', generated_card: this.generatedCards.get(id) ?? null }
+        return { ...intent, latest_charge: intent.latest_charge && { id: intent.latest_charge, payment_method_details: { card_present } } }
       }) as unknown as Promise<Stripe.PaymentIntent>,
 
     cancel: (id) =>
@@ -291,8 +367,30 @@ export class FakeStripe implements StripeClient {
           throw fakeStripeErrors.invalid('parameter_invalid_integer', 'Refund amount is greater than unrefunded amount on charge.')
         }
         this.refunded.set(intent.id, already + amount)
-        return { id: this.nextId('re'), object: 'refund', amount, payment_intent: intent.id, status: 'succeeded' }
+        const refund: FakeRefund = {
+          id: this.nextId('re'),
+          object: 'refund',
+          amount,
+          payment_intent: intent.id,
+          status: 'succeeded',
+          metadata: { ...((params.metadata ?? {}) as Record<string, string>) },
+          created: seconds(),
+        }
+        this.refundsMade.push(refund)
+        return refund
       }) as unknown as Promise<Stripe.Refund>,
+
+    // Newest first, as Stripe lists them, a page at a time.
+    list: (params) =>
+      this.run('refunds.list', params, undefined, () => {
+        if (!params.payment_intent) throw new Error('The fake has only modelled listing the refunds of one PaymentIntent.')
+        this.intent(params.payment_intent)
+        const all = newestFirst(this.refundsMade.filter((r) => r.payment_intent === params.payment_intent))
+        const from = params.starting_after ? all.findIndex((r) => r.id === params.starting_after) + 1 : 0
+        const limit = params.limit ?? 10
+        const page = all.slice(from, from + limit)
+        return { ...list(page), has_more: from + limit < all.length }
+      }) as unknown as Promise<Stripe.ApiList<Stripe.Refund>>,
   }
 
   private publicSubscription(sub: FakeSubscription, expand: readonly string[] | undefined) {

@@ -119,7 +119,9 @@
           "payment_due_by": null,
           "cancel_reason": null,
           "special_requests": null,
-          "guests_over_18_confirmed_at": "<set>"
+          "guests_over_18_confirmed_at": "<set>",
+          "part_refunded_amount": "0.00",
+          "refund_owed_amount": "0.00"
         }
       ],
       "changed": [],

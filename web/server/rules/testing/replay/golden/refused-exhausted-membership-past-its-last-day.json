@@ -1,0 +1,12 @@
+{
+  "scenario": "refused-exhausted-membership-past-its-last-day",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "exhausted_membership_not_active"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

@@ -1,12 +1,13 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { startTestDatabase, type TestDatabase } from '@/server/rules/testing/database'
+import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
 
 // The staff app's reader order functions, run for real against real Postgres (PGlite) with the live
 // foreign keys. Only Stripe is faked. The app has no test runner, so they run from its checkout
-// beside this repo, as in staff-app-helpers.test.ts. Skipped when it isn't there.
-const appDir = process.env.RETOOL_APP_DIR ?? path.resolve(__dirname, '../../../paddock-retool-app')
+// beside this repo, as in staff-app-helpers.test.ts.
+const appDir = staffAppDir()
 const backend = path.join(appDir, 'backend/paddock')
 const load = (name: string) => import(/* @vite-ignore */ path.join(backend, name))
 
@@ -296,7 +297,11 @@ const SCENARIOS: Array<[string, () => Promise<Fixture>]> = [
   ['buying a pass', () => buyNewPass()],
 ]
 
-describe.skipIf(!existsSync(backend))('reader order rollback and finalise', () => {
+// The "fails at every statement" tests each run a flow once per statement: under 1s alone, nearly 3s
+// beside the replay suites, and once over the default 5s (W05f).
+vi.setConfig({ testTimeout: 30_000 })
+
+describe('reader order rollback and finalise', () => {
   beforeAll(async () => {
     database = await startTestDatabase()
     await database.pg.exec('RESET ROLE')

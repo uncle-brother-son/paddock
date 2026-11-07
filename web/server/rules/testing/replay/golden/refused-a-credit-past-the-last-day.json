@@ -1,0 +1,13 @@
+{
+  "scenario": "refused-a-credit-past-the-last-day",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "membership_not_found",
+      "bookingFailureReason": "membership_not_found"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

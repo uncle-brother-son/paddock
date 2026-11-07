@@ -1,0 +1,13 @@
+{
+  "scenario": "refused-account-holder-under-18",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "guest_under_18",
+      "bookingFailureReason": "guest_under_18"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

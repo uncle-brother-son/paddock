@@ -1,0 +1,13 @@
+{
+  "scenario": "refused-no-method-chosen",
+  "results": [
+    {
+      "success": false,
+      "stage": "payment",
+      "reason": "payment_method_required",
+      "amountDueTotal": 24
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

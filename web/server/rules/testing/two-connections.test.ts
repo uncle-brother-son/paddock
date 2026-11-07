@@ -3,104 +3,22 @@ import type { Db, Tx } from '@/server/db'
 import catalog from './live-catalog.json'
 import { fixtures } from './database'
 import { startRealPostgres, type RealPostgres } from './real-postgres'
+import { attempt, deferred, makeRace, Refused, type Race } from './race'
 
 // Two Worker clients on real Postgres, racing inside real db.transaction()s. There is no order code
 // here yet, so the claims are the staff app's own SQL, as W06 will port it: the capacity UPDATE from
 // shared/sessionCapacity.ts, then the store_credit_apply function from the live schema.
 
-/** The refusal a claim gives. Thrown so that db.transaction rolls back, as the order code will. */
-class Refused extends Error {
-  constructor(
-    readonly reason: string,
-    readonly balance?: string | number
-  ) {
-    super(reason)
-  }
-}
-
-type Outcome<T> = { won: T } | { refused: Refused }
-
-/** One attempt in its own transaction. Anything but a refusal is a test failure, so it is rethrown. */
-async function attempt<T>(db: Db, work: (tx: Tx) => Promise<T>): Promise<Outcome<T>> {
-  try {
-    return { won: await db.transaction(work) }
-  } catch (err) {
-    if (err instanceof Refused) return { refused: err }
-    throw err
-  }
-}
-
-function deferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve = () => {}
-  const promise = new Promise<void>((done) => {
-    resolve = done
-  })
-  return { promise, resolve }
-}
-
 let pg: RealPostgres
 let first: Db
 let second: Db
-
-/** Waits until Postgres itself reports a session blocked by `holder`, and returns that session. */
-async function sessionBlockedBy(holder: number): Promise<number> {
-  const giveUpAt = Date.now() + 4_000
-  while (Date.now() < giveUpAt) {
-    const rows = await pg.admin.unsafe<{ pid: number }[]>(
-      `SELECT pid FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid))`,
-      [holder]
-    )
-    if (rows[0]) return rows[0].pid
-    await new Promise((resolve) => setTimeout(resolve, 10))
-  }
-  throw new Error('The second transaction never waited on the first.')
-}
-
-const backendPid = async (tx: Tx) => (await tx.query<{ pid: number }>('SELECT pg_backend_pid() AS pid'))[0]?.pid as number
-
-/**
- * The race with its timing fixed. The first transaction makes its claim and stays open. The second
- * makes the same claim, and Postgres must report it as blocked by the first. Only then does the
- * first finish, by committing or rolling back, and the second carries on with what it finds.
- */
-async function race<T>(claim: (tx: Tx, who: 'first' | 'second') => Promise<T>, firstEnds: 'commit' | 'rollback') {
-  const finish = deferred()
-  let announce: (pid: number) => void = () => {}
-  const claimed = new Promise<number>((resolve) => {
-    announce = resolve
-  })
-
-  const holder = attempt(first, async (tx) => {
-    const result = await claim(tx, 'first')
-    announce(await backendPid(tx))
-    await finish.promise
-    if (firstEnds === 'rollback') throw new Refused('first_rolled_back')
-    return result
-  })
-  // If the first claim fails, this rejects rather than waiting for ever.
-  const holderPid = await Promise.race([claimed, holder.then(() => Promise.reject(new Error('The first claim ended early.')))])
-
-  let waiterPid = 0
-  let waiterSettled = false
-  const waiter = attempt(second, async (tx) => {
-    waiterPid = await backendPid(tx)
-    return claim(tx, 'second')
-  }).finally(() => {
-    waiterSettled = true
-  })
-
-  const blocked = await sessionBlockedBy(holderPid)
-  expect(blocked).toBe(waiterPid)
-  expect(waiterSettled).toBe(false)
-
-  finish.resolve()
-  return { first: await holder, second: await waiter }
-}
+let race: Race
 
 beforeAll(async () => {
   pg = await startRealPostgres()
   first = pg.connect()
   second = pg.connect()
+  race = makeRace(pg, first, second)
 })
 
 afterAll(() => pg.stop())

@@ -1,0 +1,13 @@
+{
+  "scenario": "refused-session-full",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "insufficient_capacity",
+      "bookingFailureReason": "insufficient_capacity"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

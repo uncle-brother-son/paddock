@@ -1,0 +1,14 @@
+{
+  "scenario": "refused-pass-not-valid-for-the-band",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "session_pass_not_valid_for_band",
+      "bookingFailureReason": "session_pass_not_valid_for_band",
+      "message": "This is a Core pass, which can't be used for Peak sessions. Choose another way to pay."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

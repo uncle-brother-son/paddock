@@ -1,0 +1,13 @@
+{
+  "scenario": "refused-session-blocked",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "session_blocked",
+      "bookingFailureReason": "session_blocked"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

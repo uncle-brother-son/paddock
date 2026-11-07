@@ -115,6 +115,53 @@ describe('refunds', () => {
     await expect(stripe.refunds.create({ payment_intent: paid.id, amount: 501 })).rejects.toThrow('greater than')
     expect(stripe.netPence).toBe(500)
   })
+
+  it('lists a PaymentIntent\'s refunds newest first, with their metadata, a page at a time', async () => {
+    const paid = await stripe.paymentIntents.create(charge)
+    const other = await stripe.paymentIntents.create(charge)
+    await stripe.refunds.create({ payment_intent: paid.id, amount: 100, metadata: { refund_key: 'first' } })
+    await stripe.refunds.create({ payment_intent: other.id, amount: 100 })
+    await stripe.refunds.create({ payment_intent: paid.id, amount: 200, metadata: { refund_key: 'second' } })
+    const page = await stripe.refunds.list({ payment_intent: paid.id, limit: 1 })
+    expect(page.data.map((r) => r.metadata?.['refund_key'])).toEqual(['second'])
+    expect(page.has_more).toBe(true)
+    const next = await stripe.refunds.list({ payment_intent: paid.id, limit: 1, starting_after: page.data[0]!.id })
+    expect(next.data.map((r) => [r.amount, r.metadata?.['refund_key']])).toEqual([[100, 'first']])
+    expect(next.has_more).toBe(false)
+  })
+
+  it('a key dropped after 24 hours makes a repeat a new refund', async () => {
+    const paid = await stripe.paymentIntents.create(charge)
+    await stripe.refunds.create({ payment_intent: paid.id, amount: 100 }, { idempotencyKey: 'r1' })
+    await stripe.refunds.create({ payment_intent: paid.id, amount: 100 }, { idempotencyKey: 'r1' })
+    expect(stripe.refundedPence).toBe(100)
+    stripe.forgetIdempotencyKeys()
+    await stripe.refunds.create({ payment_intent: paid.id, amount: 100 }, { idempotencyKey: 'r1' })
+    expect(stripe.refundedPence).toBe(200)
+  })
+})
+
+describe('a key still in use by another request', () => {
+  it('answers 409 and saves nothing, so the request that was running decides the key', async () => {
+    stripe.failNext('paymentIntents.create', { kind: 'key_in_use' })
+    await expect(stripe.paymentIntents.create(charge, { idempotencyKey: 'k' })).rejects.toMatchObject({
+      code: 'idempotency_key_in_use',
+      statusCode: 409,
+    })
+    expect(stripe.netPence).toBe(0)
+    const paid = await stripe.paymentIntents.create(charge, { idempotencyKey: 'k' })
+    expect(paid.status).toBe('succeeded')
+  })
+
+  it('a key that has already finished is replayed, not refused', async () => {
+    const first = await stripe.paymentIntents.create(charge, { idempotencyKey: 'k' })
+    stripe.failNext('paymentIntents.create', { kind: 'key_in_use' })
+    expect((await stripe.paymentIntents.create(charge, { idempotencyKey: 'k' })).id).toBe(first.id)
+  })
+
+  it('is unknown to outcome.ts: the money may move through the other request', () => {
+    expect(readStripeFailure(fakeStripeErrors.keyInUse())).toMatchObject({ outcome: 'unknown', code: 'idempotency_key_in_use' })
+  })
 })
 
 describe('subscriptions', () => {
@@ -159,7 +206,7 @@ describe('calls', () => {
 
   it('refuses behaviour nobody modelled', async () => {
     const paid = await stripe.paymentIntents.create(charge)
-    await expect(stripe.paymentIntents.retrieve(paid.id, { expand: ['latest_charge'] })).rejects.toThrow('not modelled')
+    await expect(stripe.paymentIntents.retrieve(paid.id, { expand: ['customer'] })).rejects.toThrow('not modelled')
   })
 })
 
@@ -174,5 +221,26 @@ describe('readStripeFailure', () => {
     ['something that is not Stripe', new Error('boom'), 'unknown', null],
   ])('%s', (_, error, outcome, code) => {
     expect(readStripeFailure(error)).toMatchObject({ outcome, code })
+  })
+  describe('set-up for what already exists', () => {
+    it('a seeded subscription is live, listed and can be cancelled', async () => {
+      stripe.addPrice('price_seeded', 4000, 'month')
+      stripe.addSubscription('sub_seeded', 'cus_1', 'price_seeded')
+      expect(stripe.liveSubscriptions).toContain('sub_seeded')
+      await stripe.subscriptions.cancel('sub_seeded')
+      expect(stripe.liveSubscriptions).not.toContain('sub_seeded')
+    })
+
+    it('a tap that saves the card shows the generated card on the charge, and only then', async () => {
+      const made = await stripe.paymentIntents.create({ amount: 500, currency: 'gbp' })
+      stripe.completeReaderPayment(made.id, { generatedCard: 'pm_saved' })
+      const read = await stripe.paymentIntents.retrieve(made.id, { expand: ['latest_charge'] })
+      expect(read.payment_method).toBeTruthy()
+      expect(read.latest_charge).toMatchObject({ payment_method_details: { card_present: { generated_card: 'pm_saved' } } })
+
+      const plain = await stripe.paymentIntents.create({ amount: 500, currency: 'gbp' })
+      stripe.completeReaderPayment(plain.id)
+      expect((await stripe.paymentIntents.retrieve(plain.id)).payment_method).toBeNull()
+    })
   })
 })
