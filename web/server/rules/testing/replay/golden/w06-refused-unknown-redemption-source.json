@@ -1,0 +1,13 @@
+{
+  "scenario": "w06-refused-unknown-redemption-source",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "invalid_redemption_source",
+      "bookingFailureReason": "invalid_redemption_source"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

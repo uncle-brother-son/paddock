@@ -1,0 +1,13 @@
+{
+  "scenario": "w06-refused-too-many-guests",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "too_many_guests",
+      "bookingFailureReason": "too_many_guests"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

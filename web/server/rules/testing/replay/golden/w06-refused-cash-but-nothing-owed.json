@@ -1,0 +1,14 @@
+{
+  "scenario": "w06-refused-cash-but-nothing-owed",
+  "results": [
+    {
+      "success": false,
+      "stage": "payment",
+      "reason": "cash_amount_changed",
+      "message": "The amount due has changed. There's nothing left to collect in cash. Check it with the customer and confirm again.",
+      "amountDueTotal": 0
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

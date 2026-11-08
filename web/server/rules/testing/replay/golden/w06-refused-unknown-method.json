@@ -1,0 +1,12 @@
+{
+  "scenario": "w06-refused-unknown-method",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "invalid_payment_method"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

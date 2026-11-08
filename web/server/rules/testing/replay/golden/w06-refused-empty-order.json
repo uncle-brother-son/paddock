@@ -1,0 +1,12 @@
+{
+  "scenario": "w06-refused-empty-order",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "empty_order"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

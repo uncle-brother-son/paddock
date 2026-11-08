@@ -2785,4 +2785,103 @@ export const scenarios: Scenario[] = [
   booked('w05l-add-guest-answer-lost-and-the-look-fails', publicOnCard, async ({ add }) => {
     await losingTheAnswer(andTheLookFails(ADD_GUEST_STATEMENT), () => add(bea, { ...cash(15), giftCard: W05L_GIFT }))
   }),
+  ...w06Scenarios(),
 ]
+
+// --- W06: the Worker's order core. Every createOrder and createBooking reason in W06's scope that had
+// no scenario yet, and the paid and nothing-owed shapes it builds. They run through the old createOrder
+// for their golden files, and order-replay.test.ts runs them through the new route too.
+function w06Scenarios(): Scenario[] {
+  const robe = { addonId: ID.robe, quantity: 1, unitPrice: 8, systemUnitPrice: 8 }
+  const moCredit = { ...paidSeat([mo]), ...memberCredit }
+  const UNKNOWN = '10000000-0000-4000-8000-0000000000ff'
+  return [
+    // Paid and nothing owed
+    order('w06-standalone-addon-in-cash', { standaloneAddons: [towel], payment: cash(5) }),
+    order('w06-booking-and-a-standalone-addon-in-cash', { booking: paidSeat(), standaloneAddons: [towel], payment: cash(25) }),
+    order('w06-private-booking-with-an-addon', { booking: { ...privateSeats, addons: [{ ...towel, redemptionSource: 'paid' }] }, payment: cash(105) }),
+    order('w06-member-credit-and-nothing-owed', { customerId: ID.member, booking: moCredit, payment: {} }),
+    order('w06-pass-credit-and-nothing-owed', { booking: { ...paidSeat(), ...ownedPass }, payment: {} }),
+    order('w06-cash-chosen-with-nothing-owed', { customerId: ID.member, booking: moCredit, payment: cash(0) }),
+    order('w06-two-addon-credits-on-one-membership', {
+      customerId: ID.member,
+      booking: {
+        ...paidSeat([mo, alex]),
+        ...memberCredit,
+        addons: [
+          { ...towel, redemptionSource: 'membership_credit', membershipId: ID.membership },
+          { ...robe, redemptionSource: 'membership_credit', membershipId: ID.membership },
+        ],
+      },
+      payment: cash(20),
+    }),
+    order('w06-special-requests-kept', { booking: { ...paidSeat(), specialRequests: '  Step-free access, please  ' }, payment: cash(20) }),
+    order('w06-a-full-public-party', { booking: paidSeat([sam, alex, alex, alex, alex, alex]), payment: cash(120) }),
+    order('w06-override-with-permission-in-cash', { standaloneAddons: [{ ...towel, unitPrice: 3, priceOverrideReason: '  Regular  ' }], payment: cash(3) }),
+    order('w06-override-without-permission-is-ignored-in-cash', { standaloneAddons: [{ ...towel, unitPrice: 1 }], payment: cash(5) }, noPricing),
+    // Stage 1 and 2: before anything is read
+    order('w06-refused-no-customer', { customerId: undefined, booking: paidSeat(), payment: cash(20) }),
+    order('w06-refused-empty-order', { payment: cash(0) }),
+    order('w06-refused-gift-card-booking-source', { booking: { ...paidSeat(), redemptionSource: 'gift_card' }, payment: cash(0) }),
+    order('w06-refused-unknown-customer', { customerId: UNKNOWN, booking: paidSeat(), payment: cash(20) }),
+    // Stage 3
+    order('w06-refused-credit-on-a-private-booking', { customerId: ID.member, booking: { ...privateSeats, guests: [mo, alex], ...memberCredit }, payment: cash(0) }),
+    // Stage 11 and 12: add-ons and prices, which come before the booking's own checks
+    order('w06-refused-addon-quantity', { booking: { ...paidSeat(), addons: [{ ...towel, quantity: 0 }] }, payment: cash(20) }),
+    order('w06-refused-addon-credit-with-no-membership', { booking: { ...paidSeat(), addons: [{ ...towel, redemptionSource: 'membership_credit' }] }, payment: cash(20) }),
+    order('w06-refused-unknown-addon', { standaloneAddons: [{ ...towel, addonId: UNKNOWN }], payment: cash(5) }),
+    order('w06-refused-inactive-addon', { standaloneAddons: [towel], payment: cash(5) }, async (db) => {
+      await db.query('UPDATE addons SET active = false WHERE id = $1', [ID.addon])
+    }),
+    order('w06-refused-a-changed-price-with-no-reason', { standaloneAddons: [{ ...towel, unitPrice: 3 }], payment: cash(3) }),
+    order('w06-refused-addon-checked-before-the-booking', {
+      booking: { ...paidSeat([{ ...sam, dateOfBirth: 'not a date' }]), addons: [towel] },
+      payment: cash(25),
+    }, async (db) => {
+      await db.query('UPDATE addons SET active = false WHERE id = $1', [ID.addon])
+    }),
+    // Stage 14
+    order('w06-refused-unknown-method', { booking: paidSeat(), payment: { method: 'cheque' } }),
+    // createBooking's reasons
+    order('w06-refused-unknown-redemption-source', { booking: { ...paidSeat(), redemptionSource: 'loyalty' }, payment: cash(20) }),
+    order('w06-refused-no-guests', { booking: paidSeat([]), payment: cash(0) }),
+    order('w06-refused-too-many-guests', { booking: paidSeat([sam, alex, alex, alex, alex, alex, alex]), payment: cash(140) }),
+    order('w06-refused-guest-with-no-name', { booking: paidSeat([sam, { ...alex, name: '  ' }]), payment: cash(40) }),
+    order('w06-refused-no-date-of-birth', { booking: paidSeat([{ name: 'Sam Test', email: 'sam@example.com' }]), payment: cash(20) }),
+    order('w06-refused-a-date-of-birth-that-is-not-a-date', { booking: paidSeat([{ ...sam, dateOfBirth: 'not a date' }]), payment: cash(20) }),
+    order('w06-refused-membership-not-chosen', { customerId: ID.member, booking: { ...paidSeat([mo]), redemptionSource: 'membership_credit' }, payment: cash(0) }),
+    order('w06-refused-pass-not-chosen', { booking: { ...paidSeat(), redemptionSource: 'session_pass_credit' }, payment: cash(0) }),
+    order('w06-refused-unknown-session', { booking: { ...paidSeat(), sessionId: UNKNOWN }, payment: cash(20) }),
+    order('w06-refused-a-session-with-no-band', { booking: paidSeat(), payment: cash(20) }, async (db) => {
+      await db.query('UPDATE sessions SET band_id = NULL WHERE id = $1', [ID.session])
+    }),
+    order('w06-refused-a-private-session-already-taken', { booking: privateSeats, payment: cash(100) }, async (db) => {
+      await db.query('UPDATE sessions SET total_booked = 1 WHERE id = $1', [ID.privateSession])
+    }),
+    order('w06-refused-a-full-session-with-a-wrong-figure', { booking: paidSeat(), payment: cash(1) }, async (db) => {
+      await db.query('UPDATE sessions SET total_booked = capacity WHERE id = $1', [ID.session])
+    }),
+    // createOrder's add-on credit reasons, after the booking
+    order('w06-refused-someone-elses-addon-credit', {
+      booking: { ...paidSeat(), addons: [{ ...towel, redemptionSource: 'membership_credit', membershipId: ID.membership }] },
+      payment: cash(20),
+    }),
+    order('w06-refused-addon-credit-not-herd-yet', {
+      customerId: ID.member,
+      booking: { ...moCredit, addons: [{ ...towel, redemptionSource: 'membership_credit', membershipId: ID.membership }] },
+      payment: cash(0),
+    }, async (db) => {
+      await db.query('UPDATE customer_memberships SET is_herd = false WHERE id = $1', [ID.membership])
+    }),
+    order('w06-refused-not-enough-addon-credit', {
+      customerId: ID.member,
+      booking: { ...moCredit, addons: [{ ...towel, quantity: 3, redemptionSource: 'membership_credit', membershipId: ID.membership }] },
+      payment: cash(0),
+    }),
+    // Stage 24: the cash figure, then the amount checks
+    order('w06-refused-cash-figure-changed', { booking: paidBooking, payment: cash(40) }),
+    order('w06-refused-cash-not-confirmed', { booking: paidBooking, payment: { method: 'cash' } }),
+    order('w06-refused-cash-but-nothing-owed', { customerId: ID.member, booking: moCredit, payment: cash(20) }),
+    order('w06-refused-something-owed-with-no-method', { booking: paidSeat(), payment: {} }),
+  ]
+}

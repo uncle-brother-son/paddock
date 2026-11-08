@@ -6,7 +6,7 @@ type Responder = (sql: string, params: readonly SqlParam[]) => unknown
 
 /** Records every statement, on the pool or on a reserved connection. */
 function fakeDriver(respond: Responder = () => []) {
-  const log: Array<{ on: 'pool' | 'reserved'; sql: string; params: readonly SqlParam[] }> = []
+  const log: Array<{ on: 'pool' | 'reserved'; sql: string; params: readonly SqlParam[]; script?: true }> = []
   const released = vi.fn()
   const closed = vi.fn().mockResolvedValue(undefined)
   const run =
@@ -15,9 +15,15 @@ function fakeDriver(respond: Responder = () => []) {
       log.push({ on, sql, params })
       return respond(sql, params) as Row[]
     }
-  const reserve = vi.fn(async (): Promise<ReservedSession> => ({ run: run('reserved'), release: released }))
+  /** Several statements in one round trip: logged once, as the client sends it. */
+  const runScript = async (sql: string): Promise<void> => {
+    log.push({ on: 'reserved', sql, params: [], script: true })
+    respond(sql, [])
+  }
+  const reserve = vi.fn(async (): Promise<ReservedSession> => ({ run: run('reserved'), runScript, release: released }))
   const driver: DbDriver = { run: run('pool'), reserve, close: closed }
-  const statements = () => log.filter((entry) => entry.on === 'reserved').map((entry) => entry.sql.split(/\s/)[0])
+  /** One entry per round trip: the first word of what was sent (BEGIN for BEGIN with its time limits). */
+  const statements = () => log.filter((entry) => entry.on === 'reserved').map((entry) => entry.sql.split(/[\s;]/)[0])
   return { driver, log, released, reserve, closed, statements }
 }
 
@@ -72,7 +78,7 @@ describe('db.query', () => {
 })
 
 describe('db.transaction', () => {
-  it('runs BEGIN, the timeouts, the work and COMMIT on one reserved connection, then releases it', async () => {
+  it('runs BEGIN with the timeouts, the work and COMMIT on one reserved connection, then releases it', async () => {
     const fake = fakeDriver()
     const db = createDb(fake.driver)
 
@@ -82,16 +88,19 @@ describe('db.transaction', () => {
     })
 
     expect(result).toBe('done')
-    expect(fake.statements()).toEqual(['BEGIN', 'SELECT', 'UPDATE', 'COMMIT'])
+    expect(fake.statements()).toEqual(['BEGIN', 'UPDATE', 'COMMIT'])
     expect(fake.log.every((entry) => entry.on === 'reserved')).toBe(true)
     expect(fake.released).toHaveBeenCalledTimes(1)
   })
 
-  it('sets the timeouts for this transaction only', async () => {
+  it('sends BEGIN and the timeouts as one round trip, and sets the timeouts for this transaction only', async () => {
     const fake = fakeDriver()
     await createDb(fake.driver).transaction(async () => {})
 
-    const setTimeouts = fake.log[1]?.sql ?? ''
+    expect(fake.log).toHaveLength(2)
+    expect(fake.log[0]).toMatchObject({ on: 'reserved', script: true })
+    const setTimeouts = fake.log[0]?.sql ?? ''
+    expect(setTimeouts).toMatch(/^BEGIN;\s*SELECT set_config\(/)
     expect(setTimeouts).toContain("set_config('statement_timeout', '8000', true)")
     expect(setTimeouts).toContain("set_config('lock_timeout', '5000', true)")
     expect(setTimeouts).toContain("set_config('idle_in_transaction_session_timeout', '15000', true)")
@@ -108,7 +117,7 @@ describe('db.transaction', () => {
       })
     ).rejects.toBe(boom)
 
-    expect(fake.statements()).toEqual(['BEGIN', 'SELECT', 'UPDATE', 'ROLLBACK'])
+    expect(fake.statements()).toEqual(['BEGIN', 'UPDATE', 'ROLLBACK'])
     expect(fake.released).toHaveBeenCalledTimes(1)
   })
 
@@ -127,7 +136,7 @@ describe('db.transaction', () => {
       })
     ).rejects.toBe(failed)
 
-    expect(fake.statements()).toEqual(['BEGIN', 'SELECT', 'INSERT', 'ROLLBACK'])
+    expect(fake.statements()).toEqual(['BEGIN', 'INSERT', 'ROLLBACK'])
   })
 
   it('does not open a second transaction for a nested call on tx', async () => {
@@ -141,7 +150,7 @@ describe('db.transaction', () => {
     })
 
     expect(fake.reserve).toHaveBeenCalledTimes(1)
-    expect(fake.statements()).toEqual(['BEGIN', 'SELECT', 'UPDATE', 'COMMIT'])
+    expect(fake.statements()).toEqual(['BEGIN', 'UPDATE', 'COMMIT'])
   })
 
   it('joins the running transaction when a helper calls db.transaction or db.query inside one', async () => {
@@ -156,7 +165,7 @@ describe('db.transaction', () => {
 
     expect(fake.reserve).toHaveBeenCalledTimes(1)
     expect(fake.log.every((entry) => entry.on === 'reserved')).toBe(true)
-    expect(fake.statements()).toEqual(['BEGIN', 'SELECT', 'UPDATE', 'SELECT', 'COMMIT'])
+    expect(fake.statements()).toEqual(['BEGIN', 'UPDATE', 'SELECT', 'COMMIT'])
   })
 
   it('rolls back everything when a nested transaction fails, even if the outer code catches it', async () => {
@@ -172,7 +181,7 @@ describe('db.transaction', () => {
       })
     ).rejects.toBe(inner)
 
-    expect(fake.statements()).toEqual(['BEGIN', 'SELECT', 'ROLLBACK'])
+    expect(fake.statements()).toEqual(['BEGIN', 'ROLLBACK'])
   })
 
   it('keeps separate transactions apart once the first has finished', async () => {
@@ -223,6 +232,17 @@ describe('db.transaction', () => {
     expect(fake.released).not.toHaveBeenCalled()
   })
 
+  it('rolls back and releases the connection when BEGIN with the timeouts fails', async () => {
+    const fake = fakeDriver((sql) => {
+      if (sql.startsWith('BEGIN')) throw Object.assign(new Error('canceling statement due to statement timeout'), { code: '57014' })
+      return []
+    })
+
+    await expect(createDb(fake.driver).transaction(async () => 'x')).rejects.toBeInstanceOf(DbTimeoutError)
+    expect(fake.statements()).toEqual(['BEGIN', 'ROLLBACK'])
+    expect(fake.released).toHaveBeenCalledTimes(1)
+  })
+
   it('fails with a database error when no connection can be reserved', async () => {
     const fake = fakeDriver()
     fake.reserve.mockRejectedValueOnce(Object.assign(new Error('timeout'), { code: 'CONNECT_TIMEOUT' }))
@@ -237,7 +257,8 @@ describe('tx.selectForUpdate', () => {
     await createDb(fake.driver).transaction(async (tx) => {
       await tx.selectForUpdate(sql, ['id-1'], options)
     })
-    return fake.log[2]
+    // After BEGIN with its timeouts (one entry), the locking SELECT.
+    return fake.log[1]
   }
 
   it('adds FOR UPDATE and keeps the params', async () => {

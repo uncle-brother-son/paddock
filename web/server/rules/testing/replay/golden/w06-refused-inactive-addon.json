@@ -1,0 +1,12 @@
+{
+  "scenario": "w06-refused-inactive-addon",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "addon_inactive"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

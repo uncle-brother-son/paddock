@@ -1,0 +1,12 @@
+{
+  "scenario": "w06-refused-unknown-addon",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "addon_not_found"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

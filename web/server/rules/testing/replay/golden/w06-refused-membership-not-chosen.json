@@ -1,0 +1,13 @@
+{
+  "scenario": "w06-refused-membership-not-chosen",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "membership_id_required",
+      "bookingFailureReason": "membership_id_required"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

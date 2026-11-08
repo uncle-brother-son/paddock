@@ -1,0 +1,13 @@
+{
+  "scenario": "w06-refused-something-owed-with-no-method",
+  "results": [
+    {
+      "success": false,
+      "stage": "payment",
+      "reason": "payment_method_required",
+      "amountDueTotal": 20
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

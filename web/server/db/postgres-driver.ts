@@ -94,7 +94,14 @@ export function createPostgresDriver(connectionString: string): DbDriver {
     ...sessionOn(sql),
     async reserve(): Promise<ReservedSession> {
       const reserved = await sql.reserve()
-      return { ...sessionOn(reserved as unknown as PostgresClient), release: () => reserved.release() }
+      return {
+        ...sessionOn(reserved as unknown as PostgresClient),
+        // simple() sends the text as one simple-protocol message, which may hold several statements.
+        async runScript(text) {
+          await reserved.unsafe(text).simple()
+        },
+        release: () => reserved.release(),
+      }
     },
     close: () => sql.end({ timeout: CLOSE_TIMEOUT_SECONDS }),
   }

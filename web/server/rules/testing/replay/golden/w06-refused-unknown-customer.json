@@ -1,0 +1,12 @@
+{
+  "scenario": "w06-refused-unknown-customer",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "customer_not_found"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

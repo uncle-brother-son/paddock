@@ -1,0 +1,13 @@
+{
+  "scenario": "w06-refused-a-changed-price-with-no-reason",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "price_override_reason_required",
+      "message": "A price on this order was changed from the system price — enter a reason for the price change (up to 200 characters) on that line before completing the order."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

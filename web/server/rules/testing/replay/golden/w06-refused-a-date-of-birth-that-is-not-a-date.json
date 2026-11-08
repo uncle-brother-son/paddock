@@ -1,0 +1,13 @@
+{
+  "scenario": "w06-refused-a-date-of-birth-that-is-not-a-date",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "guest_dob_invalid",
+      "bookingFailureReason": "guest_dob_invalid"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

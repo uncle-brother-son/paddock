@@ -64,6 +64,42 @@ export function classifyDbError(err: unknown): unknown {
   return err
 }
 
+/**
+ * Postgres broke a deadlock by aborting this transaction (40P01), so all of it was rolled back.
+ * Postgres's advice is to run it again; only work that calls nothing outside the database may.
+ */
+export function isDeadlock(err: unknown): boolean {
+  return err instanceof DbTimeoutError && (err.detail ?? '').startsWith('40P01:')
+}
+
 export function queryTimeoutError(what: string): DbTimeoutError {
   return new DbTimeoutError(TIMEOUT_MESSAGE, `Client-side timeout: ${what}`)
+}
+
+/**
+ * What Postgres said about a statement it refused, for a rule to turn into its own reason once the
+ * transaction has rolled back (a failed statement ends the transaction, so it can't be caught and
+ * carried on from). Null for anything that isn't a Postgres refusal, such as a timeout.
+ */
+export interface PostgresRefusal {
+  /** The SQLSTATE, e.g. 23P01 for an exclusion constraint, P0001 for a RAISE EXCEPTION. */
+  code: string
+  /** The constraint that refused it, when there was one. */
+  constraint: string | null
+  /** The text Postgres raised: a trigger's own words for a RAISE EXCEPTION. */
+  message: string
+  /** Where it was raised, e.g. "PL/pgSQL function quote_booking(uuid,uuid,integer) line 15 at RAISE". */
+  where: string | null
+}
+
+export function postgresRefusal(err: unknown): PostgresRefusal | null {
+  if (err instanceof DbError || !(err instanceof Error)) return null
+  const fields = err as Error & { code?: unknown; constraint_name?: unknown; where?: unknown }
+  if (typeof fields.code !== 'string' || !/^[0-9A-Z]{5}$/.test(fields.code)) return null
+  return {
+    code: fields.code,
+    constraint: typeof fields.constraint_name === 'string' ? fields.constraint_name : null,
+    message: err.message,
+    where: typeof fields.where === 'string' ? fields.where : null,
+  }
 }

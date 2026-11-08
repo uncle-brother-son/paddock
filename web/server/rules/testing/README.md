@@ -22,8 +22,10 @@ Keep the version in `package.json` on the one live runs. `two-connections.test.t
 differ.
 
 For a lock test, use `makeRace` from `race.ts`: it holds the first transaction open until Postgres
-reports the second as blocked by it, so the test can't pass by luck of timing. Add a control that
-shows the unguarded version going wrong, or a passing test proves nothing.
+reports the second as blocked by it, so the test can't pass by luck of timing. When the test's name
+says which lock the second waits on, pass the table as `waitsOn` (checked in `pg_locks` with
+`waitingOn`): an earlier lock in `LOCK_ORDER` can queue the second first and hide a missing one. Add a
+control that shows the unguarded version going wrong, or a passing test proves nothing.
 
 `replay/refund-races.test.ts` runs the old functions themselves on two connections. It has no fixed
 clock, so it moves the seeded sessions 20 years on, with triggers off, because one works the band out
@@ -116,10 +118,22 @@ alone letting one through. Scenarios use `losingTheAnswer` for a write that work
 `FakeStripe.addSubscription` seeds a subscription that already exists. A reader tap that saves a card
 is `completeReaderPayment(id, { generatedCard })`, which a membership on the reader needs to finalise.
 
-To add the new side at W06, write a `ReplaySide` whose `call` runs the route, then compare its
-recording with the golden file, passing each `AllowedDifference` with the decision that allows it.
-An allowance that stops being needed fails, so stale ones can't pile up. The new side's database
-calls must also tick the clock, or every row in it will look tied.
+The new side (W06 on): `order-side.ts` sends createOrder's params to `POST /api/v1/staff/orders` and
+gives its answer back in createOrder's shape, as the staff app's wrapper will at W14.
+`order-replay.test.ts` runs every scenario in `W06_SCENARIOS` (`order-differences.ts`) through it and
+compares the recording with the golden file, passing each `AllowedDifference` with the decision that
+allows it (the idempotency row, and the audit rows of a placed order). An allowance that stops being
+needed fails, so stale ones can't pile up. T1 sets created_at itself, a millisecond apart, so its rows
+don't tie though its statements don't tick the clock. `NOT_BUILT_SCENARIOS` holds one single-order
+scenario for each part the route answers NOT_BUILT for; the slice that builds a part moves its
+scenarios into the replay list.
+
+`quote-shadow.test.ts` also runs the dry run beside the quote: every scenario's dry-run rows must
+match what the old order wrote, every single order in `W06_SCENARIOS` must have its match, and every
+other single order must have none (it is NOT_BUILT). A new single-order scenario the route can take
+must go in the list, or that check fails. The order rule's own transaction tests are in
+`server/rules/orders/place-order.test.ts` (PGlite) and `place-order-postgres.test.ts` (real Postgres:
+the races and the lock order).
 
 To re-record after a deliberate change:
 

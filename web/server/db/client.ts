@@ -23,7 +23,11 @@ export const STATEMENT_TIMEOUT_MS = 8_000
 export const LOCK_TIMEOUT_MS = 5_000
 export const IDLE_IN_TRANSACTION_TIMEOUT_MS = 15_000
 
-const SET_TRANSACTION_TIMEOUTS = `SELECT set_config('statement_timeout', '${STATEMENT_TIMEOUT_MS}', true),
+// BEGIN and the time limits go to Postgres as one message, so opening a transaction is one round
+// trip (about 20 ms through Hyperdrive), not two. A BEGIN inside a multi-statement message opens a
+// real transaction block that stays open after the message. Constants only: no values in the text.
+const BEGIN_WITH_TIMEOUTS = `BEGIN;
+SELECT set_config('statement_timeout', '${STATEMENT_TIMEOUT_MS}', true),
        set_config('lock_timeout', '${LOCK_TIMEOUT_MS}', true),
        set_config('idle_in_transaction_session_timeout', '${IDLE_IN_TRANSACTION_TIMEOUT_MS}', true)`
 
@@ -41,6 +45,11 @@ export interface DriverSession {
   run<Row>(sql: string, params: readonly SqlParam[]): Promise<Row[]>
 }
 export interface ReservedSession extends DriverSession {
+  /**
+   * Several statements in one round trip, with no parameters (Postgres's simple query protocol).
+   * Only for the client's own fixed text: BEGIN with the transaction's time limits.
+   */
+  runScript(sql: string): Promise<void>
   release(): void
 }
 export interface DbDriver extends DriverSession {
@@ -151,6 +160,16 @@ class Transaction implements Tx {
 
 const activeTransaction = new AsyncLocalStorage<Transaction>()
 
+/**
+ * Whether db.transaction() called here would join a transaction already open on this db rather
+ * than open its own. Work that wants to run its transaction again (after a deadlock) may only do
+ * so when it opened it: a joined one belongs to the caller, and has already failed.
+ */
+export function inOpenTransaction(db: Db): boolean {
+  const tx = activeTransaction.getStore()
+  return tx !== undefined && tx.owner === db && !tx.finished
+}
+
 class DbClient implements Db {
   constructor(private readonly driver: DbDriver) {}
 
@@ -197,8 +216,7 @@ class DbClient implements Db {
 
     try {
       try {
-        await withTimeout(session.run('BEGIN', []), QUERY_TIMEOUT_MS, 'BEGIN')
-        await withTimeout(session.run(SET_TRANSACTION_TIMEOUTS, []), QUERY_TIMEOUT_MS, 'setting transaction timeouts')
+        await withTimeout(session.runScript(BEGIN_WITH_TIMEOUTS), QUERY_TIMEOUT_MS, 'BEGIN and setting transaction timeouts')
       } catch (err) {
         await rollback()
         throw classifyDbError(err)

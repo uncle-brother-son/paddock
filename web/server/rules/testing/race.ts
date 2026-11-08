@@ -36,8 +36,26 @@ const backendPid = async (tx: Tx) => (await tx.query<{ pid: number }>('SELECT pg
 
 export type Race = <T>(
   claim: (tx: Tx, who: 'first' | 'second') => Promise<T>,
-  firstEnds: 'commit' | 'rollback'
+  firstEnds: 'commit' | 'rollback',
+  /** The table whose row the second must be waiting on, checked in pg_locks. */
+  waitsOn?: string
 ) => Promise<{ first: Outcome<T>; second: Outcome<T> }>
+
+/**
+ * What a blocked session is waiting on, from pg_locks. A session waiting for a row lock holds the
+ * row's tuple lock (granted) while it waits for the holder's transaction, so the tuple locks name
+ * the table; a wait on an advisory lock (the one-a-day trigger's) shows as 'advisory'. Waits on an
+ * uncommitted index entry (an exclusion constraint) show neither, so this returns [] for them.
+ */
+export async function waitingOn(pg: RealPostgres, pid: number): Promise<string[]> {
+  const rows = await pg.admin.unsafe<{ waited_on: string }[]>(
+    `SELECT DISTINCT relation::regclass::text AS waited_on FROM pg_locks WHERE pid = $1 AND locktype = 'tuple'
+     UNION
+     SELECT 'advisory' FROM pg_locks WHERE pid = $1 AND locktype = 'advisory' AND NOT granted`,
+    [pid]
+  )
+  return rows.map((row) => row.waited_on).sort()
+}
 
 /**
  * The race with its timing fixed. The first transaction makes its claim and stays open. The second
@@ -59,7 +77,7 @@ export function makeRace(pg: RealPostgres, first: Db, second: Db): Race {
     throw new Error('The second transaction never waited on the first.')
   }
 
-  return async (claim, firstEnds) => {
+  return async (claim, firstEnds, waitsOn) => {
     const finish = deferred()
     let announce: (pid: number) => void = () => {}
     const claimed = new Promise<number>((resolve) => {
@@ -88,6 +106,7 @@ export function makeRace(pg: RealPostgres, first: Db, second: Db): Race {
     const blocked = await sessionBlockedBy(holderPid)
     expect(blocked).toBe(waiterPid)
     expect(waiterSettled).toBe(false)
+    if (waitsOn !== undefined) expect(await waitingOn(pg, waiterPid)).toEqual([waitsOn])
 
     finish.resolve()
     return { first: await holder, second: await waiter }

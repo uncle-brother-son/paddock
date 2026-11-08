@@ -1,0 +1,12 @@
+{
+  "scenario": "w06-refused-no-customer",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "customer_id_required"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

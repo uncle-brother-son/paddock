@@ -23,6 +23,7 @@ export const ERROR_HTTP_STATUS: Record<ApiErrorCode, number> = {
   EMAIL_NEEDS_CODE: 403,
   RATE_LIMITED: 429,
   INTERNAL: 500,
+  NOT_BUILT: 501,
 }
 
 /** Shown when something unexpected fails. The real error goes to the log only. */

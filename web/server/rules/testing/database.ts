@@ -13,6 +13,8 @@ export interface TestDatabase {
   db: Db
   /** Straight to PGlite, for what the worker login can't do (dropping a table). */
   pg: PGlite
+  /** Where the socket listens, for a second client: one that counts its statements, say. */
+  url: string
   stop(): Promise<void>
 }
 
@@ -62,11 +64,13 @@ export async function startTestDatabase({ schema = 'rules' }: TestDatabaseOption
 
   const server = new PGLiteSocketServer({ db: pg, port: 0, host: '127.0.0.1', maxConnections: 20 })
   await server.start()
-  const db = createDb(createPostgresDriver(`postgres://postgres:postgres@${server.getServerConn()}/postgres`))
+  const url = `postgres://postgres:postgres@${server.getServerConn()}/postgres`
+  const db = createDb(createPostgresDriver(url))
 
   return {
     db,
     pg,
+    url,
     async stop() {
       await db.close()
       await server.stop()

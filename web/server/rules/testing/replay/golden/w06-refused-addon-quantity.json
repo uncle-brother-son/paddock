@@ -1,0 +1,12 @@
+{
+  "scenario": "w06-refused-addon-quantity",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "invalid_addon_quantity"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

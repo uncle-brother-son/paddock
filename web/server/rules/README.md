@@ -11,6 +11,37 @@ and the replay harness: see `testing/README.md`.
 everything it needs in one statement (`load-basket.ts`), because each database round trip costs about
 20 ms through Hyperdrive.
 
+## The order transaction (T1, from W06)
+
+`place-order.ts` places an order in one `db.transaction`: one statement locks (`locks.ts`), one reads
+(`load-basket.ts`, the quote's own read), `priceFromFacts` prices, then one statement writes the
+booking (`write-booking.ts`), one the order with its lines and credits, one the audit rows. With no
+Stripe step it finishes inside T1: seven round trips for any basket W06 takes (BEGIN and the time
+limits go as one), plus three in the route (the staff member and the idempotency key, before and
+after). The rules it keeps:
+
+- **Every refusal is a throw.** A `return` inside `db.transaction` would commit.
+- **One lock order:** `LOCK_ORDER` in `locks.ts`. Every later Worker write that takes row locks
+  takes them in that order, or two of them can deadlock. A slice that adds a lock adds it in its place.
+- **Locks before reads.** The credit period is locked in its own statement before anything counts its
+  bookings: a statement that waited for a lock still counts what it saw before waiting.
+- **Postgres's own refusals** (the one-booking-a-day trigger, the overlap constraint, quote_booking)
+  end the transaction, so they are turned into their reasons after the rollback, from
+  `postgresRefusal` in `server/db/errors.ts`.
+- **A deadlock is run once more.** Two orders inserting overlapping bookings at once can deadlock in
+  the exclusion index (40P01). T1 calls nothing outside the database, so when it opened the
+  transaction itself it runs once more (`inTransaction` in `place-order.ts`); a transaction it joined
+  is its caller's. Work that calls Stripe or anything else outside the database must not do this.
+- **Row order is set explicitly.** now() doesn't move inside a transaction, so rows that are read
+  `ORDER BY created_at, id` (seats, order lines, booking add-ons, audit rows) get created_at from
+  `clock_timestamp()`, a millisecond apart, in the INSERT.
+- **What isn't built yet answers NOT_BUILT** before any transaction opens. The list is in
+  `place-order.ts`; each slice takes its part off it.
+
+`dryRunOrder` is the same T1 with a read back (`order-rows.ts`) and a rollback. The staff app's
+createOrder shadow calls it before the old order runs and compares the two (`createOrder.dryRun` in
+`parity_log`). It goes at W16.
+
 ## Refund claims with no finish
 
 The staff app claims a refund's money before it moves. Each claim writes `booking.refund_claimed` to

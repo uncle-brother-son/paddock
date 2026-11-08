@@ -1,0 +1,12 @@
+{
+  "scenario": "w06-refused-not-enough-addon-credit",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "insufficient_addon_membership_credit"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

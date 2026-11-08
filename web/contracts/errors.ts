@@ -24,6 +24,8 @@ export const ERROR_CODES = [
   'EMAIL_NEEDS_CODE',
   'RATE_LIMITED',
   'INTERNAL',
+  /** Step C, until the slice that builds it: the order holds something the Worker can't sell yet. Nothing was touched. */
+  'NOT_BUILT',
 ] as const
 
 export const apiErrorCodeSchema = z.enum(ERROR_CODES)

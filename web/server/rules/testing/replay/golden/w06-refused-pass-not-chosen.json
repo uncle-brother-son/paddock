@@ -1,0 +1,13 @@
+{
+  "scenario": "w06-refused-pass-not-chosen",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "session_pass_id_required",
+      "bookingFailureReason": "session_pass_id_required"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

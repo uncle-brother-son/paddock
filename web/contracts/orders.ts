@@ -292,3 +292,149 @@ export const basketQuoteOutputSchema = z.object({
   problems: z.array(basketProblemSchema),
 })
 export type BasketQuoteOutput = z.infer<typeof basketQuoteOutputSchema>
+
+// --- POST /api/v1/staff/orders (W06: cash and nothing owed; the rest answers NOT_BUILT)
+
+/**
+ * What staff saw and confirmed, from the quote. Each figure is loose, as the old function was: a
+ * missing figure counts as nothing confirmed. W06 checks `toCollect` on cash, with the old words;
+ * `amountDue` and `firstInvoice` are taken now and checked from W09, W10 and W13 (W03-plan 2.7).
+ */
+export const orderConfirmedSchema = z.object({
+  amountDue: z.number().optional(),
+  /** What the chosen method takes now: on cash, the figure on the tick. */
+  toCollect: z.number().optional(),
+  firstInvoice: z.number().optional(),
+})
+export type OrderConfirmed = z.infer<typeof orderConfirmedSchema>
+
+export const placeOrderInputSchema = basketSchema.extend({
+  /** Missing counts as none: nothing chosen, nothing applied. */
+  payment: basketPaymentSchema.optional(),
+  confirmed: orderConfirmedSchema.optional(),
+})
+export type PlaceOrderInput = z.infer<typeof placeOrderInputSchema>
+
+export const placeOrderOutputSchema = z.object({
+  orderId: z.string(),
+  /** 'pending_reader' arrives with the reader (W11). */
+  status: z.enum(['paid']),
+  bookingId: z.string().nullable(),
+  payment: z.object({
+    /** What orders.payment_method records: null when nothing was owed. */
+    method: z.string().nullable(),
+    /** Taken now by that method: on cash, what staff collect. */
+    collected: z.number(),
+    cardCharged: z.boolean(),
+  }),
+})
+export type PlaceOrderOutput = z.infer<typeof placeOrderOutputSchema>
+
+/**
+ * A refusal's `details`, as the old createOrder answered it, so the staff app can hand the screen the
+ * same `{ success: false, stage, reason, message }` it reads today. `message` is the old function's
+ * own words, missing where it had none; the error's own message is what staff see.
+ */
+export const orderRefusalDetailsSchema = z.object({
+  stage: basketProblemStageSchema,
+  reason: z.string(),
+  message: z.string().optional(),
+  bookingFailureReason: z.string().optional(),
+  productVariantId: z.string().optional(),
+  amountDueTotal: z.number().optional(),
+  guestIndex: z.number().optional(),
+})
+export type OrderRefusalDetails = z.infer<typeof orderRefusalDetailsSchema>
+
+/** NOT_BUILT's `details`: the parts of the order that aren't built yet, in a fixed order. */
+export const orderNotBuiltDetailsSchema = z.object({ notBuilt: z.array(z.string()) })
+export type OrderNotBuiltDetails = z.infer<typeof orderNotBuiltDetailsSchema>
+
+// --- POST /api/v1/staff/orders/dry-run (until W16)
+
+const money = z.number()
+
+/**
+ * The rows an order wrote, read back by order id. Free text (names, emails, dates of birth, special
+ * requests, override reasons) is here for comparing, and the staff app never keeps it. The query is
+ * in server/rules/orders/order-rows.ts and, word for word, in the staff app's shadow.
+ */
+export const orderRowsSchema = z.object({
+  order: z.object({
+    order_total: money,
+    discount_amount: money.nullable(),
+    promo_code: z.string().nullable(),
+    payment_status: z.string(),
+    payment_method: z.string().nullable(),
+    order_source: z.string().nullable(),
+    has_shipping_address: z.boolean(),
+    has_payment_intent: z.boolean(),
+    has_reader_payment: z.boolean(),
+  }),
+  lines: z.array(
+    z.object({
+      item_type: z.string(),
+      quantity: z.number(),
+      unit_price: money,
+      line_total: money,
+      discount_amount: money,
+      system_unit_price: money.nullable(),
+      price_override_reason: z.string().nullable(),
+      addon_id: z.string().nullable(),
+      is_the_booking: z.boolean(),
+      fulfillment_status: z.string().nullable(),
+    })
+  ),
+  booking: z
+    .object({
+      session_id: z.string(),
+      status: z.string(),
+      party_size: z.number(),
+      price_paid: money,
+      redemption_source: z.string().nullable(),
+      redeemed_membership_id: z.string().nullable(),
+      redeemed_session_pass_id: z.string().nullable(),
+      credit_period_id: z.string().nullable(),
+      band_id: z.string().nullable(),
+      special_requests: z.string().nullable(),
+      guests_over_18_confirmed: z.boolean(),
+      for_the_order_customer: z.boolean(),
+      times_are_the_session: z.boolean(),
+      session_total_booked: z.number(),
+      pass_sessions_remaining: z.number().nullable(),
+      credit_period_used: z.number(),
+      seats: z.array(
+        z.object({
+          guest_type: z.string(),
+          guest_name: z.string(),
+          guest_email: z.string().nullable(),
+          date_of_birth: z.string().nullable(),
+          unit_price: money.nullable(),
+          pay_by: z.string().nullable(),
+          waiver_accepted: z.boolean().nullable(),
+        })
+      ),
+      addons: z.array(
+        z.object({
+          addon_id: z.string(),
+          quantity: z.number(),
+          price_at_purchase: money,
+          sku_at_purchase: z.string(),
+          redemption_source: z.string().nullable(),
+          redeemed_membership_id: z.string().nullable(),
+          for_the_order: z.boolean(),
+          addon_credits_left: z.number().nullable(),
+        })
+      ),
+    })
+    .nullable(),
+})
+export type OrderRows = z.infer<typeof orderRowsSchema>
+
+export const orderDryRunOutputSchema = z.object({
+  /** What the order would have answered. Nothing was kept. */
+  order: placeOrderOutputSchema,
+  /** What it wrote, read back inside the transaction before the rollback. */
+  rows: orderRowsSchema,
+})
+export type OrderDryRunOutput = z.infer<typeof orderDryRunOutputSchema>

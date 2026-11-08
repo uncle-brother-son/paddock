@@ -1,0 +1,13 @@
+{
+  "scenario": "w06-refused-gift-card-booking-source",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "gift_card_source_removed",
+      "message": "Gift Card is no longer a booking option. Choose Paid and apply the gift card at payment."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

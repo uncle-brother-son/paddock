@@ -1,0 +1,13 @@
+{
+  "scenario": "w06-refused-unknown-session",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "session_not_found",
+      "bookingFailureReason": "session_not_found"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

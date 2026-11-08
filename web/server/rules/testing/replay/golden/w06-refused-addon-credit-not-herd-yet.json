@@ -1,0 +1,12 @@
+{
+  "scenario": "w06-refused-addon-credit-not-herd-yet",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "addon_membership_too_new"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

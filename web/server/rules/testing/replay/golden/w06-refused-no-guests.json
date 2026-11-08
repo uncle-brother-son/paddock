@@ -1,0 +1,13 @@
+{
+  "scenario": "w06-refused-no-guests",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "no_guests",
+      "bookingFailureReason": "no_guests"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

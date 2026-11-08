@@ -1,0 +1,13 @@
+{
+  "scenario": "w06-refused-no-date-of-birth",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "guest_dob_required",
+      "bookingFailureReason": "guest_dob_required"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

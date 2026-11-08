@@ -1,0 +1,13 @@
+{
+  "scenario": "w06-refused-a-session-with-no-band",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "band_unpriced",
+      "bookingFailureReason": "band_unpriced"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

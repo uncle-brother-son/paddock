@@ -1,0 +1,12 @@
+{
+  "scenario": "w06-refused-someone-elses-addon-credit",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "addon_membership_not_found"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

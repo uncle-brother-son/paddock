@@ -1,0 +1,13 @@
+{
+  "scenario": "w06-refused-guest-with-no-name",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "guest_name_required",
+      "bookingFailureReason": "guest_name_required"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

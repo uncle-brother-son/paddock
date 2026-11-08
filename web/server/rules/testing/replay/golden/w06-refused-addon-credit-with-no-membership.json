@@ -1,0 +1,12 @@
+{
+  "scenario": "w06-refused-addon-credit-with-no-membership",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "addon_membership_id_required"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

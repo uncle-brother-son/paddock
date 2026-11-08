@@ -1,0 +1,13 @@
+{
+  "scenario": "w06-refused-a-full-session-with-a-wrong-figure",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "insufficient_capacity",
+      "bookingFailureReason": "insufficient_capacity"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}
