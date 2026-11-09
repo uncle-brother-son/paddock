@@ -1,0 +1,13 @@
+{
+  "scenario": "w08-refused-event-with-no-prices",
+  "results": [
+    {
+      "success": false,
+      "stage": "event",
+      "reason": "event_quote_failed",
+      "message": "The event could not be priced: Event 10000000-0000-4000-8000-000000000018 has no prices set"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

@@ -1,0 +1,13 @@
+{
+  "scenario": "w08-refused-event-not-released-yet",
+  "results": [
+    {
+      "success": false,
+      "stage": "event",
+      "reason": "event_not_released_yet",
+      "message": "Members can book now; public booking opens Fri 20 Nov, 9:00 am."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

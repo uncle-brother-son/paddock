@@ -1,0 +1,13 @@
+{
+  "scenario": "w08-refused-event-not-on-sale",
+  "results": [
+    {
+      "success": false,
+      "stage": "event",
+      "reason": "event_not_on_sale",
+      "message": "That event is not on sale."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

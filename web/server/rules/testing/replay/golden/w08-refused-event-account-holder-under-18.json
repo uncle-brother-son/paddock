@@ -1,0 +1,13 @@
+{
+  "scenario": "w08-refused-event-account-holder-under-18",
+  "results": [
+    {
+      "success": false,
+      "stage": "event",
+      "reason": "event_attendee_under_18",
+      "message": "Sam Test must be 18 or over on the event date."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

@@ -1,0 +1,13 @@
+{
+  "scenario": "w08-refused-event-attending-with-no-account-holder",
+  "results": [
+    {
+      "success": false,
+      "stage": "event",
+      "reason": "event_account_holder_invalid",
+      "message": "Exactly one attendee must be the account holder when the customer is attending."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

@@ -15,8 +15,9 @@ everything it needs in one statement (`load-basket.ts`), because each database r
 
 `place-order.ts` places an order in one `db.transaction`: one statement locks (`locks.ts`), one reads
 (`load-basket.ts`, the quote's own read), `priceFromFacts` prices, then one statement writes the order
-with everything that doesn't need the booking (the gift card bought, the lines, the stock claimed and
-its ledger rows, the pass bought, the address saved to the customer), one the booking with its line,
+with everything that doesn't need the booking (the gift card bought, the event's places, its booking
+and attendees (W08), the lines, the stock claimed and its ledger rows, the pass bought, the address
+saved to the customer), one the booking with its line,
 add-ons and add-on credits (`write-booking.ts`), one the audit rows. The order comes first (W07)
 because a booking can be paid with a pass bought in the same basket, and that pass needs its line.
 With no Stripe step it finishes inside T1: seven round trips for a basket with a booking, six
@@ -45,6 +46,11 @@ idempotency key, before and after). The rules it keeps:
   `gift_card_code_exhausted`, as createOrder.
 - **Stock is claimed once per variant**, for all the basket takes of it, with a guarded UPDATE, after
   the variants were locked in id order with the rest; the ledger keeps a row per line.
+- **An event's places are claimed with claim_event_places's own guard** (on sale, not cancelled, room
+  for every place), written into the order statement rather than called: a function in a CTE only runs
+  if the CTE is read. The event is locked after the variants. Its booking is written only from the
+  claim, its attendees only from its booking, so a claim that finds no room writes none of them and
+  T1 refuses with `event_full`; the counts are checked as well (W08).
 - **A pass is only written joined to its own line**, and the counts are checked, so neither can be
   kept without the other (checklist B3).
 - **What isn't built yet answers NOT_BUILT** before any transaction opens. The list is in

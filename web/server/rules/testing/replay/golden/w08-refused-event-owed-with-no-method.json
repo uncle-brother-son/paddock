@@ -1,0 +1,13 @@
+{
+  "scenario": "w08-refused-event-owed-with-no-method",
+  "results": [
+    {
+      "success": false,
+      "stage": "payment",
+      "reason": "payment_method_required",
+      "amountDueTotal": 40
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

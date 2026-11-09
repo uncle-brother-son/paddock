@@ -7,7 +7,7 @@ import { NEW_SIDE_CONFIRMS, NOT_BUILT_SCENARIOS, ORDER_SCENARIOS, orderDifferenc
 import { newOrderSide, type OrderAnswer } from './order-side'
 import { ID, scenarios } from './scenarios'
 
-// The order route's parity proof (W03-plan 3.1 layer 1): each scenario in W06's and W07's scope runs
+// The order route's parity proof (W03-plan 3.1 layer 1): each scenario in W06's to W08's scope runs
 // from the same seed through the new order route, and its rows (in the order the app reads them), its
 // answer and its money must match what the old createOrder wrote, saved in the golden file, except the
 // differences named in order-differences.ts. A golden file is the old function's own recording, so
@@ -130,6 +130,32 @@ describe('the order route against the old createOrder', () => {
       const { recording } = await runNew('w07-two-lines-of-one-variant-take-the-last-stock')
       expect(recording.tables['stock_adjustments']?.added.map((row) => row['change_amount'])).toEqual([-2, -3])
       expect(recording.tables['product_variants']?.changed).toEqual([{ id: ID.variant, stock_quantity: [5, 0] }])
+    })
+  })
+
+  describe('W08: row order', () => {
+    it('the attendees in place order, the account holder first though listed second, none tied', async () => {
+      const { recording } = await runNew('w08-event-account-holder-listed-second')
+      expect(recording.tables['event_attendees']?.tied).toBe(0)
+      expect(recording.tables['event_attendees']?.added.map((row) => [row['attendee_type'], row['name']])).toEqual([
+        ['account_holder', 'Sam Test'],
+        ['guest', 'Alex Guest'],
+      ])
+    })
+
+    it("the event's line after the booking's, before the add-ons, as createOrder wrote them", async () => {
+      const lines = (await runNew('w08-every-kind-in-cash')).recording.tables['order_line_items']
+      expect(lines?.tied).toBe(0)
+      expect(lines?.added.map((line) => line['item_type'])).toEqual(['booking', 'event', 'addon', 'product', 'session_pass', 'gift_card'])
+      expect(lines?.added[1]).toMatchObject({ event_booking_id: 'event_bookings#1', quantity: 2, unit_price: '40.00', line_total: '80.00' })
+    })
+
+    it('the worst basket: booking, event, product, gift card, postage; three attendees in place order', async () => {
+      const { recording } = await runNew('w08-worst-basket')
+      expect(recording.tables['order_line_items']?.added.map((line) => line['item_type'])).toEqual(['booking', 'event', 'product', 'gift_card', 'postage'])
+      expect(recording.tables['event_attendees']?.tied).toBe(0)
+      expect(recording.tables['event_attendees']?.added.map((row) => row['name'])).toEqual(['Sam Test', 'Alex Guest', 'Bea Guest'])
+      expect(recording.tables['events']?.changed).toEqual([{ id: ID.event, places_booked: [0, 3] }])
     })
   })
 

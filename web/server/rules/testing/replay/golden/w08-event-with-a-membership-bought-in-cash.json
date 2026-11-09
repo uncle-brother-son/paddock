@@ -1,0 +1,13 @@
+{
+  "scenario": "w08-event-with-a-membership-bought-in-cash",
+  "results": [
+    {
+      "success": false,
+      "stage": "payment",
+      "reason": "membership_cash_not_accepted",
+      "message": "Memberships are billed by Stripe and cannot be paid in cash. The saved card on file is charged for the membership's renewals (a gift card or store credit can reduce the first payment). Take a card on the reader to save one first if needed."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

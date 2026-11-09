@@ -30,6 +30,8 @@ export interface LockTargets {
   addonMembershipIds: readonly string[]
   /** Product variants whose stock the order claims, locked in id order (W07). */
   productVariantIds: readonly string[]
+  /** The event whose places the order claims (W08). */
+  eventId: string | null
 }
 
 export interface HeldLocks {
@@ -40,6 +42,8 @@ export interface HeldLocks {
   membershipIds: string[]
   /** The variants that exist, in the order they were locked. */
   variantIds: string[]
+  /** The event, when it exists (W08). */
+  eventId: string | null
 }
 
 /**
@@ -48,8 +52,9 @@ export interface HeldLocks {
  * its lock: the customer, then the session, then the credit period, then the pass, then the
  * memberships, sorted (a locking SELECT sorts before it locks), then the product variants, sorted the
  * same way (W07), so two orders taking the same variants in opposite basket order queue instead of
- * deadlocking. The test on real Postgres proves the order by holding each row in turn. Steps not
- * built yet (promo code, event, gift card) join the chain in their place when their slice builds them.
+ * deadlocking, then the event (W08), so the places the facts count are current until commit. The test
+ * on real Postgres proves the order by holding each row in turn. Steps not built yet (promo code, gift
+ * card) join the chain in their place when their slice builds them.
  *
  * The credit period is locked in its own statement, before anything reads it, because Postgres only
  * re-checks a locked row that its holder changed: a guarded INSERT that waited for the lock would
@@ -61,7 +66,8 @@ export interface HeldLocks {
  * FOR UPDATE would hold up for the whole of T1.
  */
 const LOCK_SQL = `
-SELECT s.id AS session_id, p.id AS credit_period_id, sp.id AS session_pass_id, m.ids AS membership_ids, v.ids AS variant_ids
+SELECT s.id AS session_id, p.id AS credit_period_id, sp.id AS session_pass_id, m.ids AS membership_ids, v.ids AS variant_ids,
+       e.id AS event_id
 FROM (SELECT id FROM customers WHERE id = $1::uuid FOR NO KEY UPDATE) c
 LEFT JOIN LATERAL (
   SELECT id FROM sessions WHERE id = $2::uuid AND c.id IS NOT NULL FOR NO KEY UPDATE
@@ -93,7 +99,10 @@ LEFT JOIN LATERAL (
     ORDER BY id
     FOR NO KEY UPDATE
   ) locked
-) v ON true`
+) v ON true
+LEFT JOIN LATERAL (
+  SELECT id FROM events WHERE id = $7::uuid AND (v.ids IS NULL OR v.ids IS NOT NULL) FOR NO KEY UPDATE
+) e ON true`
 
 /** Null when the customer doesn't exist: nothing else is locked then. */
 export async function lockForOrder(tx: Tx, targets: LockTargets): Promise<HeldLocks | null> {
@@ -103,6 +112,7 @@ export async function lockForOrder(tx: Tx, targets: LockTargets): Promise<HeldLo
     session_pass_id: string | null
     membership_ids: string[] | null
     variant_ids: string[] | null
+    event_id: string | null
   }>(LOCK_SQL, [
     targets.customerId,
     targets.sessionId,
@@ -110,6 +120,7 @@ export async function lockForOrder(tx: Tx, targets: LockTargets): Promise<HeldLo
     targets.sessionPassId,
     [...new Set(targets.addonMembershipIds)].sort(),
     [...new Set(targets.productVariantIds)].sort(),
+    targets.eventId,
   ])
   const row = rows[0]
   if (!row) return null
@@ -119,5 +130,6 @@ export async function lockForOrder(tx: Tx, targets: LockTargets): Promise<HeldLo
     sessionPassId: row.session_pass_id,
     membershipIds: row.membership_ids ?? [],
     variantIds: row.variant_ids ?? [],
+    eventId: row.event_id,
   }
 }

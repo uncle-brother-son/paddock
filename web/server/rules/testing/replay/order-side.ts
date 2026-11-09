@@ -37,11 +37,12 @@ export function oldRefusal(details: OrderRefusalDetails): Record<string, unknown
 /** The route's answer in createOrder's shape. Anything that isn't a refusal or an order comes back as the error. */
 export function oldResult(body: { ok: true; data: PlaceOrderOutput } | ApiFailure): Record<string, unknown> {
   if (body.ok) {
-    const { orderId, bookingId, sessionPassId, giftCardId, giftCardCode, payment } = body.data
+    const { orderId, bookingId, eventBookingId, sessionPassId, giftCardId, giftCardCode, payment } = body.data
     return {
       success: true,
       orderId,
       ...(bookingId ? { bookingId } : {}),
+      ...(eventBookingId ? { eventBookingId } : {}),
       ...(giftCardId ? { giftCardId } : {}),
       ...(giftCardCode ? { giftCardCode } : {}),
       ...(sessionPassId ? { sessionPassId } : {}),

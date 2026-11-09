@@ -1,0 +1,13 @@
+{
+  "scenario": "w08-refused-event-no-places",
+  "results": [
+    {
+      "success": false,
+      "stage": "event",
+      "reason": "event_places_invalid",
+      "message": "Add at least one place (one attendee row per place)."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

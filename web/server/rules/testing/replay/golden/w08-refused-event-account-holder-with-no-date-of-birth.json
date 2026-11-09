@@ -1,0 +1,13 @@
+{
+  "scenario": "w08-refused-event-account-holder-with-no-date-of-birth",
+  "results": [
+    {
+      "success": false,
+      "stage": "event",
+      "reason": "event_attendee_dob_required",
+      "message": "Sam Test needs a date of birth."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

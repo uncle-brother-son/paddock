@@ -1,0 +1,13 @@
+{
+  "scenario": "w08-refused-event-cancelled",
+  "results": [
+    {
+      "success": false,
+      "stage": "event",
+      "reason": "event_cancelled",
+      "message": "That event has been cancelled."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

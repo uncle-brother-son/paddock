@@ -70,6 +70,11 @@ route, and compares the rows written, the Stripe calls in order, and what staff 
   and checks row order. `tied` counts rows sharing a `created_at`.
 - `golden/`: the old functions' recordings. They outlive the old code.
 
+W08's scenarios (`w08-*`) cover events: every reason of stages 8 and 21 with its words, and what stage
+21 writes. `w08-refused-event-with-no-prices` lifts `events_on_sale_complete` for its own run, because
+live can't have an event on sale with a price missing, and puts it back `NOT VALID` (the row it leaves
+would fail a check of the old rows; new rows are still checked).
+
 `quote-shadow.test.ts` runs every scenario through the old `createOrder` with its shadow switched on,
 against the real quote and parity routes, and reads what the shadow logged. A scenario must match
 what the order wrote, except the differences in `quote-differences.ts`, each of which names its
@@ -129,13 +134,17 @@ scenario for each part the route answers NOT_BUILT for; the slice that builds a 
 scenarios into the replay list.
 
 W07 adds `W07_SCENARIOS` (products, the delivery address and postage, session passes, gift cards
-bought), and `ORDER_SCENARIOS` is both lists. Its named differences are in `W07_DIFFERENCES`, each
+bought), and `ORDER_SCENARIOS` is every slice's list. Its named differences are in `W07_DIFFERENCES`, each
 with its decision: Q4 (a shipped gift card earns free postage), Q5 (a buy-new order keeps its address
 and requests), the address saved inside T1 and, from W07a, Q33 (a pass or gift card dated on a day the
 end month doesn't have ends on that month's last day; its scenario moves the clock to 29 Feb 2028). Where a decision changes the figure staff confirm,
 `NEW_SIDE_CONFIRMS` sends the new side the figure its screen would show. Gift card codes are labelled
 by the comparator, so a recording never shows one; `place-order.test.ts` holds the new codes to the
 format.
+
+W08 adds `W08_SCENARIOS` (events), with no named difference: every event scenario matches the old
+createOrder exactly, rows and row order included. An event beside a membership bought in the same
+basket stays in `NOT_BUILT_SCENARIOS` until W13.
 
 `quote-shadow.test.ts` also runs the dry run beside the quote: every scenario's dry-run rows must
 match what the old order wrote, except the differences in `DRY_RUN_DIFFERENCES` (quote-differences.ts),

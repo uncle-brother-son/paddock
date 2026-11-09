@@ -2787,6 +2787,7 @@ export const scenarios: Scenario[] = [
   }),
   ...w06Scenarios(),
   ...w07Scenarios(),
+  ...w08Scenarios(),
 ]
 
 // --- W06: the Worker's order core. Every createOrder and createBooking reason in W06's scope that had
@@ -3066,5 +3067,184 @@ function w07Scenarios(): Scenario[] {
     order('w07-refused-buy-new-pass-on-a-private-booking', { booking: { ...privateSeats, redemptionSource: 'buy_new_session_pass' }, ...newPass, payment: cash(150) }),
     order('w07-refused-buy-new-pass-session-full', { booking: buyNewPass(), ...newPass, payment: cash(50) }, sessionFull),
     order('w07-refused-buy-new-pass-a-booking-that-day', { booking: buyNewPass(), ...newPass, payment: cash(50) }, bookedThatDay),
+  ]
+}
+
+// --- W08: events. Every createOrder reason for stage 8 (event_booking_block_reason's six, the
+// attendee list, the ages, the 18+ tick, the quote) and stage 21 (event_full), where each comes among
+// the other stages, and the shapes stage 21 writes: the places claimed, the event booking, an
+// attendee row per place in place order, and the event's line, at member and public prices, in cash
+// or with nothing owed. They run through the old createOrder for their golden files, and
+// order-replay.test.ts runs them through the new route too.
+
+/** The live check that an event on sale is complete (events_on_sale_complete), as it stands, put back NOT VALID. */
+const RESTORE_ON_SALE_COMPLETE =
+  "ALTER TABLE public.events ADD CONSTRAINT events_on_sale_complete CHECK (((NOT active) OR ((starts_at IS NOT NULL) AND (capacity IS NOT NULL) AND (refund_cutoff_at IS NOT NULL) AND (price_public IS NOT NULL) AND (price_pre_herd IS NOT NULL) AND (price_herd IS NOT NULL) AND ((access <> 'members_first'::text) OR (public_release_at IS NOT NULL)) AND (cancelled_at IS NULL)))) NOT VALID"
+
+/**
+ * Lifts events_on_sale_complete, for an event live can't have (on sale with a price missing, or on
+ * sale and cancelled). Put back with restoreOnSaleCheck, NOT VALID, so the row left behind doesn't
+ * block it; new rows are still checked.
+ */
+export async function liftOnSaleCheck(db: Db): Promise<void> {
+  await db.query('RESET ROLE')
+  await db.query('ALTER TABLE public.events DROP CONSTRAINT events_on_sale_complete')
+  await db.query('SET ROLE paddock_worker')
+}
+
+export async function restoreOnSaleCheck(db: Db): Promise<void> {
+  await db.query('RESET ROLE')
+  await db.query(RESTORE_ON_SALE_COMPLETE)
+  await db.query('SET ROLE paddock_worker')
+}
+
+function w08Scenarios(): Scenario[] {
+  const UNKNOWN = '10000000-0000-4000-8000-0000000000fd'
+  const samAttending = { ...sam, isAccountHolder: true }
+  const moAttending = { ...mo, isAccountHolder: true }
+  const alexGuest = { ...alex, isAccountHolder: false }
+  const beaGuest = { name: 'Bea Guest', email: 'bea@example.com', isAccountHolder: false }
+  type Attendee = { name: string; email: string; dateOfBirth?: string; isAccountHolder: boolean }
+  /** The event's places, with the 18+ tick when anyone isn't the account holder, as the screen sends it. */
+  const places = (attendees: Attendee[], more: Record<string, unknown> = {}) => ({
+    eventId: ID.event,
+    accountHolderAttending: attendees.some((attendee) => attendee.isAccountHolder),
+    ...(attendees.some((attendee) => !attendee.isAccountHolder) ? { guestsOver18Confirmed: true } : {}),
+    attendees,
+    ...more,
+  })
+  const asMo = { customerId: ID.member }
+  const eventSql = {
+    access: 'UPDATE events SET access = $1 WHERE id = $2',
+    public_release_at: 'UPDATE events SET public_release_at = $1 WHERE id = $2',
+    places_booked: 'UPDATE events SET places_booked = $1 WHERE id = $2',
+    price_herd: 'UPDATE events SET price_herd = $1 WHERE id = $2',
+    active: 'UPDATE events SET active = $1 WHERE id = $2',
+  } as const
+  const eventHas = (column: keyof typeof eventSql, value: SqlParam) => async (db: Db) => {
+    await db.query(eventSql[column], [value, ID.event])
+  }
+  const membersOnly = eventHas('access', 'members_only')
+  /** Members first, with the public release on `releasedAt` (the replay's today is 10 Nov 2026). */
+  const membersFirst = (releasedAt: string) => async (db: Db) => {
+    await eventHas('public_release_at', releasedAt)(db)
+    await eventHas('access', 'members_first')(db)
+  }
+  const soldOut = eventHas('places_booked', 10)
+  const notHerd = async (db: Db) => {
+    await db.query('UPDATE customer_memberships SET is_herd = false WHERE id = $1', [ID.membership])
+  }
+  const sessionFull = async (db: Db) => {
+    await db.query('UPDATE sessions SET total_booked = capacity WHERE id = $1', [ID.session])
+  }
+  const both = (...steps: Array<(db: Db) => Promise<void>>) => async (db: Db) => {
+    for (const step of steps) await step(db)
+  }
+  return [
+    // Who attends, and at what price
+    order('w08-event-account-holder-alone-in-cash', { event: places([samAttending]), payment: cash(40) }),
+    order('w08-event-guests-only-in-cash', { event: places([alexGuest, beaGuest]), payment: cash(80) }),
+    order('w08-event-account-holder-listed-second', { event: places([alexGuest, samAttending]), payment: cash(80) }),
+    order('w08-event-attendee-details-trimmed', {
+      event: places([
+        { name: '  Sam Test ', email: ' sam@example.com ', dateOfBirth: '1990-01-01', isAccountHolder: true },
+        // A guest's date of birth is never kept: the 18+ tick covers guests.
+        { name: ' Alex Guest  ', email: '   ', dateOfBirth: '1991-02-02', isAccountHolder: false },
+      ]),
+      payment: cash(80),
+    }),
+    order('w08-event-herd-member-and-a-guest', { ...asMo, event: places([moAttending, alexGuest]), payment: cash(60) }),
+    order('w08-event-pre-herd-member', { ...asMo, event: places([moAttending]), payment: cash(30) }, notHerd),
+    order('w08-event-member-not-attending-guests-pay-public', { ...asMo, event: places([alexGuest, beaGuest]), payment: cash(80) }),
+    order('w08-event-members-only-for-a-member', { ...asMo, event: places([moAttending]), payment: cash(20) }, membersOnly),
+    order('w08-event-members-only-member-on-their-last-day', { ...asMo, event: places([moAttending]), payment: cash(20) }, both(membersOnly, lastDayIs('2026-11-10'))),
+    order('w08-event-members-first-member-before-release', { ...asMo, event: places([moAttending]), payment: cash(20) }, membersFirst('2026-11-20 09:00:00+00')),
+    order('w08-event-members-first-public-after-release', { event: places([samAttending]), payment: cash(40) }, membersFirst('2026-11-01 09:00:00+00')),
+    order('w08-event-account-holder-18-on-the-day', { event: places([{ ...samAttending, dateOfBirth: '2008-12-01' }]), payment: cash(40) }),
+    order('w08-event-takes-the-last-places', { event: places([samAttending, alexGuest]), payment: cash(80) }, eventHas('places_booked', 8)),
+    order('w08-free-event-nothing-owed', { ...asMo, event: places([moAttending]), payment: {} }, eventHas('price_herd', '0.00')),
+    // Beside the other kinds: events are never paid with session credits, and don't count as a booking that day
+    order('w08-event-and-a-booking-in-cash', { booking: paidSeat(), event: places([samAttending, alexGuest]), payment: cash(100) }),
+    order('w08-member-credit-seat-and-an-event-in-cash', { ...asMo, booking: { ...paidSeat([mo]), ...memberCredit }, event: places([moAttending]), payment: cash(20) }),
+    order('w08-event-and-a-product-in-cash', { products: [soap], event: places([samAttending]), payment: cash(64) }),
+    order('w08-every-kind-in-cash', {
+      booking: { ...paidSeat(), addons: [{ ...towel, redemptionSource: 'paid' }] },
+      standaloneAddons: [towel],
+      products: [soap],
+      sessionPassTypeId: ID.passType,
+      giftCard: { giftCardPresetId: ID.giftCardPreset, fulfillmentMethod: 'digital' },
+      event: places([samAttending, alexGuest]),
+      payment: cash(244),
+    }),
+    order('w08-worst-basket', {
+      booking: { ...paidSeat([sam, alex]), addons: [{ ...towel, redemptionSource: 'paid' }] },
+      products: [candle],
+      giftCard: { giftCardTypeId: ID.giftCardType, amount: 10, fulfillmentMethod: 'shipping' },
+      event: places([samAttending, alexGuest, beaGuest]),
+      ...shipped,
+      saveShippingAddressToCustomer: true,
+      payment: cash(199.95),
+    }),
+    // Stage 8: who may book now (event_booking_block_reason's six)
+    order('w08-refused-event-not-found', { event: { ...places([samAttending]), eventId: UNKNOWN }, payment: cash(40) }),
+    order('w08-refused-event-cancelled', { event: places([samAttending]), payment: cash(40) }, async (db) => {
+      await db.query("UPDATE events SET active = false, cancelled_at = '2026-11-09 12:00:00+00' WHERE id = $1", [ID.event])
+    }),
+    order('w08-refused-event-not-on-sale', { event: places([samAttending]), payment: cash(40) }, eventHas('active', false)),
+    order('w08-refused-event-started', { event: places([samAttending]), payment: cash(40) }, async (db) => {
+      await db.query(
+        "UPDATE events SET starts_at = '2026-11-10 08:00:00+00', ends_at = '2026-11-10 10:00:00+00', refund_cutoff_at = '2026-11-09 08:00:00+00' WHERE id = $1",
+        [ID.event]
+      )
+    }),
+    order('w08-refused-event-members-only', { event: places([samAttending]), payment: cash(40) }, membersOnly),
+    order('w08-refused-event-members-only-lapsed-member', { ...asMo, event: places([moAttending]), payment: cash(20) }, both(membersOnly, lastDayIs('2026-11-09'))),
+    order('w08-refused-event-not-released-yet', { event: places([samAttending]), payment: cash(40) }, membersFirst('2026-11-20 09:00:00+00')),
+    // Stage 8: the attendee list, the ages and the 18+ tick
+    order('w08-refused-event-no-places', { event: { ...places([]), accountHolderAttending: true }, payment: cash(0) }),
+    order('w08-refused-event-attending-with-no-account-holder', { event: { ...places([alexGuest]), accountHolderAttending: true }, payment: cash(40) }),
+    order('w08-refused-event-not-attending-with-an-account-holder', { event: { ...places([samAttending]), accountHolderAttending: false }, payment: cash(40) }),
+    order('w08-refused-event-two-account-holders', { event: places([samAttending, { ...alex, isAccountHolder: true }]), payment: cash(80) }),
+    order('w08-refused-event-attendee-with-no-name', { event: places([samAttending, { ...alexGuest, name: '  ' }]), payment: cash(80) }),
+    order('w08-refused-event-account-holder-with-no-date-of-birth', { event: places([{ name: 'Sam Test', email: 'sam@example.com', isAccountHolder: true }]), payment: cash(40) }),
+    order('w08-refused-event-date-of-birth-not-a-date', { event: places([{ ...samAttending, dateOfBirth: 'not a date' }]), payment: cash(40) }),
+    order('w08-refused-event-account-holder-under-18', { event: places([{ ...samAttending, dateOfBirth: '2008-12-02' }]), payment: cash(40) }),
+    order('w08-refused-event-guests-not-confirmed', { event: { ...places([samAttending, alexGuest]), guestsOver18Confirmed: false }, payment: cash(80) }),
+    {
+      // quote_event refuses an event with a price missing. Live, an event on sale must have all three
+      // (events_on_sale_complete), so this can't happen there; the check is lifted for this scenario
+      // only, and put back as it was (NOT VALID, so the row left behind doesn't block it).
+      name: 'w08-refused-event-with-no-prices',
+      async seed(db, stripe) {
+        await seed(db, stripe)
+        await liftOnSaleCheck(db)
+        await db.query('UPDATE events SET price_pre_herd = NULL WHERE id = $1', [ID.event])
+      },
+      async run({ call, db }) {
+        try {
+          await call('createOrder', { customerId: ID.customer, event: places([samAttending]), payment: cash(40) })
+        } finally {
+          await restoreOnSaleCheck(db)
+        }
+      },
+    },
+    // Stage 21: the places
+    order('w08-refused-event-sold-out', { event: places([samAttending]), payment: cash(40) }, soldOut),
+    order('w08-refused-event-one-place-left-for-two', { event: places([samAttending, alexGuest]), payment: cash(80) }, eventHas('places_booked', 9)),
+    // Where stage 8 and stage 21 come among the others
+    order('w08-refused-product-checked-before-the-event', { products: [soap], event: { ...places([samAttending]), eventId: UNKNOWN }, payment: cash(64) }, async (db) => {
+      await db.query('UPDATE products SET active = false WHERE id = $1', [ID.product])
+    }),
+    order('w08-refused-event-checked-before-the-address', { products: [candle], postageMethod: 'standard', event: places([samAttending]), payment: cash(64.95) }, membersOnly),
+    order('w08-refused-event-checked-before-the-addons', { standaloneAddons: [{ ...towel, addonId: UNKNOWN }], event: places([samAttending]), payment: cash(45) }, eventHas('active', false)),
+    order('w08-refused-event-checked-before-the-booking', { booking: paidSeat(), event: places([{ ...samAttending, dateOfBirth: '2008-12-02' }]), payment: cash(60) }, sessionFull),
+    order('w08-refused-a-full-session-before-a-sold-out-event', { booking: paidSeat(), event: places([samAttending]), payment: cash(60) }, both(sessionFull, soldOut)),
+    order('w08-refused-out-of-stock-before-a-sold-out-event', { products: [{ ...soap, quantity: 6 }], event: places([samAttending]), payment: cash(112) }, soldOut),
+    order('w08-refused-sold-out-event-with-a-wrong-figure', { event: places([samAttending]), payment: cash(1) }, soldOut),
+    // Stage 24: the cash figure, then the amount checks
+    order('w08-refused-event-cash-figure-changed', { event: places([samAttending, alexGuest]), payment: cash(70) }),
+    order('w08-refused-event-owed-with-no-method', { event: places([samAttending]), payment: {} }),
+    // A membership bought in the same basket would price the account holder as a member: not built until W13
+    order('w08-event-with-a-membership-bought-in-cash', { event: places([samAttending]), ...monthly, payment: cash(80) }),
   ]
 }

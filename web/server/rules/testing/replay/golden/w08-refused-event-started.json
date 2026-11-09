@@ -1,0 +1,13 @@
+{
+  "scenario": "w08-refused-event-started",
+  "results": [
+    {
+      "success": false,
+      "stage": "event",
+      "reason": "event_started",
+      "message": "That event has already started."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

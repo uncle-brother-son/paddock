@@ -85,10 +85,10 @@ function creditOrder(customerId: string, sessionId: string, membershipId: string
 }
 
 /** placeOrder inside the race's transaction (it joins it), with a refusal turned into the race's Refused. */
-function placing(input: (who: 'first' | 'second') => PlaceOrderInput) {
+function placing(input: (who: 'first' | 'second') => PlaceOrderInput, as: typeof options = options) {
   return async (_tx: Tx, who: 'first' | 'second') => {
     try {
-      return await placeOrder(who === 'first' ? first : second, input(who), options)
+      return await placeOrder(who === 'first' ? first : second, input(who), as)
     } catch (err) {
       const details = refusalDetails(err)
       if (details) throw new Refused(details.reason)
@@ -148,9 +148,9 @@ async function holding(db: Db, hold: (tx: Tx) => Promise<void>) {
 }
 
 /** placeOrder on its own, its refusal as an outcome. */
-async function placed(db: Db, input: PlaceOrderInput): Promise<Outcome<unknown>> {
+async function placed(db: Db, input: PlaceOrderInput, as: typeof options = options): Promise<Outcome<unknown>> {
   try {
-    return { won: await placeOrder(db, input, options) }
+    return { won: await placeOrder(db, input, as) }
   } catch (err) {
     const details = refusalDetails(err)
     if (details) return { refused: new Refused(details.reason) }
@@ -177,6 +177,35 @@ function productOrder(customerId: string, lines: ReadonlyArray<readonly [string,
 
 const stockOf = (variantId: string) => count('SELECT stock_quantity AS n FROM product_variants WHERE id = $1', [variantId])
 const ledgerFor = (variantId: string) => count('SELECT count(*)::int AS n FROM stock_adjustments WHERE variant_id = $1', [variantId])
+
+// --- W08: events
+
+/** An event order names the member of staff who placed it, so it needs a real one. */
+let asStaff: typeof options
+beforeAll(async () => {
+  const staffId = await insert(first, 'staff', { role: 'staff', first_name: 'Jo', last_name: 'Staff', email: 'race-staff@example.com' })
+  asStaff = { actor: { type: 'staff' as const, id: staffId }, requestId: 'race-test' }
+})
+
+/** The customer at the event (public, £40 a place), with `guests` more. */
+function eventPart(eventId: string, guests = 0): NonNullable<PlaceOrderInput['event']> {
+  return {
+    eventId,
+    accountHolderAttending: true,
+    ...(guests > 0 ? { guestsOver18Confirmed: true } : {}),
+    attendees: [
+      { ...holderGuest, isAccountHolder: true },
+      ...Array.from({ length: guests }, (_, i) => ({ name: `Guest ${i + 1}`, email: null, isAccountHolder: false })),
+    ],
+  }
+}
+
+function eventOrder(customerId: string, eventId: string, guests = 0): PlaceOrderInput {
+  return { customerId, event: eventPart(eventId, guests), payment: { method: 'cash' }, confirmed: { toCollect: 40 * (guests + 1) } }
+}
+
+const placesBooked = (eventId: string) => count('SELECT places_booked AS n FROM events WHERE id = $1', [eventId])
+const eventBookingsFor = (eventId: string) => count('SELECT count(*)::int AS n FROM event_bookings WHERE event_id = $1', [eventId])
 
 describe('the last place in a session', () => {
   async function lastPlace() {
@@ -498,13 +527,13 @@ describe('the one lock order (W03-plan 2.4 item 8)', () => {
    * Holds row `k` of `chain`, starts the order, and once Postgres says the order is waiting on it,
    * checks that every row before `k` is already the order's and every row after it is still free.
    */
-  async function provesOrder(chain: Row[], input: PlaceOrderInput) {
+  async function provesOrder(chain: Row[], input: PlaceOrderInput, as: typeof options = options) {
     for (let k = 0; k < chain.length; k += 1) {
       const [table, id] = chain[k] as Row
       // Test data only: the table names are literals from this file.
       const lock = `SELECT id FROM ${table} WHERE id = $1 FOR UPDATE`
       const holder = await holding(second, async (tx) => void (await tx.query(lock, [id])))
-      const order = placed(first, input).finally(() => undefined)
+      const order = placed(first, input, as).finally(() => undefined)
       await blockedBy(holder.pid)
       const seen = await Promise.all(chain.map(async ([t, rowId], i) => (i === k ? 'held' : (await free(t, rowId)) ? 'free' : 'taken')))
       expect(seen).toEqual(chain.map((_, i) => (i < k ? 'taken' : i === k ? 'held' : 'free')))
@@ -571,6 +600,41 @@ describe('the one lock order (W03-plan 2.4 item 8)', () => {
         ['product_variants', high],
       ],
       input
+    )
+  }, 60_000)
+
+  it('W08: customer, session, credit period, add-on memberships, product variants, then the event', async () => {
+    const { customer, membership, period } = await member(10)
+    const [lowMember, highMember] = [crypto.randomUUID(), crypto.randomUUID()].sort() as [string, string]
+    for (const id of [highMember, lowMember]) {
+      await fixtures.membership(first, { id, customer_id: customer, plan_id: plan, is_herd: true, addon_credits_remaining: 5 })
+    }
+    const [low, high] = [crypto.randomUUID(), crypto.randomUUID()].sort() as [string, string]
+    await variant(100, high)
+    await variant(100, low)
+    const eventId = await fixtures.event(first, { capacity: 50 })
+    const { id: sessionId } = await session()
+    const booking = creditOrder(customer, sessionId, membership).booking as NonNullable<PlaceOrderInput['booking']>
+    const input: PlaceOrderInput = {
+      ...productOrder(customer, [[high, 1], [low, 1]]),
+      // Listed before everything else in the basket: the event is still locked last.
+      event: eventPart(eventId),
+      booking: { ...booking, addons: [highMember, lowMember].map((id) => ({ addonId: towel, quantity: 1, redemptionSource: 'membership_credit' as const, membershipId: id })) },
+      confirmed: { toCollect: 24 + 40 },
+    }
+    await provesOrder(
+      [
+        ['customers', customer],
+        ['sessions', sessionId],
+        ['membership_credit_periods', period],
+        ['customer_memberships', lowMember],
+        ['customer_memberships', highMember],
+        ['product_variants', low],
+        ['product_variants', high],
+        ['events', eventId],
+      ],
+      input,
+      asStaff
     )
   }, 60_000)
 
@@ -817,5 +881,212 @@ describe("the read-back finds the order's ledger rows through the variant index 
     const read = async (sql: string) => (await first.query<{ rows: { stock_adjustments: unknown[] } }>(sql, [orderId]))[0]?.rows.stock_adjustments
     expect(await read(ORDER_ROWS_SQL)).toEqual([{ variant_id: soap, change_amount: -2, by_staff: false }])
     expect(await read(ORDER_ROWS_SQL)).toEqual(await read(READ_WITHOUT_THE_VARIANTS))
+  })
+})
+
+describe("the event's line among the order's lines, and its attendees, on a clock that moves (W08)", () => {
+  // As W07's test above: the booking's line is written a statement after the event's (about 20 ms
+  // through Hyperdrive), so the order's statement is made to take 30 ms. The attendees are written in
+  // one statement, a millisecond apart, so they keep their place order whatever the gap.
+  it('a booking, an event for two, an add-on and a product: booking, event, add-on, product; the account holder first', async () => {
+    const customer = await fixtures.customer(first)
+    const eventId = await fixtures.event(first)
+    const { id: sessionId } = await session()
+    const soap = await variant(5)
+    await pg.admin.unsafe(`CREATE OR REPLACE FUNCTION public.slow_write() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(0.03); RETURN NULL; END $$`)
+    await pg.admin.unsafe('CREATE TRIGGER slow_write AFTER INSERT ON public.orders FOR EACH ROW EXECUTE FUNCTION public.slow_write()')
+    const placedOrder = await placeOrder(
+      first,
+      {
+        customerId: customer,
+        // The guest listed first: the account holder must still be place 1.
+        event: { ...eventPart(eventId, 1), attendees: [...eventPart(eventId, 1).attendees].reverse() },
+        booking: { sessionId, guests: [holderGuest], redemptionSource: 'paid' },
+        standaloneAddons: [{ addonId: towel, quantity: 1 }],
+        products: [{ productVariantId: soap, quantity: 1 }],
+        payment: { method: 'cash' },
+        confirmed: { toCollect: 20 + 80 + 5 + 12 },
+      },
+      asStaff
+    ).finally(() => pg.admin.unsafe('DROP TRIGGER slow_write ON public.orders'))
+    const lines = await first.query<{ item_type: string }>('SELECT item_type FROM order_line_items WHERE order_id = $1 ORDER BY created_at, id', [placedOrder.orderId])
+    expect(lines.map((line) => line.item_type)).toEqual(['booking', 'event', 'addon', 'product'])
+    expect(await count('SELECT count(*)::int - count(DISTINCT created_at)::int AS n FROM order_line_items WHERE order_id = $1', [placedOrder.orderId])).toBe(0)
+    const attendees = await first.query<{ attendee_type: string; name: string }>(
+      'SELECT attendee_type, name FROM event_attendees WHERE event_booking_id = $1 ORDER BY created_at, id',
+      [placedOrder.eventBookingId]
+    )
+    expect(attendees).toEqual([
+      { attendee_type: 'account_holder', name: 'Sam Test' },
+      { attendee_type: 'guest', name: 'Guest 1' },
+    ])
+    expect(await count('SELECT count(*)::int - count(DISTINCT created_at)::int AS n FROM event_attendees WHERE event_booking_id = $1', [placedOrder.eventBookingId])).toBe(0)
+  })
+})
+
+describe('the last place at an event (W08)', () => {
+  async function lastPlace() {
+    return { event: await fixtures.event(first, { capacity: 1 }), first: await fixtures.customer(first), second: await fixtures.customer(first) }
+  }
+
+  it("goes to the first; the second waited on the event and is refused with createOrder's reason", async () => {
+    const seed = await lastPlace()
+    const result = await race(placing((who) => eventOrder(seed[who], seed.event), asStaff), 'commit', 'events')
+    expect(result.first).toHaveProperty('won')
+    expect(result.second).toMatchObject({ refused: { reason: 'event_full' } })
+    expect(await placesBooked(seed.event)).toBe(1)
+    expect(await eventBookingsFor(seed.event)).toBe(1)
+    expect(await ordersFor(seed.second)).toBe(0)
+  })
+
+  it('goes to the second if the first rolls back', async () => {
+    const seed = await lastPlace()
+    const result = await race(placing((who) => eventOrder(seed[who], seed.event), asStaff), 'rollback', 'events')
+    expect(result.second).toHaveProperty('won')
+    expect(await placesBooked(seed.event)).toBe(1)
+    expect(await eventBookingsFor(seed.event)).toBe(1)
+  })
+
+  it('an order waits for the event in its lock statement, then counts the places afresh', async () => {
+    // Another writer (the old createOrder's claim_event_places) takes the last place and stays open.
+    // Without the event in the lock statement the order would read the places before waiting, find
+    // one, and be stopped only later by the claim's own guard.
+    const seed = await lastPlace()
+    const holder = await holding(second, async (tx) => {
+      await tx.query('SELECT claim_event_places($1, 1)', [seed.event])
+    })
+    const order = placed(first, eventOrder(seed.first, seed.event), asStaff)
+    const waiter = await blockedBy(holder.pid)
+    expect(await waitingOn(pg, waiter)).toEqual(['events'])
+    const [waiting] = await pg.admin.unsafe<{ query: string }[]>('SELECT query FROM pg_stat_activity WHERE pid = $1', [waiter])
+    expect(waiting?.query).toMatch(/^\s*SELECT s\.id AS session_id, p\.id AS credit_period_id/)
+    await holder.finish('commit')
+    expect(await order).toMatchObject({ refused: { reason: 'event_full' } })
+    expect(await placesBooked(seed.event)).toBe(1)
+    expect(await eventBookingsFor(seed.event)).toBe(0)
+  })
+
+  it('two places wanted with one left: refused whole, nothing claimed', async () => {
+    const seed = await lastPlace()
+    await first.query('UPDATE events SET capacity = 2, places_booked = 1 WHERE id = $1', [seed.event])
+    expect(await placed(first, eventOrder(seed.first, seed.event, 1), asStaff)).toMatchObject({ refused: { reason: 'event_full' } })
+    expect(await placesBooked(seed.event)).toBe(1)
+  })
+
+  it('has one winner in every free-running race', async () => {
+    for (let round = 0; round < 15; round += 1) {
+      const seed = await lastPlace()
+      const results = await Promise.all([placed(first, eventOrder(seed.first, seed.event), asStaff), placed(second, eventOrder(seed.second, seed.event), asStaff)])
+      expect(results.filter((r) => 'won' in r)).toHaveLength(1)
+      expect(results.find((r) => 'refused' in r)).toMatchObject({ refused: { reason: 'event_full' } })
+      expect(await placesBooked(seed.event)).toBe(1)
+      expect(await eventBookingsFor(seed.event)).toBe(1)
+    }
+  }, 60_000)
+})
+
+describe('two orders for places at one event at once (W08)', () => {
+  // The lock is FOR NO KEY UPDATE, so the second order waits for the first before it reads the places.
+  // A shared lock would let both read and then both try to claim: a deadlock, which T1 runs once more
+  // only when it opened the transaction itself. These join a transaction of their own, so it would show.
+  it('the second waits on the event, then both go through', async () => {
+    const eventId = await fixtures.event(first, { capacity: 10 })
+    const customers = { first: await fixtures.customer(first), second: await fixtures.customer(first) }
+    const result = await race(placing((who) => eventOrder(customers[who], eventId), asStaff), 'commit', 'events')
+    expect(result.first).toHaveProperty('won')
+    expect(result.second).toHaveProperty('won')
+    expect(await placesBooked(eventId)).toBe(2)
+  })
+
+  it('never deadlocks in 50 free-running races, with nothing to run it again (each joins a transaction of its own)', async () => {
+    const eventId = await fixtures.event(first, { capacity: 200 })
+    for (let round = 0; round < 50; round += 1) {
+      const results = await Promise.all([
+        attempt(first, async () => placeOrder(first, eventOrder(await fixtures.customer(prober), eventId), asStaff)),
+        attempt(second, async () => placeOrder(second, eventOrder(await fixtures.customer(prober), eventId), asStaff)),
+      ])
+      expect(results.map((r) => 'won' in r)).toEqual([true, true])
+    }
+    expect(await placesBooked(eventId)).toBe(100)
+    expect(await eventBookingsFor(eventId)).toBe(100)
+  }, 120_000)
+})
+
+describe('an event, a session and two variants in one basket, against another order with them the other way round (W08)', () => {
+  // Order one lists the booking, then the variants a then b, then the event; order two the event, the
+  // variants b then a, then the booking. T1 locks in LOCK_ORDER whatever the basket's order.
+  async function world() {
+    return {
+      session: (await session({ capacity: 200 })).id,
+      a: await variant(200),
+      b: await variant(200),
+      event: await fixtures.event(first, { capacity: 200 }),
+    }
+  }
+
+  function baskets(seed: Awaited<ReturnType<typeof world>>, customers: { first: string; second: string }) {
+    const booking = (customerId: string) => paidOrder(customerId, seed.session).booking as NonNullable<PlaceOrderInput['booking']>
+    const one: PlaceOrderInput = {
+      customerId: customers.first,
+      booking: booking(customers.first),
+      products: [{ productVariantId: seed.a, quantity: 1 }, { productVariantId: seed.b, quantity: 1 }],
+      event: eventPart(seed.event),
+      payment: { method: 'cash' },
+      confirmed: { toCollect: 20 + 24 + 40 },
+    }
+    const two: PlaceOrderInput = {
+      customerId: customers.second,
+      event: eventPart(seed.event),
+      products: [{ productVariantId: seed.b, quantity: 1 }, { productVariantId: seed.a, quantity: 1 }],
+      booking: booking(customers.second),
+      payment: { method: 'cash' },
+      confirmed: { toCollect: 20 + 24 + 40 },
+    }
+    return { first: one, second: two }
+  }
+
+  it('the second waits on the session (the first row they share), then both go through', async () => {
+    const seed = await world()
+    const orders = baskets(seed, { first: await fixtures.customer(first), second: await fixtures.customer(first) })
+    const result = await race(placing((who) => orders[who], asStaff), 'commit', 'sessions')
+    expect(result.first).toHaveProperty('won')
+    expect(result.second).toHaveProperty('won')
+    expect([await stockOf(seed.a), await stockOf(seed.b), await placesBooked(seed.event), await bookingsOn(seed.session)]).toEqual([198, 198, 2, 2])
+  })
+
+  it('never deadlocks in 50 free-running races, with nothing to run it again (each joins a transaction of its own)', async () => {
+    const seed = await world()
+    for (let round = 0; round < 50; round += 1) {
+      // New customers each round: one booking a day each.
+      const orders = baskets(seed, { first: await fixtures.customer(first), second: await fixtures.customer(first) })
+      const results = await Promise.all([
+        attempt(first, () => placeOrder(first, orders.first, asStaff)),
+        attempt(second, () => placeOrder(second, orders.second, asStaff)),
+      ])
+      expect(results.map((r) => 'won' in r)).toEqual([true, true])
+    }
+    expect([await stockOf(seed.a), await stockOf(seed.b), await placesBooked(seed.event), await bookingsOn(seed.session)]).toEqual([100, 100, 100, 100])
+  }, 120_000)
+
+  it('the control: locking the event and the session in basket order instead deadlocks', async () => {
+    const seed = await world()
+    const lockSession = 'SELECT id FROM sessions WHERE id = $1 FOR NO KEY UPDATE'
+    const lockEvent = 'SELECT id FROM events WHERE id = $1 FOR NO KEY UPDATE'
+    const sessionTaken = deferred()
+    const eventTaken = deferred()
+    const one = first.transaction(async (tx) => {
+      await tx.query(lockSession, [seed.session])
+      sessionTaken.resolve()
+      await eventTaken.promise
+      await tx.query(lockEvent, [seed.event])
+    })
+    const two = second.transaction(async (tx) => {
+      await tx.query(lockEvent, [seed.event])
+      eventTaken.resolve()
+      await sessionTaken.promise
+      await tx.query(lockSession, [seed.session])
+    })
+    const settled = await Promise.allSettled([one, two])
+    expect(settled.filter((outcome) => outcome.status === 'rejected' && isDeadlock(outcome.reason))).toHaveLength(1)
   })
 })

@@ -293,7 +293,7 @@ export const basketQuoteOutputSchema = z.object({
 })
 export type BasketQuoteOutput = z.infer<typeof basketQuoteOutputSchema>
 
-// --- POST /api/v1/staff/orders (W06 and W07: cash and nothing owed; the rest answers NOT_BUILT)
+// --- POST /api/v1/staff/orders (W06 to W08: cash and nothing owed; the rest answers NOT_BUILT)
 
 /**
  * What staff saw and confirmed, from the quote. Each figure is loose, as the old function was: a
@@ -325,6 +325,8 @@ export const placeOrderOutputSchema = z.object({
   /** The gift card bought, and its code, which staff give the customer (W07). */
   giftCardId: z.string().nullable(),
   giftCardCode: z.string().nullable(),
+  /** The event booking, when the order has an event (W08). */
+  eventBookingId: z.string().nullable(),
   payment: z.object({
     /** What orders.payment_method records: null when nothing was owed. */
     method: z.string().nullable(),
@@ -361,8 +363,8 @@ const money = z.number()
 
 /**
  * The rows an order wrote, read back by order id. Free text (names, emails, dates of birth, special
- * requests, override reasons, addresses, a gift card's recipient and message) is here for comparing,
- * and the staff app never keeps it. A gift card's code is never read back: only whether it has the
+ * requests, override reasons, addresses, a gift card's recipient and message, an event attendee's name,
+ * email and date of birth) is here for comparing, and the staff app never keeps it. A gift card's code is never read back: only whether it has the
  * app's format. The query is in server/rules/orders/order-rows.ts and, word for word, in the staff
  * app's shadow.
  */
@@ -482,6 +484,33 @@ export const orderRowsSchema = z.object({
       city: z.string().nullable(),
       postcode: z.string().nullable(),
       country: z.string().nullable(),
+    })
+    .nullable(),
+  /**
+   * The event booking the order's event line points at, with the event's places after the claim and
+   * the attendees in place order (W08). An attendee's name, email and date of birth are free text.
+   */
+  event_booking: z
+    .object({
+      event_id: z.string(),
+      status: z.string(),
+      places: z.number(),
+      account_holder_attending: z.boolean(),
+      price_paid: money,
+      created_by_staff_id: z.string().nullable(),
+      guests_over_18_confirmed: z.boolean(),
+      for_the_order_customer: z.boolean(),
+      event_places_booked: z.number(),
+      attendees: z.array(
+        z.object({
+          attendee_type: z.string(),
+          name: z.string(),
+          email: z.string().nullable(),
+          date_of_birth: z.string().nullable(),
+          unit_price: money,
+          price_level: z.string(),
+        })
+      ),
     })
     .nullable(),
 })

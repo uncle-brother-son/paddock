@@ -1,0 +1,13 @@
+{
+  "scenario": "w08-refused-event-members-only",
+  "results": [
+    {
+      "success": false,
+      "stage": "event",
+      "reason": "event_members_only",
+      "message": "This event is for members only — the customer needs an active membership."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

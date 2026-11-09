@@ -1,0 +1,13 @@
+{
+  "scenario": "w08-refused-event-guests-not-confirmed",
+  "results": [
+    {
+      "success": false,
+      "stage": "event",
+      "reason": "guests_over_18_not_confirmed",
+      "message": "Confirm that everyone else in the booking is 18 or over."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

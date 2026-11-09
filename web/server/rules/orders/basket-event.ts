@@ -1,5 +1,5 @@
-// Ported from backend/paddock/shared/eventOrders.ts (validateEventLine and eventPromoLines; the
-// writes move in W08).
+// Ported from backend/paddock/shared/eventOrders.ts (validateEventLine and eventPromoLines). The writes
+// (writeEventBooking) are in place-order.ts's order statement from W08.
 import 'server-only'
 import type { BasketEvent, BasketEventAttendee, BasketProblem, EventBlockReason, EventQuotePlace, PromoEligibleLine } from '@/contracts'
 import { EVENT_BLOCK_MESSAGES, eventBlockMessage } from '@/server/rules/events/event-blocks'
@@ -16,6 +16,11 @@ export interface PricedEvent {
 }
 
 const refusal = (reason: string, message: string): BasketProblem => ({ stage: 'event', reason, message })
+
+/** The attendees in quote_event's place order: the account holder first when attending, then the rest as sent. */
+export function inPlaceOrder(attendees: readonly BasketEventAttendee[]): BasketEventAttendee[] {
+  return [...attendees.filter((a) => a.isAccountHolder === true), ...attendees.filter((a) => a.isAccountHolder !== true)]
+}
 
 /** The attendee list and the quote. Everything else is in `facts`. */
 export function checkEvent(event: BasketEvent, facts: BasketEventFacts | null): { line: PricedEvent | null; problem: BasketProblem | null } {
@@ -59,7 +64,7 @@ export function checkEvent(event: BasketEvent, facts: BasketEventFacts | null): 
     problem: null,
     line: {
       facts,
-      attendees: [...holders, ...attendees.filter((a) => a.isAccountHolder !== true)],
+      attendees: inPlaceOrder(attendees),
       places: facts.places,
       listTotal: round2(facts.places.reduce((sum, place) => sum + Number.parseFloat(place.unit_price), 0)),
     },
@@ -83,9 +88,12 @@ export function eventPromoLines(line: PricedEvent): PromoEligibleLine[] {
   return lines
 }
 
+/** createOrder's refusal when the places can't be claimed (stage 21). T1's claim refuses with it too. */
+export const eventFullRefusal = (): BasketProblem => refusal('event_full', 'Not enough places are left on this event (or it has just gone off sale).')
+
 /** The places are claimed when the order is written, so this comes after the promo. */
 export function eventFullProblem(line: PricedEvent): BasketProblem | null {
   const { active, cancelled, places_left: left } = line.facts
   if (active && !cancelled && left !== null && left >= line.places.length) return null
-  return refusal('event_full', 'Not enough places are left on this event (or it has just gone off sale).')
+  return eventFullRefusal()
 }

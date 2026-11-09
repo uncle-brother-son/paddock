@@ -3,10 +3,12 @@
 // credit or paid), add-ons on a booking (paid or on an add-on credit) and on their own, paid in cash or
 // with nothing owed. W07 adds products with their stock, the delivery address and postage, session
 // passes (on their own, or bought to pay for the booking in the same basket) and gift cards bought.
-// Still not built: card and reader payments, memberships, events, promo codes, store credit and gift
-// card redemption.
+// W08 adds events: the places claimed, the event booking and its attendees, and the event's line
+// (from shared/eventOrders.ts, writeEventBooking). Still not built: card and reader payments,
+// memberships, promo codes, store credit and gift card redemption.
 import 'server-only'
 import type {
+  BasketEventAttendee,
   BasketProblem,
   BasketQuoteInput,
   BasketQuoteOutput,
@@ -20,8 +22,9 @@ import { audit } from '@/server/audit'
 import { inOpenTransaction, isDeadlock, postgresRefusal, type Db, type Tx } from '@/server/db'
 import { ApiError } from '@/server/http/errors'
 import { addMonthsToIsoDate } from '@/server/rules/time/london-time'
-import { cashDifferenceRefusal } from './amounts'
+import { cashDifferenceRefusal, round2 } from './amounts'
 import { GIFT_CARD_SOURCE_REMOVED_MESSAGE } from './basket-booking'
+import { eventFullRefusal, inPlaceOrder } from './basket-event'
 import { generateGiftCardCode } from './gift-card-code'
 import { loadBasketFacts, type BasketFacts } from './load-basket'
 import { lockForOrder, type HeldLocks } from './locks'
@@ -76,8 +79,9 @@ function refuseAtEntry(input: PlaceOrderInput): void {
 
 /**
  * What T1 can't sell yet, each built by a later slice: card (W10), reader (W11), memberships, bought
- * or buy-new or replacing an exhausted one (W13), events (W08), promo codes, store credit and gift
- * card redemption (W09). A pass bought with a buy-new membership is caught as the membership.
+ * or buy-new or replacing an exhausted one (W13), promo codes, store credit and gift card redemption
+ * (W09). A pass bought with a buy-new membership is caught as the membership, and so is an event
+ * beside a membership bought in the same basket (its account holder would be priced as that member).
  */
 const NOT_BUILT: ReadonlyArray<{ part: string; words: string; present: (input: PlaceOrderInput) => boolean }> = [
   { part: 'card', words: 'a card payment', present: (input) => input.payment?.method === 'card' },
@@ -88,7 +92,6 @@ const NOT_BUILT: ReadonlyArray<{ part: string; words: string; present: (input: P
     present: (input) =>
       Boolean(input.membershipPlanId) || input.booking?.redemptionSource === 'buy_new_membership' || Boolean(input.booking?.cancelExhaustedMembershipId),
   },
-  { part: 'event', words: 'an event', present: (input) => Boolean(input.event) },
   { part: 'promo_code', words: 'a promo code', present: (input) => Boolean(input.promoCode?.trim()) },
   { part: 'store_credit', words: 'store credit', present: (input) => Boolean(input.payment?.storeCredit) },
   { part: 'gift_card_redemption', words: 'a gift card used to pay', present: (input) => Boolean(input.payment?.giftCard) },
@@ -173,8 +176,9 @@ function bookingToWrite(input: PlaceOrderInput, facts: BasketFacts, quote: Baske
 
 /**
  * The order and everything in it that doesn't need the booking, in one statement: the gift card
- * bought, the order (with its delivery address), its lines, the stock claimed with a ledger row per
- * product line, the session pass bought, and the delivery address saved to the customer.
+ * bought, the order (with its delivery address), the event's places claimed with its booking and an
+ * attendee row per place (W08), its lines, the stock claimed with a ledger row per product line, the
+ * session pass bought, and the delivery address saved to the customer.
  *
  * The gift card's code must be new. Its INSERT skips a code already taken (ON CONFLICT DO NOTHING:
  * a failed statement would poison the transaction, W03-plan 2.4 item 3), and every other write here
@@ -186,6 +190,13 @@ function bookingToWrite(input: PlaceOrderInput, facts: BasketFacts, quote: Baske
  * and the line count is checked, so neither can be kept without the other (checklist B3). Lines and
  * ledger rows get created_at from the clock, a millisecond apart, in the order createOrder wrote
  * them; the clock is returned so the booking's line can take its place among them.
+ *
+ * The event is locked too, so its places are claimed with claim_event_places's own guarded UPDATE
+ * (on sale, not cancelled, room for every place), as one statement here rather than the function: a
+ * function called from a CTE only runs if the CTE is read. Its booking is written only from the
+ * claim, its attendees only from its booking, and its line points at it, so a claim that finds no
+ * room writes none of them and T1 refuses with event_full. Attendees get created_at from the clock,
+ * in place order, as createOrder wrote them one statement each.
  */
 const ORDER_SQL = `
 WITH clock AS (SELECT clock_timestamp() AS at),
@@ -209,12 +220,41 @@ o AS (
   WHERE go.ok
   RETURNING id
 ),
+places AS (
+  UPDATE events e
+  SET places_booked = e.places_booked + x.places, updated_at = now()
+  FROM jsonb_to_recordset($11::jsonb) AS x(event_id uuid, places int)
+  WHERE e.id = x.event_id AND e.active AND e.cancelled_at IS NULL AND e.places_booked + x.places <= e.capacity AND (SELECT ok FROM go)
+  RETURNING e.id
+),
+event_booking AS (
+  INSERT INTO event_bookings
+    (event_id, customer_id, places, status, account_holder_attending, price_paid, created_by_staff_id, guests_over_18_confirmed_at)
+  SELECT x.event_id, $1::uuid, x.places, 'confirmed', x.account_holder_attending, x.price_paid, x.created_by_staff_id,
+         CASE WHEN x.has_guests THEN now() END
+  FROM places
+  JOIN jsonb_to_recordset($11::jsonb)
+    AS x(event_id uuid, places int, account_holder_attending boolean, price_paid numeric, created_by_staff_id uuid, has_guests boolean)
+    ON x.event_id = places.id
+  RETURNING id
+),
+attendees AS (
+  INSERT INTO event_attendees (event_booking_id, attendee_type, name, email, date_of_birth, unit_price, price_level, created_at)
+  SELECT event_booking.id, a.attendee_type, a.name, a.email, a.date_of_birth, a.unit_price, a.price_level,
+         clock.at + a.position * interval '1 millisecond'
+  FROM event_booking
+  CROSS JOIN clock
+  CROSS JOIN jsonb_to_recordset($12::jsonb)
+    AS a(position int, attendee_type text, name text, email text, date_of_birth date, unit_price numeric, price_level text)
+  RETURNING id
+),
 lines AS (
   INSERT INTO order_line_items
     (order_id, item_type, quantity, unit_price, line_total, addon_id, product_variant_id, session_pass_type_id, gift_card_id,
-     fulfillment_status, system_unit_price, price_override_reason, discount_amount, created_at)
+     event_booking_id, fulfillment_status, system_unit_price, price_override_reason, discount_amount, created_at)
   SELECT o.id, l.item_type, l.quantity, l.unit_price, l.line_total, l.addon_id, l.product_variant_id, l.session_pass_type_id,
          CASE WHEN l.item_type = 'gift_card' THEN (SELECT id FROM card) END,
+         CASE WHEN l.item_type = 'event' THEN (SELECT id FROM event_booking) END,
          l.fulfillment_status, l.system_unit_price, l.price_override_reason, l.discount_amount,
          clock.at + l.position * interval '1 millisecond'
   FROM o
@@ -263,7 +303,10 @@ SELECT (SELECT id FROM o) AS order_id,
        (SELECT COALESCE(array_agg(id), '{}') FROM stock) AS variants_claimed,
        (SELECT count(*)::int FROM ledger) AS ledger_written,
        (SELECT count(*)::int FROM passes) AS passes_written,
-       (SELECT count(*)::int FROM saved_address) AS addresses_saved`
+       (SELECT count(*)::int FROM saved_address) AS addresses_saved,
+       (SELECT count(*)::int FROM places) AS events_claimed,
+       (SELECT id FROM event_booking) AS event_booking_id,
+       (SELECT count(*)::int FROM attendees) AS attendees_written`
 
 interface OrderWritten {
   /** Null when the gift card's code was taken: nothing was written. */
@@ -277,13 +320,16 @@ interface OrderWritten {
   ledger_written: number
   passes_written: number
   addresses_saved: number
+  events_claimed: number
+  event_booking_id: string | null
+  attendees_written: number
 }
 
 /** As createOrder: five codes, then gift_card_code_exhausted. */
 export const GIFT_CARD_CODE_TRIES = 5
 
 /** The line kinds the order statement writes. A booking's line is the booking statement's. */
-const ORDER_LINE_KINDS = new Set(['addon', 'product', 'session_pass', 'gift_card', 'postage'])
+const ORDER_LINE_KINDS = new Set(['event', 'addon', 'product', 'session_pass', 'gift_card', 'postage'])
 
 interface OrderToWrite {
   orderId: string
@@ -291,6 +337,45 @@ interface OrderToWrite {
   giftCardId: string | null
   giftCardCode: string | null
   sessionPassId: string | null
+  eventBookingId: string | null
+}
+
+/**
+ * The event's booking and an attendee row per place, as writeEventBooking wrote them: at the quote's
+ * prices less each place's promo share, the account holder (when attending) first, names and emails
+ * trimmed, and a date of birth for the account holder only (guests are covered by the 18+ tick).
+ */
+function eventToWrite(input: PlaceOrderInput, quote: BasketQuoteOutput, options: PlaceOrderOptions): { events: Array<Record<string, unknown>>; attendees: Array<Record<string, unknown>> } {
+  const event = input.event
+  const quoted = quote.event
+  if (!event) return { events: [], attendees: [] }
+  if (!quoted) throw unpriced('its event')
+  const inOrder = inPlaceOrder(event.attendees)
+  if (inOrder.length !== quoted.places.length) throw unpriced('a place for every attendee')
+  return {
+    events: [
+      {
+        event_id: quoted.eventId,
+        places: quoted.places.length,
+        account_holder_attending: event.accountHolderAttending === true,
+        price_paid: Math.max(0, round2(quoted.listTotal - quoted.discount)),
+        created_by_staff_id: options.actor.type === 'staff' ? options.actor.id : null,
+        has_guests: event.attendees.some((attendee) => attendee.isAccountHolder !== true),
+      },
+    ],
+    attendees: quoted.places.map((place, i) => {
+      const attendee = inOrder[i] as BasketEventAttendee
+      return {
+        position: i + 1,
+        attendee_type: place.attendeeType,
+        name: (attendee.name ?? '').trim(),
+        email: attendee.email?.trim() || null,
+        date_of_birth: place.attendeeType === 'account_holder' ? attendee.dateOfBirth ?? null : null,
+        unit_price: Math.max(0, round2(place.unitPrice - place.discount)),
+        price_level: place.priceLevel,
+      }
+    }),
+  }
 }
 
 /** The order statement, run again with a new code while the gift card's code was taken. */
@@ -360,11 +445,12 @@ async function writeOrder(tx: Tx, input: PlaceOrderInput, facts: BasketFacts, qu
 
   const delivery = quote.delivery
   const addresses = delivery?.saveToCustomer ? [delivery.address] : []
+  const { events, attendees } = eventToWrite(input, quote, options)
 
   for (let attempt = 1; ; attempt += 1) {
     const cards = giftCards()
     const written = (
-      await tx.query<OrderWritten>(ORDER_SQL, [customerId, cards, quote.totals.orderTotal, delivery?.address ?? null, paymentMethod, lines, claims, ledger, passes, addresses])
+      await tx.query<OrderWritten>(ORDER_SQL, [customerId, cards, quote.totals.orderTotal, delivery?.address ?? null, paymentMethod, lines, claims, ledger, passes, addresses, events, attendees])
     )[0] as OrderWritten
     if (!written.order_id) {
       if (cards.length === 0) throw new Error('The order was not written.')
@@ -376,6 +462,11 @@ async function writeOrder(tx: Tx, input: PlaceOrderInput, facts: BasketFacts, qu
     const claimed = new Set(written.variants_claimed)
     const short = products.find((line) => !claimed.has(line.productVariantId))
     if (short) throw orderRefusal({ stage: 'product', reason: 'insufficient_stock', productVariantId: short.productVariantId })
+    // The places, after the stock, as createOrder claimed them (stage 21 after stage 19). Attendees
+    // are only written from the event booking, and an event always has one, so their count checks the
+    // booking as well.
+    if (written.events_claimed !== events.length) throw orderRefusal(eventFullRefusal())
+    if (written.attendees_written !== attendees.length) throw new Error(`The event's booking and attendees were not written whole: ${written.attendees_written} of ${attendees.length} attendees.`)
     if (written.ledger_written !== ledger.length) throw new Error(`The stock ledger was not written whole: ${written.ledger_written} of ${ledger.length} rows.`)
     if (written.passes_written !== passes.length) throw new Error(`The session pass and its line were not written together: ${written.passes_written} of ${passes.length} passes.`)
     if (cards.length > 0 && !written.gift_card_id) throw new Error('The gift card was not written.')
@@ -386,6 +477,7 @@ async function writeOrder(tx: Tx, input: PlaceOrderInput, facts: BasketFacts, qu
       giftCardId: written.gift_card_id,
       giftCardCode: written.gift_card_code,
       sessionPassId: written.session_pass_id,
+      eventBookingId: written.event_booking_id,
     }
   }
 }
@@ -440,6 +532,7 @@ async function prepare(tx: Tx, input: PlaceOrderInput, options: PlaceOrderOption
     sessionPassId: booking?.redemptionSource === 'session_pass_credit' ? booking.sessionPassId ?? null : null,
     addonMembershipIds: attached.flatMap((line) => (line.redemptionSource === 'membership_credit' && line.membershipId ? [line.membershipId] : [])),
     productVariantIds: (input.products ?? []).map((line) => line.productVariantId),
+    eventId: input.event?.eventId ?? null,
   })
   if (!locks) throw orderRefusal({ stage: 'validation', reason: 'customer_not_found' })
 
@@ -473,6 +566,7 @@ async function prepare(tx: Tx, input: PlaceOrderInput, options: PlaceOrderOption
         bookingId,
         sessionPassId: order.sessionPassId,
         giftCardId: order.giftCardId,
+        eventBookingId: order.eventBookingId,
         postage: quote.postage ? { method: quote.postage.method, amount: quote.postage.amount } : null,
         addressSaved: quote.delivery?.saveToCustomer === true,
         orderTotal: quote.totals.orderTotal,
@@ -494,6 +588,7 @@ async function prepare(tx: Tx, input: PlaceOrderInput, options: PlaceOrderOption
       sessionPassId: order.sessionPassId,
       giftCardId: order.giftCardId,
       giftCardCode: order.giftCardCode,
+      eventBookingId: order.eventBookingId,
       payment: { method: paymentMethod, collected, cardCharged: false },
     },
   }

@@ -203,8 +203,69 @@ export const W07_SCENARIOS: readonly string[] = [
   'w07-refused-buy-new-pass-a-booking-that-day',
 ]
 
+/**
+ * W08's replay: events, in cash or with nothing owed, alone and beside every kind W06 and W07 build.
+ * The existing scenario W08 brings into scope comes first, then W08's own.
+ */
+export const W08_SCENARIOS: readonly string[] = [
+  'event-with-a-guest-in-cash',
+  // Who attends, and at what price
+  'w08-event-account-holder-alone-in-cash',
+  'w08-event-guests-only-in-cash',
+  'w08-event-account-holder-listed-second',
+  'w08-event-attendee-details-trimmed',
+  'w08-event-herd-member-and-a-guest',
+  'w08-event-pre-herd-member',
+  'w08-event-member-not-attending-guests-pay-public',
+  'w08-event-members-only-for-a-member',
+  'w08-event-members-only-member-on-their-last-day',
+  'w08-event-members-first-member-before-release',
+  'w08-event-members-first-public-after-release',
+  'w08-event-account-holder-18-on-the-day',
+  'w08-event-takes-the-last-places',
+  'w08-free-event-nothing-owed',
+  // Beside the other kinds
+  'w08-event-and-a-booking-in-cash',
+  'w08-member-credit-seat-and-an-event-in-cash',
+  'w08-event-and-a-product-in-cash',
+  'w08-every-kind-in-cash',
+  'w08-worst-basket',
+  // Stage 8: event_booking_block_reason's six
+  'w08-refused-event-not-found',
+  'w08-refused-event-cancelled',
+  'w08-refused-event-not-on-sale',
+  'w08-refused-event-started',
+  'w08-refused-event-members-only',
+  'w08-refused-event-members-only-lapsed-member',
+  'w08-refused-event-not-released-yet',
+  // Stage 8: the attendees, the ages, the 18+ tick and the quote
+  'w08-refused-event-no-places',
+  'w08-refused-event-attending-with-no-account-holder',
+  'w08-refused-event-not-attending-with-an-account-holder',
+  'w08-refused-event-two-account-holders',
+  'w08-refused-event-attendee-with-no-name',
+  'w08-refused-event-account-holder-with-no-date-of-birth',
+  'w08-refused-event-date-of-birth-not-a-date',
+  'w08-refused-event-account-holder-under-18',
+  'w08-refused-event-guests-not-confirmed',
+  'w08-refused-event-with-no-prices',
+  // Stage 21: the places
+  'w08-refused-event-sold-out',
+  'w08-refused-event-one-place-left-for-two',
+  // Where stages 8 and 21 come among the others, then stage 24
+  'w08-refused-product-checked-before-the-event',
+  'w08-refused-event-checked-before-the-address',
+  'w08-refused-event-checked-before-the-addons',
+  'w08-refused-event-checked-before-the-booking',
+  'w08-refused-a-full-session-before-a-sold-out-event',
+  'w08-refused-out-of-stock-before-a-sold-out-event',
+  'w08-refused-sold-out-event-with-a-wrong-figure',
+  'w08-refused-event-cash-figure-changed',
+  'w08-refused-event-owed-with-no-method',
+]
+
 /** Every scenario the order route takes. */
-export const ORDER_SCENARIOS: readonly string[] = [...W06_SCENARIOS, ...W07_SCENARIOS]
+export const ORDER_SCENARIOS: readonly string[] = [...W06_SCENARIOS, ...W07_SCENARIOS, ...W08_SCENARIOS]
 
 const Q4 = 'W03-decisions Q4'
 const Q5 = 'W03-decisions Q5'
@@ -290,7 +351,10 @@ export const NOT_BUILT_SCENARIOS: Readonly<Record<string, readonly string[]>> = 
   'session-pass-on-the-reader': ['reader'],
   'membership-on-saved-card': ['card', 'membership'],
   'q3-buy-new-pass-with-a-membership': ['card', 'membership'],
-  'event-with-a-guest-in-cash': ['event'],
+  // An event beside a membership bought in the same basket stays not built as a whole until W13.
+  'w08-event-with-a-membership-bought-in-cash': ['membership'],
+  'event-at-member-price-with-a-new-membership': ['card', 'membership'],
+  'promo-on-an-event': ['promo_code'],
   'promo-on-a-booking': ['promo_code'],
   'promo-on-a-product': ['promo_code'],
   'store-credit-covers-everything': ['store_credit'],

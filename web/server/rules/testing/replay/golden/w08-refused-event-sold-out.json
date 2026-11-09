@@ -1,0 +1,13 @@
+{
+  "scenario": "w08-refused-event-sold-out",
+  "results": [
+    {
+      "success": false,
+      "stage": "event",
+      "reason": "event_full",
+      "message": "Not enough places are left on this event (or it has just gone off sale)."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

@@ -151,6 +151,7 @@ describe('the quote shadow, through the real routes', () => {
     'w06-refused-cash-figure-changed',
     'w06-refused-cash-not-confirmed',
     'w06-refused-cash-but-nothing-owed',
+    'w08-refused-event-cash-figure-changed',
   ])
 
   describe.each(scenarios.map((s) => s.name))('%s', (name) => {
@@ -640,13 +641,14 @@ describe('the quote shadow, through the real routes', () => {
 
         it("the shadow's key lists are exactly the keys the read-back returns, section by section", async () => {
           let rows: Rows | undefined
-          await run(byName(EVERY_KIND), changing((data) => {
+          // W08's every kind: W07's with an event, so every section has a row.
+          await run(byName('w08-every-kind-in-cash'), changing((data) => {
             rows = data.rows
             return data
           }))
           const shadow = (await import(/* @vite-ignore */ path.join(backendDir, 'shared/orderQuoteShadow.ts'))) as { ORDER_ROWS_KEYS: Record<string, readonly string[]> }
           const keys = (value: unknown) => Object.keys(value as object).sort()
-          const all = rows as Rows & { lines: unknown[]; booking: { seats: unknown[]; addons: unknown[] } }
+          const all = rows as Rows & { lines: unknown[]; booking: { seats: unknown[]; addons: unknown[] }; event_booking: { attendees: unknown[] } }
           const sections: Record<string, unknown> = {
             rows: all,
             order: all.order,
@@ -659,6 +661,8 @@ describe('the quote shadow, through the real routes', () => {
             pass: all.session_passes[0],
             giftCard: all.gift_cards[0],
             customerAddress: all.customer_address,
+            eventBooking: all.event_booking,
+            attendee: all.event_booking.attendees[0],
           }
           expect(Object.keys(shadow.ORDER_ROWS_KEYS).sort()).toEqual(Object.keys(sections).sort())
           for (const [section, value] of Object.entries(sections)) {
@@ -728,6 +732,112 @@ describe('the quote shadow, through the real routes', () => {
         } finally {
           await failCustomers(false)
         }
+      })
+    })
+
+    describe('W08: what an event writes', () => {
+      type Attendee = Record<string, unknown> & { name: string; email: string | null; date_of_birth: string | null; unit_price: number }
+      type EventBookingRows = Record<string, unknown> & { event_places_booked: number; attendees: Attendee[] }
+      type W08Body = { ok: boolean; data?: { order: Record<string, unknown>; rows: Record<string, unknown> & { event_booking: EventBookingRows | null } } }
+      /** The real Worker, with the dry run's rows or answer changed. */
+      const changing = (change: (data: NonNullable<W08Body['data']>) => NonNullable<W08Body['data']>) => async (call: WorkerCall) => {
+        const answer = await realWorker(call)
+        if (call.path !== DRY_RUN_PATH) return answer
+        const body = answer.data as W08Body
+        return { data: { ...body, data: body.data && change(body.data) } }
+      }
+      /** The dry run's event booking changed by `change`. */
+      const changingTheEvent = (change: (booking: EventBookingRows) => EventBookingRows) =>
+        changing((data) => ({ ...data, rows: { ...data.rows, event_booking: data.rows.event_booking && change(data.rows.event_booking) } }))
+      const WORST = 'w08-worst-basket'
+      const EVENT = 'event-with-a-guest-in-cash'
+      // Every attendee's name, email and date of birth in the worst basket, and its address.
+      const ATTENDEE_TEXT = ['Sam Test', 'Alex Guest', 'Bea Guest', 'sam@example.com', 'alex@example.com', 'bea@example.com', '1990-01-01', 'Mill Lane']
+
+      it('an event order is a match, and no attendee name, email or date of birth reaches parity_log', async () => {
+        const { dryRunRows } = await run(byName(WORST))
+        expect(dryRunRows).toEqual([{ action: DRY_RUN, matches: true, diff: null, old_result: null, new_result: { timing: expect.anything() } }])
+        for (const text of ATTENDEE_TEXT) expect(JSON.stringify(dryRunRows)).not.toContain(text)
+      })
+
+      it('a different name, email or date of birth is compared and not kept: only whether they matched', async () => {
+        for (const change of [
+          (a: Attendee, i: number) => (i === 1 ? { ...a, name: 'Somebody Else' } : a),
+          (a: Attendee, i: number) => (i === 2 ? { ...a, email: 'someone@example.com' } : a),
+          (a: Attendee, i: number) => (i === 0 ? { ...a, date_of_birth: '1991-09-09' } : a),
+        ]) {
+          const { dryRunRows } = await run(byName(WORST), changingTheEvent((booking) => ({ ...booking, attendees: booking.attendees.map(change) })))
+          expect(dryRunRows.map((row) => row.matches)).toEqual([false])
+          expect(dryRunRows[0]?.diff).toEqual([])
+          expect(dryRunRows[0]?.new_result).toMatchObject({ freeTextMatches: false })
+          for (const text of [...ATTENDEE_TEXT, 'Somebody Else', 'someone@example.com', '1991-09-09']) expect(JSON.stringify(dryRunRows)).not.toContain(text)
+        }
+      })
+
+      it('an email or a date of birth that is there on one side only shows as just that, with neither value', async () => {
+        const { dryRunRows } = await run(byName(WORST), changingTheEvent((booking) => ({ ...booking, attendees: booking.attendees.map((a, i) => (i === 0 ? { ...a, email: null, date_of_birth: null } : a)) })))
+        expect(dryRunRows[0]?.diff).toEqual([
+          { path: 'rows.event_booking.attendees.0.date_of_birth', oldValue: '<set>', newValue: null },
+          { path: 'rows.event_booking.attendees.0.email', oldValue: '<set>', newValue: null },
+        ])
+        for (const text of ATTENDEE_TEXT) expect(JSON.stringify(dryRunRows)).not.toContain(text)
+      })
+
+      it("the event's places, an attendee's price and the attendees' order are compared", async () => {
+        const places = await run(byName(EVENT), changingTheEvent((booking) => ({ ...booking, event_places_booked: 3 })))
+        expect(places.dryRunRows[0]?.diff).toEqual([{ path: 'rows.event_booking.event_places_booked', oldValue: 2, newValue: 3 }])
+        const price = await run(byName(EVENT), changingTheEvent((booking) => ({ ...booking, attendees: booking.attendees.map((a, i) => (i === 1 ? { ...a, unit_price: 30 } : a)) })))
+        expect(price.dryRunRows[0]?.diff).toEqual([{ path: 'rows.event_booking.attendees.1.unit_price', oldValue: 40, newValue: 30 }])
+        const reversed = await run(byName(EVENT), changingTheEvent((booking) => ({ ...booking, attendees: [...booking.attendees].reverse() })))
+        expect(reversed.dryRunRows[0]?.diff?.map((d) => d.path)).toContain('rows.event_booking.attendees.0.attendee_type')
+      })
+
+      it('an event booking missing from either the rows or the answer is caught', async () => {
+        const rows = await run(byName(EVENT), changing((data) => ({ ...data, rows: { ...data.rows, event_booking: null } })))
+        expect(rows.dryRunRows.map((row) => row.matches)).toEqual([false])
+        expect(rows.dryRunRows[0]?.diff?.map((d) => d.path)).toEqual(['rows.event_booking'])
+        const answer = await run(byName(EVENT), changing((data) => ({ ...data, order: { ...data.order, eventBookingId: null } })))
+        expect(answer.dryRunRows[0]?.diff).toEqual([{ path: 'result.hasEventBooking', oldValue: true, newValue: false }])
+        for (const text of ATTENDEE_TEXT) expect(JSON.stringify([...rows.dryRunRows, ...answer.dryRunRows])).not.toContain(text)
+      })
+
+      it("an event refusal's words, which name the attendee, are compared and not kept", async () => {
+        const { dryRunRows, quoteRows } = await run(byName('w08-refused-event-account-holder-with-no-date-of-birth'))
+        expect(dryRunRows.map((row) => row.matches)).toEqual([true])
+        expect(quoteRows.map((row) => row.matches)).toEqual([true])
+        expect(JSON.stringify([...dryRunRows, ...quoteRows])).not.toContain('Sam Test')
+      })
+
+      it('keys this version does not know, in the event booking and on each attendee, are dropped unread and counted', async () => {
+        const { dryRunRows } = await run(
+          byName(WORST),
+          changingTheEvent((booking) => ({
+            ...booking,
+            emergency_contact: 'Ali Friend 07700 900123',
+            attendees: booking.attendees.map((a) => ({ ...a, phone: '07700 900123', dietary_note: 'Ali Friend' })),
+          }))
+        )
+        // One on the booking, two on each of three attendees.
+        expect(dryRunRows).toEqual([{ action: DRY_RUN, matches: true, diff: null, old_result: null, new_result: { timing: expect.anything(), droppedKeys: 7 } }])
+        for (const text of [...ATTENDEE_TEXT, 'Ali Friend', '07700 900123', 'emergency_contact', 'dietary_note', 'phone']) expect(JSON.stringify(dryRunRows)).not.toContain(text)
+      })
+
+      it('the publish-then-deploy window: a Worker from before W08 (no event booking in its rows or answer) leaves one false row per order, with no values in it', async () => {
+        // Release rule (W07 review B1): this staff app is published first, so until the Worker is
+        // deployed its dry run answers in W07's shape. An event is NOT_BUILT there, so records nothing.
+        const olderWorker = changing((data) => {
+          const rows: Record<string, unknown> = { ...data.rows }
+          delete rows['event_booking']
+          const order: Record<string, unknown> = { ...data.order }
+          delete order['eventBookingId']
+          return { ...data, order, rows: rows as typeof data.rows }
+        })
+        const placed = await run(byName('cash-booking-two-guests-addon'), olderWorker)
+        expect(placed.dryRunRows.map((row) => row.matches)).toEqual([false])
+        expect(placed.dryRunRows[0]?.diff).toEqual([{ path: 'rows.event_booking', oldValue: null }])
+        for (const text of ['Sam Test', 'Alex Guest', 'sam@example.com', '1990-01-01']) expect(JSON.stringify(placed.dryRunRows)).not.toContain(text)
+        const refused = await run(byName('refused-session-full'), olderWorker)
+        expect(refused.dryRunRows.map((row) => row.matches)).toEqual([true])
       })
     })
 

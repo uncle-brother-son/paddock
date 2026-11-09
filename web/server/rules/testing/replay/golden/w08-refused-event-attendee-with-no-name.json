@@ -1,0 +1,13 @@
+{
+  "scenario": "w08-refused-event-attendee-with-no-name",
+  "results": [
+    {
+      "success": false,
+      "stage": "event",
+      "reason": "event_attendee_name_required",
+      "message": "Every attendee needs a name."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

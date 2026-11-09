@@ -1,17 +1,20 @@
 // New in W06, until W16: what an order wrote, for the dry run and the staff app's shadow to compare.
-// W07 adds what products, postage, passes, gift cards and the delivery address write.
+// W07 adds what products, postage, passes, gift cards and the delivery address write; W08 what an
+// event writes.
 import 'server-only'
 import type { OrderRows } from '@/contracts'
 import type { Queryable } from '@/server/db'
 
 /**
- * Everything an order in W06's and W07's scope writes, read back by its id: the order, its lines in
+ * Everything an order in W06's to W08's scope writes, read back by its id: the order, its lines in
  * the order the app reads them, the booking with its seats and add-ons, and what the order's claims
  * left (the session's places, the pass's sessions, each add-on credit's membership, the credit
  * period's use); from W07 also each variant's stock and the ledger rows naming the order, the passes
- * and gift cards its lines issued, and the customer's own address after it. Ids the two sides write
- * differently (a gift card's, a pass's, the pass a booking bought in the same order is paid with) are
- * read as what they point at, and a gift card's code only as whether it has the app's format. One JSON value, so both drivers read it the same way.
+ * and gift cards its lines issued, and the customer's own address after it; from W08 the event booking
+ * the event line points at, the event's places after the claim and the attendees in place order. Ids
+ * the two sides write differently (a gift card's, a pass's, the pass a booking bought in the same
+ * order is paid with) are read as what they point at, and a gift card's code only as whether it has
+ * the app's format. One JSON value, so both drivers read it the same way.
  *
  * The staff app's shadow (backend/paddock/shared/orderQuoteShadow.ts) runs this same text on the
  * old order, and a test holds the two copies word for word: change both, or neither. Retool binds
@@ -20,7 +23,8 @@ import type { Queryable } from '@/server/db'
 export const ORDER_ROWS_SQL = `
 WITH o AS (SELECT * FROM orders WHERE id = $1),
 l AS (SELECT oli.* FROM order_line_items oli JOIN o ON oli.order_id = o.id),
-b AS (SELECT bk.* FROM bookings bk WHERE bk.id = (SELECT l.booking_id FROM l WHERE l.booking_id IS NOT NULL ORDER BY l.created_at, l.id LIMIT 1))
+b AS (SELECT bk.* FROM bookings bk WHERE bk.id = (SELECT l.booking_id FROM l WHERE l.booking_id IS NOT NULL ORDER BY l.created_at, l.id LIMIT 1)),
+eb AS (SELECT x.* FROM event_bookings x WHERE x.id = (SELECT l.event_booking_id FROM l WHERE l.item_type = 'event' ORDER BY l.created_at, l.id LIMIT 1))
 SELECT json_build_object(
   'order', (SELECT json_build_object(
     'order_total', o.order_total, 'discount_amount', o.discount_amount, 'promo_code', o.promo_code,
@@ -85,7 +89,18 @@ SELECT json_build_object(
     FROM l JOIN gift_cards g ON g.id = l.gift_card_id),
   'customer_address', (SELECT json_build_object(
     'line1', c.address_line1, 'line2', c.address_line2, 'city', c.city, 'postcode', c.postcode, 'country', c.country)
-    FROM customers c WHERE c.id = (SELECT o.customer_id FROM o))
+    FROM customers c WHERE c.id = (SELECT o.customer_id FROM o)),
+  'event_booking', (SELECT json_build_object(
+    'event_id', eb.event_id, 'status', eb.status, 'places', eb.places, 'account_holder_attending', eb.account_holder_attending,
+    'price_paid', eb.price_paid, 'created_by_staff_id', eb.created_by_staff_id,
+    'guests_over_18_confirmed', eb.guests_over_18_confirmed_at IS NOT NULL,
+    'for_the_order_customer', eb.customer_id = (SELECT o.customer_id FROM o),
+    'event_places_booked', e.places_booked,
+    'attendees', (SELECT COALESCE(json_agg(json_build_object(
+      'attendee_type', a.attendee_type, 'name', a.name, 'email', a.email, 'date_of_birth', a.date_of_birth,
+      'unit_price', a.unit_price, 'price_level', a.price_level) ORDER BY a.created_at, a.id), '[]'::json)
+      FROM event_attendees a WHERE a.event_booking_id = eb.id))
+    FROM eb JOIN events e ON e.id = eb.event_id)
 ) AS rows
 `
 

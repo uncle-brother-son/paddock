@@ -7,13 +7,15 @@ import { insert } from '@/server/rules/testing/database'
 import type { Recording } from '@/server/rules/testing/replay/compare'
 import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment, type Scenario } from '@/server/rules/testing/replay/harness'
 import { newOrderSide, oldResult, orderInput, postOrder, type OrderAnswer } from '@/server/rules/testing/replay/order-side'
-import { ID, mo, memberCredit, paidSeat, sam, seed, seedCorePass, whileFailing, type WriteFailure } from '@/server/rules/testing/replay/scenarios'
+import { ID, liftOnSaleCheck, mo, memberCredit, paidSeat, restoreOnSaleCheck, sam, seed, seedCorePass, whileFailing, type WriteFailure } from '@/server/rules/testing/replay/scenarios'
 import { herdWaitMessage } from './failure-messages'
 import { GIFT_CARD_CODE_FORMAT } from './gift-card-code'
 import type { BasketFacts } from './load-basket'
 import { readOrderRows } from './order-rows'
 import { refusalCode, refusalDetails } from './order-refusal'
 import { dryRunOrder, GIFT_CARD_CODE_TRIES, placeOrder } from './place-order'
+import { orderRefusal } from './order-refusal'
+import { eventFullRefusal } from './basket-event'
 import { writeBooking, type BookingToWrite, type SeatToWrite } from './write-booking'
 
 // T1 on PGlite with the live schema and the replay seed, through the real routes. The parity proof
@@ -76,6 +78,25 @@ const worstBasket = {
   giftCard: { giftCardTypeId: ID.giftCardType, amount: 10, fulfillmentMethod: 'shipping' },
   ...savedAddress,
   payment: cash(119.95),
+}
+
+// W08's baskets
+const bea = { name: 'Bea Guest', email: 'bea@example.com' }
+const samAttending = { ...sam, isAccountHolder: true }
+const eventPlaces = (attendees: Array<Record<string, unknown>>) => ({ eventId: ID.event, accountHolderAttending: true, guestsOver18Confirmed: true, attendees })
+const eventAlone = { customerId: ID.customer, event: eventPlaces([samAttending]), payment: cash(40) }
+const eventWithAGuest = { customerId: ID.customer, event: eventPlaces([samAttending, { ...alex, isAccountHolder: false }]), payment: cash(80) }
+/** An event beside a booking and a product: the order statement claims stock before the places. */
+const eventBesideOthers = { customerId: ID.customer, booking: paidSeat(), products: [soap], event: eventPlaces([samAttending, { ...alex, isAccountHolder: false }]), payment: cash(124) }
+/** The brief's worst basket for W08: an event for three, a booking for two with an add-on, a shipped product, a shipped gift card and postage. */
+const eventWorstBasket = {
+  customerId: ID.customer,
+  booking: { ...paidSeat([sam, alex]), addons: [{ ...towel, redemptionSource: 'paid' }] },
+  products: [candle],
+  giftCard: { giftCardTypeId: ID.giftCardType, amount: 10, fulfillmentMethod: 'shipping' },
+  event: eventPlaces([samAttending, { ...alex, isAccountHolder: false }, { ...bea, isAccountHolder: false }]),
+  ...savedAddress,
+  payment: cash(199.95),
 }
 
 /** One order through the new route, on a fresh seed, with `prepare` run first. */
@@ -422,6 +443,28 @@ describe('before anything is touched', () => {
       expect(result.body.ok).toBe(true)
       expect(statements).toEqual(expected)
     })
+
+    // W08: the event's places, its booking, its attendees and its line are in the order's statement
+    // too, so an event costs nothing more, whatever else the basket holds.
+    it.each([
+      ['an event for one', eventAlone, NO_BOOKING],
+      ['an event with a guest', eventWithAGuest, NO_BOOKING],
+      ['an event beside a booking and a product', eventBesideOthers, ROUTE],
+      ['the worst basket: an event for three, a booking for two with an add-on, a shipped product, a shipped gift card and postage', eventWorstBasket, ROUTE],
+    ])('W08, %s', async (_, params, expected) => {
+      await freshSeed()
+      const { result, statements } = await counting(() => postOrder(orderInput(params)))
+      expect(result.body.ok).toBe(true)
+      expect(statements).toEqual(expected)
+    })
+
+    it('W08, a sold-out event stops after the facts, as any refusal', async () => {
+      await freshSeed()
+      await db.query('UPDATE events SET places_booked = capacity WHERE id = $1', [ID.event])
+      const { result, statements } = await counting(() => postOrder(orderInput(eventAlone)))
+      expect(refusalOf(result)).toMatchObject({ code: 'EVENT_SOLD_OUT', reason: 'event_full' })
+      expect(statements).toEqual(['SELECT id,', 'INSERT INTO', 'BEGIN; SELECT', 'SELECT s.id', 'WITH london', 'ROLLBACK', 'UPDATE api_idempotency'])
+    })
   })
 })
 
@@ -557,6 +600,11 @@ describe('the audit rows', () => {
       },
       { action: 'order.paid', details: { method: 'cash', collected: 48 } },
     ])
+  })
+
+  it('W08: name the event booking', async () => {
+    const { recording } = await placeThrough(eventWithAGuest)
+    expect(recording.tables['audit_log']?.added[0]).toMatchObject({ action: 'order.create', details: { eventBookingId: 'event_bookings#1', bookingId: null, orderTotal: 80 } })
   })
 })
 
@@ -823,6 +871,9 @@ describe('gift card codes (W03-plan 2.4 item 3)', () => {
     ...savedAddress,
     payment: cash(134),
   }
+  // W08a (W08 review S1): the collision tests carry an event for two (£80), so they prove the places claim
+  // waits on the gift card's go and the event booking is written only from the claimed row.
+  const boughtWithAnEvent = { ...bought, event: eventPlaces([samAttending, { ...alex, isAccountHolder: false }]), payment: cash(214) }
 
   it('a new code has the app\'s format, and is the one written', async () => {
     const { recording, answer } = await placeThrough(giftCardInCash)
@@ -834,13 +885,17 @@ describe('gift card codes (W03-plan 2.4 item 3)', () => {
 
   it('a code already taken is skipped and another drawn, in the same transaction: every row written once', async () => {
     const codes = codesInTurn('SEEDCARD', 'PWC-ABCDEFGH')
-    const { recording, value, error } = await directly(bought, codes.next)
+    const { recording, value, error } = await directly(boughtWithAnEvent, codes.next)
     expect(error).toBeUndefined()
     expect(codes.asked()).toBe(2)
     expect(value).toMatchObject({ giftCardCode: 'PWC-ABCDEFGH' })
     expect(recording.tables['gift_cards']?.added).toHaveLength(1)
     expect(recording.tables['orders']?.added).toHaveLength(1)
-    expect(recording.tables['order_line_items']?.added.map((line) => line['item_type'])).toEqual(['product', 'session_pass', 'gift_card', 'postage'])
+    expect(recording.tables['order_line_items']?.added.map((line) => line['item_type'])).toEqual(['event', 'product', 'session_pass', 'gift_card', 'postage'])
+    // The places are claimed once (not again on the retry) and the booking comes only from that claim.
+    expect(recording.tables['events']?.changed).toEqual([{ id: ID.event, places_booked: [0, 2] }])
+    expect(recording.tables['event_bookings']?.added).toHaveLength(1)
+    expect(recording.tables['event_attendees']?.added).toHaveLength(2)
     expect(recording.tables['product_variants']?.changed).toEqual([{ id: ID.variant, stock_quantity: [5, 3] }])
     expect(recording.tables['stock_adjustments']?.added).toHaveLength(1)
     expect(recording.tables['customer_session_passes']?.added).toHaveLength(1)
@@ -858,12 +913,14 @@ describe('gift card codes (W03-plan 2.4 item 3)', () => {
 
   it('a collision inside the dry run: it reads back one gift card of the right format, and nothing is kept', async () => {
     const codes = codesInTurn('SEEDCARD', 'PWC-ABCDEFGH')
-    const { recording, value, error } = await directly(bought, codes.next, { dry: true })
+    const { recording, value, error } = await directly(boughtWithAnEvent, codes.next, { dry: true })
     expect(error).toBeUndefined()
     expect(codes.asked()).toBe(2)
-    const rows = (value as { rows: { gift_cards: Array<{ code_format_ok: boolean }>; stock: unknown } }).rows
+    const rows = (value as { rows: { gift_cards: Array<{ code_format_ok: boolean }>; stock: unknown; event_booking: { event_places_booked: number } | null } }).rows
     expect(rows.gift_cards).toEqual([expect.objectContaining({ code_format_ok: true, original_value: 60 })])
     expect(rows.stock).toEqual([{ variant_id: ID.variant, stock_quantity: 3 }])
+    // Claimed once inside the dry run: the event reads back two places booked, not four.
+    expect(rows.event_booking?.event_places_booked).toBe(2)
     expect(recording.tables).toEqual({})
   })
 })
@@ -1025,6 +1082,213 @@ describe('for the Worker step (W07): the old createOrder when a write after the 
     expect(Object.keys(recording.tables).sort()).toEqual(['product_variants'])
 
     const worker = await placeThrough(basket, undefined, (steps) => whileFailing(db, putBackFails, () => whileFailing(db, giftCardFails, steps)))
+    expect(worker.answer.body).toMatchObject({ ok: false, error: { code: 'INTERNAL' } })
+    expect(tablesTouched(worker.recording)).toEqual(['api_idempotency'])
+  })
+})
+
+// --- W08: events
+
+describe('B11 (W08): a database error writing any part of the event leaves nothing behind', () => {
+  const writes: Array<[string, WriteFailure]> = [
+    ['the places claimed', { table: 'events', event: 'UPDATE', when: 'true' }],
+    ['the event booking', { table: 'event_bookings', event: 'INSERT', when: 'true' }],
+    ['an attendee', { table: 'event_attendees', event: 'INSERT', when: "NEW.attendee_type = 'guest'" }],
+    ['the event line', { table: 'order_line_items', event: 'INSERT', when: "NEW.item_type = 'event'" }],
+  ]
+
+  it.each(writes)('the worst basket: %s fails', async (_, failure) => {
+    const { recording, answer } = await placeThrough(eventWorstBasket, undefined, (steps) => whileFailing(db, failure, steps))
+    expect(answer.body).toMatchObject({ ok: false, error: { code: 'INTERNAL', message: 'Something went wrong and the action may not have finished. Check before trying again.' } })
+    expect(JSON.stringify(answer.body)).not.toContain('connection lost')
+    expect(tablesTouched(recording)).toEqual(['api_idempotency'])
+  })
+})
+
+describe('the event claim refuses on its own, without the checks T1 runs first (W08)', () => {
+  /** A client whose basket facts show the event as `change` makes it, whatever is really there. */
+  function staleEventDb(change: (event: NonNullable<BasketFacts['event']>) => NonNullable<BasketFacts['event']>): Db {
+    const real = createPostgresDriver(environment.database.url)
+    const stale = (session: DriverSession): DriverSession => ({
+      async run<Row>(sql: string, params: Parameters<DriverSession['run']>[1]): Promise<Row[]> {
+        const rows = await session.run<Row>(sql, params)
+        if (!sql.trim().startsWith('WITH london')) return rows
+        return rows.map((row) => {
+          const facts = row as unknown as BasketFacts
+          return { ...facts, event: facts.event && change(facts.event) } as unknown as Row
+        })
+      },
+    })
+    const driver: DbDriver = {
+      ...stale(real),
+      async reserve() {
+        const reserved = await real.reserve()
+        return { ...stale(reserved), runScript: (sql) => reserved.runScript(sql), release: () => reserved.release() }
+      },
+      close: () => real.close(),
+    }
+    return createDb(driver)
+  }
+
+  async function placeWithStaleFacts(change: (event: NonNullable<BasketFacts['event']>) => NonNullable<BasketFacts['event']>, prepare: (target: Db) => Promise<void>) {
+    const staleDb = staleEventDb(change)
+    holder.db = staleDb
+    try {
+      return await placeThrough(eventBesideOthers, prepare)
+    } finally {
+      holder.db = db
+      await staleDb.close()
+    }
+  }
+
+  const eventFull = { status: 409, code: 'EVENT_SOLD_OUT', stage: 'event', reason: 'event_full', message: 'Not enough places are left on this event (or it has just gone off sale).' }
+  const onSale = (event: NonNullable<BasketFacts['event']>) => ({ ...event, block_reason: null, active: true, cancelled: false, places_left: 10 })
+
+  it("facts that think there is room: the claim's own guard refuses, with createOrder's reason and words, after the stock, nothing kept", async () => {
+    const { recording, answer } = await placeWithStaleFacts(onSale, async (target) => {
+      await target.query('UPDATE events SET places_booked = 9 WHERE id = $1', [ID.event])
+    })
+    expect(refusalOf(answer)).toEqual(eventFull)
+    expect(tablesTouched(recording)).toEqual(['api_idempotency'])
+  })
+
+  it("facts that think the event is on sale: the claim's guard refuses one that has gone off sale", async () => {
+    const { recording, answer } = await placeWithStaleFacts(onSale, async (target) => {
+      await target.query('UPDATE events SET active = false WHERE id = $1', [ID.event])
+    })
+    expect(refusalOf(answer)).toEqual(eventFull)
+    expect(tablesTouched(recording)).toEqual(['api_idempotency'])
+  })
+
+  it("facts that think the event is on: the claim's guard refuses one that has been cancelled, even one still marked on sale", async () => {
+    // Live, a cancelled event is never on sale (events_on_sale_complete), so the active guard would
+    // refuse it first; the check is lifted here so only the cancelled guard can.
+    try {
+      const { recording, answer } = await placeWithStaleFacts(onSale, async (target) => {
+        await liftOnSaleCheck(target)
+        await target.query("UPDATE events SET cancelled_at = '2026-11-09 12:00:00+00' WHERE id = $1", [ID.event])
+      })
+      expect(refusalOf(answer)).toEqual(eventFull)
+      expect(tablesTouched(recording)).toEqual(['api_idempotency'])
+    } finally {
+      await restoreOnSaleCheck(db)
+    }
+  })
+
+  it("a claim that finds the event gone: createOrder's reason, EVENT_SOLD_OUT, nothing kept", async () => {
+    const skipped: WriteFailure = { table: 'events', event: 'UPDATE', when: 'true' }
+    const { recording, answer } = await placeThrough(eventBesideOthers, undefined, (steps) => whileSkipping(db, skipped, steps))
+    expect(refusalOf(answer)).toEqual(eventFull)
+    expect(tablesTouched(recording)).toEqual(['api_idempotency'])
+  })
+
+  it.each([
+    ['the event booking', { table: 'event_bookings', event: 'INSERT', when: 'true' } as WriteFailure],
+    ['an attendee', { table: 'event_attendees', event: 'INSERT', when: "NEW.attendee_type = 'guest'" } as WriteFailure],
+  ])('%s written short: the order fails whole, with the safe words', async (_, skipped) => {
+    const { recording, answer } = await placeThrough(eventBesideOthers, undefined, (steps) => whileSkipping(db, skipped, steps))
+    expect(answer.body).toMatchObject({ ok: false, error: { code: 'INTERNAL' } })
+    expect(tablesTouched(recording)).toEqual(['api_idempotency'])
+  })
+
+  it('is the refusal the quote gives for a sold-out event, word for word', () => {
+    expect(orderRefusal(eventFullRefusal()).message).toBe(eventFull.message)
+  })
+})
+
+describe('what T1 writes for an event (W08)', () => {
+  it('the dry run reads back exactly what the real order then writes, for the worst basket', async () => {
+    let dry: unknown = null
+    let written: unknown = null
+    await replay(
+      environment,
+      {
+        name: 'dry run then order, W08',
+        seed,
+        async run() {
+          dry = (await dryRun(orderInput(eventWorstBasket))).body.data?.rows
+          const placed = await postOrder(orderInput(eventWorstBasket))
+          if (placed.body.ok) written = await readOrderRows(db, placed.body.data.orderId)
+        },
+      },
+      oldSide
+    )
+    expect(written).not.toBeNull()
+    expect(dry).toEqual(written)
+    expect(written).toMatchObject({
+      lines: [{ item_type: 'booking' }, { item_type: 'event', quantity: 3, unit_price: 40, line_total: 120 }, { item_type: 'product' }, { item_type: 'gift_card' }, { item_type: 'postage' }],
+      event_booking: {
+        event_id: ID.event,
+        status: 'confirmed',
+        places: 3,
+        account_holder_attending: true,
+        price_paid: 120,
+        created_by_staff_id: ID.staff,
+        guests_over_18_confirmed: true,
+        for_the_order_customer: true,
+        event_places_booked: 3,
+        attendees: [
+          { attendee_type: 'account_holder', name: 'Sam Test', email: 'sam@example.com', date_of_birth: '1990-01-01', unit_price: 40, price_level: 'public' },
+          { attendee_type: 'guest', name: 'Alex Guest', email: 'alex@example.com', date_of_birth: null, unit_price: 40, price_level: 'public' },
+          { attendee_type: 'guest', name: 'Bea Guest', email: 'bea@example.com', date_of_birth: null, unit_price: 40, price_level: 'public' },
+        ],
+      },
+    })
+  })
+
+  it("the answer names the event booking, in its contract and in createOrder's shape", async () => {
+    const { answer } = await placeThrough(eventWithAGuest)
+    expect(answer.body.ok).toBe(true)
+    if (!answer.body.ok) return
+    expect(placeOrderOutputSchema.safeParse(answer.body.data).success).toBe(true)
+    expect(answer.body.data).toMatchObject({ bookingId: null, eventBookingId: expect.any(String), payment: { method: 'cash', collected: 80, cardCharged: false } })
+    expect(oldResult(answer.body)).toEqual({
+      success: true,
+      orderId: answer.body.data.orderId,
+      eventBookingId: answer.body.data.eventBookingId,
+      cardCharged: false,
+      cardAmount: 80,
+      paymentMethodUsed: 'cash',
+    })
+  })
+
+  it('placed for a customer (the website, later), the booking names no member of staff', async () => {
+    const recording = await replay(
+      environment,
+      {
+        name: 'placed by the customer',
+        seed,
+        async run() {
+          await placeOrder(db, orderInput(eventAlone), { actor: { type: 'customer', id: ID.customer }, requestId: 'customer-test' })
+        },
+      },
+      oldSide
+    )
+    expect(recording.tables['event_bookings']?.added).toMatchObject([{ created_by_staff_id: null, customer_id: ID.customer, places: 1 }])
+  })
+
+  it('a membership bought beside an event is not built yet, before anything is written', async () => {
+    const { recording, answer } = await placeThrough({ ...eventAlone, membershipPlanId: ID.plan, membershipBillingFrequency: 'monthly', payment: { method: 'card' } })
+    expect(answer.body).toMatchObject({ ok: false, error: { code: 'NOT_BUILT', details: { notBuilt: ['card', 'membership'] } } })
+    expect(tablesTouched(recording)).toEqual(['api_idempotency'])
+  })
+})
+
+describe('for the Worker step (W08): the old createOrder when an attendee write fails after the places were claimed', () => {
+  // createOrder.ts claims the places at stage 21 (eventOrders.ts writeEventBooking), then writes the
+  // booking and one attendee per statement. A database error on an attendee rolls back by hand, and
+  // rollbackAll swallows a failed step: if giving the places back fails too, the places stay claimed
+  // with no booking, and staff see the database's raw words. T1 is one transaction: nothing is kept.
+  it('keeps the two places claimed, with no booking to show for them', async () => {
+    const releaseFails: WriteFailure = { table: 'events', event: 'UPDATE', when: 'NEW.places_booked < OLD.places_booked' }
+    const attendeeFails: WriteFailure = { table: 'event_attendees', event: 'INSERT', when: "NEW.attendee_type = 'guest'" }
+    const during = (steps: () => Promise<unknown>) => whileFailing(db, releaseFails, () => whileFailing(db, attendeeFails, steps))
+    const recording = await replay(environment, orderScenario(eventWithAGuest, undefined, during), oldSide)
+    expect(recording.results[0]).toEqual({ success: false, stage: 'validation', reason: 'unexpected_error', message: 'connection lost' })
+    expect(recording.tables['events']?.changed).toEqual([{ id: ID.event, places_booked: [0, 2] }])
+    expect(Object.keys(recording.tables).sort()).toEqual(['events'])
+
+    const worker = await placeThrough(eventWithAGuest, undefined, during)
     expect(worker.answer.body).toMatchObject({ ok: false, error: { code: 'INTERNAL' } })
     expect(tablesTouched(worker.recording)).toEqual(['api_idempotency'])
   })

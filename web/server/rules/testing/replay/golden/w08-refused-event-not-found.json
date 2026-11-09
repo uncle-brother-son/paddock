@@ -1,0 +1,13 @@
+{
+  "scenario": "w08-refused-event-not-found",
+  "results": [
+    {
+      "success": false,
+      "stage": "event",
+      "reason": "event_not_found",
+      "message": "That event no longer exists."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

@@ -1,0 +1,13 @@
+{
+  "scenario": "w08-refused-event-date-of-birth-not-a-date",
+  "results": [
+    {
+      "success": false,
+      "stage": "event",
+      "reason": "event_attendee_dob_invalid",
+      "message": "Sam Test's date of birth is not a valid date."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}
