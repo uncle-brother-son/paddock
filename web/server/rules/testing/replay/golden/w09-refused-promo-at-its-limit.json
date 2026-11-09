@@ -1,0 +1,13 @@
+{
+  "scenario": "w09-refused-promo-at-its-limit",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "promo_code_invalid",
+      "message": "Promo code \"ALLTEN\" cannot be used: That promo code has reached its maximum number of uses."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

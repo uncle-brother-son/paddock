@@ -1,0 +1,12 @@
+{
+  "scenario": "w09-refused-method-checked-before-the-gift-card",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "invalid_payment_method"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

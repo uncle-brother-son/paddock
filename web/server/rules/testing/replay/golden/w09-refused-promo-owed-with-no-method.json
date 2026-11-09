@@ -1,0 +1,13 @@
+{
+  "scenario": "w09-refused-promo-owed-with-no-method",
+  "results": [
+    {
+      "success": false,
+      "stage": "payment",
+      "reason": "payment_method_required",
+      "amountDueTotal": 36
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

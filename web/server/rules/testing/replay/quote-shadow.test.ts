@@ -87,8 +87,13 @@ describe('the quote shadow, through the real routes', () => {
   })
   afterAll(() => environment.stop())
 
-  /** Runs a scenario with `worker` standing in for the Worker, keeping what the shadow recorded. */
-  async function run(scenario: Scenario, worker: (call: WorkerCall) => Promise<{ data: unknown }> = realWorker) {
+  type DataQuery = (sql: string, params?: unknown[]) => Promise<{ data: unknown[] }>
+
+  /**
+   * Runs a scenario with `worker` standing in for the Worker, keeping what the shadow recorded.
+   * `data` wraps the old side's paddockData (W09: a read-back that takes its time).
+   */
+  async function run(scenario: Scenario, worker: (call: WorkerCall) => Promise<{ data: unknown }> = realWorker, data?: (query: DataQuery) => DataQuery) {
     let parity: ParityRow[] = []
     const actions: string[] = []
     quotes = []
@@ -97,6 +102,10 @@ describe('the quote shadow, through the real routes', () => {
       scenario,
       (db: Db, stripe: FakeStripe) => {
         const oldOne = oldSide(db, stripe)
+        if (data) {
+          const resource = (globalThis as unknown as { paddockData: { query: DataQuery } }).paddockData
+          vi.stubGlobal('paddockData', { query: data(resource.query) })
+        }
         const side = {
           ...oldOne,
           call(action: string, params: unknown) {
@@ -152,6 +161,10 @@ describe('the quote shadow, through the real routes', () => {
     'w06-refused-cash-not-confirmed',
     'w06-refused-cash-but-nothing-owed',
     'w08-refused-event-cash-figure-changed',
+    'w09-refused-promo-cash-figure-changed',
+    'w09-refused-cash-figure-before-the-store-credit-over-the-total',
+    'w09-refused-cash-figure-before-the-gift-card-over-the-total',
+    'w09-half-penny-store-credit',
   ])
 
   describe.each(scenarios.map((s) => s.name))('%s', (name) => {
@@ -249,8 +262,10 @@ describe('the quote shadow, through the real routes', () => {
       ['private and other items, fixed', 'q24-fixed-promo-on-private-and-other-items', PROMO.fixed, [booking, addon, product], 5],
       ['private and a membership, a big fixed code', 'q24-big-fixed-promo-on-private-and-a-membership', PROMO.big, [booking, product, membership], 150],
     ])('%s', async (_, scenario, code, lines, expected) => {
-      const { parity, recording } = await run(byName(scenario))
-      expect(parity.map((row) => row.matches)).toEqual([true])
+      const { quoteRows, dryRunRows, recording } = await run(byName(scenario))
+      expect(quoteRows.map((row) => row.matches)).toEqual([true])
+      // W09: a promo order the Worker can take (in cash, or nothing owed) has its dry run compared too.
+      expect(dryRunRows.map((row) => row.matches)).toEqual(ORDER_SCENARIOS.includes(scenario) ? [true] : [])
 
       const answer = await realWorker({
         path: '/api/v1/staff/promo-codes/validate',
@@ -306,7 +321,7 @@ describe('the quote shadow, through the real routes', () => {
     })
   })
 
-  describe('finding 12: an order that has already taken 20 seconds', () => {
+  describe('finding 12: an order that has already taken 40 seconds (20 until W09)', () => {
     const slowing = (ms: number) => async (call: WorkerCall) => {
       if (call.path === QUOTE_PATH) vi.setSystemTime(Date.now() + ms)
       return realWorker(call)
@@ -314,13 +329,13 @@ describe('the quote shadow, through the real routes', () => {
 
     it('is answered straight away: nothing is read back or recorded, and the order is as it would be', async () => {
       const name = 'cash-booking-two-guests-addon'
-      const { parity, recording } = await run(byName(name), slowing(20_001))
+      const { parity, recording } = await run(byName(name), slowing(40_001))
       expect(parity).toEqual([])
       expect(compareRecordings(withoutGoneNumbers(readGolden(name) as Recording), withoutShadowRows(recording))).toEqual([])
     })
 
     it('under the limit it still compares', async () => {
-      const { quoteRows, dryRunRows } = await run(byName('cash-booking-two-guests-addon'), slowing(19_000))
+      const { quoteRows, dryRunRows } = await run(byName('cash-booking-two-guests-addon'), slowing(39_000))
       expect(quoteRows.map((row) => row.matches)).toEqual([true])
       expect(dryRunRows.map((row) => row.matches)).toEqual([true])
     })
@@ -536,9 +551,9 @@ describe('the quote shadow, through the real routes', () => {
       })
     })
 
-    it('an order that has already taken 20 seconds is answered straight away: neither is recorded', async () => {
+    it('an order that has already taken 40 seconds is answered straight away: neither is recorded', async () => {
       const { parity, recording } = await run(byName(CASH), async (call) => {
-        if (call.path === DRY_RUN_PATH) vi.setSystemTime(Date.now() + 20_001)
+        if (call.path === DRY_RUN_PATH) vi.setSystemTime(Date.now() + 40_001)
         return realWorker(call)
       })
       expect(parity).toEqual([])
@@ -641,11 +656,17 @@ describe('the quote shadow, through the real routes', () => {
 
         it("the shadow's key lists are exactly the keys the read-back returns, section by section", async () => {
           let rows: Rows | undefined
-          // W08's every kind: W07's with an event, so every section has a row.
+          let w09Rows: Rows | undefined
+          // W08's every kind: W07's with an event, so every section has a row; W09's worst basket for the promo, store credit and gift card paid with.
           await run(byName('w08-every-kind-in-cash'), changing((data) => {
             rows = data.rows
             return data
           }))
+          await run(byName('w09-worst-basket'), changing((data) => {
+            w09Rows = data.rows
+            return data
+          }))
+          const paid = w09Rows as Rows & { promo_redemptions: unknown[]; store_credit_transactions: unknown[]; gift_card_redemptions: unknown[] }
           const shadow = (await import(/* @vite-ignore */ path.join(backendDir, 'shared/orderQuoteShadow.ts'))) as { ORDER_ROWS_KEYS: Record<string, readonly string[]> }
           const keys = (value: unknown) => Object.keys(value as object).sort()
           const all = rows as Rows & { lines: unknown[]; booking: { seats: unknown[]; addons: unknown[] }; event_booking: { attendees: unknown[] } }
@@ -663,7 +684,11 @@ describe('the quote shadow, through the real routes', () => {
             customerAddress: all.customer_address,
             eventBooking: all.event_booking,
             attendee: all.event_booking.attendees[0],
+            promoRedemption: paid.promo_redemptions[0],
+            storeCreditTransaction: paid.store_credit_transactions[0],
+            giftCardRedemption: paid.gift_card_redemptions[0],
           }
+          expect(keys(paid)).toEqual(keys(all))
           expect(Object.keys(shadow.ORDER_ROWS_KEYS).sort()).toEqual(Object.keys(sections).sort())
           for (const [section, value] of Object.entries(sections)) {
             expect(value, `${section} is in the basket`).toBeTruthy()
@@ -838,6 +863,195 @@ describe('the quote shadow, through the real routes', () => {
         for (const text of ['Sam Test', 'Alex Guest', 'sam@example.com', '1990-01-01']) expect(JSON.stringify(placed.dryRunRows)).not.toContain(text)
         const refused = await run(byName('refused-session-full'), olderWorker)
         expect(refused.dryRunRows.map((row) => row.matches)).toEqual([true])
+      })
+    })
+
+    describe('W09: what a promo code, store credit and a gift card write', () => {
+      type W09Rows = Record<string, unknown> & {
+        promo_redemptions: Array<Record<string, unknown>>
+        store_credit_transactions: Array<Record<string, unknown> & { note: string | null }>
+        gift_card_redemptions: Array<Record<string, unknown>>
+        customer_store_credit_balance: number | null
+        booking: (Record<string, unknown> & { seats: unknown }) | null
+        event_booking: (Record<string, unknown> & { attendees: unknown }) | null
+      }
+      type W09Body = { ok: boolean; data?: { order: Record<string, unknown> & { payment: Record<string, unknown> }; rows: W09Rows } }
+      /** The real Worker, with the dry run's rows or answer changed. */
+      const changing = (change: (data: NonNullable<W09Body['data']>) => NonNullable<W09Body['data']>) => async (call: WorkerCall) => {
+        const answer = await realWorker(call)
+        if (call.path !== DRY_RUN_PATH) return answer
+        const body = answer.data as W09Body
+        return { data: { ...body, data: body.data && change(body.data) } }
+      }
+      const changingRows = (change: (rows: W09Rows) => W09Rows) => changing((data) => ({ ...data, rows: change(data.rows) }))
+      const WORST = 'w09-worst-basket'
+      const NOTE = 'Store credit redeemed at checkout.'
+      // The worst basket's free text, its store credit note, and gift card codes: the seed card's own, and the start of the app's.
+      const FREE_TEXT = ['Sam Test', 'Alex Guest', 'Bea Guest', 'sam@example.com', 'alex@example.com', 'bea@example.com', '1990-01-01', 'Mill Lane', 'HX7', NOTE, 'SEEDCARD', 'PWC-']
+      const notIn = (rows: ParityRow[], texts: readonly string[]) => {
+        for (const text of texts) expect(JSON.stringify(rows)).not.toContain(text)
+      }
+      const UNREADABLE = "The dry run's rows were not in a shape this version can read, so they were not compared."
+      const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+      /** The old side's two read-backs (the quote's figures and ORDER_ROWS_SQL), both of the order by its id. */
+      const isReadBack = (sql: string) => /^\s*WITH o AS \(SELECT \* FROM orders WHERE id = \$1\)/.test(sql)
+
+      it('the worst basket is a match, quote and dry run, and nothing of it reaches parity_log', async () => {
+        const { dryRunRows, quoteRows } = await run(byName(WORST))
+        expect(dryRunRows).toEqual([{ action: DRY_RUN, matches: true, diff: null, old_result: null, new_result: { timing: expect.anything() } }])
+        expect(quoteRows.map((row) => row.matches)).toEqual([true])
+        notIn([...dryRunRows, ...quoteRows], FREE_TEXT)
+      })
+
+      it('on a difference both sides are kept whole: the note only as whether it was there, no gift card code anywhere', async () => {
+        const { dryRunRows } = await run(byName(WORST), changingRows((rows) => ({ ...rows, customer_store_credit_balance: 19 })))
+        expect(dryRunRows.map((row) => row.matches)).toEqual([false])
+        expect(dryRunRows[0]?.diff).toEqual([{ path: 'rows.customer_store_credit_balance', oldValue: 20, newValue: 19 }])
+        expect(dryRunRows[0]?.old_result).toMatchObject({
+          rows: {
+            store_credit_transactions: [{ amount: -10, balance_after: 20, note: '<set>' }],
+            gift_card_redemptions: [{ gift_card_id: ID.giftCard, amount_used: 20, card_remaining_balance: 20, card_redeemed: false }],
+            promo_redemptions: [{ promo_code_id: ID.promoFixed, discount_amount: 5 }],
+          },
+        })
+        expect(dryRunRows[0]?.new_result).toMatchObject({ freeTextMatches: true })
+        notIn(dryRunRows, FREE_TEXT)
+      })
+
+      it('a different store credit note is compared and not kept: only whether it matched', async () => {
+        const other = 'Goodwill for Sam Test [ref 6f1c2d3e-0000-4000-8000-000000000000]'
+        const { dryRunRows } = await run(byName(WORST), changingRows((rows) => ({ ...rows, store_credit_transactions: rows.store_credit_transactions.map((t) => ({ ...t, note: other })) })))
+        expect(dryRunRows.map((row) => row.matches)).toEqual([false])
+        expect(dryRunRows[0]?.diff).toEqual([])
+        expect(dryRunRows[0]?.new_result).toMatchObject({ freeTextMatches: false })
+        notIn(dryRunRows, [...FREE_TEXT, other, 'Goodwill', '6f1c2d3e'])
+        const gone = await run(byName(WORST), changingRows((rows) => ({ ...rows, store_credit_transactions: rows.store_credit_transactions.map((t) => ({ ...t, note: null })) })))
+        expect(gone.dryRunRows[0]?.diff).toEqual([{ path: 'rows.store_credit_transactions.0.note', oldValue: '<set>', newValue: null }])
+        notIn(gone.dryRunRows, FREE_TEXT)
+      })
+
+      it("each figure is compared: the promo's use, the store credit taken, the gift card used and its balance after, and the customer's balance", async () => {
+        const cases: Array<[(rows: W09Rows) => W09Rows, string]> = [
+          [(rows) => ({ ...rows, promo_redemptions: rows.promo_redemptions.map((r) => ({ ...r, discount_amount: 4 })) }), 'rows.promo_redemptions.0.discount_amount'],
+          [(rows) => ({ ...rows, promo_redemptions: [] }), 'rows.promo_redemptions.0'],
+          [(rows) => ({ ...rows, store_credit_transactions: rows.store_credit_transactions.map((t) => ({ ...t, amount: -9 })) }), 'rows.store_credit_transactions.0.amount'],
+          [(rows) => ({ ...rows, store_credit_transactions: rows.store_credit_transactions.map((t) => ({ ...t, balance_after: 21 })) }), 'rows.store_credit_transactions.0.balance_after'],
+          [(rows) => ({ ...rows, gift_card_redemptions: rows.gift_card_redemptions.map((r) => ({ ...r, amount_used: 19 })) }), 'rows.gift_card_redemptions.0.amount_used'],
+          [(rows) => ({ ...rows, gift_card_redemptions: rows.gift_card_redemptions.map((r) => ({ ...r, card_remaining_balance: 21 })) }), 'rows.gift_card_redemptions.0.card_remaining_balance'],
+          [(rows) => ({ ...rows, gift_card_redemptions: rows.gift_card_redemptions.map((r) => ({ ...r, card_redeemed: true })) }), 'rows.gift_card_redemptions.0.card_redeemed'],
+          [(rows) => ({ ...rows, customer_store_credit_balance: 30 }), 'rows.customer_store_credit_balance'],
+        ]
+        for (const [change, path] of cases) {
+          const { dryRunRows } = await run(byName(WORST), changingRows(change))
+          expect(dryRunRows.map((row) => row.matches), path).toEqual([false])
+          expect(dryRunRows[0]?.diff?.map((d) => d.path), path).toEqual([path])
+          notIn(dryRunRows, FREE_TEXT)
+        }
+      })
+
+      it('keys this version does not know, on each new row, are dropped unread and counted, a gift card code among them', async () => {
+        const { dryRunRows } = await run(
+          byName(WORST),
+          changingRows((rows) => ({
+            ...rows,
+            promo_redemptions: rows.promo_redemptions.map((r) => ({ ...r, typed_as: 'fiver for Sam Test' })),
+            store_credit_transactions: rows.store_credit_transactions.map((t) => ({ ...t, customer_email: 'sam@example.com' })),
+            gift_card_redemptions: rows.gift_card_redemptions.map((r) => ({ ...r, code: 'SEEDCARD' })),
+          }))
+        )
+        expect(dryRunRows).toEqual([{ action: DRY_RUN, matches: true, diff: null, old_result: null, new_result: { timing: expect.anything(), droppedKeys: 3 } }])
+        notIn(dryRunRows, [...FREE_TEXT, 'typed_as', 'customer_email', 'fiver'])
+      })
+
+      it('W08 review L1: a list in a shape this version cannot read records a false row with no values, not nothing', async () => {
+        const unreadable: Array<[string, (rows: W09Rows) => W09Rows]> = [
+          ['attendees as text', (rows) => ({ ...rows, event_booking: rows.event_booking && { ...rows.event_booking, attendees: 'Sam Test, Alex Guest' } })],
+          ['an attendee that is not a row', (rows) => ({ ...rows, event_booking: rows.event_booking && { ...rows.event_booking, attendees: [null, 'Alex Guest'] } })],
+          ['seats as text', (rows) => ({ ...rows, booking: rows.booking && { ...rows.booking, seats: 'Sam Test' } })],
+          ['store credit as text', (rows) => ({ ...rows, store_credit_transactions: NOTE as unknown as W09Rows['store_credit_transactions'] })],
+          ['a store credit row that is not a row', (rows) => ({ ...rows, store_credit_transactions: [null] as unknown as W09Rows['store_credit_transactions'] })],
+          ['gift card redemptions as text', (rows) => ({ ...rows, gift_card_redemptions: 'SEEDCARD' as unknown as W09Rows['gift_card_redemptions'] })],
+          ['a promo redemption that is a number', (rows) => ({ ...rows, promo_redemptions: [7] as unknown as W09Rows['promo_redemptions'] })],
+          ['the lines as null', (rows) => ({ ...rows, lines: null })],
+          // Not a list: knownRowsOnly keeps it, and reducing its free text throws, which is caught the same way.
+          ['the order as null', (rows) => ({ ...rows, order: null })],
+        ]
+        for (const [what, change] of unreadable) {
+          const { dryRunRows, quoteRows, recording } = await run(byName(WORST), changingRows(change))
+          expect(dryRunRows, what).toEqual([{ action: DRY_RUN, matches: false, diff: [{ path: '', oldValue: null, newValue: UNREADABLE }], old_result: null, new_result: { timing: expect.anything() } }])
+          expect(quoteRows.map((row) => row.matches), what).toEqual([true])
+          notIn(dryRunRows, FREE_TEXT)
+          expect(compareRecordings(withoutGoneNumbers(readGolden(WORST) as Recording), withoutShadowRows(recording)), what).toEqual([])
+        }
+      })
+
+      it('the publish-then-deploy window: a Worker from before W09 leaves one false row per order, whose only value is the balance', async () => {
+        // Release rule (W07 review B1): this staff app is published first, so until the Worker is deployed its
+        // dry run answers in W08's shape: none of the four new sections, and no gift card or store credit in the
+        // answer. A promo, store credit or gift card order is NOT_BUILT there, so records nothing.
+        const olderWorker = changing((data) => {
+          const rows: Record<string, unknown> = { ...data.rows }
+          for (const key of ['promo_redemptions', 'store_credit_transactions', 'gift_card_redemptions', 'customer_store_credit_balance']) delete rows[key]
+          const payment: Record<string, unknown> = { ...data.order.payment }
+          delete payment['giftCardApplied']
+          delete payment['storeCreditApplied']
+          return { ...data, order: { ...data.order, payment }, rows: rows as W09Rows }
+        })
+        const placed = await run(byName('cash-booking-two-guests-addon'), olderWorker)
+        expect(placed.dryRunRows.map((row) => row.matches)).toEqual([false])
+        expect(placed.dryRunRows[0]?.diff).toEqual([
+          { path: 'rows.customer_store_credit_balance', oldValue: 30 },
+          { path: 'rows.gift_card_redemptions', oldValue: [] },
+          { path: 'rows.promo_redemptions', oldValue: [] },
+          { path: 'rows.store_credit_transactions', oldValue: [] },
+        ])
+        expect(placed.dryRunRows[0]?.new_result).toMatchObject({ freeTextMatches: true })
+        notIn(placed.dryRunRows, ['Sam Test', 'Alex Guest', 'sam@example.com', '1990-01-01'])
+        const refused = await run(byName('refused-session-full'), olderWorker)
+        expect(refused.dryRunRows.map((row) => row.matches)).toEqual([true])
+      })
+
+      describe('the 40-second skip (W03-decisions, "W08 release calls")', () => {
+        // Date is faked in the replay; the waits here are real, so they are timed with performance.now().
+        it('an order that finished just inside 40 seconds is still read back and recorded, and answered within 5 seconds of it', { timeout: 30_000 }, async () => {
+          const started = performance.now()
+          const { quoteRows, dryRunRows } = await run(
+            byName(CASH),
+            async (call) => {
+              if (call.path === DRY_RUN_PATH) vi.setSystemTime(Date.now() + 39_900)
+              if (call.path === PARITY_PATH) await sleep(1_800)
+              return realWorker(call)
+            },
+            (query) => async (sql, params) => {
+              if (isReadBack(sql)) await sleep(2_800)
+              return query(sql, params)
+            }
+          )
+          const elapsed = performance.now() - started
+          expect(quoteRows.map((row) => row.matches)).toEqual([true])
+          expect(dryRunRows.map((row) => row.matches)).toEqual([true])
+          // 2.8 s to read back and 1.8 s to record, side by side for the quote and the dry run.
+          expect(elapsed).toBeGreaterThan(4_600)
+          expect(elapsed).toBeLessThan(5_500)
+        })
+
+        it('with neither the read-back nor the record answering, it gives up after 3 + 2 seconds, and the order is as it would be', { timeout: 30_000 }, async () => {
+          const started = performance.now()
+          const { parity, recording } = await run(
+            byName(CASH),
+            async (call) => {
+              if (call.path === DRY_RUN_PATH) vi.setSystemTime(Date.now() + 39_900)
+              if (call.path === PARITY_PATH) return new Promise(() => undefined)
+              return realWorker(call)
+            },
+            (query) => async (sql, params) => (isReadBack(sql) ? new Promise(() => undefined) : query(sql, params))
+          )
+          const elapsed = performance.now() - started
+          expect(parity).toEqual([])
+          expect(elapsed).toBeGreaterThan(4_900)
+          expect(elapsed).toBeLessThan(6_000)
+          expect(compareRecordings(withoutGoneNumbers(readGolden(CASH) as Recording), withoutShadowRows(recording))).toEqual([])
+        })
       })
     })
 

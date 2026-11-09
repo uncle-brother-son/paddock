@@ -13,7 +13,8 @@ import { GIFT_CARD_CODE_FORMAT } from './gift-card-code'
 import type { BasketFacts } from './load-basket'
 import { readOrderRows } from './order-rows'
 import { refusalCode, refusalDetails } from './order-refusal'
-import { dryRunOrder, GIFT_CARD_CODE_TRIES, placeOrder } from './place-order'
+import { dryRunOrder, GIFT_CARD_CODE_TRIES, placeOrder, recordedPaymentMethod, STORE_CREDIT_NOTE } from './place-order'
+import { amountChangedRefusal } from './amounts'
 import { orderRefusal } from './order-refusal'
 import { eventFullRefusal } from './basket-event'
 import { writeBooking, type BookingToWrite, type SeatToWrite } from './write-booking'
@@ -97,6 +98,17 @@ const eventWorstBasket = {
   event: eventPlaces([samAttending, { ...alex, isAccountHolder: false }, { ...bea, isAccountHolder: false }]),
   ...savedAddress,
   payment: cash(199.95),
+}
+
+// W09's baskets
+const promoBooking = { customerId: ID.customer, booking: paidSeat([sam, alex]), promoCode: 'ALLTEN', payment: cash(36) }
+const storeCreditOnly = { customerId: ID.customer, products: [soap], payment: { storeCredit: { amount: 24 } } }
+const giftCardOnly = { customerId: ID.customer, products: [soap], payment: { giftCard: { giftCardId: ID.giftCard, amount: 24 } } }
+/** W08's worst basket with FIVER, £20 on the seed's gift card and £10 of Sam's £30 store credit: £164.95 in cash. */
+const w09WorstBasket = {
+  ...eventWorstBasket,
+  promoCode: 'FIVER',
+  payment: { ...cash(164.95), giftCard: { giftCardId: ID.giftCard, amount: 20 }, storeCredit: { amount: 10 } },
 }
 
 /** One order through the new route, on a fresh seed, with `prepare` run first. */
@@ -358,7 +370,8 @@ describe('before anything is touched', () => {
 
   it('NOT_BUILT: only the staff member is looked up and the answer kept against the key', async () => {
     await freshSeed()
-    const { result, statements } = await counting(() => postOrder(orderInput({ customerId: ID.customer, booking: paidSeat(), promoCode: 'ALLTEN', payment: cash(18) })))
+    // W09 built promo codes, so a card payment is what isn't built here.
+    const { result, statements } = await counting(() => postOrder(orderInput({ customerId: ID.customer, booking: paidSeat(), promoCode: 'ALLTEN', payment: { method: 'card' } })))
     expect(result.status).toBe(501)
     expect(statements).toEqual(['SELECT id,', 'INSERT INTO', 'UPDATE api_idempotency'])
   })
@@ -463,6 +476,28 @@ describe('before anything is touched', () => {
       await db.query('UPDATE events SET places_booked = capacity WHERE id = $1', [ID.event])
       const { result, statements } = await counting(() => postOrder(orderInput(eventAlone)))
       expect(refusalOf(result)).toMatchObject({ code: 'EVENT_SOLD_OUT', reason: 'event_full' })
+      expect(statements).toEqual(['SELECT id,', 'INSERT INTO', 'BEGIN; SELECT', 'SELECT s.id', 'WITH london', 'ROLLBACK', 'UPDATE api_idempotency'])
+    })
+
+    // W09: the promo's use, the store credit and the gift card are in the order's statement, and their
+    // locks in the lock statement, so none of them costs a round trip.
+    it.each([
+      ['a booking with a promo code', promoBooking, ROUTE],
+      ['store credit only', storeCreditOnly, NO_BOOKING],
+      ['a gift card only', giftCardOnly, NO_BOOKING],
+      ['the worst basket: W08\'s with a promo code, a gift card, store credit and cash', w09WorstBasket, ROUTE],
+    ])('W09, %s', async (_, params, expected) => {
+      await freshSeed()
+      const { result, statements } = await counting(() => postOrder(orderInput(params)))
+      expect(result.body.ok).toBe(true)
+      expect(statements).toEqual(expected)
+    })
+
+    it('W09, an inactive promo code stops after the facts, as any refusal', async () => {
+      await freshSeed()
+      await db.query('UPDATE promo_codes SET active = false WHERE id = $1', [ID.promoPercent])
+      const { result, statements } = await counting(() => postOrder(orderInput(promoBooking)))
+      expect(refusalOf(result)).toMatchObject({ code: 'VALIDATION', reason: 'promo_code_invalid' })
       expect(statements).toEqual(['SELECT id,', 'INSERT INTO', 'BEGIN; SELECT', 'SELECT s.id', 'WITH london', 'ROLLBACK', 'UPDATE api_idempotency'])
     })
   })
@@ -695,6 +730,7 @@ describe('writeBooking refuses on its own, without the checks T1 runs first', ()
     email: 'sam@example.com',
     dateOfBirth: '1990-01-01',
     unitPrice: '20.00',
+    discount: 0,
     payBy,
   })
   const paid: BookingToWrite = {
@@ -1289,6 +1325,416 @@ describe('for the Worker step (W08): the old createOrder when an attendee write 
     expect(Object.keys(recording.tables).sort()).toEqual(['events'])
 
     const worker = await placeThrough(eventWithAGuest, undefined, during)
+    expect(worker.answer.body).toMatchObject({ ok: false, error: { code: 'INTERNAL' } })
+    expect(tablesTouched(worker.recording)).toEqual(['api_idempotency'])
+  })
+})
+
+// --- W09: promo codes, store credit and gift cards used to pay
+
+/** One input straight to the route (the confirmed figures as sent), on a fresh seed, with `prepare` run first. */
+async function placeInput(input: unknown, prepare?: (db: Db) => Promise<void>) {
+  const answers: OrderAnswer[] = []
+  const recording = await replay(
+    environment,
+    {
+      name: 'w09 input',
+      async seed(seedDb, stripe) {
+        await seed(seedDb, stripe)
+        await prepare?.(seedDb)
+      },
+      async run() {
+        answers.push(await postOrder(input))
+      },
+    },
+    oldSide
+  )
+  return { recording, answer: answers[0] as OrderAnswer }
+}
+
+/** A client whose basket facts are changed by `change`, whatever is really there. */
+function staleFactsDb(change: (facts: BasketFacts) => BasketFacts): Db {
+  const real = createPostgresDriver(environment.database.url)
+  const stale = (session: DriverSession): DriverSession => ({
+    async run<Row>(sql: string, params: Parameters<DriverSession['run']>[1]): Promise<Row[]> {
+      const rows = await session.run<Row>(sql, params)
+      if (!sql.trim().startsWith('WITH london')) return rows
+      return rows.map((row) => change(row as unknown as BasketFacts) as unknown as Row)
+    },
+  })
+  const driver: DbDriver = {
+    ...stale(real),
+    async reserve() {
+      const reserved = await real.reserve()
+      return { ...stale(reserved), runScript: (sql) => reserved.runScript(sql), release: () => reserved.release() }
+    },
+    close: () => real.close(),
+  }
+  return createDb(driver)
+}
+
+async function placeWithStaleFacts(params: Record<string, unknown>, change: (facts: BasketFacts) => BasketFacts, prepare: (target: Db) => Promise<void>) {
+  const staleDb = staleFactsDb(change)
+  holder.db = staleDb
+  try {
+    return await placeThrough(params, prepare)
+  } finally {
+    holder.db = db
+    await staleDb.close()
+  }
+}
+
+describe('what orders.payment_method records (W03-decisions Q9)', () => {
+  it.each([
+    ['store credit only', undefined, 0, 0, 24, 'store_credit'],
+    ['a gift card only', undefined, 0, 24, 0, 'gift_card'],
+    ['a gift card and store credit', undefined, 0, 14, 10, 'split'],
+    ['store credit and cash', 'cash', 15, 0, 5, 'cash'],
+    ['a gift card and cash', 'cash', 15, 5, 0, 'split'],
+    ['a gift card, store credit and cash', 'cash', 20, 10, 10, 'split'],
+    ['cash alone', 'cash', 20, 0, 0, 'cash'],
+    ['nothing owed', undefined, 0, 0, 0, null],
+    ['cash chosen with nothing owed', 'cash', 0, 0, 0, null],
+  ] as const)('%s: %s', (_, method, collected, giftCard, storeCredit, expected) => {
+    expect(recordedPaymentMethod(method, collected, giftCard, storeCredit)).toBe(expected)
+  })
+
+  it('through the route, on the order and in the answer', async () => {
+    for (const [params, method] of [
+      [storeCreditOnly, 'store_credit'],
+      [giftCardOnly, 'gift_card'],
+      [{ ...storeCreditOnly, payment: { storeCredit: { amount: 10 }, giftCard: { giftCardId: ID.giftCard, amount: 14 } } }, 'split'],
+    ] as const) {
+      const { recording, answer } = await placeThrough(params)
+      expect(answer.body).toMatchObject({ ok: true, data: { payment: { method, collected: 0, cardCharged: false } } })
+      expect(recording.tables['orders']?.added).toMatchObject([{ payment_method: method, payment_status: 'paid' }])
+    }
+  })
+})
+
+describe('the confirmed amounts, for every method with no Stripe step (W03-plan 2.7)', () => {
+  const words = (figure: string) => `The amount due has changed to £${figure}. Check it with the customer and confirm again.`
+
+  describe('amountChangedRefusal on its own', () => {
+    const figures = { amountDue: 24, toCollect: 0 }
+    it('an amount due not sent is not checked; one sent is, to half a penny either way', () => {
+      expect(amountChangedRefusal(undefined, {}, figures)).toBeNull()
+      expect(amountChangedRefusal(undefined, { amountDue: 24.005 }, figures)).toBeNull()
+      expect(amountChangedRefusal(undefined, { amountDue: 23.995 }, figures)).toBeNull()
+      expect(amountChangedRefusal(undefined, { amountDue: 24.006 }, figures)).toEqual({ reason: 'amount_changed', message: words('24.00') })
+      expect(amountChangedRefusal(undefined, { amountDue: 30 }, figures)).toEqual({ reason: 'amount_changed', message: words('24.00') })
+    })
+
+    it('what the method takes now: missing counts as nothing; cash is left to the cash check', () => {
+      expect(amountChangedRefusal(undefined, { toCollect: 5 }, figures)).toEqual({ reason: 'amount_changed', message: words('0.00') })
+      expect(amountChangedRefusal(undefined, undefined, { amountDue: 24, toCollect: 4 })).toEqual({ reason: 'amount_changed', message: words('4.00') })
+      expect(amountChangedRefusal('cash', { toCollect: 1 }, { amountDue: 24, toCollect: 4 })).toBeNull()
+      // £9.00 against £8.995: adding-up noise, not a change.
+      expect(amountChangedRefusal('reader', { toCollect: 9, amountDue: 9 }, { amountDue: 8.995, toCollect: 8.995 })).toBeNull()
+    })
+  })
+
+  const coveredByGiftCard = { customerId: ID.customer, products: [soap], payment: { giftCard: { giftCardId: ID.giftCard, amount: 24 } } }
+
+  it('figures that still hold: placed', async () => {
+    const { answer } = await placeInput({ ...coveredByGiftCard, confirmed: { amountDue: 24, toCollect: 0 } })
+    expect(answer.body).toMatchObject({ ok: true, data: { payment: { method: 'gift_card', giftCardApplied: 24 } } })
+  })
+
+  it("an amount due that changed: amount_changed with Q11's words and the new figure, TOTAL_CHANGED, nothing kept", async () => {
+    const { recording, answer } = await placeInput({ ...coveredByGiftCard, confirmed: { amountDue: 30, toCollect: 0 } })
+    expect(refusalOf(answer)).toEqual({ status: 409, code: 'TOTAL_CHANGED', stage: 'payment', reason: 'amount_changed', message: words('24.00'), amountDueTotal: 24 })
+    expect(answer.body.ok ? null : answer.body.error.message).toBe(words('24.00'))
+    expect(tablesTouched(recording)).toEqual(['api_idempotency'])
+  })
+
+  it('the order of checks: the cash figure first, whatever else changed', async () => {
+    const { answer } = await placeInput({ customerId: ID.customer, products: [soap], payment: { method: 'cash' }, confirmed: { toCollect: 20, amountDue: 30 } })
+    expect(refusalOf(answer)).toMatchObject({ reason: 'cash_amount_changed', amountDueTotal: 24 })
+  })
+
+  it('then a gift card or store credit over the total, never cut down to fit', async () => {
+    const giftOver = await placeInput({ ...coveredByGiftCard, payment: { giftCard: { giftCardId: ID.giftCard, amount: 30 } }, confirmed: { amountDue: 30 } })
+    expect(refusalOf(giftOver.answer)).toMatchObject({ reason: 'gift_card_amount_exceeds_total', amountDueTotal: 24 })
+    const creditOver = await placeInput({ ...coveredByGiftCard, payment: { storeCredit: { amount: 25 } }, confirmed: { amountDue: 25 } })
+    expect(refusalOf(creditOver.answer)).toMatchObject({ reason: 'store_credit_amount_exceeds_total', amountDueTotal: 24 })
+    expect(tablesTouched(creditOver.recording)).toEqual(['api_idempotency'])
+  })
+
+  it('then payment_method_required, then amount_changed last', async () => {
+    const owed = await placeInput({ ...coveredByGiftCard, payment: { storeCredit: { amount: 10 } }, confirmed: { amountDue: 30 } })
+    expect(refusalOf(owed.answer)).toMatchObject({ reason: 'payment_method_required', amountDueTotal: 24 })
+    const stale = await placeInput({ ...coveredByGiftCard, payment: { storeCredit: { amount: 24 } }, confirmed: { amountDue: 24, toCollect: 5 } })
+    expect(refusalOf(stale.answer)).toMatchObject({ reason: 'amount_changed', message: words('0.00') })
+  })
+
+  it('the shadow and the replay send no amount due, as the old createOrder took none: not checked', async () => {
+    const { answer } = await placeThrough(storeCreditOnly)
+    expect(answer.body.ok).toBe(true)
+  })
+})
+
+describe('B11 (W09): a database error writing the promo, the store credit or the gift card leaves nothing behind', () => {
+  const writes: Array<[string, WriteFailure]> = [
+    ['the order, with its promo code', { table: 'orders', event: 'INSERT', when: 'true' }],
+    ["the promo code's use", { table: 'promo_code_redemptions', event: 'INSERT', when: 'true' }],
+    ['the store credit claimed (and the address saved)', { table: 'customers', event: 'UPDATE', when: 'true' }],
+    ['the store credit ledger row', { table: 'store_credit_transactions', event: 'INSERT', when: 'true' }],
+    ['the gift card claimed', { table: 'gift_cards', event: 'UPDATE', when: 'true' }],
+    ["the gift card's redemption row", { table: 'gift_card_redemptions', event: 'INSERT', when: 'true' }],
+    ['a discounted seat', { table: 'booking_guests', event: 'INSERT', when: "NEW.guest_type = 'additional_guest'" }],
+    ['a discounted place', { table: 'event_attendees', event: 'INSERT', when: "NEW.attendee_type = 'guest'" }],
+  ]
+
+  it.each(writes)('the worst basket: %s fails', async (_, failure) => {
+    const { recording, answer } = await placeThrough(w09WorstBasket, undefined, (steps) => whileFailing(db, failure, steps))
+    expect(answer.body).toMatchObject({ ok: false, error: { code: 'INTERNAL', message: 'Something went wrong and the action may not have finished. Check before trying again.' } })
+    expect(JSON.stringify(answer.body)).not.toContain('connection lost')
+    expect(tablesTouched(recording)).toEqual(['api_idempotency'])
+  })
+})
+
+describe('the claims refuse on their own, without the checks T1 runs first (W09)', () => {
+  /** The refusal's details, and the words staff see. */
+  const refused = (reason: string, message: string) => ({ details: { status: 400, code: 'VALIDATION', stage: 'payment', reason }, message })
+  const outcome = (answer: OrderAnswer) => ({ details: refusalOf(answer), message: answer.body.ok ? null : answer.body.error.message })
+
+  it("store credit: facts that think there is enough; the claim's own guard refuses with createOrder's reason, nothing kept", async () => {
+    const { recording, answer } = await placeWithStaleFacts(
+      storeCreditOnly,
+      (facts) => ({ ...facts, customer: facts.customer && { ...facts.customer, store_credit_balance: '100.00' } }),
+      async (target) => {
+        await target.query(`UPDATE customers SET store_credit_balance = '5.00' WHERE id = $1`, [ID.customer])
+      }
+    )
+    expect(outcome(answer)).toEqual(refused('store_credit_insufficient', 'The customer no longer has enough store credit remaining.'))
+    expect(tablesTouched(recording)).toEqual(['api_idempotency'])
+  })
+
+  it('store credit: a claim that writes nothing though the balance is there is store_credit_failed, with its words', async () => {
+    const skipped: WriteFailure = { table: 'customers', event: 'UPDATE', when: 'true' }
+    const { recording, answer } = await placeThrough(storeCreditOnly, undefined, (steps) => whileSkipping(db, skipped, steps))
+    expect(outcome(answer)).toEqual(refused('store_credit_failed', 'Applying the store credit failed — no payment was taken.'))
+    expect(tablesTouched(recording)).toEqual(['api_idempotency'])
+  })
+
+  const cardThinksItIsFine = (facts: BasketFacts): BasketFacts => ({
+    ...facts,
+    redeemed_gift_card: facts.redeemed_gift_card && { ...facts.redeemed_gift_card, remaining_balance: '40.00', voided: false, expiry_date: '2030-01-01' },
+  })
+  const cardWords = refused('gift_card_insufficient_or_invalid', 'That gift card no longer has enough balance remaining.')
+
+  it.each([
+    ['has too little left', `UPDATE gift_cards SET remaining_balance = '5.00' WHERE id = $1`],
+    ['has been voided', 'UPDATE gift_cards SET voided = true WHERE id = $1'],
+    ['expired yesterday', `UPDATE gift_cards SET expiry_date = '2026-11-09' WHERE id = $1`],
+  ])("a gift card the facts think is fine but %s: the claim's guard refuses with createOrder's reason, nothing kept", async (_, sql) => {
+    const { recording, answer } = await placeWithStaleFacts(giftCardOnly, cardThinksItIsFine, async (target) => {
+      await target.query(sql, [ID.giftCard])
+    })
+    expect(outcome(answer)).toEqual(cardWords)
+    expect(tablesTouched(recording)).toEqual(['api_idempotency'])
+  })
+
+  it('a gift card claim that writes nothing: the same', async () => {
+    const skipped: WriteFailure = { table: 'gift_cards', event: 'UPDATE', when: 'true' }
+    const { recording, answer } = await placeThrough(giftCardOnly, undefined, (steps) => whileSkipping(db, skipped, steps))
+    expect(outcome(answer)).toEqual(cardWords)
+    expect(tablesTouched(recording)).toEqual(['api_idempotency'])
+  })
+
+  it.each([
+    ["the promo code's use", { table: 'promo_code_redemptions', event: 'INSERT', when: 'true' } as WriteFailure, promoBooking],
+    ['the store credit ledger row', { table: 'store_credit_transactions', event: 'INSERT', when: 'true' } as WriteFailure, storeCreditOnly],
+    ["the gift card's redemption row", { table: 'gift_card_redemptions', event: 'INSERT', when: 'true' } as WriteFailure, giftCardOnly],
+  ])('%s written short: the order fails whole, with the safe words', async (_, skipped, params) => {
+    const { recording, answer } = await placeThrough(params, undefined, (steps) => whileSkipping(db, skipped, steps))
+    expect(answer.body).toMatchObject({ ok: false, error: { code: 'INTERNAL' } })
+    expect(tablesTouched(recording)).toEqual(['api_idempotency'])
+  })
+})
+
+describe("every W09 write waits on the gift card's go (W08 review S1)", () => {
+  // W08a's collision basket (a shipped £60 gift card, two soaps, a pass, the address saved and an event for
+  // two, £214), with FIVER, £20 on the seed's gift card and £10 of store credit: £179 in cash. The first
+  // code drawn is the seed card's own, SEEDCARD, so the first try writes nothing.
+  const everythingBought = {
+    ...giftCardInCash,
+    giftCard: { ...giftCardInCash.giftCard, fulfillmentMethod: 'shipping' },
+    products: [soap],
+    sessionPassTypeId: ID.passType,
+    ...savedAddress,
+    event: eventPlaces([samAttending, { ...alex, isAccountHolder: false }]),
+    promoCode: 'FIVER',
+    payment: { ...cash(179), giftCard: { giftCardId: ID.giftCard, amount: 20 }, storeCredit: { amount: 10 } },
+  }
+
+  it('a code already taken: the promo used, the store credit and the gift card claimed, each once', async () => {
+    const codes = codesInTurn('SEEDCARD', 'PWC-ABCDEFGH')
+    const { recording, value, error } = await directly(everythingBought, codes.next)
+    expect(error).toBeUndefined()
+    expect(codes.asked()).toBe(2)
+    expect(value).toMatchObject({ giftCardCode: 'PWC-ABCDEFGH', payment: { method: 'split', collected: 179, giftCardApplied: 20, storeCreditApplied: 10 } })
+    expect(recording.tables['orders']?.added).toMatchObject([{ promo_code: 'FIVER', discount_amount: '5.00', payment_method: 'split' }])
+    expect(recording.tables['promo_code_redemptions']?.added).toMatchObject([{ promo_code_id: ID.promoFixed, customer_id: ID.customer, discount_amount: '5.00' }])
+    expect(recording.tables['customers']?.changed).toMatchObject([{ id: ID.customer, store_credit_balance: ['30.00', '20.00'] }])
+    expect(recording.tables['store_credit_transactions']?.added).toMatchObject([{ amount: '-10.00', balance_after: '20.00', reason: 'redemption', order_id: 'orders#1', staff_id: ID.staff, note: STORE_CREDIT_NOTE }])
+    expect(recording.tables['gift_cards']?.changed).toMatchObject([{ id: ID.giftCard, remaining_balance: ['40.00', '20.00'] }])
+    expect(recording.tables['gift_cards']?.added).toHaveLength(1)
+    expect(recording.tables['gift_card_redemptions']?.added).toMatchObject([{ gift_card_id: ID.giftCard, order_id: 'orders#1', amount_used: '20.00' }])
+    expect(recording.tables['events']?.changed).toEqual([{ id: ID.event, places_booked: [0, 2] }])
+  })
+
+  it('inside the dry run: each read back once, and nothing kept', async () => {
+    const codes = codesInTurn('SEEDCARD', 'PWC-ABCDEFGH')
+    const { recording, value, error } = await directly(everythingBought, codes.next, { dry: true })
+    expect(error).toBeUndefined()
+    expect(codes.asked()).toBe(2)
+    const rows = (value as OrderDryRunOutput).rows
+    expect(rows.promo_redemptions).toEqual([{ promo_code_id: ID.promoFixed, for_the_order_customer: true, discount_amount: 5 }])
+    expect(rows.store_credit_transactions).toHaveLength(1)
+    expect(rows.gift_card_redemptions).toEqual([expect.objectContaining({ amount_used: 20, card_remaining_balance: 20 })])
+    expect(rows.customer_store_credit_balance).toBe(20)
+    expect(recording.tables).toEqual({})
+  })
+})
+
+describe('what T1 writes for a promo code, store credit and a gift card (W09)', () => {
+  it('the dry run reads back exactly what the real order then writes, for the worst basket', async () => {
+    let dry: unknown = null
+    let written: unknown = null
+    await replay(
+      environment,
+      {
+        name: 'dry run then order, W09',
+        seed,
+        async run() {
+          dry = (await dryRun(orderInput(w09WorstBasket))).body.data?.rows
+          const placed = await postOrder(orderInput(w09WorstBasket))
+          if (placed.body.ok) written = await readOrderRows(db, placed.body.data.orderId)
+        },
+      },
+      oldSide
+    )
+    expect(written).not.toBeNull()
+    expect(dry).toEqual(written)
+    expect(written).toMatchObject({
+      order: { order_total: 199.95, discount_amount: 5, promo_code: 'FIVER', payment_method: 'split', payment_status: 'paid' },
+      // FIVER over £180 of seats, the candle and the places (the towel on the booking is never a promo line):
+      // 55p a seat and on the candle, £1.11 a place, the 2p left over on the last place.
+      lines: [
+        { item_type: 'booking', unit_price: 40, discount_amount: 1.1 },
+        { item_type: 'event', line_total: 120, discount_amount: 3.35 },
+        { item_type: 'product', discount_amount: 0.55 },
+        { item_type: 'gift_card', discount_amount: 0 },
+        { item_type: 'postage', discount_amount: 0 },
+      ],
+      booking: { price_paid: 38.9, seats: [{ unit_price: 19.45 }, { unit_price: 19.45 }] },
+      event_booking: { price_paid: 116.65, attendees: [{ unit_price: 38.89 }, { unit_price: 38.89 }, { unit_price: 38.87 }] },
+      promo_redemptions: [{ promo_code_id: ID.promoFixed, for_the_order_customer: true, discount_amount: 5 }],
+      store_credit_transactions: [
+        { amount: -10, balance_after: 20, reason: 'redemption', for_the_order_customer: true, for_a_booking: false, from_a_gift_card: false, staff_id: ID.staff, note: STORE_CREDIT_NOTE },
+      ],
+      gift_card_redemptions: [
+        { gift_card_id: ID.giftCard, amount_used: 20, for_a_booking: false, for_an_event_booking: false, card_remaining_balance: 20, card_redeemed: false, card_voided: false },
+      ],
+      customer_store_credit_balance: 20,
+    })
+  })
+
+  it("a gift card used up is marked redeemed; one partly used isn't (createOrder's rule)", async () => {
+    const usedUp = await placeThrough({ customerId: ID.customer, booking: paidSeat([sam, alex]), payment: { giftCard: { giftCardId: ID.giftCard, amount: 40 } } })
+    expect(usedUp.recording.tables['gift_cards']?.changed).toMatchObject([{ id: ID.giftCard, remaining_balance: ['40.00', '0.00'], redeemed_at: [null, '<set>'] }])
+    const partly = await placeThrough(giftCardOnly)
+    expect(partly.recording.tables['gift_cards']?.changed).toEqual([{ id: ID.giftCard, remaining_balance: ['40.00', '16.00'] }])
+    // Brief W09a (W09 review C1): a card already marked redeemed keeps the date it was first used up, as
+    // createOrder kept it. The recording shows every timestamp as '<set>', so read the date itself.
+    const firstRedeemed = '2026-10-01 12:00:00+00'
+    const again = await placeThrough(giftCardOnly, async (seedDb) => {
+      await seedDb.query(`UPDATE gift_cards SET remaining_balance = '24.00', redeemed_at = $1 WHERE id = $2`, [firstRedeemed, ID.giftCard])
+    })
+    expect(again.answer.body.ok).toBe(true)
+    expect(again.recording.tables['gift_cards']?.changed).toEqual([{ id: ID.giftCard, remaining_balance: ['24.00', '0.00'] }])
+    const card = await db.query<{ kept: boolean }>(`SELECT redeemed_at = $1::timestamptz AS kept FROM gift_cards WHERE id = $2`, [firstRedeemed, ID.giftCard])
+    expect(card).toEqual([{ kept: true }])
+  })
+
+  it('the audit rows name the promo code, the gift card and the store credit', async () => {
+    const { recording } = await placeThrough(w09WorstBasket)
+    expect(recording.tables['audit_log']?.added).toMatchObject([
+      {
+        action: 'order.create',
+        details: { promo: { code: 'FIVER', discount: 5 }, giftCard: { giftCardId: ID.giftCard, amount: 20 }, storeCredit: 10, amountDue: 194.95, toCollect: 164.95 },
+      },
+      { action: 'order.paid', details: { method: 'split', collected: 164.95, giftCard: 20, storeCredit: 10 } },
+    ])
+  })
+
+  it("the answer names the gift card and store credit taken, and comes back to createOrder's shape", async () => {
+    const { answer } = await placeThrough(w09WorstBasket)
+    expect(answer.body.ok).toBe(true)
+    if (!answer.body.ok) return
+    expect(placeOrderOutputSchema.safeParse(answer.body.data).success).toBe(true)
+    expect(answer.body.data.payment).toEqual({ method: 'split', collected: 164.95, cardCharged: false, giftCardApplied: 20, storeCreditApplied: 10 })
+    expect(oldResult(answer.body)).toMatchObject({ cardAmount: 164.95, giftCardRedeemedAmount: 20, storeCreditRedeemedAmount: 10, paymentMethodUsed: 'split' })
+    const giftOnly = await placeThrough(giftCardOnly)
+    const shape = oldResult(giftOnly.answer.body)
+    expect(shape).toMatchObject({ giftCardRedeemedAmount: 24, paymentMethodUsed: 'gift_card' })
+    expect(shape).not.toHaveProperty('storeCreditRedeemedAmount')
+  })
+
+  it('placed for a customer (the website, later), the store credit names no member of staff', async () => {
+    const recording = await replay(
+      environment,
+      {
+        name: 'store credit placed by the customer',
+        seed,
+        async run() {
+          await placeOrder(db, orderInput(storeCreditOnly), { actor: { type: 'customer', id: ID.customer }, requestId: 'customer-test' })
+        },
+      },
+      oldSide
+    )
+    expect(recording.tables['store_credit_transactions']?.added).toMatchObject([{ staff_id: null, amount: '-24.00', balance_after: '6.00' }])
+  })
+
+  it('a promo code beside a membership bought in the basket is the membership, not built yet', async () => {
+    const { recording, answer } = await placeThrough({ ...promoBooking, membershipPlanId: ID.plan, membershipBillingFrequency: 'monthly', payment: cash(54) })
+    expect(answer.body).toMatchObject({ ok: false, error: { code: 'NOT_BUILT', details: { notBuilt: ['membership'] } } })
+    expect(tablesTouched(recording)).toEqual(['api_idempotency'])
+  })
+})
+
+describe('for the Worker step (W09): the old createOrder when a claim write fails', () => {
+  // createOrder.ts claims the store credit and the gift card after its try block (stage 30,
+  // claimStoreCreditAndGiftCard), on the cash and saved-card paths. A database error there throws
+  // straight out: nothing is rolled back. The order stays pending, the stock stays taken, and the
+  // money already moved stays moved. T1 is one transaction: nothing is kept.
+  it('keeps the £10 of store credit and the £14 off the gift card, with a pending order and no redemption row', async () => {
+    const basket = { customerId: ID.customer, products: [soap], payment: { giftCard: { giftCardId: ID.giftCard, amount: 14 }, storeCredit: { amount: 10 } } }
+    const rowFails: WriteFailure = { table: 'gift_card_redemptions', event: 'INSERT', when: 'true' }
+    const thrown: unknown[] = []
+    const recording = await replay(
+      environment,
+      {
+        name: 'old claim fails',
+        seed,
+        async run({ call }) {
+          await whileFailing(db, rowFails, async () => {
+            await call('createOrder', basket).catch((err: unknown) => thrown.push(err))
+          })
+        },
+      },
+      oldSide
+    )
+    expect(String(thrown[0])).toContain('connection lost')
+    expect(recording.tables['orders']?.added).toMatchObject([{ payment_status: 'pending', order_total: '24.00' }])
+    expect(recording.tables['customers']?.changed).toMatchObject([{ id: ID.customer, store_credit_balance: ['30.00', '20.00'] }])
+    expect(recording.tables['gift_cards']?.changed).toMatchObject([{ id: ID.giftCard, remaining_balance: ['40.00', '26.00'] }])
+    expect(recording.tables['gift_card_redemptions']).toBeUndefined()
+    expect(recording.tables['product_variants']?.changed).toEqual([{ id: ID.variant, stock_quantity: [5, 3] }])
+
+    const worker = await placeThrough(basket, undefined, (steps) => whileFailing(db, rowFails, steps))
     expect(worker.answer.body).toMatchObject({ ok: false, error: { code: 'INTERNAL' } })
     expect(tablesTouched(worker.recording)).toEqual(['api_idempotency'])
   })

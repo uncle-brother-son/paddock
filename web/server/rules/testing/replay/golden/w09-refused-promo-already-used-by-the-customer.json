@@ -1,0 +1,13 @@
+{
+  "scenario": "w09-refused-promo-already-used-by-the-customer",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "promo_code_invalid",
+      "message": "Promo code \"ALLTEN\" cannot be used: This customer has already used that promo code."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

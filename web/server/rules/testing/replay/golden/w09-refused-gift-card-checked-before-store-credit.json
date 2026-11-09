@@ -1,0 +1,12 @@
+{
+  "scenario": "w09-refused-gift-card-checked-before-store-credit",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "gift_card_voided"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

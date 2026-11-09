@@ -1,0 +1,13 @@
+{
+  "scenario": "w09-refused-buy-new-promo-before-the-booking",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "promo_code_invalid",
+      "message": "Promo code \"NOSUCH\" does not exist."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

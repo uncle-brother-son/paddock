@@ -1,4 +1,5 @@
-// New in W06: the row locks that make an order's checks hold until it commits (W03-plan 2.4).
+// New in W06: the row locks that make an order's checks hold until it commits (W03-plan 2.4). W09
+// adds the promo code and the gift card used to pay.
 import 'server-only'
 import type { Tx } from '@/server/db'
 
@@ -22,6 +23,8 @@ export const LOCK_ORDER = [
 
 export interface LockTargets {
   customerId: string
+  /** The promo code as typed (trimmed), matched without case as the facts match it (W09). */
+  promoCode: string | null
   sessionId: string | null
   /** The membership whose session credit pays seat 1: its current credit period is locked. */
   creditMembershipId: string | null
@@ -32,6 +35,8 @@ export interface LockTargets {
   productVariantIds: readonly string[]
   /** The event whose places the order claims (W08). */
   eventId: string | null
+  /** The gift card used to pay (W09). Never the one bought in the same basket: that one is new. */
+  giftCardId: string | null
 }
 
 export interface HeldLocks {
@@ -44,6 +49,10 @@ export interface HeldLocks {
   variantIds: string[]
   /** The event, when it exists (W08). */
   eventId: string | null
+  /** The promo code's row, when the code exists (W09). */
+  promoCodeId: string | null
+  /** The gift card used to pay, when it exists (W09). */
+  giftCardId: string | null
 }
 
 /**
@@ -52,9 +61,10 @@ export interface HeldLocks {
  * its lock: the customer, then the session, then the credit period, then the pass, then the
  * memberships, sorted (a locking SELECT sorts before it locks), then the product variants, sorted the
  * same way (W07), so two orders taking the same variants in opposite basket order queue instead of
- * deadlocking, then the event (W08), so the places the facts count are current until commit. The test
- * on real Postgres proves the order by holding each row in turn. Steps not built yet (promo code, gift
- * card) join the chain in their place when their slice builds them.
+ * deadlocking, then the event (W08), so the places the facts count are current until commit. W09 adds
+ * the promo code after the customer and the gift card used to pay last, so the uses the facts count
+ * and the balance they read are current until commit too. The test on real Postgres proves the order
+ * by holding each row in turn.
  *
  * The credit period is locked in its own statement, before anything reads it, because Postgres only
  * re-checks a locked row that its holder changed: a guarded INSERT that waited for the lock would
@@ -64,13 +74,23 @@ export interface HeldLocks {
  * the old createBooking's FOR UPDATE OF p, as FOR UPDATE would, but not for an insert that only
  * points at the row (a booking's or an order's foreign key on the customer or the session), which
  * FOR UPDATE would hold up for the whole of T1.
+ *
+ * The promo code is the one row locked FOR UPDATE, for the reverse reason (W09). Its only claim is an
+ * insert that points at it: a promo_code_redemptions row. The old createOrder inserts its row, then
+ * counts (createOrder.ts, claimPromoRedemption), and can't see T1's row until T1 commits. FOR UPDATE
+ * makes that insert's foreign key check (FOR KEY SHARE) wait for T1, so the old order's count then
+ * sees T1's use and it refuses: one code, one last use, whichever runs first. Nothing else points at
+ * a promo code, so nothing else waits.
  */
 const LOCK_SQL = `
 SELECT s.id AS session_id, p.id AS credit_period_id, sp.id AS session_pass_id, m.ids AS membership_ids, v.ids AS variant_ids,
-       e.id AS event_id
+       e.id AS event_id, pc.id AS promo_code_id, g.id AS gift_card_id
 FROM (SELECT id FROM customers WHERE id = $1::uuid FOR NO KEY UPDATE) c
 LEFT JOIN LATERAL (
-  SELECT id FROM sessions WHERE id = $2::uuid AND c.id IS NOT NULL FOR NO KEY UPDATE
+  SELECT id FROM promo_codes WHERE upper(code) = upper($8::text) AND c.id IS NOT NULL FOR UPDATE
+) pc ON true
+LEFT JOIN LATERAL (
+  SELECT id FROM sessions WHERE id = $2::uuid AND (pc.id IS NULL OR pc.id IS NOT NULL) FOR NO KEY UPDATE
 ) s ON true
 LEFT JOIN LATERAL (
   SELECT id FROM membership_credit_periods
@@ -102,7 +122,10 @@ LEFT JOIN LATERAL (
 ) v ON true
 LEFT JOIN LATERAL (
   SELECT id FROM events WHERE id = $7::uuid AND (v.ids IS NULL OR v.ids IS NOT NULL) FOR NO KEY UPDATE
-) e ON true`
+) e ON true
+LEFT JOIN LATERAL (
+  SELECT id FROM gift_cards WHERE id = $9::uuid AND (e.id IS NULL OR e.id IS NOT NULL) FOR NO KEY UPDATE
+) g ON true`
 
 /** Null when the customer doesn't exist: nothing else is locked then. */
 export async function lockForOrder(tx: Tx, targets: LockTargets): Promise<HeldLocks | null> {
@@ -113,6 +136,8 @@ export async function lockForOrder(tx: Tx, targets: LockTargets): Promise<HeldLo
     membership_ids: string[] | null
     variant_ids: string[] | null
     event_id: string | null
+    promo_code_id: string | null
+    gift_card_id: string | null
   }>(LOCK_SQL, [
     targets.customerId,
     targets.sessionId,
@@ -121,6 +146,8 @@ export async function lockForOrder(tx: Tx, targets: LockTargets): Promise<HeldLo
     [...new Set(targets.addonMembershipIds)].sort(),
     [...new Set(targets.productVariantIds)].sort(),
     targets.eventId,
+    targets.promoCode,
+    targets.giftCardId,
   ])
   const row = rows[0]
   if (!row) return null
@@ -131,5 +158,7 @@ export async function lockForOrder(tx: Tx, targets: LockTargets): Promise<HeldLo
     membershipIds: row.membership_ids ?? [],
     variantIds: row.variant_ids ?? [],
     eventId: row.event_id,
+    promoCodeId: row.promo_code_id,
+    giftCardId: row.gift_card_id,
   }
 }

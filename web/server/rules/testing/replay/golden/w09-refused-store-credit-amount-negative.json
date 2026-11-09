@@ -1,0 +1,12 @@
+{
+  "scenario": "w09-refused-store-credit-amount-negative",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "store_credit_amount_invalid"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

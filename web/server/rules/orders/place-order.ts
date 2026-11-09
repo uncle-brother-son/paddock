@@ -4,8 +4,11 @@
 // with nothing owed. W07 adds products with their stock, the delivery address and postage, session
 // passes (on their own, or bought to pay for the booking in the same basket) and gift cards bought.
 // W08 adds events: the places claimed, the event booking and its attendees, and the event's line
-// (from shared/eventOrders.ts, writeEventBooking). Still not built: card and reader payments,
-// memberships, promo codes, store credit and gift card redemption.
+// (from shared/eventOrders.ts, writeEventBooking). W09 adds promo codes (the redemption, and the
+// discount on everything it applies to), store credit and gift cards used to pay (shared/storeCredit.ts
+// and createOrder's claimStoreCreditAndGiftCard), what orders.payment_method records (W03-decisions Q9)
+// and the confirmed-amount rule for every method with no Stripe step (W03-plan 2.7). Still not built:
+// card and reader payments, and memberships.
 import 'server-only'
 import type {
   BasketEventAttendee,
@@ -22,7 +25,7 @@ import { audit } from '@/server/audit'
 import { inOpenTransaction, isDeadlock, postgresRefusal, type Db, type Tx } from '@/server/db'
 import { ApiError } from '@/server/http/errors'
 import { addMonthsToIsoDate } from '@/server/rules/time/london-time'
-import { cashDifferenceRefusal, round2 } from './amounts'
+import { amountChangedRefusal, cashDifferenceRefusal, round2 } from './amounts'
 import { GIFT_CARD_SOURCE_REMOVED_MESSAGE } from './basket-booking'
 import { eventFullRefusal, inPlaceOrder } from './basket-event'
 import { generateGiftCardCode } from './gift-card-code'
@@ -79,9 +82,9 @@ function refuseAtEntry(input: PlaceOrderInput): void {
 
 /**
  * What T1 can't sell yet, each built by a later slice: card (W10), reader (W11), memberships, bought
- * or buy-new or replacing an exhausted one (W13), promo codes, store credit and gift card redemption
- * (W09). A pass bought with a buy-new membership is caught as the membership, and so is an event
- * beside a membership bought in the same basket (its account holder would be priced as that member).
+ * or buy-new or replacing an exhausted one (W13). A pass bought with a buy-new membership is caught as
+ * the membership, and so is an event beside a membership bought in the same basket (its account holder
+ * would be priced as that member), and a promo code beside one (its share of the first payment).
  */
 const NOT_BUILT: ReadonlyArray<{ part: string; words: string; present: (input: PlaceOrderInput) => boolean }> = [
   { part: 'card', words: 'a card payment', present: (input) => input.payment?.method === 'card' },
@@ -92,9 +95,6 @@ const NOT_BUILT: ReadonlyArray<{ part: string; words: string; present: (input: P
     present: (input) =>
       Boolean(input.membershipPlanId) || input.booking?.redemptionSource === 'buy_new_membership' || Boolean(input.booking?.cancelExhaustedMembershipId),
   },
-  { part: 'promo_code', words: 'a promo code', present: (input) => Boolean(input.promoCode?.trim()) },
-  { part: 'store_credit', words: 'store credit', present: (input) => Boolean(input.payment?.storeCredit) },
-  { part: 'gift_card_redemption', words: 'a gift card used to pay', present: (input) => Boolean(input.payment?.giftCard) },
 ]
 
 function refuseWhatIsNotBuilt(input: PlaceOrderInput): void {
@@ -113,15 +113,37 @@ function refuseWhatIsNotBuilt(input: PlaceOrderInput): void {
 /** Refusals that come after the cash check: they mean nothing while something else is wrong. */
 const AMOUNT_REASONS = new Set(['gift_card_amount_exceeds_total', 'store_credit_amount_exceeds_total', 'payment_method_required', 'reader_nothing_to_charge'])
 
-/** The first problem, as createOrder met them: everything else, then the cash figure, then the amount checks. */
+/**
+ * The first problem, as createOrder met them: everything else, then the cash figure, then the amount
+ * checks (the gift card or store credit over the total, then payment_method_required), then anything
+ * else staff confirmed that has changed (W03-plan 2.7). The gift card and store credit are taken for
+ * exactly what was sent, never less: an amount over what is now due is refused, not cut down.
+ */
 function refuseIfNeeded(input: PlaceOrderInput, quote: BasketQuoteOutput): void {
   const [first] = quote.problems
   if (first && !AMOUNT_REASONS.has(first.reason)) throw orderRefusal(first)
-  const cash = cashDifferenceRefusal(input.payment?.method, quote.totals.toCollect.cash, input.confirmed?.toCollect)
+  const method = input.payment?.method
+  const { totals } = quote
+  const cash = cashDifferenceRefusal(method, totals.toCollect.cash, input.confirmed?.toCollect)
   if (cash) {
-    throw orderRefusal({ stage: 'payment', reason: cash.reason, message: cash.message, amountDueTotal: quote.totals.amountDue })
+    throw orderRefusal({ stage: 'payment', reason: cash.reason, message: cash.message, amountDueTotal: totals.amountDue })
   }
   if (first) throw orderRefusal(first)
+  const toCollect = method === 'reader' ? totals.toCollect.reader : totals.toCollect.card
+  const changed = amountChangedRefusal(method, input.confirmed, { amountDue: totals.amountDue, toCollect })
+  if (changed) throw orderRefusal({ stage: 'payment', reason: changed.reason, message: changed.message, amountDueTotal: totals.amountDue })
+}
+
+/**
+ * What orders.payment_method records for an order with no Stripe step (W03-decisions Q9): the method
+ * that took a remainder, a gift card alone, store credit alone, or `split` when a gift card shares
+ * the order with store credit or with a remainder. Nothing owed records none. createOrder recorded
+ * none for store credit alone, and `gift_card` for a gift card with store credit: Q9 changed both.
+ */
+export function recordedPaymentMethod(method: string | null | undefined, collected: number, giftCard: number, storeCredit: number): string | null {
+  if (giftCard > 0) return collected > 0 || storeCredit > 0 ? 'split' : 'gift_card'
+  if (collected > 0) return method ?? null
+  return storeCredit > 0 ? 'store_credit' : null
 }
 
 const unpriced = (problem: string) => new Error(`The order was priced without ${problem}. Nothing was kept.`)
@@ -155,7 +177,8 @@ function bookingToWrite(input: PlaceOrderInput, facts: BasketFacts, quote: Baske
     sessionId: booking.sessionId,
     customerId: input.customerId as string,
     bookingType: session.booking_type,
-    pricePaid: quoted.price,
+    // createOrder took the promo's share off price_paid once createBooking had written it (W09).
+    pricePaid: round2(quoted.price - quoted.discount),
     redemptionSource: quoted.redemptionSource,
     redeemedMembershipId: quoted.redemptionSource === 'membership_credit' ? booking.membershipId ?? null : null,
     redeemedSessionPassId: passId,
@@ -169,6 +192,8 @@ function bookingToWrite(input: PlaceOrderInput, facts: BasketFacts, quote: Baske
       email: guest.email?.trim() || null,
       dateOfBirth: i === 0 ? guest.dateOfBirth ?? null : null,
       unitPrice: isPublic ? seatPrices[i]?.unit_price ?? null : null,
+      // And each seat's share off its unit_price (W09). A private booking's share is on its price alone.
+      discount: quoted.seats[i]?.discount ?? 0,
       payBy: i === 0 ? seat1 : 'paid',
     })),
   }
@@ -197,6 +222,18 @@ function bookingToWrite(input: PlaceOrderInput, facts: BasketFacts, quote: Baske
  * claim, its attendees only from its booking, and its line points at it, so a claim that finds no
  * room writes none of them and T1 refuses with event_full. Attendees get created_at from the clock,
  * in place order, as createOrder wrote them one statement each.
+ *
+ * W09 adds what pays and what discounts, each waiting on `go` like the rest:
+ * - the promo code's redemption, written only with the order, for the discount the order records
+ *   (the code is locked, and its uses counted afresh, before the facts were read);
+ * - the store credit, claimed with store_credit_apply's own guard (the balance after, rounded to the
+ *   penny, can't go below nothing) in the one UPDATE of the customer that also saves the delivery
+ *   address: one statement can't update a row twice. Its ledger row is written only from the claim,
+ *   with the old note;
+ * - the gift card used to pay, claimed with createOrder's guarded UPDATE (enough left, not voided, not
+ *   expired on today's London date) and marked redeemed when it is used up, as createOrder did, with
+ *   its redemption row written only from the claim. The card bought in the same basket can't be the
+ *   one claimed: it doesn't exist when the facts are read, and this statement can't see its own insert.
  */
 const ORDER_SQL = `
 WITH clock AS (SELECT clock_timestamp() AS at),
@@ -215,9 +252,16 @@ card AS (
 go AS (SELECT (SELECT count(*) FROM card) = jsonb_array_length($2::jsonb) AS ok),
 o AS (
   INSERT INTO orders (customer_id, order_total, payment_status, order_source, shipping_address, promo_code, discount_amount, payment_method)
-  SELECT $1::uuid, $3::numeric, 'paid', 'staff_created', $4::jsonb, NULL, 0, $5::text
+  SELECT $1::uuid, $3::numeric, 'paid', 'staff_created', $4::jsonb, $13::text, $14::numeric, $5::text
   FROM go
   WHERE go.ok
+  RETURNING id
+),
+promo_redemption AS (
+  INSERT INTO promo_code_redemptions (promo_code_id, order_id, customer_id, discount_amount)
+  SELECT $15::uuid, o.id, $1::uuid, $14::numeric
+  FROM o
+  WHERE $15::uuid IS NOT NULL
   RETURNING id
 ),
 places AS (
@@ -287,12 +331,43 @@ passes AS (
     ON lines.item_type = 'session_pass' AND lines.session_pass_type_id = p.pass_type_id
   RETURNING id
 ),
-saved_address AS (
+customer AS (
   UPDATE customers c
-  SET address_line1 = a.line1, address_line2 = a.line2, city = a.city, postcode = a.postcode, country = a.country, updated_at = now()
-  FROM jsonb_to_recordset($10::jsonb) AS a(line1 text, line2 text, city text, postcode text, country text)
-  WHERE c.id = $1::uuid AND (SELECT ok FROM go)
-  RETURNING c.id
+  SET address_line1 = CASE WHEN x.address IS NULL THEN c.address_line1 ELSE x.address->>'line1' END,
+      address_line2 = CASE WHEN x.address IS NULL THEN c.address_line2 ELSE x.address->>'line2' END,
+      city = CASE WHEN x.address IS NULL THEN c.city ELSE x.address->>'city' END,
+      postcode = CASE WHEN x.address IS NULL THEN c.postcode ELSE x.address->>'postcode' END,
+      country = CASE WHEN x.address IS NULL THEN c.country ELSE x.address->>'country' END,
+      store_credit_balance = round(c.store_credit_balance - x.credit, 2),
+      updated_at = now()
+  FROM jsonb_to_recordset($10::jsonb) AS x(address jsonb, credit numeric)
+  WHERE c.id = $1::uuid AND (SELECT ok FROM go) AND (x.credit = 0 OR round(c.store_credit_balance - x.credit, 2) >= 0)
+  RETURNING c.store_credit_balance AS balance_after, x.address IS NOT NULL AS address_saved, x.credit
+),
+credit_row AS (
+  INSERT INTO store_credit_transactions (customer_id, amount, balance_after, reason, order_id, staff_id, note)
+  SELECT $1::uuid, round(-customer.credit, 2), customer.balance_after, 'redemption', o.id, $16::uuid, $17::text
+  FROM customer
+  CROSS JOIN o
+  WHERE customer.credit > 0
+  RETURNING id
+),
+gift_card_claim AS (
+  UPDATE gift_cards g
+  SET remaining_balance = g.remaining_balance - x.amount,
+      redeemed_at = CASE WHEN g.redeemed_at IS NULL AND round(g.remaining_balance - x.amount, 2) <= 0 THEN now() ELSE g.redeemed_at END,
+      updated_at = now()
+  FROM jsonb_to_recordset($18::jsonb) AS x(gift_card_id uuid, amount numeric)
+  WHERE g.id = x.gift_card_id AND g.remaining_balance >= x.amount AND g.voided IS NOT TRUE
+    AND g.expiry_date >= (now() AT TIME ZONE 'Europe/London')::date AND (SELECT ok FROM go)
+  RETURNING g.id, x.amount
+),
+gift_card_redemption AS (
+  INSERT INTO gift_card_redemptions (gift_card_id, order_id, amount_used, redeemed_at)
+  SELECT gift_card_claim.id, o.id, gift_card_claim.amount, now()
+  FROM gift_card_claim
+  CROSS JOIN o
+  RETURNING id
 )
 SELECT (SELECT id FROM o) AS order_id,
        (SELECT at::text FROM clock) AS lines_at,
@@ -303,10 +378,18 @@ SELECT (SELECT id FROM o) AS order_id,
        (SELECT COALESCE(array_agg(id), '{}') FROM stock) AS variants_claimed,
        (SELECT count(*)::int FROM ledger) AS ledger_written,
        (SELECT count(*)::int FROM passes) AS passes_written,
-       (SELECT count(*)::int FROM saved_address) AS addresses_saved,
+       (SELECT count(*)::int FROM customer WHERE address_saved) AS addresses_saved,
        (SELECT count(*)::int FROM places) AS events_claimed,
        (SELECT id FROM event_booking) AS event_booking_id,
-       (SELECT count(*)::int FROM attendees) AS attendees_written`
+       (SELECT count(*)::int FROM attendees) AS attendees_written,
+       (SELECT count(*)::int FROM promo_redemption) AS promo_redemptions_written,
+       (SELECT count(*)::int FROM customer WHERE credit > 0) AS store_credit_claimed,
+       (SELECT count(*)::int FROM credit_row) AS store_credit_rows_written,
+       (SELECT bool_or(round(c.store_credit_balance - x.credit, 2) < 0)
+        FROM customers c CROSS JOIN jsonb_to_recordset($10::jsonb) AS x(address jsonb, credit numeric)
+        WHERE c.id = $1::uuid) AS store_credit_short,
+       (SELECT count(*)::int FROM gift_card_claim) AS gift_cards_claimed,
+       (SELECT count(*)::int FROM gift_card_redemption) AS gift_card_redemptions_written`
 
 interface OrderWritten {
   /** Null when the gift card's code was taken: nothing was written. */
@@ -323,7 +406,17 @@ interface OrderWritten {
   events_claimed: number
   event_booking_id: string | null
   attendees_written: number
+  promo_redemptions_written: number
+  store_credit_claimed: number
+  store_credit_rows_written: number
+  /** Whether the balance before this statement was short of the store credit claimed (W09). */
+  store_credit_short: boolean | null
+  gift_cards_claimed: number
+  gift_card_redemptions_written: number
 }
+
+/** createOrder's note on the store credit it took at checkout (claimStoreCreditAndGiftCard). */
+export const STORE_CREDIT_NOTE = 'Store credit redeemed at checkout.'
 
 /** As createOrder: five codes, then gift_card_code_exhausted. */
 export const GIFT_CARD_CODE_TRIES = 5
@@ -333,6 +426,8 @@ const ORDER_LINE_KINDS = new Set(['event', 'addon', 'product', 'session_pass', '
 
 interface OrderToWrite {
   orderId: string
+  /** What orders.payment_method recorded (W03-decisions Q9). */
+  paymentMethod: string | null
   linesAt: string
   giftCardId: string | null
   giftCardCode: string | null
@@ -379,12 +474,16 @@ function eventToWrite(input: PlaceOrderInput, quote: BasketQuoteOutput, options:
 }
 
 /** The order statement, run again with a new code while the gift card's code was taken. */
-async function writeOrder(tx: Tx, input: PlaceOrderInput, facts: BasketFacts, quote: BasketQuoteOutput, options: PlaceOrderOptions): Promise<OrderToWrite> {
+async function writeOrder(tx: Tx, input: PlaceOrderInput, facts: BasketFacts, quote: BasketQuoteOutput, locks: HeldLocks, options: PlaceOrderOptions): Promise<OrderToWrite> {
   const customerId = input.customerId as string
   const products = input.products ?? []
-  const method = input.payment?.method
-  const collected = quote.totals.toCollect.cash
-  const paymentMethod = collected > 0 && method === 'cash' ? 'cash' : null
+  const { totals, promo } = quote
+  // The amounts exactly as sent, as createOrder claimed them: the checks have passed, so each is over
+  // nothing and within its balance and the total. store_credit_apply rounded the balance after, so
+  // the claim below does too.
+  const giftCardPaying = input.payment?.giftCard ?? null
+  const storeCredit = input.payment?.storeCredit?.amount ?? 0
+  const paymentMethod = recordedPaymentMethod(input.payment?.method, totals.toCollect.cash, giftCardPaying?.amount ?? 0, storeCredit)
 
   const lines = quote.lines.flatMap((line, i) => {
     if (line.kind === 'booking') return []
@@ -444,13 +543,39 @@ async function writeOrder(tx: Tx, input: PlaceOrderInput, facts: BasketFacts, qu
       : []
 
   const delivery = quote.delivery
-  const addresses = delivery?.saveToCustomer ? [delivery.address] : []
+  const savedAddress = delivery?.saveToCustomer ? delivery.address : null
   const { events, attendees } = eventToWrite(input, quote, options)
+
+  // W09: the promo's use, the store credit (with the address, in the customer's one UPDATE) and the gift card used to pay.
+  if (promo && !locks.promoCodeId) throw unpriced('the promo code it locked')
+  const customerChange = savedAddress || storeCredit > 0 ? [{ address: savedAddress, credit: storeCredit }] : []
+  const giftCardRedeemed = giftCardPaying ? [{ gift_card_id: giftCardPaying.giftCardId, amount: giftCardPaying.amount }] : []
+  // Who took the store credit, on its ledger row, as createOrder's acting staff member. Only bound when some is taken.
+  const staffId = storeCredit > 0 && options.actor.type === 'staff' ? options.actor.id : null
 
   for (let attempt = 1; ; attempt += 1) {
     const cards = giftCards()
     const written = (
-      await tx.query<OrderWritten>(ORDER_SQL, [customerId, cards, quote.totals.orderTotal, delivery?.address ?? null, paymentMethod, lines, claims, ledger, passes, addresses, events, attendees])
+      await tx.query<OrderWritten>(ORDER_SQL, [
+        customerId,
+        cards,
+        totals.orderTotal,
+        delivery?.address ?? null,
+        paymentMethod,
+        lines,
+        claims,
+        ledger,
+        passes,
+        customerChange,
+        events,
+        attendees,
+        promo?.code ?? null,
+        promo?.discountTotal ?? 0,
+        promo ? locks.promoCodeId : null,
+        staffId,
+        STORE_CREDIT_NOTE,
+        giftCardRedeemed,
+      ])
     )[0] as OrderWritten
     if (!written.order_id) {
       if (cards.length === 0) throw new Error('The order was not written.')
@@ -467,12 +592,24 @@ async function writeOrder(tx: Tx, input: PlaceOrderInput, facts: BasketFacts, qu
     // booking as well.
     if (written.events_claimed !== events.length) throw orderRefusal(eventFullRefusal())
     if (written.attendees_written !== attendees.length) throw new Error(`The event's booking and attendees were not written whole: ${written.attendees_written} of ${attendees.length} attendees.`)
+    // W09, after the places, as createOrder claimed them: the promo's use (stage 25a), then the store
+    // credit, then the gift card (stage 30). Each is locked and was read after its lock, so a claim
+    // that finds nothing means something the locks should have stopped; each refuses with
+    // createOrder's reason, and the transaction rolls back.
+    if (written.promo_redemptions_written !== (promo ? 1 : 0)) throw new Error("The promo code's use was not recorded.")
+    if (written.store_credit_claimed !== (storeCredit > 0 ? 1 : 0)) {
+      throw orderRefusal({ stage: 'payment', reason: written.store_credit_short ? 'store_credit_insufficient' : 'store_credit_failed' })
+    }
+    if (written.store_credit_rows_written !== written.store_credit_claimed) throw new Error('The store credit taken was not recorded.')
+    if (written.gift_cards_claimed !== giftCardRedeemed.length) throw orderRefusal({ stage: 'payment', reason: 'gift_card_insufficient_or_invalid' })
+    if (written.gift_card_redemptions_written !== giftCardRedeemed.length) throw new Error("The gift card's use was not recorded.")
     if (written.ledger_written !== ledger.length) throw new Error(`The stock ledger was not written whole: ${written.ledger_written} of ${ledger.length} rows.`)
     if (written.passes_written !== passes.length) throw new Error(`The session pass and its line were not written together: ${written.passes_written} of ${passes.length} passes.`)
     if (cards.length > 0 && !written.gift_card_id) throw new Error('The gift card was not written.')
-    if (written.addresses_saved !== addresses.length) throw new Error("The delivery address was not saved to the customer.")
+    if (written.addresses_saved !== (savedAddress ? 1 : 0)) throw new Error("The delivery address was not saved to the customer.")
     return {
       orderId: written.order_id,
+      paymentMethod,
       linesAt: written.lines_at,
       giftCardId: written.gift_card_id,
       giftCardCode: written.gift_card_code,
@@ -533,6 +670,8 @@ async function prepare(tx: Tx, input: PlaceOrderInput, options: PlaceOrderOption
     addonMembershipIds: attached.flatMap((line) => (line.redemptionSource === 'membership_credit' && line.membershipId ? [line.membershipId] : [])),
     productVariantIds: (input.products ?? []).map((line) => line.productVariantId),
     eventId: input.event?.eventId ?? null,
+    promoCode: input.promoCode?.trim() || null,
+    giftCardId: input.payment?.giftCard?.giftCardId ?? null,
   })
   if (!locks) throw orderRefusal({ stage: 'validation', reason: 'customer_not_found' })
 
@@ -542,17 +681,18 @@ async function prepare(tx: Tx, input: PlaceOrderInput, options: PlaceOrderOption
   refuseIfNeeded(input, quote)
 
   // 3. The order, and everything in it that doesn't need the booking.
-  const order = await writeOrder(tx, input, facts, quote, options)
+  const order = await writeOrder(tx, input, facts, quote, locks, options)
 
   // 4. The booking, with its line, its add-ons and their credits.
   const bookingWrite = bookingToWrite(input, facts, quote, locks, order.sessionPassId)
   const bookingId = bookingWrite ? await writeBooking(tx, bookingWrite, bookingOrderPart(quote, order)) : null
 
   // 5. The audit rows, in the same transaction. Nothing is owed to Stripe, so the order is paid now.
-  const { orderId } = order
+  const { orderId, paymentMethod } = order
   const method = input.payment?.method
   const collected = quote.totals.toCollect.cash
-  const paymentMethod = collected > 0 && method === 'cash' ? 'cash' : null
+  const giftCardApplied = quote.totals.giftCardApplied
+  const storeCreditApplied = quote.totals.storeCreditApplied
   const actor = { actorType: options.actor.type, actorId: options.actor.id, entityType: 'order', entityId: orderId, requestId: options.requestId }
   const overrides = quote.lines.flatMap((line) =>
     line.priceOverrideReason ? [{ line: line.key, unitPrice: line.unitPrice, systemUnitPrice: line.systemUnitPrice, reason: line.priceOverrideReason }] : []
@@ -570,13 +710,16 @@ async function prepare(tx: Tx, input: PlaceOrderInput, options: PlaceOrderOption
         postage: quote.postage ? { method: quote.postage.method, amount: quote.postage.amount } : null,
         addressSaved: quote.delivery?.saveToCustomer === true,
         orderTotal: quote.totals.orderTotal,
+        promo: quote.promo ? { code: quote.promo.code, discount: quote.promo.discountTotal } : null,
         amountDue: quote.totals.amountDue,
+        giftCard: input.payment?.giftCard ? { giftCardId: input.payment.giftCard.giftCardId, amount: giftCardApplied } : null,
+        storeCredit: storeCreditApplied,
         toCollect: collected,
         confirmed: confirmed ?? null,
         overrides,
       },
     },
-    { ...actor, action: 'order.paid', details: { method: paymentMethod, collected } },
+    { ...actor, action: 'order.paid', details: { method: paymentMethod, collected, giftCard: giftCardApplied, storeCredit: storeCreditApplied } },
   ])
 
   return {
@@ -589,7 +732,7 @@ async function prepare(tx: Tx, input: PlaceOrderInput, options: PlaceOrderOption
       giftCardId: order.giftCardId,
       giftCardCode: order.giftCardCode,
       eventBookingId: order.eventBookingId,
-      payment: { method: paymentMethod, collected, cardCharged: false },
+      payment: { method: paymentMethod, collected, cardCharged: false, giftCardApplied, storeCreditApplied },
     },
   }
 }

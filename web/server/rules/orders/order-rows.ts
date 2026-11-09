@@ -1,17 +1,19 @@
 // New in W06, until W16: what an order wrote, for the dry run and the staff app's shadow to compare.
 // W07 adds what products, postage, passes, gift cards and the delivery address write; W08 what an
-// event writes.
+// event writes; W09 what a promo code, store credit and a gift card used to pay write.
 import 'server-only'
 import type { OrderRows } from '@/contracts'
 import type { Queryable } from '@/server/db'
 
 /**
- * Everything an order in W06's to W08's scope writes, read back by its id: the order, its lines in
+ * Everything an order in W06's to W09's scope writes, read back by its id: the order, its lines in
  * the order the app reads them, the booking with its seats and add-ons, and what the order's claims
  * left (the session's places, the pass's sessions, each add-on credit's membership, the credit
  * period's use); from W07 also each variant's stock and the ledger rows naming the order, the passes
  * and gift cards its lines issued, and the customer's own address after it; from W08 the event booking
- * the event line points at, the event's places after the claim and the attendees in place order. Ids
+ * the event line points at, the event's places after the claim and the attendees in place order; from
+ * W09 the promo code's use, the store credit taken (its note is free text), the gift card used to pay
+ * with that card's balance after (its code is never read), and the customer's store credit balance. Ids
  * the two sides write differently (a gift card's, a pass's, the pass a booking bought in the same
  * order is paid with) are read as what they point at, and a gift card's code only as whether it has
  * the app's format. One JSON value, so both drivers read it the same way.
@@ -100,7 +102,24 @@ SELECT json_build_object(
       'attendee_type', a.attendee_type, 'name', a.name, 'email', a.email, 'date_of_birth', a.date_of_birth,
       'unit_price', a.unit_price, 'price_level', a.price_level) ORDER BY a.created_at, a.id), '[]'::json)
       FROM event_attendees a WHERE a.event_booking_id = eb.id))
-    FROM eb JOIN events e ON e.id = eb.event_id)
+    FROM eb JOIN events e ON e.id = eb.event_id),
+  'promo_redemptions', (SELECT COALESCE(json_agg(json_build_object(
+    'promo_code_id', r.promo_code_id, 'for_the_order_customer', r.customer_id = (SELECT o.customer_id FROM o),
+    'discount_amount', r.discount_amount) ORDER BY r.created_at, r.id), '[]'::json)
+    FROM promo_code_redemptions r WHERE r.order_id = (SELECT o.id FROM o)),
+  'store_credit_transactions', (SELECT COALESCE(json_agg(json_build_object(
+    'amount', t.amount, 'balance_after', t.balance_after, 'reason', t.reason,
+    'for_the_order_customer', t.customer_id = (SELECT o.customer_id FROM o),
+    'for_a_booking', t.booking_id IS NOT NULL, 'from_a_gift_card', t.gift_card_id IS NOT NULL,
+    'staff_id', t.staff_id, 'note', t.note) ORDER BY t.created_at, t.id), '[]'::json)
+    FROM store_credit_transactions t WHERE t.order_id = (SELECT o.id FROM o)),
+  'gift_card_redemptions', (SELECT COALESCE(json_agg(json_build_object(
+    'gift_card_id', r.gift_card_id, 'amount_used', r.amount_used,
+    'for_a_booking', r.booking_id IS NOT NULL, 'for_an_event_booking', r.event_booking_id IS NOT NULL,
+    'card_remaining_balance', g.remaining_balance, 'card_redeemed', g.redeemed_at IS NOT NULL, 'card_voided', g.voided)
+    ORDER BY r.redeemed_at, r.id), '[]'::json)
+    FROM gift_card_redemptions r JOIN gift_cards g ON g.id = r.gift_card_id WHERE r.order_id = (SELECT o.id FROM o)),
+  'customer_store_credit_balance', (SELECT c.store_credit_balance FROM customers c WHERE c.id = (SELECT o.customer_id FROM o))
 ) AS rows
 `
 

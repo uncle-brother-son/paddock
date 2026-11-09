@@ -1,0 +1,13 @@
+{
+  "scenario": "w09-refused-promo-nothing-eligible",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "promo_code_invalid",
+      "message": "Promo code \"SOAPONLY\" cannot be used: Nothing in this basket is eligible for that promo code."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

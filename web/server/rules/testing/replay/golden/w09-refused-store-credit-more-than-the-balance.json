@@ -1,0 +1,12 @@
+{
+  "scenario": "w09-refused-store-credit-more-than-the-balance",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "store_credit_insufficient"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

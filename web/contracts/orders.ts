@@ -293,12 +293,14 @@ export const basketQuoteOutputSchema = z.object({
 })
 export type BasketQuoteOutput = z.infer<typeof basketQuoteOutputSchema>
 
-// --- POST /api/v1/staff/orders (W06 to W08: cash and nothing owed; the rest answers NOT_BUILT)
+// --- POST /api/v1/staff/orders (W06 to W09: cash, gift card, store credit and nothing owed; the rest answers NOT_BUILT)
 
 /**
- * What staff saw and confirmed, from the quote. Each figure is loose, as the old function was: a
- * missing figure counts as nothing confirmed. W06 checks `toCollect` on cash, with the old words;
- * `amountDue` and `firstInvoice` are taken now and checked from W09, W10 and W13 (W03-plan 2.7).
+ * What staff saw and confirmed, from the quote. Each figure is loose, as the old function was. W06
+ * checks `toCollect` on cash, with the old words, a missing figure counting as nothing confirmed.
+ * W09 checks `toCollect` for every other method the same way, and `amountDue` when it is sent (the
+ * old createOrder's params have none, so the shadow's dry run and the replay send none), with
+ * W03-decisions Q11's words. `firstInvoice` is taken now and checked from W13 (W03-plan 2.7).
  */
 export const orderConfirmedSchema = z.object({
   amountDue: z.number().optional(),
@@ -333,6 +335,9 @@ export const placeOrderOutputSchema = z.object({
     /** Taken now by that method: on cash, what staff collect. */
     collected: z.number(),
     cardCharged: z.boolean(),
+    /** The gift card and store credit taken, as sent (W09). createOrder answered them as giftCardRedeemedAmount and storeCreditRedeemedAmount. */
+    giftCardApplied: z.number(),
+    storeCreditApplied: z.number(),
   }),
 })
 export type PlaceOrderOutput = z.infer<typeof placeOrderOutputSchema>
@@ -513,6 +518,35 @@ export const orderRowsSchema = z.object({
       ),
     })
     .nullable(),
+  /** The promo code's use the order recorded (W09). */
+  promo_redemptions: z.array(z.object({ promo_code_id: z.string(), for_the_order_customer: z.boolean(), discount_amount: money })),
+  /** The store credit the order took, in the order written (W09). The note is free text. */
+  store_credit_transactions: z.array(
+    z.object({
+      amount: money,
+      balance_after: money,
+      reason: z.string(),
+      for_the_order_customer: z.boolean(),
+      for_a_booking: z.boolean(),
+      from_a_gift_card: z.boolean(),
+      staff_id: z.string().nullable(),
+      note: z.string().nullable(),
+    })
+  ),
+  /** The gift card the order was paid with, and that card after it (W09). Its code is never read. */
+  gift_card_redemptions: z.array(
+    z.object({
+      gift_card_id: z.string(),
+      amount_used: money,
+      for_a_booking: z.boolean(),
+      for_an_event_booking: z.boolean(),
+      card_remaining_balance: money,
+      card_redeemed: z.boolean(),
+      card_voided: z.boolean().nullable(),
+    })
+  ),
+  /** The order customer's store credit balance after the order (W09). */
+  customer_store_credit_balance: money.nullable(),
 })
 export type OrderRows = z.infer<typeof orderRowsSchema>
 

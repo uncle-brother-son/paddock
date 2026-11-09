@@ -57,6 +57,12 @@ export const QUOTE_DIFFERENCES: Record<string, readonly AllowedDifference[]> = {
 const dryRunQ5Address = [
   { name: 'The buy-new order keeps its delivery address', decision: 'W03-decisions Q5', path: /^rows\.order\.(has_shipping_address|shipping_address)$/ },
 ]
+/** W03-decisions Q9: the method the Worker's order records, where createOrder recorded another. */
+const dryRunQ9Method: readonly AllowedDifference[] = [
+  { name: 'The order records the method Q9 names', decision: 'W03-decisions Q9', path: /^rows\.order\.payment_method$/ },
+  { name: 'The answer names the method Q9 names', decision: 'W03-decisions Q9', path: /^result\.paymentMethodUsed$/ },
+]
+
 export const DRY_RUN_DIFFERENCES: Record<string, readonly AllowedDifference[]> = {
   // The cash figure staff confirmed includes the postage the Worker no longer charges, so its dry run
   // is refused as a changed total where the old order went through.
@@ -78,6 +84,13 @@ export const DRY_RUN_DIFFERENCES: Record<string, readonly AllowedDifference[]> =
   ],
   // The address save fails inside T1, so the dry run fails where the old order warned after it.
   'w07-address-save-fails': [{ name: 'The dry run fails: the address save is inside T1', decision: 'Brief W07 item 2 (the delivery address is saved inside T1)', path: /^$/ }],
+  // W09: what orders.payment_method records (Q9): store credit alone, and a gift card with store credit.
+  'store-credit-covers-everything': dryRunQ9Method,
+  'w09-half-penny-store-credit-covers-it': dryRunQ9Method,
+  'w09-gift-card-and-store-credit-cover-everything': dryRunQ9Method,
+  'w09-exact-cover-gift-card-and-store-credit': dryRunQ9Method,
+  'w09-exact-cover-ninety-five-and-five-pence': dryRunQ9Method,
+  'w09a-store-credit-alone-leaves-the-address-on-file': dryRunQ9Method,
 }
 
 /**

@@ -1,0 +1,12 @@
+{
+  "scenario": "w09-refused-store-credit-for-a-customer-with-none",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "store_credit_insufficient"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

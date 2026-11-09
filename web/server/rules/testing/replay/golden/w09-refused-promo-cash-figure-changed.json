@@ -1,0 +1,14 @@
+{
+  "scenario": "w09-refused-promo-cash-figure-changed",
+  "results": [
+    {
+      "success": false,
+      "stage": "payment",
+      "reason": "cash_amount_changed",
+      "message": "The amount due has changed to £36.00. Check it with the customer and confirm again.",
+      "amountDueTotal": 36
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

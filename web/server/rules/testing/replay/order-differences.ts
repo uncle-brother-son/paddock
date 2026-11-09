@@ -264,13 +264,117 @@ export const W08_SCENARIOS: readonly string[] = [
   'w08-refused-event-owed-with-no-method',
 ]
 
+/**
+ * W09's replay: promo codes, store credit and gift cards used to pay, in cash or with nothing owed,
+ * alone and beside every kind W06 to W08 build. The existing scenarios W09 brings into scope come
+ * first, then W09's own.
+ */
+export const W09_SCENARIOS: readonly string[] = [
+  'store-credit-covers-everything',
+  'gift-card-and-cash',
+  'promo-on-a-booking',
+  'promo-on-a-standalone-addon',
+  'promo-on-a-product',
+  'promo-on-a-pass',
+  'promo-on-an-event',
+  'refused-an-expired-promo',
+  'refused-store-credit-over-the-total',
+  'q24-percent-promo-on-a-private-booking',
+  'q24-fixed-promo-on-a-private-booking',
+  'q24-fixed-promo-bigger-than-the-private-price',
+  'q24-attached-addon-stays-out-of-the-promo',
+  'q24-the-member-prices-flag-does-not-apply',
+  'q24-min-spend-counts-the-private-price',
+  'q24-refused-below-min-spend',
+  'q24-refused-a-code-not-for-bookings',
+  'q24-refused-an-expired-code',
+  // W09's own
+  'w09-fixed-promo-spread-across-three-seats',
+  'w09-fixed-promo-spread-across-event-places',
+  'w09-fixed-promo-on-a-member-place-and-a-guest',
+  'w09-fixed-promo-skips-a-member-place',
+  'w09-promo-skips-a-member-priced-seat',
+  'w09-promo-on-a-guest-beside-a-credit-seat',
+  'w09-promo-on-a-buy-new-pass-and-its-guest',
+  'w09-promo-skips-a-member-priced-addon',
+  'w09-percent-promo-on-every-kind-in-cash',
+  'w09-fixed-promo-spread-across-every-kind',
+  'w09-promo-covers-everything-nothing-owed',
+  'w09-promo-does-not-touch-free-postage',
+  'w09-promo-does-not-touch-postage',
+  'w09-promo-typed-in-lower-case-with-spaces',
+  'w09-promo-with-a-use-left',
+  'w09-promo-once-per-customer-used-by-someone-else',
+  'w09-promo-for-this-customer',
+  'w09-promo-on-its-last-day',
+  'w09-refused-unknown-promo',
+  'w09-refused-inactive-promo',
+  'w09-refused-promo-at-its-limit',
+  'w09-refused-promo-already-used-by-the-customer',
+  'w09-refused-promo-for-another-customer',
+  'w09-refused-promo-nothing-eligible',
+  'w09-refused-promo-below-min-spend',
+  'w09-refused-promo-after-the-stock',
+  'w09-refused-a-full-session-before-the-promo',
+  'w09-refused-promo-before-the-event-places',
+  'w09-refused-buy-new-promo-before-the-booking',
+  'w09-refused-promo-cash-figure-changed',
+  'w09-refused-promo-owed-with-no-method',
+  'w09-store-credit-and-cash',
+  'w09-store-credit-uses-the-whole-balance',
+  'w09-refused-store-credit-amount-zero',
+  'w09-refused-store-credit-amount-negative',
+  'w09-refused-store-credit-more-than-the-balance',
+  'w09-refused-store-credit-for-a-customer-with-none',
+  'w09-refused-store-credit-with-nothing-owed',
+  'w09-refused-store-credit-checked-before-the-booking',
+  'w09-refused-store-credit-leaves-something-owed-with-no-method',
+  'w09-refused-cash-figure-before-the-store-credit-over-the-total',
+  'w09-gift-card-covers-everything',
+  'w09-gift-card-uses-the-whole-balance',
+  'w09-gift-card-already-marked-redeemed-stays-so',
+  'w09-gift-card-on-its-last-day',
+  'w09-refused-gift-card-amount-zero',
+  'w09-refused-gift-card-not-found',
+  'w09-refused-gift-card-voided',
+  'w09-refused-gift-card-expired',
+  'w09-refused-gift-card-with-nothing-left',
+  'w09-refused-gift-card-more-than-its-balance',
+  'w09-refused-gift-card-over-the-total',
+  'w09-refused-gift-card-checked-before-store-credit',
+  'w09-refused-method-checked-before-the-gift-card',
+  'w09-refused-a-gift-card-bought-in-the-same-basket',
+  'w09-refused-cash-figure-before-the-gift-card-over-the-total',
+  'w09-gift-card-and-store-credit-cover-everything',
+  'w09-gift-card-store-credit-and-cash',
+  'w09-exact-cover-gift-card-and-store-credit',
+  'w09-exact-cover-ninety-five-and-five-pence',
+  'w09-half-penny-store-credit',
+  'w09-half-penny-store-credit-covers-it',
+  'w09-half-penny-price-in-cash',
+  'w09-every-part-in-cash',
+  'w09-worst-basket',
+  // Brief W09a (W09 review S1): a customer with an address on file
+  'w09a-saved-address-with-no-second-line-replaces-one-with-it',
+  'w09a-store-credit-alone-leaves-the-address-on-file',
+]
+
 /** Every scenario the order route takes. */
-export const ORDER_SCENARIOS: readonly string[] = [...W06_SCENARIOS, ...W07_SCENARIOS, ...W08_SCENARIOS]
+export const ORDER_SCENARIOS: readonly string[] = [...W06_SCENARIOS, ...W07_SCENARIOS, ...W08_SCENARIOS, ...W09_SCENARIOS]
 
 const Q4 = 'W03-decisions Q4'
 const Q5 = 'W03-decisions Q5'
 const ADDRESS_IN_T1 = 'Brief W07 item 2 (the delivery address is saved inside T1)'
 const Q33 = 'W03-decisions Q33'
+const Q9 = 'W03-decisions Q9'
+
+/** Q9: what orders.payment_method records, where createOrder recorded something else. */
+function q9Method(was: string, now: string): AllowedDifference[] {
+  return [
+    { name: `The order records ${now} where createOrder recorded ${was}`, decision: Q9, path: /^\.tables\.orders\.added\[0\]\.payment_method$/ },
+    { name: `The answer names ${now} where createOrder named ${was}`, decision: Q9, path: /^\.results\[0\]\.paymentMethodUsed$/ },
+  ]
+}
 
 /** Q4: a shipped gift card counts towards free postage, so the order charges none. `postageLine` is its index. */
 function freePostage(postageLine: number): AllowedDifference[] {
@@ -287,7 +391,7 @@ const ADDRESS_KEPT: AllowedDifference = { name: "The buy-new order keeps its del
 const REQUESTS_KEPT: AllowedDifference = { name: 'The buy-new booking keeps its special requests', decision: Q5, path: /^\.tables\.bookings\.added\[0\]\.special_requests$/ }
 
 /**
- * W07's named differences, beyond the idempotency row and the audit rows. Each names its decision;
+ * W07's and W09's named differences, beyond the idempotency row and the audit rows. Each names its decision;
  * anything else fails, and so does an entry that stops happening. Q23 needs none: W05a fixed the old
  * createOrder too, and its cash scenarios match exactly. Gift card codes need none in the replay: the
  * comparator labels every code (compare.ts), and place-order.test.ts holds the new codes to the format.
@@ -308,6 +412,13 @@ export const W07_DIFFERENCES: Readonly<Record<string, readonly AllowedDifference
       path: /^\.results\[0\](\.|$)|^\.tables\.(orders|order_line_items|product_variants|stock_adjustments)$/,
     },
   ],
+  // W09, Q9: store credit alone records store_credit (createOrder: none); a gift card with store credit records split (createOrder: gift_card).
+  'store-credit-covers-everything': q9Method('none', 'store_credit'),
+  'w09-half-penny-store-credit-covers-it': q9Method('none', 'store_credit'),
+  'w09-gift-card-and-store-credit-cover-everything': q9Method('gift_card', 'split'),
+  'w09-exact-cover-gift-card-and-store-credit': q9Method('gift_card', 'split'),
+  'w09-exact-cover-ninety-five-and-five-pence': q9Method('gift_card', 'split'),
+  'w09a-store-credit-alone-leaves-the-address-on-file': q9Method('none', 'store_credit'),
 }
 
 /**
@@ -337,6 +448,24 @@ export const OUTCOME_DIFFERS: readonly string[] = ['w07-address-save-fails']
  *   ledger still has a row per line, and the stock ends the same (W07 brief item 1).
  */
 
+/*
+ * Named differences with no replay scenario (W09). A replay is one connection, so it can't race:
+ * - createOrder's stage 25a counted a promo's uses after inserting its own, and refused a code that had
+ *   just reached its limit with "has just reached its maximum number of uses (N)" or "this customer has
+ *   just used it in another order" (and refused both orders when two raced for the last use). T1 locks
+ *   the code before it counts (W03-plan 2.4 item 1), so the second order waits and is refused by the
+ *   facts, with the ordinary "Promo code \"X\" cannot be used: …" words. Proof: place-order-postgres.test.ts,
+ *   "the last use of a promo code (W09)".
+ * - createOrder's stage 30 refused a store credit or gift card balance spent between its check and its
+ *   claim at stage `payment`. Under T1's locks the facts see it first and refuse at stage `validation`,
+ *   with the same reason and words. The claims' own refusals (stage `payment`) remain, for what the locks
+ *   should make impossible. Proof: place-order-postgres.test.ts, "a store credit balance spent by another
+ *   order at the same time (W09)", "a gift card balance spent elsewhere (W09)"; place-order.test.ts, "the
+ *   claims refuse on their own".
+ * - promo_booking_price_changed can't happen: T1 writes a buy-new booking's seats from the very quote the
+ *   promo was spread on, under the session lock, in one transaction.
+ */
+
 /** What each scenario may differ by: a placed order has its audit rows, a refusal commits none. */
 export function orderDifferences(placed: boolean, name?: string): AllowedDifference[] {
   return [...(placed ? [IDEMPOTENCY_ROW, AUDIT_ROWS] : [IDEMPOTENCY_ROW]), ...((name && W07_DIFFERENCES[name]) || [])]
@@ -354,9 +483,7 @@ export const NOT_BUILT_SCENARIOS: Readonly<Record<string, readonly string[]>> = 
   // An event beside a membership bought in the same basket stays not built as a whole until W13.
   'w08-event-with-a-membership-bought-in-cash': ['membership'],
   'event-at-member-price-with-a-new-membership': ['card', 'membership'],
-  'promo-on-an-event': ['promo_code'],
-  'promo-on-a-booking': ['promo_code'],
-  'promo-on-a-product': ['promo_code'],
-  'store-credit-covers-everything': ['store_credit'],
-  'gift-card-and-cash': ['gift_card_redemption'],
+  // W09 built promo codes, store credit and gift cards used to pay; a promo beside a membership bought in cash is the membership's.
+  'w09-promo-with-a-membership-bought-in-cash': ['membership'],
+  'promo-on-a-membership': ['card', 'membership'],
 }

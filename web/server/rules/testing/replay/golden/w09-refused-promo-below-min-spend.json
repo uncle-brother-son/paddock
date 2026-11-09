@@ -1,0 +1,13 @@
+{
+  "scenario": "w09-refused-promo-below-min-spend",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "promo_code_invalid",
+      "message": "Promo code \"SPEND150\" cannot be used: The eligible items do not reach this code’s minimum spend."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

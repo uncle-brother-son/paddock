@@ -1,0 +1,14 @@
+{
+  "scenario": "w09-refused-cash-figure-before-the-gift-card-over-the-total",
+  "results": [
+    {
+      "success": false,
+      "stage": "payment",
+      "reason": "cash_amount_changed",
+      "message": "The amount due has changed. There's nothing left to collect in cash. Check it with the customer and confirm again.",
+      "amountDueTotal": 24
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

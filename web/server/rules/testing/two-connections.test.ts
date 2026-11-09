@@ -1,13 +1,17 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import type { PlaceOrderInput } from '@/contracts'
 import type { Db, Tx } from '@/server/db'
+import { refusalDetails } from '@/server/rules/orders/order-refusal'
+import { placeOrder } from '@/server/rules/orders/place-order'
 import catalog from './live-catalog.json'
-import { fixtures } from './database'
+import { fixtures, insert } from './database'
 import { startRealPostgres, type RealPostgres } from './real-postgres'
 import { attempt, deferred, makeRace, Refused, type Race } from './race'
 
-// Two Worker clients on real Postgres, racing inside real db.transaction()s. There is no order code
-// here yet, so the claims are the staff app's own SQL, as W06 will port it: the capacity UPDATE from
-// shared/sessionCapacity.ts, then the store_credit_apply function from the live schema.
+// Two Worker clients on real Postgres, racing inside real db.transaction()s. The capacity half is
+// the staff app's own SQL (shared/sessionCapacity.ts), as W04 copied it; T1's own session claim is
+// proven in orders/place-order-postgres.test.ts. The store credit half is the ported claim: T1 itself,
+// placing an order paid with store credit (W09, W06 report N1).
 
 let pg: RealPostgres
 let first: Db
@@ -156,22 +160,30 @@ describe('the last place on a session', () => {
 })
 
 describe('the same store credit', () => {
-  interface Applied {
-    ok: boolean
-    reason?: string
-    balance?: string | number
-    transaction_id?: string
-  }
+  let addon: string
+  let staffId: string
 
-  /** applyStoreCredit's call. A refusal comes back as a value, so it is thrown to roll back. */
-  async function spend(tx: Tx, customer: string, amount: number): Promise<Applied> {
-    const rows = await tx.query<{ result: Applied }>(
-      `SELECT public.store_credit_apply($1::uuid, $2::numeric, $3::text, $4::uuid, $5::uuid, $6::uuid, $7::text, $8::uuid) AS result`,
-      [customer, -amount, 'redemption', null, null, null, null, null]
-    )
-    const result = rows[0]?.result as Applied
-    if (!result.ok) throw new Refused(result.reason as string, result.balance)
-    return result
+  beforeAll(async () => {
+    // A £10 add-on on its own, paid wholly with store credit, so nothing is left to pay.
+    addon = await insert(first, 'addons', { name: 'Robe', sku: `ROBE-${crypto.randomUUID()}`, base_price: '10.00' })
+    staffId = await insert(first, 'staff', { role: 'staff', first_name: 'Jo', last_name: 'Staff', email: `jo-${crypto.randomUUID()}@example.com` })
+  })
+
+  const storeCreditOrder = (customer: string, amount: number): PlaceOrderInput => ({
+    customerId: customer,
+    standaloneAddons: [{ addonId: addon, quantity: amount / 10 }],
+    payment: { storeCredit: { amount } },
+  })
+
+  /** T1 paid with £`amount` of store credit, in the race's transaction (it joins it). A refusal becomes the race's Refused. */
+  const spend = (customer: string, amount: number) => async (_tx: Tx, who: 'first' | 'second') => {
+    try {
+      return await placeOrder(who === 'first' ? first : second, storeCreditOrder(customer, amount), { actor: { type: 'staff', id: staffId }, requestId: 'two-connections' })
+    } catch (err) {
+      const details = refusalDetails(err)
+      if (details) throw new Refused(details.reason)
+      throw err
+    }
   }
 
   const state = async (customer: string) => {
@@ -186,55 +198,52 @@ describe('the same store credit', () => {
 
   const customerWith = (balance: string) => fixtures.customer(first, { store_credit_balance: balance })
 
-  it('lets the first spend it and refuses the second, who waited', async () => {
+  it('lets the first spend it and refuses the second, who waited on the customer', async () => {
     const customer = await customerWith('10.00')
-    const result = await race((tx) => spend(tx, customer, 10), 'commit')
+    const result = await race(spend(customer, 10), 'commit', 'customers')
 
-    expect(result.first).toMatchObject({ won: { ok: true, balance: 0 } })
-    expect(result.second).toMatchObject({ refused: { reason: 'insufficient_store_credit', balance: 0 } })
+    expect(result.first).toMatchObject({ won: { payment: { method: 'store_credit', storeCreditApplied: 10 } } })
+    expect(result.second).toMatchObject({ refused: { reason: 'store_credit_insufficient' } })
     expect(await state(customer)).toStrictEqual({ balance: '0.00', spends: 1 })
   })
 
   it('refuses the second against what is left, not the balance it started with', async () => {
     const customer = await customerWith('15.00')
-    const result = await race((tx) => spend(tx, customer, 10), 'commit')
+    const result = await race(spend(customer, 10), 'commit', 'customers')
 
-    expect(result.first).toMatchObject({ won: { ok: true, balance: 5 } })
-    expect(result.second).toMatchObject({ refused: { reason: 'insufficient_store_credit', balance: 5 } })
+    expect(result.first).toHaveProperty('won')
+    expect(result.second).toMatchObject({ refused: { reason: 'store_credit_insufficient' } })
     expect(await state(customer)).toStrictEqual({ balance: '5.00', spends: 1 })
   })
 
   it('lets the second spend it if the first rolls back', async () => {
     const customer = await customerWith('10.00')
-    const result = await race((tx) => spend(tx, customer, 10), 'rollback')
+    const result = await race(spend(customer, 10), 'rollback', 'customers')
 
     expect(result.first).toMatchObject({ refused: { reason: 'first_rolled_back' } })
-    expect(result.second).toMatchObject({ won: { ok: true, balance: 0 } })
+    expect(result.second).toHaveProperty('won')
     expect(await state(customer)).toStrictEqual({ balance: '0.00', spends: 1 })
   })
 
   it('lets both spend when there is enough for both', async () => {
     const customer = await customerWith('20.00')
-    const result = await race((tx) => spend(tx, customer, 10), 'commit')
+    const result = await race(spend(customer, 10), 'commit', 'customers')
 
     expect(result.first).toHaveProperty('won')
-    expect(result.second).toMatchObject({ won: { ok: true, balance: 0 } })
+    expect(result.second).toHaveProperty('won')
     expect(await state(customer)).toStrictEqual({ balance: '0.00', spends: 2 })
   })
 
   it('has one winner in every free-running race', async () => {
     for (let round = 0; round < 25; round += 1) {
       const customer = await customerWith('10.00')
-      const results = await Promise.all([
-        attempt(first, (tx) => spend(tx, customer, 10)),
-        attempt(second, (tx) => spend(tx, customer, 10)),
-      ])
+      const results = await Promise.all([attempt(first, (tx) => spend(customer, 10)(tx, 'first')), attempt(second, (tx) => spend(customer, 10)(tx, 'second'))])
 
       expect(results.filter((r) => 'won' in r)).toHaveLength(1)
-      expect(results.find((r) => 'refused' in r)).toMatchObject({ refused: { reason: 'insufficient_store_credit' } })
+      expect(results.find((r) => 'refused' in r)).toMatchObject({ refused: { reason: 'store_credit_insufficient' } })
       expect(await state(customer)).toStrictEqual({ balance: '0.00', spends: 1 })
     }
-  }, 30_000)
+  }, 60_000)
 
   // Shows the tests above can fail: reading the balance first, both spend the same £10.
   it('spends it twice if the balance is read before the write, so the race is real', async () => {

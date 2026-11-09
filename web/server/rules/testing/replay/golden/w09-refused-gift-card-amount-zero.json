@@ -1,0 +1,12 @@
+{
+  "scenario": "w09-refused-gift-card-amount-zero",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "gift_card_amount_invalid"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

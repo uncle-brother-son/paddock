@@ -1,0 +1,13 @@
+{
+  "scenario": "w09-refused-store-credit-with-nothing-owed",
+  "results": [
+    {
+      "success": false,
+      "stage": "payment",
+      "reason": "store_credit_amount_exceeds_total",
+      "amountDueTotal": 0
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

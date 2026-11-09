@@ -16,6 +16,8 @@ export interface SeatToWrite {
   dateOfBirth: string | null
   /** quote_booking's price for the seat, as it gave it. Null on a private booking, priced as a whole. */
   unitPrice: string | null
+  /** The promo's share of this seat, taken off unitPrice as createOrder took it off the written seat (W09). */
+  discount: number
   payBy: PayBy
 }
 
@@ -23,7 +25,7 @@ export interface BookingToWrite {
   sessionId: string
   customerId: string
   bookingType: 'public' | 'private'
-  /** The money seats, before any promo. A private booking's whole price. */
+  /** The money seats, less the promo's share (W09). A private booking's whole price, less its share. */
   pricePaid: number
   /** What the booking is recorded as, once a credit that can't apply has fallen back to paid. */
   redemptionSource: PayBy
@@ -88,6 +90,10 @@ export interface BookingOrderPart {
  * With an order (W07), the same statement writes the booking's order line, its add-ons with their
  * order, and the add-on credits they draw, as the order's statement did in W06. The line's created_at
  * comes from the clock the order's other lines used, so it keeps its place among them.
+ *
+ * A promo (W09): createOrder took each seat's share off its written unit_price, and the booking's
+ * share off price_paid, once createBooking had written them. Here they are written so, in the one
+ * statement; the booking's line keeps the price before the promo, with the share as its discount.
  */
 const BOOKING_SQL = `
 WITH clock AS (SELECT clock_timestamp() AS at),
@@ -131,12 +137,12 @@ booking AS (
 ),
 seats AS (
   INSERT INTO booking_guests (booking_id, guest_type, guest_name, guest_email, date_of_birth, waiver_accepted, unit_price, pay_by, created_at)
-  SELECT booking.id, g.guest_type, g.guest_name, g.guest_email, g.date_of_birth, false, g.unit_price, g.pay_by,
+  SELECT booking.id, g.guest_type, g.guest_name, g.guest_email, g.date_of_birth, false, g.unit_price - g.discount, g.pay_by,
          clock.at + g.seat_no * interval '1 millisecond'
   FROM booking
   CROSS JOIN clock
   CROSS JOIN jsonb_to_recordset($13::jsonb)
-    AS g(seat_no int, guest_type text, guest_name text, guest_email text, date_of_birth date, unit_price numeric, pay_by text)
+    AS g(seat_no int, guest_type text, guest_name text, guest_email text, date_of_birth date, unit_price numeric, discount numeric, pay_by text)
   RETURNING id
 ),
 line AS (
@@ -204,6 +210,7 @@ export async function writeBooking(tx: Tx, booking: BookingToWrite, order?: Book
     guest_email: seat.email,
     date_of_birth: seat.dateOfBirth,
     unit_price: seat.unitPrice,
+    discount: seat.discount,
     pay_by: seat.payBy,
   }))
   const rows = await tx.query<BookingWritten>(BOOKING_SQL, [

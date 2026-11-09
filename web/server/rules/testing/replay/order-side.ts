@@ -48,6 +48,9 @@ export function oldResult(body: { ok: true; data: PlaceOrderOutput } | ApiFailur
       ...(sessionPassId ? { sessionPassId } : {}),
       cardCharged: payment.cardCharged,
       cardAmount: payment.collected,
+      // W09: createOrder named the gift card and store credit taken only when there were any.
+      ...(payment.giftCardApplied > 0 ? { giftCardRedeemedAmount: payment.giftCardApplied } : {}),
+      ...(payment.storeCreditApplied > 0 ? { storeCreditRedeemedAmount: payment.storeCreditApplied } : {}),
       paymentMethodUsed: payment.method,
     }
   }

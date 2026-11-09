@@ -1,0 +1,12 @@
+{
+  "scenario": "w09-refused-gift-card-expired",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "gift_card_expired"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

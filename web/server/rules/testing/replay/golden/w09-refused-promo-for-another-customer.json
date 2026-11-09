@@ -1,0 +1,13 @@
+{
+  "scenario": "w09-refused-promo-for-another-customer",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "promo_code_invalid",
+      "message": "Promo code \"ALLTEN\" cannot be used: That promo code is restricted to a different customer."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

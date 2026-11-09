@@ -1,0 +1,13 @@
+{
+  "scenario": "w09-refused-promo-after-the-stock",
+  "results": [
+    {
+      "success": false,
+      "stage": "product",
+      "reason": "insufficient_stock",
+      "productVariantId": "10000000-0000-4000-8000-000000000008"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

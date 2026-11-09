@@ -1090,3 +1090,469 @@ describe('an event, a session and two variants in one basket, against another or
     expect(settled.filter((outcome) => outcome.status === 'rejected' && isDeadlock(outcome.reason))).toHaveLength(1)
   })
 })
+
+// --- W09: promo codes, store credit and gift cards used to pay
+
+/** A promo code: unlimited unless `row` says, fixed £1 off products, events and bookings. */
+async function promo(row: Record<string, unknown> = {}): Promise<{ id: string; code: string }> {
+  const code = `W09-${crypto.randomUUID().slice(0, 8).toUpperCase()}`
+  const id = await fixtures.promo(first, { code, discount_type: 'fixed', discount_value: '1', applies_to: ['booking', 'product', 'event'], ...row })
+  return { id, code }
+}
+
+/** A gift card with `balance` on it. */
+async function giftCard(balance: string): Promise<string> {
+  return insert(first, 'gift_cards', {
+    code: `W09-${crypto.randomUUID().slice(0, 10)}`,
+    type: 'monetary',
+    original_value: balance,
+    remaining_balance: balance,
+    origin: 'customer_purchase',
+    expiry_date: '2099-01-01',
+  })
+}
+
+/** One £12 soap, with `promoCode` (£1 off) and whatever `payment` says, the rest in cash. */
+function soapOrder(customerId: string, variantId: string, extra: Partial<PlaceOrderInput> & { toCollect: number }): PlaceOrderInput {
+  const { toCollect, ...rest } = extra
+  return { customerId, products: [{ productVariantId: variantId, quantity: 1 }], payment: { method: 'cash' }, confirmed: { toCollect }, ...rest }
+}
+
+const usesOf = (promoId: string) => count('SELECT count(*)::int AS n FROM promo_code_redemptions WHERE promo_code_id = $1', [promoId])
+const balanceOf = async (customerId: string) => (await first.query<{ b: string }>('SELECT store_credit_balance::text AS b FROM customers WHERE id = $1', [customerId]))[0]?.b
+const cardBalance = async (cardId: string) => (await first.query<{ b: string }>('SELECT remaining_balance::text AS b FROM gift_cards WHERE id = $1', [cardId]))[0]?.b
+const creditRows = (customerId: string) => count('SELECT count(*)::int AS n FROM store_credit_transactions WHERE customer_id = $1', [customerId])
+const cardRows = (cardId: string) => count('SELECT count(*)::int AS n FROM gift_card_redemptions WHERE gift_card_id = $1', [cardId])
+
+describe('the last use of a promo code (W09)', () => {
+  async function lastUse() {
+    return { promo: await promo({ max_total_uses: 1 }), variant: await variant(10), first: await fixtures.customer(first), second: await fixtures.customer(first) }
+  }
+  const order = (seed: Awaited<ReturnType<typeof lastUse>>, who: 'first' | 'second') => soapOrder(seed[who], seed.variant, { promoCode: seed.promo.code, toCollect: 11 })
+
+  it("goes to the first; the second waited on the promo code and is refused with createOrder's words", async () => {
+    const seed = await lastUse()
+    const result = await race(placing((who) => order(seed, who)), 'commit', 'promo_codes')
+    expect(result.first).toHaveProperty('won')
+    expect(result.second).toMatchObject({ refused: { reason: 'promo_code_invalid' } })
+    expect(await usesOf(seed.promo.id)).toBe(1)
+    expect(await ordersFor(seed.second)).toBe(0)
+  })
+
+  it('goes to the second if the first rolls back', async () => {
+    const seed = await lastUse()
+    const result = await race(placing((who) => order(seed, who)), 'rollback', 'promo_codes')
+    expect(result.second).toHaveProperty('won')
+    expect(await usesOf(seed.promo.id)).toBe(1)
+  })
+
+  it('has one winner in every free-running race', async () => {
+    for (let round = 0; round < 15; round += 1) {
+      const seed = await lastUse()
+      const results = await Promise.all([placed(first, order(seed, 'first')), placed(second, order(seed, 'second'))])
+      expect(results.filter((r) => 'won' in r)).toHaveLength(1)
+      expect(results.find((r) => 'refused' in r)).toMatchObject({ refused: { reason: 'promo_code_invalid' } })
+      expect(await usesOf(seed.promo.id)).toBe(1)
+    }
+  }, 60_000)
+
+  it('once per customer: a second order by the same customer waits, then is refused', async () => {
+    const seed = await lastUse()
+    await first.query('UPDATE promo_codes SET max_total_uses = NULL, one_use_per_customer = true WHERE id = $1', [seed.promo.id])
+    const result = await race(placing(() => order(seed, 'first')), 'commit', 'customers')
+    expect(result.first).toHaveProperty('won')
+    expect(result.second).toMatchObject({ refused: { reason: 'promo_code_invalid' } })
+    expect(await usesOf(seed.promo.id)).toBe(1)
+  })
+
+  describe("beside the old createOrder's insert-then-count (the W15 side-by-side case)", () => {
+    /** createOrder.ts's claimPromoRedemption: its order, then its redemption, then the count, each a statement of its own. */
+    async function oldClaim(tx: Tx, promoId: string, customerId: string): Promise<string> {
+      const orderId = (await tx.query<{ id: string }>(`INSERT INTO orders (customer_id, order_total, payment_status, order_source) VALUES ($1, 12, 'pending', 'staff_created') RETURNING id`, [customerId]))[0]?.id as string
+      await tx.query('INSERT INTO promo_code_redemptions (promo_code_id, order_id, customer_id, discount_amount) VALUES ($1, $2, $3, 1) ON CONFLICT (promo_code_id, order_id) DO NOTHING', [promoId, orderId, customerId])
+      const [counted] = await tx.query<{ total: number }>('SELECT count(*)::int AS total FROM promo_code_redemptions WHERE promo_code_id = $1', [promoId])
+      const [limits] = await tx.query<{ max: number | null }>('SELECT max_total_uses AS max FROM promo_codes WHERE id = $1', [promoId])
+      if (limits?.max !== null && limits?.max !== undefined && (counted?.total ?? 0) > limits.max) throw new Refused('promo_code_invalid')
+      return orderId
+    }
+
+    it("the old order's redemption waits on T1's lock (its foreign key), then its count sees T1's use and it refuses", async () => {
+      const seed = await lastUse()
+      const result = await race(
+        async (tx, who) => (who === 'first' ? placing(() => order(seed, 'first'))(tx, who) : oldClaim(tx, seed.promo.id, seed.second)),
+        'commit',
+        'promo_codes'
+      )
+      expect(result.first).toHaveProperty('won')
+      expect(result.second).toMatchObject({ refused: { reason: 'promo_code_invalid' } })
+      expect(await usesOf(seed.promo.id)).toBe(1)
+    })
+
+    it('the other way round: T1 waits for nothing the old order holds, and counts its committed use', async () => {
+      const seed = await lastUse()
+      await first.transaction((tx) => oldClaim(tx, seed.promo.id, seed.second))
+      expect(await placed(first, order(seed, 'first'))).toMatchObject({ refused: { reason: 'promo_code_invalid' } })
+      expect(await usesOf(seed.promo.id)).toBe(1)
+    })
+
+    it('the control: a lock an insert does not wait for (FOR NO KEY UPDATE) lets both keep the last use', async () => {
+      const seed = await lastUse()
+      // T1's order of events, by hand, with the weaker lock: lock, count (none used), then its own use, held open.
+      const holder = await holding(second, async (tx) => {
+        await tx.query('SELECT id FROM promo_codes WHERE id = $1 FOR NO KEY UPDATE', [seed.promo.id])
+        const orderId = (await tx.query<{ id: string }>(`INSERT INTO orders (customer_id, order_total, payment_status, order_source) VALUES ($1, 12, 'paid', 'staff_created') RETURNING id`, [seed.first]))[0]?.id
+        await tx.query('INSERT INTO promo_code_redemptions (promo_code_id, order_id, customer_id, discount_amount) VALUES ($1, $2, $3, 1)', [seed.promo.id, orderId, seed.first])
+      })
+      // The old order goes straight through: its count can't see the holder's uncommitted use.
+      const old = await attempt(first, (tx) => oldClaim(tx, seed.promo.id, seed.second))
+      expect(old).toHaveProperty('won')
+      await holder.finish('commit')
+      expect(await usesOf(seed.promo.id)).toBe(2)
+    })
+  })
+})
+
+describe('a store credit balance spent by another order at the same time (W09)', () => {
+  async function tenPounds() {
+    return { customer: await fixtures.customer(first, { store_credit_balance: '10.00' }), variant: await variant(10) }
+  }
+  const spending = (seed: Awaited<ReturnType<typeof tenPounds>>) => soapOrder(seed.customer, seed.variant, { payment: { method: 'cash', storeCredit: { amount: 10 } }, toCollect: 2 })
+
+  it("two orders: the second waits on the customer, then is refused with createOrder's words", async () => {
+    const seed = await tenPounds()
+    const result = await race(placing(() => spending(seed), asStaff), 'commit', 'customers')
+    expect(result.first).toHaveProperty('won')
+    expect(result.second).toMatchObject({ refused: { reason: 'store_credit_insufficient' } })
+    expect(await balanceOf(seed.customer)).toBe('0.00')
+    expect(await creditRows(seed.customer)).toBe(1)
+  })
+
+  it('an order waits for the old store_credit_apply in its lock statement, then reads the balance afresh', async () => {
+    const seed = await tenPounds()
+    const holder = await holding(second, async (tx) => {
+      await tx.query(`SELECT public.store_credit_apply($1::uuid, -10, 'redemption')`, [seed.customer])
+    })
+    const pending = placed(first, spending(seed), asStaff)
+    const waiter = await blockedBy(holder.pid)
+    expect(await waitingOn(pg, waiter)).toEqual(['customers'])
+    const [waiting] = await pg.admin.unsafe<{ query: string }[]>('SELECT query FROM pg_stat_activity WHERE pid = $1', [waiter])
+    expect(waiting?.query).toMatch(/^\s*SELECT s\.id AS session_id, p\.id AS credit_period_id/)
+    await holder.finish('commit')
+    expect(await pending).toMatchObject({ refused: { reason: 'store_credit_insufficient' } })
+    expect(await balanceOf(seed.customer)).toBe('0.00')
+    expect(await creditRows(seed.customer)).toBe(1)
+  })
+
+  it('the old store_credit_apply waits for T1, then refuses on what T1 left', async () => {
+    const seed = await tenPounds()
+    const result = await race(
+      async (tx, who) => {
+        if (who === 'first') return placing(() => spending(seed), asStaff)(tx, who)
+        const [row] = await tx.query<{ result: { ok: boolean; reason?: string } }>(`SELECT public.store_credit_apply($1::uuid, -10, 'redemption') AS result`, [seed.customer])
+        if (!row?.result.ok) throw new Refused(row?.result.reason ?? 'refused')
+        return row.result
+      },
+      'commit',
+      'customers'
+    )
+    expect(result.first).toHaveProperty('won')
+    expect(result.second).toMatchObject({ refused: { reason: 'insufficient_store_credit' } })
+    expect(await balanceOf(seed.customer)).toBe('0.00')
+  })
+
+  it('has one winner in every free-running race', async () => {
+    for (let round = 0; round < 15; round += 1) {
+      const seed = await tenPounds()
+      const results = await Promise.all([placed(first, spending(seed), asStaff), placed(second, spending(seed), asStaff)])
+      expect(results.filter((r) => 'won' in r)).toHaveLength(1)
+      expect(results.find((r) => 'refused' in r)).toMatchObject({ refused: { reason: 'store_credit_insufficient' } })
+      expect(await balanceOf(seed.customer)).toBe('0.00')
+    }
+  }, 60_000)
+})
+
+describe('a gift card balance spent elsewhere (W09)', () => {
+  // A soap each, so the card is the only row the two orders share.
+  async function tenOnACard() {
+    return { card: await giftCard('10.00'), variants: { first: await variant(10), second: await variant(10) }, first: await fixtures.customer(first), second: await fixtures.customer(first) }
+  }
+  const paying = (seed: Awaited<ReturnType<typeof tenOnACard>>, who: 'first' | 'second') =>
+    soapOrder(seed[who], seed.variants[who], { payment: { method: 'cash', giftCard: { giftCardId: seed.card, amount: 10 } }, toCollect: 2 })
+
+  it("two orders on one card: the second waits on the card, then is refused with createOrder's words", async () => {
+    const seed = await tenOnACard()
+    const result = await race(placing((who) => paying(seed, who)), 'commit', 'gift_cards')
+    expect(result.first).toHaveProperty('won')
+    expect(result.second).toMatchObject({ refused: { reason: 'gift_card_insufficient_or_invalid' } })
+    expect(await cardBalance(seed.card)).toBe('0.00')
+    expect(await cardRows(seed.card)).toBe(1)
+    expect(await ordersFor(seed.second)).toBe(0)
+  })
+
+  it('goes to the second if the first rolls back', async () => {
+    const seed = await tenOnACard()
+    const result = await race(placing((who) => paying(seed, who)), 'rollback', 'gift_cards')
+    expect(result.second).toHaveProperty('won')
+    expect(await cardBalance(seed.card)).toBe('0.00')
+    expect(await cardRows(seed.card)).toBe(1)
+  })
+
+  it("an order waits for the old createOrder's claim in its lock statement, then reads the balance afresh", async () => {
+    const seed = await tenOnACard()
+    const holder = await holding(second, async (tx) => {
+      await tx.query(
+        `UPDATE gift_cards SET remaining_balance = remaining_balance - $1, updated_at = now()
+         WHERE id = $2 AND remaining_balance >= $3 AND voided IS NOT TRUE AND expiry_date >= (now() AT TIME ZONE 'Europe/London')::date`,
+        [10, seed.card, 10]
+      )
+    })
+    const pending = placed(first, paying(seed, 'first'))
+    const waiter = await blockedBy(holder.pid)
+    expect(await waitingOn(pg, waiter)).toEqual(['gift_cards'])
+    const [waiting] = await pg.admin.unsafe<{ query: string }[]>('SELECT query FROM pg_stat_activity WHERE pid = $1', [waiter])
+    expect(waiting?.query).toMatch(/^\s*SELECT s\.id AS session_id, p\.id AS credit_period_id/)
+    await holder.finish('commit')
+    expect(await pending).toMatchObject({ refused: { reason: 'gift_card_insufficient_or_invalid' } })
+    expect(await cardBalance(seed.card)).toBe('0.00')
+    expect(await cardRows(seed.card)).toBe(0)
+  })
+
+  it("the old createOrder's claim waits for T1, then finds nothing left (its guard re-checks the row T1 changed)", async () => {
+    const seed = await tenOnACard()
+    const result = await race(
+      async (tx, who) => {
+        if (who === 'first') return placing((w) => paying(seed, w))(tx, who)
+        const claimed = await tx.query(
+          `UPDATE gift_cards SET remaining_balance = remaining_balance - $1, updated_at = now()
+           WHERE id = $2 AND remaining_balance >= $3 AND voided IS NOT TRUE AND expiry_date >= (now() AT TIME ZONE 'Europe/London')::date RETURNING id`,
+          [10, seed.card, 10]
+        )
+        if (claimed.length === 0) throw new Refused('gift_card_insufficient_or_invalid')
+        return claimed
+      },
+      'commit',
+      'gift_cards'
+    )
+    expect(result.first).toHaveProperty('won')
+    expect(result.second).toMatchObject({ refused: { reason: 'gift_card_insufficient_or_invalid' } })
+    expect(await cardBalance(seed.card)).toBe('0.00')
+  })
+
+  it('two orders on a card with enough for both, in transactions of their own: the second waits on the card, then both go through, 50 rounds with no deadlock', async () => {
+    // The card is locked FOR NO KEY UPDATE, so the second order waits before it reads the balance. A shared
+    // lock would let both read and then both claim: a deadlock, which T1 runs once more only when it opened
+    // the transaction itself. These join a transaction of their own, so it would show (as W08's event test).
+    const card = await giftCard('200.00')
+    const variants = { first: await variant(200), second: await variant(200) }
+    const pay = (customerId: string, who: 'first' | 'second') => soapOrder(customerId, variants[who], { payment: { method: 'cash', giftCard: { giftCardId: card, amount: 1 } }, toCollect: 11 })
+    const customers = { first: await fixtures.customer(first), second: await fixtures.customer(first) }
+    const result = await race(placing((who) => pay(customers[who], who)), 'commit', 'gift_cards')
+    expect(result.first).toHaveProperty('won')
+    expect(result.second).toHaveProperty('won')
+    for (let round = 0; round < 50; round += 1) {
+      const results = await Promise.all([
+        attempt(first, async () => placeOrder(first, pay(await fixtures.customer(prober), 'first'), options)),
+        attempt(second, async () => placeOrder(second, pay(await fixtures.customer(prober), 'second'), options)),
+      ])
+      expect(results.map((r) => 'won' in r)).toEqual([true, true])
+    }
+    expect(await cardBalance(card)).toBe('98.00')
+    expect(await cardRows(card)).toBe(102)
+  }, 120_000)
+
+  it('has one winner in every free-running race', async () => {
+    for (let round = 0; round < 15; round += 1) {
+      const seed = await tenOnACard()
+      const results = await Promise.all([placed(first, paying(seed, 'first')), placed(second, paying(seed, 'second'))])
+      expect(results.filter((r) => 'won' in r)).toHaveLength(1)
+      expect(results.find((r) => 'refused' in r)).toMatchObject({ refused: { reason: 'gift_card_insufficient_or_invalid' } })
+      expect(await cardBalance(seed.card)).toBe('0.00')
+    }
+  }, 60_000)
+})
+
+describe('the full lock chain, with W09 (W03-plan 2.4 item 8)', () => {
+  /** Whether `prober` can take the row now: false when someone holds it. */
+  async function free(table: string, id: string): Promise<boolean> {
+    try {
+      // Test data only: the table names are literals from this file.
+      const lockNow = `SELECT id FROM ${table} WHERE id = $1 FOR UPDATE NOWAIT`
+      await prober.transaction((tx) => tx.query(lockNow, [id]))
+      return true
+    } catch (err) {
+      if (err instanceof DbTimeoutError && /55P03/.test(err.detail ?? '')) return false
+      throw err
+    }
+  }
+
+  type Row = [table: string, id: string]
+
+  /** As W06's: hold row `k`, start the order, and check every row before `k` is the order's and every row after it is free. */
+  async function provesOrder(chain: Row[], input: PlaceOrderInput) {
+    for (let k = 0; k < chain.length; k += 1) {
+      const [table, id] = chain[k] as Row
+      // Test data only: the table names are literals from this file.
+      const lock = `SELECT id FROM ${table} WHERE id = $1 FOR UPDATE`
+      const holder = await holding(second, async (tx) => void (await tx.query(lock, [id])))
+      const order = placed(first, input, asStaff).finally(() => undefined)
+      await blockedBy(holder.pid)
+      const seen = await Promise.all(chain.map(async ([t, rowId], i) => (i === k ? 'held' : (await free(t, rowId)) ? 'free' : 'taken')))
+      expect(seen).toEqual(chain.map((_, i) => (i < k ? 'taken' : i === k ? 'held' : 'free')))
+      await holder.finish('rollback')
+      const outcome = await order
+      expect(outcome, `round ${k}: ${'refused' in outcome ? outcome.refused.reason : ''}`).toHaveProperty('won')
+      await first.query("UPDATE bookings SET status = 'cancelled' WHERE customer_id = $1", [input.customerId ?? null])
+      await first.query('UPDATE sessions SET total_booked = 0 WHERE id = $1', [input.booking?.sessionId ?? null])
+    }
+  }
+
+  it('customer, promo code, session, credit period, add-on memberships, product variants, event, then the gift card', async () => {
+    const { customer, membership, period } = await member(20)
+    const [lowMember, highMember] = [crypto.randomUUID(), crypto.randomUUID()].sort() as [string, string]
+    for (const id of [highMember, lowMember]) {
+      await fixtures.membership(first, { id, customer_id: customer, plan_id: plan, is_herd: true, addon_credits_remaining: 20 })
+    }
+    const [low, high] = [crypto.randomUUID(), crypto.randomUUID()].sort() as [string, string]
+    await variant(100, high)
+    await variant(100, low)
+    const eventId = await fixtures.event(first, { capacity: 50 })
+    const code = await promo()
+    const card = await giftCard('100.00')
+    const { id: sessionId } = await session()
+    const booking = creditOrder(customer, sessionId, membership).booking as NonNullable<PlaceOrderInput['booking']>
+    const input: PlaceOrderInput = {
+      customerId: customer,
+      // Listed in the opposite order to LOCK_ORDER wherever a basket has an order: still locked in it.
+      event: eventPart(eventId),
+      products: [{ productVariantId: high, quantity: 1 }, { productVariantId: low, quantity: 1 }],
+      booking: { ...booking, addons: [highMember, lowMember].map((id) => ({ addonId: towel, quantity: 1, redemptionSource: 'membership_credit' as const, membershipId: id })) },
+      promoCode: code.code,
+      payment: { method: 'cash', giftCard: { giftCardId: card, amount: 1 } },
+      // £24 of soap and a Herd member's £20 place, £1 off, £1 on the card.
+      confirmed: { toCollect: 42 },
+    }
+    await provesOrder(
+      [
+        ['customers', customer],
+        ['promo_codes', code.id],
+        ['sessions', sessionId],
+        ['membership_credit_periods', period],
+        ['customer_memberships', lowMember],
+        ['customer_memberships', highMember],
+        ['product_variants', low],
+        ['product_variants', high],
+        ['events', eventId],
+        ['gift_cards', card],
+      ],
+      input
+    )
+  }, 90_000)
+
+  it('customer, promo code, session, the pass, then the gift card', async () => {
+    const customer = await fixtures.customer(first)
+    const passType = await fixtures.passType(first)
+    const pass = await fixtures.pass(first, { customer_id: customer, pass_type_id: passType, sessions_remaining: 10 })
+    const [soap] = [await variant(100)]
+    const code = await promo()
+    const card = await giftCard('100.00')
+    const { id: sessionId } = await session()
+    const input: PlaceOrderInput = {
+      customerId: customer,
+      booking: { sessionId, guests: [holderGuest], redemptionSource: 'session_pass_credit', sessionPassId: pass },
+      products: [{ productVariantId: soap as string, quantity: 1 }],
+      promoCode: code.code,
+      payment: { method: 'cash', giftCard: { giftCardId: card, amount: 1 } },
+      confirmed: { toCollect: 10 },
+    }
+    await provesOrder(
+      [
+        ['customers', customer],
+        ['promo_codes', code.id],
+        ['sessions', sessionId],
+        ['customer_session_passes', pass],
+        ['gift_cards', card],
+      ],
+      input
+    )
+  }, 60_000)
+})
+
+describe('a promo code, a session, two variants, an event and a gift card in one basket, against another order with them the other way round (W09)', () => {
+  // Order one lists the booking, the variants a then b, the event, then pays with the card; order two the
+  // event, the variants b then a, then the booking, and pays with the same card. T1 locks in LOCK_ORDER.
+  async function world() {
+    return {
+      session: (await session({ capacity: 200 })).id,
+      a: await variant(200),
+      b: await variant(200),
+      event: await fixtures.event(first, { capacity: 200 }),
+      promo: await promo(),
+      card: await giftCard('500.00'),
+    }
+  }
+
+  function baskets(seed: Awaited<ReturnType<typeof world>>, customers: { first: string; second: string }) {
+    const booking = (customerId: string) => paidOrder(customerId, seed.session).booking as NonNullable<PlaceOrderInput['booking']>
+    // £20 + £24 + £40, £1 off, £1 on the card: £82 in cash.
+    const pay = { payment: { method: 'cash', giftCard: { giftCardId: seed.card, amount: 1 } }, confirmed: { toCollect: 82 }, promoCode: seed.promo.code }
+    const one: PlaceOrderInput = {
+      customerId: customers.first,
+      booking: booking(customers.first),
+      products: [{ productVariantId: seed.a, quantity: 1 }, { productVariantId: seed.b, quantity: 1 }],
+      event: eventPart(seed.event),
+      ...pay,
+    }
+    const two: PlaceOrderInput = {
+      customerId: customers.second,
+      event: eventPart(seed.event),
+      products: [{ productVariantId: seed.b, quantity: 1 }, { productVariantId: seed.a, quantity: 1 }],
+      booking: booking(customers.second),
+      ...pay,
+    }
+    return { first: one, second: two }
+  }
+
+  it('the second waits on the promo code (the first row they share), then both go through', async () => {
+    const seed = await world()
+    const orders = baskets(seed, { first: await fixtures.customer(first), second: await fixtures.customer(first) })
+    const result = await race(placing((who) => orders[who], asStaff), 'commit', 'promo_codes')
+    expect(result.first).toHaveProperty('won')
+    expect(result.second).toHaveProperty('won')
+    expect([await usesOf(seed.promo.id), await cardBalance(seed.card), await placesBooked(seed.event)]).toEqual([2, '498.00', 2])
+  })
+
+  it('never deadlocks in 50 free-running races, with nothing to run it again (each joins a transaction of its own)', async () => {
+    const seed = await world()
+    for (let round = 0; round < 50; round += 1) {
+      const orders = baskets(seed, { first: await fixtures.customer(first), second: await fixtures.customer(first) })
+      const results = await Promise.all([
+        attempt(first, () => placeOrder(first, orders.first, asStaff)),
+        attempt(second, () => placeOrder(second, orders.second, asStaff)),
+      ])
+      expect(results.map((r) => 'won' in r)).toEqual([true, true])
+    }
+    expect([await usesOf(seed.promo.id), await cardBalance(seed.card), await stockOf(seed.a), await placesBooked(seed.event), await bookingsOn(seed.session)]).toEqual([100, '400.00', 100, 100, 100])
+  }, 180_000)
+
+  it('the control: locking the gift card and the promo code in opposite orders instead deadlocks', async () => {
+    const seed = await world()
+    const lockPromo = 'SELECT id FROM promo_codes WHERE id = $1 FOR UPDATE'
+    const lockCard = 'SELECT id FROM gift_cards WHERE id = $1 FOR NO KEY UPDATE'
+    const promoTaken = deferred()
+    const cardTaken = deferred()
+    const one = first.transaction(async (tx) => {
+      await tx.query(lockPromo, [seed.promo.id])
+      promoTaken.resolve()
+      await cardTaken.promise
+      await tx.query(lockCard, [seed.card])
+    })
+    const two = second.transaction(async (tx) => {
+      await tx.query(lockCard, [seed.card])
+      cardTaken.resolve()
+      await promoTaken.promise
+      await tx.query(lockPromo, [seed.promo.id])
+    })
+    const settled = await Promise.allSettled([one, two])
+    expect(settled.filter((outcome) => outcome.status === 'rejected' && isDeadlock(outcome.reason))).toHaveLength(1)
+  })
+})

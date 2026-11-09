@@ -1,0 +1,12 @@
+{
+  "scenario": "w09-refused-a-gift-card-bought-in-the-same-basket",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "gift_card_not_found"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

@@ -75,6 +75,13 @@ W08's scenarios (`w08-*`) cover events: every reason of stages 8 and 21 with its
 live can't have an event on sale with a price missing, and puts it back `NOT VALID` (the row it leaves
 would fail a check of the old rows; new rows are still checked).
 
+W09's scenarios (`w09-*`) cover promo codes, store credit and gift cards used to pay: the discount on
+every kind a code applies to (seats, places, add-ons, products, passes, a private booking's whole
+price), how a fixed code's pennies are spread, every reason of stages 15, 16, 20, 24, 25a and 30 that
+one order can reach, the payment method each mix records (Q9 is the one named difference), and W02's
+noise cases (exact cover, fully covered orders, half pennies). The `MEMBERS5` code one scenario adds
+has a fixed id, so its recording repeats.
+
 `quote-shadow.test.ts` runs every scenario through the old `createOrder` with its shadow switched on,
 against the real quote and parity routes, and reads what the shadow logged. A scenario must match
 what the order wrote, except the differences in `quote-differences.ts`, each of which names its

@@ -2788,6 +2788,7 @@ export const scenarios: Scenario[] = [
   ...w06Scenarios(),
   ...w07Scenarios(),
   ...w08Scenarios(),
+  ...w09Scenarios(),
 ]
 
 // --- W06: the Worker's order core. Every createOrder and createBooking reason in W06's scope that had
@@ -3246,5 +3247,189 @@ function w08Scenarios(): Scenario[] {
     order('w08-refused-event-owed-with-no-method', { event: places([samAttending]), payment: {} }),
     // A membership bought in the same basket would price the account holder as a member: not built until W13
     order('w08-event-with-a-membership-bought-in-cash', { event: places([samAttending]), ...monthly, payment: cash(80) }),
+  ]
+}
+
+// --- W09: promo codes, store credit and gift cards used to pay. Every reason of stages 15, 16, 20, 24,
+// 25a and 30 in scope with its words, the discount on everything a code applies to (seats, private
+// bookings, event places, add-ons, products, passes), the payment method each mix records, and W02's
+// noise cases (exact cover, fully covered orders, half pennies). Each runs through the old createOrder
+// for its golden file, and order-replay.test.ts runs it through the new route too.
+function w09Scenarios(): Scenario[] {
+  const UNKNOWN = '10000000-0000-4000-8000-0000000000fc'
+  const beaSeat: Guest = { name: 'Bea Guest', email: 'bea@example.com' }
+  const robe = { addonId: ID.robe, quantity: 1, unitPrice: 8, systemUnitPrice: 8 }
+  const asMo = { customerId: ID.member }
+  const samAttending = { ...sam, isAccountHolder: true }
+  const moAttending = { ...mo, isAccountHolder: true }
+  const alexGuest = { ...alex, isAccountHolder: false }
+  const beaGuest = { ...beaSeat, isAccountHolder: false }
+  type Attendee = { name: string; email: string; dateOfBirth?: string; isAccountHolder: boolean }
+  const places = (attendees: Attendee[]) => ({
+    eventId: ID.event,
+    accountHolderAttending: attendees.some((attendee) => attendee.isAccountHolder),
+    ...(attendees.some((attendee) => !attendee.isAccountHolder) ? { guestsOver18Confirmed: true } : {}),
+    attendees,
+  })
+  const gift = (amount: number, giftCardId: string = ID.giftCard) => ({ giftCard: { giftCardId, amount } })
+  const credit = (amount: number) => ({ storeCredit: { amount } })
+  /** A price staff typed, with Manage pricing and a reason, as W02's noise cases needed one. */
+  const towelAt = (unitPrice: number) => ({ ...towel, unitPrice, priceOverrideReason: 'Noise case' })
+  const promoHas = (sql: string, ...values: SqlParam[]) => async (db: Db) => {
+    await db.query(sql, [...values, ID.promoPercent])
+  }
+  /** An earlier order of `customerId`'s that used ALLTEN. */
+  const usedBefore = (customerId: string) => async (db: Db) => {
+    const orderId = await insert(db, 'orders', { customer_id: customerId, order_total: '20.00', payment_status: 'paid', order_source: 'staff_created' })
+    await insert(db, 'promo_code_redemptions', { promo_code_id: ID.promoPercent, order_id: orderId, customer_id: customerId, discount_amount: '2.00' })
+  }
+  const both = (...steps: Array<(db: Db) => Promise<void>>) => async (db: Db) => {
+    for (const step of steps) await step(db)
+  }
+  const cardHas = (sql: string, ...values: SqlParam[]) => async (db: Db) => {
+    await db.query(sql, [...values, ID.giftCard])
+  }
+  const sessionFull = async (db: Db) => {
+    await db.query('UPDATE sessions SET total_booked = capacity WHERE id = $1', [ID.session])
+  }
+  const eventSoldOut = async (db: Db) => {
+    await db.query('UPDATE events SET places_booked = capacity WHERE id = $1', [ID.event])
+  }
+  /** The seed customer with a full address on file, a second line among it (the seed has only a country). */
+  const addressOnFile = async (db: Db) => {
+    await db.query(
+      `UPDATE customers SET address_line1 = $1, address_line2 = $2, city = $3, postcode = $4, country = $5 WHERE id = $6`,
+      ['7 Canal Street', 'Flat 2', 'Todmorden', 'OL14 5AA', 'United Kingdom', ID.customer]
+    )
+  }
+  /** A fixed £5 off that also takes member prices, for every kind. */
+  const membersFiver = async (db: Db) => {
+    await insert(db, 'promo_codes', { id: '10000000-0000-4000-8000-0000000000fb', code: 'MEMBERS5', discount_type: 'fixed', discount_value: '5', applies_to: EVERY_KIND, applies_on_member_prices: true })
+  }
+  /** One of every kind W06 to W08 build: a seat, a standalone towel, two soaps, a pass, a £60 gift card bought and an event place (£199). */
+  const everyKind = {
+    booking: paidSeat(),
+    standaloneAddons: [towel],
+    products: [soap],
+    sessionPassTypeId: ID.passType,
+    giftCard: { giftCardPresetId: ID.giftCardPreset, fulfillmentMethod: 'digital' },
+    event: places([samAttending]),
+  }
+  return [
+    // --- The discount on what a code applies to, written at creation
+    // A fixed £5 over three £20 seats: 1.66, 1.66, 1.68 (the leftover pennies go to the last line with room).
+    order('w09-fixed-promo-spread-across-three-seats', { booking: paidSeat([sam, alex, beaSeat]), promoCode: PROMO.fixed, payment: cash(55) }),
+    // W8-6: the same across three £40 event places: 1.66, 1.66, 1.68.
+    order('w09-fixed-promo-spread-across-event-places', { event: places([samAttending, alexGuest, beaGuest]), promoCode: PROMO.fixed, payment: cash(115) }),
+    // A Herd member's £20 place and a guest's £40, with a code that takes member prices: 1.66 and 3.34.
+    order('w09-fixed-promo-on-a-member-place-and-a-guest', { ...asMo, event: places([moAttending, alexGuest]), promoCode: 'MEMBERS5', payment: cash(55) }, membersFiver),
+    // FIVER doesn't take member prices: all of it on the guest's place.
+    order('w09-fixed-promo-skips-a-member-place', { ...asMo, event: places([moAttending, alexGuest]), promoCode: PROMO.fixed, payment: cash(55) }),
+    // A Core member's Peak seat is a member price (£21.68): only the guest's £25.50 seat is discounted.
+    order('w09-promo-skips-a-member-priced-seat', { ...asMo, booking: { ...paidSeat([mo, alex]), sessionId: ID.peakSession }, promoCode: PROMO.percent, payment: cash(44.63) }),
+    order('w09-promo-on-a-guest-beside-a-credit-seat', { ...asMo, booking: { ...paidSeat([mo, alex]), ...memberCredit }, promoCode: PROMO.percent, payment: cash(18) }),
+    // Q6: the server's rule, kept: a buy-new pass booking's paid seats take the promo, and so does the pass.
+    order('w09-promo-on-a-buy-new-pass-and-its-guest', {
+      booking: { ...paidSeat([sam, alex]), redemptionSource: 'buy_new_session_pass' },
+      sessionPassTypeId: ID.passType,
+      promoCode: PROMO.percent,
+      payment: cash(63),
+    }),
+    order('w09-promo-skips-a-member-priced-addon', { ...asMo, standaloneAddons: [robe, towel], promoCode: PROMO.percent, payment: cash(12.5) }),
+    order('w09-percent-promo-on-every-kind-in-cash', { ...everyKind, promoCode: PROMO.percent, payment: cash(185.1) }),
+    // £5 over a £20 seat, a £5 towel, £24 of soap, a £50 pass and a £40 place: 0.71, 0.17, 0.86, 1.79, 1.47.
+    order('w09-fixed-promo-spread-across-every-kind', { ...everyKind, promoCode: PROMO.fixed, payment: cash(194) }),
+    order('w09-promo-covers-everything-nothing-owed', { booking: paidSeat([sam, alex]), promoCode: PROMO.big, payment: {} }),
+    // Postage is never discounted, and free postage is judged before the promo.
+    order('w09-promo-does-not-touch-free-postage', { products: [{ ...candle, quantity: 3 }], ...shipped, promoCode: PROMO.percent, payment: cash(54) }),
+    order('w09-promo-does-not-touch-postage', { products: [candle], ...shipped, promoCode: PROMO.percent, payment: cash(22.95) }),
+    order('w09-promo-typed-in-lower-case-with-spaces', { booking: paidSeat([sam, alex]), promoCode: '  allten ', payment: cash(36) }),
+    order('w09-promo-with-a-use-left', { booking: paidSeat(), promoCode: PROMO.percent, payment: cash(18) }, both(promoHas('UPDATE promo_codes SET max_total_uses = $1 WHERE id = $2', 2), usedBefore(ID.member))),
+    order('w09-promo-once-per-customer-used-by-someone-else', { booking: paidSeat(), promoCode: PROMO.percent, payment: cash(18) }, both(promoHas('UPDATE promo_codes SET one_use_per_customer = $1 WHERE id = $2', true), usedBefore(ID.member))),
+    order('w09-promo-for-this-customer', { booking: paidSeat(), promoCode: PROMO.percent, payment: cash(18) }, promoHas('UPDATE promo_codes SET restricted_customer_id = $1 WHERE id = $2', ID.customer)),
+    order('w09-promo-on-its-last-day', { booking: paidSeat(), promoCode: PROMO.percent, payment: cash(18) }, promoHas('UPDATE promo_codes SET expires_on = $1 WHERE id = $2', '2026-11-10')),
+    // --- Stage 20's reasons, with createOrder's words
+    order('w09-refused-unknown-promo', { booking: paidSeat(), promoCode: 'NOSUCH', payment: cash(20) }),
+    order('w09-refused-inactive-promo', { booking: paidSeat(), promoCode: PROMO.percent, payment: cash(18) }, promoHas('UPDATE promo_codes SET active = $1 WHERE id = $2', false)),
+    order('w09-refused-promo-at-its-limit', { booking: paidSeat(), promoCode: PROMO.percent, payment: cash(18) }, both(promoHas('UPDATE promo_codes SET max_total_uses = $1 WHERE id = $2', 1), usedBefore(ID.member))),
+    order('w09-refused-promo-already-used-by-the-customer', { booking: paidSeat(), promoCode: PROMO.percent, payment: cash(18) }, both(promoHas('UPDATE promo_codes SET one_use_per_customer = $1 WHERE id = $2', true), usedBefore(ID.customer))),
+    order('w09-refused-promo-for-another-customer', { booking: paidSeat(), promoCode: PROMO.percent, payment: cash(18) }, promoHas('UPDATE promo_codes SET restricted_customer_id = $1 WHERE id = $2', ID.member)),
+    order('w09-refused-promo-nothing-eligible', { booking: paidSeat(), promoCode: PROMO.productsOnly, payment: cash(20) }),
+    order('w09-refused-promo-below-min-spend', { booking: paidSeat([sam, alex]), promoCode: PROMO.spend150, payment: cash(36) }),
+    // --- Where stage 20 comes among the others
+    order('w09-refused-promo-after-the-stock', { products: [{ ...soap, quantity: 6 }], promoCode: 'NOSUCH', payment: cash(72) }),
+    order('w09-refused-a-full-session-before-the-promo', { booking: paidSeat(), promoCode: 'NOSUCH', payment: cash(20) }, sessionFull),
+    order('w09-refused-promo-before-the-event-places', { event: places([samAttending]), promoCode: 'NOSUCH', payment: cash(40) }, eventSoldOut),
+    // A buy-new booking works its promo out before anything is written, so before a full session.
+    order(
+      'w09-refused-buy-new-promo-before-the-booking',
+      { booking: { ...paidSeat(), redemptionSource: 'buy_new_session_pass' }, sessionPassTypeId: ID.passType, promoCode: 'NOSUCH', payment: cash(50) },
+      sessionFull
+    ),
+    order('w09-refused-promo-cash-figure-changed', { booking: paidSeat([sam, alex]), promoCode: PROMO.percent, payment: cash(40) }),
+    order('w09-refused-promo-owed-with-no-method', { booking: paidSeat([sam, alex]), promoCode: PROMO.percent, payment: {} }),
+    // --- Store credit: stages 16, 24 and 30
+    order('w09-store-credit-and-cash', { booking: paidSeat(), payment: { ...cash(15), ...credit(5) } }),
+    order('w09-store-credit-uses-the-whole-balance', { booking: paidSeat(), standaloneAddons: [towel], products: [soap], payment: { ...cash(19), ...credit(30) } }),
+    order('w09-refused-store-credit-amount-zero', { products: [soap], payment: { ...cash(24), ...credit(0) } }),
+    order('w09-refused-store-credit-amount-negative', { products: [soap], payment: { ...cash(29), ...credit(-5) } }),
+    order('w09-refused-store-credit-more-than-the-balance', { booking: paidSeat([sam, alex]), payment: { ...cash(9), ...credit(31) } }),
+    order('w09-refused-store-credit-for-a-customer-with-none', { ...asMo, standaloneAddons: [towel], payment: { ...cash(0), ...credit(5) } }),
+    order('w09-refused-store-credit-with-nothing-owed', { ...asMo, booking: { ...paidSeat([mo]), ...memberCredit }, payment: credit(5) }, async (db) => {
+      await db.query(`UPDATE customers SET store_credit_balance = '10.00' WHERE id = $1`, [ID.member])
+    }),
+    order('w09-refused-store-credit-checked-before-the-booking', { booking: paidSeat(), payment: { ...cash(0), ...credit(31) } }, sessionFull),
+    order('w09-refused-store-credit-leaves-something-owed-with-no-method', { products: [soap], payment: credit(10) }),
+    order('w09-refused-cash-figure-before-the-store-credit-over-the-total', { products: [soap], payment: { ...cash(5), ...credit(25) } }),
+    // --- Gift cards used to pay: stages 15, 24 and 30
+    order('w09-gift-card-covers-everything', { products: [soap], payment: gift(24) }),
+    order('w09-gift-card-uses-the-whole-balance', { booking: paidSeat([sam, alex]), payment: gift(40) }),
+    order('w09-gift-card-already-marked-redeemed-stays-so', { products: [soap], payment: gift(24) }, cardHas(`UPDATE gift_cards SET redeemed_at = $1 WHERE id = $2`, '2026-10-01 12:00:00+00')),
+    order('w09-gift-card-on-its-last-day', { products: [soap], payment: gift(24) }, cardHas('UPDATE gift_cards SET expiry_date = $1 WHERE id = $2', '2026-11-10')),
+    order('w09-refused-gift-card-amount-zero', { products: [soap], payment: { ...cash(24), ...gift(0) } }),
+    order('w09-refused-gift-card-not-found', { products: [soap], payment: { ...cash(14), ...gift(10, UNKNOWN) } }),
+    order('w09-refused-gift-card-voided', { products: [soap], payment: { ...cash(14), ...gift(10) } }, cardHas('UPDATE gift_cards SET voided = $1 WHERE id = $2', true)),
+    order('w09-refused-gift-card-expired', { products: [soap], payment: { ...cash(14), ...gift(10) } }, cardHas('UPDATE gift_cards SET expiry_date = $1 WHERE id = $2', '2026-11-09')),
+    order('w09-refused-gift-card-with-nothing-left', { products: [soap], payment: { ...cash(14), ...gift(10) } }, cardHas(`UPDATE gift_cards SET remaining_balance = $1 WHERE id = $2`, '0.00')),
+    order('w09-refused-gift-card-more-than-its-balance', { booking: paidSeat([sam, alex, beaSeat]), payment: { ...cash(19), ...gift(41) } }),
+    order('w09-refused-gift-card-over-the-total', { products: [soap], payment: gift(30) }),
+    order('w09-refused-gift-card-checked-before-store-credit', { products: [soap], payment: { ...cash(0), ...gift(10), ...credit(31) } }, cardHas('UPDATE gift_cards SET voided = $1 WHERE id = $2', true)),
+    order('w09-refused-method-checked-before-the-gift-card', { products: [soap], payment: { method: 'cheque', ...gift(10) } }, cardHas('UPDATE gift_cards SET voided = $1 WHERE id = $2', true)),
+    // The card bought in this basket doesn't exist yet when the order looks the paying card up.
+    order('w09-refused-a-gift-card-bought-in-the-same-basket', { giftCard: { giftCardPresetId: ID.giftCardPreset, fulfillmentMethod: 'digital' }, payment: { ...cash(0), ...gift(60, UNKNOWN) } }),
+    order('w09-refused-cash-figure-before-the-gift-card-over-the-total', { products: [soap], payment: { ...cash(5), ...gift(30) } }),
+    // --- What each mix records as the method (W03-decisions Q9), and W02's noise cases
+    order('w09-gift-card-and-store-credit-cover-everything', { products: [soap], payment: { ...gift(14), ...credit(10) } }),
+    order('w09-gift-card-store-credit-and-cash', { booking: paidSeat([sam, alex]), payment: { ...cash(20), ...gift(10), ...credit(10) } }),
+    // £6.95 covered exactly by £2.90 store credit and £4.05 on the gift card: no refusal, nothing owed.
+    order('w09-exact-cover-gift-card-and-store-credit', { standaloneAddons: [towelAt(6.95)], payment: { ...gift(4.05), ...credit(2.9) } }),
+    // £1.00 covered by 95p and 5p: nothing left to pay, so no method needed.
+    order('w09-exact-cover-ninety-five-and-five-pence', { standaloneAddons: [towelAt(1)], payment: { ...gift(0.95), ...credit(0.05) } }),
+    // Half pennies. £19.995 of store credit on £20 leaves a hair under half a penny, which is nothing to
+    // collect: a 1p cash figure is refused, as createOrder refused it.
+    order('w09-half-penny-store-credit', { booking: paidSeat(), payment: { ...cash(0.01), ...credit(19.995) } }),
+    // And with no method it covers the seat; the balance after rounds as store_credit_apply rounds it (£10.01, from £30).
+    order('w09-half-penny-store-credit-covers-it', { booking: paidSeat(), payment: credit(19.995) }),
+    order('w09-half-penny-price-in-cash', { standaloneAddons: [towelAt(18.995)], payment: { ...cash(9), ...credit(10) } }),
+    // --- Everything at once
+    order('w09-every-part-in-cash', { ...everyKind, promoCode: PROMO.fixed, payment: { ...cash(164), ...gift(20), ...credit(10) } }),
+    order('w09-worst-basket', {
+      booking: { ...paidSeat([sam, alex]), addons: [{ ...towel, redemptionSource: 'paid' }] },
+      products: [candle],
+      giftCard: { giftCardTypeId: ID.giftCardType, amount: 10, fulfillmentMethod: 'shipping' },
+      event: places([samAttending, alexGuest, beaGuest]),
+      ...shipped,
+      saveShippingAddressToCustomer: true,
+      promoCode: PROMO.fixed,
+      payment: { ...cash(164.95), ...gift(20), ...credit(10) },
+    }),
+    // --- Brief W09a (W09 review S1): a customer with an address on file. The store credit claim and the
+    // address save share one UPDATE of the customer, so hold what that UPDATE does to an address already there.
+    // Saving an address with no second line clears the old "Flat 2" (review A3).
+    order('w09a-saved-address-with-no-second-line-replaces-one-with-it', { products: [candle], ...shipped, saveShippingAddressToCustomer: true, payment: { ...cash(14.95), ...credit(10) } }, addressOnFile),
+    // Store credit alone, nothing shipped: the address on file stays as it was (review A1).
+    order('w09a-store-credit-alone-leaves-the-address-on-file', { products: [soap], payment: credit(24) }, addressOnFile),
+    // A promo beside a membership bought in the same basket would take a share of its first payment: not built until W13.
+    order('w09-promo-with-a-membership-bought-in-cash', { booking: paidSeat(), ...monthly, promoCode: PROMO.percent, payment: cash(54) }),
   ]
 }

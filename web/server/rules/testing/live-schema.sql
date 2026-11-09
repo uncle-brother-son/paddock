@@ -1504,7 +1504,7 @@ ALTER TABLE public.order_line_items ADD CONSTRAINT order_line_items_item_type_ch
 ALTER TABLE public.order_line_items ADD CONSTRAINT order_line_items_pkey PRIMARY KEY (id);
 ALTER TABLE public.order_line_items ADD CONSTRAINT order_line_items_refund_method_check CHECK ((refund_method = ANY (ARRAY['card'::text, 'credit'::text])));
 ALTER TABLE public.orders ADD CONSTRAINT orders_order_source_check CHECK ((order_source = ANY (ARRAY['online'::text, 'staff_created'::text])));
-ALTER TABLE public.orders ADD CONSTRAINT orders_payment_method_check CHECK ((payment_method = ANY (ARRAY['card'::text, 'reader'::text, 'cash'::text, 'gift_card'::text, 'split'::text])));
+ALTER TABLE public.orders ADD CONSTRAINT orders_payment_method_check CHECK ((payment_method = ANY (ARRAY['card'::text, 'reader'::text, 'cash'::text, 'gift_card'::text, 'split'::text, 'store_credit'::text])));
 ALTER TABLE public.orders ADD CONSTRAINT orders_payment_status_check CHECK ((payment_status = ANY (ARRAY['pending'::text, 'paid'::text, 'failed'::text, 'refunded'::text, 'partially_refunded'::text])));
 ALTER TABLE public.orders ADD CONSTRAINT orders_pkey PRIMARY KEY (id);
 ALTER TABLE public.orders ADD CONSTRAINT orders_shipping_status_check CHECK ((shipping_status = ANY (ARRAY['pending'::text, 'shipped'::text, 'delivered'::text])));

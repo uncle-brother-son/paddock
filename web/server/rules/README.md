@@ -17,7 +17,8 @@ everything it needs in one statement (`load-basket.ts`), because each database r
 (`load-basket.ts`, the quote's own read), `priceFromFacts` prices, then one statement writes the order
 with everything that doesn't need the booking (the gift card bought, the event's places, its booking
 and attendees (W08), the lines, the stock claimed and its ledger rows, the pass bought, the address
-saved to the customer), one the booking with its line,
+saved to the customer, and from W09 the promo code's use, the store credit and the gift card used to
+pay), one the booking with its line,
 add-ons and add-on credits (`write-booking.ts`), one the audit rows. The order comes first (W07)
 because a booking can be paid with a pass bought in the same basket, and that pass needs its line.
 With no Stripe step it finishes inside T1: seven round trips for a basket with a booking, six
@@ -53,6 +54,22 @@ idempotency key, before and after). The rules it keeps:
   T1 refuses with `event_full`; the counts are checked as well (W08).
 - **A pass is only written joined to its own line**, and the counts are checked, so neither can be
   kept without the other (checklist B3).
+- **A promo code is locked FOR UPDATE, after the customer** (W09). Its uses are counted in the facts,
+  after the lock. FOR UPDATE, not FOR NO KEY UPDATE, because the old createOrder claims a use by
+  inserting a `promo_code_redemptions` row and then counting: its foreign key check waits for T1, so its
+  count sees T1's use. The redemption is written only with the order.
+- **Store credit is claimed with store_credit_apply's own guard**, written into the customer's one
+  UPDATE in the order statement (which also saves the delivery address: a statement can't update a
+  row twice), with its ledger row only from the claim, and the amount exactly as sent. A claim that
+  finds the balance short refuses `store_credit_insufficient`, one that writes nothing otherwise
+  `store_credit_failed`, as store_credit_apply's two answers did (W09).
+- **A gift card used to pay is locked last**, and claimed with createOrder's guarded UPDATE (enough
+  left, not voided, not expired on today's London date), marked redeemed when used up, with its
+  redemption row only from the claim; `gift_card_insufficient_or_invalid` when it finds nothing (W09).
+- **What orders.payment_method records** is W03-decisions Q9's table (`recordedPaymentMethod`), and
+  the confirmed figures are checked in W03-plan 2.7's order: the cash figure, then the over-the-total
+  reasons, then `payment_method_required`, then `amount_changed` (Q11's words). The amount due is
+  checked when it is sent; the screen sends it from W14 (W09).
 - **What isn't built yet answers NOT_BUILT** before any transaction opens. The list is in
   `place-order.ts`; each slice takes its part off it.
 

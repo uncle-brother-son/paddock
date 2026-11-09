@@ -1,0 +1,12 @@
+{
+  "scenario": "w09-refused-store-credit-checked-before-the-booking",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "store_credit_insufficient"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

@@ -1,0 +1,12 @@
+{
+  "scenario": "w09-refused-gift-card-more-than-its-balance",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "gift_card_insufficient_or_invalid"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}
