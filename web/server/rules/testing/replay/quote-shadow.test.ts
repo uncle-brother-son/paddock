@@ -9,8 +9,8 @@ import { POST as promoRoute } from '@/app/api/v1/staff/promo-codes/validate/rout
 import { POST as dryRunRoute } from '@/app/api/v1/staff/orders/dry-run/route'
 import { compareRecordings, type AllowedDifference, type Recording } from './compare'
 import { backendDir, oldSide, readGolden, replay, REPLAY_USER, startReplay, type ReplayEnvironment, type Scenario } from './harness'
-import { W06_SCENARIOS } from './order-differences'
-import { QUOTE_DIFFERENCES, SCREEN_DIFFERENCE } from './quote-differences'
+import { ORDER_SCENARIOS } from './order-differences'
+import { DRY_RUN_DIFFERENCES, QUOTE_DIFFERENCES, SCREEN_DIFFERENCE } from './quote-differences'
 import { ID, PROMO, scenarios } from './scenarios'
 
 // The real old createOrder with its shadow switched on, talking to the real quote, dry-run and
@@ -162,12 +162,13 @@ describe('the quote shadow, through the real routes', () => {
       else if (allowed.length === 0) expect(quoteRows.map((row) => [row.action, row.matches])).toEqual([[QUOTE, true]])
       else expect(quoteRows.map((row) => row.matches)).toEqual([false])
 
-      // Brief W06: no decided differences for the dry run, so every row it leaves must be a match.
-      expect(undecided(dryRunRows, [])).toEqual([])
-      expect(dryRunRows.map((row) => row.matches)).not.toContain(false)
-      // A single order in W06's scope has its match; any other single order is one the Worker can't take yet.
+      // The dry run's own decided differences (from W07); every other row it leaves must be a match.
+      const dryRunAllowed = DRY_RUN_DIFFERENCES[name] ?? []
+      expect(undecided(dryRunRows, dryRunAllowed)).toEqual([])
+      if (dryRunAllowed.length === 0) expect(dryRunRows.map((row) => row.matches)).not.toContain(false)
+      // A single order in the order route's scope has its row; any other single order is one the Worker can't take yet.
       const singleOrder = actions.length === 1 && actions[0] === 'createOrder'
-      if (W06_SCENARIOS.includes(name)) expect(dryRunRows.map((row) => row.matches)).toEqual([true])
+      if (ORDER_SCENARIOS.includes(name)) expect(dryRunRows.map((row) => row.matches)).toEqual([dryRunAllowed.length === 0])
       else if (singleOrder) expect(dryRunRows).toEqual([])
     })
 
@@ -217,9 +218,9 @@ describe('the quote shadow, through the real routes', () => {
     })
 
     it('a refusal has nothing to read back', async () => {
-      const { parity } = await run(byName('refused-out-of-stock'))
-      expect(parity.map((row) => row.matches)).toEqual([true])
-      expect(timingOf(parity[0])['readBackMs']).toBeNull()
+      const { quoteRows } = await run(byName('refused-out-of-stock'))
+      expect(quoteRows.map((row) => row.matches)).toEqual([true])
+      expect(timingOf(quoteRows[0])['readBackMs']).toBeNull()
     })
 
     it('a failed comparison still says how long it took', async () => {
@@ -277,7 +278,7 @@ describe('the quote shadow, through the real routes', () => {
   describe('finding 17: free text stays out of parity_log', () => {
     const REASON = 'Regular at the Tuesday session, Sam Test agreed this'
     it('a refusal message is compared and not kept: only whether it matched', async () => {
-      const { parity } = await run(byName('refused-out-of-stock'), async (call) => {
+      const { quoteRows: parity } = await run(byName('refused-out-of-stock'), async (call) => {
         const answer = await realWorker(call)
         if (call.path !== QUOTE_PATH) return answer
         const body = answer.data as { data: BasketQuoteOutput }
@@ -342,7 +343,7 @@ describe('the quote shadow, through the real routes', () => {
       const body = answer.data as { data: BasketQuoteOutput }
       return { data: { ...body, data: { ...body.data, problems: [] } } }
     }
-    const { parity } = await run(scenario, blind)
+    const { quoteRows: parity } = await run(scenario, blind)
     expect(parity.map((row) => row.matches)).toEqual([false])
     expect(parity[0]?.old_result).toMatchObject({ refusal: { reason: 'insufficient_stock' } })
   })
@@ -541,6 +542,193 @@ describe('the quote shadow, through the real routes', () => {
       })
       expect(parity).toEqual([])
       expect(compareRecordings(withoutGoneNumbers(readGolden(CASH) as Recording), withoutShadowRows(recording))).toEqual([])
+    })
+
+    describe('W07: what products, postage, passes and gift cards write', () => {
+      type Rows = Record<string, unknown> & { order: Record<string, unknown>; customer_address: Record<string, unknown> | null; gift_cards: Array<Record<string, unknown>>; stock: Array<Record<string, unknown>>; stock_adjustments: Array<Record<string, unknown>>; session_passes: Array<Record<string, unknown>> }
+      type W07Body = { ok: boolean; data?: { order: Record<string, unknown>; rows: Rows } }
+      /** The real Worker, with the dry run's rows or answer changed. */
+      const changing = (change: (data: NonNullable<W07Body['data']>) => NonNullable<W07Body['data']>) => async (call: WorkerCall) => {
+        const answer = await realWorker(call)
+        if (call.path !== DRY_RUN_PATH) return answer
+        const body = answer.data as W07Body
+        return { data: { ...body, data: body.data && change(body.data) } }
+      }
+      const GIFT = 'w07-gift-card-custom-amount-picked-up-in-cash'
+      const SAVED = 'w07-delivery-address-saved-to-the-customer'
+      const PASS = 'w07-pass-on-its-own-in-cash'
+      const PRODUCT = 'w07-pickup-product-in-cash'
+
+      it('a gift card is compared by its format and count, and no code reaches parity_log', async () => {
+        const { dryRunRows } = await run(byName(GIFT))
+        expect(dryRunRows.map((row) => row.matches)).toEqual([true])
+        const caught = await run(byName(GIFT), changing((data) => ({ ...data, order: { ...data.order, giftCardCode: 'NOT-A-CODE' } })))
+        expect(caught.dryRunRows[0]?.diff).toEqual([{ path: 'result.giftCardCodeLooksRight', oldValue: true, newValue: false }])
+        const fewer = await run(byName(GIFT), changing((data) => ({ ...data, rows: { ...data.rows, gift_cards: [] } })))
+        expect(fewer.dryRunRows.map((row) => row.matches)).toEqual([false])
+        for (const rows of [dryRunRows, caught.dryRunRows, fewer.dryRunRows]) expect(JSON.stringify(rows)).not.toMatch(/PWC-|NOT-A-CODE/)
+      })
+
+      it('a gift card\'s recipient and message are compared and not kept', async () => {
+        const { dryRunRows } = await run(
+          byName(GIFT),
+          changing((data) => ({ ...data, rows: { ...data.rows, gift_cards: data.rows.gift_cards.map((card) => ({ ...card, recipient_name: 'Somebody Else' })) } }))
+        )
+        expect(dryRunRows.map((row) => row.matches)).toEqual([false])
+        expect(dryRunRows[0]?.diff).toEqual([])
+        expect(dryRunRows[0]?.new_result).toMatchObject({ freeTextMatches: false })
+        for (const text of ['Somebody Else', 'Ali Friend', 'ali@example.com', 'Happy birthday']) expect(JSON.stringify(dryRunRows)).not.toContain(text)
+      })
+
+      it('the delivery address and the address saved to the customer are compared and not kept', async () => {
+        const { dryRunRows } = await run(byName(SAVED))
+        expect(dryRunRows.map((row) => row.matches)).toEqual([true])
+        const moved = await run(
+          byName(SAVED),
+          changing((data) => ({ ...data, rows: { ...data.rows, customer_address: { ...data.rows.customer_address, line1: '2 Mill Lane' } } }))
+        )
+        expect(moved.dryRunRows.map((row) => row.matches)).toEqual([false])
+        expect(moved.dryRunRows[0]?.new_result).toMatchObject({ freeTextMatches: false })
+        const unsaved = await run(
+          byName(SAVED),
+          changing((data) => ({ ...data, rows: { ...data.rows, customer_address: { ...data.rows.customer_address, line1: null } } }))
+        )
+        expect(unsaved.dryRunRows[0]?.diff).toEqual([{ path: 'rows.customer_address.line1', oldValue: '<set>', newValue: null }])
+        for (const rows of [dryRunRows, moved.dryRunRows, unsaved.dryRunRows]) {
+          for (const text of ['Mill Lane', 'HX7', 'Hebden', 'Sam Test']) expect(JSON.stringify(rows)).not.toContain(text)
+        }
+      })
+
+      it('the stock, the ledger and a pass are compared', async () => {
+        const stock = await run(byName(PRODUCT), changing((data) => ({ ...data, rows: { ...data.rows, stock: data.rows.stock.map((row) => ({ ...row, stock_quantity: 4 })) } })))
+        expect(stock.dryRunRows[0]?.diff).toEqual([{ path: 'rows.stock.0.stock_quantity', oldValue: 3, newValue: 4 }])
+        const ledger = await run(byName(PRODUCT), changing((data) => ({ ...data, rows: { ...data.rows, stock_adjustments: [] } })))
+        expect(ledger.dryRunRows[0]?.diff?.map((d) => d.path)).toEqual(['rows.stock_adjustments.0'])
+        const pass = await run(byName(PASS), changing((data) => ({ ...data, rows: { ...data.rows, session_passes: data.rows.session_passes.map((row) => ({ ...row, sessions_remaining: 4 })) } })))
+        expect(pass.dryRunRows[0]?.diff).toEqual([{ path: 'rows.session_passes.0.sessions_remaining', oldValue: 5, newValue: 4 }])
+      })
+
+      describe('W07a (S1): the shadow keeps only the keys its own read-back has', () => {
+        const EVERY_KIND = 'w07-every-kind-in-cash'
+        const FREE_TEXT = ['7 Canal Street', 'Todmorden', 'Ali Friend', 'ali@example.com', '07700 900123', 'Mill Lane', '1990-01-01', 'Happy birthday']
+        /** A later Worker's read-back: free text in keys this version has never heard of, at every level. */
+        const withUnknownKeys = (data: NonNullable<W07Body['data']>): NonNullable<W07Body['data']> => {
+          const rows = data.rows as Rows & { lines: Array<Record<string, unknown>>; booking: (Record<string, unknown> & { seats: Array<Record<string, unknown>>; addons: Array<Record<string, unknown>> }) | null }
+          return {
+            ...data,
+            rows: {
+              ...rows,
+              attendees: [{ name: 'Ali Friend', email: 'ali@example.com', date_of_birth: '1990-01-01' }],
+              order: { ...rows.order, billing_address: '7 Canal Street, Todmorden' },
+              lines: rows.lines.map((line) => ({ ...line, buyer_email: 'ali@example.com' })),
+              booking: rows.booking && {
+                ...rows.booking,
+                emergency_contact: 'Ali Friend 07700 900123',
+                seats: rows.booking.seats.map((seat) => ({ ...seat, phone: '07700 900123' })),
+                addons: rows.booking.addons.map((addon) => ({ ...addon, note: 'Mill Lane' })),
+              },
+              stock: rows.stock.map((row) => ({ ...row, warehouse: 'Mill Lane' })),
+              stock_adjustments: rows.stock_adjustments.map((row) => ({ ...row, staff_name: 'Ali Friend' })),
+              session_passes: rows.session_passes.map((row) => ({ ...row, holder: 'Ali Friend' })),
+              gift_cards: rows.gift_cards.map((card) => ({ ...card, recipient_phone: '07700 900123', delivery_note: 'Happy birthday' })),
+              customer_address: rows.customer_address && { ...rows.customer_address, county: 'Todmorden' },
+            },
+          }
+        }
+        // attendees, billing_address, emergency_contact, county; one per line (5), seat (1), add-on (1), stock (1), ledger row (1), pass (1); two per gift card (1)
+        const UNKNOWN_KEYS = 4 + 5 + 1 + 1 + 1 + 1 + 1 + 2
+
+        it("the shadow's key lists are exactly the keys the read-back returns, section by section", async () => {
+          let rows: Rows | undefined
+          await run(byName(EVERY_KIND), changing((data) => {
+            rows = data.rows
+            return data
+          }))
+          const shadow = (await import(/* @vite-ignore */ path.join(backendDir, 'shared/orderQuoteShadow.ts'))) as { ORDER_ROWS_KEYS: Record<string, readonly string[]> }
+          const keys = (value: unknown) => Object.keys(value as object).sort()
+          const all = rows as Rows & { lines: unknown[]; booking: { seats: unknown[]; addons: unknown[] } }
+          const sections: Record<string, unknown> = {
+            rows: all,
+            order: all.order,
+            line: all.lines[0],
+            booking: all.booking,
+            seat: all.booking.seats[0],
+            addon: all.booking.addons[0],
+            stock: all.stock[0],
+            ledgerRow: all.stock_adjustments[0],
+            pass: all.session_passes[0],
+            giftCard: all.gift_cards[0],
+            customerAddress: all.customer_address,
+          }
+          expect(Object.keys(shadow.ORDER_ROWS_KEYS).sort()).toEqual(Object.keys(sections).sort())
+          for (const [section, value] of Object.entries(sections)) {
+            expect(value, `${section} is in the basket`).toBeTruthy()
+            expect([...(shadow.ORDER_ROWS_KEYS[section] ?? [])].sort(), section).toEqual(keys(value))
+          }
+        })
+
+        it('an extra free-text field never reaches parity_log; how many were dropped does, on a match', async () => {
+          const { dryRunRows } = await run(byName(EVERY_KIND), changing(withUnknownKeys))
+          expect(dryRunRows).toEqual([{ action: DRY_RUN, matches: true, diff: null, old_result: null, new_result: { timing: expect.anything(), droppedKeys: UNKNOWN_KEYS } }])
+          for (const text of FREE_TEXT) expect(JSON.stringify(dryRunRows)).not.toContain(text)
+        })
+
+        it('and on a difference: the diff and both sides hold none of it, only the count', async () => {
+          const { dryRunRows } = await run(
+            byName(EVERY_KIND),
+            changing((data) => {
+              const changed = withUnknownKeys(data)
+              return { ...changed, rows: { ...changed.rows, stock: changed.rows.stock.map((row) => ({ ...row, stock_quantity: 99 })) } }
+            })
+          )
+          expect(dryRunRows.map((row) => row.matches)).toEqual([false])
+          expect(dryRunRows[0]?.diff).toEqual([{ path: 'rows.stock.0.stock_quantity', oldValue: 3, newValue: 99 }])
+          expect(dryRunRows[0]?.new_result).toMatchObject({ droppedKeys: UNKNOWN_KEYS, freeTextMatches: true })
+          for (const text of FREE_TEXT) expect(JSON.stringify(dryRunRows)).not.toContain(text)
+          for (const key of ['attendees', 'billing_address', 'emergency_contact', 'county', 'recipient_phone', 'buyer_email']) expect(JSON.stringify(dryRunRows)).not.toContain(key)
+        })
+
+        it('a section in a shape this version does not know is dropped whole, and counted', async () => {
+          const { dryRunRows } = await run(
+            byName(SAVED),
+            changing((data) => ({ ...data, rows: { ...data.rows, customer_address: '7 Canal Street, Todmorden' as unknown as Rows['customer_address'] } }))
+          )
+          expect(dryRunRows.map((row) => row.matches)).toEqual([false])
+          expect(dryRunRows[0]?.new_result).toMatchObject({ droppedKeys: 1 })
+          for (const text of FREE_TEXT) expect(JSON.stringify(dryRunRows)).not.toContain(text)
+        })
+
+        it('a reply with nothing unknown records no count', async () => {
+          const { dryRunRows } = await run(byName(EVERY_KIND))
+          expect(dryRunRows).toEqual([{ action: DRY_RUN, matches: true, diff: null, old_result: null, new_result: { timing: expect.anything() } }])
+        })
+      })
+
+      it("an old order that warned (its address save failed after it was paid) is caught: the Worker's order never warns", async () => {
+        const db = environment.database.db
+        const failCustomers = async (on: boolean) => {
+          await db.query('RESET ROLE')
+          if (on) {
+            await db.query(`CREATE OR REPLACE FUNCTION public.fail_write() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'connection lost'; END $$`)
+            await db.query('CREATE TRIGGER fail_write BEFORE UPDATE ON public.customers FOR EACH ROW EXECUTE FUNCTION public.fail_write()')
+          } else {
+            await db.query('DROP TRIGGER IF EXISTS fail_write ON public.customers')
+          }
+          await db.query('SET ROLE paddock_worker')
+        }
+        try {
+          // The dry run runs whole first; only the old order's own save then fails.
+          const { dryRunRows } = await run(byName(SAVED), async (call) => {
+            const answer = await realWorker(call)
+            if (call.path === DRY_RUN_PATH) await failCustomers(true)
+            return answer
+          })
+          expect(dryRunRows.map((row) => row.matches)).toEqual([false])
+          expect(dryRunRows[0]?.diff?.map((d) => d.path)).toContain('result.hasWarning')
+        } finally {
+          await failCustomers(false)
+        }
+      })
     })
 
     it('reads the old order back with the Worker\'s own query, word for word', async () => {

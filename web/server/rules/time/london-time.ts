@@ -89,9 +89,13 @@ export function londonToday(now: Date = new Date()): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: LONDON }).format(now)
 }
 
-/** A "YYYY-MM-DD" date plus whole months, on the date digits (same overflow as Date#setMonth:
- *  31 Jan + 1 month = 3 Mar). Use with londonToday() so expiry / renewal dates are London dates. */
+/** A "YYYY-MM-DD" date plus whole months, on the date digits. A day the later month doesn't have
+ *  becomes its last day (Q33): 31 Jan + 1 month = 28 Feb, 29 Feb 2028 + 12 months = 28 Feb 2029.
+ *  The old staff app's copy rolls over instead (31 Jan + 1 month = 3 Mar) until W15. Use with
+ *  londonToday() so expiry dates are London dates. */
 export function addMonthsToIsoDate(isoDate: string, months: number): string {
   const [y, m, d] = isoDate.slice(0, 10).split('-').map(Number)
-  return new Date(Date.UTC(y!, m! - 1 + months, d!)).toISOString().slice(0, 10)
+  // Day 0 of the month after is the target month's last day.
+  const lastDay = new Date(Date.UTC(y!, m! + months, 0)).getUTCDate()
+  return new Date(Date.UTC(y!, m! - 1 + months, Math.min(d!, lastDay))).toISOString().slice(0, 10)
 }

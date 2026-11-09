@@ -1,0 +1,12 @@
+{
+  "scenario": "w07-refused-unknown-gift-card-type",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "gift_card_type_not_found"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

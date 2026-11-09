@@ -1,0 +1,12 @@
+{
+  "scenario": "w07-refused-buy-new-pass-on-a-private-booking",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "private_booking_requires_real_payment"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

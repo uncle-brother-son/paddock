@@ -58,8 +58,28 @@ describe('startsWithinRealHours', () => {
 })
 
 describe('addMonthsToIsoDate', () => {
-  it('adds on the digits, with the Date#setMonth overflow', () => {
+  it('adds on the digits: an ordinary date keeps its day, and 0 months changes nothing', () => {
     expect(addMonthsToIsoDate('2026-01-15', 1)).toBe('2026-02-15')
-    expect(addMonthsToIsoDate('2026-01-31', 1)).toBe('2026-03-03')
+    expect(addMonthsToIsoDate('2026-11-10', 12)).toBe('2027-11-10')
+    expect(addMonthsToIsoDate('2026-08-20', 18)).toBe('2028-02-20')
+    expect(addMonthsToIsoDate('2026-01-31', 0)).toBe('2026-01-31')
+    expect(addMonthsToIsoDate('2028-02-29', 0)).toBe('2028-02-29')
+  })
+
+  it("Q33: a day the later month doesn't have becomes its last day", () => {
+    expect(addMonthsToIsoDate('2027-01-31', 1)).toBe('2027-02-28')
+    expect(addMonthsToIsoDate('2028-01-31', 1)).toBe('2028-02-29')
+    expect(addMonthsToIsoDate('2028-02-29', 12)).toBe('2029-02-28')
+    expect(addMonthsToIsoDate('2027-03-31', 6)).toBe('2027-09-30')
+    expect(addMonthsToIsoDate('2026-11-30', 3)).toBe('2027-02-28')
+    expect(addMonthsToIsoDate('2027-11-30', 3)).toBe('2028-02-29')
+    expect(addMonthsToIsoDate('2026-12-31', 2)).toBe('2027-02-28')
+    expect(addMonthsToIsoDate('2026-10-31', 1)).toBe('2026-11-30')
+  })
+
+  it('Q33: a last day that the later month also has is kept, across a year end', () => {
+    expect(addMonthsToIsoDate('2026-12-31', 1)).toBe('2027-01-31')
+    expect(addMonthsToIsoDate('2027-02-28', 12)).toBe('2028-02-28')
+    expect(addMonthsToIsoDate('2026-05-31', 12)).toBe('2027-05-31')
   })
 })

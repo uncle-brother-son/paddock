@@ -1,0 +1,103 @@
+{
+  "scenario": "w07-gift-card-blank-recipient-kept-as-sent",
+  "results": [
+    {
+      "success": true,
+      "orderId": "orders#1",
+      "giftCardId": "gift_cards#1",
+      "giftCardCode": "<code#1>",
+      "cardCharged": false,
+      "cardAmount": 60,
+      "paymentMethodUsed": "cash"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "gift_cards": {
+      "added": [
+        {
+          "id": "gift_cards#1",
+          "code": "<code#1>",
+          "type": "monetary",
+          "original_value": "60.00",
+          "remaining_balance": "60.00",
+          "purchaser_id": "10000000-0000-4000-8000-000000000005",
+          "recipient_name": "",
+          "recipient_email": null,
+          "gift_message": "",
+          "origin": "customer_purchase",
+          "issue_date": "2026-11-10",
+          "expiry_date": "2027-11-10",
+          "redeemed_at": null,
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "fulfillment_method": "digital",
+          "picked_up": false,
+          "picked_up_at": null,
+          "picked_up_by": null,
+          "voided": false,
+          "shipped_at": null,
+          "shipped_by": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "order_line_items": {
+      "added": [
+        {
+          "id": "order_line_items#1",
+          "order_id": "orders#1",
+          "booking_id": null,
+          "product_variant_id": null,
+          "membership_plan_id": null,
+          "session_pass_type_id": null,
+          "gift_card_id": "gift_cards#1",
+          "item_type": "gift_card",
+          "quantity": 1,
+          "unit_price": "60.00",
+          "line_total": "60.00",
+          "created_at": "<set>",
+          "addon_id": null,
+          "refunded_at": null,
+          "refund_method": null,
+          "restocked": null,
+          "fulfillment_status": null,
+          "card_refunded_amount": "0.00",
+          "system_unit_price": null,
+          "price_override_reason": null,
+          "discount_amount": "0.00",
+          "event_booking_id": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "orders": {
+      "added": [
+        {
+          "id": "orders#1",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "order_total": "60.00",
+          "payment_status": "paid",
+          "stripe_payment_intent_id": null,
+          "promo_code": null,
+          "discount_amount": "0.00",
+          "shipping_address": null,
+          "shipping_status": null,
+          "tracking_number": null,
+          "order_source": "staff_created",
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "payment_method": "cash",
+          "reader_payment": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

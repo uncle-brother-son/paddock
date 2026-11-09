@@ -1,0 +1,13 @@
+{
+  "scenario": "w07-refused-delivery-address-missing-several-parts",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "shipping_address_required",
+      "message": "The delivery address is incomplete — recipient name, town/city are required."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

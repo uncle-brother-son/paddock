@@ -1,0 +1,12 @@
+{
+  "scenario": "w07-refused-inactive-gift-card-preset",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "gift_card_preset_inactive"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

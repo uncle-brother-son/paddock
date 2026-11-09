@@ -1,0 +1,12 @@
+{
+  "scenario": "w07-refused-inactive-pass-type",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "session_pass_type_inactive"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

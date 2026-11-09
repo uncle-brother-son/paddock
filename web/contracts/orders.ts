@@ -293,7 +293,7 @@ export const basketQuoteOutputSchema = z.object({
 })
 export type BasketQuoteOutput = z.infer<typeof basketQuoteOutputSchema>
 
-// --- POST /api/v1/staff/orders (W06: cash and nothing owed; the rest answers NOT_BUILT)
+// --- POST /api/v1/staff/orders (W06 and W07: cash and nothing owed; the rest answers NOT_BUILT)
 
 /**
  * What staff saw and confirmed, from the quote. Each figure is loose, as the old function was: a
@@ -320,6 +320,11 @@ export const placeOrderOutputSchema = z.object({
   /** 'pending_reader' arrives with the reader (W11). */
   status: z.enum(['paid']),
   bookingId: z.string().nullable(),
+  /** The session pass bought, on its own or to pay for the booking (W07). */
+  sessionPassId: z.string().nullable(),
+  /** The gift card bought, and its code, which staff give the customer (W07). */
+  giftCardId: z.string().nullable(),
+  giftCardCode: z.string().nullable(),
   payment: z.object({
     /** What orders.payment_method records: null when nothing was owed. */
     method: z.string().nullable(),
@@ -356,8 +361,10 @@ const money = z.number()
 
 /**
  * The rows an order wrote, read back by order id. Free text (names, emails, dates of birth, special
- * requests, override reasons) is here for comparing, and the staff app never keeps it. The query is
- * in server/rules/orders/order-rows.ts and, word for word, in the staff app's shadow.
+ * requests, override reasons, addresses, a gift card's recipient and message) is here for comparing,
+ * and the staff app never keeps it. A gift card's code is never read back: only whether it has the
+ * app's format. The query is in server/rules/orders/order-rows.ts and, word for word, in the staff
+ * app's shadow.
  */
 export const orderRowsSchema = z.object({
   order: z.object({
@@ -368,6 +375,8 @@ export const orderRowsSchema = z.object({
     payment_method: z.string().nullable(),
     order_source: z.string().nullable(),
     has_shipping_address: z.boolean(),
+    /** The delivery address as the order keeps it (W07). Free text. */
+    shipping_address: z.record(z.string(), z.unknown()).nullable(),
     has_payment_intent: z.boolean(),
     has_reader_payment: z.boolean(),
   }),
@@ -383,6 +392,9 @@ export const orderRowsSchema = z.object({
       addon_id: z.string().nullable(),
       is_the_booking: z.boolean(),
       fulfillment_status: z.string().nullable(),
+      product_variant_id: z.string().nullable(),
+      session_pass_type_id: z.string().nullable(),
+      has_gift_card: z.boolean(),
     })
   ),
   booking: z
@@ -426,6 +438,50 @@ export const orderRowsSchema = z.object({
           addon_credits_left: z.number().nullable(),
         })
       ),
+    })
+    .nullable(),
+  /** Each variant the order's lines name, as its stock now stands (W07). */
+  stock: z.array(z.object({ variant_id: z.string(), stock_quantity: z.number() })),
+  /** The ledger rows naming the order, in the order written (W07). */
+  stock_adjustments: z.array(z.object({ variant_id: z.string(), change_amount: z.number(), by_staff: z.boolean() })),
+  /** The passes the order's lines issued (W07). */
+  session_passes: z.array(
+    z.object({
+      pass_type_id: z.string(),
+      purchase_date: z.string(),
+      sessions_remaining: z.number(),
+      expiry_date: z.string(),
+      for_the_order_customer: z.boolean(),
+      pays_for_the_booking: z.boolean(),
+    })
+  ),
+  /** The gift cards the order's lines issued (W07). The code is never here, only whether its format is right. */
+  gift_cards: z.array(
+    z.object({
+      type: z.string(),
+      original_value: money,
+      remaining_balance: money,
+      bought_by_the_order_customer: z.boolean(),
+      recipient_name: z.string().nullable(),
+      recipient_email: z.string().nullable(),
+      gift_message: z.string().nullable(),
+      origin: z.string(),
+      issue_date: z.string(),
+      expiry_date: z.string(),
+      fulfillment_method: z.string(),
+      voided: z.boolean().nullable(),
+      redeemed: z.boolean(),
+      code_format_ok: z.boolean(),
+    })
+  ),
+  /** The order customer's own address, after the order (W07: an order can save its delivery address). Free text. */
+  customer_address: z
+    .object({
+      line1: z.string().nullable(),
+      line2: z.string().nullable(),
+      city: z.string().nullable(),
+      postcode: z.string().nullable(),
+      country: z.string().nullable(),
     })
     .nullable(),
 })

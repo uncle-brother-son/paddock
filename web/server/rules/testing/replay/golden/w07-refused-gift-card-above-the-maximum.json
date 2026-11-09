@@ -1,0 +1,12 @@
+{
+  "scenario": "w07-refused-gift-card-above-the-maximum",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "gift_card_amount_out_of_range"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

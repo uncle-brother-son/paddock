@@ -1,0 +1,13 @@
+{
+  "scenario": "w07-refused-gift-card-preset-and-custom",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "gift_card_selection_required",
+      "message": "Choose either a preset amount or a custom amount, not both."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

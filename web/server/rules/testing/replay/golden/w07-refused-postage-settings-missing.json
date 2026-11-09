@@ -1,0 +1,13 @@
+{
+  "scenario": "w07-refused-postage-settings-missing",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "postage_settings_missing",
+      "message": "Postage settings have not been configured yet — run the postage_settings migration to set them up."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

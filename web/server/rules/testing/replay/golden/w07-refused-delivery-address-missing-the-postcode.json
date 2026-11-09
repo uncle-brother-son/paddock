@@ -1,0 +1,13 @@
+{
+  "scenario": "w07-refused-delivery-address-missing-the-postcode",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "shipping_address_required",
+      "message": "The delivery address is incomplete — postcode is required."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

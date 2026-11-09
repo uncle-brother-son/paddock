@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import type { PlaceOrderInput } from '@/contracts'
-import { DbTimeoutError, type Db, type Tx } from '@/server/db'
-import { deferred, makeRace, Refused, waitingOn, type Outcome, type Race } from '@/server/rules/testing/race'
+import type { PlaceOrderInput, PlaceOrderOutput } from '@/contracts'
+import { DbTimeoutError, isDeadlock, type Db, type Tx } from '@/server/db'
+import { attempt, deferred, makeRace, Refused, waitingOn, type Outcome, type Race } from '@/server/rules/testing/race'
 import { fixtures, insert } from '@/server/rules/testing/database'
 import { startRealPostgres, type RealPostgres } from '@/server/rules/testing/real-postgres'
+import { ORDER_ROWS_SQL } from './order-rows'
 import { refusalDetails } from './order-refusal'
 import { placeOrder } from './place-order'
 
@@ -156,6 +157,26 @@ async function placed(db: Db, input: PlaceOrderInput): Promise<Outcome<unknown>>
     throw err
   }
 }
+
+// --- W07: products and passes bought
+
+/** A product picked up at the desk (£12), and its one variant with `stock` in stock. */
+async function variant(stock: number, id?: string): Promise<string> {
+  const product = await insert(first, 'products', { name: `Soap ${crypto.randomUUID().slice(0, 8)}`, base_price: '12.00', fulfillment_method: 'pickup' })
+  return insert(first, 'product_variants', { ...(id ? { id } : {}), product_id: product, sku: `SKU-${crypto.randomUUID()}`, stock_quantity: stock })
+}
+
+function productOrder(customerId: string, lines: ReadonlyArray<readonly [string, number]>): PlaceOrderInput {
+  return {
+    customerId,
+    products: lines.map(([productVariantId, quantity]) => ({ productVariantId, quantity })),
+    payment: { method: 'cash' },
+    confirmed: { toCollect: lines.reduce((sum, [, quantity]) => sum + 12 * quantity, 0) },
+  }
+}
+
+const stockOf = (variantId: string) => count('SELECT stock_quantity AS n FROM product_variants WHERE id = $1', [variantId])
+const ledgerFor = (variantId: string) => count('SELECT count(*)::int AS n FROM stock_adjustments WHERE variant_id = $1', [variantId])
 
 describe('the last place in a session', () => {
   async function lastPlace() {
@@ -523,6 +544,36 @@ describe('the one lock order (W03-plan 2.4 item 8)', () => {
     await provesOrder(chain, input)
   }, 60_000)
 
+  it('W07: customer, session, credit period, add-on memberships, then the product variants, each in id order', async () => {
+    const { customer, membership, period } = await member(10)
+    const [lowMember, highMember] = [crypto.randomUUID(), crypto.randomUUID()].sort() as [string, string]
+    for (const id of [highMember, lowMember]) {
+      await fixtures.membership(first, { id, customer_id: customer, plan_id: plan, is_herd: true, addon_credits_remaining: 5 })
+    }
+    // The higher id stored first and listed first in the basket: a lock in storage or basket order is the wrong way round.
+    const [low, high] = [crypto.randomUUID(), crypto.randomUUID()].sort() as [string, string]
+    await variant(100, high)
+    await variant(100, low)
+    const { id: sessionId } = await session()
+    const booking = creditOrder(customer, sessionId, membership).booking as NonNullable<PlaceOrderInput['booking']>
+    const input: PlaceOrderInput = {
+      ...productOrder(customer, [[high, 1], [low, 1]]),
+      booking: { ...booking, addons: [highMember, lowMember].map((id) => ({ addonId: towel, quantity: 1, redemptionSource: 'membership_credit' as const, membershipId: id })) },
+    }
+    await provesOrder(
+      [
+        ['customers', customer],
+        ['sessions', sessionId],
+        ['membership_credit_periods', period],
+        ['customer_memberships', lowMember],
+        ['customer_memberships', highMember],
+        ['product_variants', low],
+        ['product_variants', high],
+      ],
+      input
+    )
+  }, 60_000)
+
   it('customer, session, then the pass', async () => {
     const customer = await fixtures.customer(first)
     const passType = await fixtures.passType(first)
@@ -542,4 +593,229 @@ describe('the one lock order (W03-plan 2.4 item 8)', () => {
       input
     )
   }, 60_000)
+})
+
+describe("the order's lines in createOrder's order, on a clock that moves (W07)", () => {
+  // PGlite's clock stands still in the replay, so only here can the booking's line, written a
+  // statement after the others, show whether it keeps its place among them. Through Hyperdrive the
+  // booking's statement starts a round trip (about 20 ms) after the order's; on this machine it can be
+  // under a millisecond, so the order's statement is made to take 30 ms, as that round trip would.
+  it('a booking on a pass bought in the basket, an add-on and a product: pass, booking, add-on, product', async () => {
+    const customer = await fixtures.customer(first)
+    const passType = await fixtures.passType(first, { price: '50.00', sessions_included: 5 })
+    const { id: sessionId } = await session()
+    const soap = await variant(5)
+    await pg.admin.unsafe(`CREATE OR REPLACE FUNCTION public.slow_write() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(0.03); RETURN NULL; END $$`)
+    await pg.admin.unsafe('CREATE TRIGGER slow_write AFTER INSERT ON public.orders FOR EACH ROW EXECUTE FUNCTION public.slow_write()')
+    const placedOrder = await placeOrder(
+      first,
+      {
+        customerId: customer,
+        booking: { sessionId, guests: [holderGuest], redemptionSource: 'buy_new_session_pass' },
+        sessionPassTypeId: passType,
+        standaloneAddons: [{ addonId: towel, quantity: 1 }],
+        products: [{ productVariantId: soap, quantity: 1 }],
+        payment: { method: 'cash' },
+        confirmed: { toCollect: 67 },
+      },
+      options
+    ).finally(() => pg.admin.unsafe('DROP TRIGGER slow_write ON public.orders'))
+    const lines = await first.query<{ item_type: string }>('SELECT item_type FROM order_line_items WHERE order_id = $1 ORDER BY created_at, id', [placedOrder.orderId])
+    expect(lines.map((line) => line.item_type)).toEqual(['session_pass', 'booking', 'addon', 'product'])
+    const tied = await count('SELECT count(*)::int - count(DISTINCT created_at)::int AS n FROM order_line_items WHERE order_id = $1', [placedOrder.orderId])
+    expect(tied).toBe(0)
+  })
+})
+
+describe('the last item in stock (W07)', () => {
+  async function lastItem() {
+    return { variant: await variant(1), first: await fixtures.customer(first), second: await fixtures.customer(first) }
+  }
+
+  it('goes to the first; the second waited on the variant and is refused with createOrder\'s reason', async () => {
+    const seed = await lastItem()
+    const result = await race(placing((who) => productOrder(seed[who], [[seed.variant, 1]])), 'commit', 'product_variants')
+    expect(result.first).toHaveProperty('won')
+    expect(result.second).toMatchObject({ refused: { reason: 'insufficient_stock' } })
+    expect(await stockOf(seed.variant)).toBe(0)
+    expect(await ledgerFor(seed.variant)).toBe(1)
+    expect(await ordersFor(seed.second)).toBe(0)
+  })
+
+  it('goes to the second if the first rolls back', async () => {
+    const seed = await lastItem()
+    const result = await race(placing((who) => productOrder(seed[who], [[seed.variant, 1]])), 'rollback', 'product_variants')
+    expect(result.second).toHaveProperty('won')
+    expect(await stockOf(seed.variant)).toBe(0)
+    expect(await ledgerFor(seed.variant)).toBe(1)
+  })
+
+  it('an order waits for the variant in its lock statement, then counts the stock afresh', async () => {
+    // Another writer (the old createOrder's claim) takes the last one and stays open. Without the
+    // variant in the lock statement the order would read the stock before waiting, find one, and be
+    // stopped only later by the claim's own guard.
+    const seed = await lastItem()
+    const holder = await holding(second, async (tx) => {
+      await tx.query('UPDATE product_variants SET stock_quantity = stock_quantity - 1 WHERE id = $1 AND stock_quantity >= 1', [seed.variant])
+    })
+    const order = placed(first, productOrder(seed.first, [[seed.variant, 1]]))
+    const waiter = await blockedBy(holder.pid)
+    expect(await waitingOn(pg, waiter)).toEqual(['product_variants'])
+    const [waiting] = await pg.admin.unsafe<{ query: string }[]>('SELECT query FROM pg_stat_activity WHERE pid = $1', [waiter])
+    expect(waiting?.query).toMatch(/^\s*SELECT s\.id AS session_id, p\.id AS credit_period_id/)
+    await holder.finish('commit')
+    expect(await order).toMatchObject({ refused: { reason: 'insufficient_stock' } })
+    expect(await stockOf(seed.variant)).toBe(0)
+  })
+
+  it('has one winner in every free-running race', async () => {
+    for (let round = 0; round < 15; round += 1) {
+      const seed = await lastItem()
+      const results = await Promise.all([placed(first, productOrder(seed.first, [[seed.variant, 1]])), placed(second, productOrder(seed.second, [[seed.variant, 1]]))])
+      expect(results.filter((r) => 'won' in r)).toHaveLength(1)
+      expect(results.find((r) => 'refused' in r)).toMatchObject({ refused: { reason: 'insufficient_stock' } })
+      expect(await stockOf(seed.variant)).toBe(0)
+    }
+  }, 60_000)
+})
+
+describe('two orders taking the same two variants in opposite basket order (W07)', () => {
+  async function twoVariants() {
+    return { a: await variant(50), b: await variant(50), first: await fixtures.customer(first), second: await fixtures.customer(first) }
+  }
+
+  it('the second waits on a variant, then both go through', async () => {
+    const seed = await twoVariants()
+    const baskets = { first: [[seed.a, 1], [seed.b, 1]] as const, second: [[seed.b, 1], [seed.a, 1]] as const }
+    const result = await race(placing((who) => productOrder(seed[who], baskets[who])), 'commit', 'product_variants')
+    expect(result.first).toHaveProperty('won')
+    expect(result.second).toHaveProperty('won')
+    expect([await stockOf(seed.a), await stockOf(seed.b)]).toEqual([48, 48])
+  })
+
+  it('never deadlocks in 50 free-running races, with nothing to run it again (each joins a transaction of its own)', async () => {
+    // T1 runs once more after a deadlock when it opened the transaction; joining one turns that off,
+    // so a deadlock here would surface as an error.
+    const seed = { ...(await twoVariants()), a: await variant(200), b: await variant(200) }
+    for (let round = 0; round < 50; round += 1) {
+      const results = await Promise.all([
+        attempt(first, () => placeOrder(first, productOrder(seed.first, [[seed.a, 1], [seed.b, 1]]), options)),
+        attempt(second, () => placeOrder(second, productOrder(seed.second, [[seed.b, 1], [seed.a, 1]]), options)),
+      ])
+      expect(results.map((r) => 'won' in r)).toEqual([true, true])
+    }
+    expect([await stockOf(seed.a), await stockOf(seed.b)]).toEqual([100, 100])
+  }, 60_000)
+
+  it('the control: locking in basket order instead deadlocks', async () => {
+    const seed = await twoVariants()
+    const lock = 'SELECT id FROM product_variants WHERE id = $1 FOR NO KEY UPDATE'
+    const aTaken = deferred()
+    const bTaken = deferred()
+    const one = first.transaction(async (tx) => {
+      await tx.query(lock, [seed.a])
+      aTaken.resolve()
+      await bTaken.promise
+      await tx.query(lock, [seed.b])
+    })
+    const two = second.transaction(async (tx) => {
+      await tx.query(lock, [seed.b])
+      bTaken.resolve()
+      await aTaken.promise
+      await tx.query(lock, [seed.a])
+    })
+    const settled = await Promise.allSettled([one, two])
+    expect(settled.filter((outcome) => outcome.status === 'rejected' && isDeadlock(outcome.reason))).toHaveLength(1)
+  })
+})
+
+describe('the last session on a pass bought in the same basket (W07)', () => {
+  // A pass bought in an order is its own until the order commits: another order can't even see it.
+  // Once it has, an order using it waits on the customer (the pass belongs to the order's customer)
+  // and counts the pass afresh.
+  async function onePass() {
+    return {
+      customer: await fixtures.customer(first),
+      passType: await fixtures.passType(first, { price: '50.00', sessions_included: 1 }),
+      sessions: { first: (await session()).id, second: (await session()).id },
+    }
+  }
+
+  function passOrders(seed: Awaited<ReturnType<typeof onePass>>) {
+    let newPass: string | null = null
+    const input = (who: 'first' | 'second'): PlaceOrderInput =>
+      who === 'first'
+        ? {
+            customerId: seed.customer,
+            booking: { sessionId: seed.sessions.first, guests: [holderGuest], redemptionSource: 'buy_new_session_pass' },
+            sessionPassTypeId: seed.passType,
+            payment: { method: 'cash' },
+            confirmed: { toCollect: 50 },
+          }
+        : {
+            customerId: seed.customer,
+            booking: { sessionId: seed.sessions.second, guests: [holderGuest], redemptionSource: 'session_pass_credit', sessionPassId: newPass },
+            payment: {},
+          }
+    const claim = async (tx: Tx, who: 'first' | 'second') => {
+      const placedOrder = (await placing(input)(tx, who)) as PlaceOrderOutput
+      if (who === 'first') newPass = placedOrder.sessionPassId
+      return placedOrder
+    }
+    return { claim, newPass: () => newPass }
+  }
+
+  it('the booking takes it with the pass; a second order on that pass, waiting on the customer, finds it used', async () => {
+    const seed = await onePass()
+    const orders = passOrders(seed)
+    const result = await race(orders.claim, 'commit', 'customers')
+    expect(result.first).toHaveProperty('won')
+    expect(result.second).toMatchObject({ refused: { reason: 'insufficient_session_pass_credit' } })
+    expect(await count('SELECT sessions_remaining AS n FROM customer_session_passes WHERE id = $1', [orders.newPass()])).toBe(0)
+    expect(await bookingsOn(seed.sessions.second)).toBe(0)
+  })
+
+  it('if the first rolls back, the pass and its session were never there', async () => {
+    const seed = await onePass()
+    const orders = passOrders(seed)
+    const result = await race(orders.claim, 'rollback', 'customers')
+    expect(result.second).toMatchObject({ refused: { reason: 'session_pass_not_found' } })
+    expect(await count('SELECT count(*)::int AS n FROM customer_session_passes WHERE customer_id = $1', [seed.customer])).toBe(0)
+    expect(await bookingsOn(seed.sessions.first)).toBe(0)
+  })
+})
+
+describe("the read-back finds the order's ledger rows through the variant index (W07a, review L4)", () => {
+  // The ledger names the order only in its free-text reason, which no index covers. Filtering on the
+  // order's own variants as well lets Postgres use idx_stock_adjustments_variant_created, instead of
+  // reading every row of stock_adjustments while the dry run holds its locks.
+  const READ_WITHOUT_THE_VARIANTS = ORDER_ROWS_SQL.replace('sa.variant_id IN (SELECT l.product_variant_id FROM l) AND ', '')
+  /** The plan Postgres picks for the read of this order. */
+  async function planFor(sql: string, orderId: string): Promise<string> {
+    // Both texts are the code's own constants; the id is a param.
+    const explain = `EXPLAIN (COSTS OFF) ${sql}`
+    return (await first.query<{ 'QUERY PLAN': string }>(explain, [orderId])).map((row) => row['QUERY PLAN']).join('\n')
+  }
+
+  it('a ledger of 20,000 rows on 200 other variants: an index scan, and the same rows read back', async () => {
+    const soap = await variant(5)
+    const { orderId } = await placeOrder(first, productOrder(await fixtures.customer(first), [[soap, 2]]), options)
+    await pg.admin.unsafe(`
+      WITH p AS (INSERT INTO products (name, base_price, fulfillment_method) VALUES ('Ledger filler', '1.00', 'pickup') RETURNING id),
+      v AS (INSERT INTO product_variants (product_id, sku, stock_quantity) SELECT p.id, 'FILL-' || g, 0 FROM p, generate_series(1, 200) g RETURNING id)
+      INSERT INTO stock_adjustments (variant_id, change_amount, reason) SELECT v.id, 1, 'Stock take ' || g FROM v, generate_series(1, 100) g`)
+    await pg.admin.unsafe('ANALYZE stock_adjustments')
+
+    const plan = await planFor(ORDER_ROWS_SQL, orderId)
+    // An index scan or a bitmap one, as the planner prefers; either reads only the order's variants.
+    expect(plan, plan).toMatch(/(Index Scan using|Bitmap Index Scan on) idx_stock_adjustments_variant_created\b/)
+    expect(plan, plan).not.toMatch(/Seq Scan on stock_adjustments/)
+    // The control: the read without the variants scans the whole ledger.
+    const before = await planFor(READ_WITHOUT_THE_VARIANTS, orderId)
+    expect(before, before).toMatch(/Seq Scan on stock_adjustments sa/)
+
+    const read = async (sql: string) => (await first.query<{ rows: { stock_adjustments: unknown[] } }>(sql, [orderId]))[0]?.rows.stock_adjustments
+    expect(await read(ORDER_ROWS_SQL)).toEqual([{ variant_id: soap, change_amount: -2, by_staff: false }])
+    expect(await read(ORDER_ROWS_SQL)).toEqual(await read(READ_WITHOUT_THE_VARIANTS))
+  })
 })

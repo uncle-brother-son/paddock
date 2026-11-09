@@ -36,6 +36,48 @@ export const QUOTE_DIFFERENCES: Record<string, readonly AllowedDifference[]> = {
     { name: 'The delivery address is kept', decision: 'W03-decisions Q5', path: /^figures\.hasShippingAddress$/ },
     { name: 'The special requests are kept', decision: 'W03-decisions Q5', path: /^figures\.booking\.hasSpecialRequests$/ },
   ],
+  // W07's scenarios
+  'w07-q4-shipped-gift-card-and-product-reach-free-postage': [
+    { name: 'No postage on the order total', decision: 'W03-decisions Q4', path: /^figures\.orderTotal$/ },
+    { name: 'No postage on the postage line', decision: 'W03-decisions Q4', path: /^figures\.lines\.2\.(unitPrice|lineTotal)$/ },
+    { name: 'No postage in what is collected', decision: 'W03-decisions Q4', path: /^figures\.collected$/ },
+  ],
+  'w07-q5-buy-new-pass-keeps-address-and-requests': [
+    { name: 'The delivery address is kept on a buy-new pass order', decision: 'W03-decisions Q5', path: /^figures\.hasShippingAddress$/ },
+    { name: 'The special requests are kept on a buy-new pass booking', decision: 'W03-decisions Q5', path: /^figures\.booking\.hasSpecialRequests$/ },
+  ],
+  'w07-worst-basket': [{ name: 'The delivery address is kept on a buy-new pass order', decision: 'W03-decisions Q5', path: /^figures\.hasShippingAddress$/ }],
+}
+
+/**
+ * Where the Worker's dry run may differ from what the old createOrder writes (from W07, as the dry run
+ * takes products, postage, passes and gift cards). Paths are the shadow's stableDiff paths. Each
+ * names its decision, as above.
+ */
+const dryRunQ5Address = [
+  { name: 'The buy-new order keeps its delivery address', decision: 'W03-decisions Q5', path: /^rows\.order\.(has_shipping_address|shipping_address)$/ },
+]
+export const DRY_RUN_DIFFERENCES: Record<string, readonly AllowedDifference[]> = {
+  // The cash figure staff confirmed includes the postage the Worker no longer charges, so its dry run
+  // is refused as a changed total where the old order went through.
+  'q4-shipped-gift-card-earns-free-postage': [
+    { name: 'Refused as a changed total: the confirmed cash includes postage the order no longer charges', decision: 'W03-decisions Q4', path: /^(refusal|result|rows)$/ },
+  ],
+  'w07-q4-shipped-gift-card-and-product-reach-free-postage': [
+    { name: 'Refused as a changed total: the confirmed cash includes postage the order no longer charges', decision: 'W03-decisions Q4', path: /^(refusal|result|rows)$/ },
+  ],
+  'w07-q5-buy-new-pass-keeps-address-and-requests': [
+    ...dryRunQ5Address,
+    { name: 'The buy-new booking keeps its special requests', decision: 'W03-decisions Q5', path: /^rows\.booking\.special_requests$/ },
+  ],
+  'w07-worst-basket': dryRunQ5Address,
+  // The old createOrder's dates roll over a month end; the Worker's end on the month's last day.
+  'w07a-q33-pass-and-gift-card-bought-on-29-february': [
+    { name: "A pass bought on 29 Feb ends on the next year's 28 Feb, not 1 Mar", decision: 'W03-decisions Q33', path: /^rows\.session_passes\.0\.expiry_date$/ },
+    { name: "A gift card bought on 29 Feb ends on the next year's 28 Feb, not 1 Mar", decision: 'W03-decisions Q33', path: /^rows\.gift_cards\.0\.expiry_date$/ },
+  ],
+  // The address save fails inside T1, so the dry run fails where the old order warned after it.
+  'w07-address-save-fails': [{ name: 'The dry run fails: the address save is inside T1', decision: 'Brief W07 item 2 (the delivery address is saved inside T1)', path: /^$/ }],
 }
 
 /**

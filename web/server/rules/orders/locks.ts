@@ -28,6 +28,8 @@ export interface LockTargets {
   sessionPassId: string | null
   /** Memberships an add-on credit is drawn from, locked in id order. */
   addonMembershipIds: readonly string[]
+  /** Product variants whose stock the order claims, locked in id order (W07). */
+  productVariantIds: readonly string[]
 }
 
 export interface HeldLocks {
@@ -36,15 +38,18 @@ export interface HeldLocks {
   creditPeriodId: string | null
   sessionPassId: string | null
   membershipIds: string[]
+  /** The variants that exist, in the order they were locked. */
+  variantIds: string[]
 }
 
 /**
  * One statement that locks, in LOCK_ORDER, everything an order's checks depend on. Each lateral
  * subquery names the one before it, so Postgres can't run it until the one before has run and taken
  * its lock: the customer, then the session, then the credit period, then the pass, then the
- * memberships, sorted (a locking SELECT sorts before it locks). The test on real Postgres proves the
- * order by holding each row in turn. Steps W06 doesn't use (promo code, products, event, gift card)
- * join the chain in their place when their slice builds them.
+ * memberships, sorted (a locking SELECT sorts before it locks), then the product variants, sorted the
+ * same way (W07), so two orders taking the same variants in opposite basket order queue instead of
+ * deadlocking. The test on real Postgres proves the order by holding each row in turn. Steps not
+ * built yet (promo code, event, gift card) join the chain in their place when their slice builds them.
  *
  * The credit period is locked in its own statement, before anything reads it, because Postgres only
  * re-checks a locked row that its holder changed: a guarded INSERT that waited for the lock would
@@ -56,7 +61,7 @@ export interface HeldLocks {
  * FOR UPDATE would hold up for the whole of T1.
  */
 const LOCK_SQL = `
-SELECT s.id AS session_id, p.id AS credit_period_id, sp.id AS session_pass_id, m.ids AS membership_ids
+SELECT s.id AS session_id, p.id AS credit_period_id, sp.id AS session_pass_id, m.ids AS membership_ids, v.ids AS variant_ids
 FROM (SELECT id FROM customers WHERE id = $1::uuid FOR NO KEY UPDATE) c
 LEFT JOIN LATERAL (
   SELECT id FROM sessions WHERE id = $2::uuid AND c.id IS NOT NULL FOR NO KEY UPDATE
@@ -79,7 +84,16 @@ LEFT JOIN LATERAL (
     ORDER BY id
     FOR NO KEY UPDATE
   ) locked
-) m ON true`
+) m ON true
+LEFT JOIN LATERAL (
+  SELECT array_agg(locked.id ORDER BY locked.id) AS ids
+  FROM (
+    SELECT id FROM product_variants
+    WHERE id = ANY($6::uuid[]) AND (m.ids IS NULL OR m.ids IS NOT NULL)
+    ORDER BY id
+    FOR NO KEY UPDATE
+  ) locked
+) v ON true`
 
 /** Null when the customer doesn't exist: nothing else is locked then. */
 export async function lockForOrder(tx: Tx, targets: LockTargets): Promise<HeldLocks | null> {
@@ -88,12 +102,14 @@ export async function lockForOrder(tx: Tx, targets: LockTargets): Promise<HeldLo
     credit_period_id: string | null
     session_pass_id: string | null
     membership_ids: string[] | null
+    variant_ids: string[] | null
   }>(LOCK_SQL, [
     targets.customerId,
     targets.sessionId,
     targets.creditMembershipId,
     targets.sessionPassId,
     [...new Set(targets.addonMembershipIds)].sort(),
+    [...new Set(targets.productVariantIds)].sort(),
   ])
   const row = rows[0]
   if (!row) return null
@@ -102,5 +118,6 @@ export async function lockForOrder(tx: Tx, targets: LockTargets): Promise<HeldLo
     creditPeriodId: row.credit_period_id,
     sessionPassId: row.session_pass_id,
     membershipIds: row.membership_ids ?? [],
+    variantIds: row.variant_ids ?? [],
   }
 }

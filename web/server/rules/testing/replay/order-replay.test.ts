@@ -3,15 +3,15 @@ import type { Db } from '@/server/db'
 import { staffSees } from '@/server/rules/orders/failure-messages'
 import { compareRecordings, type Recording } from './compare'
 import { readGolden, replay, startReplay, type ReplayEnvironment, type Scenario } from './harness'
-import { NOT_BUILT_SCENARIOS, orderDifferences, W06_SCENARIOS } from './order-differences'
+import { NEW_SIDE_CONFIRMS, NOT_BUILT_SCENARIOS, ORDER_SCENARIOS, orderDifferences, OUTCOME_DIFFERS } from './order-differences'
 import { newOrderSide, type OrderAnswer } from './order-side'
-import { scenarios } from './scenarios'
+import { ID, scenarios } from './scenarios'
 
-// W06's parity proof (W03-plan 3.1 layer 1): each scenario in W06's scope runs from the same seed
-// through the new order route, and its rows (in the order the app reads them), its answer and its
-// money must match what the old createOrder wrote, saved in the golden file, except the differences
-// named in order-differences.ts. A golden file is the old function's own recording, so this still
-// holds the route to it after the old code goes.
+// The order route's parity proof (W03-plan 3.1 layer 1): each scenario in W06's and W07's scope runs
+// from the same seed through the new order route, and its rows (in the order the app reads them), its
+// answer and its money must match what the old createOrder wrote, saved in the golden file, except the
+// differences named in order-differences.ts. A golden file is the old function's own recording, so
+// this still holds the route to it after the old code goes.
 
 const holder = vi.hoisted(() => ({ db: null as unknown }))
 vi.mock('@/server/db/connection', () => ({
@@ -37,20 +37,25 @@ describe('the order route against the old createOrder', () => {
 
   async function runNew(name: string): Promise<{ recording: Recording; answers: OrderAnswer[] }> {
     const answers: OrderAnswer[] = []
-    const recording = await replay(environment, byName(name), newOrderSide(answers))
+    const confirms = NEW_SIDE_CONFIRMS[name]
+    const recording = await replay(
+      environment,
+      byName(name),
+      newOrderSide(answers, (input) => (confirms ? { ...input, confirmed: { ...input.confirmed, toCollect: confirms.toCollect } } : input))
+    )
     return { recording, answers }
   }
 
-  describe.each(W06_SCENARIOS)('%s', (name) => {
+  describe.each(ORDER_SCENARIOS)('%s', (name) => {
     it('writes what the old function wrote, in the same order, and answers the same', async () => {
       const golden = readGolden(name) as Recording
       expect(golden, `No golden file for ${name}`).not.toBeNull()
-      const { recording } = await runNew(name)
-      const placed = (golden.results[0] as { success?: boolean }).success === true
-      expect(compareRecordings(golden, recording, orderDifferences(placed))).toEqual([])
+      const { recording, answers } = await runNew(name)
+      const placed = answers[0]?.body.ok === true
+      expect(compareRecordings(golden, recording, orderDifferences(placed, name))).toEqual([])
     })
 
-    it('tells staff what the screen told them', async () => {
+    it.skipIf(OUTCOME_DIFFERS.includes(name))('tells staff what the screen told them', async () => {
       const golden = readGolden(name) as Recording
       const old = golden.results[0] as { success: boolean; reason?: string; message?: string; amountDueTotal?: number }
       const { answers } = await runNew(name)
@@ -91,6 +96,40 @@ describe('the order route against the old createOrder', () => {
       const audit = (await runNew('cash-booking-two-guests-addon')).recording.tables['audit_log']
       expect(audit?.tied).toBe(0)
       expect(audit?.added.map((row) => row['action'])).toEqual(['order.create', 'order.paid'])
+    })
+  })
+
+  describe('W07: the outcome the address decision changes', () => {
+    it('a failed address save: the old order was kept with a warning; the new one is refused, with nothing kept', async () => {
+      const golden = readGolden('w07-address-save-fails') as Recording
+      expect(golden.results[0]).toMatchObject({ success: true, warning: expect.stringContaining("saving the delivery address to the customer's profile failed") })
+      expect(golden.tables['orders']?.added).toMatchObject([{ payment_status: 'paid', payment_method: 'cash' }])
+      const { recording, answers } = await runNew('w07-address-save-fails')
+      expect(answers[0]?.status).toBe(500)
+      expect(answers[0]?.body).toMatchObject({ ok: false, error: { code: 'INTERNAL', message: 'Something went wrong and the action may not have finished. Check before trying again.' } })
+      expect(Object.keys(recording.tables)).toEqual(['api_idempotency'])
+    })
+  })
+
+  describe('W07: row order', () => {
+    it('every kind of line in createOrder\'s order, and the booking line among them', async () => {
+      const lines = (await runNew('w07-every-kind-in-cash')).recording.tables['order_line_items']
+      expect(lines?.tied).toBe(0)
+      expect(lines?.added.map((line) => line['item_type'])).toEqual(['booking', 'addon', 'product', 'session_pass', 'gift_card'])
+    })
+
+    it('a buy-new pass comes before the booking it pays for, and postage last', async () => {
+      const { recording } = await runNew('w07-worst-basket')
+      expect(recording.tables['order_line_items']?.tied).toBe(0)
+      expect(recording.tables['order_line_items']?.added.map((line) => line['item_type'])).toEqual(['session_pass', 'booking', 'product', 'product', 'gift_card', 'postage'])
+      expect(recording.tables['stock_adjustments']?.tied).toBe(0)
+      expect(recording.tables['stock_adjustments']?.added.map((row) => row['variant_id'])).toEqual([ID.candleVariant, ID.mugVariant])
+    })
+
+    it('two lines of one variant: two ledger rows in line order, one claim', async () => {
+      const { recording } = await runNew('w07-two-lines-of-one-variant-take-the-last-stock')
+      expect(recording.tables['stock_adjustments']?.added.map((row) => row['change_amount'])).toEqual([-2, -3])
+      expect(recording.tables['product_variants']?.changed).toEqual([{ id: ID.variant, stock_quantity: [5, 0] }])
     })
   })
 

@@ -1,0 +1,13 @@
+{
+  "scenario": "w07-refused-gift-card-neither",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "gift_card_selection_required",
+      "message": "Select a gift card preset or a custom-amount gift card type."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

@@ -1,0 +1,13 @@
+{
+  "scenario": "w07-refused-buy-new-pass-a-booking-that-day",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "duplicate_day_booking",
+      "bookingFailureReason": "duplicate_day_booking"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

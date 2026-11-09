@@ -14,11 +14,14 @@ everything it needs in one statement (`load-basket.ts`), because each database r
 ## The order transaction (T1, from W06)
 
 `place-order.ts` places an order in one `db.transaction`: one statement locks (`locks.ts`), one reads
-(`load-basket.ts`, the quote's own read), `priceFromFacts` prices, then one statement writes the
-booking (`write-booking.ts`), one the order with its lines and credits, one the audit rows. With no
-Stripe step it finishes inside T1: seven round trips for any basket W06 takes (BEGIN and the time
-limits go as one), plus three in the route (the staff member and the idempotency key, before and
-after). The rules it keeps:
+(`load-basket.ts`, the quote's own read), `priceFromFacts` prices, then one statement writes the order
+with everything that doesn't need the booking (the gift card bought, the lines, the stock claimed and
+its ledger rows, the pass bought, the address saved to the customer), one the booking with its line,
+add-ons and add-on credits (`write-booking.ts`), one the audit rows. The order comes first (W07)
+because a booking can be paid with a pass bought in the same basket, and that pass needs its line.
+With no Stripe step it finishes inside T1: seven round trips for a basket with a booking, six
+without (BEGIN and the time limits go as one), plus three in the route (the staff member and the
+idempotency key, before and after). The rules it keeps:
 
 - **Every refusal is a throw.** A `return` inside `db.transaction` would commit.
 - **One lock order:** `LOCK_ORDER` in `locks.ts`. Every later Worker write that takes row locks
@@ -33,14 +36,25 @@ after). The rules it keeps:
   transaction itself it runs once more (`inTransaction` in `place-order.ts`); a transaction it joined
   is its caller's. Work that calls Stripe or anything else outside the database must not do this.
 - **Row order is set explicitly.** now() doesn't move inside a transaction, so rows that are read
-  `ORDER BY created_at, id` (seats, order lines, booking add-ons, audit rows) get created_at from
-  `clock_timestamp()`, a millisecond apart, in the INSERT.
+  `ORDER BY created_at, id` (seats, order lines, booking add-ons, stock ledger rows, audit rows) get
+  created_at from `clock_timestamp()`, a millisecond apart, in the INSERT. The booking's line is
+  written from the order statement's clock, passed on, so it keeps its place among the others.
+- **A gift card's code must be new, without poisoning the transaction** (W03-plan 2.4 item 3). Its
+  INSERT is `ON CONFLICT (code) DO NOTHING`, every other write in the order statement waits on it, so
+  a taken code writes nothing and the statement runs again with a new code: five tries, then
+  `gift_card_code_exhausted`, as createOrder.
+- **Stock is claimed once per variant**, for all the basket takes of it, with a guarded UPDATE, after
+  the variants were locked in id order with the rest; the ledger keeps a row per line.
+- **A pass is only written joined to its own line**, and the counts are checked, so neither can be
+  kept without the other (checklist B3).
 - **What isn't built yet answers NOT_BUILT** before any transaction opens. The list is in
   `place-order.ts`; each slice takes its part off it.
 
 `dryRunOrder` is the same T1 with a read back (`order-rows.ts`) and a rollback. The staff app's
 createOrder shadow calls it before the old order runs and compares the two (`createOrder.dryRun` in
-`parity_log`). It goes at W16.
+`parity_log`). It goes at W16. The shadow keeps only the keys its own copy of the read-back produces
+and records how many others it dropped (W07a), but still: for a slice that extends `OrderRows` or
+anything the shadow compares, publish the staff app first, then deploy the Worker.
 
 ## Refund claims with no finish
 

@@ -1,0 +1,12 @@
+{
+  "scenario": "w07-refused-gift-card-fulfilment",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "invalid_gift_card_fulfillment"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

@@ -1,0 +1,12 @@
+{
+  "scenario": "w07-refused-product-checked-before-the-address",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "invalid_product_quantity"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

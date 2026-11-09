@@ -1,0 +1,12 @@
+{
+  "scenario": "w07-refused-buy-new-pass-not-chosen",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "booking_session_pass_type_required"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

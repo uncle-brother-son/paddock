@@ -1,7 +1,10 @@
 // Ported from backend/paddock/createOrder.ts: the order in one transaction, T1 (W03-plan 2.1). W06
-// builds what needs no Stripe step and no promo, store credit, gift card, product, postage, pass, event
-// or membership: bookings (public and private, with guests, on a membership or pass credit or paid),
-// add-ons on a booking (paid or on an add-on credit) and on their own, paid in cash or with nothing owed.
+// built what needs no Stripe step: bookings (public and private, with guests, on a membership or pass
+// credit or paid), add-ons on a booking (paid or on an add-on credit) and on their own, paid in cash or
+// with nothing owed. W07 adds products with their stock, the delivery address and postage, session
+// passes (on their own, or bought to pay for the booking in the same basket) and gift cards bought.
+// Still not built: card and reader payments, memberships, events, promo codes, store credit and gift
+// card redemption.
 import 'server-only'
 import type {
   BasketProblem,
@@ -16,14 +19,16 @@ import type {
 import { audit } from '@/server/audit'
 import { inOpenTransaction, isDeadlock, postgresRefusal, type Db, type Tx } from '@/server/db'
 import { ApiError } from '@/server/http/errors'
+import { addMonthsToIsoDate } from '@/server/rules/time/london-time'
 import { cashDifferenceRefusal } from './amounts'
 import { GIFT_CARD_SOURCE_REMOVED_MESSAGE } from './basket-booking'
+import { generateGiftCardCode } from './gift-card-code'
 import { loadBasketFacts, type BasketFacts } from './load-basket'
 import { lockForOrder, type HeldLocks } from './locks'
 import { bookingRefusal, orderRefusal, refusalDetails } from './order-refusal'
 import { readOrderRows } from './order-rows'
 import { priceFromFacts } from './price-basket'
-import { writeBooking, type BookingToWrite, type PayBy } from './write-booking'
+import { writeBooking, type BookingOrderPart, type BookingToWrite, type PayBy } from './write-booking'
 
 /**
  * placeOrder runs T1: entry checks that need no database, then one transaction that locks, reads,
@@ -32,6 +37,10 @@ import { writeBooking, type BookingToWrite, type PayBy } from './write-booking'
  * or nothing. Every refusal is thrown, so the transaction rolls back: a `return` inside it would
  * commit. A refusal Postgres itself raises (an overlapping booking, a second booking that day)
  * kills the transaction, so it is turned into its reason after the rollback.
+ *
+ * The order is written before the booking (W07): the booking may be paid with a pass bought in the
+ * same basket, and that pass needs its order line, which needs the order. The booking's own line
+ * then joins the order's other lines from the booking's statement.
  *
  * dryRunOrder is the same T1, read back and rolled back: nothing is kept (W03-plan 3.1 layer 4).
  */
@@ -42,6 +51,8 @@ export interface PlaceOrderOptions {
   requestId: string
   /** Whether a line's sent price counts: only with Manage pricing (W03-plan 2.9). */
   allowPriceOverrides?: boolean
+  /** Makes a gift card code. Tests pass one to force a collision; the routes use the real one. */
+  giftCardCode?: () => string
 }
 
 // --- Before anything is touched
@@ -63,7 +74,11 @@ function refuseAtEntry(input: PlaceOrderInput): void {
   }
 }
 
-/** What W06 can't sell yet, each with the slice that builds it. Postage only comes with a product or a shipped gift card. */
+/**
+ * What T1 can't sell yet, each built by a later slice: card (W10), reader (W11), memberships, bought
+ * or buy-new or replacing an exhausted one (W13), events (W08), promo codes, store credit and gift
+ * card redemption (W09). A pass bought with a buy-new membership is caught as the membership.
+ */
 const NOT_BUILT: ReadonlyArray<{ part: string; words: string; present: (input: PlaceOrderInput) => boolean }> = [
   { part: 'card', words: 'a card payment', present: (input) => input.payment?.method === 'card' },
   { part: 'reader', words: 'a card reader payment', present: (input) => input.payment?.method === 'reader' },
@@ -73,13 +88,6 @@ const NOT_BUILT: ReadonlyArray<{ part: string; words: string; present: (input: P
     present: (input) =>
       Boolean(input.membershipPlanId) || input.booking?.redemptionSource === 'buy_new_membership' || Boolean(input.booking?.cancelExhaustedMembershipId),
   },
-  {
-    part: 'session_pass',
-    words: 'a session pass bought',
-    present: (input) => Boolean(input.sessionPassTypeId) || input.booking?.redemptionSource === 'buy_new_session_pass',
-  },
-  { part: 'products', words: 'products', present: (input) => (input.products ?? []).length > 0 },
-  { part: 'gift_card_purchase', words: 'a gift card bought', present: (input) => Boolean(input.giftCard) },
   { part: 'event', words: 'an event', present: (input) => Boolean(input.event) },
   { part: 'promo_code', words: 'a promo code', present: (input) => Boolean(input.promoCode?.trim()) },
   { part: 'store_credit', words: 'store credit', present: (input) => Boolean(input.payment?.storeCredit) },
@@ -115,7 +123,12 @@ function refuseIfNeeded(input: PlaceOrderInput, quote: BasketQuoteOutput): void 
 
 const unpriced = (problem: string) => new Error(`The order was priced without ${problem}. Nothing was kept.`)
 
-function bookingToWrite(input: PlaceOrderInput, facts: BasketFacts, quote: BasketQuoteOutput, locks: HeldLocks): BookingToWrite | null {
+/**
+ * The booking as writeBooking takes it. `newPassId` is the pass this order has just written: on a
+ * buy-new pass booking, seat 1 takes its session from it, through the same guarded claim as a pass
+ * the customer already had.
+ */
+function bookingToWrite(input: PlaceOrderInput, facts: BasketFacts, quote: BasketQuoteOutput, locks: HeldLocks, newPassId: string | null): BookingToWrite | null {
   const booking = input.booking
   if (!booking) return null
   const quoted = quote.booking
@@ -131,6 +144,10 @@ function bookingToWrite(input: PlaceOrderInput, facts: BasketFacts, quote: Baske
   const creditPeriodId = seat1 === 'membership_credit' ? locks.creditPeriodId : null
   if (seat1 === 'membership_credit' && !creditPeriodId) throw bookingRefusal('insufficient_membership_credit')
 
+  const buysNewPass = booking.redemptionSource === 'buy_new_session_pass'
+  if (buysNewPass && !newPassId) throw unpriced('the pass the booking is paid with')
+  const passId = buysNewPass ? newPassId : booking.redemptionSource === 'session_pass_credit' ? booking.sessionPassId ?? null : null
+
   return {
     sessionId: booking.sessionId,
     customerId: input.customerId as string,
@@ -138,9 +155,9 @@ function bookingToWrite(input: PlaceOrderInput, facts: BasketFacts, quote: Baske
     pricePaid: quoted.price,
     redemptionSource: quoted.redemptionSource,
     redeemedMembershipId: quoted.redemptionSource === 'membership_credit' ? booking.membershipId ?? null : null,
-    redeemedSessionPassId: booking.redemptionSource === 'session_pass_credit' ? booking.sessionPassId ?? null : null,
+    redeemedSessionPassId: passId,
     creditPeriodId,
-    passToClaim: seat1 === 'session_pass_credit' ? booking.sessionPassId ?? null : null,
+    passToClaim: seat1 === 'session_pass_credit' ? passId : null,
     bandId: session.band_id,
     specialRequests: quoted.specialRequests,
     seats: booking.guests.map((guest, i) => ({
@@ -155,58 +172,251 @@ function bookingToWrite(input: PlaceOrderInput, facts: BasketFacts, quote: Baske
 }
 
 /**
- * The order, its lines, the booking's add-ons and their credits, in one statement. The memberships
- * are locked already, so the credit claims can go in any order inside it. Lines and add-ons get
- * created_at from the clock, a millisecond apart, in the order createOrder wrote them.
+ * The order and everything in it that doesn't need the booking, in one statement: the gift card
+ * bought, the order (with its delivery address), its lines, the stock claimed with a ledger row per
+ * product line, the session pass bought, and the delivery address saved to the customer.
+ *
+ * The gift card's code must be new. Its INSERT skips a code already taken (ON CONFLICT DO NOTHING:
+ * a failed statement would poison the transaction, W03-plan 2.4 item 3), and every other write here
+ * waits on `go`, so a collision writes nothing at all and the statement is simply run again with a
+ * new code, as createOrder retried its INSERT.
+ *
+ * The variants are locked already (locks.ts), so each stock claim is one guarded UPDATE per variant,
+ * for the whole quantity the basket takes of it. A pass row is only written joined to its own line,
+ * and the line count is checked, so neither can be kept without the other (checklist B3). Lines and
+ * ledger rows get created_at from the clock, a millisecond apart, in the order createOrder wrote
+ * them; the clock is returned so the booking's line can take its place among them.
  */
 const ORDER_SQL = `
 WITH clock AS (SELECT clock_timestamp() AS at),
-credits AS (
-  UPDATE customer_memberships m
-  SET addon_credits_remaining = m.addon_credits_remaining - x.quantity, updated_at = now()
-  FROM jsonb_to_recordset($1::jsonb) AS x(membership_id uuid, quantity int)
-  WHERE m.id = x.membership_id AND m.addon_credits_remaining >= x.quantity AND m.is_herd = true
-  RETURNING m.id
+card AS (
+  INSERT INTO gift_cards
+    (code, type, original_value, remaining_balance, purchaser_id, recipient_name, recipient_email, gift_message,
+     origin, issue_date, expiry_date, fulfillment_method)
+  SELECT g.code, 'monetary', g.amount, g.amount, $1::uuid, g.recipient_name, g.recipient_email, g.gift_message,
+         'customer_purchase', g.issue_date, g.expiry_date, g.fulfillment_method
+  FROM jsonb_to_recordset($2::jsonb)
+    AS g(code text, amount numeric, recipient_name text, recipient_email text, gift_message text, issue_date date,
+         expiry_date date, fulfillment_method text)
+  ON CONFLICT (code) DO NOTHING
+  RETURNING id, code
 ),
+go AS (SELECT (SELECT count(*) FROM card) = jsonb_array_length($2::jsonb) AS ok),
 o AS (
   INSERT INTO orders (customer_id, order_total, payment_status, order_source, shipping_address, promo_code, discount_amount, payment_method)
-  VALUES ($2::uuid, $3::numeric, 'paid', 'staff_created', NULL, NULL, 0, $4::text)
+  SELECT $1::uuid, $3::numeric, 'paid', 'staff_created', $4::jsonb, NULL, 0, $5::text
+  FROM go
+  WHERE go.ok
   RETURNING id
 ),
 lines AS (
   INSERT INTO order_line_items
-    (order_id, item_type, quantity, unit_price, line_total, booking_id, addon_id, system_unit_price, price_override_reason, discount_amount, created_at)
-  SELECT o.id, l.item_type, l.quantity, l.unit_price, l.line_total, l.booking_id, l.addon_id, l.system_unit_price,
-         l.price_override_reason, l.discount_amount, clock.at + l.position * interval '1 millisecond'
-  FROM o
-  CROSS JOIN clock
-  CROSS JOIN jsonb_to_recordset($5::jsonb)
-    AS l(position int, item_type text, quantity int, unit_price numeric, line_total numeric, booking_id uuid, addon_id uuid,
-         system_unit_price numeric, price_override_reason text, discount_amount numeric)
-  RETURNING id
-),
-booking_addons AS (
-  INSERT INTO addon_order_lines
-    (booking_id, addon_id, quantity, price_at_purchase, sku_at_purchase, redemption_source, redeemed_membership_id, order_id, created_at)
-  SELECT a.booking_id, a.addon_id, a.quantity, a.price_at_purchase, COALESCE(ad.sku, ad.id::text), a.redemption_source,
-         a.redeemed_membership_id, o.id, clock.at + a.position * interval '1 millisecond'
+    (order_id, item_type, quantity, unit_price, line_total, addon_id, product_variant_id, session_pass_type_id, gift_card_id,
+     fulfillment_status, system_unit_price, price_override_reason, discount_amount, created_at)
+  SELECT o.id, l.item_type, l.quantity, l.unit_price, l.line_total, l.addon_id, l.product_variant_id, l.session_pass_type_id,
+         CASE WHEN l.item_type = 'gift_card' THEN (SELECT id FROM card) END,
+         l.fulfillment_status, l.system_unit_price, l.price_override_reason, l.discount_amount,
+         clock.at + l.position * interval '1 millisecond'
   FROM o
   CROSS JOIN clock
   CROSS JOIN jsonb_to_recordset($6::jsonb)
-    AS a(position int, booking_id uuid, addon_id uuid, quantity int, price_at_purchase numeric, redemption_source text, redeemed_membership_id uuid)
-  JOIN addons ad ON ad.id = a.addon_id
+    AS l(position int, item_type text, quantity int, unit_price numeric, line_total numeric, addon_id uuid, product_variant_id uuid,
+         session_pass_type_id uuid, fulfillment_status text, system_unit_price numeric, price_override_reason text, discount_amount numeric)
+  RETURNING id, item_type, session_pass_type_id
+),
+stock AS (
+  UPDATE product_variants v
+  SET stock_quantity = v.stock_quantity - x.quantity, updated_at = now()
+  FROM jsonb_to_recordset($7::jsonb) AS x(variant_id uuid, quantity int)
+  WHERE v.id = x.variant_id AND v.stock_quantity >= x.quantity AND (SELECT ok FROM go)
+  RETURNING v.id
+),
+ledger AS (
+  INSERT INTO stock_adjustments (variant_id, change_amount, reason, staff_id, created_at)
+  SELECT a.variant_id, -a.quantity, 'Sale (Order #' || o.id || ')', NULL, clock.at + a.position * interval '1 millisecond'
+  FROM o
+  CROSS JOIN clock
+  CROSS JOIN jsonb_to_recordset($8::jsonb) AS a(position int, variant_id uuid, quantity int)
   RETURNING id
+),
+passes AS (
+  INSERT INTO customer_session_passes (customer_id, pass_type_id, purchase_date, sessions_remaining, expiry_date, order_line_item_id)
+  SELECT $1::uuid, p.pass_type_id, p.purchase_date, p.sessions_remaining, p.expiry_date, lines.id
+  FROM lines
+  JOIN jsonb_to_recordset($9::jsonb) AS p(pass_type_id uuid, purchase_date date, sessions_remaining int, expiry_date date)
+    ON lines.item_type = 'session_pass' AND lines.session_pass_type_id = p.pass_type_id
+  RETURNING id
+),
+saved_address AS (
+  UPDATE customers c
+  SET address_line1 = a.line1, address_line2 = a.line2, city = a.city, postcode = a.postcode, country = a.country, updated_at = now()
+  FROM jsonb_to_recordset($10::jsonb) AS a(line1 text, line2 text, city text, postcode text, country text)
+  WHERE c.id = $1::uuid AND (SELECT ok FROM go)
+  RETURNING c.id
 )
 SELECT (SELECT id FROM o) AS order_id,
-       (SELECT count(*)::int FROM credits) AS credits_claimed,
+       (SELECT at::text FROM clock) AS lines_at,
+       (SELECT id FROM card) AS gift_card_id,
+       (SELECT code FROM card) AS gift_card_code,
+       (SELECT id FROM passes) AS session_pass_id,
        (SELECT count(*)::int FROM lines) AS lines_written,
-       (SELECT count(*)::int FROM booking_addons) AS addons_written`
+       (SELECT COALESCE(array_agg(id), '{}') FROM stock) AS variants_claimed,
+       (SELECT count(*)::int FROM ledger) AS ledger_written,
+       (SELECT count(*)::int FROM passes) AS passes_written,
+       (SELECT count(*)::int FROM saved_address) AS addresses_saved`
 
 interface OrderWritten {
-  order_id: string
-  credits_claimed: number
+  /** Null when the gift card's code was taken: nothing was written. */
+  order_id: string | null
+  lines_at: string
+  gift_card_id: string | null
+  gift_card_code: string | null
+  session_pass_id: string | null
   lines_written: number
-  addons_written: number
+  variants_claimed: string[]
+  ledger_written: number
+  passes_written: number
+  addresses_saved: number
+}
+
+/** As createOrder: five codes, then gift_card_code_exhausted. */
+export const GIFT_CARD_CODE_TRIES = 5
+
+/** The line kinds the order statement writes. A booking's line is the booking statement's. */
+const ORDER_LINE_KINDS = new Set(['addon', 'product', 'session_pass', 'gift_card', 'postage'])
+
+interface OrderToWrite {
+  orderId: string
+  linesAt: string
+  giftCardId: string | null
+  giftCardCode: string | null
+  sessionPassId: string | null
+}
+
+/** The order statement, run again with a new code while the gift card's code was taken. */
+async function writeOrder(tx: Tx, input: PlaceOrderInput, facts: BasketFacts, quote: BasketQuoteOutput, options: PlaceOrderOptions): Promise<OrderToWrite> {
+  const customerId = input.customerId as string
+  const products = input.products ?? []
+  const method = input.payment?.method
+  const collected = quote.totals.toCollect.cash
+  const paymentMethod = collected > 0 && method === 'cash' ? 'cash' : null
+
+  const lines = quote.lines.flatMap((line, i) => {
+    if (line.kind === 'booking') return []
+    if (!ORDER_LINE_KINDS.has(line.kind)) throw unpriced(`a ${line.kind} line, which T1 doesn't write yet`)
+    return [
+      {
+        position: i + 1,
+        item_type: line.kind,
+        quantity: line.quantity,
+        unit_price: line.unitPrice,
+        line_total: line.lineTotal,
+        addon_id: line.kind === 'addon' ? line.itemId : null,
+        product_variant_id: line.kind === 'product' ? line.itemId : null,
+        session_pass_type_id: line.kind === 'session_pass' ? line.itemId : null,
+        fulfillment_status: line.kind === 'product' ? 'pending' : null,
+        system_unit_price: line.systemUnitPrice,
+        price_override_reason: line.priceOverrideReason,
+        discount_amount: line.discount,
+      },
+    ]
+  })
+
+  // One claim per variant, for all the basket takes of it; one ledger row per line, as createOrder wrote.
+  const byVariant = new Map<string, number>()
+  for (const line of products) byVariant.set(line.productVariantId, (byVariant.get(line.productVariantId) ?? 0) + line.quantity)
+  const claims = [...byVariant].map(([variant_id, quantity]) => ({ variant_id, quantity }))
+  const ledger = products.map((line, i) => ({ position: i + 1, variant_id: line.productVariantId, quantity: line.quantity }))
+
+  // London dates: bought today in London, valid through the same date N months on.
+  const today = facts.today
+  const passLine = quote.lines.find((line) => line.kind === 'session_pass')
+  const passType = facts.pass_type
+  if (passLine && passType?.id !== passLine.itemId) throw unpriced('the pass type it sells')
+  const passes = passLine && passType
+    ? [{ pass_type_id: passType.id, purchase_date: today, sessions_remaining: passType.sessions_included ?? 0, expiry_date: addMonthsToIsoDate(today, passType.expiry_months ?? 12) }]
+    : []
+
+  const giftCardLine = quote.lines.find((line) => line.kind === 'gift_card')
+  const giftCard = input.giftCard
+  if (giftCardLine && !giftCard) throw unpriced('the gift card it sells')
+  const giftCardMonths = (giftCard?.giftCardPresetId ? facts.gift_card_preset?.expiry_months : facts.gift_card_type?.expiry_months) ?? 12
+  const newCode = options.giftCardCode ?? generateGiftCardCode
+  const giftCards = (): Array<Record<string, unknown>> =>
+    giftCardLine && giftCard
+      ? [
+          {
+            code: newCode(),
+            amount: giftCardLine.unitPrice,
+            recipient_name: giftCard.recipientName ?? null,
+            recipient_email: giftCard.recipientEmail ?? null,
+            gift_message: giftCard.giftMessage ?? null,
+            issue_date: today,
+            expiry_date: addMonthsToIsoDate(today, giftCardMonths),
+            fulfillment_method: giftCard.fulfillmentMethod,
+          },
+        ]
+      : []
+
+  const delivery = quote.delivery
+  const addresses = delivery?.saveToCustomer ? [delivery.address] : []
+
+  for (let attempt = 1; ; attempt += 1) {
+    const cards = giftCards()
+    const written = (
+      await tx.query<OrderWritten>(ORDER_SQL, [customerId, cards, quote.totals.orderTotal, delivery?.address ?? null, paymentMethod, lines, claims, ledger, passes, addresses])
+    )[0] as OrderWritten
+    if (!written.order_id) {
+      if (cards.length === 0) throw new Error('The order was not written.')
+      if (attempt < GIFT_CARD_CODE_TRIES) continue
+      throw orderRefusal({ stage: 'gift_card', reason: 'gift_card_code_exhausted' })
+    }
+
+    if (written.lines_written !== lines.length) throw new Error(`The order was not written whole: ${written.lines_written} of ${lines.length} lines.`)
+    const claimed = new Set(written.variants_claimed)
+    const short = products.find((line) => !claimed.has(line.productVariantId))
+    if (short) throw orderRefusal({ stage: 'product', reason: 'insufficient_stock', productVariantId: short.productVariantId })
+    if (written.ledger_written !== ledger.length) throw new Error(`The stock ledger was not written whole: ${written.ledger_written} of ${ledger.length} rows.`)
+    if (written.passes_written !== passes.length) throw new Error(`The session pass and its line were not written together: ${written.passes_written} of ${passes.length} passes.`)
+    if (cards.length > 0 && !written.gift_card_id) throw new Error('The gift card was not written.')
+    if (written.addresses_saved !== addresses.length) throw new Error("The delivery address was not saved to the customer.")
+    return {
+      orderId: written.order_id,
+      linesAt: written.lines_at,
+      giftCardId: written.gift_card_id,
+      giftCardCode: written.gift_card_code,
+      sessionPassId: written.session_pass_id,
+    }
+  }
+}
+
+/** The booking's line and add-ons, for the booking statement. */
+function bookingOrderPart(quote: BasketQuoteOutput, order: OrderToWrite): BookingOrderPart {
+  const index = quote.lines.findIndex((line) => line.kind === 'booking')
+  const line = quote.lines[index]
+  if (!line) throw unpriced('its booking line')
+  const addons = quote.booking?.addons ?? []
+  const creditsByMembership = new Map<string, number>()
+  for (const addon of addons) {
+    if (addon.redemptionSource !== 'membership_credit') continue
+    if (!addon.membershipId) throw unpriced('the membership an add-on credit comes from')
+    creditsByMembership.set(addon.membershipId, (creditsByMembership.get(addon.membershipId) ?? 0) + addon.quantity)
+  }
+  return {
+    orderId: order.orderId,
+    linesAt: order.linesAt,
+    linePosition: index + 1,
+    linePrice: line.unitPrice,
+    lineDiscount: line.discount,
+    addons: addons.map((addon) => ({
+      addonId: addon.addonId,
+      quantity: addon.quantity,
+      priceAtPurchase: addon.unitPrice,
+      redemptionSource: addon.redemptionSource,
+      redeemedMembershipId: addon.redemptionSource === 'membership_credit' ? addon.membershipId : null,
+    })),
+    credits: [...creditsByMembership].map(([membershipId, quantity]) => ({ membershipId, quantity })),
+  }
 }
 
 interface Placed {
@@ -229,6 +439,7 @@ async function prepare(tx: Tx, input: PlaceOrderInput, options: PlaceOrderOption
     creditMembershipId: booking?.redemptionSource === 'membership_credit' ? booking.membershipId ?? null : null,
     sessionPassId: booking?.redemptionSource === 'session_pass_credit' ? booking.sessionPassId ?? null : null,
     addonMembershipIds: attached.flatMap((line) => (line.redemptionSource === 'membership_credit' && line.membershipId ? [line.membershipId] : [])),
+    productVariantIds: (input.products ?? []).map((line) => line.productVariantId),
   })
   if (!locks) throw orderRefusal({ stage: 'validation', reason: 'customer_not_found' })
 
@@ -237,56 +448,18 @@ async function prepare(tx: Tx, input: PlaceOrderInput, options: PlaceOrderOption
   const quote = priceFromFacts(quoteInput, facts, { allowPriceOverrides: options.allowPriceOverrides === true })
   refuseIfNeeded(input, quote)
 
-  // 3. The booking.
-  const bookingWrite = bookingToWrite(input, facts, quote, locks)
-  const bookingId = bookingWrite ? await writeBooking(tx, bookingWrite) : null
+  // 3. The order, and everything in it that doesn't need the booking.
+  const order = await writeOrder(tx, input, facts, quote, options)
 
-  // 4. The order, its lines, the booking's add-ons and their credits.
+  // 4. The booking, with its line, its add-ons and their credits.
+  const bookingWrite = bookingToWrite(input, facts, quote, locks, order.sessionPassId)
+  const bookingId = bookingWrite ? await writeBooking(tx, bookingWrite, bookingOrderPart(quote, order)) : null
+
+  // 5. The audit rows, in the same transaction. Nothing is owed to Stripe, so the order is paid now.
+  const { orderId } = order
   const method = input.payment?.method
   const collected = quote.totals.toCollect.cash
   const paymentMethod = collected > 0 && method === 'cash' ? 'cash' : null
-  const lines = quote.lines.map((line, i) => {
-    if (line.kind !== 'booking' && line.kind !== 'addon') throw unpriced(`a ${line.kind} line, which W06 doesn't write`)
-    return {
-      position: i + 1,
-      item_type: line.kind,
-      quantity: line.quantity,
-      unit_price: line.unitPrice,
-      line_total: line.lineTotal,
-      booking_id: line.kind === 'booking' ? bookingId : null,
-      addon_id: line.kind === 'addon' ? line.itemId : null,
-      system_unit_price: line.systemUnitPrice,
-      price_override_reason: line.priceOverrideReason,
-      discount_amount: line.discount,
-    }
-  })
-  const bookingAddons = (quote.booking?.addons ?? []).map((addon, i) => ({
-    position: i + 1,
-    booking_id: bookingId,
-    addon_id: addon.addonId,
-    quantity: addon.quantity,
-    price_at_purchase: addon.unitPrice,
-    redemption_source: addon.redemptionSource,
-    redeemed_membership_id: addon.redemptionSource === 'membership_credit' ? addon.membershipId : null,
-  }))
-  const creditsByMembership = new Map<string, number>()
-  for (const addon of quote.booking?.addons ?? []) {
-    if (addon.redemptionSource !== 'membership_credit') continue
-    if (!addon.membershipId) throw unpriced('the membership an add-on credit comes from')
-    creditsByMembership.set(addon.membershipId, (creditsByMembership.get(addon.membershipId) ?? 0) + addon.quantity)
-  }
-  const credits = [...creditsByMembership].map(([membership_id, quantity]) => ({ membership_id, quantity }))
-
-  const written = (
-    await tx.query<OrderWritten>(ORDER_SQL, [credits, customerId, quote.totals.orderTotal, paymentMethod, lines, bookingAddons])
-  )[0] as OrderWritten
-  if (written.credits_claimed !== credits.length) throw bookingRefusal('insufficient_addon_membership_credit')
-  if (written.lines_written !== lines.length || written.addons_written !== bookingAddons.length) {
-    throw new Error(`The order was not written whole: ${written.lines_written} of ${lines.length} lines, ${written.addons_written} of ${bookingAddons.length} add-ons.`)
-  }
-  const orderId = written.order_id
-
-  // 5. The audit rows, in the same transaction. Nothing is owed to Stripe, so the order is paid now.
   const actor = { actorType: options.actor.type, actorId: options.actor.id, entityType: 'order', entityId: orderId, requestId: options.requestId }
   const overrides = quote.lines.flatMap((line) =>
     line.priceOverrideReason ? [{ line: line.key, unitPrice: line.unitPrice, systemUnitPrice: line.systemUnitPrice, reason: line.priceOverrideReason }] : []
@@ -298,6 +471,10 @@ async function prepare(tx: Tx, input: PlaceOrderInput, options: PlaceOrderOption
       details: {
         method: method ?? null,
         bookingId,
+        sessionPassId: order.sessionPassId,
+        giftCardId: order.giftCardId,
+        postage: quote.postage ? { method: quote.postage.method, amount: quote.postage.amount } : null,
+        addressSaved: quote.delivery?.saveToCustomer === true,
         orderTotal: quote.totals.orderTotal,
         amountDue: quote.totals.amountDue,
         toCollect: collected,
@@ -308,7 +485,18 @@ async function prepare(tx: Tx, input: PlaceOrderInput, options: PlaceOrderOption
     { ...actor, action: 'order.paid', details: { method: paymentMethod, collected } },
   ])
 
-  return { orderId, output: { orderId, status: 'paid', bookingId, payment: { method: paymentMethod, collected, cardCharged: false } } }
+  return {
+    orderId,
+    output: {
+      orderId,
+      status: 'paid',
+      bookingId,
+      sessionPassId: order.sessionPassId,
+      giftCardId: order.giftCardId,
+      giftCardCode: order.giftCardCode,
+      payment: { method: paymentMethod, collected, cardCharged: false },
+    },
+  }
 }
 
 // --- After a rollback

@@ -37,11 +37,14 @@ export function oldRefusal(details: OrderRefusalDetails): Record<string, unknown
 /** The route's answer in createOrder's shape. Anything that isn't a refusal or an order comes back as the error. */
 export function oldResult(body: { ok: true; data: PlaceOrderOutput } | ApiFailure): Record<string, unknown> {
   if (body.ok) {
-    const { orderId, bookingId, payment } = body.data
+    const { orderId, bookingId, sessionPassId, giftCardId, giftCardCode, payment } = body.data
     return {
       success: true,
       orderId,
       ...(bookingId ? { bookingId } : {}),
+      ...(giftCardId ? { giftCardId } : {}),
+      ...(giftCardCode ? { giftCardCode } : {}),
+      ...(sessionPassId ? { sessionPassId } : {}),
       cardCharged: payment.cardCharged,
       cardAmount: payment.collected,
       paymentMethodUsed: payment.method,
@@ -73,13 +76,16 @@ export async function postOrder(input: unknown, { key = crypto.randomUUID(), ema
   return { status: response.status, body: (await response.json()) as OrderAnswer['body'] }
 }
 
-/** Replays createOrder through the new route. `answers` keeps each raw answer, for what staff see. */
-export function newOrderSide(answers: OrderAnswer[] = []): () => ReplaySide {
+/**
+ * Replays createOrder through the new route. `answers` keeps each raw answer, for what staff see.
+ * `adjust` changes what is sent where a decision changes it (order-differences.ts, NEW_SIDE_CONFIRMS).
+ */
+export function newOrderSide(answers: OrderAnswer[] = [], adjust: (input: PlaceOrderInput) => PlaceOrderInput = (input) => input): () => ReplaySide {
   return () => ({
     name: 'new',
     async call(action, params) {
-      if (action !== 'createOrder') throw new Error(`W06 builds createOrder only, not ${action}.`)
-      const answer = await postOrder(orderInput(params as Record<string, unknown>))
+      if (action !== 'createOrder') throw new Error(`The order route builds createOrder only, not ${action}.`)
+      const answer = await postOrder(adjust(orderInput(params as Record<string, unknown>)))
       answers.push(answer)
       return oldResult(answer.body)
     },

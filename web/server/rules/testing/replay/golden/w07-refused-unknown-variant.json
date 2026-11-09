@@ -1,0 +1,13 @@
+{
+  "scenario": "w07-refused-unknown-variant",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "product_variant_not_found",
+      "productVariantId": "10000000-0000-4000-8000-000000000007"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

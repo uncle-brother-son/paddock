@@ -1,0 +1,13 @@
+{
+  "scenario": "w07-refused-buy-new-core-pass-on-peak",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "booking_session_pass_type_not_valid_for_band",
+      "message": "A Core pass can't be used for a Peak session. Choose an All-Access pass or another way to pay."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

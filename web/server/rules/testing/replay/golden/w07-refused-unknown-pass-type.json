@@ -1,0 +1,12 @@
+{
+  "scenario": "w07-refused-unknown-pass-type",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "session_pass_type_not_found"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

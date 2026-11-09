@@ -128,9 +128,19 @@ don't tie though its statements don't tick the clock. `NOT_BUILT_SCENARIOS` hold
 scenario for each part the route answers NOT_BUILT for; the slice that builds a part moves its
 scenarios into the replay list.
 
+W07 adds `W07_SCENARIOS` (products, the delivery address and postage, session passes, gift cards
+bought), and `ORDER_SCENARIOS` is both lists. Its named differences are in `W07_DIFFERENCES`, each
+with its decision: Q4 (a shipped gift card earns free postage), Q5 (a buy-new order keeps its address
+and requests), the address saved inside T1 and, from W07a, Q33 (a pass or gift card dated on a day the
+end month doesn't have ends on that month's last day; its scenario moves the clock to 29 Feb 2028). Where a decision changes the figure staff confirm,
+`NEW_SIDE_CONFIRMS` sends the new side the figure its screen would show. Gift card codes are labelled
+by the comparator, so a recording never shows one; `place-order.test.ts` holds the new codes to the
+format.
+
 `quote-shadow.test.ts` also runs the dry run beside the quote: every scenario's dry-run rows must
-match what the old order wrote, every single order in `W06_SCENARIOS` must have its match, and every
-other single order must have none (it is NOT_BUILT). A new single-order scenario the route can take
+match what the old order wrote, except the differences in `DRY_RUN_DIFFERENCES` (quote-differences.ts),
+every single order in `ORDER_SCENARIOS` must have its row, and every other single order must have none
+(it is NOT_BUILT). A new single-order scenario the route can take
 must go in the list, or that check fails. The order rule's own transaction tests are in
 `server/rules/orders/place-order.test.ts` (PGlite) and `place-order-postgres.test.ts` (real Postgres:
 the races and the lock order).

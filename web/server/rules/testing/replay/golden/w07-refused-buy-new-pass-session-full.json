@@ -1,0 +1,13 @@
+{
+  "scenario": "w07-refused-buy-new-pass-session-full",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "insufficient_capacity",
+      "bookingFailureReason": "insufficient_capacity"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

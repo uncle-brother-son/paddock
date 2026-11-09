@@ -1,0 +1,12 @@
+{
+  "scenario": "w07-refused-product-quantity-not-whole",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "invalid_product_quantity"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

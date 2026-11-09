@@ -1,0 +1,13 @@
+{
+  "scenario": "w07-refused-an-unknown-postage-method",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "postage_method_required",
+      "message": "This order includes an item that must be shipped — choose a postage option (Standard or Express) in the Delivery address step."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

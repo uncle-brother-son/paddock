@@ -70,6 +70,8 @@ export interface BasketPassTypeFacts {
   price: string | null
   active: boolean | null
   sessions_included: number | null
+  /** How long a pass bought today lasts (W07: the pass row's expiry date). */
+  expiry_months: number | null
   covers_session: boolean
 }
 
@@ -152,12 +154,14 @@ export interface BasketFacts {
   variants: BasketVariantFacts[] | null
   addon_credits: BasketAddonCreditFacts[] | null
   event: BasketEventFacts | null
-  gift_card_preset: { amount: string; active: boolean } | null
+  /** expiry_months is the preset's type's (W07: the gift card's expiry date). */
+  gift_card_preset: { amount: string; active: boolean; expiry_months: number | null } | null
   gift_card_type: {
     active: boolean
     custom_amount_enabled: boolean
     custom_amount_min: string | null
     custom_amount_max: string | null
+    expiry_months: number | null
   } | null
   redeemed_gift_card: { id: string; remaining_balance: string; voided: boolean | null; expiry_date: string } | null
   promo: (PromoCodeRow & { total_uses: number; customer_uses: number }) | null
@@ -236,7 +240,7 @@ SELECT
 
   (SELECT jsonb_build_object(
             'id', spt.id, 'name', spt.name, 'price', spt.price::text, 'active', spt.active,
-            'sessions_included', spt.sessions_included,
+            'sessions_included', spt.sessions_included, 'expiry_months', spt.expiry_months,
             'covers_session', pass_covers_session(spt.id, $2::uuid))
    FROM session_pass_types spt WHERE spt.id = $6::uuid) AS pass_type,
 
@@ -299,12 +303,14 @@ SELECT
               FROM quote_event(e.id, $1::uuid, $14::int, $15::boolean, $5::text) q) END)
    FROM events e WHERE e.id = $13::uuid) AS event,
 
-  (SELECT jsonb_build_object('amount', gp.amount::text, 'active', gp.active)
-   FROM gift_card_presets gp WHERE gp.id = $16::uuid) AS gift_card_preset,
+  (SELECT jsonb_build_object('amount', gp.amount::text, 'active', gp.active, 'expiry_months', gpt.expiry_months)
+   FROM gift_card_presets gp LEFT JOIN gift_card_types gpt ON gpt.id = gp.gift_card_type_id
+   WHERE gp.id = $16::uuid) AS gift_card_preset,
 
   (SELECT jsonb_build_object(
             'active', gt.active, 'custom_amount_enabled', gt.custom_amount_enabled,
-            'custom_amount_min', gt.custom_amount_min::text, 'custom_amount_max', gt.custom_amount_max::text)
+            'custom_amount_min', gt.custom_amount_min::text, 'custom_amount_max', gt.custom_amount_max::text,
+            'expiry_months', gt.expiry_months)
    FROM gift_card_types gt WHERE gt.id = $17::uuid) AS gift_card_type,
 
   (SELECT jsonb_build_object(

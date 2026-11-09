@@ -9,8 +9,11 @@ import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment, type
 import { newOrderSide, oldResult, orderInput, postOrder, type OrderAnswer } from '@/server/rules/testing/replay/order-side'
 import { ID, mo, memberCredit, paidSeat, sam, seed, seedCorePass, whileFailing, type WriteFailure } from '@/server/rules/testing/replay/scenarios'
 import { herdWaitMessage } from './failure-messages'
+import { GIFT_CARD_CODE_FORMAT } from './gift-card-code'
+import type { BasketFacts } from './load-basket'
 import { readOrderRows } from './order-rows'
 import { refusalCode, refusalDetails } from './order-refusal'
+import { dryRunOrder, GIFT_CARD_CODE_TRIES, placeOrder } from './place-order'
 import { writeBooking, type BookingToWrite, type SeatToWrite } from './write-booking'
 
 // T1 on PGlite with the live schema and the replay seed, through the real routes. The parity proof
@@ -53,6 +56,27 @@ const memberBooking = {
   payment: cash(28),
 }
 const passBooking = { customerId: ID.customer, booking: { ...paidSeat(), redemptionSource: 'session_pass_credit', sessionPassId: ID.ownedPass }, payment: {} }
+
+// W07's baskets
+const soap = { productVariantId: ID.variant, quantity: 2, unitPrice: 12 }
+const candle = { productVariantId: ID.candleVariant, quantity: 1, unitPrice: 20 }
+const shippedMug = { productVariantId: ID.mugVariant, quantity: 1, unitPrice: 15, fulfillmentChoice: 'shipping' }
+const address = { name: 'Sam Test', line1: '1 Mill Lane', city: 'Hebden Bridge', postcode: 'HX7 1AA', country: 'United Kingdom' }
+const savedAddress = { shippingAddress: address, postageMethod: 'standard', saveShippingAddressToCustomer: true }
+const productsInCash = { customerId: ID.customer, products: [soap], payment: cash(24) }
+const passAlone = { customerId: ID.customer, sessionPassTypeId: ID.passType, payment: cash(50) }
+const giftCardInCash = { customerId: ID.customer, giftCard: { giftCardPresetId: ID.giftCardPreset, fulfillmentMethod: 'digital', recipientName: 'Ali Friend' }, payment: cash(60) }
+const buyNewPass = { customerId: ID.customer, booking: { ...paidSeat(), redemptionSource: 'buy_new_session_pass' }, sessionPassTypeId: ID.passType, payment: cash(50) }
+/** The brief's worst basket: a booking on a pass bought in it, two shipped products, a shipped gift card and postage. */
+const worstBasket = {
+  customerId: ID.customer,
+  booking: { ...paidSeat([sam, alex]), redemptionSource: 'buy_new_session_pass' },
+  sessionPassTypeId: ID.passType,
+  products: [candle, shippedMug],
+  giftCard: { giftCardTypeId: ID.giftCardType, amount: 10, fulfillmentMethod: 'shipping' },
+  ...savedAddress,
+  payment: cash(119.95),
+}
 
 /** One order through the new route, on a fresh seed, with `prepare` run first. */
 function orderScenario(params: Record<string, unknown>, prepare?: (db: Db) => Promise<void>, during?: (steps: () => Promise<unknown>) => Promise<unknown>): Scenario {
@@ -217,6 +241,31 @@ describe('B11: a database error anywhere in the order leaves nothing behind', ()
     expect(tablesTouched(recording)).toEqual(['api_idempotency'])
   })
 
+  // W07: each write the worst basket makes. A failed gift card write answers INTERNAL with the safe
+  // words, where createOrder answered gift_card_creation_failed with the database's own (W03-plan 2.9).
+  const w07Writes: Array<[string, WriteFailure]> = [
+    ['the gift card', { table: 'gift_cards', event: 'INSERT', when: 'true' }],
+    ['the order', { table: 'orders', event: 'INSERT', when: 'true' }],
+    ['the pass line', { table: 'order_line_items', event: 'INSERT', when: "NEW.item_type = 'session_pass'" }],
+    ['a product line', { table: 'order_line_items', event: 'INSERT', when: "NEW.item_type = 'product' AND NEW.product_variant_id = '" + ID.mugVariant + "'" }],
+    ['the gift card line', { table: 'order_line_items', event: 'INSERT', when: "NEW.item_type = 'gift_card'" }],
+    ['the postage line', { table: 'order_line_items', event: 'INSERT', when: "NEW.item_type = 'postage'" }],
+    ['a stock claim', { table: 'product_variants', event: 'UPDATE', when: "NEW.id = '" + ID.mugVariant + "'" }],
+    ['a stock ledger row', { table: 'stock_adjustments', event: 'INSERT', when: "NEW.variant_id = '" + ID.mugVariant + "'" }],
+    ['the pass bought', { table: 'customer_session_passes', event: 'INSERT', when: 'true' }],
+    ['the address saved to the customer', { table: 'customers', event: 'UPDATE', when: 'true' }],
+    ['the booking claiming a session from the pass bought', { table: 'customer_session_passes', event: 'UPDATE', when: 'true' }],
+    ['the booking line', { table: 'order_line_items', event: 'INSERT', when: "NEW.item_type = 'booking'" }],
+    ['a seat', { table: 'booking_guests', event: 'INSERT', when: "NEW.guest_type = 'additional_guest'" }],
+  ]
+
+  it.each(w07Writes)('W07, the worst basket: %s fails', async (_, failure) => {
+    const { recording, answer } = await placeThrough(worstBasket, undefined, (steps) => whileFailing(db, failure, steps))
+    expect(answer.body).toMatchObject({ ok: false, error: { code: 'INTERNAL', message: 'Something went wrong and the action may not have finished. Check before trying again.' } })
+    expect(JSON.stringify(answer.body)).not.toContain('connection lost')
+    expect(tablesTouched(recording)).toEqual(['api_idempotency'])
+  })
+
   it('the old createOrder, failing as it marks the order paid, keeps the booking and a pending order', async () => {
     const markPaid: WriteFailure = { table: 'orders', event: 'UPDATE', when: "NEW.payment_status = 'paid'" }
     const recording = await replay(environment, orderScenario(cashBooking, undefined, (steps) => whileFailing(db, markPaid, steps)), oldSide)
@@ -355,6 +404,23 @@ describe('before anything is touched', () => {
       const { result, statements } = await counting(() => dryRun(orderInput(memberBooking)))
       expect(result.status).toBe(200)
       expect(statements).toEqual(['SELECT id,', ...T1.slice(0, -1), 'WITH o', 'ROLLBACK'])
+    })
+
+    // W07: the gift card, the stock, the ledger, the pass, the postage and the saved address are all
+    // in the order's statement, so a basket of any of them costs no more than W06's.
+    const NO_BOOKING = ROUTE.filter((_, i) => i !== ROUTE.indexOf('WITH clock'))
+    it.each([
+      ['a pickup product', productsInCash, NO_BOOKING],
+      ['a pass on its own', passAlone, NO_BOOKING],
+      ['a gift card', giftCardInCash, NO_BOOKING],
+      ['a shipped product with postage and the address saved', { customerId: ID.customer, products: [candle], ...savedAddress, payment: cash(24.95) }, NO_BOOKING],
+      ['a booking on a pass bought in the same basket', buyNewPass, ROUTE],
+      ['the worst basket: a booking on a pass bought, two shipped products, a shipped gift card and postage', worstBasket, ROUTE],
+    ])('W07, %s', async (_, params, expected) => {
+      await freshSeed()
+      const { result, statements } = await counting(() => postOrder(orderInput(params)))
+      expect(result.body.ok).toBe(true)
+      expect(statements).toEqual(expected)
     })
   })
 })
@@ -707,5 +773,259 @@ describe('writeBooking refuses on its own, without the checks T1 runs first', ()
       ['Bea Guest', null, null],
     ])
     expect(recording.tables['bookings']?.added).toMatchObject([{ party_size: 3, price_paid: '60.00', guests_over_18_confirmed_at: '<set>' }])
+  })
+})
+
+// --- W07: products, postage, passes and gift cards bought
+
+/** placeOrder or dryRunOrder straight, on a fresh seed, with a code maker of the test's choosing. */
+async function directly(params: Record<string, unknown>, codes: () => string, { dry = false, prepare }: { dry?: boolean; prepare?: (db: Db) => Promise<void> } = {}) {
+  const outcome: { value?: unknown; error?: unknown } = {}
+  const recording = await replay(
+    environment,
+    {
+      name: 'directly',
+      async seed(seedDb, stripe) {
+        await seed(seedDb, stripe)
+        await prepare?.(seedDb)
+      },
+      async run() {
+        const options = { actor: { type: 'staff' as const, id: ID.staff }, requestId: 'w07-test', allowPriceOverrides: true, giftCardCode: codes }
+        try {
+          outcome.value = await (dry ? dryRunOrder : placeOrder)(db, orderInput(params), options)
+        } catch (err) {
+          outcome.error = err
+        }
+      },
+    },
+    oldSide
+  )
+  return { recording, ...outcome }
+}
+
+/** A code maker that gives `codes` in turn, then fresh ones, and counts how often it was asked. */
+function codesInTurn(...codes: string[]) {
+  let asked = 0
+  const next = () => {
+    asked += 1
+    return codes[asked - 1] ?? `PWC-${String(asked).padStart(8, 'A').replace(/[01]/g, 'B')}`
+  }
+  return { next, asked: () => asked }
+}
+
+describe('gift card codes (W03-plan 2.4 item 3)', () => {
+  // The seed has a gift card whose code is SEEDCARD. Shipped, so postage (free: Q4) and the saved address are in it too.
+  const bought = {
+    ...giftCardInCash,
+    giftCard: { ...giftCardInCash.giftCard, fulfillmentMethod: 'shipping' },
+    products: [soap],
+    sessionPassTypeId: ID.passType,
+    ...savedAddress,
+    payment: cash(134),
+  }
+
+  it('a new code has the app\'s format, and is the one written', async () => {
+    const { recording, answer } = await placeThrough(giftCardInCash)
+    expect(answer.body.ok).toBe(true)
+    const code = answer.body.ok ? answer.body.data.giftCardCode : null
+    expect(code).toMatch(GIFT_CARD_CODE_FORMAT)
+    expect(recording.tables['gift_cards']?.added).toMatchObject([{ code: '<code#1>', original_value: '60.00', remaining_balance: '60.00', recipient_name: 'Ali Friend', origin: 'customer_purchase', expiry_date: '2027-11-10' }])
+  })
+
+  it('a code already taken is skipped and another drawn, in the same transaction: every row written once', async () => {
+    const codes = codesInTurn('SEEDCARD', 'PWC-ABCDEFGH')
+    const { recording, value, error } = await directly(bought, codes.next)
+    expect(error).toBeUndefined()
+    expect(codes.asked()).toBe(2)
+    expect(value).toMatchObject({ giftCardCode: 'PWC-ABCDEFGH' })
+    expect(recording.tables['gift_cards']?.added).toHaveLength(1)
+    expect(recording.tables['orders']?.added).toHaveLength(1)
+    expect(recording.tables['order_line_items']?.added.map((line) => line['item_type'])).toEqual(['product', 'session_pass', 'gift_card', 'postage'])
+    expect(recording.tables['product_variants']?.changed).toEqual([{ id: ID.variant, stock_quantity: [5, 3] }])
+    expect(recording.tables['stock_adjustments']?.added).toHaveLength(1)
+    expect(recording.tables['customer_session_passes']?.added).toHaveLength(1)
+    expect(recording.tables['customers']?.changed).toHaveLength(1)
+  })
+
+  it(`${GIFT_CARD_CODE_TRIES} codes taken in a row: createOrder's gift_card_code_exhausted and words, after exactly ${GIFT_CARD_CODE_TRIES} tries, nothing kept`, async () => {
+    const codes = codesInTurn(...Array.from({ length: 10 }, () => 'SEEDCARD'))
+    const { recording, error } = await directly(bought, codes.next)
+    expect(codes.asked()).toBe(5)
+    expect(refusalDetails(error)).toEqual({ stage: 'gift_card', reason: 'gift_card_code_exhausted' })
+    expect((error as Error).message).toBe('Failed to generate a unique gift card code — please try again.')
+    expect(recording.tables).toEqual({})
+  })
+
+  it('a collision inside the dry run: it reads back one gift card of the right format, and nothing is kept', async () => {
+    const codes = codesInTurn('SEEDCARD', 'PWC-ABCDEFGH')
+    const { recording, value, error } = await directly(bought, codes.next, { dry: true })
+    expect(error).toBeUndefined()
+    expect(codes.asked()).toBe(2)
+    const rows = (value as { rows: { gift_cards: Array<{ code_format_ok: boolean }>; stock: unknown } }).rows
+    expect(rows.gift_cards).toEqual([expect.objectContaining({ code_format_ok: true, original_value: 60 })])
+    expect(rows.stock).toEqual([{ variant_id: ID.variant, stock_quantity: 3 }])
+    expect(recording.tables).toEqual({})
+  })
+})
+
+describe('B3 (pass half): a pass line is never kept without its pass, nor a pass without its line', () => {
+  it('the pass row is skipped: the order fails whole, and its pass line goes with it', async () => {
+    const skipped: WriteFailure = { table: 'customer_session_passes', event: 'INSERT', when: 'true' }
+    const { recording, answer } = await placeThrough(passAlone, undefined, (steps) => whileSkipping(db, skipped, steps))
+    expect(answer.body).toMatchObject({ ok: false, error: { code: 'INTERNAL' } })
+    expect(tablesTouched(recording)).toEqual(['api_idempotency'])
+  })
+
+  it('the pass line is skipped: no pass is issued, and the order fails whole', async () => {
+    const skipped: WriteFailure = { table: 'order_line_items', event: 'INSERT', when: "NEW.item_type = 'session_pass'" }
+    const { recording, answer } = await placeThrough(passAlone, undefined, (steps) => whileSkipping(db, skipped, steps))
+    expect(answer.body).toMatchObject({ ok: false, error: { code: 'INTERNAL' } })
+    expect(tablesTouched(recording)).toEqual(['api_idempotency'])
+  })
+
+  it('a booking on a pass bought in the basket that cannot take its session: no pass, no line, no order', async () => {
+    const skipped: WriteFailure = { table: 'customer_session_passes', event: 'UPDATE', when: 'true' }
+    const { recording, answer } = await placeThrough(buyNewPass, undefined, (steps) => whileSkipping(db, skipped, steps))
+    expect(refusalOf(answer)).toMatchObject({ reason: 'insufficient_session_pass_credit', bookingFailureReason: 'insufficient_session_pass_credit' })
+    expect(tablesTouched(recording)).toEqual(['api_idempotency'])
+  })
+
+  it('placed: the pass, its line and the booking that took a session from it, in one order', async () => {
+    const { recording, answer } = await placeThrough(buyNewPass)
+    expect(answer.body).toMatchObject({ ok: true, data: { sessionPassId: expect.any(String), bookingId: expect.any(String), giftCardId: null, giftCardCode: null } })
+    expect(recording.tables['customer_session_passes']?.added).toMatchObject([{ order_line_item_id: 'order_line_items#1', sessions_remaining: 4, purchase_date: '2026-11-10', expiry_date: '2027-11-10' }])
+    expect(recording.tables['order_line_items']?.added).toMatchObject([
+      { item_type: 'session_pass', session_pass_type_id: ID.passType, unit_price: '50.00' },
+      { item_type: 'booking', booking_id: 'bookings#1', unit_price: '0.00' },
+    ])
+    expect(recording.tables['bookings']?.added).toMatchObject([{ redemption_source: 'session_pass_credit', redeemed_session_pass_id: 'customer_session_passes#1', price_paid: '0.00' }])
+  })
+})
+
+describe('the stock claim refuses on its own, without the checks T1 runs first', () => {
+  /** A client whose basket facts show `stock` of every variant, whatever is really there. */
+  function staleStockDb(stock: number): Db {
+    const real = createPostgresDriver(environment.database.url)
+    const stale = (session: DriverSession): DriverSession => ({
+      async run<Row>(sql: string, params: Parameters<DriverSession['run']>[1]): Promise<Row[]> {
+        const rows = await session.run<Row>(sql, params)
+        if (!sql.trim().startsWith('WITH london')) return rows
+        return rows.map((row) => {
+          const facts = row as unknown as BasketFacts
+          return { ...facts, variants: facts.variants?.map((v) => ({ ...v, stock_quantity: stock })) ?? null } as unknown as Row
+        })
+      },
+    })
+    const driver: DbDriver = {
+      ...stale(real),
+      async reserve() {
+        const reserved = await real.reserve()
+        return { ...stale(reserved), runScript: (sql) => reserved.runScript(sql), release: () => reserved.release() }
+      },
+      close: () => real.close(),
+    }
+    return createDb(driver)
+  }
+
+  it("facts that think there is enough: the claim's own guard refuses, with createOrder's reason, nothing kept", async () => {
+    const staleDb = staleStockDb(100)
+    holder.db = staleDb
+    try {
+      const { recording, answer } = await placeThrough({ ...productsInCash, products: [{ ...soap, quantity: 6 }], payment: cash(72) })
+      expect(refusalOf(answer)).toEqual({ status: 409, code: 'OUT_OF_STOCK', stage: 'product', reason: 'insufficient_stock', productVariantId: ID.variant })
+      expect(tablesTouched(recording)).toEqual(['api_idempotency'])
+    } finally {
+      holder.db = db
+      await staleDb.close()
+    }
+  })
+
+  it('a claim that finds the stock gone: createOrder\'s reason, its variant and OUT_OF_STOCK, nothing kept', async () => {
+    const skipped: WriteFailure = { table: 'product_variants', event: 'UPDATE', when: 'true' }
+    const { recording, answer } = await placeThrough(productsInCash, undefined, (steps) => whileSkipping(db, skipped, steps))
+    expect(refusalOf(answer)).toEqual({ status: 409, code: 'OUT_OF_STOCK', stage: 'product', reason: 'insufficient_stock', productVariantId: ID.variant })
+    expect(tablesTouched(recording)).toEqual(['api_idempotency'])
+  })
+})
+
+describe('B5 (address half): the delivery address is kept on every path T1 writes', () => {
+  const kept = { name: 'Sam Test', line1: '1 Mill Lane', line2: null, city: 'Hebden Bridge', postcode: 'HX7 1AA', country: 'United Kingdom' }
+  it.each([
+    ['a shipped product', { customerId: ID.customer, products: [candle], ...savedAddress, payment: cash(24.95) }],
+    ['a shipped gift card', { customerId: ID.customer, giftCard: { giftCardTypeId: ID.giftCardType, amount: 30, fulfillmentMethod: 'shipping' }, ...savedAddress, payment: cash(34.95) }],
+    ['a booking on a pass bought in the same basket (Q5)', { ...buyNewPass, products: [candle], ...savedAddress, payment: cash(74.95) }],
+  ])('%s', async (_, params) => {
+    const { recording, answer } = await placeThrough(params)
+    expect(answer.body.ok).toBe(true)
+    expect(recording.tables['orders']?.added[0]?.['shipping_address']).toEqual(kept)
+    expect(recording.tables['customers']?.changed).toEqual([
+      { id: ID.customer, address_line1: [null, '1 Mill Lane'], city: [null, 'Hebden Bridge'], postcode: [null, 'HX7 1AA'], country: ['GB', 'United Kingdom'] },
+    ])
+  })
+
+  it('nothing shipped: no address on the order and none saved, whatever was sent', async () => {
+    const { recording } = await placeThrough({ ...productsInCash, ...savedAddress })
+    expect(recording.tables['orders']?.added[0]?.['shipping_address']).toBeNull()
+    expect(recording.tables['customers']).toBeUndefined()
+  })
+})
+
+describe('the dry run, for what W07 adds', () => {
+  it('reads back exactly what the real order then writes, for the worst basket', async () => {
+    let dry: unknown = null
+    let written: unknown = null
+    await replay(
+      environment,
+      {
+        name: 'dry run then order, W07',
+        seed,
+        async run() {
+          dry = (await dryRun(orderInput(worstBasket))).body.data?.rows
+          const placed = await postOrder(orderInput(worstBasket))
+          if (placed.body.ok) written = await readOrderRows(db, placed.body.data.orderId)
+        },
+      },
+      oldSide
+    )
+    expect(written).not.toBeNull()
+    expect(dry).toEqual(written)
+    expect(written).toMatchObject({
+      stock: [
+        { variant_id: ID.candleVariant, stock_quantity: 4 },
+        { variant_id: ID.mugVariant, stock_quantity: 4 },
+      ],
+      stock_adjustments: [
+        { variant_id: ID.candleVariant, change_amount: -1, by_staff: false },
+        { variant_id: ID.mugVariant, change_amount: -1, by_staff: false },
+      ],
+      session_passes: [{ sessions_remaining: 4, for_the_order_customer: true, pays_for_the_booking: true }],
+      gift_cards: [{ code_format_ok: true, original_value: 10, fulfillment_method: 'shipping', bought_by_the_order_customer: true }],
+      booking: { redeemed_session_pass_id: 'bought in this order', pass_sessions_remaining: 4 },
+      customer_address: { line1: '1 Mill Lane', country: 'United Kingdom' },
+    })
+  })
+})
+
+describe('for the Worker step (W07): the old createOrder when a write after the stock claim fails', () => {
+  // createOrder.ts claims the stock at stage 19 and writes the gift card at stage 22. A database error
+  // there (here the gift card's INSERT) rolls back by hand, and rollbackAll swallows a failed step: if
+  // the stock's own put-back fails too, the stock stays claimed with no order, no line and no ledger
+  // row, and staff see the database's raw words. T1 is one transaction: nothing is kept.
+  it('keeps the two soaps out of stock, with no order to show for them', async () => {
+    const basket = { ...productsInCash, giftCard: { giftCardPresetId: ID.giftCardPreset, fulfillmentMethod: 'digital' }, payment: cash(84) }
+    const putBackFails: WriteFailure = { table: 'product_variants', event: 'UPDATE', when: 'NEW.stock_quantity > OLD.stock_quantity' }
+    const giftCardFails: WriteFailure = { table: 'gift_cards', event: 'INSERT', when: 'true' }
+    const recording = await replay(
+      environment,
+      orderScenario(basket, undefined, (steps) => whileFailing(db, putBackFails, () => whileFailing(db, giftCardFails, steps))),
+      oldSide
+    )
+    expect(recording.results[0]).toEqual({ success: false, stage: 'gift_card', reason: 'gift_card_creation_failed', message: 'connection lost' })
+    expect(recording.tables['product_variants']?.changed).toEqual([{ id: ID.variant, stock_quantity: [5, 3] }])
+    expect(Object.keys(recording.tables).sort()).toEqual(['product_variants'])
+
+    const worker = await placeThrough(basket, undefined, (steps) => whileFailing(db, putBackFails, () => whileFailing(db, giftCardFails, steps)))
+    expect(worker.answer.body).toMatchObject({ ok: false, error: { code: 'INTERNAL' } })
+    expect(tablesTouched(worker.recording)).toEqual(['api_idempotency'])
   })
 })

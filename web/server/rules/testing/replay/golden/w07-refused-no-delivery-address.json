@@ -1,0 +1,13 @@
+{
+  "scenario": "w07-refused-no-delivery-address",
+  "results": [
+    {
+      "success": false,
+      "stage": "validation",
+      "reason": "shipping_address_required",
+      "message": "This order includes an item that must be shipped — a delivery address is required. Add it in the checkout's Delivery address step."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

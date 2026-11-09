@@ -41,6 +41,34 @@ export interface BookingToWrite {
   seats: readonly SeatToWrite[]
 }
 
+/** An add-on on the booking, as addon_order_lines records it. */
+export interface BookingAddonToWrite {
+  addonId: string
+  quantity: number
+  priceAtPurchase: number
+  redemptionSource: 'paid' | 'membership_credit'
+  redeemedMembershipId: string | null
+}
+
+/**
+ * The booking's part of an order that T1 has already written (W07): its order line, its add-ons
+ * and the add-on credits they draw. The order is written first, so a pass bought in the same basket
+ * exists before the booking claims a session from it.
+ */
+export interface BookingOrderPart {
+  orderId: string
+  /** The clock the order's other lines were written from, as text, so this line sorts among them. */
+  linesAt: string
+  /** The booking line's place among the order's lines, from 1. */
+  linePosition: number
+  /** The money seats, before any promo, and the promo's share of them. */
+  linePrice: number
+  lineDiscount: number
+  addons: readonly BookingAddonToWrite[]
+  /** Add-on credits to draw, one entry per membership. */
+  credits: ReadonlyArray<{ membershipId: string; quantity: number }>
+}
+
 /**
  * The booking in one statement: the place (a private session takes all of it), the pass session,
  * the booking, then a row per seat. Each claim is a guarded UPDATE that re-checks inside itself, and
@@ -56,6 +84,10 @@ export interface BookingToWrite {
  * The one difference from createBooking: when the guarded insert finds no credit, createBooking wrote
  * the seat as paid instead. Under the period lock that can't happen, and paying for the seat then
  * would take a figure the order has already checked against what staff confirmed, so it is refused.
+ *
+ * With an order (W07), the same statement writes the booking's order line, its add-ons with their
+ * order, and the add-on credits they draw, as the order's statement did in W06. The line's created_at
+ * comes from the clock the order's other lines used, so it keeps its place among them.
  */
 const BOOKING_SQL = `
 WITH clock AS (SELECT clock_timestamp() AS at),
@@ -106,11 +138,42 @@ seats AS (
   CROSS JOIN jsonb_to_recordset($13::jsonb)
     AS g(seat_no int, guest_type text, guest_name text, guest_email text, date_of_birth date, unit_price numeric, pay_by text)
   RETURNING id
+),
+line AS (
+  INSERT INTO order_line_items (order_id, item_type, quantity, unit_price, line_total, booking_id, discount_amount, created_at)
+  SELECT $14::uuid, 'booking', 1, $15::numeric, $15::numeric, booking.id, $16::numeric,
+         $17::timestamptz + $18::int * interval '1 millisecond'
+  FROM booking
+  WHERE $14::uuid IS NOT NULL
+  RETURNING id
+),
+credits AS (
+  UPDATE customer_memberships m
+  SET addon_credits_remaining = m.addon_credits_remaining - x.quantity, updated_at = now()
+  FROM jsonb_to_recordset($19::jsonb) AS x(membership_id uuid, quantity int)
+  WHERE m.id = x.membership_id AND m.addon_credits_remaining >= x.quantity AND m.is_herd = true
+    AND EXISTS (SELECT 1 FROM booking)
+  RETURNING m.id
+),
+booking_addons AS (
+  INSERT INTO addon_order_lines
+    (booking_id, addon_id, quantity, price_at_purchase, sku_at_purchase, redemption_source, redeemed_membership_id, order_id, created_at)
+  SELECT booking.id, a.addon_id, a.quantity, a.price_at_purchase, COALESCE(ad.sku, ad.id::text), a.redemption_source,
+         a.redeemed_membership_id, $14::uuid, clock.at + a.position * interval '1 millisecond'
+  FROM booking
+  CROSS JOIN clock
+  CROSS JOIN jsonb_to_recordset($20::jsonb)
+    AS a(position int, addon_id uuid, quantity int, price_at_purchase numeric, redemption_source text, redeemed_membership_id uuid)
+  JOIN addons ad ON ad.id = a.addon_id
+  RETURNING id
 )
 SELECT EXISTS (SELECT 1 FROM capacity) AS capacity_claimed,
        EXISTS (SELECT 1 FROM pass) AS pass_claimed,
        (SELECT id FROM booking) AS booking_id,
        (SELECT count(*)::int FROM seats) AS seats_written,
+       (SELECT count(*)::int FROM line) AS lines_written,
+       (SELECT count(*)::int FROM credits) AS credits_claimed,
+       (SELECT count(*)::int FROM booking_addons) AS addons_written,
        (SELECT pass_covers_session(pass_type_id, $1::uuid) FROM customer_session_passes WHERE id = $4::uuid) AS pass_covers,
        (SELECT sessions_remaining >= 1 AND expiry_date >= (now() AT TIME ZONE 'Europe/London')::date
         FROM customer_session_passes WHERE id = $4::uuid) AS pass_usable`
@@ -120,14 +183,20 @@ interface BookingWritten {
   pass_claimed: boolean
   booking_id: string | null
   seats_written: number
+  lines_written: number
+  credits_claimed: number
+  addons_written: number
   pass_covers: boolean | null
   pass_usable: boolean | null
 }
 
 const round2 = (n: number): number => Math.round(n * 100) / 100
 
-/** Writes the booking and its seats, and returns its id. Throws createBooking's refusal if a claim fails. */
-export async function writeBooking(tx: Tx, booking: BookingToWrite): Promise<string> {
+/**
+ * Writes the booking and its seats, and with `order` its order line, add-ons and add-on credits, and
+ * returns its id. Throws createBooking's refusal if a claim fails.
+ */
+export async function writeBooking(tx: Tx, booking: BookingToWrite, order?: BookingOrderPart): Promise<string> {
   const seats = booking.seats.map((seat, i) => ({
     seat_no: i + 1,
     guest_type: seat.guestType,
@@ -151,6 +220,20 @@ export async function writeBooking(tx: Tx, booking: BookingToWrite): Promise<str
     booking.creditPeriodId,
     booking.specialRequests,
     seats,
+    order?.orderId ?? null,
+    round2(order?.linePrice ?? 0),
+    round2(order?.lineDiscount ?? 0),
+    order?.linesAt ?? null,
+    order?.linePosition ?? 0,
+    (order?.credits ?? []).map((credit) => ({ membership_id: credit.membershipId, quantity: credit.quantity })),
+    (order?.addons ?? []).map((addon, i) => ({
+      position: i + 1,
+      addon_id: addon.addonId,
+      quantity: addon.quantity,
+      price_at_purchase: addon.priceAtPurchase,
+      redemption_source: addon.redemptionSource,
+      redeemed_membership_id: addon.redeemedMembershipId,
+    })),
   ])
   const written = rows[0] as BookingWritten
 
@@ -170,6 +253,12 @@ export async function writeBooking(tx: Tx, booking: BookingToWrite): Promise<str
   if (booking.creditPeriodId && !written.booking_id) throw bookingRefusal('insufficient_membership_credit')
   if (!written.booking_id || written.seats_written !== booking.seats.length) {
     throw new Error(`The booking was not written whole: ${written.booking_id ? `${written.seats_written} of ${booking.seats.length} seats` : 'no booking row'}.`)
+  }
+  if (order) {
+    if (written.credits_claimed !== order.credits.length) throw bookingRefusal('insufficient_addon_membership_credit')
+    if (written.lines_written !== 1 || written.addons_written !== order.addons.length) {
+      throw new Error(`The booking's order lines were not written whole: ${written.lines_written} of 1 line, ${written.addons_written} of ${order.addons.length} add-ons.`)
+    }
   }
   return written.booking_id
 }

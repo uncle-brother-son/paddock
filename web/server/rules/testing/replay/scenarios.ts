@@ -1,5 +1,5 @@
 import { vi } from 'vitest'
-import type { Db } from '@/server/db'
+import type { Db, SqlParam } from '@/server/db'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
 import { insert } from '../database'
 import type { Scenario, ScenarioContext } from './harness'
@@ -2786,6 +2786,7 @@ export const scenarios: Scenario[] = [
     await losingTheAnswer(andTheLookFails(ADD_GUEST_STATEMENT), () => add(bea, { ...cash(15), giftCard: W05L_GIFT }))
   }),
   ...w06Scenarios(),
+  ...w07Scenarios(),
 ]
 
 // --- W06: the Worker's order core. Every createOrder and createBooking reason in W06's scope that had
@@ -2883,5 +2884,187 @@ function w06Scenarios(): Scenario[] {
     order('w06-refused-cash-not-confirmed', { booking: paidBooking, payment: { method: 'cash' } }),
     order('w06-refused-cash-but-nothing-owed', { customerId: ID.member, booking: moCredit, payment: cash(20) }),
     order('w06-refused-something-owed-with-no-method', { booking: paidSeat(), payment: {} }),
+  ]
+}
+
+// --- W07: products, the delivery address and postage, session passes and gift cards bought. Every
+// createOrder reason for stages 5, 7, 9, 10 and 13, and the shapes stages 19, 22, 25, 26 and 35 write,
+// in cash or with nothing owed. They run through the old createOrder for their golden files, and
+// order-replay.test.ts runs them through the new route too.
+function w07Scenarios(): Scenario[] {
+  const UNKNOWN = '10000000-0000-4000-8000-0000000000fe'
+  const mug = (fulfillmentChoice?: string) => ({ productVariantId: ID.mugVariant, quantity: 1, unitPrice: 15, systemUnitPrice: 15, ...(fulfillmentChoice ? { fulfillmentChoice } : {}) })
+  const preset = (fulfillmentMethod: string) => ({ giftCardPresetId: ID.giftCardPreset, fulfillmentMethod })
+  const custom = (amount: number | undefined, fulfillmentMethod: string) => ({ giftCardTypeId: ID.giftCardType, amount, fulfillmentMethod })
+  const newPass = { sessionPassTypeId: ID.passType }
+  const buyNewPass = (guests: Guest[] = [sam]) => ({ ...paidSeat(guests), redemptionSource: 'buy_new_session_pass' })
+  const saved = { ...shipped, saveShippingAddressToCustomer: true }
+  const stockIs = (quantity: number) => async (db: Db) => {
+    await db.query('UPDATE product_variants SET stock_quantity = $1 WHERE id = $2', [quantity, ID.variant])
+  }
+  const thresholdIs = (amount: string) => async (db: Db) => {
+    await db.query('UPDATE postage_settings SET free_shipping_threshold = $1', [amount])
+  }
+  const passTypeSql = {
+    active: 'UPDATE session_pass_types SET active = $1 WHERE id = $2',
+    sessions_included: 'UPDATE session_pass_types SET sessions_included = $1 WHERE id = $2',
+    price: 'UPDATE session_pass_types SET price = $1 WHERE id = $2',
+    expiry_months: 'UPDATE session_pass_types SET expiry_months = $1 WHERE id = $2',
+  } as const
+  const passTypeHas = (column: keyof typeof passTypeSql, value: SqlParam) => async (db: Db) => {
+    await db.query(passTypeSql[column], [value, ID.passType])
+  }
+  const sessionFull = async (db: Db) => {
+    await db.query('UPDATE sessions SET total_booked = capacity WHERE id = $1', [ID.session])
+  }
+  const bookedThatDay = async (db: Db) => {
+    await insert(db, 'bookings', { session_id: ID.session, customer_id: ID.customer, party_size: 1, price_paid: '20', status: 'confirmed' })
+  }
+  return [
+    // Products: picked up, shipped, both, and their prices
+    order('w07-pickup-product-in-cash', { products: [soap], payment: cash(24) }),
+    order('w07-shipped-product-in-cash', { products: [candle], ...shipped, payment: cash(24.95) }),
+    order('w07-shipped-and-pickup-products-in-cash', { products: [soap, mug('shipping')], ...shipped, payment: cash(43.95) }),
+    order('w07-a-both-product-picked-up-needs-no-address', { products: [mug('pickup')], payment: cash(15) }),
+    order('w07-an-address-with-nothing-to-ship-is-not-kept', { products: [soap], ...saved, payment: cash(24) }),
+    order('w07-two-lines-of-one-variant-take-the-last-stock', { products: [soap, { ...soap, quantity: 3 }], payment: cash(60) }),
+    order('w07-the-last-item-in-stock', { products: [{ ...soap, quantity: 1 }], payment: cash(12) }, stockIs(1)),
+    order('w07-two-shipped-variants-reach-free-postage', { products: [{ ...candle, quantity: 2 }, mug('shipping')], ...shipped, payment: cash(55) }),
+    order('w07-member-price-on-a-product', { customerId: ID.member, products: [{ ...soap, quantity: 1, unitPrice: 10, systemUnitPrice: 10 }], payment: cash(10) }, async (db) => {
+      await db.query(`UPDATE products SET member_price = '10.00' WHERE id = $1`, [ID.product])
+    }),
+    order('w07-variant-price-override', { products: [{ ...soap, unitPrice: 9, systemUnitPrice: 9 }], payment: cash(18) }, async (db) => {
+      await db.query(`UPDATE product_variants SET price_override = '9.00' WHERE id = $1`, [ID.variant])
+    }),
+    order('w07-product-override-with-permission-in-cash', { products: [{ ...soap, unitPrice: 10, priceOverrideReason: '  Damaged box  ' }], payment: cash(20) }),
+    order('w07-product-override-without-permission-is-ignored-in-cash', { products: [{ ...soap, unitPrice: 1 }], payment: cash(24) }, noPricing),
+    order('w07-booking-and-products-in-cash', { booking: paidSeat(), products: [soap], payment: cash(44) }),
+    order('w07-member-credit-seat-and-a-product', { customerId: ID.member, booking: { ...paidSeat([mo]), ...memberCredit }, products: [{ ...soap, quantity: 1 }], payment: cash(12) }),
+    order('w07-every-kind-in-cash', {
+      booking: { ...paidSeat(), addons: [{ ...towel, redemptionSource: 'paid' }] },
+      standaloneAddons: [towel],
+      products: [soap],
+      ...newPass,
+      giftCard: preset('digital'),
+      payment: cash(164),
+    }),
+    // Stage 7 and 19: product refusals
+    order('w07-refused-product-quantity-zero', { products: [{ ...soap, quantity: 0 }], payment: cash(0) }),
+    order('w07-refused-product-quantity-not-whole', { products: [{ ...soap, quantity: 1.5 }], payment: cash(18) }),
+    // The product's own id where a variant's belongs: seeded, so the recording names it the same on both sides.
+    order('w07-refused-unknown-variant', { products: [{ ...soap, productVariantId: ID.product }], payment: cash(24) }),
+    order('w07-refused-inactive-product', { products: [soap], payment: cash(24) }, async (db) => {
+      await db.query('UPDATE products SET active = false WHERE id = $1', [ID.product])
+    }),
+    order('w07-refused-two-lines-over-the-stock', { products: [{ ...soap, quantity: 3 }, { ...soap, quantity: 3 }], payment: cash(72) }),
+    order('w07-refused-product-checked-before-the-address', { products: [{ ...soap, quantity: 0 }, candle], postageMethod: 'standard', payment: cash(24.95) }),
+    order('w07-refused-a-full-session-before-the-stock', { booking: paidSeat(), products: [{ ...soap, quantity: 6 }], payment: cash(92) }, sessionFull),
+    order('w07-refused-a-changed-product-price-with-no-reason', { products: [{ ...soap, unitPrice: 10 }], payment: cash(20) }),
+    // Stage 9 and 35: the delivery address
+    order('w07-refused-no-delivery-address', { products: [candle], postageMethod: 'standard', payment: cash(24.95) }),
+    order('w07-refused-delivery-address-missing-the-postcode', { products: [candle], shippingAddress: { ...address, postcode: ' ' }, postageMethod: 'standard', payment: cash(24.95) }),
+    order('w07-refused-delivery-address-missing-several-parts', {
+      products: [candle],
+      shippingAddress: { ...address, name: '', city: '   ' },
+      postageMethod: 'standard',
+      payment: cash(24.95),
+    }),
+    order('w07-delivery-address-trimmed-with-defaults', {
+      products: [candle],
+      shippingAddress: { name: '  Sam Test ', line1: ' 1 Mill Lane ', line2: '   ', city: ' Hebden Bridge ', postcode: ' HX7 1AA ', country: '  ' },
+      postageMethod: 'standard',
+      payment: cash(24.95),
+    }),
+    order('w07-delivery-address-saved-to-the-customer', { products: [candle], ...saved, payment: cash(24.95) }),
+    {
+      // W07: the save moves inside T1, so a failure refuses the order instead of warning after it.
+      name: 'w07-address-save-fails',
+      seed,
+      async run({ call, db }) {
+        await whileFailing(db, { table: 'customers', event: 'UPDATE', when: 'true' }, () =>
+          call('createOrder', { customerId: ID.customer, products: [candle], ...saved, payment: cash(24.95) })
+        )
+      },
+    },
+    // Stage 10 and 26: postage
+    order('w07-refused-no-postage-method', { products: [candle], shippingAddress: address, payment: cash(24.95) }),
+    order('w07-refused-an-unknown-postage-method', { products: [candle], shippingAddress: address, postageMethod: 'pigeon', payment: cash(24.95) }),
+    order('w07-refused-postage-settings-missing', { products: [candle], ...shipped, payment: cash(24.95) }, async (db) => {
+      await db.query('DELETE FROM postage_settings')
+    }),
+    order('w07-free-standard-postage-exactly-at-the-threshold', { products: [{ ...candle, quantity: 2 }], ...shipped, payment: cash(40) }, thresholdIs('40.00')),
+    order('w07-express-postage-is-never-free', { products: [{ ...candle, quantity: 3 }], ...shipped, postageMethod: 'express', payment: cash(69.95) }),
+    order('w07-no-free-postage-when-the-threshold-is-0', { products: [{ ...candle, quantity: 3 }], ...shipped, payment: cash(64.95) }, thresholdIs('0.00')),
+    order('w07-q23-a-sent-price-cannot-earn-free-postage-in-cash', { products: [{ ...candle, unitPrice: 60 }], ...shipped, payment: cash(24.95) }, noPricing),
+    order('w07-q23-a-sent-price-cannot-lose-free-postage-in-cash', { products: [{ ...candle, quantity: 3, unitPrice: 1 }], ...shipped, payment: cash(60) }, noPricing),
+    order('w07-q23-an-allowed-price-still-counts-in-cash', { products: [{ ...candle, unitPrice: 50, priceOverrideReason: 'Display piece' }], ...shipped, payment: cash(50) }),
+    order('w07-q4-shipped-gift-card-and-product-reach-free-postage', { products: [candle], giftCard: custom(30, 'shipping'), ...shipped, payment: cash(54.95) }),
+    order('w07-a-picked-up-gift-card-does-not-count-towards-postage', { products: [candle], giftCard: preset('pickup'), ...shipped, payment: cash(84.95) }),
+    // Stage 13 and 22: gift cards bought
+    order('w07-gift-card-custom-amount-picked-up-in-cash', {
+      giftCard: { ...custom(25, 'pickup'), recipientName: 'Ali Friend', recipientEmail: 'ali@example.com', giftMessage: 'Happy birthday' },
+      payment: cash(25),
+    }),
+    order('w07-gift-card-shipped-under-the-threshold', { giftCard: custom(30, 'shipping'), ...shipped, payment: cash(34.95) }),
+    order('w07-gift-card-blank-recipient-kept-as-sent', { giftCard: { ...preset('digital'), recipientName: '', giftMessage: '' }, payment: cash(60) }),
+    order('w07-refused-gift-card-preset-and-custom', { giftCard: { ...preset('digital'), giftCardTypeId: ID.giftCardType, amount: 20 }, payment: cash(60) }),
+    order('w07-refused-gift-card-neither', { giftCard: { fulfillmentMethod: 'digital' }, payment: cash(0) }),
+    order('w07-refused-unknown-gift-card-preset', { giftCard: { ...preset('digital'), giftCardPresetId: UNKNOWN }, payment: cash(60) }),
+    order('w07-refused-inactive-gift-card-preset', { giftCard: preset('digital'), payment: cash(60) }, async (db) => {
+      await db.query('UPDATE gift_card_presets SET active = false WHERE id = $1', [ID.giftCardPreset])
+    }),
+    order('w07-refused-unknown-gift-card-type', { giftCard: { ...custom(25, 'digital'), giftCardTypeId: UNKNOWN }, payment: cash(25) }),
+    order('w07-refused-inactive-gift-card-type', { giftCard: custom(25, 'digital'), payment: cash(25) }, async (db) => {
+      await db.query('UPDATE gift_card_types SET active = false WHERE id = $1', [ID.giftCardType])
+    }),
+    order('w07-refused-gift-card-custom-amount-not-allowed', { giftCard: custom(25, 'digital'), payment: cash(25) }, async (db) => {
+      await db.query('UPDATE gift_card_types SET custom_amount_enabled = false WHERE id = $1', [ID.giftCardType])
+    }),
+    order('w07-refused-gift-card-amount-zero', { giftCard: custom(0, 'digital'), payment: cash(0) }),
+    order('w07-refused-gift-card-no-amount', { giftCard: custom(undefined, 'digital'), payment: cash(0) }),
+    order('w07-refused-gift-card-below-the-minimum', { giftCard: custom(5, 'digital'), payment: cash(5) }),
+    order('w07-refused-gift-card-above-the-maximum', { giftCard: custom(250, 'digital'), payment: cash(250) }),
+    order('w07-refused-gift-card-fulfilment', { giftCard: preset('email'), payment: cash(60) }),
+    order('w07-refused-postage-checked-before-the-gift-card', { giftCard: preset('shipping'), shippingAddress: address, payment: cash(60) }, async (db) => {
+      await db.query('UPDATE gift_card_presets SET active = false WHERE id = $1', [ID.giftCardPreset])
+    }),
+    // Stage 5, 18a and 25: session passes
+    order('w07-pass-on-its-own-in-cash', { ...newPass, payment: cash(50) }),
+    order('w07-buy-new-pass-covers-the-seat-alone', { booking: buyNewPass(), ...newPass, payment: cash(50) }),
+    order('w07-pass-bought-beside-a-paid-booking', { booking: paidSeat(), ...newPass, payment: cash(70) }),
+    order('w07-pass-bought-beside-a-booking-on-another-pass', { booking: { ...paidSeat(), ...ownedPass }, ...newPass, payment: cash(50) }),
+    order('w07-a-pass-with-no-price', { ...newPass, payment: {} }, passTypeHas('price', null)),
+    order('w07-a-pass-lasts-its-own-months', { ...newPass, payment: cash(50) }, passTypeHas('expiry_months', 6)),
+    order('w07-a-gift-card-lasts-its-types-months', { giftCard: preset('digital'), payment: cash(60) }, async (db) => {
+      await db.query('UPDATE gift_card_types SET expiry_months = 18 WHERE id = $1', [ID.giftCardType])
+    }),
+    // Q33 (W07a): bought on 29 Feb 2028, each lasting 12 months. The Worker clamps to 28 Feb 2029; the
+    // old createOrder rolls over to 1 Mar 2029. The clock moves for this scenario only (replay() resets it).
+    order('w07a-q33-pass-and-gift-card-bought-on-29-february', { ...newPass, giftCard: preset('digital'), payment: cash(110) }, async () => {
+      vi.setSystemTime(new Date('2028-02-29T10:00:00.000Z'))
+    }),
+    order('w07-q5-buy-new-pass-keeps-address-and-requests', {
+      booking: { ...buyNewPass(), specialRequests: 'Step-free access' },
+      ...newPass,
+      products: [candle],
+      ...saved,
+      payment: cash(74.95),
+    }),
+    order('w07-worst-basket', {
+      booking: buyNewPass([sam, alex]),
+      ...newPass,
+      products: [candle, mug('shipping')],
+      giftCard: custom(10, 'shipping'),
+      ...saved,
+      payment: cash(119.95),
+    }),
+    order('w07-refused-unknown-pass-type', { sessionPassTypeId: UNKNOWN, payment: cash(50) }),
+    order('w07-refused-inactive-pass-type', { ...newPass, payment: cash(50) }, passTypeHas('active', false)),
+    order('w07-refused-buy-new-pass-not-chosen', { booking: buyNewPass(), payment: cash(0) }),
+    order('w07-refused-buy-new-pass-with-no-sessions', { booking: buyNewPass(), ...newPass, payment: cash(50) }, passTypeHas('sessions_included', 0)),
+    order('w07-refused-buy-new-core-pass-on-peak', { booking: { ...buyNewPass(), sessionId: ID.peakSession }, sessionPassTypeId: ID.corePass, payment: cash(40) }, seedCorePass),
+    order('w07-refused-buy-new-pass-on-a-private-booking', { booking: { ...privateSeats, redemptionSource: 'buy_new_session_pass' }, ...newPass, payment: cash(150) }),
+    order('w07-refused-buy-new-pass-session-full', { booking: buyNewPass(), ...newPass, payment: cash(50) }, sessionFull),
+    order('w07-refused-buy-new-pass-a-booking-that-day', { booking: buyNewPass(), ...newPass, payment: cash(50) }, bookedThatDay),
   ]
 }
