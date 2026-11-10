@@ -1,6 +1,10 @@
-import type { ApiFailure, OrderRefusalDetails, PlaceOrderInput, PlaceOrderOutput } from '@/contracts'
+import type { ApiFailure, BasketQuoteOutput, OrderRefusalDetails, PlaceOrderInput, PlaceOrderOutput } from '@/contracts'
 import { POST as ordersRoute } from '@/app/api/v1/staff/orders/route'
+import { POST as quoteRoute } from '@/app/api/v1/staff/quotes/basket/route'
+import type { Db } from '@/server/db'
+import type { FakeStripe } from '@/server/stripe/fake'
 import { REPLAY_USER, type ReplaySide } from './harness'
+import { chargesTakeASecond, replayStripe } from './stripe-binding'
 
 /**
  * The new side of W06's replay: createOrder's params go to POST /api/v1/staff/orders, and its answer
@@ -81,17 +85,44 @@ export async function postOrder(input: unknown, { key = crypto.randomUUID(), ema
 }
 
 /**
+ * W10: the card figure staff confirm, as the screen will send it from W14: the basket quote's
+ * `toCollect.card`. The old createOrder's params never had one, and the order route keeps the
+ * confirmed-amount rule for the card (a missing figure counts as nothing confirmed).
+ */
+export async function withQuotedCardFigure(input: PlaceOrderInput): Promise<PlaceOrderInput> {
+  if (input.payment?.method !== 'card' || typeof input.confirmed?.toCollect === 'number') return input
+  const basket: Partial<PlaceOrderInput> = { ...input }
+  delete basket.confirmed
+  const response = await quoteRoute(
+    new Request('https://worker.test/api/v1/staff/quotes/basket', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${process.env.STAFF_API_KEY}`, 'x-staff-email': REPLAY_USER.email, 'content-type': 'application/json' },
+      body: JSON.stringify(basket),
+    })
+  )
+  const body = (await response.json()) as { ok: boolean; data?: BasketQuoteOutput }
+  if (!body.ok || !body.data) return input
+  return { ...input, confirmed: { ...input.confirmed, toCollect: body.data.totals.toCollect.card } }
+}
+
+/**
  * Replays createOrder through the new route. `answers` keeps each raw answer, for what staff see.
  * `adjust` changes what is sent where a decision changes it (order-differences.ts, NEW_SIDE_CONFIRMS).
+ * W10: the run's FakeStripe is the one the route charges (stripe-binding.ts), and a card order sends
+ * the quote's card figure as confirmed.
  */
-export function newOrderSide(answers: OrderAnswer[] = [], adjust: (input: PlaceOrderInput) => PlaceOrderInput = (input) => input): () => ReplaySide {
-  return () => ({
-    name: 'new',
-    async call(action, params) {
-      if (action !== 'createOrder') throw new Error(`The order route builds createOrder only, not ${action}.`)
-      const answer = await postOrder(adjust(orderInput(params as Record<string, unknown>)))
-      answers.push(answer)
-      return oldResult(answer.body)
-    },
-  })
+export function newOrderSide(answers: OrderAnswer[] = [], adjust: (input: PlaceOrderInput) => PlaceOrderInput = (input) => input): (db: Db, stripe: FakeStripe) => ReplaySide {
+  return (_db, stripe) => {
+    replayStripe.current = stripe
+    chargesTakeASecond(stripe)
+    return {
+      name: 'new',
+      async call(action, params) {
+        if (action !== 'createOrder') throw new Error(`The order route builds createOrder only, not ${action}.`)
+        const answer = await postOrder(adjust(await withQuotedCardFigure(orderInput(params as Record<string, unknown>))))
+        answers.push(answer)
+        return oldResult(answer.body)
+      },
+    }
+  }
 }

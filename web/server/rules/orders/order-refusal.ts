@@ -33,7 +33,12 @@ export function refusalCode(reason: string): ApiErrorCode {
  * The message is what staff see; `details` is the old createOrder's answer, so the staff app can
  * give the screen what it reads today.
  */
-export function orderRefusal(problem: BasketProblem, settings: { addonCreditWaitMonths?: number | null } = {}): ApiError {
+export function orderRefusal(
+  problem: BasketProblem,
+  settings: { addonCreditWaitMonths?: number | null } = {},
+  /** W10: a card that needs authentication is charge_failed, as the old route said, under its own code (W03-plan 2.3). */
+  code: ApiErrorCode = refusalCode(problem.reason)
+): ApiError {
   const details: OrderRefusalDetails = {
     stage: problem.stage,
     reason: problem.reason,
@@ -43,7 +48,19 @@ export function orderRefusal(problem: BasketProblem, settings: { addonCreditWait
     ...(problem.amountDueTotal !== undefined ? { amountDueTotal: problem.amountDueTotal } : {}),
     ...(problem.guestIndex !== undefined ? { guestIndex: problem.guestIndex } : {}),
   }
-  return new ApiError(refusalCode(problem.reason), staffSees(problem, settings), { details })
+  return new ApiError(code, staffSees(problem, settings), { details })
+}
+
+/** Why an order is held pending (W10): its details, beside a refusal's stage and reason. */
+export type UnconfirmedReason = 'payment_unconfirmed' | 'paid_not_finished' | 'charged_without_order'
+
+/**
+ * PAYMENT_UNCONFIRMED (W03-plan 2.5): the order is held pending, with its claims, because its card
+ * payment isn't settled. It is never undone from here. `details` names the order so staff can find it,
+ * and `logDetail` keeps what Stripe or the database said, for the log only.
+ */
+export function paymentUnconfirmed(reason: UnconfirmedReason, message: string, orderId: string, logDetail: string): ApiError {
+  return new ApiError('PAYMENT_UNCONFIRMED', message, { details: { stage: 'payment', reason, message, orderId }, logDetail })
 }
 
 /** A booking refusal: createOrder answered these with the reason twice, once as bookingFailureReason. */

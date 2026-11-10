@@ -9,15 +9,22 @@ import { listPaymentIntentRefunds, REFUND_KEY_METADATA } from './payment-intent-
 // PaymentIntent's refunds, because Stripe may have forgotten the key and a resend could pay twice.
 
 const KEY = 'test-staff-api-key'
-const holder = vi.hoisted(() => ({ db: null as unknown, stripe: null as unknown }))
+const holder = vi.hoisted(() => ({ db: null as unknown, stripe: null as unknown, limits: [] as unknown[] }))
 
 vi.mock('@/server/db/connection', () => ({
   openRequestDb: () => holder.db as Db,
   closeRequestDb: () => {},
 }))
-vi.mock('@/server/stripe/client', () => ({ createStripeClient: () => holder.stripe }))
+vi.mock('@/server/stripe/client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/stripe/client')>()),
+  createStripeClient: (_key: string | undefined, limits?: unknown) => {
+    holder.limits.push(limits)
+    return holder.stripe
+  },
+}))
 
 const { GET } = await import('@/app/api/v1/staff/payments/refunds/route')
+const { READ_STRIPE_LIMITS } = await import('@/server/stripe/client')
 
 const charge = { amount: 4000, currency: 'gbp', customer: 'cus_1', payment_method: 'pm_1', confirm: true }
 
@@ -109,6 +116,14 @@ describe('GET /api/v1/staff/payments/refunds', () => {
     const response = await call('pi_nothing')
     expect(response.status).toBe(404)
     expect(await response.json()).toMatchObject({ ok: false, error: { code: 'NOT_FOUND' } })
+  })
+
+  it("asks Stripe with read limits of its own, not the SDK's 80 seconds and 2 retries (W10a, W10 N1)", async () => {
+    const paid = await stripe.paymentIntents.create(charge)
+    holder.limits.length = 0
+    expect((await call(paid.id)).status).toBe(200)
+    expect(holder.limits).toEqual([READ_STRIPE_LIMITS])
+    expect(READ_STRIPE_LIMITS).toEqual({ timeoutMs: 10_000, networkRetries: 1 })
   })
 
   it('Stripe failing is an error, never an empty list', async () => {

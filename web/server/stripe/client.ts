@@ -1,5 +1,6 @@
 import 'server-only'
 import Stripe from 'stripe'
+import type { StripeLimits } from './limits'
 
 /**
  * The one way rules reach Stripe. A rule takes a StripeClient as an argument, so tests pass
@@ -42,11 +43,17 @@ export interface StripeClient {
 /** The API version every Stripe call in this repo uses. */
 export const STRIPE_API_VERSION = '2026-07-29.dahlia'
 
-export function createStripeClient(secretKey: string | undefined = process.env.STRIPE_SECRET_KEY): StripeClient {
+// The limits live in limits.ts, which imports nothing from the SDK, so rule code can read them
+// without loading this module (W10a: the replay's Stripe stand-in must be installed before it loads).
+export { ORDER_STRIPE_LIMITS, READ_STRIPE_LIMITS, type StripeLimits } from './limits'
+
+/** With no limits given, the SDK's own defaults, as every caller before W10 had. */
+export function createStripeClient(secretKey: string | undefined = process.env.STRIPE_SECRET_KEY, limits?: StripeLimits): StripeClient {
   if (!secretKey) throw new Error('STRIPE_SECRET_KEY is not configured.')
   return new Stripe(secretKey, {
     apiVersion: STRIPE_API_VERSION,
     // Workers' runtime doesn't support the SDK's default Node socket client.
     httpClient: Stripe.createFetchHttpClient(),
+    ...(limits ? { timeout: limits.timeoutMs, maxNetworkRetries: limits.networkRetries } : {}),
   })
 }

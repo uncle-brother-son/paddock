@@ -24,6 +24,8 @@ export const ERROR_HTTP_STATUS: Record<ApiErrorCode, number> = {
   RATE_LIMITED: 429,
   INTERNAL: 500,
   NOT_BUILT: 501,
+  // Stripe, upstream, gave no clear answer (or the order couldn't be finished after it did).
+  PAYMENT_UNCONFIRMED: 502,
 }
 
 /** Shown when something unexpected fails. The real error goes to the log only. */

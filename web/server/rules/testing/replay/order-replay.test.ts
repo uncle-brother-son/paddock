@@ -18,6 +18,11 @@ vi.mock('@/server/db/connection', () => ({
   openRequestDb: () => holder.db as Db,
   closeRequestDb: () => {},
 }))
+// W10: the order route charges each run's own FakeStripe (stripe-binding.ts).
+vi.mock('@/server/stripe/client', async (importOriginal) => {
+  const { stripeClientMock } = await import('./stripe-binding')
+  return stripeClientMock(await importOriginal<typeof import('@/server/stripe/client')>())
+})
 
 const byName = (name: string): Scenario => {
   const scenario = scenarios.find((s) => s.name === name)
@@ -108,6 +113,36 @@ describe('the order route against the old createOrder', () => {
       expect(answers[0]?.status).toBe(500)
       expect(answers[0]?.body).toMatchObject({ ok: false, error: { code: 'INTERNAL', message: 'Something went wrong and the action may not have finished. Check before trying again.' } })
       expect(Object.keys(recording.tables)).toEqual(['api_idempotency'])
+    })
+  })
+
+  describe('W10: the outcome W03-plan 2.5 changes', () => {
+    it('an unclear answer: the old order was rolled back as a decline; the new one is held pending with its claims, never undone', async () => {
+      const golden = readGolden('w10-unclear-answer') as Recording
+      expect(golden.results[0]).toMatchObject({ success: false, reason: 'charge_failed', message: 'Failed to charge saved card: An error occurred with our API.' })
+      expect(golden.stripeCalls).toHaveLength(1)
+      expect(golden.tables).toEqual({})
+      const { recording, answers } = await runNew('w10-unclear-answer')
+      expect(answers[0]?.status).toBe(502)
+      expect(answers[0]?.body).toMatchObject({ ok: false, error: { code: 'PAYMENT_UNCONFIRMED', details: { stage: 'payment', reason: 'payment_unconfirmed' } } })
+      // The same request twice under the same key: Stripe kept the 500 against it.
+      expect(recording.stripeCalls.map((call) => call.idempotencyKey)).toEqual(['orders#1:charge', 'orders#1:charge'])
+      expect(recording.tables['orders']?.added).toMatchObject([{ payment_status: 'pending', payment_method: 'card' }])
+      expect(recording.tables['customers']?.changed).toEqual([{ id: ID.customer, store_credit_balance: ['30.00', '20.00'] }])
+      expect(recording.tables['sessions']?.changed).toEqual([{ id: ID.session, total_booked: [0, 1] }])
+      expect(recording.tables['audit_log']?.added.map((row) => row['action'])).toEqual(['order.create'])
+    })
+  })
+
+  describe('W10: row order', () => {
+    it("the card order's rows keep createOrder's order, and its audit rows come create, then paid", async () => {
+      const { recording } = await runNew('w10-card-every-kind')
+      const lines = recording.tables['order_line_items']
+      expect(lines?.tied).toBe(0)
+      expect(lines?.added.map((line) => line['item_type'])).toEqual(['booking', 'event', 'addon', 'product', 'session_pass', 'gift_card'])
+      expect(recording.tables['booking_guests']?.tied).toBe(0)
+      expect(recording.tables['event_attendees']?.tied).toBe(0)
+      expect(recording.tables['audit_log']?.added.map((row) => row['action'])).toEqual(['order.create', 'order.paid'])
     })
   })
 

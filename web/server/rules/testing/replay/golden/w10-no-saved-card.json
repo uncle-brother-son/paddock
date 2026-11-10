@@ -1,0 +1,13 @@
+{
+  "scenario": "w10-no-saved-card",
+  "results": [
+    {
+      "success": false,
+      "stage": "payment",
+      "reason": "charge_failed",
+      "message": "Customer has no saved payment method on file."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

@@ -219,8 +219,19 @@ describe('readStripeFailure', () => {
     ['a Stripe 500', fakeStripeErrors.server(), 'unknown', null],
     ['an idempotency refusal', fakeStripeErrors.idempotency(), 'unknown', null],
     ['something that is not Stripe', new Error('boom'), 'unknown', null],
+    // The legacy routes keep this reading; the order's charge reads a 401 or 403 as definite (W10a, collect-saved-card.ts).
+    ['a 401, the key refused', fakeStripeErrors.authentication(), 'unknown', null],
+    ['a 403, the key not allowed', fakeStripeErrors.permission(), 'unknown', null],
   ])('%s', (_, error, outcome, code) => {
     expect(readStripeFailure(error)).toMatchObject({ outcome, code })
+  })
+
+  it("the fake's 401 and 403 are the classes the SDK makes from Stripe's answers (generateV1Error)", () => {
+    const fromSdk = (statusCode: number) => Stripe.errors.StripeError.generate({ type: 'invalid_request_error', statusCode, message: 'x' })
+    expect(fakeStripeErrors.authentication()).toBeInstanceOf(fromSdk(401).constructor)
+    expect(fakeStripeErrors.permission()).toBeInstanceOf(fromSdk(403).constructor)
+    expect(fromSdk(401)).toBeInstanceOf(Stripe.errors.StripeAuthenticationError)
+    expect(fromSdk(403)).toBeInstanceOf(Stripe.errors.StripePermissionError)
   })
   describe('set-up for what already exists', () => {
     it('a seeded subscription is live, listed and can be cancelled', async () => {

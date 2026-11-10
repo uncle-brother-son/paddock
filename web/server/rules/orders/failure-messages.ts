@@ -115,6 +115,29 @@ export const FAILURE_MESSAGES: Readonly<Record<string, string>> = {
   guest_under_18: 'Every guest must be at least 18 years old.',
 }
 
+/*
+ * Words the screen has no entry for yet (W10). Each travels as its refusal's own message, which the
+ * screen shows first, so FAILURE_MESSAGES stays the screen's, word for word, until W14 moves them.
+ */
+
+/** W03-decisions Q10, word for word: a card order while the customer has one still being processed. */
+export const ORDER_STILL_PROCESSING_MESSAGE = 'This customer has an order still being processed. Check the Orders page before trying again.'
+
+/** The old charge route's words when the customer has no saved card (charge-saved-card/core.ts). */
+export const NO_SAVED_CARD_MESSAGE = 'Customer has no saved payment method on file.'
+
+/** PAYMENT_UNCONFIRMED: Stripe gave no clear answer twice, so the card may or may not have been charged. */
+export const PAYMENT_UNCONFIRMED_MESSAGE =
+  "The card payment didn't get a clear answer, so it may or may not have been taken. The order is on hold: don't take payment again. Check the Orders page in a few minutes."
+
+/** PAYMENT_UNCONFIRMED after the card was charged, when the order couldn't be marked paid. */
+export const PAID_NOT_FINISHED_MESSAGE =
+  "The card was charged, but the order couldn't be finished. It's on hold: don't take payment again. Check the Orders page in a few minutes."
+
+/** PAYMENT_UNCONFIRMED when the card was charged for an order that had already been undone. */
+export const CHARGED_WITHOUT_ORDER_MESSAGE =
+  "The card was charged, but the order had already been cancelled, so the charge needs refunding. Don't take payment again: check the Orders page."
+
 /** The words for the Herd gate, which name the waiting period from membership_settings. */
 export function herdWaitMessage(addonCreditWaitMonths: number): string {
   return `That membership is not a Herd member yet — add-on credits unlock for Herd members (monthly members after ${addonCreditWaitMonths} month${addonCreditWaitMonths === 1 ? '' : 's'}, yearly members straight away).`

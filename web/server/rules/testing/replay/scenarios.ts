@@ -2789,6 +2789,7 @@ export const scenarios: Scenario[] = [
   ...w07Scenarios(),
   ...w08Scenarios(),
   ...w09Scenarios(),
+  ...w10Scenarios(),
 ]
 
 // --- W06: the Worker's order core. Every createOrder and createBooking reason in W06's scope that had
@@ -3431,5 +3432,103 @@ function w09Scenarios(): Scenario[] {
     order('w09a-store-credit-alone-leaves-the-address-on-file', { products: [soap], payment: credit(24) }, addressOnFile),
     // A promo beside a membership bought in the same basket would take a share of its first payment: not built until W13.
     order('w09-promo-with-a-membership-bought-in-cash', { booking: paidSeat(), ...monthly, promoCode: PROMO.percent, payment: cash(54) }),
+  ]
+}
+
+// --- W10: the saved card. Every kind T1 takes, paid by the saved card, alone and with a gift card,
+// store credit and a promo code; then the card declined, needing authentication, and missing, and an
+// unclear answer. Each runs through the old createOrder (and its charge route) with the fake Stripe for
+// its golden file, and order-replay.test.ts runs it through the new route too.
+function w10Scenarios(): Scenario[] {
+  const card = { method: 'card' }
+  const beaSeat: Guest = { name: 'Bea Guest', email: 'bea@example.com' }
+  const samAttending = { ...sam, isAccountHolder: true }
+  const alexGuest = { ...alex, isAccountHolder: false }
+  const beaGuest = { ...beaSeat, isAccountHolder: false }
+  const robe = { addonId: ID.robe, quantity: 1, unitPrice: 8, systemUnitPrice: 8 }
+  const gift = (amount: number) => ({ giftCard: { giftCardId: ID.giftCard, amount } })
+  const credit = (amount: number) => ({ storeCredit: { amount } })
+  const event = (attendees: Array<Record<string, unknown>>) => ({
+    eventId: ID.event,
+    accountHolderAttending: true,
+    ...(attendees.length > 1 ? { guestsOver18Confirmed: true } : {}),
+    attendees,
+  })
+  const everyKind = {
+    booking: { ...paidSeat([sam, alex]), addons: [{ ...towel, redemptionSource: 'paid' }] },
+    standaloneAddons: [towel],
+    products: [soap],
+    sessionPassTypeId: ID.passType,
+    giftCard: { giftCardPresetId: ID.giftCardPreset, fulfillmentMethod: 'digital' },
+    event: event([samAttending, alexGuest]),
+  }
+  const worst = {
+    booking: { ...paidSeat([sam, alex]), addons: [{ ...towel, redemptionSource: 'paid' }] },
+    products: [candle],
+    giftCard: { giftCardTypeId: ID.giftCardType, amount: 10, fulfillmentMethod: 'shipping' },
+    event: event([samAttending, alexGuest, beaGuest]),
+    ...shipped,
+    saveShippingAddressToCustomer: true,
+  }
+  const declined = (stripe: FakeStripe) => stripe.failNext('paymentIntents.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
+  const needsAuthentication = (stripe: FakeStripe) => stripe.failNext('paymentIntents.create', { kind: 'error', error: fakeStripeErrors.authenticationRequired() })
+  const atTheCharge = (fault: (stripe: FakeStripe) => void) => async (_db: Db, stripe: FakeStripe) => {
+    fault(stripe)
+  }
+  const asMo = { customerId: ID.member }
+  return [
+    // --- Every kind T1 takes, on the saved card
+    order('w10-card-public-booking-with-an-addon', { booking: { ...paidSeat([sam, alex]), addons: [{ ...towel, redemptionSource: 'paid' }] }, payment: card }),
+    order('w10-card-private-booking', { booking: { ...paidSeat([sam, alex]), sessionId: ID.privateSession }, payment: card }),
+    order('w10-card-member-credit-seat-paid-guest-and-addon-credit', {
+      ...asMo,
+      booking: { ...paidSeat([mo, alex]), ...memberCredit, addons: [{ ...towel, redemptionSource: 'membership_credit', membershipId: ID.membership }] },
+      standaloneAddons: [robe],
+      payment: card,
+    }),
+    order('w10-card-pass-seat-and-a-paid-guest', { booking: { ...paidSeat([sam, alex]), ...ownedPass }, payment: card }),
+    order('w10-card-standalone-addons', { standaloneAddons: [towel, { ...robe, unitPrice: 10, systemUnitPrice: 10 }], payment: card }),
+    order('w10-card-products-picked-up', { products: [soap], payment: card }),
+    order('w10-card-shipped-product-address-saved', { products: [candle], ...shipped, saveShippingAddressToCustomer: true, payment: card }),
+    order('w10-card-pass-alone', { sessionPassTypeId: ID.passType, payment: card }),
+    order('w10-card-buy-new-pass-booking', { booking: { ...paidSeat([sam, alex]), redemptionSource: 'buy_new_session_pass' }, sessionPassTypeId: ID.passType, payment: card }),
+    order('w10-card-gift-card-digital', { giftCard: { giftCardPresetId: ID.giftCardPreset, fulfillmentMethod: 'digital', recipientName: 'Ali Friend' }, payment: card }),
+    order('w10-card-gift-card-shipped', { giftCard: { giftCardTypeId: ID.giftCardType, amount: 25, fulfillmentMethod: 'shipping' }, ...shipped, payment: card }),
+    order('w10-card-event-with-guests', { event: event([samAttending, alexGuest, beaGuest]), payment: card }),
+    order('w10-card-every-kind', { ...everyKind, payment: card }),
+    // --- With a gift card, store credit and a promo code
+    order('w10-card-with-a-gift-card', { ...everyKind, payment: { ...card, ...gift(20) } }),
+    order('w10-card-with-store-credit', { ...everyKind, payment: { ...card, ...credit(10) } }),
+    order('w10-card-with-a-promo-code', { ...everyKind, promoCode: PROMO.percent, payment: card }),
+    order('w10-card-with-all-three', { ...everyKind, promoCode: PROMO.fixed, payment: { ...card, ...gift(20), ...credit(10) } }),
+    order('w10-card-worst-basket', { ...worst, promoCode: PROMO.fixed, payment: { ...card, ...gift(20), ...credit(10) } }),
+    // £48 of soap: the card's whole £40, then £8 on the saved card.
+    order('w10-card-gift-card-uses-its-whole-balance', { products: [{ ...soap, quantity: 4 }], payment: { ...card, ...gift(40) } }),
+    // Nothing left for the card: no Stripe call, as createOrder.
+    order('w10-card-chosen-with-nothing-left-to-charge', { products: [soap], payment: { ...card, ...gift(14), ...credit(10) } }),
+    // --- The card declined, needing authentication, or not there: everything given back
+    order('w10-declined-every-kind-with-all-three', { ...everyKind, promoCode: PROMO.fixed, payment: { ...card, ...gift(20), ...credit(10) } }, atTheCharge(declined)),
+    order('w10-declined-worst-basket', { ...worst, promoCode: PROMO.fixed, payment: { ...card, ...gift(20), ...credit(10) } }, atTheCharge(declined)),
+    order('w10-declined-gift-card-used-up', { products: [{ ...soap, quantity: 4 }], payment: { ...card, ...gift(40) } }, atTheCharge(declined)),
+    order(
+      'w10-declined-member-credit-and-addon-credit',
+      {
+        ...asMo,
+        booking: { ...paidSeat([mo, alex]), ...memberCredit, addons: [{ ...towel, redemptionSource: 'membership_credit', membershipId: ID.membership }] },
+        payment: card,
+      },
+      atTheCharge(declined)
+    ),
+    order('w10-declined-pass-seat', { booking: { ...paidSeat([sam, alex]), ...ownedPass }, payment: card }, atTheCharge(declined)),
+    order('w10-declined-buy-new-pass-booking', { booking: { ...paidSeat([sam, alex]), redemptionSource: 'buy_new_session_pass' }, sessionPassTypeId: ID.passType, payment: card }, atTheCharge(declined)),
+    order('w10-declined-private-booking', { booking: { ...paidSeat([sam, alex]), sessionId: ID.privateSession }, payment: card }, atTheCharge(declined)),
+    order('w10-authentication-needed', { booking: paidSeat(), products: [soap], payment: card }, atTheCharge(needsAuthentication)),
+    order('w10-authentication-needed-with-store-credit', { booking: paidSeat(), payment: { ...card, ...credit(10) } }, atTheCharge(needsAuthentication)),
+    order('w10-no-saved-card', { booking: paidSeat(), payment: card }, async (db) => {
+      await db.query('UPDATE customers SET saved_payment_method_id = NULL WHERE id = $1', [ID.customer])
+    }),
+    // --- An unclear answer: a 500, which Stripe keeps against the key. createOrder rolled it back; the
+    // Worker holds the order pending (W03-plan 2.5), a named difference with its own test.
+    order('w10-unclear-answer', { booking: paidSeat(), payment: { ...card, ...credit(10) } }, atTheCharge((stripe) => stripe.failNext('paymentIntents.create', { kind: 'error', error: fakeStripeErrors.server() }))),
   ]
 }

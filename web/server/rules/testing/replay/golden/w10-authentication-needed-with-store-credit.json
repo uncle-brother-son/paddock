@@ -1,0 +1,27 @@
+{
+  "scenario": "w10-authentication-needed-with-store-credit",
+  "results": [
+    {
+      "success": false,
+      "stage": "payment",
+      "reason": "charge_failed",
+      "message": "Card requires additional authentication and cannot be charged off-session. Ask the customer to complete a new payment."
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "paymentIntents.create",
+      "params": {
+        "amount": 1000,
+        "currency": "gbp",
+        "customer": "cus_seed",
+        "payment_method": "pm_seed",
+        "off_session": true,
+        "confirm": true,
+        "description": "Staff-created order for booking"
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {}
+}

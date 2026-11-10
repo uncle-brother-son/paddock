@@ -1,0 +1,27 @@
+{
+  "scenario": "w10-declined-buy-new-pass-booking",
+  "results": [
+    {
+      "success": false,
+      "stage": "payment",
+      "reason": "charge_failed",
+      "message": "Failed to charge saved card: Your card was declined."
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "paymentIntents.create",
+      "params": {
+        "amount": 7000,
+        "currency": "gbp",
+        "customer": "cus_seed",
+        "payment_method": "pm_seed",
+        "off_session": true,
+        "confirm": true,
+        "description": "Staff-created order for booking, session pass"
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {}
+}

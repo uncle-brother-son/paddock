@@ -161,6 +161,20 @@ must go in the list, or that check fails. The order rule's own transaction tests
 `server/rules/orders/place-order.test.ts` (PGlite) and `place-order-postgres.test.ts` (real Postgres:
 the races and the lock order).
 
+W10 adds `W10_SCENARIOS` (the saved card): every single-order card scenario W06 to W09 left as NOT_BUILT,
+then W10's own (`w10-*`), every kind on the card alone and with a gift card, store credit and a promo,
+declined, needing authentication, with no saved card, and an unclear answer. The Stripe calls match the
+old ones apart from the key and `metadata.order_id`; a paid card order keeps its pending record; a
+refused one leaves its `order.create` and `order.undo` audit rows. `w10-unclear-answer` is in
+`OUTCOME_DIFFERS`: createOrder rolled a 500 back as a decline, the Worker holds the order (its own test
+says what it leaves). The route reaches each run's own `FakeStripe` through `replay/stripe-binding.ts`
+(a test file mocks `@/server/stripe/client` with `stripeClientMock`); the new side sends the quote's
+card figure as confirmed, as the screen will from W14, and each fake charge moves the stopped clock a
+second (`chargesTakeASecond`), so T2's rows come after T1's as they do live. The pipeline's own tests,
+including crash tests at every step, are in `server/rules/orders/saved-card.test.ts`, and the races (T2
+against the undo, Q10's guard with two orders at once, the undo's lock order) in
+`saved-card-postgres.test.ts`.
+
 To re-record after a deliberate change:
 
     UPDATE_GOLDEN=1 npm run test:unit -- server/rules/testing/replay

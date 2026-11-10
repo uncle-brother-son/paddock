@@ -293,14 +293,16 @@ export const basketQuoteOutputSchema = z.object({
 })
 export type BasketQuoteOutput = z.infer<typeof basketQuoteOutputSchema>
 
-// --- POST /api/v1/staff/orders (W06 to W09: cash, gift card, store credit and nothing owed; the rest answers NOT_BUILT)
+// --- POST /api/v1/staff/orders (W06 to W09: cash, gift card, store credit and nothing owed; W10: the saved card; the rest answers NOT_BUILT)
 
 /**
  * What staff saw and confirmed, from the quote. Each figure is loose, as the old function was. W06
  * checks `toCollect` on cash, with the old words, a missing figure counting as nothing confirmed.
  * W09 checks `toCollect` for every other method the same way, and `amountDue` when it is sent (the
  * old createOrder's params have none, so the shadow's dry run and the replay send none), with
- * W03-decisions Q11's words. `firstInvoice` is taken now and checked from W13 (W03-plan 2.7).
+ * W03-decisions Q11's words. `firstInvoice` is taken now and checked from W13 (W03-plan 2.7). W10: on
+ * the saved card `toCollect` is what the card is charged, checked the same way; only the dry run takes
+ * a missing card figure as confirmed (W03-decisions, "W10 setup calls").
  */
 export const orderConfirmedSchema = z.object({
   amountDue: z.number().optional(),
@@ -319,7 +321,11 @@ export type PlaceOrderInput = z.infer<typeof placeOrderInputSchema>
 
 export const placeOrderOutputSchema = z.object({
   orderId: z.string(),
-  /** 'pending_reader' arrives with the reader (W11). */
+  /**
+   * 'pending_reader' arrives with the reader (W11). A saved-card order answers 'paid' only once the card
+   * is charged and the order marked paid (W10); a refused card is an error (PAYMENT_FAILED or
+   * PAYMENT_NEEDS_AUTHENTICATION, nothing kept), and an unclear one PAYMENT_UNCONFIRMED (held pending).
+   */
   status: z.enum(['paid']),
   bookingId: z.string().nullable(),
   /** The session pass bought, on its own or to pay for the booking (W07). */
@@ -332,8 +338,9 @@ export const placeOrderOutputSchema = z.object({
   payment: z.object({
     /** What orders.payment_method records: null when nothing was owed. */
     method: z.string().nullable(),
-    /** Taken now by that method: on cash, what staff collect. */
+    /** Taken now by that method: on cash, what staff collect; on the saved card, what it was charged (W10). */
     collected: z.number(),
+    /** Whether the saved card was charged (W10). */
     cardCharged: z.boolean(),
     /** The gift card and store credit taken, as sent (W09). createOrder answered them as giftCardRedeemedAmount and storeCreditRedeemedAmount. */
     giftCardApplied: z.number(),
@@ -551,7 +558,12 @@ export const orderRowsSchema = z.object({
 export type OrderRows = z.infer<typeof orderRowsSchema>
 
 export const orderDryRunOutputSchema = z.object({
-  /** What the order would have answered. Nothing was kept. */
+  /**
+   * What the order would have answered. Nothing was kept. On a saved-card order (W10) the dry run runs
+   * T1 only, with no Stripe call: this is what the order answers once the card is charged, and `rows`
+   * are as T1 leaves them, the order pending with its snapshot (has_reader_payment), its event booking
+   * pending and its delivery address not yet saved to the customer.
+   */
   order: placeOrderOutputSchema,
   /** What it wrote, read back inside the transaction before the rollback. */
   rows: orderRowsSchema,

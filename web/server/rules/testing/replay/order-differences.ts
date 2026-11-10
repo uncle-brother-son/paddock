@@ -359,8 +359,77 @@ export const W09_SCENARIOS: readonly string[] = [
   'w09a-store-credit-alone-leaves-the-address-on-file',
 ]
 
+/**
+ * W10's replay: the saved card. Existing single-order card scenarios first (W06 to W09 answered
+ * NOT_BUILT for them), then W10's own: every kind T1 takes on the card, alone and with a gift card,
+ * store credit and a promo, then declined, needing authentication and with no saved card.
+ */
+export const W10_CHARGED: readonly string[] = [
+  'saved-card-product-gift-card-store-credit',
+  'peak-member-pays-discounted-seat',
+  'standalone-addon-at-member-price',
+  'pickup-and-shipped-products-standard-postage',
+  'shipped-product-over-threshold-is-free',
+  'shipped-product-express-postage',
+  'gift-card-custom-amount-on-card',
+  'fixed-promo-spread-across-a-basket',
+  'override-with-permission',
+  'override-without-permission-is-ignored',
+  'q23-a-sent-price-cannot-earn-free-postage',
+  'q23-a-sent-price-cannot-lose-free-postage',
+  'q23-an-allowed-price-still-counts',
+  'q24-fixed-promo-on-private-and-other-items',
+  'q24-percent-promo-on-private-and-other-items',
+  'q24-promo-with-gift-card-and-store-credit',
+  'w10-card-public-booking-with-an-addon',
+  'w10-card-private-booking',
+  'w10-card-member-credit-seat-paid-guest-and-addon-credit',
+  'w10-card-pass-seat-and-a-paid-guest',
+  'w10-card-standalone-addons',
+  'w10-card-products-picked-up',
+  'w10-card-shipped-product-address-saved',
+  'w10-card-pass-alone',
+  'w10-card-buy-new-pass-booking',
+  'w10-card-gift-card-digital',
+  'w10-card-gift-card-shipped',
+  'w10-card-event-with-guests',
+  'w10-card-every-kind',
+  'w10-card-with-a-gift-card',
+  'w10-card-with-store-credit',
+  'w10-card-with-a-promo-code',
+  'w10-card-with-all-three',
+  'w10-card-worst-basket',
+  'w10-card-gift-card-uses-its-whole-balance',
+]
+
+/** The card refused: T1 committed, the undo gave it all back. */
+export const W10_REFUSED_AT_THE_CHARGE: readonly string[] = [
+  'saved-card-declined-rolls-back',
+  'q24-card-declined-rolls-back',
+  'w10-declined-every-kind-with-all-three',
+  'w10-declined-worst-basket',
+  'w10-declined-gift-card-used-up',
+  'w10-declined-member-credit-and-addon-credit',
+  'w10-declined-pass-seat',
+  'w10-declined-buy-new-pass-booking',
+  'w10-declined-private-booking',
+  'w10-authentication-needed',
+  'w10-authentication-needed-with-store-credit',
+]
+
+export const W10_SCENARIOS: readonly string[] = [
+  ...W10_CHARGED,
+  ...W10_REFUSED_AT_THE_CHARGE,
+  // No saved card: refused inside T1, before Stripe, as createOrder's route refused it.
+  'w10-no-saved-card',
+  // The card chosen with nothing left for it: no Stripe call, finished in T1.
+  'w10-card-chosen-with-nothing-left-to-charge',
+  // An unclear answer: createOrder rolled back; the Worker holds the order (OUTCOME_DIFFERS).
+  'w10-unclear-answer',
+]
+
 /** Every scenario the order route takes. */
-export const ORDER_SCENARIOS: readonly string[] = [...W06_SCENARIOS, ...W07_SCENARIOS, ...W08_SCENARIOS, ...W09_SCENARIOS]
+export const ORDER_SCENARIOS: readonly string[] = [...W06_SCENARIOS, ...W07_SCENARIOS, ...W08_SCENARIOS, ...W09_SCENARIOS, ...W10_SCENARIOS]
 
 const Q4 = 'W03-decisions Q4'
 const Q5 = 'W03-decisions Q5'
@@ -421,6 +490,36 @@ export const W07_DIFFERENCES: Readonly<Record<string, readonly AllowedDifference
   'w09a-store-credit-alone-leaves-the-address-on-file': q9Method('none', 'store_credit'),
 }
 
+const KEYS = 'Checklist 3 and W5-15 (W03-plan 2.5: Stripe keys from the order id, metadata.order_id)'
+const PENDING_RECORD = 'W03-plan 2.5 (the pending record is the order itself, kept in orders.reader_payment)'
+
+/** W10: the charge carries the order's key and names its order, where createOrder's had neither. */
+const CHARGE_KEY_AND_ORDER: readonly AllowedDifference[] = [
+  { name: "The charge carries the order's key, <orderId>:charge", decision: KEYS, path: /^\.stripeCalls\[0\]\.idempotencyKey$/ },
+  { name: 'The charge names its order in metadata.order_id', decision: KEYS, path: /^\.stripeCalls\[0\]\.params\.metadata$/ },
+]
+/** W10: the paid card order keeps the pending record T1 wrote before the charge. */
+const PENDING_RECORD_KEPT: AllowedDifference = { name: 'The paid card order keeps its pending record', decision: PENDING_RECORD, path: /^\.tables\.orders\.added\[0\]\.reader_payment$/ }
+/** W10: T1 committed before the charge, so the refused order's create and undo are both on record (W03-decisions Q20). */
+const UNDO_AUDIT_ROWS: AllowedDifference = { ...AUDIT_ROWS, name: 'The refused card order is recorded as created and undone', decision: 'W03-plan 2.9 and W03-decisions Q20' }
+
+/** W10's named differences, by scenario. */
+export const W10_DIFFERENCES: Readonly<Record<string, readonly AllowedDifference[]>> = {
+  ...Object.fromEntries(W10_CHARGED.map((name) => [name, [...CHARGE_KEY_AND_ORDER, PENDING_RECORD_KEPT]])),
+  ...Object.fromEntries(W10_REFUSED_AT_THE_CHARGE.map((name) => [name, [...CHARGE_KEY_AND_ORDER, UNDO_AUDIT_ROWS]])),
+  // A gift card with store credit records split (Q9), where createOrder recorded gift_card.
+  'w10-card-chosen-with-nothing-left-to-charge': q9Method('gift_card', 'split'),
+  // createOrder took a 500 as a decline and rolled back; the Worker retries once with the same key, then
+  // holds the order pending with its claims (its own test in order-replay.test.ts says exactly what).
+  'w10-unclear-answer': [
+    {
+      name: 'An unclear answer is held pending, never undone, after one retry with the same key',
+      decision: 'W03-plan 2.5 (reading Stripe\'s answers)',
+      path: /^\.results\[0\](\.|$)|^\.stripeCalls(\[|$)|^\.tables\.(orders|order_line_items|bookings|booking_guests|sessions|customers|store_credit_transactions|audit_log)$/,
+    },
+  ],
+}
+
 /**
  * Where a decision changes the figure staff confirm, the new side is sent the figure its screen would
  * show (from W14, the quote's): the same basket with the old figure is refused as a changed total.
@@ -431,7 +530,7 @@ export const NEW_SIDE_CONFIRMS: Readonly<Record<string, { toCollect: number; dec
 }
 
 /** Scenarios whose outcome itself differs by decision: the new side's answer is checked by its own test. */
-export const OUTCOME_DIFFERS: readonly string[] = ['w07-address-save-fails']
+export const OUTCOME_DIFFERS: readonly string[] = ['w07-address-save-fails', 'w10-unclear-answer']
 
 /*
  * Named differences with no replay scenario (W07):
@@ -468,7 +567,7 @@ export const OUTCOME_DIFFERS: readonly string[] = ['w07-address-save-fails']
 
 /** What each scenario may differ by: a placed order has its audit rows, a refusal commits none. */
 export function orderDifferences(placed: boolean, name?: string): AllowedDifference[] {
-  return [...(placed ? [IDEMPOTENCY_ROW, AUDIT_ROWS] : [IDEMPOTENCY_ROW]), ...((name && W07_DIFFERENCES[name]) || [])]
+  return [...(placed ? [IDEMPOTENCY_ROW, AUDIT_ROWS] : [IDEMPOTENCY_ROW]), ...((name && W07_DIFFERENCES[name]) || []), ...((name && W10_DIFFERENCES[name]) || [])]
 }
 
 /**
@@ -476,14 +575,14 @@ export function orderDifferences(placed: boolean, name?: string): AllowedDiffere
  * must answer that before anything is written.
  */
 export const NOT_BUILT_SCENARIOS: Readonly<Record<string, readonly string[]>> = {
-  'peak-member-pays-discounted-seat': ['card'],
   'session-pass-on-the-reader': ['reader'],
-  'membership-on-saved-card': ['card', 'membership'],
-  'q3-buy-new-pass-with-a-membership': ['card', 'membership'],
+  // W10 built the saved card: a membership on it is the membership's (W13).
+  'membership-on-saved-card': ['membership'],
+  'q3-buy-new-pass-with-a-membership': ['membership'],
   // An event beside a membership bought in the same basket stays not built as a whole until W13.
   'w08-event-with-a-membership-bought-in-cash': ['membership'],
-  'event-at-member-price-with-a-new-membership': ['card', 'membership'],
+  'event-at-member-price-with-a-new-membership': ['membership'],
   // W09 built promo codes, store credit and gift cards used to pay; a promo beside a membership bought in cash is the membership's.
   'w09-promo-with-a-membership-bought-in-cash': ['membership'],
-  'promo-on-a-membership': ['card', 'membership'],
+  'promo-on-a-membership': ['membership'],
 }

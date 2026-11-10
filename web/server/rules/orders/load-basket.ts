@@ -3,6 +3,7 @@ import type { BasketQuoteInput, EventQuotePlace } from '@/contracts'
 import type { Queryable, SqlParam } from '@/server/db'
 import type { PromoCodeRow } from '@/server/rules/promo/promo-codes'
 import { MAX_GUESTS_PER_PRIVATE_BOOKING } from './guest-validation'
+import { PROCESSING_MINUTES } from './pending-order'
 
 /**
  * Everything a basket's price depends on, read in ONE statement. A database round trip through
@@ -21,6 +22,15 @@ export interface BasketCustomerFacts {
   store_credit_balance: string
   has_saved_card: boolean
   has_active_membership: boolean
+  /** The saved card's Stripe customer and payment method, for the charge (W10). */
+  stripe_customer_id: string | null
+  saved_payment_method_id: string | null
+  /**
+   * An order of theirs still pending: a Worker card order (`reader_payment.method` 'card') however old,
+   * until T2 or the undo settles it; any other pending order for 15 minutes (W03-decisions Q10, as
+   * changed by "W10 review calls").
+   */
+  has_order_processing: boolean
 }
 
 export interface BasketSeatFacts {
@@ -180,7 +190,13 @@ SELECT
             'has_active_membership', EXISTS (
               SELECT 1 FROM customer_memberships cm
               WHERE cm.customer_id = c.id AND cm.subscription_status = 'active'
-                AND (cm.cancel_effective_date IS NULL OR cm.cancel_effective_date >= (SELECT today FROM london))))
+                AND (cm.cancel_effective_date IS NULL OR cm.cancel_effective_date >= (SELECT today FROM london))),
+            'stripe_customer_id', c.stripe_customer_id,
+            'saved_payment_method_id', c.saved_payment_method_id,
+            'has_order_processing', EXISTS (
+              SELECT 1 FROM orders o
+              WHERE o.customer_id = c.id AND o.payment_status = 'pending'
+                AND (o.reader_payment->>'method' = 'card' OR o.created_at > now() - interval '${PROCESSING_MINUTES} minutes')))
    FROM customers c WHERE c.id = $1::uuid) AS customer,
 
   (SELECT jsonb_build_object(

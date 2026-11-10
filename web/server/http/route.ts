@@ -40,6 +40,8 @@ export type RouteContext<A extends AuthMode, I extends z.ZodType> = {
   /** The request's Idempotency-Key on an idempotent route. Stripe keys never use it: see stripeIdempotencyKey. */
   idempotencyKey: string | null
   request: Request
+  /** When the request started (ms since the epoch, from the route's clock): the order's deadline counts from it (W10a). */
+  startedAt: number
 } & ActorFor<A>
 
 export interface NextRouteContext {
@@ -177,6 +179,7 @@ export function createRouteFactory(deps: RouteDeps) {
           requestId,
           idempotencyKey,
           request,
+          startedAt,
           ...identity,
         } as RouteContext<A, I>
 

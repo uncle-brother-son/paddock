@@ -7,6 +7,7 @@ import { startTestDatabase, type TestDatabase } from '../database'
 import { staffAppDir } from '../staff-app-dir'
 import { buildRecording, TABLES, type Recording, type Row, type TableDump } from './compare'
 import { bindLegacyRoutes, bindStaffRoutes } from './legacy-routes'
+import { replayStripe } from './stripe-binding'
 
 /**
  * Replays a scenario from the same seed through either side, and records what it did: the rows
@@ -129,6 +130,8 @@ export async function replay(
   await scenario.seed(db, stripe)
   const before = await dumpTables(db)
 
+  // Each run's fake, bound again by a side that charges through the order route (W10).
+  replayStripe.current = null
   const side = makeSide(db, stripe)
   const results: unknown[] = []
   await scenario.run({

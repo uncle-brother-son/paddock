@@ -370,8 +370,8 @@ describe('before anything is touched', () => {
 
   it('NOT_BUILT: only the staff member is looked up and the answer kept against the key', async () => {
     await freshSeed()
-    // W09 built promo codes, so a card payment is what isn't built here.
-    const { result, statements } = await counting(() => postOrder(orderInput({ customerId: ID.customer, booking: paidSeat(), promoCode: 'ALLTEN', payment: { method: 'card' } })))
+    // W10 built the saved card, so the reader is what isn't built here.
+    const { result, statements } = await counting(() => postOrder(orderInput({ customerId: ID.customer, booking: paidSeat(), promoCode: 'ALLTEN', payment: { method: 'reader' } })))
     expect(result.status).toBe(501)
     expect(statements).toEqual(['SELECT id,', 'INSERT INTO', 'UPDATE api_idempotency'])
   })
@@ -562,8 +562,8 @@ describe('the dry run', () => {
 
   it('answers NOT_BUILT before it opens a transaction', async () => {
     const answers: Array<Awaited<ReturnType<typeof dryRun>>> = []
-    const recording = await replay(environment, dryScenario({ customerId: ID.customer, booking: paidSeat(), payment: { method: 'card' } }, answers), oldSide)
-    expect(answers[0]).toMatchObject({ status: 501, body: { error: { code: 'NOT_BUILT', details: { notBuilt: ['card'] } } } })
+    const recording = await replay(environment, dryScenario({ customerId: ID.customer, booking: paidSeat(), payment: { method: 'reader' } }, answers), oldSide)
+    expect(answers[0]).toMatchObject({ status: 501, body: { error: { code: 'NOT_BUILT', details: { notBuilt: ['reader'] } } } })
     expect(recording.tables).toEqual({})
   })
 })
@@ -1305,7 +1305,8 @@ describe('what T1 writes for an event (W08)', () => {
 
   it('a membership bought beside an event is not built yet, before anything is written', async () => {
     const { recording, answer } = await placeThrough({ ...eventAlone, membershipPlanId: ID.plan, membershipBillingFrequency: 'monthly', payment: { method: 'card' } })
-    expect(answer.body).toMatchObject({ ok: false, error: { code: 'NOT_BUILT', details: { notBuilt: ['card', 'membership'] } } })
+    // W10 built the saved card: the membership is what isn't built.
+    expect(answer.body).toMatchObject({ ok: false, error: { code: 'NOT_BUILT', details: { notBuilt: ['membership'] } } })
     expect(tablesTouched(recording)).toEqual(['api_idempotency'])
   })
 })

@@ -91,6 +91,8 @@ export const DRY_RUN_DIFFERENCES: Record<string, readonly AllowedDifference[]> =
   'w09-exact-cover-gift-card-and-store-credit': dryRunQ9Method,
   'w09-exact-cover-ninety-five-and-five-pence': dryRunQ9Method,
   'w09a-store-credit-alone-leaves-the-address-on-file': dryRunQ9Method,
+  // W10: the card chosen with a gift card and store credit covering it all records split (Q9).
+  'w10-card-chosen-with-nothing-left-to-charge': dryRunQ9Method,
 }
 
 /**

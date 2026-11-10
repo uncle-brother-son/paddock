@@ -57,6 +57,20 @@ export const fakeStripeErrors = {
       type: 'idempotency_error',
       message: 'Keys for idempotent requests can only be used with the same parameters they were first used with.',
     }),
+  /** A 401: the key is wrong, expired or rolled. The SDK makes it a StripeAuthenticationError (generateV1Error). */
+  authentication: () =>
+    new Stripe.errors.StripeAuthenticationError({
+      type: 'invalid_request_error',
+      statusCode: 401,
+      message: 'Invalid API Key provided: sk_live_****wxyz',
+    }),
+  /** A 403: a restricted key without the permission. The SDK makes it a StripePermissionError. */
+  permission: () =>
+    new Stripe.errors.StripePermissionError({
+      type: 'invalid_request_error',
+      statusCode: 403,
+      message: "The provided key 'rk_live_****wxyz' does not have the required permissions for this endpoint.",
+    }),
   /** A 409: the SDK makes it a StripeAPIError, so outcome.ts reads it as unknown, which it is. */
   keyInUse: () =>
     new Stripe.errors.StripeAPIError({

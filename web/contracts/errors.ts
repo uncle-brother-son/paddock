@@ -26,6 +26,12 @@ export const ERROR_CODES = [
   'INTERNAL',
   /** Step C, until the slice that builds it: the order holds something the Worker can't sell yet. Nothing was touched. */
   'NOT_BUILT',
+  /**
+   * Step C (W10, W03-plan 2.5): the order is held pending because its card payment isn't settled: Stripe
+   * gave no clear answer, or the card was charged and the order couldn't be finished. Nothing is undone;
+   * reconcile decides. Never take payment again for it.
+   */
+  'PAYMENT_UNCONFIRMED',
 ] as const
 
 export const apiErrorCodeSchema = z.enum(ERROR_CODES)

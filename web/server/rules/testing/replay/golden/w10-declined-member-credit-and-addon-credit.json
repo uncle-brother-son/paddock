@@ -1,0 +1,27 @@
+{
+  "scenario": "w10-declined-member-credit-and-addon-credit",
+  "results": [
+    {
+      "success": false,
+      "stage": "payment",
+      "reason": "charge_failed",
+      "message": "Failed to charge saved card: Your card was declined."
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "paymentIntents.create",
+      "params": {
+        "amount": 2000,
+        "currency": "gbp",
+        "customer": "cus_member",
+        "payment_method": "pm_member",
+        "off_session": true,
+        "confirm": true,
+        "description": "Staff-created order for booking, add-ons"
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {}
+}

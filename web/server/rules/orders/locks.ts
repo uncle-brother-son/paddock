@@ -1,5 +1,5 @@
 // New in W06: the row locks that make an order's checks hold until it commits (W03-plan 2.4). W09
-// adds the promo code and the gift card used to pay.
+// adds the promo code and the gift card used to pay. W10 puts an existing order first.
 import 'server-only'
 import type { Tx } from '@/server/db'
 
@@ -8,8 +8,14 @@ import type { Tx } from '@/server/db'
  * transactions that lock the same rows in opposite orders can deadlock; taking them in one order
  * can't. T2, the undo and every later Worker write must keep to it. A slice that adds a lock adds it
  * in its place here, not at the end.
+ *
+ * W10: an existing order comes first. T2 and the undo lock it before anything else (FOR UPDATE), and
+ * then only rows after it. T1 never locks an existing order (it writes a new one, which nobody else
+ * can see), so a T1 holding a customer and an undo holding an order and waiting for that customer
+ * can't wait for each other.
  */
 export const LOCK_ORDER = [
+  'order',
   'customer',
   'promo_code',
   'session',

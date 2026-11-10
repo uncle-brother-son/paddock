@@ -1,0 +1,148 @@
+{
+  "scenario": "w10-card-gift-card-uses-its-whole-balance",
+  "results": [
+    {
+      "success": true,
+      "orderId": "orders#1",
+      "cardCharged": true,
+      "cardAmount": 8,
+      "giftCardRedeemedAmount": 40,
+      "paymentMethodUsed": "split"
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "paymentIntents.create",
+      "params": {
+        "amount": 800,
+        "currency": "gbp",
+        "customer": "cus_seed",
+        "payment_method": "pm_seed",
+        "off_session": true,
+        "confirm": true,
+        "description": "Staff-created order for merchandise"
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {
+    "gift_card_redemptions": {
+      "added": [
+        {
+          "id": "gift_card_redemptions#1",
+          "gift_card_id": "10000000-0000-4000-8000-000000000009",
+          "order_id": "orders#1",
+          "booking_id": null,
+          "amount_used": "40.00",
+          "redeemed_at": "<set>",
+          "event_booking_id": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "gift_cards": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000009",
+          "remaining_balance": [
+            "40.00",
+            "0.00"
+          ],
+          "redeemed_at": [
+            null,
+            "<set>"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    },
+    "order_line_items": {
+      "added": [
+        {
+          "id": "order_line_items#1",
+          "order_id": "orders#1",
+          "booking_id": null,
+          "product_variant_id": "10000000-0000-4000-8000-000000000008",
+          "membership_plan_id": null,
+          "session_pass_type_id": null,
+          "gift_card_id": null,
+          "item_type": "product",
+          "quantity": 4,
+          "unit_price": "12.00",
+          "line_total": "48.00",
+          "created_at": "<set>",
+          "addon_id": null,
+          "refunded_at": null,
+          "refund_method": null,
+          "restocked": null,
+          "fulfillment_status": "pending",
+          "card_refunded_amount": "0.00",
+          "system_unit_price": "12.00",
+          "price_override_reason": null,
+          "discount_amount": "0.00",
+          "event_booking_id": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "orders": {
+      "added": [
+        {
+          "id": "orders#1",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "order_total": "48.00",
+          "payment_status": "paid",
+          "stripe_payment_intent_id": "pi_fake_0002",
+          "promo_code": null,
+          "discount_amount": "0.00",
+          "shipping_address": null,
+          "shipping_status": null,
+          "tracking_number": null,
+          "order_source": "staff_created",
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "payment_method": "split",
+          "reader_payment": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "product_variants": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000008",
+          "stock_quantity": [
+            5,
+            1
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    },
+    "stock_adjustments": {
+      "added": [
+        {
+          "id": "stock_adjustments#1",
+          "variant_id": "10000000-0000-4000-8000-000000000008",
+          "change_amount": -4,
+          "reason": "Sale (Order #orders#1)",
+          "staff_id": null,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

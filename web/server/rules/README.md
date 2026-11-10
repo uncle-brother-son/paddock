@@ -73,6 +73,40 @@ idempotency key, before and after). The rules it keeps:
 - **What isn't built yet answers NOT_BUILT** before any transaction opens. The list is in
   `place-order.ts`; each slice takes its part off it.
 
+## The saved card: T1, collect, T2, and the one undo (W10)
+
+A card order with something to charge runs W03-plan 2.1's pipeline:
+
+1. **T1** (`place-order.ts`) does everything above, but writes the order `pending`, with its pending
+   record in `orders.reader_payment` (`pending-order.ts`: a superset of the old reader snapshot, never
+   with the old reader's `payment_intent_id`, so the old sweep leaves it alone), its event booking
+   `pending`, and the delivery address not yet saved to the customer. Its claims are made and held.
+   It commits **before** any Stripe call. The Stripe client is made before T1, so a missing key fails
+   with nothing written. W03-decisions Q10: a card order while the customer has another order pending
+   and under 15 minutes old is refused first, with the decided words (`order_still_processing`).
+2. **Collect** (`collect-saved-card.ts`) charges the saved card once: key `<orderId>:charge`,
+   `metadata.order_id`, the description createOrder sent, all fixed by the pending record so a retry is
+   the same request. A definite refusal (card error, invalid request) means nothing was taken; anything
+   else is unknown and is sent once more with the same key. Still unknown: PAYMENT_UNCONFIRMED (502),
+   the order held pending and **never undone here**; reconcile decides (W12). The Stripe client has
+   10 seconds a call and no retries of the SDK's own (`ORDER_STRIPE_LIMITS`), so the Stripe part of an
+   order takes 20 seconds at most.
+3. **T2** (`finalise-order.ts`, one transaction) locks the order, re-checks it is pending, checks the
+   PaymentIntent (succeeded, exact pence, gbp, this order, this Stripe customer), marks it paid with the
+   PaymentIntent, confirms the event booking, saves the address when asked, and records `order.paid`.
+   Safe twice. A PaymentIntent that doesn't check out leaves the order pending for a person. A
+   database failure after the charge leaves it pending too, answering PAYMENT_UNCONFIRMED: a good sale
+   is never refunded for a fault. T2 on an order already undone records `order.charge_without_order`.
+4. **The one undo** (`undo-order.ts`, one transaction) on a definite refusal: locks the order (it,
+   then LOCK_ORDER), refuses a paid one, gives back every claim exactly once (places, a pass session,
+   add-on credits, stock and its ledger rows, event places, store credit and its ledger row, a gift
+   card's balance and `redeemed_at` when this order set it, the promo's use with the order) and
+   removes every row, recording `order.undo` with the snapshot. Run twice, the second finds nothing.
+
+`LOCK_ORDER` now starts with an existing order: T2 and the undo lock it first. Nothing calls the route
+until W14; until then only the dry run runs live, T1 only, with no Stripe (`dryRunOrder`), taking a
+missing card figure as confirmed (W03-decisions, "W10 setup calls").
+
 `dryRunOrder` is the same T1 with a read back (`order-rows.ts`) and a rollback. The staff app's
 createOrder shadow calls it before the old order runs and compares the two (`createOrder.dryRun` in
 `parity_log`). It goes at W16. The shadow keeps only the keys its own copy of the read-back produces
