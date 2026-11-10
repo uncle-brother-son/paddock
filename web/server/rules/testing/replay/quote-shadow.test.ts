@@ -157,7 +157,15 @@ describe('the quote shadow, through the real routes', () => {
    * saved card, or no clear answer, which it took as a decline): neither the quote nor the dry run can
    * foresee what Stripe says, so neither records anything.
    */
-  const refusedAtTheCharge = new Set([...W10_REFUSED_AT_THE_CHARGE, 'w10-no-saved-card', 'w10-unclear-answer'])
+  const refusedAtTheCharge = new Set([
+    ...W10_REFUSED_AT_THE_CHARGE,
+    'w10-no-saved-card',
+    'w10-unclear-answer',
+    // W11: the reader's intent refused, unclear (which createOrder took as refused), or no Stripe customer made.
+    'w11-reader-intent-refused',
+    'w11-reader-intent-unclear',
+    'w11-reader-stripe-customer-not-made',
+  ])
 
   /** Orders the quote can't foresee the answer to (a decline, no customer, a changed cash figure), so it records nothing. */
   const notCompared = new Set([
@@ -526,8 +534,8 @@ describe('the quote shadow, through the real routes', () => {
     })
 
     it('out of its scope it records nothing more', async () => {
-      // W10 built the saved card: the reader (W11) is what is out of scope now.
-      const { quoteRows, dryRunRows } = await run(byName('session-pass-on-the-reader'))
+      // W11 built the reader: a membership (W13) is what is out of scope now.
+      const { quoteRows, dryRunRows } = await run(byName('membership-on-the-reader'))
       expect(quoteRows).toHaveLength(1)
       expect(dryRunRows).toEqual([])
     })
@@ -1123,6 +1131,113 @@ describe('the quote shadow, through the real routes', () => {
             expect(quoteRows.map((row) => row.matches), name).toEqual([true])
           }
           for (const name of ['cash-booking-two-guests-addon', WORST]) {
+            const { dryRunRows } = await run(byName(name), olderWorker)
+            expect(dryRunRows.map((row) => row.matches), name).toEqual([true])
+          }
+        })
+      })
+
+      describe('W11: the reader', () => {
+        type ReaderBody = { ok: boolean; data?: { order: Record<string, unknown> & { payment: Record<string, unknown> }; rows: W09Rows & { order: Record<string, unknown> } } }
+        const changingReader = (change: (data: NonNullable<ReaderBody['data']>) => NonNullable<ReaderBody['data']>) => async (call: WorkerCall) => {
+          const answer = await realWorker(call)
+          if (call.path !== DRY_RUN_PATH) return answer
+          const body = answer.data as ReaderBody
+          return { data: { ...body, data: body.data && change(body.data) } }
+        }
+        const READER_ORDER = 'w11-reader-public-booking-with-an-addon'
+
+        it("a reader order's dry run is compared pending against pending, as the old reader branch leaves the old order, and matches", async () => {
+          for (const name of [READER_ORDER, 'w11-reader-every-kind', 'w11-reader-worst-basket', 'w11-reader-shipped-product-address-saved', 'w11-reader-save-card-with-all-three', 'w11-reader-cancelled-every-kind-with-all-three']) {
+            const { dryRunRows } = await run(byName(name))
+            expect(dryRunRows, name).toEqual([{ action: DRY_RUN, matches: true, diff: null, old_result: null, new_result: { timing: expect.anything() } }])
+          }
+        })
+
+        it('nothing is taken on to T2: a reader dry run with its order paid, its event booking confirmed or no pending record shows', async () => {
+          const cases: Array<[string, (data: NonNullable<ReaderBody['data']>) => NonNullable<ReaderBody['data']>, string[]]> = [
+            ['written paid', (data) => ({ ...data, rows: { ...data.rows, order: { ...data.rows.order, payment_status: 'paid' } } }), ['rows.order.payment_status']],
+            ['no pending record', (data) => ({ ...data, rows: { ...data.rows, order: { ...data.rows.order, has_reader_payment: false } } }), ['rows.order.has_reader_payment']],
+            ['the method recorded at T1', (data) => ({ ...data, rows: { ...data.rows, order: { ...data.rows.order, payment_method: 'reader' } } }), ['rows.order.payment_method']],
+          ]
+          for (const [what, change, paths] of cases) {
+            const { dryRunRows } = await run(byName(READER_ORDER), changingReader(change))
+            expect(dryRunRows.map((row) => row.matches), what).toEqual([false])
+            expect(dryRunRows[0]?.diff?.map((d) => d.path).sort(), what).toEqual(paths)
+          }
+          const { dryRunRows } = await run(
+            byName('w11-reader-event-with-guests'),
+            changingReader((data) => ({ ...data, rows: { ...data.rows, event_booking: data.rows.event_booking && { ...data.rows.event_booking, status: 'confirmed' } } }))
+          )
+          expect(dryRunRows[0]?.diff).toEqual([{ path: 'rows.event_booking.status', oldValue: 'pending', newValue: 'confirmed' }])
+        })
+
+        it("the answer is compared on what the old reader branch answered: the method, the card, the tap's amount", async () => {
+          const cases: Array<[string, (data: NonNullable<ReaderBody['data']>) => NonNullable<ReaderBody['data']>, string[]]> = [
+            ['another amount for the tap', (data) => ({ ...data, order: { ...data.order, payment: { ...data.order.payment, collected: 44 } } }), ['result.readerAmount']],
+            ['another method', (data) => ({ ...data, order: { ...data.order, payment: { ...data.order.payment, method: 'split' } } }), ['result.paymentMethodUsed']],
+            // A Worker that answered a reader order as paid is compared as a paid order, and every field shows.
+            [
+              'answered paid',
+              (data) => ({ ...data, order: { ...data.order, status: 'paid' } }),
+              [
+                'result.cardAmount',
+                'result.giftCardCodeLooksRight',
+                'result.hasBooking',
+                'result.hasEventBooking',
+                'result.hasGiftCard',
+                'result.hasSessionPass',
+                'result.readerAmount',
+              ],
+            ],
+          ]
+          for (const [what, change, paths] of cases) {
+            const { dryRunRows } = await run(byName(READER_ORDER), changingReader(change))
+            expect(dryRunRows.map((row) => row.matches), what).toEqual([false])
+            expect(dryRunRows[0]?.diff?.map((d) => d.path).sort(), what).toEqual(paths)
+          }
+        })
+
+        it("no free text, code, balance figure, or the tap's intent or secret reaches parity_log on a reader order", async () => {
+          // Forced apart in every reduced field at once, on the worst basket (names, an address, a gift card bought, store credit, a gift card used).
+          const { dryRunRows } = await run(
+            byName('w11-reader-worst-basket'),
+            changingReader((data) => ({
+              ...data,
+              order: { ...data.order, payment: { ...data.order.payment, collected: 1 } },
+              rows: {
+                ...data.rows,
+                customer_store_credit_balance: 12.34,
+                gift_card_redemptions: data.rows.gift_card_redemptions.map((r) => ({ ...r, card_remaining_balance: 56.78 })),
+                store_credit_transactions: data.rows.store_credit_transactions.map((t) => ({ ...t, balance_after: 12.34, note: 'Sam Test paid by the reader' })),
+              },
+            }))
+          )
+          expect(dryRunRows.map((row) => row.matches)).toEqual([false])
+          expect(dryRunRows[0]?.new_result).toMatchObject({ freeTextMatches: false, balancesMatch: false })
+          const logged = JSON.stringify(dryRunRows)
+          for (const text of ['Sam Test', 'Alex Guest', 'Bea Guest', 'sam@example.com', '1990-01-01', 'Mill Lane', 'HX7', 'SEEDCARD', 'PWC-', 'pi_fake', 'secret', 'cus_seed', '12.34', '56.78', '20.00', '10.00']) {
+            expect(logged, text).not.toContain(text)
+          }
+          expect(dryRunRows[0]?.diff?.map((d) => d.path).sort()).toEqual(['result.readerAmount'])
+        })
+
+        it("the publish-then-deploy window: a Worker from before W11 answers NOT_BUILT for the reader, so reader orders record nothing, and the rest are as before", async () => {
+          // Release rule: this staff app first. Until the Worker is deployed it is e232049 (W10), which refuses a
+          // reader basket before anything else and has the same rows otherwise.
+          const olderWorker = async (call: WorkerCall) => {
+            const body = call.body as { payment?: { method?: string } } | undefined
+            if (call.path === DRY_RUN_PATH && body?.payment?.method === 'reader') {
+              return { data: { ok: false, requestId: 'r', error: { code: 'NOT_BUILT', message: 'not built', details: { notBuilt: ['reader'] } } } }
+            }
+            return realWorker(call)
+          }
+          for (const name of [READER_ORDER, 'w11-reader-every-kind', 'w11-reader-cancelled-worst-basket']) {
+            const { dryRunRows, quoteRows } = await run(byName(name), olderWorker)
+            expect(dryRunRows, name).toEqual([])
+            expect(quoteRows.map((row) => row.matches), name).toEqual([true])
+          }
+          for (const name of [CARD_ORDER, 'cash-booking-two-guests-addon', WORST]) {
             const { dryRunRows } = await run(byName(name), olderWorker)
             expect(dryRunRows.map((row) => row.matches), name).toEqual([true])
           }

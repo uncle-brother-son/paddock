@@ -1,0 +1,57 @@
+{
+  "scenario": "w11-reader-cancelled-event",
+  "results": [
+    {
+      "success": true,
+      "orderId": "gone#1",
+      "cardCharged": false,
+      "paymentMethodUsed": "reader",
+      "pendingReaderPayment": {
+        "orderId": "gone#1",
+        "paymentIntentId": "pi_fake_0001",
+        "clientSecret": "pi_fake_0001_secret",
+        "amount": 70
+      }
+    },
+    {
+      "cancelled": true,
+      "orderId": "gone#1",
+      "message": "The pending order was cancelled and everything it held was released."
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "paymentIntents.create",
+      "params": {
+        "amount": 7000,
+        "currency": "gbp",
+        "customer": "cus_seed",
+        "payment_method_types": [
+          "card_present"
+        ],
+        "metadata": {
+          "supabase_customer_id": "10000000-0000-4000-8000-000000000005",
+          "order_id": "gone#1",
+          "flow": "checkout"
+        },
+        "description": "Paddock order gone#1"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "paymentIntents.retrieve",
+      "params": {
+        "id": "pi_fake_0001"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "paymentIntents.cancel",
+      "params": {
+        "id": "pi_fake_0001"
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {}
+}

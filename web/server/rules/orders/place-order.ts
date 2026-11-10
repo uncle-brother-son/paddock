@@ -10,7 +10,9 @@
 // and the confirmed-amount rule for every method with no Stripe step (W03-plan 2.7). W10 adds the saved
 // card (createOrder's stages 30 to 35, chargeSavedCard): T1 commits the order pending, collect charges
 // the card (collect-saved-card.ts), then T2 (finalise-order.ts) marks it paid, or the one undo
-// (undo-order.ts) removes it. Still not built: the reader (W11) and memberships (W13).
+// (undo-order.ts) removes it. W11 adds the reader (createOrder's stage 29): T1 commits the order pending
+// with its pending record, then the reader's intent is made (reader-intent.ts) and the screen collects
+// it; the finalise and cancel routes (reader-order.ts) finish it. Still not built: memberships (W13).
 import 'server-only'
 import type {
   BasketEventAttendee,
@@ -28,6 +30,7 @@ import { inOpenTransaction, isDeadlock, postgresRefusal, type Db, type Tx } from
 import { ApiError } from '@/server/http/errors'
 import { addMonthsToIsoDate } from '@/server/rules/time/london-time'
 import type { StripeClient } from '@/server/stripe/client'
+import { stripeTiming } from '@/server/stripe/deadline'
 import { amountChangedRefusal, cashDifferenceRefusal, round2 } from './amounts'
 import { GIFT_CARD_SOURCE_REMOVED_MESSAGE } from './basket-booking'
 import { eventFullRefusal, inPlaceOrder } from './basket-event'
@@ -38,6 +41,7 @@ import {
   ORDER_STILL_PROCESSING_MESSAGE,
   PAID_NOT_FINISHED_MESSAGE,
   PAYMENT_UNCONFIRMED_MESSAGE,
+  READER_INTENT_UNCONFIRMED_MESSAGE,
 } from './failure-messages'
 import { finaliseOrder, type FinaliseOutcome } from './finalise-order'
 import { generateGiftCardCode } from './gift-card-code'
@@ -45,8 +49,9 @@ import { loadBasketFacts, type BasketFacts } from './load-basket'
 import { lockForOrder, type HeldLocks } from './locks'
 import { bookingRefusal, orderRefusal, paymentUnconfirmed, refusalDetails } from './order-refusal'
 import { readOrderRows } from './order-rows'
-import { chargeDescription, type PendingSnapshot } from './pending-order'
+import { chargeDescription, type CardSnapshot, type PendingSnapshot, type ReaderSnapshot } from './pending-order'
 import { priceFromFacts } from './price-basket'
+import { createReaderIntent, recordReaderIntent, type PendingReader } from './reader-intent'
 import { undoOrder } from './undo-order'
 import { writeBooking, type BookingOrderPart, type BookingToWrite, type PayBy } from './write-booking'
 
@@ -109,14 +114,13 @@ function refuseAtEntry(input: PlaceOrderInput): void {
 }
 
 /**
- * What T1 can't sell yet, each built by a later slice: reader (W11), memberships, bought or buy-new or
- * replacing an exhausted one (W13), on any method, the saved card included. A pass bought with a
+ * What T1 can't sell yet, each built by a later slice: memberships, bought or buy-new or replacing an
+ * exhausted one (W13), on any method, the saved card and the reader included. A pass bought with a
  * buy-new membership is caught as the membership, and so is an event beside a membership bought in the
  * same basket (its account holder would be priced as that member), and a promo code beside one (its
- * share of the first payment). W10 built the saved card.
+ * share of the first payment). W10 built the saved card, W11 the reader.
  */
 const NOT_BUILT: ReadonlyArray<{ part: string; words: string; present: (input: PlaceOrderInput) => boolean }> = [
-  { part: 'reader', words: 'a card reader payment', present: (input) => input.payment?.method === 'reader' },
   {
     part: 'membership',
     words: 'a membership',
@@ -539,7 +543,10 @@ async function writeOrder(
   const storeCredit = input.payment?.storeCredit?.amount ?? 0
   // What the card or the cash takes is the same remainder (price-basket.ts); recorded now, also on a
   // pending card order, so T2 only marks it paid. createOrder recorded 'card' or 'split' the same way.
-  const paymentMethod = recordedPaymentMethod(input.payment?.method, totals.toCollect.cash, giftCardPaying?.amount ?? 0, storeCredit)
+  // W11: a reader order records none until T2, as createOrder's reader branch left it pending
+  // (finaliseReaderOrder wrote the method), so the pending order is the old one's, field for field.
+  const paymentMethod =
+    snapshot?.method === 'reader' ? null : recordedPaymentMethod(input.payment?.method, totals.toCollect.cash, giftCardPaying?.amount ?? 0, storeCredit)
 
   const lines = quote.lines.flatMap((line, i) => {
     if (line.kind === 'booking') return []
@@ -707,11 +714,16 @@ function bookingOrderPart(quote: BasketQuoteOutput, order: OrderToWrite): Bookin
 }
 
 interface Placed {
-  /** What the order answers once it is paid: on a card order, once the card has been charged and T2 has run. */
+  /**
+   * What the order answers: once it is paid (on a card order, once the card has been charged and T2 has
+   * run), or on the reader (W11) that it waits for the tap, with the intent added once Stripe has made it.
+   */
   output: PlaceOrderOutput
   orderId: string
   /** The card still to charge, after T1 has committed the order pending (W10). Null when T1 finished it. */
   charge: PendingCharge | null
+  /** The reader's intent still to make, after T1 has committed the order pending (W11). */
+  reader: PendingReader | null
 }
 
 /**
@@ -719,7 +731,7 @@ interface Placed {
  * customer and saved card are the ones read under the customer's lock; T1 refuses the order before it
  * commits if either is missing (prepare).
  */
-function cardSnapshot(input: PlaceOrderInput, facts: BasketFacts, quote: BasketQuoteOutput, options: PlaceOrderOptions): PendingSnapshot {
+function cardSnapshot(input: PlaceOrderInput, facts: BasketFacts, quote: BasketQuoteOutput, options: PlaceOrderOptions): CardSnapshot {
   const giftCard = input.payment?.giftCard
   return {
     flow: 'checkout',
@@ -732,6 +744,27 @@ function cardSnapshot(input: PlaceOrderInput, facts: BasketFacts, quote: BasketQ
     payment_method_id: facts.customer?.saved_payment_method_id ?? '',
     charge_description: chargeDescription(input),
     charge_payment_intent_id: null,
+    request_id: options.requestId,
+    ...(giftCard ? { gift_card_redemption: { gift_card_id: giftCard.giftCardId, amount: giftCard.amount } } : {}),
+  }
+}
+
+/**
+ * The pending record of a reader order (W11), what createOrder's reader branch wrote, committed by T1
+ * before the intent exists (bug 14). The single tap is the server's figure (W03-plan 2.7). The Stripe
+ * customer is the one read under the customer's lock, null when they have none yet: the intent finds
+ * or makes one, and records it with the intent.
+ */
+function readerSnapshot(input: PlaceOrderInput, facts: BasketFacts, quote: BasketQuoteOutput, options: PlaceOrderOptions): ReaderSnapshot {
+  const giftCard = input.payment?.giftCard
+  return {
+    flow: 'checkout',
+    method: 'reader',
+    channel: 'staff',
+    expected_amount: quote.totals.toCollect.reader,
+    save_card: input.payment?.readerSaveCard === true,
+    save_address_to_customer: quote.delivery?.saveToCustomer === true,
+    stripe_customer_id: facts.customer?.stripe_customer_id ?? null,
     request_id: options.requestId,
     ...(giftCard ? { gift_card_redemption: { gift_card_id: giftCard.giftCardId, amount: giftCard.amount } } : {}),
   }
@@ -770,16 +803,20 @@ async function prepare(tx: Tx, input: PlaceOrderInput, options: PlaceOrderOption
   // priceFromFacts only adds up (its problems are refused below), so this is still the first refusal.
   // Read after the customer's lock, so of two card orders at once the second waits for the first's
   // T1, then sees it. Cash and store credit orders aren't affected. A held Worker card order counts
-  // however old it is (load-basket.ts).
-  if (method === 'card' && quote.totals.toCollect.card > 0 && facts.customer?.has_order_processing) {
+  // however old it is (load-basket.ts). W11: the reader likewise ("W10 review calls": Q10 covers
+  // reader orders as it covers card orders), and a held Worker reader order counts however old too.
+  const awaitsCard = method === 'card' && quote.totals.toCollect.card > 0
+  const awaitsReader = method === 'reader' && quote.totals.toCollect.reader > 0
+  if ((awaitsCard || awaitsReader) && facts.customer?.has_order_processing) {
     throw orderRefusal({ stage: 'payment', reason: 'order_still_processing', message: ORDER_STILL_PROCESSING_MESSAGE })
   }
   refuseIfNeeded(input, quote, mode)
 
   // A card with something to take: the order is committed pending, with its snapshot, and the card
   // is charged after the commit (W03-plan 2.1, B14). Nothing to take on the card finishes here, as createOrder did.
-  const awaitsCard = method === 'card' && quote.totals.toCollect.card > 0
-  const snapshot = awaitsCard ? cardSnapshot(input, facts, quote, options) : null
+  // W11: the reader the same way, its intent made after the commit (bug 14). Nothing to take on the reader
+  // was refused above (reader_nothing_to_charge), as createOrder refused it.
+  const snapshot: PendingSnapshot | null = awaitsCard ? cardSnapshot(input, facts, quote, options) : awaitsReader ? readerSnapshot(input, facts, quote, options) : null
 
   // 3. The order, and everything in it that doesn't need the booking.
   const order = await writeOrder(tx, input, facts, quote, locks, options, snapshot)
@@ -791,14 +828,14 @@ async function prepare(tx: Tx, input: PlaceOrderInput, options: PlaceOrderOption
   // The saved card, where createOrder met its absence: after every write, at the charge (stage 32),
   // which its route refused with these words. Here it rolls T1 back, so nothing is kept and Stripe is
   // never called. A card needs both: the card is attached to the Stripe customer.
-  if (snapshot && (!snapshot.stripe_customer_id || !snapshot.payment_method_id)) {
+  if (snapshot?.method === 'card' && (!snapshot.stripe_customer_id || !snapshot.payment_method_id)) {
     throw orderRefusal({ stage: 'payment', reason: 'charge_failed', message: NO_SAVED_CARD_MESSAGE })
   }
 
   // 5. The audit rows, in the same transaction. Nothing owed to Stripe: the order is paid now. A card
-  //    to charge: only order.create; T2 records order.paid.
+  //    to charge, or a reader tap to take (W11): only order.create; T2 records order.paid.
   const { orderId, paymentMethod } = order
-  const collected = awaitsCard ? quote.totals.toCollect.card : quote.totals.toCollect.cash
+  const collected = awaitsCard ? quote.totals.toCollect.card : awaitsReader ? quote.totals.toCollect.reader : quote.totals.toCollect.cash
   const giftCardApplied = quote.totals.giftCardApplied
   const storeCreditApplied = quote.totals.storeCreditApplied
   const actor = { actorType: options.actor.type, actorId: options.actor.id, entityType: 'order', entityId: orderId, requestId: options.requestId }
@@ -825,7 +862,8 @@ async function prepare(tx: Tx, input: PlaceOrderInput, options: PlaceOrderOption
         toCollect: collected,
         confirmed: confirmed ?? null,
         overrides,
-        ...(snapshot ? { awaitsCard: true } : {}),
+        ...(awaitsCard ? { awaitsCard: true } : {}),
+        ...(awaitsReader ? { awaitsReader: true } : {}),
       },
     },
     ...(snapshot
@@ -837,15 +875,18 @@ async function prepare(tx: Tx, input: PlaceOrderInput, options: PlaceOrderOption
     orderId,
     output: {
       orderId,
-      status: 'paid',
+      // W11: a reader order waits for the tap. Its method is the reader's, as createOrder answered
+      // (paymentMethodUsed 'reader'); what orders.payment_method records is written by T2 (Q9).
+      status: awaitsReader ? 'pending_reader' : 'paid',
       bookingId,
       sessionPassId: order.sessionPassId,
       giftCardId: order.giftCardId,
       giftCardCode: order.giftCardCode,
       eventBookingId: order.eventBookingId,
-      payment: { method: paymentMethod, collected, cardCharged: awaitsCard, giftCardApplied, storeCreditApplied },
+      payment: { method: awaitsReader ? 'reader' : paymentMethod, collected, cardCharged: awaitsCard, giftCardApplied, storeCreditApplied },
     },
-    charge: snapshot ? { orderId, customerId, snapshot } : null,
+    charge: snapshot?.method === 'card' ? { orderId, customerId, snapshot } : null,
+    reader: snapshot?.method === 'reader' ? { orderId, customerId, snapshot } : null,
   }
 }
 
@@ -965,15 +1006,77 @@ async function collectAndFinish(
   return placed.output
 }
 
+/**
+ * After T1 has committed a reader order pending with its pending record (W11, createOrder's stage 29,
+ * bug 14 fixed): the reader's intent, under `<orderId>:reader-intent` (reader-intent.ts).
+ * - Stripe made it: it is written onto the pending record (with the Stripe customer it is for), and the
+ *   order answers `pending_reader` with what the screen collects on the reader. Nothing is taken until
+ *   the customer taps; the finalise route (reader-order.ts) then runs T2.
+ * - A definite failure (no intent exists): nothing can be taken, so the one undo gives everything back,
+ *   and staff are told the old words (reader_intent_failed).
+ * - No clear answer (after one retry with the same key), or the intent couldn't be written onto the
+ *   order: held pending with its claims, never undone here, PAYMENT_UNCONFIRMED. No secret reaches the
+ *   screen, so no tap can take money for it; reconcile (W12) cancels any intent and undoes it.
+ * Every answer is stored against the request's key; a new key meets Q10's guard while it is pending.
+ */
+async function startReaderPayment(
+  db: Db,
+  stripe: StripeClient,
+  placed: Placed & { reader: PendingReader },
+  options: PlaceOrderOptions,
+  startedAt: number
+): Promise<PlaceOrderOutput> {
+  const { orderId, reader } = placed
+  const actor = { type: options.actor.type, id: options.actor.id }
+  const answer = await createReaderIntent(db, stripe, reader, stripeTiming(startedAt, options.now ?? Date.now))
+
+  if (answer.outcome === 'definite') {
+    const refusal = orderRefusal({ stage: 'payment', reason: 'reader_intent_failed', message: answer.message })
+    try {
+      await undoOrder(db, orderId, { actor, requestId: options.requestId, why: `The card reader payment couldn't be started. ${answer.detail}` })
+    } catch (err) {
+      // Nothing can be taken, so the refusal is still the answer. The order stays pending with its
+      // claims until the undo runs again (reconcile, W12); the log says why.
+      throw new ApiError(refusal.code, refusal.message, { details: refusal.details, logDetail: `The undo failed: ${explain(err)}` })
+    }
+    throw refusal
+  }
+  if (answer.outcome === 'unknown') {
+    throw paymentUnconfirmed('payment_unconfirmed', READER_INTENT_UNCONFIRMED_MESSAGE, orderId, `The reader's intent got no clear answer: ${answer.detail}`)
+  }
+
+  const { paymentIntent, stripeCustomerId } = answer
+  const clientSecret = paymentIntent.client_secret
+  let recorded: boolean
+  try {
+    recorded = Boolean(clientSecret) && (await recordReaderIntent(db, orderId, paymentIntent, stripeCustomerId))
+  } catch (err) {
+    throw paymentUnconfirmed('payment_unconfirmed', READER_INTENT_UNCONFIRMED_MESSAGE, orderId, `${paymentIntent.id} could not be written onto the order: ${explain(err)}`)
+  }
+  if (!recorded || !clientSecret) {
+    throw paymentUnconfirmed('payment_unconfirmed', READER_INTENT_UNCONFIRMED_MESSAGE, orderId, `${paymentIntent.id} was not written onto the order (no secret, or the order changed)`)
+  }
+  return {
+    ...placed.output,
+    pendingReaderPayment: { orderId, paymentIntentId: paymentIntent.id, clientSecret, amount: reader.snapshot.expected_amount },
+  }
+}
+
 export async function placeOrder(db: Db, input: PlaceOrderInput, options: PlaceOrderOptions): Promise<PlaceOrderOutput> {
   const startedAt = options.startedAt ?? (options.now ?? Date.now)()
   refuseAtEntry(input)
   refuseWhatIsNotBuilt(input)
-  // Made before T1, so a card order is never left pending with no way to charge it: a missing key
-  // fails here, with nothing written.
-  const stripe = input.payment?.method === 'card' ? options.stripe?.() : undefined
-  if (input.payment?.method === 'card' && !stripe) throw new Error('A card order needs a Stripe client.')
+  // Made before T1, so a card or reader order is never left pending with no way to reach Stripe: a
+  // missing key fails here, with nothing written.
+  const method = input.payment?.method
+  const needsStripe = method === 'card' || method === 'reader'
+  const stripe = needsStripe ? options.stripe?.() : undefined
+  if (needsStripe && !stripe) throw new Error(`A ${method} order needs a Stripe client.`)
   const placed = await inTransaction(db, (tx) => prepare(tx, input, options, { dryRun: false }))
+  if (placed.reader) {
+    if (!stripe) throw new Error('A reader order needs a Stripe client.')
+    return startReaderPayment(db, stripe, { ...placed, reader: placed.reader }, options, startedAt)
+  }
   if (!placed.charge) return placed.output
   if (!stripe) throw new Error('A card order needs a Stripe client.')
   return collectAndFinish(db, stripe, { ...placed, charge: placed.charge }, options, startedAt)
@@ -990,7 +1093,9 @@ class DryRunFinished extends Error {
  * The real T1 on the real database, read back, then rolled back. Nothing is kept and nothing reaches
  * Stripe. A card order (W10) runs T1 only: its rows are read back as T1 leaves them (pending, with
  * its snapshot, its event booking pending, its address not yet saved), and `order` is what the order
- * answers once the card is charged. A missing card figure is taken as confirmed (refuseIfNeeded).
+ * answers once the card is charged. A reader order (W11) likewise: its rows as T1 leaves them, which is
+ * how createOrder's reader branch left the old order, and `order` answers `pending_reader` with no
+ * intent (none is made). A missing card or reader figure is taken as confirmed (refuseIfNeeded).
  */
 export async function dryRunOrder(db: Db, input: PlaceOrderInput, options: PlaceOrderOptions): Promise<OrderDryRunOutput> {
   refuseAtEntry(input)

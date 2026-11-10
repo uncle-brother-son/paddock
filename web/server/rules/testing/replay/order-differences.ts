@@ -428,8 +428,77 @@ export const W10_SCENARIOS: readonly string[] = [
   'w10-unclear-answer',
 ]
 
+/**
+ * W11's replay: the reader, through createOrder and then finaliseReaderOrder or cancelReaderOrder on
+ * the old side, and the order route and then the finalise or cancel route on the new. Existing reader
+ * scenarios first (W06 to W10 answered NOT_BUILT for them), then W11's own.
+ */
+/** Tapped and finalised (or left pending), the order kept: its pending record differs by design. */
+export const W11_KEPT: readonly string[] = [
+  'reader-booking-then-finalise',
+  'q24-promo-on-the-reader',
+  'session-pass-on-the-reader',
+  'w11-reader-public-booking-with-an-addon',
+  'w11-reader-private-booking',
+  'w11-reader-member-credit-seat-paid-guest-and-addon-credit',
+  'w11-reader-pass-seat-and-a-paid-guest',
+  'w11-reader-standalone-addons',
+  'w11-reader-products-picked-up',
+  'w11-reader-shipped-product-address-saved',
+  'w11-reader-pass-alone',
+  'w11-reader-buy-new-pass-booking',
+  'w11-reader-gift-card-digital',
+  'w11-reader-gift-card-shipped',
+  'w11-reader-event-with-guests',
+  'w11-reader-every-kind',
+  'w11-reader-with-a-gift-card',
+  'w11-reader-with-store-credit',
+  'w11-reader-with-a-promo-code',
+  'w11-reader-with-all-three',
+  'w11-reader-worst-basket',
+  'w11-reader-gift-card-uses-its-whole-balance',
+  'w11-reader-save-card-reusable',
+  'w11-reader-save-card-simulated-reader',
+  'w11-reader-save-card-with-all-three',
+  'w11-reader-new-stripe-customer',
+  'w11-reader-new-stripe-customer-saves-the-card',
+  'w11-reader-cancel-finds-it-paid',
+  'w11-reader-cancel-finds-it-paid-and-saves-the-card',
+  'w11-reader-amount-mismatch-a-pound-short',
+  'w11-reader-finalise-twice',
+]
+
+/** No tap: cancelled, and the undo gave everything back. */
+export const W11_CANCELLED: readonly string[] = [
+  'w11-reader-cancelled-public-booking-with-an-addon',
+  'w11-reader-cancelled-every-kind-with-all-three',
+  'w11-reader-cancelled-worst-basket',
+  'w11-reader-cancelled-gift-card-used-up',
+  'w11-reader-cancelled-member-credit-and-addon-credit',
+  'w11-reader-cancelled-pass-seat',
+  'w11-reader-cancelled-buy-new-pass-booking',
+  'w11-reader-cancelled-private-booking',
+  'w11-reader-cancelled-event',
+  'w11-reader-cancel-twice',
+  'w11-reader-finalise-before-the-tap-then-cancel',
+  'w11-reader-cancelled-then-finalised-late',
+]
+
+export const W11_SCENARIOS: readonly string[] = [
+  ...W11_KEPT,
+  ...W11_CANCELLED,
+  // The intent refused, or no Stripe customer could be made: T1 committed, the undo gave it all back.
+  'w11-reader-intent-refused',
+  'w11-reader-stripe-customer-not-made',
+  // Nothing left for the reader: refused inside T1, as createOrder refused it.
+  'w11-reader-nothing-to-charge',
+  // Outcomes a decision changes (OUTCOME_DIFFERS), each with its own test.
+  'w11-reader-amount-a-penny-over',
+  'w11-reader-intent-unclear',
+]
+
 /** Every scenario the order route takes. */
-export const ORDER_SCENARIOS: readonly string[] = [...W06_SCENARIOS, ...W07_SCENARIOS, ...W08_SCENARIOS, ...W09_SCENARIOS, ...W10_SCENARIOS]
+export const ORDER_SCENARIOS: readonly string[] = [...W06_SCENARIOS, ...W07_SCENARIOS, ...W08_SCENARIOS, ...W09_SCENARIOS, ...W10_SCENARIOS, ...W11_SCENARIOS]
 
 const Q4 = 'W03-decisions Q4'
 const Q5 = 'W03-decisions Q5'
@@ -520,6 +589,82 @@ export const W10_DIFFERENCES: Readonly<Record<string, readonly AllowedDifference
   ],
 }
 
+/** W11: the reader's intent carries the order's key, at its place among the Stripe calls. */
+const readerIntentKey = (index: number): AllowedDifference => ({
+  name: "The reader's intent carries the order's key, <orderId>:reader-intent",
+  decision: KEYS,
+  path: new RegExp(`^\\.stripeCalls\\[${index}\\]\\.idempotencyKey$`),
+})
+/** W11: a Stripe customer made for the reader carries the customer's key (W10's ensureStripeCustomer). */
+const STRIPE_CUSTOMER_KEY: AllowedDifference = {
+  name: "A Stripe customer is made under the customer's key, <customerId>:stripe-customer, so a retry can't make a second",
+  decision: 'Brief W10 (ensureStripeCustomer) and W03-plan 2.5 (keys)',
+  path: /^\.stripeCalls\[1\]\.idempotencyKey$/,
+}
+/** W11: the reader order's pending record is the old snapshot's superset (method, channel, Stripe customer, request id; W11a: the intent's mode). */
+const READER_RECORD: AllowedDifference = {
+  name: "The reader order's pending record is the old snapshot's superset: method, channel, Stripe customer, request id and the intent's Stripe mode (livemode, W11a) added; the stock ledger and the event booking found through the order's own rows, not ids kept in it",
+  decision: `${PENDING_RECORD}; W03-decisions "W11 review calls" (L1)`,
+  path: /^\.tables\.orders\.added\[0\]\.reader_payment\.(method|channel|stripe_customer_id|request_id|livemode|stock_adjustment_ids|event_booking_id)$/,
+}
+/** W11, Q9: a gift card beside the reader records split, where finaliseReaderOrder wrote reader. */
+const Q9_READER: AllowedDifference = {
+  name: 'A gift card beside the reader records split, where finaliseReaderOrder recorded reader',
+  decision: Q9,
+  path: /^\.tables\.orders\.added\[0\]\.payment_method$/,
+}
+/** W11: cancel that finds the payment taken finalises with the PaymentIntent it has just read, where cancelReaderOrder had finalise read it again. */
+const ONE_READ_FEWER: AllowedDifference = {
+  name: 'Cancel finding the payment taken finalises with the PaymentIntent it has just read: one read fewer',
+  decision: 'Brief W11 item 6 (finalise and cancel well inside Retool\'s 60 s)',
+  path: /^\.stripeCalls(\[[23]\]|$)/,
+}
+const READER_WITH_A_GIFT_CARD = new Set([
+  'w11-reader-with-a-gift-card',
+  'w11-reader-with-all-three',
+  'w11-reader-worst-basket',
+  'w11-reader-gift-card-uses-its-whole-balance',
+  'w11-reader-save-card-with-all-three',
+  'w11-reader-cancel-finds-it-paid-and-saves-the-card',
+])
+const NEW_STRIPE_CUSTOMER = new Set(['w11-reader-new-stripe-customer', 'w11-reader-new-stripe-customer-saves-the-card'])
+
+/** W11's named differences, by scenario. */
+export const W11_DIFFERENCES: Readonly<Record<string, readonly AllowedDifference[]>> = {
+  ...Object.fromEntries(
+    W11_KEPT.map((name) => [
+      name,
+      [
+        ...(NEW_STRIPE_CUSTOMER.has(name) ? [STRIPE_CUSTOMER_KEY, readerIntentKey(2)] : [readerIntentKey(0)]),
+        READER_RECORD,
+        ...(READER_WITH_A_GIFT_CARD.has(name) ? [Q9_READER] : []),
+        ...(name.startsWith('w11-reader-cancel-finds-it-paid') ? [ONE_READ_FEWER] : []),
+      ],
+    ])
+  ),
+  ...Object.fromEntries(W11_CANCELLED.map((name) => [name, [readerIntentKey(0)]])),
+  'w11-reader-intent-refused': [readerIntentKey(0), UNDO_AUDIT_ROWS],
+  'w11-reader-stripe-customer-not-made': [STRIPE_CUSTOMER_KEY, UNDO_AUDIT_ROWS],
+  // finaliseReaderOrder let a penny either way through; the Worker checks to the penny (W03-plan 2.7):
+  // the order stays pending, and finalise answers amount_mismatch. Its own test says exactly what.
+  'w11-reader-amount-a-penny-over': [
+    {
+      name: 'A payment a penny off is not finalised: checked to the exact penny',
+      decision: 'W03-plan 2.7 (the reader: finalise tightens from 1p tolerance to exact pence)',
+      path: /^\.results\[1\](\.|$)|^\.stripeCalls\[0\]\.idempotencyKey$|^\.tables\.(orders|event_bookings|customers)(\.|$)/,
+    },
+  ],
+  // createOrder took a 500 as a refusal and rolled back; the Worker sends it once more with the same key,
+  // then holds the order pending with its claims (its own test in order-replay.test.ts says exactly what).
+  'w11-reader-intent-unclear': [
+    {
+      name: "An unclear answer to the reader's intent is held pending, never undone, after one retry with the same key",
+      decision: "W03-plan 2.5 (reading Stripe's answers)",
+      path: /^\.results\[0\](\.|$)|^\.stripeCalls(\[|$)|^\.tables\.(orders|order_line_items|addon_order_lines|bookings|booking_guests|sessions|customers|store_credit_transactions|audit_log)$/,
+    },
+  ],
+}
+
 /**
  * Where a decision changes the figure staff confirm, the new side is sent the figure its screen would
  * show (from W14, the quote's): the same basket with the old figure is refused as a changed total.
@@ -530,7 +675,7 @@ export const NEW_SIDE_CONFIRMS: Readonly<Record<string, { toCollect: number; dec
 }
 
 /** Scenarios whose outcome itself differs by decision: the new side's answer is checked by its own test. */
-export const OUTCOME_DIFFERS: readonly string[] = ['w07-address-save-fails', 'w10-unclear-answer']
+export const OUTCOME_DIFFERS: readonly string[] = ['w07-address-save-fails', 'w10-unclear-answer', 'w11-reader-amount-a-penny-over', 'w11-reader-intent-unclear']
 
 /*
  * Named differences with no replay scenario (W07):
@@ -567,7 +712,12 @@ export const OUTCOME_DIFFERS: readonly string[] = ['w07-address-save-fails', 'w1
 
 /** What each scenario may differ by: a placed order has its audit rows, a refusal commits none. */
 export function orderDifferences(placed: boolean, name?: string): AllowedDifference[] {
-  return [...(placed ? [IDEMPOTENCY_ROW, AUDIT_ROWS] : [IDEMPOTENCY_ROW]), ...((name && W07_DIFFERENCES[name]) || []), ...((name && W10_DIFFERENCES[name]) || [])]
+  return [
+    ...(placed ? [IDEMPOTENCY_ROW, AUDIT_ROWS] : [IDEMPOTENCY_ROW]),
+    ...((name && W07_DIFFERENCES[name]) || []),
+    ...((name && W10_DIFFERENCES[name]) || []),
+    ...((name && W11_DIFFERENCES[name]) || []),
+  ]
 }
 
 /**
@@ -575,7 +725,8 @@ export function orderDifferences(placed: boolean, name?: string): AllowedDiffere
  * must answer that before anything is written.
  */
 export const NOT_BUILT_SCENARIOS: Readonly<Record<string, readonly string[]>> = {
-  'session-pass-on-the-reader': ['reader'],
+  // W11 built the reader: a membership on it is the membership's (W13).
+  'membership-on-the-reader': ['membership'],
   // W10 built the saved card: a membership on it is the membership's (W13).
   'membership-on-saved-card': ['membership'],
   'q3-buy-new-pass-with-a-membership': ['membership'],

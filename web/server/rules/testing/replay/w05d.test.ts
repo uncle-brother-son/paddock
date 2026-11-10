@@ -266,6 +266,9 @@ describe('W05d on the old functions', () => {
     'q3-reader-buy-new-pass-with-a-membership': 'W05a Q3 on the reader: the order rolled back, so the £90 has none. Tracked for go-live',
     'q5-buy-new-keeps-address-and-requests': FIRST_INVOICE,
     'q6-promo-on-buy-new-seats': FIRST_INVOICE,
+    // W11: the reader took £44 for a £45 order, so finalise refuses it (amount_mismatch) and the order is
+    // left pending for a person, as finaliseReaderOrder did (W03-plan 2.5, "amounts don't match").
+    'w11-reader-amount-mismatch-a-pound-short': 'W03-plan 2.5: a payment that does not match its order is left for a person, not finalised',
   }
 
   // Seat money only: add-ons have their own lines and their own refunds.
@@ -432,5 +435,6 @@ describe('W05d on the old functions', () => {
     )
     expect(stale).toEqual([])
     expect(bookingsChecked).toBeGreaterThan(100)
-  }, 180_000)
+    // W11 added 45 reader scenarios to this sweep (see w05c.test.ts's).
+  }, 300_000)
 })

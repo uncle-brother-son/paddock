@@ -370,8 +370,10 @@ describe('before anything is touched', () => {
 
   it('NOT_BUILT: only the staff member is looked up and the answer kept against the key', async () => {
     await freshSeed()
-    // W10 built the saved card, so the reader is what isn't built here.
-    const { result, statements } = await counting(() => postOrder(orderInput({ customerId: ID.customer, booking: paidSeat(), promoCode: 'ALLTEN', payment: { method: 'reader' } })))
+    // W10 built the saved card and W11 the reader, so a membership is what isn't built here.
+    const { result, statements } = await counting(() =>
+      postOrder(orderInput({ customerId: ID.customer, booking: paidSeat(), promoCode: 'ALLTEN', membershipPlanId: ID.plan, membershipBillingFrequency: 'monthly', payment: { method: 'reader' } }))
+    )
     expect(result.status).toBe(501)
     expect(statements).toEqual(['SELECT id,', 'INSERT INTO', 'UPDATE api_idempotency'])
   })
@@ -562,8 +564,9 @@ describe('the dry run', () => {
 
   it('answers NOT_BUILT before it opens a transaction', async () => {
     const answers: Array<Awaited<ReturnType<typeof dryRun>>> = []
-    const recording = await replay(environment, dryScenario({ customerId: ID.customer, booking: paidSeat(), payment: { method: 'reader' } }, answers), oldSide)
-    expect(answers[0]).toMatchObject({ status: 501, body: { error: { code: 'NOT_BUILT', details: { notBuilt: ['reader'] } } } })
+    // W11 built the reader: a membership on it is what isn't built.
+    const recording = await replay(environment, dryScenario({ customerId: ID.customer, booking: paidSeat(), membershipPlanId: ID.plan, membershipBillingFrequency: 'monthly', payment: { method: 'reader', readerSaveCard: true } }, answers), oldSide)
+    expect(answers[0]).toMatchObject({ status: 501, body: { error: { code: 'NOT_BUILT', details: { notBuilt: ['membership'] } } } })
     expect(recording.tables).toEqual({})
   })
 })

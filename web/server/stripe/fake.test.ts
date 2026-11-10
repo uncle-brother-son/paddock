@@ -1,5 +1,6 @@
 import Stripe from 'stripe'
 import { beforeEach, describe, expect, it } from 'vitest'
+import { createStripeClient, keyLivemode } from './client'
 import { FakeStripe, fakeStripeErrors } from './fake'
 import { readStripeFailure } from './outcome'
 
@@ -253,5 +254,86 @@ describe('readStripeFailure', () => {
       stripe.completeReaderPayment(plain.id)
       expect((await stripe.paymentIntents.retrieve(plain.id)).payment_method).toBeNull()
     })
+  })
+})
+
+describe('W11: the reader and card saving', () => {
+  const tap = { amount: 2400, currency: 'gbp', customer: 'cus_1', payment_method_types: ['card_present'], setup_future_usage: 'off_session' as const }
+
+  it('a reader intent waits for the tap with no money taken; a tap can take another figure', async () => {
+    const intent = await stripe.paymentIntents.create(tap, { idempotencyKey: 'order-1:reader-intent' })
+    expect(intent).toMatchObject({ status: 'requires_payment_method', amount: 2400, amount_received: 0, client_secret: `${intent.id}_secret` })
+    stripe.completeReaderPayment(intent.id, { amount: 2401 })
+    expect(await stripe.paymentIntents.retrieve(intent.id)).toMatchObject({ status: 'succeeded', amount: 2401, amount_received: 2401 })
+  })
+
+  it("the simulated reader leaves a card_present card but never a reusable one; a physical reader's tap names one", async () => {
+    const simulated = await stripe.paymentIntents.create(tap)
+    stripe.completeReaderPayment(simulated.id, { simulatedReader: true })
+    const read = await stripe.paymentIntents.retrieve(simulated.id, { expand: ['latest_charge'] })
+    expect(read.payment_method).toBe(`${simulated.id}_card_present`)
+    expect((read.latest_charge as unknown as { payment_method_details: { card_present: unknown } }).payment_method_details.card_present).toEqual({ last4: '4242', brand: 'visa', generated_card: null })
+    const physical = await stripe.paymentIntents.create(tap)
+    stripe.completeReaderPayment(physical.id, { generatedCard: 'pm_generated' })
+    expect(await stripe.paymentMethods.retrieve('pm_generated')).toMatchObject({ id: 'pm_generated', card: { last4: '4242', brand: 'visa' } })
+  })
+
+  it("a card-save SetupIntent: off-session card_present, a SetupAttempt whose card_present carries only the generated card, as Stripe's", async () => {
+    const setup = await stripe.setupIntents.create({ customer: 'cus_1', payment_method_types: ['card_present'], usage: 'off_session' }, { idempotencyKey: 'cus:setup' })
+    expect(setup).toMatchObject({ status: 'requires_payment_method', usage: 'off_session', payment_method_types: ['card_present'], client_secret: `${setup.id}_secret` })
+    expect(await stripe.setupIntents.create({ customer: 'cus_1', payment_method_types: ['card_present'], usage: 'off_session' }, { idempotencyKey: 'cus:setup' })).toMatchObject({ id: setup.id })
+    stripe.completeReaderSetup(setup.id, { generatedCard: 'pm_saved' })
+    const read = await stripe.setupIntents.retrieve(setup.id, { expand: ['latest_attempt'] })
+    expect(read.payment_method).toBe(`${setup.id}_card_present`)
+    expect((read.latest_attempt as unknown as { payment_method_details: { card_present: unknown } }).payment_method_details.card_present).toEqual({ generated_card: 'pm_saved' })
+    await expect(stripe.setupIntents.retrieve('seti_none')).rejects.toBeInstanceOf(Stripe.errors.StripeInvalidRequestError)
+    await expect(stripe.paymentMethods.retrieve('pm_none')).rejects.toMatchObject({ code: 'resource_missing' })
+  })
+
+  it('a connection token for a location', async () => {
+    expect(await stripe.terminal.connectionTokens.create({ location: 'tml_1' })).toMatchObject({ object: 'terminal.connection_token', secret: expect.stringMatching(/^pst_test_/), location: 'tml_1' })
+  })
+
+  it('the client interface the routes use is what the SDK offers: the same method names, so the real client fits', () => {
+    const sdk = new Stripe('sk_test_shape_only', { httpClient: Stripe.createFetchHttpClient() })
+    for (const [group, method] of [
+      ['setupIntents', 'create'],
+      ['setupIntents', 'retrieve'],
+      ['paymentMethods', 'retrieve'],
+      ['paymentIntents', 'cancel'],
+    ] as const) {
+      expect(typeof (sdk[group] as unknown as Record<string, unknown>)[method], `${group}.${method}`).toBe('function')
+    }
+    expect(typeof sdk.terminal.connectionTokens.create).toBe('function')
+  })
+})
+
+// W11a (review L1): the mode of the key in use, and an intent made in the other mode answered as missing.
+describe("W11a: the key's mode", () => {
+  it('is read from the key: live or test, secret or restricted; null when the key does not say', () => {
+    expect(keyLivemode('sk_live_abc')).toBe(true)
+    expect(keyLivemode('rk_live_abc')).toBe(true)
+    expect(keyLivemode('sk_test_abc')).toBe(false)
+    expect(keyLivemode('rk_test_abc')).toBe(false)
+    expect(keyLivemode('pk_live_abc')).toBe(null)
+    expect(keyLivemode('sk_abc')).toBe(null)
+    expect(keyLivemode('live')).toBe(null)
+  })
+
+  it("the Worker's client carries its key's mode (making a client sends nothing)", () => {
+    expect(createStripeClient('sk_test_mode_never_sent').keyLivemode).toBe(false)
+    expect(createStripeClient('rk_live_mode_never_sent').keyLivemode).toBe(true)
+  })
+
+  it('the fake stamps each intent with the mode of its key, and answers an intent of the other mode as missing, as Stripe does', async () => {
+    const fake = new FakeStripe()
+    const intent = await fake.paymentIntents.create({ amount: 100, currency: 'gbp' })
+    expect(intent.livemode).toBe(false)
+    fake.keyLivemode = true
+    await expect(fake.paymentIntents.retrieve(intent.id)).rejects.toMatchObject({ code: 'resource_missing' })
+    await expect(fake.paymentIntents.cancel(intent.id)).rejects.toMatchObject({ code: 'resource_missing' })
+    expect((await fake.paymentIntents.create({ amount: 100, currency: 'gbp' })).livemode).toBe(true)
+    fake.keyLivemode = false
+    expect((await fake.paymentIntents.retrieve(intent.id)).status).toBe('requires_payment_method')
   })
 })

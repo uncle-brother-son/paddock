@@ -4,6 +4,7 @@
 import 'server-only'
 import { audit } from '@/server/audit'
 import { inOpenTransaction, isDeadlock, type Db, type Tx } from '@/server/db'
+import { oldRollbackStarted } from './finalise-order'
 import { lockForOrder } from './locks'
 import type { PendingSnapshot } from './pending-order'
 
@@ -12,8 +13,12 @@ export type UndoOutcome =
   | { undone: true }
   /** Nothing to do: the order isn't there (undone already, or never written). Safe to run twice. */
   | { undone: false; reason: 'gone' }
-  /** Refused, nothing changed: a paid order is a real sale, and anything else isn't this undo's to touch. */
-  | { undone: false; reason: 'paid' | 'not_pending' }
+  /**
+   * Refused, nothing changed: a paid order is a real sale, and anything else isn't this undo's to touch.
+   * `rollback_started` (W11): the old code's rollback has started on it and may have given things back
+   * already, so giving back again here would give twice; the old code finishes it.
+   */
+  | { undone: false; reason: 'paid' | 'not_pending' | 'rollback_started' }
 
 export interface UndoOptions {
   actor: { type: 'staff' | 'customer' | 'system'; id: string | null }
@@ -187,6 +192,7 @@ async function undoInTransaction(tx: Tx, orderId: string, options: UndoOptions):
   if (!order) return { undone: false, reason: 'gone' }
   if (order.payment_status === 'paid') return { undone: false, reason: 'paid' }
   if (order.payment_status !== 'pending') return { undone: false, reason: 'not_pending' }
+  if (oldRollbackStarted(order.reader_payment)) return { undone: false, reason: 'rollback_started' }
 
   // 2. What it holds, read now the order is locked.
   const parts = (await tx.query<OrderParts>(PARTS_SQL, [orderId]))[0] as OrderParts

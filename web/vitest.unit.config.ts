@@ -17,6 +17,9 @@ export default defineConfig({
     name: 'unit',
     environment: 'node',
     include: ['app/**/*.test.ts', 'lib/**/*.test.ts', 'server/**/*.test.ts', 'contracts/**/*.test.ts'],
+    // Brief W11 (W10a O1): any request to a Stripe host is refused before it is sent, and the test that
+    // made it fails ("a test reached real Stripe"). Proof: server/rules/testing/no-real-stripe.test.ts.
+    setupFiles: ['./server/rules/testing/no-real-stripe.ts'],
     // Each rule test file starts its own PGlite, which compiles a 9 MB WebAssembly Postgres. That
     // is quick alone but passes the 10-second default once the CPU is busy: four suites at once
     // failed every time, and pass in 20 to 30 seconds with this limit. Ten at once still fail.

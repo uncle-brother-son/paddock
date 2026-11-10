@@ -2790,6 +2790,7 @@ export const scenarios: Scenario[] = [
   ...w08Scenarios(),
   ...w09Scenarios(),
   ...w10Scenarios(),
+  ...w11Scenarios(),
 ]
 
 // --- W06: the Worker's order core. Every createOrder and createBooking reason in W06's scope that had
@@ -3530,5 +3531,164 @@ function w10Scenarios(): Scenario[] {
     // --- An unclear answer: a 500, which Stripe keeps against the key. createOrder rolled it back; the
     // Worker holds the order pending (W03-plan 2.5), a named difference with its own test.
     order('w10-unclear-answer', { booking: paidSeat(), payment: { ...card, ...credit(10) } }, atTheCharge((stripe) => stripe.failNext('paymentIntents.create', { kind: 'error', error: fakeStripeErrors.server() }))),
+  ]
+}
+
+// --- W11: the reader. Every kind T1 takes, paid on the reader, alone and with a gift card, store credit
+// and a promo code; the card saved (a reusable card, and the simulated reader's, bug 7) and not; the tap
+// declined and the order cancelled (bugs 8 and 9); cancel finding the payment taken; the amount off; the
+// intent refused or unclear; finalise and cancel twice. Each runs through the old createOrder,
+// finaliseReaderOrder and cancelReaderOrder (and their legacy routes) with the fake Stripe for its golden
+// file, and order-replay.test.ts runs it through the new routes too.
+
+/** What the customer does at the reader. */
+type Tap =
+  /** No tap that took money: declined, cancelled on the reader, or walked away. */
+  | 'none'
+  /** Paid, with no card saved. */
+  | 'paid'
+  /** Paid, and Stripe made a reusable card (a physical reader). */
+  | 'paid-reusable'
+  /** Paid on the simulated reader, which never makes a reusable card (W03-decisions Q16). */
+  | 'paid-simulated'
+  /** Paid, but the reader took this many pence. */
+  | { pence: number }
+
+interface ReaderRun {
+  tap?: Tap
+  /** What the screen calls afterwards, in order. By default: finalise after a tap, cancel after none. */
+  then?: Array<'finalise' | 'cancel'>
+  prepare?(db: Db, stripe: FakeStripe): Promise<void> | void
+}
+
+function onTheReader(name: string, params: Record<string, unknown>, { tap = 'paid', then, prepare }: ReaderRun = {}): Scenario {
+  return {
+    name,
+    async seed(db, stripe) {
+      await seed(db, stripe)
+      await prepare?.(db, stripe)
+    },
+    async run({ call, stripe }) {
+      const placed = (await call('createOrder', { customerId: ID.customer, ...params })) as { orderId?: string; pendingReaderPayment?: { paymentIntentId: string } }
+      const intent = placed.pendingReaderPayment?.paymentIntentId
+      if (!placed.orderId || !intent) return
+      if (tap === 'paid') stripe.completeReaderPayment(intent)
+      else if (tap === 'paid-reusable') stripe.completeReaderPayment(intent, { generatedCard: 'pm_reader_saved' })
+      else if (tap === 'paid-simulated') stripe.completeReaderPayment(intent, { simulatedReader: true })
+      else if (tap !== 'none') stripe.completeReaderPayment(intent, { amount: tap.pence })
+      for (const step of then ?? [tap === 'none' ? 'cancel' : 'finalise']) {
+        await call(step === 'finalise' ? 'finaliseReaderOrder' : 'cancelReaderOrder', { orderId: placed.orderId })
+      }
+    },
+  }
+}
+
+function w11Scenarios(): Scenario[] {
+  const reader = { method: 'reader' }
+  const saving = { method: 'reader', readerSaveCard: true }
+  const beaSeat: Guest = { name: 'Bea Guest', email: 'bea@example.com' }
+  const samAttending = { ...sam, isAccountHolder: true }
+  const alexGuest = { ...alex, isAccountHolder: false }
+  const beaGuest = { ...beaSeat, isAccountHolder: false }
+  const robe = { addonId: ID.robe, quantity: 1, unitPrice: 8, systemUnitPrice: 8 }
+  const gift = (amount: number) => ({ giftCard: { giftCardId: ID.giftCard, amount } })
+  const credit = (amount: number) => ({ storeCredit: { amount } })
+  const event = (attendees: Array<Record<string, unknown>>) => ({
+    eventId: ID.event,
+    accountHolderAttending: true,
+    ...(attendees.length > 1 ? { guestsOver18Confirmed: true } : {}),
+    attendees,
+  })
+  const withTowel = { booking: { ...paidSeat([sam, alex]), addons: [{ ...towel, redemptionSource: 'paid' }] } }
+  const everyKind = {
+    ...withTowel,
+    standaloneAddons: [towel],
+    products: [soap],
+    sessionPassTypeId: ID.passType,
+    giftCard: { giftCardPresetId: ID.giftCardPreset, fulfillmentMethod: 'digital' },
+    event: event([samAttending, alexGuest]),
+  }
+  const worst = {
+    ...withTowel,
+    products: [candle],
+    giftCard: { giftCardTypeId: ID.giftCardType, amount: 10, fulfillmentMethod: 'shipping' },
+    event: event([samAttending, alexGuest, beaGuest]),
+    ...shipped,
+    saveShippingAddressToCustomer: true,
+  }
+  const asMo = { customerId: ID.member }
+  const moCreditAndAddonCredit = {
+    ...asMo,
+    booking: { ...paidSeat([mo, alex]), ...memberCredit, addons: [{ ...towel, redemptionSource: 'membership_credit', membershipId: ID.membership }] },
+  }
+  const noStripeCustomer = async (db: Db) => {
+    await db.query('UPDATE customers SET stripe_customer_id = NULL WHERE id = $1', [ID.customer])
+  }
+  const atTheIntent = (error: Error) => (_db: Db, stripe: FakeStripe) => stripe.failNext('paymentIntents.create', { kind: 'error', error })
+  return [
+    // --- Every kind T1 takes, tapped and finalised
+    onTheReader('w11-reader-public-booking-with-an-addon', { ...withTowel, payment: reader }),
+    onTheReader('w11-reader-private-booking', { booking: { ...paidSeat([sam, alex]), sessionId: ID.privateSession }, payment: reader }),
+    onTheReader('w11-reader-member-credit-seat-paid-guest-and-addon-credit', { ...moCreditAndAddonCredit, standaloneAddons: [robe], payment: reader }),
+    onTheReader('w11-reader-pass-seat-and-a-paid-guest', { booking: { ...paidSeat([sam, alex]), ...ownedPass }, payment: reader }),
+    onTheReader('w11-reader-standalone-addons', { standaloneAddons: [towel, { ...robe, unitPrice: 10, systemUnitPrice: 10 }], payment: reader }),
+    onTheReader('w11-reader-products-picked-up', { products: [soap], payment: reader }),
+    onTheReader('w11-reader-shipped-product-address-saved', { products: [candle], ...shipped, saveShippingAddressToCustomer: true, payment: reader }),
+    onTheReader('w11-reader-pass-alone', { sessionPassTypeId: ID.passType, payment: reader }),
+    onTheReader('w11-reader-buy-new-pass-booking', { booking: { ...paidSeat([sam, alex]), redemptionSource: 'buy_new_session_pass' }, sessionPassTypeId: ID.passType, payment: reader }),
+    onTheReader('w11-reader-gift-card-digital', { giftCard: { giftCardPresetId: ID.giftCardPreset, fulfillmentMethod: 'digital', recipientName: 'Ali Friend' }, payment: reader }),
+    onTheReader('w11-reader-gift-card-shipped', { giftCard: { giftCardTypeId: ID.giftCardType, amount: 25, fulfillmentMethod: 'shipping' }, ...shipped, payment: reader }),
+    onTheReader('w11-reader-event-with-guests', { event: event([samAttending, alexGuest, beaGuest]), payment: reader }),
+    onTheReader('w11-reader-every-kind', { ...everyKind, payment: reader }),
+    // --- With a gift card, store credit and a promo code
+    onTheReader('w11-reader-with-a-gift-card', { ...everyKind, payment: { ...reader, ...gift(20) } }),
+    onTheReader('w11-reader-with-store-credit', { ...everyKind, payment: { ...reader, ...credit(10) } }),
+    onTheReader('w11-reader-with-a-promo-code', { ...everyKind, promoCode: PROMO.percent, payment: reader }),
+    onTheReader('w11-reader-with-all-three', { ...everyKind, promoCode: PROMO.fixed, payment: { ...reader, ...gift(20), ...credit(10) } }),
+    onTheReader('w11-reader-worst-basket', { ...worst, promoCode: PROMO.fixed, payment: { ...reader, ...gift(20), ...credit(10) } }),
+    // £48 of soap: the gift card's whole £40, then £8 on the reader.
+    onTheReader('w11-reader-gift-card-uses-its-whole-balance', { products: [{ ...soap, quantity: 4 }], payment: { ...reader, ...gift(40) } }),
+    // --- The card saved, or not
+    onTheReader('w11-reader-save-card-reusable', { ...withTowel, payment: saving }, { tap: 'paid-reusable' }),
+    // Bug 7: the simulated reader never makes a reusable card. Paid all the same, with the warning.
+    onTheReader('w11-reader-save-card-simulated-reader', { ...withTowel, payment: saving }, { tap: 'paid-simulated' }),
+    onTheReader('w11-reader-save-card-with-all-three', { ...everyKind, promoCode: PROMO.fixed, payment: { ...saving, ...gift(20), ...credit(10) } }, { tap: 'paid-reusable' }),
+    // A customer with no Stripe customer yet: found or made first (ensureStripeCustomer), then the intent.
+    onTheReader('w11-reader-new-stripe-customer', { ...withTowel, payment: reader }, { prepare: noStripeCustomer }),
+    onTheReader('w11-reader-new-stripe-customer-saves-the-card', { products: [soap], payment: saving }, { tap: 'paid-reusable', prepare: noStripeCustomer }),
+    // --- No tap: cancelled, everything given back (bugs 8 and 9)
+    onTheReader('w11-reader-cancelled-public-booking-with-an-addon', { ...withTowel, payment: reader }, { tap: 'none' }),
+    onTheReader('w11-reader-cancelled-every-kind-with-all-three', { ...everyKind, promoCode: PROMO.fixed, payment: { ...reader, ...gift(20), ...credit(10) } }, { tap: 'none' }),
+    onTheReader('w11-reader-cancelled-worst-basket', { ...worst, promoCode: PROMO.fixed, payment: { ...reader, ...gift(20), ...credit(10) } }, { tap: 'none' }),
+    onTheReader('w11-reader-cancelled-gift-card-used-up', { products: [{ ...soap, quantity: 4 }], payment: { ...reader, ...gift(40) } }, { tap: 'none' }),
+    onTheReader('w11-reader-cancelled-member-credit-and-addon-credit', { ...moCreditAndAddonCredit, payment: reader }, { tap: 'none' }),
+    onTheReader('w11-reader-cancelled-pass-seat', { booking: { ...paidSeat([sam, alex]), ...ownedPass }, payment: reader }, { tap: 'none' }),
+    onTheReader('w11-reader-cancelled-buy-new-pass-booking', { booking: { ...paidSeat([sam, alex]), redemptionSource: 'buy_new_session_pass' }, sessionPassTypeId: ID.passType, payment: reader }, { tap: 'none' }),
+    onTheReader('w11-reader-cancelled-private-booking', { booking: { ...paidSeat([sam, alex]), sessionId: ID.privateSession }, payment: reader }, { tap: 'none' }),
+    onTheReader('w11-reader-cancelled-event', { event: event([samAttending, alexGuest]), payment: { ...reader, ...credit(10) } }, { tap: 'none' }),
+    // --- Cancel finds the payment taken: finalised instead (alreadySucceeded)
+    onTheReader('w11-reader-cancel-finds-it-paid', { ...withTowel, payment: reader }, { tap: 'paid', then: ['cancel'] }),
+    onTheReader('w11-reader-cancel-finds-it-paid-and-saves-the-card', { ...withTowel, payment: { ...saving, ...gift(10) } }, { tap: 'paid-reusable', then: ['cancel'] }),
+    // --- The amount the reader took isn't the order's: £1 short (both refuse), and 1p over (the old
+    // check let a penny through; the Worker checks to the penny, W03-plan 2.7)
+    onTheReader('w11-reader-amount-mismatch-a-pound-short', { ...withTowel, payment: reader }, { tap: { pence: 4400 } }),
+    onTheReader('w11-reader-amount-a-penny-over', { ...withTowel, payment: reader }, { tap: { pence: 4501 } }),
+    // --- Twice, and in the wrong order
+    onTheReader('w11-reader-finalise-twice', { ...withTowel, payment: reader }, { then: ['finalise', 'finalise'] }),
+    onTheReader('w11-reader-cancel-twice', { ...withTowel, payment: { ...reader, ...gift(10) } }, { tap: 'none', then: ['cancel', 'cancel'] }),
+    onTheReader('w11-reader-finalise-before-the-tap-then-cancel', { ...withTowel, payment: reader }, { tap: 'none', then: ['finalise', 'cancel'] }),
+    onTheReader('w11-reader-cancelled-then-finalised-late', { ...withTowel, payment: reader }, { tap: 'none', then: ['cancel', 'finalise'] }),
+    // --- The intent: refused, unclear, nothing to take, or no Stripe customer could be made
+    onTheReader('w11-reader-intent-refused', { ...withTowel, payment: { ...reader, ...credit(10) } }, { prepare: atTheIntent(fakeStripeErrors.invalid('parameter_invalid_integer', 'Invalid integer: 0')) }),
+    // A 500, which Stripe keeps against the key: createOrder rolled back; the Worker holds the order
+    // pending (W03-plan 2.5), a named difference with its own test.
+    onTheReader('w11-reader-intent-unclear', { ...withTowel, payment: { ...reader, ...credit(10) } }, { prepare: atTheIntent(fakeStripeErrors.server()) }),
+    onTheReader('w11-reader-nothing-to-charge', { products: [soap], payment: { ...reader, ...gift(24) } }),
+    onTheReader('w11-reader-stripe-customer-not-made', { ...withTowel, payment: reader }, {
+      prepare: async (db, stripe) => {
+        await noStripeCustomer(db)
+        stripe.failNext('customers.create', { kind: 'error', error: fakeStripeErrors.invalid('email_invalid', 'Invalid email address: sam@example') })
+      },
+    }),
   ]
 }

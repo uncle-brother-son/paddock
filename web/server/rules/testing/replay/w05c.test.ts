@@ -264,5 +264,6 @@ describe('W05c on the old functions', () => {
       await replay(environment, watched, oldSide)
     }
     expect(inside).toEqual([])
-  }, 120_000)
+    // W11 added 45 reader scenarios to this sweep: 66 s alone, over 120 s under a full run's load.
+  }, 300_000)
 })

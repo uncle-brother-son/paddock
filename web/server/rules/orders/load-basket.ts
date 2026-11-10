@@ -26,9 +26,9 @@ export interface BasketCustomerFacts {
   stripe_customer_id: string | null
   saved_payment_method_id: string | null
   /**
-   * An order of theirs still pending: a Worker card order (`reader_payment.method` 'card') however old,
-   * until T2 or the undo settles it; any other pending order for 15 minutes (W03-decisions Q10, as
-   * changed by "W10 review calls").
+   * An order of theirs still pending: a Worker card or reader order (`reader_payment.method` 'card' or
+   * 'reader', W11) however old, until T2 or the undo settles it; any other pending order for 15 minutes
+   * (W03-decisions Q10, as changed by "W10 review calls", which W11 applies to the reader).
    */
   has_order_processing: boolean
 }
@@ -196,7 +196,7 @@ SELECT
             'has_order_processing', EXISTS (
               SELECT 1 FROM orders o
               WHERE o.customer_id = c.id AND o.payment_status = 'pending'
-                AND (o.reader_payment->>'method' = 'card' OR o.created_at > now() - interval '${PROCESSING_MINUTES} minutes')))
+                AND (o.reader_payment->>'method' IN ('card', 'reader') OR o.created_at > now() - interval '${PROCESSING_MINUTES} minutes')))
    FROM customers c WHERE c.id = $1::uuid) AS customer,
 
   (SELECT jsonb_build_object(

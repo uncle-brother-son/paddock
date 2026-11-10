@@ -1,0 +1,138 @@
+{
+  "scenario": "w11-reader-standalone-addons",
+  "results": [
+    {
+      "success": true,
+      "orderId": "orders#1",
+      "cardCharged": false,
+      "paymentMethodUsed": "reader",
+      "pendingReaderPayment": {
+        "orderId": "orders#1",
+        "paymentIntentId": "pi_fake_0001",
+        "clientSecret": "pi_fake_0001_secret",
+        "amount": 15
+      }
+    },
+    {
+      "finalised": true,
+      "orderId": "orders#1",
+      "paymentIntentId": "pi_fake_0001"
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "paymentIntents.create",
+      "params": {
+        "amount": 1500,
+        "currency": "gbp",
+        "customer": "cus_seed",
+        "payment_method_types": [
+          "card_present"
+        ],
+        "metadata": {
+          "supabase_customer_id": "10000000-0000-4000-8000-000000000005",
+          "order_id": "orders#1",
+          "flow": "checkout"
+        },
+        "description": "Paddock order orders#1"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "paymentIntents.retrieve",
+      "params": {
+        "id": "pi_fake_0001"
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {
+    "order_line_items": {
+      "added": [
+        {
+          "id": "order_line_items#1",
+          "order_id": "orders#1",
+          "booking_id": null,
+          "product_variant_id": null,
+          "membership_plan_id": null,
+          "session_pass_type_id": null,
+          "gift_card_id": null,
+          "item_type": "addon",
+          "quantity": 1,
+          "unit_price": "5.00",
+          "line_total": "5.00",
+          "created_at": "<set>",
+          "addon_id": "10000000-0000-4000-8000-000000000006",
+          "refunded_at": null,
+          "refund_method": null,
+          "restocked": null,
+          "fulfillment_status": null,
+          "card_refunded_amount": "0.00",
+          "system_unit_price": "5.00",
+          "price_override_reason": null,
+          "discount_amount": "0.00",
+          "event_booking_id": null
+        },
+        {
+          "id": "order_line_items#2",
+          "order_id": "orders#1",
+          "booking_id": null,
+          "product_variant_id": null,
+          "membership_plan_id": null,
+          "session_pass_type_id": null,
+          "gift_card_id": null,
+          "item_type": "addon",
+          "quantity": 1,
+          "unit_price": "10.00",
+          "line_total": "10.00",
+          "created_at": "<set>",
+          "addon_id": "10000000-0000-4000-8000-000000000011",
+          "refunded_at": null,
+          "refund_method": null,
+          "restocked": null,
+          "fulfillment_status": null,
+          "card_refunded_amount": "0.00",
+          "system_unit_price": "10.00",
+          "price_override_reason": null,
+          "discount_amount": "0.00",
+          "event_booking_id": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "orders": {
+      "added": [
+        {
+          "id": "orders#1",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "order_total": "15.00",
+          "payment_status": "paid",
+          "stripe_payment_intent_id": "pi_fake_0001",
+          "promo_code": null,
+          "discount_amount": "0.00",
+          "shipping_address": null,
+          "shipping_status": null,
+          "tracking_number": null,
+          "order_source": "staff_created",
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "payment_method": "reader",
+          "reader_payment": {
+            "flow": "checkout",
+            "save_card": false,
+            "created_at": "<time>",
+            "expected_amount": 15,
+            "payment_intent_id": "pi_fake_0001",
+            "stock_adjustment_ids": [],
+            "save_address_to_customer": false
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

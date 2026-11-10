@@ -1,0 +1,33 @@
+{
+  "scenario": "w11-reader-stripe-customer-not-made",
+  "results": [
+    {
+      "success": false,
+      "stage": "payment",
+      "reason": "reader_intent_failed",
+      "message": "Failed to create Stripe customer: Invalid email address: sam@example"
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "customers.search",
+      "params": {
+        "query": "metadata['supabase_customer_id']:'10000000-0000-4000-8000-000000000005'",
+        "limit": 1
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "customers.create",
+      "params": {
+        "email": "sam@example.com",
+        "name": "Sam Test",
+        "metadata": {
+          "supabase_customer_id": "10000000-0000-4000-8000-000000000005"
+        }
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {}
+}

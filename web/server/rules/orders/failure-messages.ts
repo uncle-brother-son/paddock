@@ -138,6 +138,38 @@ export const PAID_NOT_FINISHED_MESSAGE =
 export const CHARGED_WITHOUT_ORDER_MESSAGE =
   "The card was charged, but the order had already been cancelled, so the charge needs refunding. Don't take payment again: check the Orders page."
 
+/*
+ * W11: words for the reader that the old code had none for (the Worker holds or refuses where the old
+ * code refunded or rolled back). Each travels as its answer's own message.
+ */
+
+/**
+ * PAYMENT_UNCONFIRMED on the reader: Stripe gave no clear answer when asked for the reader's intent (or
+ * it couldn't be written onto the order). No secret reached the screen, so no tap can have taken money.
+ */
+export const READER_INTENT_UNCONFIRMED_MESSAGE =
+  "The card reader payment couldn't be started: Stripe gave no clear answer. Nothing has been taken, but the order is on hold while it's checked: don't take payment for it again. Check the Orders page in a few minutes."
+
+/** Finalise: the tap took the money, but the order couldn't be marked paid (a database fault). Held, never refunded (W6-3). */
+export const READER_PAID_NOT_FINISHED_MESSAGE =
+  "The reader payment went through, but the order couldn't be finished. It's on hold: don't take payment again. Check the Orders page in a few minutes."
+
+/** Finalise: the tap took the money for an order that had already been undone. */
+export const READER_CHARGED_WITHOUT_ORDER_MESSAGE =
+  "The reader took the payment, but the order had already been cancelled, so the payment needs refunding. Don't take payment again: check the Orders page."
+
+/** Finalise: the intent belongs to another Stripe customer (the old code didn't check; W03-plan 2.7). */
+export const readerCustomerMismatchMessage = (paymentIntentId: string): string =>
+  `This PaymentIntent was made for a different Stripe customer — do NOT finalise automatically. Check the PaymentIntent (${paymentIntentId}) in Stripe before doing anything.`
+
+/** Finalise or cancel: an order the old checkout started (no `method` in its record). */
+export const OLD_READER_ORDER_MESSAGE =
+  'This card-reader order was started by the old checkout, so the old checkout must finish or cancel it.'
+
+/** Cancel: the old rollback has started on it, and may have given things back already. */
+export const OLD_ROLLBACK_STARTED_MESSAGE =
+  "This order is already being rolled back by the old checkout, so it can't be cancelled here. Press Resolve now on the Orders page to finish it."
+
 /** The words for the Herd gate, which name the waiting period from membership_settings. */
 export function herdWaitMessage(addonCreditWaitMonths: number): string {
   return `That membership is not a Herd member yet — add-on credits unlock for Herd members (monthly members after ${addonCreditWaitMonths} month${addonCreditWaitMonths === 1 ? '' : 's'}, yearly members straight away).`

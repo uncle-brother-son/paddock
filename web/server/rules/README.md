@@ -113,6 +113,56 @@ createOrder shadow calls it before the old order runs and compares the two (`cre
 and records how many others it dropped (W07a), but still: for a slice that extends `OrderRows` or
 anything the shadow compares, publish the staff app first, then deploy the Worker.
 
+## The reader: T1, the intent, finalise and cancel (W11)
+
+A reader order runs the same pipeline, with the screen collecting between the intent and T2:
+
+1. **T1** (`place-order.ts`) writes the order `pending` with its pending record (`ReaderSnapshot`,
+   `method 'reader'`), its event booking `pending`, every claim held, and **no** payment method yet
+   (createOrder's reader branch left it unrecorded until finalise; T2 records Q9's). It commits **before**
+   the intent (bug 14). Q10 covers the reader as it covers the card: a held Worker card or reader order
+   counts however old, any other pending order for 15 minutes, and only when the reader has something to
+   take. Nothing left for the reader is refused in T1 with createOrder's `reader_nothing_to_charge`.
+2. **The intent** (`reader-intent.ts`): the Stripe customer found or made (`ensureStripeCustomer`, its
+   first real user, under `<customerId>:stripe-customer`), then one `paymentIntents.create` with the
+   legacy route's parameters (`card_present`, `setup_future_usage` only when the customer agreed to save
+   the card, `supabase_customer_id`, `order_id` and `flow` in the metadata), under `<orderId>:reader-intent`,
+   for the server's figure. A definite failure, or no Stripe customer, means no intent: the one undo, and
+   the old words (`reader_intent_failed`, PAYMENT_FAILED). Anything else is sent once more with the same
+   key; still unclear: PAYMENT_UNCONFIRMED, held, never undone. The intent's id, its Stripe customer and its
+   Stripe mode (`livemode`, W11a) are then written onto the pending record (in their own transaction, so
+   Postgres bounds the write) as the old reader's own `payment_intent_id`, on purpose, so the old
+   finalise, cancel, sweep and stuck list can still finish a Worker reader order (switching back,
+   W03-plan 3.2). The order answers `pending_reader` with `pendingReaderPayment`. Creating an intent
+   takes no money: only the tap, against the secret the screen is given, can.
+3. **Finalise** (`reader-order.ts`, `POST /api/v1/staff/orders/:orderId/finalise`): reads the order and
+   the PaymentIntent, checks it to the **exact penny** (`amount` and `amount_received`), this order's,
+   gbp, this Stripe customer; reads the card when the customer agreed to save it (`server/stripe/saved-card.ts`,
+   the legacy resolve route's reading); then T2 marks it paid in one transaction, with the method, the
+   card (`customers.saved_*`, `customer.card_saved`), the address and the event booking. A card that
+   can't be saved never stops it: paid, with the old warning (bug 7). A payment that doesn't check out,
+   a Stripe read with no clear answer, or a database fault in T2 leaves the order pending: never refunded,
+   never undone. Answers as data, the old function's union.
+4. **Cancel** (`POST /api/v1/staff/orders/:orderId/cancel`): the legacy route's cancel (read; succeeded is
+   never cancelled; cancel; read again if that fails), then the one undo. A payment that had in fact
+   succeeded is finalised instead, with the PaymentIntent just read. Anything unclear from Stripe changes
+   nothing: a 401, 403 or 400 on the read, or a failed cancel whose read after isn't succeeded or
+   canceled. A 404 means "never existed" (undone) only when the key in use is of the mode recorded with
+   the intent (W11a): Stripe answers 404 to the other mode's key for an intent that exists. The undo takes
+   the add-on lines with the order (bug 8) and clears a gift card's `redeemed_at` only when this order
+   set it (bug 9).
+
+Every Stripe call on these routes (the setup intent's too, from W11a) is answered by 30 seconds after the
+request started, each with what is left (at most 10 s) and none with under 2 s left
+(`server/stripe/deadline.ts`). `ensureStripeCustomer`'s read and write-back of the Stripe customer run in
+their own transactions with the lock and statement limits cut to what is left, so they end by it too. Finalise and cancel are
+safe twice and against each other: T2 and the undo lock the order and re-check it, and Stripe's own state
+decides which can go. An order the old checkout started (no `method`), or one its rollback has started on
+(`reader_payment.rollback`), is left to the old code: T2 and the undo refuse it. Memberships on the reader
+stay NOT_BUILT (W13). Card saving with no order (`payments/terminal.ts`): the connection token, the
+SetupIntent (`ensureStripeCustomer`, then `card_present` for off-session use under a key from the customer
+and the press), and the saved card, ported as it is (W03-decisions Q19).
+
 ## Refund claims with no finish
 
 The staff app claims a refund's money before it moves. Each claim writes `booking.refund_claimed` to

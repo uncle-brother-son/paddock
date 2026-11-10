@@ -10,6 +10,7 @@ import { ID, PROMO, paidSeat, sam, seed, whileFailing, type WriteFailure } from 
 import { replayStripe, stripeClientsMade } from '@/server/rules/testing/replay/stripe-binding'
 import { ORDER_STRIPE_LIMITS } from '@/server/stripe/client'
 import { ensureStripeCustomer } from '@/server/stripe/customer'
+import { NoTimeLeft } from '@/server/stripe/deadline'
 import {
   AUTHENTICATION_NEEDED_MESSAGE,
   COLLECT_DEADLINE_MS,
@@ -20,7 +21,7 @@ import {
 } from './collect-saved-card'
 import { NO_SAVED_CARD_MESSAGE, ORDER_STILL_PROCESSING_MESSAGE, PAID_NOT_FINISHED_MESSAGE, PAYMENT_UNCONFIRMED_MESSAGE } from './failure-messages'
 import { finaliseOrder } from './finalise-order'
-import type { PendingSnapshot } from './pending-order'
+import type { CardSnapshot, PendingSnapshot } from './pending-order'
 import { placeOrder } from './place-order'
 import { undoOrder } from './undo-order'
 
@@ -480,7 +481,7 @@ async function pendingOrders() {
   return db.query<{ id: string; customer_id: string; reader_payment: PendingSnapshot }>(`SELECT id, customer_id, reader_payment FROM orders WHERE payment_status = 'pending' ORDER BY created_at`)
 }
 
-const pendingCharge = (row: { id: string; customer_id: string; reader_payment: PendingSnapshot }): PendingCharge => ({ orderId: row.id, customerId: row.customer_id, snapshot: row.reader_payment })
+const pendingCharge = (row: { id: string; customer_id: string; reader_payment: PendingSnapshot }): PendingCharge => ({ orderId: row.id, customerId: row.customer_id, snapshot: row.reader_payment as CardSnapshot })
 
 /**
  * A Stripe that the Worker dies on: the call never comes back. `before`: the request never left, so
@@ -535,10 +536,10 @@ describe('T2 (finalise-order.ts)', () => {
     if (!order) throw new Error('no pending order')
     const charged = await collectSavedCard(db, stripe, pendingCharge(order))
     if (charged.outcome !== 'answered') throw new Error('not answered')
-    expect(await finaliseOrder(db, order.id, charged.paymentIntent, asReconcile)).toEqual({ finalised: true, alreadyPaid: false })
+    expect(await finaliseOrder(db, order.id, charged.paymentIntent, asReconcile)).toEqual({ finalised: true, alreadyPaid: false, cardSaved: false })
     const audit = await db.query(`SELECT count(*)::int AS n FROM audit_log WHERE entity_id = $1`, [order.id])
     const afterFirst = await everything()
-    expect(await finaliseOrder(db, order.id, charged.paymentIntent, asReconcile)).toEqual({ finalised: true, alreadyPaid: true })
+    expect(await finaliseOrder(db, order.id, charged.paymentIntent, asReconcile)).toEqual({ finalised: true, alreadyPaid: true, cardSaved: false })
     expect(await everything()).toEqual(afterFirst)
     expect(await db.query(`SELECT count(*)::int AS n FROM audit_log WHERE entity_id = $1`, [order.id])).toEqual(audit)
     expect(afterFirst).not.toEqual(before)
@@ -573,7 +574,7 @@ describe('T2 (finalise-order.ts)', () => {
         // As reconcile will (W12): the same key, so Stripe answers with the charge it already made.
         const again = await collectSavedCard(db, fake, pendingCharge(order))
         if (again.outcome !== 'answered') throw new Error('not answered')
-        expect(await finaliseOrder(db, order.id, again.paymentIntent, asReconcile)).toEqual({ finalised: true, alreadyPaid: false })
+        expect(await finaliseOrder(db, order.id, again.paymentIntent, asReconcile)).toEqual({ finalised: true, alreadyPaid: false, cardSaved: false })
       },
     })
     expect(errorOf(answer)).toMatchObject({ status: 502, code: 'PAYMENT_UNCONFIRMED', message: PAID_NOT_FINISHED_MESSAGE, details: { reason: 'paid_not_finished' } })
@@ -735,7 +736,7 @@ describe('crash tests: the Worker dies at each step (W03-plan 3.1 layer 3)', () 
     if (!order) throw new Error('no pending order')
     const again = await collectSavedCard(db, stripe, pendingCharge(order))
     if (again.outcome !== 'answered') throw new Error('not answered')
-    expect(await finaliseOrder(db, order.id, again.paymentIntent, asReconcile)).toEqual({ finalised: true, alreadyPaid: false })
+    expect(await finaliseOrder(db, order.id, again.paymentIntent, asReconcile)).toEqual({ finalised: true, alreadyPaid: false, cardSaved: false })
     expect([...stripe.chargedByIntent.values()]).toEqual([4400])
     expect((await orderNow(order.id))?.payment_status).toBe('paid')
   })
@@ -750,7 +751,7 @@ describe('crash tests: the Worker dies at each step (W03-plan 3.1 layer 3)', () 
     const auditFails: WriteFailure = { table: 'audit_log', event: 'INSERT', when: `NEW.action = 'order.paid'` }
     await expect(whileFailing(db, auditFails, () => finaliseOrder(db, order.id, charged.paymentIntent, asReconcile))).rejects.toThrow()
     expect(await everything()).toEqual(held)
-    expect(await finaliseOrder(db, order.id, charged.paymentIntent, asReconcile)).toEqual({ finalised: true, alreadyPaid: false })
+    expect(await finaliseOrder(db, order.id, charged.paymentIntent, asReconcile)).toEqual({ finalised: true, alreadyPaid: false, cardSaved: false })
     expect(stripe.netPence).toBe(6900)
   })
 
@@ -1092,6 +1093,68 @@ describe('ensureStripeCustomer (the legacy routes\' find-or-create)', () => {
       const made = await ensureStripeCustomer(db, fake, { id: ID.customer, stripeCustomerId: null })
       expect(fake.calls.map((call) => call.method)).toEqual(['customers.search', 'customers.create'])
       expect(await stored()).toBe(made)
+    })
+  })
+
+  // W11a (review S1): with a deadline, the read and the write-back each run in a transaction whose lock
+  // and statement limits are cut to what is left (at most 5 s and 8 s), and aren't run with too little left.
+  describe('with a deadline (W11a)', () => {
+    /** `db`, recording the limits each transaction sets and the statements it runs. */
+    function recording(): { db: Db; limits: string[][]; statements: string[] } {
+      const limits: string[][] = []
+      const statements: string[] = []
+      return {
+        limits,
+        statements,
+        db: {
+          query: (sql, params) => {
+            statements.push(sql.trim().split(/\s+/).slice(0, 2).join(' '))
+            return db.query(sql, params)
+          },
+          transaction: (fn) =>
+            db.transaction((tx) =>
+              fn({
+                query: (sql, params) => {
+                  if (sql.includes('set_config')) limits.push((params ?? []).map(String))
+                  else statements.push(sql.trim().split(/\s+/).slice(0, 2).join(' '))
+                  return tx.query(sql, params)
+                },
+                selectForUpdate: (sql, params, options) => tx.selectForUpdate(sql, params, options),
+                transaction: (inner) => tx.transaction(inner),
+              })
+            ),
+          close: () => db.close(),
+        },
+      }
+    }
+    const at = (left: number) => ({ deadline: 1_000_000 + left, now: () => 1_000_000 })
+
+    it("3 s left: the read and the write-back each get 3 s, for a lock and for the statement", async () => {
+      await withCustomer(null, async (fake) => {
+        const { db: watched, limits, statements } = recording()
+        const made = await ensureStripeCustomer(watched, fake, { id: ID.customer, stripeCustomerId: null }, at(3_000))
+        expect(limits).toEqual([['3000', '3000'], ['3000', '3000']])
+        expect(statements).toEqual(['SELECT email,', 'UPDATE customers'])
+        expect(await stored()).toBe(made)
+      })
+    })
+
+    it('plenty left: the transaction limits, 8 s for the statement and 5 s for a lock', async () => {
+      await withCustomer(null, async (fake) => {
+        const { db: watched, limits } = recording()
+        await ensureStripeCustomer(watched, fake, { id: ID.customer, stripeCustomerId: null }, at(25_000))
+        expect(limits).toEqual([['8000', '5000'], ['8000', '5000']])
+      })
+    })
+
+    it('under 250 ms left: nothing is sent, read or written (NoTimeLeft)', async () => {
+      await withCustomer(null, async (fake) => {
+        const { db: watched, statements } = recording()
+        await expect(ensureStripeCustomer(watched, fake, { id: ID.customer, stripeCustomerId: null }, at(200))).rejects.toBeInstanceOf(NoTimeLeft)
+        expect(fake.calls).toEqual([])
+        expect(statements).toEqual([])
+        expect(await stored()).toBe(null)
+      })
     })
   })
 

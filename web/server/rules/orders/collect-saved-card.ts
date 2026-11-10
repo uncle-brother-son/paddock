@@ -3,13 +3,13 @@
 // it (checklist 3, W5-15), and Stripe's answers read as W03-plan 2.5 says (new in W10).
 import 'server-only'
 import Stripe from 'stripe'
-import type { Queryable } from '@/server/db'
+import type { Db } from '@/server/db'
 import { stripeIdempotencyKey } from '@/server/http/idempotency'
 import type { StripeClient } from '@/server/stripe/client'
 import { ORDER_STRIPE_LIMITS } from '@/server/stripe/limits'
 import { ensureStripeCustomer } from '@/server/stripe/customer'
 import { readStripeFailure } from '@/server/stripe/outcome'
-import type { PendingSnapshot } from './pending-order'
+import type { CardSnapshot } from './pending-order'
 
 /** The old route's words for a card that needs the customer present (charge-saved-card/core.ts). */
 export const AUTHENTICATION_NEEDED_MESSAGE =
@@ -39,7 +39,7 @@ export type ChargeAnswer =
 export interface PendingCharge {
   orderId: string
   customerId: string
-  snapshot: PendingSnapshot
+  snapshot: CardSnapshot
 }
 
 /** Pence, as the old route sent them. */
@@ -104,7 +104,7 @@ const accessRefused = (err: unknown): boolean =>
  *   the second send gets only the time left before the deadline, and isn't sent with too little left.
  *   Without it (reconcile, W12), both sends get the client's own limit.
  */
-export async function collectSavedCard(db: Queryable, stripe: StripeClient, charge: PendingCharge, timing?: CollectTiming): Promise<ChargeAnswer> {
+export async function collectSavedCard(db: Db, stripe: StripeClient, charge: PendingCharge, timing?: CollectTiming): Promise<ChargeAnswer> {
   const stripeCustomerId = await ensureStripeCustomer(db, stripe, { id: charge.customerId, stripeCustomerId: charge.snapshot.stripe_customer_id })
   const request = chargeRequest(charge, stripeCustomerId)
   const key = stripeIdempotencyKey(charge.orderId, 'charge')

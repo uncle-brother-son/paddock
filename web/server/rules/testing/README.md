@@ -180,3 +180,20 @@ To re-record after a deliberate change:
     UPDATE_GOLDEN=1 npm run test:unit -- server/rules/testing/replay
 
 Read the diff of `golden/` before keeping it: a re-record accepts whatever the code now does.
+
+## No real Stripe (W11)
+
+`no-real-stripe.ts` is loaded before every unit test file (`vitest.unit.config.ts`, `setupFiles`). Any
+request to a Stripe host, through fetch (the SDK's fetch client) or Node's http and https `request` and
+`get` (its default client), however they are imported (default, named or namespace: W11a calls
+`syncBuiltinESMExports()` after patching), is refused before it is sent, and the test that made it fails
+once it ends with "a test reached real Stripe", naming what was tried, even if the code under test
+swallowed the error. A library with its own HTTP stack (undici's own fetch) isn't covered; nothing imports
+one. Tests use FakeStripe.
+`no-real-stripe.test.ts` proves it, including in a separate vitest run of `no-real-stripe.fixture.test.ts`
+(skipped in every other run).
+
+The reader's replay (W11) drives createOrder, then `finaliseReaderOrder` or `cancelReaderOrder`, on both
+sides; the new side calls the finalise and cancel routes (`order-side.ts`). A cancelled order's id is a
+`gone#N` label on both sides, renumbered where it is first met (`withCanonicalGoneNumbers`), because the
+Worker keeps audit and idempotency rows that name it.

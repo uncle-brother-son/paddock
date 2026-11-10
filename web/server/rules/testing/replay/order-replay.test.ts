@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Db } from '@/server/db'
-import { staffSees } from '@/server/rules/orders/failure-messages'
-import { compareRecordings, type Recording } from './compare'
+import { READER_INTENT_UNCONFIRMED_MESSAGE, staffSees } from '@/server/rules/orders/failure-messages'
+import { compareRecordings, withCanonicalGoneNumbers, type Recording } from './compare'
 import { readGolden, replay, startReplay, type ReplayEnvironment, type Scenario } from './harness'
 import { NEW_SIDE_CONFIRMS, NOT_BUILT_SCENARIOS, ORDER_SCENARIOS, orderDifferences, OUTCOME_DIFFERS } from './order-differences'
 import { newOrderSide, type OrderAnswer } from './order-side'
@@ -57,7 +57,8 @@ describe('the order route against the old createOrder', () => {
       expect(golden, `No golden file for ${name}`).not.toBeNull()
       const { recording, answers } = await runNew(name)
       const placed = answers[0]?.body.ok === true
-      expect(compareRecordings(golden, recording, orderDifferences(placed, name))).toEqual([])
+      // W11: a cancelled reader order's id is a gone label on both sides, numbered where it is first met.
+      expect(compareRecordings(withCanonicalGoneNumbers(golden), withCanonicalGoneNumbers(recording), orderDifferences(placed, name))).toEqual([])
     })
 
     it.skipIf(OUTCOME_DIFFERS.includes(name))('tells staff what the screen told them', async () => {
@@ -143,6 +144,74 @@ describe('the order route against the old createOrder', () => {
       expect(recording.tables['booking_guests']?.tied).toBe(0)
       expect(recording.tables['event_attendees']?.tied).toBe(0)
       expect(recording.tables['audit_log']?.added.map((row) => row['action'])).toEqual(['order.create', 'order.paid'])
+    })
+  })
+
+  describe('W11: the outcomes W03-plan 2.5 and 2.7 change on the reader', () => {
+    it('a payment a penny over: the old finalise let it through; the new one leaves the order pending, checked to the penny', async () => {
+      const golden = readGolden('w11-reader-amount-a-penny-over') as Recording
+      expect(golden.results[1]).toEqual({ finalised: true, orderId: 'orders#1', paymentIntentId: 'pi_fake_0001' })
+      expect(golden.tables['orders']?.added).toMatchObject([{ payment_status: 'paid', payment_method: 'reader' }])
+      const { recording, answers } = await runNew('w11-reader-amount-a-penny-over')
+      expect(answers[1]?.body).toMatchObject({
+        ok: true,
+        data: {
+          finalised: false,
+          reason: 'amount_mismatch',
+          message: 'The reader charged £45.01 but the order expected £45.00 — do NOT finalise automatically. Check the PaymentIntent (pi_fake_0001) in Stripe and refund/adjust manually.',
+        },
+      })
+      expect(recording.tables['orders']?.added).toMatchObject([{ payment_status: 'pending', payment_method: null, stripe_payment_intent_id: null }])
+      // Held as T1 left it: the places taken, nothing confirmed or saved, only the order's creation on record.
+      expect(recording.tables['sessions']?.changed).toEqual([{ id: ID.session, total_booked: [0, 2] }])
+      expect(recording.tables['audit_log']?.added.map((row) => row['action'])).toEqual(['order.create'])
+      expect(recording.stripeCalls.map((call) => call.method)).toEqual(['paymentIntents.create', 'paymentIntents.retrieve'])
+    })
+
+    it("an unclear answer to the reader's intent: the old order was rolled back; the new one is held pending with its claims, after one retry with the same key", async () => {
+      const golden = readGolden('w11-reader-intent-unclear') as Recording
+      expect(golden.results[0]).toMatchObject({ success: false, reason: 'reader_intent_failed', message: 'Failed to create PaymentIntent: An error occurred with our API.' })
+      expect(golden.tables).toEqual({})
+      const { recording, answers } = await runNew('w11-reader-intent-unclear')
+      expect(answers[0]?.status).toBe(502)
+      expect(answers[0]?.body).toMatchObject({
+        ok: false,
+        error: { code: 'PAYMENT_UNCONFIRMED', message: READER_INTENT_UNCONFIRMED_MESSAGE, details: { stage: 'payment', reason: 'payment_unconfirmed', orderId: expect.any(String) } },
+      })
+      expect(recording.stripeCalls.map((call) => [call.method, call.idempotencyKey])).toEqual([
+        ['paymentIntents.create', 'orders#1:reader-intent'],
+        ['paymentIntents.create', 'orders#1:reader-intent'],
+      ])
+      expect(recording.stripeCalls[1]?.params).toEqual(recording.stripeCalls[0]?.params)
+      // Pending, its record without an intent, the places and the store credit still held.
+      expect(recording.tables['orders']?.added).toMatchObject([{ payment_status: 'pending', payment_method: null }])
+      expect((recording.tables['orders']?.added[0] as { reader_payment: Record<string, unknown> }).reader_payment).not.toHaveProperty('payment_intent_id')
+      expect(recording.tables['sessions']?.changed).toEqual([{ id: ID.session, total_booked: [0, 2] }])
+      expect(recording.tables['customers']?.changed).toEqual([{ id: ID.customer, store_credit_balance: ['30.00', '20.00'] }])
+      expect(recording.tables['audit_log']?.added.map((row) => row['action'])).toEqual(['order.create'])
+    })
+  })
+
+  describe('W11: row order', () => {
+    it("the reader order's rows keep createOrder's order, and its audit rows come create, then paid", async () => {
+      const { recording } = await runNew('w11-reader-every-kind')
+      const lines = recording.tables['order_line_items']
+      expect(lines?.tied).toBe(0)
+      expect(lines?.added.map((line) => line['item_type'])).toEqual(['booking', 'event', 'addon', 'product', 'session_pass', 'gift_card'])
+      expect(recording.tables['booking_guests']?.tied).toBe(0)
+      expect(recording.tables['event_attendees']?.tied).toBe(0)
+      expect(recording.tables['audit_log']?.added.map((row) => row['action'])).toEqual(['order.create', 'order.paid'])
+    })
+
+    it('a card saved at finalise: order.paid, then customer.card_saved', async () => {
+      const { recording } = await runNew('w11-reader-save-card-reusable')
+      expect(recording.tables['audit_log']?.tied).toBe(0)
+      expect(recording.tables['audit_log']?.added.map((row) => row['action'])).toEqual(['order.create', 'order.paid', 'customer.card_saved'])
+    })
+
+    it('cancelled: create, then undo', async () => {
+      const { recording } = await runNew('w11-reader-cancelled-every-kind-with-all-three')
+      expect(recording.tables['audit_log']?.added.map((row) => row['action'])).toEqual(['order.create', 'order.undo'])
     })
   })
 

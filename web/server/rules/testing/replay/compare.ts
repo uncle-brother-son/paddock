@@ -253,6 +253,35 @@ export function buildRecording(run: RawRun): Recording {
   }
 }
 
+/**
+ * W11: the same recording with each `gone#N` label renumbered by where it is first met: the answers,
+ * then the Stripe calls, then the tables. An id with no row left is numbered as it is met while the
+ * tables are labelled, so a side that keeps rows naming it (the Worker's audit and idempotency rows)
+ * numbers it differently. Renumbering both sides the same way keeps which label is which within a
+ * recording, so two different gone ids still can't pass as one.
+ */
+export function withCanonicalGoneNumbers(recording: Recording): Recording {
+  const numbers = new Map<string, string>()
+  const renumber = (text: string): string =>
+    text.replace(/gone#\d+/g, (label) => {
+      const known = numbers.get(label)
+      if (known) return known
+      const next = `gone#${numbers.size + 1}`
+      numbers.set(label, next)
+      return next
+    })
+  const walkValue = (value: unknown): unknown => {
+    if (typeof value === 'string') return renumber(value)
+    if (Array.isArray(value)) return value.map(walkValue)
+    if (value !== null && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, walkValue(inner)]))
+    return value
+  }
+  const results = walkValue(recording.results) as unknown[]
+  const stripeCalls = walkValue(recording.stripeCalls) as StripeCallRecord[]
+  const tables = walkValue(recording.tables) as Record<string, TableChange>
+  return { ...recording, results, stripeCalls, tables }
+}
+
 export interface Difference {
   path: string
   expected: unknown

@@ -319,14 +319,28 @@ export const placeOrderInputSchema = basketSchema.extend({
 })
 export type PlaceOrderInput = z.infer<typeof placeOrderInputSchema>
 
+/**
+ * W11: what the screen collects on the reader, as createOrder's pendingReaderPayment: the intent, its
+ * secret for the Terminal SDK, and the single tap's amount in pounds (the server's figure).
+ */
+export const pendingReaderPaymentSchema = z.object({
+  orderId: z.string(),
+  paymentIntentId: z.string(),
+  clientSecret: z.string(),
+  amount: z.number(),
+})
+export type PendingReaderPayment = z.infer<typeof pendingReaderPaymentSchema>
+
 export const placeOrderOutputSchema = z.object({
   orderId: z.string(),
   /**
-   * 'pending_reader' arrives with the reader (W11). A saved-card order answers 'paid' only once the card
-   * is charged and the order marked paid (W10); a refused card is an error (PAYMENT_FAILED or
-   * PAYMENT_NEEDS_AUTHENTICATION, nothing kept), and an unclear one PAYMENT_UNCONFIRMED (held pending).
+   * A saved-card order answers 'paid' only once the card is charged and the order marked paid (W10); a
+   * refused card is an error (PAYMENT_FAILED or PAYMENT_NEEDS_AUTHENTICATION, nothing kept), and an
+   * unclear one PAYMENT_UNCONFIRMED (held pending). W11: a reader order answers 'pending_reader' with
+   * `pendingReaderPayment`, the order pending until the finalise route; an intent Stripe refused is an
+   * error (PAYMENT_FAILED, reader_intent_failed, nothing kept), and an unclear one PAYMENT_UNCONFIRMED.
    */
-  status: z.enum(['paid']),
+  status: z.enum(['paid', 'pending_reader']),
   bookingId: z.string().nullable(),
   /** The session pass bought, on its own or to pay for the booking (W07). */
   sessionPassId: z.string().nullable(),
@@ -336,7 +350,7 @@ export const placeOrderOutputSchema = z.object({
   /** The event booking, when the order has an event (W08). */
   eventBookingId: z.string().nullable(),
   payment: z.object({
-    /** What orders.payment_method records: null when nothing was owed. */
+    /** What orders.payment_method records: null when nothing was owed. On 'pending_reader' (W11), 'reader': T2 records it. */
     method: z.string().nullable(),
     /** Taken now by that method: on cash, what staff collect; on the saved card, what it was charged (W10). */
     collected: z.number(),
@@ -346,8 +360,51 @@ export const placeOrderOutputSchema = z.object({
     giftCardApplied: z.number(),
     storeCreditApplied: z.number(),
   }),
+  /** W11: on 'pending_reader', what the screen collects. Never in a dry run, which makes no intent. */
+  pendingReaderPayment: pendingReaderPaymentSchema.optional(),
 })
 export type PlaceOrderOutput = z.infer<typeof placeOrderOutputSchema>
+
+// --- POST /api/v1/staff/orders/:orderId/finalise and /cancel (W11)
+
+/** The order, from the path. */
+export const readerOrderInputSchema = z.object({ orderId: id })
+export type ReaderOrderInput = z.infer<typeof readerOrderInputSchema>
+
+/**
+ * finaliseReaderOrder's answer, as data (W03-plan 2.3: an outcome after money has moved, not a
+ * refusal). `reason` and `message` are the old function's, where it had them; W11's new ones are named
+ * in server/rules/orders/reader-order.ts.
+ */
+export const finaliseReaderOrderOutputSchema = z.object({
+  finalised: z.boolean(),
+  orderId: z.string().optional(),
+  paymentIntentId: z.string().optional(),
+  /** The order was already paid with this same PaymentIntent: nothing was done. */
+  alreadyFinalised: z.boolean().optional(),
+  /** The PaymentIntent hasn't succeeded: the screen cancels instead, or the customer taps again. */
+  paymentNotSucceeded: z.boolean().optional(),
+  piStatus: z.string().optional(),
+  reason: z.string().optional(),
+  message: z.string().optional(),
+  warning: z.string().optional(),
+})
+export type FinaliseReaderOrderOutput = z.infer<typeof finaliseReaderOrderOutputSchema>
+
+/** cancelReaderOrder's answer, as data. */
+export const cancelReaderOrderOutputSchema = z.object({
+  cancelled: z.boolean(),
+  orderId: z.string().optional(),
+  /** The order was already gone: nothing to cancel. */
+  alreadyGone: z.boolean().optional(),
+  /** The payment had in fact succeeded: the order was finalised instead (see `finaliseResult`). */
+  finalisedInstead: z.boolean().optional(),
+  finaliseResult: finaliseReaderOrderOutputSchema.optional(),
+  reason: z.string().optional(),
+  message: z.string().optional(),
+  warning: z.string().optional(),
+})
+export type CancelReaderOrderOutput = z.infer<typeof cancelReaderOrderOutputSchema>
 
 /**
  * A refusal's `details`, as the old createOrder answered it, so the staff app can hand the screen the

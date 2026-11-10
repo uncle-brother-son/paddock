@@ -1,4 +1,6 @@
 import type { ApiFailure, BasketQuoteOutput, OrderRefusalDetails, PlaceOrderInput, PlaceOrderOutput } from '@/contracts'
+import { POST as cancelRoute } from '@/app/api/v1/staff/orders/[orderId]/cancel/route'
+import { POST as finaliseRoute } from '@/app/api/v1/staff/orders/[orderId]/finalise/route'
 import { POST as ordersRoute } from '@/app/api/v1/staff/orders/route'
 import { POST as quoteRoute } from '@/app/api/v1/staff/quotes/basket/route'
 import type { Db } from '@/server/db'
@@ -40,6 +42,11 @@ export function oldRefusal(details: OrderRefusalDetails): Record<string, unknown
 
 /** The route's answer in createOrder's shape. Anything that isn't a refusal or an order comes back as the error. */
 export function oldResult(body: { ok: true; data: PlaceOrderOutput } | ApiFailure): Record<string, unknown> {
+  if (body.ok && body.data.status === 'pending_reader') {
+    // W11: createOrder's reader branch answered only the order, the method and what the reader collects.
+    const { orderId, payment, pendingReaderPayment } = body.data
+    return { success: true, orderId, cardCharged: payment.cardCharged, paymentMethodUsed: payment.method, ...(pendingReaderPayment ? { pendingReaderPayment } : {}) }
+  }
   if (body.ok) {
     const { orderId, bookingId, eventBookingId, sessionPassId, giftCardId, giftCardCode, payment } = body.data
     return {
@@ -87,10 +94,12 @@ export async function postOrder(input: unknown, { key = crypto.randomUUID(), ema
 /**
  * W10: the card figure staff confirm, as the screen will send it from W14: the basket quote's
  * `toCollect.card`. The old createOrder's params never had one, and the order route keeps the
- * confirmed-amount rule for the card (a missing figure counts as nothing confirmed).
+ * confirmed-amount rule for the card (a missing figure counts as nothing confirmed). W11: the reader's
+ * single tap likewise, the quote's `toCollect.reader`.
  */
 export async function withQuotedCardFigure(input: PlaceOrderInput): Promise<PlaceOrderInput> {
-  if (input.payment?.method !== 'card' || typeof input.confirmed?.toCollect === 'number') return input
+  const method = input.payment?.method
+  if ((method !== 'card' && method !== 'reader') || typeof input.confirmed?.toCollect === 'number') return input
   const basket: Partial<PlaceOrderInput> = { ...input }
   delete basket.confirmed
   const response = await quoteRoute(
@@ -102,7 +111,32 @@ export async function withQuotedCardFigure(input: PlaceOrderInput): Promise<Plac
   )
   const body = (await response.json()) as { ok: boolean; data?: BasketQuoteOutput }
   if (!body.ok || !body.data) return input
-  return { ...input, confirmed: { ...input.confirmed, toCollect: body.data.totals.toCollect.card } }
+  return { ...input, confirmed: { ...input.confirmed, toCollect: method === 'reader' ? body.data.totals.toCollect.reader : body.data.totals.toCollect.card } }
+}
+
+/** W11: POST /api/v1/staff/orders/:orderId/finalise or /cancel, as the staff app's wrappers will call them at W14. */
+export async function postReaderStep(step: 'finalise' | 'cancel', orderId: string, { key = crypto.randomUUID(), email = REPLAY_USER.email } = {}): Promise<OrderAnswer> {
+  const route = step === 'finalise' ? finaliseRoute : cancelRoute
+  const response = await route(
+    new Request(`https://worker.test/api/v1/staff/orders/${orderId}/${step}`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${process.env.STAFF_API_KEY}`,
+        'x-staff-email': email,
+        'idempotency-key': key,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({}),
+    }),
+    { params: Promise.resolve({ orderId }) }
+  )
+  return { status: response.status, body: (await response.json()) as OrderAnswer['body'] }
+}
+
+/** The reader step's answer as the old function gave it: the data itself, or the error when there is no data. */
+function oldReaderStepResult(answer: OrderAnswer): unknown {
+  const body = answer.body as { ok: true; data: unknown } | ApiFailure
+  return body.ok ? body.data : { error: { code: body.error.code, message: body.error.message } }
 }
 
 /**
@@ -118,7 +152,14 @@ export function newOrderSide(answers: OrderAnswer[] = [], adjust: (input: PlaceO
     return {
       name: 'new',
       async call(action, params) {
-        if (action !== 'createOrder') throw new Error(`The order route builds createOrder only, not ${action}.`)
+        // W11: the reader's finalise and cancel, on the order the route placed.
+        if (action === 'finaliseReaderOrder' || action === 'cancelReaderOrder') {
+          const { orderId } = params as { orderId: string }
+          const answer = await postReaderStep(action === 'finaliseReaderOrder' ? 'finalise' : 'cancel', orderId)
+          answers.push(answer)
+          return oldReaderStepResult(answer)
+        }
+        if (action !== 'createOrder') throw new Error(`The order route builds createOrder, finaliseReaderOrder and cancelReaderOrder only, not ${action}.`)
         const answer = await postOrder(adjust(await withQuotedCardFigure(orderInput(params as Record<string, unknown>))))
         answers.push(answer)
         return oldResult(answer.body)

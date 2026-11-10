@@ -20,6 +20,8 @@ const CODE_BY_REASON: Readonly<Record<string, ApiErrorCode>> = {
   guests_over_18_not_confirmed: 'AGE_CONFIRMATION_REQUIRED',
   charge_failed: 'PAYMENT_FAILED',
   membership_payment_failed: 'PAYMENT_FAILED',
+  // W11: the reader's intent couldn't be made, so no payment could be taken.
+  reader_intent_failed: 'PAYMENT_FAILED',
 }
 
 export function refusalCode(reason: string): ApiErrorCode {

@@ -104,6 +104,22 @@ interface FakePaymentIntent {
   setup_future_usage: string | null
   created: number
   latest_charge: string | null
+  /** The mode of the key it was made with (W11a). */
+  livemode: boolean
+}
+
+/** W11: a reader card-save with no charge (createTerminalSetupIntent's). */
+interface FakeSetupIntent {
+  id: string
+  object: 'setup_intent'
+  status: Stripe.SetupIntent.Status
+  customer: string | null
+  payment_method: string | null
+  payment_method_types: string[]
+  usage: string
+  client_secret: string
+  created: number
+  latest_attempt: string | null
 }
 
 interface FakeRefund {
@@ -150,12 +166,21 @@ export class FakeStripe implements StripeClient {
   /** Every call that reached the client, in order, including ones that failed. */
   readonly calls: FakeStripeCall[] = []
 
+  /**
+   * The mode of the key in use (W11a): a test key by default. A test may change it, as a Worker
+   * redeployed with the other mode's key: intents made before are then answered as missing, as Stripe does.
+   */
+  keyLivemode: boolean | null = false
+
   private readonly saved = new Map<string, SavedAnswer>()
   private readonly faults = new Map<string, FakeFault[]>()
   private readonly intents = new Map<string, FakePaymentIntent>()
   private readonly refunded = new Map<string, number>()
   private readonly refundsMade: FakeRefund[] = []
   private readonly generatedCards = new Map<string, string>()
+  private readonly setupIntentsById = new Map<string, FakeSetupIntent>()
+  /** The reusable cards Stripe generated for a tap, as payment methods: what paymentMethods.retrieve finds. */
+  private readonly cardsById = new Map<string, { last4: string; brand: string }>()
   private readonly subs = new Map<string, FakeSubscription>()
   private readonly couponsById = new Map<string, Stripe.Coupon>()
   private readonly customersById = new Map<string, Record<string, unknown>>()
@@ -215,15 +240,43 @@ export class FakeStripe implements StripeClient {
    * The customer taps the reader: the PaymentIntent succeeds, as the Terminal flow would. A tap that
    * saves the card names the reusable card Stripe generates for it.
    */
-  completeReaderPayment(id: string, options: { generatedCard?: string } = {}): void {
+  completeReaderPayment(
+    id: string,
+    options: {
+      generatedCard?: string
+      /** W11: the simulated reader, which leaves a card_present card but never a reusable one (W03-plan Q16). */
+      simulatedReader?: boolean
+      /** W11: pence the tap actually took, when not the intent's amount (a reader that took another figure). */
+      amount?: number
+    } = {}
+  ): void {
     const intent = this.intents.get(id)
     if (!intent) throw new Error(`The fake has no PaymentIntent ${id}.`)
     intent.status = 'succeeded'
+    if (options.amount !== undefined) intent.amount = options.amount
     intent.amount_received = intent.amount
     intent.latest_charge = this.nextId('ch')
+    if (options.generatedCard || options.simulatedReader) intent.payment_method = `${id}_card_present`
     if (options.generatedCard) {
-      intent.payment_method = `${id}_card_present`
       this.generatedCards.set(id, options.generatedCard)
+      this.cardsById.set(options.generatedCard, { last4: '4242', brand: 'visa' })
+    }
+  }
+
+  /**
+   * W11: the customer taps the reader to save a card with no charge: the SetupIntent succeeds. Its
+   * attempt names the reusable card Stripe generates (none on the simulated reader). As Stripe, the
+   * attempt's card_present carries no last four or brand: those are on the generated card.
+   */
+  completeReaderSetup(id: string, options: { generatedCard?: string } = {}): void {
+    const setupIntent = this.setupIntentsById.get(id)
+    if (!setupIntent) throw new Error(`The fake has no SetupIntent ${id}.`)
+    setupIntent.status = 'succeeded'
+    setupIntent.payment_method = `${id}_card_present`
+    setupIntent.latest_attempt = this.nextId('setatt')
+    if (options.generatedCard) {
+      this.generatedCards.set(id, options.generatedCard)
+      this.cardsById.set(options.generatedCard, { last4: '1881', brand: 'mastercard' })
     }
   }
 
@@ -299,7 +352,8 @@ export class FakeStripe implements StripeClient {
 
   private intent(id: string): FakePaymentIntent {
     const intent = this.intents.get(id)
-    if (!intent) throw fakeStripeErrors.missing(`payment_intent: '${id}'`)
+    // As Stripe: an intent made in the other mode is answered as missing (W11a, review L1).
+    if (!intent || intent.livemode !== (this.keyLivemode === true)) throw fakeStripeErrors.missing(`payment_intent: '${id}'`)
     return intent
   }
 
@@ -318,6 +372,7 @@ export class FakeStripe implements StripeClient {
       setup_future_usage: null,
       created: seconds(),
       latest_charge: null,
+      livemode: this.keyLivemode === true,
       ...fields,
     }
     this.intents.set(id, intent)
@@ -365,6 +420,61 @@ export class FakeStripe implements StripeClient {
       this.run('paymentIntents.list', params, undefined, () =>
         list(newestFirst([...this.intents.values()].filter((i) => !params.customer || i.customer === params.customer)))
       ) as unknown as Promise<Stripe.ApiList<Stripe.PaymentIntent>>,
+  }
+
+  // W11: the reader's card-save with no charge, a generated card's details, and the reader's connection token.
+
+  readonly setupIntents: StripeClient['setupIntents'] = {
+    create: (params, options) =>
+      this.run('setupIntents.create', params, options, () => {
+        const customer = typeof params.customer === 'string' ? params.customer : null
+        if (customer !== null) this.customer(customer)
+        const id = this.nextId('seti')
+        const setupIntent: FakeSetupIntent = {
+          id,
+          object: 'setup_intent',
+          status: 'requires_payment_method',
+          customer,
+          payment_method: null,
+          payment_method_types: params.payment_method_types ?? ['card'],
+          usage: params.usage ?? 'off_session',
+          client_secret: `${id}_secret`,
+          created: seconds(),
+          latest_attempt: null,
+        }
+        this.setupIntentsById.set(id, setupIntent)
+        return setupIntent
+      }) as unknown as Promise<Stripe.SetupIntent>,
+
+    retrieve: (id, params) =>
+      this.run('setupIntents.retrieve', { id, ...params }, undefined, () => {
+        const setupIntent = this.setupIntentsById.get(id)
+        if (!setupIntent) throw fakeStripeErrors.missing(`setupintent: '${id}'`)
+        if (!params?.expand) return setupIntent
+        if (params.expand.join() !== 'latest_attempt') throw new Error('The fake has not modelled expanding anything but latest_attempt.')
+        const card_present = { generated_card: this.generatedCards.get(id) ?? null }
+        return { ...setupIntent, latest_attempt: setupIntent.latest_attempt && { id: setupIntent.latest_attempt, payment_method_details: { card_present } } }
+      }) as unknown as Promise<Stripe.SetupIntent>,
+  }
+
+  readonly paymentMethods: StripeClient['paymentMethods'] = {
+    retrieve: (id) =>
+      this.run('paymentMethods.retrieve', { id }, undefined, () => {
+        const card = this.cardsById.get(id)
+        if (!card) throw fakeStripeErrors.missing(`payment_method: '${id}'`)
+        return { id, object: 'payment_method', type: 'card', card: { ...card } }
+      }) as unknown as Promise<Stripe.PaymentMethod>,
+  }
+
+  readonly terminal: StripeClient['terminal'] = {
+    connectionTokens: {
+      create: (params, options) =>
+        this.run('terminal.connectionTokens.create', params ?? {}, options, () => ({
+          object: 'terminal.connection_token',
+          secret: `pst_test_${this.nextId('token')}`,
+          ...(params?.location ? { location: params.location } : {}),
+        })) as unknown as Promise<Stripe.Terminal.ConnectionToken>,
+    },
   }
 
   readonly refunds: StripeClient['refunds'] = {

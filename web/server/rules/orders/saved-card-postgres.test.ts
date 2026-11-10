@@ -9,7 +9,7 @@ import { FakeStripe } from '@/server/stripe/fake'
 import { collectSavedCard, type PendingCharge } from './collect-saved-card'
 import { finaliseOrder } from './finalise-order'
 import { refusalDetails } from './order-refusal'
-import type { PendingSnapshot } from './pending-order'
+import type { CardSnapshot } from './pending-order'
 import { placeOrder } from './place-order'
 import { undoOrder } from './undo-order'
 
@@ -62,7 +62,7 @@ async function pendingOrder(stripe: FakeStripe, customerId: string): Promise<Pen
   stripe.failNext('paymentIntents.create', { kind: 'unreachable' })
   stripe.failNext('paymentIntents.create', { kind: 'unreachable' })
   await expect(placeOrder(first, soapsOnCard(customerId), { ...asStaff(), stripe: () => stripe })).rejects.toMatchObject({ code: 'PAYMENT_UNCONFIRMED' })
-  const rows = await first.query<{ id: string; reader_payment: PendingSnapshot }>(
+  const rows = await first.query<{ id: string; reader_payment: CardSnapshot }>(
     `SELECT id, reader_payment FROM orders WHERE customer_id = $1 AND payment_status = 'pending'`,
     [customerId]
   )
@@ -128,7 +128,7 @@ describe('T2 and the undo racing on one order', () => {
     const charge = await pendingOrder(stripe, await cardCustomer(stripe))
     const paymentIntent = await charged(stripe, charge)
     const t2 = await holding(first, () => finaliseOrder(first, charge.orderId, paymentIntent, reconcile))
-    expect(t2.result).toEqual({ finalised: true, alreadyPaid: false })
+    expect(t2.result).toEqual({ finalised: true, alreadyPaid: false, cardSaved: false })
     const undo = undoOrder(second, charge.orderId, { ...reconcile, why: 'race' })
     const waiter = await blockedBy(t2.pid)
     expect(await waitingOn(pg, waiter)).toEqual(['orders'])
@@ -195,7 +195,7 @@ describe('T2 and the undo racing on one order', () => {
       ])
       const status = await orderStatus(charge.orderId)
       if (status === 'paid') {
-        expect(t2).toEqual({ finalised: true, alreadyPaid: false })
+        expect(t2).toEqual({ finalised: true, alreadyPaid: false, cardSaved: false })
         expect(undo).toEqual({ undone: false, reason: 'paid' })
         expect(await stockNow()).toBe(stock)
       } else {
