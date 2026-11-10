@@ -49,7 +49,7 @@ import { loadBasketFacts, type BasketFacts } from './load-basket'
 import { lockForOrder, type HeldLocks } from './locks'
 import { bookingRefusal, orderRefusal, paymentUnconfirmed, refusalDetails } from './order-refusal'
 import { readOrderRows } from './order-rows'
-import { chargeDescription, type CardSnapshot, type PendingSnapshot, type ReaderSnapshot } from './pending-order'
+import { chargeDescription, heldBooking, type CardSnapshot, type PendingSnapshot, type ReaderSnapshot } from './pending-order'
 import { priceFromFacts } from './price-basket'
 import { createReaderIntent, recordReaderIntent, type PendingReader } from './reader-intent'
 import { undoOrder } from './undo-order'
@@ -92,6 +92,12 @@ export interface PlaceOrderOptions {
 /** T1 inside the dry run: what the dry run alone does differently (W03-decisions, "W10 setup calls"). */
 interface PrepareMode {
   dryRun: boolean
+  /**
+   * W12: the mode of the Stripe key the order will be collected with (StripeClient.keyLivemode), written
+   * on the pending record as `livemode`, so reconcile takes "Stripe has no payment for this order" as
+   * "nothing was taken" only with a key of that same mode (W11 review L1). Null in the dry run (no client).
+   */
+  keyLivemode: boolean | null
 }
 
 // --- Before anything is touched
@@ -731,7 +737,7 @@ interface Placed {
  * customer and saved card are the ones read under the customer's lock; T1 refuses the order before it
  * commits if either is missing (prepare).
  */
-function cardSnapshot(input: PlaceOrderInput, facts: BasketFacts, quote: BasketQuoteOutput, options: PlaceOrderOptions): CardSnapshot {
+function cardSnapshot(input: PlaceOrderInput, facts: BasketFacts, quote: BasketQuoteOutput, options: PlaceOrderOptions, mode: PrepareMode): CardSnapshot {
   const giftCard = input.payment?.giftCard
   return {
     flow: 'checkout',
@@ -746,6 +752,8 @@ function cardSnapshot(input: PlaceOrderInput, facts: BasketFacts, quote: BasketQ
     charge_payment_intent_id: null,
     request_id: options.requestId,
     ...(giftCard ? { gift_card_redemption: { gift_card_id: giftCard.giftCardId, amount: giftCard.amount } } : {}),
+    ...heldBooking(input),
+    ...(typeof mode.keyLivemode === 'boolean' ? { livemode: mode.keyLivemode } : {}),
   }
 }
 
@@ -755,7 +763,7 @@ function cardSnapshot(input: PlaceOrderInput, facts: BasketFacts, quote: BasketQ
  * customer is the one read under the customer's lock, null when they have none yet: the intent finds
  * or makes one, and records it with the intent.
  */
-function readerSnapshot(input: PlaceOrderInput, facts: BasketFacts, quote: BasketQuoteOutput, options: PlaceOrderOptions): ReaderSnapshot {
+function readerSnapshot(input: PlaceOrderInput, facts: BasketFacts, quote: BasketQuoteOutput, options: PlaceOrderOptions, mode: PrepareMode): ReaderSnapshot {
   const giftCard = input.payment?.giftCard
   return {
     flow: 'checkout',
@@ -767,6 +775,8 @@ function readerSnapshot(input: PlaceOrderInput, facts: BasketFacts, quote: Baske
     stripe_customer_id: facts.customer?.stripe_customer_id ?? null,
     request_id: options.requestId,
     ...(giftCard ? { gift_card_redemption: { gift_card_id: giftCard.giftCardId, amount: giftCard.amount } } : {}),
+    ...heldBooking(input),
+    ...(typeof mode.keyLivemode === 'boolean' ? { livemode: mode.keyLivemode } : {}),
   }
 }
 
@@ -816,7 +826,7 @@ async function prepare(tx: Tx, input: PlaceOrderInput, options: PlaceOrderOption
   // is charged after the commit (W03-plan 2.1, B14). Nothing to take on the card finishes here, as createOrder did.
   // W11: the reader the same way, its intent made after the commit (bug 14). Nothing to take on the reader
   // was refused above (reader_nothing_to_charge), as createOrder refused it.
-  const snapshot: PendingSnapshot | null = awaitsCard ? cardSnapshot(input, facts, quote, options) : awaitsReader ? readerSnapshot(input, facts, quote, options) : null
+  const snapshot: PendingSnapshot | null = awaitsCard ? cardSnapshot(input, facts, quote, options, mode) : awaitsReader ? readerSnapshot(input, facts, quote, options, mode) : null
 
   // 3. The order, and everything in it that doesn't need the booking.
   const order = await writeOrder(tx, input, facts, quote, locks, options, snapshot)
@@ -1072,7 +1082,7 @@ export async function placeOrder(db: Db, input: PlaceOrderInput, options: PlaceO
   const needsStripe = method === 'card' || method === 'reader'
   const stripe = needsStripe ? options.stripe?.() : undefined
   if (needsStripe && !stripe) throw new Error(`A ${method} order needs a Stripe client.`)
-  const placed = await inTransaction(db, (tx) => prepare(tx, input, options, { dryRun: false }))
+  const placed = await inTransaction(db, (tx) => prepare(tx, input, options, { dryRun: false, keyLivemode: stripe?.keyLivemode ?? null }))
   if (placed.reader) {
     if (!stripe) throw new Error('A reader order needs a Stripe client.')
     return startReaderPayment(db, stripe, { ...placed, reader: placed.reader }, options, startedAt)
@@ -1102,7 +1112,7 @@ export async function dryRunOrder(db: Db, input: PlaceOrderInput, options: Place
   refuseWhatIsNotBuilt(input)
   try {
     await inTransaction(db, async (tx) => {
-      const placed = await prepare(tx, input, options, { dryRun: true })
+      const placed = await prepare(tx, input, options, { dryRun: true, keyLivemode: null })
       const rows: OrderRows = await readOrderRows(tx, placed.orderId)
       throw new DryRunFinished({ order: placed.output, rows })
     })

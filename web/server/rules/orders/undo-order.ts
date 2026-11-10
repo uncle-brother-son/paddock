@@ -19,6 +19,13 @@ export type UndoOutcome =
    * already, so giving back again here would give twice; the old code finishes it.
    */
   | { undone: false; reason: 'paid' | 'not_pending' | 'rollback_started' }
+  /**
+   * W12 (W10 review L1): refused, nothing changed. Old code has changed what the order holds since T1
+   * wrote it (the booking cancelled, moved, or its party size changed; the event booking no longer
+   * pending), so giving back the places and pass session T1 claimed could give them back twice: old
+   * Cancel gives them back itself. Left pending for a person (the stuck list), as "amounts don't match".
+   */
+  | { undone: false; reason: 'changed_since'; changed: string[] }
 
 export interface UndoOptions {
   actor: { type: 'staff' | 'customer' | 'system'; id: string | null }
@@ -39,6 +46,7 @@ interface OrderParts {
     id: string
     session_id: string
     party_size: number
+    status: string
     booking_type: string | null
     redemption_source: string | null
     /** The pass a seat took a session from, when the pass isn't one this order bought (that one goes whole). */
@@ -46,7 +54,7 @@ interface OrderParts {
   } | null
   addon_credits: Array<{ membership_id: string; quantity: number }>
   stock: Array<{ variant_id: string; quantity: number }>
-  event: { booking_id: string; event_id: string; places: number } | null
+  event: { booking_id: string; event_id: string; places: number; status: string } | null
   gift_card_used: string | null
   store_credit: string
   gift_card_bought: string | null
@@ -58,7 +66,7 @@ WITH l AS (SELECT * FROM order_line_items WHERE order_id = $1::uuid),
 bought_passes AS (SELECT p.id FROM customer_session_passes p JOIN l ON p.order_line_item_id = l.id)
 SELECT
   (SELECT json_build_object(
-     'id', b.id, 'session_id', b.session_id, 'party_size', b.party_size, 'booking_type', st.booking_type,
+     'id', b.id, 'session_id', b.session_id, 'party_size', b.party_size, 'status', b.status, 'booking_type', st.booking_type,
      'redemption_source', b.redemption_source,
      'pass_to_give_back', CASE WHEN b.redemption_source = 'session_pass_credit' AND b.redeemed_session_pass_id NOT IN (SELECT id FROM bought_passes)
                                THEN b.redeemed_session_pass_id END)
@@ -71,7 +79,7 @@ SELECT
   (SELECT COALESCE(json_agg(json_build_object('variant_id', x.variant_id, 'quantity', x.quantity) ORDER BY x.variant_id), '[]'::json)
    FROM (SELECT product_variant_id AS variant_id, sum(quantity)::int AS quantity FROM l
          WHERE item_type = 'product' AND product_variant_id IS NOT NULL GROUP BY product_variant_id) x) AS stock,
-  (SELECT json_build_object('booking_id', eb.id, 'event_id', eb.event_id, 'places', eb.places)
+  (SELECT json_build_object('booking_id', eb.id, 'event_id', eb.event_id, 'places', eb.places, 'status', eb.status)
    FROM event_bookings eb WHERE eb.id = (SELECT event_booking_id FROM l WHERE event_booking_id IS NOT NULL LIMIT 1)) AS event,
   (SELECT gift_card_id FROM gift_card_redemptions WHERE order_id = $1::uuid LIMIT 1) AS gift_card_used,
   (SELECT COALESCE(-sum(amount), 0)::text FROM store_credit_transactions WHERE order_id = $1::uuid AND reason = 'redemption') AS store_credit,
@@ -184,6 +192,24 @@ type Undone = Record<
   number
 >
 
+/**
+ * What old code has changed since T1 wrote the order (W10 review L1), read after the order's lock: the
+ * booking must still be `confirmed`, on T1's session, with T1's party size (from the pending record's
+ * `held_booking`), and the event booking still `pending`. A record written before W12 has no
+ * `held_booking`, so only the booking's status is checked for it. Empty when nothing has changed.
+ */
+export function changedSince(snapshot: PendingSnapshot | null, parts: Pick<OrderParts, 'booking' | 'event'>): string[] {
+  const changed: string[] = []
+  const held = snapshot?.held_booking
+  const booking = parts.booking
+  if (held && !booking) changed.push('the booking is gone')
+  if (booking && booking.status !== 'confirmed') changed.push(`the booking is ${booking.status}`)
+  if (held && booking && booking.session_id !== held.session_id) changed.push('the booking was moved to another session')
+  if (held && booking && booking.party_size !== held.party_size) changed.push(`the party size is ${booking.party_size}, not ${held.party_size}`)
+  if (parts.event && parts.event.status !== 'pending') changed.push(`the event booking is ${parts.event.status}`)
+  return changed
+}
+
 async function undoInTransaction(tx: Tx, orderId: string, options: UndoOptions): Promise<UndoOutcome> {
   // 1. The order first (LOCK_ORDER), so T2 and another undo queue behind it and see what this did.
   const order = (
@@ -197,6 +223,10 @@ async function undoInTransaction(tx: Tx, orderId: string, options: UndoOptions):
   // 2. What it holds, read now the order is locked.
   const parts = (await tx.query<OrderParts>(PARTS_SQL, [orderId]))[0] as OrderParts
   const booking = parts.booking
+
+  // W12: what T1 claimed is only T1's to give back while old code hasn't changed it (W10 review L1).
+  const changed = changedSince(order.reader_payment, parts)
+  if (changed.length > 0) return { undone: false, reason: 'changed_since', changed }
 
   // 3. Everything it gives back to, in LOCK_ORDER, so an order placed meanwhile can't deadlock with it.
   await lockForOrder(tx, {

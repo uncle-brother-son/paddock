@@ -18,6 +18,21 @@ import { failIfStripeWasReached, isStripeHost, REAL_STRIPE_MESSAGE, takeStripeAt
 const webDir = path.resolve(__dirname, '../../..')
 const FAKE_KEY = 'sk_test_guard_never_sent'
 
+/** A DNS lookup that fails at once: a request carrying it can't reach the network, even past a broken guard. */
+const failLookup = (_host: string, _options: unknown, callback: (err: Error) => void) => callback(new Error('lookup refused in the test: nothing sent'))
+const noNetwork = { lookup: failLookup as never }
+/** Calls `send`; the guard's refusal (thrown) is the answer, else the request's own failure. */
+const attempt = (send: () => { on(event: 'error', listener: (err: Error) => void): unknown; end(): unknown }): Promise<string> =>
+  new Promise((resolve) => {
+    try {
+      const req = send()
+      req.on('error', (err) => resolve(`not refused by the guard; failed later: ${err.message}`))
+      req.end()
+    } catch (err) {
+      resolve(err instanceof Error ? err.message : String(err))
+    }
+  })
+
 describe('the guard against real Stripe in tests', () => {
   it('knows the Stripe hosts, and only those', () => {
     for (const host of ['api.stripe.com', 'API.Stripe.com', 'files.stripe.com', 'api.stripe.com:443', 'stripe.com', 'api.stripe.com.', 'm.stripe.network']) {
@@ -41,15 +56,18 @@ describe('the guard against real Stripe in tests', () => {
     expect(takeStripeAttempts()).toEqual(['POST https://api.stripe.com/v1/payment_intents'])
   })
 
+  // W12 item 0 (W11a, "Still exposed"): these two carry a DNS lookup that fails at once, as the block
+  // below does, so a broken guard fails them with nothing looked up or sent. The SDK's own request gets
+  // it through its agent (Node passes an agent's `lookup` on to the socket).
   it("the SDK's default Node client (https.request) is stopped too", async () => {
-    const stripe = new Stripe(FAKE_KEY, { maxNetworkRetries: 0, timeout: 2_000 })
+    const stripe = new Stripe(FAKE_KEY, { maxNetworkRetries: 0, timeout: 2_000, httpAgent: new https.Agent({ lookup: failLookup as never }) })
     await expect(stripe.customers.search({ query: "metadata['x']:'y'" })).rejects.toBeInstanceOf(Stripe.errors.StripeConnectionError)
     expect(takeStripeAttempts()).toEqual(['https.request api.stripe.com'])
   })
 
-  it('https.get by host name, and by URL, are stopped', () => {
-    expect(() => https.get({ hostname: 'api.stripe.com', path: '/v1/charges' })).toThrow(REAL_STRIPE_MESSAGE)
-    expect(() => https.get('https://files.stripe.com/v1/files')).toThrow(REAL_STRIPE_MESSAGE)
+  it('https.get by host name, and by URL, are stopped', async () => {
+    expect(await attempt(() => https.get({ hostname: 'api.stripe.com', path: '/v1/charges', ...noNetwork }))).toContain(REAL_STRIPE_MESSAGE)
+    expect(await attempt(() => https.get('https://files.stripe.com/v1/files', noNetwork))).toContain(REAL_STRIPE_MESSAGE)
     expect(takeStripeAttempts()).toEqual(['https.get api.stripe.com', 'https.get files.stripe.com'])
   })
 
@@ -59,19 +77,6 @@ describe('the guard against real Stripe in tests', () => {
   // guard broken nothing is looked up or sent (a planted bug proved an unguarded call without one goes
   // out); the test fails on whether the guard refused it first.
   describe('named and namespace imports of node:http and node:https', () => {
-    const failLookup = (_host: string, _options: unknown, callback: (err: Error) => void) => callback(new Error('lookup refused in the test: nothing sent'))
-    const noNetwork = { lookup: failLookup as never }
-    /** Calls `send`; the guard's refusal (thrown) is the answer, else the request's own failure. */
-    const attempt = (send: () => { on(event: 'error', listener: (err: Error) => void): unknown; end(): unknown }): Promise<string> =>
-      new Promise((resolve) => {
-        try {
-          const req = send()
-          req.on('error', (err) => resolve(`not refused by the guard; failed later: ${err.message}`))
-          req.end()
-        } catch (err) {
-          resolve(err instanceof Error ? err.message : String(err))
-        }
-      })
     const stripeApi = { hostname: 'api.stripe.com', path: '/v1/payment_intents', method: 'POST', ...noNetwork }
 
     it('a named import of https.request is refused and recorded', async () => {

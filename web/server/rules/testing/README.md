@@ -197,3 +197,17 @@ The reader's replay (W11) drives createOrder, then `finaliseReaderOrder` or `can
 sides; the new side calls the finalise and cancel routes (`order-side.ts`). A cancelled order's id is a
 `gone#N` label on both sides, renumbered where it is first met (`withCanonicalGoneNumbers`), because the
 Worker keeps audit and idempotency rows that name it.
+
+## W12
+
+`replay/flow-replay.test.ts` runs every recorded scenario that finishes or cancels a reader flow (37), plus W12's own
+(`w12-*`: a Core pass seat moved into Peak, store credit on Move and Settle, add-on credit on Add Guest, each finalised
+and cancelled), with the flow's start and everything else through the old functions and only its finalise and cancel
+through the new routes (`replay/flow-side.ts`). The flow's record is given what step D's Worker start will write
+(`asWorkerFlow`), the one named difference with the new routes' audit and idempotency rows. A store credit note's random
+`[ref …]` is unnumbered on both sides before comparing.
+
+Migration 022 (one PaymentIntent, one order) is in `live-schema.sql`: tests that run many FakeStripes against one
+database give each its own `idTag`, or their `pi_fake_0001`s would collide. Reconcile's tests are
+`orders/reconcile.test.ts` (each row, crash tests, the refunds, the routes) and `orders/reconcile-postgres.test.ts`
+(the races, 022). `server/scheduled.test.ts` tests the schedule's handler.

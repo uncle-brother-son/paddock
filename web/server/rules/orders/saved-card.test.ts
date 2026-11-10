@@ -163,6 +163,9 @@ describe('a card order that goes through', () => {
       request_id: expect.any(String),
       gift_card_redemption: { gift_card_id: ID.giftCard, amount: 10 },
       created_at: expect.any(String),
+      // W12: the mode of the key the charge is sent with, and the booking as T1 wrote it (W10 review L1).
+      livemode: false,
+      held_booking: { session_id: ID.session, party_size: 2 },
     })
     // Never the old reader's field: the old sweep would take it for an open reader payment.
     expect(order?.reader_payment).not.toHaveProperty('payment_intent_id')

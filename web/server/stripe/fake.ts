@@ -127,7 +127,8 @@ interface FakeRefund {
   object: 'refund'
   amount: number
   payment_intent: string
-  status: 'succeeded'
+  /** W12: Stripe answers some refunds `pending` and settles them later (settleRefund). */
+  status: 'succeeded' | 'pending' | 'failed' | 'canceled'
   metadata: Record<string, string>
   created: number
 }
@@ -187,9 +188,17 @@ export class FakeStripe implements StripeClient {
   private readonly pricesById = new Map<string, Record<string, unknown>>()
   private sequence = 0
 
+  /**
+   * W12: `idTag` goes into every id this fake makes (`pi_fake_<tag>_0001`). Migration 022 lets one
+   * PaymentIntent be on one order only, so tests that run many fakes against one database (the real
+   * Postgres races) give each its own tag. Without one, ids are as before (the golden files name them).
+   */
+  constructor(private readonly options: { idTag?: string } = {}) {}
+
   private nextId(prefix: string): string {
     this.sequence += 1
-    return `${prefix}_fake_${String(this.sequence).padStart(4, '0')}`
+    const tag = this.options.idTag ? `${this.options.idTag}_` : ''
+    return `${prefix}_fake_${tag}${String(this.sequence).padStart(4, '0')}`
   }
 
   // Set-up, for tests.
@@ -229,6 +238,33 @@ export class FakeStripe implements StripeClient {
    *  request. This drops them all, as if that time had passed. */
   forgetIdempotencyKeys(): void {
     this.saved.clear()
+  }
+
+  /**
+   * W12: refunds made from now on are answered `pending`, as Stripe answers some (a card that takes
+   * longer, or one Stripe is still checking); settleRefund later says how each ended.
+   */
+  refundsStayPending = false
+
+  /** W12: a pending refund ends: `succeeded`, or `failed` / `canceled` (its money is back on the payment). */
+  settleRefund(id: string, status: 'succeeded' | 'failed' | 'canceled'): void {
+    const refund = this.refundsMade.find((r) => r.id === id)
+    if (!refund) throw new Error(`The fake has no refund ${id}.`)
+    if (refund.status !== 'pending') throw new Error(`The fake's refund ${id} is ${refund.status}, not pending.`)
+    refund.status = status
+    if (status !== 'succeeded') this.refunded.set(refund.payment_intent, (this.refunded.get(refund.payment_intent) ?? 0) - refund.amount)
+  }
+
+  /** W12: an intent Stripe is still processing (a card that takes longer): it can't be cancelled, and may yet succeed. */
+  markProcessing(id: string): void {
+    const intent = this.intents.get(id)
+    if (!intent) throw new Error(`The fake has no PaymentIntent ${id}.`)
+    intent.status = 'processing'
+  }
+
+  /** W12: every refund made, oldest first, as tests read them. */
+  get refundsSent(): ReadonlyArray<Readonly<FakeRefund>> {
+    return this.refundsMade
   }
 
   /** The next call to this method (e.g. 'paymentIntents.create') meets this fault. */
@@ -334,7 +370,12 @@ export class FakeStripe implements StripeClient {
     }
 
     if (fault?.kind === 'error') {
-      remember({ error: fault.error })
+      // W12a: a refused key (401) or a missing permission (403) is turned away before any endpoint runs, so
+      // Stripe saves nothing against the key ("we save results only after the execution of an endpoint
+      // begins", Stripe's idempotency docs, read 10 Nov 2026): the same key sent again once the key works
+      // is a first send.
+      const refused = fault.error instanceof Stripe.errors.StripeAuthenticationError || fault.error instanceof Stripe.errors.StripePermissionError
+      if (!refused) remember({ error: fault.error })
       throw fault.error
     }
 
@@ -409,17 +450,35 @@ export class FakeStripe implements StripeClient {
     cancel: (id) =>
       this.run('paymentIntents.cancel', { id }, undefined, () => {
         const intent = this.intent(id)
-        if (intent.status === 'succeeded' || intent.status === 'canceled') {
+        // W12: Stripe can't cancel a processing intent either (the W11 review's observation: the fake allowed it).
+        if (intent.status === 'succeeded' || intent.status === 'canceled' || intent.status === 'processing') {
           throw fakeStripeErrors.invalid('payment_intent_unexpected_state', `This PaymentIntent could not be canceled: it is ${intent.status}.`)
         }
         intent.status = 'canceled'
         return intent
       }) as unknown as Promise<Stripe.PaymentIntent>,
 
+    // W12: as Stripe lists them (reconcile): newest first, a page at a time (10 unless `limit` says,
+    // `starting_after` the last one seen), only the key's own mode, by customer and by `created`
+    // (gte, gt, lte, lt, in seconds) when asked.
     list: (params) =>
-      this.run('paymentIntents.list', params, undefined, () =>
-        list(newestFirst([...this.intents.values()].filter((i) => !params.customer || i.customer === params.customer)))
-      ) as unknown as Promise<Stripe.ApiList<Stripe.PaymentIntent>>,
+      this.run('paymentIntents.list', params, undefined, () => {
+        const created = typeof params.created === 'object' ? params.created : params.created === undefined ? {} : { gte: params.created, lte: params.created }
+        const all = newestFirst(
+          [...this.intents.values()].filter(
+            (i) =>
+              i.livemode === (this.keyLivemode === true) &&
+              (!params.customer || i.customer === params.customer) &&
+              (created.gte === undefined || i.created >= created.gte) &&
+              (created.gt === undefined || i.created > created.gt) &&
+              (created.lte === undefined || i.created <= created.lte) &&
+              (created.lt === undefined || i.created < created.lt)
+          )
+        )
+        const from = params.starting_after ? all.findIndex((i) => i.id === params.starting_after) + 1 : 0
+        const limit = params.limit ?? 10
+        return { ...list(all.slice(from, from + limit)), has_more: from + limit < all.length }
+      }) as unknown as Promise<Stripe.ApiList<Stripe.PaymentIntent>>,
   }
 
   // W11: the reader's card-save with no charge, a generated card's details, and the reader's connection token.
@@ -496,7 +555,7 @@ export class FakeStripe implements StripeClient {
           object: 'refund',
           amount,
           payment_intent: intent.id,
-          status: 'succeeded',
+          status: this.refundsStayPending ? 'pending' : 'succeeded',
           metadata: { ...((params.metadata ?? {}) as Record<string, string>) },
           created: seconds(),
         }

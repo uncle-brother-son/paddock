@@ -163,6 +163,56 @@ stay NOT_BUILT (W13). Card saving with no order (`payments/terminal.ts`): the co
 SetupIntent (`ensureStripeCustomer`, then `card_present` for off-session use under a key from the customer
 and the press), and the saved card, ported as it is (W03-decisions Q19).
 
+## Reader flows, reconcile and the schedule (W12)
+
+**Reader flows** (`orders/reader-flow.ts`, routes `POST /api/v1/staff/reader-flows/:pendingId/finalise` and `/cancel`):
+finaliseReaderPayment and cancelReaderPayment for Move, Settle and Add Guest, rows in the old shapes. Finalise
+checks the PaymentIntent to the penny, then one transaction locks the flow row, records the payment (order and
+line), the gift card part, a move's old places and pass session, an Add Guest's add-on lines, marks the row and
+writes `reader_payment.finalise`. The undo is one transaction too (`reader_payment.cancel`). Only flows the Worker
+started (their record carries `method: 'reader'` and `request_id`, written by step D); the old screens' are refused
+(`old_reader_flow`). A database fault after the payment holds the row (`finalise_failed`); it is never refunded for it.
+
+**The undo refuses `changed_since`** (W10 review L1): T1 writes `held_booking` (session, party size) on the pending
+record; if old code has since cancelled, moved or resized the booking, or the event booking isn't pending, the undo
+changes nothing and the order waits for a person.
+
+**Reconcile** (`orders/reconcile.ts`): Worker orders and flows pending over 15 minutes (Q14), oldest first, after the
+automatic refunds. It reads Stripe with list (never search), cancels an intent nobody can pay, runs T2 or the undo,
+and refunds a payment that landed on an order or flow already undone (`<id>:refund-charge` / `:refund-reader`, its
+row written first, listed until Stripe confirms). It never sends a charge. A 401/403 stops the run with one
+`reconcile.stripe_refused` row. "Nothing found" counts as nothing taken only when the record's `livemode` is the
+key's. Every action is an `order.reconcile` row. Old orders and flows are counted and left to the old sweep.
+
+**W12a (the W12 review's fixes).**
+- **Orders the old screens moved out of pending** (`orders/changed-elsewhere.ts`, review S1): from minute 15 the old
+  Cancel & Refund can reach a held Worker card order's booking, give its money back as store credit and set the order
+  `partially_refunded`. Reconcile also selects Worker card and reader orders that are neither `pending` nor `paid`,
+  have no PaymentIntent on them and no `order.paid` or `order.undo` row (T2 sets `paid` with its PaymentIntent and
+  writes `order.paid`; the undo deletes the order and writes `order.undo`), made in the last 30 days and over the
+  15-minute window old. It lists the customer's intents by `metadata.order_id` as for a held order and records what it
+  finds (`reason: 'changed_elsewhere'`, `finding`: taken with the amount, nothing taken, still open, unclear, other
+  mode), once per finding. It never cancels, refunds, finalises or undoes them. Taken and nothing taken are final: the
+  order isn't read again. The stuck list shows them with plain words for a person. The selection reads the last 30
+  days of orders through `idx_orders_created` and each candidate's audit rows through `audit_log_entity_idx`.
+- A held reader order found paid by listing goes through the reader's finalise (`finaliseReaderOrderFound`), so its
+  card is saved, or R6's warning given (L4).
+- The refused-key watch covers the whole Stripe client (L6); an item that had already acted keeps its row.
+- The late refund's rows are the system's, even on a staff member's run, with `runBy` naming who ran it (L7).
+- FakeStripe saves nothing against an idempotency key for a 401 or 403 (Stripe saves a result only once an
+  endpoint has started), so the late refund is sent again with the same key once the key works.
+
+**The schedule** (`server/scheduled.ts`, `custom-worker.ts`, `wrangler.jsonc`): every 5 minutes, inside the Worker,
+the database from the Hyperdrive binding and Stripe from the Worker's secret. 50 items and 120 s a run; a staff run
+(`POST /api/v1/staff/orders/reconcile`) 10 items and 20 s, every Stripe call answered by 25 s. One item's worst case
+(W12a, correcting W12's 70 s) is about 86 s: a held reader order whose tap lands while reconcile cancels it, with
+save-card, makes six Stripe calls (the list, read, cancel, read again, then the two card reads) at 10 s each, plus T2
+and its row at 13 s each. Each extra page of a Stripe list adds 10 s (ten pages, the cap, about 176 s). So a scheduled
+run ends by about 206 s, or about 296 s with ten-page lists, inside the 5 minutes to the next run (overlap would be
+safe) and far inside the 15-minute limit. The arithmetic is in `orders/reconcile.ts` (`SCHEDULED_LIMITS`). The stuck
+list is `GET /api/v1/staff/orders/stuck`.
+Their schemas are in `orders/reconcile-contracts.ts` until W14 moves them into `contracts/`.
+
 ## Refund claims with no finish
 
 The staff app claims a refund's money before it moves. Each claim writes `booking.refund_claimed` to

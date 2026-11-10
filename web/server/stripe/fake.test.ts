@@ -337,3 +337,77 @@ describe("W11a: the key's mode", () => {
     expect((await fake.paymentIntents.retrieve(intent.id)).status).toBe('requires_payment_method')
   })
 })
+
+describe('W12: what reconcile reads', () => {
+  it('lists intents as Stripe does: newest first, a page at a time, by customer and created, in the key\'s own mode', async () => {
+    stripe.addCustomer('cus_2')
+    const made: string[] = []
+    for (let i = 0; i < 3; i++) made.push((await stripe.paymentIntents.create({ amount: 100, currency: 'gbp', customer: 'cus_1' })).id)
+    await stripe.paymentIntents.create({ amount: 100, currency: 'gbp', customer: 'cus_2' })
+    const page1 = await stripe.paymentIntents.list({ customer: 'cus_1', limit: 2 })
+    expect(page1.data.map((i) => i.id)).toEqual([made[2], made[1]])
+    expect(page1.has_more).toBe(true)
+    const page2 = await stripe.paymentIntents.list({ customer: 'cus_1', limit: 2, starting_after: made[1] as string })
+    expect(page2.data.map((i) => i.id)).toEqual([made[0]])
+    expect(page2.has_more).toBe(false)
+    const now = Math.floor(Date.now() / 1000)
+    expect((await stripe.paymentIntents.list({ created: { gte: now + 60 } })).data).toEqual([])
+    expect((await stripe.paymentIntents.list({ created: { gte: now - 60, lte: now + 60 } })).data).toHaveLength(4)
+    stripe.keyLivemode = true
+    expect((await stripe.paymentIntents.list({})).data).toEqual([])
+  })
+
+  it("a processing intent can't be cancelled, as Stripe refuses", async () => {
+    const intent = await stripe.paymentIntents.create({ amount: 100, currency: 'gbp', customer: 'cus_1' })
+    stripe.markProcessing(intent.id)
+    await expect(stripe.paymentIntents.cancel(intent.id)).rejects.toThrow('could not be canceled: it is processing')
+  })
+
+  it('a refund can stay pending, then settle; one that fails puts its money back on the payment', async () => {
+    const paid = await stripe.paymentIntents.create(charge)
+    stripe.refundsStayPending = true
+    const refund = await stripe.refunds.create({ payment_intent: paid.id })
+    expect(refund.status).toBe('pending')
+    stripe.settleRefund(refund.id, 'failed')
+    expect(stripe.refundedPence).toBe(0)
+    const again = await stripe.refunds.create({ payment_intent: paid.id })
+    stripe.settleRefund(again.id, 'succeeded')
+    expect(stripe.refundedPence).toBe(1500)
+    expect((await stripe.refunds.list({ payment_intent: paid.id })).data.map((r) => r.status)).toEqual(['succeeded', 'failed'])
+  })
+
+  it('an idTag goes into every id it makes (W12: one PaymentIntent, one order, across fakes)', async () => {
+    const tagged = new FakeStripe({ idTag: 'abc' })
+    tagged.addCustomer('cus_1')
+    expect((await tagged.paymentIntents.create(charge)).id).toMatch(/^pi_fake_abc_\d{4}$/)
+    expect((await stripe.paymentIntents.create(charge)).id).toMatch(/^pi_fake_\d{4}$/)
+  })
+})
+
+describe('W12a: a refused key saves nothing against the idempotency key', () => {
+  it("a 401 or 403 is turned away before any endpoint runs, as Stripe's docs say, so the same key sent again once the key works is a first send", async () => {
+    for (const refusal of [fakeStripeErrors.authentication(), fakeStripeErrors.permission()]) {
+      const fake = new FakeStripe()
+      fake.addCustomer('cus_1')
+      const paid = await fake.paymentIntents.create(charge)
+      const key = { idempotencyKey: `${paid.id}:refund` }
+      fake.failNext('refunds.create', { kind: 'error', error: refusal })
+      await expect(fake.refunds.create({ payment_intent: paid.id }, key)).rejects.toBe(refusal)
+      expect(fake.refundedPence).toBe(0)
+      const refund = await fake.refunds.create({ payment_intent: paid.id }, key)
+      expect(refund.status).toBe('succeeded')
+      expect(await fake.refunds.create({ payment_intent: paid.id }, key)).toEqual(refund)
+      expect(fake.refundedPence).toBe(1500)
+    }
+  })
+
+  it('any other error is still saved against the key and replayed, as Stripe does once an endpoint has run', async () => {
+    const paid = await stripe.paymentIntents.create(charge)
+    const key = { idempotencyKey: `${paid.id}:refund` }
+    const disputed = fakeStripeErrors.invalid('charge_disputed', 'This charge is disputed.')
+    stripe.failNext('refunds.create', { kind: 'error', error: disputed })
+    await expect(stripe.refunds.create({ payment_intent: paid.id }, key)).rejects.toBe(disputed)
+    await expect(stripe.refunds.create({ payment_intent: paid.id }, key)).rejects.toBe(disputed)
+    expect(stripe.refundedPence).toBe(0)
+  })
+})

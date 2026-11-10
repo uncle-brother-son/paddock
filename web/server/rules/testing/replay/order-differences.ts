@@ -603,9 +603,9 @@ const STRIPE_CUSTOMER_KEY: AllowedDifference = {
 }
 /** W11: the reader order's pending record is the old snapshot's superset (method, channel, Stripe customer, request id; W11a: the intent's mode). */
 const READER_RECORD: AllowedDifference = {
-  name: "The reader order's pending record is the old snapshot's superset: method, channel, Stripe customer, request id and the intent's Stripe mode (livemode, W11a) added; the stock ledger and the event booking found through the order's own rows, not ids kept in it",
-  decision: `${PENDING_RECORD}; W03-decisions "W11 review calls" (L1)`,
-  path: /^\.tables\.orders\.added\[0\]\.reader_payment\.(method|channel|stripe_customer_id|request_id|livemode|stock_adjustment_ids|event_booking_id)$/,
+  name: "The reader order's pending record is the old snapshot's superset: method, channel, Stripe customer, request id, the intent's Stripe mode (livemode, W11a) and the booking as T1 wrote it (held_booking, W12) added; the stock ledger and the event booking found through the order's own rows, not ids kept in it",
+  decision: `${PENDING_RECORD}; W03-decisions "W11 review calls" (L1); brief W12 item 1 (W10 review L1)`,
+  path: /^\.tables\.orders\.added\[0\]\.reader_payment\.(method|channel|stripe_customer_id|request_id|livemode|held_booking|stock_adjustment_ids|event_booking_id)$/,
 }
 /** W11, Q9: a gift card beside the reader records split, where finaliseReaderOrder wrote reader. */
 const Q9_READER: AllowedDifference = {

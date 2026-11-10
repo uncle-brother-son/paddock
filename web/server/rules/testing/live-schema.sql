@@ -1731,6 +1731,7 @@ CREATE INDEX idx_stock_adjustments_variant_created ON public.stock_adjustments U
 CREATE INDEX idx_variants_product ON public.product_variants USING btree (product_id);
 CREATE INDEX idx_variants_sku ON public.product_variants USING btree (sku);
 CREATE INDEX membership_payment_date_changes_membership_idx ON public.membership_payment_date_changes USING btree (membership_id, created_at DESC);
+CREATE UNIQUE INDEX orders_stripe_payment_intent_id_key ON public.orders USING btree (stripe_payment_intent_id) WHERE (stripe_payment_intent_id IS NOT NULL);
 CREATE INDEX parity_log_action_idx ON public.parity_log USING btree (action, at DESC);
 CREATE INDEX pending_reader_payments_record_idx ON public.pending_reader_payments USING btree (record_id);
 CREATE INDEX pending_reader_payments_status_idx ON public.pending_reader_payments USING btree (status, created_at);

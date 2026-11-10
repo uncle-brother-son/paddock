@@ -10,6 +10,7 @@ import type { StripeClient } from '@/server/stripe/client'
 import { NoTimeLeft, sendOptions, stripeTiming, type StripeTiming } from '@/server/stripe/deadline'
 import { resolveSavedCard, type ResolvedCard } from '@/server/stripe/saved-card'
 import {
+  CHANGED_SINCE_MESSAGE,
   OLD_READER_ORDER_MESSAGE,
   OLD_ROLLBACK_STARTED_MESSAGE,
   READER_CHARGED_WITHOUT_ORDER_MESSAGE,
@@ -122,8 +123,8 @@ async function findOrder(db: Db, orderId: string): Promise<Found> {
   return { kind: 'not_reader' }
 }
 
-const stripeMessage = (err: unknown): string | null => (err instanceof Error && !(err instanceof NoTimeLeft) && err.message ? err.message : null)
-const isMissing = (err: unknown): boolean => {
+export const stripeMessage = (err: unknown): string | null => (err instanceof Error && !(err instanceof NoTimeLeft) && err.message ? err.message : null)
+export const isMissing = (err: unknown): boolean => {
   const failure = err as { statusCode?: number; code?: string } | null
   return failure?.statusCode === 404 || failure?.code === 'resource_missing'
 }
@@ -207,10 +208,38 @@ export async function finaliseReaderOrder(db: Db, stripe: StripeClient, orderId:
   return finaliseFound(db, stripe, orderId, await findOrder(db, orderId), options, timing)
 }
 
+/**
+ * W12a (W12 review L4): reconcile found, by listing Stripe for `metadata.order_id`, a succeeded intent for a
+ * reader order whose intent was never written onto it (held, `intent_unconfirmed`). It is finalised as the
+ * screen's finalise would be, with that PaymentIntent: the same checks, and the card saved when the customer
+ * agreed to it (or CARD_NOT_SAVED_WARNING, R6), then T2.
+ *
+ * The order is as reconcile selected it (pending, no PaymentIntent on it, this record), not read again: a
+ * read here would come after the last Stripe call and lengthen a manual run past its stated bound. T2 locks
+ * the order and re-checks all of it (still pending, the old rollback not started, the payment). `timing`
+ * is reconcile's run's.
+ */
+export async function finaliseReaderOrderFound(
+  db: Db,
+  stripe: StripeClient,
+  orderId: string,
+  record: ReaderSnapshot,
+  paymentIntent: Stripe.PaymentIntent,
+  options: ReaderRouteOptions,
+  timing: StripeTiming | undefined
+): Promise<FinaliseReaderOrderOutput> {
+  const found: Found = {
+    kind: 'reader',
+    order: { payment_status: 'pending', stripe_payment_intent_id: null, reader_payment: record as unknown as Record<string, unknown> },
+    snapshot: { ...record, payment_intent_id: paymentIntent.id },
+  }
+  return finaliseFound(db, stripe, orderId, found, options, timing, paymentIntent)
+}
+
 // --- Cancel
 
 /** What Stripe says about the reader's intent once asked to cancel it (the legacy route's 'cancel' action). */
-type Settled =
+export type Settled =
   | { kind: 'succeeded'; paymentIntent: Stripe.PaymentIntent }
   /** Cancelled now or before, or Stripe has no such intent: nothing was or can be taken. */
   | { kind: 'cancelled'; status: string }
@@ -233,9 +262,10 @@ export const otherModeMessage = (paymentIntentId: string): string =>
  * was made in (W11a, review L1): Stripe also answers 404 to a key of the other mode for an intent that
  * exists and may have taken the money. Otherwise, or when either mode is unknown, it is unclear.
  */
-async function settleIntent(
+export async function settleIntent(
   stripe: StripeClient,
-  snapshot: ReaderSnapshot & { payment_intent_id: string },
+  /** The intent's id and the mode it was made in: an order's pending record, or a reader flow's (W12). */
+  snapshot: { payment_intent_id: string; livemode?: boolean | undefined },
   timing: StripeTiming | undefined
 ): Promise<Settled> {
   const paymentIntentId = snapshot.payment_intent_id
@@ -325,5 +355,9 @@ export async function cancelReaderOrder(db: Db, stripe: StripeClient, orderId: s
       return { cancelled: false, orderId, reason: 'rollback_started', message: OLD_ROLLBACK_STARTED_MESSAGE }
     case 'not_pending':
       return { cancelled: false, orderId, reason: 'already_cancelled', message: 'This order is no longer pending, so it cannot be cancelled.' }
+    case 'changed_since':
+      // W12: the intent is cancelled (nothing more can be taken), but old code changed the booking, so
+      // giving back what T1 claimed could give it twice. Left pending for a person (the stuck list).
+      return { cancelled: false, orderId, reason: 'changed_since', message: CHANGED_SINCE_MESSAGE }
   }
 }

@@ -170,6 +170,14 @@ export const OLD_READER_ORDER_MESSAGE =
 export const OLD_ROLLBACK_STARTED_MESSAGE =
   "This order is already being rolled back by the old checkout, so it can't be cancelled here. Press Resolve now on the Orders page to finish it."
 
+/*
+ * W12: words for reconcile, the reader flows and the stuck list (new; adjustable at W14).
+ */
+
+/** The undo refused: old code changed the booking or event booking after T1 (W10 review L1). Left for a person. */
+export const CHANGED_SINCE_MESSAGE =
+  "This order's booking was changed after the order was started (cancelled, moved, or guests added or removed), so it wasn't cancelled automatically and nothing was given back. Check the booking and the payment, then sort the order out by hand."
+
 /** The words for the Herd gate, which name the waiting period from membership_settings. */
 export function herdWaitMessage(addonCreditWaitMonths: number): string {
   return `That membership is not a Herd member yet — add-on credits unlock for Herd members (monthly members after ${addonCreditWaitMonths} month${addonCreditWaitMonths === 1 ? '' : 's'}, yearly members straight away).`

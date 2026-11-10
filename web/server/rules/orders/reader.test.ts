@@ -181,8 +181,10 @@ describe('T1 and the intent (createOrder stage 29)', () => {
         request_id: expect.any(String),
         created_at: expect.any(String),
         payment_intent_id: 'pi_fake_0001',
-        // W11a (review L1): the Stripe mode the intent was made in, written with it.
+        // W11a (review L1): the Stripe mode the intent was made in, written with it (W12: T1 writes the key's first).
         livemode: false,
+        // W12 (W10 review L1): the booking as T1 wrote it, for the undo's changed_since check.
+        held_booking: { session_id: ID.session, party_size: 2 },
       })
       expect(await heldClaims()).toEqual({ places: 2, stock: 3 })
       expect(await auditActions(placed.orderId)).toEqual(['order.create'])

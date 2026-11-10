@@ -114,7 +114,7 @@ const retrieved = (stripe: FakeStripe, intent: string): Promise<Stripe.PaymentIn
 
 describe('finalise twice at once', () => {
   it('the second waits on the order, then finds it paid with the same payment: already finalised, the card saved once', async () => {
-    const stripe = new FakeStripe()
+    const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
     const { orderId, intent, customerId } = await onTheReader(stripe, true)
     stripe.completeReaderPayment(intent, { generatedCard: 'pm_race' })
     const card = { paymentMethodId: 'pm_race', reusable: true, last4: '4242', brand: 'visa' }
@@ -134,7 +134,7 @@ describe('finalise twice at once', () => {
 
 describe('cancel twice at once', () => {
   it('the second waits on the order, then finds it gone: given back once', async () => {
-    const stripe = new FakeStripe()
+    const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
     const stockBefore = await stockNow()
     const { orderId, intent } = await onTheReader(stripe)
     expect(await stockNow()).toBe(stockBefore - 2)
@@ -152,7 +152,7 @@ describe('cancel twice at once', () => {
 
 describe('finalise and cancel racing on one order', () => {
   it('the tap went through: cancel finds it succeeded and finalises instead, waiting on the T2 already running; paid once', async () => {
-    const stripe = new FakeStripe()
+    const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
     const { orderId, intent } = await onTheReader(stripe)
     stripe.completeReaderPayment(intent)
     const t2 = await holding(first, async () => finaliseOrder(first, orderId, await retrieved(stripe, intent), asReconcile))
@@ -166,7 +166,7 @@ describe('finalise and cancel racing on one order', () => {
   })
 
   it('T2 held, the undo waits on the order, then finds it paid and refuses: nothing given back', async () => {
-    const stripe = new FakeStripe()
+    const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
     const { orderId, intent } = await onTheReader(stripe)
     stripe.completeReaderPayment(intent)
     const stock = await stockNow()
@@ -179,7 +179,7 @@ describe('finalise and cancel racing on one order', () => {
   })
 
   it('the undo held, T2 waits on the order, then finds it gone: nothing marked, the payment recorded as needing a refund', async () => {
-    const stripe = new FakeStripe()
+    const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
     const { orderId, intent } = await onTheReader(stripe)
     stripe.completeReaderPayment(intent)
     const undo = await holding(first, () => undoOrder(first, orderId, { ...asReconcile, why: 'race' }))
@@ -193,7 +193,7 @@ describe('finalise and cancel racing on one order', () => {
 
   it('has exactly one outcome in every free-running race (30 rounds each): tapped, paid once and nothing given back; not tapped, undone once and never paid', async () => {
     for (let round = 0; round < 30; round += 1) {
-      const stripe = new FakeStripe()
+      const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
       const stock = await stockNow()
       const { orderId, intent } = await onTheReader(stripe)
       stripe.completeReaderPayment(intent)
@@ -205,7 +205,7 @@ describe('finalise and cancel racing on one order', () => {
       expect(await stockNow()).toBe(stock - 2)
     }
     for (let round = 0; round < 30; round += 1) {
-      const stripe = new FakeStripe()
+      const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
       const stock = await stockNow()
       const { orderId } = await onTheReader(stripe)
       const [finalised, cancelled] = await Promise.all([finaliseReaderOrder(first, stripe, orderId, asReconcile), cancelReaderOrder(second, stripe, orderId, asReconcile)])
@@ -219,7 +219,7 @@ describe('finalise and cancel racing on one order', () => {
 
   it('two cancels free-running (30 rounds): undone once, given back once', async () => {
     for (let round = 0; round < 30; round += 1) {
-      const stripe = new FakeStripe()
+      const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
       const stock = await stockNow()
       const { orderId } = await onTheReader(stripe)
       const answers = await Promise.all([cancelReaderOrder(first, stripe, orderId, asReconcile), cancelReaderOrder(second, stripe, orderId, asReconcile)])
@@ -240,7 +240,7 @@ describe("Q10's guard with two reader orders for one customer at once", () => {
   }
 
   it('both wait on the customer; whichever goes first commits pending, and the other, reading after it, is refused', async () => {
-    const stripe = new FakeStripe()
+    const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
     const customer = await readerCustomer(stripe)
     const holder = await holding(third, (tx) => tx.query('SELECT id FROM customers WHERE id = $1 FOR NO KEY UPDATE', [customer]))
     const one = outcome(first, soapsOnTheReader(customer), stripe)
@@ -259,7 +259,7 @@ describe("Q10's guard with two reader orders for one customer at once", () => {
 
   it('in every free-running race (20 rounds) one waits for its tap and the other is refused, never two intents', async () => {
     for (let round = 0; round < 20; round += 1) {
-      const stripe = new FakeStripe()
+      const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
       const customer = await readerCustomer(stripe)
       const outcomes = await Promise.all([outcome(first, soapsOnTheReader(customer), stripe), outcome(second, soapsOnTheReader(customer), stripe)])
       expect(outcomes.sort(), `round ${round}`).toEqual(['order_still_processing', 'pending_reader'])
@@ -268,7 +268,7 @@ describe("Q10's guard with two reader orders for one customer at once", () => {
   })
 
   it('a held reader order three hours old still refuses a reader order on another connection', async () => {
-    const stripe = new FakeStripe()
+    const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
     const { orderId, customerId } = await onTheReader(stripe)
     await first.query(`UPDATE orders SET created_at = now() - interval '3 hours' WHERE id = $1`, [orderId])
     expect(await outcome(second, soapsOnTheReader(customerId), stripe)).toBe('order_still_processing')
@@ -355,7 +355,7 @@ describe("W11a: the press's statements between its Stripe calls are bounded (rev
     (await first.query<{ id: string | null }>('SELECT stripe_customer_id AS id FROM customers WHERE id = $1', [customerId]))[0]?.id ?? null
 
   it("the review's case: 4 s left and the customer's row held 7 s once Stripe has made the customer: the write gives up by the deadline and never lands; nothing asked for, undone", async () => {
-    const stripe = new FakeStripe()
+    const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
     const customerId = await fixtures.customer(first) // no Stripe customer yet
     const stock = await stockNow()
     const hold = holdTheCustomer(stripe, customerId, 7_000)
@@ -379,7 +379,7 @@ describe("W11a: the press's statements between its Stripe calls are bounded (rev
   }, 30_000)
 
   it("plenty of time and the row held 2 s: the write waits for it and saves the id, and the intent is made", async () => {
-    const stripe = new FakeStripe()
+    const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
     const customerId = await fixtures.customer(first)
     const hold = holdTheCustomer(stripe, customerId, 2_000)
     const writes: Timed[] = []
@@ -392,7 +392,7 @@ describe("W11a: the press's statements between its Stripe calls are bounded (rev
   }, 30_000)
 
   it("plenty of time and the row held 7 s: the write gives up at the 5 s lock limit, not the client's 10 s, and never lands; undone", async () => {
-    const stripe = new FakeStripe()
+    const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
     const customerId = await fixtures.customer(first)
     const stock = await stockNow()
     const hold = holdTheCustomer(stripe, customerId, 7_000)
@@ -409,7 +409,7 @@ describe("W11a: the press's statements between its Stripe calls are bounded (rev
   }, 30_000)
 
   it("the intent made and the order's row held 6.5 s: writing it on gives up at the 5 s lock limit and never lands; held (PAYMENT_UNCONFIRMED), never undone", async () => {
-    const stripe = new FakeStripe()
+    const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
     const customerId = await readerCustomer(stripe)
     const stock = await stockNow()
     const hold = holdAfter(stripe, 'paymentIntents.create', 'SELECT id FROM orders WHERE id = $1 FOR UPDATE', (made) => made.metadata?.['order_id'] ?? '', customerId, 6_500)

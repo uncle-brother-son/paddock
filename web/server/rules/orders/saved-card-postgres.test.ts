@@ -124,7 +124,7 @@ const orderStatus = async (orderId: string) => (await first.query<{ payment_stat
 
 describe('T2 and the undo racing on one order', () => {
   it('T2 first: the undo waits on the order, then finds it paid and refuses; nothing given back', async () => {
-    const stripe = new FakeStripe()
+    const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
     const charge = await pendingOrder(stripe, await cardCustomer(stripe))
     const paymentIntent = await charged(stripe, charge)
     const t2 = await holding(first, () => finaliseOrder(first, charge.orderId, paymentIntent, reconcile))
@@ -140,7 +140,7 @@ describe('T2 and the undo racing on one order', () => {
   })
 
   it('the undo first: T2 waits on the order, then finds it gone, writes nothing but the record of a charge with no order', async () => {
-    const stripe = new FakeStripe()
+    const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
     const charge = await pendingOrder(stripe, await cardCustomer(stripe))
     const paymentIntent = await charged(stripe, charge)
     const stock = await stockNow()
@@ -158,7 +158,7 @@ describe('T2 and the undo racing on one order', () => {
   })
 
   it('a T2 that rolls back leaves the order to the undo, which then gives everything back', async () => {
-    const stripe = new FakeStripe()
+    const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
     const charge = await pendingOrder(stripe, await cardCustomer(stripe))
     const paymentIntent = await charged(stripe, charge)
     const stock = await stockNow()
@@ -171,7 +171,7 @@ describe('T2 and the undo racing on one order', () => {
   })
 
   it('two undos at once: one gives back, the other finds the order gone; given back once', async () => {
-    const stripe = new FakeStripe()
+    const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
     const charge = await pendingOrder(stripe, await cardCustomer(stripe))
     const stock = await stockNow()
     const one = await holding(first, () => undoOrder(first, charge.orderId, { ...reconcile, why: 'race' }))
@@ -184,7 +184,7 @@ describe('T2 and the undo racing on one order', () => {
 
   it('has exactly one outcome in every free-running race (30 rounds): paid and not undone, or undone and not paid', async () => {
     for (let round = 0; round < 30; round += 1) {
-      const stripe = new FakeStripe()
+      const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
       const customer = await cardCustomer(stripe)
       const charge = await pendingOrder(stripe, customer)
       const paymentIntent = await charged(stripe, charge)
@@ -229,7 +229,7 @@ describe("Q10's guard with two card orders for one customer at once", () => {
   }
 
   it('both wait on the customer; whichever goes first commits pending, and the other, reading after it, is refused', async () => {
-    const stripe = new FakeStripe()
+    const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
     const gate = deferred()
     gated(stripe, gate.promise)
     const customer = await cardCustomer(stripe)
@@ -255,7 +255,7 @@ describe("Q10's guard with two card orders for one customer at once", () => {
   })
 
   it('a cash order for the same customer at the same time is not affected', async () => {
-    const stripe = new FakeStripe()
+    const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
     const gate = deferred()
     gated(stripe, gate.promise)
     const customer = await cardCustomer(stripe)
@@ -274,7 +274,7 @@ describe("Q10's guard with two card orders for one customer at once", () => {
 
   it('in every free-running race (20 rounds) one is charged and the other refused, never two charges', async () => {
     for (let round = 0; round < 20; round += 1) {
-      const stripe = new FakeStripe()
+      const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
       const gate = deferred()
       gated(stripe, gate.promise)
       const customer = await cardCustomer(stripe)
@@ -299,7 +299,7 @@ describe("Q10 as changed by W10a: a held Worker card order counts however old; o
     first.query(`UPDATE orders SET created_at = now() - make_interval(mins => $1::int) WHERE customer_id = $2 AND payment_status = 'pending'`, [minutes, customer])
 
   it('held 16 minutes on (review R2) and three hours on: a card order on another connection is refused, nothing charged', async () => {
-    const stripe = new FakeStripe()
+    const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
     const customer = await cardCustomer(stripe)
     await pendingOrder(stripe, customer)
     for (const minutes of [16, 180]) {
@@ -312,7 +312,7 @@ describe("Q10 as changed by W10a: a held Worker card order counts however old; o
   })
 
   it('nothing on the card while one is held: goes through on another connection, with no Stripe call', async () => {
-    const stripe = new FakeStripe()
+    const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
     const customer = await cardCustomer(stripe)
     await pendingOrder(stripe, customer)
     await first.query('UPDATE customers SET store_credit_balance = 30 WHERE id = $1', [customer])
@@ -322,7 +322,7 @@ describe("Q10 as changed by W10a: a held Worker card order counts however old; o
   })
 
   it('any other pending order counts for 15 minutes only: refused at 14, through at 16', async () => {
-    const stripe = new FakeStripe()
+    const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
     const customer = await cardCustomer(stripe)
     await insert(first, 'orders', { customer_id: customer, order_total: '10.00', payment_status: 'pending', order_source: 'staff_created' })
     await age(customer, 14)
@@ -335,7 +335,7 @@ describe("Q10 as changed by W10a: a held Worker card order counts however old; o
 
 describe('the undo keeps LOCK_ORDER: the order, then what it gives back to', () => {
   it('with a T1 holding the customer, the undo (holding the order) waits on the customer, and both finish', async () => {
-    const stripe = new FakeStripe()
+    const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
     const customer = await cardCustomer(stripe)
     const charge = await pendingOrder(stripe, customer)
     const holder = await holding(third, (tx) => tx.query('SELECT id FROM customers WHERE id = $1 FOR NO KEY UPDATE', [customer]))
@@ -348,7 +348,7 @@ describe('the undo keeps LOCK_ORDER: the order, then what it gives back to', () 
 
   it('an undo and cash orders on the same customer and product never deadlock (30 free-running rounds)', async () => {
     for (let round = 0; round < 30; round += 1) {
-      const stripe = new FakeStripe()
+      const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
       const customer = await cardCustomer(stripe)
       const charge = await pendingOrder(stripe, customer)
       const cash = { ...soapsOnCard(customer), payment: { method: 'cash' } }

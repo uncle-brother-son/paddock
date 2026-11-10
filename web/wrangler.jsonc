@@ -2,7 +2,18 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "paddock",
   "compatibility_date": "2024-11-21",
-  "main": ".open-next/worker.js",
+  // W12: the custom worker (custom-worker.ts) wraps OpenNext's generated .open-next/worker.js, unchanged
+  // for every request, and adds the scheduled handler that runs reconcile (server/scheduled.ts).
+  "main": "custom-worker.ts",
+  // Every 5 minutes (W03-decisions Q14). Switching it off is removing this line and deploying (W03-plan 3.3).
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+  // The custom worker reaches the server code directly, outside Next's build. Next swaps the `server-only`
+  // marker for an empty module on the server; wrangler's bundle needs the same (vitest.unit.config.ts too).
+  "alias": {
+    "server-only": "./node_modules/next/dist/compiled/server-only/empty.js"
+  },
   "assets": {
     "directory": ".open-next/assets",
     "binding": "ASSETS"

@@ -21,7 +21,7 @@ export interface StripeClient {
     create(params: Stripe.PaymentIntentCreateParams, options?: Stripe.RequestOptions): Promise<Stripe.PaymentIntent>
     retrieve(id: string, params?: Stripe.PaymentIntentRetrieveParams, options?: Stripe.RequestOptions): Promise<Stripe.PaymentIntent>
     cancel(id: string, params?: Stripe.PaymentIntentCancelParams, options?: Stripe.RequestOptions): Promise<Stripe.PaymentIntent>
-    list(params: Stripe.PaymentIntentListParams): Promise<Stripe.ApiList<Stripe.PaymentIntent>>
+    list(params: Stripe.PaymentIntentListParams, options?: Stripe.RequestOptions): Promise<Stripe.ApiList<Stripe.PaymentIntent>>
   }
   /** W11: the reader's card-save with no charge (createTerminalSetupIntent), and reading it back (resolve-saved-card). */
   setupIntents: {
@@ -40,7 +40,7 @@ export interface StripeClient {
   }
   refunds: {
     create(params: Stripe.RefundCreateParams, options?: Stripe.RequestOptions): Promise<Stripe.Refund>
-    list(params: Stripe.RefundListParams): Promise<Stripe.ApiList<Stripe.Refund>>
+    list(params: Stripe.RefundListParams, options?: Stripe.RequestOptions): Promise<Stripe.ApiList<Stripe.Refund>>
   }
   subscriptions: {
     create(params: Stripe.SubscriptionCreateParams, options?: Stripe.RequestOptions): Promise<Stripe.Subscription>
