@@ -1,5 +1,5 @@
 import { defineRoute } from '@/server/http/define-route'
-import { finaliseReaderFlowOutputSchema, readerFlowInputSchema } from '@/server/rules/orders/reconcile-contracts'
+import { finaliseReaderFlowOutputSchema, readerFlowInputSchema } from '@/contracts'
 import { finaliseReaderFlow } from '@/server/rules/orders/reader-flow'
 import { createStripeClient, ORDER_STRIPE_LIMITS } from '@/server/stripe/client'
 

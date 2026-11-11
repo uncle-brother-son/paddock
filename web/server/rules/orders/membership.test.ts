@@ -451,7 +451,8 @@ describe('definite after the subscription exists (W11 review L3): compensate, th
         return answer
       }
       const answer = await place(withSoap)
-      expect(errorOf(answer)).toMatchObject({ details: { reason: 'membership_subscription_failed' } })
+      // W14c (W13 review L4, W14b N3): a refusal after Stripe, after the compensation: PAYMENT_FAILED, not VALIDATION.
+      expect(errorOf(answer)).toMatchObject({ code: 'PAYMENT_FAILED', details: { reason: 'membership_subscription_failed' } })
       expect(errorOf(answer)?.message).toContain('its first invoice was for 4500p, not 4000p')
       expect(stripe.netPence).toBe(0)
       expect(stripe.liveSubscriptions).toEqual([])
@@ -1461,7 +1462,7 @@ describe("W13a L1: T2's definite checks before Q8's cancel", () => {
       async (stripe) => {
         after(stripe.paymentIntents, 'create', tamperMembership)
         const answer = await place(replacing)
-        expect(errorOf(answer)).toMatchObject({ details: { reason: 'membership_subscription_failed' } })
+        expect(errorOf(answer)).toMatchObject({ code: 'PAYMENT_FAILED', details: { reason: 'membership_subscription_failed' } })
         expect(errorOf(answer)?.message).toContain(COMPENSATED_NOTE)
         expect(errorOf(answer)?.message).not.toContain(OLD_MEMBERSHIP_CANCELLED_NOTE)
         expect(cancelled(stripe, 'sub_exhausted')).toBe(false)

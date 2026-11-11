@@ -633,11 +633,11 @@ async function readChangedElsewhere(run: Run, order: ChangedOrder): Promise<Reco
 // --- Flows
 
 async function reconcileFlow(run: Run, row: FlowRow): Promise<ReconcileItem> {
+  // W14b (W12-6, W12a N1 for flows): the run's own deadline, not the press's 30 s, as its orders already do.
   const routeOptions = {
     actor: run.options.actor,
     requestId: run.options.requestId,
-    ...(run.options.startedAt !== undefined ? { startedAt: run.options.startedAt } : {}),
-    ...(run.options.now ? { now: run.options.now } : {}),
+    ...(run.timing ? { timing: run.timing } : {}),
   }
   if (typeof row.payment_intent_id === 'string') {
     const answer = await cancelReaderFlow(run.db, run.stripe, row.id, routeOptions)
@@ -852,11 +852,13 @@ async function recordStartedOnce(run: Run, due: LateRefundDue, details: Record<s
  * is gone. W13d (W13c review L3): gone only. An order that still exists in any state (paid, or otherwise not
  * pending) is never retried here, so a paying member's subscription can never be cancelled or its first invoice
  * refunded by this retry; its warning stays for a person (the manual close, W14). Oldest first.
+ * W14b (W13c review L4): a row whose last answer was a definite refusal (`refused`) is not retried, only listed until
+ * a person closes it; and the retries come last in a run, after the orders and flows, so they never starve them.
  */
 const SUBSCRIPTIONS_LEFT_DUE_SQL = `
 SELECT l.entity_id, l.subscription_id, l.invoice_payment_intent_id, l.amount_paid
 FROM (${SUBSCRIPTIONS_LEFT_SQL}) l
-WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.id::text = l.entity_id)
+WHERE l.state = 'left' AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.id::text = l.entity_id)
 ORDER BY l.at, l.entity_id`
 
 async function retryPutBack(run: Run, due: LeftSubscription): Promise<ReconcileItem> {
@@ -866,6 +868,7 @@ async function retryPutBack(run: Run, due: LeftSubscription): Promise<ReconcileI
     return { kind: 'order', id: due.orderId, outcome: 'undone', detail: `subscription ${due.subscriptionId} put back: cancelled${refunded.length > 0 ? `, its first invoice ${refunded.join(', ')} refunded` : ''}` }
   }
   if (retried.kind === 'not_this_order') return left('order', due.orderId, 'subscription_not_this_order', retried.detail)
+  if (retried.kind === 'refused') return left('order', due.orderId, 'subscription_refused', retried.left.join('; '))
   return left('order', due.orderId, 'subscription_left', retried.left.join('; '))
 }
 
@@ -929,7 +932,7 @@ async function lastLeft(db: Db, entityType: string, entityId: string): Promise<s
 
 /**
  * One run. Oldest first: the late refunds (money owed to a customer comes first), then the orders, then
- * the flows; bounded by `maxItems` and `budgetMs` (whatever is over waits for the next run). A key Stripe
+ * the flows, then (W14b) the left put-backs; bounded by `maxItems` and `budgetMs` (whatever is over waits for the next run). A key Stripe
  * refuses stops the run with one alert row. Each item is independent: one failing never stops the rest.
  */
 export async function reconcile(db: Db, stripeClient: StripeClient, options: ReconcileOptions): Promise<ReconcileResult> {
@@ -974,13 +977,6 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
 
   const work: Array<{ kind: ReconcileItem['kind']; id: string; go: () => Promise<ReconcileItem> }> = [
     ...refunds.map((due) => ({ kind: 'refund' as const, id: due.entity_id, go: () => settleLateRefund(run, due) })),
-    // W13c (L3): then a subscription left live, which Stripe would bill again next month.
-    ...putBacks.map((due) => ({
-      kind: 'order' as const,
-      id: due.entity_id,
-      go: () =>
-        retryPutBack(run, { orderId: due.entity_id, subscriptionId: due.subscription_id, invoicePaymentIntentId: due.invoice_payment_intent_id, amountPaid: due.amount_paid }),
-    })),
     ...orders.map((order) => ({ kind: 'order' as const, id: order.id, go: () => reconcileOrder(run, order) })),
     ...changed.map((order) => ({ kind: 'order' as const, id: order.id, go: () => readChangedElsewhere(run, order) })),
     ...flows.map((flow) => ({
@@ -992,6 +988,14 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
         if (!row || row.status !== 'pending') return { kind: 'flow' as const, id: flow.id, outcome: 'settled_elsewhere' as const, detail: row?.status ?? 'gone' }
         return reconcileFlow(run, row)
       },
+    })),
+    // W13c (L3): a subscription left live, which Stripe would bill again next month. W14b (W13c review L4): last, so
+    // a row that never settles can't keep a run from the pending orders and flows.
+    ...putBacks.map((due) => ({
+      kind: 'order' as const,
+      id: due.entity_id,
+      go: () =>
+        retryPutBack(run, { orderId: due.entity_id, subscriptionId: due.subscription_id, invoicePaymentIntentId: due.invoice_payment_intent_id, amountPaid: due.amount_paid }),
     })),
   ]
 

@@ -500,7 +500,7 @@ export async function refundOnce(
   orderId: string,
   refund: { step: RefundStep; paymentIntentId: string },
   timing: StripeTiming | undefined
-): Promise<{ ok: true; refundId: string | null; amount: number | null } | { ok: false; left: string }> {
+): Promise<{ ok: true; refundId: string | null; amount: number | null } | { ok: false; left: string; definite: boolean }> {
   const key = stripeIdempotencyKey(orderId, refund.step)
   let last = ''
   for (let attempt = 1; attempt <= 2; attempt += 1) {
@@ -509,18 +509,20 @@ export async function refundOnce(
         { payment_intent: refund.paymentIntentId, metadata: { order_id: orderId, refund_key: key, reason: 'membership_not_set_up' } },
         sendOptions(timing, { idempotencyKey: key })
       )
-      if (made.status === 'failed' || made.status === 'canceled') return { ok: false, left: `${refund.step} ${refund.paymentIntentId}: Stripe's refund ${made.id} ${made.status}` }
+      if (made.status === 'failed' || made.status === 'canceled') return { ok: false, left: `${refund.step} ${refund.paymentIntentId}: Stripe's refund ${made.id} ${made.status}`, definite: true }
       return { ok: true, refundId: made.id, amount: made.amount }
     } catch (err) {
       const failure = readStripeFailure(err)
       // Refunded already (an earlier send whose key Stripe has since forgotten, or by hand): nothing is owed.
       if (failure.code === 'charge_already_refunded') return { ok: true, refundId: null, amount: null }
-      if (err instanceof NoTimeLeft) return { ok: false, left: `${refund.step} ${refund.paymentIntentId}: not sent (${err.message})` }
-      if (failure.outcome === 'definite' || accessRefused(err)) return { ok: false, left: `${refund.step} ${refund.paymentIntentId}: refused (${failure.message})` }
+      if (err instanceof NoTimeLeft) return { ok: false, left: `${refund.step} ${refund.paymentIntentId}: not sent (${err.message})`, definite: false }
+      // W14b (W13c review L4): Stripe's own refusal is definite (sending it again meets the same); a refused key isn't
+      // (it is fixed in the settings, and the run stops at it anyway).
+      if (failure.outcome === 'definite' || accessRefused(err)) return { ok: false, left: `${refund.step} ${refund.paymentIntentId}: refused (${failure.message})`, definite: !accessRefused(err) }
       last = failure.message
     }
   }
-  return { ok: false, left: `${refund.step} ${refund.paymentIntentId}: no clear answer (${last})` }
+  return { ok: false, left: `${refund.step} ${refund.paymentIntentId}: no clear answer (${last})`, definite: false }
 }
 
 /** A subscription's first invoice, to refund, when it took money. */
@@ -538,7 +540,8 @@ const invoiceRefund = (subscription: MadeSubscription): Array<{ step: RefundStep
  * 4. only when every step is confirmed, the one undo (which then removes the mark with the order), with
  *    `order.compensate` beside `order.undo`.
  * Anything not confirmed leaves the order pending and marked, with an `order.compensate` row saying what is
- * left; reconcile sends the same steps again under the same keys. W13a (S3): a mark that returns with too little
+ * left (`held`, with `definite`: whether every step left is Stripe's definite refusal, W14c); reconcile sends the
+ * same steps again under the same keys. W13a (S3): a mark that returns with too little
  * time left to send anything to Stripe ends there, held, with no row (reconcile records its own when it finishes),
  * so the press ends inside its bound. Never throws for Stripe; a database fault on the mark or the undo is
  * thrown, and the order is still pending for reconcile.
@@ -564,15 +567,23 @@ export async function compensateOrder(
   if (noTimeLeft()) return { settled: false, left: ['marked, but the mark took the time left before the deadline: reconcile finishes it'] }
 
   const left: string[] = []
+  // W14c (W14b review S1): whether every step in `left` is Stripe's definite refusal (a cancel `refused`, a refund
+  // `definite`). Anything else (no clear answer, not listed, more than one live) the next reconcile can still finish.
+  let allDefinite = true
   const work: Taken = { subscriptionId: taken.subscriptionId, refunds: [...taken.refunds] }
   // B1: a press started the subscription (not this one, or W13c: this one in place of an expired start): list
   // Stripe again now the mark stops any more.
   if (guard && taken.subscriptionId === null && mark.startedAt !== null && (mark.startedBy !== guard.press || guard.replacedStart === true)) {
     const listed = await guard.relist()
-    if (listed.kind === 'unclear') left.push(`subscriptions: not listed (${listed.detail})`)
-    else {
+    if (listed.kind === 'unclear') {
+      left.push(`subscriptions: not listed (${listed.detail})`)
+      allDefinite = false
+    } else {
       const live = listed.subscriptions.filter((subscription) => subscription.status !== 'canceled')
-      if (live.length > 1) left.push(`subscriptions: more than one live (${live.map((subscription) => subscription.id).join(', ')})`)
+      if (live.length > 1) {
+        left.push(`subscriptions: more than one live (${live.map((subscription) => subscription.id).join(', ')})`)
+        allDefinite = false
+      }
       for (const subscription of listed.subscriptions) {
         for (const refund of invoiceRefund(subscription)) if (!work.refunds.some((r) => r.paymentIntentId === refund.paymentIntentId)) work.refunds.push(refund)
       }
@@ -582,19 +593,29 @@ export async function compensateOrder(
 
   if (work.subscriptionId) {
     const cancelled = await cancelSubscriptionChecked(stripe, work.subscriptionId, timing)
-    if (cancelled.kind !== 'cancelled') left.push(`subscription ${work.subscriptionId}: ${cancelled.kind} (${cancelled.message})`)
+    if (cancelled.kind !== 'cancelled') {
+      left.push(`subscription ${work.subscriptionId}: ${cancelled.kind} (${cancelled.message})`)
+      if (cancelled.kind !== 'refused') allDefinite = false
+    }
   }
   const refunded: Array<{ step: RefundStep; paymentIntentId: string; refundId: string | null; amount: number | null }> = []
   for (const refund of work.refunds) {
     const done = await refundOnce(stripe, orderId, refund, timing)
     if (done.ok) refunded.push({ ...refund, refundId: done.refundId, amount: done.amount })
-    else left.push(done.left)
+    else {
+      left.push(done.left)
+      if (!done.definite) allDefinite = false
+    }
   }
 
   const details = { why, subscriptionId: work.subscriptionId, refunded, ...(left.length > 0 ? { left } : {}) }
   if (left.length > 0) {
+    // `definite` (W14c, S1): only then may a person close the order by hand (close-stuck.ts); otherwise reconcile
+    // finishes it on a later run, whatever a person has done in Stripe meanwhile.
     await db.transaction((tx) =>
-      audit.recordAll(tx, [{ actorType: options.actor.type, actorId: options.actor.id, action: 'order.compensate', entityType: 'order', entityId: orderId, requestId: options.requestId, details: { state: 'held', ...details } }])
+      audit.recordAll(tx, [
+        { actorType: options.actor.type, actorId: options.actor.id, action: 'order.compensate', entityType: 'order', entityId: orderId, requestId: options.requestId, details: { state: 'held', definite: allDefinite, ...details } },
+      ])
     )
     return { settled: false, left }
   }
@@ -633,7 +654,9 @@ export function subscriptionLeftEntry(
   subscription: Pick<MadeSubscription, 'id' | 'invoicePaymentIntentId' | 'amountPaid'>,
   found: SubscriptionLeftFound,
   refunded: Array<{ paymentIntentId: string; refundId: string | null }>,
-  left: string[]
+  left: string[],
+  /** W14b (W13c review L4): `refused`: Stripe refused a step for good, so reconcile stops retrying it (listed until closed). */
+  refused = false
 ): AuditEntry {
   return {
     actorType: actor.type,
@@ -643,7 +666,7 @@ export function subscriptionLeftEntry(
     entityId: orderId,
     requestId,
     details: {
-      state: left.length === 0 ? 'cancelled' : 'left',
+      state: left.length === 0 ? 'cancelled' : refused ? 'refused' : 'left',
       subscriptionId: subscription.id,
       invoicePaymentIntentId: subscription.invoicePaymentIntentId,
       amountPaid: subscription.amountPaid,
@@ -715,7 +738,12 @@ export type RetriedPutBack =
   | { kind: 'cancelled'; refunded: Array<{ paymentIntentId: string; refundId: string | null }> }
   /** Not confirmed yet: the row stays open, and the next run tries again. */
   | { kind: 'left'; left: string[] }
-  /** Stripe's subscription doesn't name this order: nothing is sent, for a person to look at. */
+  /**
+   * W14b (W13c review L4): Stripe refused a step for good (the cancel, or the refund: a disputed payment, say). A
+   * `refused` row is written: still listed for a person, never retried (the manual close records it as sorted).
+   */
+  | { kind: 'refused'; left: string[] }
+  /** Stripe's subscription doesn't name this order: nothing is sent, for a person to look at. W14b: a `refused` row, not retried. */
   | { kind: 'not_this_order'; detail: string }
 
 /**
@@ -740,13 +768,20 @@ export async function retryLeftSubscription(
   } catch (err) {
     return { kind: 'left', left: [`subscription ${row.subscriptionId}: not read (${unclearOf(err)})`] }
   }
+  const subscription = { id: row.subscriptionId, invoicePaymentIntentId: row.invoicePaymentIntentId, amountPaid: row.amountPaid ?? 0 }
+  const refusedRow = (left: string[], refunded: Array<{ paymentIntentId: string; refundId: string | null }>) =>
+    db.transaction((tx) => audit.recordAll(tx, [subscriptionLeftEntry(options.actor, options.requestId, row.orderId, subscription, 'reconcile', refunded, left, true)]))
   if (now.metadata?.['order_id'] !== row.orderId) {
-    return { kind: 'not_this_order', detail: `subscription ${row.subscriptionId} names order ${now.metadata?.['order_id'] ?? 'none'}, not ${row.orderId}` }
+    const detail = `subscription ${row.subscriptionId} names order ${now.metadata?.['order_id'] ?? 'none'}, not ${row.orderId}`
+    await refusedRow([detail], [])
+    return { kind: 'not_this_order', detail }
   }
   const left: string[] = []
+  let definite = false
   if (now.status !== 'canceled') {
     const cancelled = await cancelSubscriptionChecked(stripe, row.subscriptionId, timing)
     if (cancelled.kind !== 'cancelled') left.push(`subscription ${row.subscriptionId}: ${cancelled.kind} (${cancelled.message})`)
+    if (cancelled.kind === 'refused') definite = true
   }
   const refunded: Array<{ paymentIntentId: string; refundId: string | null }> = []
   // As the put-back: refunded whether or not the cancel is confirmed (no membership will ever be kept for it). A row
@@ -754,10 +789,16 @@ export async function retryLeftSubscription(
   if (row.invoicePaymentIntentId && (row.amountPaid === null || row.amountPaid > 0)) {
     const done = await refundOnce(stripe, row.orderId, { step: 'refund-subscription', paymentIntentId: row.invoicePaymentIntentId }, timing)
     if (done.ok) refunded.push({ paymentIntentId: row.invoicePaymentIntentId, refundId: done.refundId })
-    else left.push(done.left)
+    else {
+      left.push(done.left)
+      if (done.definite) definite = true
+    }
+  }
+  if (left.length > 0 && definite) {
+    await refusedRow(left, refunded)
+    return { kind: 'refused', left }
   }
   if (left.length > 0) return { kind: 'left', left }
-  const subscription = { id: row.subscriptionId, invoicePaymentIntentId: row.invoicePaymentIntentId, amountPaid: row.amountPaid ?? 0 }
   await db.transaction((tx) => audit.recordAll(tx, [subscriptionLeftEntry(options.actor, options.requestId, row.orderId, subscription, 'reconcile', refunded, [])]))
   return { kind: 'cancelled', refunded }
 }

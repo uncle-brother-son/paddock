@@ -204,14 +204,35 @@ key's. Every action is an `order.reconcile` row. Old orders and flows are counte
 
 **The schedule** (`server/scheduled.ts`, `custom-worker.ts`, `wrangler.jsonc`): every 5 minutes, inside the Worker,
 the database from the Hyperdrive binding and Stripe from the Worker's secret. 50 items and 120 s a run; a staff run
-(`POST /api/v1/staff/orders/reconcile`) 10 items and 20 s, every Stripe call answered by 25 s. One item's worst case
+(`POST /api/v1/staff/orders/reconcile`) 10 items and no new item after 15 s, every Stripe call answered by 20 s (W13;
+`MANUAL_LIMITS`). One item's worst case
 (W12a, correcting W12's 70 s) is about 86 s: a held reader order whose tap lands while reconcile cancels it, with
 save-card, makes six Stripe calls (the list, read, cancel, read again, then the two card reads) at 10 s each, plus T2
 and its row at 13 s each. Each extra page of a Stripe list adds 10 s (ten pages, the cap, about 176 s). So a scheduled
 run ends by about 206 s, or about 296 s with ten-page lists, inside the 5 minutes to the next run (overlap would be
 safe) and far inside the 15-minute limit. The arithmetic is in `orders/reconcile.ts` (`SCHEDULED_LIMITS`). The stuck
-list is `GET /api/v1/staff/orders/stuck`.
-Their schemas are in `orders/reconcile-contracts.ts` until W14 moves them into `contracts/`.
+list is `GET /api/v1/staff/orders/stuck`. Their schemas are in `contracts/reconcile.ts` (W14b; exported to the staff app).
+
+**The Orders page (W14b).** The staff app's Resolve now runs two calls: `reconcileOrders` (this run, for what the
+Worker made) and the old `sweepPendingReaderPayments`, which now skips every Worker order and flow (one actor per
+item). Its stuck list is the Worker's list for Worker items merged with the old function's own query for old ones.
+Reconcile's put-back retries come last in a run, and a row Stripe refused for good (`refused`) is listed but never
+retried (W13c review L4); a staff run's reader flows keep to the run's deadline (W12-6). **The manual close**
+(`orders/close-stuck.ts`, `POST /api/v1/staff/orders/stuck/close`, Issue refunds and a reason, no Stripe call):
+- `held_order`: a pending Worker order reconcile left as `changed_since` or `compensation_unfinished` (with its mark,
+  and W14c: only when the latest held `order.compensate` row says `definite`, every step left a definite Stripe
+  refusal; otherwise `still_checking`, since reconcile finishes it itself, also after a person did the steps in Stripe).
+  In one transaction, order locked first: if old code changed nothing, the one undo (a compensation's end, by hand);
+  otherwise what old code hasn't changed goes back as the undo gives it (stock, store credit, a gift card used, the
+  event places while the event booking is still pending, anything it was buying) and the order goes; the booking's
+  places, pass session and add-ons never (its add-on lines stay with the booking, `order_id` cleared). Refused if
+  something it was buying is in use.
+- `changed_elsewhere` and `subscription_left`: recorded as sorted (`order.close`; a `cancelled` subscription row),
+  which the stuck list and reconcile then leave out. Nothing moves.
+- `late_refund` (W14c): a late payment's refund Stripe refused (`failed`), once refunded by hand: its refund row
+  written again `confirmed` with `byHand`, which the stuck list then leaves out. Refused while the refund is on its way.
+Refused, with nothing changed, unless reconcile has left it for a person (for a changed-elsewhere order: a final
+finding or the other mode), or once it is settled meanwhile. Racing reconcile, each locks the order first.
 
 ## Memberships: the subscription, its compensation, and reconcile (W13)
 

@@ -431,7 +431,7 @@ export async function undoFlowInTransaction(db: Db, pendingId: string, options: 
         ]
       )
       if (restored.length === 0) {
-        problems.push('restore the booking to payment_needed: the booking was changed by someone else while the payment was pending — it was left as found; the payment has been refunded')
+        problems.push('restore the booking to payment_needed: the booking was changed by someone else while the payment was pending — it was left as found; no payment was taken')
       }
       if (snapshot.old_seat1_pay_by !== undefined) {
         await tx.query("UPDATE booking_guests SET pay_by = $1::text WHERE booking_id = $2::uuid AND guest_type = 'account_holder'", [snapshot.old_seat1_pay_by ?? null, row.record_id])
@@ -561,13 +561,22 @@ async function finaliseFound(
 }
 
 /**
+ * The Stripe deadline: the caller's own (W14b, W12-6: a staff member's reconcile run, which ends its Stripe calls
+ * sooner than a press's 30 s, as its orders already do), else the press's from the request's start, else none.
+ */
+function flowTiming(options: ReaderRouteOptions): StripeTiming | undefined {
+  if (options.timing) return options.timing
+  return options.startedAt === undefined ? undefined : stripeTiming(options.startedAt, options.now ?? Date.now)
+}
+
+/**
  * finaliseReaderPayment: the reader has taken (or should have taken) a Move, Settle or Add Guest
  * payment. Reads the PaymentIntent, checks it to the penny, then the flow's T2 records it in one
  * transaction. Safe twice and racing cancel. Never refunds: a database fault in T2 holds it for
  * reconcile (`finalise_failed`), where the old function refunded the card and undid the flow.
  */
 export async function finaliseReaderFlow(db: Db, stripe: StripeClient, pendingId: string, options: ReaderRouteOptions): Promise<FinaliseFlowOutput> {
-  const timing = options.startedAt === undefined ? undefined : stripeTiming(options.startedAt, options.now ?? Date.now)
+  const timing = flowTiming(options)
   return finaliseFound(db, stripe, pendingId, await findFlow(db, pendingId), options, timing)
 }
 
@@ -580,7 +589,7 @@ export async function finaliseReaderFlow(db: Db, stripe: StripeClient, pendingId
  * moved). Cancelled: the flow's undo, in one transaction. Anything unclear changes nothing. Safe twice.
  */
 export async function cancelReaderFlow(db: Db, stripe: StripeClient, pendingId: string, options: ReaderRouteOptions): Promise<CancelFlowOutput> {
-  const timing = options.startedAt === undefined ? undefined : stripeTiming(options.startedAt, options.now ?? Date.now)
+  const timing = flowTiming(options)
   const found = await findFlow(db, pendingId)
   if (found.kind === 'gone') return { cancelled: true, pendingId, alreadyDone: true, message: FLOW_GONE_CANCEL_MESSAGE }
   if (found.kind === 'old') return { cancelled: false, ...basics(found.row), reason: 'old_reader_flow', message: OLD_READER_FLOW_MESSAGE }

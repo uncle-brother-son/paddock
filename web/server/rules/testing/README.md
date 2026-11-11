@@ -210,4 +210,6 @@ through the new routes (`replay/flow-side.ts`). The flow's record is given what 
 Migration 022 (one PaymentIntent, one order) is in `live-schema.sql`: tests that run many FakeStripes against one
 database give each its own `idTag`, or their `pi_fake_0001`s would collide. Reconcile's tests are
 `orders/reconcile.test.ts` (each row, crash tests, the refunds, the routes) and `orders/reconcile-postgres.test.ts`
-(the races, 022). `server/scheduled.test.ts` tests the schedule's handler.
+(the races, 022). `server/scheduled.test.ts` tests the schedule's handler. W14b: the manual close in
+`orders/close-stuck.test.ts` (per item type, refusals, words, L4) and `orders/close-stuck-postgres.test.ts` (racing
+reconcile, two closes at once); the staff app's Orders page wrappers in `server/staff-app-orders-page.test.ts`.

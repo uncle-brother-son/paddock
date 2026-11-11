@@ -1,6 +1,6 @@
 import { defineRoute } from '@/server/http/define-route'
 import { MANUAL_LIMITS, reconcile } from '@/server/rules/orders/reconcile'
-import { reconcileRunInputSchema, reconcileRunOutputSchema } from '@/server/rules/orders/reconcile-contracts'
+import { reconcileRunInputSchema, reconcileRunOutputSchema } from '@/contracts'
 import { createStripeClient, ORDER_STRIPE_LIMITS } from '@/server/stripe/client'
 
 /**

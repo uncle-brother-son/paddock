@@ -47,14 +47,14 @@ export interface UndoOptions {
   compensated?: Record<string, unknown>
 }
 
-interface LockedOrder {
+export interface LockedOrder {
   customer_id: string
   payment_status: string
   reader_payment: PendingSnapshot | null
 }
 
 /** What the order holds, read after its lock, so it is current. Each id is one this order wrote. */
-interface OrderParts {
+export interface OrderParts {
   booking: {
     id: string
     session_id: string
@@ -76,7 +76,7 @@ interface OrderParts {
   memberships_bought: string[]
 }
 
-const PARTS_SQL = `
+export const PARTS_SQL = `
 WITH l AS (SELECT * FROM order_line_items WHERE order_id = $1::uuid),
 bought_passes AS (SELECT p.id FROM customer_session_passes p JOIN l ON p.order_line_item_id = l.id),
 bought_memberships AS (SELECT m.id FROM customer_memberships m JOIN l ON m.order_line_item_id = l.id)
@@ -233,7 +233,8 @@ export function changedSince(snapshot: PendingSnapshot | null, parts: Pick<Order
   return changed
 }
 
-async function undoInTransaction(tx: Tx, orderId: string, options: UndoOptions): Promise<UndoOutcome> {
+/** W14b: exported for the manual close (close-stuck.ts), which runs it inside its own transaction after its own checks. */
+export async function undoInTransaction(tx: Tx, orderId: string, options: UndoOptions): Promise<UndoOutcome> {
   // 1. The order first (LOCK_ORDER), so T2 and another undo queue behind it and see what this did.
   const order = (
     await tx.query<LockedOrder>('SELECT customer_id, payment_status, reader_payment FROM orders WHERE id = $1::uuid FOR UPDATE', [orderId])

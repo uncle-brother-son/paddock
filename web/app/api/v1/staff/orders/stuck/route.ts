@@ -1,5 +1,5 @@
 import { defineRoute } from '@/server/http/define-route'
-import { stuckListInputSchema, stuckListOutputSchema } from '@/server/rules/orders/reconcile-contracts'
+import { stuckListInputSchema, stuckListOutputSchema } from '@/contracts'
 import { stuckList } from '@/server/rules/orders/stuck-list'
 
 /**

@@ -31,6 +31,10 @@ const STAFF_ROUTES: Record<string, () => Promise<unknown>> = {
   '/api/v1/staff/orders': () => import('@/app/api/v1/staff/orders/route'),
   '/api/v1/staff/terminal/connection-token': () => import('@/app/api/v1/staff/terminal/connection-token/route'),
   '/api/v1/staff/terminal/setup-intents': () => import('@/app/api/v1/staff/terminal/setup-intents/route'),
+  // W14b: the Orders page (the manual reconcile run, the stuck list and the manual close).
+  '/api/v1/staff/orders/reconcile': () => import('@/app/api/v1/staff/orders/reconcile/route'),
+  '/api/v1/staff/orders/stuck': () => import('@/app/api/v1/staff/orders/stuck/route'),
+  '/api/v1/staff/orders/stuck/close': () => import('@/app/api/v1/staff/orders/stuck/close/route'),
 }
 
 /** W14: the staff routes with an id in the path, and the path's parameters. */

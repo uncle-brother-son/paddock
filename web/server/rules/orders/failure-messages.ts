@@ -176,7 +176,7 @@ export const OLD_ROLLBACK_STARTED_MESSAGE =
 
 /** The undo refused: old code changed the booking or event booking after T1 (W10 review L1). Left for a person. */
 export const CHANGED_SINCE_MESSAGE =
-  "This order's booking was changed after the order was started (cancelled, moved, or guests added or removed), so it wasn't cancelled automatically and nothing was given back. Check the booking and the payment, then sort the order out by hand."
+  "This order's booking was changed after the order was started (cancelled, moved, or guests added or removed), so it wasn't cancelled automatically and nothing was given back. No payment was taken for it. Check the booking on the Bookings page (it stays as it is now), then press Close order on the Orders page to give back what the order still holds (needs the Issue refunds permission)."
 
 /*
  * W13: words for memberships. The old route's where it had them (create-subscription/core.ts, through

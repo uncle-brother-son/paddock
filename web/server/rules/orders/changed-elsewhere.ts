@@ -24,6 +24,7 @@ export const CHANGED_ELSEWHERE = 'changed_elsewhere'
  *   (and anything after that is an ordinary refund, not this).
  * - The undo deletes the order and writes `order.undo`, so an undone order isn't here; the row check is for
  *   safety only.
+ * - W14b: a person recorded it as sorted (the manual close's `order.close` row): no longer listed or read.
  * Fast: the `created_at` range uses `idx_orders_created`, so only the last 30 days of orders are read, and
  * each candidate's audit rows are read through `audit_log_entity_idx` (entity_type, entity_id).
  * `$1`: the window in minutes; `$2`: CHANGED_ELSEWHERE_DAYS.
@@ -37,7 +38,7 @@ AND o.created_at > now() - make_interval(days => $2::int)
 AND COALESCE((o.reader_payment->>'created_at')::timestamptz, o.created_at) < now() - make_interval(mins => $1::int)
 AND NOT EXISTS (
   SELECT 1 FROM audit_log a
-  WHERE a.entity_type = 'order' AND a.entity_id = o.id::text AND a.action IN ('order.paid', 'order.undo')
+  WHERE a.entity_type = 'order' AND a.entity_id = o.id::text AND a.action IN ('order.paid', 'order.undo', 'order.close')
 )`
 
 /**
@@ -69,14 +70,14 @@ export function changedElsewhereWords(finding: ChangedElsewhereFinding | null): 
     case undefined:
       return `${SAID}. The automatic check is looking in Stripe for what was taken. Don't take payment again.`
     case 'taken':
-      return `${SAID}: Stripe shows £${(finding.amount / 100).toFixed(2)} taken. Check and put it right by hand.`
+      return `${SAID}: Stripe shows £${(finding.amount / 100).toFixed(2)} taken. Check that against what the old screens gave back, put any difference right by hand, then press Mark sorted.`
     case 'nothing_taken':
-      return `${SAID}: Stripe shows nothing taken. Check and put it right by hand.`
+      return `${SAID}: Stripe shows nothing taken. Check what the old screens gave back (it was never paid for), put it right by hand, then press Mark sorted.`
     case 'open':
-      return `${SAID}: Stripe shows nothing taken yet, but its payment (${finding.paymentIntentIds.join(', ')}) is still open in Stripe. Check and put it right by hand.`
+      return `${SAID}: Stripe shows nothing taken yet, but its payment (${finding.paymentIntentIds.join(', ')}) is still open in Stripe. Cancel that payment in Stripe; the automatic check then sees it settled, and Mark sorted becomes available.`
     case 'unclear':
-      return `${SAID}. Stripe didn't give a clear answer about its payment yet; the automatic check asks again every 5 minutes. Check and put it right by hand.`
+      return `${SAID}. Stripe didn't give a clear answer about its payment yet; the automatic check asks again every 5 minutes. Don't take payment again or change anything until it has an answer.`
     case 'other_mode':
-      return `${SAID}. Stripe can't find its payment with the payment account in use now (it may be in the other Stripe mode, live or test). Check the payment in Stripe and put it right by hand.`
+      return `${SAID}. Stripe can't find its payment with the payment account in use now (it may be in the other Stripe mode, live or test). Check the payment in Stripe, put it right by hand, then press Mark sorted.`
   }
 }

@@ -752,6 +752,24 @@ describe("W13 (W12a N1): a reader order in a staff member's run keeps to the run
   })
 })
 
+describe("W14b (W12-6): a reader flow in a staff member's run keeps to the run's deadline, as its orders do", () => {
+  it("19 s into the run (1 s left of its 20, though a press would have 11): the flow's intent isn't read, the flow left for the next run", async () => {
+    await onASeed(async ({ stripe }) => {
+      const old = oldSide(db, stripe)
+      const bookingId = await lapsedSeat((action, params) => old.call(action, params), db)
+      const started = (await old.call('settleLapsedBooking', { bookingId, payment: { method: 'reader' } })) as { pendingReaderPayment: { pendingId: string } }
+      const { pendingId } = started.pendingReaderPayment
+      await asWorkerFlow(db, pendingId)
+      replayStripe.current = stripe
+      later(16)
+      const before = stripe.calls.length
+      const result = await run(stripe, { ...MANUAL_LIMITS, startedAt: Date.now() - 19_000 })
+      expect(result.items).toEqual([expect.objectContaining({ kind: 'flow', id: pendingId, outcome: 'left', reason: 'unclear' })])
+      expect(stripe.calls.slice(before).map((call) => call.method)).toEqual([])
+    })
+  })
+})
+
 describe('the staff routes', () => {
   const staffRequest = (path: string, init: RequestInit = {}) =>
     new Request(`https://worker.test${path}`, {
@@ -952,7 +970,11 @@ describe('W12a S1: a Worker order the old screens moved out of pending (W12 revi
             orderId,
             reason: 'changed_elsewhere',
             finding,
-            words: taken ? `${SAID}: Stripe shows £32.00 taken. Check and put it right by hand.` : `${SAID}: Stripe shows nothing taken. Check and put it right by hand.`,
+            // W14b: the words say what to do, and a final finding carries the close (Mark sorted).
+            words: taken
+              ? `${SAID}: Stripe shows £32.00 taken. Check that against what the old screens gave back, put any difference right by hand, then press Mark sorted.`
+              : `${SAID}: Stripe shows nothing taken. Check what the old screens gave back (it was never paid for), put it right by hand, then press Mark sorted.`,
+            close: { kind: 'changed_elsewhere', orderId },
           }),
         ])
 
@@ -972,7 +994,7 @@ describe('W12a S1: a Worker order the old screens moved out of pending (W12 revi
       const { orderId } = await p1(stripe, true)
       stripe.failNext('paymentIntents.list', { kind: 'unreachable' })
       expect((await run(stripe)).items[0]).toMatchObject({ reason: 'changed_elsewhere', finding: { state: 'unclear' } })
-      expect((await stuckList(db)).checkout[0]?.words).toBe(`${SAID}. Stripe didn't give a clear answer about its payment yet; the automatic check asks again every 5 minutes. Check and put it right by hand.`)
+      expect((await stuckList(db)).checkout[0]?.words).toBe(`${SAID}. Stripe didn't give a clear answer about its payment yet; the automatic check asks again every 5 minutes. Don't take payment again or change anything until it has an answer.`)
       later(5)
       stripe.failNext('paymentIntents.list', { kind: 'unreachable' })
       expect((await run(stripe)).items[0]).toMatchObject({ finding: { state: 'unclear' } })
@@ -995,7 +1017,9 @@ describe('W12a S1: a Worker order the old screens moved out of pending (W12 revi
       expect(stripe.calls.filter((call) => call.method === 'paymentIntents.cancel')).toEqual([])
       expect((await stripe.paymentIntents.retrieve(open.id)).status).toBe('requires_payment_method')
       expect(await reconcileRows(orderId)).toHaveLength(1)
-      expect((await stuckList(db)).checkout[0]?.words).toBe(`${SAID}: Stripe shows nothing taken yet, but its payment (${open.id}) is still open in Stripe. Check and put it right by hand.`)
+      expect((await stuckList(db)).checkout[0]?.words).toBe(`${SAID}: Stripe shows nothing taken yet, but its payment (${open.id}) is still open in Stripe. Cancel that payment in Stripe; the automatic check then sees it settled, and Mark sorted becomes available.`)
+      // W14b: not closable while its payment is still open in Stripe.
+      expect((await stuckList(db)).checkout[0]?.close).toBeUndefined()
     })
   })
 

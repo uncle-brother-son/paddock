@@ -9,58 +9,116 @@
 // W13a: a membership subscription left live for an order that was gone (B1c), with the warnings, until put back.
 import 'server-only'
 import type { Db } from '@/server/db'
-import { CHANGED_ELSEWHERE, CHANGED_ELSEWHERE_DAYS, CHANGED_ELSEWHERE_WHERE, changedElsewhereWords, type ChangedElsewhereFinding } from './changed-elsewhere'
+import { CHANGED_ELSEWHERE, CHANGED_ELSEWHERE_DAYS, CHANGED_ELSEWHERE_WHERE, changedElsewhereWords, FINAL_FINDINGS, type ChangedElsewhereFinding } from './changed-elsewhere'
 import { CHANGED_SINCE_MESSAGE } from './failure-messages'
 import { isWorkerFlow, type FlowSnapshot } from './reader-flow'
+import type { StuckCloseTarget } from '@/contracts'
 import { PROCESSING_MINUTES as RECONCILE_WINDOW_MINUTES } from './pending-order'
 
-/** Words for each reason an item is listed (W12's; adjustable at W14). */
+/**
+ * Words for each reason an item is listed (W12's, W14b: every reason reconcile can leave an order or flow with has
+ * its own, saying what staff should do; W12 review L5). A reason with none falls back to `unexpected`.
+ */
+const TELL_A_MANAGER = "Nothing was changed: don't take payment again, and tell a manager."
+/**
+ * W14c (W14b review L2): the old rollback on a Worker order. Since W14b nothing finishes it (the old sweep skips Worker
+ * orders and the Worker's undo refuses it), so the words no longer send staff to Resolve now. The close says the same.
+ */
+export const OLD_ROLLBACK_WORDS =
+  "The old screens had started cancelling this order and couldn't finish. Nothing more will be changed automatically: don't take payment again, and tell a manager."
 export const STUCK_WORDS: Readonly<Record<string, string>> = {
   waiting: 'Waiting for the automatic check, which runs every 5 minutes and settles it if it can. Nothing to do yet.',
   old_code: 'Started on the old screens: press Resolve now to settle it.',
   unclear: "Stripe didn't give a clear answer about this payment. The automatic check tries again every 5 minutes: don't take payment again.",
-  other_mode:
-    "Stripe can't find this payment with the payment account the system is using now (it may be in the other Stripe mode, live or test). Nothing was changed: check the payment in Stripe before doing anything.",
-  amount_mismatch: "The amount Stripe took isn't the amount the order expected. Nothing was changed: check the payment in Stripe and sort it out by hand. Don't take payment again.",
-  customer_mismatch: "The payment in Stripe was made for a different customer. Nothing was changed: check it in Stripe before doing anything.",
-  metadata_mismatch: "The payment in Stripe doesn't name this order. Nothing was changed: check it in Stripe before doing anything.",
-  currency_mismatch: "The payment in Stripe isn't in pounds. Nothing was changed: check it in Stripe before doing anything.",
-  several_payments: 'Stripe has more than one payment for this. Nothing was changed: check them in Stripe and sort it out by hand.',
+  other_mode: `Stripe can't find this payment with the payment account the system is using now (it may be in the other Stripe mode, live or test). ${TELL_A_MANAGER}`,
+  amount_mismatch: `The amount Stripe took isn't the amount expected. ${TELL_A_MANAGER}`,
+  customer_mismatch: `The payment in Stripe was made for a different customer. ${TELL_A_MANAGER}`,
+  metadata_mismatch: `The payment in Stripe doesn't name this order. ${TELL_A_MANAGER}`,
+  currency_mismatch: `The payment in Stripe isn't in pounds. ${TELL_A_MANAGER}`,
+  several_payments: `Stripe has more than one payment for this. ${TELL_A_MANAGER}`,
   changed_since: CHANGED_SINCE_MESSAGE,
   finalise_failed: "The payment went through but the order couldn't be finished yet. The automatic check tries again every 5 minutes: don't take payment again.",
-  undo_failed: "The order couldn't be cancelled yet (nothing was given back). The automatic check tries again every 5 minutes.",
-  old_rollback: 'The old screens had started cancelling this order: press Resolve now to finish it.',
-  charged_without_order: 'A payment went through for an order that had already been cancelled. It is being refunded automatically.',
-  charged_without_record: 'A payment went through for a change that had already been undone. It is being refunded automatically.',
-  payment_not_succeeded: "The payment hasn't gone through. The automatic check tries again every 5 minutes.",
-  unexpected: 'Something unexpected stopped the automatic check. It tries again every 5 minutes; if this stays, tell a manager.',
-  // W13 (new; adjustable at W14).
+  undo_failed: "This couldn't be cancelled yet (nothing was given back). The automatic check tries again every 5 minutes: don't take payment again. If this stays, tell a manager.",
+  old_rollback: OLD_ROLLBACK_WORDS,
+  charged_without_order: 'A payment went through for an order that had already been cancelled. It is being refunded automatically: nothing to do.',
+  charged_without_record: 'A payment went through for a change that had already been undone. It is being refunded automatically: nothing to do.',
+  payment_not_succeeded: "The payment hasn't gone through. The automatic check tries again every 5 minutes: don't take payment again.",
+  unexpected: "Something unexpected stopped the automatic check. It tries again every 5 minutes: don't take payment again. If this stays, tell a manager.",
+  // W13 (W14b: the words say what to do). W14c (W14b review S1): Close order is offered only once Stripe has refused
+  // every step left for good (COMPENSATION_REFUSED_WORDS); until then reconcile finishes it, also after a person has
+  // done the steps in Stripe by hand (a cancelled subscription reads as cancelled, a refunded payment as refunded).
   compensation_unfinished:
-    "This membership order couldn't be set up, and putting back what it took (cancelling its new subscription, refunding its payments) hasn't been confirmed yet. The automatic check tries again every 5 minutes: don't take payment again. If this stays, check the subscription and the payments in Stripe and tell a manager.",
-  several_subscriptions: 'Stripe has more than one subscription for this order. Nothing was changed: cancel the extra one in Stripe and sort it out by hand.',
+    "This membership order couldn't be set up, and putting back what it took (cancelling its new subscription, refunding its payments) hasn't been confirmed yet. The automatic check tries again every 5 minutes: don't take payment again. If this stays, tell a manager.",
+  several_subscriptions: `Stripe has more than one subscription for this order. ${TELL_A_MANAGER}`,
   replaced_unconfirmed:
-    "The new membership is paid for, but the customer's old membership couldn't be confirmed cancelled in Stripe. The automatic check tries again every 5 minutes: if this stays, cancel the old subscription in Stripe by hand.",
-  // W13a (new; adjustable at W14).
+    "The new membership is paid for, but the customer's old membership couldn't be confirmed cancelled in Stripe. The automatic check tries again every 5 minutes: if this stays, tell a manager.",
+  // W13a.
   subscription_starting:
     "A finalise of this order was setting up its membership in Stripe when the automatic check looked, so it was left alone. The check looks again in 5 minutes: don't take payment again.",
+  // W14b (W12 review L5): the reasons that used to fall back to "something unexpected".
+  unexpected_state: `This isn't in a state the automatic check expected (it may have been changed on the old screens). ${TELL_A_MANAGER}`,
+  paid_by_another_payment: `This order was already paid with a different payment, and Stripe has another payment for it too. ${TELL_A_MANAGER}`,
+  not_pending: 'This order is no longer waiting for payment: it was settled or changed elsewhere, so the automatic check leaves it alone. Nothing to do.',
+  order_not_found: 'This order no longer exists (it was cancelled or removed in the meantime). Nothing to do.',
+  not_a_reader_order: `This order isn't a card-reader order, so the automatic check couldn't settle its payment. ${TELL_A_MANAGER}`,
+  intent_unconfirmed: "Its card-reader payment was never confirmed as set up. The automatic check looks for it in Stripe every 5 minutes: don't take payment again.",
+  old_reader_order: 'Started on the old screens: press Resolve now to settle it.',
+  old_reader_flow: 'Started on the old screens: press Resolve now to settle it.',
+  rollback_started: OLD_ROLLBACK_WORDS,
+  compensating:
+    "This membership order is being reversed (its subscription cancelled, its payments refunded). The automatic check finishes it every 5 minutes: don't take payment again.",
+  membership_not_started: "The membership's subscription couldn't be found in Stripe. The automatic check tries again every 5 minutes: don't take payment again. If this stays, tell a manager.",
+  payment_missing: "The membership's payment couldn't be found in Stripe. The automatic check tries again every 5 minutes: don't take payment again. If this stays, tell a manager.",
+  subscription_mismatch: "The membership in Stripe doesn't match this order, so it is being reversed automatically: don't take payment again. If this stays, tell a manager.",
+  membership_line_missing: "This membership order is missing its membership, so it is being reversed automatically: don't take payment again. If this stays, tell a manager.",
+  membership_row_missing: "This membership order is missing its membership, so it is being reversed automatically: don't take payment again. If this stays, tell a manager.",
+  subscription_unconfirmed: "Stripe didn't confirm the membership's subscription. The automatic check looks again every 5 minutes: don't take payment again or start the membership again.",
 }
 
 /**
  * W13a (B1c): a subscription the reader's finalise made for an order that was gone (or being put back), which
- * couldn't be confirmed cancelled and refunded. Listed with the warnings until it is put back.
+ * couldn't be confirmed cancelled and refunded. Listed with the warnings until it is put back. W14b: a person who has
+ * put it back by hand marks it sorted; `refused`: Stripe refused a step for good, so the automatic check stopped.
  */
 export const SUBSCRIPTION_LEFT_WORDS = (subscriptionId: string): string =>
-  `A membership subscription (${subscriptionId}) was started in Stripe for an order that had already been cancelled, and it couldn't be confirmed cancelled. Cancel it in Stripe by hand and refund its first payment if it took one, then tell a manager.`
+  `A membership subscription (${subscriptionId}) was started in Stripe for an order that had already been cancelled, and it couldn't be confirmed cancelled yet. The automatic check tries again every 5 minutes. If this stays, cancel it in Stripe by hand and refund its first payment if it took one, then press Mark sorted (needs the Issue refunds permission).`
+export const SUBSCRIPTION_REFUSED_WORDS = (subscriptionId: string): string =>
+  `A membership subscription (${subscriptionId}) was started in Stripe for an order that had already been cancelled, and Stripe refused to cancel it or refund its first payment, so the automatic check has stopped trying. Cancel it in Stripe by hand and refund its first payment if it took one (or tell a manager), then press Mark sorted (needs the Issue refunds permission).`
+
+/**
+ * W14c (W14b review S1): a held compensation whose every step left is a definite refusal by Stripe (a disputed
+ * payment's refund, say): reconcile can't finish it, so a person sorts it and closes the order.
+ */
+export const COMPENSATION_REFUSED_WORDS =
+  "This membership order couldn't be set up, and Stripe refused to finish putting back what it took (cancelling its new subscription or refunding a payment), so the automatic check can't finish it. Don't take payment again. Cancel the subscription and refund the payments in Stripe by hand (or tell a manager if Stripe won't), then press Close order (needs the Issue refunds permission)."
 
 /** W13: added to a membership order's words while it is listed: its subscription may be live until it is settled. */
 export const MEMBERSHIP_STUCK_NOTE = "This order has a membership: its subscription may be live in Stripe until this is settled, so don't start it again."
 
 export const REFUND_PENDING_WORDS = (amount: number, paymentIntentId: string): string =>
-  `A payment of £${amount.toFixed(2)} (${paymentIntentId}) went through after its order or change had been cancelled. It is being refunded automatically: waiting for Stripe to confirm the refund. Don't refund it by hand.`
+  `A payment of £${amount.toFixed(2)} (${paymentIntentId}) went through after its order or change had been cancelled. It is being refunded automatically: waiting for Stripe to confirm the refund. Nothing to do. Don't refund it by hand.`
+/** W14c (W14b N1): a failed refund is closed by hand once a person has refunded it in Stripe (`late_refund`). */
 export const REFUND_FAILED_WORDS = (amount: number, paymentIntentId: string): string =>
-  `A payment of £${amount.toFixed(2)} (${paymentIntentId}) went through after its order or change had been cancelled, and the automatic refund failed. Refund it in Stripe by hand.`
+  `A payment of £${amount.toFixed(2)} (${paymentIntentId}) went through after its order or change had been cancelled, and Stripe refused the automatic refund, so the automatic check has stopped trying. Refund it in Stripe by hand (or tell a manager if Stripe won't), then press Mark refunded (needs the Issue refunds permission).`
 export const STRIPE_REFUSED_WORDS =
-  "Stripe turned down the club's payment account details, so the automatic check couldn't look at any payments. Tell a manager so the Stripe connection can be fixed. Nothing has been changed."
+  "Stripe turned down the club's payment account details, so the automatic check couldn't look at any payments. Nothing has been changed. Tell a manager straight away so the Stripe connection can be fixed."
+
+/** W14b: the changed-elsewhere findings the close accepts (close-stuck.ts says why). */
+const CLOSABLE_FINDINGS: ReadonlySet<string> = new Set([...FINAL_FINDINGS, 'other_mode'])
+
+/** W14b: the reasons a held Worker order can be closed by hand with (close-stuck.ts imports these). */
+export const HELD_ORDER_CLOSE_REASONS: ReadonlySet<string> = new Set(['changed_since', 'compensation_unfinished'])
+
+/**
+ * W14c (W14b review S1, L3): true when the order's latest `order.compensate` row is held with every step left a
+ * definite refusal by Stripe (membership.ts, compensateOrder). `orderIdText` is SQL for the order's id as text. The
+ * close (close-stuck.ts) and the list accept `compensation_unfinished` only on that, and only on an order carrying
+ * the compensation mark.
+ */
+export const compensationDefiniteSql = (orderIdText: string): string => `
+  COALESCE((SELECT c.details->>'state' = 'held' AND c.details->>'definite' = 'true' FROM audit_log c
+            WHERE c.entity_type = 'order' AND c.entity_id = ${orderIdText} AND c.action = 'order.compensate'
+            ORDER BY c.at DESC, c.id DESC LIMIT 1), false)`
 
 const wordsFor = (reason: string): string => STUCK_WORDS[reason] ?? STUCK_WORDS['unexpected'] ?? ''
 
@@ -78,6 +136,8 @@ export interface StuckOrder {
   /** W12a (S1), a changed-elsewhere order only: its payment status now, and what reconcile last found (null: not looked yet). */
   paymentStatus?: string
   finding?: ChangedElsewhereFinding | null
+  /** W14b: what the manual close does for it (close-stuck.ts); absent when nothing can be closed by hand. */
+  close?: StuckCloseTarget
 }
 
 export interface StuckFlow {
@@ -100,6 +160,8 @@ export interface StuckRefund {
   amount: number
   state: 'started' | 'sent' | 'failed' | 'waiting'
   words: string
+  /** W14c (W14b N1): a refund Stripe refused can be recorded as refunded by hand. */
+  close?: StuckCloseTarget
 }
 
 export interface StuckWarning {
@@ -107,6 +169,8 @@ export interface StuckWarning {
   id: string
   at: string
   warning: string
+  /** W14b: a subscription left live can be marked sorted once a person has put it back in Stripe. */
+  close?: StuckCloseTarget
 }
 
 export interface StuckListOutput {
@@ -127,6 +191,8 @@ SELECT o.id, o.order_total::text AS order_total,
        COALESCE((o.reader_payment->>'created_at')::timestamptz, o.created_at) AS created_at,
        o.reader_payment->>'method' AS method,
        o.reader_payment ? 'membership' AS has_membership,
+       o.reader_payment ? 'compensation' AS compensating,
+       ${compensationDefiniteSql('o.id::text')} AS compensation_definite,
        c.first_name, c.last_name,
        (SELECT r.details FROM audit_log r
         WHERE r.entity_type = 'order' AND r.entity_id = o.id::text AND r.action = 'order.reconcile' AND NOT (r.details ? 'refund')
@@ -176,10 +242,10 @@ latest AS (
          r.entity_type, r.entity_id, r.details->'refund'->>'paymentIntentId' AS payment_intent_id, r.details->'refund'->>'state' AS state
   FROM audit_log r
   WHERE r.action = 'order.reconcile' AND r.details ? 'refund'
-  -- A refund's state only moves forward (started, sent, then confirmed or failed), so two rows stamped in
-  -- the same millisecond are told apart by it.
+  -- A refund's state only moves forward (started, sent, then confirmed or failed; W14c: failed, then confirmed by
+  -- hand), so two rows stamped in the same millisecond are told apart by it.
   ORDER BY r.entity_type, r.entity_id, r.details->'refund'->>'paymentIntentId', r.at DESC,
-           CASE r.details->'refund'->>'state' WHEN 'confirmed' THEN 3 WHEN 'failed' THEN 3 WHEN 'sent' THEN 2 ELSE 1 END DESC
+           CASE r.details->'refund'->>'state' WHEN 'confirmed' THEN 4 WHEN 'failed' THEN 3 WHEN 'sent' THEN 2 ELSE 1 END DESC
 )
 SELECT c.entity_type, c.entity_id, c.payment_intent_id, c.pence::float8 AS pence, COALESCE(l.state, 'waiting') AS state
 FROM charged c
@@ -198,15 +264,17 @@ ORDER BY at DESC`
  * putBackSubscription), until a later row says it is put back: the same row `cancelled`, or the order's
  * compensation done with that subscription cancelled. W13c: one per order and subscription, its latest `left` row
  * (T2 records the subscription as left, then the put-back, or reconcile's retry, may record it left again).
- * Reconcile retries each (L3), from what the row carries.
+ * Reconcile retries each (L3), from what the row carries. W14b (W13c review L4): a `refused` row (Stripe refused a
+ * step for good) is listed the same but never retried; the manual close's `cancelled` row closes either.
  */
 export const SUBSCRIPTIONS_LEFT_SQL = `
 SELECT s.entity_id, s.at, s.details->>'subscriptionId' AS subscription_id,
-       s.details->>'invoicePaymentIntentId' AS invoice_payment_intent_id, (s.details->>'amountPaid')::int AS amount_paid
+       s.details->>'invoicePaymentIntentId' AS invoice_payment_intent_id, (s.details->>'amountPaid')::int AS amount_paid,
+       s.details->>'state' AS state
 FROM (
   SELECT DISTINCT ON (entity_id, details->>'subscriptionId') entity_id, at, details
   FROM audit_log
-  WHERE action = 'order.subscription_left' AND entity_type = 'order' AND details->>'state' = 'left'
+  WHERE action = 'order.subscription_left' AND entity_type = 'order' AND details->>'state' IN ('left', 'refused')
   ORDER BY entity_id, details->>'subscriptionId', at DESC
 ) s
 WHERE NOT EXISTS (
@@ -246,6 +314,8 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
     created_at: unknown
     method: string | null
     has_membership: boolean | null
+    compensating: boolean | null
+    compensation_definite: boolean | null
     first_name: string
     last_name: string
     last: Last | null
@@ -274,13 +344,19 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
   const refunds = await db.query<{ entity_type: string; entity_id: string; payment_intent_id: string; pence: number; state: string }>(REFUNDS_SQL)
   const warnings = await db.query<{ entity_type: string; entity_id: string; at: unknown; warning: string }>(WARNINGS_SQL, [WARNINGS_FOR_HOURS])
   const alert = (await db.query<{ at: unknown }>(ALERT_SQL, [ALERT_FOR_MINUTES]))[0]
-  const subscriptionsLeft = await db.query<{ entity_id: string; at: unknown; subscription_id: string }>(SUBSCRIPTIONS_LEFT_SQL)
+  const subscriptionsLeft = await db.query<{ entity_id: string; at: unknown; subscription_id: string; state: string }>(SUBSCRIPTIONS_LEFT_SQL)
 
   return {
     checkout: orders.map((row): StuckOrder => {
       const method = row.method === 'reader' || row.method === 'card' ? row.method : null
       const reason = reasonFor(method !== null, row.last)
       const createdAt = iso(row.created_at)
+      // W14b: a Worker order reconcile left for a person, with the reason the close acts on (close-stuck.ts). W14c
+      // (S1, L3): a compensation only with its mark and once Stripe has refused every step left for good.
+      const refusedForGood = row.compensating === true && row.compensation_definite === true
+      const closable =
+        method !== null && row.last?.outcome === 'left' && HELD_ORDER_CLOSE_REASONS.has(reason) && (reason !== 'compensation_unfinished' || refusedForGood)
+      const words = reason === 'compensation_unfinished' && refusedForGood ? COMPENSATION_REFUSED_WORDS : wordsFor(reason)
       return {
         orderId: row.id,
         customerName: `${row.first_name} ${row.last_name}`.trim(),
@@ -290,7 +366,8 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
         ageMinutes: ageMinutes(createdAt),
         method,
         reason,
-        words: row.has_membership ? `${wordsFor(reason)} ${MEMBERSHIP_STUCK_NOTE}` : wordsFor(reason),
+        words: row.has_membership ? `${words} ${MEMBERSHIP_STUCK_NOTE}` : words,
+        ...(closable ? { close: { kind: 'held_order' as const, orderId: row.id } } : {}),
       }
     }).concat(
       changed.map((row): StuckOrder => {
@@ -307,6 +384,8 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
           words: changedElsewhereWords(row.finding),
           paymentStatus: row.payment_status,
           finding: row.finding,
+          // W14b: once nothing in Stripe can still be paid for it (or only a person can check: the other mode).
+          ...(row.finding && CLOSABLE_FINDINGS.has(row.finding.state) ? { close: { kind: 'changed_elsewhere' as const, orderId: row.id } } : {}),
         }
       })
     ),
@@ -337,10 +416,20 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
         amount,
         state,
         words: state === 'failed' ? REFUND_FAILED_WORDS(amount, row.payment_intent_id) : REFUND_PENDING_WORDS(amount, row.payment_intent_id),
+        // W14c (W14b N1): only a refund Stripe refused; one still on its way is the automatic check's.
+        ...(state === 'failed' ? { close: { kind: 'late_refund' as const, orderId: row.entity_id, paymentIntentId: row.payment_intent_id } } : {}),
       }
     }),
     warnings: subscriptionsLeft
-      .map((row): StuckWarning => ({ kind: 'order', id: row.entity_id, at: iso(row.at), warning: SUBSCRIPTION_LEFT_WORDS(row.subscription_id) }))
+      .map(
+        (row): StuckWarning => ({
+          kind: 'order',
+          id: row.entity_id,
+          at: iso(row.at),
+          warning: row.state === 'refused' ? SUBSCRIPTION_REFUSED_WORDS(row.subscription_id) : SUBSCRIPTION_LEFT_WORDS(row.subscription_id),
+          close: { kind: 'subscription_left', orderId: row.entity_id, subscriptionId: row.subscription_id },
+        })
+      )
       .concat(warnings.map((row) => ({ kind: row.entity_type === 'order' ? 'order' : 'flow', id: row.entity_id, at: iso(row.at), warning: row.warning }))),
     alert: alert ? { at: iso(alert.at), words: STRIPE_REFUSED_WORDS } : null,
   }
