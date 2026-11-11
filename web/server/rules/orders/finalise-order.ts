@@ -49,6 +49,11 @@ export type FinaliseOutcome =
         | 'subscription_mismatch'
         | 'membership_line_missing'
         | 'membership_row_missing'
+      /**
+       * W14 (W13d defence): true only when T2 wrote an `order.subscription_left` row for the caller's own
+       * subscription in this answer. Callers put the subscription back only then.
+       */
+      subscriptionLeft?: true
     }
 
 export type FinaliseMismatch = Extract<FinaliseOutcome, { finalised: false }>['reason']
@@ -315,8 +320,9 @@ export async function finaliseOrder(db: Db, orderId: string, paymentIntent: Stri
       // The money is on its way to nobody: kept where a person (and reconcile, W12) will find it. The subscription's
       // row first: recordAll stamps rows a millisecond apart in the order given, and a later put-back's row (stamped
       // from its own clock reading, plus one) must never sort before it.
+      const left = leftHere('order_gone')
       await audit.recordAll(tx, [
-        ...leftHere('order_gone'),
+        ...left,
         ...(paymentIntent
           ? [{
               ...entry,
@@ -325,30 +331,29 @@ export async function finaliseOrder(db: Db, orderId: string, paymentIntent: Stri
             }]
           : []),
       ])
-      return { finalised: false, reason: 'order_gone' }
+      return { finalised: false, reason: 'order_gone', ...(left.length > 0 ? { subscriptionLeft: true as const } : {}) }
+    }
+    // W14: the answer for a branch that may record the caller's subscription as left, saying whether it did.
+    const leaving = async (reason: SubscriptionPutBackReason, entries: AuditEntry[] = leftHere(reason)) => {
+      await audit.recordAll(tx, entries)
+      return { finalised: false as const, reason, ...(entries.length > 0 ? { subscriptionLeft: true as const } : {}) }
     }
     if (order.payment_status === 'paid') {
       if (order.stripe_payment_intent_id === recordedIntent) return { finalised: true, alreadyPaid: true, cardSaved: false }
-      await audit.recordAll(tx, leftHere('paid_by_another_payment'))
-      return { finalised: false, reason: 'paid_by_another_payment' }
+      // W14 (W13d defence): a paid order whose record names this very subscription holds it: never left, never put back.
+      const holdsIt = subscription !== null && order.reader_payment?.membership?.subscription_id === subscription.id
+      return leaving('paid_by_another_payment', holdsIt ? [] : undefined)
     }
     if (order.payment_status !== 'pending' || !order.reader_payment) {
-      await audit.recordAll(tx, leftHere('not_pending'))
-      return { finalised: false, reason: 'not_pending' }
+      return leaving('not_pending')
     }
     const record = order.reader_payment
     // W11: the old rollback has started on it (it may have given things back already): the old code's to finish.
     // W13d (S-1): the caller's own subscription is recorded as left, and the caller puts it back (the old rollback
     // refunds the tap, never the subscription's first invoice).
-    if (oldRollbackStarted(record)) {
-      await audit.recordAll(tx, leftHere('rollback_started'))
-      return { finalised: false, reason: 'rollback_started' }
-    }
+    if (oldRollbackStarted(record)) return leaving('rollback_started')
     // W13: money is being put back: a refunded payment still reads succeeded, so it is never paid now.
-    if (record.compensation) {
-      await audit.recordAll(tx, leftHere('compensating'))
-      return { finalised: false, reason: 'compensating' }
-    }
+    if (record.compensation) return leaving('compensating')
 
     const membership = record.membership ?? null
     if (membership && !subscription) return { finalised: false, reason: 'membership_not_started' }

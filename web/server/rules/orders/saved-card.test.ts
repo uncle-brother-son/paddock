@@ -1233,13 +1233,14 @@ describe('round trips (about 20 ms each through Hyperdrive)', () => {
   const T1 = ['BEGIN; SELECT', 'SELECT s.id', 'WITH london', 'WITH clock', 'WITH clock', 'WITH clock', 'COMMIT']
   const T2 = ['BEGIN; SELECT', 'SELECT o.customer_id,', 'WITH paid', 'WITH clock', 'COMMIT']
   const UNDO = ['BEGIN; SELECT', 'SELECT customer_id,', 'WITH l', 'SELECT s.id', 'WITH capacity', 'WITH clock', 'COMMIT']
-  const ROUTE_END = ['UPDATE api_idempotency']
+  // W14 (W13c review L1): the stored answer in a transaction of its own, under the 8 s statement limit.
+  const ROUTE_END = ['BEGIN; SELECT', 'UPDATE api_idempotency', 'COMMIT']
 
-  it('a card booking with an add-on and products: 15, of which T2 is 5', async () => {
+  it('a card booking with an add-on and products: 17, of which T2 is 5', async () => {
     const { answer, statements, stripe } = await counted(cardBasket)
     expect(answer.body.ok).toBe(true)
     expect(statements).toEqual([...ROUTE_START, ...T1, ...T2, ...ROUTE_END])
-    expect(statements).toHaveLength(15)
+    expect(statements).toHaveLength(17)
     expect(stripe.calls).toHaveLength(1)
   })
 

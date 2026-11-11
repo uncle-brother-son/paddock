@@ -47,6 +47,10 @@ export const QUOTE_DIFFERENCES: Record<string, readonly AllowedDifference[]> = {
     { name: 'The special requests are kept on a buy-new pass booking', decision: 'W03-decisions Q5', path: /^figures\.booking\.hasSpecialRequests$/ },
   ],
   'w07-worst-basket': [{ name: 'The delivery address is kept on a buy-new pass order', decision: 'W03-decisions Q5', path: /^figures\.hasShippingAddress$/ }],
+  // W14a (W9-3): the quote shows £19.995 of store credit as a problem; the old order took it.
+  'w09-half-penny-store-credit-covers-it': [
+    { name: 'A store credit amount with a fraction of a penny is refused at entry', decision: 'Brief W14a (W9-3: refuse sub-penny amounts at entry)', path: /^(figures|refusal)$/ },
+  ],
   // W13's scenarios
   'w13-card-buy-new-pass-event-and-membership': [
     { name: 'The membership gets its line, which the old order never wrote (with an event too)', decision: 'W03-decisions Q3', path: /^figures\.lines\./ },
@@ -83,6 +87,11 @@ const dryRunQ9Method: readonly AllowedDifference[] = [
   { name: 'The answer names the method Q9 names', decision: 'W03-decisions Q9', path: /^result\.paymentMethodUsed$/ },
 ]
 
+/** W14a (W9-3, W09 F2): £19.995 of store credit is refused, never rounded; the old order took it. */
+const SUB_PENNY_REFUSED: readonly AllowedDifference[] = [
+  { name: 'A store credit amount with a fraction of a penny is refused at entry', decision: 'Brief W14a (W9-3: refuse sub-penny amounts at entry)', path: /^(refusal|result|rows)(\.|$)/ },
+]
+
 export const DRY_RUN_DIFFERENCES: Record<string, readonly AllowedDifference[]> = {
   // The cash figure staff confirmed includes the postage the Worker no longer charges, so its dry run
   // is refused as a changed total where the old order went through.
@@ -102,11 +111,16 @@ export const DRY_RUN_DIFFERENCES: Record<string, readonly AllowedDifference[]> =
     { name: "A pass bought on 29 Feb ends on the next year's 28 Feb, not 1 Mar", decision: 'W03-decisions Q33', path: /^rows\.session_passes\.0\.expiry_date$/ },
     { name: "A gift card bought on 29 Feb ends on the next year's 28 Feb, not 1 Mar", decision: 'W03-decisions Q33', path: /^rows\.gift_cards\.0\.expiry_date$/ },
   ],
-  // The address save fails inside T1, so the dry run fails where the old order warned after it.
-  'w07-address-save-fails': [{ name: 'The dry run fails: the address save is inside T1', decision: 'Brief W07 item 2 (the delivery address is saved inside T1)', path: /^$/ }],
+  // The address save fails inside T1, so the dry run is refused where the old order warned after it. W14a: the
+  // rollback is a definite answer, order_not_saved (W6-6, W7-9), so the refusal is compared, and differs.
+  'w07-address-save-fails': [
+    { name: 'The dry run is refused (order_not_saved): the address save is inside T1', decision: 'Brief W07 item 2 and brief W14a (W6-6, W7-9)', path: /^(refusal|result|rows)(\.|$)/ },
+  ],
+  // W14a (W9-3): an amount with a fraction of a penny is refused at entry, where the old order took it.
+  'w09-half-penny-store-credit': SUB_PENNY_REFUSED,
+  'w09-half-penny-store-credit-covers-it': SUB_PENNY_REFUSED,
   // W09: what orders.payment_method records (Q9): store credit alone, and a gift card with store credit.
   'store-credit-covers-everything': dryRunQ9Method,
-  'w09-half-penny-store-credit-covers-it': dryRunQ9Method,
   'w09-gift-card-and-store-credit-cover-everything': dryRunQ9Method,
   'w09-exact-cover-gift-card-and-store-credit': dryRunQ9Method,
   'w09-exact-cover-ninety-five-and-five-pence': dryRunQ9Method,

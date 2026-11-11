@@ -49,6 +49,18 @@ export interface PriceBasketOptions {
 
 const money = (value: string): number => Number.parseFloat(value)
 
+/**
+ * W14 (W9-3, W7-7): whether an amount staff typed is whole pennies. A fraction of a penny is refused at
+ * entry (the quote shows it as a problem and the order refuses it), never rounded: rounding gave three
+ * different figures for one amount (W09 review L2).
+ */
+export function wholePennies(amount: number): boolean {
+  return Math.abs(amount * 100 - Math.round(amount * 100)) < 1e-6
+}
+
+export const SUB_PENNY_GIFT_CARD_MESSAGE = 'Enter the gift card amount in pounds and pence, with no more than two decimal places.'
+export const SUB_PENNY_PAYMENT_MESSAGE = 'Enter the gift card and store credit amounts in pounds and pence, with no more than two decimal places.'
+
 /** The first set price, in order. Nothing set is free. */
 function firstPrice(...candidates: (string | null | undefined)[]): number {
   for (const candidate of candidates) {
@@ -139,6 +151,8 @@ function resolveGiftCard(input: BasketQuoteInput, facts: BasketFacts): { amount:
     if (!type.custom_amount_enabled) return stop('gift_card_custom_amount_not_allowed')
     const custom = giftCard.amount ?? 0
     if (!Number.isFinite(custom) || custom <= 0) return stop('invalid_gift_card_amount')
+    // W14 (W7-7, W07 review L2): an amount with a fraction of a penny is refused, never rounded.
+    if (!wholePennies(custom)) return stop('invalid_gift_card_amount', SUB_PENNY_GIFT_CARD_MESSAGE)
     const min = type.custom_amount_min === null ? null : money(type.custom_amount_min)
     const max = type.custom_amount_max === null ? null : money(type.custom_amount_max)
     if ((min !== null && custom < min) || (max !== null && custom > max)) return stop('gift_card_amount_out_of_range')
@@ -328,7 +342,8 @@ export function priceFromFacts(input: BasketQuoteInput, facts: BasketFacts, opti
       const threshold = money(facts.postage.free_shipping_threshold)
       // A threshold of 0 means no free postage.
       if (postageMethod === 'express') amount = money(facts.postage.express_price)
-      else amount = threshold > 0 && shippedValue >= threshold ? 0 : money(facts.postage.standard_price)
+      // W14 (W7-6, W07 review L1): compared in pennies, so £16.65 × 3 reaches a £49.95 threshold.
+      else amount = threshold > 0 && Math.round(shippedValue * 100) >= Math.round(threshold * 100) ? 0 : money(facts.postage.standard_price)
     }
     postage = { method: postageMethod, amount, shippedValue: round2(shippedValue) }
   }
@@ -374,6 +389,8 @@ export function priceFromFacts(input: BasketQuoteInput, facts: BasketFacts, opti
     const { amount } = payment.giftCard
     const card = facts.redeemed_gift_card
     if (!Number.isFinite(amount) || amount <= 0) refuse('validation', 'gift_card_amount_invalid')
+    // W14 (W9-3, W09 F2): refused, never rounded, so the ledger, the balance and the answer agree.
+    else if (!wholePennies(amount)) refuse('validation', 'gift_card_amount_invalid', SUB_PENNY_PAYMENT_MESSAGE)
     else if (!card) refuse('validation', 'gift_card_not_found')
     else if (card.voided) refuse('validation', 'gift_card_voided')
     // Valid through its expiry date (London).
@@ -386,6 +403,7 @@ export function priceFromFacts(input: BasketQuoteInput, facts: BasketFacts, opti
   if (payment?.storeCredit) {
     const { amount } = payment.storeCredit
     if (!Number.isFinite(amount) || amount <= 0) refuse('validation', 'store_credit_amount_invalid')
+    else if (!wholePennies(amount)) refuse('validation', 'store_credit_amount_invalid', SUB_PENNY_PAYMENT_MESSAGE)
     else if (!facts.customer) {
       // A guest has no store credit. A missing customer was already refused above.
       if (!input.customerId) refuse('validation', 'customer_not_found')

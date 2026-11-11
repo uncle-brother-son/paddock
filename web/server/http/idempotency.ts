@@ -127,3 +127,25 @@ export function stripeIdempotencyKey(recordId: string, step: string): string {
   if (!STRIPE_STEP.test(step)) throw new Error(`Invalid Stripe idempotency step: ${step}`)
   return `${recordId}:${step}`
 }
+
+/** W14 (W11-9, W11 review L2): how long a stored answer keeps a client secret: the pending window (Q14). */
+export const CLIENT_SECRET_WINDOW_MINUTES = 15
+
+/**
+ * Stripe asks that a client secret isn't kept. A stored answer keeps one (the reader's intent on the order
+ * route, the setup intent's) only so that a press whose answer was lost gets it back with the same key; after
+ * the pending window the intent is cancelled or finished (reconcile), so the secret is taken out of the stored
+ * answer. The scheduled run calls this every 5 minutes; the rows themselves are purged after 7 days.
+ */
+export async function pruneClientSecrets(db: Queryable): Promise<number> {
+  const rows = await db.query<{ key: string }>(
+    `UPDATE api_idempotency
+        SET response = response #- '{data,pendingReaderPayment,clientSecret}' #- '{data,clientSecret}'
+      WHERE endpoint IN ('POST /api/v1/staff/orders', 'POST /api/v1/staff/terminal/setup-intents')
+        AND created_at < now() - make_interval(mins => $1)
+        AND (response #> '{data,pendingReaderPayment,clientSecret}' IS NOT NULL OR response #> '{data,clientSecret}' IS NOT NULL)
+      RETURNING key`,
+    [CLIENT_SECRET_WINDOW_MINUTES]
+  )
+  return rows.length
+}

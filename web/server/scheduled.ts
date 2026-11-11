@@ -7,6 +7,7 @@
 import 'server-only'
 import { createDb, type Db } from '@/server/db'
 import { createPostgresDriver } from '@/server/db/postgres-driver'
+import { pruneClientSecrets } from '@/server/http/idempotency'
 import { reconcile, SCHEDULED_LIMITS, type ReconcileResult } from '@/server/rules/orders/reconcile'
 import { createStripeClient, ORDER_STRIPE_LIMITS, type StripeClient } from '@/server/stripe/client'
 
@@ -56,6 +57,13 @@ export async function runScheduledReconcile(env: ScheduledEnv, scheduledTime: nu
   }
   const db = deps.openDb(connectionString)
   try {
+    // W14 (W11-9): stored client secrets past the pending window. Never stops the run.
+    try {
+      const pruned = await pruneClientSecrets(db)
+      if (pruned > 0) deps.log({ event: 'idempotency.secrets_pruned', requestId, pruned })
+    } catch (err) {
+      deps.log({ event: 'idempotency.secrets_not_pruned', requestId, error: err instanceof Error ? `${err.name}: ${err.message}` : String(err) })
+    }
     const result = await deps.reconcile(db, deps.stripe(secretKey), { actor: { type: 'system', id: null }, requestId, ...SCHEDULED_LIMITS })
     const { items, ...counts } = result
     deps.log({ event: 'reconcile.run', requestId, ...counts, left: items.filter((item) => item.outcome === 'left').map((item) => ({ kind: item.kind, id: item.id, reason: item.reason })) })

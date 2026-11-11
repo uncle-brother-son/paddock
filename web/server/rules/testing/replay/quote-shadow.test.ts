@@ -217,8 +217,10 @@ describe('the quote shadow, through the real routes', () => {
 
   it('every decision has a scenario that shows it', () => {
     const decisions = Object.values(QUOTE_DIFFERENCES).flatMap((list) => list.map((a) => a.decision))
-    // W13: and the Stripe price check, where createOrder charged Stripe's price.
-    expect([...new Set([...decisions, SCREEN_DIFFERENCE.decision])].sort()).toEqual([...['Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Q6'].map((q) => `W03-decisions ${q}`), 'W03-plan 2.7 (the Stripe price check)'].sort())
+    // W13: and the Stripe price check, where createOrder charged Stripe's price. W14a: and sub-penny amounts refused (W9-3).
+    expect([...new Set([...decisions, SCREEN_DIFFERENCE.decision])].sort()).toEqual(
+      [...['Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Q6'].map((q) => `W03-decisions ${q}`), 'W03-plan 2.7 (the Stripe price check)', 'Brief W14a (W9-3: refuse sub-penny amounts at entry)'].sort()
+    )
   })
 
   it('a match is logged with only its timing, so a count proves the shadow ran', async () => {

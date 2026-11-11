@@ -422,7 +422,8 @@ async function finaliseMembership(
     // review S-1): likewise when the old rollback started after this press's start, or the order was paid with
     // another payment or is otherwise not pending: the old rollback refunds the tap, the put-back only the
     // subscription's own first invoice.
-    if (madeHere && isPutBackReason(outcome.reason)) {
+    // W14 (W13d defence): only when T2 wrote the row, so a paid order holding this subscription is never put back.
+    if (madeHere && isPutBackReason(outcome.reason) && outcome.subscriptionLeft) {
       try {
         await putBackSubscription(db, stripe, orderId, subscription, outcome.reason, actor, timing)
       } catch {
@@ -599,7 +600,10 @@ export async function cancelReaderOrder(db: Db, stripe: StripeClient, orderId: s
       finaliseResult,
       message: finaliseResult.finalised
         ? FINALISED_INSTEAD_MESSAGE
-        : `The reader payment actually succeeded, but finalising it failed: ${finaliseResult.message ?? finaliseResult.reason}`,
+        : finaliseResult.reason === 'subscription_starting'
+          ? // W14 (W13c, review L2): nothing failed; another finalise is setting the membership up.
+            `The reader payment went through, so the order wasn't cancelled. ${finaliseResult.message ?? ''}`.trim()
+          : `The reader payment actually succeeded, but finalising it failed: ${finaliseResult.message ?? finaliseResult.reason}`,
     }
   }
 

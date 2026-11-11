@@ -24,6 +24,8 @@ const CODE_BY_REASON: Readonly<Record<string, ApiErrorCode>> = {
   reader_intent_failed: 'PAYMENT_FAILED',
   // W13: the old cancel of the customer's exhausted subscription failed (Q8: everything put back).
   membership_cancellation_failed: 'PAYMENT_FAILED',
+  // W14 (W13 review L4): the subscription couldn't be set up after Stripe was reached, like the other refusals there.
+  membership_subscription_failed: 'PAYMENT_FAILED',
 }
 
 export function refusalCode(reason: string): ApiErrorCode {

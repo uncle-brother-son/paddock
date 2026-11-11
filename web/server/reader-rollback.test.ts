@@ -331,8 +331,8 @@ describe('reader order rollback and finalise', () => {
     vi.unstubAllGlobals()
   })
 
-  const cancel = async (orderId: string) => (await load('cancelReaderOrder.ts')).default({ params: { orderId }, user })
-  const finalise = async (orderId: string) => (await load('finaliseReaderOrder.ts')).default({ params: { orderId }, user })
+  const cancel = async (orderId: string) => (await load('cancelReaderOrder.ts')).cancelReaderOrderOld({ params: { orderId }, user })
+  const finalise = async (orderId: string) => (await load('finaliseReaderOrder.ts')).finaliseReaderOrderOld({ params: { orderId }, user })
   const sweep = async () => (await load('sweepPendingReaderPayments.ts')).default({ params: { olderThanMinutes: 15 }, user })
   const arm = (at: number, mode: Mode = 'before') => {
     statements = 0

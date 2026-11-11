@@ -7,7 +7,7 @@ import { makeRace, Refused, type Race } from '../race'
 import { startRealPostgres, type RealPostgres } from '../real-postgres'
 import { TABLES } from './compare'
 import { backendDir, REPLAY_USER } from './harness'
-import { bindLegacyRoutes } from './legacy-routes'
+import { bindLegacyRoutes, bindStaffRoutes } from './legacy-routes'
 import { ID, noPromoOnCard, publicOnCard, seed, sessionsToMoveBetween } from './scenarios'
 
 // The old functions on real Postgres, with two connections. PGlite is one session, so nothing in
@@ -85,6 +85,10 @@ describe('refunds at the same moment, on real Postgres', () => {
       SET session_replication_role = origin;
     `)
     const legacy = bindLegacyRoutes(first, stripe)
+    // W14a: createOrder asks the Worker's order route first; with every kind off (as live until W15) it
+    // answers ORDER_PATH_OFF and the old code places the order these races start from.
+    vi.stubGlobal('paddockWorkerV1', { rawRequest: bindStaffRoutes() })
+    vi.stubEnv('ORDER_SWITCH', '')
     vi.stubGlobal('paddockData', { query })
     vi.stubGlobal('paddockBackendApi2', {
       async rawRequest(request: { path: string }) {

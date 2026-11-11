@@ -13,7 +13,7 @@ import { GIFT_CARD_CODE_FORMAT } from './gift-card-code'
 import type { BasketFacts } from './load-basket'
 import { readOrderRows } from './order-rows'
 import { refusalCode, refusalDetails } from './order-refusal'
-import { dryRunOrder, GIFT_CARD_CODE_TRIES, placeOrder, recordedPaymentMethod, STORE_CREDIT_NOTE } from './place-order'
+import { dryRunOrder, GIFT_CARD_CODE_TRIES, ORDER_NOT_SAVED_MESSAGE, placeOrder, recordedPaymentMethod, STORE_CREDIT_NOTE } from './place-order'
 import { amountChangedRefusal } from './amounts'
 import { orderRefusal } from './order-refusal'
 import { eventFullRefusal } from './basket-event'
@@ -245,10 +245,10 @@ describe('what Postgres refuses is turned into its reason after the rollback', (
     expect(tablesTouched(recording)).toEqual(['api_idempotency'])
   })
 
-  it('anything else is a fault: the safe words, nothing kept, the detail only in the log', async () => {
+  it('anything else is a fault: nothing kept, said plainly as a definite answer (W14: order_not_saved), the detail only in the log', async () => {
     const { recording, answer } = await placeThrough(cashBooking, undefined, (steps) => whileFailing(db, { table: 'booking_guests', event: 'INSERT', when: 'true' }, steps))
     expect(answer.status).toBe(500)
-    expect(answer.body).toMatchObject({ ok: false, error: { code: 'INTERNAL', message: 'Something went wrong and the action may not have finished. Check before trying again.' } })
+    expect(answer.body).toMatchObject({ ok: false, error: { code: 'INTERNAL', message: ORDER_NOT_SAVED_MESSAGE, details: { stage: 'validation', reason: 'order_not_saved' } } })
     expect(JSON.stringify(answer.body)).not.toContain('connection lost')
     expect(tablesTouched(recording)).toEqual(['api_idempotency'])
   })
@@ -294,7 +294,7 @@ describe('B11: a database error anywhere in the order leaves nothing behind', ()
 
   it.each(w07Writes)('W07, the worst basket: %s fails', async (_, failure) => {
     const { recording, answer } = await placeThrough(worstBasket, undefined, (steps) => whileFailing(db, failure, steps))
-    expect(answer.body).toMatchObject({ ok: false, error: { code: 'INTERNAL', message: 'Something went wrong and the action may not have finished. Check before trying again.' } })
+    expect(answer.body).toMatchObject({ ok: false, error: { code: 'INTERNAL', message: ORDER_NOT_SAVED_MESSAGE, details: { stage: 'validation', reason: 'order_not_saved' } } })
     expect(JSON.stringify(answer.body)).not.toContain('connection lost')
     expect(tablesTouched(recording)).toEqual(['api_idempotency'])
   })
@@ -377,7 +377,7 @@ describe('before anything is touched', () => {
     expect(result.status).toBe(400)
     expect(result.body).toMatchObject({ ok: false, error: { code: 'VALIDATION', details: { reason: 'membership_cash_not_accepted' } } })
     expect(statements).toContain('BEGIN; SELECT')
-    expect(statements.at(-1)).toBe('UPDATE api_idempotency')
+    expect(statements.slice(-3)).toEqual(['BEGIN; SELECT', 'UPDATE api_idempotency', 'COMMIT'])
   })
 
   it('an empty basket, a missing customer and the removed gift card source: the same', async () => {
@@ -385,7 +385,8 @@ describe('before anything is touched', () => {
     for (const params of [{ customerId: ID.customer, payment: {} }, { booking: paidSeat(), payment: {} }, { customerId: ID.customer, booking: { ...paidSeat(), redemptionSource: 'gift_card' }, payment: {} }]) {
       const { result, statements } = await counting(() => postOrder(orderInput(params)))
       expect(result.body.ok).toBe(false)
-      expect(statements).toHaveLength(3)
+      // The key's claim and look-up, then (W14, W13c review L1) its stored answer in a transaction.
+      expect(statements).toHaveLength(5)
     }
   })
 
@@ -406,14 +407,14 @@ describe('before anything is touched', () => {
     // BEGIN with the transaction's time limits (one round trip, W06 N2), the locks, the facts, the
     // booking, the order, the audit rows, COMMIT.
     const T1 = ['BEGIN; SELECT', 'SELECT s.id', 'WITH london', 'WITH clock', 'WITH clock', 'WITH clock', 'COMMIT']
-    const ROUTE = ['SELECT id,', 'INSERT INTO', ...T1, 'UPDATE api_idempotency']
+    const ROUTE = ['SELECT id,', 'INSERT INTO', ...T1, 'BEGIN; SELECT', 'UPDATE api_idempotency', 'COMMIT']
 
     it('a typical basket: a cash booking with a guest and an add-on', async () => {
       await freshSeed()
       const { result, statements } = await counting(() => postOrder(orderInput(cashBooking)))
       expect(result.body.ok).toBe(true)
       expect(statements).toEqual(ROUTE)
-      expect(statements).toHaveLength(10)
+      expect(statements).toHaveLength(12)
     })
 
     it('the worst basket in scope: a credit seat, a guest, two add-on credits and a standalone add-on, the same', async () => {
@@ -434,7 +435,7 @@ describe('before anything is touched', () => {
       await freshSeed()
       const { result, statements } = await counting(() => postOrder(orderInput({ ...cashBooking, payment: cash(40) })))
       expect(refusalOf(result)).toMatchObject({ reason: 'cash_amount_changed' })
-      expect(statements).toEqual(['SELECT id,', 'INSERT INTO', 'BEGIN; SELECT', 'SELECT s.id', 'WITH london', 'ROLLBACK', 'UPDATE api_idempotency'])
+      expect(statements).toEqual(['SELECT id,', 'INSERT INTO', 'BEGIN; SELECT', 'SELECT s.id', 'WITH london', 'ROLLBACK', 'BEGIN; SELECT', 'UPDATE api_idempotency', 'COMMIT'])
     })
 
     it('the dry run: no key, a read back, a rollback', async () => {
@@ -480,7 +481,7 @@ describe('before anything is touched', () => {
       await db.query('UPDATE events SET places_booked = capacity WHERE id = $1', [ID.event])
       const { result, statements } = await counting(() => postOrder(orderInput(eventAlone)))
       expect(refusalOf(result)).toMatchObject({ code: 'EVENT_SOLD_OUT', reason: 'event_full' })
-      expect(statements).toEqual(['SELECT id,', 'INSERT INTO', 'BEGIN; SELECT', 'SELECT s.id', 'WITH london', 'ROLLBACK', 'UPDATE api_idempotency'])
+      expect(statements).toEqual(['SELECT id,', 'INSERT INTO', 'BEGIN; SELECT', 'SELECT s.id', 'WITH london', 'ROLLBACK', 'BEGIN; SELECT', 'UPDATE api_idempotency', 'COMMIT'])
     })
 
     // W09: the promo's use, the store credit and the gift card are in the order's statement, and their
@@ -502,7 +503,7 @@ describe('before anything is touched', () => {
       await db.query('UPDATE promo_codes SET active = false WHERE id = $1', [ID.promoPercent])
       const { result, statements } = await counting(() => postOrder(orderInput(promoBooking)))
       expect(refusalOf(result)).toMatchObject({ code: 'VALIDATION', reason: 'promo_code_invalid' })
-      expect(statements).toEqual(['SELECT id,', 'INSERT INTO', 'BEGIN; SELECT', 'SELECT s.id', 'WITH london', 'ROLLBACK', 'UPDATE api_idempotency'])
+      expect(statements).toEqual(['SELECT id,', 'INSERT INTO', 'BEGIN; SELECT', 'SELECT s.id', 'WITH london', 'ROLLBACK', 'BEGIN; SELECT', 'UPDATE api_idempotency', 'COMMIT'])
     })
   })
 })
@@ -1141,7 +1142,7 @@ describe('B11 (W08): a database error writing any part of the event leaves nothi
 
   it.each(writes)('the worst basket: %s fails', async (_, failure) => {
     const { recording, answer } = await placeThrough(eventWorstBasket, undefined, (steps) => whileFailing(db, failure, steps))
-    expect(answer.body).toMatchObject({ ok: false, error: { code: 'INTERNAL', message: 'Something went wrong and the action may not have finished. Check before trying again.' } })
+    expect(answer.body).toMatchObject({ ok: false, error: { code: 'INTERNAL', message: ORDER_NOT_SAVED_MESSAGE, details: { stage: 'validation', reason: 'order_not_saved' } } })
     expect(JSON.stringify(answer.body)).not.toContain('connection lost')
     expect(tablesTouched(recording)).toEqual(['api_idempotency'])
   })
@@ -1494,7 +1495,7 @@ describe('B11 (W09): a database error writing the promo, the store credit or the
 
   it.each(writes)('the worst basket: %s fails', async (_, failure) => {
     const { recording, answer } = await placeThrough(w09WorstBasket, undefined, (steps) => whileFailing(db, failure, steps))
-    expect(answer.body).toMatchObject({ ok: false, error: { code: 'INTERNAL', message: 'Something went wrong and the action may not have finished. Check before trying again.' } })
+    expect(answer.body).toMatchObject({ ok: false, error: { code: 'INTERNAL', message: ORDER_NOT_SAVED_MESSAGE, details: { stage: 'validation', reason: 'order_not_saved' } } })
     expect(JSON.stringify(answer.body)).not.toContain('connection lost')
     expect(tablesTouched(recording)).toEqual(['api_idempotency'])
   })

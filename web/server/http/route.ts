@@ -197,7 +197,10 @@ export function createRouteFactory(deps: RouteDeps) {
           } else {
             result = await run(context)
             try {
-              await completeIdempotencyKey(openDb, scope, { status: result.status, body: result.body })
+              // W14 (W13c review L1): in a transaction, so the statement_timeout (8 s) bounds it, lock wait
+              // included, rather than only the client's 10 s query limit. The convention counts it at 8.1 s.
+              const response = { status: result.status, body: result.body }
+              await openDb.transaction((tx) => completeIdempotencyKey(tx, scope, response))
             } catch (err) {
               // The work is done, so report it. The key stays 'in_progress': a retry gets CONFLICT
               // rather than running the handler again.

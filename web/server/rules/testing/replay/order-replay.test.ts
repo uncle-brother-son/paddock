@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Db } from '@/server/db'
 import { READER_INTENT_UNCONFIRMED_MESSAGE, staffSees } from '@/server/rules/orders/failure-messages'
+import { ORDER_NOT_SAVED_MESSAGE } from '@/server/rules/orders/place-order'
+import { SUB_PENNY_PAYMENT_MESSAGE } from '@/server/rules/orders/price-basket'
 import { compareRecordings, withCanonicalGoneNumbers, withCanonicalStripeIds, type Recording } from './compare'
 import { readGolden, replay, startReplay, type ReplayEnvironment, type Scenario } from './harness'
 import { NEW_SIDE_CONFIRMS, NOT_BUILT_SCENARIOS, ORDER_SCENARIOS, orderDifferences, OUTCOME_DIFFERS, W13_SCENARIOS } from './order-differences'
@@ -115,7 +117,18 @@ describe('the order route against the old createOrder', () => {
       expect(golden.tables['orders']?.added).toMatchObject([{ payment_status: 'paid', payment_method: 'cash' }])
       const { recording, answers } = await runNew('w07-address-save-fails')
       expect(answers[0]?.status).toBe(500)
-      expect(answers[0]?.body).toMatchObject({ ok: false, error: { code: 'INTERNAL', message: 'Something went wrong and the action may not have finished. Check before trying again.' } })
+      // W14a (W6-6, W7-9): a definite rollback, said plainly, so the screen's next press gets a new key.
+      expect(answers[0]?.body).toMatchObject({ ok: false, error: { code: 'INTERNAL', message: ORDER_NOT_SAVED_MESSAGE, details: { stage: 'validation', reason: 'order_not_saved' } } })
+      expect(Object.keys(recording.tables)).toEqual(['api_idempotency'])
+    })
+  })
+
+  describe('W14a: an amount with a fraction of a penny is refused at entry (W9-3)', () => {
+    it.each(['w09-half-penny-store-credit', 'w09-half-penny-store-credit-covers-it'])('%s: the old order took £19.995 as given; the new one is refused, with nothing kept', async (name) => {
+      // The golden stays the old code's (it took the covers-it order, and refused the other only over its cash figure).
+      expect(readGolden(name)).not.toBeNull()
+      const { recording, answers } = await runNew(name)
+      expect(answers[0]?.body).toMatchObject({ ok: false, error: { code: 'VALIDATION', message: SUB_PENNY_PAYMENT_MESSAGE, details: { reason: 'store_credit_amount_invalid' } } })
       expect(Object.keys(recording.tables)).toEqual(['api_idempotency'])
     })
   })

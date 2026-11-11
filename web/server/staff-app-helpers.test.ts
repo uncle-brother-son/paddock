@@ -24,6 +24,9 @@ describe('staff app helpers', () => {
 
   beforeEach(() => {
     rawRequest.mockReset()
+    // W14a: createOrder asks the Worker's order route first. As live until W15, every kind is off, so the
+    // route answers ORDER_PATH_OFF and the old code runs (any other call gets no answer, as before).
+    rawRequest.mockImplementation(async (options: { path?: string }) => (options.path === '/api/v1/staff/orders' ? refusal('ORDER_PATH_OFF', 'Switched off.') : undefined))
     vi.stubGlobal('paddockWorkerV1', { rawRequest })
   })
   afterEach(() => {
@@ -115,11 +118,8 @@ describe('staff app helpers', () => {
       'createCustomer',
       'createOneOffSession',
       'createTerminalPaymentIntent',
-      'createTerminalSetupIntent',
       'deleteServiceTypeScheduleSlot',
       'generateUpcomingSessions',
-      'getTerminalConnectionToken',
-      'saveCustomerCardOnFile',
       'setAddonLinePrepared',
       'setBookingCheckedIn',
       'setBookingSpecialRequests',
@@ -145,6 +145,22 @@ describe('staff app helpers', () => {
 
       expect(worker).not.toHaveBeenCalled()
       expect(query.mock.calls.every(([sql]) => /^\s*SELECT/i.test(sql))).toBe(true)
+    })
+
+    // Brief W14a: these three are thin calls to the Worker now, whose defineRoute refuses an inactive account
+    // before anything happens. They never touch the database or the legacy routes themselves.
+    it.each(['createTerminalSetupIntent', 'getTerminalConnectionToken', 'saveCustomerCardOnFile'])('%s asks only the Worker, which refuses an inactive account', async (name) => {
+      const query = stubStaffTable([row(false)])
+      const legacy = vi.fn()
+      vi.stubGlobal('paddockBackendApi2', { rawRequest: legacy })
+      rawRequest.mockResolvedValue(refusal('FORBIDDEN', INACTIVE))
+      const { default: fn } = await import(/* @vite-ignore */ path.join(appDir, `backend/paddock/${name}`))
+
+      await expect(fn({ params: { customerId: 'c1', setupIntentId: 'seti_1' }, user })).rejects.toThrow(INACTIVE)
+
+      expect(rawRequest).toHaveBeenCalledTimes(1)
+      expect(legacy).not.toHaveBeenCalled()
+      expect(query).not.toHaveBeenCalled()
     })
 
     it('the unguarded versions used inside payment flows do no staff lookup', async () => {
@@ -861,10 +877,11 @@ describe('staff app helpers', () => {
         expect(source).toContain("state.method === 'cash' && !hasMembership && !priceProblem")
       })
 
-      it('a promo check that fails at Complete Order stops the order', () => {
+      it('W14a: the promo is the basket quote\'s: a refused code comes off with its words, and Complete Order needs the quote', () => {
         const source = checkout()
         expect(source).not.toContain('proceed with the code')
-        expect(source).toContain('setErrorMessage(PROMO_CHECK_MESSAGE)')
+        expect(source).toContain('const refused = promoRefusal(quote)')
+        expect(source).toContain('if (!quote) return PRICE_LOADING_MESSAGE')
       })
 
       it('a refusal while loading opens the section, so the quote can run', () => {
@@ -927,7 +944,8 @@ describe('staff app helpers', () => {
           const source = checkout()
           expect(source).toContain("bookingPriceProblem(bookingPriceReport, bookingKey, booking.selectedSession?.booking_type === 'public' && !customer)")
           expect(source).toContain('eventPriceProblem(eventQuoteReport, eventKey, !customer)')
-          expect(source).toContain('promoProblem(promoApplied !== null, promoCheck, currentPromoCheckKey, !customer)')
+          // W14a: the basket quote asks for a customer the same way.
+          expect(source).toContain('? CHOOSE_CUSTOMER_MESSAGE')
           expect(source.match(/isPriceWaiting\(summaryProblem\)/g)).toHaveLength(2)
         })
       })
@@ -1236,7 +1254,9 @@ describe('staff app helpers', () => {
         expect(source).toContain('giftCardAmount: toPennies(Math.max(0, defaultAmount))')
         expect(source).toContain('? toPennies(Math.max(0, Math.min(parsed, balance, totalDueNow - storeCreditAppliedAmount)))')
         expect(source).toContain('toPennies(Math.max(0, Math.min(parsed, max)))')
-        expect(source).toContain('const remainder = amountLeftToPay(amountDueNow, giftCardAppliedAmount, storeCreditAppliedAmount)')
+        // W14a: Add Guest, Move and Settle keep this sum (legacyPaymentFigures); New Order takes the quote's.
+        const helpers = readFileSync(path.join(appDir, 'frontend/utils/basketQuote.ts'), 'utf8')
+        expect(helpers).toContain('const remainder = amountLeftToPay(amountDueNow, giftCardApplied, storeCreditApplied)')
       })
 
       it.each(['AddGuestDialog', 'MoveBookingDialog', 'SettleLapsedPaymentDialog', 'CheckoutDialog'])('%s compares credit to the penny', (name) => {
@@ -3077,19 +3097,19 @@ describe('staff app helpers', () => {
         expect(source).toContain('I confirm {formatCurrency(remainder.toFixed(2))} in cash was received.')
       })
 
-      it('New Order works from the refused total everywhere', () => {
+      it('W14a: New Order works from the basket quote everywhere (W03-plan 2.8), and asks again after a refusal', () => {
         const source = readFileSync(path.join(appDir, 'frontend/components/CheckoutDialog.tsx'), 'utf8')
-        expect(source).toContain('const amountDue = amountDueAfterRefusal(quotedAmountDue, amountRefusal)')
-        expect(source).toContain('amountDue={amountDue}')
-        expect(source).toContain('{cashNotice ? (')
+        expect(source).toContain('const amountDue = quote?.totals.amountDue ?? 0')
+        expect(source).toContain('quote={lastQuote}')
+        expect(source).not.toContain('quotedAmountDue')
       })
 
       it('New Order moves to the total on every refusal over the amount', () => {
         const source = readFileSync(path.join(appDir, 'frontend/components/CheckoutDialog.tsx'), 'utf8')
         const start = source.indexOf('response?.reason && response.amountDueTotal !== undefined')
         expect(start).toBeGreaterThan(0)
-        const branch = source.slice(start, source.indexOf('} else {', start))
-        expect(branch).toContain('setAmountRefusal(refusalAt(response.amountDueTotal, null))')
+        const branch = source.slice(start, start + 700)
+        expect(branch).toContain('setBasketQuoteRetry((n) => n + 1)')
         expect(branch).toContain('[FAILURE_MESSAGES[response.reason], response.message].filter(Boolean).join')
       })
 
@@ -3397,9 +3417,10 @@ describe('staff app helpers', () => {
         expect(after).not.toContain("payment.method === 'reader'")
         expect(after).not.toMatch(/\bpayment\.method\b/)
         expect(after).toContain('if (readerReferenceMissing(paymentInput.method, response.pendingReaderPayment)) {')
-        expect(after).toContain('const pending = response.pendingReaderPayment\n        if (pending) {')
-        expect(after).toContain('cashShortfall(paymentInput.method ?? null, cashConfirmed, response.cardAmount)')
-        expect(source).toContain('...orderMethodFields(payment, remainder, membershipAmount, readerSaveCard),')
+        expect(after).toContain('const pending = response.pendingReaderPayment\n      if (pending) {')
+        // W14a: the result line names the method that was sent (paymentSummaryLine), never the one held on screen.
+        expect(source).toContain('const methodSent = paymentInput.method ?? null')
+        expect(source).toContain('...orderMethodFields(payment, totals.toCollect.cash, membershipAmount, readerSaveCard),')
       })
 
       it('New Order keeps a refusal\'s banner when the method goes by itself', () => {
@@ -3417,9 +3438,10 @@ describe('staff app helpers', () => {
         expect(source.indexOf('clearHiddenMethod(state')).toBeGreaterThan(source.indexOf('if (state.confirmedCashAmount !== null) onChange'))
       })
 
-      it('the result screen warning stays as a last line of defence', () => {
+      it('W14a: the result line says what was taken, from the answer (W03-plan 2.8: the screen stops cashShortfall)', () => {
         const source = readFileSync(path.join(appDir, 'frontend/components/CheckoutDialog.tsx'), 'utf8')
-        expect(source).toContain('cashShortfall(paymentInput.method ?? null, cashConfirmed, response.cardAmount)')
+        expect(source).not.toContain('cashShortfall(')
+        expect(source).toContain('collected: result.cardAmount ?? 0,')
       })
     })
   })

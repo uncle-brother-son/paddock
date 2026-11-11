@@ -29,7 +29,7 @@ import type {
   PlaceOrderOutput,
 } from '@/contracts'
 import { audit } from '@/server/audit'
-import { inOpenTransaction, isDeadlock, postgresRefusal, type Db, type Tx } from '@/server/db'
+import { DbCommitUnknownError, DbError, inOpenTransaction, isDeadlock, postgresRefusal, type Db, type Tx } from '@/server/db'
 import { ApiError } from '@/server/http/errors'
 import { addMonthsToIsoDate } from '@/server/rules/time/london-time'
 import type { StripeClient } from '@/server/stripe/client'
@@ -1122,8 +1122,31 @@ async function inTransaction<T>(db: Db, work: (tx: Tx) => Promise<T>): Promise<T
       return await db.transaction(work)
     }
   } catch (err) {
-    throw await afterRollback(db, err)
+    const refused = await afterRollback(db, err)
+    // Only a transaction T1 opened itself is known to be rolled back; one it joined is its caller's.
+    throw opensItsOwn ? definiteRollback(refused) : refused
   }
+}
+
+/** W14 (W6-6, W7-9): T1 failed in the database and was rolled back, so nothing was kept and nothing taken. */
+export const ORDER_NOT_SAVED_MESSAGE =
+  "The order couldn't be saved (the system was busy, or one of its records couldn't be written), so nothing was kept and no payment was taken. Please try again."
+
+/**
+ * W14 (W06 review L3, W07 S2): a database fault inside T1 (a lock timeout, a deadlock after its one retry, a
+ * failed write such as the delivery address) rolled all of T1 back, and nothing outside the database was
+ * called, so it is a definite answer: a refusal, `order_not_saved`, with plain words, so the screen's next press
+ * gets a new key and tries again cleanly. Only a COMMIT with no answer (DbCommitUnknownError) may have saved it,
+ * and it stays INTERNAL ("may not have finished"). Refusals and anything that isn't from the database pass through.
+ */
+function definiteRollback(err: unknown): unknown {
+  if (err instanceof ApiError || err instanceof DbCommitUnknownError) return err
+  if (!(err instanceof DbError) && !postgresRefusal(err)) return err
+  const logDetail = err instanceof DbError ? `${err.name}: ${err.detail ?? err.message}` : explain(err)
+  return new ApiError('INTERNAL', ORDER_NOT_SAVED_MESSAGE, {
+    details: { stage: 'validation', reason: 'order_not_saved', message: ORDER_NOT_SAVED_MESSAGE },
+    logDetail: `T1 rolled back: ${logDetail}`,
+  })
 }
 
 const explain = (err: unknown): string => (err instanceof Error ? `${err.name}: ${err.message}` : String(err))
@@ -1366,7 +1389,8 @@ async function collectMembershipAndFinish(
     // W13c (W13a review S1): T2 has recorded the subscription as left in its own transaction; the put-back sends and
     // writes only while there is time to send, so nothing is written after T2 once the window has closed.
     // W13d (W13c review S-1): likewise for the old rollback's, paid with another payment, or not pending.
-    if (isPutBackReason(finalised.reason)) {
+    // W14 (W13d defence): only when T2 wrote the row, so a paid order holding this subscription is never put back.
+    if (isPutBackReason(finalised.reason) && finalised.subscriptionLeft) {
       try {
         await putBackSubscription(db, stripe, orderId, subscription, finalised.reason, { actor, requestId: options.requestId }, timing)
       } catch {

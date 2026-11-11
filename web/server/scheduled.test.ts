@@ -86,7 +86,25 @@ describe('the scheduled handler', () => {
     const seen = depsFor(stripe)
     const broken = { ...seen.deps, openDb: () => Object.assign(Object.create(database.db) as Db, { query: async () => Promise.reject(new Error('no database')), close: async () => undefined }) }
     await expect(runScheduledReconcile(env, 0, broken)).rejects.toThrow('no database')
-    expect(seen.logged).toEqual([{ event: 'reconcile.failed', requestId: 'reconcile-1970-01-01T00:00:00.000Z', error: 'Error: no database' }])
+    // W14 (W11-9): the secrets' pruning fails first, is logged, and never stops the run.
+    expect(seen.logged).toEqual([
+      { event: 'idempotency.secrets_not_pruned', requestId: 'reconcile-1970-01-01T00:00:00.000Z', error: 'Error: no database' },
+      { event: 'reconcile.failed', requestId: 'reconcile-1970-01-01T00:00:00.000Z', error: 'Error: no database' },
+    ])
+  })
+
+  it('W14 (W11-9): a run takes stored client secrets out once they are past the pending window', async () => {
+    const stripe = new FakeStripe()
+    const seen = depsFor(stripe)
+    await database.db.query(
+      `INSERT INTO api_idempotency (key, actor_type, actor_id, endpoint, request_hash, status, response, http_status, created_at)
+       VALUES ('w14-secret-key-0001', 'staff', 's1', 'POST /api/v1/staff/terminal/setup-intents', 'h', 'done', $1, 200, now() - interval '1 hour')`,
+      [{ ok: true, data: { clientSecret: 'seti_secret', setupIntentId: 'seti_1', stripeCustomerId: 'cus_1' } } as { [key: string]: unknown }]
+    )
+    await runScheduledReconcile(env, 0, seen.deps)
+    const [row] = await database.db.query<{ response: { data: Record<string, unknown> } }>(`SELECT response FROM api_idempotency WHERE key = 'w14-secret-key-0001'`)
+    expect(row?.response.data).toEqual({ setupIntentId: 'seti_1', stripeCustomerId: 'cus_1' })
+    expect(seen.logged[0]).toMatchObject({ event: 'idempotency.secrets_pruned', pruned: 1 })
   })
 })
 

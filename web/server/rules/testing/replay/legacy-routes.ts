@@ -26,6 +26,28 @@ const ROUTES: Record<string, () => Promise<unknown>> = {
 /** The /api/v1/staff routes the old functions call, beyond the quote shadow's own. */
 const STAFF_ROUTES: Record<string, () => Promise<unknown>> = {
   '/api/v1/staff/payments/refunds': () => import('@/app/api/v1/staff/payments/refunds/route'),
+  // W14: the wrappers ask the Worker first (createOrder, the reader's finalise and cancel, the terminal and the
+  // saved card). The quote shadow's own calls still find no route here, so it records nothing, as before.
+  '/api/v1/staff/orders': () => import('@/app/api/v1/staff/orders/route'),
+  '/api/v1/staff/terminal/connection-token': () => import('@/app/api/v1/staff/terminal/connection-token/route'),
+  '/api/v1/staff/terminal/setup-intents': () => import('@/app/api/v1/staff/terminal/setup-intents/route'),
+}
+
+/** W14: the staff routes with an id in the path, and the path's parameters. */
+const STAFF_PATTERNS: Array<{ pattern: RegExp; load: () => Promise<unknown>; params: (match: RegExpMatchArray) => Record<string, string> }> = [
+  { pattern: /^\/api\/v1\/staff\/orders\/([^/]+)\/finalise$/, load: () => import('@/app/api/v1/staff/orders/[orderId]/finalise/route'), params: (m) => ({ orderId: m[1] ?? '' }) },
+  { pattern: /^\/api\/v1\/staff\/orders\/([^/]+)\/cancel$/, load: () => import('@/app/api/v1/staff/orders/[orderId]/cancel/route'), params: (m) => ({ orderId: m[1] ?? '' }) },
+  { pattern: /^\/api\/v1\/staff\/customers\/([^/]+)\/saved-card$/, load: () => import('@/app/api/v1/staff/customers/[customerId]/saved-card/route'), params: (m) => ({ customerId: m[1] ?? '' }) },
+]
+
+function staffRoute(path: string): { load: () => Promise<unknown>; params: Record<string, string> } | null {
+  const exact = STAFF_ROUTES[path]
+  if (exact) return { load: exact, params: {} }
+  for (const { pattern, load, params } of STAFF_PATTERNS) {
+    const match = path.match(pattern)
+    if (match) return { load, params: params(match) }
+  }
+  return null
 }
 
 const active: { stripe: FakeStripe | null; db: Db | null } = { stripe: null, db: null }
@@ -176,9 +198,9 @@ export function bindStaffRoutes() {
   }
   const staffKey = key
   return async function rawRequest({ path, method = 'GET', headers = {}, queryParams, body }: StaffCall): Promise<{ data: unknown }> {
-    const load = STAFF_ROUTES[path]
-    if (!load) throw new Error(`The replay harness has no staff route ${path}.`)
-    const route = (await load()) as Record<string, (request: Request) => Promise<Response>>
+    const found = staffRoute(path)
+    if (!found) throw new Error(`The replay harness has no staff route ${path}.`)
+    const route = (await found.load()) as Record<string, (request: Request, context?: { params: Promise<Record<string, string>> }) => Promise<Response>>
     const handler = route[method]
     if (!handler) throw new Error(`${path} has no ${method}.`)
     const url = new URL(`http://replay.test${path}`)
@@ -188,7 +210,8 @@ export function bindStaffRoutes() {
         method,
         headers: { ...headers, authorization: `Bearer ${staffKey}`, 'content-type': 'application/json' },
         ...(method !== 'GET' && body !== undefined ? { body: JSON.stringify(body) } : {}),
-      })
+      }),
+      { params: Promise.resolve(found.params) }
     )
     return { data: await response.json() }
   }

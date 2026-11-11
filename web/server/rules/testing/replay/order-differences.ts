@@ -349,6 +349,7 @@ export const W09_SCENARIOS: readonly string[] = [
   'w09-gift-card-store-credit-and-cash',
   'w09-exact-cover-gift-card-and-store-credit',
   'w09-exact-cover-ninety-five-and-five-pence',
+  // W14a (W9-3): the two half-penny store credit scenarios are refused now (OUTCOME_DIFFERS, own test).
   'w09-half-penny-store-credit',
   'w09-half-penny-store-credit-covers-it',
   'w09-half-penny-price-in-cash',
@@ -567,6 +568,12 @@ const Q4 = 'W03-decisions Q4'
 const Q5 = 'W03-decisions Q5'
 const ADDRESS_IN_T1 = 'Brief W07 item 2 (the delivery address is saved inside T1)'
 const Q33 = 'W03-decisions Q33'
+/** W14a (W9-3, W09 F2): an amount with a fraction of a penny is refused at entry, never rounded. */
+const SUB_PENNY: AllowedDifference = {
+  name: 'A store credit amount with a fraction of a penny is refused at entry, with nothing kept',
+  decision: 'Brief W14a (W9-3: refuse sub-penny amounts at entry)',
+  path: /^\.results\[0\](\.|$)|^\.tables\./,
+}
 const Q9 = 'W03-decisions Q9'
 
 /** Q9: what orders.payment_method records, where createOrder recorded something else. */
@@ -615,7 +622,9 @@ export const W07_DIFFERENCES: Readonly<Record<string, readonly AllowedDifference
   ],
   // W09, Q9: store credit alone records store_credit (createOrder: none); a gift card with store credit records split (createOrder: gift_card).
   'store-credit-covers-everything': q9Method('none', 'store_credit'),
-  'w09-half-penny-store-credit-covers-it': q9Method('none', 'store_credit'),
+  // W14a (W9-3): £19.995 of store credit is refused at entry, where createOrder took it (or refused only the cash).
+  'w09-half-penny-store-credit': [SUB_PENNY],
+  'w09-half-penny-store-credit-covers-it': [SUB_PENNY],
   'w09-gift-card-and-store-credit-cover-everything': q9Method('gift_card', 'split'),
   'w09-exact-cover-gift-card-and-store-credit': q9Method('gift_card', 'split'),
   'w09-exact-cover-ninety-five-and-five-pence': q9Method('gift_card', 'split'),
@@ -740,6 +749,8 @@ export const NEW_SIDE_CONFIRMS: Readonly<Record<string, { toCollect: number; dec
 /** Scenarios whose outcome itself differs by decision: the new side's answer is checked by its own test. */
 export const OUTCOME_DIFFERS: readonly string[] = [
   'w07-address-save-fails',
+  'w09-half-penny-store-credit',
+  'w09-half-penny-store-credit-covers-it',
   'w10-unclear-answer',
   'w11-reader-amount-a-penny-over',
   'w11-reader-intent-unclear',

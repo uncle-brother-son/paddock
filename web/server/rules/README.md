@@ -270,6 +270,24 @@ Their schemas are in `orders/reconcile-contracts.ts` until W14 moves them into `
   between its list and T2 leaves a row the next run puts back (S-2). The retry takes only rows whose order no longer
   exists, never a paid one (L3).
 
+## The switch and the screen (W14a)
+
+`ORDER_SWITCH` (a Worker secret) lists the kinds of order the Worker takes: `no_stripe`, `saved_card`, `reader`,
+`membership`, `reader_flows`, comma or space separated. Empty or unset means every kind is off. `order-switch.ts`
+decides a basket's kind from what was sent: any membership is `membership`; otherwise the reader is `reader`, the
+saved card `saved_card`, and anything else (cash, gift card or store credit alone, nothing owed) `no_stripe`.
+`reader_flows` gates nothing yet (step D's flow routes check it). `POST /api/v1/staff/orders` answers
+`ORDER_PATH_OFF` (501) for a kind that is off, before the order is touched; the answer is stored against the
+request's key like any other, so a retry with the same key stays on the old code. The dry run, the quote, finalise,
+cancel and reconcile ignore the switch.
+
+The staff app's `createOrder` asks this route first and runs its old code only on `ORDER_PATH_OFF`;
+`finaliseReaderOrder` and `cancelReaderOrder` run theirs only on `old_reader_order`. Any other failure never falls
+back. T1 failing in the database (a lock timeout, a deadlock after its retry, a failed write) is a definite answer:
+`order_not_saved` with plain words, so the screen's next press gets a new key. Stored answers lose their client
+secret after the pending window (`pruneClientSecrets`, run by the schedule). The route stores its answer in a
+transaction (8 s statement limit), counted at 8.1 s in the timing convention.
+
 ## Refund claims with no finish
 
 The staff app claims a refund's money before it moves. Each claim writes `booking.refund_claimed` to

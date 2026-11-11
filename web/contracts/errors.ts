@@ -32,6 +32,11 @@ export const ERROR_CODES = [
    * reconcile decides. Never take payment again for it.
    */
   'PAYMENT_UNCONFIRMED',
+  /**
+   * Step C (W14, W03-plan 3.2): the order's kind is switched off on the Worker (the ORDER_SWITCH secret), so
+   * nothing was touched. The staff app's createOrder runs the old code; anything else must never fall back.
+   */
+  'ORDER_PATH_OFF',
 ] as const
 
 export const apiErrorCodeSchema = z.enum(ERROR_CODES)

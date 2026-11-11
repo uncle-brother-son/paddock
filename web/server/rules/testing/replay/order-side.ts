@@ -84,7 +84,25 @@ export interface OrderAnswer {
   body: { ok: true; data: PlaceOrderOutput } | ApiFailure
 }
 
-export async function postOrder(input: unknown, { key = crypto.randomUUID(), email = REPLAY_USER.email } = {}): Promise<OrderAnswer> {
+/** W14: every kind of order the Worker takes, as ORDER_SWITCH lists them once W15 has switched them all on. */
+export const ALL_KINDS_ON = 'no_stripe,saved_card,reader,membership'
+
+export async function postOrder(
+  input: unknown,
+  { key = crypto.randomUUID(), email = REPLAY_USER.email, orderSwitch = ALL_KINDS_ON }: { key?: string; email?: string; orderSwitch?: string } = {}
+): Promise<OrderAnswer> {
+  // W14: the switch for this one call, put back after it, so an old side in the same test still sees its own.
+  const before = process.env.ORDER_SWITCH
+  process.env.ORDER_SWITCH = orderSwitch
+  try {
+    return await sendOrder(input, key, email)
+  } finally {
+    if (before === undefined) delete process.env.ORDER_SWITCH
+    else process.env.ORDER_SWITCH = before
+  }
+}
+
+async function sendOrder(input: unknown, key: string, email: string): Promise<OrderAnswer> {
   const response = await ordersRoute(
     new Request('https://worker.test/api/v1/staff/orders', {
       method: 'POST',

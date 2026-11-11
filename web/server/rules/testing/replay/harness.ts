@@ -99,6 +99,9 @@ export function oldSide(db: Db, stripe: FakeStripe): ReplaySide {
   vi.stubGlobal('paddockData', { query })
   vi.stubGlobal('paddockBackendApi2', { rawRequest: bindLegacyRoutes(db, stripe) })
   vi.stubGlobal('paddockWorkerV1', { rawRequest: bindStaffRoutes() })
+  // W14: the old functions are wrappers now, asking the Worker first. With every kind off (as live until W15)
+  // the Worker answers ORDER_PATH_OFF and the old code runs, unchanged: the golden files hold it to that.
+  vi.stubEnv('ORDER_SWITCH', '')
 
   return {
     name: 'old',
@@ -144,6 +147,12 @@ export async function replay(
       return result
     },
   })
+  // W14: the old functions ask the Worker first. With every kind off its only trace is the answer stored
+  // against each press's key (ORDER_PATH_OFF; `old_reader_order` from finalise and cancel; or, for an order
+  // already gone, the Worker's own "already gone", in the old words), which is the Worker's bookkeeping, not
+  // the old code's. Those rows alone are taken out before the rows are read, so the old side's recording
+  // is exactly the old code's, as the golden files hold it. Anything else the Worker wrote would show.
+  if (side.name === 'old') await forgetSwitchedOffAnswers(db)
   await options.tamper?.(db, stripe)
 
   return buildRecording({
@@ -153,6 +162,20 @@ export async function replay(
     results,
     stripeCalls: stripe.calls,
   })
+}
+
+/**
+ * The answers the wrappers' Worker calls stored against their keys, and nothing else (see replay): an order
+ * route's ORDER_PATH_OFF, and a finalise or cancel that sent the wrapper to the old code (`old_reader_order`) or
+ * found the order already gone (answered by the Worker in the old words, nothing touched).
+ */
+export async function forgetSwitchedOffAnswers(db: Db): Promise<void> {
+  await db.query(
+    `DELETE FROM api_idempotency
+      WHERE response->'error'->>'code' = 'ORDER_PATH_OFF'
+         OR (endpoint LIKE 'POST /api/v1/staff/orders/%'
+             AND (response->'data'->>'reason' IN ('old_reader_order', 'order_not_found') OR response->'data'->>'alreadyGone' = 'true'))`
+  )
 }
 
 const goldenFile = (scenario: string) => path.join(goldenDir, `${scenario}.json`)

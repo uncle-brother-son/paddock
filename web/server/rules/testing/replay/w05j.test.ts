@@ -607,14 +607,18 @@ describe('W05j on the old functions', () => {
   describe('the reader screens', () => {
     // Read from the source, as W05i's dialog tests are: they prove the branch is there, not how it looks.
     const frontend = (file: string) => readFileSync(path.join(backendDir, '../../frontend/components', file), 'utf8')
-    it.each(['AddGuestDialog.tsx', 'SettleLapsedPaymentDialog.tsx', 'MoveBookingDialog.tsx', 'CheckoutDialog.tsx'])(
+    it.each(['AddGuestDialog.tsx', 'SettleLapsedPaymentDialog.tsx', 'MoveBookingDialog.tsx'])(
       '%s treats a refund with no clear answer like a failed one: check Stripe, do not retry',
       (file) => {
         expect(frontend(file)).toMatch(/finalise\?\.reason === 'refund_failed' \|\| finalise\?\.reason === 'refund_unsure'/)
       }
     )
-    it('CheckoutDialog does the same when a cancel finalised instead', () => {
-      expect(frontend('CheckoutDialog.tsx')).toMatch(/cancelResult\.finaliseResult\?\.reason === 'refund_unsure'/)
+    // W14a: New Order decides it in one helper for finalise and for a cancel that finalised instead
+    // (readerAlertIsCritical, tested by what it does in server/staff-app-checkout.test.ts).
+    it('CheckoutDialog does the same, on finalise and when a cancel finalised instead', () => {
+      expect(frontend('CheckoutDialog.tsx')).toContain('const critical = readerAlertIsCritical(finalise)')
+      expect(frontend('CheckoutDialog.tsx')).toContain('critical: readerAlertIsCritical(cancelResult.finaliseResult)')
+      expect(readFileSync(path.join(backendDir, '../../frontend/utils/orderAnswers.ts'), 'utf8')).toMatch(/'refund_failed',\n  'refund_unsure',/)
     })
   })
 
