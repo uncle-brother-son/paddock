@@ -59,6 +59,11 @@ export const ID = {
 /** All apply to everything, events included, and none to member prices, unless the name says. */
 export const PROMO = { percent: 'ALLTEN', fixed: 'FIVER', expired: 'OLDCODE', big: 'TAKE150', productsOnly: 'SOAPONLY', spend150: 'SPEND150', spend80: 'SPEND80' }
 
+/** W13: an All-Access plan (seedAllAccess), and its Stripe prices. */
+const ALL_ACCESS_PLAN = '10000000-0000-4000-8000-000000000a13'
+const ALL_ACCESS_MONTHLY = 'price_seed_all_access_monthly'
+const ALL_ACCESS_YEARLY = 'price_seed_all_access_yearly'
+
 const STRIPE_CUSTOMER = 'cus_seed'
 const MONTHLY_PRICE = 'price_seed_monthly'
 
@@ -2791,6 +2796,7 @@ export const scenarios: Scenario[] = [
   ...w09Scenarios(),
   ...w10Scenarios(),
   ...w11Scenarios(),
+  ...w13Scenarios(),
 ]
 
 // --- W06: the Worker's order core. Every createOrder and createBooking reason in W06's scope that had
@@ -3690,5 +3696,121 @@ function w11Scenarios(): Scenario[] {
         stripe.failNext('customers.create', { kind: 'error', error: fakeStripeErrors.invalid('email_invalid', 'Invalid email address: sam@example') })
       },
     }),
+  ]
+}
+
+// --- W13: memberships. Each plan (Core, All-Access) and frequency, on the saved card (with the remainder
+// charged as well, Q21) and on the reader (the tap taking the first payment), with a promo, a gift card,
+// store credit spilling onto the first payment (Q1, Q2), a buy-new booking (alone, with a pass, Q3, and with
+// a pass and an event, W08 review L2), replacing an exhausted membership (Q8), and refused at each Stripe
+// step. Each runs through the old createOrder (and finaliseReaderOrder or cancelReaderOrder) with the fake
+// Stripe for its golden file, and order-replay.test.ts runs it through the new routes too.
+
+
+/** An unlimited All-Access plan, covering Core and Peak sessions on credit, with add-on credits. */
+export async function seedAllAccess(db: Db, stripe: FakeStripe): Promise<void> {
+  await insert(db, 'membership_plans', {
+    id: ALL_ACCESS_PLAN,
+    name: 'All-Access',
+    level: 'all_access',
+    sessions_included: 0,
+    is_unlimited: true,
+    addons_included: 4,
+    price_monthly: '75.00',
+    price_yearly: '750.00',
+    stripe_product_id: 'prod_seed_all_access',
+    stripe_price_id: ALL_ACCESS_MONTHLY,
+    stripe_price_id_yearly: ALL_ACCESS_YEARLY,
+  })
+  await insert(db, 'membership_band_terms', { id: '10000000-0000-4000-8000-000000000a14', membership_level: 'all_access', band_id: ID.band, credit_eligible: true })
+  await insert(db, 'membership_band_terms', { id: '10000000-0000-4000-8000-000000000a15', membership_level: 'all_access', band_id: ID.peakBand, credit_eligible: true })
+  stripe.addPrice(ALL_ACCESS_MONTHLY, 7500, 'month')
+  stripe.addPrice(ALL_ACCESS_YEARLY, 75000, 'year')
+}
+
+/** Two presses of the same basket, as staff press Complete Order again after a refusal (bug 13). */
+function pressedTwice(name: string, params: Record<string, unknown>, prepare: (db: Db, stripe: FakeStripe) => Promise<void> | void): Scenario {
+  return {
+    name,
+    async seed(db, stripe) {
+      await seed(db, stripe)
+      await prepare(db, stripe)
+    },
+    async run({ call }) {
+      await call('createOrder', { customerId: ID.customer, ...params })
+      await call('createOrder', { customerId: ID.customer, ...params })
+    },
+  }
+}
+
+function w13Scenarios(): Scenario[] {
+  const card = { method: 'card' }
+  const saving = { method: 'reader', readerSaveCard: true }
+  const gift = (amount: number) => ({ giftCard: { giftCardId: ID.giftCard, amount } })
+  const credit = (amount: number) => ({ storeCredit: { amount } })
+  const yearly = { ...monthly, membershipBillingFrequency: 'yearly' }
+  const allAccess = { ...monthly, membershipPlanId: ALL_ACCESS_PLAN }
+  const allAccessYearly = { ...allAccess, membershipBillingFrequency: 'yearly' }
+  const samAttending = { ...sam, isAccountHolder: true }
+  const buyNew = (guests: Guest[] = [sam]) => ({ ...paidSeat(guests), redemptionSource: 'buy_new_membership' })
+  const replacing = (guests: Guest[] = [sam]) => ({ ...paidSeat(guests), redemptionSource: 'buy_new_membership', cancelExhaustedMembershipId: ID.exhausted })
+  const passEventAndMembership = {
+    booking: { ...paidSeat([sam]), redemptionSource: 'buy_new_session_pass' },
+    sessionPassTypeId: ID.passType,
+    event: { eventId: ID.event, accountHolderAttending: true, guestsOver18Confirmed: true, attendees: [samAttending] },
+    ...monthly,
+  }
+  const at = (method: string, error: () => Error) => async (_db: Db, stripe: FakeStripe) => {
+    stripe.failNext(method, { kind: 'error', error: error() })
+  }
+  const replacingAnd = (method: string, error: () => Error) => async (db: Db, stripe: FakeStripe) => {
+    await seedExhaustedMembership(db, stripe)
+    stripe.failNext(method, { kind: 'error', error: error() })
+  }
+  return [
+    // --- The saved card: each plan and frequency, with the remainder charged too (Q21: two charges)
+    order('w13-card-all-access-monthly', { ...allAccess, payment: card }, seedAllAccess),
+    order('w13-card-all-access-yearly-buy-new-on-peak', { booking: { ...buyNew(), sessionId: ID.peakSession }, ...allAccessYearly, payment: card }, seedAllAccess),
+    order('w13-card-membership-and-products', { products: [soap], ...monthly, payment: card }),
+    order('w13-card-yearly-and-a-shipped-product', { products: [candle], ...shipped, saveShippingAddressToCustomer: true, ...yearly, payment: card }),
+    // A gift card and store credit: the soap first, then the rest of the first payment (Q1, Q2); Q9 records split.
+    order('w13-card-membership-with-a-gift-card', { products: [soap], ...monthly, payment: { ...card, ...gift(30) } }),
+    order('w13-card-membership-covered-by-gift-card-and-store-credit', { ...monthly, payment: { ...card, ...gift(20), ...credit(20) } }),
+    order('w13-card-promo-and-spill', { products: [soap], ...monthly, promoCode: PROMO.percent, payment: { ...card, ...credit(30) } }),
+    order('w13-card-buy-new-membership-with-a-guest-and-an-addon', { booking: { ...buyNew([sam, alex]), addons: [{ ...towel, redemptionSource: 'paid' }] }, ...monthly, payment: card }),
+    // Q8: the exhausted subscription cancelled last, after the guest's seat is charged.
+    order('w13-card-replace-exhausted-with-a-paid-guest', { booking: replacing([sam, alex]), ...monthly, payment: card }, seedExhaustedMembership),
+    // W08 review L2: a buy-new pass booking, an event and a membership in one basket.
+    order('w13-card-buy-new-pass-event-and-membership', { ...passEventAndMembership, payment: card }),
+    // --- Refused at each Stripe step
+    order('w13-card-subscription-declined', { products: [soap], ...monthly, payment: card }, at('subscriptions.create', fakeStripeErrors.cardDeclined)),
+    // The rest of the basket declined once the subscription exists: it is cancelled and its first invoice refunded.
+    order('w13-card-charge-declined-after-the-subscription', { products: [soap], ...monthly, payment: card }, at('paymentIntents.create', fakeStripeErrors.cardDeclined)),
+    // Q8: the old subscription's cancel refused: everything reversed.
+    order('w13-card-old-cancel-refused', { booking: replacing([sam, alex]), ...monthly, payment: card }, replacingAnd('subscriptions.cancel', () => fakeStripeErrors.invalid('resource_missing', "No such subscription: 'sub_exhausted'"))),
+    // W03-plan 2.7: Stripe's price isn't the plan's (createOrder charged Stripe's silently), or is archived.
+    order('w13-card-stripe-price-differs', { ...monthly, payment: card }, async (_db, stripe) => {
+      stripe.addPrice('price_seed_monthly', 4500, 'month')
+    }),
+    order('w13-card-stripe-price-archived', { ...monthly, payment: card }, async (_db, stripe) => {
+      stripe.addPrice('price_seed_monthly', 4000, 'month', 'gbp', false)
+    }),
+    // A 500 on the subscription: createOrder rolled back; the Worker holds the order (W03-plan 2.5).
+    order('w13-card-subscription-unclear', { products: [soap], ...monthly, payment: card }, at('subscriptions.create', fakeStripeErrors.server)),
+    // Bug 13: declined, then pressed again. createOrder's key was the basket's, so Stripe replayed the decline.
+    pressedTwice('w13-card-declined-then-retried', { products: [soap], ...monthly, payment: card }, at('subscriptions.create', fakeStripeErrors.cardDeclined)),
+    // --- The reader: the tap takes the first payment, the coupon covers the first invoice
+    onTheReader('w13-reader-membership', { ...monthly, payment: saving }, { tap: 'paid-reusable' }),
+    onTheReader('w13-reader-all-access-yearly', { ...allAccessYearly, payment: saving }, { tap: 'paid-reusable', prepare: seedAllAccess }),
+    onTheReader('w13-reader-membership-products-and-store-credit', { products: [soap], ...monthly, payment: { ...saving, ...credit(30) } }, { tap: 'paid-reusable' }),
+    onTheReader('w13-reader-buy-new-membership-with-a-guest', { booking: buyNew([sam, alex]), ...monthly, payment: saving }, { tap: 'paid-reusable' }),
+    onTheReader('w13-reader-replace-an-exhausted-membership', { booking: replacing(), ...monthly, payment: saving }, { tap: 'paid-reusable', prepare: seedExhaustedMembership }),
+    onTheReader('w13-reader-buy-new-pass-event-and-membership', { ...passEventAndMembership, payment: saving }, { tap: 'paid-reusable' }),
+    // The simulated reader makes no reusable card: a membership can't renew, so the tap is refunded.
+    onTheReader('w13-reader-card-not-reusable', { ...monthly, payment: saving }, { tap: 'paid-simulated' }),
+    onTheReader('w13-reader-membership-cancelled', { ...monthly, payment: saving }, { tap: 'none' }),
+    onTheReader('w13-reader-buy-new-membership-cancelled', { booking: buyNew([sam, alex]), ...monthly, payment: saving }, { tap: 'none' }),
+    // Q8 on the reader: the old subscription's cancel refused: the tap refunded, the new subscription cancelled.
+    onTheReader('w13-reader-old-cancel-refused', { booking: replacing(), ...monthly, payment: saving }, { tap: 'paid-reusable', prepare: replacingAnd('subscriptions.cancel', () => fakeStripeErrors.invalid('resource_missing', "No such subscription: 'sub_exhausted'")) }),
   ]
 }

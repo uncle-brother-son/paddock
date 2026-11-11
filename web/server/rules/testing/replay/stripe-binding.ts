@@ -43,3 +43,21 @@ export function chargesTakeASecond(stripe: FakeStripe): void {
     return create(params, options)
   }
 }
+
+/**
+ * W13: the same for every Stripe call a membership's pipeline makes before T2 or the undo (the
+ * subscription, the refunds, the cancels), so their audit rows come after T1's, as they do live.
+ */
+export function stripeCallsTakeASecond(stripe: FakeStripe): void {
+  chargesTakeASecond(stripe)
+  const subscribe = stripe.subscriptions.create
+  stripe.subscriptions.create = (params, options) => {
+    vi.setSystemTime(Date.now() + 1_000)
+    return subscribe(params, options)
+  }
+  const refund = stripe.refunds.create
+  stripe.refunds.create = (params, options) => {
+    vi.setSystemTime(Date.now() + 1_000)
+    return refund(params, options)
+  }
+}

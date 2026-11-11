@@ -142,14 +142,32 @@ interface FakeSubscription {
   items: { data: Array<{ price: { id: string }; current_period_start: number; current_period_end: number }> }
   latest_invoice: string | FakeInvoice
   invoice: FakeInvoice
+  /** W13: the mode of the key it was made with, as an intent's (W11a). */
+  livemode: boolean
+  created: number
 }
 
 interface FakeInvoice {
   id: string
   object: 'invoice'
+  /** W13a: after the coupon, before the customer's balance. */
+  total: number
+  /** W13a: the customer's balance when the invoice was made (positive: they owe; negative: credit). */
+  starting_balance: number
+  /** W13a: what was due once the balance was applied, and the balance it left. */
+  amount_due: number
+  ending_balance: number
   amount_paid: number
   payments: { data: Array<{ payment: { payment_intent: string | null } }> }
 }
+
+/**
+ * W13a (S1): Stripe's minimum charge per currency, in its smallest unit (30p in GBP). An invoice whose amount due
+ * is above nothing but below it is marked paid with nothing taken, and the amount goes onto the customer's
+ * balance, to be added to their next invoice (Stripe's docs: invoicing overview, "Open invoices"; customer
+ * balance, `invoice_too_small`; read by the W13 review, 10 Nov 2026).
+ */
+const MINIMUM_CHARGE: Readonly<Record<string, number>> = { gbp: 30 }
 
 const clone = <T>(value: T): T => (value === undefined ? value : (JSON.parse(JSON.stringify(value)) as T))
 const seconds = () => Math.floor(Date.now() / 1000)
@@ -207,21 +225,48 @@ export class FakeStripe implements StripeClient {
     this.customersById.set(id, { id, object: 'customer', metadata: {}, ...fields })
   }
 
-  addPrice(id: string, unitAmount: number, interval: 'month' | 'year' | null, currency = 'gbp'): void {
+  addPrice(id: string, unitAmount: number, interval: 'month' | 'year' | null, currency = 'gbp', active = true): void {
     this.pricesById.set(id, {
       id,
       object: 'price',
+      active,
       unit_amount: unitAmount,
       currency,
       recurring: interval ? { interval } : null,
     })
   }
 
+  /** W13: a subscription as Stripe holds it now, for tests (its status after a cancel, say). */
+  subscription(id: string): { status: Stripe.Subscription.Status; metadata: Record<string, string>; customer: string; amountPaid: number; total: number } | null {
+    const sub = this.subs.get(id)
+    return sub ? { status: sub.status, metadata: { ...sub.metadata }, customer: sub.customer, amountPaid: sub.invoice.amount_paid, total: sub.invoice.total } : null
+  }
+
+  /** W13a: a customer's Stripe balance, in pence (positive: they owe it, added to their next invoice; negative: credit). */
+  customerBalance(id: string): number {
+    return Number(this.customer(id)['balance'] ?? 0)
+  }
+
+  /** W13a: a balance the customer already has in Stripe (an earlier invoice under the minimum, say, or a credit). */
+  setCustomerBalance(id: string, pence: number): void {
+    this.customer(id)['balance'] = pence
+  }
+
+  /** W13: every subscription made, oldest first, as tests read them. */
+  get subscriptionsMade(): string[] {
+    return [...this.subs.keys()]
+  }
+
+  /** W13: a coupon as Stripe holds it, for tests. */
+  coupon(id: string): Stripe.Coupon | null {
+    return this.couponsById.get(id) ?? null
+  }
+
   /** An active subscription that already exists, as a membership bought earlier would have. */
   addSubscription(id: string, customer: string, priceId: string): void {
     const start = seconds()
     const interval = (this.pricesById.get(priceId)?.['recurring'] as { interval: string } | null | undefined)?.interval ?? 'month'
-    const invoice: FakeInvoice = { id: this.nextId('in'), object: 'invoice', amount_paid: 0, payments: { data: [] } }
+    const invoice: FakeInvoice = { id: this.nextId('in'), object: 'invoice', total: 0, starting_balance: 0, amount_due: 0, ending_balance: 0, amount_paid: 0, payments: { data: [] } }
     this.subs.set(id, {
       id,
       object: 'subscription',
@@ -231,6 +276,8 @@ export class FakeStripe implements StripeClient {
       items: { data: [{ price: { id: priceId }, current_period_start: start, current_period_end: addPeriod(start, interval) }] },
       latest_invoice: invoice.id,
       invoice,
+      livemode: this.keyLivemode === true,
+      created: start,
     })
   }
 
@@ -246,6 +293,12 @@ export class FakeStripe implements StripeClient {
    */
   refundsStayPending = false
 
+  /**
+   * W13a: refunds made from now on are answered `failed` at once (Stripe can, for a card that can't take it back),
+   * and no money moves.
+   */
+  refundsFailAtOnce = false
+
   /** W12: a pending refund ends: `succeeded`, or `failed` / `canceled` (its money is back on the payment). */
   settleRefund(id: string, status: 'succeeded' | 'failed' | 'canceled'): void {
     const refund = this.refundsMade.find((r) => r.id === id)
@@ -260,6 +313,18 @@ export class FakeStripe implements StripeClient {
     const intent = this.intents.get(id)
     if (!intent) throw new Error(`The fake has no PaymentIntent ${id}.`)
     intent.status = 'processing'
+  }
+
+  /**
+   * W13b: a charge Stripe has authorised but not yet captured (`requires_capture`): nothing taken yet, and it
+   * can still be cancelled, or succeed (completeReaderPayment, which works for any intent).
+   */
+  markRequiresCapture(id: string): void {
+    const intent = this.intents.get(id)
+    if (!intent) throw new Error(`The fake has no PaymentIntent ${id}.`)
+    intent.status = 'requires_capture'
+    intent.amount_received = 0
+    intent.latest_charge = null
   }
 
   /** W12: every refund made, oldest first, as tests read them. */
@@ -342,6 +407,18 @@ export class FakeStripe implements StripeClient {
 
   get liveSubscriptions(): string[] {
     return [...this.subs.values()].filter((s) => s.status === 'active').map((s) => s.id)
+  }
+
+  /**
+   * W13: a request whose key Stripe ignores (a DELETE: "Don't send idempotency keys in GET and DELETE
+   * requests because it has no effect", Stripe's API reference). The call is recorded with the key it
+   * was sent with, but nothing is saved against it or replayed from it.
+   */
+  private runIgnoringKey<T>(method: string, params: unknown, options: Stripe.RequestOptions | undefined, work: () => T): Promise<T> {
+    const answer = this.run(method, params, undefined, work)
+    const call = this.calls.at(-1)
+    if (call && options?.idempotencyKey) call.idempotencyKey = options.idempotencyKey
+    return answer
   }
 
   // The shared path: records the call, then applies faults and the idempotency rules.
@@ -549,13 +626,13 @@ export class FakeStripe implements StripeClient {
         if (amount > left) {
           throw fakeStripeErrors.invalid('parameter_invalid_integer', 'Refund amount is greater than unrefunded amount on charge.')
         }
-        this.refunded.set(intent.id, already + amount)
+        if (!this.refundsFailAtOnce) this.refunded.set(intent.id, already + amount)
         const refund: FakeRefund = {
           id: this.nextId('re'),
           object: 'refund',
           amount,
           payment_intent: intent.id,
-          status: this.refundsStayPending ? 'pending' : 'succeeded',
+          status: this.refundsFailAtOnce ? 'failed' : this.refundsStayPending ? 'pending' : 'succeeded',
           metadata: { ...((params.metadata ?? {}) as Record<string, string>) },
           created: seconds(),
         }
@@ -578,7 +655,15 @@ export class FakeStripe implements StripeClient {
 
   private publicSubscription(sub: FakeSubscription, expand: readonly string[] | undefined) {
     const { invoice, ...rest } = sub
-    return { ...rest, latest_invoice: expand?.includes('latest_invoice.payments') ? invoice : invoice.id }
+    const expanded = expand?.includes('latest_invoice.payments') || expand?.includes('data.latest_invoice.payments')
+    return { ...rest, latest_invoice: expanded ? invoice : invoice.id }
+  }
+
+  /** As Stripe: a subscription made in the other mode is answered as missing (W13, as an intent, W11a). */
+  private sub(id: string): FakeSubscription {
+    const sub = this.subs.get(id)
+    if (!sub || sub.livemode !== (this.keyLivemode === true)) throw fakeStripeErrors.missing(`subscription: '${id}'`)
+    return sub
   }
 
   readonly subscriptions: StripeClient['subscriptions'] = {
@@ -590,22 +675,38 @@ export class FakeStripe implements StripeClient {
         const price = priceId === undefined ? undefined : this.pricesById.get(priceId)
         if (!price) throw fakeStripeErrors.missing(`price: '${String(priceId)}'`)
 
+        // W13: as Stripe, an archived price can't start a subscription.
+        if (price['active'] === false) throw fakeStripeErrors.invalid('price_inactive', `The price ${String(priceId)} is not active.`)
         const discount = params.discounts?.[0]
         const coupon = typeof discount === 'object' ? discount.coupon : undefined
         const amountOff = coupon ? (this.couponsById.get(coupon)?.amount_off ?? null) : 0
         if (amountOff === null) throw fakeStripeErrors.missing(`coupon: '${String(coupon)}'`)
-        const due = Math.max(0, Number(price['unit_amount']) - amountOff)
-        const paid =
-          due > 0
-            ? this.addIntent({ amount: due, currency: String(price['currency']), customer, status: 'succeeded', amount_received: due })
-            : null
+        const total = Math.max(0, Number(price['unit_amount']) - amountOff)
+        // W13a (S1): the customer's balance is applied (a debit added, a credit taken off), and an amount due under
+        // Stripe's minimum charge is marked paid with nothing taken and carried to the customer's balance.
+        const currency = String(price['currency'])
+        const record = this.customer(customer)
+        const startingBalance = Number(record['balance'] ?? 0)
+        const owed = total + startingBalance
+        const due = Math.max(0, owed)
+        const tooSmall = due > 0 && due < (MINIMUM_CHARGE[currency] ?? 0)
+        const taken = tooSmall ? 0 : due
+        const endingBalance = tooSmall ? due : Math.min(0, owed)
+        record['balance'] = endingBalance
+        // The first invoice's PaymentIntent carries none of the subscription's metadata, as Stripe's doesn't.
+        const paid = taken > 0 ? this.addIntent({ amount: taken, currency, customer, status: 'succeeded', amount_received: taken }) : null
 
         const start = seconds()
         const interval = (price['recurring'] as { interval: string } | null)?.interval ?? 'month'
         const invoice: FakeInvoice = {
           id: this.nextId('in'),
           object: 'invoice',
-          amount_paid: due,
+          total,
+          starting_balance: startingBalance,
+          amount_due: due,
+          ending_balance: endingBalance,
+          amount_paid: taken,
+          // As before W13a (the golden files hold it): one entry, with no PaymentIntent when nothing was taken.
           payments: { data: [{ payment: { payment_intent: paid?.id ?? null } }] },
         }
         const sub: FakeSubscription = {
@@ -617,30 +718,46 @@ export class FakeStripe implements StripeClient {
           items: { data: [{ price: { id: String(priceId) }, current_period_start: start, current_period_end: addPeriod(start, interval) }] },
           latest_invoice: invoice.id,
           invoice,
+          livemode: this.keyLivemode === true,
+          created: start,
         }
         this.subs.set(sub.id, sub)
         return this.publicSubscription(sub, params.expand)
       }) as unknown as Promise<Stripe.Subscription>,
 
-    cancel: (id) =>
-      this.run('subscriptions.cancel', { id }, undefined, () => {
-        const sub = this.subs.get(id)
-        if (!sub) throw fakeStripeErrors.missing(`subscription: '${id}'`)
-        if (sub.status === 'canceled') throw new Error('The fake has not modelled cancelling a cancelled subscription.')
+    // W13: read back, with its first invoice when asked (`latest_invoice.payments`).
+    retrieve: (id, params) =>
+      this.run('subscriptions.retrieve', { id, ...params }, undefined, () => this.publicSubscription(this.sub(id), params?.expand)) as unknown as Promise<Stripe.Subscription>,
+
+    // A DELETE: Stripe ignores a key on it (runIgnoringKey). What Stripe answers to cancelling a subscription
+    // already cancelled is not documented where we looked; the fake refuses it as an invalid request, and the
+    // code never relies on that answer (it reads the subscription back after any failed cancel). W15's
+    // test-mode runs check it.
+    cancel: (id, params, options) =>
+      this.runIgnoringKey('subscriptions.cancel', { id, ...params }, options, () => {
+        const sub = this.sub(id)
+        if (sub.status === 'canceled') throw fakeStripeErrors.invalid('subscription_canceled', `The subscription ${id} has already been canceled.`)
         sub.status = 'canceled'
         return this.publicSubscription(sub, undefined)
       }) as unknown as Promise<Stripe.Subscription>,
 
+    // W13: as Stripe lists them: newest first, a page at a time (10 unless `limit` says, `starting_after`
+    // the last one seen), only the key's own mode, by customer when asked, and without the cancelled ones
+    // unless `status: 'all'` (Stripe's default leaves cancelled subscriptions out).
     list: (params) =>
-      this.run('subscriptions.list', params, undefined, () =>
-        list(
-          newestFirst(
-            [...this.subs.values()]
-              .filter((s) => !params.customer || s.customer === params.customer)
-              .map((s) => this.publicSubscription(s, undefined))
+      this.run('subscriptions.list', params, undefined, () => {
+        const all = newestFirst(
+          [...this.subs.values()].filter(
+            (s) =>
+              s.livemode === (this.keyLivemode === true) &&
+              (!params.customer || s.customer === params.customer) &&
+              (params.status === 'all' ? true : params.status ? s.status === params.status : s.status !== 'canceled')
           )
         )
-      ) as unknown as Promise<Stripe.ApiList<Stripe.Subscription>>,
+        const from = params.starting_after ? all.findIndex((s) => s.id === params.starting_after) + 1 : 0
+        const limit = params.limit ?? 10
+        return { ...list(all.slice(from, from + limit).map((s) => this.publicSubscription(s, params.expand))), has_more: from + limit < all.length }
+      }) as unknown as Promise<Stripe.ApiList<Stripe.Subscription>>,
   }
 
   readonly coupons: StripeClient['coupons'] = {
@@ -653,8 +770,8 @@ export class FakeStripe implements StripeClient {
         return coupon
       }),
 
-    del: (id) =>
-      this.run('coupons.del', { id }, undefined, () => {
+    del: (id, _params, options) =>
+      this.run('coupons.del', { id }, options?.idempotencyKey ? options : undefined, () => {
         if (!this.couponsById.delete(id)) throw fakeStripeErrors.missing(`coupon: '${id}'`)
         return { id, object: 'coupon', deleted: true } as Stripe.DeletedCoupon
       }),
@@ -674,8 +791,8 @@ export class FakeStripe implements StripeClient {
         return this.customer(id)
       }) as unknown as Promise<Stripe.Customer>,
 
-    update: (id, params) =>
-      this.run('customers.update', { id, ...params }, undefined, () => Object.assign(this.customer(id), params)) as unknown as Promise<Stripe.Customer>,
+    update: (id, params, options) =>
+      this.run('customers.update', { id, ...params }, options, () => Object.assign(this.customer(id), params)) as unknown as Promise<Stripe.Customer>,
 
     search: (params) =>
       this.run('customers.search', params, undefined, () => {
@@ -689,8 +806,8 @@ export class FakeStripe implements StripeClient {
   }
 
   readonly prices: StripeClient['prices'] = {
-    retrieve: (id) =>
-      this.run('prices.retrieve', { id }, undefined, () => {
+    retrieve: (id, _params, options) =>
+      this.run('prices.retrieve', { id }, options?.idempotencyKey ? options : undefined, () => {
         const price = this.pricesById.get(id)
         if (!price) throw fakeStripeErrors.missing(`price: '${id}'`)
         return price

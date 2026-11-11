@@ -349,6 +349,16 @@ export const placeOrderOutputSchema = z.object({
   giftCardCode: z.string().nullable(),
   /** The event booking, when the order has an event (W08). */
   eventBookingId: z.string().nullable(),
+  /**
+   * W13: the membership bought, once it exists: on the saved card once T2 has written it; on a buy-new
+   * booking the row T1 wrote (also while a reader order waits for its tap). Absent with no membership.
+   */
+  membershipId: z.string().nullable().optional(),
+  /**
+   * W13: on the saved card, the membership's subscription and what its first invoice took (pounds), as
+   * createOrder answered them (membershipSubscriptionId, membershipAmountPaid, membershipInvoiceId).
+   */
+  membershipSubscription: z.object({ subscriptionId: z.string(), amountPaid: z.number(), invoiceId: z.string().nullable() }).optional(),
   payment: z.object({
     /** What orders.payment_method records: null when nothing was owed. On 'pending_reader' (W11), 'reader': T2 records it. */
     method: z.string().nullable(),
@@ -388,6 +398,14 @@ export const finaliseReaderOrderOutputSchema = z.object({
   reason: z.string().optional(),
   message: z.string().optional(),
   warning: z.string().optional(),
+  /**
+   * W13: the tap was refunded and the order rolled back (a membership that couldn't be set up), as
+   * finaliseReaderOrder's refund-and-rollback said in its words: nothing taken is kept, nothing held.
+   */
+  rolledBack: z.boolean().optional(),
+  /** W13: a membership on the reader, as finaliseReaderOrder answered: its subscription and its row. */
+  membershipSubscriptionId: z.string().optional(),
+  membershipId: z.string().optional(),
 })
 export type FinaliseReaderOrderOutput = z.infer<typeof finaliseReaderOrderOutputSchema>
 
@@ -466,6 +484,8 @@ export const orderRowsSchema = z.object({
       product_variant_id: z.string().nullable(),
       session_pass_type_id: z.string().nullable(),
       has_gift_card: z.boolean(),
+      /** W13: the plan a membership line sells. */
+      membership_plan_id: z.string().nullable(),
     })
   ),
   booking: z
@@ -611,6 +631,26 @@ export const orderRowsSchema = z.object({
   ),
   /** The order customer's store credit balance after the order (W09). */
   customer_store_credit_balance: money.nullable(),
+  /**
+   * W13: the memberships the order's lines issued (on a buy-new booking T1 writes it; otherwise T2), with
+   * whether each has its subscription (never the subscription's id) and its credit periods. A booking or
+   * add-on drawing on one names it as 'bought in this order', its credit period likewise.
+   */
+  memberships: z.array(
+    z.object({
+      plan_id: z.string(),
+      subscription_status: z.string().nullable(),
+      has_subscription: z.boolean(),
+      start_date: z.string(),
+      next_renewal_date: z.string().nullable(),
+      addon_credits_remaining: z.number(),
+      billing_frequency: z.string().nullable(),
+      is_herd: z.boolean(),
+      for_the_order_customer: z.boolean(),
+      pays_for_the_booking: z.boolean(),
+      credit_periods: z.number(),
+    })
+  ),
 })
 export type OrderRows = z.infer<typeof orderRowsSchema>
 

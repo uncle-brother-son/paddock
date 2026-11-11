@@ -42,22 +42,28 @@ export interface StripeClient {
     create(params: Stripe.RefundCreateParams, options?: Stripe.RequestOptions): Promise<Stripe.Refund>
     list(params: Stripe.RefundListParams, options?: Stripe.RequestOptions): Promise<Stripe.ApiList<Stripe.Refund>>
   }
+  /**
+   * W13: the membership's subscription. `cancel` and `retrieve` take request options (the order's time
+   * limits); `list` finds an order's subscription by `metadata.order_id` (reconcile).
+   */
   subscriptions: {
     create(params: Stripe.SubscriptionCreateParams, options?: Stripe.RequestOptions): Promise<Stripe.Subscription>
-    cancel(id: string): Promise<Stripe.Subscription>
-    list(params: Stripe.SubscriptionListParams): Promise<Stripe.ApiList<Stripe.Subscription>>
+    retrieve(id: string, params?: Stripe.SubscriptionRetrieveParams, options?: Stripe.RequestOptions): Promise<Stripe.Subscription>
+    cancel(id: string, params?: Stripe.SubscriptionCancelParams, options?: Stripe.RequestOptions): Promise<Stripe.Subscription>
+    list(params: Stripe.SubscriptionListParams, options?: Stripe.RequestOptions): Promise<Stripe.ApiList<Stripe.Subscription>>
   }
   coupons: {
     create(params: Stripe.CouponCreateParams, options?: Stripe.RequestOptions): Promise<Stripe.Coupon>
-    del(id: string): Promise<Stripe.DeletedCoupon>
+    /** W13a: options too (the press's time limit, deleteCouponQuietly). */
+    del(id: string, params?: Stripe.CouponDeleteParams, options?: Stripe.RequestOptions): Promise<Stripe.DeletedCoupon>
   }
   customers: {
     create(params: Stripe.CustomerCreateParams, options?: Stripe.RequestOptions): Promise<Stripe.Customer>
-    update(id: string, params: Stripe.CustomerUpdateParams): Promise<Stripe.Customer>
+    update(id: string, params: Stripe.CustomerUpdateParams, options?: Stripe.RequestOptions): Promise<Stripe.Customer>
     search(params: Stripe.CustomerSearchParams, options?: Stripe.RequestOptions): Promise<Stripe.ApiSearchResult<Stripe.Customer>>
   }
   prices: {
-    retrieve(id: string): Promise<Stripe.Price>
+    retrieve(id: string, params?: Stripe.PriceRetrieveParams, options?: Stripe.RequestOptions): Promise<Stripe.Price>
   }
 }
 

@@ -282,6 +282,40 @@ export function withCanonicalGoneNumbers(recording: Recording): Recording {
   return { ...recording, results, stripeCalls, tables }
 }
 
+/**
+ * W13: the same recording with each fake Stripe id (`pi_fake_0003`, `sub_fake_0007`, ...) renumbered by
+ * where it is first met, per kind, as withCanonicalGoneNumbers does for gone ids. The fake numbers its ids
+ * from one sequence, so a side that makes one call more or fewer (the Worker's coupon has a fixed id, so it
+ * takes no number) shifts every later id. Renumbering keeps which id is which within a recording, so two
+ * different ids still can't pass as one, and the order they are met in is still compared.
+ */
+export function withCanonicalStripeIds(recording: Recording): Recording {
+  const numbers = new Map<string, string>()
+  const counts = new Map<string, number>()
+  const renumber = (text: string): string =>
+    text.replace(/\b([a-z]+)_fake_(?:[a-z0-9]+_)?\d{4}\b/g, (id, kind: string) => {
+      const known = numbers.get(id)
+      if (known) return known
+      const next = (counts.get(kind) ?? 0) + 1
+      counts.set(kind, next)
+      const label = `${kind}_fake#${next}`
+      numbers.set(id, label)
+      return label
+    })
+  const walkValue = (value: unknown): unknown => {
+    if (typeof value === 'string') return renumber(value)
+    if (Array.isArray(value)) return value.map(walkValue)
+    if (value !== null && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, walkValue(inner)]))
+    return value
+  }
+  return {
+    ...recording,
+    results: walkValue(recording.results) as unknown[],
+    stripeCalls: walkValue(recording.stripeCalls) as StripeCallRecord[],
+    tables: walkValue(recording.tables) as Record<string, TableChange>,
+  }
+}
+
 export interface Difference {
   path: string
   expected: unknown

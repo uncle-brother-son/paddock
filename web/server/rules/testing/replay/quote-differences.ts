@@ -47,6 +47,16 @@ export const QUOTE_DIFFERENCES: Record<string, readonly AllowedDifference[]> = {
     { name: 'The special requests are kept on a buy-new pass booking', decision: 'W03-decisions Q5', path: /^figures\.booking\.hasSpecialRequests$/ },
   ],
   'w07-worst-basket': [{ name: 'The delivery address is kept on a buy-new pass order', decision: 'W03-decisions Q5', path: /^figures\.hasShippingAddress$/ }],
+  // W13's scenarios
+  'w13-card-buy-new-pass-event-and-membership': [
+    { name: 'The membership gets its line, which the old order never wrote (with an event too)', decision: 'W03-decisions Q3', path: /^figures\.lines\./ },
+    { name: 'The membership gets its first invoice, which the old order never raised', decision: 'W03-decisions Q3', path: firstInvoice },
+  ],
+  'w13-reader-buy-new-pass-event-and-membership': [
+    { name: 'The membership gets its line, which the old order never wrote, on the reader with an event too', decision: 'W03-decisions Q3', path: /^figures\.lines\./ },
+  ],
+  // createOrder charged Stripe's £45 where the plan says £40; the Worker refuses it (W13's price check).
+  'w13-card-stripe-price-differs': [{ name: "The quote charges the plan's price; createOrder charged Stripe's", decision: 'W03-plan 2.7 (the Stripe price check)', path: firstInvoice }],
 }
 
 /**
@@ -56,6 +66,16 @@ export const QUOTE_DIFFERENCES: Record<string, readonly AllowedDifference[]> = {
  */
 const dryRunQ5Address = [
   { name: 'The buy-new order keeps its delivery address', decision: 'W03-decisions Q5', path: /^rows\.order\.(has_shipping_address|shipping_address)$/ },
+]
+/** Q3: the pass bought beside a buy-new membership gets its line and row, which createOrder never wrote. */
+const dryRunQ3Pass: readonly AllowedDifference[] = [
+  { name: 'The pass gets its line and its row, which the old order never wrote', decision: 'W03-decisions Q3', path: /^rows\.(lines|session_passes)\./ },
+  { name: 'The answer names the pass', decision: 'W03-decisions Q3', path: /^result\.hasSessionPass$/ },
+]
+/** Q3 the other way: the membership beside a buy-new pass booking is sold (its line, its row, its first invoice). */
+const dryRunQ3Membership: readonly AllowedDifference[] = [
+  { name: 'The membership gets its line (and the lines after it move along), which the old order never wrote', decision: 'W03-decisions Q3', path: /^rows\.(lines|memberships)\./ },
+  { name: 'The card pays the membership too', decision: 'W03-decisions Q3', path: /^result\.cardAmount$/ },
 ]
 /** W03-decisions Q9: the method the Worker's order records, where createOrder recorded another. */
 const dryRunQ9Method: readonly AllowedDifference[] = [
@@ -93,6 +113,22 @@ export const DRY_RUN_DIFFERENCES: Record<string, readonly AllowedDifference[]> =
   'w09a-store-credit-alone-leaves-the-address-on-file': dryRunQ9Method,
   // W10: the card chosen with a gift card and store credit covering it all records split (Q9).
   'w10-card-chosen-with-nothing-left-to-charge': dryRunQ9Method,
+  // W13: memberships.
+  'q1-postage-before-the-spill': [{ name: 'Postage is paid before credit spills onto the membership: the card pays what the screen showed', decision: 'W03-decisions Q1', path: /^result\.cardAmount$/ }],
+  'q2-standalone-addon-before-the-spill': [{ name: 'A standalone add-on is paid before credit spills onto the membership', decision: 'W03-decisions Q2', path: /^result\.cardAmount$/ }],
+  'q3-buy-new-membership-with-a-pass': dryRunQ3Pass,
+  'q3-reader-buy-new-membership-with-a-pass': dryRunQ3Pass.filter((a) => a !== dryRunQ3Pass[1]),
+  'q3-buy-new-pass-with-a-membership': dryRunQ3Membership,
+  'q3-reader-buy-new-pass-with-a-membership': dryRunQ3Membership.slice(0, 1),
+  'w13-card-buy-new-pass-event-and-membership': dryRunQ3Membership,
+  'w13-reader-buy-new-pass-event-and-membership': dryRunQ3Membership.slice(0, 1),
+  'q5-buy-new-keeps-address-and-requests': [
+    ...dryRunQ5Address,
+    { name: 'The buy-new booking keeps its special requests', decision: 'W03-decisions Q5', path: /^rows\.booking\.special_requests$/ },
+  ],
+  'w13-card-membership-with-a-gift-card': dryRunQ9Method,
+  'w13-card-membership-covered-by-gift-card-and-store-credit': dryRunQ9Method,
+  'w13-card-stripe-price-differs': [{ name: "The dry run takes the plan's price; createOrder took Stripe's (refused by W13's price check)", decision: 'W03-plan 2.7 (the Stripe price check)', path: /^result\.cardAmount$/ }],
 }
 
 /**

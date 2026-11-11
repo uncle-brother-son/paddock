@@ -1,6 +1,7 @@
 // The one undo (W03-plan 2.4, "The one undo"), new in W10: shared/readerOrderRollback.ts's
 // rollbackReaderOrder and createOrder's 23 rollback closures, as one transaction. Every failure path
-// that leaves a pending order with nothing taken uses it.
+// that leaves a pending order with nothing taken uses it. W13 adds the membership a buy-new booking
+// bought (its row and credit period go with the order), and the end of a compensation (membership.ts).
 import 'server-only'
 import { audit } from '@/server/audit'
 import { inOpenTransaction, isDeadlock, type Db, type Tx } from '@/server/db'
@@ -26,12 +27,24 @@ export type UndoOutcome =
    * Cancel gives them back itself. Left pending for a person (the stuck list), as "amounts don't match".
    */
   | { undone: false; reason: 'changed_since'; changed: string[] }
+  /**
+   * W13: refused, nothing changed. A compensation has started on it (membership.ts: its subscription
+   * cancelled, its payments refunded, one by one), and only that compensation, once every step is
+   * confirmed, may undo it: an undo from anywhere else could leave a subscription live with no order.
+   */
+  | { undone: false; reason: 'compensating' }
 
 export interface UndoOptions {
   actor: { type: 'staff' | 'customer' | 'system'; id: string | null }
   requestId: string
   /** Why, for the audit row: e.g. the card's refusal. */
   why: string
+  /**
+   * W13: the end of a compensation (membership.ts compensateOrder), every step confirmed: what was
+   * cancelled and refunded, recorded as `order.compensate` beside `order.undo`. Only with it may an order
+   * carrying the compensation mark be undone.
+   */
+  compensated?: Record<string, unknown>
 }
 
 interface LockedOrder {
@@ -59,11 +72,14 @@ interface OrderParts {
   store_credit: string
   gift_card_bought: string | null
   passes_bought: string[]
+  /** W13: the membership a buy-new booking bought (T1 wrote it so the booking could draw its credit). */
+  memberships_bought: string[]
 }
 
 const PARTS_SQL = `
 WITH l AS (SELECT * FROM order_line_items WHERE order_id = $1::uuid),
-bought_passes AS (SELECT p.id FROM customer_session_passes p JOIN l ON p.order_line_item_id = l.id)
+bought_passes AS (SELECT p.id FROM customer_session_passes p JOIN l ON p.order_line_item_id = l.id),
+bought_memberships AS (SELECT m.id FROM customer_memberships m JOIN l ON m.order_line_item_id = l.id)
 SELECT
   (SELECT json_build_object(
      'id', b.id, 'session_id', b.session_id, 'party_size', b.party_size, 'status', b.status, 'booking_type', st.booking_type,
@@ -75,6 +91,7 @@ SELECT
   (SELECT COALESCE(json_agg(json_build_object('membership_id', x.membership_id, 'quantity', x.quantity) ORDER BY x.membership_id), '[]'::json)
    FROM (SELECT redeemed_membership_id AS membership_id, sum(quantity)::int AS quantity FROM addon_order_lines
          WHERE order_id = $1::uuid AND redemption_source = 'membership_credit' AND redeemed_membership_id IS NOT NULL
+           AND redeemed_membership_id NOT IN (SELECT id FROM bought_memberships)
          GROUP BY redeemed_membership_id) x) AS addon_credits,
   (SELECT COALESCE(json_agg(json_build_object('variant_id', x.variant_id, 'quantity', x.quantity) ORDER BY x.variant_id), '[]'::json)
    FROM (SELECT product_variant_id AS variant_id, sum(quantity)::int AS quantity FROM l
@@ -84,7 +101,8 @@ SELECT
   (SELECT gift_card_id FROM gift_card_redemptions WHERE order_id = $1::uuid LIMIT 1) AS gift_card_used,
   (SELECT COALESCE(-sum(amount), 0)::text FROM store_credit_transactions WHERE order_id = $1::uuid AND reason = 'redemption') AS store_credit,
   (SELECT gift_card_id FROM l WHERE item_type = 'gift_card' AND gift_card_id IS NOT NULL LIMIT 1) AS gift_card_bought,
-  (SELECT COALESCE(array_agg(id), '{}') FROM bought_passes) AS passes_bought`
+  (SELECT COALESCE(array_agg(id), '{}') FROM bought_passes) AS passes_bought,
+  (SELECT COALESCE(array_agg(id), '{}') FROM bought_memberships) AS memberships_bought`
 
 /**
  * Gives back everything T1 claimed, exactly once, and removes every row it wrote, in one statement
@@ -98,7 +116,9 @@ SELECT
  *   was set when this order used the card or later (T1 sets it to the redemption's own time), so a card
  *   marked redeemed before this order keeps its date;
  * - the promo code's use (it goes with the order), the gift card and pass bought, the lines, the
- *   booking's add-ons, the booking with its seats, and the order.
+ *   booking's add-ons, the booking with its seats, and the order;
+ * - W13: the membership a buy-new booking bought, with its credit period (which cascades). Add-on credits
+ *   drawn from it aren't given back to it: it goes whole, and one statement can't change a row it removes.
  */
 const UNDO_SQL = `
 WITH capacity AS (
@@ -150,6 +170,7 @@ credit_rows AS (DELETE FROM store_credit_transactions WHERE order_id = $1::uuid 
 lines AS (DELETE FROM order_line_items WHERE order_id = $1::uuid RETURNING id),
 booking AS (DELETE FROM bookings WHERE id = $12::uuid RETURNING id),
 passes AS (DELETE FROM customer_session_passes WHERE id = ANY($13::uuid[]) RETURNING id),
+memberships AS (DELETE FROM customer_memberships WHERE id = ANY($16::uuid[]) AND stripe_subscription_id IS NULL RETURNING id),
 event_booking AS (DELETE FROM event_bookings WHERE id = $14::uuid RETURNING id),
 bought_card AS (DELETE FROM gift_cards WHERE id = $15::uuid RETURNING id),
 removed AS (DELETE FROM orders WHERE id = $1::uuid AND payment_status = 'pending' RETURNING id)
@@ -165,6 +186,7 @@ SELECT (SELECT count(*)::int FROM removed) AS orders_removed,
        (SELECT count(*)::int FROM event_booking) AS event_bookings_removed,
        (SELECT count(*)::int FROM bought_card) AS gift_cards_removed,
        (SELECT count(*)::int FROM passes) AS passes_removed,
+       (SELECT count(*)::int FROM memberships) AS memberships_removed,
        (SELECT count(*)::int FROM lines) AS lines_removed,
        (SELECT count(*)::int FROM addon_lines) AS addon_lines_removed,
        (SELECT count(*)::int FROM ledger) AS ledger_rows_removed,
@@ -184,6 +206,7 @@ type Undone = Record<
   | 'event_bookings_removed'
   | 'gift_cards_removed'
   | 'passes_removed'
+  | 'memberships_removed'
   | 'lines_removed'
   | 'addon_lines_removed'
   | 'ledger_rows_removed'
@@ -219,6 +242,8 @@ async function undoInTransaction(tx: Tx, orderId: string, options: UndoOptions):
   if (order.payment_status === 'paid') return { undone: false, reason: 'paid' }
   if (order.payment_status !== 'pending') return { undone: false, reason: 'not_pending' }
   if (oldRollbackStarted(order.reader_payment)) return { undone: false, reason: 'rollback_started' }
+  // W13: a compensation has started on it: only that compensation, finished, may undo it.
+  if (order.reader_payment && 'compensation' in order.reader_payment && !options.compensated) return { undone: false, reason: 'compensating' }
 
   // 2. What it holds, read now the order is locked.
   const parts = (await tx.query<OrderParts>(PARTS_SQL, [orderId]))[0] as OrderParts
@@ -259,6 +284,7 @@ async function undoInTransaction(tx: Tx, orderId: string, options: UndoOptions):
       parts.passes_bought,
       parts.event?.booking_id ?? null,
       parts.gift_card_bought,
+      parts.memberships_bought,
     ])
   )[0] as Undone
   const expect = (what: keyof Undone, count: number) => {
@@ -276,17 +302,16 @@ async function undoInTransaction(tx: Tx, orderId: string, options: UndoOptions):
   expect('gift_cards_given_back', parts.gift_card_used ? 1 : 0)
   expect('gift_cards_removed', parts.gift_card_bought ? 1 : 0)
   expect('passes_removed', parts.passes_bought.length)
+  // A membership bought here with a subscription on it was finished by T2 (paid, refused above): never removed.
+  expect('memberships_removed', parts.memberships_bought.length)
 
   // 5. The record, with the full snapshot and what went, as the rows themselves are gone (W03-decisions Q20).
-  await audit.recordAll(tx, [{
-    actorType: options.actor.type,
-    actorId: options.actor.id,
-    action: 'order.undo',
-    entityType: 'order',
-    entityId: orderId,
-    requestId: options.requestId,
-    details: { why: options.why, snapshot: order.reader_payment, parts, removed: done },
-  }])
+  //    W13: after a compensation, what it cancelled and refunded first (order.compensate).
+  const entry = { actorType: options.actor.type, actorId: options.actor.id, entityType: 'order', entityId: orderId, requestId: options.requestId }
+  await audit.recordAll(tx, [
+    ...(options.compensated ? [{ ...entry, action: 'order.compensate', details: options.compensated }] : []),
+    { ...entry, action: 'order.undo', details: { why: options.why, snapshot: order.reader_payment, parts, removed: done } },
+  ])
   return { undone: true }
 }
 

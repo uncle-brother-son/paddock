@@ -72,6 +72,9 @@ export interface BasketPlanFacts {
   is_unlimited: boolean
   sessions_included: number | null
   addons_included: number | null
+  /** W13: the plan's Stripe prices, which the subscription is made on. Absent in older fixtures. */
+  stripe_price_id?: string | null
+  stripe_price_id_yearly?: string | null
 }
 
 export interface BasketPassTypeFacts {
@@ -99,6 +102,8 @@ export interface BasketPassCreditFacts {
 }
 
 export interface BasketExhaustedFacts {
+  /** W13: the subscription T2's caller cancels last (Q8). Absent in older fixtures. */
+  stripe_subscription_id?: string | null
   subscription_status: string
   cancel_effective_date: string | null
   is_unlimited: boolean | null
@@ -251,7 +256,8 @@ SELECT
             'id', mp.id, 'name', mp.name,
             'price_monthly', mp.price_monthly::text, 'price_yearly', mp.price_yearly::text,
             'active', mp.active, 'is_unlimited', mp.is_unlimited,
-            'sessions_included', mp.sessions_included, 'addons_included', mp.addons_included)
+            'sessions_included', mp.sessions_included, 'addons_included', mp.addons_included,
+            'stripe_price_id', mp.stripe_price_id, 'stripe_price_id_yearly', mp.stripe_price_id_yearly)
    FROM membership_plans mp WHERE mp.id = $4::uuid) AS plan,
 
   (SELECT jsonb_build_object(
@@ -272,6 +278,7 @@ SELECT
    FROM customer_session_passes csp WHERE csp.id = $8::uuid AND csp.customer_id = $1::uuid) AS pass_credit,
 
   (SELECT jsonb_build_object(
+            'stripe_subscription_id', cm.stripe_subscription_id,
             'subscription_status', cm.subscription_status,
             'cancel_effective_date', cm.cancel_effective_date::text,
             'is_unlimited', mcc.is_unlimited,

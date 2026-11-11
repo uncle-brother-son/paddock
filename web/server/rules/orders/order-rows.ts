@@ -1,6 +1,7 @@
 // New in W06, until W16: what an order wrote, for the dry run and the staff app's shadow to compare.
 // W07 adds what products, postage, passes, gift cards and the delivery address write; W08 what an
-// event writes; W09 what a promo code, store credit and a gift card used to pay write.
+// event writes; W09 what a promo code, store credit and a gift card used to pay write; W13 what a membership
+// writes (its line's plan, its row and credit period, and a booking or add-on drawing on it).
 import 'server-only'
 import type { OrderRows } from '@/contracts'
 import type { Queryable } from '@/server/db'
@@ -41,15 +42,21 @@ SELECT json_build_object(
     'price_override_reason', l.price_override_reason, 'addon_id', l.addon_id,
     'is_the_booking', l.booking_id IS NOT NULL AND l.booking_id = (SELECT b.id FROM b),
     'fulfillment_status', l.fulfillment_status, 'product_variant_id', l.product_variant_id,
-    'session_pass_type_id', l.session_pass_type_id, 'has_gift_card', l.gift_card_id IS NOT NULL)
+    'session_pass_type_id', l.session_pass_type_id, 'has_gift_card', l.gift_card_id IS NOT NULL,
+    'membership_plan_id', l.membership_plan_id)
     ORDER BY l.created_at, l.id), '[]'::json) FROM l),
   'booking', (SELECT json_build_object(
     'session_id', b.session_id, 'status', b.status, 'party_size', b.party_size, 'price_paid', b.price_paid,
-    'redemption_source', b.redemption_source, 'redeemed_membership_id', b.redeemed_membership_id,
+    'redemption_source', b.redemption_source,
+    'redeemed_membership_id', CASE WHEN b.redeemed_membership_id IN (
+      SELECT nm.id FROM l JOIN customer_memberships nm ON nm.order_line_item_id = l.id) THEN 'bought in this order'
+      ELSE b.redeemed_membership_id::text END,
     'redeemed_session_pass_id', CASE WHEN b.redeemed_session_pass_id IN (
       SELECT np.id FROM l JOIN customer_session_passes np ON np.order_line_item_id = l.id) THEN 'bought in this order'
       ELSE b.redeemed_session_pass_id::text END,
-    'credit_period_id', b.credit_period_id,
+    'credit_period_id', CASE WHEN b.credit_period_id IN (
+      SELECT cp.id FROM l JOIN customer_memberships nm ON nm.order_line_item_id = l.id JOIN membership_credit_periods cp ON cp.membership_id = nm.id)
+      THEN 'of the membership bought in this order' ELSE b.credit_period_id::text END,
     'band_id', b.band_id, 'special_requests', b.special_requests,
     'guests_over_18_confirmed', b.guests_over_18_confirmed_at IS NOT NULL,
     'for_the_order_customer', b.customer_id = (SELECT o.customer_id FROM o),
@@ -65,7 +72,9 @@ SELECT json_build_object(
     'addons', (SELECT COALESCE(json_agg(json_build_object(
       'addon_id', a.addon_id, 'quantity', a.quantity, 'price_at_purchase', a.price_at_purchase,
       'sku_at_purchase', a.sku_at_purchase, 'redemption_source', a.redemption_source,
-      'redeemed_membership_id', a.redeemed_membership_id,
+      'redeemed_membership_id', CASE WHEN a.redeemed_membership_id IN (
+        SELECT nm.id FROM l JOIN customer_memberships nm ON nm.order_line_item_id = l.id) THEN 'bought in this order'
+        ELSE a.redeemed_membership_id::text END,
       'for_the_order', a.order_id = (SELECT o.id FROM o),
       'addon_credits_left', (SELECT m.addon_credits_remaining FROM customer_memberships m WHERE m.id = a.redeemed_membership_id))
       ORDER BY a.created_at, a.id), '[]'::json)
@@ -119,7 +128,15 @@ SELECT json_build_object(
     'card_remaining_balance', g.remaining_balance, 'card_redeemed', g.redeemed_at IS NOT NULL, 'card_voided', g.voided)
     ORDER BY r.redeemed_at, r.id), '[]'::json)
     FROM gift_card_redemptions r JOIN gift_cards g ON g.id = r.gift_card_id WHERE r.order_id = (SELECT o.id FROM o)),
-  'customer_store_credit_balance', (SELECT c.store_credit_balance FROM customers c WHERE c.id = (SELECT o.customer_id FROM o))
+  'customer_store_credit_balance', (SELECT c.store_credit_balance FROM customers c WHERE c.id = (SELECT o.customer_id FROM o)),
+  'memberships', (SELECT COALESCE(json_agg(json_build_object(
+    'plan_id', m.plan_id, 'subscription_status', m.subscription_status, 'has_subscription', m.stripe_subscription_id IS NOT NULL,
+    'start_date', m.start_date, 'next_renewal_date', m.next_renewal_date, 'addon_credits_remaining', m.addon_credits_remaining,
+    'billing_frequency', m.billing_frequency, 'is_herd', m.is_herd,
+    'for_the_order_customer', m.customer_id = (SELECT o.customer_id FROM o),
+    'pays_for_the_booking', m.id IS NOT DISTINCT FROM (SELECT b.redeemed_membership_id FROM b),
+    'credit_periods', (SELECT count(*) FROM membership_credit_periods cp WHERE cp.membership_id = m.id)) ORDER BY l.created_at, l.id), '[]'::json)
+    FROM l JOIN customer_memberships m ON m.order_line_item_id = l.id)
 ) AS rows
 `
 

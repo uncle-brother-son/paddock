@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Db } from '@/server/db'
 import { READER_INTENT_UNCONFIRMED_MESSAGE, staffSees } from '@/server/rules/orders/failure-messages'
-import { compareRecordings, withCanonicalGoneNumbers, type Recording } from './compare'
+import { compareRecordings, withCanonicalGoneNumbers, withCanonicalStripeIds, type Recording } from './compare'
 import { readGolden, replay, startReplay, type ReplayEnvironment, type Scenario } from './harness'
-import { NEW_SIDE_CONFIRMS, NOT_BUILT_SCENARIOS, ORDER_SCENARIOS, orderDifferences, OUTCOME_DIFFERS } from './order-differences'
+import { NEW_SIDE_CONFIRMS, NOT_BUILT_SCENARIOS, ORDER_SCENARIOS, orderDifferences, OUTCOME_DIFFERS, W13_SCENARIOS } from './order-differences'
+import type { StripeCallRecord } from './compare'
 import { newOrderSide, type OrderAnswer } from './order-side'
 import { ID, scenarios } from './scenarios'
 
@@ -58,7 +59,9 @@ describe('the order route against the old createOrder', () => {
       const { recording, answers } = await runNew(name)
       const placed = answers[0]?.body.ok === true
       // W11: a cancelled reader order's id is a gone label on both sides, numbered where it is first met.
-      expect(compareRecordings(withCanonicalGoneNumbers(golden), withCanonicalGoneNumbers(recording), orderDifferences(placed, name))).toEqual([])
+      // W13: a membership's Stripe ids too, numbered by kind where first met (compare.ts, withCanonicalStripeIds).
+      const canonical = (r: Recording) => (W13_SCENARIOS.includes(name) ? withCanonicalStripeIds(withCanonicalGoneNumbers(r)) : withCanonicalGoneNumbers(r))
+      expect(compareRecordings(canonical(golden), canonical(recording), orderDifferences(placed, name, golden))).toEqual([])
     })
 
     it.skipIf(OUTCOME_DIFFERS.includes(name))('tells staff what the screen told them', async () => {
@@ -263,12 +266,174 @@ describe('the order route against the old createOrder', () => {
     })
   })
 
-  describe.each(Object.entries(NOT_BUILT_SCENARIOS))('%s is not built yet', (name, parts) => {
-    it('answers NOT_BUILT, naming what, before anything is written', async () => {
+  it('W13: nothing is left that the order route answers NOT_BUILT for', () => {
+    expect(NOT_BUILT_SCENARIOS).toEqual({})
+  })
+
+  describe('W13: the Stripe calls, call by call', () => {
+    /**
+     * A call as both sides must make it: the subscription's request without `metadata.order_id` and with the
+     * coupon named only as a coupon; the coupon's without its fixed id and `metadata.order_id`; the charge's
+     * without `metadata` (the order's id); the reader's intent as it is. Keys are held below, step by step.
+     */
+    const normalised = (call: StripeCallRecord): unknown => {
+      const params = JSON.parse(JSON.stringify(call.params ?? null)) as Record<string, unknown> & { metadata?: Record<string, unknown>; discounts?: Array<{ coupon: string }> }
+      if (call.method === 'subscriptions.create') {
+        delete params.metadata?.['order_id']
+        if (params.discounts) params.discounts = params.discounts.map(() => ({ coupon: '<the coupon>' }))
+      }
+      if (call.method === 'coupons.create') {
+        delete params['id']
+        delete params.metadata?.['order_id']
+      }
+      if (call.method === 'paymentIntents.create' && params['confirm'] === true) delete params.metadata
+      return { method: call.method, params }
+    }
+    const made = (recording: Recording, method: string) => recording.stripeCalls.filter((call) => call.method === method && (method !== 'paymentIntents.create' || (call.params as { confirm?: boolean }).confirm === true || Array.isArray((call.params as { payment_method_types?: unknown }).payment_method_types)))
+
+    // Where both sides made a subscription (Q3 the other way round, and the refused ones, have their own tests).
+    const both = W13_SCENARIOS.filter((name) => {
+      const golden = readGolden(name) as Recording | null
+      // Q8 the old cancel refused: createOrder never reached the charge (its own test below).
+      return Boolean(golden?.stripeCalls.some((call) => call.method === 'subscriptions.create')) && !OUTCOME_DIFFERS.includes(name) && !['w13-card-declined-then-retried', 'w13-card-old-cancel-refused'].includes(name)
+    })
+
+    it.each(both)("%s: the subscription, the coupon, the charge and the reader's intent are the old requests (Q1/Q2's coupon amount aside)", async (name) => {
+      const golden = readGolden(name) as Recording
+      const { recording } = await runNew(name)
+      for (const method of ['subscriptions.create', 'paymentIntents.create']) {
+        expect(made(recording, method).map(normalised), method).toEqual(made(golden, method).map(normalised))
+      }
+      const coupon = (r: Recording) => made(r, 'coupons.create').map(normalised) as Array<{ params: Record<string, unknown> }>
+      const spillFixed = name === 'q1-postage-before-the-spill' || name === 'q2-standalone-addon-before-the-spill'
+      expect(coupon(recording).map((c) => ({ ...c.params, ...(spillFixed ? { amount_off: '<Q1/Q2>' } : {}) }))).toEqual(coupon(golden).map((c) => ({ ...c.params, ...(spillFixed ? { amount_off: '<Q1/Q2>' } : {}) })))
+    })
+
+    it("the saved card's steps in the Worker's order, each money call under the order's key (Q8: the old subscription cancelled last, with no key: a DELETE)", async () => {
+      const { recording, answers } = await runNew('w13-card-replace-exhausted-with-a-paid-guest')
+      const orderId = (answers[0]?.body as { ok: true; data: { orderId: string } }).data.orderId
+      void orderId
+      expect(recording.stripeCalls.map((call) => [call.method, call.idempotencyKey])).toEqual([
+        ['prices.retrieve', null],
+        ['customers.update', null],
+        ['subscriptions.create', 'orders#1:subscription'],
+        ['paymentIntents.create', 'orders#1:charge'],
+        ['subscriptions.cancel', null],
+      ])
+      // createOrder cancelled the old subscription before the charge.
+      expect((readGolden('w13-card-replace-exhausted-with-a-paid-guest') as Recording).stripeCalls.map((call) => call.method)).toEqual([
+        'prices.retrieve',
+        'customers.update',
+        'subscriptions.create',
+        'subscriptions.cancel',
+        'paymentIntents.create',
+      ])
+    })
+
+    it('the compensation: the new subscription cancelled, then each payment refunded in full under <orderId>:refund-subscription and :refund-charge', async () => {
+      const declined = { recording: withCanonicalGoneNumbers((await runNew('w13-card-charge-declined-after-the-subscription')).recording) }
+      expect(declined.recording.stripeCalls.slice(4).map((call) => [call.method, call.idempotencyKey, call.params])).toEqual([
+        ['subscriptions.cancel', null, { id: 'sub_fake_0003' }],
+        ['refunds.create', 'orders#1:refund-subscription', { payment_intent: 'pi_fake_0001', metadata: { order_id: 'orders#1', refund_key: 'orders#1:refund-subscription', reason: 'membership_not_set_up' } }],
+      ].map(([method, key, params]) => [method, key === null ? null : String(key).replace('orders#1', 'gone#1'), JSON.parse(JSON.stringify(params).replaceAll('orders#1', 'gone#1'))]))
+      const refused = { recording: withCanonicalGoneNumbers((await runNew('w13-card-old-cancel-refused')).recording) }
+      expect(refused.recording.stripeCalls.map((call) => [call.method, call.idempotencyKey])).toEqual([
+        ['prices.retrieve', null],
+        ['customers.update', null],
+        ['subscriptions.create', 'gone#1:subscription'],
+        ['paymentIntents.create', 'gone#1:charge'],
+        ['subscriptions.cancel', null],
+        ['subscriptions.retrieve', null],
+        ['subscriptions.cancel', null],
+        ['refunds.create', 'gone#1:refund-subscription'],
+        ['refunds.create', 'gone#1:refund-charge'],
+      ])
+    })
+
+    it("the reader's steps: the price before the tap; at finalise the card, the price again, the coupon covering the tap, the subscription", async () => {
+      const { recording } = await runNew('w13-reader-replace-an-exhausted-membership')
+      expect(recording.stripeCalls.map((call) => [call.method, call.idempotencyKey])).toEqual([
+        ['prices.retrieve', null],
+        ['paymentIntents.create', 'orders#1:reader-intent'],
+        ['paymentIntents.retrieve', null],
+        ['paymentIntents.retrieve', null],
+        ['prices.retrieve', null],
+        ['customers.update', null],
+        ['coupons.create', 'orders#1:coupon'],
+        ['subscriptions.create', 'orders#1:subscription'],
+        ['subscriptions.cancel', null],
+      ])
+      // finaliseReaderOrder cancelled the old subscription first, before the subscription.
+      expect((readGolden('w13-reader-replace-an-exhausted-membership') as Recording).stripeCalls.map((call) => call.method).slice(3, 5)).toEqual(['subscriptions.cancel', 'prices.retrieve'])
+    })
+  })
+
+  describe('W13: the outcomes decisions change', () => {
+    const answer = (answers: OrderAnswer[], i = 0) => answers[i]?.body as { ok: boolean; data?: Record<string, unknown>; error?: { code: string; message: string; details: Record<string, unknown> } }
+
+    it("Stripe's price isn't the plan's: createOrder charged Stripe's £45 silently; the Worker refuses before anything is taken", async () => {
+      expect((readGolden('w13-card-stripe-price-differs') as Recording).results[0]).toMatchObject({ success: true, membershipAmountPaid: 45 })
+      const { recording, answers } = await runNew('w13-card-stripe-price-differs')
+      expect(answer(answers).error).toMatchObject({ details: { reason: 'membership_price_mismatch' } })
+      expect(recording.stripeCalls.map((call) => call.method)).toEqual(['prices.retrieve'])
+      expect(Object.keys(recording.tables).sort()).toEqual(['api_idempotency', 'audit_log'])
+    })
+
+    it('an archived price: createOrder failed at the subscription with Stripe\'s words; the Worker refuses at the price check, before the default card', async () => {
+      expect((readGolden('w13-card-stripe-price-archived') as Recording).results[0]).toMatchObject({ success: false, reason: 'membership_subscription_failed' })
+      const { recording, answers } = await runNew('w13-card-stripe-price-archived')
+      expect(answer(answers).error).toMatchObject({ details: { reason: 'membership_price_inactive' } })
+      expect(recording.stripeCalls.map((call) => call.method)).toEqual(['prices.retrieve'])
+    })
+
+    it('no clear answer from the subscription: createOrder rolled back; the Worker sends it once more with the same key, then holds the order with its claims', async () => {
+      const { recording, answers } = await runNew('w13-card-subscription-unclear')
+      expect(answer(answers).error).toMatchObject({ code: 'PAYMENT_UNCONFIRMED', details: { reason: 'payment_unconfirmed' } })
+      expect(recording.stripeCalls.filter((call) => call.method === 'subscriptions.create').map((call) => call.idempotencyKey)).toEqual(['orders#1:subscription', 'orders#1:subscription'])
+      expect(recording.tables['orders']?.added).toMatchObject([{ payment_status: 'pending' }])
+      expect(recording.tables['product_variants']?.changed).toEqual([{ id: ID.variant, stock_quantity: [5, 3] }])
+    })
+
+    it('bug 13: createOrder refused the second press too (Stripe replayed the decline under the basket\'s key); the Worker\'s second press is a new order and goes through', async () => {
+      const golden = readGolden('w13-card-declined-then-retried') as Recording
+      expect(golden.results).toMatchObject([{ success: false, reason: 'membership_payment_failed' }, { success: false, reason: 'membership_payment_failed' }])
+      expect(golden.stripeCalls.filter((call) => call.method === 'subscriptions.create').map((call) => call.idempotencyKey)).toEqual(['replay-membership-key', 'replay-membership-key'])
+      const run = await runNew('w13-card-declined-then-retried')
+      const { answers } = run
+      const recording = withCanonicalGoneNumbers(run.recording)
+      expect(answer(answers, 0).error).toMatchObject({ details: { reason: 'membership_payment_failed' } })
+      expect(answer(answers, 1).ok).toBe(true)
+      const keys = recording.stripeCalls.filter((call) => call.method === 'subscriptions.create').map((call) => call.idempotencyKey)
+      expect(keys).toEqual(['gone#1:subscription', 'orders#1:subscription'])
+      expect(recording.tables['customer_memberships']?.added).toHaveLength(1)
+    })
+
+    it.each(['q3-reader-buy-new-pass-with-a-membership', 'w13-reader-buy-new-pass-event-and-membership'])(
+      '%s (Q3): finaliseReaderOrder found no membership line, refunded the tap and rolled back; the Worker sells the pass and the membership',
+      async (name) => {
+        expect((readGolden(name) as Recording).results[1]).toMatchObject({ finalised: false, reason: 'finalise_failed' })
+        const { recording, answers } = await runNew(name)
+        expect(answer(answers, 1).data).toMatchObject({ finalised: true, membershipId: expect.any(String) })
+        expect(recording.tables['customer_memberships']?.added).toHaveLength(1)
+        expect(recording.tables['customer_session_passes']?.added).toHaveLength(1)
+        expect(recording.tables['order_line_items']?.added.map((line) => line['item_type']).slice(0, 3)).toEqual(['membership', 'session_pass', 'booking'])
+      }
+    )
+
+    it.each(['q3-buy-new-pass-with-a-membership', 'w13-card-buy-new-pass-event-and-membership'])('%s (Q3): createOrder sold the pass alone; the Worker sells the membership too, its subscription and the pass', async (name) => {
+      expect((readGolden(name) as Recording).tables['customer_memberships']).toBeUndefined()
       const { recording, answers } = await runNew(name)
-      expect(answers[0]?.status).toBe(501)
-      expect(answers[0]?.body).toMatchObject({ ok: false, error: { code: 'NOT_BUILT', details: { notBuilt: parts } } })
-      expect(Object.keys(recording.tables)).toEqual(['api_idempotency'])
+      expect(answer(answers).data).toMatchObject({ membershipId: expect.any(String), sessionPassId: expect.any(String) })
+      expect(recording.stripeCalls.map((call) => call.method)).toEqual(['prices.retrieve', 'customers.update', 'subscriptions.create', 'paymentIntents.create'])
+    })
+  })
+
+  describe('W13: row order', () => {
+    it("a buy-new membership's line and row come before the booking that draws on it; the audit rows come create, then paid", async () => {
+      const { recording } = await runNew('buy-new-membership-covers-the-seat')
+      expect(recording.tables['order_line_items']?.tied).toBe(0)
+      expect(recording.tables['order_line_items']?.added.map((line) => line['item_type'])).toEqual(['membership', 'booking'])
+      expect(recording.tables['audit_log']?.added.map((row) => row['action'])).toEqual(['order.create', 'order.paid'])
     })
   })
 })

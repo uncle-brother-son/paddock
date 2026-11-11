@@ -1450,7 +1450,7 @@ describe('round trips (about 20 ms each through Hyperdrive)', () => {
       expect(placing.statements).toEqual(['SELECT id,', 'INSERT INTO', 'BEGIN; SELECT', 'SELECT s.id', 'WITH london', 'WITH clock', 'WITH clock', 'WITH clock', 'COMMIT', 'BEGIN; SELECT', 'UPDATE orders', 'COMMIT', 'UPDATE api_idempotency'])
       stripe.completeReaderPayment(placed.pendingReaderPayment.paymentIntentId)
       const finalising = await counting(() => finalise(placed.orderId))
-      expect(finalising.statements).toEqual(['SELECT id,', 'INSERT INTO', 'SELECT payment_status,', 'BEGIN; SELECT', 'SELECT customer_id,', 'WITH paid', 'WITH clock', 'COMMIT', 'UPDATE api_idempotency'])
+      expect(finalising.statements).toEqual(['SELECT id,', 'INSERT INTO', 'SELECT payment_status,', 'BEGIN; SELECT', 'SELECT o.customer_id,', 'WITH paid', 'WITH clock', 'COMMIT', 'UPDATE api_idempotency'])
       const second = placedOf(await placeThrough({ ...readerBasket, booking: undefined }))
       const cancelling = await counting(() => cancel(second.orderId))
       expect(cancelling.statements).toEqual(['SELECT id,', 'INSERT INTO', 'SELECT payment_status,', 'BEGIN; SELECT', 'SELECT customer_id,', 'WITH l', 'SELECT s.id', 'WITH capacity', 'WITH clock', 'COMMIT', 'UPDATE api_idempotency'])

@@ -714,12 +714,12 @@ describe('a run is bounded', () => {
     })
   })
 
-  it('the limits are as stated: the schedule 50 items and 120 s, a manual run 10 and 20 s', () => {
+  it('the limits are as stated: the schedule 50 items and 120 s, a manual run 10 and 15 s (W13: its Stripe calls by 20 s)', () => {
     expect(SCHEDULED_LIMITS).toEqual({ maxItems: 50, budgetMs: 120_000 })
-    expect(MANUAL_LIMITS).toEqual({ maxItems: 10, budgetMs: 20_000, stripeDeadlineMs: 25_000 })
+    expect(MANUAL_LIMITS).toEqual({ maxItems: 10, budgetMs: 15_000, stripeDeadlineMs: 20_000 })
   })
 
-  it("a manual run's Stripe calls end by 25 s from the request's start: each gets what is left, none with under 2 s", async () => {
+  it("a manual run's Stripe calls end by 20 s from the request's start: each gets what is left, none with under 2 s", async () => {
     await onASeed(async ({ stripe }) => {
       await heldSoap(stripe, ID.customer)
       await heldSoap(stripe, ID.member)
@@ -727,8 +727,8 @@ describe('a run is bounded', () => {
       const timeouts: Array<number | undefined> = []
       const list = stripe.paymentIntents.list
       stripe.paymentIntents.list = (params, options) => (timeouts.push(options?.timeout), list(params, options))
-      // The request started 18 s ago: the first item's list gets 7 s; then the clock reads 23.5 s, so the second item's isn't sent.
-      const startedAt = Date.now() - 18_000
+      // The request started 13 s ago: the first item's list gets 7 s; then the clock reads 18.5 s, so the second item's isn't sent.
+      const startedAt = Date.now() - 13_000
       let reads = 0
       const result = await run(stripe, { ...MANUAL_LIMITS, startedAt, now: () => (reads++ < 3 ? Date.now() : Date.now() + 5_500) })
       expect(timeouts[0]).toBe(7_000)
@@ -736,6 +736,19 @@ describe('a run is bounded', () => {
       expect(result.items.map((item) => item.outcome)).toEqual(['undone', 'left'])
       expect(result.items[1]).toMatchObject({ reason: 'unclear' })
     }, addThirdCustomer)
+  })
+})
+
+describe("W13 (W12a N1): a reader order in a staff member's run keeps to the run's deadline", () => {
+  it("19 s into the run (1 s left of its 20, though a press would have 11): the reader's intent isn't read, the order left for the next run", async () => {
+    await onASeed(async ({ stripe }) => {
+      const placed = await place(basket('reader'))
+      if (!placed.body.ok) throw new Error('not placed')
+      later(16)
+      const result = await run(stripe, { ...MANUAL_LIMITS, startedAt: Date.now() - 19_000 })
+      expect(result.items).toEqual([expect.objectContaining({ id: placed.body.data.orderId, outcome: 'left', reason: 'unclear' })])
+      expect(stripe.calls.filter((call) => call.method === 'paymentIntents.retrieve')).toEqual([])
+    })
   })
 })
 

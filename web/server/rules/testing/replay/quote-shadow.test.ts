@@ -165,6 +165,14 @@ describe('the quote shadow, through the real routes', () => {
     'w11-reader-intent-refused',
     'w11-reader-intent-unclear',
     'w11-reader-stripe-customer-not-made',
+    // W13: a membership refused by Stripe (the subscription, the charge after it, the old cancel, an archived
+    // price), or no clear answer (which createOrder took as refused), or refused twice (bug 13).
+    'w13-card-subscription-declined',
+    'w13-card-charge-declined-after-the-subscription',
+    'w13-card-old-cancel-refused',
+    'w13-card-stripe-price-archived',
+    'w13-card-subscription-unclear',
+    'w13-card-declined-then-retried',
   ])
 
   /** Orders the quote can't foresee the answer to (a decline, no customer, a changed cash figure), so it records nothing. */
@@ -209,7 +217,8 @@ describe('the quote shadow, through the real routes', () => {
 
   it('every decision has a scenario that shows it', () => {
     const decisions = Object.values(QUOTE_DIFFERENCES).flatMap((list) => list.map((a) => a.decision))
-    expect([...new Set([...decisions, SCREEN_DIFFERENCE.decision])].sort()).toEqual(['Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Q6'].map((q) => `W03-decisions ${q}`))
+    // W13: and the Stripe price check, where createOrder charged Stripe's price.
+    expect([...new Set([...decisions, SCREEN_DIFFERENCE.decision])].sort()).toEqual([...['Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Q6'].map((q) => `W03-decisions ${q}`), 'W03-plan 2.7 (the Stripe price check)'].sort())
   })
 
   it('a match is logged with only its timing, so a count proves the shadow ran', async () => {
@@ -430,7 +439,8 @@ describe('the quote shadow, through the real routes', () => {
 
   it('Q6: the quote shows the discount the order gives, which the old screen left out', async () => {
     const { parity } = await run(byName('q6-promo-on-buy-new-seats'))
-    expect(parity.map((row) => row.matches)).toEqual([true])
+    // W13: the quote's row and, now that the Worker takes a membership, the dry run's.
+    expect(parity.map((row) => row.matches)).toEqual([true, true])
 
     // What the screen asked for: the membership's line only, as it leaves out buy-new seats.
     const answer = await realWorker({
@@ -533,11 +543,10 @@ describe('the quote shadow, through the real routes', () => {
       expect(dryRunRows[0]?.new_result).toMatchObject({ refusal: { reason: 'insufficient_capacity' } })
     })
 
-    it('out of its scope it records nothing more', async () => {
-      // W11 built the reader: a membership (W13) is what is out of scope now.
+    it('W13: nothing is out of its scope any more: a membership on the reader records its match too', async () => {
       const { quoteRows, dryRunRows } = await run(byName('membership-on-the-reader'))
       expect(quoteRows).toHaveLength(1)
-      expect(dryRunRows).toEqual([])
+      expect(dryRunRows.map((row) => row.matches)).toEqual([true])
     })
 
     describe('a dry run that fails changes nothing, and says so', () => {
@@ -682,6 +691,12 @@ describe('the quote shadow, through the real routes', () => {
             w09Rows = data.rows
             return data
           }))
+          // W13: a buy-new membership on the reader, whose row T1 writes.
+          let w13Rows: Rows | undefined
+          await run(byName('w13-reader-buy-new-membership-with-a-guest'), changing((data) => {
+            w13Rows = data.rows
+            return data
+          }))
           const paid = w09Rows as Rows & { promo_redemptions: unknown[]; store_credit_transactions: unknown[]; gift_card_redemptions: unknown[] }
           const shadow = (await import(/* @vite-ignore */ path.join(backendDir, 'shared/orderQuoteShadow.ts'))) as { ORDER_ROWS_KEYS: Record<string, readonly string[]> }
           const keys = (value: unknown) => Object.keys(value as object).sort()
@@ -703,6 +718,7 @@ describe('the quote shadow, through the real routes', () => {
             promoRedemption: paid.promo_redemptions[0],
             storeCreditTransaction: paid.store_credit_transactions[0],
             giftCardRedemption: paid.gift_card_redemptions[0],
+            membership: (w13Rows as Rows & { memberships: unknown[] }).memberships[0],
           }
           expect(keys(paid)).toEqual(keys(all))
           expect(Object.keys(shadow.ORDER_ROWS_KEYS).sort()).toEqual(Object.keys(sections).sort())
@@ -1240,6 +1256,99 @@ describe('the quote shadow, through the real routes', () => {
           for (const name of [CARD_ORDER, 'cash-booking-two-guests-addon', WORST]) {
             const { dryRunRows } = await run(byName(name), olderWorker)
             expect(dryRunRows.map((row) => row.matches), name).toEqual([true])
+          }
+        })
+      })
+
+      describe('W13: memberships', () => {
+        type MembershipBody = { ok: boolean; data?: { order: Record<string, unknown> & { payment: Record<string, unknown> }; rows: W09Rows & { order: Record<string, unknown>; memberships: Array<Record<string, unknown>>; lines: Array<Record<string, unknown>> } } }
+        const changingMembership = (change: (data: NonNullable<MembershipBody['data']>) => NonNullable<MembershipBody['data']>) => async (call: WorkerCall) => {
+          const answer = await realWorker(call)
+          if (call.path !== DRY_RUN_PATH) return answer
+          const body = answer.data as MembershipBody
+          return { data: { ...body, data: body.data && change(body.data) } }
+        }
+        const CARD_MEMBERSHIP = 'w13-card-membership-and-products'
+        const BUY_NEW = 'buy-new-membership-covers-the-seat'
+        const READER_BUY_NEW = 'w13-reader-buy-new-membership-with-a-guest'
+
+        it('a membership dry run is compared and matches: on the card taken on to T2, on the reader pending against pending', async () => {
+          for (const name of [CARD_MEMBERSHIP, 'membership-on-saved-card', 'yearly-membership-on-saved-card', BUY_NEW, 'w13-card-replace-exhausted-with-a-paid-guest', 'w13-card-all-access-yearly-buy-new-on-peak', 'membership-on-the-reader', READER_BUY_NEW, 'w13-reader-replace-an-exhausted-membership']) {
+            const { dryRunRows } = await run(byName(name))
+            expect(dryRunRows, name).toEqual([{ action: DRY_RUN, matches: true, diff: null, old_result: null, new_result: { timing: expect.anything() } }])
+          }
+        })
+
+        it("only T1's state is taken on: a card membership row T1 wrote with a subscription, or a reader row given one, shows; a membership written alone is compared on its plan only", async () => {
+          // A buy-new row T1 wrote already holding a subscription: still projected (T2 would refuse it), but its status shows.
+          const patched = await run(byName(BUY_NEW), changingMembership((data) => ({ ...data, rows: { ...data.rows, memberships: data.rows.memberships.map((m) => ({ ...m, subscription_status: 'past_due' })) } })))
+          expect(patched.dryRunRows.map((row) => row.matches)).toEqual([false])
+          expect(patched.dryRunRows[0]?.diff?.map((d) => d.path)).toEqual(['rows.memberships.0.subscription_status'])
+          // On the reader nothing is taken on: a row with a subscription shows.
+          const reader = await run(byName(READER_BUY_NEW), changingMembership((data) => ({ ...data, rows: { ...data.rows, memberships: data.rows.memberships.map((m) => ({ ...m, has_subscription: true })) } })))
+          expect(reader.dryRunRows[0]?.diff?.map((d) => d.path)).toEqual(['rows.memberships.0.has_subscription'])
+          // A card membership on its own (T2's row): its plan is still compared.
+          const otherPlan = await run(byName(CARD_MEMBERSHIP), changingMembership((data) => ({ ...data, rows: { ...data.rows, lines: data.rows.lines.map((l) => (l['item_type'] === 'membership' ? { ...l, membership_plan_id: 'another-plan' } : l)) } })))
+          expect(otherPlan.dryRunRows[0]?.diff?.map((d) => d.path).sort()).toEqual(['rows.lines.1.membership_plan_id', 'rows.memberships.0.plan_id'])
+          // A T1 that wrote the row itself on a card membership on its own: not T2's case, so compared in full (here the old row's own values: a match).
+          const t1Row = await run(byName(CARD_MEMBERSHIP), changingMembership((data) => ({ ...data, rows: { ...data.rows, memberships: [{ plan_id: '10000000-0000-4000-8000-00000000000a', subscription_status: 'active', has_subscription: false, start_date: '2026-11-10', next_renewal_date: '2026-12-10', addon_credits_remaining: 0, billing_frequency: 'monthly', is_herd: false, for_the_order_customer: true, pays_for_the_booking: false, credit_periods: 1 }] } })))
+          expect(t1Row.dryRunRows.map((row) => row.matches)).toEqual([true])
+        })
+
+        it('no subscription id, free text, code or balance figure reaches parity_log on a membership order', async () => {
+          const { dryRunRows } = await run(
+            byName('w13-card-membership-with-a-gift-card'),
+            changingMembership((data) => ({
+              ...data,
+              order: { ...data.order, payment: { ...data.order.payment, collected: 1 } },
+              rows: {
+                ...data.rows,
+                customer_store_credit_balance: 12.34,
+                gift_card_redemptions: data.rows.gift_card_redemptions.map((r) => ({ ...r, card_remaining_balance: 56.78 })),
+                memberships: [{ plan_id: 'x', subscription_status: 'active', has_subscription: true, start_date: '2026-11-10', next_renewal_date: '2026-12-10', addon_credits_remaining: 0, billing_frequency: 'monthly', is_herd: false, for_the_order_customer: true, pays_for_the_booking: false, credit_periods: 1 }],
+              },
+            }))
+          )
+          expect(dryRunRows.map((row) => row.matches)).toEqual([false])
+          expect(dryRunRows[0]?.new_result).toMatchObject({ balancesMatch: false })
+          const logged = JSON.stringify(dryRunRows)
+          for (const text of ['sub_fake', 'in_fake', 'pi_fake', 'coupon', 'order-', 'cus_seed', 'pm_seed', 'Sam Test', 'sam@example.com', 'SEEDCARD', '12.34', '56.78']) {
+            expect(logged, text).not.toContain(text)
+          }
+        })
+
+        it("a field a later Worker adds to a membership never reaches parity_log: cut and counted", async () => {
+          const { dryRunRows } = await run(byName(READER_BUY_NEW), changingMembership((data) => ({ ...data, rows: { ...data.rows, memberships: data.rows.memberships.map((m) => ({ ...m, subscription_id: 'sub_secret_42' })) } })))
+          expect(dryRunRows).toEqual([{ action: DRY_RUN, matches: true, diff: null, old_result: null, new_result: { timing: expect.anything(), droppedKeys: 1 } }])
+          expect(JSON.stringify(dryRunRows)).not.toContain('sub_secret_42')
+        })
+
+        it('the publish-then-deploy window: a Worker from before W13 answers NOT_BUILT for a membership (recording nothing), and its rows lack the membership keys, which fails closed: a false row naming only the missing keys, no values', async () => {
+          // Release rule: this staff app first. Until the Worker is deployed it is f32f277 (W12): a membership
+          // basket is NOT_BUILT, and its read-back has no `memberships` section and no line `membership_plan_id`.
+          const olderWorker = async (call: WorkerCall) => {
+            const body = call.body as { membershipPlanId?: string } | undefined
+            if (call.path === DRY_RUN_PATH && body?.membershipPlanId) {
+              return { data: { ok: false, requestId: 'r', error: { code: 'NOT_BUILT', message: 'not built', details: { notBuilt: ['membership'] } } } }
+            }
+            const answer = await realWorker(call)
+            if (call.path !== DRY_RUN_PATH) return answer
+            const data = (answer.data as MembershipBody).data
+            if (!data) return answer
+            const rows: Record<string, unknown> = { ...data.rows, lines: data.rows.lines.map((line) => Object.fromEntries(Object.entries(line).filter(([key]) => key !== 'membership_plan_id'))) }
+            delete rows['memberships']
+            return { data: { ...(answer.data as object), data: { ...data, rows } } }
+          }
+          for (const name of [CARD_MEMBERSHIP, BUY_NEW, READER_BUY_NEW]) {
+            const { dryRunRows } = await run(byName(name), olderWorker)
+            expect(dryRunRows, name).toEqual([])
+          }
+          for (const name of ['cash-booking-two-guests-addon', CARD_ORDER]) {
+            const { dryRunRows } = await run(byName(name), olderWorker)
+            expect(dryRunRows.map((row) => row.matches), name).toEqual([false])
+            const paths = (dryRunRows[0]?.diff ?? []).map((d) => d.path)
+            expect(paths.every((path) => path === 'rows.memberships' || /^rows\.lines\.\d+\.membership_plan_id$/.test(path)), name).toBe(true)
+            for (const entry of dryRunRows[0]?.diff ?? []) expect([entry.oldValue, entry.newValue].every((v) => v === null || v === undefined || (Array.isArray(v) && v.length === 0))).toBe(true)
           }
         })
       })

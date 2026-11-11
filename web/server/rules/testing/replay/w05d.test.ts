@@ -246,8 +246,15 @@ describe('W05d on the old functions', () => {
   })
 
   /** Allowed to break a check below, each for a reason nothing here can fix. */
+  /** W13: the old functions put a membership's money back and rolled the order back: taken and refunded, on no row. */
+  const MEMBERSHIP_ROLLED_BACK = "W13 on the old functions: a membership that couldn't be set up, its payment refunded and the order rolled back, so the money is on no row"
   const STRIPE_REFUNDS_NOT_ON_ROWS: Record<string, string> = {
     'q3-reader-buy-new-pass-with-a-membership': 'W05a Q3 on the reader: £90 taken and refunded by the rollback of an order that never existed. Tracked for go-live',
+    'w13-card-charge-declined-after-the-subscription': MEMBERSHIP_ROLLED_BACK,
+    'w13-card-old-cancel-refused': MEMBERSHIP_ROLLED_BACK,
+    'w13-reader-buy-new-pass-event-and-membership': MEMBERSHIP_ROLLED_BACK,
+    'w13-reader-card-not-reusable': MEMBERSHIP_ROLLED_BACK,
+    'w13-reader-old-cancel-refused': MEMBERSHIP_ROLLED_BACK,
     'unsure-part-refund-card-arrived': 'It already arrived moves no money and records nothing on the line, so a refund that really left Stripe is on no row. It is capped by price_paid, so nothing can go twice',
   }
   const CANCELLED_WITHOUT_ALL_THE_MONEY: Record<string, string> = {
@@ -266,6 +273,16 @@ describe('W05d on the old functions', () => {
     'q3-reader-buy-new-pass-with-a-membership': 'W05a Q3 on the reader: the order rolled back, so the £90 has none. Tracked for go-live',
     'q5-buy-new-keeps-address-and-requests': FIRST_INVOICE,
     'q6-promo-on-buy-new-seats': FIRST_INVOICE,
+    // W13's own on the old functions.
+    'w13-card-membership-and-products': FIRST_INVOICE,
+    'w13-card-yearly-and-a-shipped-product': FIRST_INVOICE,
+    'w13-card-buy-new-membership-with-a-guest-and-an-addon': FIRST_INVOICE,
+    'w13-card-replace-exhausted-with-a-paid-guest': FIRST_INVOICE,
+    'w13-card-charge-declined-after-the-subscription': MEMBERSHIP_ROLLED_BACK,
+    'w13-card-old-cancel-refused': MEMBERSHIP_ROLLED_BACK,
+    'w13-reader-buy-new-pass-event-and-membership': MEMBERSHIP_ROLLED_BACK,
+    'w13-reader-card-not-reusable': MEMBERSHIP_ROLLED_BACK,
+    'w13-reader-old-cancel-refused': MEMBERSHIP_ROLLED_BACK,
     // W11: the reader took £44 for a £45 order, so finalise refuses it (amount_mismatch) and the order is
     // left pending for a person, as finaliseReaderOrder did (W03-plan 2.5, "amounts don't match").
     'w11-reader-amount-mismatch-a-pound-short': 'W03-plan 2.5: a payment that does not match its order is left for a person, not finalised',

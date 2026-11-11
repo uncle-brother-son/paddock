@@ -368,14 +368,16 @@ describe('before anything is touched', () => {
     await replay(environment, { name: 'seed only', seed, run: async () => {} }, oldSide)
   }
 
-  it('NOT_BUILT: only the staff member is looked up and the answer kept against the key', async () => {
+  it('W13: nothing answers NOT_BUILT any more: a membership basket opens T1, and a refusal there keeps nothing', async () => {
     await freshSeed()
-    // W10 built the saved card and W11 the reader, so a membership is what isn't built here.
+    // In cash a membership is refused by T1's own checks (membership_cash_not_accepted), with T1 opened and rolled back.
     const { result, statements } = await counting(() =>
-      postOrder(orderInput({ customerId: ID.customer, booking: paidSeat(), promoCode: 'ALLTEN', membershipPlanId: ID.plan, membershipBillingFrequency: 'monthly', payment: { method: 'reader' } }))
+      postOrder(orderInput({ customerId: ID.customer, booking: paidSeat(), promoCode: 'ALLTEN', membershipPlanId: ID.plan, membershipBillingFrequency: 'monthly', payment: { method: 'cash', confirmedCashAmount: 54 } }))
     )
-    expect(result.status).toBe(501)
-    expect(statements).toEqual(['SELECT id,', 'INSERT INTO', 'UPDATE api_idempotency'])
+    expect(result.status).toBe(400)
+    expect(result.body).toMatchObject({ ok: false, error: { code: 'VALIDATION', details: { reason: 'membership_cash_not_accepted' } } })
+    expect(statements).toContain('BEGIN; SELECT')
+    expect(statements.at(-1)).toBe('UPDATE api_idempotency')
   })
 
   it('an empty basket, a missing customer and the removed gift card source: the same', async () => {
@@ -562,11 +564,12 @@ describe('the dry run', () => {
     expect(answers[0]?.body.error).toEqual(answer.body.ok ? null : answer.body.error)
   })
 
-  it('answers NOT_BUILT before it opens a transaction', async () => {
+  it('W13: a membership on the reader runs T1 and keeps nothing: pending with its record, the membership line written', async () => {
     const answers: Array<Awaited<ReturnType<typeof dryRun>>> = []
-    // W11 built the reader: a membership on it is what isn't built.
     const recording = await replay(environment, dryScenario({ customerId: ID.customer, booking: paidSeat(), membershipPlanId: ID.plan, membershipBillingFrequency: 'monthly', payment: { method: 'reader', readerSaveCard: true } }, answers), oldSide)
-    expect(answers[0]).toMatchObject({ status: 501, body: { error: { code: 'NOT_BUILT', details: { notBuilt: ['membership'] } } } })
+    expect(answers[0]).toMatchObject({ status: 200, body: { ok: true, data: { order: { status: 'pending_reader' }, rows: { order: { payment_status: 'pending', has_reader_payment: true } } } } })
+    const rows = (answers[0]?.body as { data: { rows: { lines: Array<{ item_type: string }> } } }).data.rows
+    expect(rows.lines.map((line) => line.item_type)).toEqual(['booking', 'membership'])
     expect(recording.tables).toEqual({})
   })
 })
@@ -1306,10 +1309,9 @@ describe('what T1 writes for an event (W08)', () => {
     expect(recording.tables['event_bookings']?.added).toMatchObject([{ created_by_staff_id: null, customer_id: ID.customer, places: 1 }])
   })
 
-  it('a membership bought beside an event is not built yet, before anything is written', async () => {
-    const { recording, answer } = await placeThrough({ ...eventAlone, membershipPlanId: ID.plan, membershipBillingFrequency: 'monthly', payment: { method: 'card' } })
-    // W10 built the saved card: the membership is what isn't built.
-    expect(answer.body).toMatchObject({ ok: false, error: { code: 'NOT_BUILT', details: { notBuilt: ['membership'] } } })
+  it("W13: a membership bought beside an event is T1's now: in cash it is refused there, before anything is kept", async () => {
+    const { recording, answer } = await placeThrough({ ...eventAlone, membershipPlanId: ID.plan, membershipBillingFrequency: 'monthly', payment: cash(70) })
+    expect(answer.body).toMatchObject({ ok: false, error: { code: 'VALIDATION', details: { reason: 'membership_cash_not_accepted' } } })
     expect(tablesTouched(recording)).toEqual(['api_idempotency'])
   })
 })
@@ -1702,9 +1704,9 @@ describe('what T1 writes for a promo code, store credit and a gift card (W09)', 
     expect(recording.tables['store_credit_transactions']?.added).toMatchObject([{ staff_id: null, amount: '-24.00', balance_after: '6.00' }])
   })
 
-  it('a promo code beside a membership bought in the basket is the membership, not built yet', async () => {
+  it("W13: a promo code beside a membership bought in the basket is T1's now: in cash it is refused there, before anything is kept", async () => {
     const { recording, answer } = await placeThrough({ ...promoBooking, membershipPlanId: ID.plan, membershipBillingFrequency: 'monthly', payment: cash(54) })
-    expect(answer.body).toMatchObject({ ok: false, error: { code: 'NOT_BUILT', details: { notBuilt: ['membership'] } } })
+    expect(answer.body).toMatchObject({ ok: false, error: { code: 'VALIDATION', details: { reason: 'membership_cash_not_accepted' } } })
     expect(tablesTouched(recording)).toEqual(['api_idempotency'])
   })
 })

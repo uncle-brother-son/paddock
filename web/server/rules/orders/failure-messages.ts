@@ -178,6 +178,68 @@ export const OLD_ROLLBACK_STARTED_MESSAGE =
 export const CHANGED_SINCE_MESSAGE =
   "This order's booking was changed after the order was started (cancelled, moved, or guests added or removed), so it wasn't cancelled automatically and nothing was given back. Check the booking and the payment, then sort the order out by hand."
 
+/*
+ * W13: words for memberships. The old route's where it had them (create-subscription/core.ts, through
+ * shared/createMembershipSubscription.ts); the rest are new (adjustable at W14).
+ */
+
+/** The old route's words when the plan's Stripe price couldn't be read (its 500, `unexpected`). */
+export const PRICE_NOT_VERIFIED_MESSAGE = 'Failed to verify Stripe price'
+/** The old route's words when the card couldn't be made the Stripe customer's default. */
+export const DEFAULT_CARD_FAILED_MESSAGE = 'Failed to set default payment method'
+/** The old route's words when the first-invoice coupon couldn't be made. */
+export const COUPON_FAILED_MESSAGE = 'Failed to apply the discount'
+
+/** The old route's words when a membership's customer has no Stripe customer or card (its `no_saved_card`). */
+export const MEMBERSHIP_NO_CARD_MESSAGE =
+  'This customer has no saved card. A membership is charged by Stripe, so take a card on the reader to save it first, then retry checkout.'
+
+/** New: Stripe refused the club's key (401/403) on a membership step: nothing was taken (W10a's reasoning). */
+export const MEMBERSHIP_STRIPE_REFUSED_MESSAGE =
+  "The membership wasn't set up: Stripe turned down the club's payment account details, so nothing was taken and the order wasn't placed. Tell a manager so the Stripe connection can be fixed."
+
+/** New: the plan's Stripe price is archived. */
+export const membershipPriceInactiveMessage = (planName: string): string =>
+  `The ${planName} membership's price in Stripe has been archived, so no subscription can be started on it. Nothing was taken. Check the plan's Stripe price, then retry checkout.`
+
+/** New (W03-plan 2.7): Stripe's price isn't the plan's price, which the old route charged silently. */
+export const membershipPriceMismatchMessage = (stripePence: number, ourPounds: number): string =>
+  `The membership's price in Stripe is £${(stripePence / 100).toFixed(2)}, but the plan charges £${ourPounds.toFixed(2)}, so nothing was taken. Sync the plan's price in Stripe, then retry checkout.`
+
+/** New: PAYMENT_UNCONFIRMED when Stripe gave no clear answer about the membership's subscription. */
+export const MEMBERSHIP_UNCONFIRMED_MESSAGE =
+  "The membership's subscription didn't get a clear answer from Stripe, so it may or may not have started. The order is on hold: don't take payment again. Check the Orders page in a few minutes."
+
+/** New: PAYMENT_UNCONFIRMED when everything is paid but cancelling the old membership (Q8) got no clear answer. */
+export const REPLACED_UNCONFIRMED_MESSAGE =
+  "The new membership is paid for, but cancelling the customer's old membership in Stripe didn't get a clear answer. The order is on hold until it's checked: don't take payment again. Check the Orders page in a few minutes."
+
+/** New: a definite failure after money was taken, whose reversal couldn't be confirmed yet. Held for reconcile. */
+export const COMPENSATION_HELD_MESSAGE =
+  "The membership couldn't be set up, and putting back what was taken hasn't been confirmed yet. The order is on hold and the automatic check will finish it: don't take payment again. Check the Orders page in a few minutes."
+
+/** New: Stripe made a subscription that isn't what the order asked for (another price or amount, say). */
+export const subscriptionWrongMessage = (detail: string): string =>
+  `Stripe started the membership's subscription differently from the order (${detail}), so it was cancelled and its payment refunded.`
+
+/**
+ * New (W13a, B1): a reader membership's tap is to be refunded, but another finalise of the same order is starting
+ * its subscription right now, so nothing was changed. Held; reconcile settles it.
+ */
+export const SUBSCRIPTION_STARTING_MESSAGE =
+  "Another finalise of this order is setting up the membership right now, so nothing was changed here. Don't take payment again: check the Orders page in a few minutes."
+
+/**
+ * New (W13a, L1): added when a membership order is refused and put back after the customer's previous (exhausted)
+ * membership had already been cancelled in Stripe (Q8): they now have neither.
+ */
+export const OLD_MEMBERSHIP_CANCELLED_NOTE =
+  "The customer's previous membership had already been cancelled in Stripe, so they now have no membership: check their memberships before selling one again."
+
+/** finaliseReaderOrder's ending once the tap was refunded and the order rolled back. */
+export const readerRefundedMessage = (staffMessage: string, paymentIntentId: string): string =>
+  `${staffMessage} The customer's card has been refunded in full (payment ${paymentIntentId}) and the order was rolled back.`
+
 /** The words for the Herd gate, which name the waiting period from membership_settings. */
 export function herdWaitMessage(addonCreditWaitMonths: number): string {
   return `That membership is not a Herd member yet — add-on credits unlock for Herd members (monthly members after ${addonCreditWaitMonths} month${addonCreditWaitMonths === 1 ? '' : 's'}, yearly members straight away).`

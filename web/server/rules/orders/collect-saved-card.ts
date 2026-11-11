@@ -82,7 +82,16 @@ export interface CollectTiming {
   deadline: number
   /** The clock: Date.now on the route, the test clock in tests. */
   now: () => number
+  /**
+   * W13: the first send gets only the time left too (and isn't sent with too little), as every other call
+   * of a press does. A membership's charge comes after its subscription, so its first send can't always
+   * have the client's full 10 seconds and still end inside the deadline. Not sent is definite: nothing taken.
+   */
+  boundFirstSend?: boolean
 }
+
+/** W13: the words when the charge wasn't sent for lack of time (nothing was taken by it). */
+export const CHARGE_NOT_SENT_MESSAGE = chargeFailedMessage('there was no time left to ask Stripe, so nothing was charged.')
 
 const accessRefused = (err: unknown): boolean =>
   err instanceof Stripe.errors.StripeAuthenticationError || err instanceof Stripe.errors.StripePermissionError
@@ -112,6 +121,11 @@ export async function collectSavedCard(db: Db, stripe: StripeClient, charge: Pen
   let last: { detail: string; stripeCode: string | null } = { detail: '', stripeCode: null }
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     let options: Stripe.RequestOptions = { idempotencyKey: key }
+    if (attempt === 1 && timing?.boundFirstSend) {
+      const left = Math.floor(timing.deadline - timing.now())
+      if (left < MIN_SEND_MS) return { outcome: 'definite', needsAuthentication: false, message: CHARGE_NOT_SENT_MESSAGE, stripeCode: 'not_sent', attempts: 0 }
+      options = { idempotencyKey: key, timeout: Math.min(ORDER_STRIPE_LIMITS.timeoutMs, left) }
+    }
     if (attempt === 2 && timing) {
       const left = Math.floor(timing.deadline - timing.now())
       if (left < MIN_SEND_MS) {

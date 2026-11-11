@@ -1,24 +1,54 @@
 // Ported from backend/paddock/finaliseReaderOrder.ts and cancelReaderOrder.ts, with the legacy
 // app/api/terminal/payment-intent route's retrieve and cancel (core.ts), new in W11. The money is checked
 // to the penny, the order is finished by T2 or removed by the one undo (each one transaction), and an
-// unclear answer from Stripe never undoes anything. Memberships on the reader are W13's.
+// unclear answer from Stripe never undoes anything. W13 adds the membership on the reader: at finalise the
+// card is saved, the subscription made with a coupon covering the first payment the tap took, the old
+// subscription cancelled last (Q8), then T2; a definite failure refunds the tap (compensation, membership.ts).
+// W13a (W13 review B1, L1): the finalise writes its start of the subscription before asking Stripe, so reconcile
+// can't refund the tap under it; T2's checks are read before Q8; a subscription made for an order T2 finds gone or
+// being put back is cancelled at once. A membership's finalise ends its Stripe calls by 25 s.
+// W13c (W13a review B1, S1): one press at a time: a start refused because another press's start is young answers
+// `subscription_starting` and sends nothing more; T2 records a subscription this press made for an order gone or
+// marked, and the put-back runs only with time left to send.
 import 'server-only'
 import type Stripe from 'stripe'
 import type { CancelReaderOrderOutput, FinaliseReaderOrderOutput } from '@/contracts'
 import type { Db } from '@/server/db'
 import type { StripeClient } from '@/server/stripe/client'
-import { NoTimeLeft, sendOptions, stripeTiming, type StripeTiming } from '@/server/stripe/deadline'
-import { resolveSavedCard, type ResolvedCard } from '@/server/stripe/saved-card'
+import { NoTimeLeft, sendOptions, STRIPE_DEADLINE_MS, type StripeTiming } from '@/server/stripe/deadline'
+import { notReusableMessage, resolveSavedCard, type ResolvedCard } from '@/server/stripe/saved-card'
 import {
   CHANGED_SINCE_MESSAGE,
+  COMPENSATION_HELD_MESSAGE,
+  FAILURE_MESSAGES,
+  MEMBERSHIP_UNCONFIRMED_MESSAGE,
+  OLD_MEMBERSHIP_CANCELLED_NOTE,
   OLD_READER_ORDER_MESSAGE,
+  REPLACED_UNCONFIRMED_MESSAGE,
+  readerRefundedMessage,
+  subscriptionWrongMessage,
   OLD_ROLLBACK_STARTED_MESSAGE,
   READER_CHARGED_WITHOUT_ORDER_MESSAGE,
   READER_INTENT_UNCONFIRMED_MESSAGE,
   READER_PAID_NOT_FINISHED_MESSAGE,
   readerCustomerMismatchMessage,
+  SUBSCRIPTION_STARTING_MESSAGE,
 } from './failure-messages'
-import { finaliseOrder, oldRollbackStarted, paymentMismatch, type FinaliseMismatch } from './finalise-order'
+import { finaliseOrder, MEMBERSHIP_DEFINITE, membershipPrecheck, oldRollbackStarted, paymentMismatch, type FinaliseMismatch } from './finalise-order'
+import {
+  cancelSubscriptionChecked,
+  checkMembershipPrice,
+  compensateOrder,
+  deleteCouponQuietly,
+  findOrderSubscriptions,
+  isPutBackReason,
+  markSubscriptionStarting,
+  MEMBERSHIP_STRIPE_DEADLINE_MS,
+  putBackSubscription,
+  startSubscription,
+  type MadeSubscription,
+  type Taken,
+} from './membership'
 import type { ReaderSnapshot } from './pending-order'
 import { undoOrder } from './undo-order'
 
@@ -32,6 +62,17 @@ export interface ReaderRouteOptions {
   startedAt?: number
   /** The clock for that deadline. Date.now unless a test passes another. */
   now?: () => number
+  /**
+   * W13 (W12a N1): a deadline already set by the caller (a staff member's reconcile run, which ends its Stripe
+   * calls sooner than a press's 30 s). Takes the place of `startedAt` and `now`.
+   */
+  timing?: StripeTiming
+  /**
+   * W13: reconcile has looked in Stripe for the order's subscription (by `metadata.order_id`): the one it
+   * found, or null for none. Reconcile never starts a subscription (W03-plan 2.5): with none, a membership
+   * order's tap is refunded and the order undone. Absent (the screen's finalise): the subscription is made.
+   */
+  subscriptionFound?: MadeSubscription | null
 }
 
 // --- The old words (finaliseReaderOrder.ts, cancelReaderOrder.ts, and the legacy route's errors)
@@ -87,6 +128,14 @@ function mismatchAnswer(reason: FinaliseMismatch, orderId: string, paymentIntent
     case 'paid_by_another_payment':
     case 'not_pending':
       return { finalised: false, orderId, reason: 'unexpected_state', message: changedWhileFinalisingMessage(paymentIntent.id) }
+    // W13: money is being put back for it (or must be): held for reconcile, never paid.
+    case 'compensating':
+    case 'membership_not_started':
+    case 'payment_missing':
+    case 'subscription_mismatch':
+    case 'membership_line_missing':
+    case 'membership_row_missing':
+      return { finalised: false, orderId, reason: 'compensation_unfinished', message: COMPENSATION_HELD_MESSAGE }
   }
 }
 
@@ -154,6 +203,8 @@ async function finaliseFound(
   }
   if (order.payment_status !== 'pending') return { finalised: false, orderId, reason: 'unexpected_state', message: notFinalisedMessage(order.payment_status) }
   if (oldRollbackStarted(snapshot)) return { finalised: false, orderId, reason: 'rollback_started', message: FINALISE_ROLLBACK_STARTED_MESSAGE }
+  // W13: its money is being put back: only the compensation (or reconcile) finishes it.
+  if (snapshot.compensation) return { finalised: false, orderId, reason: 'compensation_unfinished', message: COMPENSATION_HELD_MESSAGE }
 
   // The payment, from Stripe (or as cancel has just read it). Any failure leaves the order as it is.
   let paymentIntent: Stripe.PaymentIntent
@@ -167,8 +218,11 @@ async function finaliseFound(
   const wrong = paymentMismatch(snapshot, orderId, paymentIntent)
   if (wrong) return mismatchAnswer(wrong, orderId, paymentIntent, snapshot)
 
+  // W13: a membership needs the card for its renewals, a subscription and the old one cancelled first.
+  if (snapshot.membership) return finaliseMembership(db, stripe, orderId, snapshot, paymentIntent, options, timing)
+
   // The card, when the customer agreed to save it. Bug 7: a card that can't be saved never stops the
-  // order (nothing here is a membership, W13): it is marked paid with the warning.
+  // order (nothing here is a membership): it is marked paid with the warning.
   const warnings: string[] = []
   let card: ResolvedCard | null = null
   if (snapshot.save_card) {
@@ -195,6 +249,204 @@ async function finaliseFound(
 }
 
 /**
+ * W13: finaliseReaderOrder's membership, after the tap has been checked: in order,
+ * 1. the card the tap left must be reusable (the membership's renewals need it), else the tap is refunded
+ *    (compensation: the mark first, then `<orderId>:refund-reader`) and the order undone (`card_not_reusable`);
+ * 2. the plan's Stripe price again (it may have changed since the order), then (W13a B1) this press's start
+ *    written onto the order, then the subscription on that card with a fixed coupon covering the whole first
+ *    payment the tap took (its first invoice is £0), under `<orderId>:coupon` and `<orderId>:subscription`;
+ * 3. (W13a L1) T2's definite checks, then the customer's exhausted subscription cancelled last (Q8);
+ * 4. T2: paid, the card saved, the membership written (or the buy-new row patched), the old one cancelled.
+ * One rule per kind of failure (W11 review L3): definite, the tap refunded and the subscription cancelled
+ * (each checked), then the undo; unclear, held (never refunded, never undone); a database fault in T2, held
+ * for reconcile. Reconcile (`subscriptionFound`) never starts the subscription: none found, the tap is refunded,
+ * but not while a press is starting one (W13a B1: the mark waits, then Stripe is listed again).
+ * W13a (B1c): a subscription this press made for an order T2 then finds gone or being compensated is cancelled
+ * and its first invoice refunded at once, and recorded for the stuck list.
+ */
+async function finaliseMembership(
+  db: Db,
+  stripe: StripeClient,
+  orderId: string,
+  snapshot: ReaderSnapshot & { payment_intent_id: string },
+  paymentIntent: Stripe.PaymentIntent,
+  options: ReaderRouteOptions,
+  timing: StripeTiming | undefined
+): Promise<FinaliseReaderOrderOutput> {
+  const membership = snapshot.membership as NonNullable<ReaderSnapshot['membership']>
+  const tap = { step: 'refund-reader' as const, paymentIntentId: paymentIntent.id }
+  const actor = { actor: options.actor, requestId: options.requestId }
+  const held = (reason: string, message: string): FinaliseReaderOrderOutput => ({ finalised: false, orderId, reason, message })
+  // W13a (B1): this press's start of the subscription, once written; a compensation it makes is never held up by it.
+  let press: string | null = null
+  // W13c: this press's start took the place of another press's expired one, so its compensation lists Stripe again.
+  let replacedStart = false
+  const relist = () => findOrderSubscriptions(stripe, timing, snapshot.stripe_customer_id ?? null, orderId)
+  const compensate = async (taken: Taken, reason: string, staffMessage: string, why: string, oldCancelled = false): Promise<FinaliseReaderOrderOutput> => {
+    try {
+      const outcome = await compensateOrder(db, stripe, orderId, taken, why, { ...actor, ...(taken.subscriptionId === null ? { noSubscriptionFound: { press, relist, replacedStart } } : {}) }, timing)
+      if (outcome.settled && outcome.undo.undone) {
+        return { finalised: false, orderId, reason, message: readerRefundedMessage(oldCancelled ? `${staffMessage} ${OLD_MEMBERSHIP_CANCELLED_NOTE}` : staffMessage, paymentIntent.id), rolledBack: true }
+      }
+      if (!outcome.settled && outcome.starting) return held('subscription_starting', SUBSCRIPTION_STARTING_MESSAGE)
+    } catch {
+      // Held: the order is still pending (marked, or not yet), for reconcile to finish.
+    }
+    return held('compensation_unfinished', oldCancelled ? `${COMPENSATION_HELD_MESSAGE} ${OLD_MEMBERSHIP_CANCELLED_NOTE}` : COMPENSATION_HELD_MESSAGE)
+  }
+
+  // 1. The card: a membership can't be set up without one Stripe can charge for the renewals.
+  // The old words (saveCustomerCardOnFile's, through finaliseReaderOrder): why the card couldn't be saved.
+  let card: ResolvedCard | null = null
+  let notSaved = 'Failed to resolve saved card'
+  try {
+    const resolved = await resolveSavedCard(stripe, { paymentIntentId: paymentIntent.id }, () => sendOptions(timing))
+    if (resolved.reusable) card = resolved
+    else notSaved = notReusableMessage({ paymentIntentId: paymentIntent.id }, resolved.paymentMethodId)
+  } catch (err) {
+    notSaved = stripeMessage(err) ? `Failed to resolve saved card: ${stripeMessage(err)}` : notSaved
+  }
+  if (!card || !snapshot.stripe_customer_id) {
+    return compensate({ subscriptionId: null, refunds: [tap] }, 'card_not_reusable', `Saving the card for the membership failed: ${notSaved}`, `The card couldn't be saved for the membership: ${notSaved}`)
+  }
+
+  // 2. The subscription: reconcile's found one, or (the screen) a new one after the price check.
+  let subscription: MadeSubscription
+  const madeHere = options.subscriptionFound === undefined
+  if (options.subscriptionFound !== undefined) {
+    if (options.subscriptionFound === null) {
+      return compensate({ subscriptionId: null, refunds: [tap] }, 'subscription_failed', 'The membership was never started in Stripe.', 'Reconcile found the tap but no subscription, and never starts one')
+    }
+    subscription = options.subscriptionFound
+  } else {
+    const price = await checkMembershipPrice(stripe, membership, timing)
+    if (!price.ok) {
+      const words = price.message || (FAILURE_MESSAGES[price.reason] ?? '')
+      return compensate({ subscriptionId: null, refunds: [tap] }, 'subscription_failed', `Creating the Stripe subscription failed: ${words}`, `The membership's Stripe price was refused at finalise: ${price.reason}`)
+    }
+    // W13a (B1a): the start, on the order, before Stripe is asked: a compensation that found no subscription
+    // then waits for this press, and once the order is marked no start (so no subscription) can follow.
+    const thisPress = crypto.randomUUID()
+    let started: Awaited<ReturnType<typeof markSubscriptionStarting>>
+    try {
+      started = await markSubscriptionStarting(db, orderId, thisPress)
+    } catch {
+      // Nothing new was taken: the tap is held for reconcile, as a T2 fault would be.
+      return held('finalise_failed', READER_PAID_NOT_FINISHED_MESSAGE)
+    }
+    // W13c (W13a review B1): another press (the screen's finalise, or Cancel finalising instead) is making the
+    // subscription right now: this press sends nothing more and compensates nothing; that press finishes the order.
+    if (started.kind === 'starting') return held('subscription_starting', SUBSCRIPTION_STARTING_MESSAGE)
+    if (started.kind === 'not_pending') {
+      // Refused: the order is marked, gone, or already paid. Paid with this tap is another press of the same
+      // finalise that finished first (two at once): answered as finalise answers it, with nothing sent.
+      try {
+        const now = (await db.query<{ payment_status: string; stripe_payment_intent_id: string | null }>('SELECT payment_status, stripe_payment_intent_id FROM orders WHERE id = $1::uuid', [orderId]))[0]
+        if (now?.payment_status === 'paid' && now.stripe_payment_intent_id === paymentIntent.id) {
+          return { finalised: true, orderId, paymentIntentId: paymentIntent.id, alreadyFinalised: true, message: ALREADY_FINALISED_MESSAGE }
+        }
+      } catch {
+        // Held, below: nothing was sent.
+      }
+      return held('compensation_unfinished', COMPENSATION_HELD_MESSAGE)
+    }
+    press = thisPress
+    replacedStart = started.replaced
+    const answer = await startSubscription(
+      stripe,
+      { orderId, customerId: (await customerOf(db, orderId)) ?? '', stripeCustomerId: snapshot.stripe_customer_id, paymentMethodId: card.paymentMethodId, membership },
+      timing
+    )
+    if (answer.outcome === 'definite') {
+      await deleteCouponQuietly(stripe, orderId, membership, timing)
+      const words = answer.message || (FAILURE_MESSAGES[answer.reason] ?? '')
+      return compensate({ subscriptionId: null, refunds: [tap] }, 'subscription_failed', `Creating the Stripe subscription failed: ${words}`, `The membership's subscription was refused: ${answer.detail}`)
+    }
+    if (answer.outcome === 'unknown') return held('subscription_unconfirmed', MEMBERSHIP_UNCONFIRMED_MESSAGE)
+    subscription = answer.subscription
+    if (answer.outcome === 'wrong') {
+      return compensate(
+        { subscriptionId: subscription.id, refunds: [tap, ...(subscription.invoicePaymentIntentId && subscription.amountPaid > 0 ? [{ step: 'refund-subscription' as const, paymentIntentId: subscription.invoicePaymentIntentId }] : [])] },
+        'subscription_failed',
+        `Creating the Stripe subscription failed: ${subscriptionWrongMessage(answer.detail)}`,
+        `Stripe's subscription was not what was asked: ${answer.detail}`
+      )
+    }
+  }
+  const taken: Taken = {
+    subscriptionId: subscription.id,
+    refunds: [tap, ...(subscription.invoicePaymentIntentId && subscription.amountPaid > 0 ? [{ step: 'refund-subscription' as const, paymentIntentId: subscription.invoicePaymentIntentId }] : [])],
+  }
+  const savingFailed = 'Saving the membership failed: the order has no membership to attach the subscription to.'
+
+  // 3. Q8: the old subscription, last. Refused: everything back. Unclear: held.
+  // W13a (L1): T2's definite checks first, so a refusal can't follow a confirmed cancel.
+  let oldCancelled = false
+  if (snapshot.exhausted_membership_stripe_id) {
+    let ready: Awaited<ReturnType<typeof membershipPrecheck>>
+    try {
+      ready = await membershipPrecheck(db, orderId, subscription)
+    } catch {
+      return { finalised: false, orderId, reason: 'finalise_failed', message: READER_PAID_NOT_FINISHED_MESSAGE }
+    }
+    if (ready.kind === 'refused') return compensate(taken, 'finalise_failed', savingFailed, `T2 would refuse the membership (checked before Q8): ${ready.reason}`)
+    if (ready.kind === 'ready') {
+      const cancelled = await cancelSubscriptionChecked(stripe, snapshot.exhausted_membership_stripe_id, timing)
+      if (cancelled.kind === 'refused') {
+        return compensate(
+          taken,
+          'exhausted_membership_cancellation_failed',
+          `Cancelling the customer's previous membership subscription failed: Failed to cancel subscription: ${cancelled.message}`,
+          `The old subscription's cancel was refused: ${cancelled.message}`
+        )
+      }
+      if (cancelled.kind === 'unclear') return held('replaced_unconfirmed', REPLACED_UNCONFIRMED_MESSAGE)
+      oldCancelled = true
+    }
+    // Not pending any more (gone, paid, marked): no Q8; T2 answers for it below.
+  }
+
+  // 4. T2. A database fault holds it (reconcile finalises it: finalise is safe twice); a membership it can't write is definite.
+  let outcome: Awaited<ReturnType<typeof finaliseOrder>>
+  try {
+    outcome = await finaliseOrder(db, orderId, paymentIntent, { actor: options.actor, requestId: options.requestId, saveCard: card, subscription, subscriptionMadeHere: madeHere })
+  } catch {
+    return { finalised: false, orderId, reason: 'finalise_failed', message: READER_PAID_NOT_FINISHED_MESSAGE }
+  }
+  if (!outcome.finalised) {
+    if (MEMBERSHIP_DEFINITE.has(outcome.reason)) {
+      return compensate(taken, 'finalise_failed', savingFailed, `T2 refused the membership: ${outcome.reason}${oldCancelled ? ' (the old subscription was cancelled already)' : ''}`, oldCancelled)
+    }
+    // W13a (B1c): this press made a subscription for an order that is gone or being put back. W13c: T2 has recorded
+    // it as left; the put-back sends and writes only while there is time to send (else nothing after T2). W13d (W13c
+    // review S-1): likewise when the old rollback started after this press's start, or the order was paid with
+    // another payment or is otherwise not pending: the old rollback refunds the tap, the put-back only the
+    // subscription's own first invoice.
+    if (madeHere && isPutBackReason(outcome.reason)) {
+      try {
+        await putBackSubscription(db, stripe, orderId, subscription, outcome.reason, actor, timing)
+      } catch {
+        // Its row couldn't be written (a database fault): the answer below still says what happened to the order.
+      }
+    }
+    return mismatchAnswer(outcome.reason, orderId, paymentIntent, snapshot)
+  }
+  if (outcome.alreadyPaid) return { finalised: true, orderId, paymentIntentId: paymentIntent.id, alreadyFinalised: true, message: ALREADY_FINALISED_MESSAGE }
+  return {
+    finalised: true,
+    orderId,
+    paymentIntentId: paymentIntent.id,
+    membershipSubscriptionId: subscription.id,
+    ...(outcome.membershipId ? { membershipId: outcome.membershipId } : {}),
+  }
+}
+
+/** The order's customer (the subscription's metadata names them, as the old route did). */
+async function customerOf(db: Db, orderId: string): Promise<string | null> {
+  return (await db.query<{ customer_id: string }>('SELECT customer_id FROM orders WHERE id = $1::uuid', [orderId]))[0]?.customer_id ?? null
+}
+
+/**
  * finaliseReaderOrder: the reader has taken (or should have taken) the payment. Checks the order, reads
  * the PaymentIntent, checks it (succeeded, this order's, gbp, the exact pence, this Stripe customer),
  * reads the card when the customer agreed to save it, then T2 marks the order paid in one transaction,
@@ -204,8 +456,21 @@ async function finaliseFound(
  * person or reconcile (W03-plan 2.5).
  */
 export async function finaliseReaderOrder(db: Db, stripe: StripeClient, orderId: string, options: ReaderRouteOptions): Promise<FinaliseReaderOrderOutput> {
-  const timing = options.startedAt === undefined ? undefined : stripeTiming(options.startedAt, options.now ?? Date.now)
-  return finaliseFound(db, stripe, orderId, await findOrder(db, orderId), options, timing)
+  const found = await findOrder(db, orderId)
+  return finaliseFound(db, stripe, orderId, found, options, pressTiming(options, found))
+}
+
+/**
+ * The press's Stripe deadline: the caller's (a staff reconcile run's), else from the request's start. W13a: a
+ * membership's finalise (or cancel's finalise-instead) ends its Stripe calls by MEMBERSHIP_STRIPE_DEADLINE_MS
+ * (25 s), as the saved card's membership press does: its T2 can take 18.1 s, and a subscription made for an order
+ * T2 finds gone is put back after it (B1c), so the press stays 10 s inside Retool's 60 s.
+ */
+function pressTiming(options: ReaderRouteOptions, found: Found): StripeTiming | undefined {
+  if (options.timing) return options.timing
+  if (options.startedAt === undefined) return undefined
+  const membership = found.kind === 'reader' && Boolean(found.snapshot.membership)
+  return { deadline: options.startedAt + (membership ? MEMBERSHIP_STRIPE_DEADLINE_MS : STRIPE_DEADLINE_MS), now: options.now ?? Date.now }
 }
 
 /**
@@ -309,8 +574,8 @@ export async function settleIntent(
  * it, and Stripe's own state decides which can go (a cancelled intent can't succeed, and the reverse).
  */
 export async function cancelReaderOrder(db: Db, stripe: StripeClient, orderId: string, options: ReaderRouteOptions): Promise<CancelReaderOrderOutput> {
-  const timing = options.startedAt === undefined ? undefined : stripeTiming(options.startedAt, options.now ?? Date.now)
   const found = await findOrder(db, orderId)
+  const timing = pressTiming(options, found)
   if (found.kind === 'gone') return { cancelled: true, orderId, alreadyGone: true, message: ALREADY_GONE_MESSAGE }
   if (found.kind === 'not_reader') return { cancelled: false, orderId, reason: 'not_a_reader_order', message: NOT_A_READER_ORDER_MESSAGE }
   if (found.kind === 'old') return { cancelled: false, orderId, reason: 'old_reader_order', message: OLD_READER_ORDER_MESSAGE }
@@ -359,5 +624,8 @@ export async function cancelReaderOrder(db: Db, stripe: StripeClient, orderId: s
       // W12: the intent is cancelled (nothing more can be taken), but old code changed the booking, so
       // giving back what T1 claimed could give it twice. Left pending for a person (the stuck list).
       return { cancelled: false, orderId, reason: 'changed_since', message: CHANGED_SINCE_MESSAGE }
+    case 'compensating':
+      // W13: its money is being put back; the compensation (or reconcile) finishes it.
+      return { cancelled: false, orderId, reason: 'compensation_unfinished', message: COMPENSATION_HELD_MESSAGE }
   }
 }

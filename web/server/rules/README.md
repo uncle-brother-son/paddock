@@ -213,6 +213,63 @@ safe) and far inside the 15-minute limit. The arithmetic is in `orders/reconcile
 list is `GET /api/v1/staff/orders/stuck`.
 Their schemas are in `orders/reconcile-contracts.ts` until W14 moves them into `contracts/`.
 
+## Memberships: the subscription, its compensation, and reconcile (W13)
+
+`orders/membership.ts` holds the membership's Stripe steps; `place-order.ts` (the saved card) and `reader-order.ts`
+(the reader's finalise) run them; `finalise-order.ts` (T2) writes the membership; `reconcile.ts` settles what is left.
+
+- **T1** writes the membership's line (and, on a buy-new booking, its row, active with no subscription, and its first
+  credit period, so the booking draws its credit; Q3: a pass bought beside it too). Its pending record carries what
+  the subscription needs (`membership`: plan, frequency, price, first payment, first invoice, coupon, Stripe price) and
+  the exhausted membership it replaces (Q8). `confirmed.firstInvoice` is checked like `toCollect` on the card.
+- **The saved card**: the Stripe price checked (exists, active, recurring gbp of the interval, exactly the plan's price),
+  the card made the invoice default, the coupon (`order-<orderId>`, key `<orderId>:coupon`) when credit or a promo pays
+  part of the first payment, the subscription (`<orderId>:subscription`, `metadata.order_id`), the rest of the basket
+  charged (`<orderId>:charge`, Q21), the old subscription cancelled last (Q8), then T2.
+- **The reader**: the price checked before the intent; at finalise the card must be reusable, the price again, a coupon
+  covering the whole price (the tap took the first payment), the subscription, Q8, then T2 (which saves the card).
+- **One rule per kind of failure** (W11 review L3): before anything is taken, the undo; definite after a subscription or a
+  payment exists, `compensateOrder` (the `compensation` mark first, then the subscription cancelled and checked, each
+  payment refunded under `:refund-subscription`, `:refund-charge` or `:refund-reader`, each answer checked, then the undo
+  with `order.compensate`); unclear, held (PAYMENT_UNCONFIRMED); a database fault in T2, held. T2 and the undo refuse a
+  marked order (only the finished compensation undoes it).
+- **Cancels are DELETEs**: no key (Stripe ignores keys on DELETE); a failed cancel is read back, and only `canceled` counts.
+- **Reconcile** lists the customer's subscriptions (`status: 'all'`) and payments by `metadata.order_id`: everything
+  planned succeeded, the old cancel then T2; part done, compensate and undo; a marked order, finish the compensation;
+  nothing found (in the record's mode), the undo. It never starts a charge or a subscription.
+- **Deadline**: every Stripe call of a membership press (the saved card's order, the reader's finalise, and cancel's
+  finalise-instead) is answered by 25 s from its start (the charge's first send and the coupon's delete too); a
+  compensation starts only with time left, and a mark that returns too late ends there, held, with no row; anything
+  not done in time is held for reconcile.
+- **W13a, the screen's reader finalise against reconcile (review B1)**: before it asks Stripe for the subscription,
+  the finalise writes its start (`membership.subscription_started_at` and `_by`) in a guarded UPDATE that refuses a
+  marked order. A compensation that found no subscription (reconcile's "a tap but no subscription", or the screen's own
+  before its start) marks the order only when no other press's start is younger than 2 minutes, in one statement on the
+  locked row, and once marked lists Stripe again and cancels any subscription it finds. If the screen still makes one
+  for an order T2 then finds gone or marked, it cancels it at once and writes `order.subscription_left`; one it can't
+  confirm cancelled stays on the stuck list's warnings until put back.
+- **W13a, the rest of the review**: the first invoice is checked by what it was for (its `total`; Stripe's minimum
+  charge and the customer's balance can change what it took, which is what a compensation refunds) (S1); on the saved
+  card, Q8 and T2 wait for the charge to succeed (S2); T2's definite checks are read before Q8's cancel (card, reader,
+  reconcile), and a compensation after a confirmed Q8 cancel says the old membership was cancelled too (L1); the late
+  refund of a payment the compensation already refunded under the same key counts as done (B1's side effect).
+- **W13b**: the saved card's press puts back a subscription it made for an order T2 finds gone or marked, as the
+  reader's finalise does (`order.subscription_left`); reconcile adds a saved-card membership's charge that succeeded
+  during its own cancel attempt to what a later refusal refunds.
+- **W13c (the W13a review)**: one press at a time may start a reader membership's subscription: the start's write also
+  refuses while another press's start is younger than 2 minutes, and that press answers `subscription_starting` with
+  nothing sent and nothing compensated (B1); a press whose start replaced an expired one lists Stripe again in its own
+  compensation (decision "W13c call"). The check before Q8 runs in a transaction; T2 records a subscription its press
+  made as `left` in its own transaction when it finds the order gone or marked, and the put-back runs (and writes) only
+  with time left to send, so nothing is written after T2 once the window has closed (S1). Reconcile retries each open
+  `left` put-back on an order no longer pending: cancelled (checked), its first invoice refunded under its key, then a
+  `cancelled` row that closes the stuck list's warning (L3).
+- **W13d (the W13c review)**: T2 also records the press's subscription as `left`, and the press puts it back, when the
+  old rollback has started on the order, or it was paid with another payment, or it is otherwise not pending (S-1).
+  Reconcile's saved-card path passes the subscription it found as made here, so an order undone by another actor
+  between its list and T2 leaves a row the next run puts back (S-2). The retry takes only rows whose order no longer
+  exists, never a paid one (L3).
+
 ## Refund claims with no finish
 
 The staff app claims a refund's money before it moves. Each claim writes `booking.refund_claimed` to

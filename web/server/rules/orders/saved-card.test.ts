@@ -1231,7 +1231,7 @@ describe('round trips (about 20 ms each through Hyperdrive)', () => {
   // limits, the order's lock, the statement that marks it paid, its audit row, COMMIT.
   const ROUTE_START = ['SELECT id,', 'INSERT INTO']
   const T1 = ['BEGIN; SELECT', 'SELECT s.id', 'WITH london', 'WITH clock', 'WITH clock', 'WITH clock', 'COMMIT']
-  const T2 = ['BEGIN; SELECT', 'SELECT customer_id,', 'WITH paid', 'WITH clock', 'COMMIT']
+  const T2 = ['BEGIN; SELECT', 'SELECT o.customer_id,', 'WITH paid', 'WITH clock', 'COMMIT']
   const UNDO = ['BEGIN; SELECT', 'SELECT customer_id,', 'WITH l', 'SELECT s.id', 'WITH capacity', 'WITH clock', 'COMMIT']
   const ROUTE_END = ['UPDATE api_idempotency']
 

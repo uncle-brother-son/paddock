@@ -1,6 +1,6 @@
 // New in W10: an order T1 leaves pending for Stripe (W03-plan 2.1 and 2.5). Its record is the order
 // row itself, with this snapshot in orders.reader_payment, committed before any Stripe call. W11 adds
-// the reader's.
+// the reader's. W13 adds the membership's part (what the subscription needs) and the compensation mark.
 import 'server-only'
 import type { PlaceOrderInput } from '@/contracts'
 
@@ -37,6 +37,68 @@ type PendingCommon = {
    * order with no booking, and on a record written before W12.
    */
   held_booking?: HeldBooking
+  /**
+   * W13: the membership the order sells, written by T1 with everything its subscription needs, so a
+   * retry (here, or reconcile's) sends exactly the same requests under the same keys. The old reader
+   * snapshot's `membership` fields (`plan_id`, `plan_name`, `billing_frequency`, `price`,
+   * `first_payment_amount`, `membership_row_id`) mean what they meant there, so the old finalise can
+   * still read a Worker membership order (W03-plan 3.2, switching back).
+   */
+  membership?: PendingMembership
+  /**
+   * W13: the customer's exhausted subscription to cancel last (Q8), the old snapshot's field. Its
+   * membership row is cancelled locally by T2, not T1, so the undo never has a membership to put back
+   * (the old snapshot's `exhausted_membership_previous` is never written).
+   */
+  exhausted_membership_stripe_id?: string
+  /** W13: the exhausted membership's row, which T2 marks cancelled with no add-on credits, as createOrder did. */
+  replaces_membership_id?: string
+  /**
+   * W13: written (and committed) before the first step that reverses money: cancelling the order's new
+   * subscription, refunding what Stripe took. T2 refuses an order carrying it, for good: a refunded
+   * payment still reads `succeeded`. Only the undo, once every step is confirmed, ends it (with the order).
+   */
+  compensation?: Compensation
+}
+
+/** W13: what the membership's subscription needs, and what is known of it once made. */
+export type PendingMembership = {
+  plan_id: string
+  plan_name: string
+  billing_frequency: 'monthly' | 'yearly'
+  /** The plan's price for the frequency, in pounds: what Stripe's price must be, to the penny. */
+  price: number
+  /** The price less the promo's share (the old field's meaning). */
+  first_payment_amount: number
+  /** What the subscription's first invoice takes from the card, in pounds: 0 on the reader (the tap took it). */
+  first_invoice: number
+  /** The one-off coupon on the first invoice, in pounds: the price less first_invoice. 0 means none. */
+  coupon_amount: number
+  /** The coupon's name on the Stripe invoice, as the old route named it. */
+  coupon_name: string
+  /** The plan's Stripe price for the frequency, as T1 read it. Null when the plan has none (refused in T1). */
+  stripe_price_id: string
+  /** The plan's add-on credits, for the row T2 writes. */
+  addons_included: number
+  /** Buy-new (Q3, bug 5): the row T1 wrote so the booking could draw its credit; T2 patches it. */
+  membership_row_id?: string
+  /** Set once Stripe has made the subscription (the guarded write after it), else found by reconcile. */
+  subscription_id?: string
+  /** The first invoice's PaymentIntent, when it took money (null when the coupon covered it). */
+  subscription_payment_intent_id?: string | null
+  /**
+   * W13a (B1): the reader's finalise is about to ask Stripe for the subscription (membership.ts,
+   * markSubscriptionStarting): when (the database's clock) and which press. A compensation that found no
+   * subscription waits while it is younger than SUBSCRIPTION_START_GUARD_SECONDS, then lists Stripe again.
+   */
+  subscription_started_at?: string
+  subscription_started_by?: string
+}
+
+/** W13: the compensation mark. */
+export type Compensation = {
+  why: string
+  started_at: string
 }
 
 /** The booking a pending order holds, as T1 wrote it. */
@@ -97,10 +159,6 @@ export type PendingSnapshot = CardSnapshot | ReaderSnapshot
  */
 export const PROCESSING_MINUTES = 15
 
-/**
- * What the charge says on Stripe, word for word as createOrder built it: the kinds of thing in the
- * basket, in its order. A membership (W13) isn't here: T1 doesn't take one with a card yet.
- */
 /** T1's booking, for the pending record (W12): its session and party size, as written (status `confirmed`). */
 export function heldBooking(input: PlaceOrderInput): { held_booking: HeldBooking } | Record<string, never> {
   const booking = input.booking
@@ -108,6 +166,11 @@ export function heldBooking(input: PlaceOrderInput): { held_booking: HeldBooking
   return { held_booking: { session_id: booking.sessionId, party_size: booking.guests.length } }
 }
 
+/**
+ * What the charge says on Stripe, word for word as createOrder built it: the kinds of thing in the
+ * basket, in its order. A membership never appears: createOrder named it only when no subscription had
+ * been made, which on the card can't happen (W13: the subscription comes before the charge).
+ */
 export function chargeDescription(input: PlaceOrderInput): string {
   const addons = [...(input.booking?.addons ?? []), ...(input.standaloneAddons ?? [])]
   const parts = [

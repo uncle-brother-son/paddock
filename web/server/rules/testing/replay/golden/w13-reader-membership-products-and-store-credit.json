@@ -1,0 +1,329 @@
+{
+  "scenario": "w13-reader-membership-products-and-store-credit",
+  "results": [
+    {
+      "success": true,
+      "orderId": "orders#1",
+      "cardCharged": false,
+      "paymentMethodUsed": "reader",
+      "pendingReaderPayment": {
+        "orderId": "orders#1",
+        "paymentIntentId": "pi_fake_0001",
+        "clientSecret": "pi_fake_0001_secret",
+        "amount": 34
+      }
+    },
+    {
+      "finalised": true,
+      "orderId": "orders#1",
+      "paymentIntentId": "pi_fake_0001",
+      "membershipSubscriptionId": "sub_fake_0005",
+      "membershipId": "customer_memberships#1"
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "paymentIntents.create",
+      "params": {
+        "amount": 3400,
+        "currency": "gbp",
+        "customer": "cus_seed",
+        "payment_method_types": [
+          "card_present"
+        ],
+        "setup_future_usage": "off_session",
+        "metadata": {
+          "supabase_customer_id": "10000000-0000-4000-8000-000000000005",
+          "order_id": "orders#1",
+          "flow": "checkout"
+        },
+        "description": "Paddock order orders#1"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "paymentIntents.retrieve",
+      "params": {
+        "id": "pi_fake_0001"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "paymentIntents.retrieve",
+      "params": {
+        "id": "pi_fake_0001",
+        "expand": [
+          "latest_charge"
+        ]
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "prices.retrieve",
+      "params": {
+        "id": "price_seed_monthly"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "customers.update",
+      "params": {
+        "id": "cus_seed",
+        "invoice_settings": {
+          "default_payment_method": "pm_reader_saved"
+        }
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "coupons.create",
+      "params": {
+        "amount_off": 4000,
+        "currency": "gbp",
+        "duration": "once",
+        "name": "Paid on card reader",
+        "metadata": {
+          "supabase_customer_id": "10000000-0000-4000-8000-000000000005",
+          "membership_plan_id": "10000000-0000-4000-8000-00000000000a"
+        }
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "subscriptions.create",
+      "params": {
+        "customer": "cus_seed",
+        "items": [
+          {
+            "price": "price_seed_monthly"
+          }
+        ],
+        "default_payment_method": "pm_reader_saved",
+        "discounts": [
+          {
+            "coupon": "coupon_fake_0003"
+          }
+        ],
+        "off_session": true,
+        "payment_behavior": "error_if_incomplete",
+        "metadata": {
+          "supabase_customer_id": "10000000-0000-4000-8000-000000000005",
+          "membership_plan_id": "10000000-0000-4000-8000-00000000000a",
+          "billing_frequency": "monthly"
+        },
+        "expand": [
+          "latest_invoice.payments"
+        ]
+      },
+      "idempotencyKey": "replay-membership-key"
+    }
+  ],
+  "tables": {
+    "customer_memberships": {
+      "added": [
+        {
+          "id": "customer_memberships#1",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "plan_id": "10000000-0000-4000-8000-00000000000a",
+          "stripe_subscription_id": "sub_fake_0005",
+          "subscription_status": "active",
+          "start_date": "2026-11-10",
+          "next_renewal_date": "2026-12-10",
+          "addon_credits_remaining": 0,
+          "bonus_addon_credits": 0,
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "order_line_item_id": "order_line_items#2",
+          "billing_frequency": "monthly",
+          "cancel_effective_date": null,
+          "is_herd": false,
+          "herd_override": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "customers": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000005",
+          "saved_payment_method_id": [
+            "pm_seed",
+            "pm_reader_saved"
+          ],
+          "store_credit_balance": [
+            "30.00",
+            "0.00"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    },
+    "membership_credit_periods": {
+      "added": [
+        {
+          "id": "membership_credit_periods#1",
+          "membership_id": "customer_memberships#1",
+          "period_start": "2026-11-10",
+          "period_end": "2026-12-09",
+          "credits_allocated": 4,
+          "is_unlimited": false,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "order_line_items": {
+      "added": [
+        {
+          "id": "order_line_items#1",
+          "order_id": "orders#1",
+          "booking_id": null,
+          "product_variant_id": "10000000-0000-4000-8000-000000000008",
+          "membership_plan_id": null,
+          "session_pass_type_id": null,
+          "gift_card_id": null,
+          "item_type": "product",
+          "quantity": 2,
+          "unit_price": "12.00",
+          "line_total": "24.00",
+          "created_at": "<set>",
+          "addon_id": null,
+          "refunded_at": null,
+          "refund_method": null,
+          "restocked": null,
+          "fulfillment_status": "pending",
+          "card_refunded_amount": "0.00",
+          "system_unit_price": "12.00",
+          "price_override_reason": null,
+          "discount_amount": "0.00",
+          "event_booking_id": null
+        },
+        {
+          "id": "order_line_items#2",
+          "order_id": "orders#1",
+          "booking_id": null,
+          "product_variant_id": null,
+          "membership_plan_id": "10000000-0000-4000-8000-00000000000a",
+          "session_pass_type_id": null,
+          "gift_card_id": null,
+          "item_type": "membership",
+          "quantity": 1,
+          "unit_price": "40.00",
+          "line_total": "40.00",
+          "created_at": "<set>",
+          "addon_id": null,
+          "refunded_at": null,
+          "refund_method": null,
+          "restocked": null,
+          "fulfillment_status": null,
+          "card_refunded_amount": "0.00",
+          "system_unit_price": null,
+          "price_override_reason": null,
+          "discount_amount": "0.00",
+          "event_booking_id": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "orders": {
+      "added": [
+        {
+          "id": "orders#1",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "order_total": "64.00",
+          "payment_status": "paid",
+          "stripe_payment_intent_id": "pi_fake_0001",
+          "promo_code": null,
+          "discount_amount": "0.00",
+          "shipping_address": null,
+          "shipping_status": null,
+          "tracking_number": null,
+          "order_source": "staff_created",
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "payment_method": "reader",
+          "reader_payment": {
+            "flow": "checkout",
+            "save_card": true,
+            "created_at": "<time>",
+            "membership": {
+              "price": 40,
+              "plan_id": "10000000-0000-4000-8000-00000000000a",
+              "plan_name": "Core",
+              "idempotency_key": "replay-membership-key",
+              "billing_frequency": "monthly",
+              "first_payment_amount": 40
+            },
+            "expected_amount": 34,
+            "payment_intent_id": "pi_fake_0001",
+            "stock_adjustment_ids": [
+              "stock_adjustments#1"
+            ],
+            "save_address_to_customer": false
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "product_variants": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000008",
+          "stock_quantity": [
+            5,
+            3
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    },
+    "stock_adjustments": {
+      "added": [
+        {
+          "id": "stock_adjustments#1",
+          "variant_id": "10000000-0000-4000-8000-000000000008",
+          "change_amount": -2,
+          "reason": "Sale (Order #orders#1)",
+          "staff_id": null,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "store_credit_transactions": {
+      "added": [
+        {
+          "id": "store_credit_transactions#1",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "amount": "-30.00",
+          "balance_after": "0.00",
+          "reason": "redemption",
+          "order_id": "orders#1",
+          "booking_id": null,
+          "gift_card_id": null,
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "note": "Store credit redeemed at checkout.",
+          "created_at": "<set>",
+          "event_booking_id": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

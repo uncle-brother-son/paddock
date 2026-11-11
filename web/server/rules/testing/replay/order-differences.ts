@@ -1,4 +1,4 @@
-import type { AllowedDifference } from './compare'
+import type { AllowedDifference, Recording } from './compare'
 
 /**
  * W06's replay: the scenarios the new order route can take (bookings and add-ons, in cash or with
@@ -497,8 +497,71 @@ export const W11_SCENARIOS: readonly string[] = [
   'w11-reader-intent-unclear',
 ]
 
+/**
+ * W13's replay: memberships. The existing scenarios W06 to W12 answered NOT_BUILT for (on the saved card,
+ * on the reader, and in cash, which T1 refuses as createOrder did), then W13's own (w13-*).
+ */
+export const W13_EXISTING: readonly string[] = [
+  'membership-on-saved-card',
+  'yearly-membership-on-saved-card',
+  'membership-on-the-reader',
+  'event-at-member-price-with-a-new-membership',
+  'promo-on-a-membership',
+  'spill-onto-a-membership',
+  'buy-new-membership-covers-the-seat',
+  'buy-new-membership-on-peak-pays-the-seat',
+  'q1-postage-before-the-spill',
+  'q2-standalone-addon-before-the-spill',
+  'q3-buy-new-membership-with-a-pass',
+  'q3-buy-new-pass-with-a-membership',
+  'q3-reader-buy-new-membership-with-a-pass',
+  'q3-reader-buy-new-pass-with-a-membership',
+  'q5-buy-new-keeps-address-and-requests',
+  'q6-promo-on-buy-new-seats',
+  'replace-an-exhausted-membership',
+  'refused-exhausted-membership-not-found',
+  'refused-exhausted-membership-cancelled',
+  'refused-exhausted-membership-past-its-last-day',
+  'q24-big-fixed-promo-on-private-and-a-membership',
+  'w08-event-with-a-membership-bought-in-cash',
+  'w09-promo-with-a-membership-bought-in-cash',
+]
+
+/** W13's own, recorded from the old functions (scenarios.ts, w13Scenarios). */
+export const W13_OWN: readonly string[] = [
+  'w13-card-all-access-monthly',
+  'w13-card-all-access-yearly-buy-new-on-peak',
+  'w13-card-membership-and-products',
+  'w13-card-yearly-and-a-shipped-product',
+  'w13-card-membership-with-a-gift-card',
+  'w13-card-membership-covered-by-gift-card-and-store-credit',
+  'w13-card-promo-and-spill',
+  'w13-card-buy-new-membership-with-a-guest-and-an-addon',
+  'w13-card-replace-exhausted-with-a-paid-guest',
+  'w13-card-buy-new-pass-event-and-membership',
+  'w13-card-subscription-declined',
+  'w13-card-charge-declined-after-the-subscription',
+  'w13-card-old-cancel-refused',
+  'w13-card-stripe-price-differs',
+  'w13-card-stripe-price-archived',
+  'w13-card-subscription-unclear',
+  'w13-card-declined-then-retried',
+  'w13-reader-membership',
+  'w13-reader-all-access-yearly',
+  'w13-reader-membership-products-and-store-credit',
+  'w13-reader-buy-new-membership-with-a-guest',
+  'w13-reader-replace-an-exhausted-membership',
+  'w13-reader-buy-new-pass-event-and-membership',
+  'w13-reader-card-not-reusable',
+  'w13-reader-membership-cancelled',
+  'w13-reader-buy-new-membership-cancelled',
+  'w13-reader-old-cancel-refused',
+]
+
+export const W13_SCENARIOS: readonly string[] = [...W13_EXISTING, ...W13_OWN]
+
 /** Every scenario the order route takes. */
-export const ORDER_SCENARIOS: readonly string[] = [...W06_SCENARIOS, ...W07_SCENARIOS, ...W08_SCENARIOS, ...W09_SCENARIOS, ...W10_SCENARIOS, ...W11_SCENARIOS]
+export const ORDER_SCENARIOS: readonly string[] = [...W06_SCENARIOS, ...W07_SCENARIOS, ...W08_SCENARIOS, ...W09_SCENARIOS, ...W10_SCENARIOS, ...W11_SCENARIOS, ...W13_SCENARIOS]
 
 const Q4 = 'W03-decisions Q4'
 const Q5 = 'W03-decisions Q5'
@@ -675,7 +738,19 @@ export const NEW_SIDE_CONFIRMS: Readonly<Record<string, { toCollect: number; dec
 }
 
 /** Scenarios whose outcome itself differs by decision: the new side's answer is checked by its own test. */
-export const OUTCOME_DIFFERS: readonly string[] = ['w07-address-save-fails', 'w10-unclear-answer', 'w11-reader-amount-a-penny-over', 'w11-reader-intent-unclear']
+export const OUTCOME_DIFFERS: readonly string[] = [
+  'w07-address-save-fails',
+  'w10-unclear-answer',
+  'w11-reader-amount-a-penny-over',
+  'w11-reader-intent-unclear',
+  // W13: each with its own test; the reader's Q3 the other way round (createOrder failed at finalise and refunded).
+  'w13-card-stripe-price-differs',
+  'w13-card-stripe-price-archived',
+  'w13-card-subscription-unclear',
+  'w13-card-declined-then-retried',
+  'q3-reader-buy-new-pass-with-a-membership',
+  'w13-reader-buy-new-pass-event-and-membership',
+]
 
 /*
  * Named differences with no replay scenario (W07):
@@ -710,30 +785,149 @@ export const OUTCOME_DIFFERS: readonly string[] = ['w07-address-save-fails', 'w1
  *   promo was spread on, under the session lock, in one transaction.
  */
 
-/** What each scenario may differ by: a placed order has its audit rows, a refusal commits none. */
-export function orderDifferences(placed: boolean, name?: string): AllowedDifference[] {
+/** What each scenario may differ by: a placed order has its audit rows, a refusal commits none. W13 reads its golden file too. */
+export function orderDifferences(placed: boolean, name?: string, golden?: Recording): AllowedDifference[] {
   return [
     ...(placed ? [IDEMPOTENCY_ROW, AUDIT_ROWS] : [IDEMPOTENCY_ROW]),
     ...((name && W07_DIFFERENCES[name]) || []),
     ...((name && W10_DIFFERENCES[name]) || []),
     ...((name && W11_DIFFERENCES[name]) || []),
+    ...(name && golden && W13_SCENARIOS.includes(name) ? w13Differences(name, golden) : []),
   ]
 }
+
+// --- W13
+
+const Q8 = 'W03-decisions Q8'
+const MEMBERSHIP_KEYS = `${KEYS}; the coupon's fixed id order-<orderId> (W03-plan 2.5, bug 13)`
+
+/**
+ * W13: the Stripe calls are held to the old ones call by call in their own test (order-replay.test.ts, "W13:
+ * the Stripe calls"), where the order of the steps differs by decision (Q8: the old subscription cancelled
+ * last; the reader's price checked before the tap and again before the subscription; the compensation's
+ * refunds keyed). Elsewhere, only the keys, `metadata.order_id` and the coupon's fixed id differ.
+ */
+const STRIPE_CALLS_BY_THEIR_OWN_TEST: AllowedDifference = {
+  name: "The membership's Stripe calls, compared call by call in their own test (steps in the Worker's order, keys, metadata.order_id, the coupon's fixed id)",
+  decision: `${MEMBERSHIP_KEYS}; ${Q8}; brief W13 items 1 to 4`,
+  path: /^\.stripeCalls(\[|$)/,
+}
+const CALL_KEYS: AllowedDifference = { name: "Every money call carries the order's key (<orderId>:coupon, :subscription, :charge)", decision: MEMBERSHIP_KEYS, path: /^\.stripeCalls\[\d+\]\.idempotencyKey$/ }
+const CALL_ORDER_ID: AllowedDifference = { name: 'The coupon, the subscription and the charge name their order (metadata.order_id)', decision: MEMBERSHIP_KEYS, path: /^\.stripeCalls\[\d+\]\.params\.metadata(\.order_id)?$/ }
+const COUPON_ID: AllowedDifference = { name: "The coupon's fixed id, order-<orderId>, and the subscription naming it", decision: MEMBERSHIP_KEYS, path: /^\.stripeCalls\[\d+\]\.params\.(id|discounts\[0\]\.coupon)$/ }
+const MEMBERSHIP_RECORD: AllowedDifference = {
+  name: "The membership order's pending record: W10's and W11's fields, and the membership's (what the subscription needs, the reader finalise's start of it (W13a B1), and the subscription once made); none of the old reader snapshot's idempotency_key or stock ids",
+  decision: `${PENDING_RECORD}; brief W13 item 1; brief W13a item 1 (B1a)`,
+  path: /^\.tables\.orders\.added\[0\]\.reader_payment(\.(method|channel|stripe_customer_id|request_id|livemode|held_booking|stock_adjustment_ids|event_booking_id|replaces_membership_id|exhausted_membership_previous|membership\.(addons_included|coupon_amount|coupon_name|first_invoice|stripe_price_id|idempotency_key|subscription_id|subscription_payment_intent_id|subscription_started_at|subscription_started_by)))?$/,
+}
+const Q1 = 'W03-decisions Q1'
+const Q2 = 'W03-decisions Q2'
+const Q3 = 'W03-decisions Q3'
+
+/** A broad allowance for a scenario whose outcome a decision changes, with its own test saying exactly what. */
+const decided = (name: string, decision: string, path: RegExp): AllowedDifference => ({ name, decision, path })
+
+/** Q1 and Q2: the spill counts postage and standalone add-ons, so the first payment is bigger and the coupon smaller. */
+const spillFixed = (decision: string): AllowedDifference[] => [
+  { name: 'The card pays what the screen showed: the first invoice is larger by what the spill used to skip', decision, path: /^\.results\[0\]\.(cardAmount|membershipAmountPaid)$/ },
+  { name: 'and the first-invoice coupon smaller by the same', decision, path: /^\.stripeCalls\[\d+\]\.params\.amount_off$/ },
+]
+
+/** Q3: a buy-new membership booking with a pass chosen as well: the pass is written (its line and its row), where createOrder charged for it and wrote neither. */
+const Q3_PASS_WRITTEN: AllowedDifference = {
+  name: 'The pass bought beside a buy-new membership is written: its line and its row (createOrder charged for it and wrote neither)',
+  decision: Q3,
+  path: /^\.results\[0\]\.sessionPassId$|^\.tables\.(customer_session_passes|order_line_items)(\.|$)/,
+}
+/**
+ * Q3 the other way: a buy-new pass booking with a membership chosen as well: the membership is sold (its
+ * line, its row, its subscription and credit period), where createOrder charged the pass alone (on the
+ * card) or failed at finalise and refunded the tap (on the reader). Its own test says exactly what.
+ */
+const Q3_MEMBERSHIP_WRITTEN: AllowedDifference = {
+  name: 'The membership bought beside a buy-new pass booking is sold: its line, row, subscription and credit period (createOrder sold the pass alone, or failed and refunded on the reader)',
+  decision: Q3,
+  path: /^\.results(\[|$)|^\.stripeCalls(\[|$)|^\.tables\./,
+}
+const Q3_BOTH_WAYS = new Set(['q3-buy-new-pass-with-a-membership', 'w13-card-buy-new-pass-event-and-membership', 'q3-reader-buy-new-pass-with-a-membership', 'w13-reader-buy-new-pass-event-and-membership'])
+
+/** Refused after T1 had committed (by Stripe, or a step Stripe answered): created, then undone, both on record (Q20). */
+const W13_REFUSED_AFTER_T1 = new Set(['w13-card-subscription-declined', 'w13-card-charge-declined-after-the-subscription', 'w13-card-old-cancel-refused'])
+
+/** Decided outcomes, each with its own test in order-replay.test.ts. */
+export const W13_OUTCOME_DIFFERS: readonly string[] = [
+  'w13-card-stripe-price-differs',
+  'w13-card-stripe-price-archived',
+  'w13-card-subscription-unclear',
+  'w13-card-declined-then-retried',
+]
+const OUTCOME_DECIDED: Readonly<Record<string, AllowedDifference>> = {
+  'w13-card-stripe-price-differs': decided("Stripe's price isn't the plan's: refused before anything is taken, where createOrder charged Stripe's price", 'W03-plan 2.7 (the Stripe price check)', /^\.results\[0\](\.|$)|^\.stripeCalls(\[|$)|^\.tables\./),
+  'w13-card-stripe-price-archived': decided('An archived price: refused at the price check with new words, before the default card or the subscription', 'Brief W13 item 1 (the price must be active)', /^\.results\[0\](\.|$)|^\.stripeCalls(\[|$)|^\.tables\./),
+  'w13-card-subscription-unclear': decided('No clear answer from the subscription: held pending, never undone, after one more send with the same key', "W03-plan 2.5 (reading Stripe's answers)", /^\.results\[0\](\.|$)|^\.stripeCalls(\[|$)|^\.tables\./),
+  'w13-card-declined-then-retried': decided('A decline is undone, so pressing again is a new order with new keys and a new coupon id, and it goes through', 'W03-plan 1.6 bug 13 and 2.5 (keys from the order id)', /^\.results\[1\](\.|$)|^\.stripeCalls(\[|$)|^\.tables\./),
+}
+
+/** A refunded reader finalise says so as data (`rolledBack`), so reconcile counts it as undone; finaliseReaderOrder said it only in words. */
+const ROLLED_BACK_SAID: AllowedDifference = {
+  name: "The finalise that refunded the tap and rolled the order back says so as data (rolledBack), beside finaliseReaderOrder's own words",
+  decision: 'Brief W13 item 5 (reconcile: the tap refunded and the order undone is an undo)',
+  path: /^\.results\[1\]\.rolledBack$/,
+}
+
+/** The reader's refused membership leaves the customer's card as it was: the card is saved by T2, with the paid order (W11). */
+const CARD_NOT_SAVED_WHEN_REFUNDED: AllowedDifference = {
+  name: "A reader membership refunded at finalise leaves the customer's saved card as it was (finaliseReaderOrder saved it before the membership failed)",
+  decision: 'Brief W11 item 3 (the card is saved by T2, in the transaction that marks the order paid)',
+  path: /^\.tables\.customers$/,
+}
+
+
+const W13_DECIDED: Readonly<Record<string, readonly AllowedDifference[]>> = {
+  'q1-postage-before-the-spill': spillFixed(Q1),
+  'q2-standalone-addon-before-the-spill': spillFixed(Q2),
+  'q5-buy-new-keeps-address-and-requests': [ADDRESS_KEPT, REQUESTS_KEPT],
+  'q3-buy-new-membership-with-a-pass': [Q3_PASS_WRITTEN],
+  'q3-reader-buy-new-membership-with-a-pass': [Q3_PASS_WRITTEN],
+  // Q9: a gift card beside the card records split, where createOrder recorded card for any subscription.
+  'w13-card-membership-with-a-gift-card': q9Method('card', 'split'),
+  'w13-card-membership-covered-by-gift-card-and-store-credit': q9Method('card', 'split'),
+  'w13-reader-old-cancel-refused': [CARD_NOT_SAVED_WHEN_REFUNDED, ROLLED_BACK_SAID],
+  'w13-reader-card-not-reusable': [ROLLED_BACK_SAID],
+}
+
+const stripeCallsOf = (golden: Recording) => golden.stripeCalls.map((call) => call.method)
+
+/** W13's named differences for a scenario, from what its golden file shows the old functions did. */
+export function w13Differences(name: string, golden: Recording): AllowedDifference[] {
+  const methods = stripeCallsOf(golden)
+  const outcome = OUTCOME_DECIDED[name]
+  if (outcome) return [outcome]
+  if (Q3_BOTH_WAYS.has(name)) return [Q3_MEMBERSHIP_WRITTEN]
+  const fixed = W13_DECIDED[name] ?? []
+  const reader = name.includes('reader')
+  const allowances: AllowedDifference[] = [...fixed, ...(W13_REFUSED_AFTER_T1.has(name) ? [UNDO_AUDIT_ROWS] : [])]
+  if (W13_CALLS_BY_THEIR_OWN_TEST.has(name) || reader) allowances.push(STRIPE_CALLS_BY_THEIR_OWN_TEST)
+  else {
+    if (methods.includes('subscriptions.create') || methods.includes('paymentIntents.create')) allowances.push(CALL_KEYS, CALL_ORDER_ID)
+    if (methods.includes('coupons.create')) allowances.push(COUPON_ID)
+  }
+  const kept = (golden.tables['orders']?.added.length ?? 0) > 0
+  if (kept && (methods.includes('subscriptions.create') || reader)) allowances.push(MEMBERSHIP_RECORD)
+  return allowances
+}
+
+/** W13 scenarios whose Stripe calls differ in order or number by decision: held call by call in their own test. */
+export const W13_CALLS_BY_THEIR_OWN_TEST = new Set<string>([
+  'w13-card-replace-exhausted-with-a-paid-guest',
+  'w13-card-charge-declined-after-the-subscription',
+  'w13-card-old-cancel-refused',
+])
 
 /**
  * One single-order scenario for each part T1 answers NOT_BUILT, and what it says is missing. Each
  * must answer that before anything is written.
  */
 export const NOT_BUILT_SCENARIOS: Readonly<Record<string, readonly string[]>> = {
-  // W11 built the reader: a membership on it is the membership's (W13).
-  'membership-on-the-reader': ['membership'],
-  // W10 built the saved card: a membership on it is the membership's (W13).
-  'membership-on-saved-card': ['membership'],
-  'q3-buy-new-pass-with-a-membership': ['membership'],
-  // An event beside a membership bought in the same basket stays not built as a whole until W13.
-  'w08-event-with-a-membership-bought-in-cash': ['membership'],
-  'event-at-member-price-with-a-new-membership': ['membership'],
-  // W09 built promo codes, store credit and gift cards used to pay; a promo beside a membership bought in cash is the membership's.
-  'w09-promo-with-a-membership-bought-in-cash': ['membership'],
-  'promo-on-a-membership': ['membership'],
+  // W13 built memberships, the last part T1 answered NOT_BUILT for: nothing is left here.
 }

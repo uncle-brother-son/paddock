@@ -6,6 +6,7 @@
 // until Stripe confirms them, the warnings reconcile finished an order with (W03a later 6, R6), and an
 // alert when Stripe refused the key on a recent run (W10 review L4). W12a (W12 review S1): Worker orders the
 // old screens moved out of pending while their payment was unconfirmed, with what reconcile found in Stripe.
+// W13a: a membership subscription left live for an order that was gone (B1c), with the warnings, until put back.
 import 'server-only'
 import type { Db } from '@/server/db'
 import { CHANGED_ELSEWHERE, CHANGED_ELSEWHERE_DAYS, CHANGED_ELSEWHERE_WHERE, changedElsewhereWords, type ChangedElsewhereFinding } from './changed-elsewhere'
@@ -33,7 +34,26 @@ export const STUCK_WORDS: Readonly<Record<string, string>> = {
   charged_without_record: 'A payment went through for a change that had already been undone. It is being refunded automatically.',
   payment_not_succeeded: "The payment hasn't gone through. The automatic check tries again every 5 minutes.",
   unexpected: 'Something unexpected stopped the automatic check. It tries again every 5 minutes; if this stays, tell a manager.',
+  // W13 (new; adjustable at W14).
+  compensation_unfinished:
+    "This membership order couldn't be set up, and putting back what it took (cancelling its new subscription, refunding its payments) hasn't been confirmed yet. The automatic check tries again every 5 minutes: don't take payment again. If this stays, check the subscription and the payments in Stripe and tell a manager.",
+  several_subscriptions: 'Stripe has more than one subscription for this order. Nothing was changed: cancel the extra one in Stripe and sort it out by hand.',
+  replaced_unconfirmed:
+    "The new membership is paid for, but the customer's old membership couldn't be confirmed cancelled in Stripe. The automatic check tries again every 5 minutes: if this stays, cancel the old subscription in Stripe by hand.",
+  // W13a (new; adjustable at W14).
+  subscription_starting:
+    "A finalise of this order was setting up its membership in Stripe when the automatic check looked, so it was left alone. The check looks again in 5 minutes: don't take payment again.",
 }
+
+/**
+ * W13a (B1c): a subscription the reader's finalise made for an order that was gone (or being put back), which
+ * couldn't be confirmed cancelled and refunded. Listed with the warnings until it is put back.
+ */
+export const SUBSCRIPTION_LEFT_WORDS = (subscriptionId: string): string =>
+  `A membership subscription (${subscriptionId}) was started in Stripe for an order that had already been cancelled, and it couldn't be confirmed cancelled. Cancel it in Stripe by hand and refund its first payment if it took one, then tell a manager.`
+
+/** W13: added to a membership order's words while it is listed: its subscription may be live until it is settled. */
+export const MEMBERSHIP_STUCK_NOTE = "This order has a membership: its subscription may be live in Stripe until this is settled, so don't start it again."
 
 export const REFUND_PENDING_WORDS = (amount: number, paymentIntentId: string): string =>
   `A payment of £${amount.toFixed(2)} (${paymentIntentId}) went through after its order or change had been cancelled. It is being refunded automatically: waiting for Stripe to confirm the refund. Don't refund it by hand.`
@@ -106,6 +126,7 @@ SELECT o.id, o.order_total::text AS order_total,
        COALESCE(o.reader_payment->>'payment_intent_id', o.reader_payment->>'charge_payment_intent_id') AS payment_intent_id,
        COALESCE((o.reader_payment->>'created_at')::timestamptz, o.created_at) AS created_at,
        o.reader_payment->>'method' AS method,
+       o.reader_payment ? 'membership' AS has_membership,
        c.first_name, c.last_name,
        (SELECT r.details FROM audit_log r
         WHERE r.entity_type = 'order' AND r.entity_id = o.id::text AND r.action = 'order.reconcile' AND NOT (r.details ? 'refund')
@@ -172,6 +193,31 @@ FROM audit_log
 WHERE action = 'order.reconcile' AND details ? 'warning' AND at > now() - make_interval(hours => $1::int)
 ORDER BY at DESC`
 
+/**
+ * W13a (B1c): each subscription left live for an order that was gone or being compensated (membership.ts,
+ * putBackSubscription), until a later row says it is put back: the same row `cancelled`, or the order's
+ * compensation done with that subscription cancelled. W13c: one per order and subscription, its latest `left` row
+ * (T2 records the subscription as left, then the put-back, or reconcile's retry, may record it left again).
+ * Reconcile retries each (L3), from what the row carries.
+ */
+export const SUBSCRIPTIONS_LEFT_SQL = `
+SELECT s.entity_id, s.at, s.details->>'subscriptionId' AS subscription_id,
+       s.details->>'invoicePaymentIntentId' AS invoice_payment_intent_id, (s.details->>'amountPaid')::int AS amount_paid
+FROM (
+  SELECT DISTINCT ON (entity_id, details->>'subscriptionId') entity_id, at, details
+  FROM audit_log
+  WHERE action = 'order.subscription_left' AND entity_type = 'order' AND details->>'state' = 'left'
+  ORDER BY entity_id, details->>'subscriptionId', at DESC
+) s
+WHERE NOT EXISTS (
+    SELECT 1 FROM audit_log d
+    WHERE d.entity_type = 'order' AND d.entity_id = s.entity_id AND d.at >= s.at
+      AND d.details->>'subscriptionId' = s.details->>'subscriptionId'
+      AND ((d.action = 'order.subscription_left' AND d.details->>'state' = 'cancelled')
+           OR (d.action = 'order.compensate' AND d.details->>'state' = 'done'))
+  )
+ORDER BY s.at DESC`
+
 const ALERT_SQL = `
 SELECT at FROM audit_log
 WHERE action = 'reconcile.stripe_refused' AND entity_type = 'reconcile' AND at > now() - make_interval(mins => $1::int)
@@ -199,6 +245,7 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
     payment_intent_id: string | null
     created_at: unknown
     method: string | null
+    has_membership: boolean | null
     first_name: string
     last_name: string
     last: Last | null
@@ -227,6 +274,7 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
   const refunds = await db.query<{ entity_type: string; entity_id: string; payment_intent_id: string; pence: number; state: string }>(REFUNDS_SQL)
   const warnings = await db.query<{ entity_type: string; entity_id: string; at: unknown; warning: string }>(WARNINGS_SQL, [WARNINGS_FOR_HOURS])
   const alert = (await db.query<{ at: unknown }>(ALERT_SQL, [ALERT_FOR_MINUTES]))[0]
+  const subscriptionsLeft = await db.query<{ entity_id: string; at: unknown; subscription_id: string }>(SUBSCRIPTIONS_LEFT_SQL)
 
   return {
     checkout: orders.map((row): StuckOrder => {
@@ -242,7 +290,7 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
         ageMinutes: ageMinutes(createdAt),
         method,
         reason,
-        words: wordsFor(reason),
+        words: row.has_membership ? `${wordsFor(reason)} ${MEMBERSHIP_STUCK_NOTE}` : wordsFor(reason),
       }
     }).concat(
       changed.map((row): StuckOrder => {
@@ -291,7 +339,9 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
         words: state === 'failed' ? REFUND_FAILED_WORDS(amount, row.payment_intent_id) : REFUND_PENDING_WORDS(amount, row.payment_intent_id),
       }
     }),
-    warnings: warnings.map((row) => ({ kind: row.entity_type === 'order' ? 'order' : 'flow', id: row.entity_id, at: iso(row.at), warning: row.warning })),
+    warnings: subscriptionsLeft
+      .map((row): StuckWarning => ({ kind: 'order', id: row.entity_id, at: iso(row.at), warning: SUBSCRIPTION_LEFT_WORDS(row.subscription_id) }))
+      .concat(warnings.map((row) => ({ kind: row.entity_type === 'order' ? 'order' : 'flow', id: row.entity_id, at: iso(row.at), warning: row.warning }))),
     alert: alert ? { at: iso(alert.at), words: STRIPE_REFUSED_WORDS } : null,
   }
 }

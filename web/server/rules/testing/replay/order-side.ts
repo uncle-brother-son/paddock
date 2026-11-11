@@ -6,7 +6,7 @@ import { POST as quoteRoute } from '@/app/api/v1/staff/quotes/basket/route'
 import type { Db } from '@/server/db'
 import type { FakeStripe } from '@/server/stripe/fake'
 import { REPLAY_USER, type ReplaySide } from './harness'
-import { chargesTakeASecond, replayStripe } from './stripe-binding'
+import { replayStripe, stripeCallsTakeASecond } from './stripe-binding'
 
 /**
  * The new side of W06's replay: createOrder's params go to POST /api/v1/staff/orders, and its answer
@@ -48,7 +48,7 @@ export function oldResult(body: { ok: true; data: PlaceOrderOutput } | ApiFailur
     return { success: true, orderId, cardCharged: payment.cardCharged, paymentMethodUsed: payment.method, ...(pendingReaderPayment ? { pendingReaderPayment } : {}) }
   }
   if (body.ok) {
-    const { orderId, bookingId, eventBookingId, sessionPassId, giftCardId, giftCardCode, payment } = body.data
+    const { orderId, bookingId, eventBookingId, sessionPassId, giftCardId, giftCardCode, payment, membershipId, membershipSubscription } = body.data
     return {
       success: true,
       orderId,
@@ -56,6 +56,7 @@ export function oldResult(body: { ok: true; data: PlaceOrderOutput } | ApiFailur
       ...(eventBookingId ? { eventBookingId } : {}),
       ...(giftCardId ? { giftCardId } : {}),
       ...(giftCardCode ? { giftCardCode } : {}),
+      ...(membershipId ? { membershipId } : {}),
       ...(sessionPassId ? { sessionPassId } : {}),
       cardCharged: payment.cardCharged,
       cardAmount: payment.collected,
@@ -63,6 +64,14 @@ export function oldResult(body: { ok: true; data: PlaceOrderOutput } | ApiFailur
       ...(payment.giftCardApplied > 0 ? { giftCardRedeemedAmount: payment.giftCardApplied } : {}),
       ...(payment.storeCreditApplied > 0 ? { storeCreditRedeemedAmount: payment.storeCreditApplied } : {}),
       paymentMethodUsed: payment.method,
+      // W13: createOrder's membership fields, after the method.
+      ...(membershipSubscription
+        ? {
+            membershipSubscriptionId: membershipSubscription.subscriptionId,
+            membershipAmountPaid: membershipSubscription.amountPaid,
+            ...(membershipSubscription.invoiceId ? { membershipInvoiceId: membershipSubscription.invoiceId } : {}),
+          }
+        : {}),
     }
   }
   const details = body.error.details as Partial<OrderRefusalDetails> | undefined
@@ -111,7 +120,16 @@ export async function withQuotedCardFigure(input: PlaceOrderInput): Promise<Plac
   )
   const body = (await response.json()) as { ok: boolean; data?: BasketQuoteOutput }
   if (!body.ok || !body.data) return input
-  return { ...input, confirmed: { ...input.confirmed, toCollect: method === 'reader' ? body.data.totals.toCollect.reader : body.data.totals.toCollect.card } }
+  const totals = body.data.totals
+  return {
+    ...input,
+    confirmed: {
+      ...input.confirmed,
+      toCollect: method === 'reader' ? totals.toCollect.reader : totals.toCollect.card,
+      // W13: a membership on the card: the first invoice staff saw, as W14's screen will send it.
+      ...(input.membershipPlanId && method === 'card' ? { firstInvoice: totals.firstInvoice } : {}),
+    },
+  }
 }
 
 /** W11: POST /api/v1/staff/orders/:orderId/finalise or /cancel, as the staff app's wrappers will call them at W14. */
@@ -148,7 +166,8 @@ function oldReaderStepResult(answer: OrderAnswer): unknown {
 export function newOrderSide(answers: OrderAnswer[] = [], adjust: (input: PlaceOrderInput) => PlaceOrderInput = (input) => input): (db: Db, stripe: FakeStripe) => ReplaySide {
   return (_db, stripe) => {
     replayStripe.current = stripe
-    chargesTakeASecond(stripe)
+    // W13: a subscription and a refund take time too (as W10's charges do).
+    stripeCallsTakeASecond(stripe)
     return {
       name: 'new',
       async call(action, params) {

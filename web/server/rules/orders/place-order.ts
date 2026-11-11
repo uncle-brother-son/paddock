@@ -12,7 +12,11 @@
 // the card (collect-saved-card.ts), then T2 (finalise-order.ts) marks it paid, or the one undo
 // (undo-order.ts) removes it. W11 adds the reader (createOrder's stage 29): T1 commits the order pending
 // with its pending record, then the reader's intent is made (reader-intent.ts) and the screen collects
-// it; the finalise and cancel routes (reader-order.ts) finish it. Still not built: memberships (W13).
+// it; the finalise and cancel routes (reader-order.ts) finish it. W13 adds memberships (createOrder's
+// stages 4, 6, 18a, 25a and 31, and finaliseReaderOrder's membership): T1 writes the membership's line (and
+// on a buy-new booking its row, so the booking can draw its credit), and its pending record carries what
+// the subscription needs; then on the saved card the price check, the coupon, the subscription, the charge
+// and the old subscription's cancel (membership.ts), and T2. Nothing answers NOT_BUILT any more.
 import 'server-only'
 import type {
   BasketEventAttendee,
@@ -20,7 +24,6 @@ import type {
   BasketQuoteInput,
   BasketQuoteOutput,
   OrderDryRunOutput,
-  OrderNotBuiltDetails,
   OrderRows,
   PlaceOrderInput,
   PlaceOrderOutput,
@@ -30,26 +33,50 @@ import { inOpenTransaction, isDeadlock, postgresRefusal, type Db, type Tx } from
 import { ApiError } from '@/server/http/errors'
 import { addMonthsToIsoDate } from '@/server/rules/time/london-time'
 import type { StripeClient } from '@/server/stripe/client'
-import { stripeTiming } from '@/server/stripe/deadline'
+import { stripeTiming, type StripeTiming } from '@/server/stripe/deadline'
 import { amountChangedRefusal, cashDifferenceRefusal, round2 } from './amounts'
 import { GIFT_CARD_SOURCE_REMOVED_MESSAGE } from './basket-booking'
 import { eventFullRefusal, inPlaceOrder } from './basket-event'
 import { COLLECT_DEADLINE_MS, collectSavedCard, type ChargeAnswer, type PendingCharge } from './collect-saved-card'
+import type Stripe from 'stripe'
 import {
   CHARGED_WITHOUT_ORDER_MESSAGE,
+  COMPENSATION_HELD_MESSAGE,
+  FAILURE_MESSAGES,
+  MEMBERSHIP_NO_CARD_MESSAGE,
+  MEMBERSHIP_UNCONFIRMED_MESSAGE,
   NO_SAVED_CARD_MESSAGE,
+  OLD_MEMBERSHIP_CANCELLED_NOTE,
   ORDER_STILL_PROCESSING_MESSAGE,
   PAID_NOT_FINISHED_MESSAGE,
   PAYMENT_UNCONFIRMED_MESSAGE,
   READER_INTENT_UNCONFIRMED_MESSAGE,
+  REPLACED_UNCONFIRMED_MESSAGE,
+  subscriptionWrongMessage,
 } from './failure-messages'
-import { finaliseOrder, type FinaliseOutcome } from './finalise-order'
+import { finaliseOrder, MEMBERSHIP_DEFINITE, membershipPrecheck, type FinaliseOutcome } from './finalise-order'
 import { generateGiftCardCode } from './gift-card-code'
 import { loadBasketFacts, type BasketFacts } from './load-basket'
 import { lockForOrder, type HeldLocks } from './locks'
+import { pence } from './collect-saved-card'
 import { bookingRefusal, orderRefusal, paymentUnconfirmed, refusalDetails } from './order-refusal'
+import {
+  CARD_COUPON_NAME,
+  cancelSubscriptionChecked,
+  checkMembershipPrice,
+  compensateOrder,
+  COMPENSATED_NOTE,
+  deleteCouponQuietly,
+  isPutBackReason,
+  MEMBERSHIP_STRIPE_DEADLINE_MS,
+  putBackSubscription,
+  READER_COUPON_NAME,
+  startSubscription,
+  type MadeSubscription,
+  type Taken,
+} from './membership'
 import { readOrderRows } from './order-rows'
-import { chargeDescription, heldBooking, type CardSnapshot, type PendingSnapshot, type ReaderSnapshot } from './pending-order'
+import { chargeDescription, heldBooking, type CardSnapshot, type PendingMembership, type PendingSnapshot, type ReaderSnapshot } from './pending-order'
 import { priceFromFacts } from './price-basket'
 import { createReaderIntent, recordReaderIntent, type PendingReader } from './reader-intent'
 import { undoOrder } from './undo-order'
@@ -119,33 +146,6 @@ function refuseAtEntry(input: PlaceOrderInput): void {
   }
 }
 
-/**
- * What T1 can't sell yet, each built by a later slice: memberships, bought or buy-new or replacing an
- * exhausted one (W13), on any method, the saved card and the reader included. A pass bought with a
- * buy-new membership is caught as the membership, and so is an event beside a membership bought in the
- * same basket (its account holder would be priced as that member), and a promo code beside one (its
- * share of the first payment). W10 built the saved card, W11 the reader.
- */
-const NOT_BUILT: ReadonlyArray<{ part: string; words: string; present: (input: PlaceOrderInput) => boolean }> = [
-  {
-    part: 'membership',
-    words: 'a membership',
-    present: (input) =>
-      Boolean(input.membershipPlanId) || input.booking?.redemptionSource === 'buy_new_membership' || Boolean(input.booking?.cancelExhaustedMembershipId),
-  },
-]
-
-function refuseWhatIsNotBuilt(input: PlaceOrderInput): void {
-  const missing = NOT_BUILT.filter((item) => item.present(input))
-  if (missing.length === 0) return
-  const details: OrderNotBuiltDetails = { notBuilt: missing.map((item) => item.part) }
-  throw new ApiError(
-    'NOT_BUILT',
-    `The new order system can't take this order yet: it has ${missing.map((item) => item.words).join(', ')}. Nothing was changed.`,
-    { details }
-  )
-}
-
 // --- T1
 
 /** Refusals that come after the cash check: they mean nothing while something else is wrong. */
@@ -177,6 +177,15 @@ function refuseIfNeeded(input: PlaceOrderInput, quote: BasketQuoteOutput, mode: 
   const confirmed = unconfirmed ? { ...input.confirmed, toCollect } : input.confirmed
   const changed = amountChangedRefusal(method, confirmed, { amountDue: totals.amountDue, toCollect })
   if (changed) throw orderRefusal({ stage: 'payment', reason: changed.reason, message: changed.message, amountDueTotal: totals.amountDue })
+  // W13 (W03-plan 2.7): a membership's first invoice, which the saved card pays besides `toCollect`, is
+  // confirmed too, the same way (a missing figure counts as nothing confirmed; the dry run alone takes it as
+  // confirmed). On the reader the one tap is `toCollect`, which holds the first payment, and the invoice is £0.
+  if (input.membershipPlanId && method !== 'reader') {
+    const sent = input.confirmed?.firstInvoice
+    const firstInvoice = typeof sent === 'number' && Number.isFinite(sent) ? sent : mode.dryRun ? totals.firstInvoice : 0
+    const invoiceChanged = amountChangedRefusal('card', { toCollect: firstInvoice }, { amountDue: totals.amountDue, toCollect: totals.firstInvoice })
+    if (invoiceChanged) throw orderRefusal({ stage: 'payment', reason: invoiceChanged.reason, message: invoiceChanged.message, amountDueTotal: totals.amountDue })
+  }
 }
 
 /**
@@ -198,7 +207,14 @@ const unpriced = (problem: string) => new Error(`The order was priced without ${
  * buy-new pass booking, seat 1 takes its session from it, through the same guarded claim as a pass
  * the customer already had.
  */
-function bookingToWrite(input: PlaceOrderInput, facts: BasketFacts, quote: BasketQuoteOutput, locks: HeldLocks, newPassId: string | null): BookingToWrite | null {
+function bookingToWrite(
+  input: PlaceOrderInput,
+  facts: BasketFacts,
+  quote: BasketQuoteOutput,
+  locks: HeldLocks,
+  newPassId: string | null,
+  newMembership: { id: string; creditPeriodId: string | null } | null
+): BookingToWrite | null {
   const booking = input.booking
   if (!booking) return null
   const quoted = quote.booking
@@ -210,8 +226,11 @@ function bookingToWrite(input: PlaceOrderInput, facts: BasketFacts, quote: Baske
   if (isPublic && seatPrices.length !== booking.guests.length) throw unpriced('a price for every seat')
 
   // The period T1 locked is the one this credit spends from. No period means no credit, which the
-  // facts have already refused.
-  const creditPeriodId = seat1 === 'membership_credit' ? locks.creditPeriodId : null
+  // facts have already refused. W13: on a buy-new membership booking, the period of the membership this
+  // order has just written (allocated in T1, so nobody else can see it yet).
+  const buysNewMembership = booking.redemptionSource === 'buy_new_membership'
+  if (buysNewMembership && !newMembership) throw unpriced('the membership the booking is paid with')
+  const creditPeriodId = seat1 === 'membership_credit' ? (buysNewMembership ? (newMembership?.creditPeriodId ?? null) : locks.creditPeriodId) : null
   if (seat1 === 'membership_credit' && !creditPeriodId) throw bookingRefusal('insufficient_membership_credit')
 
   const buysNewPass = booking.redemptionSource === 'buy_new_session_pass'
@@ -225,7 +244,7 @@ function bookingToWrite(input: PlaceOrderInput, facts: BasketFacts, quote: Baske
     // createOrder took the promo's share off price_paid once createBooking had written it (W09).
     pricePaid: round2(quoted.price - quoted.discount),
     redemptionSource: quoted.redemptionSource,
-    redeemedMembershipId: quoted.redemptionSource === 'membership_credit' ? booking.membershipId ?? null : null,
+    redeemedMembershipId: quoted.redemptionSource === 'membership_credit' ? (buysNewMembership ? (newMembership?.id ?? null) : (booking.membershipId ?? null)) : null,
     redeemedSessionPassId: passId,
     creditPeriodId,
     passToClaim: seat1 === 'session_pass_credit' ? passId : null,
@@ -236,7 +255,9 @@ function bookingToWrite(input: PlaceOrderInput, facts: BasketFacts, quote: Baske
       name: (guest.name ?? '').trim(),
       email: guest.email?.trim() || null,
       dateOfBirth: i === 0 ? guest.dateOfBirth ?? null : null,
-      unitPrice: isPublic ? seatPrices[i]?.unit_price ?? null : null,
+      // W13: seat 1 of a buy-new membership booking at the new plan's terms (createBooking quoted it once
+      // the membership existed: a Peak seat a Core plan doesn't cover is paid at the member price).
+      unitPrice: isPublic ? (i === 0 && buysNewMembership && typeof quoted.seats[0]?.unitPrice === 'number' ? quoted.seats[0].unitPrice.toFixed(2) : (seatPrices[i]?.unit_price ?? null)) : null,
       // And each seat's share off its unit_price (W09). A private booking's share is on its price alone.
       discount: quoted.seats[i]?.discount ?? 0,
       payBy: i === 0 ? seat1 : 'paid',
@@ -348,18 +369,19 @@ attendees AS (
 lines AS (
   INSERT INTO order_line_items
     (order_id, item_type, quantity, unit_price, line_total, addon_id, product_variant_id, session_pass_type_id, gift_card_id,
-     event_booking_id, fulfillment_status, system_unit_price, price_override_reason, discount_amount, created_at)
+     event_booking_id, membership_plan_id, fulfillment_status, system_unit_price, price_override_reason, discount_amount, created_at)
   SELECT o.id, l.item_type, l.quantity, l.unit_price, l.line_total, l.addon_id, l.product_variant_id, l.session_pass_type_id,
          CASE WHEN l.item_type = 'gift_card' THEN (SELECT id FROM card) END,
          CASE WHEN l.item_type = 'event' THEN (SELECT id FROM event_booking) END,
-         l.fulfillment_status, l.system_unit_price, l.price_override_reason, l.discount_amount,
+         l.membership_plan_id, l.fulfillment_status, l.system_unit_price, l.price_override_reason, l.discount_amount,
          clock.at + l.position * interval '1 millisecond'
   FROM o
   CROSS JOIN clock
   CROSS JOIN jsonb_to_recordset($6::jsonb)
     AS l(position int, item_type text, quantity int, unit_price numeric, line_total numeric, addon_id uuid, product_variant_id uuid,
-         session_pass_type_id uuid, fulfillment_status text, system_unit_price numeric, price_override_reason text, discount_amount numeric)
-  RETURNING id, item_type, session_pass_type_id
+         session_pass_type_id uuid, membership_plan_id uuid, fulfillment_status text, system_unit_price numeric, price_override_reason text,
+         discount_amount numeric)
+  RETURNING id, item_type, session_pass_type_id, membership_plan_id
 ),
 stock AS (
   UPDATE product_variants v
@@ -382,6 +404,18 @@ passes AS (
   FROM lines
   JOIN jsonb_to_recordset($9::jsonb) AS p(pass_type_id uuid, purchase_date date, sessions_remaining int, expiry_date date)
     ON lines.item_type = 'session_pass' AND lines.session_pass_type_id = p.pass_type_id
+  RETURNING id
+),
+bought_membership AS (
+  INSERT INTO customer_memberships
+    (id, customer_id, plan_id, start_date, next_renewal_date, addon_credits_remaining, subscription_status, stripe_subscription_id,
+     order_line_item_id, billing_frequency, is_herd)
+  SELECT m.id, $1::uuid, m.plan_id, m.start_date, m.next_renewal_date, m.addons_included, 'active', NULL, lines.id, m.billing_frequency,
+         m.billing_frequency = 'yearly'
+  FROM lines
+  JOIN jsonb_to_recordset($20::jsonb)
+    AS m(id uuid, plan_id uuid, start_date date, next_renewal_date date, addons_included int, billing_frequency text)
+    ON lines.item_type = 'membership' AND lines.membership_plan_id = m.plan_id
   RETURNING id
 ),
 customer AS (
@@ -431,6 +465,7 @@ SELECT (SELECT id FROM o) AS order_id,
        (SELECT COALESCE(array_agg(id), '{}') FROM stock) AS variants_claimed,
        (SELECT count(*)::int FROM ledger) AS ledger_written,
        (SELECT count(*)::int FROM passes) AS passes_written,
+       (SELECT count(*)::int FROM bought_membership) AS memberships_written,
        (SELECT count(*)::int FROM customer WHERE address_saved) AS addresses_saved,
        (SELECT count(*)::int FROM places) AS events_claimed,
        (SELECT id FROM event_booking) AS event_booking_id,
@@ -455,6 +490,7 @@ interface OrderWritten {
   variants_claimed: string[]
   ledger_written: number
   passes_written: number
+  memberships_written: number
   addresses_saved: number
   events_claimed: number
   event_booking_id: string | null
@@ -475,7 +511,21 @@ export const STORE_CREDIT_NOTE = 'Store credit redeemed at checkout.'
 export const GIFT_CARD_CODE_TRIES = 5
 
 /** The line kinds the order statement writes. A booking's line is the booking statement's. */
-const ORDER_LINE_KINDS = new Set(['event', 'addon', 'product', 'session_pass', 'gift_card', 'postage'])
+const ORDER_LINE_KINDS = new Set(['event', 'addon', 'product', 'membership', 'session_pass', 'gift_card', 'postage'])
+
+/**
+ * W13: the membership a buy-new booking needs in the same order (createOrder's buy-new flow: the row first,
+ * then the booking drawing its credit). Its id is made here, so the pending record can name it. It is
+ * written active with no subscription (as createOrder's reader branch wrote it); T2 patches it.
+ */
+type BoughtMembership = {
+  id: string
+  plan_id: string
+  start_date: string
+  next_renewal_date: string
+  addons_included: number
+  billing_frequency: 'monthly' | 'yearly'
+}
 
 interface OrderToWrite {
   orderId: string
@@ -537,7 +587,8 @@ async function writeOrder(
   quote: BasketQuoteOutput,
   locks: HeldLocks,
   options: PlaceOrderOptions,
-  snapshot: PendingSnapshot | null
+  snapshot: PendingSnapshot | null,
+  boughtMembership: BoughtMembership | null
 ): Promise<OrderToWrite> {
   const customerId = input.customerId as string
   const products = input.products ?? []
@@ -551,8 +602,13 @@ async function writeOrder(
   // pending card order, so T2 only marks it paid. createOrder recorded 'card' or 'split' the same way.
   // W11: a reader order records none until T2, as createOrder's reader branch left it pending
   // (finaliseReaderOrder wrote the method), so the pending order is the old one's, field for field.
+  // W13: on the card, a membership's first invoice is the card's too (createOrder recorded 'card' for any
+  // subscription; Q9's table now decides, with the first invoice counted as taken by the card).
+  const firstInvoice = snapshot?.method === 'card' ? (snapshot.membership?.first_invoice ?? 0) : 0
   const paymentMethod =
-    snapshot?.method === 'reader' ? null : recordedPaymentMethod(input.payment?.method, totals.toCollect.cash, giftCardPaying?.amount ?? 0, storeCredit)
+    snapshot?.method === 'reader'
+      ? null
+      : recordedPaymentMethod(snapshot?.method ?? input.payment?.method, totals.toCollect.cash + firstInvoice, giftCardPaying?.amount ?? 0, storeCredit)
 
   const lines = quote.lines.flatMap((line, i) => {
     if (line.kind === 'booking') return []
@@ -567,6 +623,7 @@ async function writeOrder(
         addon_id: line.kind === 'addon' ? line.itemId : null,
         product_variant_id: line.kind === 'product' ? line.itemId : null,
         session_pass_type_id: line.kind === 'session_pass' ? line.itemId : null,
+        membership_plan_id: line.kind === 'membership' ? line.itemId : null,
         fulfillment_status: line.kind === 'product' ? 'pending' : null,
         system_unit_price: line.systemUnitPrice,
         price_override_reason: line.priceOverrideReason,
@@ -646,6 +703,7 @@ async function writeOrder(
         STORE_CREDIT_NOTE,
         giftCardRedeemed,
         snapshot,
+        boughtMembership ? [boughtMembership] : [],
       ])
     )[0] as OrderWritten
     if (!written.order_id) {
@@ -676,6 +734,7 @@ async function writeOrder(
     if (written.gift_card_redemptions_written !== giftCardRedeemed.length) throw new Error("The gift card's use was not recorded.")
     if (written.ledger_written !== ledger.length) throw new Error(`The stock ledger was not written whole: ${written.ledger_written} of ${ledger.length} rows.`)
     if (written.passes_written !== passes.length) throw new Error(`The session pass and its line were not written together: ${written.passes_written} of ${passes.length} passes.`)
+    if (written.memberships_written !== (boughtMembership ? 1 : 0)) throw new Error('The membership a buy-new booking needs was not written with its line.')
     if (cards.length > 0 && !written.gift_card_id) throw new Error('The gift card was not written.')
     if (written.addresses_saved !== (savedAddress ? 1 : 0)) throw new Error("The delivery address was not saved to the customer.")
     return {
@@ -691,16 +750,19 @@ async function writeOrder(
 }
 
 /** The booking's line and add-ons, for the booking statement. */
-function bookingOrderPart(quote: BasketQuoteOutput, order: OrderToWrite): BookingOrderPart {
+function bookingOrderPart(quote: BasketQuoteOutput, order: OrderToWrite, newMembershipId: string | null): BookingOrderPart {
   const index = quote.lines.findIndex((line) => line.kind === 'booking')
   const line = quote.lines[index]
   if (!line) throw unpriced('its booking line')
   const addons = quote.booking?.addons ?? []
   const creditsByMembership = new Map<string, number>()
+  // W13: on a buy-new membership booking, an add-on credit with no membership named is the new one's (createOrder).
+  const from = (addon: { membershipId: string | null }): string | null => addon.membershipId ?? newMembershipId
   for (const addon of addons) {
     if (addon.redemptionSource !== 'membership_credit') continue
-    if (!addon.membershipId) throw unpriced('the membership an add-on credit comes from')
-    creditsByMembership.set(addon.membershipId, (creditsByMembership.get(addon.membershipId) ?? 0) + addon.quantity)
+    const membershipId = from(addon)
+    if (!membershipId) throw unpriced('the membership an add-on credit comes from')
+    creditsByMembership.set(membershipId, (creditsByMembership.get(membershipId) ?? 0) + addon.quantity)
   }
   return {
     orderId: order.orderId,
@@ -713,7 +775,7 @@ function bookingOrderPart(quote: BasketQuoteOutput, order: OrderToWrite): Bookin
       quantity: addon.quantity,
       priceAtPurchase: addon.unitPrice,
       redemptionSource: addon.redemptionSource,
-      redeemedMembershipId: addon.redemptionSource === 'membership_credit' ? addon.membershipId : null,
+      redeemedMembershipId: addon.redemptionSource === 'membership_credit' ? from(addon) : null,
     })),
     credits: [...creditsByMembership].map(([membershipId, quantity]) => ({ membershipId, quantity })),
   }
@@ -733,11 +795,54 @@ interface Placed {
 }
 
 /**
+ * W13: what the membership's subscription needs, from the quote (so the order and the screen's figures
+ * can't differ) and the plan T1 read: on the card the first invoice is what is left of the first payment
+ * after the gift card and store credit spill (Q1, Q2) and the promo's share; on the reader the tap takes
+ * it all, so the coupon covers the whole price (finaliseReaderOrder's `discountAmount: membership.price`).
+ */
+function membershipPart(input: PlaceOrderInput, facts: BasketFacts, quote: BasketQuoteOutput, onReader: boolean, rowId: string | null): PendingMembership | null {
+  const line = quote.lines.find((l) => l.kind === 'membership')
+  const plan = facts.plan
+  const frequency = input.membershipBillingFrequency
+  if (!line || !plan || (frequency !== 'monthly' && frequency !== 'yearly')) return null
+  const price = line.unitPrice
+  const firstInvoice = onReader ? 0 : quote.totals.firstInvoice
+  return {
+    plan_id: plan.id,
+    plan_name: plan.name,
+    billing_frequency: frequency,
+    price,
+    first_payment_amount: quote.totals.membershipFirstPayment,
+    first_invoice: firstInvoice,
+    coupon_amount: round2(price - firstInvoice),
+    coupon_name: onReader ? READER_COUPON_NAME : CARD_COUPON_NAME,
+    stripe_price_id: (frequency === 'yearly' ? plan.stripe_price_id_yearly : plan.stripe_price_id) ?? '',
+    addons_included: plan.addons_included ?? 0,
+    ...(rowId ? { membership_row_id: rowId } : {}),
+  }
+}
+
+/** W13: the exhausted membership a buy-new membership replaces (Q8): its subscription, cancelled last, and its row, cancelled by T2. */
+function replacing(input: PlaceOrderInput, facts: BasketFacts): Pick<PendingSnapshot, 'exhausted_membership_stripe_id' | 'replaces_membership_id'> {
+  const id = input.booking?.cancelExhaustedMembershipId
+  if (!id) return {}
+  const subscription = facts.exhausted?.stripe_subscription_id
+  return { replaces_membership_id: id, ...(subscription ? { exhausted_membership_stripe_id: subscription } : {}) }
+}
+
+/**
  * The pending record of an order with a card to charge (W03-plan 2.5). The customer's Stripe
  * customer and saved card are the ones read under the customer's lock; T1 refuses the order before it
  * commits if either is missing (prepare).
  */
-function cardSnapshot(input: PlaceOrderInput, facts: BasketFacts, quote: BasketQuoteOutput, options: PlaceOrderOptions, mode: PrepareMode): CardSnapshot {
+function cardSnapshot(
+  input: PlaceOrderInput,
+  facts: BasketFacts,
+  quote: BasketQuoteOutput,
+  options: PlaceOrderOptions,
+  mode: PrepareMode,
+  membership: PendingMembership | null
+): CardSnapshot {
   const giftCard = input.payment?.giftCard
   return {
     flow: 'checkout',
@@ -754,6 +859,7 @@ function cardSnapshot(input: PlaceOrderInput, facts: BasketFacts, quote: BasketQ
     ...(giftCard ? { gift_card_redemption: { gift_card_id: giftCard.giftCardId, amount: giftCard.amount } } : {}),
     ...heldBooking(input),
     ...(typeof mode.keyLivemode === 'boolean' ? { livemode: mode.keyLivemode } : {}),
+    ...(membership ? { membership, ...replacing(input, facts) } : {}),
   }
 }
 
@@ -763,7 +869,14 @@ function cardSnapshot(input: PlaceOrderInput, facts: BasketFacts, quote: BasketQ
  * customer is the one read under the customer's lock, null when they have none yet: the intent finds
  * or makes one, and records it with the intent.
  */
-function readerSnapshot(input: PlaceOrderInput, facts: BasketFacts, quote: BasketQuoteOutput, options: PlaceOrderOptions, mode: PrepareMode): ReaderSnapshot {
+function readerSnapshot(
+  input: PlaceOrderInput,
+  facts: BasketFacts,
+  quote: BasketQuoteOutput,
+  options: PlaceOrderOptions,
+  mode: PrepareMode,
+  membership: PendingMembership | null
+): ReaderSnapshot {
   const giftCard = input.payment?.giftCard
   return {
     flow: 'checkout',
@@ -777,7 +890,19 @@ function readerSnapshot(input: PlaceOrderInput, facts: BasketFacts, quote: Baske
     ...(giftCard ? { gift_card_redemption: { gift_card_id: giftCard.giftCardId, amount: giftCard.amount } } : {}),
     ...heldBooking(input),
     ...(typeof mode.keyLivemode === 'boolean' ? { livemode: mode.keyLivemode } : {}),
+    ...(membership ? { membership, ...replacing(input, facts) } : {}),
   }
+}
+
+/** W13: createOrder's buy-new flow allocated the new membership's first credit period at once, so the booking could draw it. */
+async function allocateNewMembershipPeriod(tx: Tx, membershipId: string): Promise<string | null> {
+  await tx.query('SELECT public.allocate_membership_credit_periods()')
+  const period = await tx.query<{ id: string }>(
+    `SELECT id FROM membership_credit_periods
+     WHERE membership_id = $1::uuid AND (now() AT TIME ZONE 'Europe/London')::date BETWEEN period_start AND period_end`,
+    [membershipId]
+  )
+  return period[0]?.id ?? null
 }
 
 async function prepare(tx: Tx, input: PlaceOrderInput, options: PlaceOrderOptions, mode: PrepareMode): Promise<Placed> {
@@ -806,6 +931,9 @@ async function prepare(tx: Tx, input: PlaceOrderInput, options: PlaceOrderOption
   const facts = await loadBasketFacts(tx, quoteInput)
   const method = input.payment?.method
   const quote = priceFromFacts(quoteInput, facts, { allowPriceOverrides: options.allowPriceOverrides === true })
+  // W13: a membership is always a Stripe order: its subscription charges the saved card (or the reader's tap
+  // takes its first payment), whatever else pays. Cash is refused by the price checks (membership_cash_not_accepted).
+  const hasMembership = quote.lines.some((line) => line.kind === 'membership')
   // W03-decisions Q10 (as changed by "W10 review calls"): a card order while the customer has one
   // still being processed may be a second sale of what the first is still holding (a fresh basket
   // after a crash), so it is refused before anything else, whatever else the basket says. Only when
@@ -815,25 +943,58 @@ async function prepare(tx: Tx, input: PlaceOrderInput, options: PlaceOrderOption
   // T1, then sees it. Cash and store credit orders aren't affected. A held Worker card order counts
   // however old it is (load-basket.ts). W11: the reader likewise ("W10 review calls": Q10 covers
   // reader orders as it covers card orders), and a held Worker reader order counts however old too.
-  const awaitsCard = method === 'card' && quote.totals.toCollect.card > 0
+  // W13: a membership on the card counts as something to charge (its subscription's first invoice).
+  const awaitsCard = (method === 'card' && quote.totals.toCollect.card > 0) || (hasMembership && method !== 'reader' && method !== 'cash')
   const awaitsReader = method === 'reader' && quote.totals.toCollect.reader > 0
   if ((awaitsCard || awaitsReader) && facts.customer?.has_order_processing) {
     throw orderRefusal({ stage: 'payment', reason: 'order_still_processing', message: ORDER_STILL_PROCESSING_MESSAGE })
   }
   refuseIfNeeded(input, quote, mode)
 
+  // W13: a buy-new membership booking needs the membership written first (Q3: with a pass too), its id made here.
+  const buysNewMembership = booking?.redemptionSource === 'buy_new_membership'
+  const membershipLine = quote.lines.find((line) => line.kind === 'membership')
+  const plan = facts.plan
+  const frequency = input.membershipBillingFrequency === 'yearly' ? 'yearly' : 'monthly'
+  const bought: BoughtMembership | null =
+    buysNewMembership && membershipLine && plan
+      ? {
+          id: crypto.randomUUID(),
+          plan_id: plan.id,
+          // London dates, as createOrder's fallback; T2 patches them from Stripe's first period.
+          start_date: facts.today,
+          next_renewal_date: addMonthsToIsoDate(facts.today, frequency === 'yearly' ? 12 : 1),
+          addons_included: plan.addons_included ?? 0,
+          billing_frequency: frequency,
+        }
+      : null
+  const membership = hasMembership ? membershipPart(input, facts, quote, method === 'reader', bought?.id ?? null) : null
+
   // A card with something to take: the order is committed pending, with its snapshot, and the card
   // is charged after the commit (W03-plan 2.1, B14). Nothing to take on the card finishes here, as createOrder did.
   // W11: the reader the same way, its intent made after the commit (bug 14). Nothing to take on the reader
   // was refused above (reader_nothing_to_charge), as createOrder refused it.
-  const snapshot: PendingSnapshot | null = awaitsCard ? cardSnapshot(input, facts, quote, options, mode) : awaitsReader ? readerSnapshot(input, facts, quote, options, mode) : null
+  const snapshot: PendingSnapshot | null = awaitsCard
+    ? cardSnapshot(input, facts, quote, options, mode, membership)
+    : awaitsReader
+      ? readerSnapshot(input, facts, quote, options, mode, membership)
+      : null
 
-  // 3. The order, and everything in it that doesn't need the booking.
-  const order = await writeOrder(tx, input, facts, quote, locks, options, snapshot)
+  // 3. The order, and everything in it that doesn't need the booking (W13: the membership a buy-new booking needs too).
+  const order = await writeOrder(tx, input, facts, quote, locks, options, snapshot, bought)
+  const newMembership = bought ? { id: bought.id, creditPeriodId: await allocateNewMembershipPeriod(tx, bought.id) } : null
 
   // 4. The booking, with its line, its add-ons and their credits.
-  const bookingWrite = bookingToWrite(input, facts, quote, locks, order.sessionPassId)
-  const bookingId = bookingWrite ? await writeBooking(tx, bookingWrite, bookingOrderPart(quote, order)) : null
+  const bookingWrite = bookingToWrite(input, facts, quote, locks, order.sessionPassId, newMembership)
+  const bookingId = bookingWrite ? await writeBooking(tx, bookingWrite, bookingOrderPart(quote, order, newMembership?.id ?? null)) : null
+
+  // W13: what createOrder's subscription route refused once everything was written (create-subscription/core.ts):
+  // no Stripe customer or card for a membership on the card, then a plan with no Stripe price for the frequency.
+  // Here they roll T1 back, so nothing is kept and Stripe is never called.
+  if (membership && snapshot?.method === 'card' && (!snapshot.stripe_customer_id || !snapshot.payment_method_id)) {
+    throw orderRefusal({ stage: 'payment', reason: 'membership_no_saved_card', message: MEMBERSHIP_NO_CARD_MESSAGE })
+  }
+  if (membership && snapshot && !membership.stripe_price_id) throw orderRefusal({ stage: 'payment', reason: 'membership_plan_not_synced' })
 
   // The saved card, where createOrder met its absence: after every write, at the charge (stage 32),
   // which its route refused with these words. Here it rolls T1 back, so nothing is kept and Stripe is
@@ -845,7 +1006,9 @@ async function prepare(tx: Tx, input: PlaceOrderInput, options: PlaceOrderOption
   // 5. The audit rows, in the same transaction. Nothing owed to Stripe: the order is paid now. A card
   //    to charge, or a reader tap to take (W11): only order.create; T2 records order.paid.
   const { orderId, paymentMethod } = order
-  const collected = awaitsCard ? quote.totals.toCollect.card : awaitsReader ? quote.totals.toCollect.reader : quote.totals.toCollect.cash
+  // W13: on the card, a membership's first invoice is taken besides the remainder (Q21: two charges).
+  const firstInvoice = membership && awaitsCard ? membership.first_invoice : 0
+  const collected = awaitsCard ? round2(quote.totals.toCollect.card + firstInvoice) : awaitsReader ? quote.totals.toCollect.reader : quote.totals.toCollect.cash
   const giftCardApplied = quote.totals.giftCardApplied
   const storeCreditApplied = quote.totals.storeCreditApplied
   const actor = { actorType: options.actor.type, actorId: options.actor.id, entityType: 'order', entityId: orderId, requestId: options.requestId }
@@ -874,6 +1037,19 @@ async function prepare(tx: Tx, input: PlaceOrderInput, options: PlaceOrderOption
         overrides,
         ...(awaitsCard ? { awaitsCard: true } : {}),
         ...(awaitsReader ? { awaitsReader: true } : {}),
+        ...(membership
+          ? {
+              membership: {
+                planId: membership.plan_id,
+                billingFrequency: membership.billing_frequency,
+                firstPayment: membership.first_payment_amount,
+                firstInvoice: membership.first_invoice,
+                coupon: membership.coupon_amount,
+                rowId: membership.membership_row_id ?? null,
+                replaces: input.booking?.cancelExhaustedMembershipId ?? null,
+              },
+            }
+          : {}),
       },
     },
     ...(snapshot
@@ -893,6 +1069,8 @@ async function prepare(tx: Tx, input: PlaceOrderInput, options: PlaceOrderOption
       giftCardId: order.giftCardId,
       giftCardCode: order.giftCardCode,
       eventBookingId: order.eventBookingId,
+      // W13: the buy-new row T1 wrote; otherwise T2's (filled in once it has run).
+      ...(membership ? { membershipId: bought?.id ?? null } : {}),
       payment: { method: awaitsReader ? 'reader' : paymentMethod, collected, cardCharged: awaitsCard, giftCardApplied, storeCreditApplied },
     },
     charge: snapshot?.method === 'card' ? { orderId, customerId, snapshot } : null,
@@ -1017,6 +1195,195 @@ async function collectAndFinish(
 }
 
 /**
+ * W13: a membership order's money steps after T1, as one rule per kind of failure (W11 review L3):
+ * - before anything is taken (the price, the default card, the coupon, the subscription refused): the one
+ *   undo, and the refusal with the old words;
+ * - definite after something is taken (the card refused after the subscription, Stripe's subscription not
+ *   what was asked, the old subscription's cancel refused, a membership T2 can't write): compensate
+ *   (membership.ts: cancel the new subscription, refund what was taken, each keyed and checked), then the
+ *   undo, then the refusal with the old words and createOrder's note; a compensation that can't be confirmed
+ *   is held, marked, for reconcile;
+ * - unclear (Stripe's answer, or T2's database fault after everything was taken): held pending, never
+ *   undone, never refunded here.
+ */
+interface MembershipSteps {
+  db: Db
+  stripe: StripeClient
+  orderId: string
+  options: PlaceOrderOptions
+  timing: StripeTiming
+}
+
+async function undoThenRefuse(steps: MembershipSteps, refusal: ApiError, why: string): Promise<never> {
+  const actor = { type: steps.options.actor.type, id: steps.options.actor.id }
+  try {
+    await undoOrder(steps.db, steps.orderId, { actor, requestId: steps.options.requestId, why })
+  } catch (err) {
+    // Nothing was taken, so the refusal is still the answer; the order stays pending for reconcile's undo.
+    throw new ApiError(refusal.code, refusal.message, { details: refusal.details, logDetail: `The undo failed: ${explain(err)}` })
+  }
+  throw refusal
+}
+
+/** The refusal with createOrder's note on it: the subscription was cancelled and its money put back. */
+function withCompensatedNote(refusal: ApiError): ApiError {
+  const details = refusal.details as { message?: string } | undefined
+  const message = `${refusal.message} ${COMPENSATED_NOTE}`
+  return new ApiError(refusal.code, message, { details: { ...(refusal.details as object), message: details?.message ? `${details.message} ${COMPENSATED_NOTE}` : message } })
+}
+
+/**
+ * `oldCancelled` (W13a L1): the customer's previous subscription had already been cancelled (Q8) when this
+ * compensation became due, so the answer says they now have neither membership, whether it is settled or held.
+ */
+async function compensateThenRefuse(steps: MembershipSteps, taken: Taken, refusal: ApiError, why: string, oldCancelled = false): Promise<never> {
+  const actor = { type: steps.options.actor.type, id: steps.options.actor.id }
+  let settled = false
+  let detail = ''
+  try {
+    const outcome = await compensateOrder(steps.db, steps.stripe, steps.orderId, taken, why, { actor, requestId: steps.options.requestId }, steps.timing)
+    settled = outcome.settled && outcome.undo.undone
+    detail = outcome.settled ? `undo: ${outcome.undo.undone ? 'done' : outcome.undo.reason}` : outcome.left.join('; ')
+  } catch (err) {
+    detail = `the compensation failed: ${explain(err)}`
+  }
+  if (settled) throw withNote(withCompensatedNote(refusal), oldCancelled ? OLD_MEMBERSHIP_CANCELLED_NOTE : null)
+  throw paymentUnconfirmed('compensation_unfinished', oldCancelled ? `${COMPENSATION_HELD_MESSAGE} ${OLD_MEMBERSHIP_CANCELLED_NOTE}` : COMPENSATION_HELD_MESSAGE, steps.orderId, `${why}. Left: ${detail}`)
+}
+
+/** A refusal with a note added to its words (W13a L1). */
+function withNote(refusal: ApiError, note: string | null): ApiError {
+  if (!note) return refusal
+  const details = refusal.details as { message?: string } | undefined
+  const message = `${refusal.message} ${note}`
+  return new ApiError(refusal.code, message, { details: { ...(refusal.details as object), message: details?.message ? `${details.message} ${note}` : message } })
+}
+
+/** A refusal with the old reason, and the old words (the reason's own where the step gave none). */
+const membershipRefusal = (reason: string, message: string, code?: ApiError['code']): ApiError =>
+  orderRefusal({ stage: 'payment', reason, message: message || (FAILURE_MESSAGES[reason] ?? '') }, {}, code)
+
+async function collectMembershipAndFinish(
+  db: Db,
+  stripe: StripeClient,
+  placed: Placed & { charge: PendingCharge },
+  options: PlaceOrderOptions,
+  startedAt: number
+): Promise<PlaceOrderOutput> {
+  const { orderId, charge } = placed
+  const snapshot = charge.snapshot
+  const membership = snapshot.membership as PendingMembership
+  const now = options.now ?? Date.now
+  const timing: StripeTiming = { deadline: startedAt + MEMBERSHIP_STRIPE_DEADLINE_MS, now }
+  const steps: MembershipSteps = { db, stripe, orderId, options, timing }
+  const actor = { type: options.actor.type, id: options.actor.id }
+
+  // 1. Stripe's price (W03-plan 2.7): refused before anything is taken.
+  const price = await checkMembershipPrice(stripe, membership, timing)
+  if (!price.ok) return undoThenRefuse(steps, membershipRefusal(price.reason, price.message), `The membership's Stripe price was refused: ${price.reason}`)
+
+  // 2. The coupon and the subscription, under the order's keys.
+  const started = await startSubscription(
+    stripe,
+    { orderId, customerId: charge.customerId, stripeCustomerId: snapshot.stripe_customer_id, paymentMethodId: snapshot.payment_method_id, membership },
+    timing
+  )
+  if (started.outcome === 'definite') {
+    await deleteCouponQuietly(stripe, orderId, membership, timing)
+    return undoThenRefuse(steps, membershipRefusal(started.reason, started.message), `The membership's subscription was refused: ${started.detail}`)
+  }
+  if (started.outcome === 'unknown') throw paymentUnconfirmed('payment_unconfirmed', MEMBERSHIP_UNCONFIRMED_MESSAGE, orderId, `The subscription got no clear answer: ${started.detail}`)
+  const subscription: MadeSubscription = started.subscription
+  const taken: Taken = {
+    subscriptionId: subscription.id,
+    refunds: subscription.invoicePaymentIntentId && subscription.amountPaid > 0 ? [{ step: 'refund-subscription', paymentIntentId: subscription.invoicePaymentIntentId }] : [],
+  }
+  if (started.outcome === 'wrong') {
+    return compensateThenRefuse(steps, taken, membershipRefusal('membership_subscription_failed', subscriptionWrongMessage(started.detail)), `Stripe's subscription was not what was asked: ${started.detail}`)
+  }
+
+  // 3. The rest of the basket on the saved card (Q21: two charges), as W10's.
+  let paid: Stripe.PaymentIntent | null = null
+  if (pence(snapshot.expected_amount) > 0) {
+    let answer: ChargeAnswer
+    try {
+      answer = await collectSavedCard(db, stripe, charge, { deadline: timing.deadline, now, boundFirstSend: true })
+    } catch (err) {
+      throw paymentUnconfirmed('payment_unconfirmed', PAYMENT_UNCONFIRMED_MESSAGE, orderId, explain(err))
+    }
+    if (answer.outcome === 'definite') {
+      const refusal = orderRefusal({ stage: 'payment', reason: 'charge_failed', message: answer.message }, {}, answer.needsAuthentication ? 'PAYMENT_NEEDS_AUTHENTICATION' : 'PAYMENT_FAILED')
+      return compensateThenRefuse(steps, taken, refusal, `The card was refused after the subscription: ${answer.stripeCode ?? 'no code'}. ${answer.message}`)
+    }
+    if (answer.outcome === 'unknown') throw paymentUnconfirmed('payment_unconfirmed', PAYMENT_UNCONFIRMED_MESSAGE, orderId, `${answer.stripeCode ?? 'no code'}: ${answer.detail}`)
+    paid = answer.paymentIntent
+    // W13a (S2): Q8 and T2 only once the money is taken. Anything else (processing, say) is held before Q8:
+    // reconcile sends Q8 and runs T2 once it succeeds, or compensates if it fails.
+    if (paid.status !== 'succeeded') throw paymentUnconfirmed('payment_unconfirmed', PAYMENT_UNCONFIRMED_MESSAGE, orderId, `The charge ${paid.id} is ${paid.status}: Q8 and T2 wait for it`)
+    taken.refunds.push({ step: 'refund-charge', paymentIntentId: paid.id })
+  }
+
+  // 4. Q8: the customer's exhausted subscription, last, once all the money is taken. Refused: everything back.
+  // W13a (L1): T2's definite checks first, so a refusal can't follow a confirmed cancel.
+  const oldSubscription = snapshot.exhausted_membership_stripe_id
+  let oldCancelled = false
+  if (oldSubscription) {
+    let ready: Awaited<ReturnType<typeof membershipPrecheck>>
+    try {
+      ready = await membershipPrecheck(db, orderId, subscription)
+    } catch (err) {
+      // Everything is taken: held for reconcile (which sends Q8 and runs T2), never refunded for it (W6-3).
+      throw paymentUnconfirmed('paid_not_finished', PAID_NOT_FINISHED_MESSAGE, orderId, `The check before Q8 failed after ${subscription.id}: ${explain(err)}`)
+    }
+    if (ready.kind === 'refused') {
+      return compensateThenRefuse(steps, taken, membershipRefusal('membership_subscription_failed', ''), `T2 would refuse the membership (checked before Q8): ${ready.reason}`)
+    }
+    if (ready.kind === 'ready') {
+      const cancelled = await cancelSubscriptionChecked(stripe, oldSubscription, timing)
+      if (cancelled.kind === 'refused') {
+        return compensateThenRefuse(steps, taken, membershipRefusal('membership_cancellation_failed', `Failed to cancel subscription: ${cancelled.message}`), `The old subscription's cancel was refused: ${cancelled.message}`)
+      }
+      if (cancelled.kind === 'unclear') throw paymentUnconfirmed('replaced_unconfirmed', REPLACED_UNCONFIRMED_MESSAGE, orderId, `${oldSubscription}: ${cancelled.message}`)
+      oldCancelled = true
+    }
+    // Not pending any more (gone, paid, marked): no Q8; T2 answers for it below.
+  }
+
+  // 5. T2. A database fault holds the order for reconcile (W6-3); a membership T2 can't write is definite.
+  let finalised: FinaliseOutcome
+  try {
+    finalised = await finaliseOrder(db, orderId, paid, { actor, requestId: options.requestId, subscription, subscriptionMadeHere: true })
+  } catch (err) {
+    throw paymentUnconfirmed('paid_not_finished', PAID_NOT_FINISHED_MESSAGE, orderId, `T2 failed after ${subscription.id}: ${explain(err)}`)
+  }
+  if (!finalised.finalised) {
+    if (MEMBERSHIP_DEFINITE.has(finalised.reason)) {
+      return compensateThenRefuse(steps, taken, membershipRefusal('membership_subscription_failed', ''), `T2 refused the membership: ${finalised.reason}${oldCancelled ? ' (the old subscription was cancelled already)' : ''}`, oldCancelled)
+    }
+    // W13b (W13a N2): as the reader's finalise does (B1c), a subscription this press made for an order that is
+    // gone or being put back is cancelled and its first invoice refunded at once, with its row. The charge isn't
+    // touched here: T2 recorded it for the automatic refund (gone), or the compensation refunds it (marked).
+    // W13c (W13a review S1): T2 has recorded the subscription as left in its own transaction; the put-back sends and
+    // writes only while there is time to send, so nothing is written after T2 once the window has closed.
+    // W13d (W13c review S-1): likewise for the old rollback's, paid with another payment, or not pending.
+    if (isPutBackReason(finalised.reason)) {
+      try {
+        await putBackSubscription(db, stripe, orderId, subscription, finalised.reason, { actor, requestId: options.requestId }, timing)
+      } catch {
+        // Its row couldn't be written (a database fault): the answer below still says what happened to the order.
+      }
+    }
+    if (finalised.reason === 'order_gone') throw paymentUnconfirmed('charged_without_order', CHARGED_WITHOUT_ORDER_MESSAGE, orderId, `${subscription.id} made for an order that is gone`)
+    throw paymentUnconfirmed('payment_unconfirmed', PAYMENT_UNCONFIRMED_MESSAGE, orderId, `T2 left the order pending: ${finalised.reason}`)
+  }
+  return {
+    ...placed.output,
+    membershipId: finalised.membershipId ?? null,
+    membershipSubscription: { subscriptionId: subscription.id, amountPaid: round2(subscription.amountPaid / 100), invoiceId: subscription.invoiceId },
+  }
+}
+
+/**
  * After T1 has committed a reader order pending with its pending record (W11, createOrder's stage 29,
  * bug 14 fixed): the reader's intent, under `<orderId>:reader-intent` (reader-intent.ts).
  * - Stripe made it: it is written onto the pending record (with the Stripe customer it is for), and the
@@ -1038,7 +1405,17 @@ async function startReaderPayment(
 ): Promise<PlaceOrderOutput> {
   const { orderId, reader } = placed
   const actor = { type: options.actor.type, id: options.actor.id }
-  const answer = await createReaderIntent(db, stripe, reader, stripeTiming(startedAt, options.now ?? Date.now))
+  const timing = stripeTiming(startedAt, options.now ?? Date.now)
+  // W13: a membership's Stripe price is checked before the tap is asked for, so nothing is taken for a
+  // membership that can't be set up (finalise checks it again before the subscription).
+  const membership = reader.snapshot.membership
+  if (membership) {
+    const price = await checkMembershipPrice(stripe, membership, timing)
+    if (!price.ok) {
+      return undoThenRefuse({ db, stripe, orderId, options, timing }, membershipRefusal(price.reason, price.message), `The membership's Stripe price was refused: ${price.reason}`)
+    }
+  }
+  const answer = await createReaderIntent(db, stripe, reader, timing)
 
   if (answer.outcome === 'definite') {
     const refusal = orderRefusal({ stage: 'payment', reason: 'reader_intent_failed', message: answer.message })
@@ -1075,11 +1452,10 @@ async function startReaderPayment(
 export async function placeOrder(db: Db, input: PlaceOrderInput, options: PlaceOrderOptions): Promise<PlaceOrderOutput> {
   const startedAt = options.startedAt ?? (options.now ?? Date.now)()
   refuseAtEntry(input)
-  refuseWhatIsNotBuilt(input)
   // Made before T1, so a card or reader order is never left pending with no way to reach Stripe: a
-  // missing key fails here, with nothing written.
+  // missing key fails here, with nothing written. W13: a membership always needs Stripe (cash is refused).
   const method = input.payment?.method
-  const needsStripe = method === 'card' || method === 'reader'
+  const needsStripe = method === 'card' || method === 'reader' || (Boolean(input.membershipPlanId) && method !== 'cash')
   const stripe = needsStripe ? options.stripe?.() : undefined
   if (needsStripe && !stripe) throw new Error(`A ${method} order needs a Stripe client.`)
   const placed = await inTransaction(db, (tx) => prepare(tx, input, options, { dryRun: false, keyLivemode: stripe?.keyLivemode ?? null }))
@@ -1089,6 +1465,7 @@ export async function placeOrder(db: Db, input: PlaceOrderInput, options: PlaceO
   }
   if (!placed.charge) return placed.output
   if (!stripe) throw new Error('A card order needs a Stripe client.')
+  if (placed.charge.snapshot.membership) return collectMembershipAndFinish(db, stripe, { ...placed, charge: placed.charge }, options, startedAt)
   return collectAndFinish(db, stripe, { ...placed, charge: placed.charge }, options, startedAt)
 }
 
@@ -1109,7 +1486,6 @@ class DryRunFinished extends Error {
  */
 export async function dryRunOrder(db: Db, input: PlaceOrderInput, options: PlaceOrderOptions): Promise<OrderDryRunOutput> {
   refuseAtEntry(input)
-  refuseWhatIsNotBuilt(input)
   try {
     await inTransaction(db, async (tx) => {
       const placed = await prepare(tx, input, options, { dryRun: true, keyLivemode: null })

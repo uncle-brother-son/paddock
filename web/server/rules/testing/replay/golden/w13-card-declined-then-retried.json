@@ -1,0 +1,100 @@
+{
+  "scenario": "w13-card-declined-then-retried",
+  "results": [
+    {
+      "success": false,
+      "stage": "payment",
+      "reason": "membership_payment_failed",
+      "message": "The customer's card was declined when Stripe tried to take the first membership payment. No money was taken and nothing was recorded — use a different card or retry."
+    },
+    {
+      "success": false,
+      "stage": "payment",
+      "reason": "membership_payment_failed",
+      "message": "The customer's card was declined when Stripe tried to take the first membership payment. No money was taken and nothing was recorded — use a different card or retry."
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "prices.retrieve",
+      "params": {
+        "id": "price_seed_monthly"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "customers.update",
+      "params": {
+        "id": "cus_seed",
+        "invoice_settings": {
+          "default_payment_method": "pm_seed"
+        }
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "subscriptions.create",
+      "params": {
+        "customer": "cus_seed",
+        "items": [
+          {
+            "price": "price_seed_monthly"
+          }
+        ],
+        "default_payment_method": "pm_seed",
+        "off_session": true,
+        "payment_behavior": "error_if_incomplete",
+        "metadata": {
+          "supabase_customer_id": "10000000-0000-4000-8000-000000000005",
+          "membership_plan_id": "10000000-0000-4000-8000-00000000000a",
+          "billing_frequency": "monthly"
+        },
+        "expand": [
+          "latest_invoice.payments"
+        ]
+      },
+      "idempotencyKey": "replay-membership-key"
+    },
+    {
+      "method": "prices.retrieve",
+      "params": {
+        "id": "price_seed_monthly"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "customers.update",
+      "params": {
+        "id": "cus_seed",
+        "invoice_settings": {
+          "default_payment_method": "pm_seed"
+        }
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "subscriptions.create",
+      "params": {
+        "customer": "cus_seed",
+        "items": [
+          {
+            "price": "price_seed_monthly"
+          }
+        ],
+        "default_payment_method": "pm_seed",
+        "off_session": true,
+        "payment_behavior": "error_if_incomplete",
+        "metadata": {
+          "supabase_customer_id": "10000000-0000-4000-8000-000000000005",
+          "membership_plan_id": "10000000-0000-4000-8000-00000000000a",
+          "billing_frequency": "monthly"
+        },
+        "expand": [
+          "latest_invoice.payments"
+        ]
+      },
+      "idempotencyKey": "replay-membership-key"
+    }
+  ],
+  "tables": {}
+}

@@ -22,6 +22,8 @@ const CODE_BY_REASON: Readonly<Record<string, ApiErrorCode>> = {
   membership_payment_failed: 'PAYMENT_FAILED',
   // W11: the reader's intent couldn't be made, so no payment could be taken.
   reader_intent_failed: 'PAYMENT_FAILED',
+  // W13: the old cancel of the customer's exhausted subscription failed (Q8: everything put back).
+  membership_cancellation_failed: 'PAYMENT_FAILED',
 }
 
 export function refusalCode(reason: string): ApiErrorCode {
@@ -54,7 +56,14 @@ export function orderRefusal(
 }
 
 /** Why an order is held pending (W10): its details, beside a refusal's stage and reason. */
-export type UnconfirmedReason = 'payment_unconfirmed' | 'paid_not_finished' | 'charged_without_order'
+export type UnconfirmedReason =
+  | 'payment_unconfirmed'
+  | 'paid_not_finished'
+  | 'charged_without_order'
+  /** W13: a definite failure after money was taken, whose reversal isn't confirmed yet (held, marked). */
+  | 'compensation_unfinished'
+  /** W13: everything is paid, but cancelling the old subscription (Q8) got no clear answer. */
+  | 'replaced_unconfirmed'
 
 /**
  * PAYMENT_UNCONFIRMED (W03-plan 2.5): the order is held pending, with its claims, because its card
