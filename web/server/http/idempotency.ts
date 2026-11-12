@@ -141,7 +141,9 @@ export async function pruneClientSecrets(db: Queryable): Promise<number> {
   const rows = await db.query<{ key: string }>(
     `UPDATE api_idempotency
         SET response = response #- '{data,pendingReaderPayment,clientSecret}' #- '{data,clientSecret}'
-      WHERE endpoint IN ('POST /api/v1/staff/orders', 'POST /api/v1/staff/terminal/setup-intents')
+      WHERE (endpoint IN ('POST /api/v1/staff/orders', 'POST /api/v1/staff/terminal/setup-intents')
+             -- W19: Settle on the reader keeps its intent's secret in its stored answer too.
+             OR endpoint LIKE 'POST /api/v1/staff/bookings/%/settle')
         AND created_at < now() - make_interval(mins => $1)
         AND (response #> '{data,pendingReaderPayment,clientSecret}' IS NOT NULL OR response #> '{data,clientSecret}' IS NOT NULL)
       RETURNING key`,

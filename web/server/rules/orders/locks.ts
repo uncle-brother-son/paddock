@@ -17,7 +17,9 @@ import type { Tx } from '@/server/db'
  * W17 (D-plan 4.5): an existing booking comes straight after the order. A booking change (step D) locks the booking
  * first, then the rows after it; a flow's finalise and undo, and a refund's R2, lock their own record first (the
  * pending_reader_payments row, the claim), then the booking. T1 of an order never locks an existing booking (it
- * writes a new one), so step C's code needs no change. server/rules/bookings/locks.ts takes these.
+ * writes a new one). W19 (W17 review S2): step C's undo (undo-order.ts, and the manual close that runs it) does: it
+ * deletes the order's booking, so it locks that booking straight after the order, before the customer. T2 writes no
+ * booking row. server/rules/bookings/locks.ts takes these for a booking change.
  */
 export const LOCK_ORDER = [
   'order',

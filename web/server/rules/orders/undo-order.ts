@@ -233,6 +233,12 @@ export function changedSince(snapshot: PendingSnapshot | null, parts: Pick<Order
   return changed
 }
 
+/** W19 (W17 review S2): the booking the order's lines point at, locked, if there is one. */
+const UNDO_BOOKING_LOCK_SQL = `
+SELECT id FROM bookings
+WHERE id = (SELECT booking_id FROM order_line_items WHERE order_id = $1::uuid AND booking_id IS NOT NULL LIMIT 1)
+FOR UPDATE`
+
 /** W14b: exported for the manual close (close-stuck.ts), which runs it inside its own transaction after its own checks. */
 export async function undoInTransaction(tx: Tx, orderId: string, options: UndoOptions): Promise<UndoOutcome> {
   // 1. The order first (LOCK_ORDER), so T2 and another undo queue behind it and see what this did.
@@ -245,6 +251,10 @@ export async function undoInTransaction(tx: Tx, orderId: string, options: UndoOp
   if (oldRollbackStarted(order.reader_payment)) return { undone: false, reason: 'rollback_started' }
   // W13: a compensation has started on it: only that compensation, finished, may undo it.
   if (order.reader_payment && 'compensation' in order.reader_payment && !options.compensated) return { undone: false, reason: 'compensating' }
+  // W19 (W17 review S2, LOCK_ORDER): the order's booking straight after the order, before the customer and the rest,
+  // as a booking change (step D) takes the booking before the customer, so the two queue rather than deadlock. FOR
+  // UPDATE: the undo deletes the booking below, and this is the lock its DELETE takes.
+  await tx.query(UNDO_BOOKING_LOCK_SQL, [orderId])
 
   // 2. What it holds, read now the order is locked.
   const parts = (await tx.query<OrderParts>(PARTS_SQL, [orderId]))[0] as OrderParts

@@ -14,6 +14,9 @@
 // record carries the Worker's `method` and `request_id`). Anything the old code made is counted and left
 // to the old sweep.
 //
+// W19 (W17 review S1): saved-card flows (Settle first). Never charged here: the customer's payments are listed and
+// matched by `metadata.pending_id` (reconcileCardFlow), then C2 or the undo, or left held.
+//
 // W12a (W12 review S1): it also reads Stripe for Worker orders the old screens moved out of `pending`
 // while their payment was unconfirmed (changed-elsewhere.ts), and records what it finds. It never acts on
 // them: no cancel, refund, finalise or undo.
@@ -58,7 +61,7 @@ import {
 } from './membership'
 import { SUBSCRIPTIONS_LEFT_SQL } from './stuck-list'
 import { PROCESSING_MINUTES, type CardSnapshot, type PendingSnapshot, type ReaderSnapshot } from './pending-order'
-import { cancelReaderFlow, finaliseFlowInTransaction, readFlow, undoFlowInTransaction, type FlowRow } from './reader-flow'
+import { cancelReaderFlow, finaliseFlowInTransaction, isWorkerCardFlow, readFlow, undoFlowInTransaction, type FlowRow } from './reader-flow'
 import { cancelReaderOrder, finaliseReaderOrderFound, otherModeMessage, settleIntent } from './reader-order'
 import { undoOrder } from './undo-order'
 
@@ -632,7 +635,56 @@ async function readChangedElsewhere(run: Run, order: ChangedOrder): Promise<Reco
 
 // --- Flows
 
+/**
+ * PaymentIntent statuses that took nothing and can take nothing without a new confirm, which only the press could send
+ * (and only within its first hour): a decline leaves `requires_payment_method`; a cancelled one is `canceled`.
+ */
+const CARD_NOTHING_TAKEN: ReadonlySet<string> = new Set(['requires_payment_method', 'canceled'])
+
+/**
+ * W19 (W17 review S1, D-plan 4.10): a saved-card flow (Settle; later Move and Add Guest). Reconcile never sends its
+ * charge: only the press that wrote the record does, once. It lists the customer's payments and matches
+ * `metadata.pending_id`:
+ * - one that succeeded: C2 with it (a second one succeeding can't happen under one key, and is left for a person);
+ * - none, or only declined or cancelled ones, once past the window: nothing was taken, so the undo;
+ * - anything else (processing, waiting on the bank, a list Stripe didn't answer): left held for the next run.
+ * A charge that succeeds on a flow already undone is kept by C2 for the automatic refund, as for the reader.
+ */
+async function reconcileCardFlow(run: Run, row: FlowRow): Promise<ReconcileItem> {
+  const found = await findIntents(run.stripe, run.timing, {
+    customer: row.snapshot.stripe_customer_id ?? null,
+    since: row.created_at,
+    matches: (intent) => intent.metadata?.['pending_id'] === row.id,
+  })
+  if (found.kind === 'unclear') return left('flow', row.id, 'unclear', found.detail)
+  if (found.intents.length === 0 && !sameMode(row.snapshot.livemode, run.stripe.keyLivemode)) return left('flow', row.id, 'other_mode')
+  const succeeded = found.intents.filter((intent) => intent.status === 'succeeded')
+  if (succeeded.length > 1) return left('flow', row.id, 'several_payments', succeeded.map((intent) => intent.id).join(', '))
+  const paid = succeeded[0]
+  const stillGoing = found.intents.filter((intent) => intent.status !== 'succeeded' && !CARD_NOTHING_TAKEN.has(intent.status))
+  if (!paid && stillGoing.length > 0) return left('flow', row.id, 'payment_processing', stillGoing.map((intent) => `${intent.id} ${intent.status}`).join(', '))
+  try {
+    if (paid) {
+      const outcome = await finaliseFlowInTransaction(run.db, row.id, paid, run.options)
+      if (outcome.finalised) return outcome.alreadyFinalised ? { kind: 'flow', id: row.id, outcome: 'settled_elsewhere', detail: 'finalised' } : { kind: 'flow', id: row.id, outcome: 'finalised', detail: paid.id }
+      return left('flow', row.id, outcome.reason, paid.id)
+    }
+    const why =
+      found.intents.length === 0
+        ? 'Stripe has no payment for this saved-card change'
+        : `Stripe's payments for this saved-card change took nothing: ${found.intents.map((intent) => `${intent.id} ${intent.status}`).join(', ')}`
+    const undone = await undoFlowInTransaction(run.db, row.id, { ...run.options, why })
+    if (undone.undone) return { kind: 'flow', id: row.id, outcome: 'undone', detail: why, ...(undone.problems.length > 0 ? { warning: undone.problems.join('; ') } : {}) }
+    return { kind: 'flow', id: row.id, outcome: 'settled_elsewhere', detail: undone.reason }
+  } catch (err) {
+    // A database fault: nothing was written (one transaction). Never refunded for it (W6-3); the next run tries again.
+    return left('flow', row.id, paid ? 'finalise_failed' : 'undo_failed', err instanceof Error ? err.message : String(err))
+  }
+}
+
 async function reconcileFlow(run: Run, row: FlowRow): Promise<ReconcileItem> {
+  // W19: a saved-card flow is listed and matched, never charged, whatever its row holds (reconcileCardFlow).
+  if (isWorkerCardFlow(row.snapshot)) return reconcileCardFlow(run, row)
   // W14b (W12-6, W12a N1 for flows): the run's own deadline, not the press's 30 s, as its orders already do.
   const routeOptions = {
     actor: run.options.actor,
@@ -896,9 +948,10 @@ WHERE ${CHANGED_ELSEWHERE_WHERE}
   )
 ORDER BY since, o.id`
 
+/** W19: the Worker's flows, reader and saved card (a record with its `method` and `request_id`). */
 const FLOWS_DUE_SQL = `
 SELECT id FROM pending_reader_payments
-WHERE status = 'pending' AND snapshot->>'method' = 'reader' AND (snapshot->>'request_id') IS NOT NULL
+WHERE status = 'pending' AND snapshot->>'method' IN ('reader', 'card') AND (snapshot->>'request_id') IS NOT NULL
   AND created_at < now() - make_interval(mins => $1::int)
 ORDER BY created_at, id`
 
@@ -909,7 +962,7 @@ SELECT
      AND (reader_payment->>'method') IS DISTINCT FROM 'card' AND (reader_payment->>'method') IS DISTINCT FROM 'reader'
      AND COALESCE((reader_payment->>'created_at')::timestamptz, created_at) < now() - make_interval(mins => $1::int)) AS orders,
   (SELECT count(*)::int FROM pending_reader_payments
-   WHERE status = 'pending' AND NOT (snapshot->>'method' = 'reader' AND (snapshot->>'request_id') IS NOT NULL)
+   WHERE status = 'pending' AND NOT COALESCE(snapshot->>'method' IN ('reader', 'card') AND (snapshot->>'request_id') IS NOT NULL, false)
      AND created_at < now() - make_interval(mins => $2::int)) AS flows`
 
 /** What makes a left item's row worth writing again: its reason, and for a changed-elsewhere order its finding (W12a). */

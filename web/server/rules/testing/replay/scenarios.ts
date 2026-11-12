@@ -696,6 +696,8 @@ export async function dyingAfter(path: string, steps: () => Promise<unknown>, { 
   type Query = (sql: string, params?: unknown[]) => Promise<unknown>
   const realData = (globalThis as unknown as { paddockData: { query: Query } }).paddockData
   const realApi = backendApi()
+  const realWorker = workerApi()
+  const sameStep = WORKER_DOES_IT_NOW[path]
   let dead = false
   const died = () => Promise.reject(new Error('the function died'))
   vi.stubGlobal('paddockData', { query: (sql: string, params: unknown[] = []) => (dead ? died() : realData.query(sql, params)) })
@@ -707,14 +709,35 @@ export async function dyingAfter(path: string, steps: () => Promise<unknown>, { 
       return answer
     },
   })
+  // W19: once an action has moved to the Worker, the step is inside its route: the function dies once that answered.
+  vi.stubGlobal('paddockWorkerV1', {
+    async rawRequest(request: { path: string }) {
+      if (dead) return died()
+      const answer = await realWorker.rawRequest(request)
+      if (sameStep?.test(request.path)) dead = true
+      return answer
+    },
+  })
   try {
     await steps().catch(() => undefined)
     if (!dead) throw new Error(`The function never reached ${path}.`)
   } finally {
     vi.stubGlobal('paddockData', realData)
     vi.stubGlobal('paddockBackendApi2', realApi)
+    vi.stubGlobal('paddockWorkerV1', realWorker)
   }
   vi.setSystemTime(Date.now() + secondsLater * 1000)
+}
+
+const workerApi = () => (globalThis as unknown as { paddockWorkerV1: { rawRequest: RawRequest } }).paddockWorkerV1
+
+/**
+ * W19: a legacy step an action's old function made, and the Worker route that makes it now the action has moved (the
+ * staff app's thin wrapper calls it through paddockWorkerV1). Settle's saved-card charge is made inside the settle
+ * route. The old functions never call these routes, so the old side's recordings are unchanged.
+ */
+const WORKER_DOES_IT_NOW: Readonly<Record<string, RegExp>> = {
+  '/api/payments/charge-saved-card': /^\/api\/v1\/staff\/bookings\/[^/]+\/settle$/,
 }
 
 const CHARGE_PATH = '/api/payments/charge-saved-card'

@@ -354,6 +354,35 @@ old reason and the words staff see; it writes nothing.
   `time_conflict`.
 - Neither moves money, so neither checks the switch.
 
+## Settle and the flow pipeline (step D, W19)
+
+`bookings/settle.ts`, `POST /api/v1/staff/bookings/:bookingId/settle`; the staff app's `settleLapsedBooking` is a thin
+call to it. Gated first by the switch (`booking_changes`; the card also `saved_card`; the reader `reader_flows` and
+`reader`). The amount is seat 1's stored price, never recalculated.
+
+- **C1, one transaction, no Stripe** (with T1's once-only deadlock retry): `lockAndLoadBooking` (the booking, its
+  customer, the gift card), the old checks in their order, Q18's confirmed figures (`figures.amountDue`,
+  `figures.toCollect`; the cash tick's `confirmedCashAmount` when no `toCollect` is sent; over half a penny refused
+  with the new figure and Q11's words), the store credit and the gift card claimed (New Order's words for a voided,
+  expired, missing or used-up card), the booking confirmed with seat 1 paid and its credit released, `booking.settle`.
+  No card money: the gift card's row (the booking, no order), commit, settled. Q36: no order for cash, gift card or
+  store credit. A database fault rolls all of it back: `settle_not_saved`, nothing kept.
+- **Card money:** the flow's record (`pending_reader_payments`, `method` card or reader, `request_id`, `livemode`,
+  `stripe_customer_id`, every part) is C1's last write. The saved card: `settleCardFlow` charges once under
+  `<pendingId>:charge` (metadata `pending_id`), then W12's C2 (the card part's order and booking line, as today) or, on
+  a definite refusal, the undo; no clear answer is held (Q35's words), never undone here; a C2 fault after the card
+  paid is held (never refunded) with its PaymentIntent written onto the row on its own. W17 review S1: nothing is
+  sent for a record older than 60 minutes. The reader, pending-first (W12-7): the intent under
+  `<pendingId>:reader-intent` with `metadata.pending_id`, written onto the record with its Stripe customer and mode;
+  the screen collects, then W12's flow routes finish or cancel it.
+- **Reconcile** (`reconcileCardFlow`) never sends a card flow's charge: it lists the customer's payments and matches
+  `metadata.pending_id`. One succeeded: C2. None, or only declined or cancelled ones, past the window: the undo.
+  Anything else (`payment_processing`, unclear): left held. A charge landing on an undone card flow is refunded by the
+  late-refund step. The stuck list shows card flows as the Worker's with their own waiting words; the old sweep, the old
+  stuck list and `OLD_DUE_SQL` count a card or reader flow with a `request_id` as the Worker's.
+- **W17 review S2:** step C's undo locks the order's booking straight after the order (LOCK_ORDER), so it and a
+  booking change's C1 queue rather than deadlock.
+
 ## Refund claims with no finish
 
 The staff app claims a refund's money before it moves. Each claim writes `booking.refund_claimed` to

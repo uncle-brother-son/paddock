@@ -221,8 +221,11 @@ describe('the words W17 adds', () => {
     )
   })
 
-  it('a held card flow: the reader words with "card payment" (W05 review 1, finding 18)', () => {
-    expect(words.CARD_PAYMENT_OPEN_MESSAGE).toBe(words.READER_PAYMENT_OPEN_MESSAGE.replace('card reader payment', 'card payment'))
+  it('a held card flow: "card payment" (W05 review 1, finding 18), and only Resolve now, never a finish or cancel button (W19, W17 review later 1)', () => {
+    expect(words.CARD_PAYMENT_OPEN_MESSAGE).toContain('card payment')
+    expect(words.CARD_PAYMENT_OPEN_MESSAGE).not.toContain('card reader')
+    expect(words.CARD_PAYMENT_OPEN_MESSAGE).toContain('Resolve now on the Orders page after 15 minutes')
+    expect(words.CARD_PAYMENT_OPEN_MESSAGE).not.toMatch(/finish|cancel/i)
   })
 
   it("Q37's payment line: what was paid, in Q37's own example", () => {

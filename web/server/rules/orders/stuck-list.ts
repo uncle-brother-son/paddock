@@ -11,7 +11,7 @@ import 'server-only'
 import type { Db } from '@/server/db'
 import { CHANGED_ELSEWHERE, CHANGED_ELSEWHERE_DAYS, CHANGED_ELSEWHERE_WHERE, changedElsewhereWords, FINAL_FINDINGS, type ChangedElsewhereFinding } from './changed-elsewhere'
 import { CHANGED_SINCE_MESSAGE } from './failure-messages'
-import { isWorkerFlow, type FlowSnapshot } from './reader-flow'
+import { isWorkerCardFlow, isWorkerFlow, type FlowSnapshot } from './reader-flow'
 import type { StuckCloseTarget } from '@/contracts'
 import { PROCESSING_MINUTES as RECONCILE_WINDOW_MINUTES } from './pending-order'
 
@@ -73,7 +73,16 @@ export const STUCK_WORDS: Readonly<Record<string, string>> = {
   membership_line_missing: "This membership order is missing its membership, so it is being reversed automatically: don't take payment again. If this stays, tell a manager.",
   membership_row_missing: "This membership order is missing its membership, so it is being reversed automatically: don't take payment again. If this stays, tell a manager.",
   subscription_unconfirmed: "Stripe didn't confirm the membership's subscription. The automatic check looks again every 5 minutes: don't take payment again or start the membership again.",
+  // W19: a saved-card change's payment Stripe is still working on (reconcileCardFlow).
+  payment_processing: "The card payment for this change is still being processed by the bank. The automatic check looks again every 5 minutes: don't take payment again.",
 }
+
+/**
+ * W19: a saved-card change (Settle) waiting for the automatic check. Nothing to finish or cancel by hand: the check
+ * finds the payment in Stripe and finishes the change, or undoes it if nothing was taken.
+ */
+export const CARD_FLOW_WAITING_WORDS =
+  "A saved-card payment for this booking change didn't finish cleanly. The automatic check, every 5 minutes, finds it in Stripe and finishes the change, or undoes it if nothing was taken: don't take payment again."
 
 /**
  * W13a (B1c): a subscription the reader's finalise made for an order that was gone (or being put back), which
@@ -390,7 +399,9 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
       })
     ),
     flows: flows.map((row) => {
-      const madeByWorker = isWorkerFlow(row.snapshot)
+      // W19: a saved-card flow is the Worker's too (W17 "For W19" 1), with words of its own while it waits.
+      const card = isWorkerCardFlow(row.snapshot)
+      const madeByWorker = card || isWorkerFlow(row.snapshot)
       const reason = reasonFor(madeByWorker, row.last)
       const createdAt = iso(row.created_at)
       return {
@@ -403,7 +414,7 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
         ageMinutes: ageMinutes(createdAt),
         madeBy: madeByWorker ? 'worker' : 'old',
         reason,
-        words: wordsFor(reason),
+        words: card && reason === 'waiting' ? CARD_FLOW_WAITING_WORDS : wordsFor(reason),
       }
     }),
     refunds: refunds.map((row) => {

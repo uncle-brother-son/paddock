@@ -4,13 +4,18 @@
 // finalise, which now writes the card's order) or, on a definite refusal, the undo (W12's flow undo). Each is one
 // transaction that locks the flow's row first and re-checks it, so a second press, reconcile and a race each end in
 // one outcome. Replaces bookingCardCharge's started and finished rows, pressFinished, earlierCardCharge's resume,
-// reverseTakenPayment and the 24-hour key look-ups (D-plan "five things" 1). No route yet: W19 (Settle) is the first
-// change to start a card flow, and adds reconcile's card part.
+// reverseTakenPayment and the 24-hour key look-ups (D-plan "five things" 1). W19: Settle is the first change to start
+// one (server/rules/bookings/settle.ts). Only the press that wrote the record sends its charge, at most once and only
+// while the record is under an hour old (W17 review S1, well inside Stripe's 24-hour key life); reconcile never sends
+// one: it lists the customer's payments and matches `metadata.pending_id` (reconcile.ts, reconcileCardFlow). W19 also
+// starts reader flows pending-first here (W12-7): the record, then the intent under `<pendingId>:reader-intent`.
 import 'server-only'
 import Stripe from 'stripe'
 import type { Db, Tx } from '@/server/db'
 import { stripeIdempotencyKey } from '@/server/http/idempotency'
 import type { StripeClient } from '@/server/stripe/client'
+import { ensureStripeCustomer } from '@/server/stripe/customer'
+import { NoTimeLeft, sendOptions, type StripeTiming } from '@/server/stripe/deadline'
 import { ORDER_STRIPE_LIMITS } from '@/server/stripe/limits'
 import { readStripeFailure } from '@/server/stripe/outcome'
 import {
@@ -33,6 +38,7 @@ import {
   type ReaderFlow,
 } from '@/server/rules/orders/reader-flow'
 import type { ReaderRouteOptions } from '@/server/rules/orders/reader-order'
+import { READER_INTENT_FALLBACK_MESSAGE, READER_INTENT_NOT_SENT_MESSAGE } from '@/server/rules/orders/reader-intent'
 import { CARD_FLOW_CHARGED_WITHOUT_RECORD_MESSAGE, CARD_FLOW_PAID_NOT_FINISHED_MESSAGE, CHANGE_PAYMENT_UNCONFIRMED_MESSAGE } from './failure-messages'
 
 /** The Stripe steps of a flow, each keyed `<pendingId>:<step>` (W12-7). */
@@ -67,13 +73,20 @@ export type CardFlowSnapshot = FlowSnapshot & {
   livemode: boolean
 }
 
+/**
+ * A reader flow's record (W19, W12-7): the old flow snapshot plus the Worker's marks. `stripe_customer_id` is the
+ * customer's as C1 read it (null when none yet): the intent's own customer is written onto the record with the intent
+ * (recordFlowIntent), and finalise checks the payment against it (W12 F2).
+ */
+export type ReaderFlowSnapshot = FlowSnapshot & { method: 'reader'; channel: 'staff'; request_id: string; livemode: boolean; stripe_customer_id: string | null }
+
 export interface NewFlowRecord {
   flow: ReaderFlow
   /** The booking (Move, Settle and Add Guest all record the booking). */
   recordId: string
   /** The card's part, in pounds: what Stripe takes and C2 checks, to the penny. */
   expectedAmount: number
-  snapshot: CardFlowSnapshot | (FlowSnapshot & { method: 'reader'; channel: 'staff'; request_id: string; livemode: boolean })
+  snapshot: CardFlowSnapshot | ReaderFlowSnapshot
 }
 
 /**
@@ -178,10 +191,27 @@ export interface CardFlowOptions extends Pick<ReaderRouteOptions, 'actor' | 'req
 
 const explain = (err: unknown): string => (err instanceof Error ? `${err.name}: ${err.message}` : String(err))
 
+/** Postgres's clock, as created_at was stamped with it. Null (no row) counts as too old: nothing is sent. */
+const CARD_FLOW_TOO_OLD_SQL =
+  'SELECT created_at < now() - make_interval(mins => $2::int) AS too_old FROM pending_reader_payments WHERE id = $1::uuid'
+/** Only onto a card flow still pending with no PaymentIntent recorded. */
+const RECORD_CARD_INTENT_SQL =
+  "UPDATE pending_reader_payments SET payment_intent_id = $2::text, updated_at = now() WHERE id = $1::uuid AND status = 'pending' AND payment_intent_id IS NULL AND snapshot->>'method' = 'card'"
+
 /**
- * After C1 has committed a card flow's record: charge, then C2 or the undo. Safe to run again at any point, by a
- * second press or by reconcile: the same key gets Stripe's first answer back, so the card is charged at most once,
- * and C2 and the undo each re-check the row under its lock, so the change is finished or undone at most once.
+ * W17 review S1: a card flow's charge is only ever sent while its record is younger than this. Stripe keeps a key for
+ * about 24 hours, then may drop it, and a send under a dropped key is a new charge. The press sends within seconds of
+ * C1; an hour is far inside the key's life, and anything older is reconcile's, which never sends a charge.
+ */
+export const CARD_FLOW_SEND_LIMIT_MINUTES = 60
+
+/**
+ * After C1 has committed a card flow's record: charge, then C2 or the undo. Run by the press that wrote the record,
+ * straight after C1 (W19: Settle). It sends the charge only while the record is under CARD_FLOW_SEND_LIMIT_MINUTES
+ * old (W17 review S1): an older one is held with Q35's words and nothing is sent, because the key may have been
+ * dropped by Stripe by then. Within the hour a second run is safe: the same key gets Stripe's first answer back, so
+ * the card is charged at most once, and C2 and the undo each re-check the row under its lock, so the change is
+ * finished or undone at most once. Reconcile never calls this: it lists the customer's payments instead.
  */
 export async function settleCardFlow(db: Db, stripe: StripeClient, pendingId: string, options: CardFlowOptions): Promise<CardFlowOutcome> {
   const row = await readFlow(db, pendingId)
@@ -196,6 +226,18 @@ export async function settleCardFlow(db: Db, stripe: StripeClient, pendingId: st
       ? (await db.query<{ id: string }>('SELECT id FROM orders WHERE stripe_payment_intent_id = $1 LIMIT 1', [row.payment_intent_id]))[0]?.id ?? null
       : null
     return { outcome: 'finished', pendingId, orderId: recorded, paymentIntentId: row.payment_intent_id, alreadyFinished: true }
+  }
+
+  // W17 review S1: past the bound nothing is sent; reconcile settles it from what Stripe's list shows.
+  const age = (await db.query<{ too_old: boolean }>(CARD_FLOW_TOO_OLD_SQL, [pendingId, CARD_FLOW_SEND_LIMIT_MINUTES]))[0]
+  if (age?.too_old !== false) {
+    return {
+      outcome: 'held',
+      pendingId,
+      reason: 'payment_unconfirmed',
+      message: CHANGE_PAYMENT_UNCONFIRMED_MESSAGE,
+      detail: `not sent: the record is older than ${CARD_FLOW_SEND_LIMIT_MINUTES} minutes, so only reconcile settles it`,
+    }
   }
 
   let answer: ChargeAnswer
@@ -227,6 +269,9 @@ export async function settleCardFlow(db: Db, stripe: StripeClient, pendingId: st
   try {
     finalised = await finaliseFlowInTransaction(db, pendingId, paymentIntent, actor)
   } catch (err) {
+    // W17 review S1: the PaymentIntent onto the row on its own, best effort, so the stuck list and reconcile can name
+    // it. Reconcile finds it by listing either way, so a failure here changes nothing.
+    await db.query(RECORD_CARD_INTENT_SQL, [pendingId, paymentIntent.id]).catch(() => undefined)
     return { outcome: 'held', pendingId, reason: 'paid_not_finished', message: CARD_FLOW_PAID_NOT_FINISHED_MESSAGE, detail: `C2 failed after ${paymentIntent.id}: ${explain(err)}` }
   }
   if (finalised.finalised) return { outcome: 'finished', pendingId, orderId: finalised.orderId, paymentIntentId: paymentIntent.id, alreadyFinished: finalised.alreadyFinalised }
@@ -242,4 +287,91 @@ export async function settleCardFlow(db: Db, stripe: StripeClient, pendingId: st
  */
 export function undoCardFlow(db: Db, pendingId: string, options: Pick<ReaderRouteOptions, 'actor' | 'requestId'> & { why: string }) {
   return undoFlowInTransaction(db, pendingId, options)
+}
+
+// --- A reader flow, pending-first (W19, W12-7)
+
+/**
+ * The reader intent's request, built only from the record and the Stripe customer, so the retry under the same key is
+ * the same request: the legacy terminal route's parameters (pence, gbp, the customer, `card_present`, no card saving,
+ * `supabase_customer_id` in the metadata) and the old flow's description, plus the record's own id (flowMetadata).
+ */
+export function readerFlowIntentRequest(row: Pick<FlowRow, 'id' | 'flow' | 'record_id' | 'expected_amount' | 'snapshot'>, stripeCustomerId: string): Stripe.PaymentIntentCreateParams {
+  return {
+    amount: pence(Number.parseFloat(row.expected_amount)),
+    currency: 'gbp',
+    customer: stripeCustomerId,
+    payment_method_types: ['card_present'],
+    metadata: { supabase_customer_id: row.snapshot.customer_id, ...flowMetadata(row) },
+    description: row.snapshot.description,
+  }
+}
+
+export type FlowIntentAnswer =
+  /** Stripe made the intent: the screen collects it on the reader. Nothing has been taken. */
+  | { outcome: 'created'; paymentIntent: Stripe.PaymentIntent; stripeCustomerId: string }
+  /** Stripe said no, or nothing was sent: no intent exists, so nothing can be taken and the flow is undone. */
+  | { outcome: 'definite'; message: string; detail: string }
+  /** No clear answer: an intent may exist. Held, never undone here; reconcile finds it by `metadata.pending_id`. */
+  | { outcome: 'unknown'; detail: string }
+
+/**
+ * The reader flow's intent, after C1 has committed its record: as createReaderIntent (reader-intent.ts) does for an
+ * order. The Stripe customer first (the record's, else one tagged with the customer, else a new one): a failure there
+ * means nothing was asked for. Then the intent under `<pendingId>:reader-intent`, sent once more with the same key and
+ * request on no clear answer. Every call keeps to the press's deadline. Outside any transaction.
+ */
+export async function createFlowReaderIntent(db: Db, stripe: StripeClient, row: FlowRow, timing?: StripeTiming): Promise<FlowIntentAnswer> {
+  let stripeCustomerId: string
+  try {
+    stripeCustomerId = await ensureStripeCustomer(db, stripe, { id: row.snapshot.customer_id, stripeCustomerId: row.snapshot.stripe_customer_id ?? null }, timing)
+  } catch (err) {
+    const message =
+      err instanceof NoTimeLeft ? READER_INTENT_NOT_SENT_MESSAGE : err instanceof Stripe.errors.StripeError ? `Failed to create Stripe customer: ${err.message}` : READER_INTENT_FALLBACK_MESSAGE
+    return { outcome: 'definite', message, detail: `Finding the Stripe customer: ${explain(err)}` }
+  }
+  const request = readerFlowIntentRequest(row, stripeCustomerId)
+  const key = flowReaderIntentKey(row.id)
+  let last = ''
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    let sendWith: Stripe.RequestOptions
+    try {
+      sendWith = sendOptions(timing, { idempotencyKey: key })
+    } catch (err) {
+      if (attempt === 1) return { outcome: 'definite', message: READER_INTENT_NOT_SENT_MESSAGE, detail: explain(err) }
+      return { outcome: 'unknown', detail: `${last} (not sent again: ${explain(err)})` }
+    }
+    try {
+      return { outcome: 'created', paymentIntent: await stripe.paymentIntents.create(request, sendWith), stripeCustomerId }
+    } catch (err) {
+      const failure = readStripeFailure(err)
+      if (failure.outcome === 'definite' || (accessRefused(err) && attempt === 1)) {
+        return { outcome: 'definite', message: `Failed to create PaymentIntent: ${failure.message}`, detail: explain(err) }
+      }
+      last = explain(err)
+    }
+  }
+  return { outcome: 'unknown', detail: last }
+}
+
+/**
+ * Writes the reader intent onto its flow's record with the Stripe customer it was made for and its mode (W11a), so the
+ * flow routes can check the payment against them (W12 F2) and reconcile can trust a "not found". Only while the record
+ * is still a pending reader flow with no other intent. In its own transaction, so its lock and statement limits apply.
+ * False when nothing was written.
+ */
+export async function recordFlowIntent(db: Db, pendingId: string, paymentIntent: Pick<Stripe.PaymentIntent, 'id' | 'livemode'>, stripeCustomerId: string): Promise<boolean> {
+  const written = await db.transaction((tx) =>
+    tx.query<{ id: string }>(
+      `UPDATE pending_reader_payments
+       SET payment_intent_id = $2::text,
+           snapshot = snapshot || jsonb_build_object('stripe_customer_id', $3::text, 'livemode', $4::boolean),
+           updated_at = now()
+       WHERE id = $1::uuid AND status = 'pending' AND snapshot->>'method' = 'reader'
+         AND COALESCE(payment_intent_id, $2::text) = $2::text
+       RETURNING id`,
+      [pendingId, paymentIntent.id, stripeCustomerId, paymentIntent.livemode]
+    )
+  )
+  return written.length === 1
 }

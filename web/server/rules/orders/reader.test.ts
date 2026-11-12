@@ -1458,7 +1458,8 @@ describe('round trips (about 20 ms each through Hyperdrive)', () => {
       expect(finalising.statements).toEqual(['SELECT id,', 'INSERT INTO', 'SELECT payment_status,', 'BEGIN; SELECT', 'SELECT o.customer_id,', 'WITH paid', 'WITH clock', 'COMMIT', 'BEGIN; SELECT', 'UPDATE api_idempotency', 'COMMIT'])
       const second = placedOf(await placeThrough({ ...readerBasket, booking: undefined }))
       const cancelling = await counting(() => cancel(second.orderId))
-      expect(cancelling.statements).toEqual(['SELECT id,', 'INSERT INTO', 'SELECT payment_status,', 'BEGIN; SELECT', 'SELECT customer_id,', 'WITH l', 'SELECT s.id', 'WITH capacity', 'WITH clock', 'COMMIT', 'BEGIN; SELECT', 'UPDATE api_idempotency', 'COMMIT'])
+      // W19 (W17 review S2): the undo locks the order's booking straight after the order ('SELECT id').
+      expect(cancelling.statements).toEqual(['SELECT id,', 'INSERT INTO', 'SELECT payment_status,', 'BEGIN; SELECT', 'SELECT customer_id,', 'SELECT id', 'WITH l', 'SELECT s.id', 'WITH capacity', 'WITH clock', 'COMMIT', 'BEGIN; SELECT', 'UPDATE api_idempotency', 'COMMIT'])
     })
   })
 })

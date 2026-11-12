@@ -1170,7 +1170,8 @@ describe('round trips (about 20 ms each through Hyperdrive)', () => {
   const ROUTE_START = ['SELECT id,', 'INSERT INTO']
   const T1 = ['BEGIN; SELECT', 'SELECT s.id', 'WITH london', 'WITH clock', 'WITH clock', 'WITH clock', 'COMMIT']
   const T2 = ['BEGIN; SELECT', 'SELECT o.customer_id,', 'WITH paid', 'WITH clock', 'COMMIT']
-  const UNDO = ['BEGIN; SELECT', 'SELECT customer_id,', 'WITH l', 'SELECT s.id', 'WITH capacity', 'WITH clock', 'COMMIT']
+  // W19 (W17 review S2): the undo locks the order's booking straight after the order ('SELECT id').
+  const UNDO = ['BEGIN; SELECT', 'SELECT customer_id,', 'SELECT id', 'WITH l', 'SELECT s.id', 'WITH capacity', 'WITH clock', 'COMMIT']
   // W14 (W13c review L1): the stored answer in a transaction of its own, under the 8 s statement limit.
   const ROUTE_END = ['BEGIN; SELECT', 'UPDATE api_idempotency', 'COMMIT']
 

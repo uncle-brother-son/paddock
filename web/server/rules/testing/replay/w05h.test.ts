@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { Db } from '@/server/db'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
+import { CARD_PAYMENT_OPEN_MESSAGE } from '../../bookings/failure-messages'
 import type { Recording } from './compare'
 import { oldSide, replay, startReplay, type ReplayEnvironment, type ReplaySide, type Scenario, type ScenarioContext } from './harness'
 import {
@@ -430,6 +431,71 @@ describe('W05h on the old functions', () => {
       const message = await openMessage(async (bookingId, { call }) => {
         const { pendingReaderPayment } = await guestOnTheReader(bookingId, call)
         await call('cancelReaderPayment', { pendingId: pendingReaderPayment.pendingId })
+      })
+      expect(message).toBeNull()
+    })
+
+    // Brief W19a (W19 review S2): a flow the Worker started on a saved card has no finish or cancel button, so the
+    // banner gives the Worker's card words, word for word, when every open flow is one; the reader words otherwise.
+    // The guest's flow is re-marked as the Worker writes its own (snapshot method and request id).
+    const markedAs = (method: 'card' | 'reader') => async (bookingId: string, { call, db }: ScenarioContext) => {
+      const { pendingReaderPayment } = await guestOnTheReader(bookingId, call)
+      await db.query(`UPDATE pending_reader_payments SET snapshot = snapshot || jsonb_build_object('method', $2::text, 'request_id', 'w19a-request') WHERE id = $1::uuid`, [
+        pendingReaderPayment.pendingId,
+        method,
+      ])
+      return pendingReaderPayment.pendingId
+    }
+
+    it("a held saved-card flow, the only one open: the Worker's card words", async () => {
+      expect(await openMessage(markedAs('card'))).toBe(CARD_PAYMENT_OPEN_MESSAGE)
+    })
+
+    it('a flow the Worker started on the reader: the reader words', async () => {
+      expect(await openMessage(markedAs('reader'))).toBe(OPEN)
+    })
+
+    it('a card method without the Worker\'s request id counts as old: the reader words', async () => {
+      const message = await openMessage(async (bookingId, context) => {
+        const pendingId = await markedAs('card')(bookingId, context)
+        await context.db.query(`UPDATE pending_reader_payments SET snapshot = snapshot - 'request_id' WHERE id = $1::uuid`, [pendingId])
+      })
+      expect(message).toBe(OPEN)
+    })
+
+    it('a saved-card flow beside an old reader flow: the reader words', async () => {
+      const message = await openMessage(async (bookingId, context) => {
+        const pendingId = await markedAs('card')(bookingId, context)
+        // A second open flow on the booking, copied from the first as an old one (no method, no request id).
+        await context.db.query(
+          `INSERT INTO pending_reader_payments
+           SELECT (jsonb_populate_record(NULL::pending_reader_payments,
+                     to_jsonb(p) || jsonb_build_object('id', '00000000-0000-4000-8000-000000000a19', 'snapshot', p.snapshot - 'method' - 'request_id'))).*
+           FROM pending_reader_payments p WHERE p.id = $1::uuid`,
+          [pendingId]
+        )
+      })
+      expect(message).toBe(OPEN)
+    })
+
+    it('a held saved-card flow beside an old flow that has finished: the card words (only open flows count)', async () => {
+      const message = await openMessage(async (bookingId, context) => {
+        const pendingId = await markedAs('card')(bookingId, context)
+        await context.db.query(
+          `INSERT INTO pending_reader_payments
+           SELECT (jsonb_populate_record(NULL::pending_reader_payments,
+                     to_jsonb(p) || jsonb_build_object('id', '00000000-0000-4000-8000-000000000a19', 'status', 'cancelled', 'snapshot', p.snapshot - 'method' - 'request_id'))).*
+           FROM pending_reader_payments p WHERE p.id = $1::uuid`,
+          [pendingId]
+        )
+      })
+      expect(message).toBe(CARD_PAYMENT_OPEN_MESSAGE)
+    })
+
+    it('a saved-card flow that has finished: nothing open', async () => {
+      const message = await openMessage(async (bookingId, context) => {
+        const pendingId = await markedAs('card')(bookingId, context)
+        await context.db.query(`UPDATE pending_reader_payments SET status = 'finalised' WHERE id = $1::uuid`, [pendingId])
       })
       expect(message).toBeNull()
     })

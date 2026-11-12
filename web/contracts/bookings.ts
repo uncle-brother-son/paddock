@@ -230,6 +230,34 @@ export type BookingSpecialRequestsOutput = z.infer<typeof bookingSpecialRequests
 export const bookingStatusOutputSchema = z.object({ id, status: z.string(), cancelled_at: z.string().nullable() })
 export type BookingStatusOutput = z.infer<typeof bookingStatusOutputSchema>
 
+/**
+ * W19: settleLapsedBooking's route. `figures` are what the Settle dialog showed (Q18): `amountDue` seat 1's price,
+ * `toCollect` what the chosen method takes after the gift card and store credit. The old cash tick's
+ * `payment.confirmedCashAmount` still counts as `figures.toCollect` when that is missing.
+ */
+export const settleBookingRouteInputSchema = settleBookingInputSchema.extend(bookingInPath)
+
+/**
+ * W19: settleLapsedBooking's answer, as the old function gave it: settled, with the booking and seat 1's price; or, on
+ * the reader, not settled yet, with the payment the screen collects and then finalises or cancels (the flow routes).
+ * A refusal, a decline and a held payment (Q35) are ApiErrors whose details carry the reason and words.
+ */
+export const settleBookingOutputSchema = z.object({
+  settled: z.boolean(),
+  booking: z
+    .object({
+      id,
+      status: z.string(),
+      redemption_source: z.string(),
+      price_paid: z.string(),
+      payment_due_by: z.string().nullable(),
+    })
+    .optional(),
+  amountCharged: z.number().optional(),
+  pendingReaderPayment: pendingFlowPaymentSchema.optional(),
+})
+export type SettleBookingOutput = z.infer<typeof settleBookingOutputSchema>
+
 // --- Refusals (D-plan 4.6): an ApiError whose details carry the old reason, words and figures
 
 export const bookingRefusalDetailsSchema = z.object({
@@ -246,5 +274,7 @@ export const bookingRefusalDetailsSchema = z.object({
   figures: bookingRefundFiguresSchema.optional(),
   /** Remove Guest: pressing again would refund a second time (the old retryLocked). */
   retryLocked: z.boolean().optional(),
+  /** W19: the flow's record when the change is held for reconcile (Q35) or was undone after a decline. */
+  pendingId: z.string().optional(),
 })
 export type BookingRefusalDetails = z.infer<typeof bookingRefusalDetailsSchema>

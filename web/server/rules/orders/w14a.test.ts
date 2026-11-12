@@ -102,6 +102,29 @@ describe('W11-9: a stored client secret is taken out after the pending window', 
     // Nothing left to take: a second run changes nothing.
     expect(await pruneClientSecrets(db)).toBe(0)
   })
+  // W19a (W19 review later 2): Settle on the reader stores its intent's secret under the booking's own path, which
+  // pruneClientSecrets matches by pattern. settle.test.ts also runs this through the real route.
+  it('a reader Settle older than 15 minutes: its secret goes, the rest stays; a younger one keeps it', async () => {
+    await db.query('DELETE FROM api_idempotency')
+    const settleAt = (bookingId: string) => `POST /api/v1/staff/bookings/${bookingId}/settle`
+    const pending = { flow: 'settle', recordId: 'b1', pendingId: 'p1', paymentIntentId: 'pi_2', clientSecret: 'pi_2_secret_x', amount: 15 }
+    const settle = { ok: true, data: { settled: false, pendingReaderPayment: pending } }
+    await insertAnswer(settleAt(crypto.randomUUID()), settle, 16)
+    await insertAnswer(settleAt(crypto.randomUUID()), settle, 5)
+    // Another booking route keeps whatever it stored: the pattern names Settle only.
+    await insertAnswer(`POST /api/v1/staff/bookings/${crypto.randomUUID()}/status`, settle, 20)
+    expect(await pruneClientSecrets(db)).toBe(1)
+    const rows = await db.query<{ endpoint: string; response: { data: Record<string, unknown> } }>(
+      `SELECT endpoint, response FROM api_idempotency ORDER BY created_at, endpoint`
+    )
+    const kept = Object.fromEntries(Object.entries(pending).filter(([field]) => field !== 'clientSecret'))
+    expect(rows.map((row) => [row.endpoint.replace(/[0-9a-f-]{36}/, ':id'), row.response.data['pendingReaderPayment']])).toEqual([
+      ['POST /api/v1/staff/bookings/:id/status', pending],
+      ['POST /api/v1/staff/bookings/:id/settle', kept],
+      ['POST /api/v1/staff/bookings/:id/settle', pending],
+    ])
+    expect(await pruneClientSecrets(db)).toBe(0)
+  })
 })
 
 describe("W13d's defence: T2 and a paid order that holds this press's subscription", () => {

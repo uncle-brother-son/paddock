@@ -289,6 +289,24 @@ export const STATUS_PAYMENT_NEEDED_MESSAGE =
 /** A status change the bookings_no_cross_session_overlap constraint refuses (a no-show made active again). */
 export const STATUS_TIME_CONFLICT_MESSAGE = "Another booking now overlaps this booking's time, so it can't be made active again."
 
+// --- New in W19 (Settle on the Worker)
+
+/** C1 failed in the database and was rolled back (as step C's ORDER_NOT_SAVED): nothing was kept or taken. */
+export const SETTLE_NOT_SAVED_MESSAGE =
+  "The payment couldn't be saved (the system was busy, or one of its records couldn't be written), so nothing was kept and no payment was taken. The booking is still awaiting payment: try again."
+/** settleLapsedBooking.ts's words when the reader's payment couldn't be started (nothing was charged). */
+export const settleReaderNotStartedMessage = (detail: string): string =>
+  `Creating the card reader payment failed — the settle was undone and nothing was charged (${detail}).`
+/** A decline whose undo couldn't run yet: nothing was taken, and reconcile puts the booking back. */
+export const DECLINED_NOT_UNDONE_MESSAGE =
+  "Nothing was taken, but the booking couldn't be put back to awaiting payment yet. Don't take payment again: check the Orders page in a few minutes."
+/**
+ * W19a (W19 review later 3): the reader's payment couldn't be started and the undo then failed too. The first sentence
+ * without "the settle was undone", which would contradict the second.
+ */
+export const settleReaderNotStartedNotUndoneMessage = (detail: string): string =>
+  `Creating the card reader payment failed (${detail}). ${DECLINED_NOT_UNDONE_MESSAGE}`
+
 // --- New in W17
 
 /** The switch (D-plan 4.9, lead call L1), worded as W16's ORDER_PATH_OFF. */
@@ -313,11 +331,12 @@ export const CARD_FLOW_PAID_NOT_FINISHED_MESSAGE =
 export const CARD_FLOW_CHARGED_WITHOUT_RECORD_MESSAGE =
   "The card was charged, but the change had already been undone, so the payment needs refunding. Don't take payment again: check the Orders page."
 /**
- * W05 review 1, finding 18 (D-plan 2.3): the held-payment words when the held flow is a card one, as
- * READER_PAYMENT_OPEN_MESSAGE with "card payment" for "card reader payment".
+ * W05 review 1, finding 18 (D-plan 2.3): the held-payment words when every held flow is a card one. W19 (W17 review,
+ * later 1): a saved-card payment has no finish or cancel button (the press settles it, or reconcile does), so the words
+ * send staff to Resolve now only.
  */
 export const CARD_PAYMENT_OPEN_MESSAGE =
-  'A card payment is still open on this booking. Finish or cancel it first, or use Resolve now on the Orders page after 15 minutes.'
+  "A card payment on this booking is still being checked. Don't take payment again: use Resolve now on the Orders page after 15 minutes."
 /** The reader routes (finalise, cancel) given a saved-card flow's pending id: nothing was touched. */
 export const NOT_A_READER_FLOW_MESSAGE = "This is a saved-card payment, not a card reader payment, so it can't be finished or cancelled on the reader."
 

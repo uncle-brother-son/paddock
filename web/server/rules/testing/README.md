@@ -198,6 +198,15 @@ holds wrapper and route together. Their only named differences are N3's, on W17'
 the new side runs it too: the two breaches the old code records in N3 are gone on the new side. App code may import
 nothing under this folder (`frozen-booking-code.test.ts`, W18).
 
+W19 moves Settle (with the figures the dialog sends, `withSettleFigures`, and the switch on, `BOOKING_KINDS_ON`) and the
+reader flows' finalise and cancel, all through the staff app's wrappers; the flow wrappers send a Worker flow to the
+Worker and an old one (old Move and Add Guest) to their old body. Every scenario that calls Settle, W12's two reader
+Settle recordings included, matches with `SETTLE_DIFFERENCES` only: the flow's keys and metadata, its record, the audit
+rows (the rows the Worker doesn't replace are checked to be the golden file's, in order), the stored answer, the card
+order's `payment_method`, and per scenario the outcomes the old code's faults no longer reach (R1a, R1a's control,
+R2c, the lost answers, one press of two, the held C2 fault). `dyingAfter` knows that Settle's charge is now inside the
+settle route (`WORKER_DOES_IT_NOW`). Store credit notes' random `[ref ...]` labels are compared unnumbered.
+
 ## No real Stripe (W11)
 
 `no-real-stripe.ts` is loaded before every unit test file (`vitest.unit.config.ts`, `setupFiles`). Any

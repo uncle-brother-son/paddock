@@ -1566,182 +1566,127 @@ describe('staff app helpers', () => {
       })
     })
 
-    describe('Settle lapsed payment', () => {
-      const settle = async (payment: Record<string, unknown>, seatPrice = '30.00') => {
-        const database = stubDatabase([
-          [/UPDATE bookings/, () => [{ id: 'booking-1', status: 'confirmed', redemption_source: 'paid', price_paid: '30.00', payment_due_by: null }]],
-          [/FROM bookings b/, () => [{
-            id: 'booking-1',
-            customer_id: 'customer-1',
-            session_id: 'session-1',
-            party_size: 1,
-            status: 'payment_needed',
-            price_paid: '0.00',
-            redemption_source: 'membership_credit',
-            redeemed_membership_id: 'membership-1',
-            credit_period_id: 'period-1',
-            payment_due_by: null,
-            seat1_unit_price: seatPrice,
-            seat1_pay_by: 'membership_credit',
-          }]],
-        ])
+    // Brief W19: settleLapsedBooking is a thin call to the Worker's settle route now. Its rules (the cash figure, the
+    // parts over the price, the gift card and store credit claims, one transaction) are the Worker's and tested there
+    // (server/rules/bookings/settle.test.ts); here, the wrapper: what it sends, and the old answer shapes it gives back.
+    describe('Settle lapsed payment (W19: a thin call to the Worker)', () => {
+      const BOOKING = '11111111-1111-4111-8111-111111111111'
+      const refused = (code: string, details: Record<string, unknown>) => ({
+        data: { ok: false, error: { code, message: String(details['message']), details: { action: 'settle', ...details } }, requestId: 'worker-request' },
+      })
+      const settle = async (params: Record<string, unknown>) => {
+        const query = vi.fn()
+        vi.stubGlobal('paddockData', { query })
         const fn = (await backend('settleLapsedBooking')).default
-        const result = await fn({ params: { bookingId: 'booking-1', payment }, user })
-        return { result, ...database }
+        return { result: () => fn({ params: { bookingId: BOOKING, ...params }, user }), query }
       }
 
-      it('refuses a figure below its own, with the new figure, and writes nothing', async () => {
-        const { result, writes } = await settle({ method: 'cash', confirmedCashAmount: 20 })
-        expect(result).toEqual({ settled: false, reason: 'cash_amount_changed', message: CHANGED('30.00'), amountDue: 30 })
-        expect(writes()).toEqual([])
+      it('sends the payment, the figures on screen and the press key to the settle route, answers its data, and never touches the database', async () => {
+        const settled = { settled: true, booking: { id: BOOKING, status: 'confirmed', redemption_source: 'paid', price_paid: '30.00', payment_due_by: null }, amountCharged: 30 }
+        rawRequest.mockResolvedValue(success(settled))
+        const { result, query } = await settle({ payment: { method: 'cash', confirmedCashAmount: 30 }, figures: { amountDue: 30, toCollect: 30 }, idempotencyKey: 'press-key-0000000001' })
+        expect(await result()).toEqual(settled)
+        expect(rawRequest).toHaveBeenCalledTimes(1)
+        expect(rawRequest.mock.calls[0]?.[0]).toMatchObject({
+          path: `/api/v1/staff/bookings/${BOOKING}/settle`,
+          method: 'POST',
+          body: { payment: { method: 'cash', confirmedCashAmount: 30 }, figures: { amountDue: 30, toCollect: 30 } },
+          headers: expect.objectContaining({ 'Idempotency-Key': 'press-key-0000000001' }),
+        })
+        expect(query).not.toHaveBeenCalled()
       })
 
-      it('compares the cash left after store credit, and gives the full figure back', async () => {
-        const { result, writes } = await settle({ method: 'cash', confirmedCashAmount: 20, storeCredit: { amount: 5 } })
-        expect(result).toMatchObject({ message: CHANGED('25.00'), amountDue: 30 })
-        expect(writes()).toEqual([])
+      it('the reader: the payment the screen collects, as the old answer named it', async () => {
+        const pending = { flow: 'settle', recordId: BOOKING, pendingId: '22222222-2222-4222-8222-222222222222', paymentIntentId: 'pi_1', clientSecret: 'pi_1_secret', amount: 15 }
+        rawRequest.mockResolvedValue(success({ settled: false, pendingReaderPayment: pending }))
+        const { result } = await settle({ payment: { method: 'reader' }, figures: { amountDue: 15, toCollect: 15 } })
+        expect(await result()).toEqual({ settled: false, pendingReaderPayment: pending })
       })
 
-      it('refuses a figure above its own, with the new figure, and writes nothing', async () => {
-        const { result, writes } = await settle({ method: 'cash', confirmedCashAmount: 35 })
-        expect(result).toEqual({ settled: false, reason: 'cash_amount_changed', message: CHANGED('30.00'), amountDue: 30 })
-        expect(writes()).toEqual([])
+      it("a refusal over the amount comes back in the old shape, with the Worker's words and the new figure", async () => {
+        rawRequest.mockResolvedValue(refused('CONFLICT', { reason: 'cash_amount_changed', message: CHANGED('30.00'), amountDue: 30 }))
+        const { result } = await settle({ payment: { method: 'cash', confirmedCashAmount: 20 }, figures: { amountDue: 30, toCollect: 20 } })
+        expect(await result()).toEqual({ settled: false, reason: 'cash_amount_changed', message: CHANGED('30.00'), amountDue: 30 })
       })
 
-      it('gives the new figure when the price fell below the store credit', async () => {
-        const { result, writes } = await settle({ method: 'cash', confirmedCashAmount: 5, storeCredit: { amount: 25 } }, '20.00')
-        expect(result).toEqual({ settled: false, reason: 'cash_amount_changed', message: NOTHING_LEFT, amountDue: 20 })
-        expect(writes()).toEqual([])
-      })
-
-      it('takes the confirmed figure', async () => {
-        const { result } = await settle({ method: 'cash', confirmedCashAmount: 30 })
-        expect(result.settled).toBe(true)
+      it('any other refusal: the reason and the words, no figure', async () => {
+        rawRequest.mockResolvedValue(refused('CONFLICT', { reason: 'gift_card_insufficient_or_invalid', message: 'That gift card has expired.' }))
+        const { result } = await settle({ payment: { giftCard: { giftCardId: 'g', amount: 30 } } })
+        expect(await result()).toEqual({ settled: false, reason: 'gift_card_insufficient_or_invalid', message: 'That gift card has expired.' })
       })
 
       it.each([
-        ['nothing to pay with', {}, 'payment_method_required'],
-        ['a gift card above the price', { giftCard: { giftCardId: 'gift-1', amount: 35 } }, 'gift_card_amount_exceeds_total'],
-        ['store credit above the price', { storeCredit: { amount: 35 } }, 'store_credit_amount_exceeds_total'],
-        ['the two together above the price', { storeCredit: { amount: 20 }, giftCard: { giftCardId: 'gift-1', amount: 20 } }, 'store_credit_amount_exceeds_total'],
-      ])('%s gets the figure, and writes nothing', async (_label, payment, reason) => {
-        const { result, writes } = await settle(payment)
-        expect(result).toEqual({ settled: false, reason, amountDue: 30 })
-        expect(writes()).toEqual([])
+        ['PAYMENT_FAILED', 'card_declined', 'Failed to charge saved card: Your card was declined.'],
+        ['PAYMENT_NEEDS_AUTHENTICATION', 'card_needs_authentication', 'This card needs the customer to confirm the payment.'],
+        ['CONFLICT', 'no_saved_card', 'Customer has no saved payment method on file.'],
+      ])('%s (%s) is thrown with its words, as the old function threw the charge\'s error', async (code, reason, message) => {
+        rawRequest.mockResolvedValue(refused(code, { reason, message }))
+        const { result } = await settle({ payment: { method: 'card' }, figures: { amountDue: 30, toCollect: 30 } })
+        await expect(result()).rejects.toThrow(new Error(message))
       })
 
-      it('with nothing left for the reader, says the amount changed and gets the figure', async () => {
-        const { result, writes } = await settle({ method: 'reader', storeCredit: { amount: 30 } })
-        expect(result).toEqual({ settled: false, reason: 'payment_method_required', message: AMOUNT_CHANGED, amountDue: 30 })
-        expect(writes()).toEqual([])
+      it("a held payment (Q35) is answered with the Worker's words: don't take payment again", async () => {
+        const words = "The card payment didn't get a clear answer, so it may or may not have been taken. The change is on hold: don't take payment again. Check the Orders page in a few minutes."
+        rawRequest.mockResolvedValue(refused('PAYMENT_UNCONFIRMED', { reason: 'payment_unconfirmed', message: words, pendingId: 'p' }))
+        const { result } = await settle({ payment: { method: 'card' }, figures: { amountDue: 30, toCollect: 30 } })
+        expect(await result()).toEqual({ settled: false, reason: 'payment_unconfirmed', message: words })
       })
 
-      describe('a part of the payment that can\'t be claimed', () => {
+      it.each([
+        ['no connection', () => rawRequest.mockRejectedValue(new Error('socket hang up'))],
+        ['an earlier press still running', () => rawRequest.mockResolvedValue(refusal('CONFLICT', 'This request is already being processed'))],
+        ['a fault', () => rawRequest.mockResolvedValue(refusal('INTERNAL', 'Something went wrong and the action may not have finished. Check before trying again.'))],
+      ])('%s: no_answer, with words to check before pressing again', async (_label, arrange) => {
+        arrange()
+        const { SETTLE_NO_ANSWER_MESSAGE } = await load('bookingWorker')
+        const { result } = await settle({ payment: { method: 'card' }, figures: { amountDue: 30, toCollect: 30 } })
+        expect(await result()).toEqual({ settled: false, reason: 'no_answer', message: SETTLE_NO_ANSWER_MESSAGE })
+      })
+
+      // W19a (W19 review S1): a card or reader Settle confirms the booking before the money moves, so "confirmed" is
+      // paid only when no payment is still open on it. The words, as the review gave them.
+      it("the no-answer words don't take confirmed alone as paid", async () => {
+        const { SETTLE_NO_ANSWER_MESSAGE } = await load('bookingWorker')
+        expect(SETTLE_NO_ANSWER_MESSAGE).toBe(
+          "Take Payment didn't get an answer, so the payment may or may not have gone through. Don't take payment again yet: reload the booking. If it's confirmed and shows no payment still open, it's paid. If it shows a payment still open, it's being checked: don't take payment, and use Resolve now on the Orders page after 15 minutes. If it's still awaiting payment, press Take Payment again (it won't charge twice)."
+        )
+        expect(SETTLE_NO_ANSWER_MESSAGE).not.toContain("If it's confirmed, it's paid")
+      })
+
+      it('no booking: refused without a call, as before', async () => {
+        const fn = (await backend('settleLapsedBooking')).default
+        expect(await fn({ params: { bookingId: '' }, user })).toEqual({ settled: false, reason: 'booking_not_found' })
+        expect(rawRequest).not.toHaveBeenCalled()
+      })
+
+      it.each([
+        ['finaliseReaderPayment', 'finalise', { finalised: true, pendingId: 'p' }],
+        ['cancelReaderPayment', 'cancel', { cancelled: true, pendingId: 'p' }],
+      ])("%s sends a flow the Worker started to the Worker's flow route, and says so plainly when it gets no answer", async (name, step, answer) => {
+        const PENDING = '22222222-2222-4222-8222-222222222222'
+        const query = vi.fn(async (sql: string) => ({ data: /FROM pending_reader_payments p/.test(sql) ? [{ worker: true }] : [] }))
+        vi.stubGlobal('paddockData', { query })
+        const fn = (await backend(name)).default
+        rawRequest.mockResolvedValue(success(answer))
+        expect(await fn({ params: { pendingId: PENDING }, user })).toEqual(answer)
+        expect(rawRequest.mock.calls[0]?.[0]).toMatchObject({ path: `/api/v1/staff/reader-flows/${PENDING}/${step}`, method: 'POST' })
+        // Only the flow's own row was read: the old body (staff lookup, Stripe through the legacy routes) never ran.
+        expect(query.mock.calls.map(([sql]) => String(sql))).toEqual([expect.stringContaining("p.snapshot->>'method' IN ('reader', 'card')")])
+        rawRequest.mockRejectedValue(new Error('socket hang up'))
+        const { FLOW_STEP_NO_ANSWER_MESSAGE } = await load('bookingWorker')
+        expect(await fn({ params: { pendingId: PENDING }, user })).toMatchObject({ pendingId: PENDING, reason: 'no_answer', message: FLOW_STEP_NO_ANSWER_MESSAGE })
+      })
+
+      it('the screen has words for every old reason, and shows the Worker\'s words first', () => {
         const SPENT = 'That gift card no longer has enough balance remaining.'
-        /** A £15 seat. `balance` follows the store credit, and each `credit` answers a movement in
-         *  turn (an Error throws, false refuses). `claims` answers each gift card claim. */
-        const world = (options: { credit?: Array<boolean | Error | { reason: string }>; claims?: Array<boolean | Error> } = {}) => {
-          const state = { balance: 40, movements: [] as Array<{ amount: number; reason: unknown }> }
-          const credit = [...(options.credit ?? [])]
-          const claims = [...(options.claims ?? [])]
-          const database = stubDatabase([
-            [/store_credit_apply/, (params) => {
-              const next = credit.shift()
-              if (next instanceof Error) throw next
-              if (next === false) return [{ result: { ok: false } }]
-              if (typeof next === 'object') return [{ result: { ok: false, ...next } }]
-              state.balance += Number(params[1])
-              state.movements.push({ amount: Number(params[1]), reason: params[2] })
-              return [{ result: { ok: true, balance: state.balance } }]
-            }],
-            [/UPDATE gift_cards SET remaining_balance = remaining_balance - /, () => {
-              const next = claims.shift() ?? true
-              if (next instanceof Error) throw next
-              return next ? [{ id: 'gift-1', remaining_balance: '5.00' }] : []
-            }],
-            [/UPDATE bookings/, () => [{ id: 'booking-1', status: 'confirmed', redemption_source: 'paid', price_paid: '15.00', payment_due_by: null }]],
-            [/FROM bookings b/, () => [{
-              id: 'booking-1', customer_id: 'customer-1', session_id: 'session-1', party_size: 1, status: 'payment_needed', price_paid: '0.00',
-              redemption_source: 'membership_credit', redeemed_membership_id: 'membership-1', credit_period_id: 'period-1', payment_due_by: null,
-              seat1_unit_price: '15.00', seat1_pay_by: 'membership_credit',
-            }]],
-          ])
-          const take = async () => {
-            const fn = (await backend('settleLapsedBooking')).default
-            return fn({ params: { bookingId: 'booking-1', payment: { storeCredit: { amount: 10 }, giftCard: { giftCardId: 'gift-1', amount: 5 } } }, user })
-          }
-          return { state, take, ...database }
-        }
-        const bookingWrites = (sql: string[]) => sql.filter((text) => /UPDATE bookings/.test(text))
-
-        it('the review\'s sequence: the gift card has gone, so the store credit goes back, the booking stays, and a retry takes it once', async () => {
-          const { state, take, sql } = world({ claims: [false, true] })
-          expect(await take()).toEqual({ settled: false, reason: 'gift_card_insufficient_or_invalid' })
-          expect(state.balance).toBe(40)
-          expect(state.movements).toEqual([{ amount: -10, reason: 'redemption' }, { amount: 10, reason: 'redemption_reversal' }])
-          expect(bookingWrites(sql)).toEqual([])
-          expect((await take()).settled).toBe(true)
-          expect(state.balance).toBe(30)
-        })
-
-        it.each([
-          ['refused', false],
-          ['throwing', new Error('connection lost')],
-        ])('giving the store credit back %s: says so, and what to do', async (_label, answer) => {
-          const { take, sql } = world({ claims: [false], credit: [true, answer] })
-          expect(await take()).toEqual({
-            settled: false,
-            reason: 'gift_card_insufficient_or_invalid',
-            message: `${SPENT} Giving the £10.00 store credit back failed — check their balance, then add it by hand if it isn't there.`,
-          })
-          expect(bookingWrites(sql)).toEqual([])
-        })
-
-        it('the claim itself failing gives the store credit back too, and doesn\'t blame the balance', async () => {
-          const { state, take, sql } = world({ claims: [new Error('connection lost')] })
-          expect(await take()).toEqual({
-            settled: false,
-            reason: 'gift_card_insufficient_or_invalid',
-            message: "Claiming the gift card failed (connection lost). The store credit was given back. Check the gift card's balance before trying again.",
-          })
-          expect(state.balance).toBe(40)
-          expect(bookingWrites(sql)).toEqual([])
-        })
-
-        it('the claim failing and the store credit not going back: both are said', async () => {
-          const { take } = world({ claims: [new Error('connection lost')], credit: [true, false] })
-          expect((await take()).message).toBe(
-            "Claiming the gift card failed (connection lost). Giving the £10.00 store credit back failed — check their balance, then add it by hand if it isn't there. Check the gift card's balance before trying again."
-          )
-        })
-
-        it('with no store credit in the payment, nothing is given back', async () => {
-          const { state, sql } = world({ claims: [false] })
-          const fn = (await backend('settleLapsedBooking')).default
-          const result = await fn({ params: { bookingId: 'booking-1', payment: { giftCard: { giftCardId: 'gift-1', amount: 15 } } }, user })
-          expect(result).toEqual({ settled: false, reason: 'gift_card_insufficient_or_invalid' })
-          expect(state.movements).toEqual([])
-          expect(sql.some((text) => text.includes('store_credit_apply'))).toBe(false)
-        })
-
-        it.each([
-          ['not enough store credit', { reason: 'insufficient_store_credit' }, 'store_credit_insufficient_or_invalid'],
-          ['any other refusal', { reason: 'customer_not_found' }, 'store_credit_failed'],
-        ])('%s: a reason with words, and the gift card is never touched', async (_label, answer, reason) => {
-          const { take, sql } = world({ credit: [answer] })
-          expect(await take()).toEqual({ settled: false, reason })
-          expect(sql.some((text) => text.includes('UPDATE gift_cards'))).toBe(false)
-        })
-
-        it('the screen has words for every reason, and nothing throws a raw code', () => {
-          const dialog = readFileSync(path.join(appDir, 'frontend/components/SettleLapsedPaymentDialog.tsx'), 'utf8')
-          expect(dialog).toContain("store_credit_insufficient_or_invalid: 'The customer no longer has enough store credit remaining. Nothing was taken.'")
-          expect(dialog).toContain("store_credit_failed: 'Applying the store credit failed — nothing was taken.'")
-          expect(dialog).toContain(`gift_card_insufficient_or_invalid: '${SPENT} Nothing was taken.'`)
-          const fn = readFileSync(path.join(appDir, 'backend/paddock/settleLapsedBooking.ts'), 'utf8')
-          expect(fn).not.toContain("throw new Error('store_credit_insufficient_or_invalid')")
-          expect(fn).not.toContain("throw new Error('gift_card_insufficient_or_invalid')")
-        })
+        const dialog = readFileSync(path.join(appDir, 'frontend/components/SettleLapsedPaymentDialog.tsx'), 'utf8')
+        expect(dialog).toContain("store_credit_insufficient_or_invalid: 'The customer no longer has enough store credit remaining. Nothing was taken.'")
+        expect(dialog).toContain("store_credit_failed: 'Applying the store credit failed — nothing was taken.'")
+        expect(dialog).toContain(`gift_card_insufficient_or_invalid: '${SPENT} Nothing was taken.'`)
+        expect(dialog).toContain('setErrorMessage(result.message ?? FAILURE_MESSAGES[result.reason as SettleLapsedBookingFailureReason])')
+        // Brief W19: the dialog sends the figures on screen and keeps its press key after no answer.
+        expect(dialog).toContain('figures: { amountDue, toCollect: remainder }')
+        expect(dialog).toContain("if (result?.reason !== 'no_answer') pressKey.current = null")
       })
     })
 
@@ -2959,7 +2904,8 @@ describe('staff app helpers', () => {
 
       it.each(['AddGuestDialog', 'MoveBookingDialog', 'SettleLapsedPaymentDialog'])('%s clears its banner once the payment changes', (name) => {
         const source = readFileSync(path.join(appDir, `frontend/components/${name}.tsx`), 'utf8')
-        expect(source).toContain('if (paymentInputChanged(payment, next)) setErrorMessage(null)')
+        // W19: Settle's also starts a new press key then (a block, not one line).
+        expect(source).toMatch(/if \(paymentInputChanged\(payment, next\)\) (\{\s*)?setErrorMessage\(null\)/)
       })
 
       it('a change to any payment input counts, and nothing else does', async () => {
