@@ -159,9 +159,22 @@ export const bookingRefundFiguresSchema = z.object({
   left: z.number(),
   cardLeft: z.number(),
   parts: z.object({ card: z.number(), giftCard: z.number(), storeCredit: z.number(), cash: z.number() }),
+  /**
+   * W21 (Q26): the cash that can be handed back: the cash recorded on the booking's own orders (an order paid in cash
+   * or split with no Stripe payment), less cash already handed back, never more than the cash part above. Cash taken
+   * with no order (Settle, Move: Q36) isn't counted, so it can only go back as store credit. The figures route always
+   * sends it; the old figures had none.
+   */
+  cashLeft: z.number().optional(),
+  /**
+   * W21a (W21 review S1): what is left to refund, in words ("Left to refund: £25.00 card money.", "Nothing left to
+   * refund."), shown in the Part refund dialog. Route only.
+   */
+  paidLine: z.string().optional(),
 })
 export type BookingRefundFigures = z.infer<typeof bookingRefundFiguresSchema>
 
+/** W21 (Q26): Part refund also takes 'cash' (handed over by the staff member, capped at `cashLeft`). */
 export const partRefundInputSchema = z.object({ amount: pounds, refundMethod, reason: looseText })
 export type PartRefundInput = z.infer<typeof partRefundInputSchema>
 
@@ -321,3 +334,34 @@ export const bookingRefusalDetailsSchema = z.object({
   screenWords: z.boolean().optional(),
 })
 export type BookingRefusalDetails = z.infer<typeof bookingRefusalDetailsSchema>
+
+// --- W21: the refund figures, Part refund, Refund the rest and It already arrived (refundBooking's amount paths)
+
+/** W21: GET /api/v1/staff/bookings/:bookingId/refund-figures (getBookingRefundFigures). */
+export const bookingRefundFiguresRouteInputSchema = z.object(bookingInPath)
+/** The figures route always sends `cashLeft` and `paidLine`. */
+export const bookingRefundFiguresRouteOutputSchema = bookingRefundFiguresSchema.extend({ cashLeft: z.number(), paidLine: z.string() })
+export type BookingRefundFiguresRouteOutput = z.infer<typeof bookingRefundFiguresRouteOutputSchema>
+
+export const partRefundRouteInputSchema = partRefundInputSchema.extend(bookingInPath)
+export const refundOwedRouteInputSchema = refundOwedInputSchema.extend(bookingInPath)
+export const owedArrivedRouteInputSchema = owedArrivedInputSchema.extend(bookingInPath)
+
+/**
+ * W21: what Part refund, Refund the rest and It already arrived answer once the claim (R1) has committed, in the old
+ * function's fields: what went to the card, to store credit and (Q26) in cash, the store credit balance after, the
+ * booking's price paid after, and a warning when a later card part was refused and went to store credit. `held`: a
+ * card refund got no clear answer (or went and couldn't be recorded yet), so the claim is held for reconcile (Q35):
+ * nothing more is sent by any press, and the words say not to refund it again. A refusal before anything moved is an
+ * ApiError whose details carry the old reason and words (with the new `figures` when the amount no longer fits).
+ */
+export const refundBookingOutputSchema = z.object({
+  cardRefundedAmount: z.number(),
+  storeCreditRefundedAmount: z.number(),
+  cashRefundedAmount: z.number().optional(),
+  storeCreditBalance: z.number().optional(),
+  pricePaid: z.number().optional(),
+  warning: z.string().optional(),
+  held: z.object({ claimId: z.string(), reason: z.string(), message: z.string() }).optional(),
+})
+export type RefundBookingOutput = z.infer<typeof refundBookingOutputSchema>

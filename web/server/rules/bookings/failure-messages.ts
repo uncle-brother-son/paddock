@@ -371,3 +371,70 @@ export function paidLineWords(parts: { card: number; giftCardOrStoreCredit: numb
   const last = named.pop() as string
   return `Paid ${named.length > 0 ? `${named.join(', ')} and ${last}` : last}.`
 }
+
+/**
+ * W21a (W21 review S1): the Part refund dialog's line. Its parts are what is left to refund (price paid less what is
+ * owed), not what was paid, so it says so. paidLineWords stays for W23's booking-detail line, worked out from the
+ * payments themselves.
+ */
+export function leftLineWords(parts: { card: number; giftCardOrStoreCredit: number; cash: number }): string {
+  const named = [
+    parts.card > 0.005 ? `${money(parts.card)} card money` : null,
+    parts.giftCardOrStoreCredit > 0.005 ? `${money(parts.giftCardOrStoreCredit)} gift card / store credit` : null,
+    parts.cash > 0.005 ? `${money(parts.cash)} cash` : null,
+  ].filter((part): part is string => part !== null)
+  if (named.length === 0) return 'Nothing left to refund.'
+  const last = named.pop() as string
+  return `Left to refund: ${named.length > 0 ? `${named.join(', ')} and ${last}` : last}.`
+}
+
+// --- New in W21 (the refund pipeline: Part refund, Refund the rest, It already arrived)
+
+/** The old function's refusal of a method it doesn't know (refundBooking.ts), and Part refund's with Q26's cash. */
+export const REFUND_METHOD_WORDS = 'refundMethod must be "card" or "credit"'
+export const PART_REFUND_METHOD_WORDS = 'refundMethod must be "card", "credit" or "cash"'
+/** shared/bookingRefund.ts's words for a card refund Stripe refused before anything went. */
+export const cardRefundFailedMessage = (detail: string): string => `The card refund failed, so nothing was refunded: ${detail}`
+/** shared/bookingRefund.ts's warning when a later card part was refused and the rest went to store credit. */
+export const laterCardRefundFailedMessage = (amount: number, detail: string): string =>
+  `A further card refund of ${money(amount)} failed (${detail}), so the rest went to store credit.`
+/** The legacy refund route's words for a refusal, which the old messages carried (`Failed to refund payment: …`). */
+export const refundRefusedDetail = (stripeMessage: string): string => `Failed to refund payment: ${stripeMessage}`
+/** A part that was never sent because the press ran out of time: nothing went, as a refusal. */
+export const REFUND_NOT_SENT_DETAIL = 'it was not sent: there was no time left to send it'
+
+/** A refund on the booking is held (no clear answer yet): no other refund until reconcile settles it. */
+export const REFUND_OPEN_MESSAGE = "A refund on this booking is still being checked. Don't refund it again: check the Orders page in a few minutes."
+/** R1 failed in the database and was rolled back: nothing was claimed and nothing was sent. */
+export const REFUND_NOT_SAVED_MESSAGE =
+  "The refund couldn't be saved (the system was busy, or one of its records couldn't be written), so nothing was refunded. Try again."
+/** The card parts went, and R2 couldn't record them yet: held for reconcile, which records them (never resent). */
+export const refundGoneNotRecordedMessage = (cardGone: number): string =>
+  `${money(cardGone)} went back to the card, but the refund couldn't be finished on the booking yet. It's on hold: don't refund it again. Check the Orders page in a few minutes.`
+/** The first card part was refused, and putting the booking back failed: held for reconcile, which puts it back as owed. */
+export const REFUND_REFUSED_NOT_PUT_BACK_MESSAGE =
+  "The card refund was refused, so nothing went back, but the booking couldn't be put back yet. Don't refund it again: check the Orders page in a few minutes."
+
+/** Q26: more cash than the booking's orders recorded, or none to hand back. */
+export const onlyCashLeftMessage = (limit: number): string =>
+  `Only ${money(limit)} of cash recorded on this booking's orders can be handed back. Check the amount and confirm again.`
+export const NO_CASH_LEFT_MESSAGE = "No cash recorded on this booking's orders can be handed back, so this can only go to store credit."
+/** Refund the rest couldn't ask Stripe whether an old refund with no clear answer went: nothing was sent. */
+export const REFUND_CHECK_FAILED_MESSAGE =
+  "Checking Stripe for an earlier card refund on this booking failed, so nothing was refunded. Try again in a minute."
+/**
+ * W21a (W21 review L1): Refund the rest found an old card refund with no clear answer that reached the customer, and
+ * it isn't exactly one of the card refunds planned now, so nothing was sent: staff check Stripe first.
+ */
+export function oldRefundReachedCustomerMessage(amounts: readonly number[]): string {
+  const named = amounts.map(money)
+  const last = named.pop() ?? money(0)
+  const which = named.length > 0 ? `Earlier card refunds of ${named.join(', ')} and ${last} on this booking` : `An earlier card refund of ${last} on this booking`
+  return `${which} reached the customer, so nothing was refunded. Check Stripe, then use It already arrived for what arrived.`
+}
+/**
+ * W21a (W21 review L6): a later card part the press had no time left to send. Stripe never refused it, so it stays
+ * owed on the booking for Refund the rest to send to the card (a real refusal still goes to store credit).
+ */
+export const laterCardRefundNotSentMessage = (amount: number): string =>
+  `A further card refund of ${money(amount)} wasn't sent in time, so it's owed on the booking: use Refund the rest to send it to the card.`

@@ -2,7 +2,8 @@ import path from 'node:path'
 import { vi } from 'vitest'
 import type { Db } from '@/server/db'
 import { quoteAddGuest } from '@/server/rules/bookings/add-guest'
-import { loadBookingMoneyLeft } from '@/server/rules/bookings/money-left'
+import { openRefundClaimOn } from '@/server/rules/bookings/refunds'
+import { reconcileClaimNow } from '@/server/rules/orders/reconcile'
 import type { AddBookingGuestInput } from '@/contracts'
 import type { FakeStripe } from '@/server/stripe/fake'
 import { staffAppDir } from '../staff-app-dir'
@@ -140,6 +141,51 @@ function addGuestAsTheDialogPresses(): NewBookingAction {
 }
 
 /**
+ * W21: refundBooking's amount paths (Part refund, Refund the rest, It already arrived) as the dialogs press them: with
+ * a press key kept after no answer (the dialog keeps it until it closes, W20a's rule), and the switch on. The wrapper
+ * now answers a refusal as `failed` data (so the dialog can tell it from no answer); the dialogs show its words where
+ * they showed the old function's thrown error, so the replay reads it as that throw. Cancel & Refund (no amount) stays
+ * on the old body until W23 (REFUND_BUILT_FOR).
+ */
+function refundAsTheDialogPresses(): NewBookingAction {
+  const heldKeys = new Map<string, string>()
+  return async (db, params) => {
+    const bookingId = (params as { bookingId?: string }).bookingId ?? ''
+    const idempotencyKey = heldKeys.get(bookingId) ?? crypto.randomUUID()
+    const answer = (await withSwitch(BOOKING_KINDS_ON, () => throughStaffApp('refundBooking')(db, { ...(params as object), idempotencyKey }))) as {
+      failed?: { message: string }
+      noAnswer?: unknown
+      pressedAfterNoAnswer?: unknown
+    } | null
+    if (answer?.noAnswer || answer?.pressedAfterNoAnswer) heldKeys.set(bookingId, idempotencyKey)
+    else heldKeys.delete(bookingId)
+    if (answer?.failed) throw new Error(answer.failed.message)
+    await settleHeldRefund(db, bookingId)
+    return answer
+  }
+}
+
+/**
+ * W21: a refund the Worker held (Q35): staff check the Orders page, where reconcile has settled it, before they do
+ * anything else to the booking. The replay settles it as reconcile does (it never sends a refund) straight after the
+ * press, and again before the booking's next step if a write the scenario made fail was still failing then.
+ */
+async function settleHeldRefund(db: Db, bookingId: string | undefined): Promise<void> {
+  if (!bookingId || !replayStripe.current) return
+  const held = await openRefundClaimOn(db, bookingId)
+  if (held) await reconcileClaimNow(db, replayStripe.current, held, { actor: { type: 'system', id: null }, requestId: crypto.randomUUID() })
+}
+
+/** W21: the refundBooking calls the Worker answers: those with an amount (or about owed money). Cancel & Refund is W23's. */
+export function refundBuiltFor(params: unknown): boolean {
+  const sent = (params ?? {}) as { amount?: unknown; refundOwed?: unknown; owedArrived?: unknown }
+  return sent.amount !== undefined || sent.refundOwed === true || sent.owedArrived === true
+}
+
+/** W21: actions only some of whose calls the Worker answers (the rest still run through the old function). */
+export const PARTLY_BUILT: ReadonlyMap<string, (params: unknown) => boolean> = new Map([['refundBooking', refundBuiltFor]])
+
+/**
  * The actions the Worker answers so far, by old name. W17: the refund figures, straight from the rule (the old
  * function threw 'Booking not found.' for a missing booking; so does this). W18: special requests and status, through
  * the staff app's thin wrappers. W19: Settle, with the figures the dialog now sends, and the reader flows' finalise and
@@ -153,14 +199,9 @@ export const BUILT_BOOKING_ACTIONS: ReadonlyMap<string, NewBookingAction> = new 
   ['addBookingGuest', addGuestAsTheDialogPresses()],
   ['finaliseReaderPayment', throughStaffApp('finaliseReaderPayment')],
   ['cancelReaderPayment', throughStaffApp('cancelReaderPayment')],
-  [
-    'getBookingRefundFigures',
-    async (db, params) => {
-      const figures = await loadBookingMoneyLeft(db, (params as { bookingId: string }).bookingId)
-      if (!figures) throw new Error('Booking not found.')
-      return figures
-    },
-  ],
+  // W21: through the staff app's thin wrapper and the figures route (W17 answered it from the rule directly).
+  ['getBookingRefundFigures', throughStaffApp('getBookingRefundFigures')],
+  ['refundBooking', refundAsTheDialogPresses()],
 ])
 
 export interface BookingSideOptions {
@@ -186,7 +227,11 @@ export function newBookingSide({ actions = BUILT_BOOKING_ACTIONS, adjust, calls 
     return {
       name: 'new',
       async call(action, params) {
-        const built = actions.get(action)
+        // W21: a refund still held from an earlier step is settled first, as staff would find it (settleHeldRefund).
+        await settleHeldRefund(db, (params as { bookingId?: string } | null)?.bookingId)
+        const found = actions.get(action)
+        // W21: refundBooking's Cancel & Refund stays on the old function (W23).
+        const built = found && (PARTLY_BUILT.get(action)?.(params) ?? true) ? found : undefined
         calls?.push({ action, side: built ? 'new' : 'old' })
         if (!built) return old.call(action, params)
         // W20: the clock moves between presses, as the old side's moves with each statement (harness.ts, tick), so two
@@ -451,11 +496,53 @@ function newRowFlow(row: AuditRow): string | null {
   return null
 }
 
-/** The swapped rows a recording holds: the golden file's old machinery rows, or the new side's own rows, for WORKER_FLOWS. */
+/** W21: the refund kinds now on the Worker (Part refund, Refund the rest); Cancel & Refund's, Remove Guest's and Move's stay old. */
+const REFUND_KINDS_ON_WORKER: ReadonlySet<string> = new Set(['part_refund', 'refund_owed'])
+/** W21: the actions' own rows, written only by those actions (the old functions' and the Worker's). */
+const REFUND_ACTION_ROWS: ReadonlySet<string> = new Set(['booking.part_refund', 'booking.refund_owed', 'booking.refund_owed_arrived'])
+/** The old code's notes about a card refund inside a claim (its refusal count and its unsure keys). */
+const OLD_REFUND_NOTES: ReadonlySet<string> = new Set(['booking.card_refund_refused', 'booking.card_refund_unsure'])
+
+/**
+ * W21: a recording's rows for the refunds now on the Worker. The golden file's: the claims of Part refund and Refund
+ * the rest, their finished rows, the actions' own rows, and the old code's refusal and unsure notes written between a
+ * claim and its finished row (refundBooking's calls run one at a time). The new side's: the Worker's claims and their
+ * finished rows, and the actions' own rows.
+ */
+function refundRows(rows: readonly AuditRow[], side: 'golden' | 'new'): Set<AuditRow> {
+  const claimIds = new Set(
+    rows
+      .filter((row) => row.action === 'booking.refund_claimed' && (side === 'golden' ? REFUND_KINDS_ON_WORKER.has(String(row.details?.['kind'])) : row.details?.['worker'] === true))
+      .map((row) => row['id'])
+  )
+  const swapped = new Set<AuditRow>()
+  let open: unknown = null
+  for (const row of rows) {
+    if (row.action === 'booking.refund_claimed' && claimIds.has(row['id'])) {
+      swapped.add(row)
+      open = row['id']
+    } else if (row.action === 'booking.refund_finished' && claimIds.has(row.details?.['claimId'])) {
+      swapped.add(row)
+      if (row.details?.['claimId'] === open) open = null
+    } else if (REFUND_ACTION_ROWS.has(String(row.action))) {
+      swapped.add(row)
+    } else if (side === 'golden' && open !== null && OLD_REFUND_NOTES.has(String(row.action))) {
+      swapped.add(row)
+    } else if (side === 'new' && row.action === 'order.reconcile' && row['entity_type'] === 'refund_claim') {
+      // Reconcile's row for a held claim the replay settled (refundAsTheDialogPresses).
+      swapped.add(row)
+    }
+  }
+  return swapped
+}
+
+/** The swapped rows a recording holds: the golden file's old machinery rows, or the new side's own rows, for WORKER_FLOWS (W21: and the refunds). */
 export function swappedAuditRows(recording: Recording, side: 'golden' | 'new'): AuditRow[] {
   const rows = (recording.tables['audit_log']?.added ?? []) as AuditRow[]
   const byId = new Map(rows.map((row) => [row['id'], row]))
+  const refunds = refundRows(rows, side)
   return rows.filter((row) => {
+    if (refunds.has(row)) return true
     const flow = side === 'golden' ? oldMachineryFlow(row, byId) : newRowFlow(row)
     return flow !== null && WORKER_FLOWS.has(flow)
   })
@@ -511,9 +598,41 @@ export function comparable(recording: Recording, side: 'golden' | 'new'): Record
     if (added.length === 0 && flows.changed.length === 0 && flows.removed.length === 0) delete tables['pending_reader_payments']
     else tables['pending_reader_payments'] = { ...flows, added }
   }
-  let text = JSON.stringify({ ...recording, tables }).replace(/\[ref gone#\d+\]/g, '[ref gone]')
+  // W21: reconcile's look for a held claim's refunds (refunds.list on a planned PaymentIntent) is set aside: the old
+  // code had no such look for a booking refund. claimLookProblems checks it is only ever a look, never a send.
+  const claimIntents = side === 'new' ? workerClaimIntents(recording) : new Set<string>()
+  const stripeCalls = recording.stripeCalls.filter((call) => !isClaimLook(call, claimIntents))
+  let text = JSON.stringify({ ...recording, stripeCalls, tables }).replace(/\[ref gone#\d+\]/g, '[ref gone]')
   if (relabel.size > 0) text = text.replace(/pending_reader_payments#\d+\b/g, (label) => relabel.get(label) ?? label)
   return withCanonicalGoneNumbers(JSON.parse(text) as Recording)
+}
+
+/** W21: the PaymentIntents the Worker's refund claims in a recording planned to refund. */
+function workerClaimIntents(recording: Recording): Set<string> {
+  const rows = (recording.tables['audit_log']?.added ?? []) as AuditRow[]
+  const intents = new Set<string>()
+  for (const row of rows) {
+    if (row.action !== 'booking.refund_claimed' || row.details?.['worker'] !== true) continue
+    const plan = row.details['plan'] as { card?: Array<{ paymentIntentId: string }> } | undefined
+    for (const part of plan?.card ?? []) intents.add(part.paymentIntentId)
+  }
+  return intents
+}
+
+type StripeCall = Recording['stripeCalls'][number]
+const isClaimLook = (call: StripeCall, intents: ReadonlySet<string>): boolean =>
+  call.method === 'refunds.list' && intents.has(String((call.params as { payment_intent?: unknown } | null)?.payment_intent))
+
+/**
+ * W21: reconcile's looks for a held claim, set aside by `comparable`: each a refunds.list of one planned PaymentIntent,
+ * with no key (a read). Answers the problems found. Reconcile sending anything shows in the comparison itself.
+ */
+export function claimLookProblems(recording: Recording): string[] {
+  const intents = workerClaimIntents(recording)
+  return recording.stripeCalls
+    .filter((call) => isClaimLook(call, intents))
+    .filter((call) => call.idempotencyKey !== null || Object.keys((call.params ?? {}) as object).sort().join(',') !== 'limit,payment_intent')
+    .map((call) => JSON.stringify(call))
 }
 
 /** The fields a Worker card record's snapshot may hold for each flow: the old undo fields and the Worker's marks. */
@@ -558,11 +677,56 @@ const sameKeys = (details: Record<string, unknown> | null | undefined, keys: rea
  */
 export function newAuditRowProblems(recording: Recording): string[] {
   const problems: string[] = []
+  const all = (recording.tables['audit_log']?.added ?? []) as AuditRow[]
   for (const row of swappedAuditRows(recording, 'new')) {
     const d = row.details ?? {}
     const n = (key: string) => Number(d[key])
     const wrong = (why: string) => problems.push(`${String(row.action)}: ${why} (${JSON.stringify(d)})`)
-    if (row.action === 'booking.guest_add') {
+    if (row.action === 'booking.refund_claimed') {
+      // W21: the claim, its plan adding up to what was claimed, and the Worker's marks.
+      const cash = d['method'] === 'cash'
+      const matched = 'matched' in d
+      if (!sameKeys(d, ['kind', 'amount', 'pricePaidBefore', 'method', 'reason', 'worker', 'plan', 'livemode', ...(cash ? ['handedOverBy'] : []), ...(matched ? ['matched'] : [])])) wrong('fields')
+      const plan = (d['plan'] ?? {}) as { card?: Array<{ orderId?: string; amount: number; lines?: Array<{ amount: number }> }>; storeCredit?: number; cash?: number }
+      // W21a (W21 review L2): parts matched to an old refund that went, on Refund the rest only, each a planned part, once.
+      if (matched) {
+        const parts = Array.isArray(d['matched']) ? (d['matched'] as Array<{ orderId?: unknown; refundId?: unknown }>) : []
+        const orders = parts.map((part) => part.orderId)
+        if (d['kind'] !== 'refund_owed' || parts.length === 0 || new Set(orders).size !== orders.length) wrong('matched parts')
+        if (parts.some((part) => typeof part.refundId !== 'string' || !(plan.card ?? []).some((planned) => planned.orderId === part.orderId))) wrong('a matched part not planned')
+      }
+      const card = round2((plan.card ?? []).reduce((total, part) => total + part.amount, 0))
+      if (round2(card + Number(plan.storeCredit) + Number(plan.cash)) !== n('amount')) wrong('the plan is not what was claimed')
+      if ((plan.card ?? []).some((part) => round2((part.lines ?? []).reduce((total, line) => total + line.amount, 0)) !== part.amount)) wrong("a card part is not its lines' sum")
+      // A card refund with no card money left plans store credit only; nothing else ever plans a card part.
+      if (card > 0 && d['method'] !== 'card') wrong('card parts only for the card')
+      if ((card > 0) !== (typeof d['livemode'] === 'boolean')) wrong("the key's mode exactly with card parts")
+      if (!['part_refund', 'refund_owed'].includes(String(d['kind'])) || d['worker'] !== true) wrong('kind')
+      if (row['entity_type'] !== 'booking' || typeof row['request_id'] !== 'string') wrong('entity or request id')
+    } else if (row.action === 'booking.refund_finished') {
+      const claim = all.find((other) => other['id'] === d['claimId'])
+      const c = (claim?.details ?? {}) as Record<string, unknown>
+      if (!sameKeys(d, ['claimId', 'outcome', 'cardRefunded', 'storeCreditRefunded', 'owed', ...('cash' in d ? ['cash'] : []), ...('by' in d ? ['by'] : [])])) wrong('fields')
+      const accounted = round2(n('cardRefunded') + n('storeCreditRefunded') + n('owed') + Number(d['cash'] ?? 0))
+      if (d['outcome'] === 'put_back') {
+        if (accounted !== 0) wrong('a put-back moves nothing')
+      } else if (accounted !== Number(c['amount'])) wrong('what went, to store credit and owed is not what was claimed')
+      if (d['outcome'] !== 'put_back' && (d['outcome'] === 'owed') !== n('owed') > 0) wrong('owed exactly when something is')
+      if (typeof row['request_id'] !== 'string') wrong('request id')
+    } else if (row.action === 'booking.part_refund' || row.action === 'booking.refund_owed') {
+      const part = row.action === 'booking.part_refund'
+      const cash = 'cashRefunded' in d
+      if (!sameKeys(d, [...(part ? ['amount', 'reason', 'method'] : ['amount', 'method']), 'cardRefunded', 'storeCreditRefunded', 'owed', ...(cash ? ['cashRefunded', 'handedOverBy'] : [])])) wrong('fields')
+      if (round2(n('cardRefunded') + n('storeCreditRefunded') + n('owed') + Number(d['cashRefunded'] ?? 0)) !== n('amount')) wrong('the parts are not the amount')
+      if (typeof row['request_id'] !== 'string') wrong('request id')
+    } else if (row.action === 'order.reconcile' && row['entity_type'] === 'refund_claim') {
+      // Finished, or left once while the scenario's failing write was still failing (finished before the next step).
+      const finished = d['outcome'] === 'finalised' && sameKeys(d, ['outcome', 'detail'])
+      const leftOnce = d['outcome'] === 'left' && d['reason'] === 'finish_failed' && sameKeys(d, ['outcome', 'reason', 'detail'])
+      if (!finished && !leftOnce) wrong('a held claim reconcile finished')
+    } else if (row.action === 'booking.refund_owed_arrived') {
+      if (!sameKeys(d, ['amount', 'reason']) || !(n('amount') > 0) || typeof d['reason'] !== 'string') wrong('fields')
+    } else if (row.action === 'booking.guest_add') {
       if (!sameKeys(d, ['guestId', 'addonLineIds', 'guestAmount', 'addonsAmount', 'amountDue', 'storeCredit', 'giftCard', 'method', 'toCollect', 'orderId', 'pendingId'])) wrong('fields')
       if (round2(n('guestAmount') + n('addonsAmount')) !== n('amountDue')) wrong('amountDue is not the guest plus the paid add-ons')
       if (round2(Math.max(0, n('amountDue') - n('storeCredit') - n('giftCard'))) !== n('toCollect')) wrong('toCollect is not what is left after the parts')
@@ -593,7 +757,7 @@ export function newAuditRowProblems(recording: Recording): string[] {
 /** W20: the stored answers the new side wrote: each a finished press of a booking or flow route on the Worker. */
 export function storedAnswerProblems(recording: Recording): string[] {
   const rows = (recording.tables['api_idempotency']?.added ?? []) as Row[]
-  const route = /^POST \/api\/v1\/staff\/(bookings\/[^/]+\/(settle|guests|status|special-requests)|reader-flows\/[^/]+\/(finalise|cancel))$/
+  const route = /^POST \/api\/v1\/staff\/(bookings\/[^/]+\/(settle|guests|status|special-requests|refunds|refunds\/owed|refunds\/owed-arrived)|reader-flows\/[^/]+\/(finalise|cancel))$/
   return rows
     .filter((row) => row['status'] !== 'done' || !route.test(String(row['endpoint'])))
     .map((row) => `${String(row['endpoint'])}: ${String(row['status'])}`)
@@ -855,6 +1019,247 @@ export const ADD_GUEST_DIFFERENCES: ReadonlyMap<string, readonly AllowedDifferen
         /^\.results\[2\]\.(thrown|added|reason|message)$|^\.tables\.customers\.changed\[0\]\.store_credit_balance\[1\]$|^\.tables\.sessions\.changed\[0\]\.total_booked\[1\]$|^\.tables\.store_credit_transactions\.added\[0\]\.order_id$|^\.tables\.store_credit_transactions\.added\[1\]$/,
         'the store credit claim is inside C1, so the press went through and only its answer was lost: the same press again gets the stored answer, so £15 is taken once with its order (the old code kept the lost claim and took £15 again, and a second place)'
       ),
+    ],
+  ],
+])
+
+// --- W21: Part refund, Refund the rest, It already arrived and the figures (brief W21 item 6)
+
+const W21 = 'Brief W21 (D-plan 4.3, 4.10; lead call L3: claims in audit_log)'
+const CLAIM_KEY = /^audit_log#\d+:refund:orders#\d+$/
+const CLAIM_LABEL = /^audit_log#\d+$/
+
+/**
+ * A card refund's key and metadata come from its claim: `<claimId>:refund:<orderId>`, with `metadata.claim_id`
+ * naming the claim and `refund_key` the key (the old keys were built from the figures, with a 24-hour look-up: both
+ * replaced). Only those values pass.
+ */
+export const CLAIM_KEYS: AllowedDifference = {
+  name: "A Part refund's or Refund the rest's card refund is keyed from its claim (`<claimId>:refund:<orderId>`) and names it in `metadata.claim_id`; the old figure-built keys and their 24-hour look-up are replaced",
+  decision: `${W21}: keys from the claim id (D-plan 4.3)`,
+  path: /^\.stripeCalls\[\d+\]\.(idempotencyKey|params\.metadata\.(refund_key|claim_id))$/,
+  actual: (value, _expected, path) => (path.endsWith('.claim_id') ? typeof value === 'string' && CLAIM_LABEL.test(value) : typeof value === 'string' && CLAIM_KEY.test(value)),
+}
+
+/** W21a (W21 review S1): the line says what is left to refund, by its parts, or that nothing is. */
+const LEFT_LINE = /^(Left to refund: £\d+\.\d{2} (card money|gift card \/ store credit|cash)((, | and )£\d+\.\d{2} (gift card \/ store credit|cash))*\.|Nothing left to refund\.)$/
+
+/** Q26's cash and the line of what is left on every figures answer, and on the figures a refusal carries. Nothing else changes. */
+export const FIGURES_CASH_AND_LINE: AllowedDifference = {
+  name: 'The refund figures also say what cash can be handed back (Q26) and what is left to refund, in words (W21a)',
+  decision: "Wayne's Q26 (6 Nov) and Q37 (12 Nov); lead call L2 (cash refunds for bookings in D); brief W21 items 1 and 5; brief W21a item 1 (W21 review S1)",
+  path: /^\.results\[\d+\]\.(refused\.figures\.)?(cashLeft|paidLine)$/,
+  actual: (value, expected, path) =>
+    expected === undefined && (path.endsWith('.cashLeft') ? typeof value === 'number' && value >= 0 : typeof value === 'string' && LEFT_LINE.test(value)),
+}
+
+/**
+ * R2's store credit write fails after a card part went (the scenario's failing write): the claim is held for
+ * reconcile, with words saying what went (W6-3's rule for refunds: what went is never sent again). Reconcile, before
+ * the next step (as staff would find it), records what went and leaves what Stripe refused owed: the booking ends
+ * exactly as the old code left it.
+ */
+const heldWhileStoreCreditFails = (result: number, gone: number): AllowedDifference => ({
+  name: `A card part went and R2's store credit write failed: held (unsure, "£${gone.toFixed(2)} went back to the card, but the refund couldn't be finished…"); reconcile then ends it as the old code did`,
+  decision: `${W21}: R2 is one transaction; held for reconcile (Q35); D-plan 4.10 (reconcile records what went, never resends)`,
+  path: new RegExp(`^\\.results\\[${result}\\]\\.(cardRefundedAmount|storeCreditRefundedAmount|pricePaid|warning|unsure)$`),
+  actual: (value, _expected, path) =>
+    path.endsWith('.unsure')
+      ? typeof value === 'object' && value !== null && String((value as { message?: unknown }).message).startsWith(`£${gone.toFixed(2)} went back to the card, but the refund couldn't be finished`)
+      : value === undefined,
+})
+
+/**
+ * The old Cancel & Refund (W23's) builds its keys from the booking's refusal count (`booking.card_refund_refused` rows).
+ * The Worker's refusals are under keys of their own (its claims), so it writes no such row: an old key after one is
+ * the same key with a lower count. Only that difference passes.
+ */
+const OLD_REFUSAL_COUNT: AllowedDifference = {
+  name: "The old Cancel & Refund's key counts no refusal for a Worker card refund (the Worker keys its refunds from its claims, so writes no booking.card_refund_refused row)",
+  decision: `${W21}: keys from the claim id; the old 24-hour look-up and refusal counts replaced`,
+  path: /^\.stripeCalls\[\d+\]\.(idempotencyKey|params\.metadata\.refund_key)$/,
+  actual: (value, expected) => {
+    const head = (key: unknown) => String(key).replace(/:\d+$/, '')
+    const count = (key: unknown) => Number(/:(\d+)$/.exec(String(key))?.[1] ?? NaN)
+    return typeof value === 'string' && value.startsWith('booking-refund:') && head(value) === head(expected) && count(value) < count(expected)
+  },
+}
+
+const ANSWER_LOST_ON_THE_ROUTE = "The Worker's answer is lost after its route ran to the end (the old code lost Stripe's answer on its legacy call): the dialog gets no answer and keeps its key; the refund went and R2 recorded it, so nothing is owed and the next step finds nothing owed (refused, with the figures)"
+const noAnswerWords = (value: unknown): boolean => typeof value === 'object' && value !== null && String((value as { message?: unknown }).message).startsWith("The refund didn't get an answer")
+
+/** W21: every golden scenario that calls a Part refund, Refund the rest, It already arrived or the figures and differs. */
+export const REFUND_DIFFERENCES: ReadonlyMap<string, readonly AllowedDifference[]> = new Map<string, readonly AllowedDifference[]>([
+  ...[
+    'q24-part-refund-then-the-rest',
+    'q25-part-refund-then-a-guest',
+    'q27-part-to-card-same-tier-then-to-the-card',
+    'q27-part-to-card-same-tier-then-to-store-credit',
+    'q27-part-to-card-higher-tier-on-the-card-then-to-the-card',
+    'q27-part-to-card-higher-tier-on-the-reader-then-to-the-card',
+    'q27-part-to-card-higher-tier-in-cash-then-to-the-card',
+    'q27-no-promo-part-to-card-same-tier-then-to-the-card',
+    'q27-part-refund-split-card-and-credit-counted-once',
+    'q27-two-part-refunds-then-a-higher-tier',
+    'q27-whole-booking-part-refunded-then-same-tier',
+    'q27-guests-through-the-tiers-after-a-part-refund',
+    'q27-reader-cancelled-after-a-part-refund',
+    'q27-public-booking-part-refund-is-unchanged',
+    'q27-part-refund-after-a-cheaper-move-still-counts',
+    'q27-part-refund-before-a-same-price-move-still-counts',
+    'q27-guest-removed-then-a-part-refund-then-a-guest',
+    'q27-tier-price-fell-then-a-part-refund-then-a-guest',
+    'addon-with-guest-part-refund-then-cancel',
+    'q28-public-same-price-part-to-the-card',
+    'remove-guest-capped-an-old-quote-refused',
+    'q28-private-same-price-part-to-the-card',
+    'q28-private-dearer-on-the-card',
+    'q28-private-dearer-on-the-reader',
+    'q28-private-dearer-in-cash',
+    'q28-private-dearer-store-credit-and-card',
+    'q28-private-cheaper-to-the-card',
+    'q28-private-cheaper-to-store-credit',
+    'q28-private-cheaper-stops-at-what-is-left',
+    'q28-private-cheaper-with-nothing-left',
+    'q28-private-there-and-back',
+    'q28-private-cheaper-move-then-part-then-dearer-move',
+    'q28-private-part-then-guest-then-move',
+    'q28-private-reader-cancelled-puts-it-all-back',
+    'q28-promo-booking-still-cannot-move',
+    'q28-public-dearer-on-the-card',
+    'q28-public-dearer-on-the-reader',
+    'q28-public-dearer-in-cash',
+    'q28-public-cheaper-to-the-card',
+    'q28-public-cheaper-to-store-credit',
+    'q28-public-cheaper-stops-at-what-is-left',
+    'q28-public-credit-released-after-a-part-refund',
+    'q28-public-same-price-after-a-capped-remove-guest',
+    'remove-guest-more-left-than-the-seat',
+    'remove-guest-capped-to-store-credit',
+    'remove-guest-capped-then-cancel',
+    'remove-guest-nothing-left',
+    'part-refund-declined-changes-nothing',
+    'decline-then-the-same-part-refund-again',
+    'capped-move-down-then-back-up',
+    'all-part-refunded-to-the-card-then-cancel',
+    'all-part-refunded-card-and-credit-then-cancel',
+    'all-part-refunded-with-a-guest-then-cancel',
+    'all-part-refunded-addon-not-ticked-then-cancel',
+    'all-part-refunded-addon-ticked-then-cancel',
+    'nearly-all-part-refunded-then-cancel',
+    'price-paid-cleared-half-back-then-cancel',
+    'price-paid-cleared-addon-credit-is-not-seat-money',
+    'public-move-credit-fails-partway',
+    'private-move-credit-fails-partway',
+    'private-move-credit-fails-then-a-same-price-move-leaves-it-owed',
+    'private-move-rest-retried-then-a-same-price-move',
+    'move-refund-card-declined-then-retried',
+    'credit-booking-paid-seat-part-refunded-to-the-card-then-cancelled',
+    'owed-then-a-same-price-move',
+    'owed-then-a-dearer-move',
+    'owed-with-nothing-left-then-a-same-price-move',
+    'owed-then-a-guest-same-tier',
+    'owed-then-a-guest-higher-tier',
+    'owed-then-remove-guest-stops-at-what-is-left',
+    'refund-the-rest-card-then-store-credit',
+    'part-refund-while-a-reader-move-is-open',
+    'refund-the-rest-while-a-reader-move-is-open',
+    'public-move-credit-fails-partway-then-retried',
+    'private-move-credit-fails-partway-then-retried',
+  ].map((name): [string, readonly AllowedDifference[]] => [name, [CLAIM_KEYS]]),
+  ...[
+    'figures-on-the-card',
+    'figures-in-cash',
+    'figures-card-gift-card-and-store-credit',
+    'figures-card-order-and-a-cash-guest',
+    'figures-card-order-and-a-guest-on-store-credit',
+    'figures-with-money-owed',
+    'w17-r3-move-two-presses-the-new-session-full-for-both',
+    'w17-n3-status-set-to-cancelled-on-a-paid-booking',
+  ].map((name): [string, readonly AllowedDifference[]] => [name, [FIGURES_CASH_AND_LINE]]),
+  ['figures-after-a-part-refund', [CLAIM_KEYS, FIGURES_CASH_AND_LINE]],
+  [
+    'unsure-cheaper-move-card-then-the-rest',
+    [
+      {
+        name: "The old Move's £40 card refund got no clear answer but went: Refund the rest finds it in Stripe by its old key (a read) and records it as the card refund of the rest, never sending it again (the old code sent it again under the same key, and Stripe gave the first back)",
+        decision: `${W21}: the old 24-hour look-up's job, kept for owed money the old screens make until W22 to W24; no refund sent twice (D-plan 4.3)`,
+        path: /^\.stripeCalls\[2\]$/,
+        actual: (value, expected) => value === undefined && (expected as { method?: string } | undefined)?.method === 'refunds.create',
+      },
+    ],
+  ],
+  ['part-refund-fails-partway', [CLAIM_KEYS, heldWhileStoreCreditFails(3, 50)]],
+  ['part-refund-fails-partway-then-the-rest', [CLAIM_KEYS, heldWhileStoreCreditFails(3, 50), OLD_REFUSAL_COUNT]],
+  ['part-refund-fails-partway-then-a-same-price-move', [CLAIM_KEYS, heldWhileStoreCreditFails(3, 50)]],
+  ['part-refund-fails-partway-then-a-guest', [CLAIM_KEYS, heldWhileStoreCreditFails(3, 50), OLD_REFUSAL_COUNT]],
+  [
+    'refund-the-rest-fails-partway-then-retried',
+    [
+      CLAIM_KEYS,
+      heldWhileStoreCreditFails(4, 10),
+      {
+        name: "Reconcile gives the claim's planned £30 store credit (its note R2's: the rest went back to the card) before the retry, so the retry finds nothing owed; the customer gets the same £10 card and £30 store credit",
+        decision: `${W21}: R2 gives the plan's store credit (D-plan 4.3); held for reconcile (Q35)`,
+        path: /^\.results\[5\]\.(cardRefundedAmount|storeCreditRefundedAmount|storeCreditBalance|pricePaid|refused)$|^\.tables\.store_credit_transactions\.added\[1\]\.note$/,
+        actual: (value, _expected, path) =>
+          path.endsWith('.note')
+            ? value === 'Refund the rest of a failed booking refund (the rest went back to the card). [ref gone]'
+            : path.endsWith('.refused')
+              ? String((value as { message?: unknown }).message) === 'Nothing is owed on this booking any more.'
+              : value === undefined,
+      },
+    ],
+  ],
+  [
+    'unsure-part-refund-card-arrived',
+    [
+      CLAIM_KEYS,
+      {
+        name: `${ANSWER_LOST_ON_THE_ROUTE}; the £40 is on the order's line (the old code left it off, and It already arrived only cleared what was owed)`,
+        decision: `${W21}; W20's model of a lost answer (the route ran); W03-plan 2.6 (the key kept)`,
+        path: /^\.results\[1\]\.(unsure|noAnswer)$|^\.results\[2\]\.(cardRefundedAmount|storeCreditRefundedAmount|pricePaid|refused)$|^\.tables\.order_line_items\.added\[0\]\.card_refunded_amount$|^\.stripeCalls\[2\]\.(idempotencyKey|params\.metadata\.refund_key)$/,
+        actual: (value, _expected, path) =>
+          path.endsWith('.noAnswer')
+            ? noAnswerWords(value)
+            : path.endsWith('.refused')
+              ? String((value as { message?: unknown }).message) === 'Nothing is owed on this booking any more.'
+              : path.endsWith('.card_refunded_amount')
+                ? value === '100.00'
+                : path.startsWith('.stripeCalls[2]')
+                  ? value === 'booking-refund:order_line_items#1:6000:4000:6000:0'
+                  : value === undefined,
+      },
+    ],
+  ],
+  [
+    'unsure-part-refund-card-then-the-rest-then-cancel',
+    [
+      CLAIM_KEYS,
+      {
+        name: `${ANSWER_LOST_ON_THE_ROUTE}; so Cancel & Refund then gives the £60 left in one card refund, where the old code gave £40 (Refund the rest) and then £60`,
+        decision: `${W21}; W20's model of a lost answer (the route ran); W03-plan 2.6 (the key kept)`,
+        path: /^\.results\[1\]\.(unsure|noAnswer)$|^\.results\[2\]\.(cardRefundedAmount|storeCreditRefundedAmount|pricePaid|refused)$|^\.stripeCalls\[2\]\.(params\.amount|idempotencyKey|params\.metadata\.refund_key)$|^\.stripeCalls\[3\]$/,
+        actual: (value, _expected, path) =>
+          path.endsWith('.noAnswer') ? noAnswerWords(value) : path.endsWith('.refused') ? String((value as { message?: unknown }).message) === 'Nothing is owed on this booking any more.' : path.endsWith('.amount') ? value === 6000 : path.startsWith('.stripeCalls[2]') ? true : value === undefined,
+      },
+    ],
+  ],
+  [
+    'unsure-part-refund-store-credit-arrived',
+    [
+      {
+        name: "A lost answer on the old store credit statement: the hook matches the old code's SQL, which the Worker doesn't run; R1 is one transaction, so the £40 goes to store credit once and the order is partly refunded; It already arrived then finds nothing owed",
+        decision: `${W21}: R1 is one transaction (the store credit's answer can't be lost on its own); W05 review 3's finding 3 for refunds`,
+        path: /^\.results\[1\]\.(unsure|cardRefundedAmount|storeCreditRefundedAmount|storeCreditBalance|pricePaid)$|^\.results\[2\]\.(cardRefundedAmount|storeCreditRefundedAmount|pricePaid|refused)$|^\.tables\.orders\.added\[0\]\.payment_status$/,
+        actual: (value, _expected, path) => {
+          if (path.endsWith('.unsure') || path.startsWith('.results[2]')) return path.endsWith('.refused') ? String((value as { message?: unknown }).message) === 'Nothing is owed on this booking any more.' : value === undefined
+          if (path.endsWith('.payment_status')) return value === 'partially_refunded'
+          if (path.endsWith('.storeCreditRefundedAmount')) return value === 40
+          if (path.endsWith('.cardRefundedAmount')) return value === 0
+          return typeof value === 'number'
+        },
+      },
     ],
   ],
 ])

@@ -407,6 +407,46 @@ credit and gift card claims, C1's transaction) are in `bookings/money-in.ts`, us
   add-ons on their own lines of the same order, so the booking line is the card money less the add-ons, never below £0.
   The refund figures' seat money is unchanged.
 
+## The refund pipeline: Part refund, Refund the rest, It already arrived (step D, W21)
+
+`bookings/refunds.ts`; `POST /api/v1/staff/bookings/:bookingId/refunds` (Part refund), `/refunds/owed` (Refund the rest),
+`/refunds/owed-arrived` (It already arrived), all Issue refunds; `GET /api/v1/staff/bookings/:bookingId/refund-figures`
+(the figures, any active staff member). The staff app's `refundBooking` amount paths and `getBookingRefundFigures` are
+thin calls; Cancel & Refund keeps its old body until W23.
+
+- **R1, one transaction, no Stripe:** the booking (and its customer) locked; a payment still being taken, or a Worker
+  refund claim still open on the booking, refuses; the figures (`money-left.ts`) and the amount, to half a penny (Q18,
+  the old words with the new figures); the claim (`price_paid` lowered, a part refund also in `part_refunded_amount`,
+  Refund the rest lowers `refund_owed_amount`); the plan (card parts: the booking's lines newest first, each order's
+  card portion used once, each line's seat money, one part per order; the rest to store credit; or, Q26, cash handed
+  over, capped at `cashLeft`); the claim's row `booking.refund_claimed` (`worker: true`, the plan, the key's mode). No
+  card part: the store credit (or the cash) and the finished row in the same transaction.
+- **The card parts:** after R1 commits, each sent once under `<claimId>:refund:<orderId>` with `metadata.claim_id`.
+  The first refused (nothing went): R1 undone (`put_back`, or owed again for Refund the rest) and the old words. A
+  later one refused: it and the rest to store credit (the old warning). A later one with no time left to send (W21a,
+  review L6): it and the rest owed on the booking, for Refund the rest to send to the card (Stripe never refused
+  them). No clear answer: held (`held` in the answer,
+  Q35's words); no press sends it again. Then **R2**, one transaction: each part on its lines' `card_refunded_amount`,
+  the store credit, the orders' status, `booking.part_refund` / `booking.refund_owed` (the old rows' fields) and
+  `booking.refund_finished`. R2 failing after money went: held too, with words saying what went.
+- **Refund the rest after the old screens' unclear refund:** owed money old Move, Remove Guest or Cancel & Refund put on
+  the booking after a card refund with no clear answer (`booking.card_refund_unsure`, until W22 to W24) is looked for in
+  Stripe by its old `refund_key` first, every page of each PaymentIntent's refunds (the old 24-hour look-up's job).
+  W21a (review L1, L2): the look runs before R1; R1 checks, under the booking's lock, that the notes are still the ones
+  looked for, and that each old refund that went is exactly one planned part on its PaymentIntent. Otherwise nothing is
+  sent or claimed (`refund_check_failed`; for an old refund that went, words naming it and saying to check Stripe, then
+  use It already arrived). A part it matched is stored in the claim (`matched`: the order and the old refund's id): the
+  press never sends it, and the press's R2, reconcile and the `held_claim` close all record it as gone, never owed.
+  Stripe not answering the look: nothing sent or claimed, `refund_check_failed`.
+- **Reconcile** (`orders/reconcile.ts`, `reconcileClaim`): a Worker claim with no finished row, past the window. It lists
+  the refunds on each planned PaymentIntent and matches `metadata.claim_id` (never sends): found (succeeded or pending),
+  or a part the claim matched to an old refund (W21a), is recorded; not found ends as money owed (Refund the rest), or store credit if the booking has been cancelled since
+  (it has no button left). Left for a person: the other Stripe mode, two refunds for a part, a refund of another
+  amount. Its rows are `order.reconcile` against `refund_claim` / the claim's id.
+- **The stuck list** shows held claims (`claims`); the manual close has `held_claim` (the card money not recorded goes on
+  the booking as owed, for It already arrived or Refund the rest) and `held_flow` (W19 review later 1: W12's undo for a
+  card or reader flow reconcile left for a person, the payment found named for a person to refund).
+
 ## Refund claims with no finish
 
 The staff app claims a refund's money before it moves. Each claim writes `booking.refund_claimed` to
@@ -428,7 +468,8 @@ ORDER BY c.at;
 ```
 
 The five minutes leaves out claims still running. Check each one in Stripe and in the customer's
-balance. The reconciler replaces this at step E.
+balance. W21: a Worker claim (`details->>'worker' = 'true'`) is reconcile's, and the stuck list shows it; this query is
+for the old screens' claims (Cancel & Refund, Remove Guest, Move) until W22 to W24.
 
 ## Card refunds held with no clear answer
 

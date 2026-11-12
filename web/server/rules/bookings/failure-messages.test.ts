@@ -124,8 +124,18 @@ describe("the screens' words, moved", () => {
       remove_addon: 'RemoveBookingAddonDialog',
       special_requests: 'BookingDetailContent',
     }
+    // W21: in the Part refund and Refund the rest dialogs a call that throws got no answer (W20a's rule): they show the
+    // backend's no-answer words (copied, as the frontend can't import backend files) instead of their fallback.
+    const noAnswerNow = new Set(['part_refund', 'refund_owed'])
     for (const [action, dialog] of Object.entries(sources)) {
+      if (noAnswerNow.has(action)) continue
       expect(readFileSync(path.join(components, `${dialog}.tsx`), 'utf8'), action).toContain(`'${words.FALLBACK_WORDS[action as keyof typeof sources]}'`)
+    }
+    const backendWords = readFileSync(path.join(components, '../../backend/paddock/shared/bookingWorker.ts'), 'utf8')
+    const noAnswer = /export const REFUND_NO_ANSWER_MESSAGE =\s*\n?\s*"([^"]+)"/.exec(backendWords)?.[1]
+    expect(noAnswer).toBeTruthy()
+    for (const dialog of ['PartRefundDialog', 'RefundTheRestDialog']) {
+      expect(readFileSync(path.join(components, `${dialog}.tsx`), 'utf8'), dialog).toContain(`"${noAnswer}"`)
     }
     expect(readFileSync(path.join(components, 'BookingDetailContent.tsx'), 'utf8')).toContain(`'${words.SPECIAL_REQUESTS_CANCELLED_WORDS}'`)
   })
@@ -232,5 +242,20 @@ describe('the words W17 adds', () => {
     expect(words.paidLineWords({ card: 15, giftCardOrStoreCredit: 5, cash: 0 })).toBe('Paid £15.00 by card and £5.00 by gift card / store credit.')
     expect(words.paidLineWords({ card: 0, giftCardOrStoreCredit: 0, cash: 20 })).toBe('Paid £20.00 in cash.')
     expect(words.paidLineWords({ card: 10, giftCardOrStoreCredit: 5, cash: 5 })).toBe('Paid £10.00 by card, £5.00 by gift card / store credit and £5.00 in cash.')
+  })
+
+  it("W21a (review S1): the Part refund dialog's line says what is left to refund", () => {
+    expect(words.leftLineWords({ card: 25, giftCardOrStoreCredit: 0, cash: 0 })).toBe('Left to refund: £25.00 card money.')
+    expect(words.leftLineWords({ card: 15, giftCardOrStoreCredit: 5, cash: 0 })).toBe('Left to refund: £15.00 card money and £5.00 gift card / store credit.')
+    expect(words.leftLineWords({ card: 10, giftCardOrStoreCredit: 5, cash: 5 })).toBe('Left to refund: £10.00 card money, £5.00 gift card / store credit and £5.00 cash.')
+    expect(words.leftLineWords({ card: 0, giftCardOrStoreCredit: 0, cash: 0 })).toBe('Nothing left to refund.')
+  })
+
+  it('W21a (review L1, L6): the old refund that reached the customer, and the later part not sent in time', () => {
+    expect(words.oldRefundReachedCustomerMessage([40])).toBe(
+      'An earlier card refund of £40.00 on this booking reached the customer, so nothing was refunded. Check Stripe, then use It already arrived for what arrived.'
+    )
+    expect(words.oldRefundReachedCustomerMessage([40, 20])).toContain('Earlier card refunds of £40.00 and £20.00 on this booking reached the customer')
+    expect(words.laterCardRefundNotSentMessage(30)).toBe("A further card refund of £30.00 wasn't sent in time, so it's owed on the booking: use Refund the rest to send it to the card.")
   })
 })

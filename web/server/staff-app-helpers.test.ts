@@ -1470,6 +1470,120 @@ describe('staff app helpers', () => {
       })
     })
 
+    // Brief W21: refundBooking's Part refund, Refund the rest and It already arrived, and getBookingRefundFigures, are
+    // thin calls to the Worker. Its rules are tested there (server/rules/bookings/refunds.test.ts); here, the wrappers:
+    // what they send, and the answers the dialogs read.
+    describe('refunds (W21: thin calls to the Worker)', () => {
+      const BOOKING = '11111111-1111-4111-8111-111111111111'
+      const figures = { status: 'confirmed', customerId: BOOKING, pricePaid: 40, refundOwed: 0, left: 40, cardLeft: 40, parts: { card: 40, giftCard: 0, storeCredit: 0, cash: 0 }, cashLeft: 0, paidLine: 'Left to refund: £40.00 card money.' }
+      const refused = (code: string, details: Record<string, unknown>) => ({
+        data: { ok: false, error: { code, message: String(details['message']), details: { action: 'refund', ...details } }, requestId: 'worker-request' },
+      })
+      const refund = async (params: Record<string, unknown>) => {
+        const query = vi.fn()
+        vi.stubGlobal('paddockData', { query })
+        const fn = (await backend('refundBooking')).default
+        return { result: () => fn({ params: { bookingId: BOOKING, ...params }, user }), query }
+      }
+
+      it.each([
+        ['Part refund', { refundMethod: 'card', amount: 15, reason: 'Goodwill' }, 'refunds', { amount: 15, refundMethod: 'card', reason: 'Goodwill' }],
+        ['Part refund in cash (Q26)', { refundMethod: 'cash', amount: 15, reason: 'Handed back' }, 'refunds', { amount: 15, refundMethod: 'cash', reason: 'Handed back' }],
+        ['Refund the rest', { refundMethod: 'credit', amount: 20, refundOwed: true }, 'refunds/owed', { amount: 20, refundMethod: 'credit' }],
+        ['It already arrived', { refundMethod: 'credit', amount: 20, owedArrived: true, reason: 'Seen' }, 'refunds/owed-arrived', { amount: 20, reason: 'Seen' }],
+      ])('%s: sends the amount and the press key to its route, answers its data, never touches the database', async (_label, params, suffix, body) => {
+        rawRequest.mockResolvedValue(success({ cardRefundedAmount: 15, storeCreditRefundedAmount: 0, pricePaid: 25 }))
+        const { result, query } = await refund({ ...params, idempotencyKey: 'press-key-0000000001' })
+        expect(await result()).toEqual({ cardRefundedAmount: 15, storeCreditRefundedAmount: 0, pricePaid: 25 })
+        expect(rawRequest.mock.calls[0]?.[0]).toMatchObject({
+          path: `/api/v1/staff/bookings/${BOOKING}/${suffix}`,
+          method: 'POST',
+          body,
+          headers: expect.objectContaining({ 'Idempotency-Key': 'press-key-0000000001' }),
+        })
+        expect(query).not.toHaveBeenCalled()
+      })
+
+      it('the cash, the store credit balance and a warning come back as the dialog reads them', async () => {
+        rawRequest.mockResolvedValue(success({ cardRefundedAmount: 20, storeCreditRefundedAmount: 30, cashRefundedAmount: 0, storeCreditBalance: 30, pricePaid: 10, warning: 'w' }))
+        expect(await (await refund({ refundMethod: 'card', amount: 50, reason: 'x' })).result()).toEqual({ cardRefundedAmount: 20, storeCreditRefundedAmount: 30, cashRefundedAmount: 0, storeCreditBalance: 30, pricePaid: 10, warning: 'w' })
+      })
+
+      it('an amount that no longer fits: `refused` with the Worker\'s words and the new figures (the old shape)', async () => {
+        rawRequest.mockResolvedValue(refused('CONFLICT', { reason: 'more_than_left', message: 'Only £40.00 is left on this booking. Check the amount and confirm again.', figures }))
+        expect(await (await refund({ refundMethod: 'credit', amount: 50, reason: 'x' })).result()).toEqual({ refused: { message: 'Only £40.00 is left on this booking. Check the amount and confirm again.', figures } })
+      })
+
+      it('any other refusal: `failed` with its words (the old function threw them), so the dialog can tell it from no answer', async () => {
+        rawRequest.mockResolvedValue(refused('PAYMENT_FAILED', { reason: 'refund_failed', message: 'The card refund failed, so nothing was refunded: Failed to refund payment: Your card was declined.' }))
+        expect(await (await refund({ refundMethod: 'card', amount: 10, reason: 'x' })).result()).toEqual({
+          failed: { reason: 'refund_failed', message: 'The card refund failed, so nothing was refunded: Failed to refund payment: Your card was declined.' },
+        })
+        rawRequest.mockResolvedValue(refusal('FORBIDDEN', 'Needs Issue refunds permission — this action moves money back to the customer.'))
+        expect(await (await refund({ refundMethod: 'card', amount: 10, reason: 'x' })).result()).toEqual({
+          failed: { reason: 'forbidden', message: 'Needs Issue refunds permission — this action moves money back to the customer.' },
+        })
+      })
+
+      it('a refund held for reconcile (Q35): `unsure` with the Worker\'s words, which end the dialog', async () => {
+        const words = "The refund didn't get a clear answer, so it may or may not have gone. Don't refund it again. Check the Orders page in a few minutes."
+        rawRequest.mockResolvedValue(success({ cardRefundedAmount: 0, storeCreditRefundedAmount: 0, held: { claimId: 'c', reason: 'refund_unconfirmed', message: words } }))
+        expect(await (await refund({ refundMethod: 'card', amount: 10, reason: 'x' })).result()).toEqual({ unsure: { message: words } })
+      })
+
+      it.each([
+        ['no connection', () => rawRequest.mockRejectedValue(new Error('socket hang up'))],
+        ['an earlier press still running', () => rawRequest.mockResolvedValue(refusal('CONFLICT', 'This request is already being processed'))],
+        ['a fault', () => rawRequest.mockResolvedValue(refusal('INTERNAL', 'Something went wrong and the action may not have finished. Check before trying again.'))],
+      ])('%s: `noAnswer`, so the dialog keeps its key and the next press gets the first one\'s answer', async (_label, arrange) => {
+        arrange()
+        const { REFUND_NO_ANSWER_MESSAGE } = await load('bookingWorker')
+        expect(await (await refund({ refundMethod: 'card', amount: 10, reason: 'x' })).result()).toEqual({ noAnswer: { message: REFUND_NO_ANSWER_MESSAGE } })
+      })
+
+      it("a changed press under a no-answer press's key: `pressedAfterNoAnswer`, never sent as new", async () => {
+        rawRequest.mockResolvedValue(refusal('IDEMPOTENCY_MISMATCH', 'This Idempotency-Key was already used for a different request.'))
+        const { REFUND_PRESSED_AFTER_NO_ANSWER_MESSAGE } = await load('bookingWorker')
+        expect(await (await refund({ refundMethod: 'card', amount: 10, reason: 'x' })).result()).toEqual({ pressedAfterNoAnswer: { message: REFUND_PRESSED_AFTER_NO_ANSWER_MESSAGE } })
+      })
+
+      it("Cancel & Refund (no amount) still runs the old body (W23): it never calls the Worker's refund routes", async () => {
+        const query = vi.fn().mockResolvedValue({ data: [] })
+        vi.stubGlobal('paddockData', { query })
+        const fn = (await backend('refundBooking')).default
+        await fn({ params: { bookingId: BOOKING, refundMethod: 'card' }, user }).catch(() => undefined)
+        expect(rawRequest.mock.calls.map((call) => (call[0] as { path: string }).path).filter((p) => p.includes('/refunds'))).toEqual([])
+        expect(query).toHaveBeenCalled()
+      })
+
+      it('getBookingRefundFigures: a read of the figures route (with its time limit), and the old words for a missing booking', async () => {
+        const fn = (await backend('getBookingRefundFigures')).default
+        rawRequest.mockResolvedValue(success(figures))
+        expect(await fn({ params: { bookingId: BOOKING }, user })).toEqual(figures)
+        expect(rawRequest.mock.calls[0]?.[0]).toMatchObject({ path: `/api/v1/staff/bookings/${BOOKING}/refund-figures`, method: 'GET' })
+        rawRequest.mockResolvedValue(refusal('NOT_FOUND', 'Booking not found.'))
+        await expect(fn({ params: { bookingId: BOOKING }, user })).rejects.toThrow(new Error('Booking not found.'))
+      })
+
+      it('the two dialogs: a press key kept after no answer or a throw (W20a\'s rule), the Worker\'s figures, Q26\'s cash and Q37\'s line', () => {
+        const part = readFileSync(path.join(appDir, 'frontend/components/PartRefundDialog.tsx'), 'utf8')
+        const rest = readFileSync(path.join(appDir, 'frontend/components/RefundTheRestDialog.tsx'), 'utf8')
+        for (const source of [part, rest]) {
+          expect(source).toContain('pressKey.current ??= crypto.randomUUID()')
+          expect(source).toContain('idempotencyKey: pressKey.current')
+          // The key is cleared only after the no-answer answers have returned (it is kept for them).
+          expect(source).toMatch(/if \(response\?\.noAnswer \|\| response\?\.pressedAfterNoAnswer\) \{[^}]*return( true)?\s*\}\s*pressKey\.current = null/)
+          expect(source.match(/pressKey\.current = null/g)).toHaveLength(2)
+          expect(source).toContain('thrownCallMessage(err)')
+        }
+        expect(part).toContain("figures.paidLine")
+        expect(part).toContain('value="cash"')
+        expect(part).toContain('cashLeft > 0')
+        expect(part).toMatch(/method === 'card' && next\.parts\.card > 0/)
+        expect(rest).toContain('next.cardLeft > 0')
+      })
+    })
+
     describe('Move', () => {
       const move = async (payment: Record<string, unknown> | undefined, tierPrice = '65.00') => {
         const session = { id: 'session-2', start_time: '2026-12-01T10:00:00', end_time: '2026-12-01T11:00:00', capacity: 8, total_booked: 0, status: 'open', service_type_id: 'type-1', band_id: 'band-2', booking_type: 'private', started: false }
@@ -2310,50 +2424,9 @@ describe('staff app helpers', () => {
         })
       })
 
-      describe('refundBooking with an amount', () => {
-        const partial = async (options: Parameters<typeof setUp>[0] & { putBackFails?: boolean; claimRefused?: boolean }) => {
-          const stubs = setUp({
-            ...options,
-            answers: [
-              [/SELECT status, customer_id, price_paid, refund_owed_amount FROM bookings/, () => [{ customer_id: 'customer-1', price_paid: '50.00', refund_owed_amount: '0.00', status: 'confirmed' }]],
-              [/UPDATE bookings b\s+SET price_paid/, () => (options.claimRefused ? [] : [{ id: 'booking-1', claim_id: 'claim-1' }])],
-              [/UPDATE bookings\s+SET price_paid/, () => {
-                if (options.putBackFails) throw BROKEN
-                return []
-              }],
-            ],
-          })
-          const fn = (await backend('refundBooking')).default
-          return { run: fn({ params: { bookingId: 'booking-1', refundMethod: 'card', amount: 25, reason: 'Goodwill' }, user }), ...stubs }
-        }
-
-        it('what fell short can\'t be put back: a warning with the amount, not thrown, as the rest has gone', async () => {
-          const { run } = await partial({ refunds: [{ success: true }, { error: 'declined' }], credit: [BROKEN], putBackFails: true })
-          const result = await run
-          expect(result).toMatchObject({ cardRefundedAmount: 15, storeCreditRefundedAmount: 0 })
-          expect(result.pricePaid).toBeUndefined()
-          expect(result.warning).toContain('is still on the booking')
-          expect(result.warning).toContain("Putting the £10.00 that didn't go back on the booking failed, so it shows as refunded")
-        })
-
-        it('nothing went and it can\'t be put back: staff are told the booking is that much too low', async () => {
-          const { run } = await partial({ refunds: [{ error: 'declined' }], putBackFails: true })
-          await expect(run).rejects.toThrow("Putting the £25.00 back on the booking failed, so its price paid is that much too low: connection lost")
-        })
-
-        it('lowers price paid by the amount before any money moves, and not again after', async () => {
-          const { run, sql, rawRefund } = await partial({})
-          expect(await run).toEqual({ cardRefundedAmount: 25, storeCreditRefundedAmount: 0, pricePaid: 25 })
-          expect(sql.filter((text) => /UPDATE bookings/.test(text)).length).toBe(1)
-          expect(rawRefund).toHaveBeenCalled()
-        })
-
-        it('a claim that touches no row moves nothing, and answers with the new figures', async () => {
-          const { run, rawRefund } = await partial({ claimRefused: true })
-          expect(await run).toMatchObject({ refused: { message: 'The figures on this booking have just changed. Check them and confirm again.', figures: { pricePaid: 50 } } })
-          expect(rawRefund).not.toHaveBeenCalled()
-        })
-      })
+      // Brief W21: refundBooking's amount paths are thin calls to the Worker now (the old body's claim, put-back and
+      // warning tests went with it); the wrapper's tests are in 'refunds (W21: thin calls to the Worker)', and the rules'
+      // in server/rules/bookings/refunds.test.ts. Cancel & Refund's old body is still tested below.
 
       describe('Move', () => {
         const session = { id: 'session-2', start_time: '2099-12-01T10:00:00', end_time: '2099-12-01T11:00:00', capacity: 8, total_booked: 0, status: 'open', service_type_id: 'type-1', band_id: 'band-2', booking_type: 'private', started: false }

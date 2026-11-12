@@ -219,6 +219,16 @@ give. When a Retool function dies after the Add Guest route ran, the route's ans
 (`WORKER_DOES_IT_NOW`, `chargeLandingLate`, `losingTheAnswerOnTheWorkerToo`). The new side's clock moves 1 ms before
 each Worker call, as the old side's does per statement.
 
+W21 moves refundBooking's amount paths (Part refund, Refund the rest, It already arrived) and the refund figures, through
+the staff app's wrappers (`refundAsTheDialogPresses`: a press key kept after no answer; the wrapper's new `failed` answer
+read as the throw the old function gave, which is what the dialog shows). Cancel & Refund calls (no amount) still go to
+the old function (`PARTLY_BUILT`). A refund the Worker holds is settled as reconcile does it (`reconcileClaimNow`, which
+never sends) straight after the press and again before the booking's next step (`settleHeldRefund`), as staff would find
+it on the Orders page. The swapped audit rows include the refunds' (the old claims, finishes, notes and action rows of
+Part refund and Refund the rest; the Worker's, checked by `newAuditRowProblems`); reconcile's `refunds.list` looks for a
+held claim are set aside and checked by `claimLookProblems`. 114 scenarios call them: 93 with `REFUND_DIFFERENCES`, 21
+exact. The W05 invariants on the new side break nothing the old code doesn't.
+
 ## No real Stripe (W11)
 
 `no-real-stripe.ts` is loaded before every unit test file (`vitest.unit.config.ts`, `setupFiles`). Any

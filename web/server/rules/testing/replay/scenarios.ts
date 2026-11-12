@@ -662,9 +662,16 @@ export async function losingTheAnswer<T>(matches: (sql: string, params: unknown[
 type RawRequest = (request: { path: string }) => Promise<unknown>
 const backendApi = () => (globalThis as unknown as { paddockBackendApi2: { rawRequest: RawRequest } }).paddockBackendApi2
 
-/** The Worker did the work and its answer never reached the function: what a lost connection leaves. */
+/**
+ * The Worker did the work and its answer never reached the function: what a lost connection leaves. W21: once an action
+ * makes that call inside its own Worker route (a Part refund's or Refund the rest's card refund), the route runs to the
+ * end and its answer is lost instead, as W20 does for Add Guest (losingTheAnswerOnTheWorkerToo).
+ */
 export async function losingTheWorkersAnswer<T>(path: string, steps: () => Promise<T>): Promise<T> {
   const real = backendApi()
+  const realWorker = workerApi()
+  const route = WORKER_DOES_IT_NOW[path]
+  if (route) loseTheRouteAnswer(route.answerLost, 'socket hang up')
   let lost = false
   vi.stubGlobal('paddockBackendApi2', {
     async rawRequest(request: { path: string }) {
@@ -680,6 +687,7 @@ export async function losingTheWorkersAnswer<T>(path: string, steps: () => Promi
     return await steps()
   } finally {
     vi.stubGlobal('paddockBackendApi2', real)
+    vi.stubGlobal('paddockWorkerV1', realWorker)
   }
 }
 
@@ -744,6 +752,8 @@ const workerApi = () => (globalThis as unknown as { paddockWorkerV1: { rawReques
  */
 const WORKER_DOES_IT_NOW: Readonly<Record<string, { route: RegExp; answerLost: RegExp }>> = {
   '/api/payments/charge-saved-card': { route: /^\/api\/v1\/staff\/bookings\/[^/]+\/(settle|guests)$/, answerLost: /\/guests$/ },
+  // W21: a Part refund's and Refund the rest's card refunds are sent inside their routes.
+  '/api/payments/refund-order': { route: /^\/api\/v1\/staff\/bookings\/[^/]+\/refunds(\/owed)?$/, answerLost: /^\/api\/v1\/staff\/bookings\/[^/]+\/refunds(\/owed)?$/ },
 }
 
 const CHARGE_PATH = '/api/payments/charge-saved-card'

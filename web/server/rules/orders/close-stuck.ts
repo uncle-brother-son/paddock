@@ -19,6 +19,16 @@
 //   `failed`), once a person has refunded it in Stripe by hand: its `order.reconcile` refund row written again as
 //   `confirmed`, `byHand`, which takes it off the list. Nothing moved.
 //
+// - `held_flow` (W21, W19 review later 1): a Worker booking-change flow (card or reader) reconcile left for a person:
+//   more than one payment, a payment that doesn't match the change, the other Stripe mode, or a payment still
+//   processing after a day. W12's undo, in this transaction (the flow's row first, then its booking): everything the
+//   change held goes back. A payment Stripe has for it stays where it is and is named on the close row and in the
+//   answer, for a person to refund in Stripe (the close never sends money).
+// - `held_claim` (W21): a booking refund's claim reconcile left for a person (the other Stripe mode, more than one
+//   refund for a part, a refund of another amount): the claim's R2 with no card part counted as gone, so its card money
+//   goes back on the booking as owed (the plan's store credit is given as R2 gives it). A person then uses It already
+//   arrived if Stripe shows the refund reached the customer, or Refund the rest if not. Nothing is sent to Stripe.
+//
 // W14c (W14b review S1): a compensation is closed only when its latest held row says every step left is Stripe's
 // definite refusal. Anything else reconcile finishes on its own (each step is safe to repeat, and reads a step a
 // person did in Stripe as done), so closing it by hand could hide a subscription Stripe is still billing.
@@ -39,6 +49,10 @@ import { SUBSCRIPTION_LEFT_ACTION } from './membership'
 import { PROCESSING_MINUTES } from './pending-order'
 import { compensationDefiniteSql, HELD_ORDER_CLOSE_REASONS, OLD_ROLLBACK_WORDS, SUBSCRIPTIONS_LEFT_SQL } from './stuck-list'
 import { changedSince, PARTS_SQL, undoInTransaction, type LockedOrder, type OrderParts } from './undo-order'
+import { isWorkerCardFlow, isWorkerFlow, readFlow, undoFlowInTransaction } from './reader-flow'
+import { finishClaimInTransaction, readClaim } from '@/server/rules/bookings/refunds'
+import { lockForBooking } from '@/server/rules/bookings/locks'
+import { flowClosable, HELD_CLAIM_CLOSE_REASONS } from './stuck-list'
 
 export const CLOSE_ACTION = 'order.close'
 
@@ -56,6 +70,16 @@ export const CLOSE_WORDS = {
   changed_elsewhere: 'Marked as sorted. It is no longer listed.',
   subscription_left: 'Marked as sorted. The subscription is no longer listed.',
   late_refund: 'Marked as refunded by hand. It is no longer listed.',
+  // W21.
+  held_flow: 'Change undone: everything it held has been given back, and it is no longer listed.',
+  held_claim: 'Refund closed: its card money is back on the booking as money still to refund, and it is no longer listed.',
+  flow_settled: 'This change has been settled in the meantime (finished or undone). Nothing was changed.',
+  flow_gone: 'This change no longer exists. Nothing was changed.',
+  old_flow: "This change was started on the old screens, so the close can't act on it. Press Resolve now to settle it.",
+  flow_not_left_for_a_person:
+    "The automatic check hasn't left this change for a person: it may still be settling it, or the bank may still be dealing with its payment. Nothing was changed. Wait for the next check (every 5 minutes) and look again.",
+  claim_not_left_for_a_person:
+    "The automatic check hasn't left this refund for a person: it may still be looking for it in Stripe. Nothing was changed. Wait for the next check (every 5 minutes) and look again.",
   already: 'This was already closed (an earlier press went through). Nothing more was done.',
   gone: 'This order no longer exists: it was settled in the meantime. Nothing was changed.',
   settled: 'This order has been settled in the meantime (it is no longer waiting for payment). Nothing was changed.',
@@ -93,23 +117,30 @@ function closeEntry(options: CloseOptions, orderId: string, details: Record<stri
   return { actorType: options.actor.type, actorId: options.actor.id, action: CLOSE_ACTION, entityType: 'order', entityId: orderId, requestId: options.requestId, details }
 }
 
-/** An earlier close of this kind for this order (and subscription): an answer lost, then a new press. */
-async function closedBefore(tx: Tx, kind: StuckCloseKind, orderId: string, subscriptionId?: string): Promise<boolean> {
+/**
+ * An earlier close of this kind for this order (and subscription): an answer lost, then a new press. W21: a flow's
+ * close is written against its `reader_payment`, a claim's against its `refund_claim`.
+ */
+async function closedBefore(tx: Tx, kind: StuckCloseKind, orderId: string, subscriptionId?: string, entityType = 'order'): Promise<boolean> {
   const rows = await tx.query(
-    `SELECT 1 FROM audit_log WHERE action = $1 AND entity_type = 'order' AND entity_id = $2 AND details->>'kind' = $3
+    `SELECT 1 FROM audit_log WHERE action = $1 AND entity_type = $5 AND entity_id = $2 AND details->>'kind' = $3
        AND ($4::text IS NULL OR details->>'subscriptionId' = $4::text) LIMIT 1`,
-    [CLOSE_ACTION, orderId, kind, subscriptionId ?? null]
+    [CLOSE_ACTION, orderId, kind, subscriptionId ?? null, entityType]
   )
   return rows.length > 0
 }
 
-/** Reconcile's latest row for the order that isn't a late refund's: what it last found. */
-async function lastReconcile(tx: Tx, orderId: string): Promise<{ outcome?: string; reason?: string; finding?: ChangedElsewhereFinding } | null> {
+/** Reconcile's latest row for the order (W21: or flow, or claim) that isn't a late refund's: what it last found. */
+async function lastReconcile(
+  tx: Tx,
+  orderId: string,
+  entityType = 'order'
+): Promise<{ outcome?: string; reason?: string; detail?: string | null; finding?: ChangedElsewhereFinding } | null> {
   const row = (
-    await tx.query<{ details: { outcome?: string; reason?: string; finding?: ChangedElsewhereFinding } }>(
-      `SELECT details FROM audit_log WHERE entity_type = 'order' AND entity_id = $1 AND action = 'order.reconcile' AND NOT (details ? 'refund')
+    await tx.query<{ details: { outcome?: string; reason?: string; detail?: string | null; finding?: ChangedElsewhereFinding } }>(
+      `SELECT details FROM audit_log WHERE entity_type = $2 AND entity_id = $1 AND action = 'order.reconcile' AND NOT (details ? 'refund')
        ORDER BY at DESC, id DESC LIMIT 1`,
-      [orderId]
+      [orderId, entityType]
     )
   )[0]
   return row?.details ?? null
@@ -412,11 +443,100 @@ async function closeLateRefund(db: Db, id: string, paymentIntentId: string, why:
   })
 }
 
+// --- held_flow (W21, W19 review later 1)
+
+/** What a person still has to do in Stripe after a held flow is undone, from what reconcile last found. */
+function paymentLeftWords(reason: string, detail: string | null | undefined): string[] {
+  const payments = detail ? ` (${detail})` : ''
+  if (reason === 'other_mode') return ["Stripe can't see a payment for it with the account in use: check the other Stripe mode (live or test) and refund any payment there by hand."]
+  if (reason === 'payment_processing') return [`A payment for it was still processing at the bank${payments}: if it goes through, refund it in Stripe by hand.`]
+  return [`A payment for it went through in Stripe${payments}: refund it there by hand (the close doesn't refund it).`]
+}
+
+async function closeHeldFlow(db: Db, pendingId: string, why: string, options: CloseOptions): Promise<CloseStuckOutput> {
+  return db.transaction(async (tx) => {
+    // The flow's row first (W12's lock order), so the press's C2, reconcile and the undo queue behind it.
+    const row = await readFlow(tx, pendingId, true)
+    const entity = 'reader_payment'
+    if (!row) return (await closedBefore(tx, 'held_flow', pendingId, undefined, entity)) ? alreadyClosed('held_flow', pendingId) : refused('held_flow', pendingId, 'flow_gone')
+    if (row.status !== 'pending') return (await closedBefore(tx, 'held_flow', pendingId, undefined, entity)) ? alreadyClosed('held_flow', pendingId) : refused('held_flow', pendingId, 'flow_settled')
+    if (!isWorkerFlow(row.snapshot) && !isWorkerCardFlow(row.snapshot)) return refused('held_flow', pendingId, 'old_flow')
+    const last = await lastReconcile(tx, pendingId, entity)
+    const ageMinutes = (Date.now() - new Date(row.created_at).getTime()) / 60000
+    if (last?.outcome !== 'left' || !flowClosable(last.reason, ageMinutes)) return refused('held_flow', pendingId, 'flow_not_left_for_a_person')
+    const reason = last.reason as string
+    // db, not tx: the undo joins this transaction (db.transaction joins the one open on db).
+    const undone = await undoFlowInTransaction(db, pendingId, { actor: options.actor, requestId: options.requestId, why: `Closed by hand: ${why}` })
+    if (!undone.undone) return refused('held_flow', pendingId, 'flow_settled')
+    const leftAsFound = paymentLeftWords(reason, last.detail)
+    await audit.recordAll(tx, [
+      {
+        actorType: options.actor.type,
+        actorId: options.actor.id,
+        action: CLOSE_ACTION,
+        entityType: entity,
+        entityId: pendingId,
+        requestId: options.requestId,
+        details: { kind: 'held_flow', why, reason, payment: last.detail ?? null, flow: row.flow, recordId: row.record_id, problems: undone.problems },
+      },
+    ])
+    return answer('held_flow', pendingId, {
+      closed: true,
+      message: CLOSE_WORDS.held_flow,
+      givenBack: ['everything the change held (its store credit, gift card, places and credits)'],
+      leftAsFound,
+    })
+  })
+}
+
+// --- held_claim (W21)
+
+async function closeHeldClaim(db: Db, claimId: string, why: string, options: CloseOptions): Promise<CloseStuckOutput> {
+  const claim = await readClaim(db, claimId)
+  if (!claim) return refused('held_claim', claimId, 'not_listed')
+  const entity = 'refund_claim'
+  return db.transaction(async (tx) => {
+    // The booking first, as R2 locks it: the press's R2 and reconcile's queue behind this, and find it finished.
+    await lockForBooking(tx, { bookingId: claim.bookingId })
+    const last = await lastReconcile(tx, claimId, entity)
+    if (last?.outcome !== 'left' || !last.reason || !HELD_CLAIM_CLOSE_REASONS.has(last.reason)) {
+      return (await closedBefore(tx, 'held_claim', claimId, undefined, entity)) ? alreadyClosed('held_claim', claimId) : refused('held_claim', claimId, 'claim_not_left_for_a_person')
+    }
+    // W21a (W21 review L2): a part matched to an old refund that went is gone (never owed, or it would be sent again).
+    const matched = new Set((claim.details.matched ?? []).map((part) => part.orderId))
+    const gone = claim.details.plan.card.filter((part) => matched.has(part.orderId))
+    const owed = Math.round(claim.details.plan.card.filter((part) => !matched.has(part.orderId)).reduce((total, part) => total + part.amount, 0) * 100) / 100
+    const finished = await finishClaimInTransaction(tx, claim, { went: gone, extraToStoreCredit: 0, owed }, { actor: options.actor, requestId: options.requestId, how: 'close', why })
+    if (!finished) return (await closedBefore(tx, 'held_claim', claimId, undefined, entity)) ? alreadyClosed('held_claim', claimId) : refused('held_claim', claimId, 'not_listed')
+    await audit.recordAll(tx, [
+      {
+        actorType: options.actor.type,
+        actorId: options.actor.id,
+        action: CLOSE_ACTION,
+        entityType: entity,
+        entityId: claimId,
+        requestId: options.requestId,
+        details: { kind: 'held_claim', why, reason: last.reason, found: last.detail ?? null, bookingId: claim.bookingId, owed },
+      },
+    ])
+    return answer('held_claim', claimId, {
+      closed: true,
+      message: CLOSE_WORDS.held_claim,
+      givenBack: owed > 0 ? [`${money(owed)} back on the booking as money still to refund`] : [],
+      leftAsFound: [
+        'Check Stripe: if the refund reached the customer, use It already arrived on the booking; if not, use Refund the rest.',
+      ],
+    })
+  })
+}
+
 /** The route's work: one item, by its kind. */
 export async function closeStuckItem(db: Db, input: CloseStuckInput, options: CloseOptions): Promise<CloseStuckOutput> {
   const why = input.reason.trim()
   if (input.kind === 'held_order') return closeHeldOrder(db, input.orderId, why, options)
   if (input.kind === 'changed_elsewhere') return closeChangedElsewhere(db, input.orderId, why, options)
   if (input.kind === 'late_refund') return closeLateRefund(db, input.orderId, input.paymentIntentId ?? '', why, options)
+  if (input.kind === 'held_flow') return closeHeldFlow(db, input.orderId, why, options)
+  if (input.kind === 'held_claim') return closeHeldClaim(db, input.orderId, why, options)
   return closeSubscriptionLeft(db, input.orderId, input.subscriptionId ?? '', why, options)
 }

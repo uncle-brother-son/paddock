@@ -58,7 +58,8 @@ export const changedElsewhereFindingSchema = z.object({
 export type ChangedElsewhereFindingOutput = z.infer<typeof changedElsewhereFindingSchema>
 
 export const reconcileItemSchema = z.object({
-  kind: z.enum(['order', 'flow', 'refund']),
+  /** W21: `claim` is a booking refund's claim (server/rules/bookings/refunds.ts) held for reconcile. */
+  kind: z.enum(['order', 'flow', 'refund', 'claim']),
   id: z.string(),
   outcome: z.enum(['finalised', 'undone', 'settled_elsewhere', 'refund_pending', 'refund_confirmed', 'refund_failed', 'left']),
   reason: z.string().optional(),
@@ -93,8 +94,15 @@ export type ReconcileRunOutput = z.infer<typeof reconcileRunOutputSchema>
  *   cancelled it (and refunded its first payment) in Stripe;
  * - `late_refund` (W14c, W14b N1): a late payment's automatic refund that Stripe refused, once a person has refunded
  *   it by hand: recorded as refunded. `orderId` is then the order's or the flow's id, as the refund lists it.
+ * - `held_flow` (W21, W19 review later 1): a booking change's card or reader flow reconcile left for a person (more
+ *   than one payment, a payment that doesn't match, the other Stripe mode, or a payment still processing after a
+ *   day): W12's undo gives back everything the change held, and any payment found is named for a person to refund.
+ *   `orderId` is the flow's pending id.
+ * - `held_claim` (W21): a booking refund's claim reconcile left for a person: its card parts not yet recorded go on
+ *   the booking as money still to refund (It already arrived, or Refund the rest), the rest as R2 gives it. `orderId`
+ *   is the claim's id.
  */
-export const stuckCloseKindSchema = z.enum(['held_order', 'changed_elsewhere', 'subscription_left', 'late_refund'])
+export const stuckCloseKindSchema = z.enum(['held_order', 'changed_elsewhere', 'subscription_left', 'late_refund', 'held_flow', 'held_claim'])
 export type StuckCloseKind = z.infer<typeof stuckCloseKindSchema>
 
 export const stuckCloseTargetSchema = z.object({
@@ -138,8 +146,27 @@ export const stuckFlowSchema = z.object({
   madeBy: z.enum(['worker', 'old']),
   reason: z.string(),
   words: z.string(),
+  /** W21: a Worker flow reconcile left for a person can be closed by hand (`held_flow`). */
+  close: stuckCloseTargetSchema.optional(),
 })
 export type StuckFlowOutput = z.infer<typeof stuckFlowSchema>
+
+/**
+ * W21: a booking refund's claim with no clear end yet (a card refund with no clear answer, or one that went and
+ * couldn't be recorded), once older than the window. `amount` is the card money it planned to send.
+ */
+export const stuckClaimSchema = z.object({
+  claimId: z.string(),
+  bookingId: z.string(),
+  customerName: z.string(),
+  amount: z.number(),
+  createdAt: z.string(),
+  ageMinutes: z.number(),
+  reason: z.string(),
+  words: z.string(),
+  close: stuckCloseTargetSchema.optional(),
+})
+export type StuckClaimOutput = z.infer<typeof stuckClaimSchema>
 
 export const stuckRefundSchema = z.object({
   kind: z.enum(['order', 'flow']),
@@ -166,6 +193,8 @@ export type StuckWarningOutput = z.infer<typeof stuckWarningSchema>
 export const stuckListOutputSchema = z.object({
   checkout: z.array(stuckOrderSchema),
   flows: z.array(stuckFlowSchema),
+  /** W21: booking refunds held for reconcile. */
+  claims: z.array(stuckClaimSchema),
   refunds: z.array(stuckRefundSchema),
   warnings: z.array(stuckWarningSchema),
   alert: z.object({ at: z.string(), words: z.string() }).nullable(),

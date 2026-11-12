@@ -302,6 +302,10 @@ describe("the banner's words (frontend/utils/stuckList.ts)", () => {
     const listed = { ...empty, checkout: [{ ageMinutes: 20 }], flows: [{ ageMinutes: 40 }], refunds: [{}], warnings: [{}], alert: { at: 'now', words: 'x' } }
     expect(stuckCount(listed)).toBe(5)
     expect(oldestAgeMinutes(listed)).toBe(40)
+    // W21: a held refund claim counts too, and its age.
+    const withClaim = { ...listed, claims: [{ ageMinutes: 55 }] }
+    expect(stuckCount(withClaim)).toBe(6)
+    expect(oldestAgeMinutes(withClaim)).toBe(55)
   })
 
   it("says what each run did, and a close's button and what it does", async () => {
@@ -322,5 +326,27 @@ describe("the banner's words (frontend/utils/stuckList.ts)", () => {
     expect(closeDialogText('late_refund')).toContain('Only do this once you have refunded it in Stripe')
     expect(closeDialogText('held_order')).toContain('The booking is left exactly as it is now')
     expect(closeDialogText('subscription_left')).toContain('Nothing is cancelled or refunded here')
+    // W21: a held change is undone; a held refund closed, its card money owed on the booking.
+    expect(closeButtonLabel('held_flow')).toBe('Undo change')
+    expect(closeButtonLabel('held_claim')).toBe('Close refund')
+    expect(closeDialogText('held_flow')).toContain('refund it in Stripe by hand')
+    expect(closeDialogText('held_claim')).toContain('use It already arrived on the booking; if not, use Refund the rest')
+  })
+
+  it("W21: getStuckReaderPayments passes the Worker's held refund claims and a flow's close through", async () => {
+    const fn = (await backendFunction('getStuckReaderPayments')).default as (req: { params: object; user: { email: string } }) => Promise<Record<string, unknown>>
+    const claim = { claimId: 'c', bookingId: 'b', customerName: 'Sam Test', amount: 20, createdAt: 'x', ageMinutes: 20, reason: 'other_mode', words: 'w', close: { kind: 'held_claim', orderId: 'c' } }
+    const flow = { pendingId: 'p', flow: 'settle', recordId: 'b', customerName: 'Sam Test', amount: 20, createdAt: 'x', ageMinutes: 30, madeBy: 'worker', reason: 'several_payments', words: 'w', close: { kind: 'held_flow', orderId: 'p' } }
+    vi.stubGlobal('paddockData', { query: vi.fn().mockResolvedValue({ data: [] }) })
+    vi.stubGlobal('paddockWorkerV1', {
+      rawRequest: vi.fn().mockResolvedValue({ data: { ok: true, data: { checkout: [], flows: [flow], claims: [claim], refunds: [], warnings: [], alert: null }, requestId: 'r' } }),
+    })
+    try {
+      const listed = await fn({ params: {}, user: { email: 'jo@example.com' } })
+      expect(listed['claims']).toEqual([claim])
+      expect(listed['flows']).toEqual([flow])
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

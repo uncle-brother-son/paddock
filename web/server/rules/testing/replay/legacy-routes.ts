@@ -50,6 +50,11 @@ const STAFF_PATTERNS: Array<{ pattern: RegExp; load: () => Promise<unknown>; par
   { pattern: /^\/api\/v1\/staff\/bookings\/([^/]+)\/settle$/, load: () => import('@/app/api/v1/staff/bookings/[bookingId]/settle/route'), params: (m) => ({ bookingId: decodeURIComponent(m[1] ?? '') }) },
   // W20: the staff app's thin addBookingGuest.
   { pattern: /^\/api\/v1\/staff\/bookings\/([^/]+)\/guests$/, load: () => import('@/app/api/v1/staff/bookings/[bookingId]/guests/route'), params: (m) => ({ bookingId: decodeURIComponent(m[1] ?? '') }) },
+  // W21: the staff app's thin refundBooking (Part refund, Refund the rest, It already arrived) and getBookingRefundFigures.
+  { pattern: /^\/api\/v1\/staff\/bookings\/([^/]+)\/refunds$/, load: () => import('@/app/api/v1/staff/bookings/[bookingId]/refunds/route'), params: (m) => ({ bookingId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/bookings\/([^/]+)\/refunds\/owed$/, load: () => import('@/app/api/v1/staff/bookings/[bookingId]/refunds/owed/route'), params: (m) => ({ bookingId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/bookings\/([^/]+)\/refunds\/owed-arrived$/, load: () => import('@/app/api/v1/staff/bookings/[bookingId]/refunds/owed-arrived/route'), params: (m) => ({ bookingId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/bookings\/([^/]+)\/refund-figures$/, load: () => import('@/app/api/v1/staff/bookings/[bookingId]/refund-figures/route'), params: (m) => ({ bookingId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/reader-flows\/([^/]+)\/finalise$/, load: () => import('@/app/api/v1/staff/reader-flows/[pendingId]/finalise/route'), params: (m) => ({ pendingId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/reader-flows\/([^/]+)\/cancel$/, load: () => import('@/app/api/v1/staff/reader-flows/[pendingId]/cancel/route'), params: (m) => ({ pendingId: decodeURIComponent(m[1] ?? '') }) },
 ]

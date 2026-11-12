@@ -9,6 +9,7 @@
 // with no order) counts as gift card money, where the old figures showed it as cash.
 import 'server-only'
 import type { Queryable } from '@/server/db'
+import { leftLineWords } from './failure-messages'
 
 const round2 = (n: number): number => Math.round(n * 100) / 100
 const amount = (value: string | null | undefined): number => Number.parseFloat(value ?? '0')
@@ -190,6 +191,68 @@ export async function loadBookingMoneyLeft(db: Queryable, bookingId: string): Pr
     left,
     cardLeft,
     parts: { card, giftCard, storeCredit, cash: round2(notCard - giftCard - storeCredit) },
+  }
+}
+
+/**
+ * W21 (Q26, Wayne 6 Nov; lead call L2): the cash recorded for the booking that can be handed back. Per order with a
+ * booking line for it and no Stripe payment, paid in cash (or `split`: a gift card with cash), the smaller of the
+ * order's cash part (its total less promo, gift card and store credit) and the seat money its lines hold for this
+ * booking; less what Worker refunds have already handed back in cash. Settle's and Move's cash has no order (Q36: keep
+ * today's way), so it can't be found reliably and is left out: that money can still go back as store credit. Fixed
+ * text: ADDONS_INSIDE_LINE is a constant; the booking comes in as $1 and $2.
+ */
+const CASH_SQL = `
+WITH seat AS (
+  SELECT oli.order_id, SUM(GREATEST(oli.line_total - COALESCE(oli.discount_amount, 0) - inside.addons, 0)) AS money
+  FROM order_line_items oli
+  ${ADDONS_INSIDE_LINE}
+  WHERE oli.booking_id = $1::uuid AND oli.item_type = 'booking'
+    AND o.stripe_payment_intent_id IS NULL AND o.payment_method IN ('cash', 'split')
+  GROUP BY oli.order_id
+),
+recorded AS (
+  SELECT COALESCE(SUM(LEAST(seat.money, GREATEST(
+           o.order_total - COALESCE(o.discount_amount, 0)
+           - COALESCE((SELECT SUM(gcr.amount_used) FROM gift_card_redemptions gcr WHERE gcr.order_id = o.id), 0)
+           - COALESCE((SELECT -SUM(sct.amount) FROM store_credit_transactions sct
+                       WHERE sct.order_id = o.id AND sct.amount < 0 AND sct.reason IN ('redemption', 'redemption_reversal')), 0),
+           0))), 0) AS cash
+  FROM seat JOIN orders o ON o.id = seat.order_id
+)
+SELECT recorded.cash::text AS recorded,
+       COALESCE((SELECT SUM((c.details->>'amount')::numeric) FROM audit_log c
+                 WHERE c.action = 'booking.refund_claimed' AND c.entity_type = 'booking' AND c.entity_id = $2::text
+                   AND c.details->>'method' = 'cash'), 0)::text AS handed_back
+FROM recorded`
+
+/** W21: the figures as the figures route sends them: the old ones, with Q26's cash and the line of what is left (W21a). */
+export interface RefundFigures extends BookingMoneyLeft {
+  cashLeft: number
+  paidLine: string
+}
+
+/** The cash a Part refund can hand back (Q26): see CASH_SQL. Never more than the figures' cash part. */
+export async function cashLeftOn(db: Queryable, bookingId: string, figures: BookingMoneyLeft): Promise<number> {
+  const row = (await db.query<{ recorded: string; handed_back: string }>(CASH_SQL, [bookingId, bookingId]))[0]
+  const recorded = round2(amount(row?.recorded) - amount(row?.handed_back))
+  return Math.max(0, round2(Math.min(figures.parts.cash, recorded)))
+}
+
+/** getBookingRefundFigures on the Worker (W21): loadBookingMoneyLeft, field for field, plus `cashLeft` and `paidLine`. */
+export async function loadRefundFigures(db: Queryable, bookingId: string): Promise<RefundFigures | null> {
+  const figures = await loadBookingMoneyLeft(db, bookingId)
+  if (!figures) return null
+  return withCashAndLine(db, bookingId, figures)
+}
+
+/** The figures with Q26's cash and the line of what is left to refund (W21a, W21 review S1) added. */
+export async function withCashAndLine(db: Queryable, bookingId: string, figures: BookingMoneyLeft): Promise<RefundFigures> {
+  const { parts } = figures
+  return {
+    ...figures,
+    cashLeft: await cashLeftOn(db, bookingId, figures),
+    paidLine: leftLineWords({ card: parts.card, giftCardOrStoreCredit: round2(parts.giftCard + parts.storeCredit), cash: parts.cash }),
   }
 }
 

@@ -31,6 +31,11 @@
 // the mark before compensating (membership.ts). L1: T2's definite checks before Q8's cancel. A late refund of a
 // payment a compensation already refunded under the same key counts as done.
 //
+// W21 (D-plan 4.10): booking refund claims (server/rules/bookings/refunds.ts) a press left held (a card refund with no
+// clear answer, or one that went and couldn't be recorded). Never sends a refund: it lists the refunds on each planned
+// PaymentIntent, matches `metadata.claim_id`, and runs the claim's R2 with what it found; a part Stripe never received
+// ends as money owed on the booking (Refund the rest; store credit if the booking has been cancelled since).
+//
 // W13c (W13a review L3, first part): a membership subscription a press left live (`order.subscription_left`,
 // `left`) for an order no longer pending is put back here, each run until it is: cancelled (checked), its first
 // invoice refunded under its key, then a `cancelled` row, which closes the stuck list's warning. W13d (W13c review
@@ -64,6 +69,7 @@ import { PROCESSING_MINUTES, type CardSnapshot, type PendingSnapshot, type Reade
 import { cancelReaderFlow, finaliseFlowInTransaction, isWorkerCardFlow, readFlow, undoFlowInTransaction, type FlowRow } from './reader-flow'
 import { cancelReaderOrder, finaliseReaderOrderFound, otherModeMessage, settleIntent } from './reader-order'
 import { undoOrder } from './undo-order'
+import { CLAIMS_DUE_SQL, findCardPart, finishClaim, readClaim, type CardPart, type Claim } from '@/server/rules/bookings/refunds'
 
 /** Q14: a pending order or flow younger than this may still have staff at the reader. */
 export const RECONCILE_WINDOW_MINUTES = PROCESSING_MINUTES
@@ -148,7 +154,8 @@ export type ItemOutcome =
   | 'left'
 
 export interface ReconcileItem {
-  kind: 'order' | 'flow' | 'refund'
+  /** W21: `claim` is a booking refund's claim. */
+  kind: 'order' | 'flow' | 'refund' | 'claim'
   id: string
   outcome: ItemOutcome
   reason?: string
@@ -297,7 +304,7 @@ interface Run {
   timing: StripeTiming | undefined
   options: ReconcileOptions
   /** Each action's row: `order.reconcile`, actor system (or the staff member). */
-  record(entityType: 'order' | 'reader_payment', entityId: string, details: Record<string, unknown>): Promise<void>
+  record(entityType: 'order' | 'reader_payment' | 'refund_claim', entityId: string, details: Record<string, unknown>): Promise<void>
   /**
    * W12a (W12 review L7): the automatic refund's rows are always the system's, even on a staff member's
    * manual run (the refund is automatic by Wayne's decision; the button only runs it sooner). On a manual
@@ -728,6 +735,75 @@ async function reconcileFlow(run: Run, row: FlowRow): Promise<ReconcileItem> {
   }
 }
 
+// --- A booking refund's claim held by its press (W21, D-plan 4.10)
+
+/**
+ * Each planned card part looked for in Stripe (never sent): a refund naming the claim that succeeded or is pending
+ * went; none, or one that failed or was cancelled, never went; a part matched to an old refund (W21a) went. Then R2 with that: what went recorded on its lines, the
+ * plan's store credit given, what never went owed on the booking. Left for a person: the claim's mode isn't the key's
+ * (nothing can be trusted as "not found"), more than one refund names a part, or a refund's amount isn't the part's.
+ * Left for the next run: a list Stripe didn't answer, or R2 failing in the database (nothing kept: one transaction).
+ */
+async function reconcileClaim(run: Run, claim: Claim): Promise<ReconcileItem> {
+  const { plan, livemode } = claim.details
+  if (typeof livemode === 'boolean' && livemode !== run.stripe.keyLivemode) return left('claim', claim.id, 'other_mode')
+  const went: CardPart[] = []
+  const never: CardPart[] = []
+  // W21a (W21 review L2): a part Refund the rest matched to an old refund that went is gone, with no refund naming the
+  // claim: counted as gone, never owed (owed would move the old look-up's window past it, and it would be sent again).
+  const matched = new Set((claim.details.matched ?? []).map((part) => part.orderId))
+  for (const part of plan.card) {
+    if (matched.has(part.orderId)) {
+      went.push(part)
+      continue
+    }
+    const found = await findCardPart(run.stripe, claim.id, part, run.timing)
+    if (found.kind === 'unclear') return left('claim', claim.id, 'unclear', found.detail)
+    if (found.kind === 'several') return left('claim', claim.id, 'several_refunds', found.ids.join(', '))
+    if (found.kind === 'mismatch') return left('claim', claim.id, 'refund_mismatch', found.detail)
+    if (found.kind === 'went') went.push(part)
+    else never.push(part)
+  }
+  const owed = Math.round(never.reduce((total, part) => total + part.amount, 0) * 100) / 100
+  try {
+    const output = await finishClaim(run.db, claim, { went, extraToStoreCredit: 0, owed }, { actor: run.options.actor, requestId: run.options.requestId, how: 'reconcile' })
+    if (!output) return { kind: 'claim', id: claim.id, outcome: 'settled_elsewhere', detail: 'finished' }
+    const detail = `card ${went.map((part) => `${part.orderId} £${part.amount.toFixed(2)}`).join(', ') || 'none'} recorded; £${owed.toFixed(2)} owed; £${output.storeCreditRefundedAmount.toFixed(2)} to store credit`
+    return { kind: 'claim', id: claim.id, outcome: 'finalised', detail }
+  } catch (err) {
+    return left('claim', claim.id, 'finish_failed', err instanceof Error ? err.message : String(err))
+  }
+}
+
+/**
+ * W21: one held claim settled now, as a run settles it, whatever its age, with its `order.reconcile` row: what staff's
+ * Resolve now does for it once the claim is past the window. For the replay (a scenario whose next step comes after
+ * the staff member checked the Orders page, Q35's words) and the tests.
+ */
+export async function reconcileClaimNow(db: Db, stripeClient: StripeClient, claimId: string, options: Pick<ReconcileOptions, 'actor' | 'requestId'>): Promise<ReconcileItem> {
+  const record: Run['record'] = async (entityType, entityId, details) => {
+    await db.transaction((tx) =>
+      audit.recordAll(tx, [{ actorType: options.actor.type, actorId: options.actor.id, action: 'order.reconcile', entityType, entityId, requestId: options.requestId, details }])
+    )
+  }
+  const run: Run = {
+    db,
+    stripe: stripeClient,
+    timing: undefined,
+    options: { ...options, maxItems: 1, budgetMs: 0 },
+    record,
+    refundEntry: (entityType, entityId, details) => ({ actorType: 'system', actorId: null, action: 'order.reconcile', entityType, entityId, requestId: options.requestId, details }),
+    recordRefund: () => Promise.resolve(),
+  }
+  const claim = await readClaim(db, claimId)
+  if (!claim) return { kind: 'claim', id: claimId, outcome: 'settled_elsewhere', detail: 'gone' }
+  const item = await reconcileClaim(run, claim)
+  if (item.outcome !== 'settled_elsewhere') {
+    await record('refund_claim', claimId, { outcome: item.outcome, ...(item.reason ? { reason: item.reason } : {}), detail: item.detail ?? null })
+  }
+  return item
+}
+
 // --- The automatic refund of a late payment (W03-decisions, "W12 calls")
 
 export interface LateRefundDue {
@@ -965,6 +1041,9 @@ SELECT
    WHERE status = 'pending' AND NOT COALESCE(snapshot->>'method' IN ('reader', 'card') AND (snapshot->>'request_id') IS NOT NULL, false)
      AND created_at < now() - make_interval(mins => $2::int)) AS flows`
 
+/** The audit entity a non-refund item's `order.reconcile` rows are written against (W21: a claim's own id). */
+const entityTypeOf = (kind: ReconcileItem['kind']): 'order' | 'reader_payment' | 'refund_claim' => (kind === 'order' ? 'order' : kind === 'claim' ? 'refund_claim' : 'reader_payment')
+
 /** What makes a left item's row worth writing again: its reason, and for a changed-elsewhere order its finding (W12a). */
 const leftKey = (reason: string | undefined, finding: Partial<ChangedElsewhereFinding> | undefined): string => `${reason ?? ''}|${finding?.state ?? ''}|${finding?.amount ?? ''}`
 
@@ -1026,6 +1105,7 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
   const orders = await db.query<PendingOrder>(ORDERS_DUE_SQL, [window])
   const changed = await db.query<ChangedOrder>(CHANGED_ELSEWHERE_DUE_SQL, [window, CHANGED_ELSEWHERE_DAYS])
   const flows = await db.query<{ id: string }>(FLOWS_DUE_SQL, [window])
+  const claims = await db.query<{ id: string }>(CLAIMS_DUE_SQL, [window])
   const old = (await db.query<{ orders: number; flows: number }>(OLD_DUE_SQL, [window, window]))[0] ?? { orders: 0, flows: 0 }
 
   const work: Array<{ kind: ReconcileItem['kind']; id: string; go: () => Promise<ReconcileItem> }> = [
@@ -1040,6 +1120,16 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
         const row = await readFlow(db, flow.id)
         if (!row || row.status !== 'pending') return { kind: 'flow' as const, id: flow.id, outcome: 'settled_elsewhere' as const, detail: row?.status ?? 'gone' }
         return reconcileFlow(run, row)
+      },
+    })),
+    // W21: booking refund claims held by their press.
+    ...claims.map((due) => ({
+      kind: 'claim' as const,
+      id: due.id,
+      go: async () => {
+        const claim = await readClaim(db, due.id)
+        if (!claim) return { kind: 'claim' as const, id: due.id, outcome: 'settled_elsewhere' as const, detail: 'gone' }
+        return reconcileClaim(run, claim)
       },
     })),
     // W13c (L3): a subscription left live, which Stripe would bill again next month. W14b (W13c review L4): last, so
@@ -1073,7 +1163,7 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
       result.stripeRefused = true
       const acted = item.kind !== 'refund' && (item.outcome === 'finalised' || item.outcome === 'undone')
       if (acted) {
-        await run.record(item.kind === 'order' ? 'order' : 'reader_payment', item.id, { outcome: item.outcome, detail: item.detail ?? null, ...(item.warning ? { warning: item.warning } : {}) })
+        await run.record(entityTypeOf(item.kind), item.id, { outcome: item.outcome, detail: item.detail ?? null, ...(item.warning ? { warning: item.warning } : {}) })
         if (item.outcome === 'finalised') result.finalised += 1
         if (item.outcome === 'undone') result.undone += 1
         result.items.push(item)
@@ -1095,7 +1185,7 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
       break
     }
     if (item.kind !== 'refund') {
-      const entityType = item.kind === 'order' ? 'order' : 'reader_payment'
+      const entityType = entityTypeOf(item.kind)
       if (item.outcome === 'left') {
         // W13a (S3): on a staff run past its Stripe deadline, the row is written without first reading the last
         // one (a read outside a transaction, bounded only by the client's 10 s), so the run stays 10 s inside

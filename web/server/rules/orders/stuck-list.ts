@@ -75,6 +75,42 @@ export const STUCK_WORDS: Readonly<Record<string, string>> = {
   subscription_unconfirmed: "Stripe didn't confirm the membership's subscription. The automatic check looks again every 5 minutes: don't take payment again or start the membership again.",
   // W19: a saved-card change's payment Stripe is still working on (reconcileCardFlow).
   payment_processing: "The card payment for this change is still being processed by the bank. The automatic check looks again every 5 minutes: don't take payment again.",
+  // W21: a booking refund's claim (reconcile.ts, reconcileClaim).
+  several_refunds: `Stripe has more than one refund for this. ${TELL_A_MANAGER}`,
+  refund_mismatch: `A refund in Stripe for this isn't the amount planned. ${TELL_A_MANAGER}`,
+  finish_failed: "The refund was found in Stripe but couldn't be recorded on the booking yet. The automatic check tries again every 5 minutes: don't refund it again.",
+}
+
+/**
+ * W21: a booking refund held for the automatic check (its card refund got no clear answer, or went and couldn't be
+ * recorded). Nothing to do by hand while it waits: the check never sends a refund again.
+ */
+export const CLAIM_WAITING_WORDS =
+  "A refund on this booking didn't finish cleanly. The automatic check, every 5 minutes, looks for it in Stripe and finishes it: anything Stripe never received becomes money still to refund on the booking (Refund the rest). Don't refund it again."
+
+/**
+ * W21 (W19 review later 1): the reasons a Worker flow reconcile left for a person can be closed by hand with
+ * (close-stuck.ts imports these): more than one payment, a payment that doesn't match, the other Stripe mode. A payment
+ * still processing only once it has been for a day (PROCESSING_CLOSE_HOURS): before that the bank may still finish it.
+ */
+export const HELD_FLOW_CLOSE_REASONS: ReadonlySet<string> = new Set([
+  'several_payments',
+  'payment_mismatch',
+  'amount_mismatch',
+  'metadata_mismatch',
+  'currency_mismatch',
+  'customer_mismatch',
+  'other_mode',
+])
+export const PROCESSING_CLOSE_HOURS = 24
+/** W21: the reasons a held refund claim can be closed by hand with. */
+export const HELD_CLAIM_CLOSE_REASONS: ReadonlySet<string> = new Set(['several_refunds', 'refund_mismatch', 'other_mode'])
+
+/** W21: whether a flow's last reconcile reason, at its age, is one a person may close (close-stuck.ts checks it too). */
+export function flowClosable(reason: string | undefined, ageMinutes: number): boolean {
+  if (!reason) return false
+  if (reason === 'payment_processing') return ageMinutes >= PROCESSING_CLOSE_HOURS * 60
+  return HELD_FLOW_CLOSE_REASONS.has(reason)
 }
 
 /**
@@ -160,6 +196,21 @@ export interface StuckFlow {
   madeBy: 'worker' | 'old'
   reason: string
   words: string
+  /** W21: a Worker flow reconcile left for a person (`held_flow`). */
+  close?: StuckCloseTarget
+}
+
+export interface StuckClaim {
+  claimId: string
+  bookingId: string
+  customerName: string
+  /** The card money the claim planned to send. */
+  amount: number
+  createdAt: string
+  ageMinutes: number
+  reason: string
+  words: string
+  close?: StuckCloseTarget
 }
 
 export interface StuckRefund {
@@ -185,6 +236,7 @@ export interface StuckWarning {
 export interface StuckListOutput {
   checkout: StuckOrder[]
   flows: StuckFlow[]
+  claims: StuckClaim[]
   refunds: StuckRefund[]
   warnings: StuckWarning[]
   alert: { at: string; words: string } | null
@@ -237,6 +289,23 @@ FROM pending_reader_payments p
 JOIN customers c ON c.id = (p.snapshot->>'customer_id')::uuid
 WHERE p.status = 'pending' AND p.created_at < now() - make_interval(mins => $1::int)
 ORDER BY p.created_at, p.id`
+
+/** W21: Worker refund claims with no finished row, older than the window, with reconcile's last row for each. */
+const CLAIMS_SQL = `
+SELECT c.id, c.entity_id AS booking_id, c.at AS created_at, c.details, cu.first_name, cu.last_name,
+       (SELECT r.details FROM audit_log r
+        WHERE r.entity_type = 'refund_claim' AND r.entity_id = c.id::text AND r.action = 'order.reconcile'
+        ORDER BY r.at DESC LIMIT 1) AS last
+FROM audit_log c
+JOIN bookings b ON b.id::text = c.entity_id
+JOIN customers cu ON cu.id = b.customer_id
+WHERE c.action = 'booking.refund_claimed' AND c.entity_type = 'booking' AND c.details->>'worker' = 'true'
+  AND c.at < now() - make_interval(mins => $1::int)
+  AND NOT EXISTS (
+    SELECT 1 FROM audit_log f
+    WHERE f.action = 'booking.refund_finished' AND f.entity_type = 'booking' AND f.entity_id = c.entity_id AND f.details->>'claimId' = c.id::text
+  )
+ORDER BY c.at, c.id`
 
 const REFUNDS_SQL = `
 WITH charged AS (
@@ -350,6 +419,15 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
     last_name: string
     last: Last | null
   }>(FLOWS_SQL, [olderThanMinutes])
+  const claims = await db.query<{
+    id: string
+    booking_id: string
+    created_at: unknown
+    details: { plan?: { card?: Array<{ amount: number }> } }
+    first_name: string
+    last_name: string
+    last: Last | null
+  }>(CLAIMS_SQL, [olderThanMinutes])
   const refunds = await db.query<{ entity_type: string; entity_id: string; payment_intent_id: string; pence: number; state: string }>(REFUNDS_SQL)
   const warnings = await db.query<{ entity_type: string; entity_id: string; at: unknown; warning: string }>(WARNINGS_SQL, [WARNINGS_FOR_HOURS])
   const alert = (await db.query<{ at: unknown }>(ALERT_SQL, [ALERT_FOR_MINUTES]))[0]
@@ -404,6 +482,9 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
       const madeByWorker = card || isWorkerFlow(row.snapshot)
       const reason = reasonFor(madeByWorker, row.last)
       const createdAt = iso(row.created_at)
+      const age = ageMinutes(createdAt)
+      // W21: only once reconcile has left it for a person (W19 review later 1).
+      const closable = madeByWorker && row.last?.outcome === 'left' && flowClosable(reason, age)
       return {
         pendingId: row.id,
         flow: row.flow as StuckFlow['flow'],
@@ -415,6 +496,24 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
         madeBy: madeByWorker ? 'worker' : 'old',
         reason,
         words: card && reason === 'waiting' ? CARD_FLOW_WAITING_WORDS : wordsFor(reason),
+        ...(closable ? { close: { kind: 'held_flow' as const, orderId: row.id } } : {}),
+      }
+    }),
+    claims: claims.map((row): StuckClaim => {
+      const reason = reasonFor(true, row.last)
+      const createdAt = iso(row.created_at)
+      const amount = Math.round((row.details.plan?.card ?? []).reduce((total, part) => total + Number(part.amount), 0) * 100) / 100
+      const closable = row.last?.outcome === 'left' && HELD_CLAIM_CLOSE_REASONS.has(reason)
+      return {
+        claimId: row.id,
+        bookingId: row.booking_id,
+        customerName: `${row.first_name} ${row.last_name}`.trim(),
+        amount,
+        createdAt,
+        ageMinutes: ageMinutes(createdAt),
+        reason,
+        words: reason === 'waiting' ? CLAIM_WAITING_WORDS : wordsFor(reason),
+        ...(closable ? { close: { kind: 'held_claim' as const, orderId: row.id } } : {}),
       }
     }),
     refunds: refunds.map((row) => {

@@ -11,6 +11,9 @@ import {
   BOOKING_ACTIONS,
   BUILT_BOOKING_ACTIONS,
   cardRecordProblems,
+  claimLookProblems,
+  PARTLY_BUILT,
+  REFUND_DIFFERENCES,
   comparable,
   GIFT_CARD_PART_WITHOUT_ORDER,
   N3_DIFFERENCES,
@@ -23,6 +26,11 @@ import { W12_FLOW_SCENARIOS } from './flow-side'
 import { LEGACY_BOOKING_ACTIONS, oldFunctionPath, oldSide, readGolden, replay, startReplay, type ReplayEnvironment } from './harness'
 import { sweepInvariants } from './invariants'
 import { scenarios } from './scenarios'
+
+// W21a (W21 review S2): one time limit for every test in this file. The sweeps grow each slice and a busy run took the
+// Settle sweep past the 5 s default (and a timed-out sweep keeps writing into the next test's database). Each
+// scenario is already bounded by its own Stripe deadlines; the 5 s default stays for every other file.
+vi.setConfig({ testTimeout: 300_000 })
 
 // W17 (brief "Parity and tests"): step D's side of the replay, before any action has a route.
 // 1. Every golden scenario runs through newBookingSide: setup and every step D action through the frozen copy of the
@@ -111,6 +119,7 @@ describe("step D's side of the replay (W17)", () => {
   const w18Scenarios = new Set<string>()
   const settleScenarios = new Set<string>()
   const addGuestScenarios = new Set<string>()
+  const refundScenarios = new Set<string>()
   const shifted: string[] = []
   const counts = { bookings: 0, orders: 0, figuresCompared: 0, guardsCompared: 0, statusesCompared: 0, giftCardShifted: 0 }
 
@@ -129,7 +138,10 @@ describe("step D's side of the replay (W17)", () => {
       'finaliseReaderPayment',
       'cancelReaderPayment',
       'getBookingRefundFigures',
+      'refundBooking',
     ])
+    // W21: refundBooking's amount paths only; Cancel & Refund (no amount) is W23's.
+    expect([...PARTLY_BUILT.keys()]).toEqual(['refundBooking'])
     expect([...BOOKING_ACTIONS.keys()].sort()).toEqual([...LEGACY_BOOKING_ACTIONS].sort())
     expect(() => newBookingSide({ actions: new Map([['createOrder', async () => null]]) })).toThrow("createOrder isn't one of the old step D actions.")
   })
@@ -147,21 +159,32 @@ describe("step D's side of the replay (W17)", () => {
       const { db } = environment.database
       // W18: N3's, for its three scenarios only; W19: Settle's, for its scenarios only. Each must still be seen
       // (compareRecordings says so if not).
-      const named = [...(N3_DIFFERENCES.get(name) ?? []), ...(SETTLE_DIFFERENCES.get(name) ?? []), ...(ADD_GUEST_DIFFERENCES.get(name) ?? [])]
+      const named = [
+        ...(N3_DIFFERENCES.get(name) ?? []),
+        ...(SETTLE_DIFFERENCES.get(name) ?? []),
+        ...(ADD_GUEST_DIFFERENCES.get(name) ?? []),
+        ...(REFUND_DIFFERENCES.get(name) ?? []),
+      ]
+      // W21: the refund amount actions and the figures, through the Worker.
+      if (calls.some((call) => call.side === 'new' && (call.action === 'refundBooking' || call.action === 'getBookingRefundFigures'))) refundScenarios.add(name)
       if (calls.some((call) => call.action === 'settleLapsedBooking')) settleScenarios.add(name)
       if (calls.some((call) => call.action === 'addBookingGuest')) addGuestScenarios.add(name)
       // W20: the rows set aside from the comparison, each exactly what it should be.
       expect(newAuditRowProblems(recording), `${name}: the Worker's audit rows`).toEqual([])
       expect(storedAnswerProblems(recording), `${name}: the stored answers`).toEqual([])
       expect(cardRecordProblems(recording), `${name}: the Worker's card flow records`).toEqual([])
+      expect(claimLookProblems(recording), `${name}: reconcile's looks for a held refund`).toEqual([])
       const differences = compareSides(golden, recording, named)
       if (calls.some((call) => call.action === 'getBookingRefundFigures')) figuresScenarios.add(name)
       if (calls.some((call) => call.action === 'setBookingStatus' || call.action === 'setBookingSpecialRequests')) w18Scenarios.add(name)
-      // The built action really went to the Worker; everything else to the old code.
-      expect(calls.filter((call) => call.side === 'new').map((call) => call.action)).toEqual(
-        calls.filter((call) => BUILT_BOOKING_ACTIONS.has(call.action)).map((call) => call.action)
-      )
-      expect(calls.filter((call) => BUILT_BOOKING_ACTIONS.has(call.action)).every((call) => call.side === 'new')).toBe(true)
+      // The built action really went to the Worker; everything else to the old code. W21: refundBooking's Cancel & Refund
+      // calls (no amount) still go to the old function.
+      expect(calls.filter((call) => call.side === 'new').every((call) => BUILT_BOOKING_ACTIONS.has(call.action))).toBe(true)
+      expect(calls.filter((call) => BUILT_BOOKING_ACTIONS.has(call.action) && !PARTLY_BUILT.has(call.action)).every((call) => call.side === 'new')).toBe(true)
+      if (process.env.W21_DIFFERENCES_OUT) {
+        const all = compareSides(golden, recording, [])
+        appendFileSync(process.env.W21_DIFFERENCES_OUT, `${JSON.stringify({ name, calls: calls.filter((call) => call.side === 'new').map((call) => call.action), differences: all })}\n`)
+      }
       if (differences.length > 0) {
         // Only W05l later 1's split may differ, and only on a figures answer whose booking has such a part.
         expect(differences.every((difference) => GIFT_CARD_PART_WITHOUT_ORDER.path.test(difference.path)), JSON.stringify(differences)).toBe(true)
@@ -277,7 +300,8 @@ describe("step D's side of the replay (W17)", () => {
       const golden = readGolden(name) as Recording
       expect(results(recording)[1]).toEqual({ thrown: invalidStatusMessage('cancelled', STAFF_STATUSES) })
       expect(bookingRow(recording)).toMatchObject({ status: 'confirmed', cancelled_at: null, price_paid: '40.00' })
-      expect(results(recording)[2]).toEqual({ ...(results(golden)[2] as Figures), status: 'confirmed' })
+      // W21: the figures route adds Q26's cash and the line of what is left to refund (W21a).
+      expect(results(recording)[2]).toEqual({ ...(results(golden)[2] as Figures), status: 'confirmed', cashLeft: 0, paidLine: 'Left to refund: £40.00 card money.' })
       expect(added(recording, 'audit_log')).toEqual([])
       // Only the order's own charge, as before: no refund, then or since.
       expect(recording.stripeCalls).toEqual(golden.stripeCalls)
@@ -409,7 +433,7 @@ describe("step D's side of the replay (W17)", () => {
         ].sort()
       )
       expect(fresh.bookingsChecked).toBeGreaterThanOrEqual(adds.length)
-    }, 300_000)
+    })
 
     it('R1c: the guest added once, with the place, the £15 store credit and the £5 gift card it took; nothing given away', async () => {
       const recording = await replay(environment, byName('w17-r1c-add-guest-store-credit-and-gift-card-statement-lands-late'), newBookingSide())
@@ -481,6 +505,51 @@ describe("step D's side of the replay (W17)", () => {
     })
   })
 
+  describe('the refunds on the new side (W21): exactly what the Worker does instead', () => {
+    const byName = (name: string) => {
+      const scenario = scenarios.find((s) => s.name === name)
+      if (!scenario) throw new Error(`No scenario ${name}`)
+      return scenario
+    }
+    const added = (recording: Recording, table: string) => recording.tables[table]?.added ?? []
+    const refunds = (recording: Recording) => recording.stripeCalls.filter((call) => call.method === 'refunds.create')
+
+    it('the W05 invariants hold on the new side for every refund scenario (D-plan 4.11 item 3): money back never above what was paid', async () => {
+      const named = scenarios.filter((scenario) => refundScenarios.has(scenario.name) || REFUND_DIFFERENCES.has(scenario.name))
+      expect(named.length).toBeGreaterThanOrEqual(REFUND_DIFFERENCES.size)
+      const old = await sweepInvariants(environment, named, oldSide)
+      const fresh = await sweepInvariants(environment, named, newBookingSide())
+      // Nothing the old code doesn't break too: the new side's breaches are a subset of the old side's.
+      expect(fresh.wrong.filter((line) => !old.wrong.includes(line))).toEqual([])
+      expect(fresh.bookingsChecked).toBeGreaterThanOrEqual(named.length)
+      if (process.env.W17_COVERAGE_OUT) appendFileSync(process.env.W17_COVERAGE_OUT, `W21 invariants: ${named.length} scenarios, old ${old.wrong.length} breaches, new ${fresh.wrong.length}: ${JSON.stringify(fresh.wrong)}\n`)
+    })
+
+    it("a later card part refused, then R2's store credit write fails: held; reconcile ends it as the old code did (£50 on the card recorded, £70 owed), and nothing is sent twice", async () => {
+      const name = 'part-refund-fails-partway'
+      const recording = await replay(environment, byName(name), newBookingSide())
+      const golden = readGolden(name) as Recording
+      expect(results(recording)[3]).toEqual({ unsure: { message: "£50.00 went back to the card, but the refund couldn't be finished on the booking yet. It's on hold: don't refund it again. Check the Orders page in a few minutes." } })
+      // Newest order first: Bea's £50, then the first order's £70 (refused); each sent once.
+      expect(refunds(recording).map((call) => [(call.params as { amount: number }).amount, call.idempotencyKey])).toEqual([
+        [5000, 'audit_log#2:refund:orders#2'],
+        [7000, 'audit_log#2:refund:orders#1'],
+      ])
+      expect(added(recording, 'bookings')).toEqual(added(golden, 'bookings'))
+      expect(added(recording, 'order_line_items')).toEqual(added(golden, 'order_line_items'))
+      const finished = added(recording, 'audit_log').find((row) => row['action'] === 'booking.refund_finished')
+      expect(finished?.['details']).toMatchObject({ outcome: 'owed', cardRefunded: 50, storeCreditRefunded: 0, owed: 70, by: { how: 'reconcile' } })
+    })
+
+    it('a Part refund across two orders, newest first, each capped at its card money (q25-part-refund-then-a-guest)', async () => {
+      const recording = await replay(environment, byName('figures-after-a-part-refund'), newBookingSide())
+      const claim = added(recording, 'audit_log').find((row) => row['action'] === 'booking.refund_claimed')
+      expect(claim?.['details']).toMatchObject({ worker: true, kind: 'part_refund' })
+      const plan = (claim?.['details'] as { plan: { card: Array<{ amount: number }>; storeCredit: number } }).plan
+      expect(refunds(recording).map((call) => (call.params as { amount: number }).amount)).toEqual(plan.card.map((part) => Math.round(part.amount * 100)))
+    })
+  })
+
   it('covered what it says: the step D scenarios, the figures answers, and every booking and order at their ends', () => {
     // For the report: written where W17_COVERAGE_OUT says (vitest keeps a passing test's console quiet).
     const line =
@@ -504,6 +573,12 @@ describe("step D's side of the replay (W17)", () => {
     // W20: every scenario named for Add Guest calls it (an unused name would fail here); the rest of the Add Guest
     // scenarios match their golden files exactly (cash, gift card, store credit, or free).
     expect([...ADD_GUEST_DIFFERENCES.keys()].filter((name) => !addGuestScenarios.has(name))).toEqual([])
+    // W21: every scenario named for the refunds calls a Part refund, Refund the rest, It already arrived or the figures
+    // on the Worker; the rest of them match their golden files exactly (store credit, and refusals before any money).
+    expect([...REFUND_DIFFERENCES.keys()].filter((name) => !refundScenarios.has(name))).toEqual([])
+    if (process.env.W17_COVERAGE_OUT) {
+      appendFileSync(process.env.W17_COVERAGE_OUT, `W21: ${refundScenarios.size} call a refund amount action or the figures on the Worker, ${REFUND_DIFFERENCES.size} with named differences, ${refundScenarios.size - REFUND_DIFFERENCES.size} exact\n`)
+    }
     if (process.env.W17_COVERAGE_OUT) {
       appendFileSync(process.env.W17_COVERAGE_OUT, `W20: ${addGuestScenarios.size} call Add Guest, ${ADD_GUEST_DIFFERENCES.size} with named differences, ${addGuestScenarios.size - ADD_GUEST_DIFFERENCES.size} exact\n`)
     }
