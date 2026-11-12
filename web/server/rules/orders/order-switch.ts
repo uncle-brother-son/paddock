@@ -9,7 +9,10 @@ import { ApiError } from '@/server/http/errors'
  * The kinds the ORDER_SWITCH secret can list, comma or space separated. Empty or unset means every
  * kind is off. W17 (D-plan 4.9): `booking_changes` (every step D booking change that moves money) and
  * `reader_flows` (Move, Settle and Add Guest on the reader) are checked by the booking routes as each
- * slice builds them (server/rules/bookings/booking-switch.ts); a card flow also needs `saved_card`.
+ * slice builds them (server/rules/bookings/booking-switch.ts); a card flow also needs `saved_card`, and
+ * (W18) a reader flow also needs `reader`. Taking `reader` out stops New Order's reader now, and the booking
+ * changes on the reader as W19 / W20 / W24 move them to the Worker (until then they are the old Retool code,
+ * which reads no switch).
  */
 export const ORDER_KINDS = ['no_stripe', 'saved_card', 'reader', 'membership', 'reader_flows', 'booking_changes'] as const
 export type OrderKind = (typeof ORDER_KINDS)[number]

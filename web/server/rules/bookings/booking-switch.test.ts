@@ -24,7 +24,7 @@ describe('the booking switch', () => {
     ['cash', 'out', ['booking_changes']],
     ['card', 'in', ['booking_changes', 'saved_card']],
     ['card', 'out', ['booking_changes']],
-    ['reader', 'in', ['booking_changes', 'reader_flows']],
+    ['reader', 'in', ['booking_changes', 'reader_flows', 'reader']],
   ])('%s money %s needs %j', (money, direction, needed) => {
     expect(bookingKindsNeeded(money, direction)).toEqual(needed)
   })
@@ -40,14 +40,30 @@ describe('the booking switch', () => {
     expect(bookingPathOff('none', LIVE_NOW)).toBeNull()
   })
 
-  it('booking_changes on: cash and refunds go; the saved card also needs saved_card; the reader also needs reader_flows', () => {
+  it('booking_changes on: cash and refunds go; the saved card also needs saved_card; the reader also needs reader_flows and reader', () => {
     const on = `${LIVE_NOW},booking_changes`
     expect(bookingPathOff('cash', on)).toBeNull()
     expect(bookingPathOff('card', on, 'out')).toBeNull()
     expect(bookingPathOff('card', on)).toBeNull()
     expect(bookingPathOff('reader', on)?.details).toMatchObject({ kinds: ['reader_flows'] })
     expect(bookingPathOff('card', 'booking_changes')?.details).toMatchObject({ kinds: ['saved_card'] })
+    expect(bookingPathOff('reader', 'booking_changes,reader_flows')?.details).toMatchObject({ kinds: ['reader'] })
+    expect(bookingPathOff('reader', 'booking_changes')?.details).toMatchObject({ kinds: ['reader_flows', 'reader'] })
     expect(bookingPathOff('reader', EVERYTHING)).toBeNull()
+  })
+
+  // W18 (the W17 review's later 5, lead call): one emergency stop of the reader stops it for orders and booking
+  // changes alike, and leaves everything else running.
+  it('reader off alone stops the reader for orders and booking changes, and nothing else', () => {
+    const noReader = ORDER_KINDS.filter((kind) => kind !== 'reader').join(',')
+    expect(orderPathOff({ payment: { method: 'reader' } }, noReader)?.code).toBe('ORDER_PATH_OFF')
+    expect(bookingPathOff('reader', noReader)?.details).toMatchObject({ reason: 'booking_path_off', kinds: ['reader'] })
+    expect(orderPathOff({ payment: { method: 'card' } }, noReader)).toBeNull()
+    expect(orderPathOff({ payment: { method: 'cash' } }, noReader)).toBeNull()
+    expect(bookingPathOff('card', noReader)).toBeNull()
+    expect(bookingPathOff('card', noReader, 'out')).toBeNull()
+    expect(bookingPathOff('cash', noReader)).toBeNull()
+    expect(bookingPathOff('none', noReader)).toBeNull()
   })
 
   it('reader_flows off alone stops only the reader', () => {

@@ -214,6 +214,22 @@ export type BookingSpecialRequestsInput = z.infer<typeof bookingSpecialRequestsI
 export const bookingStatusInputSchema = z.object({ status: z.string() })
 export type BookingStatusInput = z.infer<typeof bookingStatusInputSchema>
 
+/** W18: the booking's id comes from the path (`/bookings/:bookingId/...`); the body is the input above. */
+const bookingInPath = { bookingId: id }
+export const bookingSpecialRequestsRouteInputSchema = bookingSpecialRequestsInputSchema.extend(bookingInPath)
+export const bookingStatusRouteInputSchema = bookingStatusInputSchema.extend(bookingInPath)
+
+/** W18: setBookingSpecialRequests' answer, as the old function gave it (the text as saved: trimmed, cut, or null). */
+export const bookingSpecialRequestsOutputSchema = z.object({
+  updated: z.literal(true),
+  booking: z.object({ id, special_requests: z.string().nullable() }),
+})
+export type BookingSpecialRequestsOutput = z.infer<typeof bookingSpecialRequestsOutputSchema>
+
+/** W18: setBookingStatus' answer, the row as the old function returned it. */
+export const bookingStatusOutputSchema = z.object({ id, status: z.string(), cancelled_at: z.string().nullable() })
+export type BookingStatusOutput = z.infer<typeof bookingStatusOutputSchema>
+
 // --- Refusals (D-plan 4.6): an ApiError whose details carry the old reason, words and figures
 
 export const bookingRefusalDetailsSchema = z.object({

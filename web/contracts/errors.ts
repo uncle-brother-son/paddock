@@ -39,8 +39,9 @@ export const ERROR_CODES = [
   'ORDER_PATH_OFF',
   /**
    * Step D (W17, D-plan 4.9, lead call L1): this kind of booking change is switched off on the Worker (the
-   * ORDER_SWITCH secret's `booking_changes`, `reader_flows`, `saved_card`), so nothing was touched. An emergency
-   * stop, not a fallback: the staff app never falls back to old code for it.
+   * ORDER_SWITCH secret's `booking_changes`, `reader_flows`, `reader`, `saved_card`), so nothing was touched. An emergency
+   * stop, not a fallback: the staff app never falls back to old code for it. It covers each booking change once its
+   * slice (W19 / W20 / W24) moves it to the Worker: until then the old Retool booking flows on the reader read no switch.
    */
   'BOOKING_PATH_OFF',
 ] as const

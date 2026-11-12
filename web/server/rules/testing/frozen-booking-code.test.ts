@@ -125,6 +125,49 @@ describe('W17: the frozen copy of the old step D functions', () => {
     expect(importsOf("import x from '@retool-app/backend/paddock/shared/bandPricing'")).toEqual(['@retool-app/backend/paddock/shared/bandPricing'])
   })
 
+  // W18 (the W17 review's later 4): the name check above knows only some of the harness's names (app code importing
+  // oldSide or newBookingSide would pass it). So, more simply: app code imports nothing at all under this folder.
+  describe('app code imports nothing under server/rules/testing/', () => {
+    /** Every module a file names: `from`, side-effect `import '...'`, `import(...)` and `require(...)`. */
+    const allImportsOf = (source: string): string[] =>
+      [...source.matchAll(/(?:\bfrom|\bimport\s*\(?|\brequire\s*\()\s*['"]([^'"]+)['"]/g)].map((match) => match[1] ?? '')
+    /** Where one of the Worker's own imports lands ('@/...' or relative); null for a package. */
+    const landsAt = (file: string, target: string): string | null =>
+      target.startsWith('@/') ? path.join(workerDir, target.slice(2)) : target.startsWith('.') ? path.resolve(path.dirname(file), target) : null
+    const importsTesting = (file: string, source: string): string[] =>
+      allImportsOf(source).filter((target) => {
+        const landed = landsAt(file, target)
+        return landed !== null && (landed === TESTING_DIR || landed.startsWith(TESTING_DIR + path.sep))
+      })
+
+    it('no file outside tests and the testing folder imports from it', () => {
+      const appCode = workerFiles.filter((file) => !/\.test\.tsx?$/.test(file) && !file.startsWith(TESTING_DIR + path.sep))
+      expect(appCode.flatMap((file) => importsTesting(file, code(file)).map((target) => `${shown(file)}: '${target}'`))).toEqual([])
+      // Scanned for real: 151 app files on 12 Nov, the routes and the rules among them.
+      expect(appCode.length).toBeGreaterThan(100)
+      expect(appCode).toContain(path.join(workerDir, 'server/rules/bookings/edits.ts'))
+      expect(appCode).toContain(path.join(workerDir, 'app/api/v1/staff/bookings/[bookingId]/status/route.ts'))
+    })
+
+    it('a planted import of the harness is caught, however it is written', () => {
+      const appFile = path.join(workerDir, 'server/rules/bookings/edits.ts')
+      for (const planted of [
+        "import { oldSide } from '@/server/rules/testing/replay/harness'",
+        "import { newBookingSide } from '../testing/replay/booking-side'",
+        "export { legacyOrderDir } from '@/server/rules/testing/replay/harness'",
+        "import '@/server/rules/testing/database'",
+        "const harness = await import('../testing/replay/harness')",
+        "const race = require('@/server/rules/testing/race')",
+      ]) {
+        expect(importsTesting(appFile, withoutComments(planted)), planted).toHaveLength(1)
+      }
+      // Packages, other folders, and a comment naming the folder are not imports of it.
+      expect(importsTesting(appFile, withoutComments("import { z } from 'zod'"))).toEqual([])
+      expect(importsTesting(appFile, withoutComments("import { audit } from '@/server/audit'"))).toEqual([])
+      expect(importsTesting(appFile, withoutComments("// import { oldSide } from '@/server/rules/testing/replay/harness'"))).toEqual([])
+    })
+  })
+
   it('scans both repos and the copy (a wrong folder would pass with nothing to scan)', () => {
     expect(workerFiles.some((file) => file.endsWith(path.join('server', 'rules', 'orders', 'place-order.ts')))).toBe(true)
     expect(staffAppFiles.some((file) => file.endsWith(path.join('frontend', 'components', 'MoveBookingDialog.tsx')))).toBe(true)

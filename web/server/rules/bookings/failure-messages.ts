@@ -278,6 +278,17 @@ export const STATUS_WORDS = {
 } as const
 export const invalidStatusMessage = (status: string, allowed: readonly string[]): string => `Invalid booking status "${status}" — allowed: ${allowed.join(', ')}.`
 
+// --- New in W18
+
+/**
+ * N3: a booking awaiting payment leaves that status only through Settle (paid) or Cancel (payment needed), never the
+ * status select, which the screen hides for it.
+ */
+export const STATUS_PAYMENT_NEEDED_MESSAGE =
+  "This booking is awaiting payment, so its status can't be changed here. Take the payment with Settle, or cancel it."
+/** A status change the bookings_no_cross_session_overlap constraint refuses (a no-show made active again). */
+export const STATUS_TIME_CONFLICT_MESSAGE = "Another booking now overlaps this booking's time, so it can't be made active again."
+
 // --- New in W17
 
 /** The switch (D-plan 4.9, lead call L1), worded as W16's ORDER_PATH_OFF. */

@@ -43,6 +43,9 @@ const STAFF_PATTERNS: Array<{ pattern: RegExp; load: () => Promise<unknown>; par
   { pattern: /^\/api\/v1\/staff\/orders\/([^/]+)\/finalise$/, load: () => import('@/app/api/v1/staff/orders/[orderId]/finalise/route'), params: (m) => ({ orderId: m[1] ?? '' }) },
   { pattern: /^\/api\/v1\/staff\/orders\/([^/]+)\/cancel$/, load: () => import('@/app/api/v1/staff/orders/[orderId]/cancel/route'), params: (m) => ({ orderId: m[1] ?? '' }) },
   { pattern: /^\/api\/v1\/staff\/customers\/([^/]+)\/saved-card$/, load: () => import('@/app/api/v1/staff/customers/[customerId]/saved-card/route'), params: (m) => ({ customerId: m[1] ?? '' }) },
+  // W18: the staff app's thin setBookingSpecialRequests and setBookingStatus.
+  { pattern: /^\/api\/v1\/staff\/bookings\/([^/]+)\/special-requests$/, load: () => import('@/app/api/v1/staff/bookings/[bookingId]/special-requests/route'), params: (m) => ({ bookingId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/bookings\/([^/]+)\/status$/, load: () => import('@/app/api/v1/staff/bookings/[bookingId]/status/route'), params: (m) => ({ bookingId: decodeURIComponent(m[1] ?? '') }) },
 ]
 
 function staffRoute(path: string): { load: () => Promise<unknown>; params: Record<string, string> } | null {

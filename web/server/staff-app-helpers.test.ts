@@ -118,8 +118,6 @@ describe('staff app helpers', () => {
       'generateUpcomingSessions',
       'setAddonLinePrepared',
       'setBookingCheckedIn',
-      'setBookingSpecialRequests',
-      'setBookingStatus',
       'setEventAttendeeCheckIn',
       'setEventAttendeeWaiver',
       'setEventAttendeesCheckIn',
@@ -153,6 +151,22 @@ describe('staff app helpers', () => {
       const { default: fn } = await import(/* @vite-ignore */ path.join(appDir, `backend/paddock/${name}`))
 
       await expect(fn({ params: { customerId: 'c1', setupIntentId: 'seti_1' }, user })).rejects.toThrow(INACTIVE)
+
+      expect(rawRequest).toHaveBeenCalledTimes(1)
+      expect(legacy).not.toHaveBeenCalled()
+      expect(query).not.toHaveBeenCalled()
+    })
+
+    // Brief W18: special requests and status are thin calls to the Worker now, whose defineRoute refuses an inactive
+    // account (the routes' own tests, bookings/edits.test.ts). Never the database or the legacy routes themselves.
+    it.each(['setBookingSpecialRequests', 'setBookingStatus'])('%s asks only the Worker, which refuses an inactive account', async (name) => {
+      const query = stubStaffTable([row(false)])
+      const legacy = vi.fn()
+      vi.stubGlobal('paddockBackendApi2', { rawRequest: legacy })
+      rawRequest.mockResolvedValue(refusal('FORBIDDEN', INACTIVE))
+      const { default: fn } = await import(/* @vite-ignore */ path.join(appDir, `backend/paddock/${name}`))
+
+      await expect(fn({ params: { bookingId: '11111111-1111-4111-8111-111111111111', status: 'completed', specialRequests: 'x' }, user })).rejects.toThrow(INACTIVE)
 
       expect(rawRequest).toHaveBeenCalledTimes(1)
       expect(legacy).not.toHaveBeenCalled()

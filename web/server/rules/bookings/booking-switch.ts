@@ -18,12 +18,14 @@ export type BookingMoney = 'none' | 'cash' | 'card' | 'reader'
 
 /**
  * The kinds a change needs on. Every change that moves money needs `booking_changes`; the reader also needs
- * `reader_flows`, and a saved-card charge `saved_card` (D-plan 4.9). Money back to a card is a refund, not a charge,
- * so it needs `booking_changes` alone. A change that moves no money needs nothing.
+ * `reader_flows` and `reader` (W18, lead call on the W17 review's later 5: one emergency stop of the reader, which
+ * stops New Order's reader now and each booking change on the reader once W19 / W20 / W24 move it to the Worker),
+ * and a saved-card charge `saved_card` (D-plan 4.9). Money back to a card is a
+ * refund, not a charge, so it needs `booking_changes` alone. A change that moves no money needs nothing.
  */
 export function bookingKindsNeeded(money: BookingMoney, direction: 'in' | 'out' = 'in'): OrderKind[] {
   if (money === 'none') return []
-  if (money === 'reader') return ['booking_changes', 'reader_flows']
+  if (money === 'reader') return ['booking_changes', 'reader_flows', 'reader']
   if (money === 'card' && direction === 'in') return ['booking_changes', 'saved_card']
   return ['booking_changes']
 }

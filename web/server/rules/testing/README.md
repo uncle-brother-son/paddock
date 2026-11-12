@@ -191,6 +191,13 @@ the golden gaps recorded from the old functions (L6): the W05 review 3 proofs R1
 with today's outcomes. A scenario step the old function answers by throwing uses `attempt`, which records
 `{ thrown: <words> }`.
 
+W18 moves special requests and status, through the staff app's own thin wrappers (`throughStaffApp`), which call the
+real routes through the old side's `paddockWorkerV1` stand-in (`legacy-routes.ts`'s `STAFF_PATTERNS`), so the replay
+holds wrapper and route together. Their only named differences are N3's, on W17's three `w17-n3-*` recordings
+(`N3_DIFFERENCES`). The W05 invariant sweep is in `replay/invariants.ts` (moved out of `w05d.test.ts` unchanged), so
+the new side runs it too: the two breaches the old code records in N3 are gone on the new side. App code may import
+nothing under this folder (`frozen-booking-code.test.ts`, W18).
+
 ## No real Stripe (W11)
 
 `no-real-stripe.ts` is loaded before every unit test file (`vitest.unit.config.ts`, `setupFiles`). Any

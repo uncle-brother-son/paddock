@@ -290,10 +290,10 @@ finding or the other mode), or once it is settled meanwhile. Racing reconcile, e
 ## The switch and the screen (W14a)
 
 `ORDER_SWITCH` (a Worker secret) lists the kinds of order the Worker takes: `no_stripe`, `saved_card`, `reader`,
-`membership`, `reader_flows`, comma or space separated. Empty or unset means every kind is off. `order-switch.ts`
+`membership`, `reader_flows`, `booking_changes`, comma or space separated. Empty or unset means every kind is off. `order-switch.ts`
 decides a basket's kind from what was sent: any membership is `membership`; otherwise the reader is `reader`, the
 saved card `saved_card`, and anything else (cash, gift card or store credit alone, nothing owed) `no_stripe`.
-`reader_flows` gates nothing yet (step D's flow routes check it). `POST /api/v1/staff/orders` answers
+`reader_flows` and `booking_changes` are step D's (below). `POST /api/v1/staff/orders` answers
 `ORDER_PATH_OFF` (501) for a kind that is off, before the order is touched; the answer is stored against the
 request's key like any other, so a retry with the same key gets it again. The quote, finalise, cancel and
 reconcile ignore the switch.
@@ -324,14 +324,35 @@ here one slice at a time (staff app `briefs/D-plan.md`). W17 laid the ground; no
   then W12's C2 (`finaliseFlowInTransaction`, which now writes `payment_method 'card'` and the PaymentIntent onto the
   row) or, on a definite refusal, W12's undo. Unclear: held (Q35's words), never undone. Safe to run again at any point.
   The reader routes refuse a card flow (`not_a_reader_flow`). Reconcile and the stuck list learn card flows at W19.
-- `bookings/booking-switch.ts`: `booking_changes` for any change that moves money, plus `reader_flows` for the reader
-  and `saved_card` for a card charge; off answers BOOKING_PATH_OFF (501) before anything. Only starting a change is
-  gated: finishing or undoing a held one never is.
+- `bookings/booking-switch.ts`: `booking_changes` for any change that moves money, plus `reader_flows` and `reader`
+  for the reader (W18: taking `reader` out stops New Order's reader now, and the booking changes on the reader as
+  W19 / W20 / W24 move them to the Worker; until then the live Settle, Move and Add Guest on the reader are the old
+  Retool code, which reads no switch) and `saved_card` for a card charge; off answers BOOKING_PATH_OFF (501) before anything. Only starting a change is gated: finishing
+  or undoing a held one never is. A change that moves no money (special requests, status) needs no kind.
 - `bookings/failure-messages.ts`: every word staff see from a booking change, word for word from the four dialogs'
   maps and the old functions, plus W17's (the switch, Q35, Q37, a held card flow).
 - `contracts/bookings.ts`: the routes' inputs (old param names, loose; `confirmed`/`figures` for Q18) and the figures.
 - Tests: the replay's step D side (`testing/replay/booking-side.ts`, `booking-replay.test.ts`) with setup through the
   frozen copy of the old functions (`testing/legacy-booking/`), and the W17 golden gaps (`w17-*` scenarios).
+
+## Special requests and status (step D, W18)
+
+The first two booking changes on the Worker; the staff app's `setBookingSpecialRequests` and `setBookingStatus` are
+thin calls to them. `bookings/edits.ts`, each one transaction: `lockAndLoadBooking` (the booking and its customer),
+the rule, the audit row, then the write. A refusal is an ApiError whose `details` (`bookingRefusalDetails`) carry the
+old reason and the words staff see; it writes nothing.
+
+- `POST /api/v1/staff/bookings/:bookingId/special-requests` (`booking.special_requests`): trimmed, cut to 500
+  characters, null when empty; `booking_cancelled` on a cancelled booking. The audit row keeps lengths, not the text.
+- `POST /api/v1/staff/bookings/:bookingId/status` (`booking.status`, `{ from, to }`), N3: only `pending`,
+  `confirmed`, `completed`, `no-show` (`invalid_status`); never from `payment_needed` (`booking_payment_needed`) or
+  `cancelled` (`booking_cancelled`), and never while a payment is still being taken on the booking (W18 review S1:
+  a held Move, Settle or Add Guest flow, or an order still being paid; `card_payment_open` with the card words when
+  every open flow is a saved-card one, else `reader_payment_open`), since the undo needs the status the payment left.
+  Special requests stay allowed then. A no-show made active again on a day the customer has another booking gets the
+  one-a-day trigger's own words (`duplicate_day_booking`); one whose time another booking now overlaps,
+  `time_conflict`.
+- Neither moves money, so neither checks the switch.
 
 ## Refund claims with no finish
 
