@@ -29,19 +29,6 @@ export type StaffHealthOutput = z.infer<typeof staffHealthOutputSchema>
 export const staffWhoamiOutputSchema = staffContextSchema
 export type StaffWhoamiOutput = z.infer<typeof staffWhoamiOutputSchema>
 
-/** POST /api/v1/staff/parity: one old-versus-new comparison from shadowCompare. */
-export const staffParityInputSchema = z.object({
-  action: z.string().min(1),
-  oldResult: z.unknown(),
-  newResult: z.unknown(),
-  matches: z.boolean(),
-  diff: z.unknown(),
-})
-export type StaffParityInput = z.infer<typeof staffParityInputSchema>
-
-export const staffParityOutputSchema = z.object({ recorded: z.literal(true) })
-export type StaffParityOutput = z.infer<typeof staffParityOutputSchema>
-
 /**
  * GET /api/v1/staff/payments/refunds: one PaymentIntent's refunds, newest first, each with the
  * Stripe key it was sent with. Stripe forgets a key after 24 hours, but the refund keeps it in its

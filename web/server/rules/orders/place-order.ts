@@ -23,8 +23,6 @@ import type {
   BasketProblem,
   BasketQuoteInput,
   BasketQuoteOutput,
-  OrderDryRunOutput,
-  OrderRows,
   PlaceOrderInput,
   PlaceOrderOutput,
 } from '@/contracts'
@@ -75,7 +73,6 @@ import {
   type MadeSubscription,
   type Taken,
 } from './membership'
-import { readOrderRows } from './order-rows'
 import { chargeDescription, heldBooking, type CardSnapshot, type PendingMembership, type PendingSnapshot, type ReaderSnapshot } from './pending-order'
 import { priceFromFacts } from './price-basket'
 import { createReaderIntent, recordReaderIntent, type PendingReader } from './reader-intent'
@@ -93,8 +90,6 @@ import { writeBooking, type BookingOrderPart, type BookingToWrite, type PayBy } 
  * The order is written before the booking (W07): the booking may be paid with a pass bought in the
  * same basket, and that pass needs its order line, which needs the order. The booking's own line
  * then joins the order's other lines from the booking's statement.
- *
- * dryRunOrder is the same T1, read back and rolled back: nothing is kept (W03-plan 3.1 layer 4).
  */
 
 export interface PlaceOrderOptions {
@@ -116,13 +111,12 @@ export interface PlaceOrderOptions {
   now?: () => number
 }
 
-/** T1 inside the dry run: what the dry run alone does differently (W03-decisions, "W10 setup calls"). */
+/** What T1 needs from outside it. W16: the dry run (and its `dryRun` flag) is gone with the shadow. */
 interface PrepareMode {
-  dryRun: boolean
   /**
    * W12: the mode of the Stripe key the order will be collected with (StripeClient.keyLivemode), written
    * on the pending record as `livemode`, so reconcile takes "Stripe has no payment for this order" as
-   * "nothing was taken" only with a key of that same mode (W11 review L1). Null in the dry run (no client).
+   * "nothing was taken" only with a key of that same mode (W11 review L1). Null when no Stripe is needed.
    */
   keyLivemode: boolean | null
 }
@@ -158,11 +152,9 @@ const AMOUNT_REASONS = new Set(['gift_card_amount_exceeds_total', 'store_credit_
  * exactly what was sent, never less: an amount over what is now due is refused, not cut down.
  *
  * The card's figure (W10) is checked like every other method's: `confirmed.toCollect` is what the
- * saved card is charged, and a missing figure counts as nothing confirmed. The dry run alone takes a
- * missing figure for a method that isn't cash as confirmed (W03-decisions, "W10 setup calls"): the old
- * createOrder's params, which the shadow sends it, never had one. The real route keeps the rule.
+ * saved card is charged, and a missing figure counts as nothing confirmed.
  */
-function refuseIfNeeded(input: PlaceOrderInput, quote: BasketQuoteOutput, mode: PrepareMode): void {
+function refuseIfNeeded(input: PlaceOrderInput, quote: BasketQuoteOutput): void {
   const [first] = quote.problems
   if (first && !AMOUNT_REASONS.has(first.reason)) throw orderRefusal(first)
   const method = input.payment?.method
@@ -173,16 +165,13 @@ function refuseIfNeeded(input: PlaceOrderInput, quote: BasketQuoteOutput, mode: 
   }
   if (first) throw orderRefusal(first)
   const toCollect = method === 'reader' ? totals.toCollect.reader : totals.toCollect.card
-  const unconfirmed = mode.dryRun && method !== 'cash' && typeof input.confirmed?.toCollect !== 'number'
-  const confirmed = unconfirmed ? { ...input.confirmed, toCollect } : input.confirmed
-  const changed = amountChangedRefusal(method, confirmed, { amountDue: totals.amountDue, toCollect })
+  const changed = amountChangedRefusal(method, input.confirmed, { amountDue: totals.amountDue, toCollect })
   if (changed) throw orderRefusal({ stage: 'payment', reason: changed.reason, message: changed.message, amountDueTotal: totals.amountDue })
   // W13 (W03-plan 2.7): a membership's first invoice, which the saved card pays besides `toCollect`, is
-  // confirmed too, the same way (a missing figure counts as nothing confirmed; the dry run alone takes it as
-  // confirmed). On the reader the one tap is `toCollect`, which holds the first payment, and the invoice is £0.
+  // confirmed too, the same way (a missing figure counts as nothing confirmed). On the reader the one tap is `toCollect`, which holds the first payment, and the invoice is £0.
   if (input.membershipPlanId && method !== 'reader') {
     const sent = input.confirmed?.firstInvoice
-    const firstInvoice = typeof sent === 'number' && Number.isFinite(sent) ? sent : mode.dryRun ? totals.firstInvoice : 0
+    const firstInvoice = typeof sent === 'number' && Number.isFinite(sent) ? sent : 0
     const invoiceChanged = amountChangedRefusal('card', { toCollect: firstInvoice }, { amountDue: totals.amountDue, toCollect: totals.firstInvoice })
     if (invoiceChanged) throw orderRefusal({ stage: 'payment', reason: invoiceChanged.reason, message: invoiceChanged.message, amountDueTotal: totals.amountDue })
   }
@@ -949,7 +938,7 @@ async function prepare(tx: Tx, input: PlaceOrderInput, options: PlaceOrderOption
   if ((awaitsCard || awaitsReader) && facts.customer?.has_order_processing) {
     throw orderRefusal({ stage: 'payment', reason: 'order_still_processing', message: ORDER_STILL_PROCESSING_MESSAGE })
   }
-  refuseIfNeeded(input, quote, mode)
+  refuseIfNeeded(input, quote)
 
   // W13: a buy-new membership booking needs the membership written first (Q3: with a pass too), its id made here.
   const buysNewMembership = booking?.redemptionSource === 'buy_new_membership'
@@ -1482,7 +1471,7 @@ export async function placeOrder(db: Db, input: PlaceOrderInput, options: PlaceO
   const needsStripe = method === 'card' || method === 'reader' || (Boolean(input.membershipPlanId) && method !== 'cash')
   const stripe = needsStripe ? options.stripe?.() : undefined
   if (needsStripe && !stripe) throw new Error(`A ${method} order needs a Stripe client.`)
-  const placed = await inTransaction(db, (tx) => prepare(tx, input, options, { dryRun: false, keyLivemode: stripe?.keyLivemode ?? null }))
+  const placed = await inTransaction(db, (tx) => prepare(tx, input, options, { keyLivemode: stripe?.keyLivemode ?? null }))
   if (placed.reader) {
     if (!stripe) throw new Error('A reader order needs a Stripe client.')
     return startReaderPayment(db, stripe, { ...placed, reader: placed.reader }, options, startedAt)
@@ -1491,34 +1480,4 @@ export async function placeOrder(db: Db, input: PlaceOrderInput, options: PlaceO
   if (!stripe) throw new Error('A card order needs a Stripe client.')
   if (placed.charge.snapshot.membership) return collectMembershipAndFinish(db, stripe, { ...placed, charge: placed.charge }, options, startedAt)
   return collectAndFinish(db, stripe, { ...placed, charge: placed.charge }, options, startedAt)
-}
-
-/** Thrown to end the dry run's transaction with a rollback, carrying what it found. */
-class DryRunFinished extends Error {
-  constructor(readonly result: OrderDryRunOutput) {
-    super('Dry run finished: rolled back.')
-  }
-}
-
-/**
- * The real T1 on the real database, read back, then rolled back. Nothing is kept and nothing reaches
- * Stripe. A card order (W10) runs T1 only: its rows are read back as T1 leaves them (pending, with
- * its snapshot, its event booking pending, its address not yet saved), and `order` is what the order
- * answers once the card is charged. A reader order (W11) likewise: its rows as T1 leaves them, which is
- * how createOrder's reader branch left the old order, and `order` answers `pending_reader` with no
- * intent (none is made). A missing card or reader figure is taken as confirmed (refuseIfNeeded).
- */
-export async function dryRunOrder(db: Db, input: PlaceOrderInput, options: PlaceOrderOptions): Promise<OrderDryRunOutput> {
-  refuseAtEntry(input)
-  try {
-    await inTransaction(db, async (tx) => {
-      const placed = await prepare(tx, input, options, { dryRun: true, keyLivemode: null })
-      const rows: OrderRows = await readOrderRows(tx, placed.orderId)
-      throw new DryRunFinished({ order: placed.output, rows })
-    })
-  } catch (err) {
-    if (err instanceof DryRunFinished) return err.result
-    throw err
-  }
-  throw new Error('The dry run finished without rolling back.')
 }

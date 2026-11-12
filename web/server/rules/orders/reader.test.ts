@@ -1,3 +1,4 @@
+import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import Stripe from 'stripe'
 import type { CancelReaderOrderOutput, FinaliseReaderOrderOutput, PlaceOrderOutput } from '@/contracts'
@@ -14,6 +15,7 @@ import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment } fro
 import { orderInput, postOrder, postReaderStep, withQuotedCardFigure, type OrderAnswer } from '@/server/rules/testing/replay/order-side'
 import { ID, paidSeat, sam, seed, whileFailing } from '@/server/rules/testing/replay/scenarios'
 import { chargesTakeASecond, replayStripe, stripeClientsMade } from '@/server/rules/testing/replay/stripe-binding'
+import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
 import {
   OLD_READER_ORDER_MESSAGE,
   OLD_ROLLBACK_STARTED_MESSAGE,
@@ -248,27 +250,6 @@ describe('T1 and the intent (createOrder stage 29)', () => {
     })
   })
 
-  it('the dry run: T1 only, no Stripe, nothing kept; it answers pending_reader with no intent, and reads back T1 pending', async () => {
-    const { POST: dryRunRoute } = await import('@/app/api/v1/staff/orders/dry-run/route')
-    await onASeed(async (stripe) => {
-      const before = await everything()
-      const response = await dryRunRoute(
-        new Request('https://worker.test/api/v1/staff/orders/dry-run', {
-          method: 'POST',
-          headers: { authorization: `Bearer ${process.env.STAFF_API_KEY}`, 'x-staff-email': REPLAY_USER.email, 'content-type': 'application/json' },
-          // As the shadow sends it: no confirmed reader figure (the old params never had one).
-          body: JSON.stringify(orderInput(splitBasket)),
-        })
-      )
-      const body = (await response.json()) as { ok: boolean; data: { order: PlaceOrderOutput; rows: { order: Record<string, unknown> } } }
-      expect(body.ok).toBe(true)
-      expect(body.data.order).toMatchObject({ status: 'pending_reader', payment: { method: 'reader', collected: 44, cardCharged: false } })
-      expect(body.data.order).not.toHaveProperty('pendingReaderPayment')
-      expect(body.data.rows.order).toMatchObject({ payment_status: 'pending', payment_method: null, has_reader_payment: true, has_payment_intent: false })
-      expect(stripe.calls).toEqual([])
-      expect(await everything()).toEqual(before)
-    })
-  })
 })
 
 describe("Stripe's answers to the intent (W03-plan 2.5)", () => {
@@ -1379,24 +1360,48 @@ describe('card saving (getTerminalConnectionToken, createTerminalSetupIntent, sa
   })
 })
 
-describe('switching back (W03-plan 3.2): the old functions can still finish a Worker reader order', () => {
-  it("the old finaliseReaderOrder reads the Worker's pending record and marks it paid", async () => {
+// W16 review S1: the staff app's own thin finaliseReaderOrder and cancelReaderOrder (backend/paddock, not the frozen
+// test-only copy the replay's setup uses), through the Worker's routes: the path staff take on every reader order.
+describe("the staff app's finalise and cancel, through the Worker", () => {
+  type StaffStep = (req: { params: Record<string, unknown>; user: typeof REPLAY_USER }) => Promise<Record<string, unknown>>
+  /** Binds the staff app's globals (oldSide) and loads its own file, as order-switch.test.ts does for createOrder. */
+  async function staffApp(action: 'finaliseReaderOrder' | 'cancelReaderOrder', stripe: FakeStripe): Promise<StaffStep> {
+    oldSide(db, stripe)
+    const file = path.join(staffAppDir(), 'backend/paddock', `${action}.ts`)
+    return ((await import(/* @vite-ignore */ file)) as { default: StaffStep }).default
+  }
+
+  it("finaliseReaderOrder reads the Worker's pending record and marks it paid", async () => {
     await onASeed(async (stripe) => {
       const placed = placedOf(await placeThrough(splitBasket))
       stripe.completeReaderPayment(placed.pendingReaderPayment.paymentIntentId)
-      const old = oldSide(db, stripe)
-      expect(await old.call('finaliseReaderOrder', { orderId: placed.orderId })).toMatchObject({ finalised: true, paymentIntentId: 'pi_fake_0001' })
+      const finaliseReaderOrder = await staffApp('finaliseReaderOrder', stripe)
+      expect(await finaliseReaderOrder({ params: { orderId: placed.orderId }, user: REPLAY_USER })).toMatchObject({ finalised: true, paymentIntentId: 'pi_fake_0001' })
       expect(await orderNow(placed.orderId)).toMatchObject({ payment_status: 'paid', stripe_payment_intent_id: 'pi_fake_0001' })
     })
   })
 
-  it('the old cancelReaderOrder cancels it and gives everything back', async () => {
+  it('cancelReaderOrder cancels it and gives everything back', async () => {
     await onASeed(async (stripe) => {
       const before = await everything()
       const placed = placedOf(await placeThrough(splitBasket))
-      const old = oldSide(db, stripe)
-      expect(await old.call('cancelReaderOrder', { orderId: placed.orderId })).toMatchObject({ cancelled: true })
+      const cancelReaderOrder = await staffApp('cancelReaderOrder', stripe)
+      expect(await cancelReaderOrder({ params: { orderId: placed.orderId }, user: REPLAY_USER })).toMatchObject({ cancelled: true })
       expect(await everything()).toEqual(before)
+    })
+  })
+
+  it('a missing order id: the old answer, and nothing touched', async () => {
+    await onASeed(async (stripe) => {
+      placedOf(await placeThrough(splitBasket))
+      const before = await everything()
+      const calls = stripe.calls.length
+      const finaliseReaderOrder = await staffApp('finaliseReaderOrder', stripe)
+      const cancelReaderOrder = await staffApp('cancelReaderOrder', stripe)
+      expect(await finaliseReaderOrder({ params: {}, user: REPLAY_USER })).toEqual({ finalised: false, reason: 'order_not_found', message: 'orderId is required.' })
+      expect(await cancelReaderOrder({ params: {}, user: REPLAY_USER })).toEqual({ cancelled: false, reason: 'order_not_found', message: 'orderId is required.' })
+      expect(await everything()).toEqual(before)
+      expect(stripe.calls).toHaveLength(calls)
     })
   })
 })

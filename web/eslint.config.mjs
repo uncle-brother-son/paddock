@@ -17,6 +17,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // W16: a frozen test-only copy of the removed order code and the two legacy routes it calls, linted where
+    // it lived (the staff app; app/api). Deleted at step H.
+    "server/rules/testing/legacy-order/**",
   ]),
   ...storybook.configs["flat/recommended"],
   // Values go in as $1 parameters. A dynamic query (e.g. a variable number of search words) can

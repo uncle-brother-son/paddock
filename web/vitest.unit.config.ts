@@ -11,6 +11,9 @@ export default defineConfig({
       '@': path.resolve(__dirname, '.'),
       // Next swaps this marker package for an empty module on the server; tests need the same.
       'server-only': path.resolve(__dirname, 'node_modules/next/dist/compiled/server-only/empty.js'),
+      // W16: the replay's test-only copy of the staff app's removed order code (server/rules/testing/legacy-order)
+      // imports the staff app's remaining modules from its checkout, as staffAppDir() finds it.
+      '@retool-app': process.env.RETOOL_APP_DIR ?? path.resolve(__dirname, '../../paddock-retool-app'),
     },
   },
   test: {

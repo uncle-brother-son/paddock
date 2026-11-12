@@ -19,6 +19,15 @@ import { replayStripe } from './stripe-binding'
  */
 
 export const backendDir = path.join(staffAppDir(), 'backend/paddock')
+
+/**
+ * W16 (Wayne, 12 Nov: option B): the staff app's old order code is deleted, but 687 of the golden scenarios set up
+ * their booking through it before running the refund or flow code they test. Those three actions run from a
+ * frozen test-only copy (legacy-order/README.md), so every golden file still replays exactly. Setup only: nothing
+ * else may import it, and it goes at step H.
+ */
+export const LEGACY_ORDER_ACTIONS: ReadonlySet<string> = new Set(['createOrder', 'finaliseReaderOrder', 'cancelReaderOrder'])
+export const legacyOrderDir = path.join(__dirname, '../legacy-order/backend/paddock')
 const goldenDir = path.join(__dirname, 'golden')
 
 /** Tuesday, in winter, so London time and UTC agree. */
@@ -99,14 +108,15 @@ export function oldSide(db: Db, stripe: FakeStripe): ReplaySide {
   vi.stubGlobal('paddockData', { query })
   vi.stubGlobal('paddockBackendApi2', { rawRequest: bindLegacyRoutes(db, stripe) })
   vi.stubGlobal('paddockWorkerV1', { rawRequest: bindStaffRoutes() })
-  // W14: the old functions are wrappers now, asking the Worker first. With every kind off (as live until W15)
-  // the Worker answers ORDER_PATH_OFF and the old code runs, unchanged: the golden files hold it to that.
+  // W14: the staff app's wrappers ask the Worker first; every kind is off here unless a test says otherwise.
+  // W16: the old order functions run from the test-only copy (LEGACY_ORDER_ACTIONS), so they never ask.
   vi.stubEnv('ORDER_SWITCH', '')
 
   return {
     name: 'old',
     async call(action, params) {
-      const loaded = (await import(/* @vite-ignore */ path.join(backendDir, `${action}.ts`))) as {
+      const dir = LEGACY_ORDER_ACTIONS.has(action) ? legacyOrderDir : backendDir
+      const loaded = (await import(/* @vite-ignore */ path.join(dir, `${action}.ts`))) as {
         default: (req: { params: unknown; user: typeof REPLAY_USER }) => Promise<unknown>
       }
       return loaded.default({ params, user: REPLAY_USER })

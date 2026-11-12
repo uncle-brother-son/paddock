@@ -16,18 +16,19 @@ type Route = { POST: (request: never) => Promise<Response> }
 const ROUTES: Record<string, () => Promise<unknown>> = {
   '/api/payments/charge-saved-card': () => import('@/app/api/payments/charge-saved-card/route'),
   '/api/payments/refund-order': () => import('@/app/api/payments/refund-order/route'),
-  '/api/memberships/create-subscription': () => import('@/app/api/memberships/create-subscription/route'),
   '/api/memberships/cancel-subscription': () => import('@/app/api/memberships/cancel-subscription/route'),
+  // W16: deleted from app/; the test-only copy of the old order code still calls them (legacy-order/README.md).
+  '/api/memberships/create-subscription': () => import('../legacy-order/routes/memberships/create-subscription/route'),
+  '/api/terminal/resolve-saved-card': () => import('../legacy-order/routes/terminal/resolve-saved-card/route'),
   '/api/terminal/create-payment-intent': () => import('@/app/api/terminal/create-payment-intent/route'),
   '/api/terminal/payment-intent': () => import('@/app/api/terminal/payment-intent/route'),
-  '/api/terminal/resolve-saved-card': () => import('@/app/api/terminal/resolve-saved-card/route'),
 }
 
 /** The /api/v1/staff routes the old functions call, beyond the quote shadow's own. */
 const STAFF_ROUTES: Record<string, () => Promise<unknown>> = {
   '/api/v1/staff/payments/refunds': () => import('@/app/api/v1/staff/payments/refunds/route'),
-  // W14: the wrappers ask the Worker first (createOrder, the reader's finalise and cancel, the terminal and the
-  // saved card). The quote shadow's own calls still find no route here, so it records nothing, as before.
+  // W14: the wrappers ask the Worker first (the terminal and the saved card; createOrder and the reader's finalise
+  // and cancel when a test runs the staff app's own thin calls). The quote shadow is gone (W16).
   '/api/v1/staff/orders': () => import('@/app/api/v1/staff/orders/route'),
   '/api/v1/staff/terminal/connection-token': () => import('@/app/api/v1/staff/terminal/connection-token/route'),
   '/api/v1/staff/terminal/setup-intents': () => import('@/app/api/v1/staff/terminal/setup-intents/route'),

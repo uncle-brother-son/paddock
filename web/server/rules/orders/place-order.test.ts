@@ -1,19 +1,17 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { orderDryRunOutputSchema, placeOrderOutputSchema, type OrderDryRunOutput } from '@/contracts'
-import { POST as dryRunRoute } from '@/app/api/v1/staff/orders/dry-run/route'
+import { placeOrderOutputSchema } from '@/contracts'
 import { createDb, type Db, type DbDriver, type DriverSession } from '@/server/db'
 import { createPostgresDriver } from '@/server/db/postgres-driver'
 import { insert } from '@/server/rules/testing/database'
 import type { Recording } from '@/server/rules/testing/replay/compare'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment, type Scenario } from '@/server/rules/testing/replay/harness'
+import { oldSide, replay, startReplay, type ReplayEnvironment, type Scenario } from '@/server/rules/testing/replay/harness'
 import { newOrderSide, oldResult, orderInput, postOrder, type OrderAnswer } from '@/server/rules/testing/replay/order-side'
 import { ID, liftOnSaleCheck, mo, memberCredit, paidSeat, restoreOnSaleCheck, sam, seed, seedCorePass, whileFailing, type WriteFailure } from '@/server/rules/testing/replay/scenarios'
 import { herdWaitMessage } from './failure-messages'
 import { GIFT_CARD_CODE_FORMAT } from './gift-card-code'
 import type { BasketFacts } from './load-basket'
-import { readOrderRows } from './order-rows'
 import { refusalCode, refusalDetails } from './order-refusal'
-import { dryRunOrder, GIFT_CARD_CODE_TRIES, ORDER_NOT_SAVED_MESSAGE, placeOrder, recordedPaymentMethod, STORE_CREDIT_NOTE } from './place-order'
+import { GIFT_CARD_CODE_TRIES, ORDER_NOT_SAVED_MESSAGE, placeOrder, recordedPaymentMethod, STORE_CREDIT_NOTE } from './place-order'
 import { amountChangedRefusal } from './amounts'
 import { orderRefusal } from './order-refusal'
 import { eventFullRefusal } from './basket-event'
@@ -299,29 +297,6 @@ describe('B11: a database error anywhere in the order leaves nothing behind', ()
     expect(tablesTouched(recording)).toEqual(['api_idempotency'])
   })
 
-  it('the old createOrder, failing as it marks the order paid, keeps the booking and a pending order', async () => {
-    const markPaid: WriteFailure = { table: 'orders', event: 'UPDATE', when: "NEW.payment_status = 'paid'" }
-    const recording = await replay(environment, orderScenario(cashBooking, undefined, (steps) => whileFailing(db, markPaid, steps)), oldSide)
-    expect(recording.results[0]).toMatchObject({ success: true, warning: expect.stringContaining('marking the order as paid failed') })
-    expect(recording.tables['orders']?.added).toMatchObject([{ payment_status: 'pending' }])
-    expect(recording.tables['bookings']?.added).toHaveLength(1)
-    expect(recording.tables['sessions']?.changed).toMatchObject([{ total_booked: [0, 2] }])
-  })
-})
-
-describe('for the Worker step: the old createBooking when the credit has gone at the claim', () => {
-  // createBooking.ts:445-451. The guarded insert finds no credit (here a trigger skips it, as a
-  // credit spent a moment earlier would), so the seat is written as paid instead, and on the saved
-  // card the customer is charged for it: there is no confirmed figure for a card until W10. The
-  // Worker refuses instead (writeBooking, "a credit period with nothing left").
-  it('charges the card for the seat, and staff are told the order went through', async () => {
-    const onCredit = { customerId: ID.member, booking: { ...paidSeat([mo]), ...memberCredit }, payment: { method: 'card' } }
-    const skipped: WriteFailure = { table: 'bookings', event: 'INSERT', when: 'NEW.credit_period_id IS NOT NULL' }
-    const recording = await replay(environment, orderScenario(onCredit, undefined, (steps) => whileSkipping(db, skipped, steps)), oldSide)
-    expect(recording.results[0]).toMatchObject({ success: true, cardCharged: true, cardAmount: 20 })
-    expect(recording.stripeCalls.map((call) => [call.method, (call.params as { amount?: number }).amount])).toEqual([['paymentIntents.create', 2000]])
-    expect(recording.tables['bookings']?.added).toMatchObject([{ redemption_source: 'paid', price_paid: '20.00', credit_period_id: null }])
-  })
 })
 
 describe('before anything is touched', () => {
@@ -438,13 +413,6 @@ describe('before anything is touched', () => {
       expect(statements).toEqual(['SELECT id,', 'INSERT INTO', 'BEGIN; SELECT', 'SELECT s.id', 'WITH london', 'ROLLBACK', 'BEGIN; SELECT', 'UPDATE api_idempotency', 'COMMIT'])
     })
 
-    it('the dry run: no key, a read back, a rollback', async () => {
-      await freshSeed()
-      const { result, statements } = await counting(() => dryRun(orderInput(memberBooking)))
-      expect(result.status).toBe(200)
-      expect(statements).toEqual(['SELECT id,', ...T1.slice(0, -1), 'WITH o', 'ROLLBACK'])
-    })
-
     // W07: the gift card, the stock, the ledger, the pass, the postage and the saved address are all
     // in the order's statement, so a basket of any of them costs no more than W06's.
     const NO_BOOKING = ROUTE.filter((_, i) => i !== ROUTE.indexOf('WITH clock'))
@@ -505,73 +473,6 @@ describe('before anything is touched', () => {
       expect(refusalOf(result)).toMatchObject({ code: 'VALIDATION', reason: 'promo_code_invalid' })
       expect(statements).toEqual(['SELECT id,', 'INSERT INTO', 'BEGIN; SELECT', 'SELECT s.id', 'WITH london', 'ROLLBACK', 'BEGIN; SELECT', 'UPDATE api_idempotency', 'COMMIT'])
     })
-  })
-})
-
-async function dryRun(input: unknown, email = REPLAY_USER.email) {
-  const response = await dryRunRoute(
-    new Request('https://worker.test/api/v1/staff/orders/dry-run', {
-      method: 'POST',
-      headers: { authorization: `Bearer ${process.env.STAFF_API_KEY}`, 'x-staff-email': email, 'content-type': 'application/json' },
-      body: JSON.stringify(input),
-    })
-  )
-  return { status: response.status, body: (await response.json()) as { ok: boolean; data?: OrderDryRunOutput; error?: { code: string; details?: unknown } } }
-}
-
-describe('the dry run', () => {
-  const dryScenario = (params: Record<string, unknown>, answers: Array<Awaited<ReturnType<typeof dryRun>>>): Scenario => ({
-    name: 'dry run',
-    seed,
-    async run() {
-      answers.push(await dryRun(orderInput(params)))
-    },
-  })
-
-  it('keeps nothing at all, not even a key', async () => {
-    const answers: Array<Awaited<ReturnType<typeof dryRun>>> = []
-    const recording = await replay(environment, dryScenario(memberBooking, answers), oldSide)
-    expect(answers[0]?.status).toBe(200)
-    expect(orderDryRunOutputSchema.safeParse(answers[0]?.body.data).success).toBe(true)
-    expect(recording.tables).toEqual({})
-  })
-
-  it('reads back exactly what the real order then writes', async () => {
-    const answers: Array<Awaited<ReturnType<typeof dryRun>>> = []
-    let written: unknown = null
-    await replay(
-      environment,
-      {
-        name: 'dry run then order',
-        seed,
-        async run() {
-          answers.push(await dryRun(orderInput(memberBooking)))
-          const placed = await postOrder(orderInput(memberBooking))
-          if (placed.body.ok) written = await readOrderRows(db, placed.body.data.orderId)
-        },
-      },
-      oldSide
-    )
-    expect(written).not.toBeNull()
-    expect(answers[0]?.body.data?.rows).toEqual(written)
-  })
-
-  it('answers a refusal exactly as the order route does', async () => {
-    const params = { ...cashBooking, payment: cash(40) }
-    const answers: Array<Awaited<ReturnType<typeof dryRun>>> = []
-    await replay(environment, dryScenario(params, answers), oldSide)
-    const { answer } = await placeThrough(params)
-    expect(answers[0]?.status).toBe(answer.status)
-    expect(answers[0]?.body.error).toEqual(answer.body.ok ? null : answer.body.error)
-  })
-
-  it('W13: a membership on the reader runs T1 and keeps nothing: pending with its record, the membership line written', async () => {
-    const answers: Array<Awaited<ReturnType<typeof dryRun>>> = []
-    const recording = await replay(environment, dryScenario({ customerId: ID.customer, booking: paidSeat(), membershipPlanId: ID.plan, membershipBillingFrequency: 'monthly', payment: { method: 'reader', readerSaveCard: true } }, answers), oldSide)
-    expect(answers[0]).toMatchObject({ status: 200, body: { ok: true, data: { order: { status: 'pending_reader' }, rows: { order: { payment_status: 'pending', has_reader_payment: true } } } } })
-    const rows = (answers[0]?.body as { data: { rows: { lines: Array<{ item_type: string }> } } }).data.rows
-    expect(rows.lines.map((line) => line.item_type)).toEqual(['booking', 'membership'])
-    expect(recording.tables).toEqual({})
   })
 })
 
@@ -869,8 +770,8 @@ describe('writeBooking refuses on its own, without the checks T1 runs first', ()
 
 // --- W07: products, postage, passes and gift cards bought
 
-/** placeOrder or dryRunOrder straight, on a fresh seed, with a code maker of the test's choosing. */
-async function directly(params: Record<string, unknown>, codes: () => string, { dry = false, prepare }: { dry?: boolean; prepare?: (db: Db) => Promise<void> } = {}) {
+/** placeOrder straight, on a fresh seed, with a code maker of the test's choosing. */
+async function directly(params: Record<string, unknown>, codes: () => string, { prepare }: { prepare?: (db: Db) => Promise<void> } = {}) {
   const outcome: { value?: unknown; error?: unknown } = {}
   const recording = await replay(
     environment,
@@ -883,7 +784,7 @@ async function directly(params: Record<string, unknown>, codes: () => string, { 
       async run() {
         const options = { actor: { type: 'staff' as const, id: ID.staff }, requestId: 'w07-test', allowPriceOverrides: true, giftCardCode: codes }
         try {
-          outcome.value = await (dry ? dryRunOrder : placeOrder)(db, orderInput(params), options)
+          outcome.value = await placeOrder(db, orderInput(params), options)
         } catch (err) {
           outcome.error = err
         }
@@ -954,18 +855,6 @@ describe('gift card codes (W03-plan 2.4 item 3)', () => {
     expect(recording.tables).toEqual({})
   })
 
-  it('a collision inside the dry run: it reads back one gift card of the right format, and nothing is kept', async () => {
-    const codes = codesInTurn('SEEDCARD', 'PWC-ABCDEFGH')
-    const { recording, value, error } = await directly(boughtWithAnEvent, codes.next, { dry: true })
-    expect(error).toBeUndefined()
-    expect(codes.asked()).toBe(2)
-    const rows = (value as { rows: { gift_cards: Array<{ code_format_ok: boolean }>; stock: unknown; event_booking: { event_places_booked: number } | null } }).rows
-    expect(rows.gift_cards).toEqual([expect.objectContaining({ code_format_ok: true, original_value: 60 })])
-    expect(rows.stock).toEqual([{ variant_id: ID.variant, stock_quantity: 3 }])
-    // Claimed once inside the dry run: the event reads back two places booked, not four.
-    expect(rows.event_booking?.event_places_booked).toBe(2)
-    expect(recording.tables).toEqual({})
-  })
 })
 
 describe('B3 (pass half): a pass line is never kept without its pass, nor a pass without its line', () => {
@@ -1070,60 +959,13 @@ describe('B5 (address half): the delivery address is kept on every path T1 write
   })
 })
 
-describe('the dry run, for what W07 adds', () => {
-  it('reads back exactly what the real order then writes, for the worst basket', async () => {
-    let dry: unknown = null
-    let written: unknown = null
-    await replay(
-      environment,
-      {
-        name: 'dry run then order, W07',
-        seed,
-        async run() {
-          dry = (await dryRun(orderInput(worstBasket))).body.data?.rows
-          const placed = await postOrder(orderInput(worstBasket))
-          if (placed.body.ok) written = await readOrderRows(db, placed.body.data.orderId)
-        },
-      },
-      oldSide
-    )
-    expect(written).not.toBeNull()
-    expect(dry).toEqual(written)
-    expect(written).toMatchObject({
-      stock: [
-        { variant_id: ID.candleVariant, stock_quantity: 4 },
-        { variant_id: ID.mugVariant, stock_quantity: 4 },
-      ],
-      stock_adjustments: [
-        { variant_id: ID.candleVariant, change_amount: -1, by_staff: false },
-        { variant_id: ID.mugVariant, change_amount: -1, by_staff: false },
-      ],
-      session_passes: [{ sessions_remaining: 4, for_the_order_customer: true, pays_for_the_booking: true }],
-      gift_cards: [{ code_format_ok: true, original_value: 10, fulfillment_method: 'shipping', bought_by_the_order_customer: true }],
-      booking: { redeemed_session_pass_id: 'bought in this order', pass_sessions_remaining: 4 },
-      customer_address: { line1: '1 Mill Lane', country: 'United Kingdom' },
-    })
-  })
-})
-
-describe('for the Worker step (W07): the old createOrder when a write after the stock claim fails', () => {
-  // createOrder.ts claims the stock at stage 19 and writes the gift card at stage 22. A database error
-  // there (here the gift card's INSERT) rolls back by hand, and rollbackAll swallows a failed step: if
-  // the stock's own put-back fails too, the stock stays claimed with no order, no line and no ledger
-  // row, and staff see the database's raw words. T1 is one transaction: nothing is kept.
-  it('keeps the two soaps out of stock, with no order to show for them', async () => {
+describe('W07: a write after the stock claim fails', () => {
+  // The old createOrder (removed at W16) rolled back by hand here and could leave the stock claimed with
+  // no order. T1 is one transaction: nothing is kept.
+  it('keeps nothing, the stock included', async () => {
     const basket = { ...productsInCash, giftCard: { giftCardPresetId: ID.giftCardPreset, fulfillmentMethod: 'digital' }, payment: cash(84) }
     const putBackFails: WriteFailure = { table: 'product_variants', event: 'UPDATE', when: 'NEW.stock_quantity > OLD.stock_quantity' }
     const giftCardFails: WriteFailure = { table: 'gift_cards', event: 'INSERT', when: 'true' }
-    const recording = await replay(
-      environment,
-      orderScenario(basket, undefined, (steps) => whileFailing(db, putBackFails, () => whileFailing(db, giftCardFails, steps))),
-      oldSide
-    )
-    expect(recording.results[0]).toEqual({ success: false, stage: 'gift_card', reason: 'gift_card_creation_failed', message: 'connection lost' })
-    expect(recording.tables['product_variants']?.changed).toEqual([{ id: ID.variant, stock_quantity: [5, 3] }])
-    expect(Object.keys(recording.tables).sort()).toEqual(['product_variants'])
-
     const worker = await placeThrough(basket, undefined, (steps) => whileFailing(db, putBackFails, () => whileFailing(db, giftCardFails, steps)))
     expect(worker.answer.body).toMatchObject({ ok: false, error: { code: 'INTERNAL' } })
     expect(tablesTouched(worker.recording)).toEqual(['api_idempotency'])
@@ -1240,44 +1082,6 @@ describe('the event claim refuses on its own, without the checks T1 runs first (
 })
 
 describe('what T1 writes for an event (W08)', () => {
-  it('the dry run reads back exactly what the real order then writes, for the worst basket', async () => {
-    let dry: unknown = null
-    let written: unknown = null
-    await replay(
-      environment,
-      {
-        name: 'dry run then order, W08',
-        seed,
-        async run() {
-          dry = (await dryRun(orderInput(eventWorstBasket))).body.data?.rows
-          const placed = await postOrder(orderInput(eventWorstBasket))
-          if (placed.body.ok) written = await readOrderRows(db, placed.body.data.orderId)
-        },
-      },
-      oldSide
-    )
-    expect(written).not.toBeNull()
-    expect(dry).toEqual(written)
-    expect(written).toMatchObject({
-      lines: [{ item_type: 'booking' }, { item_type: 'event', quantity: 3, unit_price: 40, line_total: 120 }, { item_type: 'product' }, { item_type: 'gift_card' }, { item_type: 'postage' }],
-      event_booking: {
-        event_id: ID.event,
-        status: 'confirmed',
-        places: 3,
-        account_holder_attending: true,
-        price_paid: 120,
-        created_by_staff_id: ID.staff,
-        guests_over_18_confirmed: true,
-        for_the_order_customer: true,
-        event_places_booked: 3,
-        attendees: [
-          { attendee_type: 'account_holder', name: 'Sam Test', email: 'sam@example.com', date_of_birth: '1990-01-01', unit_price: 40, price_level: 'public' },
-          { attendee_type: 'guest', name: 'Alex Guest', email: 'alex@example.com', date_of_birth: null, unit_price: 40, price_level: 'public' },
-          { attendee_type: 'guest', name: 'Bea Guest', email: 'bea@example.com', date_of_birth: null, unit_price: 40, price_level: 'public' },
-        ],
-      },
-    })
-  })
 
   it("the answer names the event booking, in its contract and in createOrder's shape", async () => {
     const { answer } = await placeThrough(eventWithAGuest)
@@ -1317,20 +1121,13 @@ describe('what T1 writes for an event (W08)', () => {
   })
 })
 
-describe('for the Worker step (W08): the old createOrder when an attendee write fails after the places were claimed', () => {
-  // createOrder.ts claims the places at stage 21 (eventOrders.ts writeEventBooking), then writes the
-  // booking and one attendee per statement. A database error on an attendee rolls back by hand, and
-  // rollbackAll swallows a failed step: if giving the places back fails too, the places stay claimed
-  // with no booking, and staff see the database's raw words. T1 is one transaction: nothing is kept.
-  it('keeps the two places claimed, with no booking to show for them', async () => {
+describe('W08: an attendee write fails after the places were claimed', () => {
+  // The old createOrder (removed at W16) rolled back by hand here and could leave the places claimed with
+  // no booking. T1 is one transaction: nothing is kept.
+  it('keeps nothing, the places included', async () => {
     const releaseFails: WriteFailure = { table: 'events', event: 'UPDATE', when: 'NEW.places_booked < OLD.places_booked' }
     const attendeeFails: WriteFailure = { table: 'event_attendees', event: 'INSERT', when: "NEW.attendee_type = 'guest'" }
     const during = (steps: () => Promise<unknown>) => whileFailing(db, releaseFails, () => whileFailing(db, attendeeFails, steps))
-    const recording = await replay(environment, orderScenario(eventWithAGuest, undefined, during), oldSide)
-    expect(recording.results[0]).toEqual({ success: false, stage: 'validation', reason: 'unexpected_error', message: 'connection lost' })
-    expect(recording.tables['events']?.changed).toEqual([{ id: ID.event, places_booked: [0, 2] }])
-    expect(Object.keys(recording.tables).sort()).toEqual(['events'])
-
     const worker = await placeThrough(eventWithAGuest, undefined, during)
     expect(worker.answer.body).toMatchObject({ ok: false, error: { code: 'INTERNAL' } })
     expect(tablesTouched(worker.recording)).toEqual(['api_idempotency'])
@@ -1592,62 +1389,9 @@ describe("every W09 write waits on the gift card's go (W08 review S1)", () => {
     expect(recording.tables['events']?.changed).toEqual([{ id: ID.event, places_booked: [0, 2] }])
   })
 
-  it('inside the dry run: each read back once, and nothing kept', async () => {
-    const codes = codesInTurn('SEEDCARD', 'PWC-ABCDEFGH')
-    const { recording, value, error } = await directly(everythingBought, codes.next, { dry: true })
-    expect(error).toBeUndefined()
-    expect(codes.asked()).toBe(2)
-    const rows = (value as OrderDryRunOutput).rows
-    expect(rows.promo_redemptions).toEqual([{ promo_code_id: ID.promoFixed, for_the_order_customer: true, discount_amount: 5 }])
-    expect(rows.store_credit_transactions).toHaveLength(1)
-    expect(rows.gift_card_redemptions).toEqual([expect.objectContaining({ amount_used: 20, card_remaining_balance: 20 })])
-    expect(rows.customer_store_credit_balance).toBe(20)
-    expect(recording.tables).toEqual({})
-  })
 })
 
 describe('what T1 writes for a promo code, store credit and a gift card (W09)', () => {
-  it('the dry run reads back exactly what the real order then writes, for the worst basket', async () => {
-    let dry: unknown = null
-    let written: unknown = null
-    await replay(
-      environment,
-      {
-        name: 'dry run then order, W09',
-        seed,
-        async run() {
-          dry = (await dryRun(orderInput(w09WorstBasket))).body.data?.rows
-          const placed = await postOrder(orderInput(w09WorstBasket))
-          if (placed.body.ok) written = await readOrderRows(db, placed.body.data.orderId)
-        },
-      },
-      oldSide
-    )
-    expect(written).not.toBeNull()
-    expect(dry).toEqual(written)
-    expect(written).toMatchObject({
-      order: { order_total: 199.95, discount_amount: 5, promo_code: 'FIVER', payment_method: 'split', payment_status: 'paid' },
-      // FIVER over £180 of seats, the candle and the places (the towel on the booking is never a promo line):
-      // 55p a seat and on the candle, £1.11 a place, the 2p left over on the last place.
-      lines: [
-        { item_type: 'booking', unit_price: 40, discount_amount: 1.1 },
-        { item_type: 'event', line_total: 120, discount_amount: 3.35 },
-        { item_type: 'product', discount_amount: 0.55 },
-        { item_type: 'gift_card', discount_amount: 0 },
-        { item_type: 'postage', discount_amount: 0 },
-      ],
-      booking: { price_paid: 38.9, seats: [{ unit_price: 19.45 }, { unit_price: 19.45 }] },
-      event_booking: { price_paid: 116.65, attendees: [{ unit_price: 38.89 }, { unit_price: 38.89 }, { unit_price: 38.87 }] },
-      promo_redemptions: [{ promo_code_id: ID.promoFixed, for_the_order_customer: true, discount_amount: 5 }],
-      store_credit_transactions: [
-        { amount: -10, balance_after: 20, reason: 'redemption', for_the_order_customer: true, for_a_booking: false, from_a_gift_card: false, staff_id: ID.staff, note: STORE_CREDIT_NOTE },
-      ],
-      gift_card_redemptions: [
-        { gift_card_id: ID.giftCard, amount_used: 20, for_a_booking: false, for_an_event_booking: false, card_remaining_balance: 20, card_redeemed: false, card_voided: false },
-      ],
-      customer_store_credit_balance: 20,
-    })
-  })
 
   it("a gift card used up is marked redeemed; one partly used isn't (createOrder's rule)", async () => {
     const usedUp = await placeThrough({ customerId: ID.customer, booking: paidSeat([sam, alex]), payment: { giftCard: { giftCardId: ID.giftCard, amount: 40 } } })
@@ -1712,35 +1456,12 @@ describe('what T1 writes for a promo code, store credit and a gift card (W09)', 
   })
 })
 
-describe('for the Worker step (W09): the old createOrder when a claim write fails', () => {
-  // createOrder.ts claims the store credit and the gift card after its try block (stage 30,
-  // claimStoreCreditAndGiftCard), on the cash and saved-card paths. A database error there throws
-  // straight out: nothing is rolled back. The order stays pending, the stock stays taken, and the
-  // money already moved stays moved. T1 is one transaction: nothing is kept.
-  it('keeps the £10 of store credit and the £14 off the gift card, with a pending order and no redemption row', async () => {
+describe('W09: a claim write fails', () => {
+  // The old createOrder (removed at W16) threw straight out here, keeping the store credit and the gift card
+  // claimed with a pending order. T1 is one transaction: nothing is kept.
+  it('keeps nothing, the store credit and the gift card included', async () => {
     const basket = { customerId: ID.customer, products: [soap], payment: { giftCard: { giftCardId: ID.giftCard, amount: 14 }, storeCredit: { amount: 10 } } }
     const rowFails: WriteFailure = { table: 'gift_card_redemptions', event: 'INSERT', when: 'true' }
-    const thrown: unknown[] = []
-    const recording = await replay(
-      environment,
-      {
-        name: 'old claim fails',
-        seed,
-        async run({ call }) {
-          await whileFailing(db, rowFails, async () => {
-            await call('createOrder', basket).catch((err: unknown) => thrown.push(err))
-          })
-        },
-      },
-      oldSide
-    )
-    expect(String(thrown[0])).toContain('connection lost')
-    expect(recording.tables['orders']?.added).toMatchObject([{ payment_status: 'pending', order_total: '24.00' }])
-    expect(recording.tables['customers']?.changed).toMatchObject([{ id: ID.customer, store_credit_balance: ['30.00', '20.00'] }])
-    expect(recording.tables['gift_cards']?.changed).toMatchObject([{ id: ID.giftCard, remaining_balance: ['40.00', '26.00'] }])
-    expect(recording.tables['gift_card_redemptions']).toBeUndefined()
-    expect(recording.tables['product_variants']?.changed).toEqual([{ id: ID.variant, stock_quantity: [5, 3] }])
-
     const worker = await placeThrough(basket, undefined, (steps) => whileFailing(db, rowFails, steps))
     expect(worker.answer.body).toMatchObject({ ok: false, error: { code: 'INTERNAL' } })
     expect(tablesTouched(worker.recording)).toEqual(['api_idempotency'])

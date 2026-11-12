@@ -451,9 +451,9 @@ const money = z.number()
 /**
  * The rows an order wrote, read back by order id. Free text (names, emails, dates of birth, special
  * requests, override reasons, addresses, a gift card's recipient and message, an event attendee's name,
- * email and date of birth) is here for comparing, and the staff app never keeps it. A gift card's code is never read back: only whether it has the
- * app's format. The query is in server/rules/orders/order-rows.ts and, word for word, in the staff
- * app's shadow.
+ * email and date of birth) is here for comparing. A gift card's code is never read back: only whether it
+ * has the app's format. The query is in server/rules/orders/order-rows.ts. W16: with the shadow and the dry
+ * run gone, only the tests read an order back this way.
  */
 export const orderRowsSchema = z.object({
   order: z.object({
@@ -653,16 +653,3 @@ export const orderRowsSchema = z.object({
   ),
 })
 export type OrderRows = z.infer<typeof orderRowsSchema>
-
-export const orderDryRunOutputSchema = z.object({
-  /**
-   * What the order would have answered. Nothing was kept. On a saved-card order (W10) the dry run runs
-   * T1 only, with no Stripe call: this is what the order answers once the card is charged, and `rows`
-   * are as T1 leaves them, the order pending with its snapshot (has_reader_payment), its event booking
-   * pending and its delivery address not yet saved to the customer.
-   */
-  order: placeOrderOutputSchema,
-  /** What it wrote, read back inside the transaction before the rollback. */
-  rows: orderRowsSchema,
-})
-export type OrderDryRunOutput = z.infer<typeof orderDryRunOutputSchema>

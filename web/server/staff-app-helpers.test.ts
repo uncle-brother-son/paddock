@@ -24,9 +24,6 @@ describe('staff app helpers', () => {
 
   beforeEach(() => {
     rawRequest.mockReset()
-    // W14a: createOrder asks the Worker's order route first. As live until W15, every kind is off, so the
-    // route answers ORDER_PATH_OFF and the old code runs (any other call gets no answer, as before).
-    rawRequest.mockImplementation(async (options: { path?: string }) => (options.path === '/api/v1/staff/orders' ? refusal('ORDER_PATH_OFF', 'Switched off.') : undefined))
     vi.stubGlobal('paddockWorkerV1', { rawRequest })
   })
   afterEach(() => {
@@ -114,7 +111,6 @@ describe('staff app helpers', () => {
     const guarded = [
       'addServiceTypeScheduleSlot',
       'chargeSavedCard',
-      'createBooking',
       'createCustomer',
       'createOneOffSession',
       'createTerminalPaymentIntent',
@@ -521,12 +517,10 @@ describe('staff app helpers', () => {
     })
 
     it('none of them reads the database or shadows any more', async () => {
-      const { SHADOW_ACTIONS } = await load('shadowCompare')
       for (const { name } of reads) {
         const source = readFileSync(path.join(appDir, `backend/paddock/${name}.ts`), 'utf8')
         expect(source, name).not.toContain('paddockData')
-        expect(source, name).not.toContain('shadowCompare')
-        expect(SHADOW_ACTIONS[name], name).toBeUndefined()
+        expect(source, name).not.toMatch(/shadow/i)
       }
     })
   })
@@ -1267,205 +1261,11 @@ describe('staff app helpers', () => {
     })
 
     describe('New Order', () => {
-      const product = (unitPrice = 20) => ({ productVariantId: 'variant-1', quantity: 1, unitPrice })
-      const order = async (payment: Record<string, unknown>) => {
-        const database = stubDatabase([
-          [/FROM product_variants/, () => [{
-            id: 'variant-1',
-            stock_quantity: 5,
-            product_name: 'Robe',
-            product_active: true,
-            product_member_price: null,
-            product_sale_price: null,
-            product_base_price: '20.00',
-            price_override: null,
-            product_fulfillment_method: 'pickup',
-          }]],
-          [/UPDATE product_variants/, () => [{ id: 'variant-1', stock_quantity: 4 }]],
-          [/store_credit_balance/, () => [{ store_credit_balance: '50.00' }]],
-          [/store_credit_apply/, () => [{ result: { ok: true, balance: 45, transaction_id: 'tx-1' } }]],
-          [/UPDATE gift_cards/, () => [{ id: 'gift-1', remaining_balance: '40.00' }]],
-          [/INSERT INTO gift_card_redemptions/, () => [{ id: 'redemption-1' }]],
-          [/FROM gift_cards/, () => [{ id: 'gift-1', remaining_balance: '50.00', voided: false, expiry_date: '2099-01-01', type: 'standard' }]],
-          [/INSERT INTO orders/, () => [{ id: 'order-1' }]],
-          [/INSERT INTO stock_adjustments/, () => [{ id: 'adjustment-1' }]],
-          [/FROM customers|customer_memberships/, () => [{ id: 'customer-1' }]],
-        ])
-        const fn = (await backend('createOrder')).default
-        const result = await fn({ params: { customerId: 'customer-1', products: [product()], payment }, user })
-        return { result, ...database }
-      }
-
-      it('refuses a figure below its own, and gives the stock back', async () => {
-        const { result, sql } = await order({ method: 'cash', confirmedCashAmount: 15 })
-        expect(result).toEqual({ success: false, stage: 'payment', reason: 'cash_amount_changed', message: CHANGED('20.00'), amountDueTotal: 20 })
-        expect(sql.some((text) => text.includes('INSERT INTO orders'))).toBe(false)
-        const claim = sql.findIndex((text) => /UPDATE product_variants/.test(text) && text.includes('stock_quantity - '))
-        const giveBack = sql.findIndex((text) => /UPDATE product_variants/.test(text) && text.includes('stock_quantity + '))
-        expect(claim).toBeGreaterThanOrEqual(0)
-        expect(giveBack).toBeGreaterThan(claim)
-      })
-
-      it('refuses a figure above its own, and gives the stock back', async () => {
-        const { result, sql } = await order({ method: 'cash', confirmedCashAmount: 25 })
-        expect(result).toEqual({ success: false, stage: 'payment', reason: 'cash_amount_changed', message: CHANGED('20.00'), amountDueTotal: 20 })
-        expect(sql.some((text) => text.includes('INSERT INTO orders'))).toBe(false)
-        expect(sql.some((text) => /UPDATE product_variants/.test(text) && text.includes('stock_quantity + '))).toBe(true)
-      })
-
-      it('gives the new figure when the price fell below the store credit', async () => {
-        const { result, sql } = await order({ method: 'cash', confirmedCashAmount: 5, storeCredit: { amount: 25 } })
-        expect(result).toMatchObject({ reason: 'cash_amount_changed', message: NOTHING_LEFT, amountDueTotal: 20 })
-        expect(sql.some((text) => text.includes('store_credit_apply'))).toBe(false)
-      })
-
-      it('refuses credit above the total when no cash is involved, with the total, and gives the stock back', async () => {
-        const { result, sql } = await order({ storeCredit: { amount: 25 } })
-        expect(result).toEqual({ success: false, stage: 'payment', reason: 'store_credit_amount_exceeds_total', amountDueTotal: 20 })
-        expect(sql.some((text) => text.includes('INSERT INTO orders'))).toBe(false)
-        expect(sql.some((text) => /UPDATE product_variants/.test(text) && text.includes('stock_quantity + '))).toBe(true)
-      })
-
-      it('refuses a gift card above the total, with the total', async () => {
-        const { result } = await order({ giftCard: { giftCardId: 'gift-1', amount: 25 } })
-        expect(result).toEqual({ success: false, stage: 'payment', reason: 'gift_card_amount_exceeds_total', amountDueTotal: 20 })
-      })
-
-      it('refuses the two together above the total, with the total', async () => {
-        const { result } = await order({ giftCard: { giftCardId: 'gift-1', amount: 15 }, storeCredit: { amount: 10 } })
-        expect(result).toEqual({ success: false, stage: 'payment', reason: 'store_credit_amount_exceeds_total', amountDueTotal: 20 })
-      })
-
-      it('with nothing left for the reader, says the amount changed and gives the total', async () => {
-        const { result, sql } = await order({ method: 'reader', storeCredit: { amount: 20 } })
-        expect(result).toEqual({ success: false, stage: 'payment', reason: 'reader_nothing_to_charge', message: AMOUNT_CHANGED, amountDueTotal: 20 })
-        expect(sql.some((text) => /UPDATE product_variants/.test(text) && text.includes('stock_quantity + '))).toBe(true)
-      })
-
-      it.each([[0.05, 19.95], [0.15, 19.85]])('takes credit that exactly covers the total: %s and %s', async (storeCredit, gift) => {
-        const { result } = await order({ storeCredit: { amount: storeCredit }, giftCard: { giftCardId: 'gift-1', amount: gift } })
-        expect(result.reason).toBeUndefined()
-        expect(result.success).toBe(true)
-      })
-
-      it('with nothing on screen to pay, gives the total so the choices appear, and gives the stock back', async () => {
-        const { result, sql } = await order({})
-        expect(result).toEqual({ success: false, stage: 'payment', reason: 'payment_method_required', amountDueTotal: 20 })
-        expect(sql.some((text) => text.includes('INSERT INTO orders'))).toBe(false)
-        expect(sql.some((text) => /UPDATE product_variants/.test(text) && text.includes('stock_quantity + '))).toBe(true)
-      })
-
-      it('includes the membership in that total, as the screen\'s amount due does', async () => {
-        const database = stubDatabase([
-          [/FROM product_variants/, () => [{
-            id: 'variant-1',
-            stock_quantity: 5,
-            product_name: 'Robe',
-            product_active: true,
-            product_member_price: null,
-            product_sale_price: null,
-            product_base_price: '20.00',
-            price_override: null,
-            product_fulfillment_method: 'pickup',
-          }]],
-          [/UPDATE product_variants/, () => [{ id: 'variant-1', stock_quantity: 4 }]],
-          [/FROM membership_plans/, () => [{ id: 'plan-1', name: 'Core', price_monthly: '30.00', price_yearly: '300.00', active: true, is_unlimited: false, sessions_included: 4, addons_included: 0 }]],
-          [/FROM customers|customer_memberships/, () => [{ id: 'customer-1', saved_payment_method_id: 'pm_1' }]],
-        ])
-        const fn = (await backend('createOrder')).default
-        const result = await fn({
-          params: { customerId: 'customer-1', products: [product()], membershipPlanId: 'plan-1', membershipBillingFrequency: 'monthly', payment: {} },
-          user,
-        })
-        expect(result).toMatchObject({ reason: 'payment_method_required', amountDueTotal: 50 })
-        expect(database.sql.some((text) => text.includes('INSERT INTO orders'))).toBe(false)
-      })
-
-      it('counts the total before store credit for that refusal too', async () => {
-        const { result } = await order({ storeCredit: { amount: 5 } })
-        expect(result).toMatchObject({ reason: 'payment_method_required', amountDueTotal: 20 })
-      })
-
-      it('refuses cash with no figure', async () => {
-        const { result } = await order({ method: 'cash' })
-        expect(result.reason).toBe('cash_amount_changed')
-      })
-
-      it('takes the confirmed figure', async () => {
-        const { result, sql } = await order({ method: 'cash', confirmedCashAmount: 20 })
-        expect(result.success).toBe(true)
-        expect(result.cardAmount).toBe(20)
-        expect(sql.some((text) => text.includes('INSERT INTO orders'))).toBe(true)
-      })
-
-      it('compares the cash left after store credit', async () => {
-        const { result } = await order({ method: 'cash', confirmedCashAmount: 15, storeCredit: { amount: 5 } })
-        expect(result.success).toBe(true)
-        const short = await order({ method: 'cash', confirmedCashAmount: 10, storeCredit: { amount: 5 } })
-        expect(short.result.message).toBe(CHANGED('15.00'))
-        expect(short.result.amountDueTotal).toBe(20)
-        // Refused before the store credit is claimed, so there is none to give back.
-        expect(short.sql.some((text) => text.includes('store_credit_apply'))).toBe(false)
-      })
-
+      // W16: the tests that ran the old createOrder's body (the confirmed cash and credit figures) went with it;
+      // the Worker's own tests hold the order to those rules now (amounts.ts, place-order.test.ts).
       describe('a method held after the choices went', () => {
         const choice = () => import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/paymentMethodChoice'))
         const held = (method: string | null, confirmedCashAmount: number | null = null) => ({ method, confirmedCashAmount })
-
-        /** Complete Order, from what the screen holds to what it does with the response. */
-        const complete = async (state: { method: string | null; confirmedCashAmount: number | null }, storeCredit: number) => {
-          const { amountLeftToPay } = await screen()
-          const { clearHiddenMethod, orderMethodFields, paymentChoicesShown, readerReferenceMissing } = await choice()
-          const remainder = amountLeftToPay(20, storeCredit)
-          const onScreen = clearHiddenMethod(state, paymentChoicesShown(remainder, false))
-          const sent = { ...(storeCredit > 0 ? { storeCredit: { amount: storeCredit } } : {}), ...orderMethodFields(onScreen, remainder, 0, false) }
-          const { result, sql } = await order(sent)
-          return {
-            onScreen,
-            sent,
-            result,
-            sql,
-            toldToRetry: result.success === true && readerReferenceMissing(sent.method, result.pendingReaderPayment),
-          }
-        }
-        const claims = (sql: string[]) => sql.filter((text) => text.includes('store_credit_apply')).length
-
-        it('sequence A: reader picked, then store credit raised to the total: the order finishes, with no retry and one claim', async () => {
-          const { onScreen, sent, result, sql, toldToRetry } = await complete(held('reader'), 20)
-          expect(onScreen.method).toBeNull()
-          expect(sent).toEqual({ storeCredit: { amount: 20 } })
-          expect(result).toMatchObject({ success: true, storeCreditRedeemedAmount: 20 })
-          expect(toldToRetry).toBe(false)
-          expect(claims(sql)).toBe(1)
-          expect(sql.filter((text) => text.includes('INSERT INTO orders'))).toHaveLength(1)
-        })
-
-        it('sequence B: reader picked, then the booking goes on Membership Credit: it is booked once, with no retry', async () => {
-          const { amountLeftToPay } = await screen()
-          const { clearHiddenMethod, orderMethodFields, paymentChoicesShown, readerReferenceMissing } = await choice()
-          const remainder = amountLeftToPay(0)
-          const onScreen = clearHiddenMethod(held('reader'), paymentChoicesShown(remainder, false))
-          expect(onScreen.method).toBeNull()
-          const payment = orderMethodFields(onScreen, remainder, 0, false)
-          expect(payment).toEqual({})
-
-          const { sql } = stubDatabase([
-            [/quote_booking/, () => [{ seat_no: 1, seat_kind: 'account_holder', band_id: 'band-1', list_price: '25.00', unit_price: '25.00', credit_eligible: true, membership_level: 'core', discount_percent: '0' }]],
-            [/FROM sessions s\s+JOIN service_types st[\s\S]*WHERE s\.id = \$1/, () => [{ id: 'session-1', start_time: '2099-12-01T10:00:00', end_time: '2099-12-01T11:00:00', capacity: 8, total_booked: 0, status: 'open', service_type_id: 'type-1', band_id: 'band-1', booking_type: 'public', started: false }]],
-            [/FROM customer_memberships cm\s+LEFT JOIN membership_current_credits/, () => [{ id: 'membership-1', period_id: 'period-1', is_unlimited: true, credits_remaining: null }]],
-            [/FROM membership_current_credits mcc/, () => [{ period_id: 'period-1', is_unlimited: true }]],
-            [/UPDATE sessions/, () => [{ id: 'session-1' }]],
-            [/INSERT INTO bookings/, () => [{ id: 'booking-1' }]],
-            [/INSERT INTO orders/, () => [{ id: 'order-1' }]],
-            [/FROM customers|customer_memberships/, () => [{ id: 'customer-1' }]],
-          ])
-          const fn = (await backend('createOrder')).default
-          const booking = { sessionId: 'session-1', guests: [{ name: 'Jo', dateOfBirth: '1990-01-01' }], redemptionSource: 'membership_credit', membershipId: 'membership-1' }
-          const result = await fn({ params: { customerId: 'customer-1', booking, payment }, user })
-          expect(result).toMatchObject({ success: true, cardCharged: false })
-          expect(readerReferenceMissing(undefined, result.pendingReaderPayment)).toBe(false)
-          expect(sql.filter((text) => text.includes('INSERT INTO bookings'))).toHaveLength(1)
-        })
 
         it('with the method somehow still held, nothing is sent and the order still finishes', async () => {
           const { orderMethodFields, readerReferenceMissing } = await choice()
@@ -1481,15 +1281,6 @@ describe('staff app helpers', () => {
           expect(readerReferenceMissing('reader', { orderId: 'order-1' })).toBe(false)
           expect(readerReferenceMissing('cash', undefined)).toBe(false)
           expect(readerReferenceMissing('card', undefined)).toBe(false)
-        })
-
-        it('a reader with something left to pay still goes to the reader', async () => {
-          vi.stubGlobal('paddockBackendApi2', { rawRequest: vi.fn(async () => ({ data: { paymentIntentId: 'pi_1', clientSecret: 'secret_1', stripeCustomerId: 'cus_1' } })) })
-          const { onScreen, sent, result, toldToRetry } = await complete(held('reader'), 5)
-          expect(onScreen.method).toBe('reader')
-          expect(sent).toEqual({ storeCredit: { amount: 5 }, method: 'reader', readerSaveCard: false })
-          expect(result.pendingReaderPayment).toMatchObject({ clientSecret: 'secret_1', amount: 15 })
-          expect(toldToRetry).toBe(false)
         })
 
         it('a membership keeps the reader with nothing else left to pay, and forces the save', async () => {
@@ -3447,30 +3238,9 @@ describe('staff app helpers', () => {
   })
 
   describe('Redemption Source "Gift Card" is gone', () => {
-    const MESSAGE = 'Gift Card is no longer a booking option. Choose Paid and apply the gift card at payment.'
-    const booking = { sessionId: 'session-1', guests: [], redemptionSource: 'gift_card' }
-
-    it('createOrder refuses it before touching the database', async () => {
-      const query = vi.fn(async () => ({ data: [] }))
-      vi.stubGlobal('paddockData', { query })
-      const fn = (await import(/* @vite-ignore */ path.join(appDir, 'backend/paddock/createOrder'))).default
-      const result = await fn({ params: { customerId: 'customer-1', booking, payment: {} }, user })
-      expect(result).toEqual({ success: false, stage: 'validation', reason: 'gift_card_source_removed', message: MESSAGE })
-      expect(query).not.toHaveBeenCalled()
-    })
-
-    it('createBooking refuses it before touching the database', async () => {
-      const query = vi.fn(async () => ({ data: [] }))
-      vi.stubGlobal('paddockData', { query })
-      const { createBookingUnguarded } = await import(/* @vite-ignore */ path.join(appDir, 'backend/paddock/createBooking'))
-      const result = await createBookingUnguarded({ params: { ...booking, customerId: 'customer-1' }, user })
-      expect(result).toEqual({ created: false, reason: 'gift_card_source_removed', message: MESSAGE })
-      expect(query).not.toHaveBeenCalled()
-    })
-
+    // W16: the refusal itself is the Worker's now (place-order.test.ts, "the gift card source is refused").
     it.each([
       ['backend/paddock/createOrder.ts'],
-      ['backend/paddock/createBooking.ts'],
       ['frontend/components/CheckoutDialog.tsx'],
       ['frontend/components/BookingDetailContent.tsx'],
       ['frontend/components/BlockSessionDialog.tsx'],
@@ -3479,12 +3249,6 @@ describe('staff app helpers', () => {
       const source = readFileSync(path.join(appDir, file), 'utf8')
       expect(source).not.toMatch(/[rR]edemption_?[sS]ource\s*[!=]==\s*'gift_card'/)
       expect(source).not.toMatch(/pay_by === 'gift_card'/)
-    })
-
-    it('a booking counts towards what is owed, whatever pays for it', () => {
-      const source = readFileSync(path.join(appDir, 'backend/paddock/createOrder.ts'), 'utf8')
-      expect(source).toContain("      cardAmount += bookingPrice - (currentPromo()?.bookingDiscount ?? 0)\n    }\n")
-      expect(source).toContain('writtenBookingSeatPromoLines(bookingId, bookingPrice)')
     })
 
     it('neither list on the booking screen offers it', () => {
@@ -3537,275 +3301,4 @@ describe('staff app helpers', () => {
     })
   })
 
-  describe('stableDiff', () => {
-    it('ignores key order, at every level', async () => {
-      const { stableDiff } = await load('stableDiff')
-      expect(stableDiff({ a: 1, b: { c: 2, d: [3] } }, { b: { d: [3], c: 2 }, a: 1 })).toEqual([])
-    })
-
-    it('counts array order and length', async () => {
-      const { stableDiff } = await load('stableDiff')
-      expect(stableDiff(['a', 'b'], ['b', 'a'])).toHaveLength(2)
-      expect(stableDiff(['a'], ['a', 'b'])).toEqual([{ path: '1', oldValue: undefined, newValue: 'b' }])
-    })
-
-    it('a string and a number always differ', async () => {
-      const { stableDiff } = await load('stableDiff')
-      expect(stableDiff({ price: '20.00' }, { price: 20 })).toEqual([{ path: 'price', oldValue: '20.00', newValue: 20 }])
-      expect(stableDiff({ qty: 10 }, { qty: '10' })).toEqual([{ path: 'qty', oldValue: 10, newValue: '10' }])
-      expect(stableDiff('0.10', 0.1)).toHaveLength(1)
-    })
-
-    it('two spellings of a number differ', async () => {
-      const { stableDiff } = await load('stableDiff')
-      expect(stableDiff({ discount: '15' }, { discount: '15.00' })).toEqual([{ path: 'discount', oldValue: '15', newValue: '15.00' }])
-      expect(stableDiff({ price: '12.50' }, { price: '12.5' })).toHaveLength(1)
-    })
-
-    it('compares numbers exactly, with no rounding to pence', async () => {
-      const { stableDiff } = await load('stableDiff')
-      expect(stableDiff({ total: 12.5 }, { total: 12.504 })).toEqual([{ path: 'total', oldValue: 12.5, newValue: 12.504 }])
-      expect(stableDiff({ total: 0.1 + 0.2 }, { total: 0.3 })).toHaveLength(1)
-      expect(stableDiff({ total: 12.5, price: '12.50' }, { total: 12.5, price: '12.50' })).toEqual([])
-    })
-
-    it('does not treat ordinary text as money', async () => {
-      const { stableDiff } = await load('stableDiff')
-      expect(stableDiff('2026-11-04', '2026-11-05')).toHaveLength(1)
-      expect(stableDiff('abc', 'ABC')).toHaveLength(1)
-    })
-
-    it('treats undefined as a missing key, but null as a value', async () => {
-      const { stableDiff } = await load('stableDiff')
-      expect(stableDiff({ a: 1, b: undefined }, { a: 1 })).toEqual([])
-      expect(stableDiff({ a: 1, b: null }, { a: 1 })).toEqual([{ path: 'b', oldValue: null, newValue: undefined }])
-    })
-
-    it('gives the full path, and stops at 50 differences', async () => {
-      const { stableDiff } = await load('stableDiff')
-      expect(stableDiff({ rows: [{ a: 'x' }] }, { rows: [{ a: 'y' }] })[0].path).toBe('rows.0.a')
-      const many = (value: string) => Array.from({ length: 80 }, () => value)
-      expect(stableDiff(many('a'), many('b'))).toHaveLength(50)
-    })
-  })
-
-  describe('shadowCompare', () => {
-    const parityCalls = () => rawRequest.mock.calls.filter(([options]) => options.path === '/api/v1/staff/parity')
-
-    it('runs only the old function while the flag is off', async () => {
-      const { shadowCompare } = await load('shadowCompare')
-      const newFn = vi.fn()
-
-      expect(await shadowCompare(user, 'flagOff', async () => 'old', newFn)).toBe('old')
-      expect(newFn).not.toHaveBeenCalled()
-      expect(rawRequest).not.toHaveBeenCalled()
-    })
-
-    it('returns the old result and records a bare match row, so a clean log proves it ran', async () => {
-      const { shadowCompare, SHADOW_ACTIONS } = await load('shadowCompare')
-      SHADOW_ACTIONS.matching = true
-      rawRequest.mockResolvedValue(success({ recorded: true }))
-
-      const result = await shadowCompare(user, 'matching', async () => ({ price: '5.00' }), async () => ({ price: '5.00' }))
-
-      expect(result).toEqual({ price: '5.00' })
-      expect(parityCalls()).toHaveLength(1)
-      expect(parityCalls()[0]?.[0].body).toEqual({ action: 'matching', oldResult: null, newResult: null, matches: true, diff: null })
-    })
-
-    it('still returns the old result, and records a mismatch through the Worker', async () => {
-      const { shadowCompare, SHADOW_ACTIONS } = await load('shadowCompare')
-      SHADOW_ACTIONS.different = true
-      rawRequest.mockResolvedValue(success({ recorded: true }))
-
-      const result = await shadowCompare(user, 'different', async () => ({ price: '5.00' }), async () => ({ price: '6.00' }))
-
-      expect(result).toEqual({ price: '5.00' })
-      const body = parityCalls()[0]?.[0].body
-      expect(body).toMatchObject({
-        action: 'different',
-        oldResult: { price: '5.00' },
-        newResult: { price: '6.00' },
-        matches: false,
-        diff: [{ path: 'price', oldValue: '5.00', newValue: '6.00' }],
-      })
-      expect(parityCalls()[0]?.[0].headers['Idempotency-Key']).toMatch(/^[0-9a-f-]{36}$/)
-    })
-
-    it('records a failed Worker call as a mismatch and keeps it from the screen', async () => {
-      const { shadowCompare, SHADOW_ACTIONS } = await load('shadowCompare')
-      SHADOW_ACTIONS.failing = true
-      rawRequest.mockResolvedValue(success({ recorded: true }))
-
-      const result = await shadowCompare(user, 'failing', async () => 'old', async () => {
-        throw new Error('Worker down')
-      })
-
-      expect(result).toBe('old')
-      expect(parityCalls()[0]?.[0].body.diff[0].newValue).toBe('Worker down')
-    })
-
-    it('does not break the screen when recording fails', async () => {
-      const { shadowCompare, SHADOW_ACTIONS } = await load('shadowCompare')
-      SHADOW_ACTIONS.cannotRecord = true
-      rawRequest.mockRejectedValue(new Error('down'))
-
-      expect(await shadowCompare(user, 'cannotRecord', async () => 'old', async () => 'new')).toBe('old')
-    })
-
-    it('passes on a failure of the old function, and records that the Worker answered', async () => {
-      const { shadowCompare, SHADOW_ACTIONS } = await load('shadowCompare')
-      SHADOW_ACTIONS.oldFails = true
-      rawRequest.mockResolvedValue(success({ recorded: true }))
-
-      await expect(
-        shadowCompare(
-          user,
-          'oldFails',
-          async () => {
-            throw new Error('old failed')
-          },
-          async () => 'new'
-        )
-      ).rejects.toThrow('old failed')
-
-      expect(parityCalls()[0]?.[0].body).toMatchObject({
-        action: 'oldFails',
-        oldResult: { error: 'old failed' },
-        newResult: 'new',
-        diff: [{ path: '', oldValue: 'old failed', newValue: 'new' }],
-      })
-    })
-
-    it('the same failure on both sides is recorded as a match', async () => {
-      const { shadowCompare, SHADOW_ACTIONS } = await load('shadowCompare')
-      SHADOW_ACTIONS.bothFail = true
-      rawRequest.mockResolvedValue(success({ recorded: true }))
-
-      await expect(
-        shadowCompare(
-          user,
-          'bothFail',
-          async () => {
-            throw new Error('Not configured.')
-          },
-          async () => {
-            throw new Error('Not configured. (INTERNAL, request abc)')
-          }
-        )
-      ).rejects.toThrow('Not configured.')
-
-      expect(parityCalls().map(([options]) => (options.body as { matches: boolean }).matches)).toEqual([true])
-    })
-
-    describe('time limits', () => {
-      const hang = () => new Promise<never>(() => {})
-      const NEVER_ANSWERS = { path: '/api/v1/staff/anything' }
-
-      /** Tracks a shadowCompare call, so a test can ask whether the screen has its answer yet. */
-      function watch<T>(call: Promise<T>) {
-        const state: { settled: boolean; value?: T; error?: Error } = { settled: false }
-        call.then(
-          (value) => Object.assign(state, { settled: true, value }),
-          (error: Error) => Object.assign(state, { settled: true, error })
-        )
-        return state
-      }
-
-      beforeEach(() => {
-        vi.useFakeTimers()
-      })
-      afterEach(() => {
-        vi.useRealTimers()
-      })
-
-      it('the Worker hanging on both calls: the screen gets the old answer at 7 seconds', async () => {
-        const { shadowCompare, SHADOW_ACTIONS } = await load('shadowCompare')
-        const { callWorker } = await load('callWorker')
-        SHADOW_ACTIONS.hangs = true
-        rawRequest.mockImplementation(hang)
-
-        const screen = watch(shadowCompare(user, 'hangs', async () => 'old', () => callWorker(user, NEVER_ANSWERS)))
-
-        await vi.advanceTimersByTimeAsync(6_999)
-        expect(screen.settled).toBe(false)
-        await vi.advanceTimersByTimeAsync(1)
-        expect(screen).toEqual({ settled: true, value: 'old' })
-        expect(parityCalls()[0]?.[0].body.diff[0].newValue).toBe('No answer from the Worker within 5 seconds')
-      })
-
-      it('the old side failing while the Worker hangs: the screen gets the old error at 7 seconds', async () => {
-        const { shadowCompare, SHADOW_ACTIONS } = await load('shadowCompare')
-        const { callWorker } = await load('callWorker')
-        SHADOW_ACTIONS.oldFailsWorkerHangs = true
-        rawRequest.mockImplementation(hang)
-        const failure = new Error('old failed')
-
-        const screen = watch(
-          shadowCompare(
-            user,
-            'oldFailsWorkerHangs',
-            async () => {
-              throw failure
-            },
-            () => callWorker(user, NEVER_ANSWERS)
-          )
-        )
-
-        await vi.advanceTimersByTimeAsync(6_999)
-        expect(screen.settled).toBe(false)
-        await vi.advanceTimersByTimeAsync(1)
-        expect(screen.error).toBe(failure)
-      })
-
-      it('newFn throwing synchronously leaves the screen alone', async () => {
-        const { shadowCompare, SHADOW_ACTIONS } = await load('shadowCompare')
-        SHADOW_ACTIONS.syncThrow = true
-        rawRequest.mockResolvedValue(success({ recorded: true }))
-        const newFn = () => {
-          throw new Error('thrown straight away')
-        }
-
-        await expect(shadowCompare(user, 'syncThrow', async () => 'old', newFn)).resolves.toBe('old')
-        expect(parityCalls()[0]?.[0].body.diff[0].newValue).toBe('thrown straight away')
-
-        const failure = new Error('old failed')
-        const oldFn = async () => {
-          throw failure
-        }
-        await expect(shadowCompare(user, 'syncThrow', oldFn, newFn)).rejects.toBe(failure)
-      })
-
-      it('a mismatch with a healthy Worker waits no longer than the record cap', async () => {
-        const { shadowCompare, SHADOW_ACTIONS } = await load('shadowCompare')
-        SHADOW_ACTIONS.slowRecord = true
-        rawRequest.mockImplementation(hang)
-
-        const screen = watch(shadowCompare(user, 'slowRecord', async () => 'old', async () => 'new'))
-
-        await vi.advanceTimersByTimeAsync(1_999)
-        expect(screen.settled).toBe(false)
-        await vi.advanceTimersByTimeAsync(1)
-        expect(screen).toEqual({ settled: true, value: 'old' })
-      })
-
-      it('the two sides run in parallel, and a clean match sets no timer running', async () => {
-        const { shadowCompare, SHADOW_ACTIONS } = await load('shadowCompare')
-        SHADOW_ACTIONS.parallel = true
-        const started: string[] = []
-        const after = (ms: number, name: string) => () => {
-          started.push(name)
-          return new Promise<string>((resolve) => setTimeout(() => resolve('same'), ms))
-        }
-
-        const screen = watch(shadowCompare(user, 'parallel', after(3_000, 'old'), after(3_000, 'new')))
-
-        await vi.advanceTimersByTimeAsync(0)
-        expect(started.sort()).toEqual(['new', 'old'])
-        await vi.advanceTimersByTimeAsync(3_000)
-        expect(screen).toEqual({ settled: true, value: 'same' })
-        expect(vi.getTimerCount()).toBe(0)
-      })
-    })
-  })
 })

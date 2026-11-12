@@ -64,7 +64,11 @@ async function onASeed(work: (old: ReplaySide, stripe: FakeStripe) => Promise<vo
 const status = async (orderId: string) => (await db.query<{ payment_status: string }>('SELECT payment_status FROM orders WHERE id = $1', [orderId]))[0]?.payment_status ?? 'gone'
 const flowStatus = async (pendingId: string) => (await db.query<{ status: string }>('SELECT status FROM pending_reader_payments WHERE id = $1', [pendingId]))[0]?.status
 
-/** One reader order from each side, both untapped and over the window: the old checkout's (Sam) and the Worker's (Mo). */
+/**
+ * One reader order from each side, both untapped and over the window: the old checkout's (Sam) and the Worker's (Mo).
+ * W16: no old checkout order can be made live any more (none was left, checked 11 Nov); the old one here comes from the
+ * replay's test-only copy, to show nothing settles it twice and the old sweep no longer touches orders at all.
+ */
 async function oneOfEach(old: ReplaySide, stripe: FakeStripe): Promise<{ oldOrder: string; oldIntent: string; workerOrder: string; workerIntent: string }> {
   const placed = (await old.call('createOrder', { customerId: ID.customer, products: [soaps], payment: { method: 'reader' } })) as { orderId: string; pendingReaderPayment: { paymentIntentId: string } }
   replayStripe.current = stripe
@@ -78,24 +82,25 @@ async function oneOfEach(old: ReplaySide, stripe: FakeStripe): Promise<{ oldOrde
 const callsOn = (stripe: FakeStripe, intent: string) => stripe.calls.filter((call) => JSON.stringify(call).includes(intent)).map((call) => call.method)
 
 describe('one actor per item: the old sweep and the Worker\'s reconcile (W12-3, W13-3)', () => {
-  it('orders: the old sweep settles only the old checkout\'s order; reconcileOrders only the Worker\'s; neither touches the other\'s intent', async () => {
+  it('orders (W16): the old sweep settles no order now; reconcileOrders only the Worker\'s; neither touches the other\'s intent', async () => {
     await onASeed(async (old, stripe) => {
       const { oldOrder, oldIntent, workerOrder, workerIntent } = await oneOfEach(old, stripe)
 
       const swept = (await old.call('sweepPendingReaderPayments', { olderThanMinutes: 15 })) as { checked: number; cancelled: number }
-      expect(swept).toMatchObject({ checked: 1, cancelled: 1, failed: [] })
-      expect(await status(oldOrder)).toBe('gone')
+      expect(swept).toEqual({ checked: 0, finalised: 0, cancelled: 0, failed: [] })
+      expect(await status(oldOrder)).toBe('pending')
       expect(await status(workerOrder)).toBe('pending')
       expect(callsOn(stripe, workerIntent).filter((method) => method !== 'paymentIntents.create')).toEqual([])
 
       const key = crypto.randomUUID()
       const reconciled = (await old.call('reconcileOrders', { idempotencyKey: key })) as { ok: boolean; run: { checked: number; undone: number; oldLeftAlone: { orders: number } } }
-      expect(reconciled).toMatchObject({ ok: true, run: { checked: 1, undone: 1, oldLeftAlone: { orders: 0, flows: 0 } } })
+      expect(reconciled).toMatchObject({ ok: true, run: { checked: 1, undone: 1, oldLeftAlone: { orders: 1, flows: 0 } } })
       expect(await status(workerOrder)).toBe('gone')
       expect((await stripe.paymentIntents.retrieve(workerIntent)).status).toBe('canceled')
       // The same key again: the stored answer, nothing run twice.
       expect(await old.call('reconcileOrders', { idempotencyKey: key })).toEqual(reconciled)
-      expect(callsOn(stripe, oldIntent).filter((method) => method.startsWith('paymentIntents.cancel'))).toHaveLength(1)
+      expect(callsOn(stripe, oldIntent).filter((method) => method.startsWith('paymentIntents.cancel'))).toHaveLength(0)
+      expect(await status(oldOrder)).toBe('pending')
     })
   })
 
@@ -107,8 +112,10 @@ describe('one actor per item: the old sweep and the Worker\'s reconcile (W12-3, 
       expect(await status(oldOrder)).toBe('pending')
       expect(callsOn(stripe, oldIntent)).toHaveLength(before)
       expect(await status(workerOrder)).toBe('gone')
-      expect(await old.call('sweepPendingReaderPayments', { olderThanMinutes: 15 })).toMatchObject({ checked: 1, cancelled: 1 })
-      expect(await status(oldOrder)).toBe('gone')
+      // W16: the old sweep's order part is gone, so it leaves the old order too.
+      expect(await old.call('sweepPendingReaderPayments', { olderThanMinutes: 15 })).toMatchObject({ checked: 0, cancelled: 0 })
+      expect(await status(oldOrder)).toBe('pending')
+      expect(callsOn(stripe, oldIntent)).toHaveLength(before)
     })
   })
 
@@ -169,10 +176,11 @@ describe('one stuck list, each item once (W12-5)', () => {
       expect(listed.checkout.map((item) => item.orderId).sort()).toEqual([oldOrder, workerOrder].sort())
       expect(listed.checkout).toContainEqual(expect.objectContaining({ orderId: workerOrder, madeBy: 'worker', reason: 'waiting', words: STUCK_WORDS['waiting'] }))
       expect(listed.checkout).toContainEqual(expect.objectContaining({ orderId: oldOrder, madeBy: 'old', reason: 'old_code', words: OLD_ITEM_WORDS }))
-      // After both settle, nothing.
+      // After both run, only the old order is left, once, with the old words (W16: nothing settles it now).
       await old.call('reconcileOrders', {})
       await old.call('sweepPendingReaderPayments', { olderThanMinutes: 15 })
-      expect(await old.call('getStuckReaderPayments', { olderThanMinutes: 15 })).toEqual({ checkout: [], flows: [], refunds: [], warnings: [], alert: null })
+      const after = (await old.call('getStuckReaderPayments', { olderThanMinutes: 15 })) as typeof listed
+      expect(after.checkout.map((item) => item.orderId)).toEqual([oldOrder])
     })
   })
 

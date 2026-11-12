@@ -979,68 +979,6 @@ describe('the confirmed card figure (W03-plan 2.7, W03-decisions Q11)', () => {
   })
 })
 
-describe('the dry run of a card order (T1 only, no Stripe)', () => {
-  async function dryRunOf(params: Record<string, unknown>) {
-    const { POST: dryRunRoute } = await import('@/app/api/v1/staff/orders/dry-run/route')
-    let body: unknown = null
-    let stripe: FakeStripe | null = null
-    const recording = await replay(
-      environment,
-      {
-        name: 'dry run',
-        seed,
-        async run(context) {
-          stripe = context.stripe
-          replayStripe.current = context.stripe
-          const response = await dryRunRoute(
-            new Request('https://worker.test/api/v1/staff/orders/dry-run', {
-              method: 'POST',
-              headers: { authorization: `Bearer ${process.env.STAFF_API_KEY}`, 'x-staff-email': 'jo@example.com', 'content-type': 'application/json' },
-              body: JSON.stringify(orderInput(params)),
-            })
-          )
-          body = await response.json()
-        },
-      },
-      (_db, fake) => ({ name: 'test', call: async () => fake })
-    )
-    return { body: body as { ok: boolean; data: { order: Record<string, unknown>; rows: Record<string, Record<string, unknown> | null> }; error?: Record<string, unknown> }, recording, stripe: stripe as unknown as FakeStripe }
-  }
-
-  it('answers as the order would once charged, reads back T1 pending, calls no Stripe and keeps nothing', async () => {
-    const { body, recording, stripe } = await dryRunOf({
-      customerId: ID.customer,
-      products: [{ productVariantId: ID.candleVariant, quantity: 1, unitPrice: 20 }],
-      shippingAddress: { name: 'Sam Test', line1: '1 Mill Lane', city: 'Hebden Bridge', postcode: 'HX7 1AA', country: 'United Kingdom' },
-      postageMethod: 'standard',
-      saveShippingAddressToCustomer: true,
-      event: { eventId: ID.event, accountHolderAttending: true, attendees: [{ ...sam, isAccountHolder: true }] },
-      payment: card,
-    })
-    expect(body.ok).toBe(true)
-    expect(body.data.order).toMatchObject({ status: 'paid', payment: { method: 'card', collected: 64.95, cardCharged: true } })
-    expect(body.data.rows['order']).toMatchObject({ payment_status: 'pending', payment_method: 'card', has_payment_intent: false, has_reader_payment: true })
-    expect(body.data.rows['event_booking']).toMatchObject({ status: 'pending' })
-    // The address is saved by T2, so not yet.
-    expect(body.data.rows['customer_address']).toEqual({ line1: null, line2: null, city: null, postcode: null, country: 'GB' })
-    expect(stripe.calls).toEqual([])
-    expect(tablesTouched(recording)).toEqual([])
-  })
-
-  it('with no card figure it is compared, not refused; a wrong figure sent is still refused', async () => {
-    expect((await dryRunOf(cardBasket)).body.ok).toBe(true)
-    const { POST: dryRunRoute } = await import('@/app/api/v1/staff/orders/dry-run/route')
-    const response = await dryRunRoute(
-      new Request('https://worker.test/api/v1/staff/orders/dry-run', {
-        method: 'POST',
-        headers: { authorization: `Bearer ${process.env.STAFF_API_KEY}`, 'x-staff-email': 'jo@example.com', 'content-type': 'application/json' },
-        body: JSON.stringify({ ...orderInput(cardBasket), confirmed: { toCollect: 68 } }),
-      })
-    )
-    expect(await response.json()).toMatchObject({ ok: false, error: { code: 'TOTAL_CHANGED', details: { reason: 'amount_changed' } } })
-  })
-})
-
 describe('ensureStripeCustomer (the legacy routes\' find-or-create)', () => {
   async function withCustomer(stripeCustomerId: string | null, work: (fake: FakeStripe) => Promise<void>) {
     await replay(

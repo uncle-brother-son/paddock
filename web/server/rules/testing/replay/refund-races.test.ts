@@ -6,7 +6,7 @@ import { FakeStripe } from '@/server/stripe/fake'
 import { makeRace, Refused, type Race } from '../race'
 import { startRealPostgres, type RealPostgres } from '../real-postgres'
 import { TABLES } from './compare'
-import { backendDir, REPLAY_USER } from './harness'
+import { backendDir, LEGACY_ORDER_ACTIONS, legacyOrderDir, REPLAY_USER } from './harness'
 import { bindLegacyRoutes, bindStaffRoutes } from './legacy-routes'
 import { ID, noPromoOnCard, publicOnCard, seed, sessionsToMoveBetween } from './scenarios'
 
@@ -35,7 +35,9 @@ describe('refunds at the same moment, on real Postgres', () => {
   /** Holds the next card refund open until released. */
   let refundGate: { reached: () => void; released: Promise<void> } | null = null
 
-  const load = async <T>(file: string) => (await import(/* @vite-ignore */ path.join(backendDir, file))) as T
+  // W16: the old order functions the races start from run from the test-only copy (harness.ts, LEGACY_ORDER_ACTIONS).
+  const load = async <T>(file: string) =>
+    (await import(/* @vite-ignore */ path.join(LEGACY_ORDER_ACTIONS.has(file.replace(/\.ts$/, '')) ? legacyOrderDir : backendDir, file))) as T
 
   async function query(sql: string, params: unknown[] = []) {
     // Retool maps $N to params[N-1] only if they ascend and none repeats.
@@ -85,8 +87,7 @@ describe('refunds at the same moment, on real Postgres', () => {
       SET session_replication_role = origin;
     `)
     const legacy = bindLegacyRoutes(first, stripe)
-    // W14a: createOrder asks the Worker's order route first; with every kind off (as live until W15) it
-    // answers ORDER_PATH_OFF and the old code places the order these races start from.
+    // The wrappers that ask the Worker (W14a) find its staff routes here; every kind of order is off.
     vi.stubGlobal('paddockWorkerV1', { rawRequest: bindStaffRoutes() })
     vi.stubEnv('ORDER_SWITCH', '')
     vi.stubGlobal('paddockData', { query })

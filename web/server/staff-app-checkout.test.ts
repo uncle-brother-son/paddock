@@ -44,8 +44,8 @@ describe('the key rule (W03-plan 2.6)', () => {
 })
 
 describe('the createOrder wrapper: what it sends and what the screen gets', () => {
-  it("drops both keys, keeps the old cash figure for the old code's params, and sends confirmed", async () => {
-    const { orderBody, oldParams } = await backend()
+  it('drops both keys and sends confirmed', async () => {
+    const { orderBody } = await backend()
     const params = {
       customerId: 'c1',
       membershipIdempotencyKey: 'basket',
@@ -56,7 +56,6 @@ describe('the createOrder wrapper: what it sends and what the screen gets', () =
     expect(orderBody(params)).toEqual({ customerId: 'c1', payment: { method: 'cash', storeCredit: { amount: 5 } }, confirmed: { amountDue: 30, toCollect: 25, firstInvoice: 0 } })
     // An old caller (the replay's scenarios): the tick becomes confirmed.toCollect.
     expect(orderBody({ customerId: 'c1', payment: { method: 'cash', confirmedCashAmount: 12 } })).toEqual({ customerId: 'c1', payment: { method: 'cash' }, confirmed: { toCollect: 12 } })
-    expect(oldParams(params)).toEqual({ customerId: 'c1', membershipIdempotencyKey: 'basket', payment: { method: 'cash', confirmedCashAmount: 25, storeCredit: { amount: 5 } } })
   })
 
   it("maps a paid order and a pending reader order to createOrder's fields", async () => {

@@ -103,15 +103,11 @@ A card order with something to charge runs W03-plan 2.1's pipeline:
    card's balance and `redeemed_at` when this order set it, the promo's use with the order) and
    removes every row, recording `order.undo` with the snapshot. Run twice, the second finds nothing.
 
-`LOCK_ORDER` now starts with an existing order: T2 and the undo lock it first. Nothing calls the route
-until W14; until then only the dry run runs live, T1 only, with no Stripe (`dryRunOrder`), taking a
-missing card figure as confirmed (W03-decisions, "W10 setup calls").
+`LOCK_ORDER` now starts with an existing order: T2 and the undo lock it first.
 
-`dryRunOrder` is the same T1 with a read back (`order-rows.ts`) and a rollback. The staff app's
-createOrder shadow calls it before the old order runs and compares the two (`createOrder.dryRun` in
-`parity_log`). It goes at W16. The shadow keeps only the keys its own copy of the read-back produces
-and records how many others it dropped (W07a), but still: for a slice that extends `OrderRows` or
-anything the shadow compares, publish the staff app first, then deploy the Worker.
+W16 removed the dry run (`dryRunOrder` and `POST /api/v1/staff/orders/dry-run`), the staff app's shadow and the
+parity route with it. `order-rows.ts` (the read-back) stays for the tests. `parity_log` and its 30-day purge stay in
+the database until step H; nothing writes to it any more.
 
 ## The reader: T1, the intent, finalise and cancel (W11)
 
@@ -299,12 +295,13 @@ decides a basket's kind from what was sent: any membership is `membership`; othe
 saved card `saved_card`, and anything else (cash, gift card or store credit alone, nothing owed) `no_stripe`.
 `reader_flows` gates nothing yet (step D's flow routes check it). `POST /api/v1/staff/orders` answers
 `ORDER_PATH_OFF` (501) for a kind that is off, before the order is touched; the answer is stored against the
-request's key like any other, so a retry with the same key stays on the old code. The dry run, the quote, finalise,
-cancel and reconcile ignore the switch.
+request's key like any other, so a retry with the same key gets it again. The quote, finalise, cancel and
+reconcile ignore the switch.
 
-The staff app's `createOrder` asks this route first and runs its old code only on `ORDER_PATH_OFF`;
-`finaliseReaderOrder` and `cancelReaderOrder` run theirs only on `old_reader_order`. Any other failure never falls
-back. T1 failing in the database (a lock timeout, a deadlock after its retry, a failed write) is a definite answer:
+W16: the staff app's old order code is gone, so the switch is an emergency off switch. `createOrder` is a thin
+call to this route; on `ORDER_PATH_OFF` it places nothing and tells staff the kind is switched off.
+`finaliseReaderOrder` and `cancelReaderOrder` are thin calls too, with no `old_reader_order` fallback (no order the
+old checkout started was left, checked live on 11 Nov). No failure falls back. T1 failing in the database (a lock timeout, a deadlock after its retry, a failed write) is a definite answer:
 `order_not_saved` with plain words, so the screen's next press gets a new key. Stored answers lose their client
 secret after the pending window (`pruneClientSecrets`, run by the schedule). The route stores its answer in a
 transaction (8 s statement limit), counted at 8.1 s in the timing convention.

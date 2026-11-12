@@ -1,6 +1,5 @@
 import path from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { POST as dryRunRoute } from '@/app/api/v1/staff/orders/dry-run/route'
 import { POST as quoteRoute } from '@/app/api/v1/staff/quotes/basket/route'
 import type { Db } from '@/server/db'
 import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
@@ -9,8 +8,9 @@ import { ID, paidSeat, seed } from '@/server/rules/testing/replay/scenarios'
 import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
 import { kindsOn, ORDER_KINDS, orderKind, orderPathOff } from './order-switch'
 
-// Brief W14a: the switch (W03-plan 3.2) and the staff app's createOrder wrapper with its fallback. The
-// rule is tested by what it does; the route and the wrapper on PGlite with the replay seed.
+// Brief W14a: the switch (W03-plan 3.2) and the staff app's createOrder wrapper. W16: the wrapper has no old
+// code to fall back to; a kind switched off places nothing and says so. The rule is tested by what it does;
+// the route and the wrapper on PGlite with the replay seed.
 
 const holder = vi.hoisted(() => ({ db: null as unknown }))
 vi.mock('@/server/db/connection', () => ({
@@ -131,7 +131,7 @@ describe('the order route and the switch', () => {
     expect(await count('orders')).toBe(0)
   })
 
-  it('a retry with the same key stays on the old code after the kind is switched on (the stored answer replays)', async () => {
+  it('a retry with the same key after the kind is switched on gets the stored ORDER_PATH_OFF again (nothing placed)', async () => {
     await freshSeed()
     const key = crypto.randomUUID()
     const first = await postOrder(orderInput(cashSeat), { key, orderSwitch: '' })
@@ -141,14 +141,12 @@ describe('the order route and the switch', () => {
     expect(await count('orders')).toBe(0)
   })
 
-  it('the dry run and the quote ignore the switch', async () => {
+  it('the quote ignores the switch', async () => {
     await freshSeed()
     const before = process.env.ORDER_SWITCH
     process.env.ORDER_SWITCH = ''
     try {
       const body = JSON.stringify(orderInput(cashSeat))
-      const dryRun = await dryRunRoute(new Request('https://worker.test/api/v1/staff/orders/dry-run', { method: 'POST', headers, body }))
-      expect(((await dryRun.json()) as { ok: boolean }).ok).toBe(true)
       const quote = await quoteRoute(new Request('https://worker.test/api/v1/staff/quotes/basket', { method: 'POST', headers, body }))
       expect((await quote.json()) as unknown).toMatchObject({ ok: true, data: { totals: { amountDue: 20 } } })
     } finally {
@@ -178,7 +176,7 @@ describe('the staff app createOrder wrapper', () => {
   })
 
   type Wrapper = (req: { params: unknown; user: typeof REPLAY_USER }) => Promise<Record<string, unknown>>
-  /** Seeds, binds the old side (every kind off unless `orderSwitch` says otherwise), and runs `work` as one scenario. */
+  /** Seeds, binds the staff app's side (every kind off unless `orderSwitch` says otherwise), and runs `work` as one scenario. */
   async function run(orderSwitch: string, work: (createOrder: Wrapper) => Promise<void>): Promise<void> {
     await replay(
       environment,
@@ -196,18 +194,22 @@ describe('the staff app createOrder wrapper', () => {
   }
   const count = async (sql: string) => Number((await db.query<{ n: string }>(sql))[0]?.n ?? 0)
   const orders = () => count('SELECT count(*) AS n FROM orders')
-  /** The Worker's T1 writes order.create; the old createOrder writes no audit row for an order. */
+  /** The Worker's T1 writes order.create for every order it places. */
   const workerOrders = () => count("SELECT count(*) AS n FROM audit_log WHERE action = 'order.create'")
 
-  it('kind off: the old code runs, once, and the Worker kept nothing but the answer for the key', async () => {
+  it('W16, kind off: nothing is placed, and the plain words say so (a definite answer)', async () => {
     let answer: Record<string, unknown> = {}
     await run('', async (createOrder) => {
       answer = await createOrder({ params: { ...cashSeat, idempotencyKey: crypto.randomUUID() }, user: REPLAY_USER })
-      // Before the replay takes the switch's own rows out: the one ORDER_PATH_OFF answer.
       expect(await count(`SELECT count(*) AS n FROM api_idempotency WHERE response->'error'->>'code' = 'ORDER_PATH_OFF'`)).toBe(1)
     })
-    expect(answer).toMatchObject({ success: true, paymentMethodUsed: 'cash', cardAmount: 20 })
-    expect(await orders()).toBe(1)
+    expect(answer).toEqual({
+      success: false,
+      reason: 'order_path_off',
+      message: 'This kind of order is switched off in the booking system. Tell a manager.',
+      workerCode: 'ORDER_PATH_OFF',
+    })
+    expect(await orders()).toBe(0)
     expect(await workerOrders()).toBe(0)
   })
 

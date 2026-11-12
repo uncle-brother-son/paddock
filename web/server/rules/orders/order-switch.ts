@@ -1,5 +1,6 @@
 // W14 (W03-plan 3.2, W03-decisions Q7): which kinds of order the Worker takes. The rest answer
-// ORDER_PATH_OFF before anything is touched, and the staff app's createOrder runs the old code.
+// ORDER_PATH_OFF before anything is touched. W16: the old code is gone, so this is an emergency off switch:
+// a kind switched off places nothing, and the staff app says so.
 import 'server-only'
 import type { PlaceOrderInput } from '@/contracts'
 import { ApiError } from '@/server/http/errors'
@@ -34,9 +35,9 @@ export function kindsOn(switchValue: string | undefined | null): ReadonlySet<Ord
   return new Set(ORDER_KINDS.filter((kind) => words.includes(kind)))
 }
 
-export const ORDER_PATH_OFF_MESSAGE = 'This kind of order is still taken by the old checkout.'
+export const ORDER_PATH_OFF_MESSAGE = 'This kind of order is switched off in the booking system. Tell a manager.'
 
-/** ORDER_PATH_OFF when the basket's kind is off, else null. The dry run and the quote never ask. */
+/** ORDER_PATH_OFF when the basket's kind is off, else null. The quote never asks. */
 export function orderPathOff(input: Pick<PlaceOrderInput, 'membershipPlanId' | 'payment'>, switchValue: string | undefined | null): ApiError | null {
   const kind = orderKind(input)
   if (kindsOn(switchValue).has(kind)) return null

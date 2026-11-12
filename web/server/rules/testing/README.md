@@ -5,8 +5,8 @@
 | Set-up | What it is | Use it for | Used by |
 |---|---|---|---|
 | `startTestDatabase()` | PGlite, `schema.sql`: the tables the read rules use, no foreign keys or triggers | Read rules, where fixtures set ids directly | The step B rule and route suites |
-| `startTestDatabase({ schema: 'live' })` | PGlite, `live-schema.sql`: everything in the live catalog | Anything that writes | Replay, the probe, `live-schema.test.ts` |
-| `reader-orders-schema.sql` | PGlite, a hand copy from W03a | Only `reader-rollback.test.ts` | Move it to `live` when that suite is next touched |
+| `startTestDatabase({ schema: 'live' })` | PGlite, `live-schema.sql`: everything in the live catalog | Anything that writes | Replay, `live-schema.test.ts` |
+| `reader-orders-schema.sql` | PGlite, a hand copy from W03a | Nothing since W16 (`reader-rollback.test.ts` went with the old reader order code) | Delete (left for Wayne's yes) |
 | `startRealPostgres()` | Real Postgres 17.6, `live-schema.sql` | Anything about one connection waiting on another | `two-connections.test.ts`, `replay/refund-races.test.ts` |
 
 PGlite is one session, so it can't show one connection waiting on another's lock. It is also
@@ -82,10 +82,10 @@ one order can reach, the payment method each mix records (Q9 is the one named di
 noise cases (exact cover, fully covered orders, half pennies). The `MEMBERS5` code one scenario adds
 has a fixed id, so its recording repeats.
 
-`quote-shadow.test.ts` runs every scenario through the old `createOrder` with its shadow switched on,
-against the real quote and parity routes, and reads what the shadow logged. A scenario must match
-what the order wrote, except the differences in `quote-differences.ts`, each of which names its
-decision. Adding a scenario adds it here too. The shadow goes at W16, and this file with it.
+`quote-shadow.test.ts` ran every scenario through the old `createOrder` with its shadow switched on and
+compared the quote and the dry run with what the order wrote. W16 removed it with the shadow, the dry run
+and `quote-differences.ts`; the golden files it compared against stay, and `order-replay.test.ts` holds the
+order route to them.
 
 `w05a.test.ts` says in pounds and pence what the W05a scenarios prove on the old functions: Q23, Q24
 and its refunds, migration 018, replacing an exhausted membership, and what Q3 does on the reader.
@@ -153,11 +153,7 @@ W08 adds `W08_SCENARIOS` (events), with no named difference: every event scenari
 createOrder exactly, rows and row order included. An event beside a membership bought in the same
 basket stays in `NOT_BUILT_SCENARIOS` until W13.
 
-`quote-shadow.test.ts` also runs the dry run beside the quote: every scenario's dry-run rows must
-match what the old order wrote, except the differences in `DRY_RUN_DIFFERENCES` (quote-differences.ts),
-every single order in `ORDER_SCENARIOS` must have its row, and every other single order must have none
-(it is NOT_BUILT). A new single-order scenario the route can take
-must go in the list, or that check fails. The order rule's own transaction tests are in
+Until W16, `quote-shadow.test.ts` also ran the dry run beside the quote. The order rule's own transaction tests are in
 `server/rules/orders/place-order.test.ts` (PGlite) and `place-order-postgres.test.ts` (real Postgres:
 the races and the lock order).
 
