@@ -307,6 +307,22 @@ export const DECLINED_NOT_UNDONE_MESSAGE =
 export const settleReaderNotStartedNotUndoneMessage = (detail: string): string =>
   `Creating the card reader payment failed (${detail}). ${DECLINED_NOT_UNDONE_MESSAGE}`
 
+// --- New in W20 (Add Guest on the Worker)
+
+/** C1 failed in the database and was rolled back (as Settle's): nothing was added and nothing was taken. */
+export const ADD_GUEST_NOT_SAVED_MESSAGE =
+  "This couldn't be saved (the system was busy, or one of its records couldn't be written), so nothing was added and no payment was taken. Try again."
+/** What the change added, in the old words: the guest, or the add-ons alone. */
+const addedThing = (addingGuest: boolean): string => (addingGuest ? 'guest was' : 'add-ons were')
+/** addBookingGuest.ts's words when the reader's payment couldn't be started (the change was undone, nothing charged). */
+export const addGuestReaderNotStartedMessage = (addingGuest: boolean, detail: string): string =>
+  `Creating the card reader payment failed — the ${addedThing(addingGuest)} removed and nothing was charged (${detail}).`
+/** A decline (or a reader that couldn't start) whose undo couldn't run yet: nothing was taken, and reconcile undoes it. */
+export const ADD_GUEST_NOT_UNDONE_MESSAGE =
+  "Nothing was taken, but this couldn't be taken off the booking yet. Don't take payment again: check the Orders page in a few minutes."
+/** The reader's payment couldn't be started and the undo failed too (as W19a's Settle words, without "removed"). */
+export const addGuestReaderNotStartedNotUndoneMessage = (detail: string): string => `Creating the card reader payment failed (${detail}). ${ADD_GUEST_NOT_UNDONE_MESSAGE}`
+
 // --- New in W17
 
 /** The switch (D-plan 4.9, lead call L1), worded as W16's ORDER_PATH_OFF. */

@@ -328,6 +328,33 @@ export interface AllowedDifference {
   /** Where it was decided, e.g. 'W03-decisions Q9'. */
   decision: string
   path: RegExp
+  /**
+   * W20 (W19 review later 4): when set, a difference on `path` is allowed only if this says the new side's value (and
+   * the golden file's) is what the decision says it should be, so an allowance can't hide a wrong value on its path.
+   */
+  actual?: (actual: unknown, expected: unknown, path: string, recordings: { expected: Recording; actual: Recording }) => boolean
+}
+
+const pennies = (value: unknown): number => Math.round(Number(value) * 100)
+
+/**
+ * W20a (W20 review S2), for the W05c Noticed 5 allowances: a changed `order_line_items.added[N].unit_price` or
+ * `.line_total` is allowed only on a booking line (one seat, in both recordings), and only at exactly the golden value
+ * less the paid add-ons on that line's order in the new recording (price × quantity, not membership credit), to the
+ * penny and never below £0 (the Worker's C2 rule). Add-ons taken off twice, or any other smaller figure, fail.
+ */
+export function seatLineLessPaidAddOns(value: unknown, expected: unknown, path: string, recordings: { expected: Recording; actual: Recording }): boolean {
+  const index = /^\.tables\.order_line_items\.added\[(\d+)\]\.(unit_price|line_total)$/.exec(path)?.[1]
+  if (index === undefined) return false
+  const line = recordings.actual.tables['order_line_items']?.added[Number(index)]
+  const golden = recordings.expected.tables['order_line_items']?.added[Number(index)]
+  if (!line || !golden || line['item_type'] !== 'booking' || golden['item_type'] !== 'booking') return false
+  if (Number(line['quantity']) !== 1 || Number(golden['quantity']) !== 1 || typeof line['order_id'] !== 'string') return false
+  const addOns = (recordings.actual.tables['addon_order_lines']?.added ?? [])
+    .filter((row) => row['order_id'] === line['order_id'] && row['redemption_source'] !== 'membership_credit')
+    .reduce((sum, row) => sum + pennies(row['price_at_purchase']) * Number(row['quantity']), 0)
+  if (addOns <= 0) return false
+  return pennies(value) === Math.max(0, pennies(expected) - addOns)
 }
 
 function walk(path: string, expected: unknown, actual: unknown, out: Difference[]): void {
@@ -362,7 +389,9 @@ export function compareRecordings(expected: Recording, actual: Recording, allowe
 
   const used = new Set<AllowedDifference>()
   const left = found.filter((difference) => {
-    const allowance = allowed.find((a) => a.path.test(difference.path))
+    const allowance = allowed.find(
+      (a) => a.path.test(difference.path) && (!a.actual || a.actual(difference.actual, difference.expected, difference.path, { expected, actual }))
+    )
     if (allowance) used.add(allowance)
     return !allowance
   })

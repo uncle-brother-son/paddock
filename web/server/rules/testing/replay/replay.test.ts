@@ -1,9 +1,14 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Db } from '@/server/db'
 import type { FakeStripe } from '@/server/stripe/fake'
 import { buildRecording, compareRecordings, type Difference, type RawRun, type Recording } from './compare'
 import { oldSide, readGolden, replay, startReplay, writeGolden, type ReplayEnvironment, type ReplayOptions, type ReplaySide } from './harness'
 import { scenarios } from './scenarios'
+
+// W20a (W20 review, run 5's timing): each test here takes about 0.2 s alone, but one stalled past the default 5 s once
+// under full-suite load. 15 s is three times the worst stall seen; a stall past it is no longer load, so capture which
+// step it was in before rerunning.
+vi.setConfig({ testTimeout: 15_000 })
 
 // To re-record after a deliberate change to an old function or scenario:
 //   UPDATE_GOLDEN=1 npm run test:unit -- server/rules/testing/replay

@@ -207,6 +207,18 @@ order's `payment_method`, and per scenario the outcomes the old code's faults no
 R2c, the lost answers, one press of two, the held C2 fault). `dyingAfter` knows that Settle's charge is now inside the
 settle route (`WORKER_DOES_IT_NOW`). Store credit notes' random `[ref ...]` labels are compared unnumbered.
 
+W20 moves Add Guest, as the dialog presses it (`addGuestAsTheDialogPresses`: the figures from the Worker's own quote,
+`withAddGuestFigures`, and a press key kept after no answer). 140 scenarios call it: 36 match their golden files
+exactly, and 104 differ only as `ADD_GUEST_DIFFERENCES` names. W19 review later 4 tightened the comparison
+(`comparable` in `booking-side.ts`): the swapped audit rows (each side's own, by flow), the stored answers and the
+Worker's card flow records are set aside and each checked exactly on its own (`newAuditRowProblems`,
+`storedAnswerProblems`, `cardRecordProblems`); flow labels are renumbered without the card records; an allowance can
+check the new value as well as the path (`AllowedDifference.actual`), so the keys, the reader record's marks, the card
+order's method, the seat line (W05c N5) and Settle's settled booking fields pass only with the values their decisions
+give. When a Retool function dies after the Add Guest route ran, the route's answer is what is lost
+(`WORKER_DOES_IT_NOW`, `chargeLandingLate`, `losingTheAnswerOnTheWorkerToo`). The new side's clock moves 1 ms before
+each Worker call, as the old side's does per statement.
+
 ## No real Stripe (W11)
 
 `no-real-stripe.ts` is loaded before every unit test file (`vitest.unit.config.ts`, `setupFiles`). Any

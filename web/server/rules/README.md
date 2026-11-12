@@ -383,6 +383,30 @@ call to it. Gated first by the switch (`booking_changes`; the card also `saved_c
 - **W17 review S2:** step C's undo locks the order's booking straight after the order (LOCK_ORDER), so it and a
   booking change's C1 queue rather than deadlock.
 
+## Add Guest and add-ons (step D, W20)
+
+`bookings/add-guest.ts`, `POST /api/v1/staff/bookings/:bookingId/guests`; the staff app's `addBookingGuest` is a thin
+call to it (a guest, add-ons, or both). Settle's shared pieces (a part's amount, the held-payment refusal, the store
+credit and gift card claims, C1's transaction) are in `bookings/money-in.ts`, used by both.
+
+- **The prices**, in the old order: add-ons as New Order (member, else sale, else base; a sent price only with Manage
+  pricing, and then a different one needs a reason); the guest's seat: private, the tier for the new headcount less
+  price paid less money owed plus the booking line's promo share plus part refunds, never below £0 (Q25, Q27); public,
+  the band's seat price, always paid. With no payment and money due the answer is those figures (`priceImpact`) and
+  nothing is added (the dialog's first call); a quote is never gated by the switch, an add with nothing to pay is
+  (`booking_changes`), a payment before anything is read.
+- **C1, one transaction, no Stripe:** the booking, its customer, its session, the add-on credits' memberships and the
+  gift card locked in LOCK_ORDER; the checks; Q18's figures (`amountDue` the guest plus the paid add-ons, `toCollect`);
+  the place (+1, public), the add-on credits, the store credit, the gift card (New Order's guarded claim, stamping
+  `redeemed_at` when used up: O1) claimed before any Stripe call (bug 9); the guest, the booking, the add-on lines. No
+  card money: its own paid order (as today, Q36) with the seat on its booking line, the add-on lines, the gift card's row
+  and the store credit's link on it; `booking.guest_add`. Card money: the flow record, then the saved card
+  (`settleCardFlow`) or the reader, pending-first, as Settle. The party size is part of the locked booking, so two
+  guests at once queue and the second is priced at the new headcount.
+- **W05c Noticed 5:** C2 (`finaliseFlowInTransaction`) writes an Add Guest's seat on the booking line and the paid
+  add-ons on their own lines of the same order, so the booking line is the card money less the add-ons, never below £0.
+  The refund figures' seat money is unchanged.
+
 ## Refund claims with no finish
 
 The staff app claims a refund's money before it moves. Each claim writes `booking.refund_claimed` to

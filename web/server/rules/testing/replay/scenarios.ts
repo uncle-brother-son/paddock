@@ -406,7 +406,7 @@ const ownedPass = { redemptionSource: 'session_pass_credit', sessionPassId: ID.o
 const buyNewReplacing = (id: string) => ({ ...paidSeat(), redemptionSource: 'buy_new_membership', cancelExhaustedMembershipId: id })
 
 /** The private price by group size: £100 up to two, £150 up to four, £200 above. */
-async function tieredPrivatePrices(db: Db): Promise<void> {
+export async function tieredPrivatePrices(db: Db): Promise<void> {
   await db.query('UPDATE service_type_price_tiers SET max_people = 2 WHERE id = $1', [ID.privateTier])
   const tier = { service_type_id: ID.privateType, band_id: ID.band }
   await insert(db, 'service_type_price_tiers', { ...tier, id: ID.privateTierThreeToFour, min_people: 3, max_people: 4, price: '150.00' })
@@ -710,11 +710,16 @@ export async function dyingAfter(path: string, steps: () => Promise<unknown>, { 
     },
   })
   // W19: once an action has moved to the Worker, the step is inside its route: the function dies once that answered.
+  // W20: for Add Guest the death loses the route's answer too, as a Retool function killed while it waited would: the
+  // screen gets no answer, keeps the press's key and sends it again (W19's Settle recordings keep the answer).
   vi.stubGlobal('paddockWorkerV1', {
     async rawRequest(request: { path: string }) {
       if (dead) return died()
       const answer = await realWorker.rawRequest(request)
-      if (sameStep?.test(request.path)) dead = true
+      if (sameStep?.route.test(request.path)) {
+        dead = true
+        if (sameStep.answerLost.test(request.path)) return died()
+      }
       return answer
     },
   })
@@ -734,10 +739,11 @@ const workerApi = () => (globalThis as unknown as { paddockWorkerV1: { rawReques
 /**
  * W19: a legacy step an action's old function made, and the Worker route that makes it now the action has moved (the
  * staff app's thin wrapper calls it through paddockWorkerV1). Settle's saved-card charge is made inside the settle
- * route. The old functions never call these routes, so the old side's recordings are unchanged.
+ * route; W20: Add Guest's inside the guests route. The old functions never call these routes, so the old side's
+ * recordings are unchanged.
  */
-const WORKER_DOES_IT_NOW: Readonly<Record<string, RegExp>> = {
-  '/api/payments/charge-saved-card': /^\/api\/v1\/staff\/bookings\/[^/]+\/settle$/,
+const WORKER_DOES_IT_NOW: Readonly<Record<string, { route: RegExp; answerLost: RegExp }>> = {
+  '/api/payments/charge-saved-card': { route: /^\/api\/v1\/staff\/bookings\/[^/]+\/(settle|guests)$/, answerLost: /\/guests$/ },
 }
 
 const CHARGE_PATH = '/api/payments/charge-saved-card'
@@ -793,6 +799,7 @@ export function beforeTheStartedRow(gap: () => Promise<unknown>): void {
  */
 export async function chargeLandingLate<T>(steps: () => Promise<T>): Promise<T> {
   const real = backendApi()
+  const realWorker = workerApi()
   let held: { path: string } | null = null
   vi.stubGlobal('paddockBackendApi2', {
     async rawRequest(request: { path: string }) {
@@ -803,11 +810,53 @@ export async function chargeLandingLate<T>(steps: () => Promise<T>): Promise<T> 
       return real.rawRequest(request)
     },
   })
+  // W20: once Add Guest is on the Worker the charge is inside its route, so Retool stops waiting for the route and the
+  // Worker carries on to the end: the route finishes, and its answer never reaches the function.
+  loseTheRouteAnswer(ADD_GUEST_ROUTE, 'socket hang up')
   try {
     return await steps()
   } finally {
     vi.stubGlobal('paddockBackendApi2', real)
+    vi.stubGlobal('paddockWorkerV1', realWorker)
     if (held) await real.rawRequest(held)
+  }
+}
+
+/** W20: Add Guest's Worker route, as the staff app's thin wrapper calls it. */
+const ADD_GUEST_ROUTE = /^\/api\/v1\/staff\/bookings\/[^/]+\/guests$/
+
+/**
+ * W20: the first call to a Worker route matching `route` runs to the end, and its answer is lost on the way back (the
+ * function sees `why`). Until the caller puts paddockWorkerV1 back. For a step the old code made with its own
+ * statement or call, which the Worker now makes inside the route.
+ */
+function loseTheRouteAnswer(route: RegExp, why: string): void {
+  const realWorker = workerApi()
+  let lost = false
+  vi.stubGlobal('paddockWorkerV1', {
+    async rawRequest(request: { path: string }) {
+      const answer = await realWorker.rawRequest(request)
+      if (!lost && route.test(request.path)) {
+        lost = true
+        throw new Error(why)
+      }
+      return answer
+    },
+  })
+}
+
+/**
+ * W20: `losingTheAnswer` for an action now on the Worker: the old code's statement whose answer was lost is inside the
+ * Worker's transaction, so the connection is lost on the route's answer instead (the route finished). The old side
+ * never calls the route, so its recording is unchanged.
+ */
+export async function losingTheAnswerOnTheWorkerToo<T>(matches: (sql: string, params: unknown[]) => boolean, steps: () => Promise<T>): Promise<T> {
+  const realWorker = workerApi()
+  loseTheRouteAnswer(ADD_GUEST_ROUTE, 'connection lost')
+  try {
+    return await losingTheAnswer(matches, steps)
+  } finally {
+    vi.stubGlobal('paddockWorkerV1', realWorker)
   }
 }
 
@@ -4031,7 +4080,7 @@ function w17Scenarios(): Scenario[] {
         const bookingId = await placeSamsTwoSeats(call)
         await call('addBookingGuest', { bookingId, ...bea })
         const redemption = (sql: string, params: unknown[]) => sql.includes('store_credit_apply') && params[2] === 'redemption'
-        await losingTheAnswer(redemption, () => attempt('addBookingGuest', { bookingId, ...bea, payment: R1_MONEY }))
+        await losingTheAnswerOnTheWorkerToo(redemption, () => attempt('addBookingGuest', { bookingId, ...bea, payment: R1_MONEY }))
         await attempt('addBookingGuest', { bookingId, ...bea, payment: R1_MONEY })
       },
     },

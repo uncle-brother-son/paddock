@@ -48,6 +48,8 @@ const STAFF_PATTERNS: Array<{ pattern: RegExp; load: () => Promise<unknown>; par
   { pattern: /^\/api\/v1\/staff\/bookings\/([^/]+)\/status$/, load: () => import('@/app/api/v1/staff/bookings/[bookingId]/status/route'), params: (m) => ({ bookingId: decodeURIComponent(m[1] ?? '') }) },
   // W19: the staff app's thin settleLapsedBooking, and its flow wrappers for a flow the Worker started.
   { pattern: /^\/api\/v1\/staff\/bookings\/([^/]+)\/settle$/, load: () => import('@/app/api/v1/staff/bookings/[bookingId]/settle/route'), params: (m) => ({ bookingId: decodeURIComponent(m[1] ?? '') }) },
+  // W20: the staff app's thin addBookingGuest.
+  { pattern: /^\/api\/v1\/staff\/bookings\/([^/]+)\/guests$/, load: () => import('@/app/api/v1/staff/bookings/[bookingId]/guests/route'), params: (m) => ({ bookingId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/reader-flows\/([^/]+)\/finalise$/, load: () => import('@/app/api/v1/staff/reader-flows/[pendingId]/finalise/route'), params: (m) => ({ pendingId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/reader-flows\/([^/]+)\/cancel$/, load: () => import('@/app/api/v1/staff/reader-flows/[pendingId]/cancel/route'), params: (m) => ({ pendingId: decodeURIComponent(m[1] ?? '') }) },
 ]

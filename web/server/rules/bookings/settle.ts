@@ -15,7 +15,7 @@
 import 'server-only'
 import type { ApiErrorCode, SettleBookingInput, SettleBookingOutput } from '@/contracts'
 import { audit } from '@/server/audit'
-import { DbCommitUnknownError, DbError, inOpenTransaction, isDeadlock, postgresRefusal, type Db, type Tx } from '@/server/db'
+import type { Db, Tx } from '@/server/db'
 import { ApiError } from '@/server/http/errors'
 import type { StripeClient } from '@/server/stripe/client'
 import { stripeTiming } from '@/server/stripe/deadline'
@@ -25,16 +25,15 @@ import { FAILURE_MESSAGES as ORDER_WORDS, NO_SAVED_CARD_MESSAGE } from '@/server
 import { FLOW_INTENT_UNCONFIRMED_MESSAGE, readFlow, undoFlowInTransaction } from '@/server/rules/orders/reader-flow'
 import {
   AMOUNT_CHANGED_MESSAGE,
-  CARD_PAYMENT_OPEN_MESSAGE,
   DECLINED_NOT_UNDONE_MESSAGE,
-  READER_PAYMENT_OPEN_MESSAGE,
   SETTLE_NOT_SAVED_MESSAGE,
   settleReaderNotStartedMessage,
   settleReaderNotStartedNotUndoneMessage,
   staffSees,
 } from './failure-messages'
 import { createFlowReaderIntent, recordFlowIntent, settleCardFlow, writeFlowRecord, type CardFlowSnapshot, type ReaderFlowSnapshot } from './flow'
-import { lockAndLoadBooking, paymentOpen, type LoadedBooking } from './load-booking'
+import { lockAndLoadBooking, paymentOpen } from './load-booking'
+import { claimGiftCard, claimStoreCredit, inC1, partAmount, paymentOpenRefusal } from './money-in'
 
 export interface SettleOptions {
   actor: { type: 'staff'; id: string }
@@ -72,7 +71,6 @@ export function settleRefusal(code: ApiErrorCode, reason: string, message: strin
 }
 
 const round2 = (n: number): number => Math.round(n * 100) / 100
-const wholePennies = (n: number): boolean => Math.abs(n * 100 - Math.round(n * 100)) < 1e-6
 const explain = (err: unknown): string => (err instanceof Error ? `${err.name}: ${err.message}` : String(err))
 
 /** A flow C1 committed: its record, seat 1's price and what the card or reader takes. */
@@ -83,54 +81,6 @@ interface FlowStarted {
 }
 
 type Started = { kind: 'settled'; output: SettleBookingOutput } | ({ kind: 'card' | 'reader' } & FlowStarted)
-
-/** A part's amount: missing or £0 is no part (as the old function); anything else must be whole pennies above £0. */
-function partAmount(sent: number | undefined, reason: 'gift_card_amount_invalid' | 'store_credit_amount_invalid'): number {
-  if (sent === undefined || sent === 0) return 0
-  if (!Number.isFinite(sent) || sent < 0 || !wholePennies(sent)) throw settleRefusal('VALIDATION', reason, ORDER_WORDS[reason])
-  return sent
-}
-
-/** The held-payment refusal, with the card words when every open flow on it is a saved-card one (W18a). */
-function paymentOpenRefusal(booking: LoadedBooking): ApiError {
-  const cardOnly = booking.openFlows.length > 0 && booking.openFlows.every((flow) => flow.method === 'card')
-  return cardOnly
-    ? settleRefusal('CONFLICT', 'card_payment_open', CARD_PAYMENT_OPEN_MESSAGE)
-    : settleRefusal('CONFLICT', 'reader_payment_open', READER_PAYMENT_OPEN_MESSAGE)
-}
-
-/** The gift card's checks with New Order's words (D-plan 2.2), under its lock, then the claim. Answers whether this stamped redeemed_at. */
-async function claimGiftCard(tx: Tx, giftCardId: string, amount: number): Promise<boolean> {
-  const card = (
-    await tx.query<{ remaining_balance: string; voided: boolean | null; expired: boolean; redeemed: boolean }>(
-      `SELECT remaining_balance::text AS remaining_balance, voided,
-              expiry_date < (now() AT TIME ZONE 'Europe/London')::date AS expired, redeemed_at IS NOT NULL AS redeemed
-       FROM gift_cards WHERE id = $1::uuid`,
-      [giftCardId]
-    )
-  )[0]
-  // The old reason for all four, so the screen's handling is unchanged; New Order's words say which.
-  const refuse = (words: string | undefined) => settleRefusal('CONFLICT', 'gift_card_insufficient_or_invalid', words)
-  if (!card) throw refuse(ORDER_WORDS['gift_card_not_found'])
-  if (card.voided === true) throw refuse(ORDER_WORDS['gift_card_voided'])
-  if (card.expired) throw refuse(ORDER_WORDS['gift_card_expired'])
-  const balance = Number.parseFloat(card.remaining_balance)
-  if (balance <= 0 || round2(balance - amount) < 0) throw refuse(ORDER_WORDS['gift_card_insufficient_or_invalid'])
-  const claimed = (
-    await tx.query<{ redeemed: boolean }>(
-      `UPDATE gift_cards
-       SET remaining_balance = remaining_balance - $1::numeric,
-           redeemed_at = CASE WHEN redeemed_at IS NULL AND round(remaining_balance - $1::numeric, 2) <= 0 THEN now() ELSE redeemed_at END,
-           updated_at = now()
-       WHERE id = $2::uuid AND remaining_balance >= $1::numeric AND voided IS NOT TRUE
-         AND expiry_date >= (now() AT TIME ZONE 'Europe/London')::date
-       RETURNING redeemed_at IS NOT NULL AS redeemed`,
-      [amount, giftCardId]
-    )
-  )[0]
-  if (!claimed) throw refuse(ORDER_WORDS['gift_card_insufficient_or_invalid'])
-  return !card.redeemed && claimed.redeemed
-}
 
 /**
  * C1, inside its transaction. The checks run in the old function's order: the booking, its status, seat 1's price, a
@@ -149,10 +99,10 @@ async function c1(tx: Tx, bookingId: string, input: SettleBookingInput, options:
     throw settleRefusal('CONFLICT', 'seat_price_missing', undefined)
   }
   const amount = seat1.unitPrice
-  if (paymentOpen(booking)) throw paymentOpenRefusal(booking)
+  if (paymentOpen(booking)) throw paymentOpenRefusal(booking, settleRefusal)
 
-  const giftCardAmount = partAmount(payment?.giftCard?.amount, 'gift_card_amount_invalid')
-  const storeCreditAmount = partAmount(payment?.storeCredit?.amount, 'store_credit_amount_invalid')
+  const giftCardAmount = partAmount(payment?.giftCard?.amount, 'gift_card_amount_invalid', settleRefusal)
+  const storeCreditAmount = partAmount(payment?.storeCredit?.amount, 'store_credit_amount_invalid', settleRefusal)
   const method = payment?.method
   const remainder = Math.max(0, round2(amount - giftCardAmount - storeCreditAmount))
 
@@ -199,17 +149,9 @@ async function c1(tx: Tx, bookingId: string, input: SettleBookingInput, options:
 
   // The money parts, in the payment order: store credit, then the gift card.
   if (storeCreditAmount > 0) {
-    const applied = (
-      await tx.query<{ result: { ok?: boolean; reason?: string } | null }>(
-        'SELECT public.store_credit_apply($1::uuid, $2::numeric, $3::text, NULL::uuid, $4::uuid, $5::uuid, $6::text, NULL::uuid) AS result',
-        [booking.customerId, -storeCreditAmount, 'redemption', bookingId, options.actor.id, SETTLE_STORE_CREDIT_NOTE]
-      )
-    )[0]?.result
-    if (applied?.ok !== true) {
-      throw settleRefusal('CONFLICT', applied?.reason === 'insufficient_store_credit' ? 'store_credit_insufficient_or_invalid' : 'store_credit_failed', undefined)
-    }
+    await claimStoreCredit(tx, { customerId: booking.customerId, amount: storeCreditAmount, bookingId, staffId: options.actor.id, note: SETTLE_STORE_CREDIT_NOTE }, settleRefusal)
   }
-  const stampedRedeemedAt = giftCardAmount > 0 && giftCardId ? await claimGiftCard(tx, giftCardId, giftCardAmount) : false
+  const stampedRedeemedAt = giftCardAmount > 0 && giftCardId ? await claimGiftCard(tx, giftCardId, giftCardAmount, settleRefusal) : false
 
   // The booking confirmed and paid for seat 1, its membership credit released; seat 1 a paid seat. Places untouched.
   const updated = (
@@ -289,27 +231,6 @@ async function c1(tx: Tx, bookingId: string, input: SettleBookingInput, options:
       booking: { id: updated.id, status: updated.status, redemption_source: updated.redemption_source, price_paid: updated.price_paid, payment_due_by: updated.payment_due_by },
       amountCharged: amount,
     },
-  }
-}
-
-/**
- * C1 in a transaction of its own, run once more after a deadlock (W17 review S2, as T1 does: it calls nothing outside
- * the database). A database fault rolled all of it back, so it is a definite answer with plain words; only a COMMIT
- * with no answer may have saved it, and stays INTERNAL.
- */
-async function inC1<T>(db: Db, work: (tx: Tx) => Promise<T>): Promise<T> {
-  const opensItsOwn = !inOpenTransaction(db)
-  try {
-    try {
-      return await db.transaction(work)
-    } catch (err) {
-      if (!opensItsOwn || !isDeadlock(err)) throw err
-      return await db.transaction(work)
-    }
-  } catch (err) {
-    if (!opensItsOwn || err instanceof ApiError || err instanceof DbCommitUnknownError) throw err
-    if (!(err instanceof DbError) && !postgresRefusal(err)) throw err
-    throw settleRefusal('INTERNAL', 'settle_not_saved', SETTLE_NOT_SAVED_MESSAGE, { logDetail: `C1 rolled back: ${explain(err)}` })
   }
 }
 
@@ -394,7 +315,9 @@ export async function settleBooking(db: Db, bookingId: string, input: SettleBook
   // Made before C1, so a card or reader payment is never left held with no way to reach Stripe.
   const stripe = method === 'card' || method === 'reader' ? options.stripe?.() : undefined
   if ((method === 'card' || method === 'reader') && !stripe) throw new Error(`A ${method} settle needs a Stripe client.`)
-  const started = await inC1(db, (tx) => c1(tx, bookingId, input, options, stripe?.keyLivemode ?? null))
+  const started = await inC1(db, (tx) => c1(tx, bookingId, input, options, stripe?.keyLivemode ?? null), (logDetail) =>
+    settleRefusal('INTERNAL', 'settle_not_saved', SETTLE_NOT_SAVED_MESSAGE, { logDetail })
+  )
   if (started.kind === 'settled') return started.output
   if (!stripe) throw new Error('A card or reader settle needs a Stripe client.')
   if (started.kind === 'card') return chargeAndFinish(db, stripe, bookingId, started, options, startedAt)

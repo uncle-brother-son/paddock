@@ -610,7 +610,10 @@ describe('W05j on the old functions', () => {
     it.each(['AddGuestDialog.tsx', 'SettleLapsedPaymentDialog.tsx', 'MoveBookingDialog.tsx'])(
       '%s treats a refund with no clear answer like a failed one: check Stripe, do not retry',
       (file) => {
-        expect(frontend(file)).toMatch(/finalise\?\.reason === 'refund_failed' \|\| finalise\?\.reason === 'refund_unsure'/)
+        // W20 (W19 review later 2): Add Guest's and Move's reasons now sit in one list with the Worker's two mismatches;
+        // W20a (W20 for later 1): Settle's too.
+        expect(frontend(file)).toMatch(/'refund_failed', 'refund_unsure', 'amount_mismatch', 'customer_mismatch', 'metadata_mismatch'/)
+        if (file !== 'MoveBookingDialog.tsx') expect(frontend(file)).toContain("if (CHECK_STRIPE_FIRST.has(finalise?.reason ?? '')) {")
       }
     )
     // W14a: New Order decides it in one helper for finalise and for a cancel that finalised instead

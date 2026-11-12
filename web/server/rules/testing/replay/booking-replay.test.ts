@@ -7,14 +7,17 @@ import { compareRecordings, type Recording } from './compare'
 import { invalidStatusMessage, STATUS_PAYMENT_NEEDED_MESSAGE } from '@/server/rules/bookings/failure-messages'
 import { STAFF_STATUSES } from '@/server/rules/bookings/edits'
 import {
+  ADD_GUEST_DIFFERENCES,
   BOOKING_ACTIONS,
   BUILT_BOOKING_ACTIONS,
+  cardRecordProblems,
+  comparable,
   GIFT_CARD_PART_WITHOUT_ORDER,
   N3_DIFFERENCES,
-  NEW_SETTLE_AUDIT_ACTIONS,
+  newAuditRowProblems,
   newBookingSide,
-  OLD_SETTLE_AUDIT_ACTIONS,
   SETTLE_DIFFERENCES,
+  storedAnswerProblems,
 } from './booking-side'
 import { W12_FLOW_SCENARIOS } from './flow-side'
 import { LEGACY_BOOKING_ACTIONS, oldFunctionPath, oldSide, readGolden, replay, startReplay, type ReplayEnvironment } from './harness'
@@ -38,25 +41,12 @@ import { scenarios } from './scenarios'
 // replace are exactly the golden file's.
 
 /**
- * A store credit note's `[ref <uuid>]` is random on both sides, so its label is a `gone#N`, and the new side's extra
- * rows (audit, idempotency) shift N. Only that token loses its number: the note's words are still compared.
+ * W20 (W19 review later 4): both sides compared as `comparable` has them: the swapped audit rows and the stored answers
+ * set aside (each checked exactly on its own: newAuditRowProblems, storedAnswerProblems), the random refs and gone ids
+ * numbered the same way on both. Everything else is compared exactly.
  */
-function withRefsUnnumbered(recording: Recording): Recording {
-  return JSON.parse(JSON.stringify(recording).replace(/\[ref gone#\d+\]/g, '[ref gone]')) as Recording
-}
-
-type AuditRow = { action: string; entity_type: string; entity_id: unknown; details: Record<string, unknown> | null }
-/** The audit rows neither the old machinery nor the Worker's Settle writes, as what they say (labels that shift left out). */
-function otherAuditRows(recording: Recording, leaveOut: ReadonlySet<string>): unknown[] {
-  const rows = (recording.tables['audit_log']?.added ?? []) as unknown as AuditRow[]
-  return rows
-    .filter((row) => !leaveOut.has(row.action))
-    .map((row) => {
-      const details = { ...(row.details ?? {}) }
-      delete details['claimId']
-      return { action: row.action, entity_type: row.entity_type, entity_id: row.entity_id, details }
-    })
-}
+const compareSides = (golden: Recording, recording: Recording, named: Parameters<typeof compareRecordings>[2]) =>
+  compareRecordings(comparable(golden, 'golden'), comparable(recording, 'new'), named)
 
 // W19: flow-side.ts (W12's Settle recordings) imports the flow routes when it loads, so the routes' database and Stripe
 // client are the replay's from the start, as flow-replay.test.ts mocks them.
@@ -120,6 +110,7 @@ describe("step D's side of the replay (W17)", () => {
   const figuresScenarios = new Set<string>()
   const w18Scenarios = new Set<string>()
   const settleScenarios = new Set<string>()
+  const addGuestScenarios = new Set<string>()
   const shifted: string[] = []
   const counts = { bookings: 0, orders: 0, figuresCompared: 0, guardsCompared: 0, statusesCompared: 0, giftCardShifted: 0 }
 
@@ -134,6 +125,7 @@ describe("step D's side of the replay (W17)", () => {
       'setBookingSpecialRequests',
       'setBookingStatus',
       'settleLapsedBooking',
+      'addBookingGuest',
       'finaliseReaderPayment',
       'cancelReaderPayment',
       'getBookingRefundFigures',
@@ -155,13 +147,14 @@ describe("step D's side of the replay (W17)", () => {
       const { db } = environment.database
       // W18: N3's, for its three scenarios only; W19: Settle's, for its scenarios only. Each must still be seen
       // (compareRecordings says so if not).
-      const named = [...(N3_DIFFERENCES.get(name) ?? []), ...(SETTLE_DIFFERENCES.get(name) ?? [])]
+      const named = [...(N3_DIFFERENCES.get(name) ?? []), ...(SETTLE_DIFFERENCES.get(name) ?? []), ...(ADD_GUEST_DIFFERENCES.get(name) ?? [])]
       if (calls.some((call) => call.action === 'settleLapsedBooking')) settleScenarios.add(name)
-      if (SETTLE_DIFFERENCES.has(name)) {
-        // The audit rows the Worker doesn't replace are the golden file's, in order (SETTLE_AUDIT_ROWS allows only the swap).
-        expect(otherAuditRows(recording, NEW_SETTLE_AUDIT_ACTIONS), `${name}: audit rows`).toEqual(otherAuditRows(golden, OLD_SETTLE_AUDIT_ACTIONS))
-      }
-      const differences = compareRecordings(withRefsUnnumbered(golden), withRefsUnnumbered(recording), named)
+      if (calls.some((call) => call.action === 'addBookingGuest')) addGuestScenarios.add(name)
+      // W20: the rows set aside from the comparison, each exactly what it should be.
+      expect(newAuditRowProblems(recording), `${name}: the Worker's audit rows`).toEqual([])
+      expect(storedAnswerProblems(recording), `${name}: the stored answers`).toEqual([])
+      expect(cardRecordProblems(recording), `${name}: the Worker's card flow records`).toEqual([])
+      const differences = compareSides(golden, recording, named)
       if (calls.some((call) => call.action === 'getBookingRefundFigures')) figuresScenarios.add(name)
       if (calls.some((call) => call.action === 'setBookingStatus' || call.action === 'setBookingSpecialRequests')) w18Scenarios.add(name)
       // The built action really went to the Worker; everything else to the old code.
@@ -181,7 +174,7 @@ describe("step D's side of the replay (W17)", () => {
         }
         shifted.push(name)
       }
-      expect(compareRecordings(withRefsUnnumbered(golden), withRefsUnnumbered(recording), [...named, ...(differences.length > 0 ? [GIFT_CARD_PART_WITHOUT_ORDER] : [])])).toEqual([])
+      expect(compareSides(golden, recording, [...named, ...(differences.length > 0 ? [GIFT_CARD_PART_WITHOUT_ORDER] : [])])).toEqual([])
 
       // The end state, read both ways. The old side's globals are still bound to this run's database.
       const oldFigures = (await import(/* @vite-ignore */ oldFunctionPath('getBookingRefundFigures'))) as Loaded
@@ -240,8 +233,10 @@ describe("step D's side of the replay (W17)", () => {
       const recording = await replay(environment, scenario, newBookingSide({ calls }))
       const golden = readGolden(name) as Recording
       expect(calls.filter((call) => call.side === 'new').map((call) => call.action)).toEqual(['settleLapsedBooking', name.endsWith('cancelled') ? 'cancelReaderPayment' : 'finaliseReaderPayment'])
-      expect(otherAuditRows(recording, NEW_SETTLE_AUDIT_ACTIONS)).toEqual(otherAuditRows(golden, OLD_SETTLE_AUDIT_ACTIONS))
-      expect(compareRecordings(withRefsUnnumbered(golden), withRefsUnnumbered(recording), SETTLE_DIFFERENCES.get(name) ?? [])).toEqual([])
+      expect(newAuditRowProblems(recording)).toEqual([])
+      expect(storedAnswerProblems(recording)).toEqual([])
+      expect(cardRecordProblems(recording)).toEqual([])
+      expect(compareSides(golden, recording, SETTLE_DIFFERENCES.get(name) ?? [])).toEqual([])
       settleScenarios.add(name)
     })
   })
@@ -391,6 +386,101 @@ describe("step D's side of the replay (W17)", () => {
     })
   })
 
+  describe('Add Guest on the new side (W20): exactly what the Worker does instead', () => {
+    const byName = (name: string) => {
+      const scenario = scenarios.find((s) => s.name === name)
+      if (!scenario) throw new Error(`No scenario ${name}`)
+      return scenario
+    }
+    const added = (recording: Recording, table: string) => recording.tables[table]?.added ?? []
+    const charges = (recording: Recording) => recording.stripeCalls.filter((call) => call.method === 'paymentIntents.create')
+
+    it('the W05 invariants hold on the new side for every Add Guest scenario (D-plan 4.11 item 3), but for R2d\'s hold', async () => {
+      // Every scenario seen calling Add Guest above (140 in a full run), and at least every named one.
+      const adds = scenarios.filter((scenario) => addGuestScenarios.has(scenario.name) || ADD_GUEST_DIFFERENCES.has(scenario.name))
+      expect(adds.length).toBeGreaterThanOrEqual(ADD_GUEST_DIFFERENCES.size)
+      const fresh = await sweepInvariants(environment, adds, newBookingSide())
+      // R2d: the card paid and its order couldn't be written, so the change is held for reconcile; until then the £15 card
+      // payment is on no order (so price_paid counts £15 no order shows). add-guest.test.ts runs reconcile on the same hold and it writes the order.
+      expect(fresh.wrong.sort()).toEqual(
+        [
+          'w17-r2d-add-guest-press-dies-while-the-worker-charges-and-writes-no-order: price_paid £60.00, but £45.00 paid less £0.00 back',
+          'w17-r2d-add-guest-press-dies-while-the-worker-charges-and-writes-no-order: pi_fake_0004 is on 0 orders',
+        ].sort()
+      )
+      expect(fresh.bookingsChecked).toBeGreaterThanOrEqual(adds.length)
+    }, 300_000)
+
+    it('R1c: the guest added once, with the place, the £15 store credit and the £5 gift card it took; nothing given away', async () => {
+      const recording = await replay(environment, byName('w17-r1c-add-guest-store-credit-and-gift-card-statement-lands-late'), newBookingSide())
+      expect(results(recording)[2]).toMatchObject({ added: true, guest: { guest_name: 'Bea Guest' } })
+      expect(added(recording, 'store_credit_transactions').map((row) => [row['amount'], row['reason']])).toEqual([['-15.00', 'redemption']])
+      expect(recording.tables['gift_cards']?.changed).toEqual([{ id: '10000000-0000-4000-8000-000000000009', remaining_balance: ['40.00', '35.00'] }])
+      expect(added(recording, 'booking_guests')).toHaveLength(3)
+    })
+
+    it('R2a: the dead press added the guest and took £5 store credit and £15 on the card once; the next press is refused, nothing taken twice', async () => {
+      const recording = await replay(environment, byName('w17-r2a-add-guest-press-dies-after-the-charge-then-paid-on-the-card'), newBookingSide())
+      expect(results(recording)[2]).toMatchObject({ added: false, reason: 'no_answer' })
+      expect(results(recording)[3]).toMatchObject({ added: false, reason: 'pressed_after_no_answer' })
+      expect(charges(recording).map((call) => (call.params as { amount: number }).amount)).toEqual([4000, 1500])
+      expect(added(recording, 'booking_guests')).toHaveLength(3)
+      expect(added(recording, 'store_credit_transactions').map((row) => [row['amount'], row['reason']])).toEqual([['-5.00', 'redemption']])
+      expect(added(recording, 'bookings')[0]).toMatchObject({ party_size: 3 })
+    })
+
+    it('R4a: the same press again gets the stored answer: £15 store credit taken once, one guest, one place', async () => {
+      const recording = await replay(environment, byName('w17-r4a-add-guest-store-credit-claim-answer-lost-then-pressed-again'), newBookingSide())
+      expect(results(recording)[2]).toMatchObject({ added: false, reason: 'no_answer' })
+      expect(results(recording)[3]).toMatchObject({ added: true })
+      expect(added(recording, 'store_credit_transactions').map((row) => [row['amount'], row['reason']])).toEqual([['-15.00', 'redemption']])
+      expect(added(recording, 'booking_guests')).toHaveLength(3)
+    })
+
+    // W20a (W20 review later 1): R2b and p4 had no exact replay assertion (only their named differences).
+    it('R2b: the dead press added the guest and took £5 store credit and £15 on the card once; the next press, with a gift card, is refused and the gift card is never touched', async () => {
+      const recording = await replay(environment, byName('w17-r2b-add-guest-press-dies-after-the-charge-then-resumed-with-a-gift-card'), newBookingSide())
+      expect(results(recording)[2]).toMatchObject({ added: false, reason: 'no_answer' })
+      expect(results(recording)[3]).toMatchObject({ added: false, reason: 'pressed_after_no_answer' })
+      expect(charges(recording).map((call) => (call.params as { amount: number }).amount)).toEqual([4000, 1500])
+      expect(added(recording, 'booking_guests')).toHaveLength(3)
+      expect(added(recording, 'store_credit_transactions').map((row) => [row['amount'], row['reason']])).toEqual([['-5.00', 'redemption']])
+      expect(recording.tables['gift_cards']).toBeUndefined()
+      expect(recording.tables['gift_card_redemptions']).toBeUndefined()
+      expect(added(recording, 'bookings')[0]).toMatchObject({ party_size: 3 })
+      expect(added(recording, 'orders').map((row) => [row['order_total'], row['payment_method']])).toEqual([['40.00', 'card'], ['15.00', 'card']])
+    })
+
+    it('p4: the charge landed after the press gave up; the same press again gets the stored answer: one guest charge, £5 store credit taken once and never given back', async () => {
+      const recording = await replay(environment, byName('p4-charge-lands-after-the-press-gave-up'), newBookingSide())
+      expect(results(recording)[1]).toMatchObject({ added: false, reason: 'no_answer' })
+      expect(results(recording)[2]).toMatchObject({ added: true, guest: { guest_name: 'Bea Guest' } })
+      expect(charges(recording).map((call) => (call.params as { amount: number }).amount)).toEqual([4000, 1500])
+      expect(added(recording, 'store_credit_transactions').map((row) => [row['amount'], row['reason']])).toEqual([['-5.00', 'redemption']])
+      expect(added(recording, 'booking_guests').map((row) => row['guest_name'])).toEqual(['Sam Test', 'Alex Guest', 'Bea Guest'])
+      expect(added(recording, 'orders').map((row) => [row['order_total'], row['payment_method']])).toEqual([['40.00', 'card'], ['15.00', 'card']])
+    })
+
+    it('a dead press then the same press again: one charge, one guest', async () => {
+      const recording = await replay(environment, byName('dies-after-the-charge-add-guest'), newBookingSide())
+      expect(results(recording)[1]).toMatchObject({ reason: 'no_answer' })
+      expect(results(recording)[2]).toMatchObject({ added: true })
+      expect(charges(recording)).toHaveLength(2)
+      expect(added(recording, 'booking_guests')).toHaveLength(3)
+    })
+
+    it('W05c N5: a guest and an add-on on the card: the seat on the booking line, the add-on on its own line of the same order', async () => {
+      const recording = await replay(environment, byName('addon-with-guest-public-card-ticked'), newBookingSide())
+      const golden = readGolden('addon-with-guest-public-card-ticked') as Recording
+      const order = added(recording, 'orders')[1]
+      const line = added(recording, 'order_line_items').find((row) => row['order_id'] === order?.['id'])
+      expect(order).toMatchObject({ order_total: '25.00', payment_method: 'card' })
+      expect(line).toMatchObject({ item_type: 'booking', unit_price: '20.00', line_total: '20.00' })
+      expect(added(golden, 'order_line_items').find((row) => row['order_id'] === order?.['id'])).toMatchObject({ unit_price: '25.00' })
+      expect(added(recording, 'addon_order_lines')[0]).toMatchObject({ order_id: order?.['id'] })
+    })
+  })
+
   it('covered what it says: the step D scenarios, the figures answers, and every booking and order at their ends', () => {
     // For the report: written where W17_COVERAGE_OUT says (vitest keeps a passing test's console quiet).
     const line =
@@ -411,5 +501,11 @@ describe("step D's side of the replay (W17)", () => {
     // W19: every scenario that calls Settle is named (with its differences), and nothing named goes unrun; N3's
     // settle-again step is the one with N3's difference only.
     expect([...settleScenarios].sort()).toEqual([...SETTLE_DIFFERENCES.keys(), 'w17-n3-status-set-to-payment-needed-then-settled-again'].sort())
+    // W20: every scenario named for Add Guest calls it (an unused name would fail here); the rest of the Add Guest
+    // scenarios match their golden files exactly (cash, gift card, store credit, or free).
+    expect([...ADD_GUEST_DIFFERENCES.keys()].filter((name) => !addGuestScenarios.has(name))).toEqual([])
+    if (process.env.W17_COVERAGE_OUT) {
+      appendFileSync(process.env.W17_COVERAGE_OUT, `W20: ${addGuestScenarios.size} call Add Guest, ${ADD_GUEST_DIFFERENCES.size} with named differences, ${addGuestScenarios.size - ADD_GUEST_DIFFERENCES.size} exact\n`)
+    }
   })
 })

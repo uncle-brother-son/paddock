@@ -324,10 +324,27 @@ export async function finaliseFlowInTransaction(
       )[0]?.id as string
       const withBookingLine = row.flow !== 'add_guest' || Boolean(snapshot.guest_row_id)
       if (withBookingLine) {
+        // W20 (W05c Noticed 5): an Add Guest's booking line holds only the seat's part of the payment; the paid add-ons
+        // it also paid for are on their own lines (linked below), not inside the booking line. The card money covers
+        // the add-ons first, so the seat's part is the rest, never below £0: the same seat money the refund figures
+        // (money-left.ts, ADDONS_INSIDE_LINE) worked out from the old, larger line.
+        const addonsPaid =
+          row.flow === 'add_guest' && (snapshot.addon_line_ids ?? []).length > 0
+            ? Number.parseFloat(
+                (
+                  await tx.query<{ paid: string }>(
+                    `SELECT COALESCE(SUM(price_at_purchase * quantity), 0)::text AS paid FROM addon_order_lines
+                     WHERE id = ANY($1::uuid[]) AND redemption_source IS DISTINCT FROM 'membership_credit'`,
+                    [snapshot.addon_line_ids ?? []]
+                  )
+                )[0]?.paid ?? '0'
+              )
+            : 0
+        const seatPart = Math.max(0, Math.round((amount - addonsPaid) * 100) / 100)
         await tx.query(
           `INSERT INTO order_line_items (order_id, item_type, quantity, unit_price, line_total, booking_id, created_at)
            VALUES ($1::uuid, 'booking', 1, $2::numeric, $2::numeric, $3::uuid, clock_timestamp())`,
-          [orderId, amount, row.record_id]
+          [orderId, seatPart, row.record_id]
         )
       }
       if (row.flow === 'add_guest' && (snapshot.addon_line_ids ?? []).length > 0) {

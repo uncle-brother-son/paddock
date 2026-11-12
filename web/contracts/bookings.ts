@@ -258,6 +258,42 @@ export const settleBookingOutputSchema = z.object({
 })
 export type SettleBookingOutput = z.infer<typeof settleBookingOutputSchema>
 
+/**
+ * W20: addBookingGuest's route (a guest, add-ons, or both). The dialog's first call sends no payment: when money is
+ * due the answer is the Worker's figures (`priceImpact`) and nothing is added. The second call sends the payment and
+ * `figures` (Q18): `amountDue` the guest's seat plus the paid add-ons, `toCollect` what the chosen method takes after
+ * the gift card and store credit. The old cash tick's `payment.confirmedCashAmount` still counts as `figures.toCollect`
+ * when that is missing.
+ */
+export const addBookingGuestRouteInputSchema = addBookingGuestInputSchema.extend(bookingInPath)
+
+/** W20: the guest row as the old function answered it (`to_jsonb` of the inserted row). */
+export const addedGuestSchema = z.object({
+  id,
+  guest_name: z.string(),
+  guest_email: z.string().nullable(),
+  guest_type: z.string(),
+  unit_price: z.number().nullable(),
+  pay_by: z.string().nullable(),
+})
+export type AddedGuest = z.infer<typeof addedGuestSchema>
+
+/**
+ * W20: addBookingGuest's answer, as the old function gave it: added (with the guest and the add-on lines); not added
+ * with `priceImpact` (the quote: money is due and no payment was sent); not added with `limitReached`; or, on the
+ * reader, added and pending the payment the screen collects and then finalises or cancels (the flow routes). A
+ * refusal, a decline and a held payment (Q35) are ApiErrors whose details carry the reason, words and figures.
+ */
+export const addBookingGuestOutputSchema = z.object({
+  added: z.boolean(),
+  limitReached: z.boolean().optional(),
+  guest: addedGuestSchema.nullable().optional(),
+  priceImpact: addGuestPriceImpactSchema.optional(),
+  addonLineIds: z.array(id).optional(),
+  pendingReaderPayment: pendingFlowPaymentSchema.optional(),
+})
+export type AddBookingGuestOutput = z.infer<typeof addBookingGuestOutputSchema>
+
 // --- Refusals (D-plan 4.6): an ApiError whose details carry the old reason, words and figures
 
 export const bookingRefusalDetailsSchema = z.object({
@@ -276,5 +312,12 @@ export const bookingRefusalDetailsSchema = z.object({
   retryLocked: z.boolean().optional(),
   /** W19: the flow's record when the change is held for reconcile (Q35) or was undone after a decline. */
   pendingId: z.string().optional(),
+  /** W20 (W06 F4): which guest a guest refusal is about. Add Guest has one, so 0. */
+  guestIndex: z.number().optional(),
+  /**
+   * W20: true when the old function sent no words of its own for this reason, so `message` is the dialog's own words
+   * for it. The Add Guest wrapper then leaves `message` out, as the old answer did; the dialog shows the same words.
+   */
+  screenWords: z.boolean().optional(),
 })
 export type BookingRefusalDetails = z.infer<typeof bookingRefusalDetailsSchema>

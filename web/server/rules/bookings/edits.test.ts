@@ -20,6 +20,10 @@ import {
 } from './failure-messages'
 import { BOOKING_STATUSES } from './load-booking'
 
+// W20a (W20 review): one test here timed out once at the default 5 s under full-suite load (W20's exploratory run).
+// 15 s, as replay.test.ts; a stall past it is no longer load, so capture which step it was in before rerunning.
+vi.setConfig({ testTimeout: 15_000 })
+
 // Brief W18: the special requests and status routes (D-plan 1.9, 4.4; N3), on the replay's live schema (its triggers
 // and constraints included), and the staff app's two thin wrappers through them.
 

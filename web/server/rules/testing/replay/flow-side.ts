@@ -2,7 +2,7 @@ import { POST as cancelFlowRoute } from '@/app/api/v1/staff/reader-flows/[pendin
 import { POST as finaliseFlowRoute } from '@/app/api/v1/staff/reader-flows/[pendingId]/finalise/route'
 import type { Db } from '@/server/db'
 import type { FakeStripe } from '@/server/stripe/fake'
-import type { AllowedDifference } from './compare'
+import { seatLineLessPaidAddOns, type AllowedDifference } from './compare'
 import { oldSide, REPLAY_USER, type ReplaySide, type Scenario, type ScenarioContext } from './harness'
 import { bea, ID, lapsedSeat, memberCredit, mo, paidSeat, publicOnCard, sam, seed, seedCorePass, settle } from './scenarios'
 import { replayStripe } from './stripe-binding'
@@ -218,8 +218,36 @@ const FLOW_IDEMPOTENCY_ROWS: AllowedDifference = {
   path: /^\.tables\.api_idempotency(\.|$)/,
 }
 
-/** W12's named differences for the flows: the three above, in every scenario (each finishes or cancels one). */
-export function flowDifferences(): AllowedDifference[] {
-  return [WORKER_FLOW_RECORD, FLOW_AUDIT_ROWS, FLOW_IDEMPOTENCY_ROWS]
+/**
+ * W20 (W05c Noticed 5): the Worker's finalise of an Add Guest flow writes the seat on the booking line and the paid
+ * add-ons on their own lines of the same order, so where a guest and an add-on were paid on the reader the booking line
+ * is smaller by the add-on (never below £0). The refund figures' seat money is unchanged (money-left.ts takes the
+ * add-ons out of the old, larger line).
+ */
+const SEAT_ON_THE_BOOKING_LINE: AllowedDifference = {
+  name: "An Add Guest flow's order puts only the seat on the booking line; the paid add-ons are on their own lines of the same order",
+  decision: 'W05c Noticed 5 (D-plan 2.3); brief W20 item 2; brief W20a item 4 (exact, booking lines only)',
+  path: /^\.tables\.order_line_items\.added\[\d+\]\.(unit_price|line_total)$/,
+  actual: seatLineLessPaidAddOns,
+}
+
+/** The flow scenarios where a guest and a paid add-on were paid together on the reader (W05c's golden families). */
+const GUEST_AND_ADDON_ON_THE_READER: ReadonlySet<string> = new Set([
+  'addon-with-guest-private-reader-not-ticked',
+  'addon-with-guest-private-reader-ticked',
+  'addon-with-guest-private-split-reader-not-ticked',
+  'addon-with-guest-private-split-reader-ticked',
+  'addon-with-guest-public-reader-not-ticked',
+  'addon-with-guest-public-reader-ticked',
+  'addon-with-guest-public-split-reader-not-ticked',
+  'addon-with-guest-public-split-reader-ticked',
+])
+
+/**
+ * W12's named differences for the flows: the three above, in every scenario (each finishes or cancels one); W20: and
+ * the seat on its own booking line, in the scenarios that paid a guest and an add-on together on the reader.
+ */
+export function flowDifferences(scenario?: string): AllowedDifference[] {
+  return [WORKER_FLOW_RECORD, FLOW_AUDIT_ROWS, FLOW_IDEMPOTENCY_ROWS, ...(scenario && GUEST_AND_ADDON_ON_THE_READER.has(scenario) ? [SEAT_ON_THE_BOOKING_LINE] : [])]
 }
 

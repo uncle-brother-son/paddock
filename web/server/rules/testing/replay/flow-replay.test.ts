@@ -90,7 +90,7 @@ describe('the reader flows (finalise and cancel) through the new routes, against
       expect(golden, `No golden file for ${name}`).not.toBeNull()
       const recording = await replay(environment, byName(name), newFlowSide())
       const compare = (r: Recording) => withRefsUnnumbered(withCanonicalGoneNumbers(r))
-      expect(compareRecordings(compare(golden), compare(recording), flowDifferences())).toEqual([])
+      expect(compareRecordings(compare(golden), compare(recording), flowDifferences(name))).toEqual([])
     })
   })
 })
