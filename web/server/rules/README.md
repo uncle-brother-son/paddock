@@ -306,6 +306,33 @@ old checkout started was left, checked live on 11 Nov). No failure falls back. T
 secret after the pending window (`pruneClientSecrets`, run by the schedule). The route stores its answer in a
 transaction (8 s statement limit), counted at 8.1 s in the timing convention.
 
+## Booking changes: foundations (step D, W17)
+
+Step D moves the booking changes (Move, Add Guest, Settle, Remove Guest, the refunds, the cancels, the two setters)
+here one slice at a time (staff app `briefs/D-plan.md`). W17 laid the ground; nothing is switched and no route exists yet.
+
+- `bookings/load-booking.ts`: the booking, its seats (seat 1 first), its session and type, what is open on it (any
+  pending flow, card or reader, old or new, and an order still being paid: the old NO_READER_PAYMENT_OPEN), and its
+  refund figures. `lockAndLoadBooking` locks first, in LOCK_ORDER.
+- `bookings/locks.ts`: `lockForBooking`, one statement: the booking, its customer, the sessions (id order), credit
+  periods, the pass, memberships, the gift card. LOCK_ORDER now has `booking` straight after `order`; a flow's C2 and
+  undo lock the flow's row, then the booking.
+- `bookings/money-left.ts`: getBookingRefundFigures, the order card portion and an order's status after refunds, as the
+  old code worked them out, except W05l later 1 (permanent with Q36): a gift card part with no order is gift card money.
+- `bookings/flow.ts`: a booking change on the saved card is a flow with `method: 'card'` (`pending_reader_payments`,
+  written by C1 with no PaymentIntent). `settleCardFlow` charges under `<pendingId>:charge` with `metadata.pending_id`,
+  then W12's C2 (`finaliseFlowInTransaction`, which now writes `payment_method 'card'` and the PaymentIntent onto the
+  row) or, on a definite refusal, W12's undo. Unclear: held (Q35's words), never undone. Safe to run again at any point.
+  The reader routes refuse a card flow (`not_a_reader_flow`). Reconcile and the stuck list learn card flows at W19.
+- `bookings/booking-switch.ts`: `booking_changes` for any change that moves money, plus `reader_flows` for the reader
+  and `saved_card` for a card charge; off answers BOOKING_PATH_OFF (501) before anything. Only starting a change is
+  gated: finishing or undoing a held one never is.
+- `bookings/failure-messages.ts`: every word staff see from a booking change, word for word from the four dialogs'
+  maps and the old functions, plus W17's (the switch, Q35, Q37, a held card flow).
+- `contracts/bookings.ts`: the routes' inputs (old param names, loose; `confirmed`/`figures` for Q18) and the figures.
+- Tests: the replay's step D side (`testing/replay/booking-side.ts`, `booking-replay.test.ts`) with setup through the
+  frozen copy of the old functions (`testing/legacy-booking/`), and the W17 golden gaps (`w17-*` scenarios).
+
 ## Refund claims with no finish
 
 The staff app claims a refund's money before it moves. Each claim writes `booking.refund_claimed` to

@@ -7,10 +7,11 @@ import { ApiError } from '@/server/http/errors'
 
 /**
  * The kinds the ORDER_SWITCH secret can list, comma or space separated. Empty or unset means every
- * kind is off. `reader_flows` (Move, Settle and Add Guest on the reader) gates nothing yet: its routes
- * start at step D, and they check it then.
+ * kind is off. W17 (D-plan 4.9): `booking_changes` (every step D booking change that moves money) and
+ * `reader_flows` (Move, Settle and Add Guest on the reader) are checked by the booking routes as each
+ * slice builds them (server/rules/bookings/booking-switch.ts); a card flow also needs `saved_card`.
  */
-export const ORDER_KINDS = ['no_stripe', 'saved_card', 'reader', 'membership', 'reader_flows'] as const
+export const ORDER_KINDS = ['no_stripe', 'saved_card', 'reader', 'membership', 'reader_flows', 'booking_changes'] as const
 export type OrderKind = (typeof ORDER_KINDS)[number]
 
 /**
@@ -21,7 +22,7 @@ export type OrderKind = (typeof ORDER_KINDS)[number]
  *   to take (the order then refuses with its own reason, as placeOrder needs Stripe for either);
  * - anything else is `no_stripe`: cash, gift card or store credit alone, nothing owed, or no method.
  */
-export function orderKind(input: Pick<PlaceOrderInput, 'membershipPlanId' | 'payment'>): Exclude<OrderKind, 'reader_flows'> {
+export function orderKind(input: Pick<PlaceOrderInput, 'membershipPlanId' | 'payment'>): Exclude<OrderKind, 'reader_flows' | 'booking_changes'> {
   if (input.membershipPlanId) return 'membership'
   const method = input.payment?.method
   if (method === 'reader') return 'reader'

@@ -177,6 +177,20 @@ To re-record after a deliberate change:
 
 Read the diff of `golden/` before keeping it: a re-record accepts whatever the code now does.
 
+### Step D's side (W17)
+
+The old functions run from two frozen test-only copies: `legacy-order/` (W16, the old order code) and
+`legacy-booking/` (W17, the twelve old step D functions and every module they import, byte for byte, hashed in its
+`manifest.json`). `harness.ts`'s `oldFunctionPath` picks the file: the booking copy for anything it holds, the order
+copy for the three old order actions, else the staff app's checkout. `frozen-booking-code.test.ts` keeps the copy as
+frozen and out of reach of app code. `replay/booking-side.ts` is step D's new side, as `order-side.ts` is step C's: each
+slice moves one old action to the Worker (`BUILT_BOOKING_ACTIONS`; W17: the refund figures), and every other call,
+setup included, still runs through the frozen copy. `booking-replay.test.ts` replays every scenario that way and reads
+each end state both ways (figures, the open-payment guard, an order's status after refunds). The `w17-*` scenarios are
+the golden gaps recorded from the old functions (L6): the W05 review 3 proofs R1a to R4b and the D-plan's N1, N3, N4,
+with today's outcomes. A scenario step the old function answers by throwing uses `attempt`, which records
+`{ thrown: <words> }`.
+
 ## No real Stripe (W11)
 
 `no-real-stripe.ts` is loaded before every unit test file (`vitest.unit.config.ts`, `setupFiles`). Any

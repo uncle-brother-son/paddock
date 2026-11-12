@@ -28,6 +28,40 @@ export const backendDir = path.join(staffAppDir(), 'backend/paddock')
  */
 export const LEGACY_ORDER_ACTIONS: ReadonlySet<string> = new Set(['createOrder', 'finaliseReaderOrder', 'cancelReaderOrder'])
 export const legacyOrderDir = path.join(__dirname, '../legacy-order/backend/paddock')
+
+/**
+ * W17 (D-plan 4.11 item 1): step D deletes the staff app's booking-change functions slice by slice, but the golden
+ * scenarios set up with an old Move, Add Guest, refund or reader flow before the step they test. Those functions,
+ * and every module they import, run from a second frozen test-only copy (legacy-booking/README.md), so each golden
+ * file keeps replaying exactly whichever actions have switched. Setup and the recorded side only; it goes at step H.
+ */
+export const LEGACY_BOOKING_ACTIONS: ReadonlySet<string> = new Set([
+  'moveBooking',
+  'addBookingGuest',
+  'settleLapsedBooking',
+  'removeBookingGuest',
+  'refundBooking',
+  'cancelCreditBooking',
+  'removeBookingAddon',
+  'setBookingSpecialRequests',
+  'setBookingStatus',
+  'getBookingRefundFigures',
+  'finaliseReaderPayment',
+  'cancelReaderPayment',
+])
+export const legacyBookingDir = path.join(__dirname, '../legacy-booking/backend/paddock')
+
+/**
+ * Where the old side loads a staff app file from (`moveBooking.ts`, `shared/bookingMoneyClaim.ts`): the frozen
+ * booking copy for anything it holds, the frozen order copy for the three old order actions, else the staff app's
+ * own checkout (the functions steps E to G move: events, refundOrder, the Orders page, the reads).
+ */
+export function oldFunctionPath(file: string): string {
+  const name = file.replace(/\.ts$/, '')
+  if (existsSync(path.join(legacyBookingDir, `${name}.ts`))) return path.join(legacyBookingDir, `${name}.ts`)
+  if (LEGACY_ORDER_ACTIONS.has(name)) return path.join(legacyOrderDir, `${name}.ts`)
+  return path.join(backendDir, `${name}.ts`)
+}
 const goldenDir = path.join(__dirname, 'golden')
 
 /** Tuesday, in winter, so London time and UTC agree. */
@@ -46,6 +80,11 @@ export interface ScenarioContext {
   db: Db
   /** Calls the action on this side and keeps its answer as part of the recording. */
   call(action: string, params: unknown): Promise<unknown>
+  /**
+   * W17: as `call`, for a step the old function answers by throwing (a lost answer, a failed write): the throw is
+   * kept in the recording as `{ thrown: <its words> }`, which is what staff were shown, and the scenario carries on.
+   */
+  attempt(action: string, params: unknown): Promise<unknown>
 }
 
 export interface Scenario {
@@ -110,13 +149,13 @@ export function oldSide(db: Db, stripe: FakeStripe): ReplaySide {
   vi.stubGlobal('paddockWorkerV1', { rawRequest: bindStaffRoutes() })
   // W14: the staff app's wrappers ask the Worker first; every kind is off here unless a test says otherwise.
   // W16: the old order functions run from the test-only copy (LEGACY_ORDER_ACTIONS), so they never ask.
+  // W17: the old booking functions likewise (legacy-booking, oldFunctionPath).
   vi.stubEnv('ORDER_SWITCH', '')
 
   return {
     name: 'old',
     async call(action, params) {
-      const dir = LEGACY_ORDER_ACTIONS.has(action) ? legacyOrderDir : backendDir
-      const loaded = (await import(/* @vite-ignore */ path.join(dir, `${action}.ts`))) as {
+      const loaded = (await import(/* @vite-ignore */ oldFunctionPath(action))) as {
         default: (req: { params: unknown; user: typeof REPLAY_USER }) => Promise<unknown>
       }
       return loaded.default({ params, user: REPLAY_USER })
@@ -153,6 +192,16 @@ export async function replay(
     db,
     async call(action, params) {
       const result = await side.call(action, params)
+      results.push(result)
+      return result
+    },
+    async attempt(action, params) {
+      let result: unknown
+      try {
+        result = await side.call(action, params)
+      } catch (err) {
+        result = { thrown: err instanceof Error ? err.message : String(err) }
+      }
       results.push(result)
       return result
     },

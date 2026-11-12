@@ -2,7 +2,7 @@ import {
   findUsableMembershipCreditPeriod,
   reserveSessionPassCredit,
   releaseSessionPassCredit,
-} from '@retool-app/backend/paddock/shared/creditRedemption'
+} from '../../../legacy-booking/backend/paddock/shared/creditRedemption'
 import {
   validateGuests,
   GUESTS_OVER_18_NOT_CONFIRMED_MESSAGE,
@@ -10,11 +10,11 @@ import {
   MAX_GUESTS_PER_PRIVATE_BOOKING,
   type GuestInput,
   type GuestValidationReason,
-} from '@retool-app/backend/paddock/shared/guestValidation'
-import { claimSessionCapacity, releaseSessionCapacity } from '@retool-app/backend/paddock/shared/sessionCapacity'
-import { quoteSeats, findDuplicateDayBooking, type BandSeatQuote } from '@retool-app/backend/paddock/shared/bandPricing'
-import { londonToday } from '@retool-app/backend/paddock/shared/londonTime'
-import { resolveStaffId } from '@retool-app/backend/paddock/shared/resolveStaffId'
+} from '../../../legacy-booking/backend/paddock/shared/guestValidation'
+import { claimSessionCapacity, releaseSessionCapacity } from '../../../legacy-booking/backend/paddock/shared/sessionCapacity'
+import { quoteSeats, findDuplicateDayBooking, type BandSeatQuote } from '../../../legacy-booking/backend/paddock/shared/bandPricing'
+import { londonToday } from '../../../legacy-booking/backend/paddock/shared/londonTime'
+import { resolveStaffId } from '../../../legacy-booking/backend/paddock/shared/resolveStaffId'
 
 export type RedemptionSource = 'paid' | 'membership_credit' | 'session_pass_credit'
 

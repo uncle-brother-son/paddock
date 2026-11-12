@@ -19,6 +19,7 @@ import { audit } from '@/server/audit'
 import { inOpenTransaction, isDeadlock, type Db, type Tx } from '@/server/db'
 import type { StripeClient } from '@/server/stripe/client'
 import { sendOptions, stripeTiming, type StripeTiming } from '@/server/stripe/deadline'
+import { NOT_A_READER_FLOW_MESSAGE } from '@/server/rules/bookings/failure-messages'
 import { pence } from './collect-saved-card'
 import { lockForOrder } from './locks'
 import { isMissing, settleIntent, stripeMessage, type ReaderRouteOptions } from './reader-order'
@@ -62,12 +63,14 @@ export interface FlowSnapshot {
   claimed_extra_capacity?: boolean
   addon_line_ids?: string[]
   addon_credits?: Array<{ membership_id: string; quantity: number }>
-  // A flow the Worker started (W12; written by step D).
-  method?: 'reader'
+  // A flow the Worker started (W12; written by step D). W17: `card` for a saved-card flow (server/rules/bookings/flow.ts),
+  // which also names the saved card it charges.
+  method?: 'reader' | 'card'
   channel?: 'staff'
   request_id?: string
   stripe_customer_id?: string | null
   livemode?: boolean
+  payment_method_id?: string
 }
 
 export interface FlowRow {
@@ -82,9 +85,17 @@ export interface FlowRow {
   created_at: string
 }
 
-/** A flow the Worker started: its record carries the Worker's method and request id. */
+/**
+ * A reader flow the Worker started: its record carries the Worker's method and request id. The reader routes, the
+ * stuck list and reconcile's flow part take these. W17: a saved-card flow (`method: 'card'`) is the Worker's too, but
+ * not a reader one: isWorkerCardFlow names it, and the reader routes refuse it (`not_a_reader_flow`).
+ */
 export const isWorkerFlow = (snapshot: FlowSnapshot | null | undefined): boolean =>
   snapshot?.method === 'reader' && typeof snapshot.request_id === 'string'
+
+/** W17: a saved-card flow the Worker started (server/rules/bookings/flow.ts). */
+export const isWorkerCardFlow = (snapshot: FlowSnapshot | null | undefined): boolean =>
+  snapshot?.method === 'card' && typeof snapshot.request_id === 'string'
 
 const READ_FLOW_SQL =
   'SELECT id, flow, record_id, payment_intent_id, expected_amount::text AS expected_amount, snapshot, status, created_at FROM pending_reader_payments WHERE id = $1::uuid'
@@ -236,6 +247,11 @@ async function releasePlaces(tx: Tx, sessionId: string, partySize: number, booki
   )
 }
 
+/** W17: the flow's booking (its record_id for Move, Settle and Add Guest), locked straight after the flow's row. */
+async function lockFlowBooking(tx: Tx, row: FlowRow): Promise<void> {
+  await tx.query('SELECT id FROM bookings WHERE id = $1::uuid FOR NO KEY UPDATE', [row.record_id])
+}
+
 export type FlowFinaliseOutcome =
   | { finalised: true; alreadyFinalised: boolean; orderId: string | null }
   /** The row was undone (or is gone) while the payment succeeded: recorded for the automatic refund. */
@@ -278,6 +294,8 @@ export async function finaliseFlowInTransaction(
 
     const snapshot = row.snapshot
     const isMove = row.flow === 'move'
+    // W17 (LOCK_ORDER's 'booking', D-plan 4.5): the flow's row, then its booking, then the rest.
+    await lockFlowBooking(tx, row)
     await lockForOrder(tx, {
       customerId: snapshot.customer_id,
       promoCode: null,
@@ -294,13 +312,14 @@ export async function finaliseFlowInTransaction(
     let orderId = recorded[0]?.id ?? null
     if (!orderId) {
       const amount = Number.parseFloat(row.expected_amount)
-      // recordReaderChargeOrder: one paid order, and its booking line unless only add-ons were paid for.
+      // recordReaderChargeOrder: one paid order, and its booking line unless only add-ons were paid for. W17: a
+      // saved-card flow's order says 'card', as the old saved-card charge's order did.
       orderId = (
         await tx.query<{ id: string }>(
           `INSERT INTO orders (customer_id, order_total, payment_status, order_source, payment_method, stripe_payment_intent_id, created_at)
-           VALUES ($1::uuid, $2::numeric, 'paid', 'staff_created', 'reader', $3::text, clock_timestamp())
+           VALUES ($1::uuid, $2::numeric, 'paid', 'staff_created', $3::text, $4::text, clock_timestamp())
            RETURNING id`,
-          [snapshot.customer_id, amount, paymentIntent.id]
+          [snapshot.customer_id, amount, snapshot.method === 'card' ? 'card' : 'reader', paymentIntent.id]
         )
       )[0]?.id as string
       const withBookingLine = row.flow !== 'add_guest' || Boolean(snapshot.guest_row_id)
@@ -334,7 +353,11 @@ export async function finaliseFlowInTransaction(
         )
       }
     }
-    const marked = await tx.query("UPDATE pending_reader_payments SET status = 'finalised', updated_at = now() WHERE id = $1::uuid AND status = 'pending' RETURNING id", [pendingId])
+    // W17: a saved-card flow learns its PaymentIntent only from the charge's answer, so it is written here.
+    const marked = await tx.query(
+      "UPDATE pending_reader_payments SET status = 'finalised', payment_intent_id = COALESCE(payment_intent_id, $2::text), updated_at = now() WHERE id = $1::uuid AND status = 'pending' RETURNING id",
+      [pendingId, paymentIntent.id]
+    )
     if (marked.length !== 1) throw new Error('The reader payment was not marked finalised.')
     await audit.recordAll(tx, [{
       ...entry,
@@ -366,6 +389,8 @@ export async function undoFlowInTransaction(db: Db, pendingId: string, options: 
     if (row.status === 'finalised') return { undone: false, reason: 'already_finalised' }
     const snapshot = row.snapshot
     const problems: string[] = []
+    // W17 (LOCK_ORDER's 'booking', D-plan 4.5): the flow's row, then its booking, then the rest.
+    await lockFlowBooking(tx, row)
 
     const placesSession =
       row.flow === 'move' ? (snapshot.new_session_id ?? null) : row.flow === 'add_guest' && snapshot.claimed_extra_capacity ? (snapshot.session_id ?? null) : null
@@ -504,12 +529,14 @@ export async function undoFlowInTransaction(db: Db, pendingId: string, options: 
 type FoundFlow =
   | { kind: 'gone' }
   | { kind: 'old'; row: FlowRow }
+  | { kind: 'card'; row: FlowRow }
   | { kind: 'no_intent'; row: FlowRow }
   | { kind: 'flow'; row: FlowRow & { payment_intent_id: string } }
 
 async function findFlow(db: Db, pendingId: string): Promise<FoundFlow> {
   const row = await readFlow(db, pendingId)
   if (!row) return { kind: 'gone' }
+  if (isWorkerCardFlow(row.snapshot)) return { kind: 'card', row }
   if (!isWorkerFlow(row.snapshot)) return { kind: 'old', row }
   if (typeof row.payment_intent_id !== 'string') return { kind: 'no_intent', row }
   return { kind: 'flow', row: row as FlowRow & { payment_intent_id: string } }
@@ -528,6 +555,7 @@ async function finaliseFound(
 ): Promise<FinaliseFlowOutput> {
   if (found.kind === 'gone') return { finalised: false, pendingId, reason: 'not_found', message: FLOW_GONE_MESSAGE }
   if (found.kind === 'old') return { finalised: false, ...basics(found.row), reason: 'old_reader_flow', message: OLD_READER_FLOW_MESSAGE }
+  if (found.kind === 'card') return { finalised: false, ...basics(found.row), reason: 'not_a_reader_flow', message: NOT_A_READER_FLOW_MESSAGE }
   const { row } = found
   if (row.status === 'finalised') {
     return { finalised: true, ...basics(row), ...(row.payment_intent_id ? { paymentIntentId: row.payment_intent_id } : {}), alreadyFinalised: true, message: FLOW_ALREADY_FINALISED_MESSAGE }
@@ -593,6 +621,7 @@ export async function cancelReaderFlow(db: Db, stripe: StripeClient, pendingId: 
   const found = await findFlow(db, pendingId)
   if (found.kind === 'gone') return { cancelled: true, pendingId, alreadyDone: true, message: FLOW_GONE_CANCEL_MESSAGE }
   if (found.kind === 'old') return { cancelled: false, ...basics(found.row), reason: 'old_reader_flow', message: OLD_READER_FLOW_MESSAGE }
+  if (found.kind === 'card') return { cancelled: false, ...basics(found.row), reason: 'not_a_reader_flow', message: NOT_A_READER_FLOW_MESSAGE }
   const { row } = found
   if (row.status === 'cancelled') return { cancelled: true, ...basics(row), alreadyDone: true, message: FLOW_CANCEL_ALREADY_DONE_MESSAGE }
   if (row.status === 'finalised') return { cancelled: false, ...basics(row), reason: 'already_finalised', message: FLOW_CANCEL_FINALISED_MESSAGE }

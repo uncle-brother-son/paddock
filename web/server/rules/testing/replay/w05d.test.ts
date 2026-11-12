@@ -36,6 +36,28 @@ const failing = (matches: (sql: string) => boolean, armed: { on: boolean }) => (
   return side
 }
 
+
+/** W17: what the golden gaps (w17-* in scenarios.ts) break, recorded from the old functions (W17 report, section 6). */
+const W17_KNOWN_FAULTS = [
+  'w17-r1a-settle-store-credit-and-gift-card-statement-lands-late: price_paid £20.00, but £5.00 paid less £0.00 back',
+  'w17-r1a-settle-store-credit-and-gift-card-statement-lands-late: gift card 10000000-0000-4000-8000-000000000009 lost £0.00, its redemptions say £5.00',
+  'w17-r1b-move-store-credit-and-gift-card-statement-lands-late: price_paid £51.00, but £45.00 paid less £0.00 back',
+  'w17-r1b-move-store-credit-and-gift-card-statement-lands-late: gift card 10000000-0000-4000-8000-000000000009 lost £0.00, its redemptions say £5.00',
+  'w17-r1c-add-guest-store-credit-and-gift-card-statement-lands-late: price_paid £60.00, but £45.00 paid less £0.00 back',
+  'w17-r1c-add-guest-store-credit-and-gift-card-statement-lands-late: gift card 10000000-0000-4000-8000-000000000009 lost £0.00, its redemptions say £5.00',
+  'w17-r1d-move-gift-card-and-reader-statement-lands-late-then-cancel: gift card 10000000-0000-4000-8000-000000000009 lost £-5.00, its redemptions say £0.00',
+  'w17-r2a-add-guest-press-dies-after-the-charge-then-paid-on-the-card: price_paid £60.00, but £80.00 paid less £0.00 back',
+  'w17-r2b-add-guest-press-dies-after-the-charge-then-resumed-with-a-gift-card: price_paid £60.00, but £65.00 paid less £0.00 back',
+  'w17-r2b-add-guest-press-dies-after-the-charge-then-resumed-with-a-gift-card: gift card 10000000-0000-4000-8000-000000000009 lost £0.00, its redemptions say £5.00',
+  'w17-r2d-add-guest-press-dies-while-the-worker-charges-and-writes-no-order: price_paid £60.00, but £65.00 paid less £0.00 back',
+  'w17-r3-move-two-presses-the-new-session-full-for-both: price_paid £40.00, but £51.00 paid less £22.00 back',
+  'w17-r3-move-two-presses-the-new-session-full-for-both: Stripe refunded £11.00, the rows say £22',
+  'w17-r4a-add-guest-store-credit-claim-answer-lost-then-pressed-again: price_paid £60.00, but £75.00 paid less £0.00 back',
+  'w17-r4b-move-store-credit-claim-answer-lost: price_paid £40.00, but £46.00 paid less £0.00 back',
+  'w17-n3-status-set-to-cancelled-on-a-paid-booking: cancelled with £0.00 back on £40.00 paid',
+  'w17-n3-status-set-to-payment-needed-then-settled-again: price_paid £60.00, but £40.00 paid less £0.00 back',
+]
+
 describe('W05d on the old functions', () => {
   let environment: ReplayEnvironment
 
@@ -446,7 +468,12 @@ describe('W05d on the old functions', () => {
       }
       await replay(environment, watched, oldSide)
     }
-    expect(wrong).toEqual([])
+    // W17 (L6): the golden gaps record the old functions' faults on purpose, and these invariants are what catch
+    // them. Each must keep breaking them in exactly these ways, until the slice that moves its action names the
+    // difference on the new side (D-plan 4.11 item 3: the invariants run on every new-side scenario too).
+    const known = wrong.filter((line) => line.startsWith('w17-'))
+    expect(wrong.filter((line) => !line.startsWith('w17-'))).toEqual([])
+    expect(known).toEqual(W17_KNOWN_FAULTS)
     const stale = [STRIPE_REFUNDS_NOT_ON_ROWS, CANCELLED_WITHOUT_ALL_THE_MONEY, CHARGES_NOT_ON_ONE_ORDER].flatMap((list) =>
       Object.keys(list).filter((name) => !needed.has(`${Object.keys(list)[0]}/${name}`))
     )

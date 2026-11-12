@@ -28,6 +28,8 @@ export const ERROR_HTTP_STATUS: Record<ApiErrorCode, number> = {
   PAYMENT_UNCONFIRMED: 502,
   // Switched off, as NOT_BUILT: this kind of order isn't taken here yet.
   ORDER_PATH_OFF: 501,
+  // W17: the same for a booking change.
+  BOOKING_PATH_OFF: 501,
 }
 
 /** Shown when something unexpected fails. The real error goes to the log only. */

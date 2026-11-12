@@ -1,12 +1,11 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
-import path from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Db, SqlParam, Tx } from '@/server/db'
 import { FakeStripe } from '@/server/stripe/fake'
 import { makeRace, Refused, type Race } from '../race'
 import { startRealPostgres, type RealPostgres } from '../real-postgres'
 import { TABLES } from './compare'
-import { backendDir, LEGACY_ORDER_ACTIONS, legacyOrderDir, REPLAY_USER } from './harness'
+import { oldFunctionPath, REPLAY_USER } from './harness'
 import { bindLegacyRoutes, bindStaffRoutes } from './legacy-routes'
 import { ID, noPromoOnCard, publicOnCard, seed, sessionsToMoveBetween } from './scenarios'
 
@@ -36,8 +35,8 @@ describe('refunds at the same moment, on real Postgres', () => {
   let refundGate: { reached: () => void; released: Promise<void> } | null = null
 
   // W16: the old order functions the races start from run from the test-only copy (harness.ts, LEGACY_ORDER_ACTIONS).
-  const load = async <T>(file: string) =>
-    (await import(/* @vite-ignore */ path.join(LEGACY_ORDER_ACTIONS.has(file.replace(/\.ts$/, '')) ? legacyOrderDir : backendDir, file))) as T
+  // W17: the old booking functions and their modules from the booking copy (harness.ts, oldFunctionPath).
+  const load = async <T>(file: string) => (await import(/* @vite-ignore */ oldFunctionPath(file))) as T
 
   async function query(sql: string, params: unknown[] = []) {
     // Retool maps $N to params[N-1] only if they ascend and none repeats.

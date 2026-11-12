@@ -65,6 +65,9 @@ describe('the reader flows (finalise and cancel) through the new routes, against
       })
       .map((file) => file.replace(/\.json$/, ''))
       .filter((name) => !name.startsWith('w12-'))
+      // W17's golden gaps record old faults; R1d's flow row is written by an old statement that landed after the
+      // press gave up, so no Worker start ever stands behind it. W24 (Move) names its difference.
+      .filter((name) => name !== 'w17-r1d-move-gift-card-and-reader-statement-lands-late-then-cancel')
       .sort()
     expect(writing).toEqual([...FLOW_SCENARIOS].sort())
   })

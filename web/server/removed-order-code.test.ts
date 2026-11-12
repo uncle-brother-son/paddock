@@ -123,7 +123,11 @@ const workerFiles = sourceFiles(workerDir, ['app', 'server', 'lib', 'contracts',
   ['custom-worker.ts', 'middleware.ts'].map((file) => path.join(workerDir, file)).filter((file) => existsSync(file))
 )
 const staffAppFiles = sourceFiles(appDir, ['backend', 'frontend']).filter((file) => !file.includes(`${path.sep}hooks${path.sep}backend${path.sep}`))
-const everyFile = [...workerFiles, ...staffAppFiles].filter((file) => file !== __filename && !file.startsWith(FIXTURE_DIR + path.sep))
+/** W17: the frozen copy of the old step D functions, guarded by frozen-booking-code.test.ts. It is old code too. */
+const BOOKING_FIXTURE_DIR = path.join(workerDir, 'server/rules/testing/legacy-booking')
+const everyFile = [...workerFiles, ...staffAppFiles].filter(
+  (file) => file !== __filename && !file.startsWith(FIXTURE_DIR + path.sep) && !file.startsWith(BOOKING_FIXTURE_DIR + path.sep)
+)
 const code = new Map(everyFile.map((file) => [file, withoutComments(readFileSync(file, 'utf8'))]))
 const shown = (file: string) => path.relative(path.dirname(workerDir), file)
 

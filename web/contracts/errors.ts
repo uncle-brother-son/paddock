@@ -37,6 +37,12 @@ export const ERROR_CODES = [
    * nothing was touched. The staff app's createOrder runs the old code; anything else must never fall back.
    */
   'ORDER_PATH_OFF',
+  /**
+   * Step D (W17, D-plan 4.9, lead call L1): this kind of booking change is switched off on the Worker (the
+   * ORDER_SWITCH secret's `booking_changes`, `reader_flows`, `saved_card`), so nothing was touched. An emergency
+   * stop, not a fallback: the staff app never falls back to old code for it.
+   */
+  'BOOKING_PATH_OFF',
 ] as const
 
 export const apiErrorCodeSchema = z.enum(ERROR_CODES)

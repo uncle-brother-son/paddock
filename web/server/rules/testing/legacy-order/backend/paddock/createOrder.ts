@@ -4,33 +4,33 @@ import {
   isRemovedRedemptionSource,
   type RedemptionSource,
 } from './createBooking'
-import { AMOUNT_CHANGED_MESSAGE, amountLeftToPay, cashDifferenceRefusal, exceedsAmount } from '@retool-app/backend/paddock/shared/cashConfirmation'
-import { chargeSavedCardUnguarded as chargeSavedCard } from '@retool-app/backend/paddock/chargeSavedCard'
-import { extractApiErrorMessage } from '@retool-app/backend/paddock/shared/extractApiErrorMessage'
-import { isHtmlErrorPage } from '@retool-app/backend/paddock/shared/isHtmlErrorPage'
+import { AMOUNT_CHANGED_MESSAGE, amountLeftToPay, cashDifferenceRefusal, exceedsAmount } from '../../../legacy-booking/backend/paddock/shared/cashConfirmation'
+import { chargeSavedCardUnguarded as chargeSavedCard } from '../../../legacy-booking/backend/paddock/chargeSavedCard'
+import { extractApiErrorMessage } from '../../../legacy-booking/backend/paddock/shared/extractApiErrorMessage'
+import { isHtmlErrorPage } from '../../../legacy-booking/backend/paddock/shared/isHtmlErrorPage'
 import { generateGiftCardCode } from './shared/generateGiftCardCode'
 import { cancelMembershipSubscription } from '@retool-app/backend/paddock/shared/cancelMembershipSubscription'
 import createMembershipSubscription, {
   MEMBERSHIP_SUBSCRIPTION_FAILURE_REASONS,
   type MembershipSubscriptionSuccess,
 } from './shared/createMembershipSubscription'
-import { refundPaymentIntent } from '@retool-app/backend/paddock/shared/refundPaymentIntent'
-import { createTerminalPaymentIntentUnguarded as createTerminalPaymentIntent } from '@retool-app/backend/paddock/createTerminalPaymentIntent'
+import { refundPaymentIntent } from '../../../legacy-booking/backend/paddock/shared/refundPaymentIntent'
+import { createTerminalPaymentIntentUnguarded as createTerminalPaymentIntent } from '../../../legacy-booking/backend/paddock/createTerminalPaymentIntent'
 import type { ReaderPaymentSnapshot } from './shared/readerOrderRollback'
-import type { GuestInput } from '@retool-app/backend/paddock/shared/guestValidation'
+import type { GuestInput } from '../../../legacy-booking/backend/paddock/shared/guestValidation'
 import {
   reserveMembershipAddonCredit,
   releaseMembershipAddonCredit,
   releaseSessionPassCredit,
-} from '@retool-app/backend/paddock/shared/creditRedemption'
+} from '../../../legacy-booking/backend/paddock/shared/creditRedemption'
 import { insertStockAdjustment, deleteStockAdjustment } from '@retool-app/backend/paddock/shared/stockAdjustments'
-import { releaseSessionCapacity } from '@retool-app/backend/paddock/shared/sessionCapacity'
-import { applyStoreCredit } from '@retool-app/backend/paddock/shared/storeCredit'
-import { storeCreditMoved } from '@retool-app/backend/paddock/shared/storeCreditRefund'
-import { getStaffAccessRow } from '@retool-app/backend/paddock/shared/staffAccess'
-import { addMonthsToIsoDate, londonToday } from '@retool-app/backend/paddock/shared/londonTime'
-import { quoteSeats } from '@retool-app/backend/paddock/shared/bandPricing'
-import { addonSystemPrice as catalogAddonPrice, customerHasActiveMembership } from '@retool-app/backend/paddock/shared/addonPricing'
+import { releaseSessionCapacity } from '../../../legacy-booking/backend/paddock/shared/sessionCapacity'
+import { applyStoreCredit } from '../../../legacy-booking/backend/paddock/shared/storeCredit'
+import { storeCreditMoved } from '../../../legacy-booking/backend/paddock/shared/storeCreditRefund'
+import { getStaffAccessRow } from '../../../legacy-booking/backend/paddock/shared/staffAccess'
+import { addMonthsToIsoDate, londonToday } from '../../../legacy-booking/backend/paddock/shared/londonTime'
+import { quoteSeats } from '../../../legacy-booking/backend/paddock/shared/bandPricing'
+import { addonSystemPrice as catalogAddonPrice, customerHasActiveMembership } from '../../../legacy-booking/backend/paddock/shared/addonPricing'
 import { applyPromoCode, type PromoEligibleLine } from '@retool-app/backend/paddock/shared/promoCodes'
 import { loadPromoAndUsage } from './shared/promoCodeLookup'
 import {

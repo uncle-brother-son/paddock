@@ -1,6 +1,6 @@
 import { undoEventBooking } from './eventOrders'
-import { refundPaymentIntent } from '@retool-app/backend/paddock/shared/refundPaymentIntent'
-import { pence } from '@retool-app/backend/paddock/shared/cardRefundAttempts'
+import { refundPaymentIntent } from '../../../../legacy-booking/backend/paddock/shared/refundPaymentIntent'
+import { pence } from '../../../../legacy-booking/backend/paddock/shared/cardRefundAttempts'
 
 /**
  * Rows-based rollback for a PENDING reader order: the shared undo used by cancelReaderOrder.ts and

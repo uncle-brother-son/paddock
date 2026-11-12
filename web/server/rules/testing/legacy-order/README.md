@@ -12,6 +12,10 @@ chose (12 Nov, option B) to keep this copy for the replay's set-up only.
   changes: imports of modules that still exist in the staff app go through the `@retool-app` alias
   (vitest.unit.config.ts) to its checkout, and createOrder, finaliseReaderOrder and cancelReaderOrder default
   to their old bodies (no W14 Worker-first wrapper, no shadow), as the golden files recorded them.
+- W17: the modules this copy shares with the old step D functions now come from the frozen booking copy beside it
+  (`../legacy-booking/README.md`), not from the staff app's checkout, so this copy keeps working while step D deletes
+  them from the staff app. Import paths only; those files are byte for byte the staff app's at `453bf38`. Only
+  `cancelMembershipSubscription`, `promoCodes` and `stockAdjustments` (steps E and G) still go through the alias.
 - `routes/`: the Worker's deleted `app/api/memberships/create-subscription` (route and core) and
   `app/api/terminal/resolve-saved-card`, exactly as at Worker commit `c966a10`, which the old code calls through
   `replay/legacy-routes.ts`.

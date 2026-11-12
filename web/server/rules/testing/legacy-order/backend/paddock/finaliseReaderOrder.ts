@@ -1,10 +1,10 @@
-import { getStaffAccessRow } from '@retool-app/backend/paddock/shared/staffAccess'
-import { terminalPaymentIntentAction, type TerminalPaymentIntentInfo } from '@retool-app/backend/paddock/shared/terminalPaymentIntent'
+import { getStaffAccessRow } from '../../../legacy-booking/backend/paddock/shared/staffAccess'
+import { terminalPaymentIntentAction, type TerminalPaymentIntentInfo } from '../../../legacy-booking/backend/paddock/shared/terminalPaymentIntent'
 import { loadReaderOrderRows, rollbackReaderOrder, startReaderRollback, type ReaderPaymentSnapshot } from './shared/readerOrderRollback'
 import { saveCustomerCardOnFileUnguarded as saveCustomerCardOnFile } from './saveCustomerCardOnFile'
 import createMembershipSubscription from './shared/createMembershipSubscription'
 import { cancelMembershipSubscription } from '@retool-app/backend/paddock/shared/cancelMembershipSubscription'
-import { addMonthsToIsoDate, londonToday } from '@retool-app/backend/paddock/shared/londonTime'
+import { addMonthsToIsoDate, londonToday } from '../../../legacy-booking/backend/paddock/shared/londonTime'
 
 export interface FinaliseReaderOrderParams {
   orderId: string

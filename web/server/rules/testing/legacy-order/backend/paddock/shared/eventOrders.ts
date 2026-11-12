@@ -1,4 +1,4 @@
-import { isAtLeastMinimumAge, GUESTS_OVER_18_NOT_CONFIRMED_MESSAGE } from '@retool-app/backend/paddock/shared/guestValidation'
+import { isAtLeastMinimumAge, GUESTS_OVER_18_NOT_CONFIRMED_MESSAGE } from '../../../../legacy-booking/backend/paddock/shared/guestValidation'
 import type { PromoEligibleLine } from '@retool-app/backend/paddock/shared/promoCodes'
 
 /**

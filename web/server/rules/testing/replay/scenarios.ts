@@ -2797,6 +2797,7 @@ export const scenarios: Scenario[] = [
   ...w10Scenarios(),
   ...w11Scenarios(),
   ...w13Scenarios(),
+  ...w17Scenarios(),
 ]
 
 // --- W06: the Worker's order core. Every createOrder and createBooking reason in W06's scope that had
@@ -3812,5 +3813,285 @@ function w13Scenarios(): Scenario[] {
     onTheReader('w13-reader-buy-new-membership-cancelled', { booking: buyNew([sam, alex]), ...monthly, payment: saving }, { tap: 'none' }),
     // Q8 on the reader: the old subscription's cancel refused: the tap refunded, the new subscription cancelled.
     onTheReader('w13-reader-old-cancel-refused', { booking: replacing(), ...monthly, payment: saving }, { tap: 'paid-reusable', prepare: replacingAnd('subscriptions.cancel', () => fakeStripeErrors.invalid('resource_missing', "No such subscription: 'sub_exhausted'")) }),
+  ]
+}
+
+// --- W17 (lead call L6, D-plan 4.11 item 6): the golden gaps, recorded from the old functions while they exist (the
+// frozen copy, legacy-booking/), with today's outcomes, so step D's named differences are held against real
+// recordings. R1a to R4b are the third W05 release review's proofs (briefs/W05-release-review-3-report.md, findings 1
+// to 4); N1, N3 and N4 are D-plan section 3's bugs. Each records what the old code does today, faults included:
+// the slice that moves the action names the difference (W19 Settle, W20 Add Guest, W23 Cancel, W24 Move, W18 status).
+
+/**
+ * The statement matching `matches` gets no answer before it has run (the driver gave up while it waited, for a lock
+ * or in the pooler's queue), and then runs once `steps` is over: what a statement that commits after the press looked
+ * for it and undid everything leaves (the review's `landingAfterTheLook`). The late statement's own answer is lost.
+ */
+export async function landingAfterTheLook<T>(matches: (sql: string) => boolean, steps: () => Promise<T>): Promise<T> {
+  const real = dataApi()
+  let held: { sql: string; params: unknown[] } | null = null
+  vi.stubGlobal('paddockData', {
+    async query(sql: string, params: unknown[] = []) {
+      if (!held && matches(sql)) {
+        held = { sql, params }
+        throw new Error('timeout exceeded when trying to connect')
+      }
+      return real.query(sql, params)
+    },
+  })
+  try {
+    return await steps()
+  } finally {
+    vi.stubGlobal('paddockData', real)
+    const late = held as { sql: string; params: unknown[] } | null
+    if (late) await real.query(late.sql, late.params).catch(() => undefined)
+  }
+}
+
+/** Sam's other booking on `day`, in the cold plunge, so a move onto that day meets the one-a-day trigger (N1). */
+const samsOtherBookingOn = (day: string) => async (db: Db) => {
+  await insert(db, 'service_types', { id: ID.sauna2, name: 'Cold Plunge', booking_type: 'public' })
+  await insert(db, 'sessions', {
+    id: ID.conflicting,
+    service_type_id: ID.sauna2,
+    start_time: `${day} 08:00:00+00`,
+    end_time: `${day} 09:00:00+00`,
+    type: 'public',
+    capacity: 10,
+    total_booked: 1,
+    band_id: ID.band,
+  })
+  // With its times: a booking with none is an unbounded range to bookings_no_cross_session_overlap.
+  await insert(db, 'bookings', {
+    session_id: ID.conflicting,
+    customer_id: ID.customer,
+    party_size: 1,
+    price_paid: '20',
+    status: 'confirmed',
+    start_time: `${day} 08:00:00+00`,
+    end_time: `${day} 09:00:00+00`,
+  })
+}
+
+/** A write to `table` the database refuses, as a lost connection would (N4's later statements). */
+const sessionsWriteFails: WriteFailure = { table: 'sessions', event: 'UPDATE', when: 'true' }
+const passWriteFails: WriteFailure = { table: 'customer_session_passes', event: 'UPDATE', when: 'true' }
+
+function w17Scenarios(): Scenario[] {
+  const placeSamsTwoSeats = async (call: ScenarioContext['call']) =>
+    ((await call('createOrder', { customerId: ID.customer, ...publicOnCard })) as { bookingId: string }).bookingId
+  const movingSeed = async (db: Db, stripe: FakeStripe) => {
+    await seed(db, stripe)
+    await sessionsToMoveBetween(db)
+  }
+  const R1_MONEY = { storeCredit: { amount: 15 }, giftCard: { giftCardId: ID.giftCard, amount: 5 } }
+  const toPeak = (bookingId: string, payment?: Record<string, unknown>) => ({
+    bookingId,
+    newSessionId: ID.peakSession,
+    ...(payment ? { confirmed: true, payment } : {}),
+  })
+  return [
+    // R1 (review 3, finding 1): a no-card press whose statement commits after the press looked for it and undid.
+    {
+      name: 'w17-r1a-settle-store-credit-and-gift-card-statement-lands-late',
+      seed,
+      async run({ call, attempt, db }) {
+        const bookingId = await lapsedSeat(call, db)
+        await db.query('UPDATE customers SET store_credit_balance = 15 WHERE id = $1', [ID.member])
+        await landingAfterTheLook(SETTLE_STATEMENT, () => attempt('settleLapsedBooking', { bookingId, payment: R1_MONEY }))
+      },
+    },
+    {
+      name: 'w17-r1a-control-settle-store-credit-and-card-statement-lands-late',
+      seed,
+      async run({ call, attempt, db }) {
+        const bookingId = await lapsedSeat(call, db)
+        await db.query('UPDATE customers SET store_credit_balance = 15 WHERE id = $1', [ID.member])
+        await landingAfterTheLook(SETTLE_STATEMENT, () => attempt('settleLapsedBooking', { bookingId, payment: { method: 'card', storeCredit: { amount: 5 } } }))
+      },
+    },
+    {
+      name: 'w17-r1b-move-store-credit-and-gift-card-statement-lands-late',
+      seed: movingSeed,
+      async run({ call, attempt }) {
+        const bookingId = await placeSamsTwoSeats(call)
+        await call('moveBooking', toPeak(bookingId))
+        await landingAfterTheLook(MOVE_STATEMENT, () => attempt('moveBooking', toPeak(bookingId, { storeCredit: { amount: 6 }, giftCard: { giftCardId: ID.giftCard, amount: 5 } })))
+      },
+    },
+    {
+      name: 'w17-r1c-add-guest-store-credit-and-gift-card-statement-lands-late',
+      seed,
+      async run({ call, attempt }) {
+        const bookingId = await placeSamsTwoSeats(call)
+        await call('addBookingGuest', { bookingId, ...bea })
+        await landingAfterTheLook(ADD_GUEST_STATEMENT, () => attempt('addBookingGuest', { bookingId, ...bea, payment: R1_MONEY }))
+      },
+    },
+    {
+      name: 'w17-r1d-move-gift-card-and-reader-statement-lands-late-then-cancel',
+      seed: movingSeed,
+      async run({ call, attempt, db }) {
+        const bookingId = await placeSamsTwoSeats(call)
+        await call('moveBooking', toPeak(bookingId))
+        await landingAfterTheLook(MOVE_STATEMENT, () => attempt('moveBooking', toPeak(bookingId, { method: 'reader', giftCard: { giftCardId: ID.giftCard, amount: 5 } })))
+        const open = (await db.query<{ id: string }>("SELECT id FROM pending_reader_payments WHERE record_id = $1 AND status = 'pending'", [bookingId]))[0]
+        // As the old sweep does after 15 minutes: cancel the reader payment the late statement left open.
+        if (open) await attempt('cancelReaderPayment', { pendingId: open.id })
+      },
+    },
+    // R2 (finding 2): what a press that died took is recorded nowhere.
+    {
+      name: 'w17-r2a-add-guest-press-dies-after-the-charge-then-paid-on-the-card',
+      seed,
+      async run({ call, attempt }) {
+        const bookingId = await placeSamsTwoSeats(call)
+        await call('addBookingGuest', { bookingId, ...bea })
+        await dyingAfter(CHARGE_PATH, () => call('addBookingGuest', { bookingId, ...bea, payment: { method: 'card', storeCredit: { amount: 5 } } }))
+        await attempt('addBookingGuest', { bookingId, ...bea, payment: { method: 'card' } })
+      },
+    },
+    {
+      name: 'w17-r2b-add-guest-press-dies-after-the-charge-then-resumed-with-a-gift-card',
+      seed,
+      async run({ call, attempt }) {
+        const bookingId = await placeSamsTwoSeats(call)
+        await call('addBookingGuest', { bookingId, ...bea })
+        await dyingAfter(CHARGE_PATH, () => call('addBookingGuest', { bookingId, ...bea, payment: { method: 'card', storeCredit: { amount: 5 } } }))
+        await attempt('addBookingGuest', { bookingId, ...bea, payment: { method: 'card', giftCard: { giftCardId: ID.giftCard, amount: 5 } } })
+      },
+    },
+    {
+      name: 'w17-r2c-settle-press-dies-after-a-decline-then-declined-again',
+      seed,
+      async run({ call, attempt, db, stripe }) {
+        const bookingId = await lapsedSeat(call, db)
+        await db.query('UPDATE customers SET store_credit_balance = 10 WHERE id = $1', [ID.member])
+        stripe.failNext('paymentIntents.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
+        await dyingAfter(CHARGE_PATH, () => call('settleLapsedBooking', { bookingId, payment: { method: 'card', storeCredit: { amount: 5 } } }))
+        stripe.failNext('paymentIntents.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
+        await attempt('settleLapsedBooking', { bookingId, payment: { method: 'card', storeCredit: { amount: 5 } } })
+      },
+    },
+    {
+      name: 'w17-r2d-add-guest-press-dies-while-the-worker-charges-and-writes-no-order',
+      seed,
+      async run({ call, attempt, db }) {
+        const bookingId = await placeSamsTwoSeats(call)
+        await call('addBookingGuest', { bookingId, ...bea })
+        const payment = { method: 'card', storeCredit: { amount: 5 } }
+        await whileFailing(db, { table: 'orders', event: 'INSERT', when: 'true' }, () =>
+          dyingAfter(CHARGE_PATH, () => call('addBookingGuest', { bookingId, ...bea, payment }))
+        )
+        await attempt('addBookingGuest', { bookingId, ...bea, payment })
+      },
+    },
+    // R3 (finding 4): two losing presses record the one refund twice.
+    {
+      name: 'w17-r3-move-two-presses-the-new-session-full-for-both',
+      seed: movingSeed,
+      async run({ call, attempt, db }) {
+        const bookingId = await placeSamsTwoSeats(call)
+        await call('moveBooking', toPeak(bookingId))
+        await db.query('UPDATE sessions SET total_booked = capacity WHERE id = $1', [ID.peakSession])
+        const press = () => attempt('moveBooking', toPeak(bookingId, { method: 'card' }))
+        beforeTheStartedRow(press)
+        await press()
+        await call('getBookingRefundFigures', { bookingId })
+      },
+    },
+    // R4 (finding 3): a store credit claim whose answer is lost is kept.
+    {
+      name: 'w17-r4a-add-guest-store-credit-claim-answer-lost-then-pressed-again',
+      seed,
+      async run({ call, attempt }) {
+        const bookingId = await placeSamsTwoSeats(call)
+        await call('addBookingGuest', { bookingId, ...bea })
+        const redemption = (sql: string, params: unknown[]) => sql.includes('store_credit_apply') && params[2] === 'redemption'
+        await losingTheAnswer(redemption, () => attempt('addBookingGuest', { bookingId, ...bea, payment: R1_MONEY }))
+        await attempt('addBookingGuest', { bookingId, ...bea, payment: R1_MONEY })
+      },
+    },
+    {
+      name: 'w17-r4b-move-store-credit-claim-answer-lost',
+      seed: movingSeed,
+      async run({ call, attempt }) {
+        const bookingId = await placeSamsTwoSeats(call)
+        await call('moveBooking', toPeak(bookingId))
+        const redemption = (sql: string, params: unknown[]) => sql.includes('store_credit_apply') && params[2] === 'redemption'
+        await losingTheAnswer(redemption, () => attempt('moveBooking', toPeak(bookingId, { method: 'card', storeCredit: { amount: 6 } })))
+      },
+    },
+    // N1: Move meets the one-booking-a-day rule only at its write.
+    {
+      name: 'w17-n1-dearer-move-on-the-card-to-a-day-with-another-booking',
+      async seed(db, stripe) {
+        await movingSeed(db, stripe)
+        await samsOtherBookingOn('2026-11-14')(db)
+      },
+      async run({ call, attempt }) {
+        const bookingId = await placeSamsTwoSeats(call)
+        await call('moveBooking', toPeak(bookingId))
+        await attempt('moveBooking', toPeak(bookingId, { method: 'card' }))
+      },
+    },
+    {
+      name: 'w17-n1-same-price-move-to-a-day-with-another-booking',
+      async seed(db, stripe) {
+        await seed(db, stripe)
+        await laterPublicSession(db)
+        await samsOtherBookingOn('2026-11-20')(db)
+      },
+      async run({ call, attempt }) {
+        const bookingId = await placeSamsTwoSeats(call)
+        await call('moveBooking', { bookingId, newSessionId: ID.laterPublicSession })
+        await attempt('moveBooking', { bookingId, newSessionId: ID.laterPublicSession, confirmed: true })
+      },
+    },
+    // N3: setBookingStatus takes statuses the screen never offers.
+    {
+      name: 'w17-n3-status-set-to-cancelled-on-a-paid-booking',
+      seed,
+      async run({ call, attempt }) {
+        const bookingId = await placeSamsTwoSeats(call)
+        await attempt('setBookingStatus', { bookingId, status: 'cancelled' })
+        await call('getBookingRefundFigures', { bookingId })
+      },
+    },
+    {
+      name: 'w17-n3-status-set-to-payment-needed-then-settled-again',
+      seed,
+      async run({ call, attempt }) {
+        const bookingId = await placeSamsTwoSeats(call)
+        await attempt('setBookingStatus', { bookingId, status: 'payment_needed' })
+        await attempt('settleLapsedBooking', { bookingId, payment: cash(20) })
+      },
+    },
+    {
+      name: 'w17-n3-status-set-to-confirmed-from-payment-needed',
+      seed,
+      async run({ call, attempt, db }) {
+        const bookingId = await lapsedSeat(call, db)
+        await attempt('setBookingStatus', { bookingId, status: 'confirmed' })
+      },
+    },
+    // N4: Cancel & return credit writes the cancel, then the places and the pass session separately.
+    {
+      name: 'w17-n4-cancel-credit-places-write-fails-after-the-cancel',
+      seed,
+      async run({ call, attempt, db }) {
+        const { bookingId } = (await call('createOrder', { customerId: ID.member, booking: { ...paidSeat([mo]), ...memberCredit }, payment: {} })) as { bookingId: string }
+        await whileFailing(db, sessionsWriteFails, () => attempt('cancelCreditBooking', { bookingId }))
+      },
+    },
+    {
+      name: 'w17-n4-cancel-credit-pass-session-write-fails-after-the-cancel',
+      seed,
+      async run({ call, attempt, db }) {
+        const booking = { ...paidSeat([sam]), redemptionSource: 'session_pass_credit', sessionPassId: ID.ownedPass }
+        const { bookingId } = (await call('createOrder', { customerId: ID.customer, booking, payment: {} })) as { bookingId: string }
+        await whileFailing(db, passWriteFails, () => attempt('cancelCreditBooking', { bookingId }))
+      },
+    },
   ]
 }

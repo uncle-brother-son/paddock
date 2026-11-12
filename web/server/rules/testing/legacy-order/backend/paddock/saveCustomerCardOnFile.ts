@@ -1,6 +1,6 @@
-import { isHtmlErrorPage } from '@retool-app/backend/paddock/shared/isHtmlErrorPage'
-import { extractStructuredApiError } from '@retool-app/backend/paddock/shared/extractStructuredApiError'
-import { extractApiErrorMessage } from '@retool-app/backend/paddock/shared/extractApiErrorMessage'
+import { isHtmlErrorPage } from '../../../legacy-booking/backend/paddock/shared/isHtmlErrorPage'
+import { extractStructuredApiError } from '../../../legacy-booking/backend/paddock/shared/extractStructuredApiError'
+import { extractApiErrorMessage } from '../../../legacy-booking/backend/paddock/shared/extractApiErrorMessage'
 
 export interface SaveCustomerCardOnFileParams {
   customerId: string

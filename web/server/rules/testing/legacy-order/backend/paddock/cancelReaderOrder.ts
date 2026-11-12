@@ -1,5 +1,5 @@
-import { getStaffAccessRow } from '@retool-app/backend/paddock/shared/staffAccess'
-import { terminalPaymentIntentAction } from '@retool-app/backend/paddock/shared/terminalPaymentIntent'
+import { getStaffAccessRow } from '../../../legacy-booking/backend/paddock/shared/staffAccess'
+import { terminalPaymentIntentAction } from '../../../legacy-booking/backend/paddock/shared/terminalPaymentIntent'
 import { loadReaderOrderRows, rollbackReaderOrder } from './shared/readerOrderRollback'
 import finaliseReaderOrder, { type FinaliseReaderOrderResult } from './finaliseReaderOrder'
 
