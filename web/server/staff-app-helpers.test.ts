@@ -1158,8 +1158,6 @@ describe('staff app helpers', () => {
     const screen = () => import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/cashConfirmation'))
     const backend = (name: string) => import(/* @vite-ignore */ path.join(appDir, `backend/paddock/${name}`))
     const isWrite = (sql: string) => /\b(INSERT INTO|UPDATE|DELETE FROM)\b/.test(sql)
-    /** The writes that move money or change the booking: a claim's finishing row isn't one. */
-    const notAudit = (sql: string) => !/^\s*INSERT INTO audit_log/.test(sql)
 
     /** A fake database: the first matching pattern answers, and anything else returns no rows. */
     function stubDatabase(answers: Array<[RegExp, (params: unknown[]) => unknown[]]>) {
@@ -1584,6 +1582,181 @@ describe('staff app helpers', () => {
       })
     })
 
+    describe('Remove Guest and Remove add-on (W22: thin calls to the Worker)', () => {
+      const GUEST = '22222222-2222-4222-8222-222222222222'
+      const LINE = '33333333-3333-4333-8333-333333333333'
+      const BOOKING = '11111111-1111-4111-8111-111111111111'
+      const quote = { bookingId: BOOKING, bookingType: 'public', refundAmount: 20, refundable: true, partySize: 3 }
+      const addonQuote = { lineId: LINE, bookingId: BOOKING, paid: true, amount: 5, insideTwentyFourHours: false, refund: 5 }
+      const refused = (code: string, details: Record<string, unknown>) => ({
+        data: { ok: false, error: { code, message: String(details['message']), details: { ...details } }, requestId: 'worker-request' },
+      })
+      const run = async (name: 'removeBookingGuest' | 'removeBookingAddon', params: Record<string, unknown>) => {
+        const query = vi.fn()
+        vi.stubGlobal('paddockData', { query })
+        const fn = (await backend(name)).default
+        return { result: await fn({ params, user }), query }
+      }
+
+      it('Remove Guest: the first call asks for the quote (a read, no key); the second removes with the amount and the press key; never the database', async () => {
+        rawRequest.mockResolvedValue(success({ removed: false, blocked: false, guestId: GUEST, quote }))
+        const first = await run('removeBookingGuest', { guestId: GUEST })
+        expect(first.result).toEqual({ removed: false, blocked: false, guestId: GUEST, quote })
+        expect(rawRequest.mock.calls[0]?.[0]).toMatchObject({ path: `/api/v1/staff/bookings/guests/${GUEST}/remove/quote`, method: 'POST', body: {} })
+        expect((rawRequest.mock.calls[0]?.[0] as { headers?: Record<string, string> }).headers?.['Idempotency-Key']).toBeUndefined()
+        rawRequest.mockResolvedValue(success({ removed: true, blocked: false, guestId: GUEST, refundedAmount: 20, cardRefundedAmount: 20, storeCreditRefundedAmount: 0 }))
+        const second = await run('removeBookingGuest', { guestId: GUEST, confirmedRefundAmount: 20, refundMethod: 'card', idempotencyKey: 'press-key-0000000001' })
+        expect(second.result).toEqual({ removed: true, blocked: false, guestId: GUEST, refundedAmount: 20, cardRefundedAmount: 20, storeCreditRefundedAmount: 0 })
+        expect(rawRequest.mock.calls[1]?.[0]).toMatchObject({
+          path: `/api/v1/staff/bookings/guests/${GUEST}/remove`,
+          method: 'POST',
+          body: { confirmedRefundAmount: 20, refundMethod: 'card' },
+          headers: expect.objectContaining({ 'Idempotency-Key': 'press-key-0000000001' }),
+        })
+        expect(first.query).not.toHaveBeenCalled()
+        expect(second.query).not.toHaveBeenCalled()
+      })
+
+      it('Remove Guest: a refusal in the old shape (the words left out when the old function had none; the new quote; the permission flag)', async () => {
+        rawRequest.mockResolvedValue(refused('CONFLICT', { reason: 'refund_amount_mismatch', message: 'The amount due has changed. Check it with the customer and confirm again.', action: 'remove_guest', quote }))
+        expect((await run('removeBookingGuest', { guestId: GUEST, confirmedRefundAmount: 25, refundMethod: 'card' })).result).toEqual({
+          removed: false,
+          blocked: false,
+          guestId: GUEST,
+          reason: 'refund_amount_mismatch',
+          message: 'The amount due has changed. Check it with the customer and confirm again.',
+          quote,
+        })
+        rawRequest.mockResolvedValue(refused('FORBIDDEN', { reason: 'no_refund_permission', message: 'x', action: 'remove_guest', screenWords: true, blockedByRefundPermission: true }))
+        expect((await run('removeBookingGuest', { guestId: GUEST, confirmedRefundAmount: 20, refundMethod: 'card' })).result).toEqual({
+          removed: false,
+          blocked: false,
+          guestId: GUEST,
+          reason: 'no_refund_permission',
+          blockedByRefundPermission: true,
+        })
+        rawRequest.mockResolvedValue(refused('NOT_FOUND', { reason: 'guest_not_found', message: 'This guest has already been removed.', action: 'remove_guest', screenWords: true }))
+        expect((await run('removeBookingGuest', { guestId: GUEST })).result).toEqual({ removed: false, blocked: false, guestId: GUEST, reason: 'guest_not_found' })
+      })
+
+      it("Remove Guest: a refund held for the automatic check (Q35): removed, with the Worker's words as the warning", async () => {
+        const words = "The refund didn't get a clear answer, so it may or may not have gone. Don't refund it again. Check the Orders page in a few minutes."
+        rawRequest.mockResolvedValue(success({ removed: true, blocked: false, guestId: GUEST, refundedAmount: 0, cardRefundedAmount: 0, storeCreditRefundedAmount: 0, held: { claimId: 'c', reason: 'refund_unconfirmed', message: words } }))
+        expect((await run('removeBookingGuest', { guestId: GUEST, confirmedRefundAmount: 20, refundMethod: 'card' })).result).toMatchObject({ removed: true, warning: words })
+      })
+
+      it.each([
+        ['no connection', () => rawRequest.mockRejectedValue(new Error('socket hang up'))],
+        ['an earlier press still running', () => rawRequest.mockResolvedValue(refusal('CONFLICT', 'This request is already being processed'))],
+        ['a fault', () => rawRequest.mockResolvedValue(refusal('INTERNAL', 'Something went wrong and the action may not have finished. Check before trying again.'))],
+      ])('%s: `no_answer` on either removal, so the dialog keeps its key', async (_label, arrange) => {
+        arrange()
+        const { REMOVE_GUEST_NO_ANSWER_MESSAGE, REMOVE_ADDON_NO_ANSWER_MESSAGE } = await load('bookingWorker')
+        expect((await run('removeBookingGuest', { guestId: GUEST, confirmedRefundAmount: 20, refundMethod: 'card' })).result).toEqual({
+          removed: false,
+          blocked: false,
+          guestId: GUEST,
+          reason: 'no_answer',
+          message: REMOVE_GUEST_NO_ANSWER_MESSAGE,
+        })
+        expect((await run('removeBookingAddon', { addonLineId: LINE, refund: 'card', confirmedRefund: 5 })).result).toEqual({ removed: false, reason: 'no_answer', message: REMOVE_ADDON_NO_ANSWER_MESSAGE })
+      })
+
+      it('a changed press under a no-answer key: `pressed_after_no_answer` (Remove Guest locks), never sent as new', async () => {
+        rawRequest.mockResolvedValue(refusal('IDEMPOTENCY_MISMATCH', 'This Idempotency-Key was already used for a different request.'))
+        const { REMOVE_GUEST_PRESSED_AFTER_NO_ANSWER_MESSAGE, REMOVE_ADDON_PRESSED_AFTER_NO_ANSWER_MESSAGE } = await load('bookingWorker')
+        expect((await run('removeBookingGuest', { guestId: GUEST, confirmedRefundAmount: 20, refundMethod: 'credit' })).result).toMatchObject({
+          reason: 'pressed_after_no_answer',
+          message: REMOVE_GUEST_PRESSED_AFTER_NO_ANSWER_MESSAGE,
+          retryLocked: true,
+        })
+        expect((await run('removeBookingAddon', { addonLineId: LINE, refund: 'credit', confirmedRefund: 5 })).result).toEqual({
+          removed: false,
+          reason: 'pressed_after_no_answer',
+          message: REMOVE_ADDON_PRESSED_AFTER_NO_ANSWER_MESSAGE,
+        })
+      })
+
+      it('Remove add-on: the quote first (a read), then the removal with the confirmed refund and the key; a refusal with the new quote', async () => {
+        rawRequest.mockResolvedValue(success(addonQuote))
+        expect((await run('removeBookingAddon', { addonLineId: LINE, refund: 'card' })).result).toEqual({ removed: false, quote: addonQuote })
+        expect(rawRequest.mock.calls[0]?.[0]).toMatchObject({ path: `/api/v1/staff/bookings/addon-lines/${LINE}/remove/quote`, method: 'POST' })
+        const removed = { removed: true, summary: '1 add-on cancelled: £5.00 to the card', cancelledLineIds: [LINE], refundedAmount: 5, cardRefundedAmount: 5, storeCreditRefundedAmount: 0, creditsReturned: 0, notes: [] }
+        rawRequest.mockResolvedValue(success(removed))
+        const { result, query } = await run('removeBookingAddon', { addonLineId: LINE, refund: 'card', confirmedRefund: 5, idempotencyKey: 'press-key-0000000002' })
+        expect(result).toEqual(removed)
+        expect(rawRequest.mock.calls[1]?.[0]).toMatchObject({
+          path: `/api/v1/staff/bookings/addon-lines/${LINE}/remove`,
+          body: { refund: 'card', confirmed: { refund: 5 } },
+          headers: expect.objectContaining({ 'Idempotency-Key': 'press-key-0000000002' }),
+        })
+        expect(query).not.toHaveBeenCalled()
+        rawRequest.mockResolvedValue(
+          refused('CONFLICT', { reason: 'refund_changed', message: 'The figures on this booking have just changed. Check them and confirm again.', action: 'remove_addon', addonQuote: { ...addonQuote, insideTwentyFourHours: true, refund: 0 } })
+        )
+        expect((await run('removeBookingAddon', { addonLineId: LINE, refund: 'card', confirmedRefund: 5 })).result).toEqual({
+          removed: false,
+          reason: 'refund_changed',
+          message: 'The figures on this booking have just changed. Check them and confirm again.',
+          quote: { ...addonQuote, insideTwentyFourHours: true, refund: 0 },
+        })
+      })
+
+      it("the dialogs: Remove Guest blocks closing mid-call (W02 finding 13); both keep their press key after no answer or a throw (W20a's rule); Remove add-on sends the quote's figure", () => {
+        const guest = readFileSync(path.join(appDir, 'frontend/components/RemoveGuestDialog.tsx'), 'utf8')
+        const addon = readFileSync(path.join(appDir, 'frontend/components/RemoveBookingAddonDialog.tsx'), 'utf8')
+        expect(guest).toContain('onOpenChange={(next) => (submitting ? undefined : next ? setOpen(true) : resetAndClose())}')
+        expect(addon).toContain('onOpenChange={(next) => (saving ? undefined : next ? setOpen(true) : close())}')
+        for (const source of [guest, addon]) {
+          expect(source).toContain('pressKey.current ??= crypto.randomUUID()')
+          expect(source).toContain('idempotencyKey: pressKey.current')
+          // The key is cleared only after the no-answer answers have returned (it is kept for them), and on close.
+          expect(source).toMatch(/=== 'no_answer' \|\| result(\?)?\.reason === 'pressed_after_no_answer'\)\) ?\{[\s\S]*?return\s*\}\s*pressKey\.current = null|=== 'no_answer' \|\| result(\?)?\.reason === 'pressed_after_no_answer'\) \{[\s\S]*?return\s*\}\s*pressKey\.current = null/)
+          expect(source.match(/pressKey\.current = null/g)).toHaveLength(2)
+          // A throw keeps the key, with the no-answer words.
+          expect(source).toContain('setErrorMessage(thrownCallMessage(err))')
+        }
+        // The old dialog locked Remove after a throw; with the key kept, pressing again is the same press.
+        expect(guest.slice(guest.indexOf('async function handleConfirm'))).not.toMatch(/catch \(err\) \{[^}]*setRetryLocked\(true\)/)
+        expect(addon).toContain('confirmedRefund: refundShown')
+        expect(addon).toContain("const refundShown = quote && quote.paid && refund !== 'none' ? quote.refund : 0")
+      })
+
+      it("W22a item 1 (Wayne's decision): inside 24 hours Remove Guest shows the 24-hour words and sends the Worker's £0", () => {
+        const guest = readFileSync(path.join(appDir, 'frontend/components/RemoveGuestDialog.tsx'), 'utf8')
+        expect(guest).toContain(
+          "'Inside 24 hours of the session, so nothing is refunded for this guest. Use Part refund if you want to give something back.'"
+        )
+        expect(guest).toMatch(/\{quote\.refundable && quote\.insideTwentyFourHours\s+\? INSIDE_24_HOURS_MESSAGE/)
+        // The figure sent is the quote's (the Worker's £0 inside 24 hours), with no method when it is £0.
+        expect(guest).toContain('confirmedRefundAmount: quote.refundAmount,')
+        expect(guest).toContain('...(quote.refundAmount > 0 ? { refundMethod } : {}),')
+      })
+
+      it('W22a S1 (Q37): Remove Guest offers the card whenever the booking\'s figures show card money left, not from its payment_method', () => {
+        const guest = readFileSync(path.join(appDir, 'frontend/components/RemoveGuestDialog.tsx'), 'utf8')
+        expect(guest).toContain('const figures = await loadFigures({ bookingId: next.bookingId }, { skipCache: true })')
+        expect(guest).toContain('const cardLeft = figures.parts.card')
+        expect(guest).toContain('const cardRefundAvailable = card !== null && card.cardLeft > 0')
+        expect(guest).toContain("setRefundMethod(cardLeft > 0 ? 'card' : 'credit')")
+        // Figures that can't be loaded offer store credit only; Remove waits for the figures when money goes back.
+        expect(guest).toContain("setCard({ cardLeft: 0, paidLine: null, failed: true })")
+        expect(guest).toContain('(quote.refundAmount > 0 && (!canIssueRefunds || card === null))')
+        expect(guest).not.toContain('cardRefundAvailable?: boolean')
+        expect(guest).not.toMatch(/payment_method ===|hasCardPayment/)
+        const parent = readFileSync(path.join(appDir, 'frontend/components/BookingDetailContent.tsx'), 'utf8')
+        const removeGuest = parent.slice(parent.indexOf('<RemoveGuestDialog'), parent.indexOf('/>', parent.indexOf('<RemoveGuestDialog')))
+        expect(removeGuest).not.toContain('cardRefundAvailable')
+      })
+
+      it('W22a S2: Remove add-on reloads the booking on close after no answer or a throw, as Remove Guest does', () => {
+        const addon = readFileSync(path.join(appDir, 'frontend/components/RemoveBookingAddonDialog.tsx'), 'utf8')
+        const confirm = addon.slice(addon.indexOf('async function handleConfirm'), addon.indexOf('return (\n    <>'))
+        expect(confirm).toMatch(/=== 'pressed_after_no_answer'\)\) \{\s+\/\/[^\n]*\n\s+removedOnClose\.current = true/)
+        expect(confirm).toMatch(/catch \(err\) \{\s+\/\/[^\n]*\n\s+removedOnClose\.current = true\s+setErrorMessage\(thrownCallMessage\(err\)\)/)
+      })
+    })
+
     describe('Move', () => {
       const move = async (payment: Record<string, unknown> | undefined, tierPrice = '65.00') => {
         const session = { id: 'session-2', start_time: '2026-12-01T10:00:00', end_time: '2026-12-01T11:00:00', capacity: 8, total_booked: 0, status: 'open', service_type_id: 'type-1', band_id: 'band-2', booking_type: 'private', started: false }
@@ -1827,233 +2000,6 @@ describe('staff app helpers', () => {
       })
     })
 
-    describe('Remove Guest', () => {
-      const remove = async (params: Record<string, unknown>, seat: { unit_price: string | null; pay_by: string } = { unit_price: '25.00', pay_by: 'paid' }) => {
-        const database = stubDatabase([
-          [/FROM booking_guests g/, () => [{
-            id: 'guest-1',
-            booking_id: 'booking-1',
-            guest_type: 'additional',
-            guest_name: 'Sam',
-            ...seat,
-            bk_id: 'booking-1',
-            customer_id: 'customer-1',
-            party_size: 2,
-            price_paid: '50.00',
-            status: 'confirmed',
-            session_id: 'session-1',
-            booking_type: 'public',
-          }]],
-        ])
-        const fn = (await backend('removeBookingGuest')).default
-        const result = await fn({ params: { guestId: 'guest-1', ...params }, user })
-        return { result, ...database }
-      }
-      const quote = (refundAmount: number, refundable = true) => ({ bookingId: 'booking-1', bookingType: 'public', refundAmount, refundable, partySize: 2 })
-
-      it('a confirmed refund that differs gets the new figure, and writes nothing', async () => {
-        const { result, writes } = await remove({ confirmedRefundAmount: 20, refundMethod: 'credit' })
-        expect(result).toEqual({ removed: false, blocked: false, guestId: 'guest-1', reason: 'refund_amount_mismatch', message: AMOUNT_CHANGED, quote: quote(25) })
-        expect(writes()).toEqual([])
-      })
-
-      it('no refund method gets the figure, and writes nothing', async () => {
-        const { result, writes } = await remove({ confirmedRefundAmount: 25 })
-        expect(result).toEqual({ removed: false, blocked: false, guestId: 'guest-1', reason: 'refund_method_required', quote: quote(25) })
-        expect(writes()).toEqual([])
-      })
-
-      it('a seat that stopped being refundable is refused, not removed with no refund', async () => {
-        const { result, writes } = await remove({ confirmedRefundAmount: 25, refundMethod: 'credit' }, { unit_price: '25.00', pay_by: 'membership_credit' })
-        expect(result).toMatchObject({ removed: false, reason: 'refund_amount_mismatch', quote: quote(0, false) })
-        expect(writes()).toEqual([])
-      })
-
-      describe('what staff are told when it fails', () => {
-        const DIDNT_GO_THROUGH = "The refund didn't go through, so the guest hasn't been removed. Please try again."
-        const NOTHING_REFUNDED = "The guest couldn't be removed and nothing was refunded. Please try again."
-        const WENT_THROUGH = "The refund went through, but the guest couldn't be removed. Check the booking before trying again."
-        const PART_WENT_THROUGH = "Part of the refund went through, but the guest couldn't be removed. Check the booking before trying again."
-        const CARD_REFUND_FAILED = 'The card refund failed, so nothing was refunded: card_declined'
-        const CREDIT_FAILED = 'Adding the store credit failed, so nothing was refunded.'
-
-        /** A seat of £25 on one order. `cardPortion` is what that order's card took (0: no card
-         *  money to return). `credit` answers each store credit movement in turn. */
-        const run = async (options: {
-          params?: Record<string, unknown>
-          seat?: { unit_price: string | null; pay_by: string }
-          cardPortion?: number
-          cardRefund?: { error: string } | { success: true }
-          credit?: boolean[]
-          deleted?: boolean | Error
-          status?: string
-        }) => {
-          const credit = [...(options.credit ?? [])]
-          const database = stubDatabase([
-            [/FROM booking_guests g/, () => [{
-              id: 'guest-1',
-              booking_id: 'booking-1',
-              claim_id: 'claim-1',
-              guest_type: 'additional',
-              guest_name: 'Sam',
-              ...(options.seat ?? { unit_price: '25.00', pay_by: 'paid' }),
-              bk_id: 'booking-1',
-              customer_id: 'customer-1',
-              party_size: 2,
-              price_paid: '50.00',
-              status: options.status ?? 'confirmed',
-              session_id: 'session-1',
-              booking_type: 'public',
-            }]],
-            [/WHERE oli\.booking_id = \$1 AND oli\.item_type = 'booking'/, () => [{ id: 'line-1', order_id: 'order-1', net_remaining: '25.00' }]],
-            [/FROM orders o WHERE o\.id/, () => [{
-              customer_id: 'customer-1',
-              stripe_payment_intent_id: (options.cardPortion ?? 0) > 0 ? 'pi_1' : null,
-              payment_method: 'card',
-              order_total: String(options.cardPortion ?? 0),
-              order_discount_amount: '0',
-              gift_card_used: '0',
-              store_credit_used: '0',
-              membership_net: '0',
-              already_card_refunded: '0',
-            }]],
-            [/store_credit_apply/, () => [{ result: credit.shift() === false ? { ok: false } : { ok: true, balance: 25 } }]],
-            [/WITH del AS/, () => {
-              if (options.deleted instanceof Error) throw options.deleted
-              return [{ deleted: options.deleted ?? true }]
-            }],
-          ])
-          const rawRefund = vi.fn(async () => ({ data: options.cardRefund ?? { success: true } }))
-          vi.stubGlobal('paddockBackendApi2', { rawRequest: rawRefund })
-          const fn = (await backend('removeBookingGuest')).default
-          const result = await fn({
-            params: { guestId: 'guest-1', confirmedRefundAmount: 25, refundMethod: 'card', ...options.params },
-            user,
-          })
-          return { result, rawRefund, ...database }
-        }
-        const credit = { refundMethod: 'credit' }
-        const cardWentBack = (amount: string) =>
-          `£${amount} had already gone back to the card; it was taken off the guest's seat, so retrying refunds only the rest.`
-
-        it('a cancelled booking is refused with its reason at both steps, and nothing moves', async () => {
-          for (const params of [{ confirmedRefundAmount: undefined }, {}]) {
-            const { result, writes, rawRefund } = await run({ params, status: 'cancelled', cardPortion: 25 })
-            expect(result).toEqual({ removed: false, blocked: false, guestId: 'guest-1', reason: 'booking_cancelled' })
-            expect(writes()).toEqual([])
-            expect(rawRefund).not.toHaveBeenCalled()
-          }
-        })
-
-        it('a card refund that fails: nothing moved and the guest stays', async () => {
-          const { result, writes } = await run({ cardPortion: 25, cardRefund: { error: 'card_declined' } })
-          expect(result).toEqual({
-            removed: false,
-            blocked: false,
-            guestId: 'guest-1',
-            reason: `refund_failed: ${CARD_REFUND_FAILED}`,
-            message: `${DIDNT_GO_THROUGH} (${CARD_REFUND_FAILED})`,
-          })
-          expect(writes().filter(notAudit)).toEqual([expect.stringContaining('WITH seat AS'), expect.stringContaining('WITH seat AS (UPDATE booking_guests')])
-        })
-
-        it('store credit that fails: nothing moved and the guest stays', async () => {
-          const { result, sql, writes } = await run({ params: credit, credit: [false] })
-          expect(result.message).toBe(`${DIDNT_GO_THROUGH} (${CREDIT_FAILED})`)
-          expect(writes().filter(notAudit).filter((text) => !/store_credit_apply/.test(text))).toEqual([expect.stringContaining('WITH seat AS'), expect.stringContaining('WITH seat AS (UPDATE booking_guests')])
-          expect(sql.some((text) => /WITH del AS/.test(text))).toBe(false)
-        })
-
-        it('no refund was due: says nothing was refunded, not that a refund went through', async () => {
-          const { result, rawRefund } = await run({
-            params: { confirmedRefundAmount: 0, refundMethod: undefined },
-            seat: { unit_price: null, pay_by: 'membership_credit' },
-            deleted: new Error('deadlock detected'),
-          })
-          expect(result).toEqual({
-            removed: false,
-            blocked: false,
-            guestId: 'guest-1',
-            reason: 'guest_remove_failed: deadlock detected',
-            message: `${NOTHING_REFUNDED} (deadlock detected)`,
-          })
-          expect(rawRefund).not.toHaveBeenCalled()
-        })
-
-        it('store credit taken back: nothing is refunded in the end', async () => {
-          const { result } = await run({ params: credit, deleted: new Error('deadlock detected') })
-          expect(result.message).toBe(`${NOTHING_REFUNDED} The £25.00 store credit was taken back. (deadlock detected)`)
-          expect(result.quote).toBeUndefined()
-        })
-
-        it('store credit that could not be taken back: the refund stands', async () => {
-          const { result } = await run({ params: credit, credit: [true, false], deleted: new Error('deadlock detected') })
-          expect(result.message).toBe(`${WENT_THROUGH} Taking back the £25.00 store credit failed — remove it by hand. (deadlock detected)`)
-          expect(result.quote).toBeUndefined()
-        })
-
-        it('all of it back on the card: the refund stands, and the screen moves to the £0.00 left', async () => {
-          const { result } = await run({ cardPortion: 25, deleted: new Error('deadlock detected') })
-          expect(result.reason).toBe('guest_remove_failed: deadlock detected')
-          expect(result.message).toBe(`${WENT_THROUGH} ${cardWentBack('25.00')} (deadlock detected)`)
-          expect(result.quote).toEqual(quote(0))
-          expect(result.removed).toBe(false)
-        })
-
-        it('part on the card and the store credit taken back: only that part stands', async () => {
-          const { result } = await run({ cardPortion: 15, deleted: new Error('deadlock detected') })
-          expect(result.message).toBe(
-            `${PART_WENT_THROUGH} The £10.00 store credit was taken back. ${cardWentBack('15.00')} (deadlock detected)`
-          )
-          expect(result.quote).toEqual(quote(10))
-        })
-
-        it('the figure left on the seat is in whole pennies', async () => {
-          const { result } = await run({
-            params: { confirmedRefundAmount: 25.3 },
-            seat: { unit_price: '25.30', pay_by: 'paid' },
-            cardPortion: 15.1,
-            deleted: new Error('deadlock detected'),
-          })
-          expect(result.quote).toEqual(quote(10.2))
-        })
-
-        it('part on the card and the store credit not taken back: all of it stands', async () => {
-          const { result } = await run({ cardPortion: 15, credit: [true, false], deleted: new Error('deadlock detected') })
-          expect(result.message).toContain(WENT_THROUGH)
-          expect(result.quote).toEqual(quote(10))
-        })
-
-        it('keeps what the refund itself warned about', async () => {
-          const { result } = await run({ cardPortion: 15, credit: [false], deleted: new Error('deadlock detected') })
-          expect(result.message).toBe(
-            `${PART_WENT_THROUGH} The other £10.00 wasn't added to store credit, so it's still to refund. ${cardWentBack('15.00')} (deadlock detected)`
-          )
-        })
-
-        it('a guest already gone: no seat to lower, so no promise about retrying', async () => {
-          const { result } = await run({ cardPortion: 25, deleted: false })
-          expect(result.message).toBe(
-            `${WENT_THROUGH} £25.00 had already gone back to the card; it was taken off the booking's price paid. (the guest was already removed)`
-          )
-          expect(result.quote).toBeUndefined()
-        })
-
-        it('the detail is always last, in brackets', async () => {
-          const { result } = await run({ params: credit, deleted: new Error('deadlock detected') })
-          expect(result.message.endsWith('(deadlock detected)')).toBe(true)
-          expect(result.warning).toBeUndefined()
-        })
-
-        it('a guest that has gone says so', async () => {
-          stubDatabase([])
-          const fn = (await backend('removeBookingGuest')).default
-          const result = await fn({ params: { guestId: 'guest-1' }, user })
-          expect(result).toEqual({ removed: false, blocked: false, guestId: 'guest-1', reason: 'guest_not_found' })
-        })
-      })
-    })
-
     describe('refund safety', () => {
       const FAR_OFF = '2099-01-01T10:00:00Z'
       const BROKEN = new Error('connection lost')
@@ -2225,147 +2171,6 @@ describe('staff app helpers', () => {
           expect(given).toMatchObject({ ok: true, result: { cardRefunded: 15, shortfall: 10 } })
           expect(given.result.warning).toContain('recording it on its order failed — check before refunding this booking again')
           expect(rawRefund).toHaveBeenCalledTimes(1)
-        })
-      })
-
-      describe('Remove Guest', () => {
-        const guestRow = {
-          id: 'guest-1', claim_id: 'claim-1', booking_id: 'booking-1', guest_type: 'additional', guest_name: 'Sam', unit_price: '25.00', pay_by: 'paid',
-          bk_id: 'booking-1', customer_id: 'customer-1', party_size: 2, price_paid: '50.00', status: 'confirmed', session_id: 'session-1', booking_type: 'public',
-        }
-        const removal = async (options: Parameters<typeof setUp>[0] & { deleted?: boolean | Error; putBackFails?: boolean; refundMethod?: string }) => {
-          const stubs = setUp({
-            ...options,
-            answers: [
-              [/FROM booking_guests g/, () => [guestRow]],
-              [/WITH del AS/, () => {
-                if (options.deleted instanceof Error) throw options.deleted
-                return [{ deleted: options.deleted ?? true }]
-              }],
-              [/WITH seat AS \(UPDATE booking_guests/, () => {
-                if (options.putBackFails) throw BROKEN
-                return []
-              }],
-            ],
-          })
-          const fn = (await backend('removeBookingGuest')).default
-          const result = await fn({ params: { guestId: 'guest-1', confirmedRefundAmount: 25, refundMethod: options.refundMethod ?? 'card' }, user })
-          return { result, ...stubs }
-        }
-        const STILL_TO_REFUND = "The other £10.00 wasn't added to store credit, so it's still to refund."
-        const CARD_OFF_SEAT = "£15.00 had already gone back to the card; it was taken off the guest's seat, so retrying refunds only the rest."
-
-        it('a database error before any money moved: the guest stays and it is worded, not thrown', async () => {
-          const { result, rawRefund, writes } = await removal({ portions: { 'order-new': BROKEN } })
-          expect(result).toEqual({
-            removed: false,
-            blocked: false,
-            guestId: 'guest-1',
-            reason: 'refund_failed: Checking the card payment failed, so nothing was refunded: connection lost',
-            message: "The refund didn't go through, so the guest hasn't been removed. Please try again. (Checking the card payment failed, so nothing was refunded: connection lost)",
-          })
-          expect(rawRefund).not.toHaveBeenCalled()
-          expect(writes().filter(notAudit)).toEqual([expect.stringContaining('WITH seat AS'), expect.stringContaining('WITH seat AS (UPDATE booking_guests')])
-        })
-
-        it('store credit throwing after the card refund: the guest is still removed, and the rest stays on the booking to refund again', async () => {
-          const { result, sql, rawRefund } = await removal({ portions: { 'order-new': 15 }, credit: [BROKEN] })
-          expect(result).toMatchObject({ removed: true, refundedAmount: 15, cardRefundedAmount: 15, storeCreditRefundedAmount: 0 })
-          expect(result.warning).toContain('is still on the booking')
-          expect(result.warning).not.toContain('by hand')
-          expect(sql.some((text) => /WITH del AS/.test(text))).toBe(true)
-          expect(rawRefund).toHaveBeenCalledTimes(1)
-        })
-
-        it('the next order failing after the card refund: the same, with the rest on store credit', async () => {
-          const { result } = await removal({ portions: { 'order-new': 15, 'order-old': BROKEN } })
-          expect(result).toMatchObject({
-            removed: true,
-            refundedAmount: 25,
-            cardRefundedAmount: 15,
-            storeCreditRefundedAmount: 10,
-            storeCreditBalance: 40,
-            warning: 'Checking the next card payment failed (connection lost), so the rest went to store credit.',
-          })
-        })
-
-        it('a removal tells the screen how the refund split', async () => {
-          const { result } = await removal({ portions: { 'order-new': 15 } })
-          expect(result).toEqual({
-            removed: true,
-            blocked: false,
-            guestId: 'guest-1',
-            refundedAmount: 25,
-            cardRefundedAmount: 15,
-            storeCreditRefundedAmount: 10,
-            storeCreditBalance: 40,
-          })
-        })
-
-        it('store credit short and the guest stuck: says it is still to refund, never to add it by hand as well', async () => {
-          const { result } = await removal({ portions: { 'order-new': 15 }, credit: [false], deleted: new Error('deadlock detected') })
-          expect(result.message).toBe(
-            `Part of the refund went through, but the guest couldn't be removed. Check the booking before trying again. ${STILL_TO_REFUND} ${CARD_OFF_SEAT} (deadlock detected)`
-          )
-          expect(result.message).not.toContain('by hand')
-          expect(result.quote.refundAmount).toBe(10)
-          expect(result.retryLocked).toBeUndefined()
-        })
-
-        it('keeps the refund\'s other warnings when the shortfall line is dropped', async () => {
-          const { result } = await removal({ portions: { 'order-new': 15, 'order-old': BROKEN }, credit: [false], deleted: new Error('deadlock detected') })
-          expect(result.message).toContain(`Checking the next card payment failed (connection lost). ${STILL_TO_REFUND}`)
-        })
-
-        describe('the lock', () => {
-          it('store credit that could not be taken back locks Remove', async () => {
-            const { result } = await removal({ refundMethod: 'credit', credit: [true, false], deleted: new Error('deadlock detected') })
-            expect(result.retryLocked).toBe(true)
-          })
-
-          it('store credit that threw on the way back locks Remove', async () => {
-            const { result } = await removal({ refundMethod: 'credit', credit: [true, BROKEN], deleted: new Error('deadlock detected') })
-            expect(result.retryLocked).toBe(true)
-          })
-
-          it('a seat that could not be put back locks Remove', async () => {
-            const { result } = await removal({ portions: { 'order-new': 15 }, deleted: new Error('deadlock detected'), putBackFails: true })
-            expect(result.retryLocked).toBe(true)
-            expect(result.message).toContain("Putting the £10.00 back on the booking failed, so its price paid is that much too low")
-          })
-
-          it('store credit not taken back locks Remove even with the card part off the seat', async () => {
-            const { result } = await removal({ portions: { 'order-new': 15 }, credit: [true, false], deleted: new Error('deadlock detected') })
-            expect(result.retryLocked).toBe(true)
-            expect(result.quote.refundAmount).toBe(10)
-          })
-
-          it('a failure where a retry is safe does not lock', async () => {
-            for (const options of [
-              { refundMethod: 'credit', deleted: new Error('deadlock detected') },
-              { portions: { 'order-new': 25 }, deleted: new Error('deadlock detected') },
-              { portions: { 'order-new': 15 }, deleted: new Error('deadlock detected') },
-            ]) {
-              const { result } = await removal(options)
-              expect(result.removed).toBe(false)
-              expect(result.retryLocked).toBeUndefined()
-            }
-          })
-
-          it('a guest already gone does not lock: a retry only finds them gone', async () => {
-            for (const options of [
-              { refundMethod: 'credit', credit: [true, false], deleted: false },
-              { portions: { 'order-new': 15 }, deleted: false, putBackFails: true },
-            ]) {
-              const { result } = await removal(options)
-              expect(result.retryLocked).toBeUndefined()
-            }
-          })
-
-          it('a refund that moved nothing does not lock', async () => {
-            const { result } = await removal({ refunds: [{ error: 'card_declined' }] })
-            expect(result.retryLocked).toBeUndefined()
-          })
         })
       })
 
@@ -3048,7 +2853,8 @@ describe('staff app helpers', () => {
 
       it('Remove Guest moves to the new figure and shows words, not a code', () => {
         const source = readFileSync(path.join(appDir, 'frontend/components/RemoveGuestDialog.tsx'), 'utf8')
-        expect(source).toContain('if (result?.quote) setQuote(result.quote)')
+        // W22a: through showQuote, which loads the booking's figures again for the new figure.
+        expect(source).toContain('if (result?.quote) await showQuote(result.quote)')
         expect(source).toContain("setErrorMessage(refusalText(result, 'Failed to remove guest.'))")
         expect(source).not.toContain("setErrorMessage(result?.reason ??")
       })
@@ -3099,12 +2905,13 @@ describe('staff app helpers', () => {
 
       it('Remove Guest says nothing is left on a paid seat, and keeps the old reason for an unpaid one', () => {
         const source = readFileSync(path.join(appDir, 'frontend/components/RemoveGuestDialog.tsx'), 'utf8')
-        expect(source).toMatch(/\{quote\.refundable\s+\? 'Nothing left to refund on this seat\.'\s+: 'Nothing to refund — this seat was not paid with money \(legacy booking or credit-covered\)\.'\}/)
+        expect(source).toMatch(/: quote\.refundable\s+\? 'Nothing left to refund on this seat\.'\s+: 'Nothing to refund — this seat was not paid with money \(legacy booking or credit-covered\)\.'\}/)
       })
 
       it('Remove Guest reloads the booking when it closes after a refusal, and the parent does', () => {
         const dialog = readFileSync(path.join(appDir, 'frontend/components/RemoveGuestDialog.tsx'), 'utf8')
-        expect(dialog.match(/reloadOnClose\.current = true/g)).toHaveLength(3)
+        // W22: and after no answer (the key kept), as after a refusal or a throw.
+        expect(dialog.match(/reloadOnClose\.current = true/g)).toHaveLength(4)
         expect(dialog).toContain('if (reloadOnClose.current) {')
         expect(dialog).toContain('onBookingStale()')
         const parent = readFileSync(path.join(appDir, 'frontend/components/BookingDetailContent.tsx'), 'utf8')
@@ -3273,12 +3080,13 @@ describe('staff app helpers', () => {
         })
       })
 
-      it('Remove Guest locks and reloads when the call itself fails, because the refund may have gone', () => {
+      it('Remove Guest reloads when the call itself fails, because the refund may have gone; W22: it keeps the press key rather than locking (pressing again is the same press)', () => {
         const source = readFileSync(path.join(appDir, 'frontend/components/RemoveGuestDialog.tsx'), 'utf8')
         const confirm = source.slice(source.indexOf('async function handleConfirm'), source.indexOf('return (\n    <>'))
         const failed = confirm.slice(confirm.indexOf('} catch (err) {'))
         expect(failed).toContain('reloadOnClose.current = true')
-        expect(failed).toContain('setRetryLocked(true)')
+        expect(failed).not.toContain('setRetryLocked(true)')
+        expect(failed).not.toContain('pressKey.current = null')
         // Fetching the quote moves no money, so it stays retryable.
         const quote = source.slice(source.indexOf('async function handleQuote'), source.indexOf('async function handleConfirm'))
         expect(quote).not.toContain('setRetryLocked(true)')

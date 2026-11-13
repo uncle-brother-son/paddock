@@ -213,6 +213,22 @@ export async function loadBooking(db: Queryable, bookingId: string): Promise<Loa
 }
 
 /** Whether a payment is still being taken on the booking: any open flow, card or reader, old or new, or an order still being paid. */
+/**
+ * W22a: the booking's session start as the 24-hour rule reads it (startsWithinRealHours takes the London wall clock),
+ * the convention of the old lookup. Remove add-on and Remove Guest (Wayne's decision, 13 Nov) both use it. Null when
+ * the booking is gone.
+ */
+export async function sessionStartWallClock(db: Queryable, bookingId: string): Promise<string | null> {
+  const row = (
+    await db.query<{ start_time: string }>(
+      `SELECT to_char(s.start_time AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS') AS start_time
+       FROM bookings b JOIN sessions s ON s.id = b.session_id WHERE b.id = $1::uuid`,
+      [bookingId]
+    )
+  )[0]
+  return row?.start_time ?? null
+}
+
 export const paymentOpen = (booking: Pick<LoadedBooking, 'openFlows' | 'orderBeingPaid'>): boolean => booking.openFlows.length > 0 || booking.orderBeingPaid
 
 /**

@@ -144,9 +144,26 @@ export const removeGuestQuoteSchema = z.object({
   bookingType: z.enum(['public', 'private']),
   refundAmount: z.number(),
   refundable: z.boolean(),
+  /** W22a (Wayne's decision, 13 Nov): the session starts within 24 real hours, so the refund is £0 (Part refund instead). */
+  insideTwentyFourHours: z.boolean(),
   partySize: z.number(),
 })
 export type RemoveGuestQuote = z.infer<typeof removeGuestQuoteSchema>
+
+/**
+ * W22: what removing the add-on gives back, for the dialog to show and send back as `confirmed.refund` (Q18): a paid
+ * add-on's price × quantity (`amount`), and `refund`, what card or store credit would give (£0 inside 24 hours of the
+ * session). "Remove, no refund" and a credit add-on give £0 of money.
+ */
+export const removeAddonQuoteSchema = z.object({
+  lineId: id,
+  bookingId: id,
+  paid: z.boolean(),
+  amount: z.number(),
+  insideTwentyFourHours: z.boolean(),
+  refund: z.number(),
+})
+export type RemoveAddonQuote = z.infer<typeof removeAddonQuoteSchema>
 
 // --- Refund figures, and the three amount actions (refundBooking's amount paths)
 
@@ -327,6 +344,10 @@ export const bookingRefusalDetailsSchema = z.object({
   pendingId: z.string().optional(),
   /** W20 (W06 F4): which guest a guest refusal is about. Add Guest has one, so 0. */
   guestIndex: z.number().optional(),
+  /** W22: Remove add-on's figures, when the refund staff confirmed is no longer what would go back. */
+  addonQuote: removeAddonQuoteSchema.optional(),
+  /** W22: Remove Guest refused for want of Issue refunds (the old blockedByRefundPermission). */
+  blockedByRefundPermission: z.boolean().optional(),
   /**
    * W20: true when the old function sent no words of its own for this reason, so `message` is the dialog's own words
    * for it. The Add Guest wrapper then leaves `message` out, as the old answer did; the dialog shows the same words.
@@ -365,3 +386,60 @@ export const refundBookingOutputSchema = z.object({
   held: z.object({ claimId: z.string(), reason: z.string(), message: z.string() }).optional(),
 })
 export type RefundBookingOutput = z.infer<typeof refundBookingOutputSchema>
+
+// --- W22: Remove Guest and Remove add-on (removeBookingGuest, removeBookingAddon)
+
+/** A card refund the press couldn't get a clear answer on (or couldn't record yet): held for reconcile (Q35). */
+const heldRefundSchema = z.object({ claimId: z.string(), reason: z.string(), message: z.string() })
+
+/** W22: the guest's id comes from the path (`/bookings/guests/:guestId/remove`, `.../remove/quote`). */
+const guestInPath = { guestId: id }
+export const removeGuestQuoteRouteInputSchema = z.object(guestInPath)
+export const removeGuestRouteInputSchema = removeGuestInputSchema.extend(guestInPath)
+
+/**
+ * W22: removeBookingGuest's answer, as the old function gave it: the quote (`removed: false`, nothing changed);
+ * `blocked` for the account holder; removed, with what went to the card and to store credit. `held`: the guest is
+ * removed and a card refund got no clear answer (or went and couldn't be recorded yet), so it is held for reconcile
+ * (Q35) and never sent again by a press. A refusal before anything changed is an ApiError whose details carry the old
+ * reason and words (and the new `quote` when the amount no longer fits).
+ */
+export const removeGuestOutputSchema = z.object({
+  removed: z.boolean(),
+  blocked: z.boolean(),
+  guestId: id,
+  quote: removeGuestQuoteSchema.optional(),
+  refundedAmount: z.number().optional(),
+  cardRefundedAmount: z.number().optional(),
+  storeCreditRefundedAmount: z.number().optional(),
+  storeCreditBalance: z.number().optional(),
+  warning: z.string().optional(),
+  held: heldRefundSchema.optional(),
+})
+export type RemoveGuestOutput = z.infer<typeof removeGuestOutputSchema>
+
+/** W22: the add-on line's id comes from the path (`/bookings/addon-lines/:lineId/remove`, `.../remove/quote`). */
+const lineInPath = { lineId: id }
+export const removeAddonQuoteRouteInputSchema = z.object(lineInPath)
+export const removeBookingAddonRouteInputSchema = removeBookingAddonInputSchema.extend(lineInPath)
+
+
+/**
+ * W22: removeBookingAddon's answer once the add-on is removed, in the old fields (cancelBookingAddonLines' result and
+ * its one-line summary). `held` as Remove Guest's. A refusal is an ApiError whose details carry the old reason and words
+ * (and `addonQuote` when the confirmed refund no longer fits).
+ */
+export const removeBookingAddonOutputSchema = z.object({
+  removed: z.literal(true),
+  summary: z.string(),
+  cancelledLineIds: z.array(id),
+  refundedAmount: z.number(),
+  cardRefundedAmount: z.number(),
+  storeCreditRefundedAmount: z.number(),
+  creditsReturned: z.number(),
+  storeCreditBalance: z.number().optional(),
+  notes: z.array(z.string()),
+  warning: z.string().optional(),
+  held: heldRefundSchema.optional(),
+})
+export type RemoveBookingAddonOutput = z.infer<typeof removeBookingAddonOutputSchema>

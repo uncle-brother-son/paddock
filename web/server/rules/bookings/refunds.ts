@@ -65,15 +65,44 @@ import {
 import { lockAndLoadBooking, paymentOpen, type LoadedBooking } from './load-booking'
 import { lockForBooking } from './locks'
 import { inC1, paymentOpenRefusal } from './money-in'
-import { loadBookingLines, loadOrderCardPortion, recordOrderPaymentStatus, withCashAndLine, type RefundFigures } from './money-left'
+import { ADDONS_INSIDE_LINE, loadBookingLines, loadOrderCardPortion, recordOrderPaymentStatus, withCashAndLine, type RefundFigures } from './money-left'
 
 export const REFUND_CLAIMED = 'booking.refund_claimed'
 export const REFUND_FINISHED = 'booking.refund_finished'
 /** The reason's limit, as the old function's. */
 export const REFUND_REASON_MAX_LENGTH = 200
 
-export type RefundKind = 'part_refund' | 'refund_owed'
+/** W22: Remove Guest's and Remove add-on's claims go through the same pipeline (remove-guest.ts, remove-addon.ts). */
+export type RefundKind = 'part_refund' | 'refund_owed' | 'remove_guest' | 'remove_addon'
 export type RefundMethod = 'card' | 'credit' | 'cash'
+
+/**
+ * W22: Remove Guest's claim. R1 deleted the guest (and released a public place); R2 stamps the line that held their
+ * seat once all of it went back, as the old stampRemovedGuestLine did. With card parts the guest's row is kept, so an
+ * undo after the first card refund is refused puts them back exactly as they were.
+ */
+export interface GuestClaim {
+  id: string
+  /** The store credit note names them, as the old function's did. */
+  name: string
+  /** The seat's price (its stored unit_price): the line R2 stamps held no more seat money than this. */
+  seatPrice: number
+  /** A public booking's place went back to the session in R1 (a private booking holds the whole session). */
+  placeReleased: boolean
+  /** With card parts only: the guest's row as it was (to_jsonb), for the undo. */
+  restore?: Record<string, unknown>
+}
+
+/** W22: Remove add-on's claim: the add-on line R1 marked removed, and what it paid (price × quantity). */
+export interface AddonClaim {
+  lines: Array<{ id: string; amount: number }>
+  /** "1× Towel": the store credit note's words, as the old function wrote them. */
+  described: string
+  /** "Towel": the old refusal and warning words. */
+  names: string
+  /** The choice staff made ('card' or 'credit'; a removal with nothing back makes no claim). */
+  refund: 'card' | 'credit'
+}
 
 /** One booking line's share of a card part. */
 export interface CardPartLine {
@@ -117,6 +146,10 @@ export interface ClaimDetails {
    * (found before R1): each is gone already, so it is never sent, and reconcile and a close count it as gone.
    */
   matched?: MatchedPart[]
+  /** W22: Remove Guest's claim. */
+  guest?: GuestClaim
+  /** W22: Remove add-on's claim. Its card parts' lines are add-on lines (addon_order_lines), not booking lines. */
+  addon?: AddonClaim
 }
 
 /** A planned card part that is an old refund already gone: the order it refunds and the old refund's id. */
@@ -239,7 +272,8 @@ async function claimFinished(db: Queryable, claim: Pick<Claim, 'id' | 'bookingId
   return rows.length > 0
 }
 
-async function writeClaim(tx: Tx, bookingId: string, details: ClaimDetails, options: Pick<RefundOptions, 'actor' | 'requestId'>): Promise<Claim> {
+/** Writes the claim's row (`booking.refund_claimed`, lead call L3): the record every key and the finish come from. */
+export async function writeClaim(tx: Tx, bookingId: string, details: ClaimDetails, options: Pick<RefundOptions, 'actor' | 'requestId'>): Promise<Claim> {
   const row = (
     await tx.query<{ id: string; at: unknown }>(
       `INSERT INTO audit_log (at, actor_type, actor_id, action, entity_type, entity_id, request_id, details)
@@ -290,10 +324,41 @@ export async function planRefund(db: Queryable, bookingId: string, amount: numbe
   return { card: [...parts.values()], storeCredit: left > 0.005 ? left : 0, cash: 0, ownOrderId }
 }
 
+/**
+ * W22: where a removed add-on's money goes, as cancelBookingAddonLines sent it: with the card, against the order that
+ * paid for the add-on (its own, or the guest's order an older add-on was paid inside), at most what that order's card
+ * can still take back (its card portion less every card refund on its lines and add-on lines); the rest to store
+ * credit, linked to that order. The card share runs line by line in order. A card part's lines are add-on lines.
+ */
+export async function planAddonRefund(db: Queryable, orderId: string | null, lines: AddonClaim['lines'], method: 'card' | 'credit'): Promise<RefundPlan> {
+  const total = sum(lines.map((line) => line.amount))
+  let card = 0
+  let paymentIntentId: string | null = null
+  if (method === 'card' && orderId && total > 0) {
+    const portion = await loadOrderCardPortion(db, orderId)
+    paymentIntentId = portion?.paymentIntentId ?? null
+    if (paymentIntentId && portion) card = round2(Math.min(total, portion.cardPortionRemaining))
+  }
+  const parts: CardPart[] = []
+  if (card > 0 && orderId && paymentIntentId) {
+    let left = card
+    const partLines: CardPartLine[] = []
+    for (const line of lines) {
+      const take = round2(Math.min(left, line.amount))
+      if (take <= 0) continue
+      partLines.push({ lineId: line.id, amount: take })
+      left = round2(left - take)
+    }
+    parts.push({ orderId, paymentIntentId, amount: card, lines: partLines })
+  }
+  const storeCredit = round2(total - card)
+  return { card: parts, storeCredit: storeCredit > 0.005 ? storeCredit : 0, cash: 0, ownOrderId: orderId }
+}
+
 // --- R1
 
 /** What R1 finished on its own, or the claim whose card parts the press now sends. */
-type Started = { kind: 'done'; output: RefundBookingOutput } | { kind: 'card'; claim: Claim }
+export type Started = { kind: 'done'; output: RefundBookingOutput } | { kind: 'card'; claim: Claim }
 
 /**
  * The checks every amount action starts with, under the booking's lock, in the old function's order (a payment still
@@ -425,9 +490,123 @@ export interface ClaimOutcome {
 
 /** The notes the old function gave its store credit (shared/storeCreditRefund's `[ref …]` included, as it was written). */
 function storeCreditNote(claim: Claim, cardRefunded: number): string {
-  const base = claim.details.kind === 'part_refund' ? `Booking partial refund: ${claim.details.reason ?? ''}` : 'Refund the rest of a failed booking refund'
+  const { details } = claim
+  // W22: Remove add-on's note was the add-ons alone (cancelBookingAddonLines), whatever went to the card.
+  if (details.kind === 'remove_addon') return `Add-on refund: ${details.addon?.described ?? ''}. [ref ${crypto.randomUUID()}]`
+  const base =
+    details.kind === 'part_refund'
+      ? `Booking partial refund: ${details.reason ?? ''}`
+      : details.kind === 'remove_guest'
+        ? `Refund for a guest removed from the booking (${details.guest?.name ?? ''})`
+        : 'Refund the rest of a failed booking refund'
   return `${base}${cardRefunded > 0 ? ' (the rest went back to the card).' : '.'} [ref ${crypto.randomUUID()}]`
 }
+
+/**
+ * W22: the line that held a removed guest's seat, stamped refunded, as the old stampRemovedGuestLine (Remove Guest):
+ * the newest booking line not yet stamped whose seat money is above £0 and no more than the seat's price, and which
+ * isn't the booking's first line (unless nothing is left on the booking). Answers the stamped line's order, if any.
+ * Fixed text: ADDONS_INSIDE_LINE is a constant; the booking and the price come in as $1 and $2.
+ */
+const STAMP_GUEST_LINE_SQL = `
+WITH seat AS (
+  SELECT oli.id
+  FROM order_line_items oli
+  ${ADDONS_INSIDE_LINE}
+  WHERE oli.booking_id = $1::uuid AND oli.item_type = 'booking' AND oli.refunded_at IS NULL
+    AND oli.line_total - COALESCE(oli.discount_amount, 0) - inside.addons > 0
+    AND oli.line_total - COALESCE(oli.discount_amount, 0) - inside.addons <= $2::numeric
+    AND (
+      EXISTS (
+        SELECT 1 FROM order_line_items earlier
+        WHERE earlier.booking_id = oli.booking_id AND earlier.item_type = 'booking'
+          AND (earlier.created_at, earlier.id) < (oli.created_at, oli.id)
+      )
+      OR (SELECT COALESCE(b.price_paid, 0) FROM bookings b WHERE b.id = oli.booking_id) <= 0
+    )
+  ORDER BY oli.created_at DESC, oli.id DESC
+  LIMIT 1
+)
+UPDATE order_line_items
+SET refunded_at = now(), refund_method = CASE WHEN card_refunded_amount > 0 THEN 'card' ELSE 'credit' END
+WHERE id IN (SELECT id FROM seat)
+RETURNING order_id`
+
+/** W22: stamps a removed guest's line (STAMP_GUEST_LINE_SQL) and works out its order's status again. */
+export async function stampRemovedGuestLine(tx: Tx, bookingId: string, seatPrice: number): Promise<string | null> {
+  const orderId = (await tx.query<{ order_id: string }>(STAMP_GUEST_LINE_SQL, [bookingId, seatPrice]))[0]?.order_id ?? null
+  if (orderId) await recordOrderPaymentStatus(tx, orderId)
+  return orderId
+}
+
+/** W22: how a removed add-on line is stamped: what went back to it, how much of that to the card, and how. */
+export interface AddonLineStamp {
+  id: string
+  refunded: number
+  card: number
+  method: 'card' | 'credit' | 'none' | 'credit_returned'
+}
+
+/** W22: the stamps on removed add-on lines (as cancelBookingAddonLines' step 5). */
+export async function stampAddonLines(tx: Tx, stamps: readonly AddonLineStamp[]): Promise<void> {
+  for (const stamp of stamps) {
+    await tx.query('UPDATE addon_order_lines SET refunded_amount = $1::numeric, card_refunded_amount = $2::numeric, refund_method = $3::text WHERE id = $4::uuid', [
+      stamp.refunded,
+      stamp.card,
+      stamp.method,
+      stamp.id,
+    ])
+  }
+}
+
+/** W22: a removed add-on's lines, card first line by line, then store credit (as the old function split them). */
+function addonStamps(lines: AddonClaim['lines'], card: number, credit: number): AddonLineStamp[] {
+  let cardLeft = card
+  let creditLeft = credit
+  return lines.map((line) => {
+    const cardPart = round2(Math.min(cardLeft, line.amount))
+    cardLeft = round2(cardLeft - cardPart)
+    const creditPart = round2(Math.min(creditLeft, line.amount - cardPart))
+    creditLeft = round2(creditLeft - creditPart)
+    return { id: line.id, refunded: round2(cardPart + creditPart), card: cardPart, method: cardPart > 0 ? 'card' : creditPart > 0 ? 'credit' : 'none' }
+  })
+}
+
+/** The action's own row, as each action writes it (W21: the old function's fields; W22: Remove Guest's and add-on's). */
+function actionRow(details: ClaimDetails, parts: { cardRefunded: number; storeCredit: number; owed: number; cash: number }): { action: string; details: Record<string, unknown> } {
+  const { cardRefunded, storeCredit, owed, cash } = parts
+  switch (details.kind) {
+    case 'part_refund':
+      return {
+        action: 'booking.part_refund',
+        details: { amount: details.amount, reason: details.reason, method: details.method, cardRefunded, storeCreditRefunded: storeCredit, owed, ...(cash > 0 ? { cashRefunded: cash, handedOverBy: details.handedOverBy ?? null } : {}) },
+      }
+    case 'refund_owed':
+      return { action: 'booking.refund_owed', details: { amount: details.amount, method: details.method, cardRefunded, storeCreditRefunded: storeCredit, owed } }
+    case 'remove_guest':
+      return { action: GUEST_REMOVED, details: guestRemovedDetails(details.guest?.id ?? null, { refundAmount: details.amount, method: details.method, cardRefunded, storeCreditRefunded: storeCredit, owed }) }
+    case 'remove_addon':
+      return {
+        action: ADDON_REMOVED,
+        details: addonRemovedDetails((details.addon?.lines ?? []).map((line) => line.id), { refund: details.addon?.refund ?? null, amount: details.amount, cardRefunded, storeCreditRefunded: storeCredit, owed, creditsReturned: 0 }),
+      }
+  }
+}
+
+/** W22: Remove Guest's own row (every removal, with or without money back). */
+export const GUEST_REMOVED = 'booking.guest_remove'
+/** W22: Remove add-on's own row (every removal, with or without money back). */
+export const ADDON_REMOVED = 'booking.addon_remove'
+
+export const guestRemovedDetails = (
+  guestId: string | null,
+  money: { refundAmount: number; method: RefundMethod | null; cardRefunded: number; storeCreditRefunded: number; owed: number }
+): Record<string, unknown> => ({ guestId, ...money })
+
+export const addonRemovedDetails = (
+  lineIds: readonly string[],
+  money: { refund: string | null; amount: number; cardRefunded: number; storeCreditRefunded: number; owed: number; creditsReturned: number }
+): Record<string, unknown> => ({ lineIds, ...money })
 
 /**
  * R2, inside a transaction the caller opened: the booking locked (and its customer), then, unless the claim is
@@ -444,9 +623,12 @@ export async function finishClaimInTransaction(tx: Tx, claim: Claim, outcome: Cl
   const { details } = claim
   const { plan } = details
 
-  for (const part of outcome.went) {
-    for (const line of part.lines) {
-      await tx.query('UPDATE order_line_items SET card_refunded_amount = card_refunded_amount + $1::numeric WHERE id = $2::uuid', [line.amount, line.lineId])
+  // W22: a removed add-on's card refund is recorded on its add-on line (stamped below), not on a booking line.
+  if (details.kind !== 'remove_addon') {
+    for (const part of outcome.went) {
+      for (const line of part.lines) {
+        await tx.query('UPDATE order_line_items SET card_refunded_amount = card_refunded_amount + $1::numeric WHERE id = $2::uuid', [line.amount, line.lineId])
+      }
     }
   }
   const cardRefunded = sum(outcome.went.map((part) => part.amount))
@@ -475,24 +657,23 @@ export async function finishClaimInTransaction(tx: Tx, claim: Claim, outcome: Cl
       [owed, claim.bookingId]
     )
   }
+  // W22: the removed add-on's line says what went back to it (money Stripe never received: nothing, and 'none', as the
+  // old function stamped a refund with no clear answer); before the orders' status, which counts it.
+  if (details.kind === 'remove_addon') await stampAddonLines(tx, addonStamps(details.addon?.lines ?? [], cardRefunded, storeCredit))
   if (cardRefunded + storeCredit > 0) {
     for (const orderId of new Set([...outcome.went.map((part) => part.orderId), ...(plan.ownOrderId ? [plan.ownOrderId] : [])])) {
       await recordOrderPaymentStatus(tx, orderId)
     }
   }
+  // W22: the removed guest's line, once all of their seat's money went back (the old function didn't stamp it while
+  // some was still to refund).
+  if (details.kind === 'remove_guest' && details.guest && owed <= 0) await stampRemovedGuestLine(tx, claim.bookingId, details.guest.seatPrice)
 
   const cash = plan.cash
   const actor = { actorType: 'staff' as const, actorId: claim.staffId, entityType: 'booking', entityId: claim.bookingId, requestId: by.requestId }
   const finishedBy = by.how === 'press' ? {} : { by: { how: by.how, type: by.actor.type, id: by.actor.id, ...(by.why ? { why: by.why } : {}) } }
   const entries: AuditEntry[] = [
-    {
-      ...actor,
-      action: details.kind === 'part_refund' ? 'booking.part_refund' : 'booking.refund_owed',
-      details:
-        details.kind === 'part_refund'
-          ? { amount: details.amount, reason: details.reason, method: details.method, cardRefunded, storeCreditRefunded: storeCredit, owed, ...(cash > 0 ? { cashRefunded: cash, handedOverBy: details.handedOverBy ?? null } : {}) }
-          : { amount: details.amount, method: details.method, cardRefunded, storeCreditRefunded: storeCredit, owed },
-    },
+    { ...actor, ...actionRow(details, { cardRefunded, storeCredit, owed, cash }) },
     {
       ...actor,
       action: REFUND_FINISHED,
@@ -528,7 +709,8 @@ export async function finishClaim(db: Db, claim: Claim, outcome: ClaimOutcome, b
  */
 async function undoClaim(db: Db, claim: Claim, by: FinishedBy): Promise<boolean> {
   return db.transaction(async (tx) => {
-    const locks = await lockForBooking(tx, { bookingId: claim.bookingId })
+    // W22: a removed guest's place goes back to the booking's session, so it is locked too (LOCK_ORDER).
+    const locks = await lockForBooking(tx, { bookingId: claim.bookingId, ownSession: claim.details.kind === 'remove_guest' })
     if (!locks) throw new Error(`The booking of refund claim ${claim.id} no longer exists.`)
     if (await claimFinished(tx, claim)) return false
     const { amount, kind } = claim.details
@@ -537,6 +719,18 @@ async function undoClaim(db: Db, claim: Claim, by: FinishedBy): Promise<boolean>
         'UPDATE bookings SET price_paid = price_paid + $1::numeric, part_refunded_amount = GREATEST(part_refunded_amount - $1::numeric, 0), updated_at = now() WHERE id = $2::uuid',
         [amount, claim.bookingId]
       )
+    } else if (kind === 'remove_guest') {
+      // W22: the guest comes back exactly as they were (their row as R1 found it), with their place and their money.
+      const guest = claim.details.guest
+      if (!guest?.restore) throw new Error(`Refund claim ${claim.id} has no guest to put back.`)
+      await tx.query('INSERT INTO booking_guests SELECT * FROM jsonb_populate_record(NULL::booking_guests, $1::jsonb)', [JSON.stringify(guest.restore)])
+      await tx.query('UPDATE bookings SET price_paid = price_paid + $1::numeric, party_size = party_size + 1, updated_at = now() WHERE id = $2::uuid', [amount, claim.bookingId])
+      if (guest.placeReleased) {
+        await tx.query('UPDATE sessions SET total_booked = total_booked + 1, updated_at = now() WHERE id = $1::uuid', [locks.bookingSessionId])
+      }
+    } else if (kind === 'remove_addon') {
+      // W22: the add-on goes back on the booking (cancelBookingAddonLines' unclaim): nothing went back for it.
+      await tx.query('UPDATE addon_order_lines SET removed_at = NULL, removed_by = NULL WHERE id = ANY($1::uuid[])', [(claim.details.addon?.lines ?? []).map((line) => line.id)])
     } else {
       await tx.query(
         'UPDATE bookings SET price_paid = price_paid + $1::numeric, refund_owed_amount = refund_owed_amount + $1::numeric, updated_at = now() WHERE id = $2::uuid',
@@ -551,7 +745,7 @@ async function undoClaim(db: Db, claim: Claim, by: FinishedBy): Promise<boolean>
         entityType: 'booking',
         entityId: claim.bookingId,
         requestId: by.requestId,
-        details: { claimId: claim.id, outcome: kind === 'part_refund' ? 'put_back' : 'owed', cardRefunded: 0, storeCreditRefunded: 0, owed: kind === 'part_refund' ? 0 : amount },
+        details: { claimId: claim.id, outcome: kind === 'refund_owed' ? 'owed' : 'put_back', cardRefunded: 0, storeCreditRefunded: 0, owed: kind === 'refund_owed' ? amount : 0 },
       },
     ])
     return true
@@ -695,7 +889,7 @@ const held = (claim: Claim, reason: string, message: string, cardGone = 0): Refu
  * holds the claim for reconcile (Q35), as does R2 failing after money went (W6-3's rule for refunds: what went is never
  * sent again, reconcile records it).
  */
-async function sendAndFinish(db: Db, stripe: StripeClient, claim: Claim, options: RefundOptions, timing: StripeTiming): Promise<RefundBookingOutput> {
+async function sendAndFinish(db: Db, stripe: StripeClient, claim: Claim, options: RefundOptions, timing: StripeTiming, firstRefused: FirstRefused): Promise<RefundBookingOutput> {
   const by: FinishedBy = { actor: options.actor, requestId: options.requestId, how: 'press' }
   const matched = new Set((claim.details.matched ?? []).map((part) => part.orderId))
   const went: CardPart[] = claim.details.plan.card.filter((part) => matched.has(part.orderId))
@@ -718,7 +912,7 @@ async function sendAndFinish(db: Db, stripe: StripeClient, claim: Claim, options
       } catch {
         return held(claim, 'refund_refused_not_put_back', REFUND_REFUSED_NOT_PUT_BACK_MESSAGE)
       }
-      throw refundRefusal('PAYMENT_FAILED', 'refund_failed', cardRefundFailedMessage(answer.outcome === 'not_sent' ? REFUND_NOT_SENT_DETAIL : answer.detail))
+      throw firstRefused(answer.outcome === 'not_sent' ? REFUND_NOT_SENT_DETAIL : answer.detail)
     }
     const rest = sum(toSend.slice(index).map((later) => later.amount))
     if (answer.outcome === 'not_sent') {
@@ -746,23 +940,39 @@ async function sendAndFinish(db: Db, stripe: StripeClient, claim: Claim, options
 
 const notSaved = (logDetail: string): ApiError => refundRefusal('INTERNAL', 'refund_not_saved', REFUND_NOT_SAVED_MESSAGE, { logDetail })
 
-type R1 = (tx: Tx, livemode: boolean | null) => Promise<Started>
+export type R1 = (tx: Tx, livemode: boolean | null) => Promise<Started>
+
+/**
+ * W22: what the press throws when the first card part is refused (nothing went, R1 undone): the action's own reason
+ * and words, from the refusal's detail ("Failed to refund payment: …").
+ */
+export type FirstRefused = (detail: string) => ApiError
+
+/** W21's words for Part refund and Refund the rest (shared/bookingRefund.ts's). */
+const refundFirstRefused: FirstRefused = (detail) => refundRefusal('PAYMENT_FAILED', 'refund_failed', cardRefundFailedMessage(detail))
 
 /**
  * R1 in its transaction (with C1's once-only deadlock retry and plain words for a fault), then the card parts.
  * `prepare` runs first, outside any transaction, with the Stripe client of a card refund: Refund the rest's look-up.
  */
-async function run(db: Db, card: boolean, options: RefundOptions, prepare: (stripe: StripeClient | null, timing: StripeTiming) => Promise<R1>): Promise<RefundBookingOutput> {
+export async function run(
+  db: Db,
+  card: boolean,
+  options: RefundOptions,
+  prepare: (stripe: StripeClient | null, timing: StripeTiming) => Promise<R1>,
+  firstRefused: FirstRefused = refundFirstRefused,
+  notSavedAs: (logDetail: string) => ApiError = notSaved
+): Promise<RefundBookingOutput> {
   // A card refund needs Stripe: the client is made before R1, so a missing key fails with nothing written.
   const stripe = card && options.stripe ? options.stripe() : null
   const timing = stripeTiming(options.startedAt ?? Date.now(), options.now ?? Date.now)
   const r1 = await prepare(stripe, timing)
   // A COMMIT with no answer (INTERNAL) may have saved a claim whose card parts were never sent: reconcile finds it,
   // finds nothing in Stripe, and the money ends as owed (Refund the rest).
-  const started = await inC1(db, (tx) => r1(tx, stripe?.keyLivemode ?? null), notSaved)
+  const started = await inC1(db, (tx) => r1(tx, stripe?.keyLivemode ?? null), notSavedAs)
   if (started.kind === 'done') return started.output
   if (!stripe) throw new Error('A card refund was planned with no Stripe client.')
-  return sendAndFinish(db, stripe, started.claim, options, timing)
+  return sendAndFinish(db, stripe, started.claim, options, timing, firstRefused)
 }
 
 /** Part refund: gives `amount` of what is left, to the card (the rest to store credit), to store credit, or in cash. */

@@ -14,6 +14,8 @@ import {
   claimLookProblems,
   PARTLY_BUILT,
   REFUND_DIFFERENCES,
+  REMOVE_DIFFERENCES,
+  REMOVE_GUEST_24_HOURS_DIFFERENCES,
   comparable,
   GIFT_CARD_PART_WITHOUT_ORDER,
   N3_DIFFERENCES,
@@ -112,6 +114,12 @@ function sameButForGiftCardPart(oldFigures: Figures, newFigures: Figures, withou
   )
 }
 
+/** W22: the hold remove-guest-credit-fails-partway ends with (REMOVE_HELD_WHILE_STORE_CREDIT_FAILS), not an end state. */
+const REMOVE_HELD_BREACHES = [
+  'remove-guest-credit-fails-partway: Stripe refunded £10.00, the rows say £0',
+  'remove-guest-credit-fails-partway: price_paid £40.00, but £60.00 paid less £0.00 back',
+]
+
 describe("step D's side of the replay (W17)", () => {
   let environment: ReplayEnvironment
   const dScenarios = new Set<string>()
@@ -120,6 +128,7 @@ describe("step D's side of the replay (W17)", () => {
   const settleScenarios = new Set<string>()
   const addGuestScenarios = new Set<string>()
   const refundScenarios = new Set<string>()
+  const removeScenarios = new Set<string>()
   const shifted: string[] = []
   const counts = { bookings: 0, orders: 0, figuresCompared: 0, guardsCompared: 0, statusesCompared: 0, giftCardShifted: 0 }
 
@@ -139,6 +148,8 @@ describe("step D's side of the replay (W17)", () => {
       'cancelReaderPayment',
       'getBookingRefundFigures',
       'refundBooking',
+      'removeBookingGuest',
+      'removeBookingAddon',
     ])
     // W21: refundBooking's amount paths only; Cancel & Refund (no amount) is W23's.
     expect([...PARTLY_BUILT.keys()]).toEqual(['refundBooking'])
@@ -164,10 +175,14 @@ describe("step D's side of the replay (W17)", () => {
         ...(SETTLE_DIFFERENCES.get(name) ?? []),
         ...(ADD_GUEST_DIFFERENCES.get(name) ?? []),
         ...(REFUND_DIFFERENCES.get(name) ?? []),
+        ...(REMOVE_DIFFERENCES.get(name) ?? []),
+        ...(REMOVE_GUEST_24_HOURS_DIFFERENCES.get(name) ?? []),
       ]
       // W21: the refund amount actions and the figures, through the Worker.
       if (calls.some((call) => call.side === 'new' && (call.action === 'refundBooking' || call.action === 'getBookingRefundFigures'))) refundScenarios.add(name)
       if (calls.some((call) => call.action === 'settleLapsedBooking')) settleScenarios.add(name)
+      // W22: Remove Guest and Remove add-on, through the Worker.
+      if (calls.some((call) => call.action === 'removeBookingGuest' || call.action === 'removeBookingAddon')) removeScenarios.add(name)
       if (calls.some((call) => call.action === 'addBookingGuest')) addGuestScenarios.add(name)
       // W20: the rows set aside from the comparison, each exactly what it should be.
       expect(newAuditRowProblems(recording), `${name}: the Worker's audit rows`).toEqual([])
@@ -426,10 +441,14 @@ describe("step D's side of the replay (W17)", () => {
       const fresh = await sweepInvariants(environment, adds, newBookingSide())
       // R2d: the card paid and its order couldn't be written, so the change is held for reconcile; until then the £15 card
       // payment is on no order (so price_paid counts £15 no order shows). add-guest.test.ts runs reconcile on the same hold and it writes the order.
+      // W22: remove-guest-credit-fails-partway (it adds its guest first) ends with Remove Guest's refund held (its card
+      // part went, its store credit write failed): until reconcile finishes it, the £10 is on no line and price_paid is
+      // R1's. The next scenario, and remove-guest.test.ts, run reconcile on the same hold, and it records both.
       expect(fresh.wrong.sort()).toEqual(
         [
           'w17-r2d-add-guest-press-dies-while-the-worker-charges-and-writes-no-order: price_paid £60.00, but £45.00 paid less £0.00 back',
           'w17-r2d-add-guest-press-dies-while-the-worker-charges-and-writes-no-order: pi_fake_0004 is on 0 orders',
+          ...REMOVE_HELD_BREACHES,
         ].sort()
       )
       expect(fresh.bookingsChecked).toBeGreaterThanOrEqual(adds.length)
@@ -550,6 +569,57 @@ describe("step D's side of the replay (W17)", () => {
     })
   })
 
+  describe('Remove Guest and Remove add-on on the new side (W22): exactly what the Worker does instead', () => {
+    const byName = (name: string) => {
+      const scenario = scenarios.find((s) => s.name === name)
+      if (!scenario) throw new Error(`No scenario ${name}`)
+      return scenario
+    }
+    const added = (recording: Recording, table: string) => recording.tables[table]?.added ?? []
+    const refunds = (recording: Recording) => recording.stripeCalls.filter((call) => call.method === 'refunds.create')
+    const auditRows = (recording: Recording, action: string) => added(recording, 'audit_log').filter((row) => row['action'] === action)
+
+    it('the W05 invariants hold on the new side for every Remove Guest and Remove add-on scenario (D-plan 4.11 item 3), but for the one hold', async () => {
+      const named = scenarios.filter((scenario) => removeScenarios.has(scenario.name) || REMOVE_DIFFERENCES.has(scenario.name))
+      expect(named.length).toBeGreaterThanOrEqual(REMOVE_DIFFERENCES.size)
+      const old = await sweepInvariants(environment, named, oldSide)
+      const fresh = await sweepInvariants(environment, named, newBookingSide())
+      // Nothing the old code doesn't break too, but the hold named above (reconcile finishes it).
+      expect(fresh.wrong.filter((line) => !old.wrong.includes(line)).sort()).toEqual([...REMOVE_HELD_BREACHES].sort())
+      expect(fresh.bookingsChecked).toBeGreaterThanOrEqual(named.length)
+      if (process.env.W17_COVERAGE_OUT) appendFileSync(process.env.W17_COVERAGE_OUT, `W22 invariants: ${named.length} scenarios, old ${old.wrong.length} breaches, new ${fresh.wrong.length}: ${JSON.stringify(fresh.wrong)}\n`)
+    })
+
+    it('a paid public guest to the card: one refund on the guest\'s own order, keyed from the claim; the guest deleted, the place released, the line stamped', async () => {
+      const recording = await replay(environment, byName('remove-guest-on-the-card'), newBookingSide())
+      expect(refunds(recording).map((call) => [(call.params as { amount: number }).amount, call.idempotencyKey])).toEqual([[2000, 'audit_log#3:refund:orders#2']])
+      const claim = auditRows(recording, 'booking.refund_claimed').find((row) => (row['details'] as { kind?: string }).kind === 'remove_guest')
+      expect(claim?.['details']).toMatchObject({ kind: 'remove_guest', amount: 20, method: 'card', worker: true, guest: { name: 'Bea Guest', seatPrice: 20, placeReleased: true } })
+      expect(auditRows(recording, 'booking.guest_remove').map((row) => row['details'])).toEqual([
+        expect.objectContaining({ refundAmount: 20, method: 'card', cardRefunded: 20, storeCreditRefunded: 0, owed: 0 }),
+      ])
+      // Bea, added on the card, is gone; the booking's own two seats stay.
+      expect(added(recording, 'booking_guests').map((row) => row['guest_name'])).toEqual(['Sam Test', 'Alex Guest'])
+      expect(added(recording, 'order_line_items')[1]).toMatchObject({ card_refunded_amount: '20.00', refund_method: 'card', refunded_at: '<set>' })
+    })
+
+    it('an add-on paid with a guest goes back to its own order\'s card (W05c N5), keyed from its claim, and its line says so', async () => {
+      const recording = await replay(environment, byName('addon-with-guest-removed-to-the-card-then-cancel'), newBookingSide())
+      const claim = auditRows(recording, 'booking.refund_claimed').find((row) => (row['details'] as { kind?: string }).kind === 'remove_addon')
+      expect(claim?.['details']).toMatchObject({ kind: 'remove_addon', amount: 5, method: 'card', addon: { described: '1× Towel', refund: 'card' } })
+      const addonRefund = refunds(recording).find((call) => String(call.idempotencyKey).startsWith(String(claim?.['id'])))
+      expect(addonRefund).toMatchObject({ params: { amount: 500 }, idempotencyKey: `${String(claim?.['id'])}:refund:orders#2` })
+      expect(added(recording, 'addon_order_lines')[0]).toMatchObject({ removed_at: '<set>', refunded_amount: '5.00', card_refunded_amount: '5.00', refund_method: 'card' })
+    })
+
+    it('the store credit held while its write fails, then reconciled before the next step: £10 card and £10 store credit, each once', async () => {
+      const recording = await replay(environment, byName('remove-guest-credit-fails-partway-then-retried'), newBookingSide())
+      expect(refunds(recording).filter((call) => String(call.idempotencyKey).endsWith(':refund:orders#1')).map((call) => (call.params as { amount: number }).amount)).toEqual([1000])
+      const finished = auditRows(recording, 'booking.refund_finished').find((row) => (row['details'] as { by?: { how?: string } }).by?.how === 'reconcile')
+      expect(finished?.['details']).toMatchObject({ outcome: 'given', cardRefunded: 10, storeCreditRefunded: 10, owed: 0 })
+    })
+  })
+
   it('covered what it says: the step D scenarios, the figures answers, and every booking and order at their ends', () => {
     // For the report: written where W17_COVERAGE_OUT says (vitest keeps a passing test's console quiet).
     const line =
@@ -578,6 +648,17 @@ describe("step D's side of the replay (W17)", () => {
     expect([...REFUND_DIFFERENCES.keys()].filter((name) => !refundScenarios.has(name))).toEqual([])
     if (process.env.W17_COVERAGE_OUT) {
       appendFileSync(process.env.W17_COVERAGE_OUT, `W21: ${refundScenarios.size} call a refund amount action or the figures on the Worker, ${REFUND_DIFFERENCES.size} with named differences, ${refundScenarios.size - REFUND_DIFFERENCES.size} exact\n`)
+    }
+    // W22: every scenario named for Remove Guest or Remove add-on calls one of them on the Worker.
+    expect([...REMOVE_DIFFERENCES.keys()].filter((name) => !removeScenarios.has(name))).toEqual([])
+    if (process.env.W17_COVERAGE_OUT) {
+      appendFileSync(process.env.W17_COVERAGE_OUT, `W22: ${removeScenarios.size} call Remove Guest or Remove add-on on the Worker, ${REMOVE_DIFFERENCES.size} with W22's named differences (more with W20's and W21's only), ${[...removeScenarios].filter((name) => !REMOVE_DIFFERENCES.has(name) && !ADD_GUEST_DIFFERENCES.has(name) && !REFUND_DIFFERENCES.has(name) && !REMOVE_GUEST_24_HOURS_DIFFERENCES.has(name)).length} exact\n`)
+    }
+    // W22a: every scenario named for the 24-hour rule calls Remove Guest on the Worker (an unused allowance fails in
+    // compareRecordings as well).
+    expect([...REMOVE_GUEST_24_HOURS_DIFFERENCES.keys()].filter((name) => !removeScenarios.has(name))).toEqual([])
+    if (process.env.W17_COVERAGE_OUT) {
+      appendFileSync(process.env.W17_COVERAGE_OUT, `W22a: ${REMOVE_GUEST_24_HOURS_DIFFERENCES.size} with the 24-hour rule's named differences (1 inside the 24 hours)\n`)
     }
     if (process.env.W17_COVERAGE_OUT) {
       appendFileSync(process.env.W17_COVERAGE_OUT, `W20: ${addGuestScenarios.size} call Add Guest, ${ADD_GUEST_DIFFERENCES.size} with named differences, ${addGuestScenarios.size - ADD_GUEST_DIFFERENCES.size} exact\n`)

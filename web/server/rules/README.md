@@ -447,6 +447,37 @@ thin calls; Cancel & Refund keeps its old body until W23.
   the booking as owed, for It already arrived or Refund the rest) and `held_flow` (W19 review later 1: W12's undo for a
   card or reader flow reconcile left for a person, the payment found named for a person to refund).
 
+## Remove Guest and Remove add-on (step D, W22)
+
+`bookings/remove-guest.ts` and `bookings/remove-addon.ts`, through the W21 pipeline (`refunds.ts`: claim kinds
+`remove_guest` and `remove_addon`). `POST /api/v1/staff/bookings/guests/:guestId/remove/quote` and `.../remove`;
+`POST /api/v1/staff/bookings/addon-lines/:lineId/remove/quote` and `.../remove`. The quotes are reads (any active staff
+member, never gated). The removals take the amount staff confirmed (Q18, half a penny either way), are idempotent, and
+are gated by `booking_changes` only when money goes back. The staff app's `removeBookingGuest` and `removeBookingAddon`
+are thin calls.
+
+- **Remove Guest R1, one transaction:** the booking, its customer and session locked; the guest read again under the
+  lock (a second tab finds it gone: W02 finding 11); a payment still being taken (W18a's words) or a Worker refund
+  claim still open refuses; Issue refunds only when money goes back; the confirmed amount; then the guest deleted, a
+  public place released, the party size and price paid lowered, the refund planned (W21's `planRefund`: the booking's
+  lines newest first) and the claim written with the guest (its row too, when there are card parts, for the undo).
+  Private guests (no seat price, and Q38), credit and pre-band seats refund £0: no claim, `booking.guest_remove` only.
+- **Remove add-on R1:** the line claimed (`removed_at`); inside 24 real hours nothing back (`none`, the old note);
+  a credit add-on's credits back while its membership is active (`credit_returned`), else the old note; a paid add-on
+  refunded: card first on the order that paid for it (`planAddonRefund`, capped at that order's card portion), the rest
+  to store credit linked to that order. Its card part's lines are add-on lines.
+- **The press and R2 are W21's:** each card part once under `<claimId>:refund:<orderId>`. R2 records a guest's card
+  part on the booking lines and stamps the guest's line once nothing is owed (the old `stampRemovedGuestLine`); it
+  stamps the add-on line with what went back and how. The first card part refused: the undo puts the guest back
+  (their row, place, party size, money) or the add-on back on the booking, with the old words. Unclear: held; the guest
+  or add-on stays removed; reconcile records what went and puts what never went on the booking as owed (store credit
+  on a cancelled booking). `booking.guest_remove` / `booking.addon_remove` are the actions' own rows.
+- **W22a: Remove Guest follows the 24-hour rule** (Wayne's decision, 13 Nov), with the add-on's check on the same
+  wall-clock start (`load-booking.ts`'s `sessionStartWallClock`): inside 24 real hours of the session the quote is £0
+  (`insideTwentyFourHours: true`), the guest is removed with the place released and nothing back (no claim, no Issue
+  refunds, the line not stamped, the seat's money left on the booking for Part refund), and `booking.guest_remove`
+  carries `reason: 'inside_24_hours'`.
+
 ## Refund claims with no finish
 
 The staff app claims a refund's money before it moves. Each claim writes `booking.refund_claimed` to

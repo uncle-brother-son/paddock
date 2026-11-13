@@ -3,6 +3,7 @@ import { vi } from 'vitest'
 import type { Db } from '@/server/db'
 import { quoteAddGuest } from '@/server/rules/bookings/add-guest'
 import { openRefundClaimOn } from '@/server/rules/bookings/refunds'
+import { quoteRemoveAddon } from '@/server/rules/bookings/remove-addon'
 import { reconcileClaimNow } from '@/server/rules/orders/reconcile'
 import type { AddBookingGuestInput } from '@/contracts'
 import type { FakeStripe } from '@/server/stripe/fake'
@@ -176,6 +177,65 @@ async function settleHeldRefund(db: Db, bookingId: string | undefined): Promise<
   if (held) await reconcileClaimNow(db, replayStripe.current, held, { actor: { type: 'system', id: null }, requestId: crypto.randomUUID() })
 }
 
+/**
+ * W22: Remove Guest as the dialog presses it: the quote, then the removal with the amount it showed (the old params
+ * carry both), with a press key kept after no answer (W20a's rule) per guest, and the switch on. A refund the Worker
+ * held is settled straight after, as staff would find it on the Orders page.
+ */
+function removeGuestAsTheDialogPresses(): NewBookingAction {
+  const heldKeys = new Map<string, string>()
+  return async (db, params) => {
+    const guestId = (params as { guestId?: string }).guestId ?? ''
+    const bookingId = await bookingOf(db, params)
+    const idempotencyKey = heldKeys.get(guestId) ?? crypto.randomUUID()
+    const answer = (await withSwitch(BOOKING_KINDS_ON, () => throughStaffApp('removeBookingGuest')(db, { ...(params as object), idempotencyKey }))) as { reason?: string } | null
+    if (answer?.reason === 'no_answer' || answer?.reason === 'pressed_after_no_answer') heldKeys.set(guestId, idempotencyKey)
+    else heldKeys.delete(guestId)
+    await settleHeldRefund(db, bookingId)
+    return answer
+  }
+}
+
+/**
+ * W22: Remove add-on as the dialog presses it: the Worker's quote first (the dialog asks for it on open), then the
+ * removal with the refund it showed for the choice (`confirmedRefund`: the quote's refund for a paid add-on refunded
+ * to the card or store credit, else £0), a press key kept after no answer, and the switch on. The old params had no
+ * figure: the old function worked it out itself.
+ */
+function removeAddonAsTheDialogPresses(): NewBookingAction {
+  const heldKeys = new Map<string, string>()
+  return async (db, params) => {
+    const sent = params as { addonLineId?: string; refund?: string }
+    const lineId = sent.addonLineId ?? ''
+    const bookingId = await bookingOf(db, params)
+    let confirmedRefund = 0
+    try {
+      const quote = await quoteRemoveAddon(db, lineId)
+      confirmedRefund = quote.paid && (sent.refund === 'card' || sent.refund === 'credit') ? quote.refund : 0
+    } catch {
+      // The quote is refused as the removal will be (the line gone, removed, or its session started): £0 is sent.
+    }
+    const idempotencyKey = heldKeys.get(lineId) ?? crypto.randomUUID()
+    const answer = (await withSwitch(BOOKING_KINDS_ON, () => throughStaffApp('removeBookingAddon')(db, { ...sent, confirmedRefund, idempotencyKey }))) as {
+      removed?: boolean
+      reason?: string
+    } | null
+    if (answer?.reason === 'no_answer' || answer?.reason === 'pressed_after_no_answer') heldKeys.set(lineId, idempotencyKey)
+    else heldKeys.delete(lineId)
+    await settleHeldRefund(db, bookingId)
+    return answer
+  }
+}
+
+/** W22: the booking an action's params are about: its booking id, or the booking of its guest or add-on line. */
+async function bookingOf(db: Db, params: unknown): Promise<string | undefined> {
+  const sent = (params ?? {}) as { bookingId?: string; guestId?: string; addonLineId?: string }
+  if (sent.bookingId) return sent.bookingId
+  if (sent.guestId) return (await db.query<{ booking_id: string }>('SELECT booking_id FROM booking_guests WHERE id = $1::uuid', [sent.guestId]))[0]?.booking_id
+  if (sent.addonLineId) return (await db.query<{ booking_id: string }>('SELECT booking_id FROM addon_order_lines WHERE id = $1::uuid', [sent.addonLineId]))[0]?.booking_id
+  return undefined
+}
+
 /** W21: the refundBooking calls the Worker answers: those with an amount (or about owed money). Cancel & Refund is W23's. */
 export function refundBuiltFor(params: unknown): boolean {
   const sent = (params ?? {}) as { amount?: unknown; refundOwed?: unknown; owedArrived?: unknown }
@@ -202,6 +262,9 @@ export const BUILT_BOOKING_ACTIONS: ReadonlyMap<string, NewBookingAction> = new 
   // W21: through the staff app's thin wrapper and the figures route (W17 answered it from the rule directly).
   ['getBookingRefundFigures', throughStaffApp('getBookingRefundFigures')],
   ['refundBooking', refundAsTheDialogPresses()],
+  // W22: Remove Guest and Remove add-on, through the staff app's thin wrappers as the dialogs press them.
+  ['removeBookingGuest', removeGuestAsTheDialogPresses()],
+  ['removeBookingAddon', removeAddonAsTheDialogPresses()],
 ])
 
 export interface BookingSideOptions {
@@ -227,8 +290,9 @@ export function newBookingSide({ actions = BUILT_BOOKING_ACTIONS, adjust, calls 
     return {
       name: 'new',
       async call(action, params) {
-        // W21: a refund still held from an earlier step is settled first, as staff would find it (settleHeldRefund).
-        await settleHeldRefund(db, (params as { bookingId?: string } | null)?.bookingId)
+        // W21: a refund still held from an earlier step is settled first, as staff would find it (settleHeldRefund). W22:
+        // a Remove Guest or Remove add-on call names its guest or line, not the booking.
+        await settleHeldRefund(db, await bookingOf(db, params))
         const found = actions.get(action)
         // W21: refundBooking's Cancel & Refund stays on the old function (W23).
         const built = found && (PARTLY_BUILT.get(action)?.(params) ?? true) ? found : undefined
@@ -496,10 +560,13 @@ function newRowFlow(row: AuditRow): string | null {
   return null
 }
 
-/** W21: the refund kinds now on the Worker (Part refund, Refund the rest); Cancel & Refund's, Remove Guest's and Move's stay old. */
-const REFUND_KINDS_ON_WORKER: ReadonlySet<string> = new Set(['part_refund', 'refund_owed'])
-/** W21: the actions' own rows, written only by those actions (the old functions' and the Worker's). */
-const REFUND_ACTION_ROWS: ReadonlySet<string> = new Set(['booking.part_refund', 'booking.refund_owed', 'booking.refund_owed_arrived'])
+/** W21: the refund kinds now on the Worker (Part refund, Refund the rest; W22: Remove Guest); Cancel & Refund's and Move's stay old. */
+const REFUND_KINDS_ON_WORKER: ReadonlySet<string> = new Set(['part_refund', 'refund_owed', 'remove_guest'])
+/**
+ * W21: the actions' own rows, written only by those actions (the old functions' and the Worker's). W22: Remove Guest's
+ * and Remove add-on's (the Worker's only: the old functions wrote none).
+ */
+const REFUND_ACTION_ROWS: ReadonlySet<string> = new Set(['booking.part_refund', 'booking.refund_owed', 'booking.refund_owed_arrived', 'booking.guest_remove', 'booking.addon_remove'])
 /** The old code's notes about a card refund inside a claim (its refusal count and its unsure keys). */
 const OLD_REFUND_NOTES: ReadonlySet<string> = new Set(['booking.card_refund_refused', 'booking.card_refund_unsure'])
 
@@ -686,7 +753,21 @@ export function newAuditRowProblems(recording: Recording): string[] {
       // W21: the claim, its plan adding up to what was claimed, and the Worker's marks.
       const cash = d['method'] === 'cash'
       const matched = 'matched' in d
-      if (!sameKeys(d, ['kind', 'amount', 'pricePaidBefore', 'method', 'reason', 'worker', 'plan', 'livemode', ...(cash ? ['handedOverBy'] : []), ...(matched ? ['matched'] : [])])) wrong('fields')
+      // W22: Remove Guest's and Remove add-on's claims carry what they removed.
+      const removed = d['kind'] === 'remove_guest' ? ['guest'] : d['kind'] === 'remove_addon' ? ['addon'] : []
+      if (!sameKeys(d, ['kind', 'amount', 'pricePaidBefore', 'method', 'reason', 'worker', 'plan', 'livemode', ...(cash ? ['handedOverBy'] : []), ...(matched ? ['matched'] : []), ...removed])) wrong('fields')
+      if (d['kind'] === 'remove_guest') {
+        const guest = (d['guest'] ?? {}) as Record<string, unknown>
+        const card = ((d['plan'] as { card?: unknown[] } | undefined)?.card ?? []).length > 0
+        // The guest's row is kept exactly when a card part could be refused and the guest put back.
+        if (!sameKeys(guest, ['id', 'name', 'seatPrice', 'placeReleased', ...(card ? ['restore'] : [])])) wrong('the guest')
+        if (!(Number(guest['seatPrice']) >= n('amount')) || d['reason'] !== null || !['card', 'credit'].includes(String(d['method']))) wrong('a guest claim')
+      }
+      if (d['kind'] === 'remove_addon') {
+        const addon = (d['addon'] ?? {}) as { lines?: Array<{ amount: number }>; refund?: unknown }
+        if (!sameKeys(addon as Record<string, unknown>, ['lines', 'described', 'names', 'refund'])) wrong('the add-on')
+        if (round2((addon.lines ?? []).reduce((total, line) => total + line.amount, 0)) !== n('amount') || addon.refund !== d['method']) wrong('an add-on claim')
+      }
       const plan = (d['plan'] ?? {}) as { card?: Array<{ orderId?: string; amount: number; lines?: Array<{ amount: number }> }>; storeCredit?: number; cash?: number }
       // W21a (W21 review L2): parts matched to an old refund that went, on Refund the rest only, each a planned part, once.
       if (matched) {
@@ -701,7 +782,7 @@ export function newAuditRowProblems(recording: Recording): string[] {
       // A card refund with no card money left plans store credit only; nothing else ever plans a card part.
       if (card > 0 && d['method'] !== 'card') wrong('card parts only for the card')
       if ((card > 0) !== (typeof d['livemode'] === 'boolean')) wrong("the key's mode exactly with card parts")
-      if (!['part_refund', 'refund_owed'].includes(String(d['kind'])) || d['worker'] !== true) wrong('kind')
+      if (!['part_refund', 'refund_owed', 'remove_guest', 'remove_addon'].includes(String(d['kind'])) || d['worker'] !== true) wrong('kind')
       if (row['entity_type'] !== 'booking' || typeof row['request_id'] !== 'string') wrong('entity or request id')
     } else if (row.action === 'booking.refund_finished') {
       const claim = all.find((other) => other['id'] === d['claimId'])
@@ -724,6 +805,21 @@ export function newAuditRowProblems(recording: Recording): string[] {
       const finished = d['outcome'] === 'finalised' && sameKeys(d, ['outcome', 'detail'])
       const leftOnce = d['outcome'] === 'left' && d['reason'] === 'finish_failed' && sameKeys(d, ['outcome', 'reason', 'detail'])
       if (!finished && !leftOnce) wrong('a held claim reconcile finished')
+    } else if (row.action === 'booking.guest_remove') {
+      // W22: every removal; with a claim, its parts add up to what was claimed. W22a: a paid seat removed inside 24 hours
+      // names the reason, with nothing back.
+      const inside = d['reason'] === 'inside_24_hours'
+      if (!sameKeys(d, ['guestId', 'refundAmount', 'method', 'cardRefunded', 'storeCreditRefunded', 'owed', ...(inside ? ['reason'] : [])])) wrong('fields')
+      if (inside && n('refundAmount') !== 0) wrong('money back inside 24 hours')
+      if (round2(n('cardRefunded') + n('storeCreditRefunded') + n('owed')) !== n('refundAmount')) wrong('the parts are not the refund')
+      if ((n('refundAmount') > 0) !== (d['method'] === 'card' || d['method'] === 'credit')) wrong('a method exactly when something goes back')
+      if (typeof d['guestId'] !== 'string' || row['entity_type'] !== 'booking' || typeof row['request_id'] !== 'string') wrong('guest, entity or request id')
+    } else if (row.action === 'booking.addon_remove') {
+      if (!sameKeys(d, ['lineIds', 'refund', 'amount', 'cardRefunded', 'storeCreditRefunded', 'owed', 'creditsReturned'])) wrong('fields')
+      if (round2(n('cardRefunded') + n('storeCreditRefunded') + n('owed')) !== n('amount')) wrong('the parts are not the amount')
+      if (!Array.isArray(d['lineIds']) || (d['lineIds'] as unknown[]).length !== 1) wrong('one line')
+      if (n('creditsReturned') > 0 && n('amount') > 0) wrong('credits back and money back on one line')
+      if (row['entity_type'] !== 'booking' || typeof row['request_id'] !== 'string') wrong('entity or request id')
     } else if (row.action === 'booking.refund_owed_arrived') {
       if (!sameKeys(d, ['amount', 'reason']) || !(n('amount') > 0) || typeof d['reason'] !== 'string') wrong('fields')
     } else if (row.action === 'booking.guest_add') {
@@ -757,7 +853,8 @@ export function newAuditRowProblems(recording: Recording): string[] {
 /** W20: the stored answers the new side wrote: each a finished press of a booking or flow route on the Worker. */
 export function storedAnswerProblems(recording: Recording): string[] {
   const rows = (recording.tables['api_idempotency']?.added ?? []) as Row[]
-  const route = /^POST \/api\/v1\/staff\/(bookings\/[^/]+\/(settle|guests|status|special-requests|refunds|refunds\/owed|refunds\/owed-arrived)|reader-flows\/[^/]+\/(finalise|cancel))$/
+  const route =
+    /^POST \/api\/v1\/staff\/(bookings\/[^/]+\/(settle|guests|status|special-requests|refunds|refunds\/owed|refunds\/owed-arrived)|bookings\/(guests|addon-lines)\/[^/]+\/remove|reader-flows\/[^/]+\/(finalise|cancel))$/
   return rows
     .filter((row) => row['status'] !== 'done' || !route.test(String(row['endpoint'])))
     .map((row) => `${String(row['endpoint'])}: ${String(row['status'])}`)
@@ -850,6 +947,8 @@ export const ADD_GUEST_DIFFERENCES: ReadonlyMap<string, readonly AllowedDifferen
     'unsure-remove-guest-store-credit-arrived',
     'all-part-refunded-with-a-guest-then-cancel',
     'remove-guest-on-the-card',
+    'w22a-remove-guest-a-minute-outside-24-hours',
+    'w22a-remove-guest-a-minute-inside-24-hours',
     'remove-guest-to-store-credit',
     'remove-guest-then-cancel',
     'remove-guest-while-a-reader-move-is-open',
@@ -1035,8 +1134,8 @@ const CLAIM_LABEL = /^audit_log#\d+$/
  * replaced). Only those values pass.
  */
 export const CLAIM_KEYS: AllowedDifference = {
-  name: "A Part refund's or Refund the rest's card refund is keyed from its claim (`<claimId>:refund:<orderId>`) and names it in `metadata.claim_id`; the old figure-built keys and their 24-hour look-up are replaced",
-  decision: `${W21}: keys from the claim id (D-plan 4.3)`,
+  name: "A Worker refund's card refund (Part refund, Refund the rest; W22: Remove Guest, Remove add-on) is keyed from its claim (`<claimId>:refund:<orderId>`) and names it in `metadata.claim_id`; the old figure-built keys (and Remove add-on's line-built ones) and their 24-hour look-up are replaced",
+  decision: `${W21}: keys from the claim id (D-plan 4.3); brief W22 items 1 and 2 (W22's claims, the same rule)`,
   path: /^\.stripeCalls\[\d+\]\.(idempotencyKey|params\.metadata\.(refund_key|claim_id))$/,
   actual: (value, _expected, path) => (path.endsWith('.claim_id') ? typeof value === 'string' && CLAIM_LABEL.test(value) : typeof value === 'string' && CLAIM_KEY.test(value)),
 }
@@ -1262,4 +1361,171 @@ export const REFUND_DIFFERENCES: ReadonlyMap<string, readonly AllowedDifference[
       },
     ],
   ],
+])
+
+// --- W22: Remove Guest and Remove add-on (brief W22 item 5)
+
+const W22 = 'Brief W22 (D-plan 1.5, 1.8, 4.3; W02 finding 11; lead call L3: claims in audit_log)'
+
+/** R2's words for a card refund that went and couldn't be recorded yet (W21's refundGoneNotRecordedMessage). */
+const goneNotRecorded = (gone: number) => (value: unknown): boolean =>
+  typeof value === 'string' && value.startsWith(`£${gone.toFixed(2)} went back to the card, but the refund couldn't be finished on the booking yet.`)
+
+/**
+ * Remove Guest's £10 card part went and R2's £10 store credit failed (the scenario's failing write): the claim is held,
+ * with the guest removed (R1), and the words say what went (W6-3's rule for refunds: what went is never sent again).
+ * The old code removed the guest, recorded the £10 on the line and left the other £10 owed. On the Worker, reconcile
+ * finishes it once the write works again: the £10 card part recorded and the planned £10 store credit given (the next
+ * scenario shows it). Until then the booking is as R1 left it: £40 paid, nothing owed, nothing on the line yet.
+ */
+const REMOVE_HELD_WHILE_STORE_CREDIT_FAILS: AllowedDifference = {
+  name: "Remove Guest's card part went and R2's store credit write failed: held (removed, \"£10.00 went back to the card, but the refund couldn't be finished…\"), the booking as R1 left it until reconcile finishes it",
+  decision: `${W22}; R2 is one transaction, held for reconcile (Q35); D-plan 4.10 (reconcile records what went, never resends)`,
+  path: /^\.results\[4\]\.warning$|^\.tables\.bookings\.added\[0\]\.(price_paid|refund_owed_amount)$|^\.tables\.order_line_items\.added\[0\]\.card_refunded_amount$|^\.tables\.orders\.added\[0\]\.payment_status$/,
+  actual: (value, _expected, path) =>
+    path.endsWith('.warning')
+      ? goneNotRecorded(10)(value)
+      : path.endsWith('.price_paid')
+        ? value === '40.00'
+        : path.endsWith('.refund_owed_amount') || path.endsWith('.card_refunded_amount')
+          ? value === '0.00'
+          : value === 'paid',
+}
+
+/**
+ * The same hold, then Refund the rest: reconcile finishes the claim first (as staff would find it on the Orders page),
+ * recording the £10 on the line and giving the planned £10 store credit (Remove Guest's note), so Refund the rest finds
+ * nothing owed. The customer gets the same £10 card and £10 store credit, and the booking ends as the old code left it.
+ */
+const REMOVE_HELD_THEN_RECONCILED: AllowedDifference = {
+  name: "Remove Guest held while its store credit failed; reconcile gives the planned £10 store credit (Remove Guest's note) before Refund the rest, which finds nothing owed; the customer gets the same £10 card and £10 store credit",
+  decision: `${W22}; R2 gives the plan's store credit (D-plan 4.3); held for reconcile (Q35)`,
+  path: /^\.results\[4\]\.warning$|^\.results\[5\]\.(cardRefundedAmount|storeCreditRefundedAmount|storeCreditBalance|pricePaid|refused)$|^\.tables\.store_credit_transactions\.added\[1\]\.note$/,
+  actual: (value, _expected, path) =>
+    path.endsWith('.warning')
+      ? goneNotRecorded(10)(value)
+      : path.endsWith('.note')
+        ? value === 'Refund for a guest removed from the booking (Bea Guest) (the rest went back to the card). [ref gone]'
+        : path.endsWith('.refused')
+          ? String((value as { message?: unknown }).message) === 'Nothing is owed on this booking any more.'
+          : value === undefined,
+}
+
+/**
+ * A lost answer on the old store credit statement (the hook matches the old code's SQL, which the Worker doesn't run):
+ * R1 is one transaction, so the guest is removed with the £20 to store credit once, the guest's line is stamped and the
+ * orders' status worked out; It already arrived then finds nothing owed, and the last Remove finds the guest gone.
+ */
+const REMOVE_NO_LOST_ANSWER: AllowedDifference = {
+  name: "A lost answer on the old store credit statement: R1 is one transaction, so the guest is removed once with £20 to store credit (the line stamped, the orders' status); It already arrived finds nothing owed and the last Remove finds the guest gone",
+  decision: `${W22}: R1 is one transaction (W02 finding 11; W05 review 2, finding 11)`,
+  path: /^\.results\[3\]\.(removed|reason|message|retryLocked|quote|refundedAmount|cardRefundedAmount|storeCreditRefundedAmount|storeCreditBalance)$|^\.results\[4\]\.(cardRefundedAmount|storeCreditRefundedAmount|pricePaid|refused)$|^\.results\[5\]\.(removed|refundedAmount|cardRefundedAmount|storeCreditRefundedAmount|reason)$|^\.tables\.order_line_items\.added\[1\]\.(refunded_at|refund_method)$|^\.tables\.orders\.added\[[01]\]\.payment_status$/,
+  actual: (value, _expected, path) => {
+    if (path.startsWith('.results[3]')) {
+      if (path.endsWith('.removed')) return value === true
+      if (path.endsWith('.refundedAmount') || path.endsWith('.storeCreditRefundedAmount')) return value === 20
+      if (path.endsWith('.cardRefundedAmount')) return value === 0
+      if (path.endsWith('.storeCreditBalance')) return typeof value === 'number'
+      return value === undefined
+    }
+    if (path.startsWith('.results[4]')) return path.endsWith('.refused') ? String((value as { message?: unknown }).message) === 'Nothing is owed on this booking any more.' : value === undefined
+    if (path.startsWith('.results[5]')) return path.endsWith('.removed') ? value === false : path.endsWith('.reason') ? value === 'guest_not_found' : value === undefined
+    if (path.endsWith('.refunded_at')) return value === '<set>'
+    if (path.endsWith('.refund_method')) return value === 'credit'
+    return path.includes('added[0]') ? value === 'partially_refunded' : value === 'refunded'
+  },
+}
+
+/**
+ * W22: every golden scenario that calls Remove Guest or Remove add-on and differs, and the only differences allowed
+ * in each (with W20's Add Guest and W21's refund allowances where the scenario has them). The rest match exactly.
+ */
+export const REMOVE_DIFFERENCES: ReadonlyMap<string, readonly AllowedDifference[]> = new Map<string, readonly AllowedDifference[]>([
+  ...[
+    'addon-with-guest-then-remove-guest-then-cancel',
+    'addon-with-guest-removed-to-the-card-then-cancel',
+    'remove-guest-on-the-card',
+    'remove-guest-their-addon-left',
+    'remove-guest-the-older-of-two',
+    'remove-guest-both-of-two',
+    'remove-a-seat-from-the-first-order',
+    'remove-guest-after-a-cheaper-move',
+    'credit-booking-paid-seat-removed',
+    'credit-booking-paid-guest-removed-then-cancelled',
+    'remove-guest-while-a-reader-move-is-open',
+    'remove-guest-while-a-guest-is-on-the-reader',
+    'reader-move-finished-then-remove-guest',
+    'w22a-remove-guest-a-minute-outside-24-hours',
+  ].map((name): [string, readonly AllowedDifference[]] => [name, [CLAIM_KEYS]]),
+  ['remove-guest-credit-fails-partway', [CLAIM_KEYS, REMOVE_HELD_WHILE_STORE_CREDIT_FAILS]],
+  ['remove-guest-credit-fails-partway-then-retried', [CLAIM_KEYS, REMOVE_HELD_THEN_RECONCILED]],
+  ['unsure-remove-guest-store-credit-arrived', [REMOVE_NO_LOST_ANSWER]],
+])
+
+// --- W22a: Remove Guest follows the 24-hour rule (Wayne's decision, 13 Nov; brief W22a item 1)
+
+const W22A = "Wayne's decision (13 Nov): Remove Guest follows the 24-hour rule, as Cancel & Refund and Remove add-on (brief W22a item 1)"
+
+/** Remove Guest's quote also says whether the session starts within 24 hours: false on every golden press (none is inside them). */
+const GUEST_QUOTE_OUTSIDE_24_HOURS: AllowedDifference = {
+  name: "Remove Guest's quote also says whether the session starts within 24 hours: false, so the seat's refund is the old one",
+  decision: W22A,
+  path: /^\.results\[\d+\]\.quote\.insideTwentyFourHours$/,
+  actual: (value, expected) => expected === undefined && value === false,
+}
+
+/**
+ * A minute inside the 24 hours: the old code refunded Bea's £20 seat to the card; the Worker's quote is £0 (it says the
+ * session is inside 24 hours), the press sends that £0, and she is removed with nothing back: no Stripe refund, her
+ * line not stamped, her order still paid, the £20 left on the booking (Part refund can give it). Her place is released
+ * and the party size lowered exactly as before (those tables match the golden file).
+ */
+const REMOVE_GUEST_INSIDE_24_HOURS: AllowedDifference = {
+  name: "Remove Guest a minute inside 24 hours of the session: the quote £0 (inside 24 hours), the guest removed with nothing back (no refund, line not stamped, order paid, £60 left on the booking)",
+  decision: W22A,
+  path: /^\.results\[3\]\.quote\.(refundAmount|insideTwentyFourHours)$|^\.results\[4\]\.(refundedAmount|cardRefundedAmount)$|^\.stripeCalls\[2\]$|^\.tables\.bookings\.added\[0\]\.price_paid$|^\.tables\.order_line_items\.added\[1\]\.(refunded_at|refund_method|card_refunded_amount)$|^\.tables\.orders\.added\[1\]\.payment_status$/,
+  actual: (value, expected, path) => {
+    if (path.endsWith('.insideTwentyFourHours')) return expected === undefined && value === true
+    if (path.startsWith('.results')) return expected === 20 && value === 0
+    if (path === '.stripeCalls[2]') return (expected as { method?: string } | undefined)?.method === 'refunds.create' && value === undefined
+    if (path.endsWith('.price_paid')) return expected === '40.00' && value === '60.00'
+    if (path.endsWith('.card_refunded_amount')) return expected === '20.00' && value === '0.00'
+    if (path.endsWith('.payment_status')) return expected === 'refunded' && value === 'paid'
+    return value === null
+  },
+}
+
+/**
+ * W22a: every golden scenario whose Remove Guest answers carry the quote, and the 24-hour allowance each needs (with the
+ * W20 / W21 / W22 allowances it already had). Only `w22a-remove-guest-a-minute-inside-24-hours` gives a different
+ * refund; the rest differ only by the quote's new `insideTwentyFourHours: false`.
+ */
+export const REMOVE_GUEST_24_HOURS_DIFFERENCES: ReadonlyMap<string, readonly AllowedDifference[]> = new Map<string, readonly AllowedDifference[]>([
+  ...[
+    'addon-with-guest-then-remove-guest-then-cancel',
+    'credit-booking-paid-guest-removed-then-cancelled',
+    'credit-booking-paid-seat-removed',
+    'owed-then-remove-guest-stops-at-what-is-left',
+    'q28-public-same-price-after-a-capped-remove-guest',
+    'reader-move-finished-then-remove-guest',
+    'remove-a-seat-from-the-first-order',
+    'remove-guest-after-a-cheaper-move',
+    'remove-guest-both-of-two',
+    'remove-guest-capped-an-old-quote-refused',
+    'remove-guest-capped-then-cancel',
+    'remove-guest-capped-to-store-credit',
+    'remove-guest-credit-fails-partway',
+    'remove-guest-credit-fails-partway-then-retried',
+    'remove-guest-more-left-than-the-seat',
+    'remove-guest-nothing-left',
+    'remove-guest-on-the-card',
+    'remove-guest-paid-in-cash',
+    'remove-guest-the-older-of-two',
+    'remove-guest-their-addon-left',
+    'remove-guest-then-cancel',
+    'remove-guest-to-store-credit',
+    'remove-guest-while-a-reader-move-is-open',
+    'w22a-remove-guest-a-minute-outside-24-hours',
+  ].map((name): [string, readonly AllowedDifference[]] => [name, [GUEST_QUOTE_OUTSIDE_24_HOURS]]),
+  ['w22a-remove-guest-a-minute-inside-24-hours', [REMOVE_GUEST_INSIDE_24_HOURS]],
 ])

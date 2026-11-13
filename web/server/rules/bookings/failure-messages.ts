@@ -438,3 +438,31 @@ export function oldRefundReachedCustomerMessage(amounts: readonly number[]): str
  */
 export const laterCardRefundNotSentMessage = (amount: number): string =>
   `A further card refund of ${money(amount)} wasn't sent in time, so it's owed on the booking: use Refund the rest to send it to the card.`
+
+// --- New in W22 (Remove Guest and Remove add-on on the Worker)
+
+/** R1 failed in the database and was rolled back: the guest is still there and nothing was refunded (the old words). */
+export const REMOVE_GUEST_NOT_SAVED_MESSAGE = REMOVE_GUEST_WORDS.notRemovedNothingRefunded
+/** R1 failed in the database and was rolled back: the add-on is still there and nothing was refunded. */
+export const REMOVE_ADDON_NOT_SAVED_MESSAGE =
+  "The add-on couldn't be removed (the system was busy, or one of its records couldn't be written), so nothing was refunded. Try again."
+
+/** cancelBookingAddonLines' words when the first card refund for a paying order was refused: the add-ons stay on. */
+export function addonCardRefundFailedMessage(names: string, count: number, detail: string): string {
+  const one = count === 1
+  return `The card refund for ${names} failed (${detail}), so ${one ? 'it was' : 'they were'} left on the booking — refund ${one ? 'it' : 'them'} manually.`
+}
+/** cancelBookingAddonLines' notes. */
+export const ADDON_INSIDE_24_HOURS_NOTE = 'Inside 24 hours of the session, so no add-on money or credit was given back.'
+export const addonMembershipNotActiveNote = (name: string): string =>
+  `The membership that paid for ${name} is no longer active, so its add-on credit couldn't be returned.`
+
+/** describeAddonCancellation: "1 add-on cancelled: £5.00 to the card, 1 add-on credit returned". */
+export function addonRemovalSummary(result: { count: number; cardRefundedAmount: number; storeCreditRefundedAmount: number; creditsReturned: number }): string {
+  const parts: string[] = []
+  if (result.cardRefundedAmount > 0) parts.push(`${money(result.cardRefundedAmount)} to the card`)
+  if (result.storeCreditRefundedAmount > 0) parts.push(`${money(result.storeCreditRefundedAmount)} to store credit`)
+  if (result.creditsReturned > 0) parts.push(`${result.creditsReturned} add-on credit${result.creditsReturned === 1 ? '' : 's'} returned`)
+  const head = `${result.count} add-on${result.count === 1 ? '' : 's'} cancelled`
+  return parts.length > 0 ? `${head}: ${parts.join(', ')}` : `${head}, nothing given back`
+}

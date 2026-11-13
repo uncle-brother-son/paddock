@@ -229,6 +229,19 @@ Part refund and Refund the rest; the Worker's, checked by `newAuditRowProblems`)
 held claim are set aside and checked by `claimLookProblems`. 114 scenarios call them: 93 with `REFUND_DIFFERENCES`, 21
 exact. The W05 invariants on the new side break nothing the old code doesn't.
 
+W22 moves Remove Guest and Remove add-on, through the staff app's wrappers as the dialogs press them
+(`removeGuestAsTheDialogPresses`, `removeAddonAsTheDialogPresses`: the add-on's confirmed refund from the Worker's own
+quote, as the dialog asks for it on open; a press key kept after no answer). A call naming a guest or an add-on line is
+matched to its booking (`bookingOf`) so a held refund is settled before the next step. 31 scenarios call them: the
+Worker's claims and rows are set aside and checked (`newAuditRowProblems`); `REMOVE_DIFFERENCES` names the rest (keys
+from the claim, the held store-credit failure and its reconcile, the old store credit statement's lost answer).
+
+W22a (Wayne's decision, 13 Nov: Remove Guest follows the 24-hour rule) adds two recordings from the old code,
+`w22a-remove-guest-a-minute-outside-24-hours` and `...-inside-24-hours`, each pressing with the figure its own quote
+showed. `REMOVE_GUEST_24_HOURS_DIFFERENCES` names the rule: inside, the old £20 card refund becomes £0 with the guest
+still removed (`REMOVE_GUEST_INSIDE_24_HOURS`, each value checked); on every other Remove Guest recording the quote only
+gains `insideTwentyFourHours: false` (`GUEST_QUOTE_OUTSIDE_24_HOURS`).
+
 ## No real Stripe (W11)
 
 `no-real-stripe.ts` is loaded before every unit test file (`vitest.unit.config.ts`, `setupFiles`). Any

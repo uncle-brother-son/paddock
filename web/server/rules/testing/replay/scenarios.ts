@@ -2272,6 +2272,18 @@ export const scenarios: Scenario[] = [
     await call('removeBookingGuest', { guestId: guest.guest?.id })
     await call('removeBookingGuest', { guestId: guest.guest?.id, confirmedRefundAmount: 20, refundMethod: 'card' })
   }),
+  // --- W22a (Wayne's decision, 13 Nov): Remove Guest follows the 24-hour rule. The session starts 12 Nov 10:00 (GMT),
+  // so 24 real hours before is 11 Nov 10:00Z. Each presses with the figure its own quote showed, as the dialog does:
+  // the old code refunds the seat on both sides of the 24 hours; the Worker only outside them.
+  ...(['outside', 'inside'] as const).map((side) =>
+    booked(`w22a-remove-guest-a-minute-${side}-24-hours`, publicOnCard, async ({ call, add }) => {
+      const guest = await add(bea, payments.card)
+      vi.setSystemTime(new Date(side === 'outside' ? '2026-11-11T09:59:00.000Z' : '2026-11-11T10:01:00.000Z'))
+      const quoted = (await call('removeBookingGuest', { guestId: guest.guest?.id })) as { quote?: { refundAmount?: number } }
+      const amount = quoted.quote?.refundAmount ?? 0
+      await call('removeBookingGuest', { guestId: guest.guest?.id, confirmedRefundAmount: amount, ...(amount > 0 ? { refundMethod: 'card' } : {}) })
+    })
+  ),
   booked('remove-guest-to-store-credit', publicOnCard, async ({ call, add }) => {
     const guest = await add(bea, payments.card)
     await call('removeBookingGuest', { guestId: guest.guest?.id })
