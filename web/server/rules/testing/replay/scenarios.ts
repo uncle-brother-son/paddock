@@ -754,12 +754,14 @@ const workerApi = () => (globalThis as unknown as { paddockWorkerV1: { rawReques
  * recordings are unchanged.
  */
 const WORKER_DOES_IT_NOW: Readonly<Record<string, { route: RegExp; answerLost: RegExp }>> = {
-  '/api/payments/charge-saved-card': { route: /^\/api\/v1\/staff\/bookings\/[^/]+\/(settle|guests)$/, answerLost: /\/guests$/ },
+  // W24: and Move's (inside the move route; its answer is lost as Add Guest's is).
+  '/api/payments/charge-saved-card': { route: /^\/api\/v1\/staff\/bookings\/[^/]+\/(settle|guests|move)$/, answerLost: /\/(guests|move)$/ },
   // W21: a Part refund's and Refund the rest's card refunds are sent inside their routes.
   // W23: and Cancel & Refund's and Cancel & return credit's (one card part per order, sent inside the cancel route).
   '/api/payments/refund-order': {
-    route: /^\/api\/v1\/staff\/bookings\/[^/]+\/(refunds(\/owed)?|cancel-and-refund|cancel-credit)$/,
-    answerLost: /^\/api\/v1\/staff\/bookings\/[^/]+\/(refunds(\/owed)?|cancel-and-refund|cancel-credit)$/,
+    // W24: and a cheaper Move's (inside the move route).
+    route: /^\/api\/v1\/staff\/bookings\/[^/]+\/(refunds(\/owed)?|cancel-and-refund|cancel-credit|move)$/,
+    answerLost: /^\/api\/v1\/staff\/bookings\/[^/]+\/(refunds(\/owed)?|cancel-and-refund|cancel-credit|move)$/,
   },
 }
 
@@ -962,9 +964,31 @@ async function readerMoveLeftOpen(bookingId: string, call: BookingSteps['call'])
 
 const itArrived = { amount: 40, owedArrived: true, reason: 'Found on their balance' }
 
-/** The same £40 as fortyOwed, but the store credit landed and only its answer was lost. */
+/**
+ * W24: a setup step the new side runs through the frozen copy of the old functions (D-plan 4.11 item 1: setup steps run
+ * through the frozen copy, so the seed state is what each golden file recorded, whichever actions have switched). Used
+ * where the state a step leaves can't be made through the Worker's version of the action: W05g's and W05h's money owed
+ * after a move's store credit failed or couldn't be told. On the Worker a move is one transaction, so a failing store
+ * credit leaves nothing moved and nothing owed (`move-refund-store-credit-fails-outright` and its family, which test the
+ * move itself, stay on the Worker). These scenarios test what the later steps do with money owed, which the Worker still
+ * reaches: a refund that reconcile finds Stripe never received ends as owed. The old side runs every step through the
+ * old functions anyway, so this changes nothing there.
+ */
+let oldSideSetup = 0
+export async function onTheOldSide<T>(steps: () => Promise<T>): Promise<T> {
+  oldSideSetup += 1
+  try {
+    return await steps()
+  } finally {
+    oldSideSetup -= 1
+  }
+}
+/** True inside onTheOldSide: newBookingSide sends every call to the old functions. */
+export const inOldSideSetup = (): boolean => oldSideSetup > 0
+
+/** The same £40 as fortyOwed, but the store credit landed and only its answer was lost. W24: a setup on the old side. */
 async function fortyLanded({ move }: Pick<BookingSteps, 'move'>): Promise<void> {
-  await creditCantBeTold(() => move(ID.laterPrivateSession, { refundMethod: 'credit' }))
+  await onTheOldSide(() => creditCantBeTold(() => move(ID.laterPrivateSession, { refundMethod: 'credit' })))
 }
 
 const payments = {
@@ -975,9 +999,9 @@ const payments = {
   publicGiftCardAndReader: { method: 'reader', giftCard: { giftCardId: ID.giftCard, amount: 10 } },
 }
 
-/** A dearer booking's move to £100 at Core, with the store credit refund failing: all of it owed. */
+/** A dearer booking's move to £100 at Core, with the store credit refund failing: all of it owed. W24: a setup on the old side. */
 async function fortyOwed({ db, move }: Pick<BookingSteps, 'db' | 'move'>): Promise<void> {
-  await whileFailing(db, refundCreditFails, () => move(ID.laterPrivateSession, { refundMethod: 'credit' }))
+  await onTheOldSide(() => whileFailing(db, refundCreditFails, () => move(ID.laterPrivateSession, { refundMethod: 'credit' })))
 }
 
 /** A third guest's £50 on a card, then a £120 part refund stopping after the first £50. */
@@ -2306,6 +2330,34 @@ export const scenarios: Scenario[] = [
     await call('cancelCreditBooking', { bookingId })
     await call('cancelCreditBooking', { bookingId, clubCancelled: true })
   }),
+  // --- W24 (Wayne's Q34, 12 Nov): a credit stays on a moved booking only if it covers the new date. Recorded from the old
+  // code, which kept the credit whatever the date (£0 due, moved, the seat still free); the Worker releases it and the
+  // seat is charged its full new price, so the press with no payment is refused for one.
+  {
+    name: 'w24-q34-membership-credit-moved-past-its-last-day',
+    async seed(db, stripe) {
+      await seed(db, stripe)
+      await laterPublicSession(db)
+      await lastDayIs('2026-11-15')(db)
+    },
+    async run({ call, attempt }) {
+      const { bookingId } = (await call('createOrder', { customerId: ID.member, booking: { ...paidSeat([mo]), ...memberCredit }, payment: {} })) as { bookingId: string }
+      await call('moveBooking', { bookingId, newSessionId: ID.laterPublicSession })
+      await attempt('moveBooking', { bookingId, newSessionId: ID.laterPublicSession, confirmed: true })
+    },
+  },
+  booked(
+    'w24-q34-pass-seat-moved-past-its-expiry',
+    { booking: { ...paidSeat([sam]), ...ownedPass }, payment: {} },
+    async ({ bookingId, call, attempt }) => {
+      await call('moveBooking', { bookingId, newSessionId: ID.laterPublicSession })
+      await attempt('moveBooking', { bookingId, newSessionId: ID.laterPublicSession, confirmed: true })
+    },
+    async (db) => {
+      await laterPublicSession(db)
+      await db.query("UPDATE customer_session_passes SET expiry_date = '2026-11-15' WHERE id = $1", [ID.ownedPass])
+    }
+  ),
   booked('remove-guest-to-store-credit', publicOnCard, async ({ call, add }) => {
     const guest = await add(bea, payments.card)
     await call('removeBookingGuest', { guestId: guest.guest?.id })
@@ -2464,7 +2516,7 @@ export const scenarios: Scenario[] = [
     peakPrivateOnCard,
     async ({ bookingId, call, db, move }) => {
       await call('refundBooking', { bookingId, refundMethod: 'card', amount: 110, ...goodwill })
-      await whileFailing(db, refundCreditFails, () => move(ID.laterPrivateSession, { refundMethod: 'credit' }))
+      await onTheOldSide(() => whileFailing(db, refundCreditFails, () => move(ID.laterPrivateSession, { refundMethod: 'credit' })))
       await move(ID.privateSession, { refundMethod: 'credit' })
     },
     sessionsToMoveBetween
@@ -2473,7 +2525,7 @@ export const scenarios: Scenario[] = [
     'owed-public-then-a-same-price-move',
     publicPeakOnCard,
     async ({ bookingId, call, db, move }) => {
-      await whileFailing(db, refundCreditFails, () => move(ID.laterPublicSession, { refundMethod: 'credit' }))
+      await onTheOldSide(() => whileFailing(db, refundCreditFails, () => move(ID.laterPublicSession, { refundMethod: 'credit' })))
       await move(ID.session, {})
       await call('refundBooking', { bookingId, refundMethod: 'credit', amount: 11, refundOwed: true })
       await call('refundBooking', { bookingId, refundMethod: 'card' })
@@ -2511,7 +2563,7 @@ export const scenarios: Scenario[] = [
     publicPeakOnCard,
     async ({ bookingId, call, db, move, add }) => {
       const guest = await add(bea, payments.card)
-      await whileFailing(db, refundCreditFails, () => move(ID.laterPublicSession, { refundMethod: 'credit' }))
+      await onTheOldSide(() => whileFailing(db, refundCreditFails, () => move(ID.laterPublicSession, { refundMethod: 'credit' })))
       await call('refundBooking', { bookingId, refundMethod: 'card', amount: 50, ...goodwill })
       await call('removeBookingGuest', { guestId: guest.guest?.id })
       await call('removeBookingGuest', { guestId: guest.guest?.id, confirmedRefundAmount: 10, refundMethod: 'card' })
@@ -2623,7 +2675,7 @@ export const scenarios: Scenario[] = [
     'refund-the-rest-while-a-reader-move-is-open',
     publicPeakOnCard,
     async ({ bookingId, call, db, move }) => {
-      await whileFailing(db, refundCreditFails, () => move(ID.laterPublicSession, { refundMethod: 'credit' }))
+      await onTheOldSide(() => whileFailing(db, refundCreditFails, () => move(ID.laterPublicSession, { refundMethod: 'credit' })))
       const pendingId = await readerMoveLeftOpen(bookingId, call)
       await call('refundBooking', { bookingId, refundMethod: 'card', amount: 11, refundOwed: true }).catch(() => undefined)
       await call('cancelReaderPayment', { pendingId })
@@ -2825,9 +2877,11 @@ export const scenarios: Scenario[] = [
     await call('cancelReaderPayment', { pendingId: started.pendingReaderPayment?.pendingId })
     await call('refundBooking', { bookingId, refundMethod: 'card' })
   }),
-  booked('w05l-move-gift-card-row-fails-then-cancel', publicOnCard, async ({ bookingId, call, db, move }) => {
+  // W24: the cancel is an `attempt` (the old side records it as before): on the Worker the move is held for reconcile,
+  // which refuses the cancel while the payment is checked.
+  booked('w05l-move-gift-card-row-fails-then-cancel', publicOnCard, async ({ bookingId, attempt, db, move }) => {
     await whileFailing(db, giftCardRowFails, () => move(ID.peakSession, { payment: w05lPay.card }))
-    await call('refundBooking', { bookingId, refundMethod: 'card' })
+    await attempt('refundBooking', { bookingId, refundMethod: 'card' })
   }),
   booked('w05l-move-gift-card-answer-lost-then-cancel', publicOnCard, async ({ bookingId, call, move }) => {
     await losingTheAnswer(MOVE_STATEMENT, () => move(ID.peakSession, { payment: w05lPay.card }))
@@ -3965,7 +4019,8 @@ export async function landingAfterTheLook<T>(matches: (sql: string) => boolean, 
 }
 
 /** Sam's other booking on `day`, in the cold plunge, so a move onto that day meets the one-a-day trigger (N1). */
-const samsOtherBookingOn = (day: string) => async (db: Db) => {
+/** W17: Sam's other booking on `day` (N1). Exported for move.test.ts (W24). */
+export const samsOtherBookingOn = (day: string) => async (db: Db) => {
   await insert(db, 'service_types', { id: ID.sauna2, name: 'Cold Plunge', booking_type: 'public' })
   await insert(db, 'sessions', {
     id: ID.conflicting,

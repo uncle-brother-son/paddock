@@ -259,6 +259,31 @@ both sides, matching), then the block's press with `clubCancelled: true`, which 
 answers with everything back. `CLUB_CANCEL_AND_REFUND` and `CLUB_CANCEL_CREDIT` name exactly that, each value checked;
 `newAuditRowProblems` accepts `clubCancelled` on a cancel's claim and row only as `true`.
 
+W24 moves Move, through the staff app's wrapper as the dialog presses it (`moveAsTheDialogPresses`: the Worker's quote
+for "Check Price Difference", kept per booking as the dialog keeps it on screen, then the press with those figures
+(`figures.amountDue`, signed; `toCollect` the cash tick's own figure for cash) and a press key kept after no answer).
+Move's flows and claims join the swapped rows (`WORKER_FLOWS`, `REFUND_KINDS_ON_WORKER`, `booking.move`); `MOVE_DIFFERENCES`
+names the rest: the flow and claim keys, the reader record's marks, the card order's method, the quote's card choice
+(Q37), the first card refusal putting the move back, a store credit write failing in R1 (one transaction), the holds
+when R2's store credit or C2's gift card row fails, the lost answers, the W17 gaps R1b, R1d, R3, R4b, and N1. Every value
+these allowances let through is checked. W05g's and W05h's money-owed setups (a cheaper move whose store credit failed,
+or couldn't be told) can't be made through the Worker, where a move is one transaction, so those steps run on the old
+side (`onTheOldSide` in `scenarios.ts`): their old rows are set aside on both sides alike, and everything after them
+runs on the Worker. Two recordings from the old code (`w24-q34-*`, written with `UPDATE_GOLDEN=1 -t w24-q34`) show Q34:
+the old code kept a credit past the membership's last day and a pass seat past the pass's expiry.
+
+W24a (W24 review): no new allowance. Four checks are tighter, each proved by a plant that passes without it
+(`briefs/W24a-logs/plants/` in the staff app repo). `ONE_PART_PER_ORDER`'s "refund gone" branch also needs the
+refunds on that PaymentIntent to add up the same on both sides (L2: the add-on's money dropped from a merged part).
+`MOVE_QUOTE_REFUND_CHOICE` also needs `card + storeCredit` to equal the refund, to the penny (L3). The R1c allowance
+checks the whole change to `customers` and `gift_cards` (one changed balance, nothing added or removed), where only
+`changed` was looked at. `flowRowProblems` holds each finalise or cancel row to its own flow's record: `collected` is
+the record's expected amount on its PaymentIntent, a cancel's snapshot is the record's (any amount above £0 passed
+before). A gift card part written without the card being lowered shows no difference from the R1c golden file (which
+has no gift card change either); the test beside it ("R1c: the guest added once...") catches that. The tests of the staff
+app's deleted `shared/cashConfirmation.ts` and `shared/bookingRefund.ts` are gone from `server/staff-app-helpers.test.ts`
+(31 tests); the frozen copy keeps both files for the replay.
+
 ## No real Stripe (W11)
 
 `no-real-stripe.ts` is loaded before every unit test file (`vitest.unit.config.ts`, `setupFiles`). Any

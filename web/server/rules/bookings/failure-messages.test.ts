@@ -146,6 +146,10 @@ describe("the screens' words, moved", () => {
     for (const file of ['CancelAndRefundDialog.tsx', 'useCancelCreditPress.ts']) {
       expect(readFileSync(path.join(components, file), 'utf8'), file).toContain(`"${cancelNoAnswer}"`)
     }
+    // W24: the Move dialog's copy of MOVE_NO_ANSWER_MESSAGE, for a call that throws.
+    const moveNoAnswer = /export const MOVE_NO_ANSWER_MESSAGE =\s*\n?\s*"([^"]+)"/.exec(backendWords)?.[1]
+    expect(moveNoAnswer).toBeTruthy()
+    expect(readFileSync(path.join(components, 'MoveBookingDialog.tsx'), 'utf8')).toContain(`"${moveNoAnswer}"`)
     expect(readFileSync(path.join(components, 'BookingDetailContent.tsx'), 'utf8')).toContain(`'${words.SPECIAL_REQUESTS_CANCELLED_WORDS}'`)
   })
 })

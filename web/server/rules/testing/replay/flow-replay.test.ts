@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Db } from '@/server/db'
 import { compareRecordings, withCanonicalGoneNumbers, type Recording } from './compare'
-import { FLOW_SCENARIOS, flowDifferences, newFlowSide, W12_FLOW_SCENARIOS } from './flow-side'
+import { FLOW_SCENARIOS, flowComparable, flowDifferences, flowRowProblems, newFlowSide, W12_FLOW_SCENARIOS } from './flow-side'
 import { oldSide, readGolden, replay, startReplay, writeGolden, type ReplayEnvironment, type Scenario } from './harness'
 import { scenarios } from './scenarios'
 
@@ -89,8 +89,10 @@ describe('the reader flows (finalise and cancel) through the new routes, against
       const golden = readGolden(name) as Recording
       expect(golden, `No golden file for ${name}`).not.toBeNull()
       const recording = await replay(environment, byName(name), newFlowSide())
-      const compare = (r: Recording) => withRefsUnnumbered(withCanonicalGoneNumbers(r))
-      expect(compareRecordings(compare(golden), compare(recording), flowDifferences(name))).toEqual([])
+      // W24 (W20 review later 1): the flow routes' own rows set aside and checked exactly, not allowed wholesale.
+      const compare = (r: Recording, side: 'golden' | 'new') => withRefsUnnumbered(withCanonicalGoneNumbers(flowComparable(r, side)))
+      expect(flowRowProblems(recording)).toEqual([])
+      expect(compareRecordings(compare(golden, 'golden'), compare(recording, 'new'), flowDifferences(name))).toEqual([])
     })
   })
 })

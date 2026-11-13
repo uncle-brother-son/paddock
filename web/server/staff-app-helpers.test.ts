@@ -1152,8 +1152,6 @@ describe('staff app helpers', () => {
 
   describe('cash must match what was confirmed', () => {
     const CHANGED = (amount: string) => `The amount due has changed to £${amount}. Check it with the customer and confirm again.`
-    const NOTHING_LEFT = "The amount due has changed. There's nothing left to collect in cash. Check it with the customer and confirm again."
-    const AMOUNT_CHANGED = 'The amount due has changed. Check it with the customer and confirm again.'
     const staffRow = { id: 'staff-1', email: user.email, role: 'admin', can_issue_refunds: true, can_manage_pricing: false, active: true }
     const screen = () => import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/cashConfirmation'))
     const backend = (name: string) => import(/* @vite-ignore */ path.join(appDir, `backend/paddock/${name}`))
@@ -1172,69 +1170,12 @@ describe('staff app helpers', () => {
       return { sql, writes: () => sql.filter(isWrite) }
     }
 
-    describe('the rule', () => {
-      it('refuses a higher figure, with the new amount', async () => {
-        const { cashDifferenceRefusal } = await load('cashConfirmation')
-        expect(cashDifferenceRefusal('cash', 25, 20)).toEqual({ reason: 'cash_amount_changed', message: CHANGED('25.00'), amountToCollect: 25 })
-      })
-
-      it('refuses one penny more', async () => {
-        const { cashDifferenceRefusal } = await load('cashConfirmation')
-        expect(cashDifferenceRefusal('cash', 20.01, 20)?.message).toBe(CHANGED('20.01'))
-      })
-
-      it('refuses a lower figure the same way', async () => {
-        const { cashDifferenceRefusal } = await load('cashConfirmation')
-        expect(cashDifferenceRefusal('cash', 15, 20)).toEqual({ reason: 'cash_amount_changed', message: CHANGED('15.00'), amountToCollect: 15 })
-      })
-
-      it('refuses one penny less', async () => {
-        const { cashDifferenceRefusal } = await load('cashConfirmation')
-        expect(cashDifferenceRefusal('cash', 19.99, 20)?.message).toBe(CHANGED('19.99'))
-      })
-
-      it('refuses when nothing is left to collect but cash was confirmed', async () => {
-        const { cashDifferenceRefusal } = await load('cashConfirmation')
-        expect(cashDifferenceRefusal('cash', 0, 20)).toEqual({ reason: 'cash_amount_changed', message: NOTHING_LEFT, amountToCollect: 0 })
-      })
-
-      it('only says nothing is left when the figure really is £0.00', async () => {
-        const { cashDifferenceRefusal } = await load('cashConfirmation')
-        expect(cashDifferenceRefusal('cash', 0.004, 20)?.message).toBe(NOTHING_LEFT)
-        expect(cashDifferenceRefusal('cash', 0.01, 20)?.message).toBe(CHANGED('0.01'))
-      })
-
-      it.each([
-        ['the same amount', 'cash', 20, 20],
-        ['half a penny more', 'cash', 20.005, 20],
-        ['half a penny less', 'cash', 19.995, 20],
-        // Both come out a hair over half a penny. Refusing them would show staff the figure they
-        // had just confirmed, every time they confirmed it.
-        ['a tick rounded up', 'cash', 8.995, 9],
-        ['a tick rounded down', 'cash', 12.345, 12.34],
-        ['adding up noise', 'cash', 0.1 + 0.2, 0.3],
-        ['a card', 'card', 25, 20],
-        ['the reader', 'reader', 25, 20],
-        ['no method', undefined, 25, 20],
-      ])('lets through %s', async (_label, method, due, confirmed) => {
-        const { cashDifferenceRefusal } = await load('cashConfirmation')
-        expect(cashDifferenceRefusal(method, due, confirmed)).toBeNull()
-      })
-
-      it.each([
-        ['missing', undefined],
-        ['null', null],
-        ['not a number', Number.NaN],
-        ['infinite', Number.POSITIVE_INFINITY],
-      ])('a %s figure counts as nothing confirmed', async (_label, confirmed) => {
-        const { cashDifferenceRefusal } = await load('cashConfirmation')
-        expect(cashDifferenceRefusal('cash', 25, confirmed)?.reason).toBe('cash_amount_changed')
-        expect(cashDifferenceRefusal('cash', 0, confirmed)).toBeNull()
-      })
-    })
+    // Brief W24a: the rule's own tests (cashDifferenceRefusal in backend/paddock/shared/cashConfirmation.ts) went with
+    // that file. The rule is the Worker's now (server/rules/orders/amounts.ts), tested through the actions that use it
+    // (place-order.test.ts, settle.test.ts, add-guest.test.ts, move.test.ts).
 
     describe('pennies', () => {
-      const both = async () => [await load('cashConfirmation'), await screen()]
+      // Brief W24a: the staff app's backend copy of these two sums is deleted; the screen's copy stays.
 
       it.each([
         ['nothing left', [1, 0.95, 0.05], 0],
@@ -1243,7 +1184,7 @@ describe('staff app helpers', () => {
         ['one penny', [0.01], 0.01],
         ['more credit than due', [5, 10], 0],
       ])('amountLeftToPay: %s', async (_label, [due, ...parts], left) => {
-        for (const side of await both()) expect(side.amountLeftToPay(due, ...parts)).toBe(left)
+        expect((await screen()).amountLeftToPay(due, ...parts)).toBe(left)
       })
 
       it.each([
@@ -1252,7 +1193,7 @@ describe('staff app helpers', () => {
         ['one penny more', 6.96, 6.95, true],
         ['one penny less', 6.94, 6.95, false],
       ])('exceedsAmount: %s', async (_label, parts, amount, exceeds) => {
-        for (const side of await both()) expect(side.exceedsAmount(parts, amount)).toBe(exceeds)
+        expect((await screen()).exceedsAmount(parts, amount)).toBe(exceeds)
       })
 
       it('the gift card and store credit boxes hold pennies', () => {
@@ -1757,7 +1698,8 @@ describe('staff app helpers', () => {
         expect(press).toMatch(/const stale = reloadOnClose\.current\s+reloadOnClose\.current = false/)
         for (const dialog of ['CancelCreditBookingDialog.tsx', 'CancelPaymentNeededDialog.tsx']) expect(read(dialog)).toContain('if (press.reset()) onStale?.(bookingId)')
         const detail = readFileSync(path.join(appDir, 'frontend/components/BookingDetailContent.tsx'), 'utf8')
-        expect(detail.match(/onStale=\{reloadAfterNoAnswer\}/g)).toHaveLength(3)
+        // W24: and the Move dialog's.
+        expect(detail.match(/onStale=\{reloadAfterNoAnswer\}/g)).toHaveLength(4)
         expect(detail).toMatch(/function reloadAfterNoAnswer\(\) \{\s+trigger\(\{ bookingId \}, \{ skipCache: true \}\)/)
       })
 
@@ -1774,6 +1716,111 @@ describe('staff app helpers', () => {
         expect(read('CancelAndRefundDialog.tsx').match(/\.\.\.club\b/g)).toHaveLength(2)
         expect(read('useCancelCreditPress.ts').match(/\.\.\.club\b/g)).toHaveLength(2)
         expect(read('CancelCreditBookingDialog.tsx')).toContain('useCancelCreditPress(bookingId, open && !result, clubCancelled)')
+      })
+    })
+
+    describe('Move (W24: a thin call to the Worker)', () => {
+      const BOOKING = '11111111-1111-4111-8111-111111111111'
+      const SESSION = '22222222-2222-4222-8222-222222222222'
+      const priceImpact = { amountDue: -11, refundDue: true, seatDeltas: [], legacyPricing: false, customerId: '44444444-4444-4444-8444-444444444444' }
+      const quote = { priceImpact, blocked: null, cardRefundAvailable: true, refundParts: { card: 11, storeCredit: 0 } }
+      const refused = (code: string, details: Record<string, unknown>) => ({
+        data: { ok: false, error: { code, message: String(details['message']), details: { ...details } }, requestId: 'worker-request' },
+      })
+      const run = async (params: Record<string, unknown>) => {
+        const query = vi.fn()
+        vi.stubGlobal('paddockData', { query })
+        const fn = (await backend('moveBooking')).default
+        return { result: await fn({ params: { bookingId: BOOKING, newSessionId: SESSION, ...params }, user }), query }
+      }
+
+      it('no `confirmed` asks for the quote (a read, no key) and answers the old shape; with it, the move with the figures and the press key; never the database', async () => {
+        rawRequest.mockResolvedValue(success(quote))
+        const quoting = await run({})
+        expect(quoting.result).toEqual({ moved: false, priceImpact, cardRefundAvailable: true, refundParts: { card: 11, storeCredit: 0 } })
+        expect(rawRequest.mock.calls[0]?.[0]).toMatchObject({ path: `/api/v1/staff/bookings/${BOOKING}/move/quote`, method: 'POST', body: { newSessionId: SESSION } })
+        expect((rawRequest.mock.calls[0]?.[0] as { headers?: Record<string, string> }).headers?.['Idempotency-Key']).toBeUndefined()
+        // A dearer or same-price quote: the old answer exactly (no card choice), and `blocked` only when something blocks.
+        rawRequest.mockResolvedValue(success({ ...quote, priceImpact: { ...priceImpact, amountDue: 11, refundDue: false }, refundParts: null, blocked: { reason: 'refund_open', message: 'held' } }))
+        expect((await run({})).result).toEqual({ moved: false, priceImpact: { ...priceImpact, amountDue: 11, refundDue: false }, blocked: { reason: 'refund_open', message: 'held' } })
+        rawRequest.mockResolvedValue(success({ moved: true, booking: { id: BOOKING, price_paid: 29 } }))
+        const pressed = await run({ confirmed: true, refundMethod: 'card', figures: { amountDue: -11, toCollect: 0 }, idempotencyKey: 'press-key-0000000025' })
+        expect(pressed.result).toEqual({ moved: true, booking: { id: BOOKING, price_paid: 29 } })
+        expect(rawRequest.mock.calls[2]?.[0]).toMatchObject({
+          path: `/api/v1/staff/bookings/${BOOKING}/move`,
+          method: 'POST',
+          body: { newSessionId: SESSION, confirmed: true, figures: { amountDue: -11, toCollect: 0 }, refundMethod: 'card' },
+          headers: expect.objectContaining({ 'Idempotency-Key': 'press-key-0000000025' }),
+        })
+        expect(quoting.query).not.toHaveBeenCalled()
+        expect(pressed.query).not.toHaveBeenCalled()
+      })
+
+      it('the reader: moved, pending the tap; a held refund: moved, with its words as the warning', async () => {
+        const pending = { flow: 'move', recordId: BOOKING, pendingId: 'p', paymentIntentId: 'pi', clientSecret: 'pi_secret', amount: 11 }
+        rawRequest.mockResolvedValue(success({ moved: true, booking: { id: BOOKING, price_paid: 51 }, pendingReaderPayment: pending }))
+        expect((await run({ confirmed: true, payment: { method: 'reader' }, figures: { amountDue: 11, toCollect: 11 } })).result).toEqual({ moved: true, booking: { id: BOOKING, price_paid: 51 }, pendingReaderPayment: pending })
+        rawRequest.mockResolvedValue(success({ moved: true, booking: { id: BOOKING, price_paid: 29 }, held: { claimId: 'c', reason: 'refund_unconfirmed', message: 'held words' } }))
+        expect((await run({ confirmed: true, refundMethod: 'card', figures: { amountDue: -11 } })).result).toEqual({ moved: true, booking: { id: BOOKING, price_paid: 29 }, warning: 'held words' })
+      })
+
+      it('refusals as data, in the old shape: the reason, the words (left out when only the dialog had some), the new figures', async () => {
+        rawRequest.mockResolvedValue(refused('CONFLICT', { reason: 'amount_changed', message: 'The amount due has changed to £5.50. Check it with the customer and confirm again.', action: 'move', priceImpact: { ...priceImpact, amountDue: 5.5, refundDue: false } }))
+        expect((await run({ confirmed: true, payment: { method: 'card' }, figures: { amountDue: 11, toCollect: 11 } })).result).toEqual({
+          moved: false,
+          reason: 'amount_changed',
+          message: 'The amount due has changed to £5.50. Check it with the customer and confirm again.',
+          priceImpact: { ...priceImpact, amountDue: 5.5, refundDue: false },
+        })
+        rawRequest.mockResolvedValue(refused('CONFLICT', { reason: 'same_session', message: 'Pick a different session than the one this booking is already on.', action: 'move', screenWords: true }))
+        expect((await run({})).result).toEqual({ moved: false, reason: 'same_session' })
+        rawRequest.mockResolvedValue(refused('CONFLICT', { reason: 'duplicate_day_booking', message: 'This customer already has a booking on that day. Only one booking per customer per day is allowed.', action: 'move' }))
+        expect((await run({})).result).toEqual({ moved: false, reason: 'duplicate_day_booking', message: 'This customer already has a booking on that day. Only one booking per customer per day is allowed.' })
+      })
+
+      it.each([
+        ['no connection', () => rawRequest.mockRejectedValue(new Error('socket hang up'))],
+        ['an earlier press still running', () => rawRequest.mockResolvedValue(refusal('CONFLICT', 'This request is already being processed'))],
+        ['a fault', () => rawRequest.mockResolvedValue(refusal('INTERNAL', 'Something went wrong and the action may not have finished. Check before trying again.'))],
+      ])('%s on the press: `no_answer`, with the move words (the dialog keeps its key)', async (_label, arrange) => {
+        const { MOVE_NO_ANSWER_MESSAGE } = await load('bookingWorker')
+        arrange()
+        expect((await run({ confirmed: true, figures: { amountDue: 0 } })).result).toEqual({ moved: false, reason: 'no_answer', message: MOVE_NO_ANSWER_MESSAGE })
+      })
+
+      it('a changed press under a no-answer key: `pressed_after_no_answer`, locked, never sent as new', async () => {
+        const { MOVE_PRESSED_AFTER_NO_ANSWER_MESSAGE } = await load('bookingWorker')
+        rawRequest.mockResolvedValue(refusal('IDEMPOTENCY_MISMATCH', 'This Idempotency-Key was already used for a different request.'))
+        expect((await run({ confirmed: true, figures: { amountDue: 0 } })).result).toEqual({ moved: false, reason: 'pressed_after_no_answer', message: MOVE_PRESSED_AFTER_NO_ANSWER_MESSAGE, retryLocked: true })
+      })
+
+      it('the dialog: the Worker\'s quote and its figures sent back (Q18), the card from cardRefundAvailable (Q37), the press key kept after no answer or a throw (W20a), closing blocked mid-call, the booking reloaded on close after either (W23a S2), `blocked` holding Confirm', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/MoveBookingDialog.tsx'), 'utf8')
+        expect(source).toContain('figures: {\n            amountDue: priceImpact.amountDue,')
+        expect(source).toContain('toCollect: dearer ? figureToCollect(amountLeftToPay(priceImpact.amountDue, giftCardAmount, storeCreditAmount), payment) : 0,')
+        expect(source).toContain('pressKey.current ??= crypto.randomUUID()')
+        expect(source).toContain('idempotencyKey: pressKey.current,')
+        // Kept after no answer (and a changed press after it), cleared after any other answer and on close: never in the catch.
+        expect(source.match(/pressKey\.current = null/g)).toHaveLength(2)
+        const press = source.slice(source.indexOf('async function handleConfirm'))
+        const caught = press.indexOf('} catch (err) {')
+        const thrown = press.slice(caught, press.indexOf('} finally {', caught))
+        expect(thrown).not.toContain('pressKey.current = null')
+        expect(thrown).toContain('reloadOnClose.current = true')
+        expect(source.match(/reloadOnClose\.current = true/g)).toHaveLength(2)
+        expect(source).toMatch(/if \(reloadOnClose\.current\) \{\s+reloadOnClose\.current = false\s+onStale\?\.\(bookingId\)/)
+        expect(source).toContain('onOpenChange={(next) => (readerWaiting || submitting ? undefined')
+        expect(source).toContain('const card = result.cardRefundAvailable === true')
+        expect(source).toContain('disabled={!cardRefundAvailable}')
+        expect(source).toContain('disabled={submitting || retryLocked || Boolean(blocked) ||')
+        expect(source).not.toContain('cardRefundAvailable = true')
+        // The Block dialogs pass no onStale: their row stays, with its words, until close (W23a).
+        for (const block of ['BlockSessionDialog.tsx', 'BlockDayDialog.tsx']) {
+          const blockSource = readFileSync(path.join(appDir, 'frontend/components', block), 'utf8')
+          const dialog = blockSource.slice(blockSource.indexOf('<MoveBookingDialog'), blockSource.indexOf('/>', blockSource.indexOf('<MoveBookingDialog')))
+          expect(dialog).not.toContain('onStale')
+          expect(dialog).not.toContain('cardRefundAvailable')
+        }
       })
     })
 
@@ -1952,123 +1999,6 @@ describe('staff app helpers', () => {
       })
     })
 
-    describe('Move', () => {
-      const move = async (payment: Record<string, unknown> | undefined, tierPrice = '65.00') => {
-        const session = { id: 'session-2', start_time: '2026-12-01T10:00:00', end_time: '2026-12-01T11:00:00', capacity: 8, total_booked: 0, status: 'open', service_type_id: 'type-1', band_id: 'band-2', booking_type: 'private', started: false }
-        const database = stubDatabase([
-          [/FROM bookings b\s+LEFT JOIN sessions/, () => [{
-            id: 'booking-1',
-            customer_id: 'customer-1',
-            session_id: 'session-1',
-            party_size: 2,
-            status: 'confirmed',
-            price_paid: '40.00',
-            part_refunded_amount: '0.00',
-            refund_owed_amount: '0.00',
-            redemption_source: 'paid',
-            redeemed_membership_id: null,
-            redeemed_session_pass_id: null,
-            start_time: '2026-11-30T10:00:00',
-            end_time: '2026-11-30T11:00:00',
-            band_id: 'band-1',
-            credit_period_id: null,
-            booking_type: 'private',
-          }]],
-          [/FROM sessions s\s+JOIN service_types/, () => [session]],
-          [/FROM service_type_price_tiers/, () => [{ price: tierPrice }]],
-        ])
-        const fn = (await backend('moveBooking')).default
-        const result = await fn({ params: { bookingId: 'booking-1', newSessionId: 'session-2', confirmed: true, ...(payment ? { payment } : {}) }, user })
-        return { result, ...database }
-      }
-
-      it('refuses a figure below its own, with the new figures, and writes nothing', async () => {
-        const { result, writes } = await move({ method: 'cash', confirmedCashAmount: 20 })
-        expect(result).toMatchObject({ moved: false, reason: 'cash_amount_changed', message: CHANGED('25.00'), priceImpact: { amountDue: 25 } })
-        expect(writes()).toEqual([])
-      })
-
-      it('compares the cash left after store credit', async () => {
-        const { result, writes } = await move({ method: 'cash', confirmedCashAmount: 10, storeCredit: { amount: 5 } })
-        expect(result.message).toBe(CHANGED('20.00'))
-        expect(writes()).toEqual([])
-      })
-
-      it('refuses a figure above its own, with the new figures, and writes nothing', async () => {
-        const { result, writes } = await move({ method: 'cash', confirmedCashAmount: 30 })
-        expect(result).toMatchObject({ moved: false, reason: 'cash_amount_changed', message: CHANGED('25.00'), priceImpact: { amountDue: 25 } })
-        expect(writes()).toEqual([])
-      })
-
-      it('refuses confirmed cash when the difference has dropped to nothing', async () => {
-        const { result, writes } = await move({ method: 'cash', confirmedCashAmount: 25 }, '40.00')
-        expect(result).toMatchObject({ moved: false, reason: 'cash_amount_changed', message: NOTHING_LEFT, priceImpact: { amountDue: 0 } })
-        expect(writes()).toEqual([])
-      })
-
-      it('refuses confirmed cash when the difference has turned into a refund', async () => {
-        const { result, writes } = await move({ method: 'cash', confirmedCashAmount: 25 }, '30.00')
-        expect(result).toMatchObject({ moved: false, reason: 'cash_amount_changed', message: NOTHING_LEFT, priceImpact: { amountDue: -10, refundDue: true } })
-        expect(writes()).toEqual([])
-      })
-
-      it('gives the new figures when the difference fell below the store credit', async () => {
-        const { result, writes } = await move({ method: 'cash', confirmedCashAmount: 5, storeCredit: { amount: 20 } }, '55.00')
-        expect(result).toMatchObject({ reason: 'cash_amount_changed', message: NOTHING_LEFT, priceImpact: { amountDue: 15 } })
-        expect(writes()).toEqual([])
-      })
-
-      it('gets past the check with the confirmed figure', async () => {
-        const { result } = await move({ method: 'cash', confirmedCashAmount: 25 })
-        expect(result.reason).not.toBe('cash_amount_changed')
-      })
-
-      it('with nothing on screen to pay, gives the new figures so the choices appear', async () => {
-        const { result, writes } = await move(undefined)
-        expect(result).toMatchObject({ moved: false, reason: 'payment_method_required', priceImpact: { amountDue: 25, customerId: 'customer-1' } })
-        expect(writes()).toEqual([])
-      })
-
-      it('with nothing left for the reader, says the amount changed and gets the figures', async () => {
-        const { result, writes } = await move({ method: 'reader', storeCredit: { amount: 25 } })
-        expect(result).toMatchObject({ moved: false, reason: 'payment_method_required', message: AMOUNT_CHANGED, priceImpact: { amountDue: 25 } })
-        expect(writes()).toEqual([])
-      })
-
-      it('never starts a reader payment when the difference has gone to nothing', async () => {
-        const { result, writes } = await move({ method: 'reader' }, '40.00')
-        expect(result).toMatchObject({ moved: false, reason: 'payment_method_required', message: AMOUNT_CHANGED, priceImpact: { amountDue: 0 } })
-        expect(writes()).toEqual([])
-      })
-
-      it('the reader refused on a refund keeps its words and gets the figures', async () => {
-        const { result, writes } = await move({ method: 'reader' }, '30.00')
-        expect(result.message).toContain('a card reader cannot refund')
-        expect(result).toMatchObject({ moved: false, reason: 'payment_method_required', priceImpact: { amountDue: -10, refundDue: true } })
-        expect(writes()).toEqual([])
-      })
-
-      it.each([
-        ['a gift card above the difference', { giftCard: { giftCardId: 'gift-1', amount: 30 } }, 'gift_card_amount_exceeds_total'],
-        ['store credit above the difference', { storeCredit: { amount: 30 } }, 'store_credit_amount_exceeds_total'],
-        ['the two together above the difference', { storeCredit: { amount: 15 }, giftCard: { giftCardId: 'gift-1', amount: 15 } }, 'store_credit_amount_exceeds_total'],
-      ])('%s gets the figures, and writes nothing', async (_label, payment, reason) => {
-        const { result, writes } = await move(payment)
-        expect(result).toMatchObject({ moved: false, reason, priceImpact: { amountDue: 25 } })
-        expect(writes()).toEqual([])
-      })
-
-      it('a difference that turned into a refund gets the figures, so the refund choices appear', async () => {
-        const { result, writes } = await move({ method: 'card' }, '30.00')
-        expect(result).toMatchObject({ moved: false, reason: 'refund_method_required', priceImpact: { amountDue: -10, refundDue: true } })
-        expect(writes()).toEqual([])
-      })
-
-      it.each([[0.05, 24.95], [2.9, 22.1]])('accepts credit that exactly covers £25: %s and %s', async (storeCredit, gift) => {
-        const { result } = await move({ storeCredit: { amount: storeCredit }, giftCard: { giftCardId: 'gift-1', amount: gift } })
-        expect(['payment_method_required', 'gift_card_amount_exceeds_total', 'store_credit_amount_exceeds_total']).not.toContain(result.reason)
-      })
-    })
 
     // Brief W19: settleLapsedBooking is a thin call to the Worker's settle route now. Its rules (the cash figure, the
     // parts over the price, the gift card and store credit claims, one transaction) are the Worker's and tested there
@@ -2207,8 +2137,6 @@ describe('staff app helpers', () => {
         portions?: Record<string, number | Error>
         credit?: Array<boolean | Error>
         refunds?: Array<{ error: string } | { success: true }>
-        linesFail?: boolean
-        thirdOrder?: boolean
         answers?: Answer[]
       } = {}) => {
         const credit = [...(options.credit ?? [])]
@@ -2218,11 +2146,9 @@ describe('staff app helpers', () => {
         const database = stubDatabase([
           ...(options.answers ?? []),
           [/WHERE oli\.booking_id = \$1 AND oli\.item_type = 'booking'/, () => {
-            if (options.linesFail) throw BROKEN
             return [
               { id: 'line-new', order_id: 'order-new', net_remaining: '15.00' },
               { id: 'line-old', order_id: 'order-old', net_remaining: '25.00' },
-              ...(options.thirdOrder ? [{ id: 'line-oldest', order_id: 'order-oldest', net_remaining: '25.00' }] : []),
             ]
           }],
           [/FROM orders o WHERE o\.id/, (params) => {
@@ -2255,10 +2181,6 @@ describe('staff app helpers', () => {
         vi.stubGlobal('paddockBackendApi2', { rawRequest: rawRefund })
         return { rawRefund, ...database }
       }
-      const giveBack = async (amount = 25, method: 'card' | 'credit' = 'card') => {
-        const { giveBookingMoneyBack } = await load('bookingRefund')
-        return giveBookingMoneyBack({ bookingId: 'booking-1', customerId: 'customer-1', amount, method, staffId: 'staff-1', note: 'Refund', recordCardOnLines: true, pricePaidBefore: 50 })
-      }
       const refundedTo = (rawRefund: ReturnType<typeof vi.fn>) =>
         rawRefund.mock.calls.map(([call]) => {
           const body = { ...(call as { body: Record<string, unknown> }).body }
@@ -2266,159 +2188,14 @@ describe('staff app helpers', () => {
           return body
         })
 
-      describe('giveBookingMoneyBack', () => {
-        it('nothing moved: a failed lookup of the payments is reported, not thrown', async () => {
-          const { rawRefund, writes } = setUp({ linesFail: true })
-          expect(await giveBack()).toEqual({ ok: false, message: "Looking up the booking's payments failed, so nothing was refunded: connection lost" })
-          expect(rawRefund).not.toHaveBeenCalled()
-          expect(writes()).toEqual([])
-        })
-
-        it('nothing moved: reading the first order failing is reported, not thrown', async () => {
-          const { rawRefund, sql } = setUp({ portions: { 'order-new': BROKEN } })
-          expect(await giveBack()).toEqual({ ok: false, message: 'Checking the card payment failed, so nothing was refunded: connection lost' })
-          expect(rawRefund).not.toHaveBeenCalled()
-          expect(sql.some((text) => /store_credit_apply/.test(text))).toBe(false)
-        })
-
-        it('nothing moved: an order with no card before the failure still counts as nothing', async () => {
-          const { rawRefund } = setUp({ portions: { 'order-new': 0, 'order-old': BROKEN } })
-          expect(await giveBack()).toMatchObject({ ok: false })
-          expect(rawRefund).not.toHaveBeenCalled()
-        })
-
-        it('store credit throwing can\'t say whether it landed: unsure, with its detail', async () => {
-          setUp({ credit: [BROKEN] })
-          expect(await giveBack(25, 'credit')).toEqual({ ok: false, unsure: true, message: 'Adding the store credit gave no clear answer: connection lost; checking whether it landed failed too: connection lost' })
-        })
-
-        it('store credit refused is still a clear no', async () => {
-          setUp({ credit: [false] })
-          expect(await giveBack(25, 'credit')).toEqual({ ok: false, message: 'Adding the store credit failed, so nothing was refunded.' })
-        })
-
-        it('reading the next order failing after a card refund: the rest goes to store credit, and the card money stands', async () => {
-          const { rawRefund, sql } = setUp({ portions: { 'order-new': 15, 'order-old': BROKEN } })
-          const given = await giveBack()
-          expect(given).toMatchObject({
-            ok: true,
-            result: {
-              cardRefunded: 15,
-              storeCreditRefunded: 10,
-              cardByLine: [{ lineId: 'line-new', orderId: 'order-new', amount: 15 }],
-              warning: 'Checking the next card payment failed (connection lost), so the rest went to store credit.',
-            },
-          })
-          expect(given.result.shortfall).toBeUndefined()
-          expect(refundedTo(rawRefund)).toEqual([{ paymentIntentId: 'pi_order-new', amount: 15 }])
-          expect(sql.filter((text) => /UPDATE order_line_items SET card_refunded_amount/.test(text))).toHaveLength(1)
-        })
-
-        it('stops at the failure: no card refund is tried on an older order after it', async () => {
-          const { rawRefund } = setUp({ portions: { 'order-new': 15, 'order-old': BROKEN, 'order-oldest': 25 }, thirdOrder: true })
-          expect(await giveBack()).toMatchObject({ ok: true, result: { cardRefunded: 15, storeCreditRefunded: 10 } })
-          expect(rawRefund).toHaveBeenCalledTimes(1)
-        })
-
-        it('that and store credit refused: no false claim about store credit, and the shortfall is named', async () => {
-          setUp({ portions: { 'order-new': 15, 'order-old': BROKEN }, credit: [false] })
-          const { result } = await giveBack()
-          expect(result.warning).toBe(
-            'Checking the next card payment failed (connection lost). £15.00 went back to the card, but adding the £10.00 remainder to store credit failed — add it by hand.'
-          )
-          expect(result).toMatchObject({ cardRefunded: 15, storeCreditRefunded: 0, shortfall: 10 })
-          expect(result.warningWithoutShortfall).toBe('Checking the next card payment failed (connection lost).')
-        })
-
-        it('a further card refund failing keeps its words', async () => {
-          setUp({ refunds: [{ success: true }, { error: 'card_declined' }] })
-          const { result } = await giveBack()
-          expect(result.warning).toBe('A further card refund of £10.00 failed (card_declined), so the rest went to store credit.')
-        })
-
-        it('a further card refund failing and store credit refused: no false claim either', async () => {
-          setUp({ refunds: [{ success: true }, { error: 'card_declined' }], credit: [false] })
-          const { result } = await giveBack()
-          expect(result.warning).toBe(
-            'A further card refund of £10.00 failed (card_declined). £15.00 went back to the card, but adding the £10.00 remainder to store credit failed — add it by hand.'
-          )
-        })
-
-        it('store credit throwing after a card refund: the card money stands, and staff check the balance first', async () => {
-          const { sql } = setUp({ portions: { 'order-new': 15 }, credit: [BROKEN] })
-          const given = await giveBack()
-          expect(given).toMatchObject({ ok: true, result: { cardRefunded: 15, storeCreditRefunded: 0, shortfall: 10 } })
-          expect(given.result.warning).toBe(
-            "£15.00 went back to the card, but adding the £10.00 remainder to store credit failed (connection lost; checking whether it landed failed too: connection lost) — check their balance, then add it by hand if it isn't there."
-          )
-          expect(given.result.warningWithoutShortfall).toBeUndefined()
-          expect(sql.filter((text) => /UPDATE order_line_items SET card_refunded_amount/.test(text))).toHaveLength(1)
-        })
-
-        it('every read and write failing after the first card refund still returns what went back', async () => {
-          const { rawRefund } = setUp({
-            portions: { 'order-new': 15, 'order-old': BROKEN },
-            credit: [BROKEN],
-            answers: [[/UPDATE order_line_items SET card_refunded_amount/, () => { throw BROKEN }], [/orders SET payment_status|COUNT\(\*\)/, () => { throw BROKEN }]],
-          })
-          const given = await giveBack()
-          expect(given).toMatchObject({ ok: true, result: { cardRefunded: 15, shortfall: 10 } })
-          expect(given.result.warning).toContain('recording it on its order failed — check before refunding this booking again')
-          expect(rawRefund).toHaveBeenCalledTimes(1)
-        })
-      })
-
       // Brief W21: refundBooking's amount paths are thin calls to the Worker now (the old body's claim, put-back and
       // warning tests went with it); the wrapper's tests are in 'refunds (W21: thin calls to the Worker)', and the rules'
       // in server/rules/bookings/refunds.test.ts. Brief W23: so is Cancel & Refund (its old body's tests went with it;
       // the wrapper's are in 'Cancel & Refund and Cancel & return credit (W23: thin calls to the Worker)', the rules' in
-      // server/rules/bookings/cancel.test.ts).
+      // server/rules/bookings/cancel.test.ts). Brief W24a: giveBookingMoneyBack (shared/bookingRefund.ts) is deleted, and
+      // its tests with it; the Worker's refund pipeline is tested in server/rules/bookings/refunds.test.ts and the
+      // frozen copy of the old code by the replay (server/rules/testing/legacy-booking/).
 
-      describe('Move', () => {
-        const session = { id: 'session-2', start_time: '2099-12-01T10:00:00', end_time: '2099-12-01T11:00:00', capacity: 8, total_booked: 0, status: 'open', service_type_id: 'type-1', band_id: 'band-2', booking_type: 'private', started: false }
-        const moved = async (options: Parameters<typeof setUp>[0]) => {
-          const stubs = setUp({
-            ...options,
-            answers: [
-              [/FROM bookings b\s+LEFT JOIN sessions/, () => [{
-                id: 'booking-1', customer_id: 'customer-1', session_id: 'session-1', party_size: 2, status: 'confirmed', price_paid: '50.00',
-                part_refunded_amount: '0.00', refund_owed_amount: '0.00', redemption_source: 'paid', redeemed_membership_id: null, redeemed_session_pass_id: null,
-                start_time: '2099-11-30T10:00:00', end_time: '2099-11-30T11:00:00', band_id: 'band-1', credit_period_id: null, booking_type: 'private',
-              }]],
-              [/FROM sessions s\s+JOIN service_types/, () => [session]],
-              [/FROM service_type_price_tiers/, () => [{ price: '25.00' }]],
-              [/UPDATE sessions[\s\S]*RETURNING/, () => [{ id: 'session-2' }]],
-              [/WITH bk AS/, () => [{ id: 'booking-1', pending_id: null }]],
-            ],
-          })
-          const fn = (await backend('moveBooking')).default
-          const result = await fn({ params: { bookingId: 'booking-1', newSessionId: 'session-2', confirmed: true, refundMethod: 'card' }, user })
-          return { result, ...stubs }
-        }
-        const undone = (sql: string[]) => sql.filter((text) => /SET session_id/.test(text)).length
-
-        it('store credit throwing after the card refund: the move stands, and is not undone with the money gone', async () => {
-          const { result, sql, rawRefund } = await moved({ portions: { 'order-new': 15 }, credit: [BROKEN] })
-          // The £10 store credit couldn't give stays on price_paid, to refund again.
-          expect(result).toMatchObject({ moved: true, booking: { id: 'booking-1', price_paid: 35 } })
-          expect(result.warning).toContain('is still on the booking')
-          expect(result.warning).not.toContain('by hand')
-          expect(rawRefund).toHaveBeenCalledTimes(1)
-          expect(undone(sql)).toBe(1)
-        })
-
-        it('the next order failing after a card refund: the move stands, with the rest on store credit', async () => {
-          const { result, sql } = await moved({ portions: { 'order-new': 15, 'order-old': BROKEN } })
-          expect(result).toMatchObject({ moved: true, warning: 'Checking the next card payment failed (connection lost), so the rest went to store credit.' })
-          expect(undone(sql)).toBe(1)
-        })
-
-        it('a database error before any money moved: the move stands and the refund is reported as failed', async () => {
-          const { result, rawRefund } = await moved({ linesFail: true })
-          expect(result).toMatchObject({ moved: true, reason: "refund_failed: Looking up the booking's payments failed, so nothing was refunded: connection lost" })
-          expect(rawRefund).not.toHaveBeenCalled()
-        })
-      })
 
       describe('the same gap elsewhere', () => {
         describe('refundOrder', () => {
@@ -2790,13 +2567,16 @@ describe('staff app helpers', () => {
         const branch = source.slice(start, source.indexOf('return', start))
         expect(branch).toContain('setPriceImpact(result.priceImpact)')
         expect(branch).toContain('confirmedCashAmount: null')
-        expect(branch).toContain('setErrorMessage(result.message ?? FAILURE_MESSAGES[result.reason as MoveBookingFailureReason] ?? result.reason)')
+        // W24: the Worker's words first (refusalText), then the dialog's for the reason.
+        expect(branch).toContain('setErrorMessage(refusalText(result))')
         expect(branch).toContain('if (result.priceImpact.amountDue > 0.001 && !customer) await loadPayingCustomer(result.priceImpact.customerId)')
       })
 
       it('Move shows the server\'s own words on any other refusal', () => {
         const source = readFileSync(path.join(appDir, 'frontend/components/MoveBookingDialog.tsx'), 'utf8')
-        expect(source).toContain('} else if (result?.reason) {\n        setErrorMessage(result.message ?? FAILURE_MESSAGES')
+        // W24: refusalText puts the Worker's words first, then the dialog's for the reason.
+        expect(source).toContain('} else {\n        setErrorMessage(refusalText(result))')
+        expect(source).toContain("return result?.message ?? (result?.reason ? FAILURE_MESSAGES[result.reason] ?? result.reason : 'Failed to move booking.')")
       })
 
       it('Move clears the tick on Back, because the next session\'s amount can differ', () => {
@@ -3025,8 +2805,9 @@ describe('staff app helpers', () => {
         it('every way a move finishes goes the same way, and none is only a toast', () => {
           const source = dialog()
           expect(source).not.toContain('toast.warning')
-          expect(source.match(/finishMove\(/g)).toHaveLength(5)
-          expect(source.match(/finishMove\(moveNotices\(result\)\)/g)).toHaveLength(2)
+          // W24: the quote (a read on the Worker) never moves, so only the press finishes with its answer's notices.
+          expect(source.match(/finishMove\(/g)).toHaveLength(4)
+          expect(source.match(/finishMove\(moveNotices\(result\)\)/g)).toHaveLength(1)
           expect(source.match(/toast\.success\('Booking moved'\)/g)).toHaveLength(1)
         })
 

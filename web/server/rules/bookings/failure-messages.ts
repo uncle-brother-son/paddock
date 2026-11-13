@@ -490,3 +490,25 @@ export function cancelCreditAddonRefundFailedMessage(names: string, detail: stri
  */
 export const CLOSED_ON_A_CANCELLED_BOOKING_WORDS =
   "The booking is cancelled, so it has no Refund the rest. Check Stripe: if the refund didn't reach the customer, give it as store credit on the customer's page."
+
+// --- New in W24 (Move on the Worker)
+
+/** C1 (or R1) failed in the database and was rolled back: the booking is where it was, nothing taken or refunded. */
+export const MOVE_NOT_SAVED_MESSAGE =
+  "The move couldn't be saved (the system was busy, or one of its records couldn't be written), so the booking wasn't moved and no payment was taken or refunded. Try again."
+/**
+ * W24a (W24 review S1): a booking awaiting payment can't be moved. Move would charge the released seat 1 and leave the
+ * booking awaiting payment, and Settle would then charge seat 1 again.
+ */
+export const MOVE_PAYMENT_NEEDED_MESSAGE = 'Take the payment first, then move the booking.'
+/** A decline (or a reader that couldn't start) whose undo couldn't run yet: nothing was taken, and reconcile undoes it. */
+export const MOVE_NOT_UNDONE_MESSAGE =
+  "Nothing was taken, but the booking couldn't be moved back yet. Don't take payment again: check the Orders page in a few minutes."
+/** The reader's payment couldn't be started and the undo failed too (as W19a's Settle words, without "undone"). */
+export const moveReaderNotStartedNotUndoneMessage = (detail: string): string => `Creating the card reader payment failed (${detail}). ${MOVE_NOT_UNDONE_MESSAGE}`
+/**
+ * A cheaper move's first card refund refused: nothing went, so the move was put back exactly (both sessions' places, the
+ * seats, a released credit or pass session). The old function kept the move and left the money owed.
+ */
+export const moveRefundFailedMessage = (detail: string): string =>
+  `The card refund failed (${detail}), so the booking wasn't moved and nothing was refunded. Try again, or refund the difference to store credit.`

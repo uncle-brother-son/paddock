@@ -10,6 +10,7 @@ import type { FakeStripe } from '@/server/stripe/fake'
 import { staffAppDir } from '../staff-app-dir'
 import { seatLineLessPaidAddOns, withCanonicalGoneNumbers, type AllowedDifference, type Recording, type Row } from './compare'
 import { LEGACY_BOOKING_ACTIONS, oldSide, REPLAY_USER, type ReplaySide } from './harness'
+import { inOldSideSetup } from './scenarios'
 import { replayStripe } from './stripe-binding'
 
 /*
@@ -270,6 +271,45 @@ function cancelCreditAsTheDialogPresses(): NewBookingAction {
   }
 }
 
+/**
+ * W24: Move as the dialog presses it. The quote (the dialog's "Check Price Difference") goes to the Worker's quote route
+ * and its figures are kept for that booking, as the dialog keeps them on screen; the press sends them back (Q18:
+ * `figures.amountDue`, signed; `toCollect` the cash tick's own figure for cash, else what the method takes after the
+ * gift card and store credit), with a press key kept after no answer (W20a's rule), and the switch on. A press with no
+ * quote before it (none in the golden files) asks for one first. The old params had no figures.
+ */
+function moveAsTheDialogPresses(): NewBookingAction {
+  const heldKeys = new Map<string, string>()
+  const shown = new Map<string, number>()
+  return async (db, params) => {
+    const sent = params as { bookingId?: string; newSessionId?: string; confirmed?: boolean; payment?: { method?: string; confirmedCashAmount?: number; giftCard?: { amount?: number }; storeCredit?: { amount?: number } } }
+    const bookingId = sent.bookingId ?? ''
+    const quote = async () => {
+      const answer = (await withSwitch(BOOKING_KINDS_ON, () => throughStaffApp('moveBooking')(db, { bookingId, newSessionId: sent.newSessionId }))) as { priceImpact?: { amountDue: number } } | null
+      if (answer?.priceImpact) shown.set(bookingId, answer.priceImpact.amountDue)
+      else shown.delete(bookingId)
+      return answer
+    }
+    if (sent.confirmed !== true) return quote()
+    if (!shown.has(bookingId)) await quote()
+    const amountDue = shown.get(bookingId) ?? 0
+    const payment = sent.payment
+    const left = Math.max(0, Math.round((amountDue - (payment?.giftCard?.amount ?? 0) - (payment?.storeCredit?.amount ?? 0)) * 100) / 100)
+    const toCollect = payment?.method === 'cash' && typeof payment.confirmedCashAmount === 'number' ? payment.confirmedCashAmount : left
+    const idempotencyKey = heldKeys.get(bookingId) ?? crypto.randomUUID()
+    const answer = (await withSwitch(BOOKING_KINDS_ON, () => throughStaffApp('moveBooking')(db, { ...sent, figures: { amountDue, toCollect }, idempotencyKey }))) as {
+      reason?: string
+      priceImpact?: { amountDue: number }
+    } | null
+    if (answer?.reason === 'no_answer' || answer?.reason === 'pressed_after_no_answer') heldKeys.set(bookingId, idempotencyKey)
+    else heldKeys.delete(bookingId)
+    // A refusal over the amount carries the new figures: the dialog moves to them.
+    if (answer?.priceImpact) shown.set(bookingId, answer.priceImpact.amountDue)
+    await settleHeldRefund(db, bookingId)
+    return answer
+  }
+}
+
 /** W22: the booking an action's params are about: its booking id, or the booking of its guest or add-on line. */
 async function bookingOf(db: Db, params: unknown): Promise<string | undefined> {
   const sent = (params ?? {}) as { bookingId?: string; guestId?: string; addonLineId?: string }
@@ -313,6 +353,8 @@ export const BUILT_BOOKING_ACTIONS: ReadonlyMap<string, NewBookingAction> = new 
   ['removeBookingAddon', removeAddonAsTheDialogPresses()],
   // W23: Cancel & return credit and Cancel (payment needed), through the staff app's thin wrapper as the dialogs press it.
   ['cancelCreditBooking', cancelCreditAsTheDialogPresses()],
+  // W24: Move, through the staff app's thin wrapper as the dialog presses it.
+  ['moveBooking', moveAsTheDialogPresses()],
 ])
 
 export interface BookingSideOptions {
@@ -320,8 +362,11 @@ export interface BookingSideOptions {
   actions?: ReadonlyMap<string, NewBookingAction>
   /** Changes an answer after the Worker gives it: how a test plants a deliberate difference. */
   adjust?: (action: string, answer: unknown) => unknown
-  /** Every call, as it was made, for tests that check which side answered. W23: `cancel` marks Cancel & Refund and Cancel & return credit. */
-  calls?: Array<{ action: string; side: 'new' | 'old'; cancel?: boolean }>
+  /**
+   * Every call, as it was made, for tests that check which side answered. W23: `cancel` marks Cancel & Refund and Cancel &
+   * return credit. W24: `setup` marks a call a scenario runs on the old side (onTheOldSide).
+   */
+  calls?: Array<{ action: string; side: 'new' | 'old'; cancel?: boolean; setup?: boolean }>
 }
 
 /**
@@ -338,6 +383,11 @@ export function newBookingSide({ actions = BUILT_BOOKING_ACTIONS, adjust, calls 
     return {
       name: 'new',
       async call(action, params) {
+        // W24: a setup step the scenario runs through the frozen copy (onTheOldSide).
+        if (inOldSideSetup()) {
+          calls?.push({ action, side: 'old', setup: true })
+          return old.call(action, params)
+        }
         // W21: a refund still held from an earlier step is settled first, as staff would find it (settleHeldRefund). W22:
         // a Remove Guest or Remove add-on call names its guest or line, not the booking.
         await settleHeldRefund(db, await bookingOf(db, params))
@@ -514,13 +564,34 @@ const HELD_NOT_REFUNDED: AllowedDifference = {
   name: "The gift card's row fails after the card paid: the change is held for reconcile (Q35 words), never refunded for a database fault; the booking stays confirmed with its parts claimed and no order yet, and reconcile finishes it (settle.test.ts)",
   decision: "W6-3 (a good payment is never refunded for a database fault); Wayne's Q35 (held, reconcile finishes or undoes it)",
   path: new RegExp(`^\\.results\\[1\\]\\.(reason|message)$|^\\.stripeCalls\\[1\\]$|${SETTLED_FIELDS.source}|^\\.tables\\.(orders|order_line_items)\\.added\\[1\\]$|^\\.tables\\.gift_cards$`),
-  actual: settledAsDecided,
+  // W24 (W20 review later 1): every path with its one value, where the stripe call, the order rows and the gift card
+  // table let any value through: the old reversal refund gone, no card order yet (held), the £5 gift card claimed once.
+  actual: (value, expected, path) => {
+    if (path === '.stripeCalls[1]') return value === undefined && (expected as { method?: string; idempotencyKey?: string } | undefined)?.method === 'refunds.create' && String((expected as { idempotencyKey?: string }).idempotencyKey).startsWith('reverse-charge:')
+    if (/^\.tables\.(orders|order_line_items)\.added\[1\]$/.test(path)) return value === undefined
+    if (path === '.tables.gift_cards') return expected === undefined && JSON.stringify((value as { changed?: unknown } | undefined)?.changed) === JSON.stringify([{ id: '10000000-0000-4000-8000-000000000009', remaining_balance: ['40.00', '35.00'] }])
+    if (path.endsWith('.reason')) return value === 'paid_not_finished'
+    if (path.endsWith('.message')) return typeof value === 'string' && value.startsWith("The card payment went through, but the change couldn't be finished.")
+    return settledAsDecided(value, expected, path)
+  },
 }
 
 const R1A: AllowedDifference = {
   name: "R1a: the old statement landed after the press undid everything (£20 given back on a settled booking); the Worker's C1 is one transaction, so the settle goes through once with the store credit and gift card it took",
   decision: 'W05 review 3, finding 1 (R1a); W17 golden gap; brief W19 item 1',
   path: /^\.results\[1\](\.|$)|^\.tables\.customers$|^\.tables\.store_credit_transactions\.added\[1\]$|^\.tables\.gift_cards$/,
+  // W24 (W20 review later 1): each value, where the whole tables went unchecked: settled with £20 charged; no store
+  // credit given back (the member's balance ends where the scenario's top-up began) and no reversal row; the £5 gift
+  // card claimed once.
+  actual: (value, expected, path) => {
+    if (path === '.results[1].settled') return value === true
+    if (path === '.results[1].reason' || path === '.results[1].message') return value === undefined
+    if (path === '.results[1].booking') return JSON.stringify(value) === JSON.stringify({ id: 'bookings#1', status: 'confirmed', redemption_source: 'paid', price_paid: '20.00', payment_due_by: null })
+    if (path === '.results[1].amountCharged') return value === 20
+    if (path === '.tables.customers' || path === '.tables.store_credit_transactions.added[1]') return value === undefined
+    if (path === '.tables.gift_cards') return expected === undefined && JSON.stringify((value as { changed?: unknown } | undefined)?.changed) === JSON.stringify([{ id: '10000000-0000-4000-8000-000000000009', remaining_balance: ['40.00', '35.00'] }])
+    return false
+  },
 }
 
 const R1A_CONTROL: AllowedDifference = {
@@ -567,7 +638,7 @@ export const SETTLE_DIFFERENCES: ReadonlyMap<string, readonly AllowedDifference[
 // --- W20 (W19 review later 4): the audit rows and stored answers, set aside exactly rather than allowed wholesale
 
 /** The flows whose actions are on the Worker: their old machinery rows and their new rows are swapped, nothing else. */
-export const WORKER_FLOWS: ReadonlySet<string> = new Set(['settle', 'add_guest'])
+export const WORKER_FLOWS: ReadonlySet<string> = new Set(['settle', 'add_guest', 'move'])
 
 type AuditRow = Row & { action?: string; details?: Record<string, unknown> | null }
 
@@ -602,6 +673,8 @@ function oldMachineryFlow(row: AuditRow, byId: ReadonlyMap<unknown, AuditRow>): 
 function newRowFlow(row: AuditRow): string | null {
   if (row.action === 'booking.settle') return 'settle'
   if (row.action === 'booking.guest_add') return 'add_guest'
+  // W24: Move's own row (a cheaper move's is R2's, set aside with its claim's rows below).
+  if (row.action === 'booking.move') return 'move'
   if (row.action === 'reader_payment.finalise' || row.action === 'reader_payment.cancel' || row.action === 'reader_payment.charge_without_record') {
     const flow = row.details?.['flow']
     return typeof flow === 'string' ? flow : null
@@ -610,7 +683,7 @@ function newRowFlow(row: AuditRow): string | null {
 }
 
 /** W21: the refund kinds now on the Worker (Part refund, Refund the rest; W22: Remove Guest; W23: Cancel & Refund); Move's stays old. */
-const REFUND_KINDS_ON_WORKER: ReadonlySet<string> = new Set(['part_refund', 'refund_owed', 'remove_guest', 'cancel'])
+const REFUND_KINDS_ON_WORKER: ReadonlySet<string> = new Set(['part_refund', 'refund_owed', 'remove_guest', 'cancel', 'move'])
 /**
  * W21: the actions' own rows, written only by those actions (the old functions' and the Worker's). W22: Remove Guest's
  * and Remove add-on's (the Worker's only: the old functions wrote none).
@@ -624,6 +697,8 @@ const REFUND_ACTION_ROWS: ReadonlySet<string> = new Set([
   // W23: Cancel & Refund's and Cancel & return credit's (the Worker's only).
   'booking.cancel',
   'booking.cancel_credit',
+  // W24: Move's (the Worker's only).
+  'booking.move',
 ])
 /** The old code's notes about a card refund inside a claim (its refusal count and its unsure keys). */
 const OLD_REFUND_NOTES: ReadonlySet<string> = new Set(['booking.card_refund_refused', 'booking.card_refund_unsure'])
@@ -635,11 +710,15 @@ const OLD_REFUND_NOTES: ReadonlySet<string> = new Set(['booking.card_refund_refu
  * finished rows, and the actions' own rows.
  */
 function refundRows(rows: readonly AuditRow[], side: 'golden' | 'new'): Set<AuditRow> {
+  // W24: on the new side, an old claim of a kind now on the Worker comes from a setup step run on the old side
+  // (onTheOldSide), exactly as the golden file has it: set aside on both sides, as the golden side sets aside all of them.
+  const oldKind = (row: AuditRow) => row.details?.['worker'] !== true && REFUND_KINDS_ON_WORKER.has(String(row.details?.['kind']))
   const claimIds = new Set(
     rows
-      .filter((row) => row.action === 'booking.refund_claimed' && (side === 'golden' ? REFUND_KINDS_ON_WORKER.has(String(row.details?.['kind'])) : row.details?.['worker'] === true))
+      .filter((row) => row.action === 'booking.refund_claimed' && (side === 'golden' ? REFUND_KINDS_ON_WORKER.has(String(row.details?.['kind'])) : row.details?.['worker'] === true || oldKind(row)))
       .map((row) => row['id'])
   )
+  const oldClaimIds = new Set(rows.filter((row) => row.action === 'booking.refund_claimed' && oldKind(row)).map((row) => row['id']))
   const swapped = new Set<AuditRow>()
   let open: unknown = null
   for (const row of rows) {
@@ -651,7 +730,7 @@ function refundRows(rows: readonly AuditRow[], side: 'golden' | 'new'): Set<Audi
       if (row.details?.['claimId'] === open) open = null
     } else if (REFUND_ACTION_ROWS.has(String(row.action))) {
       swapped.add(row)
-    } else if (side === 'golden' && open !== null && OLD_REFUND_NOTES.has(String(row.action))) {
+    } else if ((side === 'golden' || oldClaimIds.has(open)) && open !== null && OLD_REFUND_NOTES.has(String(row.action))) {
       swapped.add(row)
     } else if (side === 'new' && row.action === 'order.reconcile' && row['entity_type'] === 'refund_claim') {
       // Reconcile's row for a held claim the replay settled (refundAsTheDialogPresses).
@@ -668,8 +747,26 @@ export function swappedAuditRows(recording: Recording, side: 'golden' | 'new'): 
   const refunds = refundRows(rows, side)
   return rows.filter((row) => {
     if (refunds.has(row)) return true
-    const flow = side === 'golden' ? oldMachineryFlow(row, byId) : newRowFlow(row)
+    // W24: the old machinery rows of a setup step run on the old side (onTheOldSide) are set aside on the new side too.
+    const flow = side === 'golden' ? oldMachineryFlow(row, byId) : (newRowFlow(row) ?? oldMachineryFlow(row, byId))
     return flow !== null && WORKER_FLOWS.has(flow)
+  })
+}
+
+/**
+ * W24: the Worker's own rows among the new side's swapped ones: not an old claim (or its finished row, or a note inside
+ * it) or an old machinery row from a setup step run on the old side, which match the golden file's and are set aside on
+ * both sides alike.
+ */
+function workerRows(recording: Recording): AuditRow[] {
+  const rows = (recording.tables['audit_log']?.added ?? []) as AuditRow[]
+  const byId = new Map(rows.map((row) => [row['id'], row]))
+  const oldClaims = new Set(rows.filter((row) => row.action === 'booking.refund_claimed' && row.details?.['worker'] !== true).map((row) => row['id']))
+  return swappedAuditRows(recording, 'new').filter((row) => {
+    if (row.action === 'booking.refund_claimed') return row.details?.['worker'] === true
+    if (row.action === 'booking.refund_finished') return !oldClaims.has(row.details?.['claimId'])
+    if (OLD_REFUND_NOTES.has(String(row.action))) return false
+    return oldMachineryFlow(row, byId) === null
   })
 }
 
@@ -764,6 +861,29 @@ export function claimLookProblems(recording: Recording): string[] {
 const CARD_RECORD_FIELDS: Readonly<Record<string, readonly string[]>> = {
   settle: ['customer_id', 'description', 'booking_id', 'old_status', 'old_price_paid', 'old_payment_due_by', 'old_redemption_source', 'old_redeemed_membership_id', 'old_credit_period_id', 'old_seat1_pay_by', 'amount', 'store_credit_amount', 'gift_card'],
   add_guest: ['customer_id', 'description', 'booking_id', 'session_id', 'addon_credits', 'price_increment', 'claimed_extra_capacity', 'store_credit_amount', 'gift_card', 'guest_row_id', 'addon_line_ids'],
+  // W24: the old reader move's snapshot (W12's undo and C2 read it).
+  move: [
+    'customer_id',
+    'description',
+    'booking_id',
+    'old_session_id',
+    'old_start_time',
+    'old_end_time',
+    'old_price_paid',
+    'price_paid_change',
+    'old_band_id',
+    'old_credit_period_id',
+    'old_redemption_source',
+    'old_redeemed_membership_id',
+    'old_redeemed_session_pass_id',
+    'release_session_pass_on_finalise',
+    'seats',
+    'new_session_id',
+    'new_session_booking_type',
+    'party_size',
+    'store_credit_amount',
+    'gift_card',
+  ],
 }
 const CARD_MARKS = ['method', 'channel', 'request_id', 'livemode', 'stripe_customer_id', 'payment_method_id']
 
@@ -803,7 +923,7 @@ const sameKeys = (details: Record<string, unknown> | null | undefined, keys: rea
 export function newAuditRowProblems(recording: Recording): string[] {
   const problems: string[] = []
   const all = (recording.tables['audit_log']?.added ?? []) as AuditRow[]
-  for (const row of swappedAuditRows(recording, 'new')) {
+  for (const row of workerRows(recording)) {
     const d = row.details ?? {}
     const n = (key: string) => Number(d[key])
     const wrong = (why: string) => problems.push(`${String(row.action)}: ${why} (${JSON.stringify(d)})`)
@@ -813,7 +933,7 @@ export function newAuditRowProblems(recording: Recording): string[] {
       const matched = 'matched' in d
       // W22: Remove Guest's and Remove add-on's claims carry what they removed. W23: a cancel's, what it changed.
       const cancelKind = d['kind'] === 'cancel' || d['kind'] === 'cancel_credit'
-      const removed = d['kind'] === 'remove_guest' ? ['guest'] : d['kind'] === 'remove_addon' ? ['addon'] : cancelKind ? ['cancel'] : []
+      const removed = d['kind'] === 'remove_guest' ? ['guest'] : d['kind'] === 'remove_addon' ? ['addon'] : cancelKind ? ['cancel'] : d['kind'] === 'move' ? ['move'] : []
       if (!sameKeys(d, ['kind', 'amount', 'pricePaidBefore', 'method', 'reason', 'worker', 'plan', 'livemode', ...(cash ? ['handedOverBy'] : []), ...(matched ? ['matched'] : []), ...removed])) wrong('fields')
       if (d['kind'] === 'remove_guest') {
         const guest = (d['guest'] ?? {}) as Record<string, unknown>
@@ -839,6 +959,15 @@ export function newAuditRowProblems(recording: Recording): string[] {
         if (round2(Number(cancel.seatAmount) + addonsBack) !== n('amount') || d['reason'] !== null || !['card', 'credit'].includes(String(d['method']))) wrong('a cancel claim')
         if (d['kind'] === 'cancel_credit' && Number(cancel.seatAmount) !== 0) wrong('seat money on Cancel & return credit')
       }
+      if (d['kind'] === 'move') {
+        // W24: a cheaper Move's claim: the booking as R1 found it and what R1 changed (for the undo), and only card or
+        // store credit (no cash back on a move).
+        const move = (d['move'] ?? {}) as Record<string, unknown>
+        const fields = ['oldSessionId', 'newSessionId', 'oldStartTime', 'oldEndTime', 'oldBandId', 'oldCreditPeriodId', 'oldRedemptionSource', 'oldRedeemedMembershipId', 'oldRedeemedSessionPassId', 'seats', 'placesClaimed', 'placesReleased', 'passReturned', 'creditReleased']
+        if (!sameKeys(move, fields)) wrong('the move')
+        if (move['oldSessionId'] === move['newSessionId'] || !Array.isArray(move['seats']) || d['reason'] !== null || !['card', 'credit'].includes(String(d['method']))) wrong('a move claim')
+        if (!(Number(move['placesClaimed']) >= 0) || !(Number(move['placesReleased']) >= 0)) wrong('places')
+      }
       const plan = (d['plan'] ?? {}) as { card?: Array<{ orderId?: string; amount: number; lines?: Array<{ amount: number; addon?: unknown }> }>; storeCredit?: number; cash?: number }
       // W23 (item 1): one card part per order, and add-on lines in a part only on a cancel's claim.
       const partOrders = (plan.card ?? []).map((part) => part.orderId)
@@ -857,7 +986,7 @@ export function newAuditRowProblems(recording: Recording): string[] {
       // A card refund with no card money left plans store credit only; nothing else ever plans a card part.
       if (card > 0 && d['method'] !== 'card') wrong('card parts only for the card')
       if ((card > 0) !== (typeof d['livemode'] === 'boolean')) wrong("the key's mode exactly with card parts")
-      if (!['part_refund', 'refund_owed', 'remove_guest', 'remove_addon', 'cancel', 'cancel_credit'].includes(String(d['kind'])) || d['worker'] !== true) wrong('kind')
+      if (!['part_refund', 'refund_owed', 'remove_guest', 'remove_addon', 'cancel', 'cancel_credit', 'move'].includes(String(d['kind'])) || d['worker'] !== true) wrong('kind')
       if (row['entity_type'] !== 'booking' || typeof row['request_id'] !== 'string') wrong('entity or request id')
     } else if (row.action === 'booking.refund_finished') {
       const claim = all.find((other) => other['id'] === d['claimId'])
@@ -906,6 +1035,24 @@ export function newAuditRowProblems(recording: Recording): string[] {
       if (round2(n('cardRefunded') + n('storeCreditRefunded') + n('owed')) !== round2((credit ? 0 : n('seatRefund')) + n('addonsRefund'))) wrong('the parts are not what went back')
       if (!Array.isArray(d['addonLineIds']) || !(n('placesReleased') >= 0) || !(n('creditsReturned') >= 0)) wrong('lines, places or credits')
       if (row['entity_type'] !== 'booking' || typeof row['request_id'] !== 'string') wrong('entity or request id')
+    } else if (row.action === 'booking.move') {
+      // W24: every move; its money: what was collected (dearer) or what went back (cheaper), and nothing else.
+      const keys = ['oldSessionId', 'newSessionId', 'amountDue', 'storeCredit', 'giftCard', 'method', 'toCollect', 'refundMethod', 'cardRefunded', 'storeCreditRefunded', 'owed', 'pendingId', 'creditReleased', 'passReleased', 'legacyPricing']
+      if (!sameKeys(d, keys)) wrong('fields')
+      if (d['oldSessionId'] === d['newSessionId'] || typeof d['newSessionId'] !== 'string') wrong('the sessions')
+      const due = n('amountDue')
+      if (due > 0) {
+        if (round2(Math.max(0, due - n('storeCredit') - n('giftCard'))) !== n('toCollect')) wrong('toCollect is not what is left after the parts')
+        if ((n('toCollect') > 0) !== (d['method'] !== null)) wrong('a method exactly when something is collected')
+        if ((d['pendingId'] !== null) !== (d['method'] === 'card' || d['method'] === 'reader')) wrong('a flow record exactly for the card or reader')
+        if (d['refundMethod'] !== null || n('cardRefunded') + n('storeCreditRefunded') + n('owed') !== 0) wrong('money back on a dearer move')
+      } else if (due < 0) {
+        if (round2(n('cardRefunded') + n('storeCreditRefunded') + n('owed')) !== round2(-due)) wrong('the parts are not the refund')
+        if (!['card', 'credit'].includes(String(d['refundMethod'])) || d['pendingId'] !== null || n('storeCredit') + n('giftCard') + n('toCollect') !== 0) wrong('a refund')
+      } else if (d['method'] !== null || d['refundMethod'] !== null || d['pendingId'] !== null || n('storeCredit') + n('giftCard') + n('toCollect') + n('cardRefunded') + n('storeCreditRefunded') + n('owed') !== 0) {
+        wrong('money on a same-price move')
+      }
+      if (row['entity_type'] !== 'booking' || typeof row['request_id'] !== 'string') wrong('entity or request id')
     } else if (row.action === 'booking.refund_owed_arrived') {
       if (!sameKeys(d, ['amount', 'reason']) || !(n('amount') > 0) || typeof d['reason'] !== 'string') wrong('fields')
     } else if (row.action === 'booking.guest_add') {
@@ -940,7 +1087,7 @@ export function newAuditRowProblems(recording: Recording): string[] {
 export function storedAnswerProblems(recording: Recording): string[] {
   const rows = (recording.tables['api_idempotency']?.added ?? []) as Row[]
   const route =
-    /^POST \/api\/v1\/staff\/(bookings\/[^/]+\/(settle|guests|status|special-requests|refunds|refunds\/owed|refunds\/owed-arrived|cancel-and-refund|cancel-credit)|bookings\/(guests|addon-lines)\/[^/]+\/remove|reader-flows\/[^/]+\/(finalise|cancel))$/
+    /^POST \/api\/v1\/staff\/(bookings\/[^/]+\/(settle|guests|status|special-requests|refunds|refunds\/owed|refunds\/owed-arrived|cancel-and-refund|cancel-credit|move)|bookings\/(guests|addon-lines)\/[^/]+\/remove|reader-flows\/[^/]+\/(finalise|cancel))$/
   return rows
     .filter((row) => row['status'] !== 'done' || !route.test(String(row['endpoint'])))
     .map((row) => `${String(row['endpoint'])}: ${String(row['status'])}`)
@@ -1193,6 +1340,22 @@ export const ADD_GUEST_DIFFERENCES: ReadonlyMap<string, readonly AllowedDifferen
         name: "R1c: the old statement landed after the press had given the £15 store credit and the place back (the guest added, its money and place given away); the Worker's C1 is one transaction, so the guest is added once with the place, the £15 store credit and the £5 gift card it took",
         decision: 'W05 review 3, finding 1 (R1c); W17 golden gap; brief W20 item 2',
         path: /^\.results\[2\]\.(added|reason|limitReached|guest|addonLineIds)$|^\.tables\.sessions\.changed\[0\]\.total_booked\[1\]$|^\.tables\.store_credit_transactions\.added\[1\]$|^\.tables\.(customers|gift_cards)$/,
+        // W24 (W20 review later 1): each value, where the whole tables went unchecked: Bea added (her £20 seat), the
+        // third place taken, the £15 store credit taken once (no reversal row), the £5 gift card claimed once.
+        actual: (value, expected, path) => {
+          if (path.endsWith('.added')) return value === true
+          if (path.endsWith('.reason')) return value === undefined
+          if (path.endsWith('.limitReached')) return value === false
+          if (path.endsWith('.guest')) return (value as { guest_name?: unknown; unit_price?: unknown } | undefined)?.guest_name === 'Bea Guest' && (value as { unit_price?: unknown }).unit_price === 20
+          if (path.endsWith('.addonLineIds')) return Array.isArray(value) && value.length === 0
+          if (path.endsWith('.total_booked[1]')) return value === 3
+          if (path === '.tables.store_credit_transactions.added[1]') return value === undefined
+          // W24a (W24 review, its unread parts): the whole table's change, so a row added or gone beside the one changed
+          // balance doesn't pass (only `changed` was looked at).
+          const only = (changed: Row): boolean => expected === undefined && JSON.stringify(value) === JSON.stringify({ added: [], changed: [changed], removed: [], tied: 0 })
+          if (path === '.tables.customers') return only({ id: '10000000-0000-4000-8000-000000000005', store_credit_balance: ['30.00', '15.00'] })
+          return only({ id: '10000000-0000-4000-8000-000000000009', remaining_balance: ['40.00', '35.00'] })
+        },
       },
     ],
   ],
@@ -1609,14 +1772,43 @@ const W23 = 'Brief W23 (D-plan 1.6, 1.7, 3 N4, 4.3, 4.7; lead call L3: claims in
  * (`<claimId>:refund:<orderId>`); the old code sent the seat's refund and then the add-on's (its own `addon-refund:` key).
  * Only that passes: the order's refund larger than the old one, and the old add-on refund gone.
  */
+type RefundCall = { method?: string; params?: { payment_intent?: string; amount?: number; metadata?: { refund_key?: string } } }
+const refundKeyOf = (call: RefundCall | undefined): string => String(call?.params?.metadata?.refund_key)
+/** The old code's add-on refunds on a PaymentIntent (their `addon-refund:` keys), in pence. */
+const oldAddonRefundsOn = (recording: Recording, paymentIntent: string | undefined): number =>
+  (recording.stripeCalls as RefundCall[])
+    .filter((call) => call.method === 'refunds.create' && call.params?.payment_intent === paymentIntent && refundKeyOf(call).startsWith('addon-refund:'))
+    .reduce((total, call) => total + Number(call.params?.amount ?? 0), 0)
+
 const ONE_PART_PER_ORDER: AllowedDifference = {
   name: "A cancel's seat money and its ticked add-on on the same order go back in one card refund, one key (the old code sent two)",
   decision: `${W23}, item 1 (W22 review, later 1): one card part per order per claim`,
   path: /^\.stripeCalls\[\d+\](\.params\.amount)?$/,
-  actual: (value, expected, path) => {
-    if (path.endsWith('.amount')) return typeof value === 'number' && typeof expected === 'number' && value > expected
-    const old = expected as { method?: string; params?: { metadata?: { refund_key?: string } } } | undefined
-    return value === undefined && old?.method === 'refunds.create' && String(old.params?.metadata?.refund_key).startsWith('addon-refund:')
+  // W24 (W23 review, later 3): exactly the old seat refund plus the old add-on refunds on that PaymentIntent, where any
+  // larger amount passed before; and a refund gone only if it was an old add-on refund on a PaymentIntent the new side
+  // refunded in one part, with the same total sent back to that PaymentIntent on both sides (W24a, W24 review L2).
+  actual: (value, expected, path, recordings) => {
+    const index = Number(/^\.stripeCalls\[(\d+)\]/.exec(path)?.[1])
+    if (path.endsWith('.amount')) {
+      const merged = recordings.actual.stripeCalls[index] as RefundCall | undefined
+      const seat = recordings.expected.stripeCalls[index] as RefundCall | undefined
+      const paymentIntent = merged?.params?.payment_intent
+      if (merged?.method !== 'refunds.create' || seat?.method !== 'refunds.create' || seat.params?.payment_intent !== paymentIntent) return false
+      if (!refundKeyOf(seat).startsWith('booking-refund:')) return false
+      const addons = oldAddonRefundsOn(recordings.expected, paymentIntent)
+      return addons > 0 && typeof value === 'number' && typeof expected === 'number' && value === expected + addons
+    }
+    const old = expected as RefundCall | undefined
+    if (value !== undefined || old?.method !== 'refunds.create' || !refundKeyOf(old).startsWith('addon-refund:')) return false
+    // Gone into its order's one part: the new side sends exactly one refund fewer on that PaymentIntent per old add-on refund.
+    const paymentIntent = old.params?.payment_intent
+    const refundsOn = (recording: Recording) => (recording.stripeCalls as RefundCall[]).filter((call) => call.method === 'refunds.create' && call.params?.payment_intent === paymentIntent)
+    const oldAddons = refundsOn(recordings.expected).filter((call) => refundKeyOf(call).startsWith('addon-refund:')).length
+    if (refundsOn(recordings.actual).length !== refundsOn(recordings.expected).length - oldAddons) return false
+    // W24a (W24 review L2): ...and the same money goes back to that PaymentIntent on both sides, to the penny, so a
+    // merged part that left the add-on's money out (the old refund gone, the seat's part unchanged) is not allowed.
+    const sentBack = (recording: Recording) => refundsOn(recording).reduce((total, call) => total + Number(call.params?.amount ?? Number.NaN), 0)
+    return sentBack(recordings.actual) === sentBack(recordings.expected)
   },
 }
 
@@ -1835,7 +2027,6 @@ export const CANCEL_DIFFERENCES: ReadonlyMap<string, readonly AllowedDifference[
     'w05l-move-gift-card-and-reader-then-cancel',
     'w05l-move-gift-card-and-reader-undone-then-cancel',
     'w05l-move-gift-card-answer-lost-then-cancel',
-    'w05l-move-gift-card-row-fails-then-cancel',
     'w05l-settle-gift-card-and-card-then-cancel',
     'w05l-settle-gift-card-and-reader-answer-lost-then-cancel',
     'w05l-settle-gift-card-and-reader-then-cancel',
@@ -1883,4 +2074,460 @@ export const CANCEL_DIFFERENCES: ReadonlyMap<string, readonly AllowedDifference[
   // W23a: the club's cancel (Block Session, Block Day) inside 24 hours.
   ['w23a-block-session-cancel-and-refund-inside-24-hours', [CLUB_CANCEL_AND_REFUND]],
   ['w23a-block-day-cancel-credit-inside-24-hours', [CLUB_CANCEL_CREDIT]],
+])
+
+// --- W24: Move (brief W24 item 8)
+
+const W24 = 'Brief W24 (D-plan 1.2, 4.2, 4.3, 4.7; W19\'s flows, W21\'s claims)'
+
+/** A Move on the card or reader is keyed from its flow record, and names it in its metadata (W19's rule). */
+const MOVE_KEYS = flowKeys('A Move', `${W24}: keys from the record, never from the booking's updated_at`)
+/** A Move on the reader: its flow record carries the Worker's marks (W19's rule). */
+const MOVE_READER = readerFlowMarks('A Move', `${W24}: pending-first with method, request_id, livemode, stripe_customer_id; a card Move's record is set aside and checked on its own (cardRecordProblems)`)
+/** A Move's card part's order says 'card' (Q9), where the legacy charge route left it empty. */
+const MOVE_CARD_METHOD = cardOrderMethod("W03-decisions Q9 (an order paid on the saved card records 'card'); W17's card C2; Q36 keeps the card part's own order and line")
+
+/**
+ * A cheaper move's quote also says, for the dialog, whether card money is left and how the refund would split between
+ * the card(s) that paid and store credit (Q37). Only on a quote that gives money back; only these two fields; and the
+ * split must add up to that quote's refund (W24a).
+ */
+const MOVE_QUOTE_REFUND_CHOICE: AllowedDifference = {
+  name: "A cheaper move's quote also says whether card money is left and how its refund splits between the card and store credit (Q37)",
+  decision: `${W24}, item 7; Wayne's Q37 (12 Nov): the card offered from card money left`,
+  path: /^\.results\[\d+\]\.(cardRefundAvailable|refundParts)$/,
+  actual: (value, expected, path, recordings) => {
+    if (expected !== undefined) return false
+    if (path.endsWith('.cardRefundAvailable')) return typeof value === 'boolean'
+    const parts = value as { card?: unknown; storeCredit?: unknown } | null
+    if (parts === null || typeof parts !== 'object' || Object.keys(parts).sort().join(',') !== 'card,storeCredit') return false
+    if (typeof parts.card !== 'number' || typeof parts.storeCredit !== 'number' || parts.card < 0 || parts.storeCredit < 0) return false
+    // W24a (W24 review L3): the two parts add up to the quote's own refund, to the penny (the same answer's amountDue,
+    // which is compared with the old side's and has no allowance here).
+    const quoted = recordings.actual.results[Number(/^\.results\[(\d+)\]/.exec(path)?.[1])] as { priceImpact?: { amountDue?: unknown } } | undefined
+    const amountDue = quoted?.priceImpact?.amountDue
+    return typeof amountDue === 'number' && amountDue < 0 && Math.round((parts.card + parts.storeCredit) * 100) === Math.round(-amountDue * 100)
+  },
+}
+
+const MOVE_CARD = [MOVE_KEYS, MOVE_CARD_METHOD]
+const MOVE_READER_ONLY = [MOVE_KEYS, MOVE_READER]
+const MOVE_CHEAPER = [CLAIM_KEYS, MOVE_QUOTE_REFUND_CHOICE]
+
+const MOVE_REFUND_FAILED_WORDS = (value: unknown): boolean =>
+  typeof value === 'string' && value.startsWith('The card refund failed (') && value.endsWith("so the booking wasn't moved and nothing was refunded. Try again, or refund the difference to store credit.")
+const MOVE_NOT_SAVED_WORDS = (value: unknown): boolean => typeof value === 'string' && value.startsWith("The move couldn't be saved")
+const NOTHING_OWED = (value: unknown): boolean => String((value as { message?: unknown } | null)?.message) === 'Nothing is owed on this booking any more.'
+
+/**
+ * A cheaper move's first card refund refused (`move-refund-card-declined`): the old code kept the move and left the £40
+ * owed; the Worker puts the move back exactly (the booking on its old session and band, both sessions' places, nothing
+ * owed) and says so. `then`: what the later steps see instead: Refund the rest finds nothing owed, and Cancel & Refund
+ * gives the whole £140 in one refund where the old code gave the £40 and then £100.
+ */
+const moveRefusedPutBack = (then: boolean): AllowedDifference => ({
+  name: `A cheaper move's first card refund refused: the move put back exactly, nothing owed${then ? '; Refund the rest then finds nothing owed and Cancel & Refund gives all £140 in one refund' : ''}`,
+  decision: `${W24}, item 4: the first refusal undoes the move exactly (W21's R1 undo)`,
+  path: new RegExp(
+    `^\\.results\\[2\\]\\.(moved|booking|reason|warning|message)$|^\\.tables\\.bookings\\.added\\[0\\]\\.(session_id|band_id|refund_owed_amount)$|^\\.tables\\.sessions\\.changed\\[0\\]\\.id$${
+      then
+        ? '|^\\.results\\[3\\]\\.(cardRefundedAmount|storeCreditRefundedAmount|pricePaid|refused)$|^\\.results\\[4\\]\\.cardRefundedAmount$|^\\.stripeCalls\\[2\\]\\.params\\.amount$|^\\.stripeCalls\\[3\\]$|^\\.tables\\.bookings\\.added\\[0\\]\\.price_paid$'
+        : ''
+    }`
+  ),
+  actual: (value, expected, path) => {
+    if (path.endsWith('.moved')) return value === false
+    if (path.endsWith('.reason')) return value === 'refund_failed'
+    if (path.endsWith('.message')) return MOVE_REFUND_FAILED_WORDS(value)
+    if (path.endsWith('.booking') || path.endsWith('.warning')) return value === undefined
+    if (path.endsWith('.session_id')) return value === '10000000-0000-4000-8000-000000000040'
+    if (path.endsWith('.band_id')) return value === '10000000-0000-4000-8000-00000000000c'
+    if (path.endsWith('.refund_owed_amount')) return value === '0.00'
+    if (path.endsWith('.changed[0].id')) return value === '10000000-0000-4000-8000-000000000040'
+    if (path.endsWith('.refused')) return NOTHING_OWED(value)
+    if (path.startsWith('.results[3]')) return value === undefined
+    if (path.startsWith('.results[4]')) return value === 140
+    if (path.endsWith('.params.amount')) return value === 14000
+    if (path === '.stripeCalls[3]') return value === undefined && (expected as { method?: string } | undefined)?.method === 'refunds.create'
+    return path.endsWith('.price_paid') && value === '140.00'
+  },
+})
+
+/**
+ * A cheaper move to store credit whose store credit write fails (`move-refund-store-credit-fails-outright` and its family):
+ * R1 is one transaction, so nothing is moved, given or owed, and the words say so (the old code moved it and left the
+ * money owed). `then`: Refund the rest finds nothing owed, and Cancel & Refund gives the whole price paid to the card in
+ * one refund (the customer gets the same total: the old code gave the difference as store credit and the rest to the card).
+ */
+const moveNotSaved = (scenario: { result: number; oldSession: string; oldBand: string; seatsBack?: boolean; then?: { all: number; less: number; credit: number; balance: number } }): AllowedDifference => {
+  const { then } = scenario
+  return {
+    name: `A cheaper move whose store credit can't be written is one transaction: not moved, nothing given or owed${then ? `; Refund the rest finds nothing owed, and Cancel & Refund gives all £${then.all} to the card` : ''}`,
+    decision: `${W24}, item 4: same price or cheaper with no card is one transaction (R1); W05 review 3, finding 3 for refunds`,
+    path: new RegExp(
+      `^\\.results\\[${scenario.result}\\]\\.(moved|booking|reason|warning|message)$|^\\.tables\\.bookings\\.added\\[0\\]\\.(session_id|band_id|refund_owed_amount)$|^\\.tables\\.sessions\\.changed\\[0\\]\\.id$${scenario.seatsBack ? '|^\\.tables\\.booking_guests\\.added\\[[01]\\]\\.unit_price$' : ''}${
+        then
+          ? `|^\\.results\\[${scenario.result + 1}\\]\\.(cardRefundedAmount|storeCreditRefundedAmount|storeCreditBalance|pricePaid|refused)$|^\\.results\\[${scenario.result + 2}\\]\\.cardRefundedAmount$|^\\.stripeCalls\\[1\\]\\.params\\.amount$|^\\.tables\\.bookings\\.added\\[0\\]\\.price_paid$|^\\.tables\\.(customers|store_credit_transactions)$|^\\.tables\\.order_line_items\\.added\\[0\\]\\.card_refunded_amount$`
+          : ''
+      }`
+    ),
+    actual: (value, _expected, path) => {
+      if (path.endsWith('.moved')) return value === false
+      if (path.endsWith('.reason')) return value === 'move_not_saved'
+      if (path.endsWith('.message')) return MOVE_NOT_SAVED_WORDS(value)
+      if (path.endsWith('.booking') || path.endsWith('.warning')) return value === undefined
+      if (path.endsWith('.session_id') || path.endsWith('.changed[0].id')) return value === scenario.oldSession
+      if (path.endsWith('.band_id')) return value === scenario.oldBand
+      if (path.endsWith('.refund_owed_amount')) return value === '0.00'
+      if (path.endsWith('.unit_price')) return value === '25.50'
+      if (!then) return false
+      if (path.endsWith('.refused')) return NOTHING_OWED(value)
+      if (path.startsWith(`.results[${scenario.result + 1}]`)) return value === undefined
+      if (path.startsWith(`.results[${scenario.result + 2}]`)) return value === then.all
+      if (path.endsWith('.params.amount')) return value === then.all * 100
+      if (path.endsWith('.price_paid')) return Number(value) === then.all
+      if (path.endsWith('.card_refunded_amount')) return Number(value) === then.all
+      // No store credit at all: the move gave none, and the cancel's money all went to the card.
+      return value === undefined
+    },
+  }
+}
+
+const PEAK_PRIVATE = { oldSession: '10000000-0000-4000-8000-000000000040', oldBand: '10000000-0000-4000-8000-00000000000c' }
+const PEAK_PUBLIC = { oldSession: '10000000-0000-4000-8000-00000000000e', oldBand: '10000000-0000-4000-8000-00000000000c' }
+
+/**
+ * A cheaper move to the card whose card part went and whose store credit write then failed (the `*-credit-fails-partway`
+ * family): R2 is one transaction, so the claim is held (W21's words: what went), never sent again; the booking stays as
+ * R1 left it until reconcile finishes the claim. The old code recorded the card part and left the rest owed. Before the
+ * next step reconcile finishes it (as staff would find it on the Orders page): the card part recorded and the planned
+ * store credit given (the move's note), so Refund the rest finds nothing owed; the customer gets the same card and store
+ * credit money.
+ */
+const moveHeldWhileStoreCreditFails = (scenario: { result: number; gone: number; r1PricePaid: number; recorded?: string; then?: 'the_rest' | 'same_price_move' }): AllowedDifference => ({
+  name: `A cheaper move's £${scenario.gone.toFixed(2)} card part went and R2's store credit failed: held (the words say what went); ${scenario.then ? 'reconcile finishes it before the next step, which finds nothing owed' : 'the booking as R1 left it until reconcile finishes it'}`,
+  decision: `${W24}, item 4 (W21's R2: one transaction, held for reconcile, Q35); D-plan 4.10 (reconcile records what went, never resends)`,
+  path: new RegExp(
+    `^\\.results\\[${scenario.result}\\]\\.(booking\\.price_paid|warning)$${
+      scenario.then === 'the_rest'
+        ? `|^\\.results\\[${scenario.result + 1}\\]\\.(cardRefundedAmount|storeCreditRefundedAmount|storeCreditBalance|pricePaid|refused)$|^\\.tables\\.store_credit_transactions\\.added\\[1\\]\\.note$`
+        : scenario.then === 'same_price_move'
+          ? `|^\\.results\\[${scenario.result + 2}\\]\\.booking\\.price_paid$|^\\.tables\\.bookings\\.added\\[0\\]\\.(price_paid|refund_owed_amount)$|^\\.tables\\.customers$|^\\.tables\\.store_credit_transactions\\.added\\[1\\]$`
+          : '|^\\.tables\\.bookings\\.added\\[0\\]\\.(price_paid|refund_owed_amount)$|^\\.tables\\.order_line_items\\.added\\[0\\]\\.card_refunded_amount$'
+    }`
+  ),
+  actual: (value, _expected, path) => {
+    if (path.endsWith('.warning')) return goneNotRecorded(scenario.gone)(value)
+    if (path.endsWith('.booking.price_paid')) return value === scenario.r1PricePaid
+    if (path.endsWith('.refused')) return NOTHING_OWED(value)
+    if (path.startsWith(`.results[${scenario.result + 1}]`)) return value === undefined
+    if (path.endsWith('.note')) return value === 'Refund of the price difference after a booking move (the rest went back to the card). [ref gone]'
+    if (path.endsWith('.price_paid')) return Number(value) === scenario.r1PricePaid
+    if (path.endsWith('.refund_owed_amount')) return value === '0.00'
+    if (path.endsWith('.card_refunded_amount')) return value === scenario.recorded
+    // The planned £30 store credit given by reconcile: the balance ends where it began (£30 taken at the order, £30 back).
+    if (path === '.tables.customers') return value === undefined
+    return typeof value === 'object' && value !== null && (value as { reason?: unknown }).reason === 'refund'
+  },
+})
+
+/** The Worker's answer is lost after its move route ran to the end (W20's model): no answer, the key kept. */
+const MOVE_NO_ANSWER = (value: unknown): boolean => typeof value === 'string' && value.startsWith("Moving didn't get an answer")
+
+/**
+ * The old hooks for a lost answer match the old code's own statements (its press row, its single statement), which the
+ * Worker doesn't run: C1 is one transaction, so the move simply goes through once with what it took.
+ */
+const moveNoLostAnswer = (result: number): AllowedDifference => ({
+  name: "A lost answer on the old statement: the hook matches the old code's SQL, which the Worker doesn't run; C1 is one transaction, so the move goes through once",
+  decision: `${W24}, item 5: one transaction (W05 review 3, finding 1; the old press rows retired)`,
+  path: new RegExp(`^\\.results\\[${result}\\]\\.(moved|reason|message|booking)$`),
+  actual: (value, _expected, path) => (path.endsWith('.moved') ? value === true : path.endsWith('.booking') ? JSON.stringify(value) === JSON.stringify({ id: 'bookings#1', price_paid: 51 }) : value === undefined),
+})
+
+/**
+ * Wayne's Q34 (N2): the old code kept a credit on a booking moved past the membership's last day, or a pass seat moved
+ * past the pass's expiry (£0 due, moved, the seat still free). The Worker releases it: the seat is charged its full new
+ * price (£20), so the press with no payment is refused for a method with the new figures, and nothing moves.
+ */
+const Q34_RELEASED: AllowedDifference = {
+  name: "Q34: a credit that doesn't cover the new date is released: the seat is £20 (paid, the credit released), and the press with no payment is refused for a method",
+  decision: "Wayne's Q34 (12 Nov, as recommended): a credit stays on a move only if it covers the new date; brief W24 item 2",
+  path: /^\.results\[1\]\.priceImpact\.(amountDue|seatDeltas\[0\]\.(payBy|delta|creditReleased))$|^\.results\[2\]\.(moved|booking|reason|priceImpact)$|^\.tables\.bookings\.added\[0\]\.session_id$|^\.tables\.sessions\.changed\[0\]\.id$/,
+  actual: (value, _expected, path) => {
+    if (path.endsWith('.amountDue') || path.endsWith('.delta')) return value === 20
+    if (path.endsWith('.payBy')) return value === 'paid'
+    if (path.endsWith('.creditReleased')) return value === true
+    if (path.endsWith('.moved')) return value === false
+    if (path.endsWith('.booking')) return value === undefined
+    if (path.endsWith('.reason')) return value === 'payment_method_required'
+    if (path.endsWith('.priceImpact')) return (value as { amountDue?: unknown } | undefined)?.amountDue === 20
+    // Not moved: still on the Core session of the 12th.
+    return value === '10000000-0000-4000-8000-000000000004'
+  },
+}
+
+const N1 = "N1 (D-plan section 3; brief W24 item 3): one booking a day is checked before any money moves, with New Order's words"
+const DUPLICATE_DAY_WORDS = 'This customer already has a booking on that day. Only one booking per customer per day is allowed.'
+
+/**
+ * W24: every golden scenario that calls Move and differs, and the only differences allowed in each (with the W19 to W23
+ * allowances it already had). The rest match their golden files exactly.
+ */
+export const MOVE_DIFFERENCES: ReadonlyMap<string, readonly AllowedDifference[]> = new Map<string, readonly AllowedDifference[]>([
+  // Cheaper to the card: the claim's keys, and the quote's card choice.
+  ...[
+    'q27-cheaper-move-is-not-a-part-refund',
+    'q27-part-refund-after-a-cheaper-move-still-counts',
+    'addon-with-guest-cheaper-move-then-cancel',
+    'q27-tier-rise-after-a-cheaper-move',
+    'q28-private-cheaper-to-the-card',
+    'q28-private-cheaper-stops-at-what-is-left',
+    'q28-public-cheaper-to-the-card',
+    'q28-public-cheaper-stops-at-what-is-left',
+    'remove-guest-after-a-cheaper-move',
+    'w05l-move-cheaper-answer-lost',
+  ].map((name): [string, readonly AllowedDifference[]] => [name, MOVE_CHEAPER]),
+  // Cheaper to store credit: only the quote's card choice.
+  ...['q27-cheaper-move-to-store-credit-is-not-a-part-refund', 'q28-private-cheaper-to-store-credit', 'q28-public-cheaper-to-store-credit', 'cheaper-move-to-store-credit-stays-live'].map(
+    (name): [string, readonly AllowedDifference[]] => [name, [MOVE_QUOTE_REFUND_CHOICE]]
+  ),
+  // Dearer on the saved card.
+  ...['q28-private-dearer-on-the-card', 'q28-private-dearer-store-credit-and-card', 'q28-public-dearer-on-the-card', 'q28-public-credit-released-after-a-part-refund', 'w05l-move-gift-card-and-card-then-cancel', 'owed-then-a-dearer-move', 'owed-then-a-dearer-move-then-cancel'].map(
+    (name): [string, readonly AllowedDifference[]] => [name, MOVE_CARD]
+  ),
+  // Its flow key is covered by Add Guest's allowance (the same key rule): only the card order's method is the Move's.
+  ['move-while-a-guest-is-on-the-reader', [MOVE_CARD_METHOD]],
+  ['q28-private-there-and-back', [...MOVE_CARD, ...MOVE_CHEAPER]],
+  ['q28-private-cheaper-move-then-part-then-dearer-move', [...MOVE_CARD, ...MOVE_CHEAPER]],
+  ['capped-move-down-then-back-up', [...MOVE_CARD, ...MOVE_CHEAPER]],
+  // Dearer on the reader.
+  ...[
+    'q28-private-dearer-on-the-reader',
+    'q28-public-dearer-on-the-reader',
+    'q28-private-reader-cancelled-puts-it-all-back',
+    'w05l-move-gift-card-and-reader-then-cancel',
+    'w05l-move-gift-card-and-reader-undone-then-cancel',
+    'w05l-move-gift-card-and-reader-answer-lost-then-cancel',
+    'add-guest-while-a-reader-move-is-open',
+    'cancel-while-a-reader-move-is-open',
+    'part-refund-while-a-reader-move-is-open',
+    'refund-the-rest-while-a-reader-move-is-open',
+    'second-move-while-a-reader-move-is-open',
+  ].map((name): [string, readonly AllowedDifference[]] => [name, MOVE_READER_ONLY]),
+  // Their flow keys are covered by Add Guest's allowance (the same key rule): only the Move's reader marks.
+  ...['remove-guest-while-a-reader-move-is-open', 'reader-move-finished-then-remove-guest'].map((name): [string, readonly AllowedDifference[]] => [name, [MOVE_READER]]),
+  // Item 4: the first card refusal puts the move back; a store credit write failing is one transaction.
+  ['move-refund-card-declined', [...MOVE_CHEAPER, moveRefusedPutBack(false)]],
+  ['move-refund-card-declined-then-retried', [...MOVE_CHEAPER, moveRefusedPutBack(true)]],
+  ['move-refund-store-credit-fails-outright', [MOVE_QUOTE_REFUND_CHOICE, moveNotSaved({ result: 2, ...PEAK_PRIVATE })]],
+  ['move-refund-store-credit-fails-outright-then-retried', [...MOVE_CHEAPER, moveNotSaved({ result: 2, ...PEAK_PRIVATE, then: { all: 140, less: 100, credit: 40, balance: 70 } })]],
+  ['public-move-refund-fails-outright-then-retried', [...MOVE_CHEAPER, moveNotSaved({ result: 2, ...PEAK_PUBLIC, seatsBack: true, then: { all: 51, less: 40, credit: 11, balance: 41 } })]],
+  ['public-move-credit-fails-partway', [...MOVE_CHEAPER, moveHeldWhileStoreCreditFails({ result: 3, gone: 6, r1PricePaid: 25, recorded: '15.00' })]],
+  ['public-move-credit-fails-partway-then-retried', [...MOVE_CHEAPER, moveHeldWhileStoreCreditFails({ result: 3, gone: 6, r1PricePaid: 25, then: 'the_rest' })]],
+  ['private-move-credit-fails-partway', [...MOVE_CHEAPER, moveHeldWhileStoreCreditFails({ result: 3, gone: 10, r1PricePaid: 0, recorded: '100.00' })]],
+  ['private-move-credit-fails-partway-then-retried', [...MOVE_CHEAPER, moveHeldWhileStoreCreditFails({ result: 3, gone: 10, r1PricePaid: 0, then: 'the_rest' })]],
+  ['private-move-credit-fails-then-a-same-price-move-leaves-it-owed', [...MOVE_CHEAPER, moveHeldWhileStoreCreditFails({ result: 3, gone: 10, r1PricePaid: 0, then: 'same_price_move' })]],
+  ['private-move-rest-retried-then-a-same-price-move', [...MOVE_CHEAPER, moveHeldWhileStoreCreditFails({ result: 3, gone: 30, r1PricePaid: 20, then: 'the_rest' })]],
+  // Item 5 (W05i "die between", W05k): the press's answer lost after the Worker's route ran (the old code resumed and
+  // charged again under its key); the same press again gets the stored answer, so the card is charged once.
+  [
+    'dies-after-the-charge-move',
+    [
+      ...MOVE_CARD,
+      {
+        name: "The press's answer is lost after the move route ran to the end (C1, then the card): no answer, the key kept; the same press again gets the stored answer, so the card is charged once (the old resume charged again)",
+        decision: `${W24}, item 5; W20's model of a lost answer; W03-plan 2.6 (the key kept)`,
+        path: /^\.results\[1\]\.(reason|message)$|^\.stripeCalls\[2\]$/,
+        actual: (value, expected, path) => {
+          if (path.endsWith('.reason')) return value === 'no_answer'
+          if (path.endsWith('.message')) return MOVE_NO_ANSWER(value)
+          return value === undefined && (expected as { method?: string } | undefined)?.method === 'paymentIntents.create'
+        },
+      },
+    ],
+  ],
+  [
+    'unsure-cheaper-move-card-then-the-rest',
+    [
+      ...MOVE_CHEAPER,
+      {
+        name: "A cheaper move's answer is lost after its route ran to the end (the card refund went and R2 recorded it): no answer, the key kept; Refund the rest then finds nothing owed (the old code left the £40 owed and Refund the rest gave it again under the old key)",
+        decision: `${W24}, item 4; W20's model of a lost answer; D-plan 4.3 (no refund sent twice)`,
+        path: /^\.results\[2\]\.(moved|booking|reason|warning|message)$|^\.results\[3\]\.(cardRefundedAmount|storeCreditRefundedAmount|pricePaid|refused)$/,
+        actual: (value, _expected, path) => {
+          if (path.endsWith('.moved')) return value === false
+          if (path.endsWith('.reason')) return value === 'no_answer'
+          if (path.endsWith('.message')) return MOVE_NO_ANSWER(value)
+          if (path.endsWith('.refused')) return NOTHING_OWED(value)
+          return value === undefined
+        },
+      },
+    ],
+  ],
+  ['w05l-move-gift-card-answer-lost-then-cancel', [...MOVE_CARD, moveNoLostAnswer(2)]],
+  ['w05l-move-answer-lost-and-the-look-fails', [moveNoLostAnswer(2)]],
+  [
+    'w05l-move-fails-after-another-press-finished',
+    [
+      {
+        name: "The gift card's row failing is inside C1 (one transaction): nothing moved or taken, with the plain words (the old code moved, then put everything back by hand)",
+        decision: `${W24}, item 5: one transaction`,
+        path: /^\.results\[4\]\.(reason|message)$/,
+        actual: (value, _expected, path) => (path.endsWith('.reason') ? value === 'move_not_saved' : MOVE_NOT_SAVED_WORDS(value)),
+      },
+    ],
+  ],
+  [
+    'w05l-move-gift-card-row-fails-then-cancel',
+    [
+      MOVE_KEYS,
+      {
+        name: "The gift card's row fails in C2 after the card paid: the move is held for reconcile (Q35 words), never refunded for a database fault; Cancel & Refund is then refused while the payment is being checked (W18a's words)",
+        decision: "W6-3 (a good payment is never refunded for a database fault); Wayne's Q35; brief W24 item 6 (a payment still being taken refuses a booking change)",
+        path: /^\.results\[2\]\.(reason|message)$|^\.results\[3\]\.(cardRefundedAmount|storeCreditRefundedAmount|thrown)$|^\.stripeCalls\[[23]\]$|^\.tables\.booking_guests\.added\[[01]\]\.unit_price$|^\.tables\.bookings\.added\[0\]\.(session_id|status|price_paid|cancelled_at|band_id)$|^\.tables\.order_line_items\.added\[0\]\.(refunded_at|refund_method|card_refunded_amount)$|^\.tables\.(orders|order_line_items)\.added\[1\]$|^\.tables\.orders\.added\[0\]\.payment_status$|^\.tables\.(gift_cards|sessions)$/,
+        actual: (value, expected, path) => {
+          if (path.endsWith('.reason')) return value === 'paid_not_finished'
+          if (path.endsWith('.message')) return typeof value === 'string' && value.startsWith('The card payment went through, but the change couldn\'t be finished.')
+          if (path.endsWith('.thrown')) return value === "A card payment on this booking is still being checked. Don't take payment again: use Resolve now on the Orders page after 15 minutes."
+          if (path.startsWith('.results[3]')) return value === undefined
+          if (path.startsWith('.stripeCalls')) return value === undefined && (expected as { method?: string } | undefined)?.method === 'refunds.create'
+          if (path.endsWith('.unit_price')) return value === '25.50'
+          if (path.endsWith('.session_id')) return value === '10000000-0000-4000-8000-00000000000e'
+          if (path.endsWith('.status')) return value === 'confirmed'
+          if (path.endsWith('.price_paid')) return value === '51.00'
+          if (path.endsWith('.band_id')) return value === '10000000-0000-4000-8000-00000000000c'
+          if (path.endsWith('.card_refunded_amount')) return value === '0.00'
+          if (path.endsWith('.payment_status')) return value === 'paid'
+          // Held: the £5 on the gift card claimed, both sessions holding the party (the old seat until C2).
+          if (path === '.tables.gift_cards') return JSON.stringify((value as { changed?: unknown }).changed) === JSON.stringify([{ id: '10000000-0000-4000-8000-000000000009', remaining_balance: ['40.00', '35.00'] }])
+          if (path === '.tables.sessions') {
+            return JSON.stringify((value as { changed?: unknown }).changed) === JSON.stringify([{ id: '10000000-0000-4000-8000-000000000004', total_booked: [0, 2] }, { id: '10000000-0000-4000-8000-00000000000e', total_booked: [0, 2] }])
+          }
+          // No card order yet (C2 couldn't write it), nothing refunded, nothing cancelled.
+          return value === undefined || value === null
+        },
+      },
+    ],
+  ],
+  [
+    'p2-two-moves-the-other-way-round',
+    [
+      ...MOVE_CARD,
+      {
+        name: "Two overlapping presses: the overlap is hooked on the old code's started row, which the Worker never writes, so only one press runs here (one move, one charge, the store credit taken once); the Worker's race is C1's lock (move-postgres.test.ts: two moves at once)",
+        decision: `${W24}: one transaction; D-plan 4.11 item 5 (real Postgres races)`,
+        path: /^\.results\[2\]$|^\.stripeCalls\[2\]$|^\.tables\.store_credit_transactions\.added\[[12]\]$/,
+        actual: (value) => value === undefined,
+      },
+    ],
+  ],
+  // The W17 golden gaps (W05 review 3), with the outcomes the old code's faults no longer reach.
+  [
+    'w17-r1b-move-store-credit-and-gift-card-statement-lands-late',
+    [
+      {
+        name: "R1b: the old statement landed after the press had given the £6 store credit and £5 gift card back (the booking moved, its money given away); the Worker's C1 is one transaction, so the move goes through once with what it took",
+        decision: 'W05 review 3, finding 1 (R1b); W17 golden gap; brief W24 item 5',
+        path: /^\.results\[2\]\.(moved|reason|booking)$|^\.tables\.sessions\.changed\[0\]\.id$|^\.tables\.store_credit_transactions\.added\[1\]$|^\.tables\.(customers|gift_cards)$/,
+        actual: (value, _expected, path) => {
+          if (path.endsWith('.moved')) return value === true
+          if (path.endsWith('.reason')) return value === undefined
+          if (path.endsWith('.booking')) return JSON.stringify(value) === JSON.stringify({ id: 'bookings#1', price_paid: 51 })
+          if (path.endsWith('.id')) return value === '10000000-0000-4000-8000-00000000000e'
+          if (path === '.tables.customers') return JSON.stringify((value as { changed?: unknown }).changed) === JSON.stringify([{ id: '10000000-0000-4000-8000-000000000005', store_credit_balance: ['30.00', '24.00'] }])
+          if (path === '.tables.gift_cards') return JSON.stringify((value as { changed?: unknown }).changed) === JSON.stringify([{ id: '10000000-0000-4000-8000-000000000009', remaining_balance: ['40.00', '35.00'] }])
+          return value === undefined
+        },
+      },
+    ],
+  ],
+  [
+    'w17-r1d-move-gift-card-and-reader-statement-lands-late-then-cancel',
+    [
+      ...MOVE_READER_ONLY,
+      {
+        name: "R1d: the old statement landed after the press undid it, so the old sweep's cancel gave the £5 gift card back a second time and the Peak session went to -2; the Worker's C1 is one transaction, so the reader flow starts once, and its cancel puts everything back once",
+        decision: 'W05 review 3, finding 1 (R1d); W17 golden gap; brief W24 item 5',
+        path: /^\.results\[2\]\.(moved|reason|booking|pendingReaderPayment)$|^\.tables\.gift_cards$|^\.tables\.sessions\.changed\[1\]$/,
+        actual: (value, _expected, path) => {
+          if (path.endsWith('.moved')) return value === true
+          if (path.endsWith('.booking')) return JSON.stringify(value) === JSON.stringify({ id: 'bookings#1', price_paid: 51 })
+          if (path.endsWith('.pendingReaderPayment')) return (value as { flow?: unknown; amount?: unknown } | undefined)?.flow === 'move' && (value as { amount?: unknown }).amount === 6
+          return value === undefined
+        },
+      },
+    ],
+  ],
+  [
+    'w17-r3-move-two-presses-the-new-session-full-for-both',
+    [
+      {
+        name: "R3: with the new session full, the old presses each charged £11 and refunded it (the second recording the one refund twice); the Worker refuses the press in C1 before any charge, and the overlapping second press (hooked on the old started row) never runs, so the figures come next",
+        decision: 'W05 review 3, finding 4 (R3); W17 golden gap; brief W24 item 5',
+        path: /^\.results\[3\](\.|$)|^\.results\[4\]$|^\.stripeCalls\[[1-4]\]$|^\.tables\.(orders|order_line_items)\.added\[1\]$/,
+        actual: (value, expected, path) => {
+          const field = path.slice(path.lastIndexOf('.') + 1)
+          const figures: Readonly<Record<string, unknown>> = { status: 'confirmed', customerId: '10000000-0000-4000-8000-000000000005', pricePaid: 40, refundOwed: 0, left: 40, cardLeft: 40 }
+          if (path.startsWith('.results[3]')) {
+            if (field === 'moved' || field === 'reason') return value === undefined
+            if (field === 'parts') return JSON.stringify(value) === JSON.stringify({ card: 40, giftCard: 0, storeCredit: 0, cash: 0 })
+            return figures[field] === value
+          }
+          if (path === '.results[4]') return value === undefined && typeof expected === 'object'
+          return value === undefined
+        },
+      },
+    ],
+  ],
+  [
+    'w17-r4b-move-store-credit-claim-answer-lost',
+    [
+      {
+        name: "R4b: the old store credit claim's answer was lost, so the press stopped with the £6 kept; on the Worker the claim is inside C1, so the hook (on the old SQL) does nothing and the move goes through once: £6 store credit and £5 on the card",
+        decision: 'W05 review 3, finding 3 (R4b); W17 golden gap; brief W24 item 5',
+        path: /^\.results\[2\]\.(moved|reason|booking)$|^\.stripeCalls\[1\]$|^\.tables\.booking_guests\.added\[[01]\]\.unit_price$|^\.tables\.bookings\.added\[0\]\.(session_id|price_paid|band_id)$|^\.tables\.(orders|order_line_items)\.added\[1\]$|^\.tables\.sessions\.changed\[0\]\.id$/,
+        actual: (value, _expected, path) => {
+          if (path.endsWith('.moved')) return value === true
+          if (path.endsWith('.reason')) return value === undefined
+          if (path.endsWith('.booking')) return JSON.stringify(value) === JSON.stringify({ id: 'bookings#1', price_paid: 51 })
+          if (path === '.stripeCalls[1]') return (value as { params?: { amount?: unknown } } | undefined)?.params?.amount === 500
+          if (path.endsWith('.unit_price')) return value === '25.50'
+          if (path.endsWith('.session_id') || path.endsWith('.id')) return value === '10000000-0000-4000-8000-00000000000e'
+          if (path.endsWith('.price_paid')) return value === '51.00'
+          if (path.endsWith('.band_id')) return value === '10000000-0000-4000-8000-00000000000c'
+          return (value as { order_total?: unknown; line_total?: unknown } | undefined)?.order_total === '5.00' || (value as { line_total?: unknown } | undefined)?.line_total === '5.00'
+        },
+      },
+    ],
+  ],
+  ['w24-q34-membership-credit-moved-past-its-last-day', [Q34_RELEASED]],
+  ['w24-q34-pass-seat-moved-past-its-expiry', [Q34_RELEASED]],
+  [
+    'w17-n1-dearer-move-on-the-card-to-a-day-with-another-booking',
+    [
+      {
+        name: "N1: the quote and the press are refused with New Order's words before any money moves (the old code charged £11, met the trigger at its write and refunded it)",
+        decision: N1,
+        path: /^\.results\[1\]\.(priceImpact|reason|message)$|^\.results\[2\]\.(reason|message)$|^\.stripeCalls\[[12]\]$|^\.tables\.(orders|order_line_items)\.added\[1\]$/,
+        actual: (value, _expected, path) => (path.endsWith('.reason') ? value === 'duplicate_day_booking' : path.endsWith('.message') ? value === DUPLICATE_DAY_WORDS : value === undefined),
+      },
+    ],
+  ],
+  [
+    'w17-n1-same-price-move-to-a-day-with-another-booking',
+    [
+      {
+        name: "N1: the quote and the press are refused with New Order's words (the old code showed the database's own text, thrown)",
+        decision: N1,
+        path: /^\.results\[1\]\.(priceImpact|reason|message)$|^\.results\[2\]\.(thrown|moved|reason|message)$/,
+        actual: (value, _expected, path) => {
+          if (path.endsWith('.reason')) return value === 'duplicate_day_booking'
+          if (path.endsWith('.message')) return value === DUPLICATE_DAY_WORDS
+          if (path.endsWith('.moved')) return value === false
+          return value === undefined
+        },
+      },
+    ],
+  ],
 ])

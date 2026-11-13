@@ -80,7 +80,7 @@ export const REFUND_REASON_MAX_LENGTH = 200
  * W22: Remove Guest's and Remove add-on's claims go through the same pipeline (remove-guest.ts, remove-addon.ts). W23:
  * Cancel & Refund's (`cancel`, the old claim's kind) and Cancel & return credit's with paid add-ons (`cancel_credit`).
  */
-export type RefundKind = 'part_refund' | 'refund_owed' | 'remove_guest' | 'remove_addon' | 'cancel' | 'cancel_credit'
+export type RefundKind = 'part_refund' | 'refund_owed' | 'remove_guest' | 'remove_addon' | 'cancel' | 'cancel_credit' | 'move'
 export type RefundMethod = 'card' | 'credit' | 'cash'
 
 /**
@@ -176,6 +176,59 @@ export interface CancelClaim {
   clubCancelled?: true
 }
 
+/**
+ * W24: a cheaper Move's claim. R1 moved the booking (both sessions' places, the seats, a released credit or pass
+ * session) and lowered price_paid by the refund; this is the booking as R1 found it and what R1 changed, so the undo
+ * after a refused first card part puts the move back exactly.
+ */
+export interface MoveClaim {
+  oldSessionId: string
+  newSessionId: string
+  /** As the database had them (text), so they go back exactly. */
+  oldStartTime: string
+  oldEndTime: string
+  oldBandId: string | null
+  oldCreditPeriodId: string | null
+  oldRedemptionSource: string | null
+  oldRedeemedMembershipId: string | null
+  oldRedeemedSessionPassId: string | null
+  /** Each seat as it was (unit_price as text, null for none). */
+  seats: Array<{ id: string; unitPrice: string | null; payBy: string | null }>
+  /** The places R1 took on the new session and gave back on the old one (total_booked after less before, and before less after). */
+  placesClaimed: number
+  placesReleased: number
+  /** The session pass a released pass seat gave its session back to (sessions_remaining + 1), or null. */
+  passReturned: string | null
+  /** A membership or pass credit was released (its seat now paid), for the move's own row. */
+  creditReleased: boolean
+}
+
+/** W24: Move's own row (`booking.move`), whichever way it went: written by C1, or by R2 when money went back. */
+export const BOOKING_MOVED = 'booking.move'
+
+export interface MoveRow {
+  oldSessionId: string
+  newSessionId: string
+  /** Signed: negative is a refund. */
+  amountDue: number
+  storeCredit: number
+  giftCard: number
+  /** The money-in method when something was collected ('card', 'reader', 'cash'), else null. */
+  method: string | null
+  toCollect: number
+  /** A refund's method ('card' or 'credit') when money went back, else null. */
+  refundMethod: string | null
+  cardRefunded: number
+  storeCreditRefunded: number
+  owed: number
+  pendingId: string | null
+  creditReleased: boolean
+  passReleased: string | null
+  legacyPricing: boolean
+}
+
+export const moveRowDetails = (row: MoveRow): Record<string, unknown> => ({ ...row })
+
 /** One refund to one order's card: the order's lines for this booking (newest first) add up to `amount`. */
 export interface CardPart {
   orderId: string
@@ -218,6 +271,8 @@ export interface ClaimDetails {
   addon?: AddonClaim
   /** W23: Cancel & Refund's and Cancel & return credit's claim. */
   cancel?: CancelClaim
+  /** W24: a cheaper Move's claim. */
+  move?: MoveClaim
 }
 
 /** A planned card part that is an old refund already gone: the order it refunds and the old refund's id. */
@@ -592,7 +647,10 @@ function storeCreditNote(claim: Claim, cardRefunded: number): string {
       ? `Booking partial refund: ${details.reason ?? ''}`
       : details.kind === 'remove_guest'
         ? `Refund for a guest removed from the booking (${details.guest?.name ?? ''})`
-        : 'Refund the rest of a failed booking refund'
+        : details.kind === 'move'
+          ? // W24: the old Move's note (moveBooking.ts's giveBookingMoneyBack call).
+            'Refund of the price difference after a booking move'
+          : 'Refund the rest of a failed booking refund'
   return `${base}${cardRefunded > 0 ? ' (the rest went back to the card).' : '.'} [ref ${crypto.randomUUID()}]`
 }
 
@@ -666,7 +724,10 @@ function addonStamps(lines: AddonClaim['lines'], card: number, credit: number): 
   })
 }
 
-/** The action's own row, as each action writes it (W21: the old function's fields; W22: Remove Guest's and add-on's). */
+/**
+ * The action's own row, as each action writes it (W21: the old function's fields; W22: Remove Guest's and add-on's; W24:
+ * a cheaper Move's `booking.move`).
+ */
 function actionRow(details: ClaimDetails, parts: { cardRefunded: number; storeCredit: number; owed: number; cash: number }): { action: string; details: Record<string, unknown> } {
   const { cardRefunded, storeCredit, owed, cash } = parts
   switch (details.kind) {
@@ -687,6 +748,30 @@ function actionRow(details: ClaimDetails, parts: { cardRefunded: number; storeCr
     case 'cancel':
     case 'cancel_credit':
       return cancelActionRow(details.kind, details.method, details.cancel, { cardRefunded, storeCreditRefunded: storeCredit, owed })
+    case 'move': {
+      // W24: R2 writes a cheaper Move's own row once the money's fate is known (an undone move then leaves none).
+      const move = details.move
+      return {
+        action: BOOKING_MOVED,
+        details: moveRowDetails({
+          oldSessionId: move?.oldSessionId ?? '',
+          newSessionId: move?.newSessionId ?? '',
+          amountDue: round2(-details.amount),
+          storeCredit: 0,
+          giftCard: 0,
+          method: null,
+          toCollect: 0,
+          refundMethod: details.method,
+          cardRefunded,
+          storeCreditRefunded: storeCredit,
+          owed,
+          pendingId: null,
+          creditReleased: move?.creditReleased ?? false,
+          passReleased: move?.passReturned ?? null,
+          legacyPricing: false,
+        }),
+      }
+    }
   }
 }
 
@@ -1054,17 +1139,22 @@ async function undoClaim(db: Db, claim: Claim, by: FinishedBy): Promise<boolean>
     // W22: a removed guest's place goes back to the booking's session, so it is locked too (LOCK_ORDER). W23: a cancel's
     // places too, with the memberships its add-on credits went back to and the pass it gave a session back to.
     const cancel = claim.details.cancel
+    // W24: a Move's two sessions (in id order) and the pass its released seat gave a session back to.
+    const move = claim.details.move
     const locks = await lockForBooking(tx, {
       bookingId: claim.bookingId,
       ownSession: claim.details.kind === 'remove_guest' || cancel !== undefined,
+      sessionIds: move ? [move.oldSessionId, move.newSessionId] : [],
       membershipIds: (cancel?.addons ?? []).filter((line) => line.creditsReturned > 0 && line.membershipId).map((line) => line.membershipId as string),
-      sessionPassId: cancel?.passReturned ?? null,
+      sessionPassId: cancel?.passReturned ?? move?.passReturned ?? null,
     })
     if (!locks) throw new Error(`The booking of refund claim ${claim.id} no longer exists.`)
     if (await claimFinished(tx, claim)) return false
     const { amount, kind } = claim.details
     if (cancel) {
       await undoCancel(tx, claim.bookingId, cancel)
+    } else if (move) {
+      await undoMoveClaim(tx, claim.bookingId, amount, move)
     } else if (kind === 'part_refund') {
       await tx.query(
         'UPDATE bookings SET price_paid = price_paid + $1::numeric, part_refunded_amount = GREATEST(part_refunded_amount - $1::numeric, 0), updated_at = now() WHERE id = $2::uuid',
@@ -1132,6 +1222,46 @@ async function undoCancel(tx: Tx, bookingId: string, cancel: CancelClaim): Promi
       'UPDATE addon_order_lines SET removed_at = NULL, removed_by = NULL, refunded_amount = $1::numeric, card_refunded_amount = $2::numeric, refund_method = $3::text WHERE id = $4::uuid',
       [line.was.refunded, line.was.card, line.was.method, line.id]
     )
+  }
+}
+
+/**
+ * W24: a cheaper Move's R1 put back exactly (the first card part refused, so nothing went): the booking on its old
+ * session with its old times, band and credit, price_paid back up by the refund; each seat's price and cover as they
+ * were; the new session's places given back and the old session's taken again (by what R1 changed); the pass session
+ * a released pass seat gave back taken back.
+ */
+async function undoMoveClaim(tx: Tx, bookingId: string, amount: number, move: MoveClaim): Promise<void> {
+  await tx.query(
+    `UPDATE bookings
+     SET session_id = $1::uuid, start_time = $2::timestamptz, end_time = $3::timestamptz, price_paid = price_paid + $4::numeric,
+         band_id = $5::uuid, credit_period_id = $6::uuid, redemption_source = $7::text, redeemed_membership_id = $8::uuid,
+         redeemed_session_pass_id = $9::uuid, updated_at = now()
+     WHERE id = $10::uuid`,
+    [
+      move.oldSessionId,
+      move.oldStartTime,
+      move.oldEndTime,
+      amount,
+      move.oldBandId,
+      move.oldCreditPeriodId,
+      move.oldRedemptionSource,
+      move.oldRedeemedMembershipId,
+      move.oldRedeemedSessionPassId,
+      bookingId,
+    ]
+  )
+  for (const seat of move.seats) {
+    await tx.query('UPDATE booking_guests SET unit_price = $1::numeric, pay_by = $2::text WHERE id = $3::uuid', [seat.unitPrice, seat.payBy, seat.id])
+  }
+  if (move.placesClaimed !== 0) {
+    await tx.query('UPDATE sessions SET total_booked = total_booked - $1::int, updated_at = now() WHERE id = $2::uuid', [move.placesClaimed, move.newSessionId])
+  }
+  if (move.placesReleased !== 0) {
+    await tx.query('UPDATE sessions SET total_booked = total_booked + $1::int, updated_at = now() WHERE id = $2::uuid', [move.placesReleased, move.oldSessionId])
+  }
+  if (move.passReturned) {
+    await tx.query('UPDATE customer_session_passes SET sessions_remaining = sessions_remaining - 1, updated_at = now() WHERE id = $1::uuid', [move.passReturned])
   }
 }
 
@@ -1272,7 +1402,7 @@ const held = (claim: Claim, reason: string, message: string, cardGone = 0): Refu
  * holds the claim for reconcile (Q35), as does R2 failing after money went (W6-3's rule for refunds: what went is never
  * sent again, reconcile records it).
  */
-async function sendAndFinish(db: Db, stripe: StripeClient, claim: Claim, options: RefundOptions, timing: StripeTiming, firstRefused: FirstRefused): Promise<RefundBookingOutput> {
+export async function sendAndFinish(db: Db, stripe: StripeClient, claim: Claim, options: RefundOptions, timing: StripeTiming, firstRefused: FirstRefused): Promise<RefundBookingOutput> {
   const by: FinishedBy = { actor: options.actor, requestId: options.requestId, how: 'press' }
   const matched = new Set((claim.details.matched ?? []).map((part) => part.orderId))
   const went: CardPart[] = claim.details.plan.card.filter((part) => matched.has(part.orderId))

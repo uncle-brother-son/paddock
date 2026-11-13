@@ -47,8 +47,12 @@ export type MoneyInConfirmed = z.infer<typeof moneyInConfirmedSchema>
 
 export const moveBookingInputSchema = z.object({
   newSessionId: id,
-  /** The old second call's flag. The quote route ignores it; the move route needs it true. */
+  /** The old second call's flag. W24: without it the move route answers the quote and moves nothing. */
   confirmed: z.boolean().optional(),
+  /**
+   * W24 (Q18): what the Move dialog showed. `amountDue` is signed (negative: a refund); `toCollect` what the chosen
+   * method takes after the gift card and store credit (cash: the tick's own figure). Half a penny either way passes.
+   */
   figures: moneyInConfirmedSchema.optional(),
   payment: bookingPaymentSchema.optional(),
   refundMethod: refundMethod.optional(),
@@ -553,3 +557,43 @@ export const cancelCreditBookingOutputSchema = z.object({
   held: heldRefundSchema.optional(),
 })
 export type CancelCreditBookingOutput = z.infer<typeof cancelCreditBookingOutputSchema>
+
+// --- W24: Move (moveBooking)
+
+/** W24: the quote's body: the session the booking would move to. */
+export const moveQuoteInputSchema = z.object({ newSessionId: id })
+export type MoveQuoteInput = z.infer<typeof moveQuoteInputSchema>
+export const moveQuoteRouteInputSchema = moveQuoteInputSchema.extend(bookingInPath)
+export const moveBookingRouteInputSchema = moveBookingInputSchema.extend(bookingInPath)
+
+/**
+ * W24: the Move dialog's figures (its first call): the old `priceImpact`, and, new, what a press would be refused with
+ * now (`blocked`: a payment still being taken, or a refund still being checked; the dialog shows the words and holds
+ * Confirm), and for a cheaper move where the refund can go (Q37: the card whenever card money is left; `refundParts`:
+ * what the card(s) that paid can take, the rest to store credit). A read: never gated by the switch.
+ */
+export const moveQuoteSchema = z.object({
+  priceImpact: movePriceImpactSchema,
+  blocked: z.object({ reason: z.string(), message: z.string() }).nullable(),
+  cardRefundAvailable: z.boolean(),
+  refundParts: z.object({ card: z.number(), storeCredit: z.number() }).nullable(),
+})
+export type MoveQuote = z.infer<typeof moveQuoteSchema>
+
+/**
+ * W24: moveBooking's answer, as the old function gave it: moved, with the booking's new price paid; on the reader,
+ * moved and pending the payment the screen collects and then finalises or cancels (the flow routes); with a warning
+ * when a cheaper move's later card refund was refused and went to store credit. `held`: a cheaper move's card refund
+ * got no clear answer (or went and couldn't be recorded yet): the booking is moved and the refund is held for reconcile
+ * (Q35), never sent again by a press. Without `confirmed`, the quote and nothing moved. A refusal, a decline and a held
+ * payment are ApiErrors whose details carry the old reason and words (and the new `priceImpact` when the figures moved).
+ */
+export const moveBookingOutputSchema = z.object({
+  moved: z.boolean(),
+  booking: z.object({ id, price_paid: z.number().nullable() }).optional(),
+  pendingReaderPayment: pendingFlowPaymentSchema.optional(),
+  warning: z.string().optional(),
+  held: heldRefundSchema.optional(),
+  quote: moveQuoteSchema.optional(),
+})
+export type MoveBookingOutput = z.infer<typeof moveBookingOutputSchema>

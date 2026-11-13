@@ -527,6 +527,47 @@ are gated by `booking_changes` only when money goes back. The staff app's `refun
   (`session_already_started`). Money back still needs Issue refunds. The claim's `cancel` record and the cancel's own
   audit row carry `clubCancelled: true` (only then). A cancel from the booking page keeps the 24-hour rule.
 
+## Move (step D, W24)
+
+`bookings/move.ts`, through W19's flow pipeline for a dearer move and W21's refund pipeline (claim kind `move`) for a
+cheaper one. `POST /api/v1/staff/bookings/:bookingId/move/quote` (a read: the old `priceImpact`, `blocked` with the words
+a press would be refused with now, and for a cheaper move `cardRefundAvailable` and `refundParts` for Q37) and `.../move`
+(`confirmed: true` with `figures: { amountDue, toCollect }`: Q18, `amountDue` signed, negative a refund, half a penny
+either way, a missing figure counting as £0; idempotent; without `confirmed`, the quote). Any active staff member; Issue
+refunds for a move that gives money back. Gated before anything is read: a payment as Settle and Add Guest, money back
+by `booking_changes`. The staff app's `moveBooking` is a thin call.
+
+- **The price, as the old function worked it out:** public moves seat by seat at the new band (`quote_booking`), paid
+  seats settling their difference, a dearer move stopping at the new paid seats less what was paid toward them and the
+  part refunds (Q28 and the W05 review's cap); private moves at the new band's tier less those two; a refund never more
+  than is left; a legacy booking (no seat prices) keeps its price (N9 left); public to private and promo bookings refused.
+- **Q34 (Wayne, 12 Nov):** a membership credit stays only while the new band is credit-eligible for the level and the
+  booking's membership covers the new date (active, `cancel_effective_date` not before it); a pass seat only while the
+  pass covers the new session (`pass_covers_session`) and its `expiry_date` isn't before it. Otherwise the seat is paid
+  its full new price, the booking's credit cleared, and a pass session given back (while the pass is unexpired today).
+- **N1:** the one-booking-a-day check runs before any money moves (quote and press) with New Order's words; should
+  another booking race past it, the trigger's refusal gets the same words (`duplicate_day_booking`), never the raw text.
+- **One transaction (C1, or R1):** the booking, its customer, both sessions (id order: two moves the other way round
+  queue rather than deadlock), the session pass and the gift card locked; the old checks in the old order, with a payment
+  still being taken and a refund still being checked first; the new session's places claimed; the old session's given
+  back, unless card money is still to come, when the old seat is held until C2 (as the reader always did); store credit
+  and gift card (dearer); the booking and seats moved; a released pass session given back (on a flow, at C2).
+- **Dearer on the card or reader:** the flow record last (the old move snapshot plus the Worker's marks), then W19's
+  saved card (`<pendingId>:charge`) or reader intent (`<pendingId>:reader-intent`); W12's C2 writes the card's order and
+  gives back the old places and the pass session; a definite refusal undoes it; no clear answer holds it (Q35). Cash,
+  gift card and store credit write no order (Q36: today's way); the gift card's row names the booking.
+- **Cheaper:** the refund planned and claimed (`move`: what R1 changed, for the undo). To store credit, R2 runs inside
+  R1 (note "Refund of the price difference after a booking move."). To the card, each part once under
+  `<claimId>:refund:<orderId>`, then R2. The first part refused: the move put back exactly (`undoMoveClaim`: the booking,
+  its seats, both sessions' places, the pass session); a later part refused: to store credit; unclear: held (the booking
+  stays moved), reconcile records what went, and what Stripe never got ends as owed (Refund the rest).
+- **Its own row:** `booking.move` (old and new session, the signed amount, the parts, method, refund method and where it
+  went, the flow record, the credit or pass released): C1's for every move but a cheaper one, whose row R2 writes once
+  the money's fate is known (an undone move leaves none).
+- **A booking awaiting payment can't be moved (W24a, W24 review S1):** refused on the quote and the press before
+  anything is priced (`booking_not_movable`, "Take the payment first, then move the booking."). Its first seat is
+  unpaid, so a dearer move charged that seat and Settle then charged it again (£40 for a £20 seat).
+
 ## Refund claims with no finish
 
 The staff app claims a refund's money before it moves. Each claim writes `booking.refund_claimed` to

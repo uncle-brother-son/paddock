@@ -10,6 +10,7 @@ import {
   ADD_GUEST_DIFFERENCES,
   BOOKING_ACTIONS,
   CANCEL_DIFFERENCES,
+  MOVE_DIFFERENCES,
   BUILT_BOOKING_ACTIONS,
   cardRecordProblems,
   claimLookProblems,
@@ -115,6 +116,24 @@ function sameButForGiftCardPart(oldFigures: Figures, newFigures: Figures, withou
   )
 }
 
+/**
+ * W24: the holds three Move scenarios end with, not end states (each named in MOVE_DIFFERENCES; move.test.ts runs
+ * reconcile on the same holds and it finishes each): a cheaper move whose card part went and whose store credit write
+ * failed (R2 held: the card part not yet on its line, price_paid as R1 left it), and a card move whose gift card row
+ * failed in C2 (held: the booking moved and its £5 gift card claimed, the £6 card payment on no order yet).
+ */
+const MOVE_CREDIT_HELD_BREACHES = [
+  'public-move-credit-fails-partway: price_paid £25.00, but £51.00 paid less £15.00 back',
+  'public-move-credit-fails-partway: Stripe refunded £21.00, the rows say £15',
+  'private-move-credit-fails-partway: price_paid £0.00, but £140.00 paid less £100.00 back',
+  'private-move-credit-fails-partway: Stripe refunded £110.00, the rows say £100',
+]
+const MOVE_GIFT_CARD_ROW_HELD_BREACHES = [
+  'w05l-move-gift-card-row-fails-then-cancel: price_paid £51.00, but £40.00 paid less £0.00 back',
+  'w05l-move-gift-card-row-fails-then-cancel: gift card 10000000-0000-4000-8000-000000000009 lost £5.00, its redemptions say £0.00',
+  'w05l-move-gift-card-row-fails-then-cancel: pi_fake_0004 is on 0 orders',
+]
+
 /** W22: the hold remove-guest-credit-fails-partway ends with (REMOVE_HELD_WHILE_STORE_CREDIT_FAILS), not an end state. */
 const REMOVE_HELD_BREACHES = [
   'remove-guest-credit-fails-partway: Stripe refunded £10.00, the rows say £0',
@@ -131,6 +150,8 @@ describe("step D's side of the replay (W17)", () => {
   const refundScenarios = new Set<string>()
   const removeScenarios = new Set<string>()
   const cancelScenarios = new Set<string>()
+  const moveScenarios = new Set<string>()
+  const moveSetupScenarios = new Set<string>()
   const shifted: string[] = []
   const counts = { bookings: 0, orders: 0, figuresCompared: 0, guardsCompared: 0, statusesCompared: 0, giftCardShifted: 0 }
 
@@ -153,6 +174,7 @@ describe("step D's side of the replay (W17)", () => {
       'removeBookingGuest',
       'removeBookingAddon',
       'cancelCreditBooking',
+      'moveBooking',
     ])
     // W23: refundBooking's Cancel & Refund moved too, so no action is partly built.
     expect([...PARTLY_BUILT.keys()]).toEqual([])
@@ -164,11 +186,14 @@ describe("step D's side of the replay (W17)", () => {
     it('matches its golden file with the figures from the Worker, and the Worker reads the end state as the old code does', async () => {
       const scenario = scenarios.find((s) => s.name === name)
       if (!scenario) throw new Error(`No scenario ${name}`)
-      const calls: Array<{ action: string; side: 'new' | 'old'; cancel?: boolean }> = []
+      const calls: Array<{ action: string; side: 'new' | 'old'; cancel?: boolean; setup?: boolean }> = []
       const recording = await replay(environment, scenario, newBookingSide({ calls }))
       if (calls.some((call) => LEGACY_BOOKING_ACTIONS.has(call.action))) dScenarios.add(name)
       // W23: Cancel & Refund and Cancel & return credit, through the Worker.
       if (calls.some((call) => call.cancel === true && call.side === 'new')) cancelScenarios.add(name)
+      // W24: Move, through the Worker; and the scenarios whose owed-money setup ran on the old side (onTheOldSide).
+      if (calls.some((call) => call.action === 'moveBooking' && call.side === 'new')) moveScenarios.add(name)
+      if (calls.some((call) => call.setup === true)) moveSetupScenarios.add(name)
       const golden = readGolden(name) as Recording
       expect(golden, `No golden file for ${name}`).not.toBeNull()
 
@@ -183,6 +208,7 @@ describe("step D's side of the replay (W17)", () => {
         ...(REMOVE_DIFFERENCES.get(name) ?? []),
         ...(REMOVE_GUEST_24_HOURS_DIFFERENCES.get(name) ?? []),
         ...(CANCEL_DIFFERENCES.get(name) ?? []),
+        ...(MOVE_DIFFERENCES.get(name) ?? []),
       ]
       // W21: the refund amount actions and the figures, through the Worker.
       if (calls.some((call) => call.side === 'new' && (call.action === 'refundBooking' || call.action === 'getBookingRefundFigures'))) refundScenarios.add(name)
@@ -201,10 +227,11 @@ describe("step D's side of the replay (W17)", () => {
       // The built action really went to the Worker; everything else to the old code. W21: refundBooking's Cancel & Refund
       // calls (no amount) still go to the old function.
       expect(calls.filter((call) => call.side === 'new').every((call) => BUILT_BOOKING_ACTIONS.has(call.action))).toBe(true)
-      expect(calls.filter((call) => BUILT_BOOKING_ACTIONS.has(call.action) && !PARTLY_BUILT.has(call.action)).every((call) => call.side === 'new')).toBe(true)
+      // W24: but a setup step a scenario runs on the old side (onTheOldSide).
+      expect(calls.filter((call) => BUILT_BOOKING_ACTIONS.has(call.action) && !PARTLY_BUILT.has(call.action) && call.setup !== true).every((call) => call.side === 'new')).toBe(true)
       if (process.env.W21_DIFFERENCES_OUT) {
         const all = compareSides(golden, recording, [])
-        appendFileSync(process.env.W21_DIFFERENCES_OUT, `${JSON.stringify({ name, calls: calls.filter((call) => call.side === 'new').map((call) => call.action), differences: all })}\n`)
+        appendFileSync(process.env.W21_DIFFERENCES_OUT, `${JSON.stringify({ name, calls: calls.filter((call) => call.side === 'new').map((call) => call.action), differences: all, unnamed: differences })}\n`)
       }
       if (differences.length > 0) {
         // Only W05l later 1's split may differ, and only on a figures answer whose booking has such a part.
@@ -544,8 +571,9 @@ describe("step D's side of the replay (W17)", () => {
       expect(named.length).toBeGreaterThanOrEqual(REFUND_DIFFERENCES.size)
       const old = await sweepInvariants(environment, named, oldSide)
       const fresh = await sweepInvariants(environment, named, newBookingSide())
-      // Nothing the old code doesn't break too: the new side's breaches are a subset of the old side's.
-      expect(fresh.wrong.filter((line) => !old.wrong.includes(line))).toEqual([])
+      // Nothing the old code doesn't break too: the new side's breaches are a subset of the old side's. W24: but the
+      // holds Move's scenarios end with (MOVE_CREDIT_HELD_BREACHES, MOVE_GIFT_CARD_ROW_HELD_BREACHES), each named.
+      expect(fresh.wrong.filter((line) => !old.wrong.includes(line)).sort()).toEqual([...MOVE_CREDIT_HELD_BREACHES, ...MOVE_GIFT_CARD_ROW_HELD_BREACHES].sort())
       expect(fresh.bookingsChecked).toBeGreaterThanOrEqual(named.length)
       if (process.env.W17_COVERAGE_OUT) appendFileSync(process.env.W17_COVERAGE_OUT, `W21 invariants: ${named.length} scenarios, old ${old.wrong.length} breaches, new ${fresh.wrong.length}: ${JSON.stringify(fresh.wrong)}\n`)
     })
@@ -641,8 +669,9 @@ describe("step D's side of the replay (W17)", () => {
       expect(named.length).toBeGreaterThanOrEqual(CANCEL_DIFFERENCES.size)
       const old = await sweepInvariants(environment, named, oldSide)
       const fresh = await sweepInvariants(environment, named, newBookingSide())
-      // remove-guest-credit-fails-partway's hold (W22) isn't a cancel scenario; anything else new would be W23's.
-      expect(fresh.wrong.filter((line) => !old.wrong.includes(line))).toEqual([])
+      // remove-guest-credit-fails-partway's hold (W22) isn't a cancel scenario; anything else new would be W23's. W24: but
+      // the Move hold whose cancel is then refused (MOVE_GIFT_CARD_ROW_HELD_BREACHES).
+      expect(fresh.wrong.filter((line) => !old.wrong.includes(line)).sort()).toEqual([...MOVE_GIFT_CARD_ROW_HELD_BREACHES].sort())
       expect(fresh.bookingsChecked).toBeGreaterThanOrEqual(named.length)
       if (process.env.W17_COVERAGE_OUT) appendFileSync(process.env.W17_COVERAGE_OUT, `W23 invariants: ${named.length} scenarios, old ${old.wrong.length} breaches, new ${fresh.wrong.length}: ${JSON.stringify(fresh.wrong)}\n`)
     })
@@ -662,6 +691,66 @@ describe("step D's side of the replay (W17)", () => {
       expect(results(recording)[1]).toMatchObject({ cancelled: false, reason: 'cancel_not_saved' })
       expect(added(recording, 'bookings')[0]).toMatchObject({ status: 'confirmed', cancelled_at: null })
       expect(auditRows(recording, 'booking.cancel_credit')).toEqual([])
+    })
+  })
+
+  describe('Move on the new side (W24): exactly what the Worker does instead', () => {
+    const byName = (name: string) => {
+      const scenario = scenarios.find((s) => s.name === name)
+      if (!scenario) throw new Error(`No scenario ${name}`)
+      return scenario
+    }
+    const added = (recording: Recording, table: string) => recording.tables[table]?.added ?? []
+    const created = (recording: Recording, method: string) => recording.stripeCalls.filter((call) => call.method === method)
+
+    it('the W05 invariants hold on the new side for every Move scenario (D-plan 4.11 item 3): nothing the old code doesn\'t break but the named holds', async () => {
+      const named = scenarios.filter((scenario) => moveScenarios.has(scenario.name) || MOVE_DIFFERENCES.has(scenario.name))
+      expect(named.length).toBeGreaterThanOrEqual(MOVE_DIFFERENCES.size)
+      const old = await sweepInvariants(environment, named, oldSide)
+      const fresh = await sweepInvariants(environment, named, newBookingSide())
+      expect(fresh.wrong.filter((line) => !old.wrong.includes(line)).sort()).toEqual([...MOVE_CREDIT_HELD_BREACHES, ...MOVE_GIFT_CARD_ROW_HELD_BREACHES].sort())
+      expect(fresh.bookingsChecked).toBeGreaterThanOrEqual(named.length)
+      if (process.env.W17_COVERAGE_OUT) appendFileSync(process.env.W17_COVERAGE_OUT, `W24 invariants: ${named.length} scenarios, old ${old.wrong.length} breaches, new ${fresh.wrong.length}: ${JSON.stringify(fresh.wrong)}\n`)
+    })
+
+    it('a dearer move on the card: one £11 charge keyed from its flow record, the card part on its own order, the old places given back', async () => {
+      const recording = await replay(environment, byName('q28-public-dearer-on-the-card'), newBookingSide())
+      const charges = created(recording, 'paymentIntents.create')
+      expect(charges.map((call) => (call.params as { amount: number }).amount)).toEqual([4000, 1100])
+      expect(charges[1]?.idempotencyKey).toBe('pending_reader_payments#1:charge')
+      expect(added(recording, 'orders')[1]).toMatchObject({ order_total: '11.00', payment_method: 'card' })
+      expect(added(recording, 'pending_reader_payments').map((row) => [row['status'], (row['snapshot'] as { method: string }).method])).toEqual([['finalised', 'card']])
+      expect(added(recording, 'audit_log').filter((row) => row['action'] === 'booking.move').map((row) => (row['details'] as { method: string }).method)).toEqual(['card'])
+    })
+
+    it('a cheaper move to the card: one refund per order, keyed from its claim, never the old figure-built key', async () => {
+      const recording = await replay(environment, byName('q28-private-cheaper-to-the-card'), newBookingSide())
+      const keys = created(recording, 'refunds.create').map((call) => call.idempotencyKey)
+      expect(keys.every((key) => /^audit_log#\d+:refund:orders#\d+$/.test(String(key)))).toBe(true)
+      expect(new Set(keys).size).toBe(keys.length)
+      const claims = added(recording, 'audit_log').filter((row) => row['action'] === 'booking.refund_claimed' && (row['details'] as { kind?: string }).kind === 'move')
+      expect(claims).toHaveLength(1)
+    })
+
+    it('R3: with the new session full, nothing is charged at all (the old presses each charged £11 and refunded it)', async () => {
+      const recording = await replay(environment, byName('w17-r3-move-two-presses-the-new-session-full-for-both'), newBookingSide())
+      expect(results(recording)[2]).toMatchObject({ moved: false, reason: 'insufficient_capacity' })
+      expect(created(recording, 'paymentIntents.create')).toHaveLength(1)
+      expect(created(recording, 'refunds.create')).toEqual([])
+    })
+
+    it('N1: refused with New Order\'s words before any money moves; no charge, no refund', async () => {
+      const recording = await replay(environment, byName('w17-n1-dearer-move-on-the-card-to-a-day-with-another-booking'), newBookingSide())
+      expect(results(recording)[2]).toMatchObject({ moved: false, reason: 'duplicate_day_booking' })
+      expect(created(recording, 'paymentIntents.create')).toHaveLength(1)
+      expect(created(recording, 'refunds.create')).toEqual([])
+    })
+
+    it('the owed-money setups run on the old side, and only those: everything after them on the Worker', async () => {
+      const calls: Array<{ action: string; side: 'new' | 'old'; setup?: boolean }> = []
+      await replay(environment, byName('owed-then-a-dearer-move'), newBookingSide({ calls }))
+      expect(calls.filter((call) => call.setup === true).map((call) => call.action)).toEqual(['moveBooking', 'moveBooking'])
+      expect(calls.filter((call) => call.setup !== true && call.action === 'moveBooking').every((call) => call.side === 'new')).toBe(true)
     })
   })
 
@@ -716,6 +805,17 @@ describe("step D's side of the replay (W17)", () => {
     }
     if (process.env.W17_COVERAGE_OUT) {
       appendFileSync(process.env.W17_COVERAGE_OUT, `W20: ${addGuestScenarios.size} call Add Guest, ${ADD_GUEST_DIFFERENCES.size} with named differences, ${addGuestScenarios.size - ADD_GUEST_DIFFERENCES.size} exact\n`)
+    }
+    // W24: every scenario named for Move calls it on the Worker; the owed-money setups that ran on the old side are W05g's
+    // and W05h's (onTheOldSide), and only those.
+    expect([...MOVE_DIFFERENCES.keys()].filter((name) => !moveScenarios.has(name))).toEqual([])
+    expect([...moveSetupScenarios].every((name) => name.startsWith('owed-') || name.startsWith('refund-the-rest-') || name === 'figures-with-money-owed')).toBe(true)
+    if (process.env.W17_COVERAGE_OUT) {
+      const earlier = (name: string) => [ADD_GUEST_DIFFERENCES, REFUND_DIFFERENCES, REMOVE_DIFFERENCES, REMOVE_GUEST_24_HOURS_DIFFERENCES, SETTLE_DIFFERENCES, CANCEL_DIFFERENCES].some((map) => map.has(name))
+      appendFileSync(
+        process.env.W17_COVERAGE_OUT,
+        `W24: ${moveScenarios.size} call Move on the Worker, ${MOVE_DIFFERENCES.size} with W24's named differences, ${[...moveScenarios].filter((name) => !MOVE_DIFFERENCES.has(name) && !earlier(name)).length} exact, ${[...moveScenarios].filter((name) => !MOVE_DIFFERENCES.has(name) && earlier(name)).length} with earlier slices' only; ${moveSetupScenarios.size} run an owed-money setup on the old side: ${[...moveSetupScenarios].sort().join(', ')}\n`
+      )
     }
   })
 })

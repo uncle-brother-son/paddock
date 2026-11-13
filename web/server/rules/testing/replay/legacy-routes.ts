@@ -64,6 +64,9 @@ const STAFF_PATTERNS: Array<{ pattern: RegExp; load: () => Promise<unknown>; par
   { pattern: /^\/api\/v1\/staff\/bookings\/([^/]+)\/cancel-and-refund$/, load: () => import('@/app/api/v1/staff/bookings/[bookingId]/cancel-and-refund/route'), params: (m) => ({ bookingId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/bookings\/([^/]+)\/cancel-credit\/quote$/, load: () => import('@/app/api/v1/staff/bookings/[bookingId]/cancel-credit/quote/route'), params: (m) => ({ bookingId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/bookings\/([^/]+)\/cancel-credit$/, load: () => import('@/app/api/v1/staff/bookings/[bookingId]/cancel-credit/route'), params: (m) => ({ bookingId: decodeURIComponent(m[1] ?? '') }) },
+  // W24: Move's quote and press.
+  { pattern: /^\/api\/v1\/staff\/bookings\/([^/]+)\/move\/quote$/, load: () => import('@/app/api/v1/staff/bookings/[bookingId]/move/quote/route'), params: (m) => ({ bookingId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/bookings\/([^/]+)\/move$/, load: () => import('@/app/api/v1/staff/bookings/[bookingId]/move/route'), params: (m) => ({ bookingId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/bookings\/([^/]+)\/refund-figures$/, load: () => import('@/app/api/v1/staff/bookings/[bookingId]/refund-figures/route'), params: (m) => ({ bookingId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/reader-flows\/([^/]+)\/finalise$/, load: () => import('@/app/api/v1/staff/reader-flows/[pendingId]/finalise/route'), params: (m) => ({ pendingId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/reader-flows\/([^/]+)\/cancel$/, load: () => import('@/app/api/v1/staff/reader-flows/[pendingId]/cancel/route'), params: (m) => ({ pendingId: decodeURIComponent(m[1] ?? '') }) },

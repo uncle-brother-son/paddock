@@ -103,9 +103,11 @@ export async function claimGiftCard<E>(tx: Tx, giftCardId: string, amount: numbe
 /**
  * C1 in a transaction of its own, run once more after a deadlock (W17 review S2, as T1 does: it calls nothing outside
  * the database). A database fault rolled all of it back, so it is a definite answer with the action's plain words
- * (`notSaved`); only a COMMIT with no answer may have saved it, and stays INTERNAL.
+ * (`notSaved`); only a COMMIT with no answer may have saved it, and stays INTERNAL. W24: `notSaved` also gets the
+ * error, so Move can answer a refusal Postgres raised (the one-booking-a-day trigger, the overlap constraint) with its
+ * own reason and words.
  */
-export async function inC1<T>(db: Db, work: (tx: Tx) => Promise<T>, notSaved: (logDetail: string) => ApiError): Promise<T> {
+export async function inC1<T>(db: Db, work: (tx: Tx) => Promise<T>, notSaved: (logDetail: string, err: unknown) => ApiError): Promise<T> {
   const opensItsOwn = !inOpenTransaction(db)
   try {
     try {
@@ -117,6 +119,6 @@ export async function inC1<T>(db: Db, work: (tx: Tx) => Promise<T>, notSaved: (l
   } catch (err) {
     if (!opensItsOwn || err instanceof ApiError || err instanceof DbCommitUnknownError) throw err
     if (!(err instanceof DbError) && !postgresRefusal(err)) throw err
-    throw notSaved(`C1 rolled back: ${explain(err)}`)
+    throw notSaved(`C1 rolled back: ${explain(err)}`, err)
   }
 }
