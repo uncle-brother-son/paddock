@@ -141,7 +141,7 @@ export async function removeAddon(db: Db, lineId: string, input: RemoveBookingAd
     removeAddonRefusal('PAYMENT_FAILED', 'refund_failed', addonCardRefundFailedMessage(result.name, result.count, detail))
   const notSaved = (logDetail: string): ApiError => removeAddonRefusal('INTERNAL', 'addon_remove_not_saved', REMOVE_ADDON_NOT_SAVED_MESSAGE, { logDetail })
   const card = choice === 'card' && isPaid(found) && (input.confirmed?.refund ?? 0) > 0
-  const output = await run(db, card, options, () => Promise.resolve(r1), firstRefused, notSaved)
+  const output = await run(db, card, options, r1, firstRefused, notSaved)
   const cardRefunded = output.cardRefundedAmount
   const storeCredit = output.storeCreditRefundedAmount
   return {

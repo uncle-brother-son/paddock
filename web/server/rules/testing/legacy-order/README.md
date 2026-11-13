@@ -19,6 +19,12 @@ chose (12 Nov, option B) to keep this copy for the replay's set-up only.
 - `routes/`: the Worker's deleted `app/api/memberships/create-subscription` (route and core) and
   `app/api/terminal/resolve-saved-card`, exactly as at Worker commit `c966a10`, which the old code calls through
   `replay/legacy-routes.ts`.
+- W25: `routes/` also holds the three legacy routes step D's old functions called, moved here (`git mv`, byte for
+  byte) from `app/api/` at Worker commit `b7ab0ac` when the app lost them: `payments/charge-saved-card` (route, core
+  and the core's test), `terminal/create-payment-intent` (route) and `terminal/payment-intent` (route, core and the
+  core's test). The frozen copy of the old step D functions beside this folder (`../legacy-booking/`) and the old
+  order code here call them through `replay/legacy-routes.ts`. `server/rules/testing/removed-booking-code.test.ts` checks nothing
+  else does.
 
 Who may use it: only `replay/harness.ts` (`LEGACY_ORDER_ACTIONS`, `legacyOrderDir`) and `replay/legacy-routes.ts`,
 and test files through the harness. `server/removed-order-code.test.ts` checks that, and that nothing else in

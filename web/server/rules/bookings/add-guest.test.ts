@@ -608,7 +608,7 @@ describe('the saved card (pending first, keyed from the record, C2 or the undo)'
       expect(held.body.error).toMatchObject({ code: 'PAYMENT_UNCONFIRMED', message: CHANGE_PAYMENT_UNCONFIRMED_MESSAGE, details: { reason: 'payment_unconfirmed' } })
       expect(await guests(bookingId)).toHaveLength(3)
       await ageFlows(bookingId)
-      expect((await stuckList(db)).flows.find((item) => item.recordId === bookingId)).toMatchObject({ madeBy: 'worker', words: CARD_FLOW_WAITING_WORDS })
+      expect((await stuckList(db)).flows.find((item) => item.recordId === bookingId)).toMatchObject({ words: CARD_FLOW_WAITING_WORDS })
       const sent = creates(stripe).length
       expect((await runReconcile(stripe)).items.find((item) => item.kind === 'flow')).toMatchObject({ outcome: 'finalised' })
       expect(creates(stripe)).toHaveLength(sent)
@@ -796,13 +796,45 @@ describe('the old code leaves a held Worker Add Guest alone (brief W20 item 4)',
       expect(held?.status).toBe('pending')
       const staffApp = (name: string) =>
         import(/* @vite-ignore */ path.join(staffAppDir(), 'backend/paddock', `${name}.ts`)) as Promise<{ default: (req: { params: unknown; user: { email: string } }) => Promise<unknown> }>
-      const swept = (await (await staffApp('sweepPendingReaderPayments')).default({ params: { olderThanMinutes: 15 }, user: REPLAY_USER })) as { checked: number }
-      expect(swept.checked).toBe(0)
-      const listed = (await (await staffApp('getStuckReaderPayments')).default({ params: { olderThanMinutes: 15 }, user: REPLAY_USER })) as { flows: Array<{ pendingId: string; madeBy: string }> }
-      expect(listed.flows.filter((item) => item.pendingId === held?.id)).toEqual([expect.objectContaining({ madeBy: 'worker' })])
+      // W25: the old sweep is gone; the staff app's list is the Worker's, and shows the held flow once, waiting.
+      const listed = (await (await staffApp('getStuckReaderPayments')).default({ params: { olderThanMinutes: 15 }, user: REPLAY_USER })) as { flows: Array<{ pendingId: string; reason: string }> }
+      expect(listed.flows.filter((item) => item.pendingId === held?.id)).toEqual([expect.objectContaining({ reason: 'waiting' })])
       expect((await flows(bookingId))[0]?.status).toBe('pending')
-      // And reconcile counts nothing of it as the old code's.
-      expect((await runReconcile(stripe)).oldLeftAlone).toEqual({ orders: 0, flows: 0 })
+      // And reconcile takes it as its own: it is checked, not passed over.
+      expect((await runReconcile(stripe)).checked).toBe(1)
     })
   })
 })
+
+// --- Brief W25 (W20 review 5)
+
+describe("W25: the undo of a held Add Guest clears the over-18 stamp its own tick set", () => {
+  const stamp = async (bookingId: string) => (await db.query<{ at: unknown }>('SELECT guests_over_18_confirmed_at AS at FROM bookings WHERE id = $1', [bookingId]))[0]?.at ?? null
+
+  it("the first guest's tick stamps the booking; cancelled on the reader, the stamp goes with the guest", async () => {
+    await onABooking(publicBooking, async ({ bookingId }) => {
+      await db.query('UPDATE bookings SET guests_over_18_confirmed_at = NULL WHERE id = $1', [bookingId])
+      const answer = await post(bookingId, { ...bea, payment: { method: 'reader' }, ...figures(20, 20) })
+      const pending = answer.body.data?.['pendingReaderPayment'] as { pendingId: string }
+      expect(await stamp(bookingId)).not.toBeNull()
+      const record = (await db.query<{ snapshot: Record<string, unknown> }>('SELECT snapshot FROM pending_reader_payments WHERE id = $1', [pending.pendingId]))[0]
+      expect(record?.snapshot['over_18_confirmed_here']).toBe(true)
+      expect((await flowStep('cancel', pending.pendingId)).data).toMatchObject({ cancelled: true })
+      expect(await stamp(bookingId)).toBeNull()
+    })
+  })
+
+  it('a booking already stamped keeps its stamp when a later guest is undone', async () => {
+    await onABooking(publicBooking, async ({ bookingId }) => {
+      await db.query("UPDATE bookings SET guests_over_18_confirmed_at = '2026-11-01 09:00:00+00' WHERE id = $1", [bookingId])
+      const before = await stamp(bookingId)
+      const answer = await post(bookingId, { ...bea, payment: { method: 'reader' }, ...figures(20, 20) })
+      const pending = answer.body.data?.['pendingReaderPayment'] as { pendingId: string }
+      const record = (await db.query<{ snapshot: Record<string, unknown> }>('SELECT snapshot FROM pending_reader_payments WHERE id = $1', [pending.pendingId]))[0]
+      expect('over_18_confirmed_here' in (record?.snapshot ?? {})).toBe(false)
+      expect((await flowStep('cancel', pending.pendingId)).data).toMatchObject({ cancelled: true })
+      expect(await stamp(bookingId)).toEqual(before)
+    })
+  })
+})
+

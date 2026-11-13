@@ -659,25 +659,29 @@ describe('reader flows the Worker started (step D) and the old code started', ()
     })
   })
 
-  it('a flow the old code started: counted and left to the old sweep, untouched, no Stripe call', async () => {
+  it("a flow with no mark of the Worker's (W25: none can be made any more): untouched, no Stripe call, listed for a person", async () => {
     await onASeed(async ({ stripe }) => {
       const flow = await startSettle(stripe, false)
       later(16)
       const calls = stripe.calls.length
       const result = await run(stripe)
-      expect(result).toMatchObject({ checked: 0, oldLeftAlone: { orders: 0, flows: 1 } })
+      expect(result).toMatchObject({ checked: 0 })
+      // W25: the run counts nothing as "the old code's" any more: these are all its fields.
+      expect(Object.keys(result).sort()).toEqual(['checked', 'deferred', 'finalised', 'items', 'left', 'refunds', 'stripeRefused', 'undone'])
       expect(stripe.calls.length).toBe(calls)
       expect(await flowStatus(flow.pendingId)).toBe('pending')
-      expect((await stuckList(db)).flows).toEqual([expect.objectContaining({ pendingId: flow.pendingId, madeBy: 'old', reason: 'old_code', words: STUCK_WORDS['old_code'] })])
+      expect((await stuckList(db)).flows).toEqual([expect.objectContaining({ pendingId: flow.pendingId, reason: 'not_started_here', words: STUCK_WORDS['not_started_here'] })])
+      expect(STUCK_WORDS['not_started_here']).toMatch(/tell a manager/)
+      expect(STUCK_WORDS['not_started_here']).not.toMatch(/Resolve now|old screens/)
     })
   })
 
-  it("an order the old checkout started is counted and left alone too", async () => {
+  it("an order with no mark of the Worker's is left alone too, and listed for a person", async () => {
     await onASeed(async ({ stripe }) => {
       await oldSide(db, stripe).call('createOrder', basket('reader'))
       later(16)
-      expect(await run(stripe)).toMatchObject({ checked: 0, oldLeftAlone: { orders: 1, flows: 0 } })
-      expect((await stuckList(db)).checkout).toEqual([expect.objectContaining({ method: null, reason: 'old_code' })])
+      expect(await run(stripe)).toMatchObject({ checked: 0 })
+      expect((await stuckList(db)).checkout).toEqual([expect.objectContaining({ method: null, reason: 'not_started_here', words: STUCK_WORDS['not_started_here'] })])
     })
   })
 })

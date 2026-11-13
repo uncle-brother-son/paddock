@@ -110,10 +110,8 @@ describe('staff app helpers', () => {
     // each must refuse straight away: no write, no Worker call.
     const guarded = [
       'addServiceTypeScheduleSlot',
-      'chargeSavedCard',
       'createCustomer',
       'createOneOffSession',
-      'createTerminalPaymentIntent',
       'deleteServiceTypeScheduleSlot',
       'generateUpcomingSessions',
       'setAddonLinePrepared',
@@ -173,17 +171,8 @@ describe('staff app helpers', () => {
       expect(query).not.toHaveBeenCalled()
     })
 
-    it('the unguarded versions used inside payment flows do no staff lookup', async () => {
-      const query = stubStaffTable([row(false)])
-      const worker = vi.fn().mockResolvedValue({ data: { paymentIntentId: 'pi_1' } })
-      vi.stubGlobal('paddockBackendApi2', { rawRequest: worker })
-      const { chargeSavedCardUnguarded } = await load('../chargeSavedCard')
-
-      await chargeSavedCardUnguarded({ params: { customerId: 'c', amount: 1, description: 'd' } })
-
-      expect(worker).toHaveBeenCalledTimes(1)
-      expect(query).not.toHaveBeenCalled()
-    })
+    // W25: chargeSavedCard and createTerminalPaymentIntent, and their unguarded versions, went with the old flow code:
+    // every charge and reader intent is the Worker's (server/rules/testing/removed-booking-code.test.ts).
 
     it('uses the same wording as the Worker', async () => {
       const { INACTIVE_STAFF_MESSAGE } = await load('staffAccess')
@@ -1641,7 +1630,9 @@ describe('staff app helpers', () => {
         expect(cancel).toContain('onOpenChange={(next) => (submitting ? undefined')
         expect(cancel).toContain('disabled={!quote?.cardRefundAvailable}')
         expect(cancel).not.toContain('payment_method')
-        expect(press).toContain('confirmed: { addonsRefund: addons.paidTicked ? quote.addonsRefund : 0 }')
+        // W25: with the paid guests' money (`refund`) when the club's cancel gives it back.
+        expect(press).toContain('confirmed: { addonsRefund: addons.paidTicked ? quote.addonsRefund : 0, ...(quote.refund > 0 ? { refund: quote.refund } : {}) }')
+        expect(press).toContain('...(addons.paidTicked || quote.refund > 0 ? { addonRefund } : {})')
         for (const dialog of ['CancelCreditBookingDialog.tsx', 'CancelPaymentNeededDialog.tsx']) {
           const source = read(dialog)
           expect(source).toContain('useCancelCreditPress(bookingId')
@@ -1814,13 +1805,27 @@ describe('staff app helpers', () => {
         expect(source).toContain('disabled={!cardRefundAvailable}')
         expect(source).toContain('disabled={submitting || retryLocked || Boolean(blocked) ||')
         expect(source).not.toContain('cardRefundAvailable = true')
-        // The Block dialogs pass no onStale: their row stays, with its words, until close (W23a).
+        // W25 (W24 review L6): the Block dialogs pass onStale to Move: after a Move with no answer the booking is read
+        // again (a read, never the block itself) and its row goes or is brought up to date.
         for (const block of ['BlockSessionDialog.tsx', 'BlockDayDialog.tsx']) {
           const blockSource = readFileSync(path.join(appDir, 'frontend/components', block), 'utf8')
           const dialog = blockSource.slice(blockSource.indexOf('<MoveBookingDialog'), blockSource.indexOf('/>', blockSource.indexOf('<MoveBookingDialog')))
-          expect(dialog).not.toContain('onStale')
+          expect(dialog).toContain('onStale={(id) => void handleBookingStale(id)}')
           expect(dialog).not.toContain('cardRefundAvailable')
+          expect(blockSource).toContain('const fresh = await loadBooking({ bookingId }, { skipCache: true })')
+          expect(blockSource).toContain('useGetBookingById')
         }
+        // W25 item 6 (W23 review later 1): the owed bar shows on a cancelled booking too, with Refund the rest held to
+        // store credit there.
+        const detailSource = readFileSync(path.join(appDir, 'frontend/components/BookingDetailContent.tsx'), 'utf8')
+        expect(detailSource).toContain('{refundOwed > 0 ? (')
+        expect(detailSource).not.toContain("refundOwed > 0 && booking.status !== 'cancelled'")
+        expect(detailSource).toContain("storeCreditOnly={booking.status === 'cancelled'}")
+        const restSource = readFileSync(path.join(appDir, 'frontend/components/RefundTheRestDialog.tsx'), 'utf8')
+        expect(restSource).toContain("setRefundMethod(!storeCreditOnly && method === 'card' && next.cardLeft > 0 ? 'card' : 'credit')")
+        expect(restSource).toContain('const cardTakes = figures && !storeCreditOnly ? Math.min(figures.cardLeft, owed) : 0')
+        // W25 (W24 review L7): a re-quote that fails after an "amount changed" refusal clears the old card choice.
+        expect(source).toContain("setCardRefundAvailable(false)\n            setRefundParts(null)\n            setRefundMethod('credit')")
       })
     })
 
@@ -2096,16 +2101,16 @@ describe('staff app helpers', () => {
       it.each([
         ['finaliseReaderPayment', 'finalise', { finalised: true, pendingId: 'p' }],
         ['cancelReaderPayment', 'cancel', { cancelled: true, pendingId: 'p' }],
-      ])("%s sends a flow the Worker started to the Worker's flow route, and says so plainly when it gets no answer", async (name, step, answer) => {
+      ])("%s sends every flow to the Worker's flow route (W25: no old body, no read of its own), and says so plainly when it gets no answer", async (name, step, answer) => {
         const PENDING = '22222222-2222-4222-8222-222222222222'
-        const query = vi.fn(async (sql: string) => ({ data: /FROM pending_reader_payments p/.test(sql) ? [{ worker: true }] : [] }))
+        const query = vi.fn(async () => ({ data: [] }))
         vi.stubGlobal('paddockData', { query })
         const fn = (await backend(name)).default
         rawRequest.mockResolvedValue(success(answer))
         expect(await fn({ params: { pendingId: PENDING }, user })).toEqual(answer)
         expect(rawRequest.mock.calls[0]?.[0]).toMatchObject({ path: `/api/v1/staff/reader-flows/${PENDING}/${step}`, method: 'POST' })
-        // Only the flow's own row was read: the old body (staff lookup, Stripe through the legacy routes) never ran.
-        expect(query.mock.calls.map(([sql]) => String(sql))).toEqual([expect.stringContaining("p.snapshot->>'method' IN ('reader', 'card')")])
+        // W25: nothing is read here any more (the old body, with its staff lookup and legacy routes, is gone).
+        expect(query).not.toHaveBeenCalled()
         rawRequest.mockRejectedValue(new Error('socket hang up'))
         const { FLOW_STEP_NO_ANSWER_MESSAGE } = await load('bookingWorker')
         expect(await fn({ params: { pendingId: PENDING }, user })).toMatchObject({ pendingId: PENDING, reason: 'no_answer', message: FLOW_STEP_NO_ANSWER_MESSAGE })

@@ -19,12 +19,10 @@ import {
   CHANGE_REFUND_UNCONFIRMED_MESSAGE,
   laterCardRefundNotSentMessage,
   NO_CASH_LEFT_MESSAGE,
-  oldRefundReachedCustomerMessage,
   onlyCardLeftMessage,
   onlyCashLeftMessage,
   onlyLeftMessage,
   owedChangedMessage,
-  REFUND_CHECK_FAILED_MESSAGE,
   REFUND_OPEN_MESSAGE,
   REFUND_WORDS,
   refundGoneNotRecordedMessage,
@@ -520,229 +518,6 @@ describe('Refund the rest and It already arrived (W21)', () => {
   })
 })
 
-describe("Refund the rest after the old screens' card refund got no clear answer (the old 24-hour look-up's job)", () => {
-  /** What old Move, Remove Guest or Cancel & Refund leave: £20 owed, and their note of the card refund with no clear answer. */
-  async function oldUnsureOwed(stripe: FakeStripe, bookingId: string, { went }: { went: boolean }) {
-    const intent = (await db.query<{ stripe_payment_intent_id: string }>(
-      "SELECT o.stripe_payment_intent_id FROM orders o JOIN order_line_items l ON l.order_id = o.id WHERE l.booking_id = $1 AND l.item_type = 'booking' ORDER BY l.created_at LIMIT 1",
-      [bookingId]
-    ))[0]?.stripe_payment_intent_id as string
-    const key = `booking-refund:old-line:4000:0:2000:0`
-    if (went) await stripe.refunds.create({ payment_intent: intent, amount: 2000, metadata: { refund_key: key } }, { idempotencyKey: key })
-    await db.query('UPDATE bookings SET refund_owed_amount = 20 WHERE id = $1', [bookingId])
-    await db.query(
-      "INSERT INTO audit_log (actor_type, actor_id, action, entity_type, entity_id, details) VALUES ('staff', $1, 'booking.card_refund_unsure', 'booking', $2, $3::jsonb)",
-      [ID.staff, bookingId, JSON.stringify({ key, paymentIntentId: intent, amount: 20 })]
-    )
-  }
-
-  it('it went: Refund the rest finds it by its old key and records it as the card refund; nothing is sent again', async () => {
-    await onABooking(async ({ bookingId, stripe }) => {
-      await oldUnsureOwed(stripe, bookingId, { went: true })
-      const before = refundCalls(stripe).length
-      const answer = await refund('owed', bookingId, { amount: 20, refundMethod: 'card' })
-      expect(answer.body.data).toMatchObject({ cardRefundedAmount: 20, storeCreditRefundedAmount: 0, pricePaid: 20 })
-      expect(refundCalls(stripe)).toHaveLength(before)
-      expect((await bookingLines(bookingId)).map((line) => line.card_refunded_amount)).toEqual(['20'])
-      expect(await booking(bookingId)).toMatchObject({ refund_owed_amount: '0.00' })
-    })
-  })
-
-  it('it never went: Refund the rest sends it, under its own claim key', async () => {
-    await onABooking(async ({ bookingId, stripe }) => {
-      await oldUnsureOwed(stripe, bookingId, { went: false })
-      const answer = await refund('owed', bookingId, { amount: 20, refundMethod: 'card' })
-      expect(answer.body.data).toMatchObject({ cardRefundedAmount: 20 })
-      expect(refundCalls(stripe).at(-1)?.idempotencyKey).toMatch(/:refund:/)
-    })
-  })
-
-  it("Stripe can't be asked: nothing is sent, the claim is put back (still owed), and staff try again", async () => {
-    await onABooking(async ({ bookingId, stripe }) => {
-      await oldUnsureOwed(stripe, bookingId, { went: true })
-      stripe.failNext('refunds.list', { kind: 'error', error: fakeStripeErrors.server() })
-      const before = refundCalls(stripe).length
-      const answer = await refund('owed', bookingId, { amount: 20, refundMethod: 'card' })
-      expect(answer.body.error?.details).toMatchObject({ reason: 'refund_check_failed' })
-      expect(refundCalls(stripe)).toHaveLength(before)
-      expect(await booking(bookingId)).toMatchObject({ price_paid: '40.00', refund_owed_amount: '20.00' })
-    })
-  })
-
-  /**
-   * W21a: several old refunds with no clear answer on the booking's first order (PaymentIntent X), each that went or
-   * not, and `extra` owed besides (money a Worker refund put back as owed): owed is their total.
-   */
-  async function oldUnsureNotes(stripe: FakeStripe, bookingId: string, notes: Array<{ amount: number; went: boolean }>, extra = 0) {
-    const intent = (await db.query<{ stripe_payment_intent_id: string }>(
-      "SELECT o.stripe_payment_intent_id FROM orders o JOIN order_line_items l ON l.order_id = o.id WHERE l.booking_id = $1 AND l.item_type = 'booking' ORDER BY l.created_at LIMIT 1",
-      [bookingId]
-    ))[0]?.stripe_payment_intent_id as string
-    for (const [index, note] of notes.entries()) {
-      const key = `booking-refund:old-line:${index}:${note.amount * 100}`
-      if (note.went) await stripe.refunds.create({ payment_intent: intent, amount: note.amount * 100, metadata: { refund_key: key } }, { idempotencyKey: key })
-      await db.query(
-        "INSERT INTO audit_log (at, actor_type, actor_id, action, entity_type, entity_id, details) VALUES (clock_timestamp() + $1::int * interval '1 millisecond', 'staff', $2, 'booking.card_refund_unsure', 'booking', $3, $4::jsonb)",
-        [index, ID.staff, bookingId, JSON.stringify({ key, paymentIntentId: intent, amount: note.amount })]
-      )
-    }
-    const owed = notes.reduce((total, note) => total + note.amount, extra)
-    await db.query('UPDATE bookings SET refund_owed_amount = $1 WHERE id = $2', [owed, bookingId])
-    return intent
-  }
-  const refundsOn = (stripe: FakeStripe, intent: string) => stripe.refundsSent.filter((made) => made.payment_intent === intent && made.status !== 'failed').map((made) => made.amount)
-
-  it("W21a (review L1): the review's £200 example: £40 and £20 old refunds went on X, £60 owed planned as one £60 part on X: nothing sent", async () => {
-    await onABooking(
-      async ({ bookingId, stripe }) => {
-        const x = await oldUnsureNotes(stripe, bookingId, [
-          { amount: 40, went: true },
-          { amount: 20, went: true },
-        ])
-        const before = refundCalls(stripe).length
-        const answer = await refund('owed', bookingId, { amount: 60, refundMethod: 'card' })
-        expect(answer.status).toBe(409)
-        expect(answer.body.error?.details).toMatchObject({ reason: 'refund_check_failed', message: oldRefundReachedCustomerMessage([40, 20]) })
-        expect(answer.body.error?.message).toBe('Earlier card refunds of £40.00 and £20.00 on this booking reached the customer, so nothing was refunded. Check Stripe, then use It already arrived for what arrived.')
-        // Nothing sent (the customer has £60 back, not £120), nothing claimed, the booking as it was.
-        expect(refundCalls(stripe)).toHaveLength(before)
-        expect(refundsOn(stripe, x)).toEqual([4000, 2000])
-        expect(await auditRows(REFUND_CLAIMED)).toEqual([])
-        expect(await booking(bookingId)).toMatchObject({ price_paid: '200.00', refund_owed_amount: '60.00' })
-        // Every page is looked through: the look-up is a list of X, a read with no key.
-        const looks = stripe.calls.filter((call) => call.method === 'refunds.list')
-        expect(looks.map((call) => [call.params, call.idempotencyKey])).toEqual([[{ payment_intent: x, limit: 100 }, null]])
-        // Staff check Stripe and use It already arrived.
-        const arrived = await refund('arrived', bookingId, { amount: 60, reason: 'Both seen in Stripe' })
-        expect(arrived.body.data).toMatchObject({ cardRefundedAmount: 0, pricePaid: 140 })
-        expect(await booking(bookingId)).toMatchObject({ refund_owed_amount: '0.00' })
-      },
-      { privatePrice: 200 }
-    )
-  })
-
-  it('W21a (review L1): one old refund that went and one Worker refund Stripe never got (£40 + £20 owed): nothing sent', async () => {
-    await onABooking(
-      async ({ bookingId, stripe }) => {
-        const x = await oldUnsureNotes(stripe, bookingId, [{ amount: 40, went: true }], 20)
-        const answer = await refund('owed', bookingId, { amount: 60, refundMethod: 'card' })
-        expect(answer.body.error?.details).toMatchObject({ reason: 'refund_check_failed', message: oldRefundReachedCustomerMessage([40]) })
-        expect(answer.body.error?.message).toBe('An earlier card refund of £40.00 on this booking reached the customer, so nothing was refunded. Check Stripe, then use It already arrived for what arrived.')
-        expect(refundsOn(stripe, x)).toEqual([4000])
-        expect(await booking(bookingId)).toMatchObject({ price_paid: '200.00', refund_owed_amount: '60.00' })
-      },
-      { privatePrice: 200 }
-    )
-  })
-
-  it('W21a: the look-up pages through every refund on X (more than one page), as reconcile does', async () => {
-    await onABooking(
-      async ({ bookingId, stripe }) => {
-        // The old £20 that went, then 100 more refunds of 1p on X (newer, so they come first): the old one is on page 2.
-        const x = await oldUnsureNotes(stripe, bookingId, [{ amount: 20, went: true }])
-        for (let n = 0; n < 100; n += 1) await stripe.refunds.create({ payment_intent: x, amount: 1 }, { idempotencyKey: `penny-${n}` })
-        const before = refundCalls(stripe).length
-        const answer = await refund('owed', bookingId, { amount: 20, refundMethod: 'card' })
-        expect(answer.body.data).toMatchObject({ cardRefundedAmount: 20, storeCreditRefundedAmount: 0 })
-        expect(refundCalls(stripe)).toHaveLength(before)
-        expect(stripe.calls.filter((call) => call.method === 'refunds.list')).toHaveLength(2)
-      },
-      { privatePrice: 200 }
-    )
-  })
-
-  it('W21a: an old note written while Stripe was being asked: R1 sees the notes changed, nothing is sent or claimed, try again', async () => {
-    await onABooking(
-      async ({ bookingId, stripe }) => {
-        const x = await oldUnsureNotes(stripe, bookingId, [{ amount: 20, went: true }])
-        const list = stripe.refunds.list.bind(stripe.refunds)
-        const late = vi.spyOn(stripe.refunds, 'list').mockImplementationOnce(async (...args: Parameters<typeof list>) => {
-          const listed = await list(...args)
-          await db.query(
-            "INSERT INTO audit_log (at, actor_type, actor_id, action, entity_type, entity_id, details) VALUES (clock_timestamp() + interval '1 second', 'staff', $1, 'booking.card_refund_unsure', 'booking', $2, $3::jsonb)",
-            [ID.staff, bookingId, JSON.stringify({ key: 'booking-refund:old-line:late', paymentIntentId: x, amount: 5 })]
-          )
-          return listed
-        })
-        const before = refundCalls(stripe).length
-        const answer = await refund('owed', bookingId, { amount: 20, refundMethod: 'card' })
-        late.mockRestore()
-        expect(answer.body.error?.details).toMatchObject({ reason: 'refund_check_failed', message: REFUND_CHECK_FAILED_MESSAGE })
-        expect(refundCalls(stripe)).toHaveLength(before)
-        expect(await auditRows(REFUND_CLAIMED)).toEqual([])
-        expect(await booking(bookingId)).toMatchObject({ refund_owed_amount: '20.00' })
-      },
-      { privatePrice: 200 }
-    )
-  })
-
-  it("W21a (review L2): a part matched to an old refund is stored on the claim; the other part held, reconcile counts it gone: no £40 twice", async () => {
-    await onABooking(
-      async ({ bookingId, stripe }) => {
-        // £60 owed: the old £40 on X (the first order) went, and £20 more. The plan: Bea's £20 on Y (newer), then £40 on X.
-        const x = await oldUnsureNotes(stripe, bookingId, [{ amount: 40, went: true }], 20)
-        stripe.failNext('refunds.create', { kind: 'lost_response' })
-        stripe.failNext('refunds.create', { kind: 'lost_response' })
-        const answer = await refund('owed', bookingId, { amount: 60, refundMethod: 'card' })
-        expect(answer.body.data?.held).toMatchObject({ reason: 'refund_unconfirmed' })
-        const claim = await readClaim(db, answer.body.data?.held?.claimId ?? '')
-        const xOrder = (await bookingLines(bookingId))[0]?.order_id
-        const oldRefund = stripe.refundsSent.find((made) => made.payment_intent === x)?.id
-        expect(claim?.details.plan.card.map((part) => part.amount)).toEqual([20, 40])
-        expect(claim?.details.matched).toEqual([{ orderId: xOrder, refundId: oldRefund }])
-        // Only Y's £20 was sent.
-        expect(refundCalls(stripe).filter((call) => call.idempotencyKey?.includes(':refund:')).map((call) => (call.params as { amount: number }).amount)).toEqual([2000, 2000])
-        pastTheWindow()
-        expect((await runReconcile()).items.filter((item) => item.kind === 'claim')).toMatchObject([{ outcome: 'finalised' }])
-        // Reconcile found Y's £20 and counted X's £40 as gone: nothing owed, so nothing for Refund the rest to send again.
-        expect((await auditRows('booking.refund_finished'))[0]?.details).toMatchObject({ outcome: 'given', cardRefunded: 60, owed: 0, by: { how: 'reconcile' } })
-        expect(await booking(bookingId)).toMatchObject({ price_paid: '0.00', refund_owed_amount: '0.00' })
-        expect((await bookingLines(bookingId)).map((line) => line.card_refunded_amount)).toEqual(['40', '20'])
-        expect((await refund('owed', bookingId, { amount: 40, refundMethod: 'card' })).body.error?.details?.reason).toBe('nothing_owed')
-        expect(refundsOn(stripe, x)).toEqual([4000])
-      },
-      { guests: 1 }
-    )
-  })
-
-  it('W21a (review L2): a held claim with a matched part closed by hand: only the part never sent is owed; X never gets £40 twice', async () => {
-    await onABooking(
-      async ({ bookingId, stripe }) => {
-        const x = await oldUnsureNotes(stripe, bookingId, [{ amount: 40, went: true }], 20)
-        stripe.failNext('refunds.create', { kind: 'unreachable' })
-        stripe.failNext('refunds.create', { kind: 'unreachable' })
-        const claimId = (await refund('owed', bookingId, { amount: 60, refundMethod: 'card' })).body.data?.held?.claimId ?? ''
-        // Left for a person (the claim's mode isn't the key's), then closed.
-        await db.query("UPDATE audit_log SET details = jsonb_set(details, '{livemode}', 'true') WHERE id = $1", [claimId])
-        pastTheWindow()
-        expect((await runReconcile()).items.filter((item) => item.kind === 'claim')).toMatchObject([{ outcome: 'left', reason: 'other_mode' }])
-        expect((await close('held_claim', claimId)).body.data).toMatchObject({ closed: true })
-        expect((await auditRows('booking.refund_finished'))[0]?.details).toMatchObject({ outcome: 'owed', cardRefunded: 40, owed: 20, by: { how: 'close' } })
-        expect(await booking(bookingId)).toMatchObject({ price_paid: '20.00', refund_owed_amount: '20.00' })
-        // Refund the rest sends the £20 to Bea's order; X never gets its £40 again.
-        const rest = await refund('owed', bookingId, { amount: 20, refundMethod: 'card' })
-        expect(rest.body.data).toMatchObject({ cardRefundedAmount: 20, pricePaid: 0 })
-        expect(refundsOn(stripe, x)).toEqual([4000])
-        expect((await bookingLines(bookingId)).map((line) => line.card_refunded_amount)).toEqual(['40', '20'])
-      },
-      { guests: 1 }
-    )
-  })
-
-  it('a note already dealt with (It already arrived since) is not looked for again', async () => {
-    await onABooking(async ({ bookingId, stripe }) => {
-      await oldUnsureOwed(stripe, bookingId, { went: true })
-      await refund('arrived', bookingId, { amount: 20, reason: 'Seen in Stripe' })
-      // New money owed later (a Worker refund Stripe never got): sent, not taken for the old one.
-      await db.query('UPDATE bookings SET price_paid = price_paid + 20, refund_owed_amount = 20 WHERE id = $1', [bookingId])
-      const before = stripe.calls.filter((call) => call.method === 'refunds.list').length
-      const answer = await refund('owed', bookingId, { amount: 20, refundMethod: 'card' })
-      expect(answer.body.data).toMatchObject({ cardRefundedAmount: 20 })
-      expect(stripe.calls.filter((call) => call.method === 'refunds.list')).toHaveLength(before)
-    })
-  })
-})
-
 describe('the figures route (W21)', () => {
   it('answers the old figures field for field, with cashLeft and the line of what is left to refund (W21a)', async () => {
     await onABooking(
@@ -921,3 +696,195 @@ describe('the stuck list and R1 against a held claim', () => {
     expect(onlyCashLeftMessage(5)).toContain('£5.00')
   })
 })
+
+// --- Brief W25 item 9: the manual close (W21 review L4, L5)
+
+describe('W25 item 9: the manual close shows per-part findings, and watches a payment still processing', () => {
+  it("L4: a held claim with one part gone and one part Stripe shows differently: the close records the part that went and puts only the other one owed, naming each", async () => {
+    await onABooking(
+      async ({ bookingId, stripe }) => {
+        // £50 to the card: part A is Bea's order (£20, sent first), part B the first order (£30). A's answer is lost
+        // (Stripe has it), so the claim is held and B is never sent.
+        stripe.failNext('refunds.create', { kind: 'lost_response' })
+        stripe.failNext('refunds.create', { kind: 'lost_response' })
+        const held = await refund('part', bookingId, { amount: 50, refundMethod: 'card', reason: 'Goodwill' })
+        const claimId = held.body.data?.held?.claimId ?? ''
+        const claim = await readClaim(db, claimId)
+        const [partA, partB] = claim?.details.plan.card ?? []
+        expect([partA?.amount, partB?.amount]).toEqual([20, 30])
+        // By hand in Stripe: a £10 refund naming the claim on B's payment (not the £30 planned).
+        await stripe.refunds.create({ payment_intent: partB?.paymentIntentId ?? '', amount: 1000, metadata: { claim_id: claimId } })
+        pastTheWindow()
+        const run = await runReconcile()
+        expect(run.items.filter((item) => item.kind === 'claim')).toMatchObject([{ outcome: 'left', reason: 'refund_mismatch' }])
+        // The run's answer carries no findings; its audit row does, for the close.
+        expect(run.items.find((item) => item.kind === 'claim')).not.toHaveProperty('record')
+        const left = (await db.query<{ details: { parts?: Array<{ orderId: string; found: string }> } }>(
+          "SELECT details FROM audit_log WHERE entity_type = 'refund_claim' AND entity_id = $1 AND action = 'order.reconcile' ORDER BY at DESC LIMIT 1",
+          [claimId]
+        ))[0]
+        expect(left?.details.parts).toMatchObject([
+          { orderId: partA?.orderId, amount: 20, found: 'went' },
+          { orderId: partB?.orderId, amount: 30, found: 'mismatch' },
+        ])
+
+        const closed = await close('held_claim', claimId)
+        expect(closed.body.data).toMatchObject({ closed: true, kind: 'held_claim' })
+        const givenBack = closed.body.data?.['givenBack'] as string[]
+        const leftAsFound = closed.body.data?.['leftAsFound'] as string[]
+        expect(givenBack).toEqual([
+          `£20.00 to the card on order ${partA?.orderId.slice(0, 8)}: Stripe shows it went, so it is recorded as refunded`,
+          '£30.00 back on the booking as money still to refund',
+        ])
+        expect(leftAsFound[0]).toMatch(new RegExp(`^£30\\.00 to the card on order ${partB?.orderId.slice(0, 8)}: Stripe shows a refund of a different amount`))
+        // Only B is owed (£30, not the whole £50), and A's £20 is on its line, so Refund the rest can't plan it again.
+        expect(await booking(bookingId)).toMatchObject({ price_paid: '40.00', part_refunded_amount: '50.00', refund_owed_amount: '30.00' })
+        const lines = await bookingLines(bookingId)
+        expect(lines.find((line) => line.order_id === partA?.orderId)?.card_refunded_amount).toBe('20')
+        expect(lines.find((line) => line.order_id === partB?.orderId)?.card_refunded_amount).toBe('0')
+        expect((await auditRows('booking.refund_finished'))[0]?.details).toMatchObject({ outcome: 'owed', cardRefunded: 20, owed: 30, by: { how: 'close' } })
+        expect((await figures(bookingId)).body.data).toMatchObject({ refundOwed: 30 })
+        // The close's own row keeps what was found for each part.
+        const closeRow = (await db.query<{ details: { owed: number; parts: Array<{ found: string }> } }>(
+          "SELECT details FROM audit_log WHERE action = 'order.close' AND entity_type = 'refund_claim' AND entity_id = $1",
+          [claimId]
+        ))[0]
+        expect(closeRow?.details).toMatchObject({ owed: 30, parts: [{ found: 'went' }, { found: 'mismatch' }] })
+      },
+      { guests: 1 }
+    )
+  })
+
+  /** A saved-card Settle held with nothing sent (the charge got no answer), as the "two payments" test sets one up. */
+  async function heldCardSettle(context: Parameters<Parameters<typeof replay>[1]['run']>[0]): Promise<{ bookingId: string; pendingId: string }> {
+    const { lapsedSeat } = await import('@/server/rules/testing/replay/scenarios')
+    const bookingId = await lapsedSeat(context.call, context.db)
+    const { settleBooking } = await import('./settle')
+    context.stripe.failNext('paymentIntents.create', { kind: 'unreachable' })
+    context.stripe.failNext('paymentIntents.create', { kind: 'unreachable' })
+    const before = process.env.ORDER_SWITCH
+    process.env.ORDER_SWITCH = BOOKING_KINDS_ON
+    let pendingId = ''
+    try {
+      await settleBooking(db, bookingId, { payment: { method: 'card' }, figures: { amountDue: 20, toCollect: 20 } }, {
+        actor: { type: 'staff', id: ID.staff },
+        requestId: crypto.randomUUID(),
+        stripe: () => context.stripe,
+      }).catch((err: { details?: { pendingId?: string } }) => {
+        pendingId = err.details?.pendingId ?? ''
+      })
+    } finally {
+      if (before === undefined) delete process.env.ORDER_SWITCH
+      else process.env.ORDER_SWITCH = before
+    }
+    expect(pendingId).not.toBe('')
+    return { bookingId, pendingId }
+  }
+  const watchRows = (pendingId: string) =>
+    db.query<{ action: string; details: Record<string, unknown> }>(
+      "SELECT action, details FROM audit_log WHERE entity_type = 'reader_payment' AND entity_id = $1 AND action IN ('reader_payment.payment_watched', 'reader_payment.charge_without_record') ORDER BY at, id",
+      [pendingId]
+    )
+  const flowItems = async () => (await runReconcile()).items.filter((item) => item.kind === 'flow' || item.kind === 'refund')
+
+  it('L5: a held card flow closed while its payment is still processing: the payment is watched, and refunded automatically when it lands', async () => {
+    await replay(
+      environment,
+      {
+        name: 'w25 watched payment',
+        seed,
+        async run(context) {
+          replayStripe.current = context.stripe
+          try {
+            const { bookingId, pendingId } = await heldCardSettle(context)
+            const row = await readFlow(db, pendingId)
+            const processing = await context.stripe.paymentIntents.create({
+              amount: 2000,
+              currency: 'gbp',
+              customer: 'cus_member',
+              metadata: { flow: 'settle', record_id: row?.record_id ?? '', pending_id: pendingId },
+            })
+            context.stripe.markProcessing(processing.id)
+            pastTheWindow()
+            expect(await flowItems()).toMatchObject([{ kind: 'flow', outcome: 'left', reason: 'payment_processing' }])
+            // Under a day: the bank may still finish it, so the close refuses.
+            expect((await close('held_flow', pendingId)).body.data).toMatchObject({ closed: false, reason: 'flow_not_left_for_a_person' })
+            vi.setSystemTime(Date.now() + 25 * 60 * 60_000)
+            const closed = await close('held_flow', pendingId)
+            expect(closed.body.data).toMatchObject({ closed: true, kind: 'held_flow' })
+            expect((closed.body.data?.['leftAsFound'] as string[])[0]).toMatch(/keeps watching it: if it goes through, it is refunded automatically/)
+            expect((await readFlow(db, pendingId))?.status).toBe('cancelled')
+            expect((await db.query<{ status: string }>('SELECT status FROM bookings WHERE id = $1', [bookingId]))[0]?.status).toBe('payment_needed')
+            expect(await watchRows(pendingId)).toMatchObject([{ action: 'reader_payment.payment_watched', details: { state: 'watching', paymentIntentId: processing.id } }])
+
+            // Still at the bank: watched, nothing refunded, nothing more written.
+            expect(await flowItems()).toMatchObject([{ kind: 'flow', outcome: 'left', reason: 'payment_watched' }])
+            expect(context.stripe.refundsSent).toHaveLength(0)
+            expect(await watchRows(pendingId)).toHaveLength(1)
+
+            // The bank completes it, two days on: recorded as a payment for a change already undone.
+            vi.setSystemTime(Date.now() + 48 * 60 * 60_000)
+            context.stripe.completeReaderPayment(processing.id)
+            expect(await flowItems()).toMatchObject([{ kind: 'flow', outcome: 'left', reason: 'charged_without_record' }])
+            expect(await watchRows(pendingId)).toMatchObject([
+              { details: { state: 'watching' } },
+              { action: 'reader_payment.payment_watched', details: { state: 'landed', paymentIntentId: processing.id, amount: 2000 } },
+              { action: 'reader_payment.charge_without_record', details: { paymentIntentId: processing.id, amount: 2000, watched: true } },
+            ])
+            expect((await stuckList(db)).refunds).toMatchObject([{ kind: 'flow', id: pendingId, paymentIntentId: processing.id, amount: 20 }])
+            // The next run refunds it in full, once; then nothing is left to watch or refund.
+            expect(await flowItems()).toMatchObject([{ kind: 'refund', id: pendingId, outcome: 'refund_confirmed' }])
+            expect(context.stripe.refundsSent).toMatchObject([{ payment_intent: processing.id, amount: 2000 }])
+            expect(await flowItems()).toEqual([])
+            expect(context.stripe.refundsSent).toHaveLength(1)
+            expect((await stuckList(db)).refunds).toEqual([])
+          } finally {
+            replayStripe.current = null
+          }
+        },
+      },
+      oldSide
+    )
+  })
+
+  it('L5: a watched payment that ends with nothing taken: cancelled, the watch ends, nothing is refunded', async () => {
+    await replay(
+      environment,
+      {
+        name: 'w25 watched payment, nothing taken',
+        seed,
+        async run(context) {
+          replayStripe.current = context.stripe
+          try {
+            const { pendingId } = await heldCardSettle(context)
+            const row = await readFlow(db, pendingId)
+            const processing = await context.stripe.paymentIntents.create({
+              amount: 2000,
+              currency: 'gbp',
+              customer: 'cus_member',
+              metadata: { flow: 'settle', record_id: row?.record_id ?? '', pending_id: pendingId },
+            })
+            context.stripe.markProcessing(processing.id)
+            pastTheWindow()
+            await runReconcile()
+            vi.setSystemTime(Date.now() + 25 * 60 * 60_000)
+            expect((await close('held_flow', pendingId)).body.data).toMatchObject({ closed: true })
+            // The next run, five minutes on. The bank lets go of it without taking anything: reconcile cancels it, so
+            // nothing can be taken later.
+            vi.setSystemTime(Date.now() + 5 * 60_000)
+            context.stripe.markRequiresCapture(processing.id)
+            expect(await flowItems()).toMatchObject([{ kind: 'flow', id: pendingId, outcome: 'settled_elsewhere' }])
+            expect(await watchRows(pendingId)).toMatchObject([{ details: { state: 'watching' } }, { details: { state: 'nothing_taken', paymentIntentId: processing.id } }])
+            expect((await context.stripe.paymentIntents.retrieve(processing.id)).status).toBe('canceled')
+            expect(await flowItems()).toEqual([])
+            expect(context.stripe.refundsSent).toHaveLength(0)
+          } finally {
+            replayStripe.current = null
+          }
+        },
+      },
+      oldSide
+    )
+  })
+})
+

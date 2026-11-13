@@ -20,7 +20,9 @@ import {
   READER_PAYMENT_OPEN_MESSAGE,
   REFUND_OPEN_MESSAGE,
   REMOVE_GUEST_NOT_SAVED_MESSAGE,
+  putBackBlockedMessage,
   refundGoneNotRecordedMessage,
+  refundRefusedDetail,
 } from './failure-messages'
 import { claimRefundKey } from './refunds'
 
@@ -244,6 +246,40 @@ describe('Remove Guest: the removal (W22)', () => {
       expect(again.body.data).toMatchObject({ removed: true, cardRefundedAmount: 20 })
       const keys = refundCalls(stripe).map((call) => call.idempotencyKey)
       expect(new Set(keys).size).toBe(2)
+    })
+  })
+
+  it("W25a (W25 review L5): the first card refund refused after the guest's place was taken again: the guest stays removed (the session never one over), the £20 still to refund on the booking there and then, with Stripe's reason; Refund the rest gives it", async () => {
+    await withAGuest(async ({ bookingId, guestId, stripe }) => {
+      const capacity = (await db.query<{ capacity: number }>('SELECT capacity FROM sessions WHERE id = $1', [ID.session]))[0]?.capacity ?? 0
+      // Another booking takes every free place (the guest's included) between R1 and the card's answer.
+      const create = stripe.refunds.create
+      stripe.refunds.create = (async (...args: Parameters<typeof create>) => {
+        await db.query('UPDATE sessions SET total_booked = capacity WHERE id = $1', [ID.session])
+        return create(...args)
+      }) as typeof create
+      stripe.failNext('refunds.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
+      const answer = await remove(guestId, { confirmedRefundAmount: 20, refundMethod: 'card' })
+      expect(answer.status).toBe(200)
+      expect(answer.body.data).toMatchObject({
+        removed: true,
+        refundedAmount: 0,
+        cardRefundedAmount: 0,
+        storeCreditRefundedAmount: 0,
+        held: { reason: 'refund_refused_not_put_back', message: putBackBlockedMessage(refundRefusedDetail('Your card was declined.'), 20, false) },
+      })
+      // Nothing of the undo is kept: the guest gone, the party of two, the session full and not one over.
+      expect(await guestRow(guestId)).toBeUndefined()
+      expect(await booking(bookingId)).toMatchObject({ price_paid: '60.00', refund_owed_amount: '20.00', party_size: 2, total_booked: capacity })
+      expect((await auditRows('booking.refund_finished'))[0]?.details).toMatchObject({ outcome: 'owed', cardRefunded: 0, owed: 20, by: { how: 'undo_blocked', why: refundRefusedDetail('Your card was declined.') } })
+      expect((await auditRows('booking.guest_remove'))[0]?.details).toMatchObject({ guestId, cardRefunded: 0, storeCreditRefunded: 0, owed: 20 })
+      expect(await creditRefunds()).toEqual([])
+      // Reconcile has nothing to do for it; Refund the rest sends it to the card.
+      pastTheWindow()
+      expect((await runReconcile()).items.filter((item) => item.kind === 'claim')).toEqual([])
+      const rest = await refundTheRest(bookingId, { amount: 20, refundMethod: 'card' })
+      expect(rest.body.data).toMatchObject({ cardRefundedAmount: 20, pricePaid: 40 })
+      expect(await booking(bookingId)).toMatchObject({ refund_owed_amount: '0.00', total_booked: capacity })
     })
   })
 

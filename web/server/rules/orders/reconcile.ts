@@ -66,7 +66,17 @@ import {
 } from './membership'
 import { SUBSCRIPTIONS_LEFT_SQL } from './stuck-list'
 import { PROCESSING_MINUTES, type CardSnapshot, type PendingSnapshot, type ReaderSnapshot } from './pending-order'
-import { cancelReaderFlow, finaliseFlowInTransaction, isWorkerCardFlow, readFlow, undoFlowInTransaction, type FlowRow } from './reader-flow'
+import {
+  cancelReaderFlow,
+  finaliseFlowInTransaction,
+  FLOW_CHARGE_WITHOUT_RECORD,
+  FLOW_PAYMENT_WATCHED,
+  FlowUndoBlocked,
+  isWorkerCardFlow,
+  readFlow,
+  undoFlowInTransaction,
+  type FlowRow,
+} from './reader-flow'
 import { cancelReaderOrder, finaliseReaderOrderFound, otherModeMessage, settleIntent } from './reader-order'
 import { undoOrder } from './undo-order'
 import { CLAIMS_DUE_SQL, findCardPart, finishClaim, readClaim, type CardPart, type Claim } from '@/server/rules/bookings/refunds'
@@ -164,6 +174,23 @@ export interface ReconcileItem {
   detail?: string
   /** W12a (S1): what Stripe shows for an order the old screens moved out of pending. */
   finding?: ChangedElsewhereFinding
+  /**
+   * W25: more for a left item's `order.reconcile` row, for the manual close to act on (never in the run's answer): a
+   * claim's per-part findings (`parts`, W21 review L4), a card flow's payments still at the bank (`payments`, L5).
+   */
+  record?: Record<string, unknown>
+}
+
+/**
+ * W25 (W21 review L4): what reconcile found in Stripe for one planned card part of a claim it left for a person, kept
+ * on its `order.reconcile` row (`parts`). The close records each `went` part as gone and puts only the others owed.
+ */
+export interface ClaimPartFinding {
+  orderId: string
+  amount: number
+  found: 'went' | 'none' | 'several' | 'mismatch'
+  /** What Stripe showed: the refunds' ids for `several`, the amounts for `mismatch`. */
+  detail?: string
 }
 
 export interface ReconcileResult {
@@ -174,8 +201,6 @@ export interface ReconcileResult {
   left: number
   /** Over the run's bounds: left for the next run. */
   deferred: number
-  /** Started by the old code: counted, left to the old sweep (until W14 makes it a wrapper of this). */
-  oldLeftAlone: { orders: number; flows: number }
   /** Stripe refused the key (401/403): nothing more was tried, and an alert row was recorded. */
   stripeRefused: boolean
   items: ReconcileItem[]
@@ -314,7 +339,22 @@ interface Run {
   recordRefund(entityType: 'order' | 'reader_payment', entityId: string, details: Record<string, unknown>): Promise<void>
 }
 
-const left = (kind: ReconcileItem['kind'], id: string, reason: string, detail?: string): ReconcileItem => ({ kind, id, outcome: 'left', reason, ...(detail ? { detail } : {}) })
+/** The item as the run answers it: without what is only for its audit row. */
+function forTheAnswer(item: ReconcileItem): ReconcileItem {
+  if (!item.record) return item
+  const answered = { ...item }
+  delete answered.record
+  return answered
+}
+
+const left = (kind: ReconcileItem['kind'], id: string, reason: string, detail?: string, record?: Record<string, unknown>): ReconcileItem => ({
+  kind,
+  id,
+  outcome: 'left',
+  reason,
+  ...(detail ? { detail } : {}),
+  ...(record ? { record } : {}),
+})
 
 interface PendingOrder {
   id: string
@@ -669,7 +709,10 @@ async function reconcileCardFlow(run: Run, row: FlowRow): Promise<ReconcileItem>
   if (succeeded.length > 1) return left('flow', row.id, 'several_payments', succeeded.map((intent) => intent.id).join(', '))
   const paid = succeeded[0]
   const stillGoing = found.intents.filter((intent) => intent.status !== 'succeeded' && !CARD_NOTHING_TAKEN.has(intent.status))
-  if (!paid && stillGoing.length > 0) return left('flow', row.id, 'payment_processing', stillGoing.map((intent) => `${intent.id} ${intent.status}`).join(', '))
+  if (!paid && stillGoing.length > 0) {
+    // W25 (W21 review L5): the payments' ids are kept on the row, so a close by hand can have them watched.
+    return left('flow', row.id, 'payment_processing', stillGoing.map((intent) => `${intent.id} ${intent.status}`).join(', '), { payments: stillGoing.map((intent) => intent.id) })
+  }
   try {
     if (paid) {
       const outcome = await finaliseFlowInTransaction(run.db, row.id, paid, run.options)
@@ -685,7 +728,8 @@ async function reconcileCardFlow(run: Run, row: FlowRow): Promise<ReconcileItem>
     return { kind: 'flow', id: row.id, outcome: 'settled_elsewhere', detail: undone.reason }
   } catch (err) {
     // A database fault: nothing was written (one transaction). Never refunded for it (W6-3); the next run tries again.
-    return left('flow', row.id, paid ? 'finalise_failed' : 'undo_failed', err instanceof Error ? err.message : String(err))
+    // W25: a move the customer's other booking stops going back is said plainly (`undo_blocked`).
+    return left('flow', row.id, paid ? 'finalise_failed' : err instanceof FlowUndoBlocked ? 'undo_blocked' : 'undo_failed', err instanceof Error ? err.message : String(err))
   }
 }
 
@@ -731,39 +775,102 @@ async function reconcileFlow(run: Run, row: FlowRow): Promise<ReconcileItem> {
     if (undone.undone) return { kind: 'flow', id: row.id, outcome: 'undone', ...(undone.problems.length > 0 ? { warning: undone.problems.join('; ') } : {}) }
     return { kind: 'flow', id: row.id, outcome: 'settled_elsewhere', detail: undone.reason }
   } catch (err) {
-    return left('flow', row.id, settled.kind === 'succeeded' ? 'finalise_failed' : 'undo_failed', err instanceof Error ? err.message : String(err))
+    return left('flow', row.id, settled.kind === 'succeeded' ? 'finalise_failed' : err instanceof FlowUndoBlocked ? 'undo_blocked' : 'undo_failed', err instanceof Error ? err.message : String(err))
   }
+}
+
+// --- A payment watched after its flow was undone by hand (W25, W21 review L5)
+
+/**
+ * The payments a manual close left watched (`watching` rows) with no end yet: `landed` or `nothing_taken`, or a
+ * `charge_without_record` row for that payment (the automatic refund has it). Oldest first.
+ */
+const WATCHED_DUE_SQL = `
+SELECT w.entity_id, w.details->>'paymentIntentId' AS payment_intent_id, (w.details->>'livemode')::boolean AS livemode,
+       w.details->>'flow' AS flow, w.details->>'recordId' AS record_id
+FROM audit_log w
+WHERE w.action = '${FLOW_PAYMENT_WATCHED}' AND w.entity_type = 'reader_payment' AND w.details->>'state' = 'watching'
+  AND NOT EXISTS (
+    SELECT 1 FROM audit_log d
+    WHERE d.entity_type = 'reader_payment' AND d.entity_id = w.entity_id AND d.details->>'paymentIntentId' = w.details->>'paymentIntentId'
+      AND ((d.action = '${FLOW_PAYMENT_WATCHED}' AND d.details->>'state' IN ('landed', 'nothing_taken')) OR d.action = '${FLOW_CHARGE_WITHOUT_RECORD}')
+  )
+ORDER BY w.at, w.id`
+
+interface WatchedPayment {
+  entity_id: string
+  payment_intent_id: string
+  livemode: boolean | null
+  flow: string | null
+  record_id: string | null
+}
+
+/**
+ * W25 (W21 review L5): a saved-card payment that was still at the bank when a person undid its change by hand. Read
+ * again each run (settleIntent: read it, and cancel it when Stripe allows, so nothing more can be taken for a change
+ * that is gone). If it went through, it is recorded exactly as C2 records a payment for a flow already undone
+ * (`reader_payment.charge_without_record`), and the automatic refund gives it back from the next run. Cancelled, or it
+ * took nothing: the watch ends. Anything unclear: watched again next run. Never refunds here, never charges.
+ */
+async function checkWatchedPayment(run: Run, due: WatchedPayment): Promise<ReconcileItem> {
+  const id = due.entity_id
+  const settled = await settleIntent(run.stripe, { payment_intent_id: due.payment_intent_id, livemode: due.livemode ?? undefined }, run.timing)
+  if (settled.kind === 'unclear') return left('flow', id, 'payment_watched', `${due.payment_intent_id}: ${settled.message}`)
+  const entry = { actorType: run.options.actor.type, actorId: run.options.actor.id, entityType: 'reader_payment', entityId: id, requestId: run.options.requestId }
+  if (settled.kind === 'succeeded') {
+    const amount = settled.paymentIntent.amount_received
+    await run.db.transaction((tx) =>
+      audit.recordAll(tx, [
+        { ...entry, action: FLOW_PAYMENT_WATCHED, details: { state: 'landed', paymentIntentId: due.payment_intent_id, amount } },
+        { ...entry, action: FLOW_CHARGE_WITHOUT_RECORD, details: { paymentIntentId: due.payment_intent_id, amount, flow: due.flow, recordId: due.record_id, watched: true } },
+      ])
+    )
+    return left('flow', id, 'charged_without_record', due.payment_intent_id)
+  }
+  await run.db.transaction((tx) =>
+    audit.recordAll(tx, [{ ...entry, action: FLOW_PAYMENT_WATCHED, details: { state: 'nothing_taken', paymentIntentId: due.payment_intent_id, status: settled.status } }])
+  )
+  return { kind: 'flow', id, outcome: 'settled_elsewhere', detail: `watched payment ${due.payment_intent_id} took nothing (${settled.status})` }
 }
 
 // --- A booking refund's claim held by its press (W21, D-plan 4.10)
 
 /**
  * Each planned card part looked for in Stripe (never sent): a refund naming the claim that succeeded or is pending
- * went; none, or one that failed or was cancelled, never went; a part matched to an old refund (W21a) went. Then R2 with that: what went recorded on its lines, the
+ * went; none, or one that failed or was cancelled, never went. Then R2 with that: what went recorded on its lines, the
  * plan's store credit given, what never went owed on the booking. Left for a person: the claim's mode isn't the key's
  * (nothing can be trusted as "not found"), more than one refund names a part, or a refund's amount isn't the part's.
  * Left for the next run: a list Stripe didn't answer, or R2 failing in the database (nothing kept: one transaction).
+ * W25 (W21 review L4): every part is looked at before the claim is left for a person, and what was found for each is
+ * kept on the left row (`parts`), so the close by hand records the parts that went and puts only the others owed.
  */
 async function reconcileClaim(run: Run, claim: Claim): Promise<ReconcileItem> {
   const { plan, livemode } = claim.details
   if (typeof livemode === 'boolean' && livemode !== run.stripe.keyLivemode) return left('claim', claim.id, 'other_mode')
   const went: CardPart[] = []
   const never: CardPart[] = []
-  // W21a (W21 review L2): a part Refund the rest matched to an old refund that went is gone, with no refund naming the
-  // claim: counted as gone, never owed (owed would move the old look-up's window past it, and it would be sent again).
-  const matched = new Set((claim.details.matched ?? []).map((part) => part.orderId))
+  const parts: ClaimPartFinding[] = []
+  let forAPerson: { reason: 'several_refunds' | 'refund_mismatch'; detail: string } | null = null
   for (const part of plan.card) {
-    if (matched.has(part.orderId)) {
-      went.push(part)
-      continue
-    }
     const found = await findCardPart(run.stripe, claim.id, part, run.timing)
+    // Stripe didn't answer for this part: nothing is concluded about any part until a run reads them all.
     if (found.kind === 'unclear') return left('claim', claim.id, 'unclear', found.detail)
-    if (found.kind === 'several') return left('claim', claim.id, 'several_refunds', found.ids.join(', '))
-    if (found.kind === 'mismatch') return left('claim', claim.id, 'refund_mismatch', found.detail)
-    if (found.kind === 'went') went.push(part)
-    else never.push(part)
+    const finding = { orderId: part.orderId, amount: part.amount }
+    if (found.kind === 'several') {
+      parts.push({ ...finding, found: 'several', detail: found.ids.join(', ') })
+      forAPerson ??= { reason: 'several_refunds', detail: found.ids.join(', ') }
+    } else if (found.kind === 'mismatch') {
+      parts.push({ ...finding, found: 'mismatch', detail: found.detail })
+      forAPerson ??= { reason: 'refund_mismatch', detail: found.detail }
+    } else if (found.kind === 'went') {
+      parts.push({ ...finding, found: 'went' })
+      went.push(part)
+    } else {
+      parts.push({ ...finding, found: 'none' })
+      never.push(part)
+    }
   }
+  if (forAPerson) return left('claim', claim.id, forAPerson.reason, forAPerson.detail, { parts })
   const owed = Math.round(never.reduce((total, part) => total + part.amount, 0) * 100) / 100
   try {
     const output = await finishClaim(run.db, claim, { went, extraToStoreCredit: 0, owed }, { actor: run.options.actor, requestId: run.options.requestId, how: 'reconcile' })
@@ -799,9 +906,9 @@ export async function reconcileClaimNow(db: Db, stripeClient: StripeClient, clai
   if (!claim) return { kind: 'claim', id: claimId, outcome: 'settled_elsewhere', detail: 'gone' }
   const item = await reconcileClaim(run, claim)
   if (item.outcome !== 'settled_elsewhere') {
-    await record('refund_claim', claimId, { outcome: item.outcome, ...(item.reason ? { reason: item.reason } : {}), detail: item.detail ?? null })
+    await record('refund_claim', claimId, { outcome: item.outcome, ...(item.reason ? { reason: item.reason } : {}), detail: item.detail ?? null, ...(item.record ?? {}) })
   }
-  return item
+  return forTheAnswer(item)
 }
 
 // --- The automatic refund of a late payment (W03-decisions, "W12 calls")
@@ -1031,21 +1138,22 @@ WHERE status = 'pending' AND snapshot->>'method' IN ('reader', 'card') AND (snap
   AND created_at < now() - make_interval(mins => $1::int)
 ORDER BY created_at, id`
 
-const OLD_DUE_SQL = `
-SELECT
-  (SELECT count(*)::int FROM orders
-   WHERE payment_status = 'pending' AND reader_payment IS NOT NULL
-     AND (reader_payment->>'method') IS DISTINCT FROM 'card' AND (reader_payment->>'method') IS DISTINCT FROM 'reader'
-     AND COALESCE((reader_payment->>'created_at')::timestamptz, created_at) < now() - make_interval(mins => $1::int)) AS orders,
-  (SELECT count(*)::int FROM pending_reader_payments
-   WHERE status = 'pending' AND NOT COALESCE(snapshot->>'method' IN ('reader', 'card') AND (snapshot->>'request_id') IS NOT NULL, false)
-     AND created_at < now() - make_interval(mins => $2::int)) AS flows`
-
 /** The audit entity a non-refund item's `order.reconcile` rows are written against (W21: a claim's own id). */
 const entityTypeOf = (kind: ReconcileItem['kind']): 'order' | 'reader_payment' | 'refund_claim' => (kind === 'order' ? 'order' : kind === 'claim' ? 'refund_claim' : 'reader_payment')
 
-/** What makes a left item's row worth writing again: its reason, and for a changed-elsewhere order its finding (W12a). */
-const leftKey = (reason: string | undefined, finding: Partial<ChangedElsewhereFinding> | undefined): string => `${reason ?? ''}|${finding?.state ?? ''}|${finding?.amount ?? ''}`
+/** W25: what a left row carries for the close (a claim's `parts`, a card flow's `payments`), as one comparable string. */
+function recordKey(record: { parts?: unknown; payments?: unknown } | undefined): string {
+  const parts = Array.isArray(record?.parts) ? (record.parts as Array<Partial<ClaimPartFinding>>).map((part) => `${part.orderId ?? ''}:${part.found ?? ''}`).join(',') : ''
+  const payments = Array.isArray(record?.payments) ? (record.payments as unknown[]).map(String).join(',') : ''
+  return `${parts}|${payments}`
+}
+
+/**
+ * What makes a left item's row worth writing again: its reason, for a changed-elsewhere order its finding (W12a), and
+ * (W25) what it carries for the close.
+ */
+const leftKey = (reason: string | undefined, finding: Partial<ChangedElsewhereFinding> | undefined, record?: { parts?: unknown; payments?: unknown }): string =>
+  `${reason ?? ''}|${finding?.state ?? ''}|${finding?.amount ?? ''}|${recordKey(record)}`
 
 /**
  * The latest reconcile row for an entity that isn't a refund's: so a left item is recorded once per reason
@@ -1053,13 +1161,13 @@ const leftKey = (reason: string | undefined, finding: Partial<ChangedElsewhereFi
  */
 async function lastLeft(db: Db, entityType: string, entityId: string): Promise<string | null> {
   const row = (
-    await db.query<{ details: { outcome?: string; reason?: string; finding?: Partial<ChangedElsewhereFinding> } }>(
+    await db.query<{ details: { outcome?: string; reason?: string; finding?: Partial<ChangedElsewhereFinding>; parts?: unknown; payments?: unknown } }>(
       `SELECT details FROM audit_log WHERE entity_type = $1 AND entity_id = $2 AND action = 'order.reconcile' AND NOT (details ? 'refund')
        ORDER BY at DESC LIMIT 1`,
       [entityType, entityId]
     )
   )[0]
-  return row?.details.outcome === 'left' ? leftKey(row.details.reason, row.details.finding) : null
+  return row?.details.outcome === 'left' ? leftKey(row.details.reason, row.details.finding, row.details) : null
 }
 
 /**
@@ -1106,7 +1214,7 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
   const changed = await db.query<ChangedOrder>(CHANGED_ELSEWHERE_DUE_SQL, [window, CHANGED_ELSEWHERE_DAYS])
   const flows = await db.query<{ id: string }>(FLOWS_DUE_SQL, [window])
   const claims = await db.query<{ id: string }>(CLAIMS_DUE_SQL, [window])
-  const old = (await db.query<{ orders: number; flows: number }>(OLD_DUE_SQL, [window, window]))[0] ?? { orders: 0, flows: 0 }
+  const watchedPayments = await db.query<WatchedPayment>(WATCHED_DUE_SQL)
 
   const work: Array<{ kind: ReconcileItem['kind']; id: string; go: () => Promise<ReconcileItem> }> = [
     ...refunds.map((due) => ({ kind: 'refund' as const, id: due.entity_id, go: () => settleLateRefund(run, due) })),
@@ -1122,6 +1230,8 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
         return reconcileFlow(run, row)
       },
     })),
+    // W25 (W21 review L5): payments watched since their change was undone by hand.
+    ...watchedPayments.map((due) => ({ kind: 'flow' as const, id: due.entity_id, go: () => checkWatchedPayment(run, due) })),
     // W21: booking refund claims held by their press.
     ...claims.map((due) => ({
       kind: 'claim' as const,
@@ -1142,7 +1252,7 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
     })),
   ]
 
-  const result: ReconcileResult = { checked: 0, finalised: 0, undone: 0, refunds: 0, left: 0, deferred: 0, oldLeftAlone: old, stripeRefused: false, items: [] }
+  const result: ReconcileResult = { checked: 0, finalised: 0, undone: 0, refunds: 0, left: 0, deferred: 0, stripeRefused: false, items: [] }
   for (const [index, next] of work.entries()) {
     if (result.checked >= options.maxItems || now() - started >= options.budgetMs) {
       result.deferred = work.length - index
@@ -1166,7 +1276,7 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
         await run.record(entityTypeOf(item.kind), item.id, { outcome: item.outcome, detail: item.detail ?? null, ...(item.warning ? { warning: item.warning } : {}) })
         if (item.outcome === 'finalised') result.finalised += 1
         if (item.outcome === 'undone') result.undone += 1
-        result.items.push(item)
+        result.items.push(forTheAnswer(item))
       } else {
         result.checked -= 1
       }
@@ -1191,8 +1301,8 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
         // one (a read outside a transaction, bounded only by the client's 10 s), so the run stays 10 s inside
         // Retool's 60 s; at worst a reason already recorded is recorded again.
         const pastDeadline = timing !== undefined && now() >= timing.deadline
-        if (pastDeadline || (await lastLeft(db, entityType, item.id)) !== leftKey(item.reason, item.finding)) {
-          await run.record(entityType, item.id, { outcome: 'left', reason: item.reason, detail: item.detail ?? null, ...(item.finding ? { finding: item.finding } : {}) })
+        if (pastDeadline || (await lastLeft(db, entityType, item.id)) !== leftKey(item.reason, item.finding, item.record)) {
+          await run.record(entityType, item.id, { outcome: 'left', reason: item.reason, detail: item.detail ?? null, ...(item.finding ? { finding: item.finding } : {}), ...(item.record ?? {}) })
         }
       } else if (item.outcome !== 'settled_elsewhere') {
         await run.record(entityType, item.id, { outcome: item.outcome, detail: item.detail ?? null, ...(item.warning ? { warning: item.warning } : {}) })
@@ -1202,7 +1312,7 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
     if (item.outcome === 'undone') result.undone += 1
     if (item.outcome.startsWith('refund_')) result.refunds += 1
     if (item.outcome === 'left' || item.outcome === 'refund_failed' || item.outcome === 'refund_pending') result.left += 1
-    result.items.push(item)
+    result.items.push(forTheAnswer(item))
   }
   return result
 }

@@ -12,7 +12,7 @@ import {
   FLOW_PAID_NOT_FINISHED_MESSAGE,
   FLOW_UNDO_INCOMPLETE_MESSAGE,
   finaliseFlowInTransaction,
-  OLD_READER_FLOW_MESSAGE,
+  FLOW_NOT_STARTED_HERE_MESSAGE,
   undoFlowInTransaction,
   type CancelFlowOutput,
   type FinaliseFlowOutput,
@@ -118,14 +118,14 @@ const rowOf = async (pendingId: string) =>
 const flowAudit = async (pendingId: string) =>
   (await db.query<{ action: string }>("SELECT action FROM audit_log WHERE entity_type = 'reader_payment' AND entity_id = $1 ORDER BY at, id", [pendingId])).map((row) => row.action)
 
-describe('a flow the old screens started is refused (old_reader_flow), as W11 refuses the old checkout', () => {
-  it('finalise and cancel answer old_reader_flow and change nothing, tapped or not', async () => {
+describe("a pending row with no mark of the Worker's is refused (W25: not_a_reader_flow, tell a manager)", () => {
+  it('finalise and cancel refuse it and change nothing, tapped or not', async () => {
     await onASeed(async (context) => {
       const started = await startSettle(context, { worker: false })
       const before = await figures(started.bookingId)
-      expect((await cancel(started.pendingId)).data).toMatchObject({ cancelled: false, reason: 'old_reader_flow', message: OLD_READER_FLOW_MESSAGE })
+      expect((await cancel(started.pendingId)).data).toMatchObject({ cancelled: false, reason: 'not_a_reader_flow', message: FLOW_NOT_STARTED_HERE_MESSAGE })
       context.stripe.completeReaderPayment(started.paymentIntentId)
-      expect((await finalise(started.pendingId)).data).toMatchObject({ finalised: false, reason: 'old_reader_flow', message: OLD_READER_FLOW_MESSAGE })
+      expect((await finalise(started.pendingId)).data).toMatchObject({ finalised: false, reason: 'not_a_reader_flow', message: FLOW_NOT_STARTED_HERE_MESSAGE })
       expect(await figures(started.bookingId)).toEqual(before)
       expect((await rowOf(started.pendingId))?.status).toBe('pending')
       // No Stripe call from the new routes (the old start made the intent).

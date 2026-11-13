@@ -53,9 +53,10 @@ import {
   CANCEL_CREDIT_WORDS,
   CANCEL_NOT_SAVED_MESSAGE,
   cancelCreditAddonRefundFailedMessage,
+  cancelCreditGuestRefundFailedMessage,
+  PAID_GUESTS_REFUND_METHOD_MESSAGE,
   ISSUE_REFUNDS_NEEDED_MESSAGE,
   notCancellableMessage,
-  REFUND_CHECK_FAILED_MESSAGE,
   REFUND_METHOD_WORDS,
   REFUND_OPEN_MESSAGE,
   REFUND_WORDS,
@@ -68,8 +69,6 @@ import { recordOrderPaymentStatus, withCashAndLine } from './money-left'
 import {
   cancelActionRow,
   finishClaimInTransaction,
-  matchOldRefunds,
-  oldUnsureRefundsThatWent,
   planRefund,
   refundClaimOpen,
   run,
@@ -82,7 +81,6 @@ import {
   type AddonRefundLine,
   type CancelAddonLine,
   type CancelClaim,
-  type OldRefundsLooked,
   type RefundOptions,
   type Started,
 } from './refunds'
@@ -185,6 +183,21 @@ async function cancelAndRefundRefusal(db: Queryable, booking: LoadedBooking, at:
 
 const CREDIT_SOURCES: ReadonlySet<string> = new Set(['membership_credit', 'session_pass_credit'])
 
+/** A credit booking whose money is its paid guests' (seat 1 is covered by the credit): "remove paid guests first". */
+function paidGuestsOnACreditSeat(booking: LoadedBooking): boolean {
+  if (!(booking.pricePaid > 0)) return false
+  const seat1 = booking.seats[0]
+  const seat1CreditCovered = booking.creditPeriodId !== null || seat1?.payBy === 'membership_credit' || seat1?.payBy === 'session_pass_credit'
+  return seat1CreditCovered && booking.seats.some((seat) => seat.guestType === 'additional_guest' && (seat.unitPrice ?? 0) > 0)
+}
+
+/**
+ * W25 (W23a "for later"; Wayne, 13 Nov: when the club cancels, everything comes back): the club's Cancel & return
+ * credit on a credit booking with paid guests refunds those guests in full (the booking's price paid, which is theirs
+ * alone), instead of refusing until they are removed one by one (Remove Guest gives £0 inside 24 hours).
+ */
+const clubRefundsPaidGuests = (kind: CancelKind, booking: LoadedBooking, club: boolean): boolean => kind === 'cancel_credit' && club && paidGuestsOnACreditSeat(booking)
+
 /** Cancel & return credit's checks after the booking is found (cancelCreditBooking's, in its order). */
 async function cancelCreditRefusal(db: Queryable, booking: LoadedBooking, at: StartCheck): Promise<ApiError | null> {
   const refuse = cancelRefusal('cancel_credit')
@@ -198,12 +211,10 @@ async function cancelCreditRefusal(db: Queryable, booking: LoadedBooking, at: St
   if (await refundClaimOpen(db, booking.id)) return refuse('CONFLICT', 'refund_open', REFUND_OPEN_MESSAGE)
   // A money payment must be refunded, not dropped: only when seat 1 itself is credit-covered and the money is from paid
   // guests does "remove guests first" apply (N5: a pass booking with paid guests now shows this button and these words).
+  // W25: not when the club is cancelling: its cancel refunds the paid guests itself (clubRefundsPaidGuests).
   if (booking.pricePaid > 0) {
-    const seat1 = booking.seats[0]
-    const seat1CreditCovered = booking.creditPeriodId !== null || seat1?.payBy === 'membership_credit' || seat1?.payBy === 'session_pass_credit'
-    const paidGuests = booking.seats.some((seat) => seat.guestType === 'additional_guest' && (seat.unitPrice ?? 0) > 0)
-    if (seat1CreditCovered && paidGuests) return refuse('CONFLICT', 'paid_guests_present', CANCEL_CREDIT_WORDS.paidGuestsPresent)
-    return refuse('CONFLICT', 'money_paid', CANCEL_CREDIT_WORDS.moneyPaid)
+    if (!paidGuestsOnACreditSeat(booking)) return refuse('CONFLICT', 'money_paid', CANCEL_CREDIT_WORDS.moneyPaid)
+    if (!at.club) return refuse('CONFLICT', 'paid_guests_present', CANCEL_CREDIT_WORDS.paidGuestsPresent)
   }
   const tooLate = clubCancelTooLate('cancel_credit', at)
   if (tooLate) return tooLate
@@ -221,16 +232,18 @@ const refusalFor = (kind: CancelKind, db: Queryable, booking: LoadedBooking, at:
  * What cancelling gives back with these ticked lines: the figures both the quote and R1 work out. Inside 24 hours the
  * paid add-ons give nothing back (`ruleApplies`; never for the club's cancel, W23a).
  */
-async function figuresFor(db: Queryable, kind: CancelKind, booking: LoadedBooking, rows: readonly AddonRow[], ruleApplies: boolean, paidRefunded: boolean) {
-  const refund = kind === 'cancel' ? round2(booking.pricePaid) : 0
-  const owed = kind === 'cancel' ? round2(booking.refundOwed) : 0
+async function figuresFor(db: Queryable, kind: CancelKind, booking: LoadedBooking, rows: readonly AddonRow[], ruleApplies: boolean, paidRefunded: boolean, club: boolean) {
+  // The booking's own money: Cancel & Refund's, and (W25) the paid guests' on the club's Cancel & return credit.
+  const seatMoney = kind === 'cancel' || clubRefundsPaidGuests(kind, booking, club)
+  const refund = seatMoney ? round2(booking.pricePaid) : 0
+  const owed = seatMoney ? round2(booking.refundOwed) : 0
   const paidLines: AddonRefundLine[] =
     paidRefunded && !ruleApplies ? rows.filter((row) => !isCreditLine(row) && lineAmount(row) > 0).map((row) => ({ id: row.id, orderId: row.order_id, amount: lineAmount(row) })) : []
   return { refund, owed, paidLines, addonsRefund: sum(paidLines.map((line) => line.amount)) }
 }
 
 async function quoteFor(db: Queryable, kind: CancelKind, booking: LoadedBooking, rows: readonly AddonRow[], at: StartCheck, blocked: ApiError | null): Promise<CancelQuote> {
-  const { refund, owed, paidLines, addonsRefund } = await figuresFor(db, kind, booking, rows, at.ruleApplies, true)
+  const { refund, owed, paidLines, addonsRefund } = await figuresFor(db, kind, booking, rows, at.ruleApplies, true, at.club)
   const plan = await planRefund(db, booking.id, refund, 'card', paidLines)
   const card = sum(plan.card.map((part) => part.amount))
   const figures = await withCashAndLine(db, booking.id, booking.figures)
@@ -273,9 +286,11 @@ interface R1Result {
   sent: boolean
   creditUsableAgain: boolean
   bookingStatus: string
+  /** W25: the booking's own money a Cancel & return credit gives back (the club's cancel with paid guests). */
+  seatRefund: number
 }
 
-const newResult = (): R1Result => ({ notes: [], addons: [], sent: false, creditUsableAgain: false, bookingStatus: 'cancelled' })
+const newResult = (): R1Result => ({ notes: [], addons: [], sent: false, creditUsableAgain: false, bookingStatus: 'cancelled', seatRefund: 0 })
 
 interface R1Input {
   kind: CancelKind
@@ -288,7 +303,7 @@ interface R1Input {
   clubCancelled: boolean
 }
 
-async function cancelR1(tx: Tx, input: R1Input, options: CancelOptions, livemode: boolean | null, looked: OldRefundsLooked | null, result: R1Result): Promise<Started> {
+async function cancelR1(tx: Tx, input: R1Input, options: CancelOptions, livemode: boolean | null, result: R1Result): Promise<Started> {
   Object.assign(result, newResult())
   const { kind, bookingId, lineIds, method } = input
   const refuse = cancelRefusal(kind)
@@ -305,15 +320,20 @@ async function cancelR1(tx: Tx, input: R1Input, options: CancelOptions, livemode
   const paidTicked = rows.some((row) => !isCreditLine(row))
   // Cancel & return credit: refunding paid add-ons moves money, so Issue refunds first, as the old function checked it.
   if (kind === 'cancel_credit' && method && paidTicked && !options.canIssueRefunds) throw refuse('FORBIDDEN', 'no_refund_permission', ISSUE_REFUNDS_NEEDED_MESSAGE)
+  // W25: the club's cancel refunding paid guests moves money too, and needs to know where it goes.
+  const guestsRefunded = clubRefundsPaidGuests(kind, booking, input.clubCancelled)
+  if (guestsRefunded && !options.canIssueRefunds) throw refuse('FORBIDDEN', 'no_refund_permission', ISSUE_REFUNDS_NEEDED_MESSAGE)
   const at = await startCheckOf(tx, bookingId, input.clubCancelled)
   // Inside 24 hours nothing comes back (only reachable on a payment-needed booking), unless the club is cancelling.
   const inside = at.ruleApplies
   const refused = await refusalFor(kind, tx, booking, at)
   if (refused) throw refused
+  if (guestsRefunded && method === null) throw refuse('CONFLICT', 'refund_method_required', PAID_GUESTS_REFUND_METHOD_MESSAGE)
 
   // Cancel & return credit leaves the paid lines alone without a method (the old includePaidLines).
   const claimed = rows.filter((row) => isCreditLine(row) || method !== null)
-  const { refund, paidLines, addonsRefund } = await figuresFor(tx, kind, booking, claimed, inside, method !== null)
+  const { refund, paidLines, addonsRefund } = await figuresFor(tx, kind, booking, claimed, inside, method !== null, input.clubCancelled)
+  result.seatRefund = kind === 'cancel_credit' ? refund : 0
   // Q18: what staff confirmed, half a penny each way (missing counts as £0).
   if (differsByMoreThanHalfAPenny(input.confirmed.refund, refund) || differsByMoreThanHalfAPenny(input.confirmed.addonsRefund, addonsRefund)) {
     throw refuse('CONFLICT', 'refund_changed', REFUND_WORDS.figuresChanged, { cancelQuote: await quoteFor(tx, kind, booking, rows, at, null) })
@@ -323,8 +343,9 @@ async function cancelR1(tx: Tx, input: R1Input, options: CancelOptions, livemode
   const allBackAlready = kind === 'cancel' && refund <= 0 ? await seatMoneyAllBack(tx, bookingId) : false
 
   // The cancel. Cancel & Refund gives what is owed too, so nothing stays owed; price_paid stays, as on every cancelled booking.
+  // W25: so does the club's Cancel & return credit when it refunds paid guests (their money, what is owed included).
   await tx.query(
-    kind === 'cancel'
+    kind === 'cancel' || guestsRefunded
       ? "UPDATE bookings SET status = 'cancelled', cancelled_at = now(), refund_owed_amount = 0, updated_at = now() WHERE id = $1::uuid"
       : "UPDATE bookings SET status = 'cancelled', cancelled_at = now(), updated_at = now() WHERE id = $1::uuid",
     [bookingId]
@@ -447,16 +468,13 @@ async function cancelR1(tx: Tx, input: R1Input, options: CancelOptions, livemode
         entityType: 'booking',
         entityId: bookingId,
         requestId: options.requestId,
-        ...cancelActionRow(kind, kind === 'cancel' ? method : null, cancel, { cardRefunded: 0, storeCreditRefunded: 0, owed: 0 }),
+        ...cancelActionRow(kind, method, cancel, { cardRefunded: 0, storeCreditRefunded: 0, owed: 0 }),
       },
     ])
     return { kind: 'done', output: { cardRefundedAmount: 0, storeCreditRefundedAmount: 0, ...(cancel.addons.length > 0 ? { addons: { cardRefundedAmount: 0, storeCreditRefundedAmount: 0 } } : {}) } }
   }
 
   const plan = await planRefund(tx, bookingId, refund, method, paidLines)
-  // Money an old screen's card refund with no clear answer left owed may have reached the customer: what Stripe shows
-  // went must be exactly one planned part, or nothing is sent (W21a's rule, as Refund the rest; brief W23 item 2).
-  const matched = looked ? await matchOldRefunds(tx, bookingId, plan, looked) : []
   const claim = await writeClaim(
     tx,
     bookingId,
@@ -470,7 +488,6 @@ async function cancelR1(tx: Tx, input: R1Input, options: CancelOptions, livemode
       plan,
       livemode: plan.card.length > 0 ? livemode : null,
       cancel,
-      ...(matched.length > 0 ? { matched } : {}),
     },
     options
   )
@@ -504,9 +521,7 @@ function addonsOutcome(result: R1Result, output: RefundBookingOutput): CancelAdd
 const notSavedFor = (kind: CancelKind) => (logDetail: string): ApiError => cancelRefusal(kind)('INTERNAL', 'cancel_not_saved', CANCEL_NOT_SAVED_MESSAGE, { logDetail })
 
 /**
- * Cancel & Refund (refundBooking without an amount), with the figures staff confirmed. Issue refunds (the route). To
- * the card, an old screen's card refund with no clear answer is looked for first (W21a's look-up, before R1), as the
- * money it left owed is given back now too.
+ * Cancel & Refund (refundBooking without an amount), with the figures staff confirmed. Issue refunds (the route).
  */
 export async function cancelAndRefund(db: Db, bookingId: string, input: CancelAndRefundInput, options: CancelOptions): Promise<CancelAndRefundOutput> {
   const method = input.refundMethod
@@ -521,18 +536,7 @@ export async function cancelAndRefund(db: Db, bookingId: string, input: CancelAn
     clubCancelled: input.clubCancelled === true,
   }
   const card = method === 'card' && r1Input.confirmed.refund + r1Input.confirmed.addonsRefund > 0
-  const output = await run(
-    db,
-    card,
-    options,
-    async (stripe, timing) => {
-      const looked = stripe ? await oldUnsureRefundsThatWent(db, stripe, bookingId, timing) : null
-      if (looked === 'unclear') throw cancelRefusal('cancel')('CONFLICT', 'refund_check_failed', REFUND_CHECK_FAILED_MESSAGE)
-      return (tx, livemode) => cancelR1(tx, r1Input, options, livemode, looked, result)
-    },
-    undefined,
-    notSavedFor('cancel')
-  )
+  const output = await run(db, card, options, (tx, livemode) => cancelR1(tx, r1Input, options, livemode, result), undefined, notSavedFor('cancel'))
   return {
     cancelled: true,
     cardRefundedAmount: output.cardRefundedAmount,
@@ -556,21 +560,31 @@ export async function cancelCredit(db: Db, bookingId: string, input: CancelCredi
     bookingId,
     lineIds: [...new Set(input.addonLineIds ?? [])],
     method,
-    confirmed: { refund: 0, addonsRefund: confirmedAmount(input.confirmed?.addonsRefund) },
+    // W25: `refund` is the paid guests' money on the club's cancel; £0 (or missing) on every other.
+    confirmed: { refund: confirmedAmount(input.confirmed?.refund), addonsRefund: confirmedAmount(input.confirmed?.addonsRefund) },
     clubCancelled: input.clubCancelled === true,
   }
   const firstRefused = (detail: string): ApiError => {
     const names = result.addons.filter((line) => line.paid).map((line) => line.name).join(', ')
-    return cancelRefusal('cancel_credit')('PAYMENT_FAILED', 'refund_failed', cancelCreditAddonRefundFailedMessage(names, detail))
+    const words = result.seatRefund > 0 ? cancelCreditGuestRefundFailedMessage(detail) : cancelCreditAddonRefundFailedMessage(names, detail)
+    return cancelRefusal('cancel_credit')('PAYMENT_FAILED', 'refund_failed', words)
   }
-  const card = method === 'card' && r1Input.confirmed.addonsRefund > 0
-  const output = await run(db, card, options, () => Promise.resolve((tx, livemode) => cancelR1(tx, r1Input, options, livemode, null, result)), firstRefused, notSavedFor('cancel_credit'))
+  const card = method === 'card' && r1Input.confirmed.addonsRefund + r1Input.confirmed.refund > 0
+  const output = await run(db, card, options, (tx, livemode) => cancelR1(tx, r1Input, options, livemode, result), firstRefused, notSavedFor('cancel_credit'))
   const reason = typeof input.reason === 'string' ? input.reason.trim() : ''
   return {
     cancelled: true,
     creditUsableAgain: result.creditUsableAgain,
     booking: { id: bookingId, status: result.bookingStatus },
     ...(reason ? { message: reason } : {}),
+    // W25: the paid guests' money the club's cancel gave back.
+    ...(result.seatRefund > 0
+      ? {
+          cardRefundedAmount: output.cardRefundedAmount,
+          storeCreditRefundedAmount: output.storeCreditRefundedAmount,
+          ...(output.storeCreditBalance !== undefined ? { storeCreditBalance: output.storeCreditBalance } : {}),
+        }
+      : {}),
     ...(r1Input.lineIds.length > 0 ? { addons: addonsOutcome(result, output) } : {}),
     ...(output.warning ? { warning: output.warning } : {}),
     ...(output.held ? { held: output.held } : {}),

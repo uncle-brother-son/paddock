@@ -860,7 +860,7 @@ export function claimLookProblems(recording: Recording): string[] {
 /** The fields a Worker card record's snapshot may hold for each flow: the old undo fields and the Worker's marks. */
 const CARD_RECORD_FIELDS: Readonly<Record<string, readonly string[]>> = {
   settle: ['customer_id', 'description', 'booking_id', 'old_status', 'old_price_paid', 'old_payment_due_by', 'old_redemption_source', 'old_redeemed_membership_id', 'old_credit_period_id', 'old_seat1_pay_by', 'amount', 'store_credit_amount', 'gift_card'],
-  add_guest: ['customer_id', 'description', 'booking_id', 'session_id', 'addon_credits', 'price_increment', 'claimed_extra_capacity', 'store_credit_amount', 'gift_card', 'guest_row_id', 'addon_line_ids'],
+  add_guest: ['customer_id', 'description', 'booking_id', 'session_id', 'addon_credits', 'price_increment', 'claimed_extra_capacity', 'store_credit_amount', 'gift_card', 'guest_row_id', 'addon_line_ids', 'over_18_confirmed_here'],
   // W24: the old reader move's snapshot (W12's undo and C2 read it).
   move: [
     'customer_id',
@@ -908,6 +908,8 @@ export function cardRecordProblems(recording: Recording): string[] {
     if (row['status'] === 'finalised' && typeof row['payment_intent_id'] !== 'string') wrong('finished with no PaymentIntent')
     if (row['order_id'] !== null) wrong('an order on the record')
     if (row['flow'] === 'add_guest' && snapshot['guest_row_id'] === undefined && Number(snapshot['price_increment'] ?? 0) !== 0) wrong('a seat price with no guest')
+    // W25 (W20 review 5): only ever `true`, and only with a guest (it is their tick that stamped the booking).
+    if ('over_18_confirmed_here' in snapshot && (snapshot['over_18_confirmed_here'] !== true || snapshot['guest_row_id'] === undefined)) wrong('the over-18 mark')
   }
   return problems
 }
@@ -1127,14 +1129,26 @@ const PRESSED_AGAIN_WORDS = (value: unknown) => typeof value === 'string' && val
  * runs to the end, so the press's answer is what is lost: the screen says so and keeps the key. The next press sends
  * that key: the same request gets the first press's stored answer; a changed one is refused. One guest, paid once.
  */
-const deadPressAnswerLost = (scenario: string, path: RegExp, saying: string): AllowedDifference => ({
+const deadPressAnswerLost = (scenario: string, path: RegExp, saying: string, kept: { storeCreditHigherBy?: number } = {}): AllowedDifference => ({
   name: `${scenario}: the press's answer is lost after the Worker's route ran to the end (one transaction, then the card); ${saying}`,
   decision: `${W20}: C1 then the card in one route; the dialog keeps the key after no answer (W03-plan 2.6); W05 review 3 finding 2 (R2) where named`,
   path,
-  actual: (value, _expected, at) => {
+  actual: (value, expected, at) => {
     if (at.endsWith('.reason')) return value === 'no_answer' || value === 'pressed_after_no_answer'
     if (at.endsWith('.message')) return NO_ANSWER_WORDS(value) || PRESSED_AGAIN_WORDS(value)
-    return true
+    // W25 (W20 review later 1; W24 "noticed"): every other path exactly, not any value. The Worker never repeats what
+    // the old resume repeated: the press answered is not an add; no second Stripe call, order, line, store credit row
+    // or gift card use exists on its side; one place is taken, not two; the store credit is taken once.
+    const pennies = (amount: unknown): number => Math.round(Number(amount) * 100)
+    if (/^\.results\[\d+\]\.added$/.test(at)) return value === false
+    if (/^\.results\[\d+\]\.(limitReached|guest|addonLineIds|thrown)$/.test(at)) return value === undefined
+    if (/^\.stripeCalls\[\d+\]$/.test(at)) return value === undefined
+    if (/\.added\[\d+\]$/.test(at) || at === '.tables.gift_card_redemptions') return value === undefined
+    if (at.endsWith('.total_booked[1]')) return Number(value) === Number(expected) - 1
+    if (at.endsWith('.store_credit_balance[1]')) return kept.storeCreditHigherBy !== undefined && pennies(value) - pennies(expected) === pennies(kept.storeCreditHigherBy)
+    // The store credit row carries the order C1 wrote with it (the old lost claim had none).
+    if (at.endsWith('.added[0].order_id')) return typeof value === 'string' && value.length > 0
+    return false
   },
 })
 
@@ -1323,7 +1337,8 @@ export const ADD_GUEST_DIFFERENCES: ReadonlyMap<string, readonly AllowedDifferen
       deadPressAnswerLost(
         'R2d',
         /^\.results\[2\]\.(reason|message)$|^\.results\[3\]\.(added|limitReached|guest|addonLineIds|reason|message)$|^\.stripeCalls\[2\]$|^\.tables\.customers\.changed\[0\]\.store_credit_balance\[1\]$|^\.tables\.(orders|order_line_items)\.added\[1\]$|^\.tables\.sessions\.changed\[0\]\.total_booked\[1\]$|^\.tables\.store_credit_transactions\.added\[1\]$/,
-        "the card paid and its order couldn't be written, so the change is held for reconcile (never refunded for a database fault, W6-3), with the guest added once and £5 store credit taken once; the next press is refused (the old code took the £5 again and charged £15 again). add-guest.test.ts runs reconcile on the same hold and it writes the order"
+        "the card paid and its order couldn't be written, so the change is held for reconcile (never refunded for a database fault, W6-3), with the guest added once and £5 store credit taken once; the next press is refused (the old code took the £5 again and charged £15 again). add-guest.test.ts runs reconcile on the same hold and it writes the order",
+        { storeCreditHigherBy: 5 }
       ),
     ],
   ],
@@ -1365,7 +1380,8 @@ export const ADD_GUEST_DIFFERENCES: ReadonlyMap<string, readonly AllowedDifferen
       deadPressAnswerLost(
         'R4a',
         /^\.results\[2\]\.(thrown|added|reason|message)$|^\.tables\.customers\.changed\[0\]\.store_credit_balance\[1\]$|^\.tables\.sessions\.changed\[0\]\.total_booked\[1\]$|^\.tables\.store_credit_transactions\.added\[0\]\.order_id$|^\.tables\.store_credit_transactions\.added\[1\]$/,
-        'the store credit claim is inside C1, so the press went through and only its answer was lost: the same press again gets the stored answer, so £15 is taken once with its order (the old code kept the lost claim and took £15 again, and a second place)'
+        'the store credit claim is inside C1, so the press went through and only its answer was lost: the same press again gets the stored answer, so £15 is taken once with its order (the old code kept the lost claim and took £15 again, and a second place)',
+        { storeCreditHigherBy: 15 }
       ),
     ],
   ],
@@ -1889,11 +1905,17 @@ const CANCEL_ANSWER_LOST: AllowedDifference = {
  * cancelled, and so does the last Cancel & Refund (both refused with the old words); the customer gets the same £100.
  */
 const CANCEL_NO_LOST_ANSWER: AllowedDifference = {
-  name: "A lost answer on the old store credit statement: R1 is one transaction, so the cancel goes through once with £100 to store credit; the next two presses find it cancelled",
-  decision: `${W23}: R1 one transaction (W05 review 3, finding 3 for refunds)`,
-  path: /^\.results\[1\]\.(unsure|cardRefundedAmount|storeCreditRefundedAmount|storeCreditBalance)$|^\.results\[[23]\]\.(cardRefundedAmount|storeCreditRefundedAmount|pricePaid|thrown)$|^\.tables\.bookings\.added\[0\]\.(price_paid|refund_owed_amount)$|^\.tables\.order_line_items\.added\[0\]\.(refunded_at|refund_method)$|^\.tables\.orders\.added\[0\]\.payment_status$/,
+  name: "A lost answer on the old store credit statement: R1 is one transaction, so the cancel goes through once with £100 to store credit; the next two presses find it cancelled (W25: It already arrived runs on a cancelled booking, and finds nothing owed)",
+  decision: `${W23}: R1 one transaction (W05 review 3, finding 3 for refunds); brief W25 item 6 (W23 review later 1): Refund the rest and It already arrived run on a cancelled booking`,
+  path: /^\.results\[1\]\.(unsure|cardRefundedAmount|storeCreditRefundedAmount|storeCreditBalance)$|^\.results\[[23]\]\.(cardRefundedAmount|storeCreditRefundedAmount|pricePaid|thrown)$|^\.results\[2\]\.refused$|^\.tables\.bookings\.added\[0\]\.(price_paid|refund_owed_amount)$|^\.tables\.order_line_items\.added\[0\]\.(refunded_at|refund_method)$|^\.tables\.orders\.added\[0\]\.payment_status$/,
   actual: (value, _expected, path) => {
     if (path.startsWith('.results[1]')) return path.endsWith('.unsure') ? value === undefined : path.endsWith('.storeCreditRefundedAmount') ? value === 100 : path.endsWith('.cardRefundedAmount') ? value === 0 : typeof value === 'number'
+    // W25: It already arrived (result 2) is no longer refused for the cancel: it finds nothing owed, with the figures.
+    if (path === '.results[2].refused') {
+      const refused = value as { message?: unknown; figures?: { refundOwed?: unknown; status?: unknown } } | undefined
+      return refused?.message === 'Nothing is owed on this booking any more.' && refused.figures?.refundOwed === 0 && refused.figures?.status === 'cancelled'
+    }
+    if (path === '.results[2].thrown') return value === undefined
     if (path.endsWith('.thrown')) return value === 'This booking is already cancelled.'
     if (path.startsWith('.results')) return value === undefined
     if (path.endsWith('.price_paid')) return value === '100.00'

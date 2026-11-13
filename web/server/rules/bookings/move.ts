@@ -47,6 +47,7 @@ import {
   amountChangedToMessage,
   MOVE_NOT_SAVED_MESSAGE,
   MOVE_NOT_UNDONE_MESSAGE,
+  MOVE_PAYMENT_AND_REFUND_MESSAGE,
   MOVE_PAYMENT_NEEDED_MESSAGE,
   MOVE_WORDS,
   moveReaderNotStartedNotUndoneMessage,
@@ -452,6 +453,11 @@ async function moveC1(tx: Tx, input: C1Input, options: MoveOptions, keyLivemode:
   const giftCardAmount = dearer ? partAmount(payment?.giftCard?.amount, 'gift_card_amount_invalid', moveRefusal, withFigures) : 0
   const storeCreditAmount = dearer ? partAmount(payment?.storeCredit?.amount, 'store_credit_amount_invalid', moveRefusal, withFigures) : 0
   const method = payment?.method
+  // W25 (W24 review L7): a press is a payment or a refund, never both. The dialog sends a payment method only for a
+  // dearer move and a refund method only for a cheaper one; the two together used to be read as a cash-in press.
+  if (method && input.refundMethod) {
+    throw moveRefusal('VALIDATION', 'payment_and_refund', MOVE_PAYMENT_AND_REFUND_MESSAGE, { ...withFigures, field: 'refundMethod' })
+  }
   const remainder = dearer ? Math.max(0, round2(amountDue - giftCardAmount - storeCreditAmount)) : 0
   // Cash first, whatever the difference has become (the old function's order): staff are holding what they confirmed.
   const toCollect = input.figures?.toCollect ?? payment?.confirmedCashAmount

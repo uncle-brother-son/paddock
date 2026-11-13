@@ -4,6 +4,8 @@ import { POST as cancelQuoteRoute } from '@/app/api/v1/staff/bookings/[bookingId
 import { POST as creditRoute } from '@/app/api/v1/staff/bookings/[bookingId]/cancel-credit/route'
 import { POST as creditQuoteRoute } from '@/app/api/v1/staff/bookings/[bookingId]/cancel-credit/quote/route'
 import { POST as partRoute } from '@/app/api/v1/staff/bookings/[bookingId]/refunds/route'
+import { POST as owedRoute } from '@/app/api/v1/staff/bookings/[bookingId]/refunds/owed/route'
+import { POST as owedArrivedRoute } from '@/app/api/v1/staff/bookings/[bookingId]/refunds/owed-arrived/route'
 import { POST as closeRoute } from '@/app/api/v1/staff/orders/stuck/close/route'
 import type { Db } from '@/server/db'
 import { reconcile } from '@/server/rules/orders/reconcile'
@@ -20,6 +22,10 @@ import {
   CHANGE_REFUND_UNCONFIRMED_MESSAGE,
   CLOSED_ON_A_CANCELLED_BOOKING_WORDS,
   ISSUE_REFUNDS_NEEDED_MESSAGE,
+  OWED_ON_CANCELLED_STORE_CREDIT_ONLY_MESSAGE,
+  PAID_GUESTS_REFUND_METHOD_MESSAGE,
+  putBackBlockedMessage,
+  cancelCreditGuestRefundFailedMessage,
   READER_PAYMENT_OPEN_MESSAGE,
   REFUND_OPEN_MESSAGE,
   REFUND_WORDS,
@@ -151,7 +157,7 @@ async function cancel(
 }
 async function cancelCredit(
   bookingId: string,
-  body: { addonLineIds?: string[]; addonRefund?: string; confirmed?: { addonsRefund: number }; clubCancelled?: boolean } = {},
+  body: { addonLineIds?: string[]; addonRefund?: string; confirmed?: { addonsRefund: number; refund?: number }; clubCancelled?: boolean } = {},
   options: Parameters<typeof post>[4] = {}
 ): Promise<Answer> {
   return post(creditRoute, `${base(bookingId)}/cancel-credit`, bookingId, { confirmed: { addonsRefund: 0 }, ...body }, options)
@@ -362,7 +368,11 @@ describe('Cancel & Refund (brief W23 items 1 and 2)', () => {
         })
       )
       const body = (await closed.json()) as { data?: { closed?: boolean; givenBack?: string[]; leftAsFound?: string[] } }
-      expect(body.data).toMatchObject({ closed: true, givenBack: ['£20.00 back on the booking as money still to refund'], leftAsFound: [CLOSED_ON_A_CANCELLED_BOOKING_WORDS] })
+      // W25 (W21 review L4): the part is named; in the other Stripe mode nothing could be checked, so all of it is owed.
+      expect(body.data).toMatchObject({ closed: true, givenBack: ['£20.00 back on the booking as money still to refund'] })
+      expect(body.data?.leftAsFound).toHaveLength(2)
+      expect(body.data?.leftAsFound?.[0]).toMatch(/^£20\.00 to the card on order [0-9a-f]{8}: it couldn't be checked in Stripe with the account in use/)
+      expect(body.data?.leftAsFound?.[1]).toBe(CLOSED_ON_A_CANCELLED_BOOKING_WORDS)
       expect(await bookingRow(bookingId)).toMatchObject({ status: 'cancelled', price_paid: '20.00', refund_owed_amount: '20.00' })
       expect(await storeCredit()).toEqual([])
       expect((await auditRows(bookingId, 'booking.refund_finished'))[0]?.details).toMatchObject({ outcome: 'owed', cardRefunded: 0, storeCreditRefunded: 0, owed: 20, by: { how: 'close' } })
@@ -450,27 +460,6 @@ describe('Cancel & Refund (brief W23 items 1 and 2)', () => {
       expect(refunds(stripe)).toHaveLength(0)
       expect(await auditRows(bookingId, 'booking.refund_claimed')).toEqual([])
       expect((await auditRows(bookingId, 'booking.cancel'))[0]?.details).toMatchObject({ seatRefund: 0, cardRefunded: 0, storeCreditRefunded: 0 })
-    })
-  })
-
-  it("money an old screen's unclear card refund left owed: what Stripe shows went must be exactly one planned part, or nothing is sent (W21a's look-up)", async () => {
-    await withBooking(onCard, async ({ bookingId, stripe }) => {
-      // The old screens' £5 card refund with no clear answer (old Move still makes these until W24): it went.
-      const intent = (await db.query<{ pi: string }>("SELECT o.stripe_payment_intent_id AS pi FROM orders o JOIN order_line_items l ON l.order_id = o.id WHERE l.booking_id = $1 AND l.item_type = 'booking'", [bookingId]))[0]?.pi ?? ''
-      const key = 'booking-refund:old-line:0:500'
-      await stripe.refunds.create({ payment_intent: intent, amount: 500, metadata: { refund_key: key } }, { idempotencyKey: key })
-      await db.query('UPDATE bookings SET refund_owed_amount = 5 WHERE id = $1', [bookingId])
-      await db.query(
-        "INSERT INTO audit_log (actor_type, actor_id, action, entity_type, entity_id, details) VALUES ('staff', $1, 'booking.card_refund_unsure', 'booking', $2, $3::jsonb)",
-        [ID.staff, bookingId, JSON.stringify({ key, paymentIntentId: intent, amount: 5 })]
-      )
-      const before = refunds(stripe).length
-      const refused = await cancel(bookingId, 'card')
-      expect(refused.body.error?.details).toMatchObject({ reason: 'refund_check_failed' })
-      expect(String(refused.body.error?.details?.message)).toContain('An earlier card refund of £5.00 on this booking reached the customer')
-      expect(refunds(stripe)).toHaveLength(before)
-      expect(await bookingRow(bookingId)).toMatchObject({ status: 'confirmed', refund_owed_amount: '5.00' })
-      // To store credit it isn't looked for (as Refund the rest): the dialog's owed line says to check their balance first.
     })
   })
 })
@@ -829,3 +818,334 @@ describe("W23a (Wayne, 13 Nov): the club cancelling from Block Session or Block 
     )
   })
 })
+
+// --- Brief W25, Part B
+
+/** The manual close of a held refund claim, as the Orders page presses it. */
+async function closeClaim(claimId: string) {
+  const closed = await closeRoute(
+    new Request('https://worker.test/api/v1/staff/orders/stuck/close', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${KEY}`, 'x-staff-email': REPLAY_USER.email, 'idempotency-key': crypto.randomUUID(), 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'held_claim', orderId: claimId, reason: 'Checked in Stripe by hand' }),
+    })
+  )
+  return ((await closed.json()) as { data?: { closed?: boolean; message?: string; givenBack?: string[]; leftAsFound?: string[] } }).data
+}
+/** A cancel to the card held with no clear answer, left for a person by reconcile (the other Stripe mode), then closed by hand. */
+async function cancelHeldThenClosed(bookingId: string, stripe: FakeStripe, addonLineIds: string[] = []) {
+  stripe.failNext('refunds.create', { kind: 'unreachable' })
+  stripe.failNext('refunds.create', { kind: 'unreachable' })
+  const claimId = (await cancel(bookingId, 'card', addonLineIds)).body.data?.held?.claimId ?? ''
+  await db.query("UPDATE audit_log SET details = jsonb_set(details, '{livemode}', 'true') WHERE id = $1", [claimId])
+  pastTheWindow()
+  expect((await runReconcile()).items.filter((item) => item.kind === 'claim')).toMatchObject([{ outcome: 'left', reason: 'other_mode' }])
+  return closeClaim(claimId)
+}
+const refundTheRest = (bookingId: string, amount: number, refundMethod: string) => post(owedRoute, `${base(bookingId)}/refunds/owed`, bookingId, { amount, refundMethod })
+const itAlreadyArrived = (bookingId: string, amount: number) => post(owedArrivedRoute, `${base(bookingId)}/refunds/owed-arrived`, bookingId, { amount, reason: 'Seen in Stripe' })
+
+describe('W25 item 6: money still owed on a cancelled booking (W23 review later 1)', () => {
+  it('Refund the rest runs on the cancelled booking: store credit only, exactly what is owed, once; the price paid stays', async () => {
+    await withBooking(onCard, async ({ bookingId, stripe }) => {
+      const closed = await cancelHeldThenClosed(bookingId, stripe)
+      // The close's words point to the two buttons on the cancelled booking.
+      expect(closed?.leftAsFound?.at(-1)).toBe(CLOSED_ON_A_CANCELLED_BOOKING_WORDS)
+      expect(CLOSED_ON_A_CANCELLED_BOOKING_WORDS).toMatch(/It already arrived/)
+      expect(CLOSED_ON_A_CANCELLED_BOOKING_WORDS).toMatch(/Refund the rest/)
+      expect(await bookingRow(bookingId)).toMatchObject({ status: 'cancelled', price_paid: '20.00', refund_owed_amount: '20.00' })
+      const sent = refunds(stripe).length
+
+      // To the card: refused (a second card refund could pay the same money twice), nothing changed.
+      const toCard = await refundTheRest(bookingId, 20, 'card')
+      expect(toCard.status).toBe(409)
+      expect(toCard.body.error?.details).toMatchObject({ reason: 'cancelled_store_credit_only', message: OWED_ON_CANCELLED_STORE_CREDIT_ONLY_MESSAGE })
+      // Not exactly what is owed: refused with the figures.
+      expect((await refundTheRest(bookingId, 19, 'credit')).body.error?.details).toMatchObject({ reason: 'owed_changed' })
+      expect(await bookingRow(bookingId)).toMatchObject({ status: 'cancelled', price_paid: '20.00', refund_owed_amount: '20.00' })
+      expect(await storeCredit()).toEqual([])
+
+      const given = await refundTheRest(bookingId, 20, 'credit')
+      expect(given.body.data).toMatchObject({ cardRefundedAmount: 0, storeCreditRefundedAmount: 20 })
+      // A cancelled booking keeps its price paid; only what was owed comes off.
+      expect(await bookingRow(bookingId)).toMatchObject({ status: 'cancelled', price_paid: '20.00', refund_owed_amount: '0.00' })
+      expect((await storeCredit()).map((row) => row.amount)).toEqual(['20.00'])
+      expect((await auditRows(bookingId, 'booking.refund_owed')).at(-1)?.details).toMatchObject({ amount: 20, method: 'credit', storeCreditRefunded: 20, cardRefunded: 0, owed: 0 })
+      // Nothing was sent to Stripe, and it can't be given twice.
+      expect(refunds(stripe)).toHaveLength(sent)
+      expect((await refundTheRest(bookingId, 20, 'credit')).body.error?.details).toMatchObject({ reason: 'nothing_owed' })
+      expect((await storeCredit()).map((row) => row.amount)).toEqual(['20.00'])
+      // A part refund is still refused on a cancelled booking (its price paid would pay out twice).
+      const part = await post(partRoute, `${base(bookingId)}/refunds`, bookingId, { amount: 5, refundMethod: 'credit', reason: 'Goodwill' })
+      expect(part.body.error?.details).toMatchObject({ reason: 'already_cancelled' })
+    })
+  })
+
+  it('It already arrived runs on the cancelled booking: what is owed comes off, no money moves', async () => {
+    await withBooking(onCard, async ({ bookingId, stripe }) => {
+      await cancelHeldThenClosed(bookingId, stripe)
+      const sent = refunds(stripe).length
+      const arrived = await itAlreadyArrived(bookingId, 20)
+      expect(arrived.body.data).toMatchObject({ cardRefundedAmount: 0, storeCreditRefundedAmount: 0, pricePaid: 20 })
+      expect(await bookingRow(bookingId)).toMatchObject({ status: 'cancelled', price_paid: '20.00', refund_owed_amount: '0.00' })
+      expect(await storeCredit()).toEqual([])
+      expect(refunds(stripe)).toHaveLength(sent)
+      expect((await auditRows(bookingId, 'booking.refund_owed_arrived'))[0]?.details).toEqual({ amount: 20, reason: 'Seen in Stripe' })
+      expect((await itAlreadyArrived(bookingId, 20)).body.error?.details).toMatchObject({ reason: 'nothing_owed' })
+    })
+  })
+
+  it("the add-on line's unsent share is in what is owed, and Refund the rest gives it too (seat £20 + towel £5)", async () => {
+    await withBooking(cardSeatAndTowel, async ({ bookingId, stripe }) => {
+      const [line] = await addonLines(bookingId)
+      const closed = await cancelHeldThenClosed(bookingId, stripe, [line?.id ?? ''])
+      expect(closed).toMatchObject({ closed: true })
+      // The towel's line reads removed with nothing back; the booking carries its £5 with the seat's £20.
+      const [towelLine] = await addonLines(bookingId)
+      expect([Number(towelLine?.refunded_amount), Number(towelLine?.card_refunded_amount)]).toEqual([0, 0])
+      expect(await bookingRow(bookingId)).toMatchObject({ status: 'cancelled', refund_owed_amount: '25.00' })
+      const given = await refundTheRest(bookingId, 25, 'credit')
+      expect(given.body.data).toMatchObject({ storeCreditRefundedAmount: 25 })
+      expect(await bookingRow(bookingId)).toMatchObject({ status: 'cancelled', refund_owed_amount: '0.00' })
+      expect((await storeCredit()).map((row) => row.amount)).toEqual(['25.00'])
+    })
+  })
+})
+
+describe("W25 item 7: the undo after a refused first card part never overfills a session or takes a pass below 0 (W23 review later 2)", () => {
+  /** Runs `meanwhile` just before Stripe is asked for the refund: what another person did in those seconds. */
+  function whileTheRefundIsSent(stripe: FakeStripe, meanwhile: () => Promise<unknown>) {
+    const create = stripe.refunds.create
+    stripe.refunds.create = (async (...args: Parameters<typeof create>) => {
+      await meanwhile()
+      return create(...args)
+    }) as typeof create
+  }
+
+  it("the session filled meanwhile: the cancel stands (never one over) and ends there and then as £20 still to refund on the cancelled booking, with Stripe's reason; never store credit, at the press or at reconcile (W25a, W25 review S1)", async () => {
+    await withBooking(onCard, async ({ bookingId, stripe }) => {
+      const capacity = (await db.query<{ capacity: number }>('SELECT capacity FROM sessions WHERE id = $1', [ID.session]))[0]?.capacity ?? 0
+      // Another booking takes every free place between R1 and the card's answer.
+      whileTheRefundIsSent(stripe, () => db.query('UPDATE sessions SET total_booked = capacity WHERE id = $1', [ID.session]))
+      stripe.failNext('refunds.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
+      const answer = await cancel(bookingId, 'card')
+      expect(answer.status).toBe(200)
+      // The words carry Stripe's refusal and point to the two buttons on the cancelled booking.
+      const words = putBackBlockedMessage(refundRefusedDetail('Your card was declined.'), 20, true)
+      expect(answer.body.data).toMatchObject({ cancelled: true, cardRefundedAmount: 0, storeCreditRefundedAmount: 0, held: { reason: 'refund_refused_not_put_back', message: words } })
+      expect(words).toMatch(/Your card was declined\./)
+      expect(words).toMatch(/£20\.00 shows on the booking as still to refund/)
+      expect(words).toMatch(/It already arrived/)
+      expect(words).toMatch(/Refund the rest \(the booking is cancelled, so it goes to store credit\)/)
+      // The session is full, not one over; the booking stays cancelled, with the £20 still to refund on it, and the
+      // claim is finished: no store credit row.
+      expect(await totalBooked()).toBe(capacity)
+      expect(await bookingRow(bookingId)).toMatchObject({ status: 'cancelled', price_paid: '20.00', refund_owed_amount: '20.00' })
+      expect(await storeCredit()).toEqual([])
+      const finished = await auditRows(bookingId, 'booking.refund_finished')
+      expect(finished).toHaveLength(1)
+      expect(finished[0]?.details).toMatchObject({ outcome: 'owed', cardRefunded: 0, storeCreditRefunded: 0, owed: 20, by: { how: 'undo_blocked', why: refundRefusedDetail('Your card was declined.') } })
+      expect((await bookingLines(bookingId))[0]).toMatchObject({ card_refunded_amount: '0' })
+      // Reconcile has nothing to do for it: nothing sent, no store credit, the money still owed.
+      const sent = refunds(stripe).length
+      pastTheWindow()
+      expect((await runReconcile()).items.filter((item) => item.kind === 'claim')).toEqual([])
+      expect(await storeCredit()).toEqual([])
+      expect(await auditRows(bookingId, 'booking.refund_finished')).toHaveLength(1)
+      expect(await bookingRow(bookingId)).toMatchObject({ status: 'cancelled', price_paid: '20.00', refund_owed_amount: '20.00' })
+      expect(refunds(stripe)).toHaveLength(sent)
+      expect(await totalBooked()).toBe(capacity)
+      // No refund is open, and a person decides: It already arrived takes it off with no money moving.
+      expect((await quote(bookingId)).blocked).not.toMatchObject({ reason: 'refund_open' })
+      const arrived = await itAlreadyArrived(bookingId, 20)
+      expect(arrived.body.data).toMatchObject({ cardRefundedAmount: 0, storeCreditRefundedAmount: 0 })
+      expect(await bookingRow(bookingId)).toMatchObject({ status: 'cancelled', refund_owed_amount: '0.00' })
+      expect(await storeCredit()).toEqual([])
+    })
+  })
+
+  it("the same with a ticked paid towel on the order (£25): all of it owed on the cancelled booking, the towel's line with nothing back, and Refund the rest gives it as store credit once", async () => {
+    await withBooking(cardSeatAndTowel, async ({ bookingId, stripe }) => {
+      const [line] = await addonLines(bookingId)
+      whileTheRefundIsSent(stripe, () => db.query('UPDATE sessions SET total_booked = capacity WHERE id = $1', [ID.session]))
+      stripe.failNext('refunds.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
+      const answer = await cancel(bookingId, 'card', [line?.id ?? ''])
+      expect(answer.body.data?.held).toMatchObject({ message: putBackBlockedMessage(refundRefusedDetail('Your card was declined.'), 25, true) })
+      expect(await bookingRow(bookingId)).toMatchObject({ status: 'cancelled', refund_owed_amount: '25.00' })
+      const [towelLine] = await addonLines(bookingId)
+      expect(towelLine?.removed_at).not.toBeNull()
+      expect([Number(towelLine?.refunded_amount), Number(towelLine?.card_refunded_amount)]).toEqual([0, 0])
+      expect(await storeCredit()).toEqual([])
+      const given = await refundTheRest(bookingId, 25, 'credit')
+      expect(given.body.data).toMatchObject({ cardRefundedAmount: 0, storeCreditRefundedAmount: 25 })
+      expect((await storeCredit()).map((row) => row.amount)).toEqual(['25.00'])
+      expect((await refundTheRest(bookingId, 25, 'credit')).body.error?.details).toMatchObject({ reason: 'nothing_owed' })
+    })
+  })
+
+  it('control: with room left the first refusal still puts everything back exactly', async () => {
+    await withBooking(onCard, async ({ bookingId, stripe }) => {
+      const before = await snapshot(bookingId)
+      whileTheRefundIsSent(stripe, () => Promise.resolve())
+      stripe.failNext('refunds.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
+      const refused = await cancel(bookingId, 'card')
+      expect(refused.status).toBe(402)
+      expect(await snapshot(bookingId)).toEqual(before)
+    })
+  })
+
+  it("the pass session spent meanwhile: the cancel stands and the pass stays at 0, never -1", async () => {
+    const passBooking = { booking: { ...paidSeat([sam]), redemptionSource: 'session_pass_credit', sessionPassId: ID.ownedPass }, payment: {} }
+    await withBooking(passBooking, async ({ bookingId, stripe, call }) => {
+      await call('addBookingGuest', { bookingId, addons: [{ addonId: ID.addon, quantity: 1 }] })
+      await call('addBookingGuest', { bookingId, addons: [{ addonId: ID.addon, quantity: 1 }], payment: { method: 'card' } })
+      const [line] = await addonLines(bookingId)
+      // The customer spends the session the cancel just gave back, before the card's answer.
+      whileTheRefundIsSent(stripe, () => db.query('UPDATE customer_session_passes SET sessions_remaining = 0 WHERE id = $1', [ID.ownedPass]))
+      stripe.failNext('refunds.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
+      const answer = await cancelCredit(bookingId, { addonLineIds: [line?.id ?? ''], addonRefund: 'card', confirmed: { addonsRefund: 5 } })
+      expect(answer.status).toBe(200)
+      // W25a: the towel's £5 is owed on the cancelled booking straight away, with Stripe's reason; no store credit.
+      expect(answer.body.data?.held).toMatchObject({ reason: 'refund_refused_not_put_back', message: putBackBlockedMessage(refundRefusedDetail('Your card was declined.'), 5, true) })
+      expect((await db.query<{ n: number }>('SELECT sessions_remaining AS n FROM customer_session_passes WHERE id = $1', [ID.ownedPass]))[0]?.n).toBe(0)
+      expect(await bookingRow(bookingId)).toMatchObject({ status: 'cancelled', refund_owed_amount: '5.00' })
+      expect(await storeCredit()).toEqual([])
+      pastTheWindow()
+      expect((await runReconcile()).items.filter((item) => item.kind === 'claim')).toEqual([])
+      expect(await storeCredit()).toEqual([])
+    })
+  })
+})
+
+describe("W25 item 8: the club's Cancel & return credit refunds paid guests in full (W23a for later)", () => {
+  const passAndGuest = { booking: { ...paidSeat([sam]), redemptionSource: 'session_pass_credit', sessionPassId: ID.ownedPass }, payment: {} }
+  const passSessions = async () => (await db.query<{ n: number }>('SELECT sessions_remaining AS n FROM customer_session_passes WHERE id = $1', [ID.ownedPass]))[0]?.n
+  /** A pass booking with one guest paid on the card (£20). */
+  async function withAPaidGuest(work: (context: Context) => Promise<void>) {
+    await withBooking(passAndGuest, async (context) => {
+      await context.call('addBookingGuest', { bookingId: context.bookingId, ...bea })
+      await context.call('addBookingGuest', { bookingId: context.bookingId, ...bea, payment: { method: 'card' } })
+      await work(context)
+    })
+  }
+
+  it('from Block Session / Block Day, inside 24 hours too: cancelled, the pass session back, both places back, the guest refunded to the card', async () => {
+    await withAPaidGuest(async ({ bookingId, stripe }) => {
+      insideTwentyFourHours()
+      // The booking page still refuses (Remove paid guests first); the club's quote shows the guests' money.
+      expect((await creditQuote(bookingId)).blocked).toEqual({ reason: 'paid_guests_present', message: CANCEL_CREDIT_WORDS.paidGuestsPresent })
+      const q = await creditQuote(bookingId, [], true)
+      expect(q).toMatchObject({ refund: 20, addonsRefund: 0, parts: { card: 20, storeCredit: 0 }, cardRefundAvailable: true, blocked: null })
+      const places = (await totalBooked()) ?? 0
+      const sessions = (await passSessions()) ?? 0
+      const cancelled = await cancelCredit(bookingId, { addonRefund: 'card', confirmed: { addonsRefund: 0, refund: q.refund }, clubCancelled: true })
+      expect(cancelled.status).toBe(200)
+      expect(cancelled.body.data).toMatchObject({ cancelled: true, creditUsableAgain: true, cardRefundedAmount: 20, storeCreditRefundedAmount: 0 })
+      expect(await bookingRow(bookingId)).toMatchObject({ status: 'cancelled', refund_owed_amount: '0.00' })
+      expect(await totalBooked()).toBe(places - 2)
+      expect(await passSessions()).toBe(sessions + 1)
+      // One refund of the guest's £20, keyed from the claim; the guest's line stamped refunded to the card.
+      const sent = refunds(stripe)
+      expect(sent).toHaveLength(1)
+      expect(sent[0]?.params).toMatchObject({ amount: 2000 })
+      const [claim] = await auditRows(bookingId, 'booking.refund_claimed')
+      expect(claim?.details).toMatchObject({ kind: 'cancel_credit', amount: 20, method: 'card' })
+      const lines = await bookingLines(bookingId)
+      expect(lines.filter((line) => Number(line.card_refunded_amount) === 20)).toHaveLength(1)
+      expect(lines.find((line) => Number(line.card_refunded_amount) === 20)).toMatchObject({ refund_method: 'card' })
+      expect((await auditRows(bookingId, 'booking.cancel_credit'))[0]?.details).toMatchObject({ clubCancelled: true, seatRefund: 20, refundMethod: 'card', cardRefunded: 20, passReturned: ID.ownedPass })
+    })
+  })
+
+  it('to store credit; and what it needs: the figure staff saw, where the money goes, Issue refunds', async () => {
+    await withAPaidGuest(async ({ bookingId, stripe }) => {
+      // The guests' money not confirmed: refused with the new figures, nothing changed.
+      const stale = await cancelCredit(bookingId, { addonRefund: 'credit', confirmed: { addonsRefund: 0 }, clubCancelled: true })
+      expect(stale.body.error?.details).toMatchObject({ reason: 'refund_changed', message: REFUND_WORDS.figuresChanged })
+      expect(stale.body.error?.details?.cancelQuote).toMatchObject({ refund: 20 })
+      // No method: refused.
+      const noMethod = await cancelCredit(bookingId, { confirmed: { addonsRefund: 0, refund: 20 }, clubCancelled: true })
+      expect(noMethod.body.error?.details).toMatchObject({ reason: 'refund_method_required', message: PAID_GUESTS_REFUND_METHOD_MESSAGE })
+      // No Issue refunds: refused.
+      await db.query('UPDATE staff SET can_issue_refunds = false')
+      const forbidden = await cancelCredit(bookingId, { addonRefund: 'credit', confirmed: { addonsRefund: 0, refund: 20 }, clubCancelled: true })
+      expect(forbidden.body.error?.details).toMatchObject({ reason: 'no_refund_permission', message: ISSUE_REFUNDS_NEEDED_MESSAGE })
+      await db.query('UPDATE staff SET can_issue_refunds = true')
+      expect(await bookingRow(bookingId)).toMatchObject({ status: 'confirmed', price_paid: '20.00' })
+
+      const cancelled = await cancelCredit(bookingId, { addonRefund: 'credit', confirmed: { addonsRefund: 0, refund: 20 }, clubCancelled: true })
+      expect(cancelled.body.data).toMatchObject({ cancelled: true, cardRefundedAmount: 0, storeCreditRefundedAmount: 20 })
+      expect((await storeCredit()).map((row) => row.amount)).toEqual(['20.00'])
+      expect(refunds(stripe)).toHaveLength(0)
+      expect(await bookingRow(bookingId)).toMatchObject({ status: 'cancelled', refund_owed_amount: '0.00' })
+    })
+  })
+
+  it('the first card refund refused: nothing cancelled, everything back exactly, with words for the guests', async () => {
+    await withAPaidGuest(async ({ bookingId, stripe }) => {
+      const before = await snapshot(bookingId)
+      stripe.failNext('refunds.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
+      const refused = await cancelCredit(bookingId, { addonRefund: 'card', confirmed: { addonsRefund: 0, refund: 20 }, clubCancelled: true })
+      expect(refused.status).toBe(402)
+      expect(refused.body.error?.details).toMatchObject({ reason: 'refund_failed', message: cancelCreditGuestRefundFailedMessage(refundRefusedDetail('Your card was declined.')) })
+      expect(await snapshot(bookingId)).toEqual(before)
+    })
+  })
+
+  it("W25a (W25 review L5): a paid guest and a ticked paid towel together: one refund choice for both, each back to its own order's card; or both to store credit", async () => {
+    /** The pass booking with Bea paid on the card (£20), then a £5 towel paid on the card (Add Guest, add-ons only). */
+    const withGuestAndTowel = (work: (context: Context & { lineId: string }) => Promise<void>) =>
+      withAPaidGuest(async (context) => {
+        const { bookingId, call } = context
+        await call('addBookingGuest', { bookingId, addons: [{ addonId: ID.addon, quantity: 1 }] })
+        await call('addBookingGuest', { bookingId, addons: [{ addonId: ID.addon, quantity: 1 }], payment: { method: 'card' } })
+        const [line] = await addonLines(bookingId)
+        await work({ ...context, lineId: line?.id ?? '' })
+      })
+
+    await withGuestAndTowel(async ({ bookingId, stripe, lineId }) => {
+      insideTwentyFourHours()
+      const q = await creditQuote(bookingId, [lineId], true)
+      expect(q).toMatchObject({ refund: 20, addonsRefund: 5, parts: { card: 25, storeCredit: 0 }, cardRefundAvailable: true, blocked: null })
+      // The towel's figure alone isn't enough: the guests' money must be confirmed with it.
+      const stale = await cancelCredit(bookingId, { addonLineIds: [lineId], addonRefund: 'card', confirmed: { addonsRefund: 5 }, clubCancelled: true })
+      expect(stale.body.error?.details).toMatchObject({ reason: 'refund_changed' })
+      expect(await bookingRow(bookingId)).toMatchObject({ status: 'confirmed' })
+      // One choice (`addonRefund`) sends both to the card: one claim, one part per paying order (£20 and £5).
+      const cancelled = await cancelCredit(bookingId, { addonLineIds: [lineId], addonRefund: 'card', confirmed: { addonsRefund: 5, refund: 20 }, clubCancelled: true })
+      expect(cancelled.status).toBe(200)
+      expect(cancelled.body.data).toMatchObject({ cancelled: true, cardRefundedAmount: 20, storeCreditRefundedAmount: 0, addons: { cardRefundedAmount: 5, storeCreditRefundedAmount: 0 } })
+      expect(refunds(stripe).map((sent) => (sent.params as { amount: number }).amount).sort((a, b) => a - b)).toEqual([500, 2000])
+      const claims = await auditRows(bookingId, 'booking.refund_claimed')
+      expect(claims).toHaveLength(1)
+      expect(claims[0]?.details).toMatchObject({ kind: 'cancel_credit', amount: 25, method: 'card' })
+      expect(await storeCredit()).toEqual([])
+      expect(await bookingRow(bookingId)).toMatchObject({ status: 'cancelled', refund_owed_amount: '0.00' })
+      expect((await addonLines(bookingId))[0]).toMatchObject({ removed_at: expect.anything(), refunded_amount: '5', card_refunded_amount: '5', refund_method: 'card' })
+      expect((await bookingLines(bookingId)).filter((line) => Number(line.card_refunded_amount) === 20)).toHaveLength(1)
+      expect((await auditRows(bookingId, 'booking.cancel_credit'))[0]?.details).toMatchObject({ clubCancelled: true, seatRefund: 20, addonsRefund: 5, refundMethod: 'card', cardRefunded: 25, storeCreditRefunded: 0, owed: 0 })
+    })
+
+    await withGuestAndTowel(async ({ bookingId, stripe, lineId }) => {
+      const cancelled = await cancelCredit(bookingId, { addonLineIds: [lineId], addonRefund: 'credit', confirmed: { addonsRefund: 5, refund: 20 }, clubCancelled: true })
+      expect(cancelled.body.data).toMatchObject({ cancelled: true, cardRefundedAmount: 0, storeCreditRefundedAmount: 20, addons: { cardRefundedAmount: 0, storeCreditRefundedAmount: 5 } })
+      expect(refunds(stripe)).toHaveLength(0)
+      expect((await storeCredit()).map((row) => row.amount).sort()).toEqual(['20.00', '5.00'])
+      expect((await addonLines(bookingId))[0]).toMatchObject({ refunded_amount: '5', card_refunded_amount: '0', refund_method: 'credit' })
+      expect(await bookingRow(bookingId)).toMatchObject({ status: 'cancelled', refund_owed_amount: '0.00' })
+    })
+  })
+
+  it('not from the booking page: the same press without the club is still refused, and so is a booking paid with money', async () => {
+    await withAPaidGuest(async ({ bookingId }) => {
+      const refused = await cancelCredit(bookingId, { addonRefund: 'card', confirmed: { addonsRefund: 0, refund: 20 } })
+      expect(refused.body.error?.details).toMatchObject({ reason: 'paid_guests_present' })
+      expect(await bookingRow(bookingId)).toMatchObject({ status: 'confirmed' })
+    })
+    await withBooking(onCard, async ({ bookingId }) => {
+      const refused = await cancelCredit(bookingId, { addonRefund: 'card', confirmed: { addonsRefund: 0, refund: 20 }, clubCancelled: true })
+      expect(refused.body.error?.details).toMatchObject({ reason: 'not_credit_booking' })
+    })
+  })
+})
+

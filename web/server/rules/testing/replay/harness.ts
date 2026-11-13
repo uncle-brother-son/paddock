@@ -207,7 +207,8 @@ export async function replay(
     },
   })
   // W14: the old functions ask the Worker first. With every kind off its only trace is the answer stored
-  // against each press's key (ORDER_PATH_OFF; `old_reader_order` from finalise and cancel; or, for an order
+  // against each press's key (ORDER_PATH_OFF; `not_a_reader_order` from finalise and cancel, W25: the Worker's
+  // answer for an order with no mark of its own, where it used to say the old checkout's; or, for an order
   // already gone, the Worker's own "already gone", in the old words), which is the Worker's bookkeeping, not
   // the old code's. Those rows alone are taken out before the rows are read, so the old side's recording
   // is exactly the old code's, as the golden files hold it. Anything else the Worker wrote would show.
@@ -225,7 +226,7 @@ export async function replay(
 
 /**
  * The answers the wrappers' Worker calls stored against their keys, and nothing else (see replay): an order
- * route's ORDER_PATH_OFF, and a finalise or cancel that sent the wrapper to the old code (`old_reader_order`) or
+ * route's ORDER_PATH_OFF, and a finalise or cancel the Worker refused as not its own reader order (`not_a_reader_order`) or
  * found the order already gone (answered by the Worker in the old words, nothing touched).
  */
 export async function forgetSwitchedOffAnswers(db: Db): Promise<void> {
@@ -233,7 +234,7 @@ export async function forgetSwitchedOffAnswers(db: Db): Promise<void> {
     `DELETE FROM api_idempotency
       WHERE response->'error'->>'code' = 'ORDER_PATH_OFF'
          OR (endpoint LIKE 'POST /api/v1/staff/orders/%'
-             AND (response->'data'->>'reason' IN ('old_reader_order', 'order_not_found') OR response->'data'->>'alreadyGone' = 'true'))`
+             AND (response->'data'->>'reason' IN ('not_a_reader_order', 'order_not_found') OR response->'data'->>'alreadyGone' = 'true'))`
   )
 }
 

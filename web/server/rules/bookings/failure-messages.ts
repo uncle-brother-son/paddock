@@ -417,23 +417,29 @@ export const refundGoneNotRecordedMessage = (cardGone: number): string =>
 export const REFUND_REFUSED_NOT_PUT_BACK_MESSAGE =
   "The card refund was refused, so nothing went back, but the booking couldn't be put back yet. Don't refund it again: check the Orders page in a few minutes."
 
+/**
+ * W25 (W22 review later 2, W23 later 2, W24 review L1): the first card part was refused, and the booking can't go back
+ * as it was because its places (or its pass session) have been taken since. The change stands. W25a (W25 review S1):
+ * the claim is finished there and then with the card money owed on the booking (on a cancelled booking too, never
+ * store credit unseen), so the words carry Stripe's reason (`detail`, "Failed to refund payment: …") and point to the
+ * two buttons a person decides with.
+ */
+export const putBackBlockedMessage = (detail: string, owed: number, cancelled: boolean): string =>
+  `The card refund was refused (${detail}), so nothing went back, and the booking can't be put back as it was: its places or its pass session have been taken since. The change stands, and ${money(owed)} shows on the booking as still to refund. Check Stripe first: if the money already reached the customer, use It already arrived; if not, use Refund the rest${cancelled ? ' (the booking is cancelled, so it goes to store credit)' : ''}.`
+/**
+ * W25a: the same refusal when the money owed couldn't be written on the booking yet (the database failed just then).
+ * The claim stays open for the automatic check, so the words still carry Stripe's reason.
+ */
+export const putBackBlockedNotRecordedMessage = (detail: string): string =>
+  `The card refund was refused (${detail}), so nothing went back, and the booking can't be put back as it was: its places or its pass session have been taken since. The change stands, but the money still to refund couldn't be recorded on the booking yet. Don't refund it again: check the Orders page in a few minutes.`
+/** W25 (W23 review later 1): Refund the rest to the card on a cancelled booking. */
+export const OWED_ON_CANCELLED_STORE_CREDIT_ONLY_MESSAGE =
+  'This booking is cancelled, so what is still to refund can only go to store credit. Choose store credit and confirm again.'
+
 /** Q26: more cash than the booking's orders recorded, or none to hand back. */
 export const onlyCashLeftMessage = (limit: number): string =>
   `Only ${money(limit)} of cash recorded on this booking's orders can be handed back. Check the amount and confirm again.`
 export const NO_CASH_LEFT_MESSAGE = "No cash recorded on this booking's orders can be handed back, so this can only go to store credit."
-/** Refund the rest couldn't ask Stripe whether an old refund with no clear answer went: nothing was sent. */
-export const REFUND_CHECK_FAILED_MESSAGE =
-  "Checking Stripe for an earlier card refund on this booking failed, so nothing was refunded. Try again in a minute."
-/**
- * W21a (W21 review L1): Refund the rest found an old card refund with no clear answer that reached the customer, and
- * it isn't exactly one of the card refunds planned now, so nothing was sent: staff check Stripe first.
- */
-export function oldRefundReachedCustomerMessage(amounts: readonly number[]): string {
-  const named = amounts.map(money)
-  const last = named.pop() ?? money(0)
-  const which = named.length > 0 ? `Earlier card refunds of ${named.join(', ')} and ${last} on this booking` : `An earlier card refund of ${last} on this booking`
-  return `${which} reached the customer, so nothing was refunded. Check Stripe, then use It already arrived for what arrived.`
-}
 /**
  * W21a (W21 review L6): a later card part the press had no time left to send. Stripe never refused it, so it stays
  * owed on the booking for Refund the rest to send to the card (a real refusal still goes to store credit).
@@ -484,18 +490,26 @@ export const addonsAlreadyRemovedNote = (count: number): string => `${count} add
 export function cancelCreditAddonRefundFailedMessage(names: string, detail: string): string {
   return `The card refund for ${names} failed (${detail}), so the booking wasn't cancelled and nothing was refunded. Try again, or refund the add-ons to store credit.`
 }
+/** W25: the club's Cancel & return credit with paid guests: the first card refund refused, so nothing was cancelled. */
+export const cancelCreditGuestRefundFailedMessage = (detail: string): string =>
+  `The card refund failed (${detail}), so the booking wasn't cancelled and nothing was refunded. Try again, or refund to store credit.`
+/** W25: the club's Cancel & return credit with paid guests, sent without where their refund goes. */
+export const PAID_GUESTS_REFUND_METHOD_MESSAGE = "Choose where the paid guests' refund goes (card or store credit), then confirm again."
 /**
- * A held refund closed by hand on a cancelled booking (W23): the money stays owed on the booking, which has no Refund the
- * rest, so staff give what didn't reach the customer as store credit themselves.
+ * A held refund closed by hand on a cancelled booking (W23): the money stays owed on the booking. W25 (W23 review later
+ * 1): the cancelled booking shows it, and It already arrived and Refund the rest (store credit only) run there.
  */
 export const CLOSED_ON_A_CANCELLED_BOOKING_WORDS =
-  "The booking is cancelled, so it has no Refund the rest. Check Stripe: if the refund didn't reach the customer, give it as store credit on the customer's page."
+  'Check Stripe: if the refund reached the customer, use It already arrived on the booking; if not, use Refund the rest there (the booking is cancelled, so it goes to store credit).'
 
 // --- New in W24 (Move on the Worker)
 
 /** C1 (or R1) failed in the database and was rolled back: the booking is where it was, nothing taken or refunded. */
 export const MOVE_NOT_SAVED_MESSAGE =
   "The move couldn't be saved (the system was busy, or one of its records couldn't be written), so the booking wasn't moved and no payment was taken or refunded. Try again."
+/** W25 (W24 review L7): a Move press sent with both a payment method and a refund method. Nothing was moved. */
+export const MOVE_PAYMENT_AND_REFUND_MESSAGE = "A move either takes a payment or gives a refund, not both. Nothing was moved: check the price difference and confirm again."
+
 /**
  * W24a (W24 review S1): a booking awaiting payment can't be moved. Move would charge the released seat 1 and leave the
  * booking awaiting payment, and Settle would then charge seat 1 again.

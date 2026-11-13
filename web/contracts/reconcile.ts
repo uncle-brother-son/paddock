@@ -8,7 +8,7 @@ import { z } from 'zod'
 
 const id = z.guid()
 
-// --- POST /api/v1/staff/reader-flows/:pendingId/finalise and /cancel (W12; nothing calls them until step D)
+// --- POST /api/v1/staff/reader-flows/:pendingId/finalise and /cancel (W12; the staff app's flow wrappers since W19)
 
 export const readerFlowInputSchema = z.object({ pendingId: id })
 export type ReaderFlowInput = z.infer<typeof readerFlowInputSchema>
@@ -76,7 +76,6 @@ export const reconcileRunOutputSchema = z.object({
   refunds: z.number(),
   left: z.number(),
   deferred: z.number(),
-  oldLeftAlone: z.object({ orders: z.number(), flows: z.number() }),
   stripeRefused: z.boolean(),
   items: z.array(reconcileItemSchema),
 })
@@ -124,7 +123,7 @@ export const stuckOrderSchema = z.object({
   paymentIntentId: z.string().nullable(),
   createdAt: z.string(),
   ageMinutes: z.number(),
-  /** 'reader' or 'card' for an order the Worker made; null for the old checkout's. */
+  /** 'reader' or 'card' for an order the Worker made; null for a pending order with no mark of the Worker's. */
   method: z.enum(['reader', 'card']).nullable(),
   reason: z.string(),
   words: z.string(),
@@ -143,7 +142,6 @@ export const stuckFlowSchema = z.object({
   amount: z.number(),
   createdAt: z.string(),
   ageMinutes: z.number(),
-  madeBy: z.enum(['worker', 'old']),
   reason: z.string(),
   words: z.string(),
   /** W21: a Worker flow reconcile left for a person can be closed by hand (`held_flow`). */

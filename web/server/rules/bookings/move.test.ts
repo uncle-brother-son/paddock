@@ -43,7 +43,11 @@ import {
   REFUND_WORDS,
   moveRefundFailedMessage,
   refundRefusedDetail,
+  MOVE_PAYMENT_AND_REFUND_MESSAGE,
+  putBackBlockedMessage,
 } from './failure-messages'
+import { FLOW_UNDO_BLOCKED_MESSAGE } from '@/server/rules/orders/reader-flow'
+import { STUCK_WORDS, stuckList as listStuck } from '@/server/rules/orders/stuck-list'
 import { claimRefundKey } from './refunds'
 
 // Brief W24: Move on the Worker, through the routes as the staff app calls them, on the replay's live schema. The
@@ -843,3 +847,114 @@ describe('refusals before any money moves', () => {
     })
   })
 })
+
+// --- Brief W25, Part B
+
+describe('W25: the Move items sent to W25 (W24 review L1, L7; W24 noticed)', () => {
+  it("L1: the first card refund refused after the old session was taken again: the move stands (never two bookings on one private session) and the £40 is still to refund on the booking there and then, with Stripe's reason (W25a); reconcile has nothing to do", async () => {
+    await withBooking(peakPrivateOnCard, async ({ bookingId, stripe }) => {
+      // A cheaper private move frees the whole old session at R1; another hire takes it before the card's answer.
+      const create = stripe.refunds.create
+      stripe.refunds.create = (async (...args: Parameters<typeof create>) => {
+        await db.query('UPDATE sessions SET total_booked = capacity WHERE id = $1', [ID.peakPrivateSession])
+        return create(...args)
+      }) as typeof create
+      stripe.failNext('refunds.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
+      const capacity = (await db.query<{ capacity: number }>('SELECT capacity FROM sessions WHERE id = $1', [ID.peakPrivateSession]))[0]?.capacity
+      const answer = await move(bookingId, ID.laterPrivateSession, { refundMethod: 'card' })
+      expect(answer.status).toBe(200)
+      const words = putBackBlockedMessage(refundRefusedDetail('Your card was declined.'), 40, false)
+      expect(answer.body.data).toMatchObject({ moved: true, held: { reason: 'refund_refused_not_put_back', message: words } })
+      expect(words).toMatch(/Your card was declined\./)
+      expect(words).toMatch(/use It already arrived; if not, use Refund the rest\.$/)
+      // The booking stays on the new session; the old one holds only the other hire (its capacity, not twice it).
+      expect(await places(ID.peakPrivateSession)).toBe(capacity)
+      // W25a: the £40 is owed on the booking straight away (Refund the rest), and the move's row says so. No store credit.
+      expect(await bookingRow(bookingId)).toMatchObject({ session_id: ID.laterPrivateSession, price_paid: '140.00', refund_owed_amount: '40.00' })
+      expect((await auditRows(bookingId, 'booking.move'))[0]?.details).toMatchObject({ refundMethod: 'card', cardRefunded: 0, owed: 40 })
+      expect((await auditRows(bookingId, 'booking.refund_finished'))[0]?.details).toMatchObject({ outcome: 'owed', owed: 40, by: { how: 'undo_blocked', why: refundRefusedDetail('Your card was declined.') } })
+      expect(await storeCreditRows()).toEqual([])
+      // Reconcile has nothing to do for it, and sends nothing.
+      const sent = refunds(stripe).length
+      pastTheWindow()
+      expect((await runReconcile()).items.filter((item) => item.kind === 'claim')).toEqual([])
+      expect(await bookingRow(bookingId)).toMatchObject({ session_id: ID.laterPrivateSession, refund_owed_amount: '40.00' })
+      expect(await storeCreditRows()).toEqual([])
+      expect(refunds(stripe)).toHaveLength(sent)
+    })
+  })
+
+  it("W25a (W25 review L5): the pass floor on a Move's undo: the pass session R1 gave back was spent meanwhile, so the move stands and the pass stays at 0, never -1; the £2 is still to refund", async () => {
+    const guests = ['Alex', 'Bea', 'Cy', 'Di'].map((name) => ({ name: `${name} Guest`, email: `${name.toLowerCase()}@example.com` }))
+    await withBooking(
+      { booking: { ...paidSeat([sam, ...guests]), sessionId: ID.peakSession, redemptionSource: 'session_pass_credit', sessionPassId: ID.ownedPass }, payment: { method: 'card' } },
+      async ({ bookingId, stripe }) => {
+        await db.query("UPDATE customer_session_passes SET expiry_date = '2026-11-15' WHERE id = $1", [ID.ownedPass])
+        // Sam's pass seat is released (the pass ends before the 20th): +£20; four guests £25.50 to £20: -£22. £2 back.
+        expect((await quote(bookingId, ID.laterPublicSession)).priceImpact.amountDue).toBe(-2)
+        const placesBefore = [await places(ID.peakSession), await places(ID.laterPublicSession)]
+        // The customer spends every session on the pass (the one R1 gave back included) before the card's answer.
+        const create = stripe.refunds.create
+        stripe.refunds.create = (async (...args: Parameters<typeof create>) => {
+          await db.query('UPDATE customer_session_passes SET sessions_remaining = 0 WHERE id = $1', [ID.ownedPass])
+          return create(...args)
+        }) as typeof create
+        stripe.failNext('refunds.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
+        const answer = await move(bookingId, ID.laterPublicSession, { refundMethod: 'card' })
+        expect(answer.status).toBe(200)
+        expect(answer.body.data).toMatchObject({ moved: true, held: { reason: 'refund_refused_not_put_back', message: putBackBlockedMessage(refundRefusedDetail('Your card was declined.'), 2, false) } })
+        const [claim] = await auditRows(bookingId, 'booking.refund_claimed')
+        expect(claim?.details).toMatchObject({ move: { passReturned: ID.ownedPass, creditReleased: true } })
+        // Never below 0; nothing of the undo kept: the booking on the new session without its pass, the places as R1 left them.
+        expect(await passLeft(ID.ownedPass)).toBe(0)
+        expect(await bookingRow(bookingId)).toMatchObject({ session_id: ID.laterPublicSession, redemption_source: 'paid', redeemed_session_pass_id: null, refund_owed_amount: '2.00' })
+        expect([await places(ID.peakSession), await places(ID.laterPublicSession)]).toEqual([(placesBefore[0] ?? 0) - 5, (placesBefore[1] ?? 0) + 5])
+        expect((await auditRows(bookingId, 'booking.refund_finished'))[0]?.details).toMatchObject({ outcome: 'owed', owed: 2, by: { how: 'undo_blocked' } })
+        expect(await storeCreditRows()).toEqual([])
+      }
+    )
+  })
+
+  it('L7: a press with both a payment method and a refund method is refused, cheaper or dearer; nothing moves', async () => {
+    await withBooking(peakPrivateOnCard, async ({ bookingId, stripe }) => {
+      const before = await snapshot(bookingId)
+      const cheaper = await move(bookingId, ID.laterPrivateSession, { payment: { method: 'cash' }, refundMethod: 'card' })
+      expect(cheaper.body.error).toMatchObject({ code: 'VALIDATION' })
+      expect(cheaper.body.error?.details).toMatchObject({ reason: 'payment_and_refund', message: MOVE_PAYMENT_AND_REFUND_MESSAGE })
+      expect(await snapshot(bookingId)).toEqual(before)
+      expect(refunds(stripe)).toHaveLength(0)
+    })
+    await withBooking(publicOnCard, async ({ bookingId, stripe }) => {
+      const before = await snapshot(bookingId)
+      const dearer = await move(bookingId, ID.peakSession, { payment: { method: 'cash', confirmedCashAmount: 11 }, refundMethod: 'credit' })
+      expect(dearer.body.error?.details).toMatchObject({ reason: 'payment_and_refund', message: MOVE_PAYMENT_AND_REFUND_MESSAGE })
+      expect(await snapshot(bookingId)).toEqual(before)
+      expect(charges(stripe)).toHaveLength(1)
+    })
+  })
+
+  it("W24 noticed: a held reader move whose undo meets the customer's other booking on the old day: said plainly on the reader and on the Orders page, nothing changed; once that booking is gone, Resolve now undoes it", async () => {
+    await withBooking(publicOnCard, async ({ bookingId }) => {
+      const before = await snapshot(bookingId)
+      const answer = await move(bookingId, ID.peakSession, { payment: { method: 'reader' } })
+      const pending = answer.body.data?.pendingReaderPayment
+      // While the move is held, the customer is booked on the day it was moved from (New Order).
+      await samsOtherBookingOn('2026-11-12')(db)
+      const cancelled = (await flowStep('cancel', pending?.pendingId ?? '')).data
+      expect(cancelled).toMatchObject({ cancelled: false, reason: 'undo_blocked', message: FLOW_UNDO_BLOCKED_MESSAGE })
+      expect(FLOW_UNDO_BLOCKED_MESSAGE).not.toMatch(/already has a booking on \d/)
+      expect((await flows(bookingId))[0]).toMatchObject({ status: 'pending' })
+      expect(await bookingRow(bookingId)).toMatchObject({ session_id: ID.peakSession })
+      // The automatic check says the same, for a person, with what to do.
+      await ageFlows(bookingId)
+      expect((await runReconcile()).items.filter((item) => item.kind === 'flow')).toMatchObject([{ outcome: 'left', reason: 'undo_blocked' }])
+      expect((await listStuck(db)).flows.find((item) => item.recordId === bookingId)).toMatchObject({ reason: 'undo_blocked', words: STUCK_WORDS['undo_blocked'] })
+      expect(STUCK_WORDS['undo_blocked']).toMatch(/Move or cancel the other booking, then press Resolve now/)
+      // The other booking moved off the day: the next run undoes the move exactly.
+      await db.query("DELETE FROM bookings WHERE session_id = $1", [ID.conflicting])
+      expect((await runReconcile()).items.filter((item) => item.kind === 'flow')).toMatchObject([{ outcome: 'undone' }])
+      expect(await snapshot(bookingId)).toEqual(before)
+    })
+  })
+})
+

@@ -292,7 +292,7 @@ describe('held_order: changed_since (W12 review L2)', () => {
       const placed = (await old.call('createOrder', { customerId: ID.customer, products: [soap], payment: { method: 'reader' } })) as { orderId: string }
       replayStripe.current = stripe
       later(16)
-      expect(dataOf(await postClose({ kind: 'held_order', orderId: placed.orderId, reason: WHY }))).toMatchObject({ closed: false, reason: 'old_order', message: CLOSE_WORDS.old_order })
+      expect(dataOf(await postClose({ kind: 'held_order', orderId: placed.orderId, reason: WHY }))).toMatchObject({ closed: false, reason: 'order_not_started_here', message: CLOSE_WORDS.order_not_started_here })
       expect(await db.query<{ payment_status: string }>('SELECT payment_status FROM orders')).toEqual([{ payment_status: 'pending' }])
     })
   })
@@ -608,13 +608,13 @@ describe('words (brief W14b item 3; W12 review L5, W13 to W13d)', () => {
   // Every reason reconcile records for an order or flow it leaves, and the ones its finalise and cancel can hand it
   // (reconcile.ts left(...), FinaliseMismatch, the reader and flow routes' reasons).
   const REASONS = [
-    'waiting', 'old_code', 'unclear', 'other_mode', 'amount_mismatch', 'customer_mismatch', 'metadata_mismatch', 'currency_mismatch',
+    'waiting', 'not_started_here', 'unclear', 'other_mode', 'amount_mismatch', 'customer_mismatch', 'metadata_mismatch', 'currency_mismatch',
     'several_payments', 'changed_since', 'finalise_failed', 'undo_failed', 'old_rollback', 'charged_without_order', 'charged_without_record',
     'payment_not_succeeded', 'compensation_unfinished', 'several_subscriptions', 'replaced_unconfirmed', 'subscription_starting',
     // W12 review L5's list, which fell back to "something unexpected" before W14b.
-    'unexpected_state', 'paid_by_another_payment', 'not_pending', 'order_not_found', 'not_a_reader_order', 'intent_unconfirmed', 'old_reader_order',
+    'unexpected_state', 'paid_by_another_payment', 'not_pending', 'order_not_found', 'not_a_reader_order', 'intent_unconfirmed',
     // The rest the routes can answer.
-    'old_reader_flow', 'rollback_started', 'compensating', 'membership_not_started', 'payment_missing', 'subscription_mismatch',
+    'not_a_reader_flow', 'undo_blocked', 'rollback_started', 'compensating', 'membership_not_started', 'payment_missing', 'subscription_mismatch',
     'membership_line_missing', 'membership_row_missing', 'subscription_unconfirmed',
   ]
   it.each(REASONS)('%s has words of its own, saying what to do', (reason) => {

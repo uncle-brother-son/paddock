@@ -31,7 +31,6 @@ vi.mock('@/server/stripe/client', async (importOriginal) => {
 })
 
 const appDir = staffAppDir()
-const workerItems = () => import(/* @vite-ignore */ path.join(appDir, 'backend/paddock/shared/workerItems'))
 const stuckHelpers = () => import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/stuckList'))
 const backendFunction = (name: string) => import(/* @vite-ignore */ path.join(appDir, `backend/paddock/${name}`))
 
@@ -81,45 +80,28 @@ async function oneOfEach(old: ReplaySide, stripe: FakeStripe): Promise<{ oldOrde
 /** Every Stripe call naming the intent, by method. */
 const callsOn = (stripe: FakeStripe, intent: string) => stripe.calls.filter((call) => JSON.stringify(call).includes(intent)).map((call) => call.method)
 
-describe('one actor per item: the old sweep and the Worker\'s reconcile (W12-3, W13-3)', () => {
-  it('orders (W16): the old sweep settles no order now; reconcileOrders only the Worker\'s; neither touches the other\'s intent', async () => {
+describe("Resolve now is the Worker's reconcile alone (W12-3, W13-3; W25: the old sweep is gone)", () => {
+  it("a reader order: reconcileOrders settles the Worker's; an order with no mark of the Worker's is left untouched, by everything", async () => {
     await onASeed(async (old, stripe) => {
       const { oldOrder, oldIntent, workerOrder, workerIntent } = await oneOfEach(old, stripe)
-
-      const swept = (await old.call('sweepPendingReaderPayments', { olderThanMinutes: 15 })) as { checked: number; cancelled: number }
-      expect(swept).toEqual({ checked: 0, finalised: 0, cancelled: 0, failed: [] })
-      expect(await status(oldOrder)).toBe('pending')
-      expect(await status(workerOrder)).toBe('pending')
-      expect(callsOn(stripe, workerIntent).filter((method) => method !== 'paymentIntents.create')).toEqual([])
+      const before = callsOn(stripe, oldIntent).length
 
       const key = crypto.randomUUID()
-      const reconciled = (await old.call('reconcileOrders', { idempotencyKey: key })) as { ok: boolean; run: { checked: number; undone: number; oldLeftAlone: { orders: number } } }
-      expect(reconciled).toMatchObject({ ok: true, run: { checked: 1, undone: 1, oldLeftAlone: { orders: 1, flows: 0 } } })
+      const reconciled = (await old.call('reconcileOrders', { idempotencyKey: key })) as { ok: boolean; run: Record<string, unknown> }
+      expect(reconciled).toMatchObject({ ok: true, run: { checked: 1, undone: 1 } })
+      // W25: nothing is counted as "the old code's" any more: these are all the run's fields.
+      expect(Object.keys(reconciled.run).sort()).toEqual(['checked', 'deferred', 'finalised', 'items', 'left', 'refunds', 'stripeRefused', 'undone'])
       expect(await status(workerOrder)).toBe('gone')
       expect((await stripe.paymentIntents.retrieve(workerIntent)).status).toBe('canceled')
       // The same key again: the stored answer, nothing run twice.
       expect(await old.call('reconcileOrders', { idempotencyKey: key })).toEqual(reconciled)
-      expect(callsOn(stripe, oldIntent).filter((method) => method.startsWith('paymentIntents.cancel'))).toHaveLength(0)
+      // The unmarked order: no Stripe call names its intent, and it stays as it was (listed for a person, below).
+      expect(callsOn(stripe, oldIntent)).toHaveLength(before)
       expect(await status(oldOrder)).toBe('pending')
     })
   })
 
-  it("reconcile first: it counts the old order and leaves it; the Worker's order is the only one it settles", async () => {
-    await onASeed(async (old, stripe) => {
-      const { oldOrder, oldIntent, workerOrder } = await oneOfEach(old, stripe)
-      const before = callsOn(stripe, oldIntent).length
-      expect(await old.call('reconcileOrders', {})).toMatchObject({ ok: true, run: { checked: 1, undone: 1, oldLeftAlone: { orders: 1 } } })
-      expect(await status(oldOrder)).toBe('pending')
-      expect(callsOn(stripe, oldIntent)).toHaveLength(before)
-      expect(await status(workerOrder)).toBe('gone')
-      // W16: the old sweep's order part is gone, so it leaves the old order too.
-      expect(await old.call('sweepPendingReaderPayments', { olderThanMinutes: 15 })).toMatchObject({ checked: 0, cancelled: 0 })
-      expect(await status(oldOrder)).toBe('pending')
-      expect(callsOn(stripe, oldIntent)).toHaveLength(before)
-    })
-  })
-
-  it("flows: a Worker flow goes only to reconcile, an old flow only to the old sweep", async () => {
+  it("a reader flow: reconcileOrders settles the Worker's; a flow with no mark of the Worker's is left untouched", async () => {
     for (const worker of [true, false]) {
       await onASeed(async (old, stripe) => {
         const bookingId = await lapsedSeat((action, params) => old.call(action, params), db)
@@ -128,97 +110,89 @@ describe('one actor per item: the old sweep and the Worker\'s reconcile (W12-3, 
         if (worker) await asWorkerFlow(db, pendingId)
         replayStripe.current = stripe
         later(16)
-        const swept = (await old.call('sweepPendingReaderPayments', { olderThanMinutes: 15 })) as { checked: number }
-        expect(swept.checked, worker ? 'the old sweep skips a Worker flow' : 'the old sweep takes an old flow').toBe(worker ? 0 : 1)
-        expect(await flowStatus(pendingId)).toBe(worker ? 'pending' : 'cancelled')
-        const reconciled = (await old.call('reconcileOrders', {})) as { run: { checked: number; oldLeftAlone: { flows: number } } }
-        expect(reconciled.run).toMatchObject(worker ? { checked: 1, oldLeftAlone: { flows: 0 } } : { checked: 0, oldLeftAlone: { flows: 0 } })
-        expect(await flowStatus(pendingId)).toBe('cancelled')
+        const calls = stripe.calls.length
+        const reconciled = (await old.call('reconcileOrders', {})) as { run: { checked: number; undone: number } }
+        expect(reconciled.run).toMatchObject(worker ? { checked: 1, undone: 1 } : { checked: 0, undone: 0 })
+        expect(await flowStatus(pendingId)).toBe(worker ? 'cancelled' : 'pending')
+        if (!worker) expect(stripe.calls.length).toBe(calls)
       })
     }
   })
 
-  it('the SQL tests match the Worker\'s own (reconcile.ts): a record with no method is old; card, reader and a reader flow with a request id are the Worker\'s', async () => {
-    const { OLD_ORDERS_ONLY, OLD_FLOWS_ONLY } = await workerItems()
-    const cases: Array<[Record<string, unknown> | null, boolean]> = [
-      [null, true],
-      [{ payment_intent_id: 'pi_1' }, true],
-      [{ method: 'card' }, false],
-      [{ method: 'reader', payment_intent_id: 'pi_1' }, false],
-      [{ method: 'card', membership: { plan_id: 'x' } }, false],
-    ]
-    for (const [record, oldOne] of cases) {
-      const sql = ['SELECT (', OLD_ORDERS_ONLY, ') AS old FROM (SELECT $1::jsonb AS reader_payment) o'].join('')
-      const rows = await db.query<{ old: boolean }>(sql, [record === null ? null : JSON.stringify(record)])
-      expect(rows[0]?.old, JSON.stringify(record)).toBe(oldOne)
-    }
-    const flows: Array<[Record<string, unknown>, boolean]> = [
-      [{ customer_id: 'c' }, true],
-      [{ method: 'reader' }, true],
-      [{ request_id: 'r' }, true],
-      [{ method: 'reader', request_id: 'r' }, false],
-    ]
-    for (const [snapshot, oldOne] of flows) {
-      const sql = ['SELECT (', OLD_FLOWS_ONLY, ') AS old FROM (SELECT $1::jsonb AS snapshot) p'].join('')
-      const rows = await db.query<{ old: boolean }>(sql, [JSON.stringify(snapshot)])
-      expect(rows[0]?.old, JSON.stringify(snapshot)).toBe(oldOne)
-    }
+  it("the flow wrappers send every flow to the Worker: one with no mark of the Worker's is refused there, in words that send staff to a manager", async () => {
+    await onASeed(async (old, stripe) => {
+      const bookingId = await lapsedSeat((action, params) => old.call(action, params), db)
+      const started = (await old.call('settleLapsedBooking', { bookingId, payment: { method: 'reader' } })) as { pendingReaderPayment: { pendingId: string } }
+      const pendingId = started.pendingReaderPayment.pendingId
+      replayStripe.current = stripe
+      const calls = stripe.calls.length
+      const user = { email: 'jo@example.com' }
+      const { default: finalise } = await backendFunction('finaliseReaderPayment')
+      const { default: cancel } = await backendFunction('cancelReaderPayment')
+      const finalised = (await finalise({ params: { pendingId }, user })) as { finalised: boolean; reason?: string; message?: string }
+      const cancelled = (await cancel({ params: { pendingId }, user })) as { cancelled: boolean; reason?: string; message?: string }
+      expect(finalised).toMatchObject({ finalised: false, reason: 'not_a_reader_flow' })
+      expect(cancelled).toMatchObject({ cancelled: false, reason: 'not_a_reader_flow' })
+      expect(finalised.message).toMatch(/tell a manager/)
+      expect(finalised.message).not.toMatch(/old booking screens|Resolve now/)
+      // Nothing was asked of Stripe and nothing changed.
+      expect(stripe.calls.length).toBe(calls)
+      expect(await flowStatus(pendingId)).toBe('pending')
+    })
   })
 })
 
-describe('one stuck list, each item once (W12-5)', () => {
-  it("the Worker's order with the Worker's reason and words; the old order with the old words; nothing twice", async () => {
+describe("one stuck list, the Worker's (W12-5; W25: the staff app's own two queries are gone)", () => {
+  it("the Worker's order with its reason and words; an order with no mark of the Worker's with words to tell a manager; nothing twice", async () => {
     await onASeed(async (old, stripe) => {
       const { oldOrder, workerOrder } = await oneOfEach(old, stripe)
-      const { OLD_ITEM_WORDS } = await workerItems()
-      const listed = (await old.call('getStuckReaderPayments', { olderThanMinutes: 15 })) as { checkout: Array<{ orderId: string; madeBy: string; reason: string; words: string }>; workerProblem?: string }
+      const listed = (await old.call('getStuckReaderPayments', { olderThanMinutes: 15 })) as { checkout: Array<Record<string, unknown> & { orderId: string; reason: string; words: string }>; workerProblem?: string }
       expect(listed.workerProblem).toBeUndefined()
       expect(listed.checkout.map((item) => item.orderId).sort()).toEqual([oldOrder, workerOrder].sort())
-      expect(listed.checkout).toContainEqual(expect.objectContaining({ orderId: workerOrder, madeBy: 'worker', reason: 'waiting', words: STUCK_WORDS['waiting'] }))
-      expect(listed.checkout).toContainEqual(expect.objectContaining({ orderId: oldOrder, madeBy: 'old', reason: 'old_code', words: OLD_ITEM_WORDS }))
-      // After both run, only the old order is left, once, with the old words (W16: nothing settles it now).
+      expect(listed.checkout).toContainEqual(expect.objectContaining({ orderId: workerOrder, reason: 'waiting', words: STUCK_WORDS['waiting'] }))
+      expect(listed.checkout).toContainEqual(expect.objectContaining({ orderId: oldOrder, reason: 'not_started_here', words: STUCK_WORDS['not_started_here'] }))
+      expect(STUCK_WORDS['not_started_here']).toMatch(/tell a manager/)
+      expect(listed.checkout.every((item) => !('madeBy' in item))).toBe(true)
+      // After Resolve now, only the unmarked order is left, once.
       await old.call('reconcileOrders', {})
-      await old.call('sweepPendingReaderPayments', { olderThanMinutes: 15 })
       const after = (await old.call('getStuckReaderPayments', { olderThanMinutes: 15 })) as typeof listed
       expect(after.checkout.map((item) => item.orderId)).toEqual([oldOrder])
     })
   })
 
-  it("flows: a Worker flow once, from the Worker's list", async () => {
-    await onASeed(async (old, stripe) => {
-      const bookingId = await lapsedSeat((action, params) => old.call(action, params), db)
-      const started = (await old.call('settleLapsedBooking', { bookingId, payment: { method: 'reader' } })) as { pendingReaderPayment: { pendingId: string } }
-      await asWorkerFlow(db, started.pendingReaderPayment.pendingId)
-      replayStripe.current = stripe
-      later(16)
-      const listed = (await old.call('getStuckReaderPayments', {})) as { flows: Array<{ pendingId: string; madeBy: string }> }
-      expect(listed.flows).toEqual([expect.objectContaining({ pendingId: started.pendingReaderPayment.pendingId, madeBy: 'worker', reason: 'waiting' })])
-    })
+  it("flows: a Worker flow once, waiting; a flow with no mark of the Worker's once, with words to tell a manager", async () => {
+    for (const worker of [true, false]) {
+      await onASeed(async (old, stripe) => {
+        const bookingId = await lapsedSeat((action, params) => old.call(action, params), db)
+        const started = (await old.call('settleLapsedBooking', { bookingId, payment: { method: 'reader' } })) as { pendingReaderPayment: { pendingId: string } }
+        if (worker) await asWorkerFlow(db, started.pendingReaderPayment.pendingId)
+        replayStripe.current = stripe
+        later(16)
+        const listed = (await old.call('getStuckReaderPayments', {})) as { flows: Array<Record<string, unknown> & { pendingId: string }> }
+        expect(listed.flows).toEqual([
+          expect.objectContaining(
+            worker
+              ? { pendingId: started.pendingReaderPayment.pendingId, reason: 'waiting' }
+              : { pendingId: started.pendingReaderPayment.pendingId, reason: 'not_started_here', words: STUCK_WORDS['not_started_here'] }
+          ),
+        ])
+        expect(listed.flows.every((item) => !('madeBy' in item))).toBe(true)
+      })
+    }
   })
 
-  it("flows: an old flow once, from the old list (the Worker's list names it too, as old_code)", async () => {
+  it("the Worker can't be reached: nothing is listed, with words saying so (no query of the staff app's own stands in)", async () => {
     await onASeed(async (old, stripe) => {
-      const bookingId = await lapsedSeat((action, params) => old.call(action, params), db)
-      const started = (await old.call('settleLapsedBooking', { bookingId, payment: { method: 'reader' } })) as { pendingReaderPayment: { pendingId: string } }
-      replayStripe.current = stripe
-      later(16)
-      const { OLD_ITEM_WORDS } = await workerItems()
-      const listed = (await old.call('getStuckReaderPayments', {})) as { flows: Array<{ pendingId: string; madeBy: string }> }
-      expect(listed.flows).toEqual([expect.objectContaining({ pendingId: started.pendingReaderPayment.pendingId, madeBy: 'old', reason: 'old_code', words: OLD_ITEM_WORDS })])
-    })
-  })
-
-  it("the Worker can't be reached: the old items still show, with words saying the rest can't be listed", async () => {
-    await onASeed(async (old, stripe) => {
-      const { oldOrder } = await oneOfEach(old, stripe)
+      await oneOfEach(old, stripe)
       const { STUCK_LIST_UNREACHABLE } = await backendFunction('getStuckReaderPayments')
       vi.stubGlobal('paddockWorkerV1', {
         rawRequest: async () => {
           throw new Error('connect ECONNREFUSED')
         },
       })
-      const listed = (await old.call('getStuckReaderPayments', {})) as { checkout: Array<{ orderId: string }>; workerProblem?: string }
-      expect(listed.checkout.map((item) => item.orderId)).toEqual([oldOrder])
+      const listed = (await old.call('getStuckReaderPayments', {})) as { checkout: unknown[]; flows: unknown[]; workerProblem?: string }
+      expect(listed.checkout).toEqual([])
+      expect(listed.flows).toEqual([])
       expect(listed.workerProblem).toBe(STUCK_LIST_UNREACHABLE)
     })
   })
@@ -309,9 +283,10 @@ describe("the banner's words (frontend/utils/stuckList.ts)", () => {
   })
 
   it("says what each run did, and a close's button and what it does", async () => {
-    const { reconcileLine, sweepLine, closeButtonLabel, closeDialogText } = await stuckHelpers()
-    expect(sweepLine({ checked: 0, finalised: 0, cancelled: 0, failed: [] })).toBeNull()
-    expect(sweepLine({ checked: 2, finalised: 1, cancelled: 1, failed: [] })).toBe('Started on the old screens: 2 payments checked, 1 finished, 1 cancelled.')
+    const helpers = await stuckHelpers()
+    const { reconcileLine, closeButtonLabel, closeDialogText } = helpers
+    // W25: the old sweep's line went with the sweep: these are all the helpers.
+    expect(Object.keys(helpers).sort()).toEqual(['closeButtonLabel', 'closeDialogText', 'flowLabel', 'oldestAgeMinutes', 'reconcileLine', 'stuckCount'])
     const run = (fields: Record<string, unknown>) => ({ ok: true, run: { checked: 0, finalised: 0, undone: 0, refunds: 0, left: 0, deferred: 0, stripeRefused: false, ...fields } })
     expect(reconcileLine(run({}))).toBe('The automatic check found nothing to settle.')
     expect(reconcileLine(run({ checked: 3, finalised: 1, undone: 1, left: 1, deferred: 2 }))).toBe(
@@ -331,13 +306,19 @@ describe("the banner's words (frontend/utils/stuckList.ts)", () => {
     expect(closeButtonLabel('held_claim')).toBe('Close refund')
     expect(closeDialogText('held_flow')).toContain('refund it in Stripe by hand')
     expect(closeDialogText('held_claim')).toContain('use It already arrived on the booking; if not, use Refund the rest')
+    // W25 (W21 review L4, L5; W23 review later 1): what the close now does, in its words.
+    expect(closeDialogText('held_claim')).toContain('Card refunds the automatic check found in Stripe are recorded as refunded')
+    expect(closeDialogText('held_claim')).toContain('on a cancelled booking that goes to store credit')
+    expect(closeDialogText('held_flow')).toContain('A payment still processing at the bank is watched and refunded automatically if it goes through')
   })
 
   it("W21: getStuckReaderPayments passes the Worker's held refund claims and a flow's close through", async () => {
     const fn = (await backendFunction('getStuckReaderPayments')).default as (req: { params: object; user: { email: string } }) => Promise<Record<string, unknown>>
     const claim = { claimId: 'c', bookingId: 'b', customerName: 'Sam Test', amount: 20, createdAt: 'x', ageMinutes: 20, reason: 'other_mode', words: 'w', close: { kind: 'held_claim', orderId: 'c' } }
-    const flow = { pendingId: 'p', flow: 'settle', recordId: 'b', customerName: 'Sam Test', amount: 20, createdAt: 'x', ageMinutes: 30, madeBy: 'worker', reason: 'several_payments', words: 'w', close: { kind: 'held_flow', orderId: 'p' } }
-    vi.stubGlobal('paddockData', { query: vi.fn().mockResolvedValue({ data: [] }) })
+    const flow = { pendingId: 'p', flow: 'settle', recordId: 'b', customerName: 'Sam Test', amount: 20, createdAt: 'x', ageMinutes: 30, reason: 'several_payments', words: 'w', close: { kind: 'held_flow', orderId: 'p' } }
+    // W25: the list is the Worker's alone: the staff app's own queries are gone.
+    const query = vi.fn().mockResolvedValue({ data: [] })
+    vi.stubGlobal('paddockData', { query })
     vi.stubGlobal('paddockWorkerV1', {
       rawRequest: vi.fn().mockResolvedValue({ data: { ok: true, data: { checkout: [], flows: [flow], claims: [claim], refunds: [], warnings: [], alert: null }, requestId: 'r' } }),
     })
@@ -345,6 +326,7 @@ describe("the banner's words (frontend/utils/stuckList.ts)", () => {
       const listed = await fn({ params: {}, user: { email: 'jo@example.com' } })
       expect(listed['claims']).toEqual([claim])
       expect(listed['flows']).toEqual([flow])
+      expect(query).not.toHaveBeenCalled()
     } finally {
       vi.unstubAllGlobals()
     }

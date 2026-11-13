@@ -169,7 +169,7 @@ export async function removeGuest(db: Db, guestId: string, input: RemoveGuestInp
   }
   const notSaved = (logDetail: string): ApiError => removeGuestRefusal('INTERNAL', 'guest_remove_not_saved', REMOVE_GUEST_NOT_SAVED_MESSAGE, { logDetail })
   const card = method === 'card' && confirmed > 0
-  const output = await run(db, card, options, () => Promise.resolve(r1), firstRefused, notSaved)
+  const output = await run(db, card, options, r1, firstRefused, notSaved)
   const cardRefunded = output.cardRefundedAmount
   const storeCredit = output.storeCreditRefundedAmount
   return {

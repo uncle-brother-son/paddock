@@ -17,7 +17,6 @@ import { ID, paidSeat, sam, seed, whileFailing } from '@/server/rules/testing/re
 import { chargesTakeASecond, replayStripe, stripeClientsMade } from '@/server/rules/testing/replay/stripe-binding'
 import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
 import {
-  OLD_READER_ORDER_MESSAGE,
   OLD_ROLLBACK_STARTED_MESSAGE,
   ORDER_STILL_PROCESSING_MESSAGE,
   READER_CHARGED_WITHOUT_ORDER_MESSAGE,
@@ -658,8 +657,9 @@ describe('finalise (finaliseReaderOrder, T2)', () => {
       const placed = placedOf(await placeThrough(readerBasket))
       stripe.completeReaderPayment(placed.pendingReaderPayment.paymentIntentId)
       await db.query(`UPDATE orders SET reader_payment = reader_payment - 'method' WHERE id = $1`, [placed.orderId])
-      expect((await finalise(placed.orderId)).data).toMatchObject({ finalised: false, reason: 'old_reader_order', message: OLD_READER_ORDER_MESSAGE })
-      expect((await cancel(placed.orderId)).data).toMatchObject({ cancelled: false, reason: 'old_reader_order' })
+      // W25: an order with an intent but no Worker `method` (the old checkout's shape; none is left) is simply not a reader order.
+      expect((await finalise(placed.orderId)).data).toMatchObject({ finalised: false, reason: 'not_a_reader_order', message: 'This order is not a pending card-reader order.' })
+      expect((await cancel(placed.orderId)).data).toMatchObject({ cancelled: false, reason: 'not_a_reader_order' })
 
       await db.query(
         `UPDATE orders SET reader_payment = reader_payment || jsonb_build_object('method', 'reader', 'rollback', jsonb_build_object('started_at', now(), 'done', jsonb_build_object('session_capacity', true))) WHERE id = $1`,

@@ -264,11 +264,7 @@ describe('the words W17 adds', () => {
     expect(words.leftLineWords({ card: 0, giftCardOrStoreCredit: 0, cash: 0 })).toBe('Nothing left to refund.')
   })
 
-  it('W21a (review L1, L6): the old refund that reached the customer, and the later part not sent in time', () => {
-    expect(words.oldRefundReachedCustomerMessage([40])).toBe(
-      'An earlier card refund of £40.00 on this booking reached the customer, so nothing was refunded. Check Stripe, then use It already arrived for what arrived.'
-    )
-    expect(words.oldRefundReachedCustomerMessage([40, 20])).toContain('Earlier card refunds of £40.00 and £20.00 on this booking reached the customer')
+  it('W21a (review L6): the later part not sent in time', () => {
     expect(words.laterCardRefundNotSentMessage(30)).toBe("A further card refund of £30.00 wasn't sent in time, so it's owed on the booking: use Refund the rest to send it to the card.")
   })
 })

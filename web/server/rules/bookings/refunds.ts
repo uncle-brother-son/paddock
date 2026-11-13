@@ -21,10 +21,8 @@
 //   received ends as money owed on the booking (Refund the rest), never resent (D-plan 4.10).
 // - A later part the press had no time left to send (W21a, W21 review L6): it and the parts after it end as owed on the
 //   booking (Refund the rest can still send them to the card), not store credit: Stripe never refused them.
-// Refund the rest to the card first looks in Stripe for the old screens' card refunds with no clear answer (W21a, W21
-// review L1 and L2): before R1, so R1 checks what was found under the booking's lock. Each one that went must be
-// exactly one planned part, or nothing is sent (R1 refuses); a part it matched is stored in the claim (the old refund's
-// id), so the press, reconcile and a close all count it as gone, never owed and never sent.
+// W25: the look-up of the old screens' card refunds with no clear answer (`booking.card_refund_unsure`, W21a) is gone:
+// nothing writes those notes any more (the last writer, the old Move, went at W24) and live has none.
 // One transaction per step replaces the old figure-built keys and their 24-hour look-up, refusal counts, put-backs and
 // best-effort statements (bookingRefund.ts, bookingMoneyClaim.ts, cardRefundAttempts.ts, stripeRefundLookup.ts).
 // W23 (brief W23 item 1): a claim plans ONE card part per order across its booking lines and its add-on lines (Cancel &
@@ -48,7 +46,7 @@ import {
   laterCardRefundFailedMessage,
   laterCardRefundNotSentMessage,
   NO_CASH_LEFT_MESSAGE,
-  oldRefundReachedCustomerMessage,
+  OWED_ON_CANCELLED_STORE_CREDIT_ONLY_MESSAGE,
   onlyCardLeftMessage,
   onlyCashLeftMessage,
   onlyLeftMessage,
@@ -56,7 +54,6 @@ import {
   PART_REFUND_METHOD_WORDS,
   reasonRequiredMessage,
   reasonTooLongMessage,
-  REFUND_CHECK_FAILED_MESSAGE,
   REFUND_METHOD_WORDS,
   REFUND_NOT_SAVED_MESSAGE,
   REFUND_NOT_SENT_DETAIL,
@@ -64,6 +61,8 @@ import {
   REFUND_REFUSED_NOT_PUT_BACK_MESSAGE,
   REFUND_WORDS,
   refundGoneNotRecordedMessage,
+  putBackBlockedMessage,
+  putBackBlockedNotRecordedMessage,
   refundRefusedDetail,
 } from './failure-messages'
 import { lockAndLoadBooking, paymentOpen, type LoadedBooking } from './load-booking'
@@ -162,7 +161,10 @@ export interface CancelClaim {
   placesReleased: number
   /** Cancel & return credit: the session pass a credit went back to (sessions_remaining + 1). */
   passReturned: string | null
-  /** The seat money given back: Cancel & Refund's price paid (money owed included); £0 for Cancel & return credit. */
+  /**
+   * The seat money given back: Cancel & Refund's price paid (money owed included); £0 for Cancel & return credit,
+   * except (W25) the club's cancel of a credit booking with paid guests, which gives their money back.
+   */
   seatAmount: number
   /** The booking lines are stamped refunded once seat money goes back, or when all of it had gone back already. */
   allBackAlready: boolean
@@ -260,11 +262,6 @@ export interface ClaimDetails {
   livemode: boolean | null
   /** Q26: who handed the cash over. */
   handedOverBy?: string
-  /**
-   * W21a (W21 review L2): Refund the rest's planned parts that are an old card refund with no clear answer that went
-   * (found before R1): each is gone already, so it is never sent, and reconcile and a close count it as gone.
-   */
-  matched?: MatchedPart[]
   /** W22: Remove Guest's claim. */
   guest?: GuestClaim
   /** W22: Remove add-on's claim. Its card parts' lines are add-on lines (addon_order_lines), not booking lines. */
@@ -273,12 +270,6 @@ export interface ClaimDetails {
   cancel?: CancelClaim
   /** W24: a cheaper Move's claim. */
   move?: MoveClaim
-}
-
-/** A planned card part that is an old refund already gone: the order it refunds and the old refund's id. */
-export interface MatchedPart {
-  orderId: string
-  refundId: string
 }
 
 export interface Claim {
@@ -300,11 +291,14 @@ export interface RefundOptions {
   stripe?: () => StripeClient
 }
 
-/** Who finishes a claim: the press, reconcile, or a person closing it by hand (their reason). */
+/**
+ * Who finishes a claim: the press, reconcile, or a person closing it by hand (their reason). W25a: `undo_blocked` is
+ * the press whose first card part was refused and whose undo was blocked (`why`: Stripe's reason).
+ */
 export interface FinishedBy {
   actor: { type: 'staff' | 'system'; id: string | null }
   requestId: string
-  how: 'press' | 'reconcile' | 'close'
+  how: 'press' | 'reconcile' | 'close' | 'undo_blocked'
   why?: string
 }
 
@@ -513,20 +507,34 @@ export type Started = { kind: 'done'; output: RefundBookingOutput } | { kind: 'c
  * The checks every amount action starts with, under the booking's lock, in the old function's order (a payment still
  * being taken on the booking first, as refundBooking checked it before anything else).
  */
-async function lockAndCheck(tx: Tx, bookingId: string, amount: unknown): Promise<{ booking: LoadedBooking; amount: number }> {
+async function lockAndCheck(tx: Tx, bookingId: string, amount: unknown, owedOnly = false): Promise<{ booking: LoadedBooking; amount: number; cancelled: boolean }> {
   const loaded = await lockAndLoadBooking(tx, { bookingId, ownSession: false })
   if (!loaded) throw refundRefusal('NOT_FOUND', 'booking_not_found', REFUND_WORDS.bookingNotFound)
   const { booking } = loaded
   if (paymentOpen(booking)) throw paymentOpenRefusal(booking, refundRefusal)
   // A held refund on the booking (no clear answer yet) holds every refund until reconcile settles it.
   if (await refundClaimOpen(tx, bookingId)) throw refundRefusal('CONFLICT', 'refund_open', REFUND_OPEN_MESSAGE)
-  // price_paid stays on a cancelled booking after its refund, so it would pay out a second time.
-  if (booking.status === 'cancelled') throw refundRefusal('CONFLICT', 'already_cancelled', REFUND_WORDS.alreadyCancelled)
+  // price_paid stays on a cancelled booking after its refund, so a part refund would pay out a second time. W25 (W23
+  // review later 1): money still owed on a cancelled booking (a refund closed by hand) is not that: `owedOnly` (Refund
+  // the rest, It already arrived) goes on, and gives or clears exactly what is owed, which lives in refund_owed_amount
+  // alone on a cancelled booking.
+  const cancelled = booking.status === 'cancelled'
+  if (cancelled && !owedOnly) throw refundRefusal('CONFLICT', 'already_cancelled', REFUND_WORDS.alreadyCancelled)
   if (typeof amount !== 'number' || !Number.isFinite(amount) || !(round2(amount) > 0)) {
     throw refundRefusal('VALIDATION', 'amount_not_positive', REFUND_WORDS.amountNotPositive, { field: 'amount' })
   }
-  return { booking, amount }
+  return { booking, amount, cancelled }
 }
+
+/**
+ * W25: what is owed comes off the booking (Refund the rest, It already arrived). A live booking's price_paid holds the
+ * money owed, so both fall; a cancelled booking keeps its price_paid (as every cancelled booking does), and what is
+ * owed on it is in refund_owed_amount alone (finishClaimInTransaction).
+ */
+const OWED_OFF_SQL = {
+  live: 'UPDATE bookings SET price_paid = price_paid - $1::numeric, refund_owed_amount = refund_owed_amount - $1::numeric, updated_at = now() WHERE id = $2::uuid',
+  cancelled: 'UPDATE bookings SET refund_owed_amount = refund_owed_amount - $1::numeric, updated_at = now() WHERE id = $2::uuid',
+} as const
 
 /** What Refund the rest and It already arrived both refuse: the amount must be what is owed, to half a penny. */
 function owedRefusal(amount: number, figures: RefundFigures): ApiError | null {
@@ -582,28 +590,20 @@ async function partR1(tx: Tx, bookingId: string, input: PartRefundInput, options
   return { kind: 'done', output }
 }
 
-async function owedR1(
-  tx: Tx,
-  bookingId: string,
-  input: RefundOwedInput,
-  options: RefundOptions,
-  livemode: boolean | null,
-  looked: OldRefundsLooked | null
-): Promise<Started> {
+async function owedR1(tx: Tx, bookingId: string, input: RefundOwedInput, options: RefundOptions, livemode: boolean | null): Promise<Started> {
   const method = input.refundMethod
   if (method !== 'card' && method !== 'credit') throw refundRefusal('VALIDATION', 'refund_method_invalid', REFUND_METHOD_WORDS, { field: 'refundMethod' })
-  const { booking, amount } = await lockAndCheck(tx, bookingId, input.amount)
+  const { booking, amount, cancelled } = await lockAndCheck(tx, bookingId, input.amount, true)
   const figures = await withCashAndLine(tx, bookingId, booking.figures)
   const refused = owedRefusal(amount, figures)
   if (refused) throw refused
+  // W25: on a cancelled booking, store credit only. The money is owed there because a card refund couldn't be settled
+  // (a refund closed by hand), so a second card refund could pay the same money twice.
+  if (cancelled && method !== 'credit') throw refundRefusal('CONFLICT', 'cancelled_store_credit_only', OWED_ON_CANCELLED_STORE_CREDIT_ONLY_MESSAGE, { figures })
   // Exactly what is owed: staff confirmed it. Never a part refund: this money was never paid toward the booking.
   const owed = figures.refundOwed
   const plan = await planRefund(tx, bookingId, owed, method)
-  const matched = looked ? await matchOldRefunds(tx, bookingId, plan, looked) : []
-  await tx.query(
-    'UPDATE bookings SET price_paid = price_paid - $1::numeric, refund_owed_amount = refund_owed_amount - $1::numeric, updated_at = now() WHERE id = $2::uuid',
-    [owed, bookingId]
-  )
+  await tx.query(cancelled ? OWED_OFF_SQL.cancelled : OWED_OFF_SQL.live, [owed, bookingId])
   const claim = await writeClaim(
     tx,
     bookingId,
@@ -616,7 +616,6 @@ async function owedR1(
       worker: true,
       plan,
       livemode: plan.card.length > 0 ? livemode : null,
-      ...(matched.length > 0 ? { matched } : {}),
     },
     options
   )
@@ -800,9 +799,11 @@ export function cancelActionRow(
   // W23a: a club cancel says so (only then, so every other cancel's row is as W23 wrote it).
   const club = cancel?.clubCancelled ? { clubCancelled: true } : {}
   if (kind === 'cancel') return { action: BOOKING_CANCELLED, details: { refundMethod: method, seatRefund: cancel?.seatAmount ?? 0, ...common, ...club } }
+  // W25: the club's Cancel & return credit that refunded paid guests says so (only then, so every other row is as W23's).
+  const guests = (cancel?.seatAmount ?? 0) > 0 ? { refundMethod: method, seatRefund: cancel?.seatAmount ?? 0 } : {}
   return {
     action: BOOKING_CANCELLED_CREDIT,
-    details: { addonRefund: cancel?.addonRefund ?? null, creditUsableAgain: cancel?.creditUsableAgain ?? false, passReturned: cancel?.passReturned ?? null, ...common, ...club },
+    details: { addonRefund: cancel?.addonRefund ?? null, creditUsableAgain: cancel?.creditUsableAgain ?? false, passReturned: cancel?.passReturned ?? null, ...common, ...club, ...guests },
   }
 }
 
@@ -850,11 +851,14 @@ export async function finishClaimInTransaction(tx: Tx, claim: Claim, outcome: Cl
   const status = (await tx.query<{ status: string }>('SELECT status FROM bookings WHERE id = $1::uuid', [claim.bookingId]))[0]?.status
   let owed = round2(outcome.owed)
   let storeCredit = round2(plan.storeCredit + outcome.extraToStoreCredit)
-  // A cancelled booking has no Refund the rest, so money Stripe never received goes to store credit (W21). W23: not when
-  // a person closes the claim by hand: reconcile left it because Stripe shows something it can't settle (several refunds,
-  // a different amount, another mode), so the card money may have reached the customer, and store credit on top could
-  // pay it twice. It stays owed on the booking, and the close's words say to check Stripe first.
-  if (owed > 0 && status === 'cancelled' && by.how !== 'close') {
+  // On a cancelled booking, money Stripe never received goes to store credit (W21). W23: not when a person closes the
+  // claim by hand: reconcile left it because Stripe shows something it can't settle (several refunds, a different
+  // amount, another mode), so the card money may have reached the customer, and store credit on top could pay it twice.
+  // It stays owed on the booking, and the close's words say to check Stripe first, then use It already arrived or
+  // Refund the rest on the cancelled booking (W25: both run there; Refund the rest to store credit only). W25a (W25
+  // review S1): the same when Stripe refused the first card part and the undo was blocked: the refusal may mean the
+  // customer has the money already (refunded in Stripe's dashboard, or disputed), so a person decides, with the reason.
+  if (owed > 0 && status === 'cancelled' && by.how !== 'close' && by.how !== 'undo_blocked') {
     storeCredit = round2(storeCredit + owed)
     owed = 0
   }
@@ -892,8 +896,10 @@ export async function finishClaimInTransaction(tx: Tx, claim: Claim, outcome: Cl
   }
   if (owed > 0) {
     // W23: a cancel never lowered price_paid (a cancelled booking keeps it, as before), so only what is owed rises.
+    // W25: the same for any claim closed by hand on a cancelled booking (an add-on removed from it): what is owed on a
+    // cancelled booking is in refund_owed_amount alone, where Refund the rest and It already arrived take it from.
     await tx.query(
-      cancel
+      cancel || status === 'cancelled'
         ? 'UPDATE bookings SET refund_owed_amount = refund_owed_amount + $1::numeric, updated_at = now() WHERE id = $2::uuid'
         : 'UPDATE bookings SET price_paid = price_paid + $1::numeric, refund_owed_amount = refund_owed_amount + $1::numeric, updated_at = now() WHERE id = $2::uuid',
       [owed, claim.bookingId]
@@ -1111,6 +1117,9 @@ async function cancelOrdersToRecount(
   if (kind === 'cancel') {
     const rows = await tx.query<{ order_id: string }>("SELECT DISTINCT order_id FROM order_line_items WHERE booking_id = $1::uuid AND item_type = 'booking'", [bookingId])
     orders.push(...rows.map((row) => row.order_id), ...outcome.went.map((part) => part.orderId), ...(plan.ownOrderId ? [plan.ownOrderId] : []))
+  } else if (cancel.seatAmount > 0) {
+    // W25: the club's Cancel & return credit that refunded paid guests: the orders their money went back to.
+    orders.push(...outcome.went.map((part) => part.orderId), ...(plan.ownOrderId ? [plan.ownOrderId] : []))
   }
   for (const stamp of shares.stamps) {
     const line = cancel.addons.find((one) => one.id === stamp.id)
@@ -1127,6 +1136,38 @@ export async function finishClaim(db: Db, claim: Claim, outcome: ClaimOutcome, b
     if (!isDeadlock(err)) throw err
     return db.transaction((tx) => finishClaimInTransaction(tx, claim, outcome, by))
   }
+}
+
+/**
+ * W25 (W22 review later 2, W23 review later 2, W24 review L1): the undo can't put the booking back because what R1
+ * gave back has been taken since: the session's places (another booking), or the pass session (spent). Thrown inside
+ * the undo's transaction, so nothing of the undo is kept: the change stands, and the press finishes the claim there and
+ * then with every card part owed on the booking (W25a; `finishBlockedUndo`).
+ */
+export class PutBackBlocked extends Error {
+  constructor(what: string) {
+    super(`The undo can't put the booking back: ${what}.`)
+    this.name = 'PutBackBlocked'
+  }
+}
+
+/** The session takes `places` back only while it has room for them (a private session: only while it is empty again). */
+async function takePlacesBack(tx: Tx, sessionId: string, places: number): Promise<void> {
+  if (places <= 0) return
+  const taken = await tx.query(
+    'UPDATE sessions SET total_booked = total_booked + $1::int, updated_at = now() WHERE id = $2::uuid AND (capacity - total_booked) >= $1::int RETURNING id',
+    [places, sessionId]
+  )
+  if (taken.length !== 1) throw new PutBackBlocked(`session ${sessionId} no longer has ${places} free place${places === 1 ? '' : 's'}`)
+}
+
+/** The pass gives back the session it was handed only while it still has one: never below 0. */
+async function takePassSessionBack(tx: Tx, passId: string): Promise<void> {
+  const taken = await tx.query(
+    'UPDATE customer_session_passes SET sessions_remaining = sessions_remaining - 1, updated_at = now() WHERE id = $1::uuid AND sessions_remaining >= 1 RETURNING id',
+    [passId]
+  )
+  if (taken.length !== 1) throw new PutBackBlocked(`pass ${passId} has no session left to take back`)
 }
 
 /**
@@ -1166,9 +1207,7 @@ async function undoClaim(db: Db, claim: Claim, by: FinishedBy): Promise<boolean>
       if (!guest?.restore) throw new Error(`Refund claim ${claim.id} has no guest to put back.`)
       await tx.query('INSERT INTO booking_guests SELECT * FROM jsonb_populate_record(NULL::booking_guests, $1::jsonb)', [JSON.stringify(guest.restore)])
       await tx.query('UPDATE bookings SET price_paid = price_paid + $1::numeric, party_size = party_size + 1, updated_at = now() WHERE id = $2::uuid', [amount, claim.bookingId])
-      if (guest.placeReleased) {
-        await tx.query('UPDATE sessions SET total_booked = total_booked + 1, updated_at = now() WHERE id = $1::uuid', [locks.bookingSessionId])
-      }
+      if (guest.placeReleased) await takePlacesBack(tx, locks.bookingSessionId, 1)
     } else if (kind === 'remove_addon') {
       // W22: the add-on goes back on the booking (cancelBookingAddonLines' unclaim): nothing went back for it.
       await tx.query('UPDATE addon_order_lines SET removed_at = NULL, removed_by = NULL WHERE id = ANY($1::uuid[])', [(claim.details.addon?.lines ?? []).map((line) => line.id)])
@@ -1205,12 +1244,9 @@ async function undoCancel(tx: Tx, bookingId: string, cancel: CancelClaim): Promi
     cancel.refundOwed,
     bookingId,
   ])
-  if (cancel.placesReleased > 0) {
-    await tx.query('UPDATE sessions SET total_booked = total_booked + $1::int, updated_at = now() WHERE id = $2::uuid', [cancel.placesReleased, cancel.sessionId])
-  }
-  if (cancel.passReturned) {
-    await tx.query('UPDATE customer_session_passes SET sessions_remaining = sessions_remaining - 1, updated_at = now() WHERE id = $1::uuid', [cancel.passReturned])
-  }
+  // W25: only while the session still has the places and the pass still has the session (PutBackBlocked otherwise).
+  await takePlacesBack(tx, cancel.sessionId, cancel.placesReleased)
+  if (cancel.passReturned) await takePassSessionBack(tx, cancel.passReturned)
   for (const line of cancel.addons) {
     if (line.creditsReturned > 0 && line.membershipId) {
       await tx.query('UPDATE customer_memberships SET addon_credits_remaining = addon_credits_remaining - $1::int, updated_at = now() WHERE id = $2::uuid', [
@@ -1257,12 +1293,10 @@ async function undoMoveClaim(tx: Tx, bookingId: string, amount: number, move: Mo
   if (move.placesClaimed !== 0) {
     await tx.query('UPDATE sessions SET total_booked = total_booked - $1::int, updated_at = now() WHERE id = $2::uuid', [move.placesClaimed, move.newSessionId])
   }
-  if (move.placesReleased !== 0) {
-    await tx.query('UPDATE sessions SET total_booked = total_booked + $1::int, updated_at = now() WHERE id = $2::uuid', [move.placesReleased, move.oldSessionId])
-  }
-  if (move.passReturned) {
-    await tx.query('UPDATE customer_session_passes SET sessions_remaining = sessions_remaining - 1, updated_at = now() WHERE id = $1::uuid', [move.passReturned])
-  }
+  // W25: the old session's places only while it still has them, and the pass session only while the pass still has it
+  // (PutBackBlocked otherwise: the move stands and the refund ends as money still to refund).
+  await takePlacesBack(tx, move.oldSessionId, move.placesReleased)
+  if (move.passReturned) await takePassSessionBack(tx, move.passReturned)
 }
 
 // --- The press: each card part once, then R2
@@ -1308,86 +1342,6 @@ async function sendCardPart(stripe: StripeClient, claimId: string, part: CardPar
   return { outcome: 'unclear', detail: last }
 }
 
-// --- Refund the rest after an old card refund with no clear answer (the old 24-hour look-up's job, for old money)
-
-/**
- * The old code's card refunds that got no clear answer (`booking.card_refund_unsure`: the key, PaymentIntent and
- * amount) since the booking's money owed was last dealt with (Refund the rest or It already arrived). Old Move, Remove
- * Guest and Cancel & Refund still write these until W22 to W24: the money is put on the booking as owed. The old
- * Refund the rest sent it again under the same key, so Stripe gave the first refund back (and after 24 hours looked
- * for it); a Worker refund has a key of its own, so it looks: `$1` the booking.
- */
-const OLD_UNSURE_SQL = `
-SELECT n.id::text AS id, n.details->>'key' AS key, n.details->>'paymentIntentId' AS payment_intent_id
-FROM audit_log n
-WHERE n.action = 'booking.card_refund_unsure' AND n.entity_type = 'booking' AND n.entity_id = $1::text
-  AND n.at > COALESCE(
-    (SELECT max(d.at) FROM audit_log d
-     WHERE d.entity_type = 'booking' AND d.entity_id = $1::text AND d.action IN ('booking.refund_owed', 'booking.refund_owed_arrived')),
-    '-infinity'::timestamptz)
-ORDER BY n.at, n.id`
-
-/** An old refund with no clear answer that went (succeeded or pending): its PaymentIntent, id and pence. */
-interface OldRefundFound {
-  paymentIntentId: string
-  refundId: string
-  amount: number
-}
-
-/** What Refund the rest's look-up saw: the notes it looked for (their ids) and the old refunds that went. */
-export interface OldRefundsLooked {
-  noteIds: string[]
-  found: OldRefundFound[]
-}
-
-/**
- * Each old unsure refund found in Stripe (by its `refund_key`, which the legacy route put on every refund) that went
- * (succeeded or pending), each refund once (an old screen pressed again sent the same key); 'unclear' when Stripe
- * couldn't be asked, or a PaymentIntent has more refunds than reconcile pages through. Reads only, before R1.
- */
-export async function oldUnsureRefundsThatWent(db: Queryable, stripe: StripeClient, bookingId: string, timing: StripeTiming): Promise<OldRefundsLooked | 'unclear'> {
-  const notes = await db.query<{ id: string; key: string; payment_intent_id: string }>(OLD_UNSURE_SQL, [bookingId])
-  const found = new Map<string, OldRefundFound>()
-  const listed = new Map<string, Stripe.Refund[]>()
-  for (const note of notes) {
-    let refunds = listed.get(note.payment_intent_id)
-    if (!refunds) {
-      const answer = await listRefunds(stripe, note.payment_intent_id, timing)
-      if (answer.kind === 'unclear') return 'unclear'
-      refunds = answer.refunds
-      listed.set(note.payment_intent_id, refunds)
-    }
-    const refund = refunds.find((one) => one.metadata?.['refund_key'] === note.key && one.status !== 'failed' && one.status !== 'canceled')
-    if (refund) found.set(refund.id, { paymentIntentId: note.payment_intent_id, refundId: refund.id, amount: refund.amount })
-  }
-  return { noteIds: notes.map((note) => note.id), found: [...found.values()] }
-}
-
-/**
- * Under R1's lock: the notes are still the ones the look-up saw (or nothing is sent: try again), and each old refund
- * that went is exactly one planned part on its PaymentIntent (or nothing is sent: W21 review L1, where a £60 part on a
- * PaymentIntent that already gave back £40 and £20 would pay £60 over). Answers the parts matched, for the claim.
- */
-export async function matchOldRefunds(tx: Tx, bookingId: string, plan: RefundPlan, looked: OldRefundsLooked): Promise<MatchedPart[]> {
-  const notes = await tx.query<{ id: string }>(OLD_UNSURE_SQL, [bookingId])
-  if (JSON.stringify(notes.map((note) => note.id)) !== JSON.stringify(looked.noteIds)) {
-    throw refundRefusal('CONFLICT', 'refund_check_failed', REFUND_CHECK_FAILED_MESSAGE)
-  }
-  const free = [...plan.card]
-  const matched: MatchedPart[] = []
-  let allMatched = true
-  for (const refund of looked.found) {
-    const at = free.findIndex((part) => part.paymentIntentId === refund.paymentIntentId && pence(part.amount) === refund.amount)
-    const part = at >= 0 ? free.splice(at, 1)[0] : undefined
-    if (part) matched.push({ orderId: part.orderId, refundId: refund.refundId })
-    else allMatched = false
-  }
-  if (!allMatched) {
-    throw refundRefusal('CONFLICT', 'refund_check_failed', oldRefundReachedCustomerMessage(looked.found.map((refund) => refund.amount / 100)))
-  }
-  return matched
-}
-
 const held = (claim: Claim, reason: string, message: string, cardGone = 0): RefundBookingOutput => ({
   cardRefundedAmount: cardGone,
   storeCreditRefundedAmount: 0,
@@ -1395,18 +1349,35 @@ const held = (claim: Claim, reason: string, message: string, cardGone = 0): Refu
 })
 
 /**
+ * W25a (W25 review S1): the first card part was refused and the undo was blocked, so the change stands. The claim is
+ * finished now as a close by hand finishes it: nothing gone, every card part owed on the booking (kept owed on a
+ * cancelled booking too, never store credit: Stripe's refusal may mean the customer has the money already), the plan's
+ * own store credit given. Reconcile never sees the claim. The answer is still `held` (the screens show its words),
+ * with Stripe's reason and the two buttons. If the finish fails, the claim stays open for reconcile, as before.
+ */
+async function finishBlockedUndo(db: Db, claim: Claim, options: RefundOptions, detail: string): Promise<RefundBookingOutput> {
+  const owed = sum(claim.details.plan.card.map((part) => part.amount))
+  const words = putBackBlockedMessage(detail, owed, claim.details.cancel !== undefined)
+  try {
+    const output = await finishClaim(db, claim, { went: [], extraToStoreCredit: 0, owed }, { actor: options.actor, requestId: options.requestId, how: 'undo_blocked', why: detail })
+    return { ...(output ?? { cardRefundedAmount: 0, storeCreditRefundedAmount: 0 }), held: { claimId: claim.id, reason: 'refund_refused_not_put_back', message: words } }
+  } catch {
+    return held(claim, 'refund_refused_not_put_back', putBackBlockedNotRecordedMessage(detail))
+  }
+}
+
+/**
  * After R1 has committed a claim with card parts: each part once, in the plan's order (newest order first), then R2.
- * A part matched to an old refund that went (Refund the rest) is gone already: recorded, never sent. The first part
- * sent that is refused undoes R1 and is thrown with the old words; a later one sends it and the rest to store credit
+ * The first part sent that is refused undoes R1 and is thrown with the old words (an undo that is blocked: the claim
+ * finished as money owed, `finishBlockedUndo`); a later one sends it and the rest to store credit
  * (the old warning); a later one with no time left to send ends with the rest as owed (W21 review L6); no clear answer
  * holds the claim for reconcile (Q35), as does R2 failing after money went (W6-3's rule for refunds: what went is never
  * sent again, reconcile records it).
  */
 export async function sendAndFinish(db: Db, stripe: StripeClient, claim: Claim, options: RefundOptions, timing: StripeTiming, firstRefused: FirstRefused): Promise<RefundBookingOutput> {
   const by: FinishedBy = { actor: options.actor, requestId: options.requestId, how: 'press' }
-  const matched = new Set((claim.details.matched ?? []).map((part) => part.orderId))
-  const went: CardPart[] = claim.details.plan.card.filter((part) => matched.has(part.orderId))
-  const toSend = claim.details.plan.card.filter((part) => !matched.has(part.orderId))
+  const went: CardPart[] = []
+  const toSend = claim.details.plan.card
   let sentOne = false
   let extraToStoreCredit = 0
   let owed = 0
@@ -1420,12 +1391,15 @@ export async function sendAndFinish(db: Db, stripe: StripeClient, claim: Claim, 
     }
     if (answer.outcome === 'unclear') return held(claim, 'refund_unconfirmed', CHANGE_REFUND_UNCONFIRMED_MESSAGE)
     if (!sentOne) {
+      const detail = answer.outcome === 'not_sent' ? REFUND_NOT_SENT_DETAIL : answer.detail
       try {
         await undoClaim(db, claim, by)
-      } catch {
+      } catch (err) {
+        // W25: the places or the pass session have been taken since, so the change stands, with its own words.
+        if (err instanceof PutBackBlocked) return finishBlockedUndo(db, claim, options, detail)
         return held(claim, 'refund_refused_not_put_back', REFUND_REFUSED_NOT_PUT_BACK_MESSAGE)
       }
-      throw firstRefused(answer.outcome === 'not_sent' ? REFUND_NOT_SENT_DETAIL : answer.detail)
+      throw firstRefused(detail)
     }
     const rest = sum(toSend.slice(index).map((later) => later.amount))
     if (answer.outcome === 'not_sent') {
@@ -1464,22 +1438,18 @@ export type FirstRefused = (detail: string) => ApiError
 /** W21's words for Part refund and Refund the rest (shared/bookingRefund.ts's). */
 const refundFirstRefused: FirstRefused = (detail) => refundRefusal('PAYMENT_FAILED', 'refund_failed', cardRefundFailedMessage(detail))
 
-/**
- * R1 in its transaction (with C1's once-only deadlock retry and plain words for a fault), then the card parts.
- * `prepare` runs first, outside any transaction, with the Stripe client of a card refund: Refund the rest's look-up.
- */
+/** R1 in its transaction (with C1's once-only deadlock retry and plain words for a fault), then the card parts. */
 export async function run(
   db: Db,
   card: boolean,
   options: RefundOptions,
-  prepare: (stripe: StripeClient | null, timing: StripeTiming) => Promise<R1>,
+  r1: R1,
   firstRefused: FirstRefused = refundFirstRefused,
   notSavedAs: (logDetail: string) => ApiError = notSaved
 ): Promise<RefundBookingOutput> {
   // A card refund needs Stripe: the client is made before R1, so a missing key fails with nothing written.
   const stripe = card && options.stripe ? options.stripe() : null
   const timing = stripeTiming(options.startedAt ?? Date.now(), options.now ?? Date.now)
-  const r1 = await prepare(stripe, timing)
   // A COMMIT with no answer (INTERNAL) may have saved a claim whose card parts were never sent: reconcile finds it,
   // finds nothing in Stripe, and the money ends as owed (Refund the rest).
   const started = await inC1(db, (tx) => r1(tx, stripe?.keyLivemode ?? null), notSavedAs)
@@ -1490,20 +1460,12 @@ export async function run(
 
 /** Part refund: gives `amount` of what is left, to the card (the rest to store credit), to store credit, or in cash. */
 export function partRefund(db: Db, bookingId: string, input: PartRefundInput, options: RefundOptions): Promise<RefundBookingOutput> {
-  return run(db, input.refundMethod === 'card', options, () => Promise.resolve((tx, livemode) => partR1(tx, bookingId, input, options, livemode)))
+  return run(db, input.refundMethod === 'card', options, (tx, livemode) => partR1(tx, bookingId, input, options, livemode))
 }
 
-/**
- * Refund the rest: gives exactly what is owed; with the card, what the cards can't take goes to store credit. To the
- * card, the old screens' refunds with no clear answer are looked for first (money they put on the booking as owed may
- * have reached the customer): Stripe not answering sends nothing, and R1 checks what was found.
- */
+/** Refund the rest: gives exactly what is owed; with the card, what the cards can't take goes to store credit. */
 export function refundOwed(db: Db, bookingId: string, input: RefundOwedInput, options: RefundOptions): Promise<RefundBookingOutput> {
-  return run(db, input.refundMethod === 'card', options, async (stripe, timing) => {
-    const looked = stripe ? await oldUnsureRefundsThatWent(db, stripe, bookingId, timing) : null
-    if (looked === 'unclear') throw refundRefusal('CONFLICT', 'refund_check_failed', REFUND_CHECK_FAILED_MESSAGE)
-    return (tx, livemode) => owedR1(tx, bookingId, input, options, livemode, looked)
-  })
+  return run(db, input.refundMethod === 'card', options, (tx, livemode) => owedR1(tx, bookingId, input, options, livemode))
 }
 
 /**
@@ -1514,16 +1476,13 @@ export async function owedArrived(db: Db, bookingId: string, input: OwedArrivedI
   return inC1(
     db,
     async (tx) => {
-      const { booking, amount } = await lockAndCheck(tx, bookingId, input.amount)
+      const { booking, amount, cancelled } = await lockAndCheck(tx, bookingId, input.amount, true)
       const reason = requiredReason(input.reason, 'this')
       const figures = await withCashAndLine(tx, bookingId, booking.figures)
       const refused = owedRefusal(amount, figures)
       if (refused) throw refused
       const owed = figures.refundOwed
-      await tx.query(
-        'UPDATE bookings SET price_paid = price_paid - $1::numeric, refund_owed_amount = refund_owed_amount - $1::numeric, updated_at = now() WHERE id = $2::uuid',
-        [owed, bookingId]
-      )
+      await tx.query(cancelled ? OWED_OFF_SQL.cancelled : OWED_OFF_SQL.live, [owed, bookingId])
       await audit.recordAll(tx, [
         {
           actorType: 'staff',
@@ -1535,7 +1494,7 @@ export async function owedArrived(db: Db, bookingId: string, input: OwedArrivedI
           details: { amount: owed, reason },
         },
       ])
-      return { cardRefundedAmount: 0, storeCreditRefundedAmount: 0, pricePaid: round2(figures.pricePaid - owed) }
+      return { cardRefundedAmount: 0, storeCreditRefundedAmount: 0, pricePaid: cancelled ? figures.pricePaid : round2(figures.pricePaid - owed) }
     },
     notSaved
   )

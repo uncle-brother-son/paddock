@@ -23,7 +23,6 @@ import {
   FAILURE_MESSAGES,
   MEMBERSHIP_UNCONFIRMED_MESSAGE,
   OLD_MEMBERSHIP_CANCELLED_NOTE,
-  OLD_READER_ORDER_MESSAGE,
   REPLACED_UNCONFIRMED_MESSAGE,
   readerRefundedMessage,
   subscriptionWrongMessage,
@@ -149,10 +148,8 @@ interface OrderRead {
 
 type Found =
   | { kind: 'gone' }
-  /** Not an order the reader is collecting for: no intent on its record (a cash or saved-card order, say). */
+  /** Not an order the reader is collecting for: its record isn't a Worker reader order's (a cash or saved-card order, say). */
   | { kind: 'not_reader' }
-  /** The old checkout's reader order (an intent, but no Worker method): the old checkout's to finish. */
-  | { kind: 'old' }
   /** A Worker reader order whose intent was never written onto it (held, PAYMENT_UNCONFIRMED). */
   | { kind: 'no_intent' }
   | { kind: 'reader'; order: OrderRead; snapshot: ReaderSnapshot & { payment_intent_id: string } }
@@ -167,8 +164,8 @@ async function findOrder(db: Db, orderId: string): Promise<Found> {
     if (typeof record['payment_intent_id'] !== 'string') return { kind: 'no_intent' }
     return { kind: 'reader', order, snapshot: record as ReaderSnapshot & { payment_intent_id: string } }
   }
-  // What finaliseReaderOrder took for a reader order: an intent and the amount it expects.
-  if (record && typeof record['payment_intent_id'] === 'string' && typeof record['expected_amount'] === 'number') return { kind: 'old' }
+  // W25: the old checkout's reader orders (an intent but no `method`) are gone with the old checkout (W16; none left,
+  // checked live 11 Nov), so anything else is simply not a reader order.
   return { kind: 'not_reader' }
 }
 
@@ -191,7 +188,6 @@ async function finaliseFound(
 ): Promise<FinaliseReaderOrderOutput> {
   if (found.kind === 'gone') return { finalised: false, orderId, reason: 'order_not_found', message: ORDER_NOT_FOUND_MESSAGE }
   if (found.kind === 'not_reader') return { finalised: false, orderId, reason: 'not_a_reader_order', message: NOT_A_READER_ORDER_MESSAGE }
-  if (found.kind === 'old') return { finalised: false, orderId, reason: 'old_reader_order', message: OLD_READER_ORDER_MESSAGE }
   if (found.kind === 'no_intent') return { finalised: false, orderId, reason: 'intent_unconfirmed', message: READER_INTENT_UNCONFIRMED_MESSAGE }
 
   const { order, snapshot } = found
@@ -579,7 +575,6 @@ export async function cancelReaderOrder(db: Db, stripe: StripeClient, orderId: s
   const timing = pressTiming(options, found)
   if (found.kind === 'gone') return { cancelled: true, orderId, alreadyGone: true, message: ALREADY_GONE_MESSAGE }
   if (found.kind === 'not_reader') return { cancelled: false, orderId, reason: 'not_a_reader_order', message: NOT_A_READER_ORDER_MESSAGE }
-  if (found.kind === 'old') return { cancelled: false, orderId, reason: 'old_reader_order', message: OLD_READER_ORDER_MESSAGE }
   // Its intent may exist, though nobody has its secret: reconcile (W12) finds it in Stripe by the order's id.
   if (found.kind === 'no_intent') return { cancelled: false, orderId, reason: 'intent_unconfirmed', message: READER_INTENT_UNCONFIRMED_MESSAGE }
 

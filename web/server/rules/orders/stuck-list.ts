@@ -28,7 +28,9 @@ export const OLD_ROLLBACK_WORDS =
   "The old screens had started cancelling this order and couldn't finish. Nothing more will be changed automatically: don't take payment again, and tell a manager."
 export const STUCK_WORDS: Readonly<Record<string, string>> = {
   waiting: 'Waiting for the automatic check, which runs every 5 minutes and settles it if it can. Nothing to do yet.',
-  old_code: 'Started on the old screens: press Resolve now to settle it.',
+  // W25: a pending order or flow with no mark of the Worker's. None can be made any more (the old screens' code is
+  // gone) and nothing settles one, so it is listed for a person.
+  not_started_here: `The booking system has no record of starting this payment, so the automatic check can't settle it. ${TELL_A_MANAGER}`,
   unclear: "Stripe didn't give a clear answer about this payment. The automatic check tries again every 5 minutes: don't take payment again.",
   other_mode: `Stripe can't find this payment with the payment account the system is using now (it may be in the other Stripe mode, live or test). ${TELL_A_MANAGER}`,
   amount_mismatch: `The amount Stripe took isn't the amount expected. ${TELL_A_MANAGER}`,
@@ -39,6 +41,9 @@ export const STUCK_WORDS: Readonly<Record<string, string>> = {
   changed_since: CHANGED_SINCE_MESSAGE,
   finalise_failed: "The payment went through but the order couldn't be finished yet. The automatic check tries again every 5 minutes: don't take payment again.",
   undo_failed: "This couldn't be cancelled yet (nothing was given back). The automatic check tries again every 5 minutes: don't take payment again. If this stays, tell a manager.",
+  // W25 (W24 noticed): a held move's undo meeting the customer's other booking (reader-flow.ts, FlowUndoBlocked).
+  undo_blocked:
+    "This move couldn't be undone: the customer now has another booking that clashes with putting this one back (on the same day, or at the same time). Nothing was taken for the move. Move or cancel the other booking, then press Resolve now; or tell a manager.",
   old_rollback: OLD_ROLLBACK_WORDS,
   charged_without_order: 'A payment went through for an order that had already been cancelled. It is being refunded automatically: nothing to do.',
   charged_without_record: 'A payment went through for a change that had already been undone. It is being refunded automatically: nothing to do.',
@@ -62,8 +67,7 @@ export const STUCK_WORDS: Readonly<Record<string, string>> = {
   order_not_found: 'This order no longer exists (it was cancelled or removed in the meantime). Nothing to do.',
   not_a_reader_order: `This order isn't a card-reader order, so the automatic check couldn't settle its payment. ${TELL_A_MANAGER}`,
   intent_unconfirmed: "Its card-reader payment was never confirmed as set up. The automatic check looks for it in Stripe every 5 minutes: don't take payment again.",
-  old_reader_order: 'Started on the old screens: press Resolve now to settle it.',
-  old_reader_flow: 'Started on the old screens: press Resolve now to settle it.',
+  not_a_reader_flow: `This isn't a card reader payment the booking system can finish or cancel. ${TELL_A_MANAGER}`,
   rollback_started: OLD_ROLLBACK_WORDS,
   compensating:
     "This membership order is being reversed (its subscription cancelled, its payments refunded). The automatic check finishes it every 5 minutes: don't take payment again.",
@@ -174,7 +178,7 @@ export interface StuckOrder {
   paymentIntentId: string | null
   createdAt: string
   ageMinutes: number
-  /** 'reader' or 'card' for an order the Worker made; null for the old checkout's. */
+  /** 'reader' or 'card' for an order the Worker made; null for a pending order with no mark of the Worker's (`not_started_here`). */
   method: 'reader' | 'card' | null
   reason: string
   words: string
@@ -193,7 +197,6 @@ export interface StuckFlow {
   amount: number
   createdAt: string
   ageMinutes: number
-  madeBy: 'worker' | 'old'
   reason: string
   words: string
   /** W21: a Worker flow reconcile left for a person (`held_flow`). */
@@ -374,9 +377,9 @@ interface Last {
   reason?: string
 }
 
-/** Why an item is listed: what reconcile last found, or that it hasn't looked yet, or that it's the old code's. */
+/** Why an item is listed: what reconcile last found, or that it hasn't looked yet, or that the Worker never started it. */
 function reasonFor(madeByWorker: boolean, last: Last | null): string {
-  if (!madeByWorker) return 'old_code'
+  if (!madeByWorker) return 'not_started_here'
   if (last?.outcome === 'left' && last.reason) return last.reason
   return 'waiting'
 }
@@ -493,7 +496,6 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
         amount: Number.parseFloat(row.expected_amount),
         createdAt,
         ageMinutes: ageMinutes(createdAt),
-        madeBy: madeByWorker ? 'worker' : 'old',
         reason,
         words: card && reason === 'waiting' ? CARD_FLOW_WAITING_WORDS : wordsFor(reason),
         ...(closable ? { close: { kind: 'held_flow' as const, orderId: row.id } } : {}),

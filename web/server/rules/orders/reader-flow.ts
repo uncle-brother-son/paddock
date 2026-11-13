@@ -11,12 +11,13 @@
 // succeeds on a flow already undone is recorded for reconcile's automatic refund (W12 calls).
 //
 // Only flows the Worker started are taken (their record carries the Worker's `method` and `request_id`,
-// as an order's does). Until step D moves Move, Settle and Add Guest, the old functions start every flow
-// and finish it too, so these routes refuse them (`old_reader_flow`), as W11's do the old checkout's.
+// as an order's does). W25: every flow is the Worker's now (step D moved Move, Settle and Add Guest, and the
+// old functions that started and finished flows are gone), so a row without the Worker's mark is refused as
+// not a reader flow, with words that send staff to a manager.
 import 'server-only'
 import type Stripe from 'stripe'
 import { audit } from '@/server/audit'
-import { inOpenTransaction, isDeadlock, type Db, type Tx } from '@/server/db'
+import { inOpenTransaction, isDeadlock, postgresRefusal, type Db, type Tx } from '@/server/db'
 import type { StripeClient } from '@/server/stripe/client'
 import { sendOptions, stripeTiming, type StripeTiming } from '@/server/stripe/deadline'
 import { NOT_A_READER_FLOW_MESSAGE } from '@/server/rules/bookings/failure-messages'
@@ -63,6 +64,8 @@ export interface FlowSnapshot {
   claimed_extra_capacity?: boolean
   addon_line_ids?: string[]
   addon_credits?: Array<{ membership_id: string; quantity: number }>
+  /** W25 (W20 review 5): this Add Guest's tick was the booking's first, so its undo clears guests_over_18_confirmed_at. */
+  over_18_confirmed_here?: boolean
   // A flow the Worker started (W12; written by step D). W17: `card` for a saved-card flow (server/rules/bookings/flow.ts),
   // which also names the saved card it charges.
   method?: 'reader' | 'card'
@@ -136,6 +139,16 @@ export interface CancelFlowOutput {
   warning?: string
 }
 
+/**
+ * W25 (W21 review L5): a saved-card payment that was still processing when its flow was undone by hand (the manual
+ * close, `held_flow`). The close writes one `watching` row per payment; reconcile reads the payment each run and ends
+ * the watch with `landed` (it went through: handed to the automatic refund as `reader_payment.charge_without_record`)
+ * or `nothing_taken` (cancelled, or it took nothing).
+ */
+export const FLOW_PAYMENT_WATCHED = 'reader_payment.payment_watched'
+/** The row finaliseFlowInTransaction writes for a payment that succeeded on a flow already undone (the late refund's cue). */
+export const FLOW_CHARGE_WITHOUT_RECORD = 'reader_payment.charge_without_record'
+
 export function flowLabel(flow: string): string {
   if (flow === 'move') return 'booking move'
   if (flow === 'settle') return 'booking payment'
@@ -158,7 +171,9 @@ export const flowNotSucceededMessage = (status: string): string =>
 export const flowCancelledMessage = (flow: string): string => `Payment not taken. The ${flowLabel(flow)} was undone and nothing was charged.`
 
 // W12's words (new; adjustable at W14).
-export const OLD_READER_FLOW_MESSAGE = 'This card-reader payment was started by the old booking screens, so the old screens must finish or cancel it.'
+/** W25: a pending row with no mark of the Worker's (none can be made any more: the old screens' code is gone). */
+export const FLOW_NOT_STARTED_HERE_MESSAGE =
+  "The booking system has no record of starting this card reader payment, so it can't be finished or cancelled here. Nothing was changed: don't take payment again, and tell a manager."
 export const FLOW_INTENT_UNCONFIRMED_MESSAGE =
   "The card reader payment couldn't be started: Stripe gave no clear answer. Nothing has been taken, but the change is on hold while it's checked: don't take payment for it again. Check the Orders page in a few minutes."
 export const FLOW_PAID_NOT_FINISHED_MESSAGE =
@@ -167,6 +182,23 @@ export const FLOW_CHARGED_WITHOUT_RECORD_MESSAGE =
   "The reader took the payment, but the change had already been undone, so the payment needs refunding. Don't take payment again: check the Orders page."
 export const FLOW_UNDO_INCOMPLETE_MESSAGE =
   "The change couldn't be undone yet: nothing was given back. It's still on the Orders page, and Resolve now will finish it once it's 15 minutes old."
+/**
+ * W25 (W24 noticed): a held Move's undo can't put the booking back on its old session because the customer now has
+ * another booking that clashes with it there: one on the same day (the one-booking-a-day rule), or one at the same
+ * time (the overlap rule). Nothing was taken for the move. Said plainly, on the reader and on the Orders page.
+ */
+export const FLOW_UNDO_BLOCKED_MESSAGE =
+  "The move couldn't be undone: the customer now has another booking that clashes with putting this one back (on the same day, or at the same time). Nothing was taken for the move and nothing was changed. Move or cancel the other booking, then press Resolve now on the Orders page; or tell a manager."
+export class FlowUndoBlocked extends Error {
+  constructor(detail: string) {
+    super(`${FLOW_UNDO_BLOCKED_MESSAGE} (${detail})`)
+    this.name = 'FlowUndoBlocked'
+  }
+}
+/** The trigger's words for a second booking on the day (enforce_one_booking_per_customer_day), and the overlap constraint. */
+const DUPLICATE_DAY_TEXT = 'This customer already has a booking on'
+const OVERLAP_CONSTRAINT = 'bookings_no_cross_session_overlap'
+
 export const flowCustomerMismatchMessage = (paymentIntentId: string): string =>
   `This PaymentIntent was made for a different Stripe customer — do NOT finalise automatically. Check the PaymentIntent (${paymentIntentId}) in Stripe before doing anything.`
 
@@ -280,7 +312,7 @@ export async function finaliseFlowInTransaction(
       // The money is on its way to nobody: kept where reconcile refunds it (W12 calls) and the stuck list shows it.
       await audit.recordAll(tx, [{
         ...entry,
-        action: 'reader_payment.charge_without_record',
+        action: FLOW_CHARGE_WITHOUT_RECORD,
         details: { paymentIntentId: paymentIntent.id, amount: paymentIntent.amount_received, flow: row?.flow ?? null, recordId: row?.record_id ?? null },
       }])
       return { finalised: false, reason: 'charged_without_record' }
@@ -399,6 +431,20 @@ export type FlowUndoOutcome =
  * credit Postgres refused to give) is still a warning; anything that fails rolls the whole undo back.
  */
 export async function undoFlowInTransaction(db: Db, pendingId: string, options: Pick<ReaderRouteOptions, 'actor' | 'requestId'> & { why: string }): Promise<FlowUndoOutcome> {
+  try {
+    return await undoFlow(db, pendingId, options)
+  } catch (err) {
+    // W25 (W24 noticed): Postgres refused to put a move back beside the customer's other booking. Nothing of the undo
+    // was kept (one transaction); thrown as its own error, so the callers that show words can say so plainly.
+    const refused = postgresRefusal(err)
+    if (refused && (refused.constraint === OVERLAP_CONSTRAINT || (refused.code === 'P0001' && refused.message.startsWith(DUPLICATE_DAY_TEXT)))) {
+      throw new FlowUndoBlocked(refused.constraint ?? refused.message)
+    }
+    throw err
+  }
+}
+
+function undoFlow(db: Db, pendingId: string, options: Pick<ReaderRouteOptions, 'actor' | 'requestId'> & { why: string }): Promise<FlowUndoOutcome> {
   return inTransaction(db, async (tx) => {
     const row = await readFlow(tx, pendingId, true)
     if (!row) return { undone: false, reason: 'gone' }
@@ -485,7 +531,14 @@ export async function undoFlowInTransaction(db: Db, pendingId: string, options: 
       if (snapshot.guest_row_id) {
         await tx.query('DELETE FROM booking_guests WHERE id = $1::uuid', [snapshot.guest_row_id])
         // The party grew by one whenever a guest was added, even a free one.
-        await tx.query('UPDATE bookings SET price_paid = price_paid - $1::numeric, party_size = party_size - 1, updated_at = now() WHERE id = $2::uuid', [increment, row.record_id])
+        // W25 (W20 review 5): the over-18 stamp too, when this guest's tick was the one that set it.
+        await tx.query(
+          `UPDATE bookings
+           SET price_paid = price_paid - $1::numeric, party_size = party_size - 1,
+               guests_over_18_confirmed_at = CASE WHEN $3::boolean THEN NULL ELSE guests_over_18_confirmed_at END, updated_at = now()
+           WHERE id = $2::uuid`,
+          [increment, row.record_id, snapshot.over_18_confirmed_here === true]
+        )
       }
       if ((snapshot.addon_line_ids ?? []).length > 0) await tx.query('DELETE FROM addon_order_lines WHERE id = ANY($1::uuid[])', [snapshot.addon_line_ids ?? []])
       for (const credit of snapshot.addon_credits ?? []) {
@@ -545,21 +598,21 @@ export async function undoFlowInTransaction(db: Db, pendingId: string, options: 
 
 type FoundFlow =
   | { kind: 'gone' }
-  | { kind: 'old'; row: FlowRow }
-  | { kind: 'card'; row: FlowRow }
+  /** Not a reader flow of the Worker's: a saved-card flow (`card`), or a row with no mark of the Worker's at all. */
+  | { kind: 'not_reader'; row: FlowRow; card: boolean }
   | { kind: 'no_intent'; row: FlowRow }
   | { kind: 'flow'; row: FlowRow & { payment_intent_id: string } }
 
 async function findFlow(db: Db, pendingId: string): Promise<FoundFlow> {
   const row = await readFlow(db, pendingId)
   if (!row) return { kind: 'gone' }
-  if (isWorkerCardFlow(row.snapshot)) return { kind: 'card', row }
-  if (!isWorkerFlow(row.snapshot)) return { kind: 'old', row }
+  if (!isWorkerFlow(row.snapshot)) return { kind: 'not_reader', row, card: isWorkerCardFlow(row.snapshot) }
   if (typeof row.payment_intent_id !== 'string') return { kind: 'no_intent', row }
   return { kind: 'flow', row: row as FlowRow & { payment_intent_id: string } }
 }
 
 const basics = (row: FlowRow) => ({ pendingId: row.id, flow: row.flow, recordId: row.record_id })
+const notReaderFlowMessage = (card: boolean): string => (card ? NOT_A_READER_FLOW_MESSAGE : FLOW_NOT_STARTED_HERE_MESSAGE)
 
 async function finaliseFound(
   db: Db,
@@ -571,8 +624,7 @@ async function finaliseFound(
   known?: Stripe.PaymentIntent
 ): Promise<FinaliseFlowOutput> {
   if (found.kind === 'gone') return { finalised: false, pendingId, reason: 'not_found', message: FLOW_GONE_MESSAGE }
-  if (found.kind === 'old') return { finalised: false, ...basics(found.row), reason: 'old_reader_flow', message: OLD_READER_FLOW_MESSAGE }
-  if (found.kind === 'card') return { finalised: false, ...basics(found.row), reason: 'not_a_reader_flow', message: NOT_A_READER_FLOW_MESSAGE }
+  if (found.kind === 'not_reader') return { finalised: false, ...basics(found.row), reason: 'not_a_reader_flow', message: notReaderFlowMessage(found.card) }
   const { row } = found
   if (row.status === 'finalised') {
     return { finalised: true, ...basics(row), ...(row.payment_intent_id ? { paymentIntentId: row.payment_intent_id } : {}), alreadyFinalised: true, message: FLOW_ALREADY_FINALISED_MESSAGE }
@@ -637,8 +689,7 @@ export async function cancelReaderFlow(db: Db, stripe: StripeClient, pendingId: 
   const timing = flowTiming(options)
   const found = await findFlow(db, pendingId)
   if (found.kind === 'gone') return { cancelled: true, pendingId, alreadyDone: true, message: FLOW_GONE_CANCEL_MESSAGE }
-  if (found.kind === 'old') return { cancelled: false, ...basics(found.row), reason: 'old_reader_flow', message: OLD_READER_FLOW_MESSAGE }
-  if (found.kind === 'card') return { cancelled: false, ...basics(found.row), reason: 'not_a_reader_flow', message: NOT_A_READER_FLOW_MESSAGE }
+  if (found.kind === 'not_reader') return { cancelled: false, ...basics(found.row), reason: 'not_a_reader_flow', message: notReaderFlowMessage(found.card) }
   const { row } = found
   if (row.status === 'cancelled') return { cancelled: true, ...basics(row), alreadyDone: true, message: FLOW_CANCEL_ALREADY_DONE_MESSAGE }
   if (row.status === 'finalised') return { cancelled: false, ...basics(row), reason: 'already_finalised', message: FLOW_CANCEL_FINALISED_MESSAGE }
@@ -664,8 +715,10 @@ export async function cancelReaderFlow(db: Db, stripe: StripeClient, pendingId: 
   let undone: FlowUndoOutcome
   try {
     undone = await undoFlowInTransaction(db, pendingId, { actor: options.actor, requestId: options.requestId, why: `The card reader payment was cancelled (${settled.status}).` })
-  } catch {
-    // Nothing was changed (one transaction): still pending, for the next try.
+  } catch (err) {
+    // Nothing was changed (one transaction): still pending, for the next try. W25: said plainly when the customer's
+    // other booking is what stops a move going back.
+    if (err instanceof FlowUndoBlocked) return { cancelled: false, ...basics(row), reason: 'undo_blocked', message: FLOW_UNDO_BLOCKED_MESSAGE }
     return { cancelled: false, ...basics(row), reason: 'undo_incomplete', message: FLOW_UNDO_INCOMPLETE_MESSAGE }
   }
   if (!undone.undone) {

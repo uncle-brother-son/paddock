@@ -568,6 +568,48 @@ by `booking_changes`. The staff app's `moveBooking` is a thin call.
   anything is priced (`booking_not_movable`, "Take the payment first, then move the booking."). Its first seat is
   unpaid, so a dearer move charged that seat and Settle then charged it again (£40 for a £20 seat).
 
+## The old payment code out, and step D's "for later" fixes (step D, W25)
+
+Read this first where an earlier section names something W25 removed: those sections are history, this one is now.
+
+**What went.** The staff app's old flow code (the old sweep, the stuck list's own queries, the flow wrappers' old
+bodies, `chargeSavedCard`, `createTerminalPaymentIntent`) and the three legacy routes only it called
+(`/api/payments/charge-saved-card`, `/api/terminal/create-payment-intent`, `/api/terminal/payment-intent`: moved, byte
+for byte, into `testing/legacy-order/routes/`, where the frozen copies still call them for the golden set-ups). Here:
+- **No "old" items.** `old_reader_flow`, `old_reader_order`, `old_code`, `OLD_DUE_SQL`, the run's `oldLeftAlone` and the
+  stuck list's `madeBy` are gone. A pending order or flow with no mark of the Worker's (none can be made any more) is
+  refused by the reader routes as `not_a_reader_order` / `not_a_reader_flow`, left alone by reconcile, and listed for a
+  person as `not_started_here` ("tell a manager"), never "press Resolve now": Resolve now is this reconcile and nothing
+  else.
+- **The look-up of old `booking.card_refund_unsure` notes** (W21a, W23) is gone with its `matched` parts: nothing writes
+  those notes and live has none.
+
+**Part B.**
+- **Money still owed on a cancelled booking** (W23 review later 1): what is owed there lives in `refund_owed_amount`
+  alone (`price_paid` stays, as on every cancelled booking). Refund the rest (store credit only, exactly what is owed;
+  the card is refused, `cancelled_store_credit_only`) and It already arrived run on it; a part refund is still refused.
+- **The undo after a refused first card part** (W22 later 2, W23 later 2, W24 review L1): it takes a session's places
+  back only while the session has room, and a pass session only while the pass has one (`PutBackBlocked`). Otherwise
+  nothing of the undo is kept: the change stands, and (W25a, W25 review S1) the press finishes the claim there and then
+  as a close by hand does: every card part owed on the booking, kept owed on a cancelled booking too (never store
+  credit unseen: Stripe's refusal may mean the customer has the money already). The press still answers held
+  (`refund_refused_not_put_back`); its words carry Stripe's reason and point to It already arrived / Refund the rest.
+  The finished row says `by.how: 'undo_blocked'` with the reason. Reconcile never sees the claim (only if that finish
+  itself fails does the claim stay open for it).
+- **The club's Cancel & return credit with paid guests** (W23a): from Block Session / Block Day it refunds the guests'
+  money (the booking's price paid) through the same claim, to the method chosen, with `confirmed.refund`; Issue refunds.
+  From the booking page it is still "Remove paid guests first".
+- **The manual close** (W21 review L4, L5): reconcile looks at every card part before leaving a claim for a person and
+  keeps what it found on its left row (`parts`); `held_claim` records the parts that went and puts only the others
+  owed, naming each. A `held_flow` closed while its saved-card payment was still processing has that payment watched
+  (`reader_payment.payment_watched`): each run reads it (and cancels it when Stripe allows); if it lands it is recorded
+  as `reader_payment.charge_without_record`, which the automatic refund gives back.
+- **Smaller:** an Add Guest flow's undo clears `guests_over_18_confirmed_at` when its own tick set it
+  (`over_18_confirmed_here`); a Move press with both a payment method and a refund method is refused
+  (`payment_and_refund`); a held move's undo that meets the customer's other booking says so plainly (`undo_blocked`,
+  `FlowUndoBlocked`); Q18 confirms a cheaper move's amount, not its card / store credit split (the rule is card first,
+  the rest to store credit, and the answer says what went where: left as it is, for the spec).
+
 ## Refund claims with no finish
 
 The staff app claims a refund's money before it moves. Each claim writes `booking.refund_claimed` to

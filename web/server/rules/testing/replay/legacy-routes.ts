@@ -14,14 +14,16 @@ const API_KEY = 'replay-legacy-key'
 type Route = { POST: (request: never) => Promise<Response> }
 
 const ROUTES: Record<string, () => Promise<unknown>> = {
-  '/api/payments/charge-saved-card': () => import('@/app/api/payments/charge-saved-card/route'),
+  // W25: deleted from app/; the test-only copy of the old step D functions still calls it (legacy-order/README.md).
+  '/api/payments/charge-saved-card': () => import('../legacy-order/routes/payments/charge-saved-card/route'),
   '/api/payments/refund-order': () => import('@/app/api/payments/refund-order/route'),
   '/api/memberships/cancel-subscription': () => import('@/app/api/memberships/cancel-subscription/route'),
   // W16: deleted from app/; the test-only copy of the old order code still calls them (legacy-order/README.md).
   '/api/memberships/create-subscription': () => import('../legacy-order/routes/memberships/create-subscription/route'),
   '/api/terminal/resolve-saved-card': () => import('../legacy-order/routes/terminal/resolve-saved-card/route'),
-  '/api/terminal/create-payment-intent': () => import('@/app/api/terminal/create-payment-intent/route'),
-  '/api/terminal/payment-intent': () => import('@/app/api/terminal/payment-intent/route'),
+  // W25: these two as well.
+  '/api/terminal/create-payment-intent': () => import('../legacy-order/routes/terminal/create-payment-intent/route'),
+  '/api/terminal/payment-intent': () => import('../legacy-order/routes/terminal/payment-intent/route'),
 }
 
 /** The /api/v1/staff routes the old functions call, beyond the quote shadow's own. */

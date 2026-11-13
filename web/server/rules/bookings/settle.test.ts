@@ -433,7 +433,7 @@ describe('the saved card (pending first, keyed from the record, C2 or the undo)'
       // The stuck list shows it with the card words; then reconcile, past the window.
       await ageFlows(bookingId)
       const listed = (await stuckList(db)).flows.find((item) => item.recordId === bookingId)
-      expect(listed).toMatchObject({ madeBy: 'worker', reason: 'waiting', words: CARD_FLOW_WAITING_WORDS })
+      expect(listed).toMatchObject({ reason: 'waiting', words: CARD_FLOW_WAITING_WORDS })
       const sent = creates(stripe).length
       const run = await runReconcile(stripe)
       expect(run.items.find((item) => item.kind === 'flow')).toMatchObject({ outcome: 'finalised' })
@@ -712,20 +712,20 @@ describe('the reader, pending first (W12-7), finished or cancelled by the flow r
   })
 })
 
-describe('reconcile and the old code leave each other alone (brief W19 item 5)', () => {
-  it("a held Worker card flow is the Worker's: reconcile counts no old flow for it, and the stuck list says madeBy worker", async () => {
+describe("a held card flow is the Worker's to settle (brief W19 item 5; W25: the old sweep is gone)", () => {
+  it("a held Worker card flow is listed as waiting, with the card words, and reconcile checks it", async () => {
     await onALapsedSeat(async ({ bookingId, stripe }) => {
       holder.crash = 'after_c1'
       await post(bookingId, onCard())
       holder.crash = null
       await ageFlows(bookingId)
       const listed = (await stuckList(db)).flows.find((item) => item.recordId === bookingId)
-      expect(listed?.madeBy).toBe('worker')
-      expect((await runReconcile(stripe)).oldLeftAlone).toEqual({ orders: 0, flows: 0 })
+      expect(listed).toMatchObject({ reason: 'waiting', words: CARD_FLOW_WAITING_WORDS })
+      expect((await runReconcile(stripe)).checked).toBe(1)
     })
   })
 
-  it("the staff app's old sweep leaves a held Worker card flow alone, and its stuck list shows it once, as the Worker's (W17 \"For W19\" 1)", async () => {
+  it("the staff app's stuck list shows a held Worker card flow once, with the Worker's words (W17 \"For W19\" 1)", async () => {
     await onALapsedSeat(async ({ bookingId }) => {
       holder.crash = 'after_c1'
       await post(bookingId, onCard())
@@ -733,11 +733,9 @@ describe('reconcile and the old code leave each other alone (brief W19 item 5)',
       await ageFlows(bookingId)
       const [flow] = await flows(bookingId)
       const staffApp = (name: string) => import(/* @vite-ignore */ path.join(staffAppDir(), 'backend/paddock', `${name}.ts`)) as Promise<{ default: (req: { params: unknown; user: { email: string } }) => Promise<unknown> }>
-      const swept = (await (await staffApp('sweepPendingReaderPayments')).default({ params: { olderThanMinutes: 15 }, user: REPLAY_USER })) as { checked: number }
-      expect(swept.checked).toBe(0)
       expect((await flows(bookingId))[0]).toMatchObject({ status: 'pending' })
-      const listed = (await (await staffApp('getStuckReaderPayments')).default({ params: { olderThanMinutes: 15 }, user: REPLAY_USER })) as { flows: Array<{ pendingId: string; madeBy: string; words: string }> }
-      expect(listed.flows.filter((item) => item.pendingId === flow?.id)).toEqual([expect.objectContaining({ madeBy: 'worker', words: CARD_FLOW_WAITING_WORDS })])
+      const listed = (await (await staffApp('getStuckReaderPayments')).default({ params: { olderThanMinutes: 15 }, user: REPLAY_USER })) as { flows: Array<{ pendingId: string; reason: string; words: string }> }
+      expect(listed.flows.filter((item) => item.pendingId === flow?.id)).toEqual([expect.objectContaining({ reason: 'waiting', words: CARD_FLOW_WAITING_WORDS })])
     })
   })
 })

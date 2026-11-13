@@ -258,7 +258,11 @@ export type CancelCreditBookingInput = z.infer<typeof cancelCreditBookingInputSc
 export const cancelQuoteSchema = z.object({
   bookingId: id,
   status: z.string(),
-  /** Cancel & Refund: the booking's own money back (its price paid, money still owed included). Cancel & return credit: £0. */
+  /**
+   * Cancel & Refund: the booking's own money back (its price paid, money still owed included). Cancel & return credit:
+   * £0, except (W25) the club's cancel of a credit booking with paid guests: their money, which the press sends back
+   * as `confirmed.refund`.
+   */
   refund: z.number(),
   /** Of `refund`, money owed from an earlier refund that didn't reach the customer. */
   owed: z.number(),
@@ -552,6 +556,10 @@ export const cancelCreditBookingOutputSchema = z.object({
   creditUsableAgain: z.boolean(),
   booking: z.object({ id, status: z.string() }),
   message: z.string().optional(),
+  /** W25: the paid guests' money the club's cancel gave back (to the card, to store credit, and the balance after). */
+  cardRefundedAmount: z.number().optional(),
+  storeCreditRefundedAmount: z.number().optional(),
+  storeCreditBalance: z.number().optional(),
   addons: cancelAddonsOutcomeSchema.optional(),
   warning: z.string().optional(),
   held: heldRefundSchema.optional(),

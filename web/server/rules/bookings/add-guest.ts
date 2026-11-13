@@ -446,15 +446,22 @@ async function c1(tx: Tx, bookingId: string, input: AddBookingGuestInput, option
     : null
   if (addingGuest && !guest) throw new Error(`The guest on booking ${bookingId} was not written.`)
   const priceIncrement = payment ? guestAmount : 0
-  await tx.query(
-    `UPDATE bookings
-     SET price_paid = price_paid + $1::numeric,
-         party_size = party_size + CASE WHEN $2::boolean THEN 1 ELSE 0 END,
-         guests_over_18_confirmed_at = CASE WHEN $2::boolean THEN COALESCE(guests_over_18_confirmed_at, now()) ELSE guests_over_18_confirmed_at END,
-         updated_at = now()
-     WHERE id = $3::uuid`,
-    [priceIncrement, addingGuest, bookingId]
-  )
+  // W25 (W20 review 5): whether this guest's tick is the one that stamps the booking, so a flow's undo clears it again.
+  const over18ConfirmedHere =
+    (
+      await tx.query<{ here: boolean }>(
+        `WITH was AS (SELECT guests_over_18_confirmed_at IS NULL AS unconfirmed FROM bookings WHERE id = $3::uuid)
+         UPDATE bookings b
+         SET price_paid = b.price_paid + $1::numeric,
+             party_size = b.party_size + CASE WHEN $2::boolean THEN 1 ELSE 0 END,
+             guests_over_18_confirmed_at = CASE WHEN $2::boolean THEN COALESCE(b.guests_over_18_confirmed_at, now()) ELSE b.guests_over_18_confirmed_at END,
+             updated_at = now()
+         FROM was
+         WHERE b.id = $3::uuid
+         RETURNING ($2::boolean AND was.unconfirmed) AS here`,
+        [priceIncrement, addingGuest, bookingId]
+      )
+    )[0]?.here === true
 
   // No card money: the change's own order, when anything was due, carries every part (Q36 as today).
   const ownOrder = !cardMoney && amountDue > 0
@@ -507,6 +514,7 @@ async function c1(tx: Tx, bookingId: string, input: AddBookingGuestInput, option
       ...(giftCardPart > 0 && giftCardId ? { gift_card: { gift_card_id: giftCardId, amount: giftCardPart, stamped_redeemed_at: stampedRedeemedAt } } : {}),
       ...(guest ? { guest_row_id: guest.id } : {}),
       ...(addonLineIds.length > 0 ? { addon_line_ids: addonLineIds } : {}),
+      ...(over18ConfirmedHere ? { over_18_confirmed_here: true } : {}),
     }
     const marks = { channel: 'staff' as const, request_id: options.requestId, livemode: keyLivemode === true }
     const snapshot: CardFlowSnapshot | ReaderFlowSnapshot =
