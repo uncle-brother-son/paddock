@@ -176,6 +176,8 @@ export const INACTIVE_STAFF_MESSAGE = 'This staff account is inactive. Ask an ad
 export const ISSUE_REFUNDS_NEEDED_MESSAGE = 'Needs Issue refunds permission — this action moves money back to the customer.'
 /** shared/bookingRefund.ts and cancelCreditBooking.ts: the 24-hour rule. */
 export const WITHIN_24_HOURS_MESSAGE = 'Not eligible for refund or credit — within 24 hours of session start.'
+/** W23a: the club's cancel (Block Session, Block Day) gives everything back at any time before the session starts, not after. */
+export const CLUB_CANCEL_SESSION_STARTED_MESSAGE = 'This session has already started, so it can no longer be cancelled with everything back.'
 export const REFUND_UNSURE_MESSAGE = 'This may have gone through. Check Stripe or their balance, then use It already arrived or Refund the rest.'
 
 /** moveBooking.ts. */
@@ -466,3 +468,25 @@ export function addonRemovalSummary(result: { count: number; cardRefundedAmount:
   const head = `${result.count} add-on${result.count === 1 ? '' : 's'} cancelled`
   return parts.length > 0 ? `${head}: ${parts.join(', ')}` : `${head}, nothing given back`
 }
+
+// --- New in W23 (Cancel & Refund, Cancel & return credit and Cancel (payment needed) on the Worker)
+
+/** R1 failed in the database and was rolled back: the booking is as it was and nothing was refunded. */
+export const CANCEL_NOT_SAVED_MESSAGE =
+  "The cancellation couldn't be saved (the system was busy, or one of its records couldn't be written), so the booking was not cancelled and nothing was refunded. Try again."
+/** cancelBookingAddonLines' note when ticked lines had gone already (the old words). */
+export const addonsAlreadyRemovedNote = (count: number): string => `${count} add-on${count === 1 ? ' was' : 's were'} already removed.`
+/**
+ * Cancel & return credit with paid add-ons to the card, the first card refund refused: nothing went, so the whole cancel
+ * was put back (N4: one change, all or nothing). The old function had cancelled anyway and left the add-ons on the
+ * cancelled booking for a manual refund.
+ */
+export function cancelCreditAddonRefundFailedMessage(names: string, detail: string): string {
+  return `The card refund for ${names} failed (${detail}), so the booking wasn't cancelled and nothing was refunded. Try again, or refund the add-ons to store credit.`
+}
+/**
+ * A held refund closed by hand on a cancelled booking (W23): the money stays owed on the booking, which has no Refund the
+ * rest, so staff give what didn't reach the customer as store credit themselves.
+ */
+export const CLOSED_ON_A_CANCELLED_BOOKING_WORDS =
+  "The booking is cancelled, so it has no Refund the rest. Check Stripe: if the refund didn't reach the customer, give it as store credit on the customer's page."

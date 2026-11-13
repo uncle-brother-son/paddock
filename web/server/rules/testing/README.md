@@ -242,6 +242,23 @@ showed. `REMOVE_GUEST_24_HOURS_DIFFERENCES` names the rule: inside, the old £20
 still removed (`REMOVE_GUEST_INSIDE_24_HOURS`, each value checked); on every other Remove Guest recording the quote only
 gains `insideTwentyFourHours: false` (`GUEST_QUOTE_OUTSIDE_24_HOURS`).
 
+W23 moves refundBooking's Cancel & Refund and cancelCreditBooking, through the staff app's wrappers as the dialogs press
+them (the Worker's quote for the ticked add-ons first, then the press with the quote's figures as confirmed; a press key
+kept after no answer). No action is partly built any more. The old Cancel & Refund claims (kind `cancel`) are set aside on
+the golden side, and the Worker's `booking.cancel` / `booking.cancel_credit` rows checked by `newAuditRowProblems` (which
+also refuses two card parts for one order). `CANCEL_DIFFERENCES` names the rest: keys from the claim; one card part per
+order (`ONE_PART_PER_ORDER`, item 1); R1 in one transaction where the old cancel's write failed after the money
+(`cancelWriteFails`), N4's two recordings, the lost answers (`CANCEL_ANSWER_LOST`, `CANCEL_NO_LOST_ANSWER`), and an
+order's status worked out after its credit add-on's stamp. `unsure-cancel-store-credit-arrived`'s last two steps are
+`attempt`s (the old side records them as before).
+
+W23a (Wayne, 13 Nov: when the club cancels from Block Session or Block Day, the 24-hour rule doesn't apply) adds two
+recordings from the old code, `w23a-block-session-cancel-and-refund-inside-24-hours` and
+`w23a-block-day-cancel-credit-inside-24-hours`: 22 hours before the session, the press from the booking page (refused on
+both sides, matching), then the block's press with `clubCancelled: true`, which the old code refused and the Worker
+answers with everything back. `CLUB_CANCEL_AND_REFUND` and `CLUB_CANCEL_CREDIT` name exactly that, each value checked;
+`newAuditRowProblems` accepts `clubCancelled` on a cancel's claim and row only as `true`.
+
 ## No real Stripe (W11)
 
 `no-real-stripe.ts` is loaded before every unit test file (`vitest.unit.config.ts`, `setupFiles`). Any

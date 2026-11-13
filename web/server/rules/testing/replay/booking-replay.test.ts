@@ -9,6 +9,7 @@ import { STAFF_STATUSES } from '@/server/rules/bookings/edits'
 import {
   ADD_GUEST_DIFFERENCES,
   BOOKING_ACTIONS,
+  CANCEL_DIFFERENCES,
   BUILT_BOOKING_ACTIONS,
   cardRecordProblems,
   claimLookProblems,
@@ -129,6 +130,7 @@ describe("step D's side of the replay (W17)", () => {
   const addGuestScenarios = new Set<string>()
   const refundScenarios = new Set<string>()
   const removeScenarios = new Set<string>()
+  const cancelScenarios = new Set<string>()
   const shifted: string[] = []
   const counts = { bookings: 0, orders: 0, figuresCompared: 0, guardsCompared: 0, statusesCompared: 0, giftCardShifted: 0 }
 
@@ -150,9 +152,10 @@ describe("step D's side of the replay (W17)", () => {
       'refundBooking',
       'removeBookingGuest',
       'removeBookingAddon',
+      'cancelCreditBooking',
     ])
-    // W21: refundBooking's amount paths only; Cancel & Refund (no amount) is W23's.
-    expect([...PARTLY_BUILT.keys()]).toEqual(['refundBooking'])
+    // W23: refundBooking's Cancel & Refund moved too, so no action is partly built.
+    expect([...PARTLY_BUILT.keys()]).toEqual([])
     expect([...BOOKING_ACTIONS.keys()].sort()).toEqual([...LEGACY_BOOKING_ACTIONS].sort())
     expect(() => newBookingSide({ actions: new Map([['createOrder', async () => null]]) })).toThrow("createOrder isn't one of the old step D actions.")
   })
@@ -161,9 +164,11 @@ describe("step D's side of the replay (W17)", () => {
     it('matches its golden file with the figures from the Worker, and the Worker reads the end state as the old code does', async () => {
       const scenario = scenarios.find((s) => s.name === name)
       if (!scenario) throw new Error(`No scenario ${name}`)
-      const calls: Array<{ action: string; side: 'new' | 'old' }> = []
+      const calls: Array<{ action: string; side: 'new' | 'old'; cancel?: boolean }> = []
       const recording = await replay(environment, scenario, newBookingSide({ calls }))
       if (calls.some((call) => LEGACY_BOOKING_ACTIONS.has(call.action))) dScenarios.add(name)
+      // W23: Cancel & Refund and Cancel & return credit, through the Worker.
+      if (calls.some((call) => call.cancel === true && call.side === 'new')) cancelScenarios.add(name)
       const golden = readGolden(name) as Recording
       expect(golden, `No golden file for ${name}`).not.toBeNull()
 
@@ -177,6 +182,7 @@ describe("step D's side of the replay (W17)", () => {
         ...(REFUND_DIFFERENCES.get(name) ?? []),
         ...(REMOVE_DIFFERENCES.get(name) ?? []),
         ...(REMOVE_GUEST_24_HOURS_DIFFERENCES.get(name) ?? []),
+        ...(CANCEL_DIFFERENCES.get(name) ?? []),
       ]
       // W21: the refund amount actions and the figures, through the Worker.
       if (calls.some((call) => call.side === 'new' && (call.action === 'refundBooking' || call.action === 'getBookingRefundFigures'))) refundScenarios.add(name)
@@ -620,6 +626,45 @@ describe("step D's side of the replay (W17)", () => {
     })
   })
 
+  describe('Cancel & Refund and Cancel & return credit on the new side (W23): exactly what the Worker does instead', () => {
+    const byName = (name: string) => {
+      const scenario = scenarios.find((s) => s.name === name)
+      if (!scenario) throw new Error(`No scenario ${name}`)
+      return scenario
+    }
+    const added = (recording: Recording, table: string) => recording.tables[table]?.added ?? []
+    const refunds = (recording: Recording) => recording.stripeCalls.filter((call) => call.method === 'refunds.create')
+    const auditRows = (recording: Recording, action: string) => added(recording, 'audit_log').filter((row) => row['action'] === action)
+
+    it("the W05 invariants hold on the new side for every cancel scenario (D-plan 4.11 item 3): nothing the old code doesn't break", async () => {
+      const named = scenarios.filter((scenario) => cancelScenarios.has(scenario.name) || CANCEL_DIFFERENCES.has(scenario.name))
+      expect(named.length).toBeGreaterThanOrEqual(CANCEL_DIFFERENCES.size)
+      const old = await sweepInvariants(environment, named, oldSide)
+      const fresh = await sweepInvariants(environment, named, newBookingSide())
+      // remove-guest-credit-fails-partway's hold (W22) isn't a cancel scenario; anything else new would be W23's.
+      expect(fresh.wrong.filter((line) => !old.wrong.includes(line))).toEqual([])
+      expect(fresh.bookingsChecked).toBeGreaterThanOrEqual(named.length)
+      if (process.env.W17_COVERAGE_OUT) appendFileSync(process.env.W17_COVERAGE_OUT, `W23 invariants: ${named.length} scenarios, old ${old.wrong.length} breaches, new ${fresh.wrong.length}: ${JSON.stringify(fresh.wrong)}\n`)
+    })
+
+    it('item 1: the seat and a ticked towel on one order go back in ONE £45 card refund, keyed from the claim; each line stamped with its share', async () => {
+      const recording = await replay(environment, byName('addon-on-the-first-order-public-ticked'), newBookingSide())
+      const claim = auditRows(recording, 'booking.refund_claimed').find((row) => (row['details'] as { kind?: string }).kind === 'cancel')
+      expect(refunds(recording).map((call) => [(call.params as { amount: number }).amount, call.idempotencyKey])).toEqual([[4500, `${String(claim?.['id'])}:refund:orders#1`]])
+      expect((claim?.['details'] as { plan: { card: Array<{ lines: Array<{ amount: number; addon?: boolean }> }> } }).plan.card).toHaveLength(1)
+      expect(added(recording, 'order_line_items')[0]).toMatchObject({ card_refunded_amount: '40.00', refund_method: 'card', refunded_at: '<set>' })
+      expect(added(recording, 'addon_order_lines')[0]).toMatchObject({ removed_at: '<set>', refunded_amount: '5.00', card_refunded_amount: '5.00', refund_method: 'card' })
+      expect(auditRows(recording, 'booking.cancel').map((row) => row['details'])).toEqual([expect.objectContaining({ seatRefund: 40, addonsRefund: 5, cardRefunded: 45, storeCreditRefunded: 0, owed: 0 })])
+    })
+
+    it('N4: the places write failing rolls Cancel & return credit back: still confirmed, its place still held, the words say nothing was cancelled', async () => {
+      const recording = await replay(environment, byName('w17-n4-cancel-credit-places-write-fails-after-the-cancel'), newBookingSide())
+      expect(results(recording)[1]).toMatchObject({ cancelled: false, reason: 'cancel_not_saved' })
+      expect(added(recording, 'bookings')[0]).toMatchObject({ status: 'confirmed', cancelled_at: null })
+      expect(auditRows(recording, 'booking.cancel_credit')).toEqual([])
+    })
+  })
+
   it('covered what it says: the step D scenarios, the figures answers, and every booking and order at their ends', () => {
     // For the report: written where W17_COVERAGE_OUT says (vitest keeps a passing test's console quiet).
     const line =
@@ -653,6 +698,15 @@ describe("step D's side of the replay (W17)", () => {
     expect([...REMOVE_DIFFERENCES.keys()].filter((name) => !removeScenarios.has(name))).toEqual([])
     if (process.env.W17_COVERAGE_OUT) {
       appendFileSync(process.env.W17_COVERAGE_OUT, `W22: ${removeScenarios.size} call Remove Guest or Remove add-on on the Worker, ${REMOVE_DIFFERENCES.size} with W22's named differences (more with W20's and W21's only), ${[...removeScenarios].filter((name) => !REMOVE_DIFFERENCES.has(name) && !ADD_GUEST_DIFFERENCES.has(name) && !REFUND_DIFFERENCES.has(name) && !REMOVE_GUEST_24_HOURS_DIFFERENCES.has(name)).length} exact\n`)
+    }
+    // W23: every scenario named for the cancels calls Cancel & Refund or Cancel & return credit on the Worker.
+    expect([...CANCEL_DIFFERENCES.keys()].filter((name) => !cancelScenarios.has(name))).toEqual([])
+    if (process.env.W17_COVERAGE_OUT) {
+      const earlier = (name: string) => [ADD_GUEST_DIFFERENCES, REFUND_DIFFERENCES, REMOVE_DIFFERENCES, REMOVE_GUEST_24_HOURS_DIFFERENCES, SETTLE_DIFFERENCES].some((map) => map.has(name))
+      appendFileSync(
+        process.env.W17_COVERAGE_OUT,
+        `W23: ${cancelScenarios.size} call Cancel & Refund or Cancel & return credit on the Worker, ${CANCEL_DIFFERENCES.size} with W23's named differences, ${[...cancelScenarios].filter((name) => !CANCEL_DIFFERENCES.has(name) && !earlier(name)).length} exact, ${[...cancelScenarios].filter((name) => !CANCEL_DIFFERENCES.has(name) && earlier(name)).length} with earlier slices' only\n`
+      )
     }
     // W22a: every scenario named for the 24-hour rule calls Remove Guest on the Worker (an unused allowance fails in
     // compareRecordings as well).

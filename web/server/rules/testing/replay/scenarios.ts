@@ -511,6 +511,8 @@ const towelAdded = { addons: [{ addonId: ID.addon, quantity: 1 }] }
 interface BookingSteps {
   bookingId: string
   call(action: string, params: unknown): Promise<unknown>
+  /** W23: as `call`, but a throw is recorded as `{ thrown }` (the harness's attempt). */
+  attempt(action: string, params: unknown): Promise<unknown>
   db: Db
   stripe: FakeStripe
   /** Adds to the booking the way the screen does it: price first, then payment, then the reader. */
@@ -538,12 +540,13 @@ function booked(
       await seed(db, stripe)
       await prepare?.(db, stripe)
     },
-    async run({ call, stripe, db }) {
+    async run({ call, attempt, stripe, db }) {
       const placed = (await call('createOrder', { customerId: ID.customer, ...order })) as { bookingId: string }
       const { bookingId } = placed
       await steps({
         bookingId,
         call,
+        attempt,
         db,
         stripe,
         async add(params, payment) {
@@ -753,7 +756,11 @@ const workerApi = () => (globalThis as unknown as { paddockWorkerV1: { rawReques
 const WORKER_DOES_IT_NOW: Readonly<Record<string, { route: RegExp; answerLost: RegExp }>> = {
   '/api/payments/charge-saved-card': { route: /^\/api\/v1\/staff\/bookings\/[^/]+\/(settle|guests)$/, answerLost: /\/guests$/ },
   // W21: a Part refund's and Refund the rest's card refunds are sent inside their routes.
-  '/api/payments/refund-order': { route: /^\/api\/v1\/staff\/bookings\/[^/]+\/refunds(\/owed)?$/, answerLost: /^\/api\/v1\/staff\/bookings\/[^/]+\/refunds(\/owed)?$/ },
+  // W23: and Cancel & Refund's and Cancel & return credit's (one card part per order, sent inside the cancel route).
+  '/api/payments/refund-order': {
+    route: /^\/api\/v1\/staff\/bookings\/[^/]+\/(refunds(\/owed)?|cancel-and-refund|cancel-credit)$/,
+    answerLost: /^\/api\/v1\/staff\/bookings\/[^/]+\/(refunds(\/owed)?|cancel-and-refund|cancel-credit)$/,
+  },
 }
 
 const CHARGE_PATH = '/api/payments/charge-saved-card'
@@ -1982,10 +1989,12 @@ export const scenarios: Scenario[] = [
     await call('refundBooking', { bookingId, refundMethod: 'credit', amount: 40, owedArrived: true, reason: 'Seen in Stripe' })
     await call('refundBooking', { bookingId, refundMethod: 'card' })
   }),
-  booked('unsure-cancel-store-credit-arrived', noPromoOnCard, async ({ bookingId, call }) => {
+  booked('unsure-cancel-store-credit-arrived', noPromoOnCard, async ({ bookingId, call, attempt }) => {
     await creditCantBeTold(() => call('refundBooking', { bookingId, refundMethod: 'credit' }))
-    await call('refundBooking', { bookingId, refundMethod: 'credit', amount: 100, owedArrived: true, reason: 'Found on their balance' })
-    await call('refundBooking', { bookingId, refundMethod: 'credit' })
+    // W23: `attempt` (the old side answers as `call` did): on the Worker the cancel went through once, so these two
+    // find the booking cancelled and are refused.
+    await attempt('refundBooking', { bookingId, refundMethod: 'credit', amount: 100, owedArrived: true, reason: 'Found on their balance' })
+    await attempt('refundBooking', { bookingId, refundMethod: 'credit' })
   }),
   booked('unsure-cancel-card-pressed-again', noPromoOnCard, async ({ bookingId, call }) => {
     await losingTheWorkersAnswer('/api/payments/refund-order', () => call('refundBooking', { bookingId, refundMethod: 'card' }))
@@ -2284,6 +2293,19 @@ export const scenarios: Scenario[] = [
       await call('removeBookingGuest', { guestId: guest.guest?.id, confirmedRefundAmount: amount, ...(amount > 0 ? { refundMethod: 'card' } : {}) })
     })
   ),
+  // --- W23a (Wayne, 13 Nov): when the club cancels (Block Session, Block Day: `clubCancelled`), the 24-hour rule doesn't
+  // apply. 22 hours before the session (12 Nov 10:00): the press from the booking page is refused on both sides; the
+  // block's press is refused by the old code (it had no such rule) and gives everything back on the Worker.
+  booked('w23a-block-session-cancel-and-refund-inside-24-hours', publicOnCard, async ({ bookingId, attempt }) => {
+    vi.setSystemTime(new Date('2026-11-11T12:00:00.000Z'))
+    await attempt('refundBooking', { bookingId, refundMethod: 'card' })
+    await attempt('refundBooking', { bookingId, refundMethod: 'card', clubCancelled: true })
+  }),
+  booked('w23a-block-day-cancel-credit-inside-24-hours', { booking: { ...paidSeat([sam]), ...ownedPass }, payment: {} }, async ({ bookingId, call }) => {
+    vi.setSystemTime(new Date('2026-11-11T12:00:00.000Z'))
+    await call('cancelCreditBooking', { bookingId })
+    await call('cancelCreditBooking', { bookingId, clubCancelled: true })
+  }),
   booked('remove-guest-to-store-credit', publicOnCard, async ({ call, add }) => {
     const guest = await add(bea, payments.card)
     await call('removeBookingGuest', { guestId: guest.guest?.id })

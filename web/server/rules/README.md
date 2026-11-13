@@ -478,6 +478,55 @@ are thin calls.
   refunds, the line not stamped, the seat's money left on the booking for Part refund), and `booking.guest_remove`
   carries `reason: 'inside_24_hours'`.
 
+## Cancel & Refund, Cancel & return credit and Cancel (payment needed) (step D, W23)
+
+`bookings/cancel.ts`, through the W21 pipeline (`refunds.ts`: claim kinds `cancel` and `cancel_credit`).
+`POST /api/v1/staff/bookings/:bookingId/cancel-and-refund/quote` and `.../cancel-and-refund` (Issue refunds);
+`POST /api/v1/staff/bookings/:bookingId/cancel-credit/quote` and `.../cancel-credit` (any active staff member; Issue
+refunds only when ticked paid add-ons are refunded). The quotes take the ticked add-on lines and are reads: never
+refused for an open payment or refund, they say what a press would be refused with now (`blocked`, the old words). The
+presses take `confirmed: { refund, addonsRefund }` (Q18, half a penny each; missing counts as £0), are idempotent, and
+are gated by `booking_changes` only when money goes back. The staff app's `refundBooking` (no amount) and
+`cancelCreditBooking` are thin calls.
+
+- **One card part per order per claim (item 1).** `planRefund` takes a cancel's ticked paid add-on lines after the
+  booking lines: each against the order that paid for it, sharing that order's card portion (used once), each capped at
+  its own amount; the rest to store credit. An order's seat and add-on money are one part, one refund, one key (order
+  £45 on the card, seat £40 and towel £5: one £45 refund). A part's add-on lines carry `addon: true`; R2 records the
+  booking lines' share on them and stamps the add-on lines with theirs. With no add-on lines the plan is W21's.
+- **Cancel & Refund R1, one transaction:** the booking, customer, session and the ticked credit add-ons' memberships
+  locked; the ticked lines read again under the lock; a payment still being taken, a Worker refund claim open, a
+  booking already cancelled or the 24-hour rule refuse (old words); the confirmed figures; then the booking cancelled
+  with nothing owed (it gives what is owed too; `price_paid` stays, as on every cancelled booking), its places released
+  (a private booking's whole session, a public one's party), the ticked lines claimed with their credits back while the
+  membership is active, the refund planned (price paid and the ticked paid add-ons) and the claim written with what R1
+  changed (`cancel`: status, cancelled time, owed, places, add-on lines and their stamps as they were). To the card, an
+  old screen's unclear card refund is looked for first (W21a's look-up): one that went must be exactly one planned part,
+  or nothing is sent. With no money at all there is no claim; R1 writes `booking.cancel`.
+- **Cancel & return credit R1 (N4: one transaction):** the old checks in the old order (not a credit booking, not
+  cancellable, a payment open, a refund open, money paid: "Remove paid guests first, then cancel." when seat 1 is
+  credit-covered and guests are paid, the 24-hour rule except on a payment-needed booking); the cancel, its places, a
+  pass's session back while the pass is unexpired, whether the credit can be used again (its period still current, or
+  the pass unexpired), the ticked lines' credits, and paid lines refunded when staff chose card or store credit (£0
+  inside 24 hours, the old note). The booking's lines are stamped only when all its seat money had gone back already
+  (the old `stampLinesIfSeatMoneyAllBack`), after the add-ons.
+- **The press and R2 are W21's.** R2 gives a cancel's store credit as the old functions did: the seat's (note "Booking
+  refund", linked to the booking's own order), then the add-ons' per paying order ("Add-on refund: 1× Towel."), each
+  row a millisecond after the one before (one transaction, one `now()`); stamps the add-on lines; stamps Cancel &
+  Refund's booking lines (the old last statement); works out the orders' status after both. The first card part
+  refused: R1 undone exactly (`undoCancel`) with the old words (Cancel & return credit: new words, the cancel put back:
+  N4). A later part refused: to store credit. Unclear: held, the booking stays cancelled; reconcile records what went,
+  and gives what Stripe never got as store credit (a cancelled booking has no Refund the rest).
+- **A held claim closed by hand on a cancelled booking (any kind):** its money stays owed on the booking, never store
+  credit: reconcile left it because Stripe shows something it can't settle, so the card money may have gone. The close's
+  words say to check Stripe and give what didn't arrive as store credit on the customer's page.
+- **The club's cancel (W23a, Wayne 13 Nov).** Block Session and Block Day send `clubCancelled: true` with the quote and
+  the press of both cancels. The 24-hour rule doesn't apply: Cancel & Refund gives the whole booking back (card or store
+  credit), Cancel & return credit gives the credit, a pass session and add-on credits back and refunds ticked paid
+  add-ons, at any time before the session starts; once it has started the club's cancel is refused
+  (`session_already_started`). Money back still needs Issue refunds. The claim's `cancel` record and the cancel's own
+  audit row carry `clubCancelled: true` (only then). A cancel from the booking page keeps the 24-hour rule.
+
 ## Refund claims with no finish
 
 The staff app claims a refund's money before it moves. Each claim writes `booking.refund_claimed` to
@@ -500,7 +549,7 @@ ORDER BY c.at;
 
 The five minutes leaves out claims still running. Check each one in Stripe and in the customer's
 balance. W21: a Worker claim (`details->>'worker' = 'true'`) is reconcile's, and the stuck list shows it; this query is
-for the old screens' claims (Cancel & Refund, Remove Guest, Move) until W22 to W24.
+for the old screens' claims (Move's) until W24.
 
 ## Card refunds held with no clear answer
 

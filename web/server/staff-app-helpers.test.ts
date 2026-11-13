@@ -1545,14 +1545,6 @@ describe('staff app helpers', () => {
         expect(await (await refund({ refundMethod: 'card', amount: 10, reason: 'x' })).result()).toEqual({ pressedAfterNoAnswer: { message: REFUND_PRESSED_AFTER_NO_ANSWER_MESSAGE } })
       })
 
-      it("Cancel & Refund (no amount) still runs the old body (W23): it never calls the Worker's refund routes", async () => {
-        const query = vi.fn().mockResolvedValue({ data: [] })
-        vi.stubGlobal('paddockData', { query })
-        const fn = (await backend('refundBooking')).default
-        await fn({ params: { bookingId: BOOKING, refundMethod: 'card' }, user }).catch(() => undefined)
-        expect(rawRequest.mock.calls.map((call) => (call[0] as { path: string }).path).filter((p) => p.includes('/refunds'))).toEqual([])
-        expect(query).toHaveBeenCalled()
-      })
 
       it('getBookingRefundFigures: a read of the figures route (with its time limit), and the old words for a missing booking', async () => {
         const fn = (await backend('getBookingRefundFigures')).default
@@ -1579,6 +1571,209 @@ describe('staff app helpers', () => {
         expect(part).toContain('cashLeft > 0')
         expect(part).toMatch(/method === 'card' && next\.parts\.card > 0/)
         expect(rest).toContain('next.cardLeft > 0')
+      })
+    })
+
+    describe('Cancel & Refund and Cancel & return credit (W23: thin calls to the Worker)', () => {
+      const BOOKING = '11111111-1111-4111-8111-111111111111'
+      const LINE = '33333333-3333-4333-8333-333333333333'
+      const quote = {
+        bookingId: BOOKING,
+        status: 'confirmed',
+        refund: 40,
+        owed: 0,
+        addonsRefund: 5,
+        addonLineIds: [LINE],
+        parts: { card: 45, storeCredit: 0 },
+        cardRefundAvailable: true,
+        insideTwentyFourHours: false,
+        paidLine: 'Left to refund: £40.00 card money.',
+        blocked: null,
+      }
+      const refused = (code: string, details: Record<string, unknown>) => ({
+        data: { ok: false, error: { code, message: String(details['message']), details: { ...details } }, requestId: 'worker-request' },
+      })
+      const run = async (name: 'refundBooking' | 'cancelCreditBooking', params: Record<string, unknown>) => {
+        const query = vi.fn()
+        vi.stubGlobal('paddockData', { query })
+        const fn = (await backend(name)).default
+        return { result: await fn({ params: { bookingId: BOOKING, ...params }, user }), query }
+      }
+      const addons = { cancelledLineIds: [LINE], refundedAmount: 5, cardRefundedAmount: 5, storeCreditRefundedAmount: 0, creditsReturned: 0, notes: [], summary: '1 add-on cancelled: £5.00 to the card' }
+
+      it('Cancel & Refund: no `confirmed` asks for the quote (a read, its ticks, no key); with it, the cancel with the figures and the press key; never the database', async () => {
+        rawRequest.mockResolvedValue(success(quote))
+        const quoting = await run('refundBooking', { refundMethod: 'card', addonLineIds: [LINE] })
+        expect(quoting.result).toEqual({ quote })
+        expect(rawRequest.mock.calls[0]?.[0]).toMatchObject({ path: `/api/v1/staff/bookings/${BOOKING}/cancel-and-refund/quote`, method: 'POST', body: { addonLineIds: [LINE] } })
+        expect((rawRequest.mock.calls[0]?.[0] as { headers?: Record<string, string> }).headers?.['Idempotency-Key']).toBeUndefined()
+        rawRequest.mockResolvedValue(success({ cancelled: true, cardRefundedAmount: 40, storeCreditRefundedAmount: 0, addons }))
+        const pressed = await run('refundBooking', { refundMethod: 'card', addonLineIds: [LINE], confirmed: { refund: 40, addonsRefund: 5 }, idempotencyKey: 'press-key-0000000023' })
+        expect(pressed.result).toEqual({ cardRefundedAmount: 40, storeCreditRefundedAmount: 0, addons })
+        expect(rawRequest.mock.calls[1]?.[0]).toMatchObject({
+          path: `/api/v1/staff/bookings/${BOOKING}/cancel-and-refund`,
+          method: 'POST',
+          body: { refundMethod: 'card', addonLineIds: [LINE], confirmed: { refund: 40, addonsRefund: 5 } },
+          headers: expect.objectContaining({ 'Idempotency-Key': 'press-key-0000000023' }),
+        })
+        expect(quoting.query).not.toHaveBeenCalled()
+        expect(pressed.query).not.toHaveBeenCalled()
+      })
+
+      it('Cancel & Refund: changed figures as `quoteChanged` with the new quote; any other refusal as `failed`; a hold as `unsure`', async () => {
+        const words = 'The figures on this booking have just changed. Check them and confirm again.'
+        rawRequest.mockResolvedValue(refused('CONFLICT', { reason: 'refund_changed', message: words, action: 'cancel_and_refund', cancelQuote: quote }))
+        expect((await run('refundBooking', { refundMethod: 'card', confirmed: { refund: 30, addonsRefund: 0 } })).result).toEqual({ quoteChanged: { message: words, quote } })
+        rawRequest.mockResolvedValue(refused('CONFLICT', { reason: 'within_24_hours', message: 'Not eligible for refund or credit — within 24 hours of session start.', action: 'cancel_and_refund' }))
+        expect((await run('refundBooking', { refundMethod: 'card', confirmed: { refund: 40, addonsRefund: 0 } })).result).toEqual({
+          failed: { reason: 'within_24_hours', message: 'Not eligible for refund or credit — within 24 hours of session start.' },
+        })
+        const held = "The refund didn't get a clear answer, so it may or may not have gone. Don't refund it again. Check the Orders page in a few minutes."
+        rawRequest.mockResolvedValue(success({ cancelled: true, cardRefundedAmount: 0, storeCreditRefundedAmount: 0, held: { claimId: 'c', reason: 'refund_unconfirmed', message: held } }))
+        expect((await run('refundBooking', { refundMethod: 'card', confirmed: { refund: 40, addonsRefund: 0 } })).result).toEqual({ unsure: { message: held } })
+      })
+
+      it.each([
+        ['no connection', () => rawRequest.mockRejectedValue(new Error('socket hang up'))],
+        ['an earlier press still running', () => rawRequest.mockResolvedValue(refusal('CONFLICT', 'This request is already being processed'))],
+        ['a fault', () => rawRequest.mockResolvedValue(refusal('INTERNAL', 'Something went wrong and the action may not have finished. Check before trying again.'))],
+      ])('%s: Cancel & Refund `noAnswer` and Cancel & return credit `no_answer`, with the cancel words (the dialogs keep their key)', async (_label, arrange) => {
+        const { CANCEL_NO_ANSWER_MESSAGE } = await load('bookingWorker')
+        arrange()
+        expect((await run('refundBooking', { refundMethod: 'card', confirmed: { refund: 40, addonsRefund: 0 } })).result).toEqual({ noAnswer: { message: CANCEL_NO_ANSWER_MESSAGE } })
+        arrange()
+        expect((await run('cancelCreditBooking', { confirmed: { addonsRefund: 0 } })).result).toEqual({ cancelled: false, reason: 'no_answer', message: CANCEL_NO_ANSWER_MESSAGE })
+      })
+
+      it('a changed press under a no-answer key: `pressedAfterNoAnswer` / `pressed_after_no_answer` (locked), never sent as new', async () => {
+        const { CANCEL_PRESSED_AFTER_NO_ANSWER_MESSAGE } = await load('bookingWorker')
+        rawRequest.mockResolvedValue(refusal('IDEMPOTENCY_MISMATCH', 'This Idempotency-Key was already used for a different request.'))
+        expect((await run('refundBooking', { refundMethod: 'card', confirmed: { refund: 40, addonsRefund: 0 } })).result).toEqual({ pressedAfterNoAnswer: { message: CANCEL_PRESSED_AFTER_NO_ANSWER_MESSAGE } })
+        expect((await run('cancelCreditBooking', { confirmed: { addonsRefund: 0 } })).result).toEqual({
+          cancelled: false,
+          reason: 'pressed_after_no_answer',
+          message: CANCEL_PRESSED_AFTER_NO_ANSWER_MESSAGE,
+          retryLocked: true,
+        })
+      })
+
+      it('Cancel & return credit: the quote first; then the cancel with the paid add-ons\' figure, the method and the key; the old answer shape; refusals as data with the words (and the new quote)', async () => {
+        rawRequest.mockResolvedValue(success({ ...quote, refund: 0 }))
+        expect((await run('cancelCreditBooking', { addonLineIds: [LINE] })).result).toEqual({ cancelled: false, quote: { ...quote, refund: 0 } })
+        expect(rawRequest.mock.calls[0]?.[0]).toMatchObject({ path: `/api/v1/staff/bookings/${BOOKING}/cancel-credit/quote`, body: { addonLineIds: [LINE] } })
+        rawRequest.mockResolvedValue(success({ cancelled: true, creditUsableAgain: true, booking: { id: BOOKING, status: 'cancelled' }, addons }))
+        const pressed = await run('cancelCreditBooking', { addonLineIds: [LINE], addonRefund: 'card', confirmed: { addonsRefund: 5 }, idempotencyKey: 'press-key-0000000024' })
+        expect(pressed.result).toEqual({ cancelled: true, creditUsableAgain: true, booking: { id: BOOKING, status: 'cancelled' }, addons })
+        expect(rawRequest.mock.calls[1]?.[0]).toMatchObject({
+          path: `/api/v1/staff/bookings/${BOOKING}/cancel-credit`,
+          body: { addonRefund: 'card', confirmed: { addonsRefund: 5 }, addonLineIds: [LINE] },
+          headers: expect.objectContaining({ 'Idempotency-Key': 'press-key-0000000024' }),
+        })
+        expect(pressed.query).not.toHaveBeenCalled()
+        rawRequest.mockResolvedValue(refused('CONFLICT', { reason: 'paid_guests_present', message: 'Remove paid guests first, then cancel.', action: 'cancel_credit' }))
+        expect((await run('cancelCreditBooking', { confirmed: { addonsRefund: 0 } })).result).toEqual({ cancelled: false, reason: 'paid_guests_present', message: 'Remove paid guests first, then cancel.' })
+        rawRequest.mockResolvedValue(refused('CONFLICT', { reason: 'refund_changed', message: 'The figures on this booking have just changed. Check them and confirm again.', action: 'cancel_credit', cancelQuote: quote }))
+        expect((await run('cancelCreditBooking', { confirmed: { addonsRefund: 0 } })).result).toMatchObject({ cancelled: false, reason: 'refund_changed', quote })
+        // A held add-on refund: cancelled, with its words as the warning.
+        rawRequest.mockResolvedValue(success({ cancelled: true, creditUsableAgain: false, booking: { id: BOOKING, status: 'cancelled' }, held: { claimId: 'c', reason: 'refund_unconfirmed', message: 'held words' } }))
+        expect((await run('cancelCreditBooking', { confirmed: { addonsRefund: 5 } })).result).toMatchObject({ cancelled: true, warning: 'held words' })
+      })
+
+      it('the three dialogs: the quote first, its figures sent back as confirmed, the press key kept after no answer or a throw (W20a), closing blocked mid-call (W02 finding 13), the card from cardRefundAvailable (Q37)', () => {
+        const read = (file: string) => readFileSync(path.join(appDir, 'frontend/components', file), 'utf8')
+        const cancel = read('CancelAndRefundDialog.tsx')
+        const press = read('useCancelCreditPress.ts')
+        for (const source of [cancel, press]) {
+          expect(source).toContain('const idempotencyKey = pressKey.current ?? crypto.randomUUID()')
+          expect(source).toContain('pressKey.current = idempotencyKey')
+          // Kept after no answer and after a changed press; cleared after any other answer, and on close.
+          expect(source).toMatch(/\/\/ Any other answer: the next press is a new one\.\s+pressKey\.current = null/)
+          expect(source).toContain("W20a's rule: a throw is no answer, so the key is kept for the next press.")
+          // The key is cleared in two places only (after an answer, and on close): never in the catch.
+          expect(source.match(/pressKey\.current = null/g)).toHaveLength(2)
+          const thrown = source.slice(source.indexOf('} catch (err) {', source.indexOf('const idempotencyKey = pressKey.current')))
+          expect(thrown.slice(0, thrown.indexOf('} finally {'))).not.toContain('pressKey.current = null')
+          expect(source).toContain('quoteFor === ticksKey(addons.lineIds)')
+          expect(source).toContain('!quote.blocked')
+        }
+        expect(cancel).toContain('confirmed: { refund: quote.refund, addonsRefund: quote.addonsRefund }')
+        expect(cancel).toContain('onOpenChange={(next) => (submitting ? undefined')
+        expect(cancel).toContain('disabled={!quote?.cardRefundAvailable}')
+        expect(cancel).not.toContain('payment_method')
+        expect(press).toContain('confirmed: { addonsRefund: addons.paidTicked ? quote.addonsRefund : 0 }')
+        for (const dialog of ['CancelCreditBookingDialog.tsx', 'CancelPaymentNeededDialog.tsx']) {
+          const source = read(dialog)
+          expect(source).toContain('useCancelCreditPress(bookingId')
+          expect(source).toContain('onOpenChange={(next) => (press.submitting ? undefined')
+          expect(source).toContain('press.quote?.blocked')
+        }
+      })
+
+      it('N5: a pass booking with paid guests shows Cancel & return credit (the Worker\'s words say to remove the paid guests first); the Block dialogs open the same Cancel & Refund dialog', () => {
+        const detail = readFileSync(path.join(appDir, 'frontend/components/BookingDetailContent.tsx'), 'utf8')
+        expect(detail).toMatch(/Number\.parseFloat\(booking\.price_paid\) === 0 \|\|\s+booking\.redemption_source === 'session_pass_credit' \|\|/)
+        expect(detail).not.toContain('Paid in cash — no card payment on file')
+        for (const block of ['BlockSessionDialog.tsx', 'BlockDayDialog.tsx']) {
+          expect(readFileSync(path.join(appDir, 'frontend/components', block), 'utf8')).toContain('<CancelAndRefundDialog')
+        }
+      })
+
+      it('W23a: the club\'s cancel (`clubCancelled`) goes to the quote and the press of both wrappers; without it nothing extra is sent', async () => {
+        rawRequest.mockResolvedValue(success(quote))
+        await run('refundBooking', { refundMethod: 'card', clubCancelled: true })
+        expect(rawRequest.mock.calls[0]?.[0]).toMatchObject({ path: `/api/v1/staff/bookings/${BOOKING}/cancel-and-refund/quote`, body: { clubCancelled: true } })
+        rawRequest.mockResolvedValue(success({ cancelled: true, cardRefundedAmount: 40, storeCreditRefundedAmount: 0 }))
+        await run('refundBooking', { refundMethod: 'card', confirmed: { refund: 40, addonsRefund: 0 }, clubCancelled: true })
+        expect(rawRequest.mock.calls[1]?.[0]).toMatchObject({ path: `/api/v1/staff/bookings/${BOOKING}/cancel-and-refund`, body: { refundMethod: 'card', confirmed: { refund: 40, addonsRefund: 0 }, clubCancelled: true } })
+        rawRequest.mockResolvedValue(success({ ...quote, refund: 0 }))
+        await run('cancelCreditBooking', { clubCancelled: true })
+        expect(rawRequest.mock.calls[2]?.[0]).toMatchObject({ path: `/api/v1/staff/bookings/${BOOKING}/cancel-credit/quote`, body: { clubCancelled: true } })
+        rawRequest.mockResolvedValue(success({ cancelled: true, creditUsableAgain: true, booking: { id: BOOKING, status: 'cancelled' } }))
+        await run('cancelCreditBooking', { confirmed: { addonsRefund: 0 }, clubCancelled: true })
+        expect(rawRequest.mock.calls[3]?.[0]).toMatchObject({ path: `/api/v1/staff/bookings/${BOOKING}/cancel-credit`, body: { confirmed: { addonsRefund: 0 }, clubCancelled: true } })
+        // From the booking page: no flag at all.
+        rawRequest.mockResolvedValue(success(quote))
+        await run('refundBooking', { refundMethod: 'card' })
+        await run('cancelCreditBooking', {})
+        for (const call of rawRequest.mock.calls.slice(4)) expect((call[0] as { body?: Record<string, unknown> }).body).not.toHaveProperty('clubCancelled')
+      })
+
+      it('W23a (W23 review S2): the three cancel dialogs reload the booking on close after no answer or a throw; a held or warning Cancel & Refund tells its parent on close, not straight away', () => {
+        const read = (file: string) => readFileSync(path.join(appDir, 'frontend/components', file), 'utf8')
+        const cancel = read('CancelAndRefundDialog.tsx')
+        const press = read('useCancelCreditPress.ts')
+        for (const source of [cancel, press]) {
+          // Set in the no-answer branch, the pressed-after-no-answer branch and the catch.
+          expect(source.match(/reloadOnClose\.current = true/g)).toHaveLength(3)
+          const thrown = source.slice(source.indexOf('} catch (err) {', source.indexOf('const idempotencyKey = pressKey.current')))
+          expect(thrown.slice(0, thrown.indexOf('} finally {'))).toContain('reloadOnClose.current = true')
+        }
+        expect(cancel).toMatch(/if \(reloadOnClose\.current\) \{\s+reloadOnClose\.current = false\s+onStale\?\.\(booking\.id\)/)
+        expect(cancel).toMatch(/toast\.warning\('This refund needs checking'\)\s+refundedOnClose\.current = true\s+return/)
+        expect(cancel).toMatch(/toast\.warning\('Refund processed with a warning — see details'\)\s+refundedOnClose\.current = true\s+return/)
+        expect(cancel).toMatch(/if \(refundedOnClose\.current\) \{\s+refundedOnClose\.current = false\s+onRefunded\(booking\.id\)/)
+        // onRefunded twice only: on close (held or warning), and straight after a clear answer.
+        expect(cancel.match(/onRefunded\(booking\.id\)/g)).toHaveLength(2)
+        expect(press).toMatch(/const stale = reloadOnClose\.current\s+reloadOnClose\.current = false/)
+        for (const dialog of ['CancelCreditBookingDialog.tsx', 'CancelPaymentNeededDialog.tsx']) expect(read(dialog)).toContain('if (press.reset()) onStale?.(bookingId)')
+        const detail = readFileSync(path.join(appDir, 'frontend/components/BookingDetailContent.tsx'), 'utf8')
+        expect(detail.match(/onStale=\{reloadAfterNoAnswer\}/g)).toHaveLength(3)
+        expect(detail).toMatch(/function reloadAfterNoAnswer\(\) \{\s+trigger\(\{ bookingId \}, \{ skipCache: true \}\)/)
+      })
+
+      it("W23a (Wayne, 13 Nov): Block Session and Block Day cancel as the club and offer Cancel & return credit for credit bookings; the booking page never sends the flag", () => {
+        const read = (file: string) => readFileSync(path.join(appDir, 'frontend/components', file), 'utf8')
+        for (const block of ['BlockSessionDialog.tsx', 'BlockDayDialog.tsx']) {
+          const source = read(block)
+          expect(source.match(/^\s+clubCancelled$/gm)).toHaveLength(2)
+          expect(source).toContain("const CREDIT_SOURCES: ReadonlySet<string> = new Set(['membership_credit', 'session_pass_credit'])")
+          expect(source).toMatch(/\{CREDIT_SOURCES\.has\(b\.redemption_source\) \? \(\s+<CancelCreditBookingDialog/)
+        }
+        expect(read('BookingDetailContent.tsx')).not.toContain('clubCancelled')
+        expect(read('CancelAndRefundDialog.tsx')).toContain('const club = clubCancelled ? { clubCancelled: true } : {}')
+        expect(read('CancelAndRefundDialog.tsx').match(/\.\.\.club\b/g)).toHaveLength(2)
+        expect(read('useCancelCreditPress.ts').match(/\.\.\.club\b/g)).toHaveLength(2)
+        expect(read('CancelCreditBookingDialog.tsx')).toContain('useCancelCreditPress(bookingId, open && !result, clubCancelled)')
       })
     })
 
@@ -2001,7 +2196,6 @@ describe('staff app helpers', () => {
     })
 
     describe('refund safety', () => {
-      const FAR_OFF = '2099-01-01T10:00:00Z'
       const BROKEN = new Error('connection lost')
       type Answer = [RegExp, (params: unknown[]) => unknown[]]
 
@@ -2174,64 +2368,11 @@ describe('staff app helpers', () => {
         })
       })
 
-      describe('Cancel & Refund', () => {
-        const cancel = async (options: Parameters<typeof setUp>[0] & { statementFails?: boolean }) => {
-          const stubs = setUp({
-            ...options,
-            answers: [
-              [/FROM bookings b JOIN sessions s/, () => [{ customer_id: 'customer-1', status: 'confirmed', price_paid: '25.00', party_size: 1, session_id: 'session-1', start_time: FAR_OFF, booking_type: 'public' }]],
-              [/UPDATE bookings b\s+SET status = 'cancelled'/, () => [{ id: 'booking-1' }]],
-              [/WITH p AS/, () => {
-                if (options.statementFails) throw new Error('deadlock detected')
-                return [{ id: 'booking-1' }]
-              }],
-            ],
-          })
-          const fn = (await backend('refundBooking')).default
-          const run = fn({ params: { bookingId: 'booking-1', refundMethod: 'card' }, user })
-          return { run, ...stubs }
-        }
-
-        it('store credit throwing after the card refund: not cancelled, the card money recorded and the rest owed', async () => {
-          const { run, sql } = await cancel({ portions: { 'order-new': 15 }, credit: [BROKEN] })
-          const result = await run
-          expect(result.unsure.message).toContain('£15.00 went back to the card, and the other £10.00 is still on the booking.')
-          expect(sql.some((text) => /WITH p AS/.test(text))).toBe(false)
-          expect(sql.some((text) => /refund_owed_amount = price_paid/.test(text))).toBe(true)
-          expect(sql.some((text) => /UPDATE order_line_items SET card_refunded_amount/.test(text))).toBe(true)
-        })
-
-        it('store credit refused after the card refund: cancelled, and staff add it by hand, as nothing can have landed', async () => {
-          const { run, sql } = await cancel({ portions: { 'order-new': 15 }, credit: [false] })
-          const result = await run
-          expect(result).toMatchObject({ cardRefundedAmount: 15, storeCreditRefundedAmount: 0 })
-          expect(result.warning).toContain('add it by hand')
-          expect(sql.some((text) => /WITH p AS/.test(text))).toBe(true)
-        })
-
-        it('the next order failing after a card refund: cancelled, with the rest on store credit', async () => {
-          const { run } = await cancel({ portions: { 'order-new': 15, 'order-old': BROKEN } })
-          expect(await run).toMatchObject({ cardRefundedAmount: 15, storeCreditRefundedAmount: 10 })
-        })
-
-        it('a database error before any money moved says nothing was refunded, and cancels nothing', async () => {
-          const { run, sql } = await cancel({ linesFail: true })
-          await expect(run).rejects.toThrow("Looking up the booking's payments failed, so nothing was refunded: connection lost")
-          expect(sql.some((text) => /WITH p AS/.test(text))).toBe(false)
-          expect(sql.some((text) => /SET status = \$1, cancelled_at = NULL/.test(text))).toBe(true)
-        })
-
-        it('a failed cancel after a shortfall says a retry refunds the rest, never to add it by hand', async () => {
-          const { run } = await cancel({ portions: { 'order-new': 15 }, credit: [false], statementFails: true })
-          const error = await run.catch((err: Error) => err)
-          expect((error as Error).message).toContain("£15.00 had already gone back to the card; it is recorded on the order and taken off the booking's price paid, so retrying refunds only the rest.")
-          expect((error as Error).message).not.toContain('by hand')
-        })
-      })
-
       // Brief W21: refundBooking's amount paths are thin calls to the Worker now (the old body's claim, put-back and
       // warning tests went with it); the wrapper's tests are in 'refunds (W21: thin calls to the Worker)', and the rules'
-      // in server/rules/bookings/refunds.test.ts. Cancel & Refund's old body is still tested below.
+      // in server/rules/bookings/refunds.test.ts. Brief W23: so is Cancel & Refund (its old body's tests went with it;
+      // the wrapper's are in 'Cancel & Refund and Cancel & return credit (W23: thin calls to the Worker)', the rules' in
+      // server/rules/bookings/cancel.test.ts).
 
       describe('Move', () => {
         const session = { id: 'session-2', start_time: '2099-12-01T10:00:00', end_time: '2099-12-01T11:00:00', capacity: 8, total_booked: 0, status: 'open', service_type_id: 'type-1', band_id: 'band-2', booking_type: 'private', started: false }
@@ -2344,102 +2485,6 @@ describe('staff app helpers', () => {
             const { result, sql } = await cancelPlaces({ portion: 0, credit: [BROKEN] })
             expect(result).toMatchObject({ ok: true, storeCreditRefundedAmount: 25, warning: expect.stringContaining('gave no clear answer') })
             expect(sql.some((text) => /WITH p AS/.test(text))).toBe(true)
-          })
-        })
-
-        describe('booking add-ons', () => {
-          const addonLine = (id: string, order: string | null, extra: Record<string, unknown> = {}) => ({
-            id, addon_name: id, quantity: 1, price_at_purchase: '10.00', redemption_source: 'paid', redeemed_membership_id: null, order_id: order, ...extra,
-          })
-          const cancelAddons = async (options: {
-            lines: unknown[]
-            portions?: Record<string, number | Error>
-            credit?: Array<boolean | Error>
-            unclaimFails?: boolean
-            creditReturnFails?: boolean
-          }) => {
-            const stubs = setUp({
-              ...(options.portions ? { portions: options.portions } : {}),
-              ...(options.credit ? { credit: options.credit } : {}),
-              answers: [
-                [/FROM bookings b JOIN sessions s/, () => [{ customer_id: 'customer-1', start_time: FAR_OFF }]],
-                [/UPDATE addon_order_lines aol\s+SET removed_at/, () => options.lines],
-                [/UPDATE addon_order_lines SET removed_at = NULL/, () => {
-                  if (options.unclaimFails) throw BROKEN
-                  return []
-                }],
-                [/UPDATE customer_memberships/, () => {
-                  if (options.creditReturnFails) throw BROKEN
-                  return [{ id: 'membership-1' }]
-                }],
-              ],
-            })
-            const { cancelBookingAddonLines } = await load('bookingAddonCancellation')
-            const lineIds = (options.lines as Array<{ id: string }>).map((line) => line.id)
-            const result = await cancelBookingAddonLines({ bookingId: 'booking-1', lineIds, refund: 'card', returnCredits: true, includePaidLines: true, staffId: 'staff-1' })
-            return { result, ...stubs }
-          }
-          const recorded = (sql: string[]) => sql.some((text) => /SET refunded_amount = s\.refunded/.test(text))
-
-          it('store credit throwing after the card refund: the card money is recorded on the add-on, and the rest owed', async () => {
-            const { result, sql } = await cancelAddons({ lines: [addonLine('sauna-towel', 'order-1')], portions: { 'order-1': 6 }, credit: [BROKEN] })
-            expect(result).toMatchObject({ cardRefundedAmount: 6, storeCreditRefundedAmount: 0, cancelledLineIds: ['sauna-towel'] })
-            expect(result.warning).toContain('£4.00 for sauna-towel: This may have gone through.')
-            expect(recorded(sql)).toBe(true)
-            expect(sql.some((text) => /refund_owed_amount = refund_owed_amount \+/.test(text))).toBe(true)
-          })
-
-          it('store credit refused after the card refund: the card money is recorded, and staff add the rest by hand', async () => {
-            const { result, sql } = await cancelAddons({ lines: [addonLine('sauna-towel', 'order-1')], portions: { 'order-1': 6 }, credit: [false] })
-            expect(result.warning).toBe('£6.00 went back to the card, but adding the £4.00 remainder to store credit failed — add it manually.')
-            expect(recorded(sql)).toBe(true)
-          })
-
-          it('store credit throwing with no card money: the claim stands, as it may have landed', async () => {
-            const { result, sql } = await cancelAddons({ lines: [addonLine('sauna-towel', 'order-1')], portions: { 'order-1': 0 }, credit: [BROKEN] })
-            expect(result.cancelledLineIds).toEqual(['sauna-towel'])
-            expect(result.warning).toContain('£10.00 for sauna-towel: This may have gone through.')
-            expect(sql.some((text) => /UPDATE addon_order_lines SET removed_at = NULL/.test(text))).toBe(false)
-          })
-
-          it('store credit refused with no card money: the add-on goes back on the booking', async () => {
-            const { result, sql } = await cancelAddons({ lines: [addonLine('sauna-towel', 'order-1')], portions: { 'order-1': 0 }, credit: [false] })
-            expect(result.cancelledLineIds).toEqual([])
-            expect(result.warning).toContain('it was left on the booking')
-            expect(sql.some((text) => /UPDATE addon_order_lines SET removed_at = NULL/.test(text))).toBe(true)
-          })
-
-          it('the next order failing after one was refunded: the first is still recorded, the second goes back on the booking', async () => {
-            const { result, sql, rawRefund } = await cancelAddons({
-              lines: [addonLine('first', 'order-1'), addonLine('second', 'order-2')],
-              portions: { 'order-1': 10, 'order-2': BROKEN },
-            })
-            expect(result).toMatchObject({ cardRefundedAmount: 10, cancelledLineIds: ['first'] })
-            expect(result.warning).toBe('Checking the card payment for second failed (connection lost), so it was left on the booking — refund it manually.')
-            expect(recorded(sql)).toBe(true)
-            expect(rawRefund).toHaveBeenCalledTimes(1)
-          })
-
-          it('putting an add-on back failing as well does not lose the first order\'s refund', async () => {
-            const { result, sql } = await cancelAddons({
-              lines: [addonLine('first', 'order-1'), addonLine('second', 'order-2')],
-              portions: { 'order-1': 10, 'order-2': BROKEN },
-              unclaimFails: true,
-            })
-            expect(result.cardRefundedAmount).toBe(10)
-            expect(result.warning).toContain('Putting an add-on back on the booking failed, so it may show as removed — check it: connection lost')
-            expect(recorded(sql)).toBe(true)
-          })
-
-          it('returning a membership credit failing does not lose a paid line\'s refund', async () => {
-            const { result, sql } = await cancelAddons({
-              lines: [addonLine('paid', 'order-1'), addonLine('credit', null, { redemption_source: 'membership_credit', redeemed_membership_id: 'membership-1' })],
-              portions: { 'order-1': 10 },
-              creditReturnFails: true,
-            })
-            expect(result).toMatchObject({ cardRefundedAmount: 10, creditsReturned: 0, cancelledLineIds: ['paid', 'credit'] })
-            expect(result.warning).toBe('Returning the add-on credit for credit failed and needs a manual check: connection lost')
-            expect(recorded(sql)).toBe(true)
           })
         })
       })
@@ -2646,43 +2691,6 @@ describe('staff app helpers', () => {
           expect(await refund(['line-1'])).toMatchObject({ success: false, reason: 'already_refunded' })
           expect(refundedTo(rawRefund).filter((body) => 'amount' in (body as object))).toHaveLength(1)
           expect(credited).toEqual([])
-        })
-      })
-
-      describe('Cancel & Refund after the money has gone', () => {
-        const READ_FAILED = 'The booking was cancelled and refunded, but reading its orders failed, so their payment status needs a manual check: connection lost'
-        const cancel = async (addonLineIds?: string[]) => {
-          const stubs = setUp({
-            portions: { 'order-new': 15, 'order-old': 25 },
-            answers: [
-              [/FROM bookings b JOIN sessions s/, () => [{ customer_id: 'customer-1', status: 'confirmed', price_paid: '25.00', party_size: 1, session_id: 'session-1', start_time: FAR_OFF, booking_type: 'public' }]],
-              [/UPDATE bookings b\s+SET status = 'cancelled'/, () => [{ id: 'booking-1' }]],
-              [/WITH p AS/, () => [{ id: 'booking-1' }]],
-              [/SELECT DISTINCT order_id FROM order_line_items/, () => { throw BROKEN }],
-              [/UPDATE addon_order_lines aol\s+SET removed_at/, () => [{ id: 'addon-1', addon_name: 'Towel', quantity: 1, price_at_purchase: '10.00', redemption_source: 'paid', redeemed_membership_id: null, order_id: 'order-new' }]],
-            ],
-          })
-          const fn = (await backend('refundBooking')).default
-          const result = await fn({ params: { bookingId: 'booking-1', refundMethod: 'card', ...(addonLineIds ? { addonLineIds } : {}) }, user })
-          return { result, ...stubs }
-        }
-
-        it('the read failing is a warning with what went back, not an error', async () => {
-          const { result, rawRefund } = await cancel()
-          expect(result).toEqual({ cardRefundedAmount: 25, storeCreditRefundedAmount: 0, warning: READ_FAILED })
-          expect(rawRefund).toHaveBeenCalledTimes(2)
-        })
-
-        it('the ticked add-ons still go, and are refunded', async () => {
-          const { result, sql } = await cancel(['addon-1'])
-          expect(result.warning).toContain(READ_FAILED)
-          expect(result.addons).toMatchObject({ cancelledLineIds: ['addon-1'] })
-          expect(sql.some((text) => /UPDATE addon_order_lines aol\s+SET removed_at/.test(text))).toBe(true)
-        })
-
-        it('the orders it does know of still get their status worked out', async () => {
-          const { sql } = await cancel()
-          expect(sql.filter((text) => /FROM order_line_items oli\s+LEFT JOIN bookings b/.test(text)).length).toBeGreaterThan(0)
         })
       })
     })

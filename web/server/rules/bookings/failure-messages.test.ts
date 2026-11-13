@@ -119,23 +119,32 @@ describe("the screens' words, moved", () => {
       part_refund: 'PartRefundDialog',
       refund_owed: 'RefundTheRestDialog',
       cancel_and_refund: 'CancelAndRefundDialog',
-      cancel_credit: 'CancelCreditBookingDialog',
-      cancel_payment_needed: 'CancelPaymentNeededDialog',
+      // W23: both credit cancels' press is their shared hook's (useCancelCreditPress.ts).
+      cancel_credit: 'useCancelCreditPress.ts',
+      cancel_payment_needed: 'useCancelCreditPress.ts',
       remove_addon: 'RemoveBookingAddonDialog',
       special_requests: 'BookingDetailContent',
     }
     // W21: in the Part refund and Refund the rest dialogs a call that throws got no answer (W20a's rule): they show the
     // backend's no-answer words (copied, as the frontend can't import backend files) instead of their fallback.
-    const noAnswerNow = new Set(['part_refund', 'refund_owed'])
+    // W23: so does Cancel & Refund (CANCEL_NO_ANSWER_MESSAGE), checked below.
+    const noAnswerNow = new Set(['part_refund', 'refund_owed', 'cancel_and_refund'])
     for (const [action, dialog] of Object.entries(sources)) {
       if (noAnswerNow.has(action)) continue
-      expect(readFileSync(path.join(components, `${dialog}.tsx`), 'utf8'), action).toContain(`'${words.FALLBACK_WORDS[action as keyof typeof sources]}'`)
+      const file = dialog.endsWith('.ts') ? dialog : `${dialog}.tsx`
+      expect(readFileSync(path.join(components, file), 'utf8'), action).toContain(`'${words.FALLBACK_WORDS[action as keyof typeof sources]}'`)
     }
     const backendWords = readFileSync(path.join(components, '../../backend/paddock/shared/bookingWorker.ts'), 'utf8')
     const noAnswer = /export const REFUND_NO_ANSWER_MESSAGE =\s*\n?\s*"([^"]+)"/.exec(backendWords)?.[1]
     expect(noAnswer).toBeTruthy()
     for (const dialog of ['PartRefundDialog', 'RefundTheRestDialog']) {
       expect(readFileSync(path.join(components, `${dialog}.tsx`), 'utf8'), dialog).toContain(`"${noAnswer}"`)
+    }
+    // W23: the three cancel dialogs (Cancel & return credit and Cancel (payment needed) through their shared hook).
+    const cancelNoAnswer = /export const CANCEL_NO_ANSWER_MESSAGE =\s*\n?\s*"([^"]+)"/.exec(backendWords)?.[1]
+    expect(cancelNoAnswer).toBeTruthy()
+    for (const file of ['CancelAndRefundDialog.tsx', 'useCancelCreditPress.ts']) {
+      expect(readFileSync(path.join(components, file), 'utf8'), file).toContain(`"${cancelNoAnswer}"`)
     }
     expect(readFileSync(path.join(components, 'BookingDetailContent.tsx'), 'utf8')).toContain(`'${words.SPECIAL_REQUESTS_CANCELLED_WORDS}'`)
   })

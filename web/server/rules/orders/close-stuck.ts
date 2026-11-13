@@ -52,6 +52,7 @@ import { changedSince, PARTS_SQL, undoInTransaction, type LockedOrder, type Orde
 import { isWorkerCardFlow, isWorkerFlow, readFlow, undoFlowInTransaction } from './reader-flow'
 import { finishClaimInTransaction, readClaim } from '@/server/rules/bookings/refunds'
 import { lockForBooking } from '@/server/rules/bookings/locks'
+import { CLOSED_ON_A_CANCELLED_BOOKING_WORDS } from '@/server/rules/bookings/failure-messages'
 import { flowClosable, HELD_CLAIM_CLOSE_REASONS } from './stuck-list'
 
 export const CLOSE_ACTION = 'order.close'
@@ -519,12 +520,17 @@ async function closeHeldClaim(db: Db, claimId: string, why: string, options: Clo
         details: { kind: 'held_claim', why, reason: last.reason, found: last.detail ?? null, bookingId: claim.bookingId, owed },
       },
     ])
+    // W23: a cancelled booking (Cancel & Refund's claims, an add-on removed from a cancelled booking) has no Refund the
+    // rest or It already arrived: R2 kept the money owed on it rather than giving store credit, which could pay twice.
+    const cancelled = (await tx.query<{ status: string }>('SELECT status FROM bookings WHERE id = $1::uuid', [claim.bookingId]))[0]?.status === 'cancelled'
     return answer('held_claim', claimId, {
       closed: true,
       message: CLOSE_WORDS.held_claim,
       givenBack: owed > 0 ? [`${money(owed)} back on the booking as money still to refund`] : [],
       leftAsFound: [
-        'Check Stripe: if the refund reached the customer, use It already arrived on the booking; if not, use Refund the rest.',
+        cancelled
+          ? CLOSED_ON_A_CANCELLED_BOOKING_WORDS
+          : 'Check Stripe: if the refund reached the customer, use It already arrived on the booking; if not, use Refund the rest.',
       ],
     })
   })

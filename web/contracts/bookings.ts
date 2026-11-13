@@ -213,20 +213,65 @@ export const moneyOutConfirmedSchema = z.object({
 })
 export type MoneyOutConfirmed = z.infer<typeof moneyOutConfirmedSchema>
 
+/**
+ * W23: Cancel & Refund's press. `confirmed` is what the quote showed (Q18, half a penny each): `refund` the booking's
+ * own money back (price paid, money still owed included), `addonsRefund` the ticked paid add-ons' money back. Missing
+ * counts as £0, so a press without the figures is refused with the new quote whenever money goes back.
+ */
 export const cancelAndRefundInputSchema = z.object({
   refundMethod,
   addonLineIds: z.array(id).optional(),
   confirmed: moneyOutConfirmedSchema.optional(),
+  /**
+   * W23a (Wayne, 13 Nov): the club is cancelling (Block Session or Block Day), so the 24-hour rule doesn't apply: the
+   * whole booking comes back at any time before the session starts. Money back still needs Issue refunds. Recorded on
+   * the claim and the cancel's audit row. Missing: a cancel from the booking page, with the 24-hour rule.
+   */
+  clubCancelled: z.boolean().optional(),
 })
 export type CancelAndRefundInput = z.infer<typeof cancelAndRefundInputSchema>
 
+/**
+ * W23: Cancel & return credit's and Cancel (payment needed)'s press. `addonRefund` ('card' or 'credit') refunds the
+ * ticked paid add-ons (Issue refunds); without it they are left as they are. `confirmed.addonsRefund` is what the quote
+ * showed for them (missing counts as £0).
+ */
 export const cancelCreditBookingInputSchema = z.object({
   reason: looseText,
   addonLineIds: z.array(id).optional(),
   addonRefund: z.string().optional(),
   confirmed: moneyOutConfirmedSchema.optional(),
+  /** W23a: as Cancel & Refund's: the club is cancelling, so credits, a pass session and add-on credits come back and ticked paid add-ons are refunded inside 24 hours too. */
+  clubCancelled: z.boolean().optional(),
 })
 export type CancelCreditBookingInput = z.infer<typeof cancelCreditBookingInputSchema>
+
+/**
+ * W23: what cancelling gives back, for the dialogs to show and send back as `confirmed` (Q18). A read: never refused
+ * for a payment still being taken or a refund still being checked; `blocked` says what a press would be refused with now
+ * (those, the 24-hour rule, a booking that can't be cancelled this way), with the old words.
+ */
+export const cancelQuoteSchema = z.object({
+  bookingId: id,
+  status: z.string(),
+  /** Cancel & Refund: the booking's own money back (its price paid, money still owed included). Cancel & return credit: £0. */
+  refund: z.number(),
+  /** Of `refund`, money owed from an earlier refund that didn't reach the customer. */
+  owed: z.number(),
+  /** The ticked paid add-ons' money back (price × quantity; £0 inside 24 hours of the session). */
+  addonsRefund: z.number(),
+  /** The ticked add-on lines counted: those still on this booking. */
+  addonLineIds: z.array(id),
+  /** With the card (Q37): what the card(s) that paid can take back, and the rest, which goes to store credit. */
+  parts: z.object({ card: z.number(), storeCredit: z.number() }),
+  /** Q37: the card is offered whenever card money is left to give back. */
+  cardRefundAvailable: z.boolean(),
+  insideTwentyFourHours: z.boolean(),
+  /** What is left to refund on the booking, in words (the figures' line, W21a). */
+  paidLine: z.string(),
+  blocked: z.object({ reason: z.string(), message: z.string() }).nullable(),
+})
+export type CancelQuote = z.infer<typeof cancelQuoteSchema>
 
 export const removeBookingAddonInputSchema = z.object({
   /** 'card', 'credit' or 'none' ("Remove, no refund"). A string, for the old reason. */
@@ -348,6 +393,8 @@ export const bookingRefusalDetailsSchema = z.object({
   addonQuote: removeAddonQuoteSchema.optional(),
   /** W22: Remove Guest refused for want of Issue refunds (the old blockedByRefundPermission). */
   blockedByRefundPermission: z.boolean().optional(),
+  /** W23: Cancel & Refund's or Cancel & return credit's figures, when what staff confirmed is no longer what would go back. */
+  cancelQuote: cancelQuoteSchema.optional(),
   /**
    * W20: true when the old function sent no words of its own for this reason, so `message` is the dialog's own words
    * for it. The Add Guest wrapper then leaves `message` out, as the old answer did; the dialog shows the same words.
@@ -384,6 +431,8 @@ export const refundBookingOutputSchema = z.object({
   pricePaid: z.number().optional(),
   warning: z.string().optional(),
   held: z.object({ claimId: z.string(), reason: z.string(), message: z.string() }).optional(),
+  /** W23: a cancel's ticked add-ons' share (the amounts above are then the booking's own money, as the old answer had them). */
+  addons: z.object({ cardRefundedAmount: z.number(), storeCreditRefundedAmount: z.number(), storeCreditBalance: z.number().optional() }).optional(),
 })
 export type RefundBookingOutput = z.infer<typeof refundBookingOutputSchema>
 
@@ -443,3 +492,64 @@ export const removeBookingAddonOutputSchema = z.object({
   held: heldRefundSchema.optional(),
 })
 export type RemoveBookingAddonOutput = z.infer<typeof removeBookingAddonOutputSchema>
+
+// --- W23: Cancel & Refund, Cancel & return credit and Cancel (payment needed) (refundBooking's Cancel & Refund,
+// cancelCreditBooking)
+
+/** W23: the quote's body: the ticked add-on lines (none, when missing, as the press reads it); W23a: the club's cancel. */
+export const cancelQuoteInputSchema = z.object({
+  addonLineIds: z.array(id).optional(),
+  /** W23a: the club is cancelling (Block Session, Block Day): the quote shows the whole amount inside 24 hours too. */
+  clubCancelled: z.boolean().optional(),
+})
+export type CancelQuoteInput = z.infer<typeof cancelQuoteInputSchema>
+export const cancelQuoteRouteInputSchema = cancelQuoteInputSchema.extend(bookingInPath)
+export const cancelAndRefundRouteInputSchema = cancelAndRefundInputSchema.extend(bookingInPath)
+export const cancelCreditBookingRouteInputSchema = cancelCreditBookingInputSchema.extend(bookingInPath)
+
+/** W23: the ticked add-ons' outcome, as cancelBookingAddonLines answered it, with its one-line summary. */
+export const cancelAddonsOutcomeSchema = z.object({
+  cancelledLineIds: z.array(id),
+  refundedAmount: z.number(),
+  cardRefundedAmount: z.number(),
+  storeCreditRefundedAmount: z.number(),
+  creditsReturned: z.number(),
+  storeCreditBalance: z.number().optional(),
+  notes: z.array(z.string()),
+  summary: z.string(),
+})
+export type CancelAddonsOutcome = z.infer<typeof cancelAddonsOutcomeSchema>
+
+/**
+ * W23: Cancel & Refund's answer once R1 has committed, in the old fields: the booking's own money to the card and to
+ * store credit (and the balance after), the ticked add-ons' outcome, a warning when a later card part was refused and
+ * went to store credit. `held`: a card refund got no clear answer (or went and couldn't be recorded yet): the booking
+ * is cancelled and the refund is held for reconcile (Q35), never sent again by a press. A refusal before anything
+ * changed is an ApiError whose details carry the old reason and words (and `cancelQuote` when the figures moved).
+ */
+export const cancelAndRefundOutputSchema = z.object({
+  cancelled: z.literal(true),
+  cardRefundedAmount: z.number(),
+  storeCreditRefundedAmount: z.number(),
+  storeCreditBalance: z.number().optional(),
+  addons: cancelAddonsOutcomeSchema.optional(),
+  warning: z.string().optional(),
+  held: heldRefundSchema.optional(),
+})
+export type CancelAndRefundOutput = z.infer<typeof cancelAndRefundOutputSchema>
+
+/**
+ * W23: cancelCreditBooking's answer once cancelled, as the old function gave it: whether the credit can be used again
+ * (its period, or the pass, still covers today), the booking, the reason staff typed (as `message`), the ticked
+ * add-ons' outcome, a warning, and `held` as Cancel & Refund's. A refusal is an ApiError with the old reason and words.
+ */
+export const cancelCreditBookingOutputSchema = z.object({
+  cancelled: z.literal(true),
+  creditUsableAgain: z.boolean(),
+  booking: z.object({ id, status: z.string() }),
+  message: z.string().optional(),
+  addons: cancelAddonsOutcomeSchema.optional(),
+  warning: z.string().optional(),
+  held: heldRefundSchema.optional(),
+})
+export type CancelCreditBookingOutput = z.infer<typeof cancelCreditBookingOutputSchema>
