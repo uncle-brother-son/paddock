@@ -49,6 +49,8 @@ export const CHARGES_NOT_ON_ONE_ORDER: Record<string, string> = {
   // W11: the reader took £44 for a £45 order, so finalise refuses it (amount_mismatch) and the order is
   // left pending for a person, as finaliseReaderOrder did (W03-plan 2.5, "amounts don't match").
   'w11-reader-amount-mismatch-a-pound-short': 'W03-plan 2.5: a payment that does not match its order is left for a person, not finalised',
+  // W27's own on the old functions: a membership bought with a robe on one card (E3). The order names the robe's payment.
+  'w27-e3-membership-and-robe-on-one-card-refunded-to-card': FIRST_INVOICE,
 }
 
 export interface InvariantSweep {
@@ -85,7 +87,8 @@ export async function sweepInvariants(
         const call: ScenarioContext['call'] = async (action, params) => {
           const result = await context.call(action, params)
           const sent = params as { bookingId?: string; payment?: { method?: string; confirmedCashAmount?: number } }
-          const answer = result as { moved?: boolean; settled?: boolean; message?: string }
+          // W27: an old function can answer null (getEventCancellationOverview, for an event that is gone).
+          const answer = (result ?? {}) as { moved?: boolean; settled?: boolean; message?: string }
           // An unclear save (W05l) keeps everything taken, the cash too, until staff check.
           const unclear = answer.message?.includes('checking whether it was saved failed too') === true
           const done = (action === 'moveBooking' && (answer.moved || unclear)) || (action === 'settleLapsedBooking' && (answer.settled || unclear))

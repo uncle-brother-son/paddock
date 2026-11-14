@@ -204,7 +204,8 @@
             "payment_intent_id": "pi_fake_0001",
             "stock_adjustment_ids": [],
             "save_address_to_customer": false
-          }
+          },
+          "refund_owed_amount": "0.00"
         }
       ],
       "changed": [],

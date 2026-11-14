@@ -167,7 +167,8 @@
           "created_at": "<set>",
           "updated_at": "<set>",
           "payment_method": "cash",
-          "reader_payment": null
+          "reader_payment": null,
+          "refund_owed_amount": "0.00"
         }
       ],
       "changed": [],

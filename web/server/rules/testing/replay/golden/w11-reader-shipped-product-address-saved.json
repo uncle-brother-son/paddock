@@ -162,7 +162,8 @@
               "stock_adjustments#1"
             ],
             "save_address_to_customer": true
-          }
+          },
+          "refund_owed_amount": "0.00"
         }
       ],
       "changed": [],

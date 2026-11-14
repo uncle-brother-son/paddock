@@ -36,17 +36,31 @@
 // Refund's seat and a ticked towel on the same order: one refund, one key), each order's card portion used once;
 // R2 records the booking lines' share on them and stamps the add-on lines with theirs. Cancel & Refund and Cancel &
 // return credit (cancel.ts) are claims of kind `cancel` and `cancel_credit`.
+// W27 (E-plan 4.1): the parts that don't care what is refunded (the claim's read and write, the due list, one card
+// part's key, request and send, the refusal mark, the Stripe look-up, the held answer) are in
+// server/rules/refunds/pipeline.ts, shared with step E's order and event claims. Everything about a booking stays
+// here, under the same names, and every statement it runs is the one it ran before.
 import 'server-only'
-import Stripe from 'stripe'
 import type { ApiErrorCode, OwedArrivedInput, PartRefundInput, RefundBookingOutput, RefundOwedInput } from '@/contracts'
 import { audit, type AuditEntry } from '@/server/audit'
 import { isDeadlock, type Db, type Queryable, type Tx } from '@/server/db'
 import { ApiError } from '@/server/http/errors'
-import { stripeIdempotencyKey } from '@/server/http/idempotency'
 import type { StripeClient } from '@/server/stripe/client'
-import { sendOptions, stripeTiming, type StripeTiming } from '@/server/stripe/deadline'
-import { readStripeFailure } from '@/server/stripe/outcome'
-import { pence } from '@/server/rules/orders/collect-saved-card'
+import { stripeTiming, type StripeTiming } from '@/server/stripe/deadline'
+import {
+  BOOKING_CLAIMS,
+  claimIsFinished,
+  claimRefusal as claimRefusalOn,
+  claimsDueSql,
+  heldAnswer,
+  markRefused as markRefusedOn,
+  openClaimOn,
+  readClaimRow,
+  sendCardPart,
+  writeClaimRow,
+  type CardPart,
+  type CardPartLine,
+} from '@/server/rules/refunds/pipeline'
 import {
   cardRefundFailedMessage,
   CHANGE_REFUND_UNCONFIRMED_MESSAGE,
@@ -71,12 +85,15 @@ import {
   putBackBlockedNotRecordedMessage,
   putBackFailedMessage,
   putBackFailedNotRecordedMessage,
-  refundRefusedDetail,
 } from './failure-messages'
 import { lockAndLoadBooking, paymentOpen, type LoadedBooking } from './load-booking'
 import { lockForBooking } from './locks'
 import { inC1, paymentOpenRefusal } from './money-in'
 import { ADDONS_INSIDE_LINE, loadBookingLines, loadOrderCardPortion, recordOrderPaymentStatus, withCashAndLine, type RefundFigures } from './money-left'
+
+// W27: lifted to the shared core, and still exported from here under their old names.
+export { cardPartRequest, claimRefundKey, findCardPart } from '@/server/rules/refunds/pipeline'
+export type { CardPart, CardPartLine } from '@/server/rules/refunds/pipeline'
 
 export const REFUND_CLAIMED = 'booking.refund_claimed'
 export const REFUND_FINISHED = 'booking.refund_finished'
@@ -120,16 +137,9 @@ export interface AddonClaim {
   refund: 'card' | 'credit'
 }
 
-/**
- * One line's share of a card part: a booking line's (order_line_items), or (W23, `addon: true`) a ticked add-on line's
- * (addon_order_lines) planned in the same part as the booking lines of its order. Remove add-on's parts (W22) hold
- * add-on lines with no mark: its claim says so by its kind.
- */
-export interface CardPartLine {
-  lineId: string
-  amount: number
-  addon?: true
-}
+// One line's share of a card part (`CardPartLine`, in the shared core): a booking line's (order_line_items), or (W23,
+// `addon: true`) a ticked add-on line's (addon_order_lines) planned in the same part as the booking lines of its
+// order. Remove add-on's parts (W22) hold add-on lines with no mark: its claim says so by its kind.
 
 /** W23: a ticked paid add-on line a cancel gives back: the order that paid for it, and what it paid (price × quantity). */
 export interface AddonRefundLine {
@@ -241,13 +251,8 @@ export interface MoveRow {
 
 export const moveRowDetails = (row: MoveRow): Record<string, unknown> => ({ ...row })
 
-/** One refund to one order's card: the order's lines for this booking (newest first) add up to `amount`. */
-export interface CardPart {
-  orderId: string
-  paymentIntentId: string
-  amount: number
-  lines: CardPartLine[]
-}
+// One refund to one order's card (`CardPart`, in the shared core): the order's lines for this booking (newest first)
+// add up to `amount`.
 
 /** Where the claimed money goes: the card parts, then store credit for the rest, or (Q26) cash handed over. */
 export interface RefundPlan {
@@ -316,11 +321,7 @@ export interface FinishedBy {
 const round2 = (n: number): number => Math.round(n * 100) / 100
 /** Rounded first, as the old cash rule: taking pounds from pounds leaves noise. Half a penny either way passes (Q18). */
 const overHalfPenny = (amount: number, limit: number): boolean => Math.round((amount - limit) * 1e6) / 1e6 > 0.005
-const explain = (err: unknown): string => (err instanceof Error ? `${err.name}: ${err.message}` : String(err))
 const sum = (amounts: readonly number[]): number => round2(amounts.reduce((total, n) => total + n, 0))
-
-/** The key of one card part: `<claimId>:refund:<orderId>` (the claim's record id, then the order it refunds). */
-export const claimRefundKey = (claimId: string, orderId: string): string => `${stripeIdempotencyKey(claimId, 'refund')}:${orderId}`
 
 // --- Refusals
 
@@ -345,29 +346,11 @@ function requiredReason(value: unknown, what: string): string {
 
 // --- Claims on audit_log (lead call L3)
 
-/** A Worker claim with no finished row: `$1` the booking (as text). */
-const OPEN_CLAIM_ON_BOOKING_SQL = `
-SELECT c.id FROM audit_log c
-WHERE c.action = '${REFUND_CLAIMED}' AND c.entity_type = 'booking' AND c.entity_id = $1::text AND c.details->>'worker' = 'true'
-  AND NOT EXISTS (
-    SELECT 1 FROM audit_log f
-    WHERE f.action = '${REFUND_FINISHED}' AND f.entity_type = 'booking' AND f.entity_id = c.entity_id AND f.details->>'claimId' = c.id::text
-  )
-LIMIT 1`
-
 /**
  * Every Worker claim with no finished row, older than `$1` minutes, oldest first: what reconcile settles (D-plan
  * 4.10). A claim and its finished row are written by different transactions only when card parts were sent.
  */
-export const CLAIMS_DUE_SQL = `
-SELECT c.id FROM audit_log c
-WHERE c.action = '${REFUND_CLAIMED}' AND c.entity_type = 'booking' AND c.details->>'worker' = 'true'
-  AND c.at < now() - make_interval(mins => $1::int)
-  AND NOT EXISTS (
-    SELECT 1 FROM audit_log f
-    WHERE f.action = '${REFUND_FINISHED}' AND f.entity_type = 'booking' AND f.entity_id = c.entity_id AND f.details->>'claimId' = c.id::text
-  )
-ORDER BY c.at, c.id`
+export const CLAIMS_DUE_SQL = claimsDueSql(BOOKING_CLAIMS)
 
 /** True when the booking has a Worker refund claim with no finished row: it holds the booking for every refund. */
 export async function refundClaimOpen(db: Queryable, bookingId: string): Promise<boolean> {
@@ -376,42 +359,24 @@ export async function refundClaimOpen(db: Queryable, bookingId: string): Promise
 
 /** The id of the booking's open Worker refund claim, if it has one. */
 export async function openRefundClaimOn(db: Queryable, bookingId: string): Promise<string | null> {
-  return (await db.query<{ id: string }>(OPEN_CLAIM_ON_BOOKING_SQL, [bookingId]))[0]?.id ?? null
+  return openClaimOn(db, BOOKING_CLAIMS, bookingId)
 }
 
 /** The claim, or null when there is no Worker claim with that id. */
 export async function readClaim(db: Queryable, claimId: string): Promise<Claim | null> {
-  const row = (
-    await db.query<{ id: string; entity_id: string; actor_id: string | null; at: unknown; details: ClaimDetails }>(
-      `SELECT id, entity_id, actor_id, at, details FROM audit_log
-       WHERE id = $1::uuid AND action = 'booking.refund_claimed' AND entity_type = 'booking' AND details->>'worker' = 'true'`,
-      [claimId]
-    )
-  )[0]
+  const row = await readClaimRow<ClaimDetails>(db, BOOKING_CLAIMS, claimId)
   if (!row) return null
-  return { id: row.id, bookingId: row.entity_id, staffId: row.actor_id, at: row.at instanceof Date ? row.at.toISOString() : String(row.at), details: row.details }
+  return { id: row.id, bookingId: row.subjectId, staffId: row.staffId, at: row.at, details: row.details }
 }
 
 async function claimFinished(db: Queryable, claim: Pick<Claim, 'id' | 'bookingId'>): Promise<boolean> {
-  const rows = await db.query(
-    "SELECT 1 FROM audit_log WHERE action = 'booking.refund_finished' AND entity_type = 'booking' AND entity_id = $1::text AND details->>'claimId' = $2::text LIMIT 1",
-    [claim.bookingId, claim.id]
-  )
-  return rows.length > 0
+  return claimIsFinished(db, BOOKING_CLAIMS, { id: claim.id, subjectId: claim.bookingId })
 }
 
 /** Writes the claim's row (`booking.refund_claimed`, lead call L3): the record every key and the finish come from. */
 export async function writeClaim(tx: Tx, bookingId: string, details: ClaimDetails, options: Pick<RefundOptions, 'actor' | 'requestId'>): Promise<Claim> {
-  const row = (
-    await tx.query<{ id: string; at: unknown }>(
-      `INSERT INTO audit_log (at, actor_type, actor_id, action, entity_type, entity_id, request_id, details)
-       VALUES (clock_timestamp(), 'staff', $1::text, 'booking.refund_claimed', 'booking', $2::text, $3::text, $4::jsonb)
-       RETURNING id, at`,
-      [options.actor.id, bookingId, options.requestId, JSON.stringify(details)]
-    )
-  )[0]
-  if (!row) throw new Error('The refund claim was not written.')
-  return { id: row.id, bookingId, staffId: options.actor.id, at: row.at instanceof Date ? row.at.toISOString() : String(row.at), details }
+  const row = await writeClaimRow(tx, BOOKING_CLAIMS, bookingId, details, options)
+  return { id: row.id, bookingId, staffId: row.staffId, at: row.at, details }
 }
 
 // --- The plan
@@ -1319,52 +1284,10 @@ async function undoMoveClaim(tx: Tx, bookingId: string, amount: number, move: Mo
 
 // --- The press: each card part once, then R2
 
-type PartAnswer = { outcome: 'went'; refund: Stripe.Refund } | { outcome: 'refused'; detail: string } | { outcome: 'not_sent' } | { outcome: 'unclear'; detail: string }
+// W27: one part's request and its send (`sendCardPart`: once, under its key, sent once more only on an unclear answer)
+// are the shared core's.
 
-const accessRefused = (err: unknown): boolean =>
-  err instanceof Stripe.errors.StripeAuthenticationError || err instanceof Stripe.errors.StripePermissionError
-
-/** One part's refund request, from the claim alone, so a resend under its key is the same request. */
-export function cardPartRequest(claimId: string, part: CardPart): Stripe.RefundCreateParams {
-  return { payment_intent: part.paymentIntentId, amount: pence(part.amount), metadata: { refund_key: claimRefundKey(claimId, part.orderId), claim_id: claimId } }
-}
-
-/**
- * Sends one card part, outside any transaction, under its key: Stripe's refund back (succeeded or pending) is a yes;
- * failed or cancelled, or a definite error, is a no; nothing sent (no time left before the first send) is not_sent
- * (W21a: not a refusal, Stripe never saw it); any other answer is sent once more with the same key and request, then is
- * unclear. Only the press calls this, once per part, straight after R1: reconcile never sends a refund.
- */
-async function sendCardPart(stripe: StripeClient, claimId: string, part: CardPart, timing: StripeTiming): Promise<PartAnswer> {
-  const request = cardPartRequest(claimId, part)
-  const key = claimRefundKey(claimId, part.orderId)
-  let last = ''
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    let options: Stripe.RequestOptions
-    try {
-      options = sendOptions(timing, { idempotencyKey: key })
-    } catch (err) {
-      if (attempt === 1) return { outcome: 'not_sent' }
-      return { outcome: 'unclear', detail: `${last} (not sent again: ${explain(err)})` }
-    }
-    try {
-      const refund = await stripe.refunds.create(request, options)
-      if (refund.status === 'failed' || refund.status === 'canceled') return { outcome: 'refused', detail: refundRefusedDetail(`the refund ${refund.status}`) }
-      return { outcome: 'went', refund }
-    } catch (err) {
-      const failure = readStripeFailure(err)
-      if (failure.outcome === 'definite' || (accessRefused(err) && attempt === 1)) return { outcome: 'refused', detail: refundRefusedDetail(failure.message) }
-      last = failure.message
-    }
-  }
-  return { outcome: 'unclear', detail: last }
-}
-
-const held = (claim: Claim, reason: string, message: string, cardGone = 0): RefundBookingOutput => ({
-  cardRefundedAmount: cardGone,
-  storeCreditRefundedAmount: 0,
-  held: { claimId: claim.id, reason, message },
-})
+const held = (claim: Claim, reason: string, message: string, cardGone = 0): RefundBookingOutput => heldAnswer(claim.id, reason, message, cardGone)
 
 /**
  * W26a: the mark that Stripe refused one of the claim's card parts, written before anything else is tried (the undo,
@@ -1373,35 +1296,12 @@ const held = (claim: Claim, reason: string, message: string, cardGone = 0): Refu
  * over: the press carries on, and its own finish records the refusal.
  */
 async function markRefused(db: Db, claim: Claim, part: CardPart, detail: string, requestId: string): Promise<void> {
-  const write = (): Promise<void> =>
-    db.transaction((tx) =>
-      audit.recordAll(tx, [
-        {
-          actorType: 'staff',
-          actorId: claim.staffId,
-          action: REFUND_REFUSED,
-          entityType: 'booking',
-          entityId: claim.bookingId,
-          requestId,
-          details: { claimId: claim.id, orderId: part.orderId, amount: part.amount, detail },
-        },
-      ])
-    )
-  try {
-    await write()
-  } catch {
-    await write().catch(() => undefined)
-  }
+  return markRefusedOn(db, BOOKING_CLAIMS, { id: claim.id, subjectId: claim.bookingId, staffId: claim.staffId }, part, detail, requestId)
 }
 
 /** W26a: Stripe's reason when it refused one of the claim's card parts (the first mark), or null when it never did. */
 export async function claimRefusal(db: Queryable, claim: Pick<Claim, 'id' | 'bookingId'>): Promise<string | null> {
-  const rows = await db.query<{ detail: string | null }>(
-    "SELECT details->>'detail' AS detail FROM audit_log WHERE action = 'booking.refund_refused' AND entity_type = 'booking' AND entity_id = $1::text AND details->>'claimId' = $2::text ORDER BY at, id LIMIT 1",
-    [claim.bookingId, claim.id]
-  )
-  const row = rows[0]
-  return row ? (row.detail ?? 'refused') : null
+  return claimRefusalOn(db, BOOKING_CLAIMS, { id: claim.id, subjectId: claim.bookingId })
 }
 
 /**
@@ -1567,59 +1467,6 @@ export async function owedArrived(db: Db, bookingId: string, input: OwedArrivedI
 }
 
 // --- Reconcile (D-plan 4.10) and the close by hand
-
-/** A claim's card part as Stripe shows it: a refund naming the claim, none, or more than one (left for a person). */
-type PartFound =
-  | { kind: 'went' }
-  | { kind: 'none' }
-  /** W26a: a refund naming the claim that failed or was cancelled, and none that went: Stripe's refusal, with its words. */
-  | { kind: 'refused'; detail: string }
-  | { kind: 'several'; ids: string[] }
-  | { kind: 'mismatch'; detail: string }
-  | { kind: 'unclear'; detail: string }
-
-const LIST_PAGE = 100
-const LIST_MOST_PAGES = 10
-
-/** Every refund on a PaymentIntent, every page (at most LIST_MOST_PAGES); 'unclear' when Stripe didn't answer. */
-async function listRefunds(
-  stripe: StripeClient,
-  paymentIntentId: string,
-  timing: StripeTiming | undefined
-): Promise<{ kind: 'listed'; refunds: Stripe.Refund[] } | { kind: 'unclear'; detail: string }> {
-  const refunds: Stripe.Refund[] = []
-  let startingAfter: string | undefined
-  try {
-    for (let page = 0; ; page += 1) {
-      if (page >= LIST_MOST_PAGES) return { kind: 'unclear', detail: `more than ${LIST_PAGE * LIST_MOST_PAGES} refunds to look through` }
-      const listed = await stripe.refunds.list({ payment_intent: paymentIntentId, limit: LIST_PAGE, ...(startingAfter ? { starting_after: startingAfter } : {}) }, sendOptions(timing))
-      refunds.push(...listed.data)
-      const last = listed.data.at(-1)
-      if (!listed.has_more || !last) break
-      startingAfter = last.id
-    }
-  } catch (err) {
-    return { kind: 'unclear', detail: readStripeFailure(err).message }
-  }
-  return { kind: 'listed', refunds }
-}
-
-/**
- * The refunds on the part's PaymentIntent that name this claim (`metadata.claim_id`), every page. Succeeded or pending
- * is money gone; failed or cancelled, or none, is money that never went. W26a: failed or cancelled is told apart from
- * none (`refused`): Stripe got it and refused it, so reconcile never gives it as store credit. Never sends anything.
- */
-export async function findCardPart(stripe: StripeClient, claimId: string, part: CardPart, timing: StripeTiming | undefined): Promise<PartFound> {
-  const listed = await listRefunds(stripe, part.paymentIntentId, timing)
-  if (listed.kind === 'unclear') return listed
-  const matched = listed.refunds.filter((refund) => refund.metadata?.['claim_id'] === claimId)
-  const live = matched.filter((refund) => refund.status !== 'failed' && refund.status !== 'canceled')
-  if (live.length > 1) return { kind: 'several', ids: live.map((refund) => refund.id) }
-  const refund = live[0]
-  if (!refund) {
-    const dead = matched[0]
-    return dead ? { kind: 'refused', detail: refundRefusedDetail(`the refund ${dead.status}`) } : { kind: 'none' }
-  }
-  if (refund.amount !== pence(part.amount)) return { kind: 'mismatch', detail: `${refund.id} is ${refund.amount}p, the part ${pence(part.amount)}p` }
-  return { kind: 'went' }
-}
+//
+// W27: the look-up they use (`findCardPart`: the refunds on a part's PaymentIntent that name the claim, never a send)
+// is the shared core's, exported from here as before.

@@ -1,0 +1,215 @@
+{
+  "scenario": "w27-order-refund-a-second-refund-on-the-same-order",
+  "results": [
+    {
+      "success": true,
+      "orderId": "orders#1",
+      "cardCharged": true,
+      "cardAmount": 39,
+      "paymentMethodUsed": "card"
+    },
+    {
+      "success": true,
+      "refundedAmount": 24,
+      "refundMethod": "card",
+      "cardRefundedAmount": 24,
+      "orderPaymentStatus": "partially_refunded"
+    },
+    {
+      "success": true,
+      "refundedAmount": 15,
+      "refundMethod": "credit",
+      "storeCreditRefundedAmount": 15,
+      "storeCreditBalance": 45,
+      "orderPaymentStatus": "refunded"
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "paymentIntents.create",
+      "params": {
+        "amount": 3900,
+        "currency": "gbp",
+        "customer": "cus_seed",
+        "payment_method": "pm_seed",
+        "off_session": true,
+        "confirm": true,
+        "description": "Staff-created order for merchandise"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "refunds.create",
+      "params": {
+        "payment_intent": "pi_fake_0002",
+        "amount": 2400,
+        "metadata": {
+          "refund_key": "order-refund:orders#1:<ids>:0:2400:0"
+        }
+      },
+      "idempotencyKey": "order-refund:orders#1:<ids>:0:2400:0"
+    }
+  ],
+  "tables": {
+    "customers": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000005",
+          "store_credit_balance": [
+            "30.00",
+            "45.00"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    },
+    "order_line_items": {
+      "added": [
+        {
+          "id": "order_line_items#1",
+          "order_id": "orders#1",
+          "booking_id": null,
+          "product_variant_id": "10000000-0000-4000-8000-000000000008",
+          "membership_plan_id": null,
+          "session_pass_type_id": null,
+          "gift_card_id": null,
+          "item_type": "product",
+          "quantity": 2,
+          "unit_price": "12.00",
+          "line_total": "24.00",
+          "created_at": "<set>",
+          "addon_id": null,
+          "refunded_at": "<set>",
+          "refund_method": "card",
+          "restocked": false,
+          "fulfillment_status": "pending",
+          "card_refunded_amount": "24.00",
+          "system_unit_price": "12.00",
+          "price_override_reason": null,
+          "discount_amount": "0.00",
+          "event_booking_id": null
+        },
+        {
+          "id": "order_line_items#2",
+          "order_id": "orders#1",
+          "booking_id": null,
+          "product_variant_id": "10000000-0000-4000-8000-000000000015",
+          "membership_plan_id": null,
+          "session_pass_type_id": null,
+          "gift_card_id": null,
+          "item_type": "product",
+          "quantity": 1,
+          "unit_price": "15.00",
+          "line_total": "15.00",
+          "created_at": "<set>",
+          "addon_id": null,
+          "refunded_at": "<set>",
+          "refund_method": "credit",
+          "restocked": true,
+          "fulfillment_status": "pending",
+          "card_refunded_amount": "0.00",
+          "system_unit_price": "15.00",
+          "price_override_reason": null,
+          "discount_amount": "0.00",
+          "event_booking_id": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "orders": {
+      "added": [
+        {
+          "id": "orders#1",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "order_total": "39.00",
+          "payment_status": "refunded",
+          "stripe_payment_intent_id": "pi_fake_0002",
+          "promo_code": null,
+          "discount_amount": "0.00",
+          "shipping_address": null,
+          "shipping_status": null,
+          "tracking_number": null,
+          "order_source": "staff_created",
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "payment_method": "card",
+          "reader_payment": null,
+          "refund_owed_amount": "0.00"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "product_variants": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000008",
+          "stock_quantity": [
+            5,
+            3
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    },
+    "stock_adjustments": {
+      "added": [
+        {
+          "id": "stock_adjustments#1",
+          "variant_id": "10000000-0000-4000-8000-000000000008",
+          "change_amount": -2,
+          "reason": "Sale (Order #orders#1)",
+          "staff_id": null,
+          "created_at": "<set>"
+        },
+        {
+          "id": "stock_adjustments#2",
+          "variant_id": "10000000-0000-4000-8000-000000000015",
+          "change_amount": -1,
+          "reason": "Sale (Order #orders#1)",
+          "staff_id": null,
+          "created_at": "<set>"
+        },
+        {
+          "id": "stock_adjustments#3",
+          "variant_id": "10000000-0000-4000-8000-000000000015",
+          "change_amount": 1,
+          "reason": "Refund Restock (Order #orders#1)",
+          "staff_id": null,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "store_credit_transactions": {
+      "added": [
+        {
+          "id": "store_credit_transactions#1",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "amount": "15.00",
+          "balance_after": "45.00",
+          "reason": "refund",
+          "order_id": "orders#1",
+          "booking_id": null,
+          "gift_card_id": null,
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "note": "Refund to store credit — order line items refunded by staff. [ref gone#1]",
+          "created_at": "<set>",
+          "event_booking_id": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -16,8 +16,9 @@ actions have switched, W17 froze this copy (D-plan 4.11 item 1), as W16 froze th
   `manifest.json` holds each file's SHA-256; `server/rules/testing/frozen-booking-code.test.ts` fails if one changes.
 - `legacy-order/backend/paddock/` now imports the modules both copies share from here (W17), not from the staff app's
   checkout, so the old order code keeps working when step D deletes them (`chargeSavedCard`, `bandPricing`,
-  `creditRedemption`...). Only the three modules steps E and G move (`cancelMembershipSubscription`, `promoCodes`,
-  `stockAdjustments`) still go through the `@retool-app` alias.
+  `creditRedemption`...). The three modules steps E and G move (`cancelMembershipSubscription`, `promoCodes`,
+  `stockAdjustments`) went through the `@retool-app` alias until W27; the order copy now takes them from the frozen
+  step E copy (`../legacy-refund/`), so no import in the test tree uses the alias any more.
 
 Who may use it: only `replay/harness.ts` (`LEGACY_BOOKING_ACTIONS`, `legacyBookingDir`, `oldFunctionPath`) and the
 order copy's imports, and test files through the harness. `server/rules/testing/frozen-booking-code.test.ts` checks that nothing in

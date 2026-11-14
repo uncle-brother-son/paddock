@@ -20,6 +20,11 @@ import type { Tx } from '@/server/db'
  * writes a new one). W19 (W17 review S2): step C's undo (undo-order.ts, and the manual close that runs it) does: it
  * deletes the order's booking, so it locks that booking straight after the order, before the customer. T2 writes no
  * booking row. server/rules/bookings/locks.ts takes these for a booking change.
+ *
+ * W27 (E-plan 4.2): an existing event booking comes straight after its event. A refund of an order's lines or a
+ * cancel of an event booking's places (step E) locks the order first, then the rows after it that its lines need, and
+ * the event booking's row only once its event is held (server/rules/refunds/locks.ts). T2 and the undo, which also
+ * write an order's event booking, hold that order first, so they queue behind the same lock.
  */
 export const LOCK_ORDER = [
   'order',
@@ -32,6 +37,7 @@ export const LOCK_ORDER = [
   'membership',
   'product_variants',
   'event',
+  'event_booking',
   'gift_card',
 ] as const
 

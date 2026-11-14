@@ -13,8 +13,13 @@ import { ApiError } from '@/server/http/errors'
  * (W18) a reader flow also needs `reader`. Taking `reader` out stops New Order's reader now, and the booking
  * changes on the reader as W19 / W20 / W24 move them to the Worker (until then they are the old Retool code,
  * which reads no switch).
+ *
+ * W27 (E-plan 4.10, lead call L3): `order_refunds` (an order's lines refunded, and money owed on an order given) and
+ * `event_cancels` (an event place, booking or whole event cancelled with money back) are step E's, checked by its
+ * routes as W28 and W30 build them (server/rules/refunds/refund-switch.ts). Both are off until the lead adds them to
+ * the secret, and neither turns any order or booking change on.
  */
-export const ORDER_KINDS = ['no_stripe', 'saved_card', 'reader', 'membership', 'reader_flows', 'booking_changes'] as const
+export const ORDER_KINDS = ['no_stripe', 'saved_card', 'reader', 'membership', 'reader_flows', 'booking_changes', 'order_refunds', 'event_cancels'] as const
 export type OrderKind = (typeof ORDER_KINDS)[number]
 
 /**
@@ -25,7 +30,7 @@ export type OrderKind = (typeof ORDER_KINDS)[number]
  *   to take (the order then refuses with its own reason, as placeOrder needs Stripe for either);
  * - anything else is `no_stripe`: cash, gift card or store credit alone, nothing owed, or no method.
  */
-export function orderKind(input: Pick<PlaceOrderInput, 'membershipPlanId' | 'payment'>): Exclude<OrderKind, 'reader_flows' | 'booking_changes'> {
+export function orderKind(input: Pick<PlaceOrderInput, 'membershipPlanId' | 'payment'>): Exclude<OrderKind, 'reader_flows' | 'booking_changes' | 'order_refunds' | 'event_cancels'> {
   if (input.membershipPlanId) return 'membership'
   const method = input.payment?.method
   if (method === 'reader') return 'reader'

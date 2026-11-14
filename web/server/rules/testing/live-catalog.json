@@ -2937,6 +2937,14 @@
      "default": null,
      "generated": "",
      "identity": ""
+    },
+    {
+     "name": "refund_owed_amount",
+     "type": "numeric(10,2)",
+     "notNull": true,
+     "default": "0",
+     "generated": "",
+     "identity": ""
     }
    ]
   },
@@ -4803,7 +4811,7 @@
    "table": "event_attendees",
    "name": "event_attendees_refund_method_check",
    "type": "c",
-   "definition": "CHECK ((refund_method = ANY (ARRAY['card'::text, 'credit'::text, 'none'::text])))"
+   "definition": "CHECK ((refund_method = ANY (ARRAY['card'::text, 'credit'::text, 'none'::text, 'cash'::text])))"
   },
   {
    "table": "event_attendees",
@@ -5325,7 +5333,7 @@
    "table": "order_line_items",
    "name": "order_line_items_refund_method_check",
    "type": "c",
-   "definition": "CHECK ((refund_method = ANY (ARRAY['card'::text, 'credit'::text])))"
+   "definition": "CHECK ((refund_method = ANY (ARRAY['card'::text, 'credit'::text, 'cash'::text])))"
   },
   {
    "table": "order_line_items",
@@ -5362,6 +5370,12 @@
    "name": "orders_pkey",
    "type": "p",
    "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "orders",
+   "name": "orders_refund_owed_amount_check",
+   "type": "c",
+   "definition": "CHECK ((refund_owed_amount >= (0)::numeric))"
   },
   {
    "table": "orders",
@@ -5850,6 +5864,10 @@
   {
    "name": "audit_log_entity_idx",
    "definition": "CREATE INDEX audit_log_entity_idx ON public.audit_log USING btree (entity_type, entity_id)"
+  },
+  {
+   "name": "audit_log_refund_claims_idx",
+   "definition": "CREATE INDEX audit_log_refund_claims_idx ON public.audit_log USING btree (action, at) WHERE (action = ANY (ARRAY['booking.refund_claimed'::text, 'order.refund_claimed'::text, 'event_booking.refund_claimed'::text]))"
   },
   {
    "name": "customers_auth_user_id_key",

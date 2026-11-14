@@ -52,13 +52,26 @@ export const LEGACY_BOOKING_ACTIONS: ReadonlySet<string> = new Set([
 export const legacyBookingDir = path.join(__dirname, '../legacy-booking/backend/paddock')
 
 /**
+ * W27 (E-plan 4.13 item 2, lead call L6): step E deletes the staff app's order refund and event cancellation
+ * functions slice by slice (W28 to W31). Its golden files were recorded through them, so those five functions, and
+ * every module they import, run from a third frozen test-only copy (legacy-refund/README.md). The recorded side and
+ * setup only; it goes at step H.
+ */
+export const LEGACY_REFUND_ACTIONS: ReadonlySet<string> = new Set(['refundOrder', 'cancelEventPlaces', 'cancelEvent', 'getEventCancellationQuote', 'getEventCancellationOverview'])
+export const legacyRefundDir = path.join(__dirname, '../legacy-refund/backend/paddock')
+
+/**
  * Where the old side loads a staff app file from (`moveBooking.ts`, `shared/bookingMoneyClaim.ts`): the frozen
- * booking copy for anything it holds, the frozen order copy for the three old order actions, else the staff app's
- * own checkout (the functions steps E to G move: events, refundOrder, the Orders page, the reads).
+ * booking copy for anything it holds (step D), the frozen refund copy for the five old step E actions and the
+ * modules only it holds (W27), the frozen order copy for the three old order actions, else the staff app's own
+ * checkout (the functions steps F and G move: memberships, the Orders page, the reads). A module both the booking
+ * and the refund copy hold (`shared/staffAccess.ts`) is named from the booking copy, as before W27; each copy's own
+ * functions import their own, relatively, whatever this answers.
  */
 export function oldFunctionPath(file: string): string {
   const name = file.replace(/\.ts$/, '')
   if (existsSync(path.join(legacyBookingDir, `${name}.ts`))) return path.join(legacyBookingDir, `${name}.ts`)
+  if (LEGACY_REFUND_ACTIONS.has(name) || existsSync(path.join(legacyRefundDir, `${name}.ts`))) return path.join(legacyRefundDir, `${name}.ts`)
   if (LEGACY_ORDER_ACTIONS.has(name)) return path.join(legacyOrderDir, `${name}.ts`)
   return path.join(backendDir, `${name}.ts`)
 }

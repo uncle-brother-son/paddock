@@ -59,6 +59,30 @@ const W17_KNOWN_FAULTS = [
   'w17-n3-status-set-to-payment-needed-then-settled-again: price_paid £60.00, but £40.00 paid less £0.00 back',
 ]
 
+/**
+ * W27 (E-plan 4.13 item 1, lead call L6): step E's golden files record the old order refund and event cancellation
+ * functions' faults on purpose too, and these invariants are what catch them. Each must keep breaking them in exactly
+ * these ways, until the slice that moves its action (W28 order refunds, W30 event places) names the difference on the
+ * new side. Every other W27 scenario, 131 of the 137, is clean.
+ */
+const W27_KNOWN_FAULTS = [
+  // The function died after its card refund: £24 went with nothing recorded. The same lines pressed again would get
+  // that refund back (the same key); another line doesn't, so the first £24 stays on no row.
+  'w27-order-refund-died-on-one-line-then-another-line-at-the-same-figures: Stripe refunded £48.00, the rows say £24',
+  // A held refund that went, still held when the scenario ends: the look for it failed, so nothing is recorded yet.
+  'w27-order-refund-held-two-days-and-the-look-fails: Stripe refunded £24.00, the rows say £0',
+  // E2: the order was refunded while its reader payment was open; the customer then tapped, and the £24 is on no order.
+  'w27-e2-order-refund-while-its-reader-payment-is-still-open: pi_fake_0001 is on 0 orders',
+  // £40 went to the card, then the place was checked in before the cancel was recorded: on the line, on no place.
+  'w27-event-cancel-changed-by-someone-else-a-place-checked-in-meanwhile: the places say £0.00 went to the card, Stripe refunded £40.00',
+  // The function died after one place's refund; the other place then took the card's other £40. £80 back, one place still booked.
+  'w27-event-cancel-died-on-one-place-then-the-other-at-the-same-figures: Stripe refunded £80.00, the rows say £40',
+  'w27-event-cancel-died-on-one-place-then-the-other-at-the-same-figures: the places say £40.00 went to the card, Stripe refunded £80.00',
+  // A held refund that went, still held when the scenario ends (as the order's above).
+  'w27-event-cancel-held-two-days-and-the-look-fails: Stripe refunded £40.00, the rows say £0',
+  'w27-event-cancel-held-two-days-and-the-look-fails: the places say £0.00 went to the card, Stripe refunded £40.00',
+]
+
 describe('W05d on the old functions', () => {
   let environment: ReplayEnvironment
 
@@ -276,8 +300,11 @@ describe('W05d on the old functions', () => {
     // them. Each must keep breaking them in exactly these ways, until the slice that moves its action names the
     // difference on the new side (D-plan 4.11 item 3: the invariants run on every new-side scenario too).
     const known = wrong.filter((line) => line.startsWith('w17-'))
-    expect(wrong.filter((line) => !line.startsWith('w17-'))).toEqual([])
+    // W27: step E's golden files do the same for the old order refund and event cancellation functions.
+    const knownOfStepE = wrong.filter((line) => line.startsWith('w27-'))
+    expect(wrong.filter((line) => !line.startsWith('w17-') && !line.startsWith('w27-'))).toEqual([])
     expect(known).toEqual(W17_KNOWN_FAULTS)
+    expect(knownOfStepE).toEqual(W27_KNOWN_FAULTS)
     const stale = [STRIPE_REFUNDS_NOT_ON_ROWS, CANCELLED_WITHOUT_ALL_THE_MONEY, CHARGES_NOT_ON_ONE_ORDER].flatMap((list) =>
       Object.keys(list).filter((name) => !needed.has(`${Object.keys(list)[0]}/${name}`))
     )

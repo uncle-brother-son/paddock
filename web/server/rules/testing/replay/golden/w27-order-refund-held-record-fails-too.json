@@ -1,0 +1,149 @@
+{
+  "scenario": "w27-order-refund-held-record-fails-too",
+  "results": [
+    {
+      "success": true,
+      "orderId": "orders#1",
+      "cardCharged": true,
+      "cardAmount": 24,
+      "paymentMethodUsed": "card"
+    },
+    {
+      "success": false,
+      "reason": "refund_unsure",
+      "message": "The card refund of £24.00 gave no clear answer, so it may have gone through, and nothing else was done. Check Stripe, but don't refund it there by hand: pressing again first finds out whether it went, and can't pay it twice.",
+      "warning": "Keeping it for the next press failed too, so press again only with Card on the same lines: that gets the first refund back."
+    },
+    {
+      "success": true,
+      "refundedAmount": 24,
+      "refundMethod": "card",
+      "cardRefundedAmount": 24,
+      "orderPaymentStatus": "refunded"
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "paymentIntents.create",
+      "params": {
+        "amount": 2400,
+        "currency": "gbp",
+        "customer": "cus_seed",
+        "payment_method": "pm_seed",
+        "off_session": true,
+        "confirm": true,
+        "description": "Staff-created order for merchandise"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "refunds.create",
+      "params": {
+        "payment_intent": "pi_fake_0002",
+        "amount": 2400,
+        "metadata": {
+          "refund_key": "order-refund:orders#1:<ids>:0:2400:0"
+        }
+      },
+      "idempotencyKey": "order-refund:orders#1:<ids>:0:2400:0"
+    },
+    {
+      "method": "refunds.create",
+      "params": {
+        "payment_intent": "pi_fake_0002",
+        "amount": 2400,
+        "metadata": {
+          "refund_key": "order-refund:orders#1:<ids>:0:2400:0"
+        }
+      },
+      "idempotencyKey": "order-refund:orders#1:<ids>:0:2400:0"
+    }
+  ],
+  "tables": {
+    "order_line_items": {
+      "added": [
+        {
+          "id": "order_line_items#1",
+          "order_id": "orders#1",
+          "booking_id": null,
+          "product_variant_id": "10000000-0000-4000-8000-000000000008",
+          "membership_plan_id": null,
+          "session_pass_type_id": null,
+          "gift_card_id": null,
+          "item_type": "product",
+          "quantity": 2,
+          "unit_price": "12.00",
+          "line_total": "24.00",
+          "created_at": "<set>",
+          "addon_id": null,
+          "refunded_at": "<set>",
+          "refund_method": "card",
+          "restocked": false,
+          "fulfillment_status": "pending",
+          "card_refunded_amount": "24.00",
+          "system_unit_price": "12.00",
+          "price_override_reason": null,
+          "discount_amount": "0.00",
+          "event_booking_id": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "orders": {
+      "added": [
+        {
+          "id": "orders#1",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "order_total": "24.00",
+          "payment_status": "refunded",
+          "stripe_payment_intent_id": "pi_fake_0002",
+          "promo_code": null,
+          "discount_amount": "0.00",
+          "shipping_address": null,
+          "shipping_status": null,
+          "tracking_number": null,
+          "order_source": "staff_created",
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "payment_method": "card",
+          "reader_payment": null,
+          "refund_owed_amount": "0.00"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "product_variants": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000008",
+          "stock_quantity": [
+            5,
+            3
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    },
+    "stock_adjustments": {
+      "added": [
+        {
+          "id": "stock_adjustments#1",
+          "variant_id": "10000000-0000-4000-8000-000000000008",
+          "change_amount": -2,
+          "reason": "Sale (Order #orders#1)",
+          "staff_id": null,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

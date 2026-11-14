@@ -404,8 +404,8 @@ export const cardRefundFailedMessage = (detail: string): string => `The card ref
  */
 export const laterCardRefundRefusedMessage = (amount: number, detail: string, owed: number, cancelled: boolean): string =>
   `A further card refund of ${money(amount)} was refused (${detail}), so ${money(owed)} shows on the booking as still to refund. ${checkStripeFirstWords(cancelled)}`
-/** The legacy refund route's words for a refusal, which the old messages carried (`Failed to refund payment: …`). */
-export const refundRefusedDetail = (stripeMessage: string): string => `Failed to refund payment: ${stripeMessage}`
+/** W27: the refusal's detail is the shared pipeline's now (server/rules/refunds/failure-messages.ts): one definition, the same words. */
+export { refundRefusedDetail } from '@/server/rules/refunds/failure-messages'
 /** A part that was never sent because the press ran out of time: nothing went, as a refusal. */
 export const REFUND_NOT_SENT_DETAIL = 'it was not sent: there was no time left to send it'
 

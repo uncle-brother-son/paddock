@@ -647,6 +647,51 @@ for byte, into `testing/legacy-order/routes/`, where the frozen copies still cal
   bookings under the Cancelled filter; Part refund, Refund the rest / It already arrived, Add Guest and Take Payment
   reload the booking on close after no answer or a throw (source tests in `server/staff-app-helpers.test.ts`).
 
+## Step E foundations: the shared refund core, claims on orders and event bookings, money owed on an order (W27)
+
+Step E (staff app `briefs/E-plan.md`) moves order refunds and event cancellations onto step D's refund pipeline, one
+slice at a time (W28 to W35). W27 laid the ground. **Nothing is switched, no route exists yet and no booking behaviour
+changed:** step D's suite, replay and planted bugs pass as before.
+
+- `refunds/pipeline.ts`: the parts of the pipeline that don't care what is refunded, lifted out of
+  `bookings/refunds.ts` with every statement and its timing the same: a claim's read and write on `audit_log`, the
+  open-claim look, the due list, one card part's key (`<claimId>:refund:<orderId>`), request and send, the refusal
+  mark and its read, the Stripe look-up (never a send) and the held answer. A claim is on a **subject**
+  (`BOOKING_CLAIMS`, `ORDER_CLAIMS`, `EVENT_BOOKING_CLAIMS`): one set of three actions each (`<subject>.refund_claimed`,
+  `…refund_finished`, `…refund_refused`; lead call L2). `bookings/refunds.ts` keeps everything about a booking (the
+  R1s, R2, the undo, money owed on a booking) under the same exported names, and calls the core for a booking.
+- `refunds/claims.ts`: an order's and an event booking's claim, with the same details and keys as a booking's. Two
+  rules are kept where the claim is written: **one card part at most**, on the claim's own order (an event booking is
+  always paid by one order), and **an open claim holds its subject** (`refund_open`). An order and its event booking
+  share one card payment and one "money owed", so an open claim on either holds both, and so does an open booking
+  claim with a card part on that order's payment. **What makes the look hold (W27a):** both writers take the order's
+  row lock themselves (FOR UPDATE; the event booking's on its `details.orderId`) before they look, so order and event
+  booking claims queue even if a caller forgot `lockForRefund`. A booking's claim is seen **only once it is
+  committed, and one way** (lead's call (a), 14 Nov): step D's booking refunds never lock the order row and never look
+  for an order's claim, and step D's lock order is unchanged. Money still can't go twice: the two claims are never for
+  the same line, each card part has its own key, and Stripe never refunds more than the payment took; the worst case
+  is a card part refused for going over what is left, which ends as the refusal's words or as money owed.
+  `refunds/claim-writers.test.ts` (a text search) keeps every other app file from passing `ORDER_CLAIMS` or
+  `EVENT_BOOKING_CLAIMS` to `writeClaimRow`, which would skip the writers' rules.
+- `refunds/locks.ts` (`lockForRefund`): one statement, in LOCK_ORDER: the order (FOR UPDATE, as T2, the undo and the
+  close by hand take it), its customer, then the session passes, memberships and product variants the refunded lines
+  sold, the event, **the event booking (after its event: LOCK_ORDER's new `event_booking`)**, the gift cards. The
+  caller reads the ids, locks, then reads again under the lock.
+- `orders/money-owed.ts`: `orders.refund_owed_amount` (migration 023; Wayne's Q39): raise, lower (never below £0; any
+  amount up to what is owed), read. An event booking's money owed is its order's (`moneyOwedOnEventBooking`): the
+  failed card refund was on that order's payment and Refund the rest goes back to it, so one figure serves both.
+- `refunds/refund-switch.ts`: `ORDER_SWITCH` gains `order_refunds` and `event_cancels` (lead call L3), both off unless
+  the secret names them; off answers `REFUND_PATH_OFF` (501) before anything is read. A cancel with no refund needs
+  no kind. The value live runs today turns neither on.
+- `refunds/failure-messages.ts` and `events/failure-messages.ts`: every reason `refundOrder`, the event cancellations
+  and their dialogs answer with, and its words, word for word (held to the frozen old code by the tests beside them).
+  Not moved: the warnings for half-finished states and the "settle on the next press" words, which have no state left
+  to describe once a refund is one claim.
+- `contracts/refunds.ts`, `contracts/events.ts`: the routes' inputs and outputs (E-plan 4.8), loose where the old
+  function answered for itself, with `confirmed` for Q18. `REFUND_PATH_OFF` joins the error codes.
+- `supabase/migrations/023_orders_refund_owed_and_cash_refunds.sql`: **written, not applied.** The saved test schema
+  already has it (testing/README.md).
+
 ## Refund claims with no finish
 
 The staff app claims a refund's money before it moves. Each claim writes `booking.refund_claimed` to

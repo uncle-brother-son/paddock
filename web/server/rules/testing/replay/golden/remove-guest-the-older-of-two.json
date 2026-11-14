@@ -416,7 +416,8 @@
           "created_at": "<set>",
           "updated_at": "<set>",
           "payment_method": "card",
-          "reader_payment": null
+          "reader_payment": null,
+          "refund_owed_amount": "0.00"
         },
         {
           "id": "orders#2",
@@ -433,7 +434,8 @@
           "created_at": "<set>",
           "updated_at": "<set>",
           "payment_method": null,
-          "reader_payment": null
+          "reader_payment": null,
+          "refund_owed_amount": "0.00"
         },
         {
           "id": "orders#3",
@@ -450,7 +452,8 @@
           "created_at": "<set>",
           "updated_at": "<set>",
           "payment_method": null,
-          "reader_payment": null
+          "reader_payment": null,
+          "refund_owed_amount": "0.00"
         }
       ],
       "changed": [],

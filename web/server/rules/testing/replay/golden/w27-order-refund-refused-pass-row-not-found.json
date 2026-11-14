@@ -1,0 +1,109 @@
+{
+  "scenario": "w27-order-refund-refused-pass-row-not-found",
+  "results": [
+    {
+      "success": true,
+      "orderId": "orders#1",
+      "sessionPassId": "customer_session_passes#1",
+      "cardCharged": true,
+      "cardAmount": 50,
+      "paymentMethodUsed": "card"
+    },
+    {
+      "success": false,
+      "reason": "session_pass_instance_not_found",
+      "message": "No customer_session_passes row references line item order_line_items#1."
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "paymentIntents.create",
+      "params": {
+        "amount": 5000,
+        "currency": "gbp",
+        "customer": "cus_seed",
+        "payment_method": "pm_seed",
+        "off_session": true,
+        "confirm": true,
+        "description": "Staff-created order for session pass"
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {
+    "customer_session_passes": {
+      "added": [
+        {
+          "id": "customer_session_passes#1",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "pass_type_id": "10000000-0000-4000-8000-000000000016",
+          "purchase_date": "2026-11-10",
+          "sessions_remaining": 5,
+          "expiry_date": "2027-11-10",
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "order_line_item_id": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "order_line_items": {
+      "added": [
+        {
+          "id": "order_line_items#1",
+          "order_id": "orders#1",
+          "booking_id": null,
+          "product_variant_id": null,
+          "membership_plan_id": null,
+          "session_pass_type_id": "10000000-0000-4000-8000-000000000016",
+          "gift_card_id": null,
+          "item_type": "session_pass",
+          "quantity": 1,
+          "unit_price": "50.00",
+          "line_total": "50.00",
+          "created_at": "<set>",
+          "addon_id": null,
+          "refunded_at": null,
+          "refund_method": null,
+          "restocked": null,
+          "fulfillment_status": null,
+          "card_refunded_amount": "0.00",
+          "system_unit_price": null,
+          "price_override_reason": null,
+          "discount_amount": "0.00",
+          "event_booking_id": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "orders": {
+      "added": [
+        {
+          "id": "orders#1",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "order_total": "50.00",
+          "payment_status": "paid",
+          "stripe_payment_intent_id": "pi_fake_0002",
+          "promo_code": null,
+          "discount_amount": "0.00",
+          "shipping_address": null,
+          "shipping_status": null,
+          "tracking_number": null,
+          "order_source": "staff_created",
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "payment_method": "card",
+          "reader_payment": null,
+          "refund_owed_amount": "0.00"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

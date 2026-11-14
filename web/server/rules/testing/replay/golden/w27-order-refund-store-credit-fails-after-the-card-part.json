@@ -1,0 +1,177 @@
+{
+  "scenario": "w27-order-refund-store-credit-fails-after-the-card-part",
+  "results": [
+    {
+      "success": true,
+      "orderId": "orders#1",
+      "cardCharged": true,
+      "cardAmount": 14,
+      "storeCreditRedeemedAmount": 10,
+      "paymentMethodUsed": "card"
+    },
+    {
+      "success": true,
+      "refundedAmount": 14,
+      "refundMethod": "card",
+      "cardRefundedAmount": 14,
+      "storeCreditRefundedAmount": 0,
+      "warning": "The card portion (14.00) was refunded to the card, but applying the 10.00 remainder to store credit failed and needs a manual check."
+    },
+    {
+      "success": true,
+      "refundedAmount": 10,
+      "refundMethod": "card",
+      "storeCreditRefundedAmount": 10,
+      "storeCreditBalance": 30,
+      "orderPaymentStatus": "refunded"
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "paymentIntents.create",
+      "params": {
+        "amount": 1400,
+        "currency": "gbp",
+        "customer": "cus_seed",
+        "payment_method": "pm_seed",
+        "off_session": true,
+        "confirm": true,
+        "description": "Staff-created order for merchandise"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "refunds.create",
+      "params": {
+        "payment_intent": "pi_fake_0002",
+        "amount": 1400,
+        "metadata": {
+          "refund_key": "order-refund:orders#1:<ids>:0:1400:0"
+        }
+      },
+      "idempotencyKey": "order-refund:orders#1:<ids>:0:1400:0"
+    }
+  ],
+  "tables": {
+    "order_line_items": {
+      "added": [
+        {
+          "id": "order_line_items#1",
+          "order_id": "orders#1",
+          "booking_id": null,
+          "product_variant_id": "10000000-0000-4000-8000-000000000008",
+          "membership_plan_id": null,
+          "session_pass_type_id": null,
+          "gift_card_id": null,
+          "item_type": "product",
+          "quantity": 2,
+          "unit_price": "12.00",
+          "line_total": "24.00",
+          "created_at": "<set>",
+          "addon_id": null,
+          "refunded_at": "<set>",
+          "refund_method": "card",
+          "restocked": false,
+          "fulfillment_status": "pending",
+          "card_refunded_amount": "14.00",
+          "system_unit_price": "12.00",
+          "price_override_reason": null,
+          "discount_amount": "0.00",
+          "event_booking_id": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "orders": {
+      "added": [
+        {
+          "id": "orders#1",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "order_total": "24.00",
+          "payment_status": "refunded",
+          "stripe_payment_intent_id": "pi_fake_0002",
+          "promo_code": null,
+          "discount_amount": "0.00",
+          "shipping_address": null,
+          "shipping_status": null,
+          "tracking_number": null,
+          "order_source": "staff_created",
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "payment_method": "card",
+          "reader_payment": null,
+          "refund_owed_amount": "0.00"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "product_variants": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000008",
+          "stock_quantity": [
+            5,
+            3
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    },
+    "stock_adjustments": {
+      "added": [
+        {
+          "id": "stock_adjustments#1",
+          "variant_id": "10000000-0000-4000-8000-000000000008",
+          "change_amount": -2,
+          "reason": "Sale (Order #orders#1)",
+          "staff_id": null,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "store_credit_transactions": {
+      "added": [
+        {
+          "id": "store_credit_transactions#1",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "amount": "-10.00",
+          "balance_after": "20.00",
+          "reason": "redemption",
+          "order_id": "orders#1",
+          "booking_id": null,
+          "gift_card_id": null,
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "note": "Store credit redeemed at checkout.",
+          "created_at": "<set>",
+          "event_booking_id": null
+        },
+        {
+          "id": "store_credit_transactions#2",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "amount": "10.00",
+          "balance_after": "30.00",
+          "reason": "refund",
+          "order_id": "orders#1",
+          "booking_id": null,
+          "gift_card_id": null,
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "note": "Refund to store credit — order line items refunded by staff. [ref gone#1]",
+          "created_at": "<set>",
+          "event_booking_id": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

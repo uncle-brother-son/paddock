@@ -9,7 +9,7 @@ import { chargeSavedCardUnguarded as chargeSavedCard } from '../../../legacy-boo
 import { extractApiErrorMessage } from '../../../legacy-booking/backend/paddock/shared/extractApiErrorMessage'
 import { isHtmlErrorPage } from '../../../legacy-booking/backend/paddock/shared/isHtmlErrorPage'
 import { generateGiftCardCode } from './shared/generateGiftCardCode'
-import { cancelMembershipSubscription } from '@retool-app/backend/paddock/shared/cancelMembershipSubscription'
+import { cancelMembershipSubscription } from '../../../legacy-refund/backend/paddock/shared/cancelMembershipSubscription'
 import createMembershipSubscription, {
   MEMBERSHIP_SUBSCRIPTION_FAILURE_REASONS,
   type MembershipSubscriptionSuccess,
@@ -23,7 +23,7 @@ import {
   releaseMembershipAddonCredit,
   releaseSessionPassCredit,
 } from '../../../legacy-booking/backend/paddock/shared/creditRedemption'
-import { insertStockAdjustment, deleteStockAdjustment } from '@retool-app/backend/paddock/shared/stockAdjustments'
+import { insertStockAdjustment, deleteStockAdjustment } from '../../../legacy-refund/backend/paddock/shared/stockAdjustments'
 import { releaseSessionCapacity } from '../../../legacy-booking/backend/paddock/shared/sessionCapacity'
 import { applyStoreCredit } from '../../../legacy-booking/backend/paddock/shared/storeCredit'
 import { storeCreditMoved } from '../../../legacy-booking/backend/paddock/shared/storeCreditRefund'
@@ -31,7 +31,7 @@ import { getStaffAccessRow } from '../../../legacy-booking/backend/paddock/share
 import { addMonthsToIsoDate, londonToday } from '../../../legacy-booking/backend/paddock/shared/londonTime'
 import { quoteSeats } from '../../../legacy-booking/backend/paddock/shared/bandPricing'
 import { addonSystemPrice as catalogAddonPrice, customerHasActiveMembership } from '../../../legacy-booking/backend/paddock/shared/addonPricing'
-import { applyPromoCode, type PromoEligibleLine } from '@retool-app/backend/paddock/shared/promoCodes'
+import { applyPromoCode, type PromoEligibleLine } from '../../../legacy-refund/backend/paddock/shared/promoCodes'
 import { loadPromoAndUsage } from './shared/promoCodeLookup'
 import {
   validateEventLine,

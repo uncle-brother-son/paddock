@@ -275,7 +275,8 @@
             },
             "stock_adjustment_ids": [],
             "save_address_to_customer": false
-          }
+          },
+          "refund_owed_amount": "0.00"
         }
       ],
       "changed": [],

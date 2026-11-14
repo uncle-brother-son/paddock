@@ -340,7 +340,8 @@
               "addon_credits_remaining": 0
             },
             "exhausted_membership_stripe_id": "sub_exhausted"
-          }
+          },
+          "refund_owed_amount": "0.00"
         }
       ],
       "changed": [],

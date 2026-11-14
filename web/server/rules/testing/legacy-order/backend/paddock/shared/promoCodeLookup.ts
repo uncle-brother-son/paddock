@@ -1,4 +1,4 @@
-import type { PromoCodeRow, PromoUsageCounts } from '@retool-app/backend/paddock/shared/promoCodes'
+import type { PromoCodeRow, PromoUsageCounts } from '../../../../legacy-refund/backend/paddock/shared/promoCodes'
 
 export interface LoadedPromo {
   promo: PromoCodeRow

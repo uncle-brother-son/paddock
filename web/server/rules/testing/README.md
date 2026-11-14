@@ -284,6 +284,51 @@ has no gift card change either); the test beside it ("R1c: the guest added once.
 app's deleted `shared/cashConfirmation.ts` and `shared/bookingRefund.ts` are gone from `server/staff-app-helpers.test.ts`
 (31 tests); the frozen copy keeps both files for the replay.
 
+### Step E's side (W27)
+
+`legacy-refund/` is a third frozen test-only copy (its README): the staff app's five old step E functions
+(`refundOrder`, `cancelEventPlaces`, `cancelEvent`, `getEventCancellationQuote`, `getEventCancellationOverview`) and
+every module they import, byte for byte at staff app `941276f`, hashed in its `manifest.json`, with one stand-in for
+the staff app's typecheck barrel. It also holds the three modules the order copy used to take from the staff app's
+checkout through the `@retool-app` alias (`cancelMembershipSubscription`, `promoCodes`, `stockAdjustments`); the
+order copy imports them from there now, so it keeps working when steps E and G delete them. `oldFunctionPath` loads
+the five actions from it. `frozen-refund-code.test.ts` keeps it as frozen and out of reach of app code.
+
+The `w27-*` scenarios (137, `w27Scenarios()` in `scenarios.ts`) are step E's golden files, recorded from the old
+functions while they exist (E-plan 4.13 item 1): every refusal of `refundOrder`, the place cancel and the whole-event
+cancel; each kind of line (product with and without restock, postage, standalone add-on, gift card, pass, membership,
+the payment date change charge); card, store credit and a split; a promo line; a second refund on one order; one
+place, several, the last, a whole booking; the cut-off with and without a reason and with none set; a whole event
+with a failing booking and its retry; the W05j and W05k lost-answer cases; and today's outcome for the plan's bugs E2
+to E5 and E7 to E10 (`w27-e2-…` and so on). `replay.test.ts` holds each to its file as it does every scenario.
+`w27.test.ts` says in pounds and pence what each one proves (read from the golden file), that the list covers every
+reason, every kind of line and every bug named, and that a deliberate difference is caught and an allowance nobody
+needs fails. `w27-contracts.test.ts` runs them all once more and holds `contracts/refunds.ts` and
+`contracts/events.ts` to what the old functions take and give. What can't be recorded, and the W27 report says why:
+E6 (Retool's 60 seconds); E11 (the dialog losing an answer: the function's own answer is a plain success); an event
+cancel's second `order_not_found` and two of `refundOrder`'s three `store_credit_failed` texts (each needs a row the
+foreign keys forbid, or an amount of £0 that the function has already ruled out).
+
+No new side exists yet: W28 to W31 each add theirs (`refund-side.ts`, as `booking-side.ts` is step D's) and name
+every difference.
+
+### Migration 023 and the saved schema (W27)
+
+`supabase/migrations/023_orders_refund_owed_and_cash_refunds.sql` is written but **not applied to live**: the lead
+applies it after W27's review, before W28. `live-catalog.json` and `live-schema.sql` already have its four changes
+(`orders.refund_owed_amount` and its check, `cash` on the two refund-method checks, the partial index
+`audit_log_refund_claims_idx`), each added by hand exactly as Postgres 17.6 prints it, so `npm run schema:test --
+--check` passes and every test runs against the schema live will have. `migration-023.test.ts` holds the two to each
+other on real Postgres: the saved schema with 023 taken out and applied again must be the saved schema.
+
+**After the lead applies 023:** refresh as above ("Refreshing the live schema": run `live-catalog-query.sql` against
+live, then `npm run schema:test -- --from <that file>`). `git diff server/rules/testing/live-catalog.json
+server/rules/testing/live-schema.sql` should then show **nothing**. Any line it does show is a difference between
+what W27 expected and what live has: stop and look before W28.
+
+The new column is in every recording: each new `orders` row in a golden file gained `"refund_owed_amount": "0.00"`
+(519 files, 676 rows, nothing else: `briefs/W27-logs/golden-column.txt` in the staff app repo).
+
 ## No real Stripe (W11)
 
 `no-real-stripe.ts` is loaded before every unit test file (`vitest.unit.config.ts`, `setupFiles`). Any

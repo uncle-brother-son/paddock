@@ -1,5 +1,5 @@
 import { isAtLeastMinimumAge, GUESTS_OVER_18_NOT_CONFIRMED_MESSAGE } from '../../../../legacy-booking/backend/paddock/shared/guestValidation'
-import type { PromoEligibleLine } from '@retool-app/backend/paddock/shared/promoCodes'
+import type { PromoEligibleLine } from '../../../../legacy-refund/backend/paddock/shared/promoCodes'
 
 /**
  * Event lines in a New Order basket (stage 1: set-up and selling). The rules live in SQL —

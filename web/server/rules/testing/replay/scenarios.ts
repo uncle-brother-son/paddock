@@ -1066,6 +1066,9 @@ function lapsed(name: string, steps: (context: ScenarioContext, bookingId: strin
   }
 }
 
+/** W27: the name every step E golden scenario starts with (declared here, above the list that builds them). */
+export const W27_PREFIX = 'w27-'
+
 export const scenarios: Scenario[] = [
   {
     // Two guests, because their order is what section 2.4's item 7 is about.
@@ -2968,6 +2971,7 @@ export const scenarios: Scenario[] = [
   ...w11Scenarios(),
   ...w13Scenarios(),
   ...w17Scenarios(),
+  ...w27Scenarios(),
 ]
 
 // --- W06: the Worker's order core. Every createOrder and createBooking reason in W06's scope that had
@@ -4265,4 +4269,1007 @@ function w17Scenarios(): Scenario[] {
       },
     },
   ]
+}
+
+// --- W27 (E-plan 4.13 item 1, lead call L6): step E's golden files, recorded from the old functions ------------------
+//
+// Every scenario below runs the staff app's old refundOrder, cancelEventPlaces, cancelEvent, getEventCancellationQuote
+// or getEventCancellationOverview (from the frozen copy, legacy-refund/) and records today's outcome: each refusal of
+// E-plan 1.2 to 1.4, each kind of line, each way the money goes back, the event cancellations by place, by booking
+// and by event, and what the old code does today for each bug in the plan's section 3. W28 to W31 replay them through
+// the Worker's routes and name every difference. `server/rules/testing/replay/w27.test.ts` says, in pounds and pence,
+// what each one proves, so a scenario that stopped reaching its branch fails there.
+//
+// Not recordable, and why (also in the W27 report): E6 (the 60 second limit is Retool's, not the function's); E11 (the
+// dialog losing an answer: the function's own answer is a plain success); the second `order_not_found` of an event
+// cancel (an order line whose order is gone: the foreign key forbids it); and two of refundOrder's three
+// `store_credit_failed` texts (a customer that doesn't exist, which the foreign key forbids, and an amount of £0,
+// which the function has ruled out before it gives any store credit).
+
+/** What a W27 scenario's steps are given: the order it placed, and ways to find its lines and places. */
+interface W27Steps {
+  orderId: string
+  eventBookingId: string
+  bookingId: string
+  placed: Record<string, unknown>
+  call: ScenarioContext['call']
+  attempt: ScenarioContext['attempt']
+  db: Db
+  stripe: FakeStripe
+  /** The order's lines of one kind (or all), oldest first. */
+  lines(itemType?: string): Promise<string[]>
+  /** The event booking's places, oldest first. */
+  places(): Promise<string[]>
+  /** refundOrder on this order, with a restock "no" for every line unless given. */
+  refund(lineItemIds: string[], refundMethod: string, restock?: Record<string, boolean>): Promise<unknown>
+  /** cancelEventPlaces on this order's event booking. */
+  cancel(refund: string, attendeeIds?: string[], reason?: string): Promise<unknown>
+}
+
+function w27Scenarios(): Scenario[] {
+  const UNKNOWN = '10000000-0000-4000-8000-0000000000e7'
+  const card = { method: 'card' }
+  const samAttending = { ...sam, isAccountHolder: true }
+  const alexGuest = { ...alex, isAccountHolder: false }
+  const beaGuest = { name: 'Bea Guest', email: 'bea@example.com', isAccountHolder: false }
+  const moAttending = { ...mo, isAccountHolder: true }
+  type Attendee = { name: string; email: string; dateOfBirth?: string; isAccountHolder: boolean }
+  const places = (attendees: Attendee[]) => ({
+    eventId: ID.event,
+    accountHolderAttending: attendees.some((attendee) => attendee.isAccountHolder),
+    ...(attendees.some((attendee) => !attendee.isAccountHolder) ? { guestsOver18Confirmed: true } : {}),
+    attendees,
+  })
+  const three = places([samAttending, alexGuest, beaGuest])
+  const mug = { productVariantId: ID.mugVariant, quantity: 1, unitPrice: 15, systemUnitPrice: 15, fulfillmentChoice: 'pickup' }
+  const robe = { addonId: ID.robe, quantity: 1, unitPrice: 10, systemUnitPrice: 10 }
+  const digitalCard = { giftCardPresetId: ID.giftCardPreset, fulfillmentMethod: 'digital' }
+  const newPass = { sessionPassTypeId: ID.passType }
+  const refusal = () => fakeStripeErrors.invalid('charge_disputed', 'This charge is disputed.')
+  const lineStampFails: WriteFailure = { table: 'order_line_items', event: 'UPDATE', when: 'NEW.refunded_at IS NOT NULL' }
+  const placeStampFails: WriteFailure = { table: 'event_attendees', event: 'UPDATE', when: 'NEW.cancelled_at IS NOT NULL' }
+  const noIssueRefunds = async (db: Db) => {
+    await db.query('UPDATE staff SET can_issue_refunds = false WHERE id = $1', [ID.staff])
+  }
+  const eventIs = (sql: string, params: SqlParam[] = []) => async (db: Db) => {
+    // Test data only: each statement is a literal below.
+    await db.query(sql, [...params, ID.event])
+  }
+  /** Off sale, with no cut-off: the only way an event can have none (events_on_sale_complete). */
+  const noCutoff = eventIs('UPDATE events SET active = false, refund_cutoff_at = NULL WHERE id = $1')
+  /** The cut-off has passed (yesterday), the event hasn't started. */
+  const afterCutoff = eventIs("UPDATE events SET refund_cutoff_at = '2026-11-09 09:00:00+00' WHERE id = $1")
+  const checkIn = (db: Db, attendeeId: string) => db.query('UPDATE event_attendees SET checked_in_at = now() WHERE id = $1', [attendeeId])
+
+  /** Runs `gap` once, straight after the first statement matching `matches` has answered: what another tab does in between. */
+  async function onceAfter<T>(matches: (sql: string) => boolean, gap: () => Promise<unknown>, steps: () => Promise<T>): Promise<T> {
+    type Query = (sql: string, params?: unknown[]) => Promise<unknown>
+    const real = (globalThis as unknown as { paddockData: { query: Query } }).paddockData
+    let done = false
+    vi.stubGlobal('paddockData', {
+      async query(sql: string, params: unknown[] = []) {
+        const answer = await real.query(sql, params)
+        if (!done && matches(sql)) {
+          done = true
+          vi.stubGlobal('paddockData', real)
+          await gap()
+        }
+        return answer
+      },
+    })
+    try {
+      return await steps()
+    } finally {
+      vi.stubGlobal('paddockData', real)
+    }
+  }
+
+  /** Every statement matching `matches` fails before it runs, as a read does when the database is away: nothing is changed by it. */
+  async function whileUnreadable<T>(matches: (sql: string) => boolean, steps: () => Promise<T>): Promise<T> {
+    type Query = (sql: string, params?: unknown[]) => Promise<unknown>
+    const real = (globalThis as unknown as { paddockData: { query: Query } }).paddockData
+    vi.stubGlobal('paddockData', {
+      async query(sql: string, params: unknown[] = []) {
+        if (matches(sql)) throw new Error('connection lost')
+        return real.query(sql, params)
+      },
+    })
+    try {
+      return await steps()
+    } finally {
+      vi.stubGlobal('paddockData', real)
+    }
+  }
+  /** The count of earlier refusals that goes into a card refund's key (shared/cardRefundAttempts.ts). */
+  const refusalCount = (sql: string) => sql.includes('count(*)::int AS refused')
+  /** The look for a card refund held with no clear answer (shared/heldCardRefund.ts). */
+  const heldLook = (sql: string) => sql.includes("action = 'card_refund_held'") && sql.trimStart().startsWith('SELECT')
+
+  /** An order (unless `order` is null), then `steps` with what it made. */
+  function after(name: string, order: Record<string, unknown> | null, steps: (made: W27Steps) => Promise<void>, prepare?: (db: Db, stripe: FakeStripe) => Promise<void>): Scenario {
+    return {
+      name: `${W27_PREFIX}${name}`,
+      async seed(db, stripe) {
+        await seed(db, stripe)
+        await prepare?.(db, stripe)
+      },
+      async run({ call, attempt, db, stripe }) {
+        const placed = order ? ((await call('createOrder', { customerId: ID.customer, ...order })) as Record<string, unknown>) : {}
+        if (order && placed['success'] !== true) throw new Error(`${name}: the order failed: ${JSON.stringify(placed)}`)
+        const orderId = String(placed['orderId'] ?? '')
+        const eventBookingId = String(placed['eventBookingId'] ?? '')
+        const lines = async (itemType?: string) =>
+          (
+            await db.query<{ id: string }>(
+              'SELECT id FROM order_line_items WHERE order_id = $1::uuid AND ($2::text IS NULL OR item_type = $2::text) ORDER BY created_at, id',
+              [orderId, itemType ?? null]
+            )
+          ).map((row) => row.id)
+        const attendees = async () =>
+          (await db.query<{ id: string }>('SELECT id FROM event_attendees WHERE event_booking_id = $1::uuid ORDER BY created_at, id', [eventBookingId])).map((row) => row.id)
+        await steps({
+          orderId,
+          eventBookingId,
+          bookingId: String(placed['bookingId'] ?? ''),
+          placed,
+          call,
+          attempt,
+          db,
+          stripe,
+          lines,
+          places: attendees,
+          refund: (lineItemIds, refundMethod, restock) =>
+            call('refundOrder', { orderId, lineItemIds, refundMethod, restock: restock ?? Object.fromEntries(lineItemIds.map((id) => [id, false])) }),
+          cancel: (refund, attendeeIds, reason) => call('cancelEventPlaces', { eventBookingId, ...(attendeeIds ? { attendeeIds } : {}), refund, ...(reason !== undefined ? { reason } : {}) }),
+        })
+      },
+    }
+  }
+
+  const soapOnCard = { products: [soap], payment: card }
+  const soapInCash = { products: [soap], payment: cash(24) }
+  /** Soap £24: £10 of it store credit, £14 on the card. */
+  const soapPartCredit = { products: [soap], payment: { method: 'card', storeCredit: { amount: 10 } } }
+  const eventOnCard = { event: eventPlaces, payment: card }
+  const eventInCash = { event: eventPlaces, payment: cash(80) }
+  const threeOnCard = { event: three, payment: card }
+
+  // --- refundOrder: every refusal of E-plan 1.2, in the function's own order -----------------------------------------
+  const orderRefusals: Scenario[] = [
+    after('order-refund-refused-no-staff-record', soapOnCard, async ({ refund, lines, db }) => {
+      await db.query("UPDATE staff SET email = 'someone-else@example.com' WHERE id = $1", [ID.staff])
+      await refund(await lines('product'), 'card')
+    }),
+    after('order-refund-refused-inactive-staff', soapOnCard, async ({ orderId, lines, db, attempt }) => {
+      await db.query('UPDATE staff SET active = false WHERE id = $1', [ID.staff])
+      const ids = await lines('product')
+      await attempt('refundOrder', { orderId, lineItemIds: ids, refundMethod: 'card', restock: { [ids[0] as string]: false } })
+    }),
+    after('order-refund-refused-without-issue-refunds', soapOnCard, async ({ refund, lines, db }) => {
+      await noIssueRefunds(db)
+      await refund(await lines('product'), 'credit')
+    }),
+    after('order-refund-refused-no-lines-chosen', soapOnCard, async ({ refund }) => {
+      await refund([], 'card')
+    }),
+    after('order-refund-refused-no-order-id', soapOnCard, async ({ call, lines }) => {
+      await call('refundOrder', { lineItemIds: await lines(), refundMethod: 'card' })
+    }),
+    after('order-refund-refused-method-not-card-or-credit', soapOnCard, async ({ refund, lines }) => {
+      await refund(await lines('product'), 'cash')
+    }),
+    after('order-refund-refused-unknown-order', soapOnCard, async ({ call, lines }) => {
+      await call('refundOrder', { orderId: UNKNOWN, lineItemIds: await lines(), refundMethod: 'card' })
+    }),
+    after('order-refund-refused-line-of-another-order', soapOnCard, async ({ refund, lines, call, db }) => {
+      const other = (await call('createOrder', { customerId: ID.customer, products: [mug], payment: cash(15) })) as { orderId: string }
+      const theirs = await db.query<{ id: string }>('SELECT id FROM order_line_items WHERE order_id = $1', [other.orderId])
+      await refund([...(await lines('product')), theirs[0]?.id as string], 'card')
+    }),
+    after('order-refund-refused-event-line', { products: [soap], event: eventPlaces, payment: card }, async ({ refund, lines }) => {
+      await refund(await lines(), 'card')
+    }),
+    after('order-refund-refused-booking-line', { products: [soap], booking: paidSeat(), payment: card }, async ({ refund, lines }) => {
+      await refund(await lines(), 'card')
+    }),
+    after('order-refund-refused-already-refunded', { products: [soap, mug], payment: card }, async ({ refund, lines }) => {
+      const [first, second] = await lines('product')
+      await refund([first as string], 'card')
+      // The same line again, with another beside it: nothing of the second goes.
+      await refund([first as string, second as string], 'card')
+    }),
+    after('order-refund-refused-no-restock-decision', { products: [soap, mug], payment: card }, async ({ refund, lines }) => {
+      const [first, second] = await lines('product')
+      await refund([first as string, second as string], 'card', { [first as string]: true })
+    }),
+    after('order-refund-refused-gift-card-part-spent', { giftCard: digitalCard, payment: card }, async ({ orderId, refund, lines, db }) => {
+      await db.query('UPDATE gift_cards SET remaining_balance = remaining_balance - 5 WHERE id IN (SELECT gift_card_id FROM order_line_items WHERE order_id = $1)', [orderId])
+      await refund(await lines('gift_card'), 'card')
+    }),
+    after('order-refund-refused-gift-card-voided', { giftCard: digitalCard, payment: card }, async ({ orderId, refund, lines, db }) => {
+      await db.query('UPDATE gift_cards SET voided = true WHERE id IN (SELECT gift_card_id FROM order_line_items WHERE order_id = $1)', [orderId])
+      await refund(await lines('gift_card'), 'card')
+    }),
+    after('order-refund-refused-gift-card-row-not-found', { giftCard: digitalCard, payment: card }, async ({ orderId, refund, lines, db }) => {
+      await db.query("UPDATE order_line_items SET gift_card_id = NULL WHERE order_id = $1 AND item_type = 'gift_card'", [orderId])
+      await refund(await lines('gift_card'), 'card')
+    }),
+    after('order-refund-refused-pass-used', { ...newPass, payment: card }, async ({ refund, lines, db }) => {
+      const [line] = await lines('session_pass')
+      await db.query('UPDATE customer_session_passes SET sessions_remaining = sessions_remaining - 1 WHERE order_line_item_id = $1', [line as string])
+      await refund([line as string], 'card')
+    }),
+    after('order-refund-refused-pass-row-not-found', { ...newPass, payment: card }, async ({ refund, lines, db }) => {
+      const [line] = await lines('session_pass')
+      await db.query('UPDATE customer_session_passes SET order_line_item_id = NULL WHERE order_line_item_id = $1', [line as string])
+      await refund([line as string], 'card')
+    }),
+    after('order-refund-refused-membership-row-not-found', { ...monthly, payment: card }, async ({ refund, lines, db }) => {
+      const [line] = await lines('membership')
+      await db.query('UPDATE customer_memberships SET order_line_item_id = NULL WHERE order_line_item_id = $1', [line as string])
+      await refund([line as string], 'card')
+    }),
+    after('order-refund-refused-card-on-an-order-with-no-card-payment', soapInCash, async ({ refund, lines }) => {
+      await refund(await lines('product'), 'card')
+    }),
+    after('order-refund-refused-by-stripe-then-pressed-again', soapOnCard, async ({ refund, lines, stripe }) => {
+      stripe.failNext('refunds.create', { kind: 'error', error: refusal() })
+      await refund(await lines('product'), 'card')
+      // A definite no leaves nothing behind: the next press has a new key and goes through.
+      await refund(await lines('product'), 'card')
+    }),
+    after('order-refund-refused-when-the-card-check-cannot-be-read', soapOnCard, async ({ refund, lines }) => {
+      // The count of earlier refusals (part of the refund's key) can't be read: nothing is sent, nothing refunded.
+      const ids = await lines('product')
+      await whileUnreadable(refusalCount, () => refund(ids, 'card'))
+    }),
+    after('order-refund-refused-when-the-look-for-a-held-refund-fails', soapOnCard, async ({ refund, lines }) => {
+      // The look for an earlier refund with no clear answer can't be read: the press stops before the lines are read.
+      const ids = await lines('product')
+      await whileUnreadable(heldLook, () => refund(ids, 'card'))
+    }),
+    after('order-refund-store-credit-write-fails', soapInCash, async ({ refund, lines, db }) => {
+      const ids = await lines('product')
+      await whileFailing(db, refundCreditFails, () => refund(ids, 'credit'))
+    }),
+    after('order-refund-store-credit-fails-after-the-card-part', soapPartCredit, async ({ refund, lines, db }) => {
+      // £14 goes back to the card, then the £10 to store credit fails: today's "success with a warning".
+      const ids = await lines('product')
+      await whileFailing(db, refundCreditFails, () => refund(ids, 'card'))
+      // Pressed again: the card money counts, and the rest goes to store credit.
+      await refund(ids, 'card')
+    }),
+    after('order-refund-line-stamp-fails-to-store-credit-is-rolled-back', soapInCash, async ({ refund, lines, db }) => {
+      const ids = await lines('product')
+      await whileFailing(db, lineStampFails, () => refund(ids, 'credit', { [ids[0] as string]: true }))
+    }),
+    after('order-refund-line-stamp-fails-after-the-card-refund', soapOnCard, async ({ refund, lines, db }) => {
+      const ids = await lines('product')
+      await whileFailing(db, lineStampFails, () => refund(ids, 'card', { [ids[0] as string]: true }))
+      await refund(ids, 'card', { [ids[0] as string]: true })
+    }),
+  ]
+
+  // --- refundOrder: each kind of line, each way the money goes back ---------------------------------------------------
+  const orderLines: Scenario[] = [
+    after('order-refund-product-to-card-no-restock', soapOnCard, async ({ refund, lines }) => {
+      await refund(await lines('product'), 'card')
+    }),
+    after('order-refund-product-to-card-with-restock', soapOnCard, async ({ refund, lines }) => {
+      const ids = await lines('product')
+      await refund(ids, 'card', { [ids[0] as string]: true })
+    }),
+    after('order-refund-product-to-store-credit', soapOnCard, async ({ refund, lines }) => {
+      await refund(await lines('product'), 'credit')
+    }),
+    after('order-refund-cash-order-to-store-credit-with-restock', soapInCash, async ({ refund, lines }) => {
+      const ids = await lines('product')
+      await refund(ids, 'credit', { [ids[0] as string]: true })
+    }),
+    after('order-refund-split-card-and-store-credit', soapPartCredit, async ({ refund, lines }) => {
+      // £24 of soap, £14 of it on the card: a Card refund gives £14 to the card and £10 to store credit.
+      await refund(await lines('product'), 'card')
+    }),
+    after('order-refund-gift-card-part-paid-split', { products: [soap], payment: { method: 'card', giftCard: { giftCardId: ID.giftCard, amount: 10 } } }, async ({ refund, lines }) => {
+      await refund(await lines('product'), 'card')
+    }),
+    after('order-refund-postage-line', { products: [candle], ...shipped, payment: card }, async ({ refund, lines }) => {
+      await refund(await lines('postage'), 'card')
+    }),
+    after('order-refund-shipped-product-and-its-postage', { products: [candle], ...shipped, payment: card }, async ({ refund, lines }) => {
+      const product = await lines('product')
+      await refund([...product, ...(await lines('postage'))], 'card', { [product[0] as string]: true })
+    }),
+    after('order-refund-standalone-addon', { standaloneAddons: [towel], payment: card }, async ({ refund, lines }) => {
+      await refund(await lines('addon'), 'card')
+    }),
+    after('order-refund-gift-card-unspent-is-voided', { giftCard: digitalCard, payment: card }, async ({ refund, lines }) => {
+      await refund(await lines('gift_card'), 'card')
+    }),
+    after('order-refund-pass-unused-is-emptied', { ...newPass, payment: card }, async ({ refund, lines }) => {
+      await refund(await lines('session_pass'), 'card')
+    }),
+    after('order-refund-pass-to-store-credit', { ...newPass, payment: cash(50) }, async ({ refund, lines }) => {
+      await refund(await lines('session_pass'), 'credit')
+    }),
+    after('order-refund-membership-on-saved-card', { ...monthly, payment: card }, async ({ refund, lines }) => {
+      await refund(await lines('membership'), 'card')
+    }),
+    after('order-refund-membership-to-store-credit', { ...monthly, payment: card }, async ({ refund, lines }) => {
+      await refund(await lines('membership'), 'credit')
+    }),
+    after('order-refund-membership-with-no-subscription', { ...monthly, payment: card }, async ({ refund, lines, db }) => {
+      const [line] = await lines('membership')
+      await db.query('UPDATE customer_memberships SET stripe_subscription_id = NULL WHERE order_line_item_id = $1', [line as string])
+      await refund([line as string], 'credit')
+    }),
+    {
+      name: `${W27_PREFIX}order-refund-membership-bought-on-the-reader`,
+      seed,
+      async run({ call, stripe, db }) {
+        const placed = (await call('createOrder', { customerId: ID.customer, ...monthly, payment: { method: 'reader', readerSaveCard: true } })) as {
+          orderId: string
+          pendingReaderPayment: { paymentIntentId: string }
+        }
+        stripe.completeReaderPayment(placed.pendingReaderPayment.paymentIntentId, { generatedCard: 'pm_reader_saved' })
+        await call('finaliseReaderOrder', { orderId: placed.orderId })
+        const line = await db.query<{ id: string }>("SELECT id FROM order_line_items WHERE order_id = $1 AND item_type = 'membership'", [placed.orderId])
+        await call('refundOrder', { orderId: placed.orderId, lineItemIds: [line[0]?.id], refundMethod: 'card' })
+      },
+    },
+    after('order-refund-payment-date-change-charge-is-a-plain-line', null, async ({ call, db, stripe }) => {
+      // changeMembershipPaymentDate's own order: one membership line, and its row in membership_payment_date_changes.
+      // Refunded as a plain card line: the subscription isn't cancelled, the membership stays, the new date stays.
+      const charge = await stripe.paymentIntents.create({ amount: 650, currency: 'gbp', customer: MEMBER_STRIPE_CUSTOMER, payment_method: 'pm_member', off_session: true, confirm: true })
+      const order = await insert(db, 'orders', {
+        customer_id: ID.member,
+        order_total: '6.50',
+        payment_status: 'paid',
+        payment_method: 'card',
+        order_source: 'staff_created',
+        stripe_payment_intent_id: charge.id,
+      })
+      const line = await insert(db, 'order_line_items', { order_id: order, item_type: 'membership', membership_plan_id: ID.plan, quantity: 1, unit_price: '6.50', line_total: '6.50' })
+      await insert(db, 'membership_payment_date_changes', {
+        membership_id: ID.membership,
+        old_renewal_date: '2026-12-10',
+        new_renewal_date: '2026-12-15',
+        extra_days: 5,
+        amount_charged: '6.50',
+        stripe_payment_intent_id: charge.id,
+        order_id: order,
+        staff_id: ID.staff,
+        status: 'done',
+      })
+      await call('refundOrder', { orderId: order, lineItemIds: [line], refundMethod: 'card' })
+    }),
+    after('order-refund-promo-line-gives-back-what-was-paid', { products: [{ ...soap, quantity: 1, unitPrice: 12 }, mug], promoCode: PROMO.percent, payment: card }, async ({ refund, lines }) => {
+      // E1: a £15 mug bought with 10% off gives back £13.50, whatever the dialog added up.
+      const [, second] = await lines('product')
+      await refund([second as string], 'card')
+    }),
+    after('order-refund-a-second-refund-on-the-same-order', { products: [soap, mug], payment: card }, async ({ refund, lines }) => {
+      const [first, second] = await lines('product')
+      await refund([first as string], 'card')
+      await refund([second as string], 'credit', { [second as string]: true })
+    }),
+    after('order-refund-two-lines-at-once-split', { products: [soap, mug], payment: { method: 'card', storeCredit: { amount: 20 } } }, async ({ refund, lines }) => {
+      // £39 of lines, £19 of it on the card: the first line is recorded as card, the second as store credit.
+      await refund(await lines('product'), 'card')
+    }),
+    after('order-refund-every-kind-of-line-at-once', { products: [soap], standaloneAddons: [towel], giftCard: digitalCard, ...newPass, payment: card }, async ({ refund, lines }) => {
+      const product = await lines('product')
+      await refund(await lines(), 'card', { [product[0] as string]: true })
+    }),
+  ]
+
+  // --- refundOrder: a card refund with no clear answer (the W05j and W05k cases), and a refused subscription cancel -----
+  const orderUnclear: Scenario[] = [
+    after('order-refund-answer-lost-then-pressed-again', soapOnCard, async ({ refund, lines }) => {
+      const ids = await lines('product')
+      await losingTheWorkersAnswer(REFUND_PATH, () => refund(ids, 'card'))
+      await refund(ids, 'card')
+    }),
+    after('order-refund-answer-lost-then-store-credit-chosen', soapOnCard, async ({ refund, lines }) => {
+      const ids = await lines('product')
+      await losingTheWorkersAnswer(REFUND_PATH, () => refund(ids, 'card'))
+      // The earlier refund is settled first and counts: no store credit goes.
+      await refund(ids, 'credit')
+    }),
+    after('order-refund-held-two-days-then-found-by-its-key', soapOnCard, async ({ refund, lines, stripe }) => {
+      const ids = await lines('product')
+      await losingTheWorkersAnswer(REFUND_PATH, () => refund(ids, 'card'))
+      later(TWO_DAYS)
+      stripe.forgetIdempotencyKeys()
+      await refund(ids, 'card')
+    }),
+    after('order-refund-held-record-fails-too', soapOnCard, async ({ refund, lines, db }) => {
+      const ids = await lines('product')
+      await whileFailing(db, { table: 'audit_log', event: 'INSERT', when: `NEW.action = 'card_refund_held'` }, () => losingTheWorkersAnswer(REFUND_PATH, () => refund(ids, 'card')))
+      await refund(ids, 'card')
+    }),
+    after('order-refund-died-after-the-refund-then-pressed-again', soapOnCard, async ({ refund, lines }) => {
+      const ids = await lines('product')
+      await dyingAfter(REFUND_PATH, () => refund(ids, 'card'))
+      await refund(ids, 'card')
+    }),
+    after('order-refund-died-then-the-same-lines-in-the-other-order', { products: [soap, mug], payment: card }, async ({ refund, lines }) => {
+      const ids = await lines('product')
+      await dyingAfter(REFUND_PATH, () => refund(ids, 'card'))
+      // The same lines chosen the other way round: the same key, so the same refund, not a second.
+      await refund([...ids].reverse(), 'card')
+    }),
+    after('order-refund-died-on-one-line-then-another-line-at-the-same-figures', { products: [soap, { ...soap, quantity: 2 }], payment: card }, async ({ refund, lines }) => {
+      const [first, second] = await lines('product')
+      await dyingAfter(REFUND_PATH, () => refund([first as string], 'card'))
+      // Another line of the same amount is a refund of its own (the key names the lines).
+      await refund([second as string], 'card')
+    }),
+    after('order-refund-still-no-clear-answer-on-the-next-press', soapOnCard, async ({ refund, lines, stripe }) => {
+      const ids = await lines('product')
+      await losingTheWorkersAnswer(REFUND_PATH, () => refund(ids, 'card'))
+      stripe.failNext('refunds.create', { kind: 'lost_response' })
+      await refund(ids, 'credit')
+      await refund(ids, 'card')
+    }),
+    after('order-refund-never-reached-stripe-then-two-days-later', soapOnCard, async ({ refund, lines, stripe }) => {
+      const ids = await lines('product')
+      stripe.failNext('refunds.create', { kind: 'unreachable' })
+      await refund(ids, 'card')
+      later(TWO_DAYS)
+      stripe.forgetIdempotencyKeys()
+      // The look finds nothing, which counts as a no, and the press refunds for real.
+      await refund(ids, 'card')
+    }),
+    after('order-refund-held-two-days-and-the-look-fails', soapOnCard, async ({ refund, lines, stripe }) => {
+      const ids = await lines('product')
+      await losingTheWorkersAnswer(REFUND_PATH, () => refund(ids, 'card'))
+      later(TWO_DAYS)
+      stripe.forgetIdempotencyKeys()
+      stripe.failNext('refunds.list', { kind: 'unreachable' })
+      await refund(ids, 'card')
+    }),
+    after('order-refund-store-credit-answer-lost-is-found-by-its-note', soapOnCard, async ({ refund, lines }) => {
+      const ids = await lines('product')
+      await losingTheAnswer(creditRefund, () => refund(ids, 'credit'))
+      await refund(ids, 'credit')
+    }),
+    after('order-refund-store-credit-that-cannot-be-looked-for-counts-as-given', soapOnCard, async ({ refund, lines }) => {
+      const ids = await lines('product')
+      await creditCantBeTold(() => refund(ids, 'credit'))
+    }),
+    after('order-refund-store-credit-cannot-be-looked-for-then-the-stamp-fails', soapOnCard, async ({ refund, lines, db }) => {
+      const ids = await lines('product')
+      await whileFailing(db, lineStampFails, () => creditCantBeTold(() => refund(ids, 'credit')))
+    }),
+    after('order-refund-subscription-cancel-refused-after-the-money-went', { ...monthly, payment: card }, async ({ refund, lines, stripe }) => {
+      // E10: the card refund went, then Stripe refuses the cancel: "success with a warning", and the subscription lives.
+      stripe.failNext('subscriptions.cancel', { kind: 'error', error: fakeStripeErrors.server() })
+      await refund(await lines('membership'), 'card')
+    }),
+    after('order-refund-subscription-cancel-refused-before-any-money-is-taken-back', { ...monthly, payment: card }, async ({ refund, lines, stripe }) => {
+      // To store credit: the credit is given first, the cancel is refused, and (the credit can be undone) it is taken back.
+      stripe.failNext('subscriptions.cancel', { kind: 'error', error: fakeStripeErrors.server() })
+      await refund(await lines('membership'), 'credit')
+    }),
+  ]
+
+  // --- refundOrder: today's outcome for the plan's bugs E2 to E5 --------------------------------------------------------
+  const orderBugs: Scenario[] = [
+    {
+      // E2: an order whose reader payment is still on hold can be refunded: £24 of store credit for nothing once the tap is cancelled.
+      name: `${W27_PREFIX}e2-order-refund-while-its-reader-payment-is-still-open`,
+      seed,
+      async run({ call, db, stripe }) {
+        const placed = (await call('createOrder', { customerId: ID.customer, products: [soap], payment: { method: 'reader' } })) as {
+          orderId: string
+          pendingReaderPayment: { paymentIntentId: string }
+        }
+        const line = await db.query<{ id: string }>("SELECT id FROM order_line_items WHERE order_id = $1 AND item_type = 'product'", [placed.orderId])
+        await call('refundOrder', { orderId: placed.orderId, lineItemIds: [line[0]?.id], refundMethod: 'credit', restock: { [line[0]?.id as string]: false } })
+        // The order now reads "refunded", so the reader payment can't be cancelled from the screen...
+        await call('cancelReaderOrder', { orderId: placed.orderId })
+        // ...and if the customer then taps, finalise finds an order that isn't pending.
+        stripe.completeReaderPayment(placed.pendingReaderPayment.paymentIntentId)
+        await call('finaliseReaderOrder', { orderId: placed.orderId })
+      },
+    },
+    after('e3-membership-and-robe-on-one-card-refunded-to-card', { ...monthly, standaloneAddons: [robe], payment: card }, async ({ refund, lines }) => {
+      // E3: the membership's first payment is the subscription's own, which the order doesn't name. A Card refund of the
+      // membership line comes out of the rest of the basket's payment, and the remainder goes to store credit.
+      await refund(await lines('membership'), 'card')
+      await refund(await lines('addon'), 'card')
+    }),
+    {
+      // E4: a membership refunds in full however much it was used: a credit session taken, £40 back, the booking stays.
+      name: `${W27_PREFIX}e4-membership-refunded-in-full-after-a-credit-session`,
+      seed,
+      async run({ call, db }) {
+        const placed = (await call('createOrder', { customerId: ID.customer, ...monthly, payment: card })) as { orderId: string }
+        const membership = await db.query<{ id: string }>('SELECT id FROM customer_memberships WHERE customer_id = $1 ORDER BY created_at DESC LIMIT 1', [ID.customer])
+        await call('createOrder', { customerId: ID.customer, booking: { ...paidSeat(), redemptionSource: 'membership_credit', membershipId: membership[0]?.id }, payment: {} })
+        const line = await db.query<{ id: string }>("SELECT id FROM order_line_items WHERE order_id = $1 AND item_type = 'membership'", [placed.orderId])
+        await call('refundOrder', { orderId: placed.orderId, lineItemIds: [line[0]?.id], refundMethod: 'card' })
+      },
+    },
+    after('e5-used-pass-refunds-in-full-once-its-type-is-edited-down', { ...newPass, payment: card }, async ({ refund, lines, db }) => {
+      // E5: 5 sessions bought, 2 used (3 left). The type is then edited to 3 sessions: 3 is not below 3, so £50 goes back.
+      const [line] = await lines('session_pass')
+      await db.query('UPDATE customer_session_passes SET sessions_remaining = 3 WHERE order_line_item_id = $1', [line as string])
+      await db.query('UPDATE session_pass_types SET sessions_included = 3 WHERE id = $1', [ID.passType])
+      await refund([line as string], 'card')
+    }),
+    after('e5-unused-pass-is-refused-once-its-type-is-edited-up', { ...newPass, payment: card }, async ({ refund, lines, db }) => {
+      // E5 the other way round: nothing used, the type edited from 5 to 10 sessions: 5 is below 10, so it is refused.
+      await db.query('UPDATE session_pass_types SET sessions_included = 10 WHERE id = $1', [ID.passType])
+      await refund(await lines('session_pass'), 'card')
+    }),
+  ]
+
+  // --- cancelEventPlaces: every refusal of E-plan 1.3 ------------------------------------------------------------------
+  const placeRefusals: Scenario[] = [
+    after('event-cancel-refused-without-issue-refunds-for-a-card-refund', eventOnCard, async ({ eventBookingId, places: ids, db, attempt }) => {
+      await noIssueRefunds(db)
+      await attempt('cancelEventPlaces', { eventBookingId, attendeeIds: [(await ids())[0]], refund: 'card' })
+      await attempt('cancelEventPlaces', { eventBookingId, attendeeIds: [(await ids())[0]], refund: 'credit' })
+    }),
+    after('event-cancel-by-someone-with-no-staff-record', eventOnCard, async ({ eventBookingId, places: ids, db, attempt }) => {
+      // The signed-in user's email matches no staff row: a refund is refused (thrown), and then the same press with No refund.
+      await db.query("UPDATE staff SET email = 'someone-else@example.com' WHERE id = $1", [ID.staff])
+      const [first] = await ids()
+      await attempt('cancelEventPlaces', { eventBookingId, attendeeIds: [first], refund: 'card' })
+      await attempt('cancelEventPlaces', { eventBookingId, attendeeIds: [first], refund: 'none' })
+    }),
+    after('event-cancel-by-an-inactive-staff-member', eventOnCard, async ({ eventBookingId, places: ids, db, attempt }) => {
+      await db.query('UPDATE staff SET active = false WHERE id = $1', [ID.staff])
+      const [first] = await ids()
+      await attempt('cancelEventPlaces', { eventBookingId, attendeeIds: [first], refund: 'card' })
+      await attempt('cancelEventPlaces', { eventBookingId, attendeeIds: [first], refund: 'none' })
+    }),
+    after('event-cancel-no-refund-needs-no-permission', eventOnCard, async ({ cancel, places: ids, db }) => {
+      await noIssueRefunds(db)
+      await cancel('none', [(await ids())[0] as string])
+    }),
+    after('event-cancel-refused-no-booking-chosen', eventOnCard, async ({ call }) => {
+      await call('cancelEventPlaces', { refund: 'none' })
+    }),
+    after('event-cancel-refused-no-place-chosen', eventOnCard, async ({ cancel }) => {
+      await cancel('card', [])
+    }),
+    after('event-cancel-refused-refund-choice-not-known', eventOnCard, async ({ cancel, places: ids }) => {
+      await cancel('cash', [(await ids())[0] as string])
+    }),
+    {
+      name: `${W27_PREFIX}event-cancel-refused-while-its-reader-payment-is-open`,
+      seed,
+      async run({ call, db }) {
+        await call('createOrder', { customerId: ID.customer, event: eventPlaces, payment: { method: 'reader' } })
+        // The order isn't finished, so its event booking is still pending (the reader's answer doesn't name it).
+        const pending = await db.query<{ id: string }>("SELECT id FROM event_bookings WHERE status = 'pending'")
+        const eventBookingId = pending[0]?.id
+        if (!eventBookingId) throw new Error('The reader order left no pending event booking.')
+        await call('getEventCancellationQuote', { eventBookingId })
+        await call('cancelEventPlaces', { eventBookingId, refund: 'none' })
+      },
+    },
+    after('event-cancel-refused-unknown-booking', eventOnCard, async ({ call }) => {
+      await call('cancelEventPlaces', { eventBookingId: UNKNOWN, refund: 'none' })
+    }),
+    after('event-cancel-refused-booking-already-cancelled', eventOnCard, async ({ cancel }) => {
+      await cancel('card')
+      await cancel('card')
+    }),
+    after('event-cancel-refused-place-of-another-booking', eventOnCard, async ({ cancel, call, db }) => {
+      const other = (await call('createOrder', { customerId: ID.member, event: places([moAttending]), payment: cash(20) })) as { eventBookingId: string }
+      const theirs = await db.query<{ id: string }>('SELECT id FROM event_attendees WHERE event_booking_id = $1', [other.eventBookingId])
+      await cancel('card', [theirs[0]?.id as string])
+    }),
+    after('event-cancel-refused-place-already-cancelled', eventOnCard, async ({ cancel, places: ids }) => {
+      const [first] = await ids()
+      await cancel('card', [first as string])
+      await cancel('card', [first as string])
+    }),
+    after('event-cancel-refused-nothing-left-to-cancel', eventOnCard, async ({ cancel, eventBookingId, db }) => {
+      // Every place stamped cancelled while the booking still says confirmed (no screen leaves this; the reason exists for it).
+      await db.query('UPDATE event_attendees SET cancelled_at = now() WHERE event_booking_id = $1', [eventBookingId])
+      await cancel('none')
+    }),
+    after('event-cancel-refused-place-checked-in', eventOnCard, async ({ cancel, places: ids, db }) => {
+      const [first, second] = await ids()
+      await checkIn(db, first as string)
+      await cancel('card', [first as string])
+      // The whole booking is refused too, while one of its places is checked in; the other place alone goes.
+      await cancel('card')
+      await cancel('card', [second as string])
+    }),
+    after('event-cancel-refused-after-the-cut-off-with-no-reason', eventOnCard, async ({ cancel, places: ids }) => {
+      await cancel('card', [(await ids())[0] as string])
+      await cancel('credit', [(await ids())[0] as string], '   ')
+    }, afterCutoff),
+    after('event-cancel-refused-order-line-not-found', eventOnCard, async ({ cancel, orderId, db }) => {
+      // The places' value comes from the order line, so a line that was never there gives £0 and no refusal. The
+      // reason is only reached when the line goes between the quote and the look for it (nothing on a screen does that).
+      const detach = () => db.query("UPDATE order_line_items SET event_booking_id = NULL WHERE order_id = $1 AND item_type = 'event'", [orderId])
+      await onceAfter((sql) => sql.includes('event_cancellation_quote'), detach, () => cancel('card'))
+    }),
+    after('event-cancel-with-no-order-line-is-worth-nothing', eventOnCard, async ({ cancel, orderId, db, call, eventBookingId }) => {
+      // A booking whose order line doesn't name it: the quote says £0, and a Card cancel gives nothing back and says ok.
+      await db.query("UPDATE order_line_items SET event_booking_id = NULL WHERE order_id = $1 AND item_type = 'event'", [orderId])
+      await call('getEventCancellationQuote', { eventBookingId })
+      await cancel('card')
+    }),
+    after('event-cancel-refused-by-stripe-then-pressed-again', eventOnCard, async ({ cancel, places: ids, stripe }) => {
+      const [first] = await ids()
+      stripe.failNext('refunds.create', { kind: 'error', error: refusal() })
+      await cancel('card', [first as string])
+      await cancel('card', [first as string])
+    }),
+    after('event-cancel-refused-when-the-card-check-cannot-be-read', eventOnCard, async ({ cancel, places: ids }) => {
+      const [first] = await ids()
+      await whileUnreadable(refusalCount, () => cancel('card', [first as string]))
+    }),
+    after('event-cancel-refused-when-the-look-for-a-held-refund-fails', eventOnCard, async ({ cancel, places: ids }) => {
+      const [first] = await ids()
+      await whileUnreadable(heldLook, () => cancel('card', [first as string]))
+    }),
+    after('event-cancel-store-credit-write-fails', eventInCash, async ({ cancel, places: ids, db }) => {
+      const [first] = await ids()
+      await whileFailing(db, refundCreditFails, () => cancel('credit', [first as string]))
+    }),
+    after('event-cancel-store-credit-fails-after-the-card-part', { event: eventPlaces, payment: { method: 'card', storeCredit: { amount: 30 } } }, async ({ cancel, db }) => {
+      // £80 of places, £50 of it on the card: £50 goes back to the card, then the £30 to store credit fails.
+      await whileFailing(db, refundCreditFails, () => cancel('card'))
+    }),
+    after('event-cancel-changed-by-someone-else-a-place-checked-in-meanwhile', eventOnCard, async ({ cancel, places: ids, db }) => {
+      const [first] = await ids()
+      // Checked in after the quote and before the statement that records the cancel: the card refund has gone by then.
+      await onceAfter((sql) => sql.includes('event_cancellation_quote'), () => checkIn(db, first as string), () => cancel('card', [first as string]))
+    }),
+    after('event-cancel-recording-fails-after-the-card-refund', eventOnCard, async ({ cancel, places: ids, db }) => {
+      const [first] = await ids()
+      await whileFailing(db, placeStampFails, () => cancel('card', [first as string]))
+      // Pressed again: the card money already back is used up, not refunded again.
+      await cancel('card', [first as string])
+    }),
+    after('event-cancel-recording-fails-to-store-credit-is-taken-back', eventInCash, async ({ cancel, places: ids, db }) => {
+      const [first] = await ids()
+      await whileFailing(db, placeStampFails, () => cancel('credit', [first as string]))
+    }),
+  ]
+
+  // --- cancelEventPlaces: one place, several, the last, a whole booking, the cut-off -----------------------------------
+  const placeCancels: Scenario[] = [
+    after('event-cancel-one-place-to-card', eventOnCard, async ({ cancel, places: ids, call, eventBookingId }) => {
+      const [first] = await ids()
+      await call('getEventCancellationQuote', { eventBookingId, attendeeIds: [first] })
+      await cancel('card', [first as string])
+    }),
+    after('event-cancel-one-place-to-store-credit', eventOnCard, async ({ cancel, places: ids }) => {
+      await cancel('credit', [(await ids())[0] as string])
+    }),
+    after('event-cancel-one-place-no-refund-with-a-reason', eventOnCard, async ({ cancel, places: ids }) => {
+      await cancel('none', [(await ids())[0] as string], 'Could not make it')
+    }),
+    after('event-cancel-several-places-then-the-last', threeOnCard, async ({ cancel, places: ids, call, eventBookingId }) => {
+      const [first, second, third] = await ids()
+      await cancel('card', [first as string, second as string])
+      await call('getEventCancellationQuote', { eventBookingId })
+      // The last place cancels the booking and stamps its order line.
+      await cancel('card', [third as string])
+    }),
+    after('event-cancel-whole-booking-to-card', eventOnCard, async ({ cancel, call, eventBookingId }) => {
+      await call('getEventCancellationQuote', { eventBookingId })
+      await cancel('card')
+    }),
+    after('event-cancel-whole-booking-to-store-credit', eventOnCard, async ({ cancel }) => {
+      await cancel('credit')
+    }),
+    after('event-cancel-whole-booking-no-refund', eventOnCard, async ({ cancel }) => {
+      await cancel('none')
+    }),
+    after('event-cancel-cash-order-card-chosen-goes-to-store-credit', eventInCash, async ({ cancel, call, eventBookingId }) => {
+      // No card payment can take it back: all of it goes to store credit, and the quote says so.
+      await call('getEventCancellationQuote', { eventBookingId })
+      await cancel('card')
+    }),
+    after('event-cancel-split-card-and-store-credit', { event: eventPlaces, payment: { method: 'card', storeCredit: { amount: 30 } } }, async ({ cancel, call, eventBookingId }) => {
+      // £80 of places, £50 of it on the card: the quote and the cancel give £50 to the card and £30 to store credit.
+      await call('getEventCancellationQuote', { eventBookingId })
+      await cancel('card')
+    }),
+    after('event-cancel-gift-card-part-paid-one-place-then-the-other', { event: eventPlaces, payment: { method: 'card', giftCard: { giftCardId: ID.giftCard, amount: 40 } } }, async ({ cancel, places: ids }) => {
+      // £80 of places, £40 on the card: the first place takes the card's £40, the second goes to store credit.
+      const [first, second] = await ids()
+      await cancel('card', [first as string])
+      await cancel('card', [second as string])
+    }),
+    after('event-cancel-promo-line-the-last-place-takes-what-is-left', { event: three, promoCode: PROMO.fixed, payment: card }, async ({ cancel, places: ids, call, eventBookingId }) => {
+      // £120 less a £5 code: £115 over three places doesn't divide evenly; the last place takes exactly what is left.
+      const [first, second, third] = await ids()
+      await call('getEventCancellationQuote', { eventBookingId, attendeeIds: [first] })
+      await cancel('card', [first as string])
+      await cancel('card', [second as string])
+      await call('getEventCancellationQuote', { eventBookingId, attendeeIds: [third] })
+      await cancel('card', [third as string])
+    }),
+    after('event-cancel-member-price-place', { customerId: ID.member, event: places([moAttending, alexGuest]), payment: cash(60) }, async ({ cancel, places: ids }) => {
+      // A Herd member's own place (£20) and a guest's at the public price (£40): each gives back what it cost.
+      const [own, guest] = await ids()
+      await cancel('credit', [own as string])
+      await cancel('credit', [guest as string])
+    }),
+    after('event-cancel-after-the-cut-off-with-a-reason', eventOnCard, async ({ cancel, places: ids, call, eventBookingId }) => {
+      const [first, second] = await ids()
+      await call('getEventCancellationQuote', { eventBookingId, attendeeIds: [first] })
+      await cancel('card', [first as string], 'Train strike')
+      // No refund needs no reason, after the cut-off too.
+      await cancel('none', [second as string])
+    }, afterCutoff),
+    after('e8-event-with-no-cut-off-counts-as-after-it', eventOnCard, async ({ cancel, places: ids, call, eventBookingId, db }) => {
+      // E8: no cut-off set, three weeks before the event: a refund is refused without a reason, and with one is
+      // recorded as an after-cut-off refund. An event on sale must have a cut-off (events_on_sale_complete), so this is
+      // an event taken off sale and its cut-off cleared after places were sold.
+      await noCutoff(db)
+      const [first] = await ids()
+      await call('getEventCancellationQuote', { eventBookingId, attendeeIds: [first] })
+      await cancel('card', [first as string])
+      await cancel('card', [first as string], 'Changed their mind')
+    }),
+    after('event-cancel-after-the-event-has-started-a-no-show', eventOnCard, async ({ cancel, places: ids, call, eventBookingId }) => {
+      // A cancel is allowed after the event has started or ended (for a no-show): the clock moves three weeks on.
+      later(22 * 24 * 60 * 60 * 1000)
+      const [first] = await ids()
+      await call('getEventCancellationQuote', { eventBookingId, attendeeIds: [first] })
+      await cancel('credit', [first as string], 'No-show, goodwill')
+    }),
+    after('e9-figure-changes-between-the-quote-and-the-press', { event: three, promoCode: PROMO.fixed, payment: card }, async ({ cancel, places: ids, call, eventBookingId }) => {
+      // E9: the dialog shows the whole booking's £115, another tab cancels a place, and the press then gives back
+      // what is left without saying the figure changed.
+      const [first] = await ids()
+      await call('getEventCancellationQuote', { eventBookingId })
+      await cancel('card', [first as string])
+      await cancel('card')
+    }),
+    after('event-cancel-quote-refusals', eventOnCard, async ({ call, eventBookingId, places: ids, db }) => {
+      const [first] = await ids()
+      await call('getEventCancellationQuote', { eventBookingId: UNKNOWN })
+      await call('getEventCancellationQuote', { eventBookingId, attendeeIds: [UNKNOWN] })
+      await checkIn(db, first as string)
+      await call('getEventCancellationQuote', { eventBookingId, attendeeIds: [first] })
+      await call('getEventCancellationQuote', { eventBookingId })
+    }),
+  ]
+
+  // --- cancelEventPlaces: a card refund with no clear answer (W05j, W05k; p3 and p5 are the two already recorded) ------
+  const placeUnclear: Scenario[] = [
+    after('event-cancel-answer-lost-then-pressed-again', eventOnCard, async ({ cancel, places: ids }) => {
+      const [first] = await ids()
+      await losingTheWorkersAnswer(REFUND_PATH, () => cancel('card', [first as string]))
+      await cancel('card', [first as string])
+    }),
+    after('event-cancel-answer-lost-then-another-place-to-store-credit', eventOnCard, async ({ cancel, places: ids }) => {
+      const [first, second] = await ids()
+      await losingTheWorkersAnswer(REFUND_PATH, () => cancel('card', [first as string]))
+      // The held refund is settled first, whatever is asked next: its £40 is on the line, unallocated, and the next
+      // cancel of the first place uses it up.
+      await cancel('credit', [second as string])
+      await cancel('card', [first as string])
+    }),
+    after('event-cancel-answer-lost-then-no-refund-chosen', eventOnCard, async ({ cancel, places: ids }) => {
+      const [first] = await ids()
+      await losingTheWorkersAnswer(REFUND_PATH, () => cancel('card', [first as string]))
+      // The card money has gone back, so the place records it whatever is chosen now.
+      await cancel('none', [first as string])
+    }),
+    after('event-cancel-answer-lost-then-store-credit-chosen', eventOnCard, async ({ cancel, places: ids }) => {
+      const [first] = await ids()
+      await losingTheWorkersAnswer(REFUND_PATH, () => cancel('card', [first as string]))
+      // The earlier refund is settled first, so no store credit goes.
+      await cancel('credit', [first as string])
+    }),
+    after('event-cancel-died-after-the-refund-then-pressed-again', eventOnCard, async ({ cancel, places: ids }) => {
+      const [first] = await ids()
+      await dyingAfter(REFUND_PATH, () => cancel('card', [first as string]))
+      await cancel('card', [first as string])
+    }),
+    after('event-cancel-died-on-one-place-then-the-other-at-the-same-figures', eventOnCard, async ({ cancel, places: ids }) => {
+      const [first, second] = await ids()
+      await dyingAfter(REFUND_PATH, () => cancel('card', [first as string]))
+      // The other place is a refund of its own; the first place, later, gets its first refund back.
+      await cancel('card', [second as string])
+      await cancel('card', [first as string])
+    }),
+    after('event-cancel-still-no-clear-answer-on-the-next-press', eventOnCard, async ({ cancel, places: ids, stripe }) => {
+      const [first] = await ids()
+      await losingTheWorkersAnswer(REFUND_PATH, () => cancel('card', [first as string]))
+      stripe.failNext('refunds.create', { kind: 'lost_response' })
+      await cancel('credit', [first as string])
+      await cancel('card', [first as string])
+    }),
+    after('event-cancel-held-record-fails-too', eventOnCard, async ({ cancel, places: ids, db }) => {
+      const [first] = await ids()
+      await whileFailing(db, { table: 'audit_log', event: 'INSERT', when: `NEW.action = 'card_refund_held'` }, () => losingTheWorkersAnswer(REFUND_PATH, () => cancel('card', [first as string])))
+      await cancel('card', [first as string])
+    }),
+    after('event-cancel-never-reached-stripe-then-two-days-later', eventOnCard, async ({ cancel, places: ids, stripe }) => {
+      const [first, second] = await ids()
+      stripe.failNext('refunds.create', { kind: 'unreachable' })
+      await cancel('card', [first as string])
+      later(TWO_DAYS)
+      stripe.forgetIdempotencyKeys()
+      // The look finds nothing, which counts as a no, and each press refunds for real.
+      await cancel('card', [second as string])
+      await cancel('card', [first as string])
+    }),
+    after('event-cancel-held-two-days-and-the-look-fails', eventOnCard, async ({ cancel, places: ids, stripe }) => {
+      const [first, second] = await ids()
+      await losingTheWorkersAnswer(REFUND_PATH, () => cancel('card', [first as string]))
+      later(TWO_DAYS)
+      stripe.forgetIdempotencyKeys()
+      stripe.failNext('refunds.list', { kind: 'unreachable' })
+      await cancel('card', [second as string])
+    }),
+    after('event-cancel-store-credit-answer-lost-is-found-by-its-note', eventOnCard, async ({ cancel, places: ids }) => {
+      const [first] = await ids()
+      await losingTheAnswer(creditRefund, () => cancel('credit', [first as string]))
+      await cancel('credit', [first as string])
+    }),
+    after('event-cancel-store-credit-that-cannot-be-looked-for-counts-as-given', eventOnCard, async ({ cancel, places: ids }) => {
+      const [first] = await ids()
+      await creditCantBeTold(() => cancel('credit', [first as string]))
+    }),
+    after('event-cancel-store-credit-cannot-be-looked-for-then-recording-fails', eventOnCard, async ({ cancel, places: ids, db }) => {
+      const [first] = await ids()
+      await whileFailing(db, placeStampFails, () => creditCantBeTold(() => cancel('credit', [first as string])))
+    }),
+    after('event-cancel-recording-fails-and-the-take-back-answer-is-lost', eventInCash, async ({ cancel, places: ids, db }) => {
+      const [first] = await ids()
+      const takeBack = (sql: string, params: unknown[]) => sql.includes('store_credit_apply') && params[2] === 'refund' && Number(params[1]) < 0
+      await whileFailing(db, placeStampFails, () => losingTheAnswer(takeBack, () => cancel('credit', [first as string])))
+    }),
+  ]
+
+  // --- cancelEvent and the overview: every refusal of E-plan 1.4, and a whole event ------------------------------------
+  /** Two bookings on the event: Sam's two places on the card (£80), then Mo's own place at the Herd price in cash (£20). */
+  async function bookingsOnTheEvent(call: ScenarioContext['call']): Promise<{ sam: string; mo: string }> {
+    const samBooking = (await call('createOrder', { customerId: ID.customer, event: eventPlaces, payment: card })) as { eventBookingId: string }
+    const moBooking = (await call('createOrder', { customerId: ID.member, event: places([moAttending]), payment: cash(20) })) as { eventBookingId: string }
+    return { sam: samBooking.eventBookingId, mo: moBooking.eventBookingId }
+  }
+  const storm = { eventId: ID.event, refund: 'card', reason: 'Storm' }
+  const wholeEvent: Scenario[] = [
+    after('event-whole-cancel-refused-without-issue-refunds', eventOnCard, async ({ attempt, db }) => {
+      await noIssueRefunds(db)
+      await attempt('cancelEvent', storm)
+    }),
+    after('event-whole-cancel-refused-no-event-chosen', eventOnCard, async ({ call }) => {
+      await call('cancelEvent', { refund: 'card', reason: 'Storm' })
+    }),
+    after('event-whole-cancel-refused-refund-choice-not-known', eventOnCard, async ({ call }) => {
+      await call('cancelEvent', { ...storm, refund: 'none' })
+    }),
+    after('event-whole-cancel-refused-no-reason', eventOnCard, async ({ call }) => {
+      await call('cancelEvent', { ...storm, reason: '   ' })
+    }),
+    after('event-whole-cancel-refused-unknown-event', eventOnCard, async ({ call }) => {
+      await call('cancelEvent', { ...storm, eventId: UNKNOWN })
+      await call('getEventCancellationOverview', { eventId: UNKNOWN })
+    }),
+    after('event-whole-cancel-refused-event-ended', eventOnCard, async ({ call }) => {
+      later(22 * 24 * 60 * 60 * 1000)
+      await call('getEventCancellationOverview', { eventId: ID.event })
+      await call('cancelEvent', storm)
+    }),
+    {
+      name: `${W27_PREFIX}event-whole-cancel-refused-while-a-reader-payment-is-open`,
+      seed,
+      async run({ call, stripe }) {
+        await call('createOrder', { customerId: ID.member, event: places([moAttending]), payment: cash(20) })
+        const pending = (await call('createOrder', { customerId: ID.customer, event: eventPlaces, payment: { method: 'reader' } })) as {
+          orderId: string
+          pendingReaderPayment: { paymentIntentId: string }
+        }
+        await call('getEventCancellationOverview', { eventId: ID.event })
+        await call('cancelEvent', storm)
+        // Once the tap is finished, the event can be cancelled.
+        stripe.completeReaderPayment(pending.pendingReaderPayment.paymentIntentId)
+        await call('finaliseReaderOrder', { orderId: pending.orderId })
+        await call('cancelEvent', storm)
+      },
+    },
+    {
+      name: `${W27_PREFIX}event-whole-cancel-card-and-cash-bookings-to-card`,
+      seed,
+      async run({ call }) {
+        await bookingsOnTheEvent(call)
+        await call('getEventCancellationOverview', { eventId: ID.event })
+        await call('cancelEvent', storm)
+        await call('getEventCancellationOverview', { eventId: ID.event })
+      },
+    },
+    {
+      name: `${W27_PREFIX}event-whole-cancel-everything-to-store-credit`,
+      seed,
+      async run({ call }) {
+        await bookingsOnTheEvent(call)
+        await call('cancelEvent', { ...storm, refund: 'credit' })
+      },
+    },
+    {
+      // A whole event with a failing booking: Sam's has a checked-in place, so it is listed as failed and Mo's still goes.
+      // Then the check-in is undone and the dialog's Retry runs only what is still confirmed, keeping the first reason.
+      name: `${W27_PREFIX}event-whole-cancel-one-booking-fails-then-retry`,
+      seed,
+      async run({ call, db }) {
+        const bookings = await bookingsOnTheEvent(call)
+        const first = await db.query<{ id: string }>('SELECT id FROM event_attendees WHERE event_booking_id = $1 ORDER BY created_at, id LIMIT 1', [bookings.sam])
+        await checkIn(db, first[0]?.id as string)
+        await call('getEventCancellationOverview', { eventId: ID.event })
+        await call('cancelEvent', storm)
+        await call('getEventCancellationOverview', { eventId: ID.event })
+        await db.query('UPDATE event_attendees SET checked_in_at = NULL WHERE id = $1', [first[0]?.id as string])
+        await call('cancelEvent', { ...storm, reason: 'A different reason on the retry' })
+        await call('getEventCancellationOverview', { eventId: ID.event })
+      },
+    },
+    {
+      // A booking whose card refund Stripe refuses is listed as failed, with Stripe's words, and the rest carried on.
+      name: `${W27_PREFIX}event-whole-cancel-a-card-refund-refused-by-stripe`,
+      seed,
+      async run({ call, stripe }) {
+        await bookingsOnTheEvent(call)
+        stripe.failNext('refunds.create', { kind: 'error', error: refusal() })
+        await call('cancelEvent', storm)
+        await call('cancelEvent', storm)
+      },
+    },
+    {
+      // Places already cancelled before the event was: only what is left of each booking is refunded, whatever the cut-off.
+      name: `${W27_PREFIX}event-whole-cancel-after-the-cut-off-and-a-place-already-cancelled`,
+      async seed(db, stripe) {
+        await seed(db, stripe)
+        await afterCutoff(db)
+      },
+      async run({ call, db }) {
+        const bookings = await bookingsOnTheEvent(call)
+        const first = await db.query<{ id: string }>('SELECT id FROM event_attendees WHERE event_booking_id = $1 ORDER BY created_at, id LIMIT 1', [bookings.sam])
+        await call('cancelEventPlaces', { eventBookingId: bookings.sam, attendeeIds: [first[0]?.id], refund: 'none' })
+        await call('cancelEvent', storm)
+      },
+    },
+    {
+      // E7: the check for payments in progress and the "cancelled" mark are separate statements. A reader order that
+      // starts between them is finished later, on a cancelled event, and nobody refunds it until the dialog is opened again.
+      name: `${W27_PREFIX}e7-a-reader-order-started-between-the-check-and-the-cancel`,
+      seed,
+      async run({ call, stripe }) {
+        await call('createOrder', { customerId: ID.member, event: places([moAttending]), payment: cash(20) })
+        let pending: { orderId: string; pendingReaderPayment: { paymentIntentId: string } } | null = null
+        await onceAfter(
+          (sql) => sql.includes("eb.status = 'pending'"),
+          async () => {
+            pending = (await call('createOrder', { customerId: ID.customer, event: eventPlaces, payment: { method: 'reader' } })) as typeof pending
+          },
+          () => call('cancelEvent', storm)
+        )
+        const started = pending as { orderId: string; pendingReaderPayment: { paymentIntentId: string } } | null
+        if (!started) throw new Error('E7: the reader order never started.')
+        stripe.completeReaderPayment(started.pendingReaderPayment.paymentIntentId)
+        await call('finaliseReaderOrder', { orderId: started.orderId })
+        await call('getEventCancellationOverview', { eventId: ID.event })
+      },
+    },
+    {
+      // W05j: the whole event's card refund for one booking gets no clear answer; pressed again, it is settled first.
+      name: `${W27_PREFIX}event-whole-cancel-answer-lost-then-retry`,
+      seed,
+      async run({ call }) {
+        await bookingsOnTheEvent(call)
+        await losingTheWorkersAnswer(REFUND_PATH, () => call('cancelEvent', storm))
+        await call('cancelEvent', storm)
+      },
+    },
+  ]
+
+  return [...orderRefusals, ...orderLines, ...orderUnclear, ...orderBugs, ...placeRefusals, ...placeCancels, ...placeUnclear, ...wholeEvent]
 }

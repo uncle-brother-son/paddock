@@ -44,6 +44,12 @@ export const ERROR_CODES = [
    * slice (W19 / W20 / W24) moves it to the Worker: until then the old Retool booking flows on the reader read no switch.
    */
   'BOOKING_PATH_OFF',
+  /**
+   * Step E (W27, E-plan 4.10, lead call L3): this kind of refund is switched off on the Worker (the ORDER_SWITCH
+   * secret's `order_refunds` for an order's lines and money owed on an order, `event_cancels` for an event cancel that
+   * gives money back), so nothing was touched. An emergency stop, not a fallback. No route answers it until W28 and W30.
+   */
+  'REFUND_PATH_OFF',
 ] as const
 
 export const apiErrorCodeSchema = z.enum(ERROR_CODES)

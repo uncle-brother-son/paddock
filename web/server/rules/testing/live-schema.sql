@@ -427,7 +427,8 @@ CREATE TABLE public.orders (
   created_at timestamp with time zone DEFAULT now() NOT NULL,
   updated_at timestamp with time zone DEFAULT now() NOT NULL,
   payment_method text,
-  reader_payment jsonb
+  reader_payment jsonb,
+  refund_owed_amount numeric(10,2) DEFAULT 0 NOT NULL
 );
 
 CREATE TABLE public.parity_log (
@@ -1442,7 +1443,7 @@ ALTER TABLE public.event_attendees ADD CONSTRAINT event_attendees_card_refunded_
 ALTER TABLE public.event_attendees ADD CONSTRAINT event_attendees_event_waiver_method_check CHECK ((event_waiver_method = ANY (ARRAY['email_link'::text, 'in_person'::text, 'checkout'::text])));
 ALTER TABLE public.event_attendees ADD CONSTRAINT event_attendees_pkey PRIMARY KEY (id);
 ALTER TABLE public.event_attendees ADD CONSTRAINT event_attendees_price_level_check CHECK ((price_level = ANY (ARRAY['public'::text, 'pre_herd'::text, 'herd'::text])));
-ALTER TABLE public.event_attendees ADD CONSTRAINT event_attendees_refund_method_check CHECK ((refund_method = ANY (ARRAY['card'::text, 'credit'::text, 'none'::text])));
+ALTER TABLE public.event_attendees ADD CONSTRAINT event_attendees_refund_method_check CHECK ((refund_method = ANY (ARRAY['card'::text, 'credit'::text, 'none'::text, 'cash'::text])));
 ALTER TABLE public.event_attendees ADD CONSTRAINT event_attendees_refunded_amount_check CHECK ((refunded_amount >= (0)::numeric));
 ALTER TABLE public.event_attendees ADD CONSTRAINT event_attendees_unit_price_check CHECK ((unit_price >= (0)::numeric));
 ALTER TABLE public.event_attendees ADD CONSTRAINT event_attendees_waiver_method_check CHECK ((waiver_method = ANY (ARRAY['email_link'::text, 'in_person'::text, 'checkout'::text])));
@@ -1502,11 +1503,12 @@ ALTER TABLE public.membership_settings ADD CONSTRAINT membership_settings_pkey P
 ALTER TABLE public.order_line_items ADD CONSTRAINT order_line_items_fulfillment_status_check CHECK ((fulfillment_status = ANY (ARRAY['pending'::text, 'fulfilled'::text])));
 ALTER TABLE public.order_line_items ADD CONSTRAINT order_line_items_item_type_check CHECK ((item_type = ANY (ARRAY['booking'::text, 'product'::text, 'membership'::text, 'session_pass'::text, 'gift_card'::text, 'addon'::text, 'postage'::text, 'event'::text])));
 ALTER TABLE public.order_line_items ADD CONSTRAINT order_line_items_pkey PRIMARY KEY (id);
-ALTER TABLE public.order_line_items ADD CONSTRAINT order_line_items_refund_method_check CHECK ((refund_method = ANY (ARRAY['card'::text, 'credit'::text])));
+ALTER TABLE public.order_line_items ADD CONSTRAINT order_line_items_refund_method_check CHECK ((refund_method = ANY (ARRAY['card'::text, 'credit'::text, 'cash'::text])));
 ALTER TABLE public.orders ADD CONSTRAINT orders_order_source_check CHECK ((order_source = ANY (ARRAY['online'::text, 'staff_created'::text])));
 ALTER TABLE public.orders ADD CONSTRAINT orders_payment_method_check CHECK ((payment_method = ANY (ARRAY['card'::text, 'reader'::text, 'cash'::text, 'gift_card'::text, 'split'::text, 'store_credit'::text])));
 ALTER TABLE public.orders ADD CONSTRAINT orders_payment_status_check CHECK ((payment_status = ANY (ARRAY['pending'::text, 'paid'::text, 'failed'::text, 'refunded'::text, 'partially_refunded'::text])));
 ALTER TABLE public.orders ADD CONSTRAINT orders_pkey PRIMARY KEY (id);
+ALTER TABLE public.orders ADD CONSTRAINT orders_refund_owed_amount_check CHECK ((refund_owed_amount >= (0)::numeric));
 ALTER TABLE public.orders ADD CONSTRAINT orders_shipping_status_check CHECK ((shipping_status = ANY (ARRAY['pending'::text, 'shipped'::text, 'delivered'::text])));
 ALTER TABLE public.parity_log ADD CONSTRAINT parity_log_pkey PRIMARY KEY (id);
 ALTER TABLE public.pending_reader_payments ADD CONSTRAINT pending_reader_payments_flow_check CHECK ((flow = ANY (ARRAY['checkout'::text, 'move'::text, 'settle'::text, 'add_guest'::text])));
@@ -1680,6 +1682,7 @@ ALTER TABLE public.store_credit_transactions ADD CONSTRAINT store_credit_transac
 CREATE INDEX api_idempotency_created_at_idx ON public.api_idempotency USING btree (created_at);
 CREATE INDEX audit_log_actor_idx ON public.audit_log USING btree (actor_id, at);
 CREATE INDEX audit_log_entity_idx ON public.audit_log USING btree (entity_type, entity_id);
+CREATE INDEX audit_log_refund_claims_idx ON public.audit_log USING btree (action, at) WHERE (action = ANY (ARRAY['booking.refund_claimed'::text, 'order.refund_claimed'::text, 'event_booking.refund_claimed'::text]));
 CREATE UNIQUE INDEX customers_auth_user_id_key ON public.customers USING btree (auth_user_id) WHERE (auth_user_id IS NOT NULL);
 CREATE INDEX event_attendees_booking_idx ON public.event_attendees USING btree (event_booking_id);
 CREATE UNIQUE INDEX event_attendees_one_account_holder ON public.event_attendees USING btree (event_booking_id) WHERE (attendee_type = 'account_holder'::text);

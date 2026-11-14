@@ -39,6 +39,7 @@
   "exclude": [
     "node_modules",
     "server/rules/testing/legacy-order/backend",
-    "server/rules/testing/legacy-booking/backend"
+    "server/rules/testing/legacy-booking/backend",
+    "server/rules/testing/legacy-refund/backend"
   ]
 }
