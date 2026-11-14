@@ -23,6 +23,7 @@ import {
   CARD_PAYMENT_OPEN_MESSAGE,
   CHANGE_PAYMENT_UNCONFIRMED_MESSAGE,
   READER_PAYMENT_OPEN_MESSAGE,
+  REFUND_OPEN_MESSAGE,
   SETTLE_REASON_WORDS,
   settleReaderNotStartedMessage,
   settleReaderNotStartedNotUndoneMessage,
@@ -327,6 +328,33 @@ describe('refusals, in the old order, with nothing written', () => {
       await flow('reader')
       expect(refused(await post(bookingId, { payment: { method: 'cash', confirmedCashAmount: 20 }, ...figures(20, 20) }))).toMatchObject({ reason: 'reader_payment_open', message: READER_PAYMENT_OPEN_MESSAGE })
       expect(await booking(bookingId)).toMatchObject({ status: 'payment_needed' })
+    })
+  })
+
+  it("W26a (audit A1): a refund still being checked on the booking: Take Payment is refused with W21's words and nothing is taken; once it is settled the payment goes through", async () => {
+    await onALapsedSeat(async ({ bookingId }) => {
+      const cash = { payment: { method: 'cash', confirmedCashAmount: 20 }, ...figures(20, 20) }
+      // A Worker refund claim with no finished row: a card refund on this booking still being checked.
+      const claim = (
+        await db.query<{ id: string }>(
+          `INSERT INTO audit_log (at, actor_type, actor_id, action, entity_type, entity_id, request_id, details)
+           VALUES (now(), 'staff', NULL, 'booking.refund_claimed', 'booking', $1::text, 'r', '{"worker": true}'::jsonb) RETURNING id`,
+          [bookingId]
+        )
+      )[0]
+      expect(refused(await post(bookingId, cash))).toMatchObject({ reason: 'refund_open', message: REFUND_OPEN_MESSAGE })
+      expect(refused(await post(bookingId, onCard()))).toMatchObject({ reason: 'refund_open', message: REFUND_OPEN_MESSAGE })
+      expect(await booking(bookingId)).toMatchObject({ status: 'payment_needed' })
+      await untouched(bookingId)
+      // Once the claim is finished, the booking is free again.
+      await db.query(
+        `INSERT INTO audit_log (at, actor_type, actor_id, action, entity_type, entity_id, request_id, details)
+         VALUES (now(), 'staff', NULL, 'booking.refund_finished', 'booking', $1::text, 'r', $2::jsonb)`,
+        [bookingId, JSON.stringify({ claimId: claim?.id })]
+      )
+      const settled = await post(bookingId, cash)
+      expect(settled.status).toBe(200)
+      expect((await booking(bookingId))?.status).not.toBe('payment_needed')
     })
   })
 

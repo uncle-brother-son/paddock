@@ -30,6 +30,7 @@ import {
   CHANGE_PAYMENT_UNCONFIRMED_MESSAGE,
   MOVE_WORDS,
   READER_PAYMENT_OPEN_MESSAGE,
+  REFUND_OPEN_MESSAGE,
 } from './failure-messages'
 import { CARD_FLOW_SEND_LIMIT_MINUTES, chargeCardFlow, flowChargeKey, flowReaderIntentKey, settleCardFlow, type CardFlowSnapshot } from './flow'
 
@@ -434,6 +435,35 @@ describe('refusals, in the old order, with nothing written', () => {
         await db.query("INSERT INTO booking_guests (booking_id, guest_type, guest_name, unit_price, pay_by) VALUES ($1, 'additional_guest', 'Extra', 20, 'paid')", [bookingId])
       }
       expect((await post(bookingId, bea)).body.data).toEqual({ added: false, limitReached: true, guest: null })
+    })
+  })
+
+  it("W26a (audit A1): a refund still being checked on the booking: Add Guest and add-ons are refused with W21's words, on the first call and on the press, and nothing is added; once it is settled they go through", async () => {
+    await onABooking(publicBooking, async ({ bookingId }) => {
+      const guests = async () => (await db.query<{ n: number }>('SELECT count(*)::int AS n FROM booking_guests WHERE booking_id = $1', [bookingId]))[0]?.n
+      const before = await guests()
+      // A Worker refund claim with no finished row: a card refund on this booking still being checked.
+      const claim = (
+        await db.query<{ id: string }>(
+          `INSERT INTO audit_log (at, actor_type, actor_id, action, entity_type, entity_id, request_id, details)
+           VALUES (now(), 'staff', NULL, 'booking.refund_claimed', 'booking', $1::text, 'r', '{"worker": true}'::jsonb) RETURNING id`,
+          [bookingId]
+        )
+      )[0]
+      expect(refused(await post(bookingId, bea))).toMatchObject({ status: 409, reason: 'refund_open', message: REFUND_OPEN_MESSAGE })
+      expect(refused(await post(bookingId, { ...bea, payment: { method: 'cash', confirmedCashAmount: 20 } }))).toMatchObject({ status: 409, reason: 'refund_open', message: REFUND_OPEN_MESSAGE })
+      expect(refused(await post(bookingId, { addons: [{ addonId: ID.addon, quantity: 1 }] }))).toMatchObject({ reason: 'refund_open', message: REFUND_OPEN_MESSAGE })
+      expect(await guests()).toBe(before)
+      await untouched(bookingId)
+      // Once the claim is finished, the booking is free again.
+      await db.query(
+        `INSERT INTO audit_log (at, actor_type, actor_id, action, entity_type, entity_id, request_id, details)
+         VALUES (now(), 'staff', NULL, 'booking.refund_finished', 'booking', $1::text, 'r', $2::jsonb)`,
+        [bookingId, JSON.stringify({ claimId: claim?.id })]
+      )
+      const quoted = await post(bookingId, bea)
+      expect(quoted.status).toBe(200)
+      expect(quoted.body.error).toBeUndefined()
     })
   })
 

@@ -423,9 +423,11 @@ thin calls; Cancel & Refund keeps its old body until W23.
   card part: the store credit (or the cash) and the finished row in the same transaction.
 - **The card parts:** after R1 commits, each sent once under `<claimId>:refund:<orderId>` with `metadata.claim_id`.
   The first refused (nothing went): R1 undone (`put_back`, or owed again for Refund the rest) and the old words. A
-  later one refused: it and the rest to store credit (the old warning). A later one with no time left to send (W21a,
-  review L6): it and the rest owed on the booking, for Refund the rest to send to the card (Stripe never refused
-  them). No clear answer: held (`held` in the answer,
+  later one refused (W26a; Wayne, 14 Nov): it and the rest owed on the booking, live or cancelled, never store credit,
+  with Stripe's reason in the warning and on the finished row (`refused`); a person checks Stripe, then uses It
+  already arrived or Refund the rest. A later one with no time left to send (W21a, review L6): it and the rest owed
+  on the booking, live or cancelled (W26b), for Refund the rest to send to the card (Stripe never refused them; store
+  credit only on a cancelled booking). No clear answer: held (`held` in the answer,
   Q35's words); no press sends it again. Then **R2**, one transaction: each part on its lines' `card_refunded_amount`,
   the store credit, the orders' status, `booking.part_refund` / `booking.refund_owed` (the old rows' fields) and
   `booking.refund_finished`. R2 failing after money went: held too, with words saying what went.
@@ -486,8 +488,9 @@ are thin calls.
 refunds only when ticked paid add-ons are refunded). The quotes take the ticked add-on lines and are reads: never
 refused for an open payment or refund, they say what a press would be refused with now (`blocked`, the old words). The
 presses take `confirmed: { refund, addonsRefund }` (Q18, half a penny each; missing counts as £0), are idempotent, and
-are gated by `booking_changes` only when money goes back. The staff app's `refundBooking` (no amount) and
-`cancelCreditBooking` are thin calls.
+are gated by `booking_changes` only when money goes back (W26a, audit S3: Cancel & return credit counts the club's
+refund of paid guests, `confirmed.refund`, with the add-ons', so the emergency stop stops it too). The staff app's
+`refundBooking` (no amount) and `cancelCreditBooking` are thin calls.
 
 - **One card part per order per claim (item 1).** `planRefund` takes a cancel's ticked paid add-on lines after the
   booking lines: each against the order that paid for it, sharing that order's card portion (used once), each capped at
@@ -515,8 +518,9 @@ are gated by `booking_changes` only when money goes back. The staff app's `refun
   row a millisecond after the one before (one transaction, one `now()`); stamps the add-on lines; stamps Cancel &
   Refund's booking lines (the old last statement); works out the orders' status after both. The first card part
   refused: R1 undone exactly (`undoCancel`) with the old words (Cancel & return credit: new words, the cancel put back:
-  N4). A later part refused: to store credit. Unclear: held, the booking stays cancelled; reconcile records what went,
-  and gives what Stripe never got as store credit (a cancelled booking has no Refund the rest).
+  N4). A later part refused (W26a): owed on the cancelled booking, never store credit. Unclear: held, the booking
+  stays cancelled; reconcile records what went, and what Stripe never got ("not found") ends owed on the cancelled
+  booking too (W26b; Wayne, 14 Nov), never store credit.
 - **A held claim closed by hand on a cancelled booking (any kind):** its money stays owed on the booking, never store
   credit: reconcile left it because Stripe shows something it can't settle, so the card money may have gone. The close's
   words say to check Stripe and give what didn't arrive as store credit on the customer's page.
@@ -524,7 +528,9 @@ are gated by `booking_changes` only when money goes back. The staff app's `refun
   the press of both cancels. The 24-hour rule doesn't apply: Cancel & Refund gives the whole booking back (card or store
   credit), Cancel & return credit gives the credit, a pass session and add-on credits back and refunds ticked paid
   add-ons, at any time before the session starts; once it has started the club's cancel is refused
-  (`session_already_started`). Money back still needs Issue refunds. The claim's `cancel` record and the cancel's own
+  (`session_already_started`). Money back still needs Issue refunds, and (W26a; Wayne, 14 Nov; audit S6) so does any
+  club cancel inside 24 hours of the session, since the flag comes from the screen (`no_refund_permission`; a
+  payment-needed booking, which the rule never covered, is as before; outside 24 hours nothing changes). The claim's `cancel` record and the cancel's own
   audit row carry `clubCancelled: true` (only then). A cancel from the booking page keeps the 24-hour rule.
 
 ## Move (step D, W24)
@@ -559,7 +565,7 @@ by `booking_changes`. The staff app's `moveBooking` is a thin call.
 - **Cheaper:** the refund planned and claimed (`move`: what R1 changed, for the undo). To store credit, R2 runs inside
   R1 (note "Refund of the price difference after a booking move."). To the card, each part once under
   `<claimId>:refund:<orderId>`, then R2. The first part refused: the move put back exactly (`undoMoveClaim`: the booking,
-  its seats, both sessions' places, the pass session); a later part refused: to store credit; unclear: held (the booking
+  its seats, both sessions' places, the pass session); a later part refused (W26a): owed on the booking; unclear: held (the booking
   stays moved), reconcile records what went, and what Stripe never got ends as owed (Refund the rest).
 - **Its own row:** `booking.move` (old and new session, the signed amount, the parts, method, refund method and where it
   went, the flow record, the credit or pass released): C1's for every move but a cheaper one, whose row R2 writes once
@@ -596,6 +602,22 @@ for byte, into `testing/legacy-order/routes/`, where the frozen copies still cal
   (`refund_refused_not_put_back`); its words carry Stripe's reason and point to It already arrived / Refund the rest.
   The finished row says `by.how: 'undo_blocked'` with the reason. Reconcile never sees the claim (only if that finish
   itself fails does the claim stay open for it).
+- **Every Stripe refusal is held for a person, never store credit unseen (W26a; Wayne, 14 Nov; audit S2, table 34 and
+  35):** a refused card part is marked on the claim first (`booking.refund_refused`: the claim, the part, Stripe's
+  reason; its own transaction, tried twice). An undo that fails for any other reason (a database fault) ends as a
+  blocked one does (`by.how: 'undo_failed'`, its own words). A later part refused ends owed (above). Reconcile reads
+  the mark, and also takes a failed or cancelled refund naming the claim in Stripe as a refusal (`findCardPart`:
+  `refused`, where the press got no clear answer): a claim the press couldn't finish ends with what never went owed
+  on the booking, live or cancelled (`refused` on the finished row).
+- **Money owed on a cancelled booking is always left for staff (W26b; Wayne, 14 Nov; W26a's unsure 1):** R2
+  (`finishClaimInTransaction`) never gives card money that didn't go as store credit, whatever the booking's status and
+  however the claim ends: the press (a later part with no time left to send), reconcile's "not found", a refusal, a
+  close by hand. It is owed on the booking (`refund_owed_amount`; a cancelled booking's `price_paid` stays), for
+  Refund the rest (store credit only on a cancelled booking) or It already arrived. Only the plan's own store credit
+  (what the cards can't take) is given. This closes what W26a left: Stripe refusing with an error (no refund object)
+  while the database can write nothing at all, the mark included, which reconcile reads as "not found" and used to
+  give as store credit on a cancelled booking. The not-sent warning on a cancel says Refund the rest goes to store
+  credit there (`laterCardRefundNotSentMessage(amount, cancelled)`).
 - **The club's Cancel & return credit with paid guests** (W23a): from Block Session / Block Day it refunds the guests'
   money (the booking's price paid) through the same claim, to the method chosen, with `confirmed.refund`; Issue refunds.
   From the booking page it is still "Remove paid guests first".
@@ -609,6 +631,21 @@ for byte, into `testing/legacy-order/routes/`, where the frozen copies still cal
   (`payment_and_refund`); a held move's undo that meets the customer's other booking says so plainly (`undo_blocked`,
   `FlowUndoBlocked`); Q18 confirms a cheaper move's amount, not its card / store credit split (the rule is card first,
   the rest to store credit, and the answer says what went where: left as it is, for the spec).
+
+## The step D audit fixes (W26a)
+
+- **Stripe refusals** (S2, table 34 and 35): see "Every Stripe refusal is held for a person" above.
+- **The switch on Cancel & return credit** (S3) and **the club's cancel inside 24 hours needs Issue refunds** (S6):
+  in the Cancel section above.
+- **Add Guest and Settle refuse a booking with an open Worker refund claim** (A1): `refund_open` with W21's words, in
+  Add Guest's checks (the first call and the press, under the booking's lock in C1) and Settle's C1, as Move and the
+  removals: an undo after a refused refund puts places and prices back as R1 found them.
+- **The paid line** (S5, Q37): the figures route also sends `paidWords` ("Paid £15.00 by card and £5.00 by gift card /
+  store credit."), `paidLineWords` over the figures' parts: the money on the booking now, so money already refunded
+  or still owed isn't in it. The booking detail shows it.
+- **Screens** (S1, S4): a customer's Booking History row opens the booking by id; the calendar's cards list cancelled
+  bookings under the Cancelled filter; Part refund, Refund the rest / It already arrived, Add Guest and Take Payment
+  reload the booking on close after no answer or a throw (source tests in `server/staff-app-helpers.test.ts`).
 
 ## Refund claims with no finish
 

@@ -174,7 +174,7 @@ describe("the press's R2 racing reconcile's on one held claim", () => {
     const held = (await partRefund(first, bookingId, { amount: 25, refundMethod: 'card', reason: 'Goodwill' }, options(stripe))) as { held?: { claimId: string } }
     const claim = await readClaim(first, held.held?.claimId ?? '')
     if (!claim) throw new Error('No claim.')
-    const went = { went: claim.details.plan.card, extraToStoreCredit: 0, owed: 0 }
+    const went = { went: claim.details.plan.card, owed: 0 }
     const gate = await holdingTheBooking(bookingId)
     const a = outcome(finishClaim(first, claim, went, { actor: { type: 'staff', id: staffId }, requestId: 'press', how: 'press' }))
     const b = outcome(finishClaim(second, claim, went, { actor: { type: 'system', id: null }, requestId: 'reconcile', how: 'reconcile' }))

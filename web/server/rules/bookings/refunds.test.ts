@@ -9,7 +9,7 @@ import { reconcile } from '@/server/rules/orders/reconcile'
 import { CLAIM_WAITING_WORDS, stuckList } from '@/server/rules/orders/stuck-list'
 import { readFlow } from '@/server/rules/orders/reader-flow'
 import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/replay/harness'
-import { bea, ID, paidSeat, sam, seed, whileFailing, refundCreditFails } from '@/server/rules/testing/replay/scenarios'
+import { bea, ID, paidSeat, sam, seed, whileFailing } from '@/server/rules/testing/replay/scenarios'
 import { STRIPE_DEADLINE_MS } from '@/server/stripe/deadline'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { BOOKING_KINDS_ON } from '@/server/rules/testing/replay/booking-side'
@@ -18,6 +18,8 @@ import {
   BOOKING_PATH_OFF_MESSAGE,
   CHANGE_REFUND_UNCONFIRMED_MESSAGE,
   laterCardRefundNotSentMessage,
+  laterCardRefundRefusedMessage,
+  putBackFailedMessage,
   NO_CASH_LEFT_MESSAGE,
   onlyCardLeftMessage,
   onlyCashLeftMessage,
@@ -240,20 +242,67 @@ describe('Part refund (W21)', () => {
     )
   })
 
-  it('a later card part refused: it and the rest go to store credit (today\'s rule), with the old warning', async () => {
+  it("W26a (Wayne, 14 Nov): a later card part refused is never store credit: what went is recorded, the refused £30 is still to refund on the booking with Stripe's reason, reconcile does nothing, and a person gives it with Refund the rest", async () => {
     await onABooking(
       async ({ bookingId, stripe }) => {
         stripe.failNext('refunds.create', { kind: 'none' })
         stripe.failNext('refunds.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
         const answer = await refund('part', bookingId, { amount: 50, refundMethod: 'card', reason: 'Goodwill' })
+        const reason = 'Failed to refund payment: Your card was declined.'
         expect(answer.body.data).toMatchObject({
           cardRefundedAmount: 20,
-          storeCreditRefundedAmount: 30,
-          pricePaid: 10,
-          warning: 'A further card refund of £30.00 failed (Failed to refund payment: Your card was declined.), so the rest went to store credit.',
+          storeCreditRefundedAmount: 0,
+          pricePaid: 40,
+          warning: laterCardRefundRefusedMessage(30, reason, 30, false),
         })
-        expect((await storeCredit())[0]?.note).toMatch(/^Booking partial refund: Goodwill \(the rest went back to the card\)\. \[ref /)
+        expect(answer.body.data?.['warning']).toBe(
+          'A further card refund of £30.00 was refused (Failed to refund payment: Your card was declined.), so £30.00 shows on the booking as still to refund. Check Stripe first: if the money already reached the customer, use It already arrived; if not, use Refund the rest.'
+        )
+        expect(await storeCredit()).toEqual([])
+        expect(await booking(bookingId)).toMatchObject({ price_paid: '40.00', part_refunded_amount: '50.00', refund_owed_amount: '30.00' })
         expect((await bookingLines(bookingId)).map((line) => line.card_refunded_amount)).toEqual(['0', '20'])
+        const finished = await auditRows('booking.refund_finished')
+        expect(finished).toHaveLength(1)
+        expect(finished[0]?.details).toMatchObject({ outcome: 'owed', cardRefunded: 20, storeCreditRefunded: 0, owed: 30, refused: reason })
+        expect((await auditRows('booking.refund_refused')).map((row) => row.details)).toMatchObject([{ amount: 30, detail: reason }])
+        // Reconcile does nothing for it.
+        const sent = refundCalls(stripe).length
+        pastTheWindow()
+        expect((await runReconcile()).items.filter((item) => item.kind === 'claim')).toEqual([])
+        expect(refundCalls(stripe)).toHaveLength(sent)
+        expect(await storeCredit()).toEqual([])
+        // A person decides: Refund the rest, here to store credit.
+        expect((await refund('owed', bookingId, { amount: 30, refundMethod: 'credit' })).body.data).toMatchObject({ cardRefundedAmount: 0, storeCreditRefundedAmount: 30, pricePaid: 10 })
+        expect((await storeCredit()).map((row) => row.amount)).toEqual(['30.00'])
+        expect(await booking(bookingId)).toMatchObject({ price_paid: '10.00', refund_owed_amount: '0.00' })
+      },
+      { guests: 1 }
+    )
+  })
+
+  it("W26a (audit S2): the first card part refused and the undo fails (a database fault): the £30 ends there and then as still to refund on the booking, with Stripe's reason; reconcile does nothing", async () => {
+    await onABooking(
+      async ({ bookingId, stripe }) => {
+        stripe.failNext('refunds.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
+        const undoFails = { table: 'audit_log', event: 'INSERT', when: "NEW.action = 'booking.refund_finished' AND NEW.details->>'outcome' = 'put_back'" } as const
+        const answer = await whileFailing(db, undoFails, () => refund('part', bookingId, { amount: 30, refundMethod: 'card', reason: 'Goodwill' }))
+        const reason = 'Failed to refund payment: Your card was declined.'
+        expect(answer.status).toBe(200)
+        expect(answer.body.data).toMatchObject({ cardRefundedAmount: 0, storeCreditRefundedAmount: 0, held: { reason: 'refund_refused_not_put_back', message: putBackFailedMessage(reason, 30, false) } })
+        expect(answer.body.data?.held?.message).toBe(
+          "The card refund was refused (Failed to refund payment: Your card was declined.), so nothing went back, and the booking couldn't be put back as it was. The change stands, and £30.00 shows on the booking as still to refund. Check Stripe first: if the money already reached the customer, use It already arrived; if not, use Refund the rest."
+        )
+        expect(await booking(bookingId)).toMatchObject({ price_paid: '60.00', refund_owed_amount: '30.00' })
+        expect(await storeCredit()).toEqual([])
+        const finished = await auditRows('booking.refund_finished')
+        expect(finished).toHaveLength(1)
+        expect(finished[0]?.details).toMatchObject({ outcome: 'owed', cardRefunded: 0, owed: 30, by: { how: 'undo_failed', why: reason } })
+        const sent = refundCalls(stripe).length
+        pastTheWindow()
+        expect((await runReconcile()).items.filter((item) => item.kind === 'claim')).toEqual([])
+        expect(refundCalls(stripe)).toHaveLength(sent)
+        expect(await storeCredit()).toEqual([])
+        expect(await booking(bookingId)).toMatchObject({ price_paid: '60.00', refund_owed_amount: '30.00' })
       },
       { guests: 1 }
     )
@@ -271,7 +320,7 @@ describe('Part refund (W21)', () => {
         })
         const answer = await refund('part', bookingId, { amount: 50, refundMethod: 'card', reason: 'Goodwill' })
         slow.mockRestore()
-        expect(answer.body.data).toMatchObject({ cardRefundedAmount: 20, storeCreditRefundedAmount: 0, pricePaid: 40, warning: laterCardRefundNotSentMessage(30) })
+        expect(answer.body.data).toMatchObject({ cardRefundedAmount: 20, storeCreditRefundedAmount: 0, pricePaid: 40, warning: laterCardRefundNotSentMessage(30, false) })
         expect(refundCalls(stripe).map((call) => (call.params as { amount: number }).amount)).toEqual([2000])
         expect(await storeCredit()).toEqual([])
         // Still a part refund of £50 (Q27), £30 of it owed.
@@ -348,10 +397,12 @@ describe('Part refund (W21)', () => {
   it('the card went and R2 couldn\'t record it: held (never refunded again), and reconcile records it', async () => {
     await onABooking(
       async ({ bookingId, stripe }) => {
-        // Bea's £20 goes; the first order's £30 is refused, so R2 sends it to store credit, and that write fails.
+        // Bea's £20 goes; the first order's £30 is refused, and R2's finished row can't be written (W26a: R2 no longer
+        // writes store credit for a refused part, so that write can't be the one that fails).
         stripe.failNext('refunds.create', { kind: 'none' })
         stripe.failNext('refunds.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
-        const answer = await whileFailing(db, refundCreditFails, () => refund('part', bookingId, { amount: 50, refundMethod: 'card', reason: 'Goodwill' }))
+        const finishFails = { table: 'audit_log', event: 'INSERT', when: "NEW.action = 'booking.refund_finished'" } as const
+        const answer = await whileFailing(db, finishFails, () => refund('part', bookingId, { amount: 50, refundMethod: 'card', reason: 'Goodwill' }))
         expect(answer.body.data).toMatchObject({ cardRefundedAmount: 20, held: { reason: 'refund_not_recorded', message: refundGoneNotRecordedMessage(20) } })
         // Held: nothing on the lines yet, and no other refund.
         expect((await bookingLines(bookingId)).map((line) => line.card_refunded_amount)).toEqual(['0', '0'])
@@ -359,8 +410,8 @@ describe('Part refund (W21)', () => {
         const sent = refundCalls(stripe).length
         await runReconcile()
         expect(refundCalls(stripe)).toHaveLength(sent)
-        // Reconcile records the £20 that went; the £30 Stripe never took ends as owed (D-plan 4.10), not resent.
-        expect((await auditRows('booking.refund_finished'))[0]?.details).toMatchObject({ outcome: 'owed', cardRefunded: 20, storeCreditRefunded: 0, owed: 30 })
+        // Reconcile records the £20 that went; the £30 Stripe refused ends as owed (D-plan 4.10; W26a: from the mark), not resent.
+        expect((await auditRows('booking.refund_finished'))[0]?.details).toMatchObject({ outcome: 'owed', cardRefunded: 20, storeCreditRefunded: 0, owed: 30, refused: 'Failed to refund payment: Your card was declined.' })
         expect((await bookingLines(bookingId)).map((line) => line.card_refunded_amount)).toEqual(['0', '20'])
         expect(await booking(bookingId)).toMatchObject({ price_paid: '40.00', part_refunded_amount: '50.00', refund_owed_amount: '30.00' })
       },
@@ -412,7 +463,7 @@ describe('Part refund (W21)', () => {
     await onABooking(
       async ({ bookingId, stripe }) => {
         const shown = await figures(bookingId)
-        expect(shown.body.data).toMatchObject({ left: 40, cashLeft: 40, paidLine: 'Left to refund: £40.00 cash.' })
+        expect(shown.body.data).toMatchObject({ left: 40, cashLeft: 40, paidLine: 'Left to refund: £40.00 cash.', paidWords: 'Paid £40.00 in cash.' })
         const over = await refund('part', bookingId, { amount: 40.01, refundMethod: 'cash', reason: 'Handed back' })
         expect(over.body.error?.details?.reason).toBe('more_than_left')
         const given = await refund('part', bookingId, { amount: 15, refundMethod: 'cash', reason: 'Handed back' })
@@ -524,7 +575,7 @@ describe('the figures route (W21)', () => {
       async ({ bookingId }) => {
         const answer = await figures(bookingId)
         const old = await loadBookingMoneyLeft(db, bookingId)
-        expect(answer.body.data).toEqual({ ...old, cashLeft: 0, paidLine: 'Left to refund: £60.00 card money.' })
+        expect(answer.body.data).toEqual({ ...old, cashLeft: 0, paidLine: 'Left to refund: £60.00 card money.', paidWords: 'Paid £60.00 by card.' })
         expect((await figures(crypto.randomUUID())).body.error).toMatchObject({ code: 'NOT_FOUND', message: 'Booking not found.' })
       },
       { guests: 1 }
@@ -536,8 +587,10 @@ describe('the figures route (W21)', () => {
       expect((await figures(bookingId)).body.data?.['paidLine']).toBe('Left to refund: £40.00 card money.')
       await refund('part', bookingId, { amount: 15, refundMethod: 'card', reason: 'Goodwill' })
       expect((await figures(bookingId)).body.data?.['paidLine']).toBe('Left to refund: £25.00 card money.')
+      // W26a (audit S5): the paid line follows the booking: what is on it now, after the £15 went back.
+      expect((await figures(bookingId)).body.data?.['paidWords']).toBe('Paid £25.00 by card.')
       await refund('part', bookingId, { amount: 25, refundMethod: 'card', reason: 'Goodwill' })
-      expect((await figures(bookingId)).body.data?.['paidLine']).toBe('Nothing left to refund.')
+      expect((await figures(bookingId)).body.data).toMatchObject({ paidLine: 'Nothing left to refund.', paidWords: 'Nothing was paid.', left: 0 })
     })
   })
 
@@ -552,6 +605,8 @@ describe('the figures route (W21)', () => {
         const answer = await figures(bookingId)
         expect(answer.body.data).toMatchObject({ left: 60, cardLeft: 40, cashLeft: 0, parts: { card: 40, storeCredit: 20 } })
         expect(answer.body.data?.['paidLine']).toBe('Left to refund: £40.00 card money and £20.00 gift card / store credit.')
+        // W26a (audit S5; Q37): the booking detail's payment line, from the same parts.
+        expect(answer.body.data?.['paidWords']).toBe('Paid £40.00 by card and £20.00 by gift card / store credit.')
         const over = await refund('part', bookingId, { amount: 40.01, refundMethod: 'card', reason: 'x' })
         expect(over.body.error?.details).toMatchObject({ reason: 'more_than_card_left', message: onlyCardLeftMessage(40) })
         // £40 to the card goes only to the first order's card; nothing is sent against the store credit order.
@@ -675,16 +730,28 @@ describe('held claims and flows closed by hand (W21, W19 review later 1)', () =>
 })
 
 describe('the stuck list and R1 against a held claim', () => {
-  it('a cash booking cancelled while its claim is held: what Stripe never got goes to store credit (no button left for owed)', async () => {
+  it('W26b (Wayne, 14 Nov): a booking cancelled while its Part refund is held: what Stripe never got ends owed on the cancelled booking, never store credit; Refund the rest then gives it once', async () => {
     await onABooking(
       async ({ bookingId, stripe }) => {
         stripe.failNext('refunds.create', { kind: 'unreachable' })
         stripe.failNext('refunds.create', { kind: 'unreachable' })
         await refund('part', bookingId, { amount: 20, refundMethod: 'card', reason: 'Goodwill' })
+        const before = await booking(bookingId)
         await db.query("UPDATE bookings SET status = 'cancelled' WHERE id = $1", [bookingId])
         pastTheWindow()
         await runReconcile()
+        // Owed alone rises on a cancelled booking (its price_paid stays as R1 left it); no store credit row.
+        expect(await booking(bookingId)).toMatchObject({ status: 'cancelled', price_paid: before.price_paid, refund_owed_amount: '20.00' })
+        expect(await storeCredit()).toEqual([])
+        const finished = await auditRows('booking.refund_finished')
+        expect(finished).toHaveLength(1)
+        expect(finished[0]?.details).toMatchObject({ outcome: 'owed', cardRefunded: 0, storeCreditRefunded: 0, owed: 20, by: { how: 'reconcile' } })
+        expect(finished[0]?.details).not.toHaveProperty('refused')
+        // A person decides: Refund the rest (store credit only on a cancelled booking) gives it, once.
+        expect((await refund('owed', bookingId, { amount: 20, refundMethod: 'credit' })).body.data).toMatchObject({ cardRefundedAmount: 0, storeCreditRefundedAmount: 20 })
+        expect((await storeCredit()).map((row) => row.amount)).toEqual(['20.00'])
         expect(await booking(bookingId)).toMatchObject({ refund_owed_amount: '0.00' })
+        expect((await refund('owed', bookingId, { amount: 20, refundMethod: 'credit' })).body.error?.details).toMatchObject({ reason: 'nothing_owed' })
         expect((await storeCredit()).map((row) => row.amount)).toEqual(['20.00'])
       },
       { guests: 1 }

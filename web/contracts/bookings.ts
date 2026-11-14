@@ -192,6 +192,12 @@ export const bookingRefundFiguresSchema = z.object({
    * refund."), shown in the Part refund dialog. Route only.
    */
   paidLine: z.string().optional(),
+  /**
+   * W26a (audit S5; Q37): how the money on the booking was paid, in words, for the booking detail ("Paid £15.00 by card
+   * and £5.00 by gift card / store credit."): the parts above, so money already refunded or still owed isn't in it.
+   * Route only.
+   */
+  paidWords: z.string().optional(),
 })
 export type BookingRefundFigures = z.infer<typeof bookingRefundFiguresSchema>
 
@@ -415,8 +421,8 @@ export type BookingRefusalDetails = z.infer<typeof bookingRefusalDetailsSchema>
 
 /** W21: GET /api/v1/staff/bookings/:bookingId/refund-figures (getBookingRefundFigures). */
 export const bookingRefundFiguresRouteInputSchema = z.object(bookingInPath)
-/** The figures route always sends `cashLeft` and `paidLine`. */
-export const bookingRefundFiguresRouteOutputSchema = bookingRefundFiguresSchema.extend({ cashLeft: z.number(), paidLine: z.string() })
+/** The figures route always sends `cashLeft`, `paidLine` and (W26a) `paidWords`. */
+export const bookingRefundFiguresRouteOutputSchema = bookingRefundFiguresSchema.extend({ cashLeft: z.number(), paidLine: z.string(), paidWords: z.string() })
 export type BookingRefundFiguresRouteOutput = z.infer<typeof bookingRefundFiguresRouteOutputSchema>
 
 export const partRefundRouteInputSchema = partRefundInputSchema.extend(bookingInPath)
@@ -426,7 +432,8 @@ export const owedArrivedRouteInputSchema = owedArrivedInputSchema.extend(booking
 /**
  * W21: what Part refund, Refund the rest and It already arrived answer once the claim (R1) has committed, in the old
  * function's fields: what went to the card, to store credit and (Q26) in cash, the store credit balance after, the
- * booking's price paid after, and a warning when a later card part was refused and went to store credit. `held`: a
+ * booking's price paid after, and a warning when a later card part was refused (W26a: it stays on the booking as
+ * still to refund, never store credit; the warning carries Stripe's reason). `held`: a
  * card refund got no clear answer (or went and couldn't be recorded yet), so the claim is held for reconcile (Q35):
  * nothing more is sent by any press, and the words say not to refund it again. A refusal before anything moved is an
  * ApiError whose details carry the old reason and words (with the new `figures` when the amount no longer fits).
@@ -530,8 +537,8 @@ export type CancelAddonsOutcome = z.infer<typeof cancelAddonsOutcomeSchema>
 
 /**
  * W23: Cancel & Refund's answer once R1 has committed, in the old fields: the booking's own money to the card and to
- * store credit (and the balance after), the ticked add-ons' outcome, a warning when a later card part was refused and
- * went to store credit. `held`: a card refund got no clear answer (or went and couldn't be recorded yet): the booking
+ * store credit (and the balance after), the ticked add-ons' outcome, a warning when a later card part was refused
+ * (W26a: still to refund on the cancelled booking, never store credit). `held`: a card refund got no clear answer (or went and couldn't be recorded yet): the booking
  * is cancelled and the refund is held for reconcile (Q35), never sent again by a press. A refusal before anything
  * changed is an ApiError whose details carry the old reason and words (and `cancelQuote` when the figures moved).
  */
@@ -591,7 +598,7 @@ export type MoveQuote = z.infer<typeof moveQuoteSchema>
 /**
  * W24: moveBooking's answer, as the old function gave it: moved, with the booking's new price paid; on the reader,
  * moved and pending the payment the screen collects and then finalises or cancels (the flow routes); with a warning
- * when a cheaper move's later card refund was refused and went to store credit. `held`: a cheaper move's card refund
+ * when a cheaper move's later card refund was refused (W26a: still to refund on the booking, never store credit). `held`: a cheaper move's card refund
  * got no clear answer (or went and couldn't be recorded yet): the booking is moved and the refund is held for reconcile
  * (Q35), never sent again by a press. Without `confirmed`, the quote and nothing moved. A refusal, a decline and a held
  * payment are ApiErrors whose details carry the old reason and words (and the new `priceImpact` when the figures moved).

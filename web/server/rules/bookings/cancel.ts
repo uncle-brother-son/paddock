@@ -21,9 +21,10 @@
 //   transaction; with no money at all, there is no claim and R1 writes the cancel's own row.
 // With card parts, each is sent once under `<claimId>:refund:<orderId>`, then R2. The first part refused: R1 undone
 // exactly (the booking back to its status with its places, pass session, credits and add-on lines). A later part
-// refused: it and the rest to store credit. No clear answer: held (the booking stays cancelled); reconcile records what
-// went and gives what Stripe never received as store credit (a cancelled booking has no Refund the rest), never
-// sending it again. Gift card and store credit money goes back as store credit, as before; cash back is Part refund's.
+// refused: it and the rest owed on the cancelled booking (W26a). No clear answer: held (the booking stays cancelled);
+// reconcile records what went and leaves what Stripe never received owed on the cancelled booking (W26b; Refund the
+// rest to store credit, or It already arrived, run there since W25), never sending it again. Gift card and store
+// credit money goes back as store credit, as before; cash back is Part refund's.
 //
 // W23a (Wayne, 13 Nov): when the club cancels (Block Session, Block Day: `clubCancelled`), the 24-hour rule doesn't
 // apply. The whole booking comes back at any time before the session starts (Cancel & Refund: everything paid; Cancel &
@@ -324,6 +325,12 @@ async function cancelR1(tx: Tx, input: R1Input, options: CancelOptions, livemode
   const guestsRefunded = clubRefundsPaidGuests(kind, booking, input.clubCancelled)
   if (guestsRefunded && !options.canIssueRefunds) throw refuse('FORBIDDEN', 'no_refund_permission', ISSUE_REFUNDS_NEEDED_MESSAGE)
   const at = await startCheckOf(tx, bookingId, input.clubCancelled)
+  // W26a (audit S6; Wayne, 14 Nov): inside 24 hours the club's cancel gives back what the rule would keep (the credit,
+  // the pass session, the add-ons), and the flag comes from the screen, so it needs Issue refunds. Outside 24 hours
+  // nothing changes, and a payment-needed booking (which the rule never covered) is as before.
+  if (input.clubCancelled && at.inside && booking.status !== 'payment_needed' && !options.canIssueRefunds) {
+    throw refuse('FORBIDDEN', 'no_refund_permission', ISSUE_REFUNDS_NEEDED_MESSAGE)
+  }
   // Inside 24 hours nothing comes back (only reachable on a payment-needed booking), unless the club is cancelling.
   const inside = at.ruleApplies
   const refused = await refusalFor(kind, tx, booking, at)
@@ -493,7 +500,7 @@ async function cancelR1(tx: Tx, input: R1Input, options: CancelOptions, livemode
   )
   result.sent = true
   if (plan.card.length > 0) return { kind: 'card', claim }
-  const output = await finishClaimInTransaction(tx, claim, { went: [], extraToStoreCredit: 0, owed: 0 }, by)
+  const output = await finishClaimInTransaction(tx, claim, { went: [], owed: 0 }, by)
   if (!output) throw new Error(`Refund claim ${claim.id} was finished in its own transaction.`)
   return { kind: 'done', output }
 }

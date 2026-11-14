@@ -1689,8 +1689,8 @@ describe('staff app helpers', () => {
         expect(press).toMatch(/const stale = reloadOnClose\.current\s+reloadOnClose\.current = false/)
         for (const dialog of ['CancelCreditBookingDialog.tsx', 'CancelPaymentNeededDialog.tsx']) expect(read(dialog)).toContain('if (press.reset()) onStale?.(bookingId)')
         const detail = readFileSync(path.join(appDir, 'frontend/components/BookingDetailContent.tsx'), 'utf8')
-        // W24: and the Move dialog's.
-        expect(detail.match(/onStale=\{reloadAfterNoAnswer\}/g)).toHaveLength(4)
+        // W24: and the Move dialog's. W26a (audit S4): and Take Payment, Refund the rest, Part refund and both Add Guest buttons.
+        expect(detail.match(/onStale=\{reloadAfterNoAnswer\}/g)).toHaveLength(9)
         expect(detail).toMatch(/function reloadAfterNoAnswer\(\) \{\s+trigger\(\{ bookingId \}, \{ skipCache: true \}\)/)
       })
 
@@ -2982,6 +2982,170 @@ describe('staff app helpers', () => {
       expect(body).toContain('setReaderSaveCard(false)')
       // Saving a card on the reader updates the same customer, and must keep the payment.
       expect(source).toContain('onCustomerUpdated={(updated) => setCustomer(updated)}')
+    })
+  })
+
+  describe('W26a: the step D audit fixes on the screens', () => {
+    const component = (file: string) => readFileSync(path.join(appDir, 'frontend/components', file), 'utf8')
+    const page = (file: string) => readFileSync(path.join(appDir, 'frontend/pages', file), 'utf8')
+    /** The dialog's use in a parent: from its opening tag to the tag's end. */
+    const uses = (source: string, tag: string) => source.split(`<${tag}`).slice(1).map((rest) => rest.slice(0, rest.indexOf('/>')))
+    const CLOSE = /if \(reloadOnClose\.current\) \{\s+reloadOnClose\.current = false\s+onStale\?\.\(bookingId\)\s+\}/
+    /** Each press's `catch (err)` body (to its `finally`): a press is where the key is made. */
+    const thrown = (source: string) =>
+      source
+        .split('pressKey.current ??= crypto.randomUUID()')
+        .slice(1)
+        .map((rest) => {
+          const at = rest.indexOf('} catch (err) {')
+          return rest.slice(at, rest.indexOf('} finally {', at))
+        })
+
+    describe('S4: the four dialogs reload the booking on close after no answer, a changed press after no answer, or a throw', () => {
+      it('Part refund', () => {
+        const source = component('PartRefundDialog.tsx')
+        // One branch covers no answer and a changed press after it; the other is the catch.
+        expect(source.match(/reloadOnClose\.current = true/g)).toHaveLength(2)
+        expect(source).toMatch(/if \(response\?\.noAnswer \|\| response\?\.pressedAfterNoAnswer\) \{\s+setErrorMessage\([^\n]+\)\s+reloadOnClose\.current = true\s+return/)
+        expect(thrown(source)).toHaveLength(1)
+        for (const body of thrown(source)) expect(body).toContain('reloadOnClose.current = true')
+        expect(source).toMatch(CLOSE)
+        const close = source.slice(source.indexOf('function resetAndClose()'), source.indexOf('const amountValue'))
+        expect(close).toMatch(CLOSE)
+        // The key is still kept after no answer or a throw (W20a), and closing is blocked mid-call.
+        expect(thrown(source)[0]).not.toContain('pressKey.current = null')
+        expect(source).toContain('onOpenChange={(next) => (submitting ? undefined : next ? setOpen(true) : resetAndClose())}')
+      })
+
+      it('Refund the rest and It already arrived', () => {
+        const source = component('RefundTheRestDialog.tsx')
+        // The shared no-answer branch (both presses go through it), and each press's catch.
+        expect(source.match(/reloadOnClose\.current = true/g)).toHaveLength(3)
+        const early = source.slice(source.indexOf('function stoppedEarly'), source.indexOf('async function handleArrived'))
+        expect(early).toMatch(/if \(response\?\.noAnswer \|\| response\?\.pressedAfterNoAnswer\) \{\s+setErrorMessage\([^\n]+\)\s+reloadOnClose\.current = true\s+return true/)
+        expect(thrown(source)).toHaveLength(2)
+        for (const body of thrown(source)) {
+          expect(body).toContain('reloadOnClose.current = true')
+          expect(body).not.toContain('pressKey.current = null')
+        }
+        for (const press of ['async function handleArrived', 'async function handleSubmit']) {
+          expect(source.slice(source.indexOf(press)).slice(0, 1200)).toContain('if (stoppedEarly(response)) return')
+        }
+        const close = source.slice(source.indexOf('function resetAndClose()'), source.indexOf('function stoppedEarly'))
+        expect(close).toMatch(CLOSE)
+      })
+
+      it('Add Guest (and add-ons)', () => {
+        const source = component('AddGuestDialog.tsx')
+        // Both presses (the first call and Confirm): the no-answer branch and the catch of each.
+        expect(source.match(/reloadOnClose\.current = true/g)).toHaveLength(4)
+        expect(
+          source.match(/if \(result\?\.reason !== 'no_answer' && result\?\.reason !== 'pressed_after_no_answer'\) pressKey\.current = null\s+else reloadOnClose\.current = true/g)
+        ).toHaveLength(2)
+        expect(thrown(source)).toHaveLength(2)
+        for (const body of thrown(source)) {
+          expect(body).toContain('reloadOnClose.current = true')
+          expect(body).not.toContain('pressKey.current = null')
+        }
+        const close = source.slice(source.indexOf('function resetAndClose()'), source.indexOf('function handleContinueToPayment'))
+        expect(close).toMatch(CLOSE)
+      })
+
+      it('Take Payment', () => {
+        const source = component('SettleLapsedPaymentDialog.tsx')
+        expect(source.match(/reloadOnClose\.current = true/g)).toHaveLength(2)
+        expect(source).toMatch(/if \(result\?\.reason !== 'no_answer'\) pressKey\.current = null\s+else reloadOnClose\.current = true/)
+        expect(thrown(source)).toHaveLength(1)
+        for (const body of thrown(source)) expect(body).toContain('reloadOnClose.current = true')
+        const close = source.slice(source.indexOf('function resetAndClose()'), source.indexOf('async function handleCancelReaderWait'))
+        expect(close).toMatch(CLOSE)
+      })
+
+      it('every parent passes the reload: the booking detail for all four, the Block dialogs for Part refund', () => {
+        const detail = component('BookingDetailContent.tsx')
+        expect(detail).toMatch(/function reloadAfterNoAnswer\(\) \{\s+trigger\(\{ bookingId \}, \{ skipCache: true \}\)\s+onBookingsChanged\?\.\(\)/)
+        for (const [tag, count] of [['PartRefundDialog', 1], ['RefundTheRestDialog', 1], ['AddGuestDialog', 2], ['SettleLapsedPaymentDialog', 1]] as const) {
+          const found = uses(detail, tag)
+          expect(found, tag).toHaveLength(count)
+          for (const use of found) expect(use, tag).toContain('onStale={reloadAfterNoAnswer}')
+        }
+        for (const block of ['BlockSessionDialog.tsx', 'BlockDayDialog.tsx']) {
+          const found = uses(component(block), 'PartRefundDialog')
+          expect(found).toHaveLength(1)
+          expect(found[0]).toContain('onStale={(id) => void handleBookingStale(id)}')
+        }
+      })
+    })
+
+    describe('S1: a cancelled booking can be opened again', () => {
+      it("a customer's Booking History row opens the booking window by id, as the Overview does", () => {
+        const customers = page('CustomersPage.tsx')
+        const history = customers.slice(customers.indexOf('detail.bookingHistory.map((b) => ('))
+        // Every row, whatever its status (no condition on it), opens its booking.
+        expect(history.slice(0, history.indexOf('</TableRow>'))).toMatch(/<TableRow key=\{b\.id\} className="cursor-pointer hover:bg-accent\/50" onClick=\{\(\) => setOpenBookingId\(b\.id\)\}>/)
+        expect(customers).toMatch(/<BookingByIdDialog\s+bookingId=\{openBookingId\}\s+onClose=\{\(\) => setOpenBookingId\(null\)\}\s+onChanged=\{\(\) => trigger\(\{ customerId \}, \{ skipCache: true \}\)\}/)
+        const dialog = component('BookingByIdDialog.tsx')
+        // The row is read fresh by id (never filtered by status), and again after any action inside the window.
+        expect(dialog).toContain('loadBookingById({ bookingId }, { skipCache: true })')
+        expect(dialog).toContain('}, [bookingId, refreshToken])')
+        expect(dialog).toMatch(/<BookingDetailDialog\s+booking=\{booking\}\s+open=\{bookingId !== null\}/)
+        expect(dialog).not.toMatch(/status\s*[!=]==/)
+        // The window shows the owed bar on a cancelled booking, with Refund the rest to store credit only (W25).
+        const detail = component('BookingDetailContent.tsx')
+        const bar = detail.slice(detail.indexOf('{refundOwed > 0 ? ('), detail.indexOf('{isRefundEligible || isMovable || isCreditBooking ? ('))
+        expect(bar).toContain('still to refund')
+        expect(bar).toContain("storeCreditOnly={booking.status === 'cancelled'}")
+        expect(bar).not.toContain("status !== 'cancelled'")
+      })
+
+      it('the calendar lists cancelled bookings on the session cards only when the status filter is Cancelled', async () => {
+        const { buildDaySlotCards, buildCardsByDate } = await import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/dayViewSlots.ts'))
+        const session = (id: string, bookingType: string, start: string, end: string) => ({ id, booking_type: bookingType, status: 'open', start_time: `2026-11-20T${start}:00`, end_time: `2026-11-20T${end}:00` })
+        const booking = (id: string, sessionId: string, status: string) => ({ id, session_id: sessionId, status, start_time: '2026-11-20T10:00:00' })
+        const sessions = [session('pub', 'public', '10:00', '11:00'), session('priv', 'private', '10:00', '12:00')]
+        const cancelledOnly = [booking('b1', 'pub', 'cancelled'), booking('b2', 'priv', 'cancelled')]
+        // As before: cancelled bookings are never on a card.
+        expect(buildDaySlotCards(sessions, cancelledOnly, false).map((card: { bookings: unknown[]; visualState: string }) => [card.bookings.length, card.visualState])).toEqual([[0, 'empty']])
+        // With the Cancelled filter: listed, so one can be opened; a cancelled private booking doesn't hide the public slot.
+        const listed = buildDaySlotCards(sessions, cancelledOnly, false, true)
+        expect(listed.map((card: { session: { id: string }; bookings: Array<{ id: string }>; visualState: string }) => [card.session.id, card.bookings.map((b) => b.id), card.visualState])).toEqual([['pub', ['b1'], 'public_booked']])
+        expect(buildDaySlotCards(sessions, cancelledOnly, true, true)[0]).toMatchObject({ session: { id: 'priv' }, bookings: [{ id: 'b2' }], visualState: 'private_booked' })
+        // An active private booking still claims the public slot it spans, listed or not.
+        expect(buildDaySlotCards(sessions, [booking('b3', 'priv', 'confirmed')], false, true)).toEqual([])
+        expect(buildCardsByDate(sessions, cancelledOnly, false, true).get('2026-11-20')?.[0]?.bookings).toHaveLength(1)
+        expect(buildCardsByDate(sessions, cancelledOnly).get('2026-11-20')?.[0]?.bookings).toHaveLength(0)
+
+        const bookings = page('BookingsPage.tsx')
+        // From the filter the rows were loaded with (Apply Filters), not the select's value.
+        expect(bookings).toContain("const listCancelled = rowsStatus === 'cancelled'")
+        expect(bookings).toMatch(/const status = statusFilter\s+trigger\(\{/)
+        expect(bookings).toMatch(/setRows\(result \?\? \[\]\)\s+setRowsStatus\(status\)/)
+        for (const view of ['BookingSessionAgendaView', 'BookingWeekView', 'BookingMonthView']) {
+          const found = uses(bookings, view)
+          expect(found, view).toHaveLength(1)
+          expect(found[0], view).toContain('listCancelled={listCancelled}')
+        }
+        expect(component('BookingSessionAgendaView.tsx')).toContain('buildDaySlotCards(sessions, bookings, showPrivateSessions, listCancelled)')
+        expect(component('BookingWeekView.tsx')).toContain('buildCardsByDate(sessions, bookings, showPrivateSessions, listCancelled)')
+        expect(component('BookingMonthView.tsx')).toContain('buildCardsByDate(sessions, bookings, false, listCancelled)')
+        // The card's row opens the booking and says it is cancelled.
+        const card = component('SessionDetailDialog.tsx')
+        expect(card).toContain('onClick={() => onSelectBooking(b)}')
+        expect(card).toMatch(/b\.status === 'cancelled' \? \(\s+\/\/[^\n]+\s+<BookingStatusBadge status=\{b\.status\} \/>/)
+      })
+    })
+
+    it("S5 (Q37): the booking detail shows the Worker's exact payment line, read again with the booking, and keeps the general words until it has it", () => {
+      const detail = component('BookingDetailContent.tsx')
+      expect(detail).toContain('const { trigger: loadFigures } = useGetBookingRefundFigures()')
+      expect(detail).toContain("const showsPaidWords = booking.redemption_source === 'paid' && booking.status !== 'cancelled'")
+      expect(detail).toContain('setPaidWords(figures && figures.left > 0 && figures.paidWords ? figures.paidWords : null)')
+      expect(detail).toContain('}, [data, bookingId, showsPaidWords])')
+      expect(detail).toMatch(/\{paidWords\s+\? `\$\{paidWords\} Card money goes back to the card, the rest to store credit\.`\s+: 'Paid — eligible for refund: card money goes back to the card, the rest to store credit\.'\}/)
+      const types = readFileSync(path.join(appDir, 'frontend/types/paddock.ts'), 'utf8')
+      expect(types).toContain('paidWords?: string')
+      const contracts = readFileSync(path.join(shared, 'workerContracts.ts'), 'utf8')
+      expect(contracts).toMatch(/export type BookingRefundFiguresRouteOutput = \{[^\n]*paidLine: string; paidWords: string; \}/)
     })
   })
 

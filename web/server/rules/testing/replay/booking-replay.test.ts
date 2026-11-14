@@ -349,7 +349,7 @@ describe("step D's side of the replay (W17)", () => {
       expect(results(recording)[1]).toEqual({ thrown: invalidStatusMessage('cancelled', STAFF_STATUSES) })
       expect(bookingRow(recording)).toMatchObject({ status: 'confirmed', cancelled_at: null, price_paid: '40.00' })
       // W21: the figures route adds Q26's cash and the line of what is left to refund (W21a).
-      expect(results(recording)[2]).toEqual({ ...(results(golden)[2] as Figures), status: 'confirmed', cashLeft: 0, paidLine: 'Left to refund: £40.00 card money.' })
+      expect(results(recording)[2]).toEqual({ ...(results(golden)[2] as Figures), status: 'confirmed', cashLeft: 0, paidLine: 'Left to refund: £40.00 card money.', paidWords: 'Paid £40.00 by card.' })
       expect(added(recording, 'audit_log')).toEqual([])
       // Only the order's own charge, as before: no refund, then or since.
       expect(recording.stripeCalls).toEqual(golden.stripeCalls)
@@ -578,11 +578,17 @@ describe("step D's side of the replay (W17)", () => {
       if (process.env.W17_COVERAGE_OUT) appendFileSync(process.env.W17_COVERAGE_OUT, `W21 invariants: ${named.length} scenarios, old ${old.wrong.length} breaches, new ${fresh.wrong.length}: ${JSON.stringify(fresh.wrong)}\n`)
     })
 
-    it("a later card part refused, then R2's store credit write fails: held; reconcile ends it as the old code did (£50 on the card recorded, £70 owed), and nothing is sent twice", async () => {
+    it("W26a: a later card part refused (the scenario's store credit write would fail, but none is tried): the press ends it as the old code's end state (£50 on the card recorded, £70 owed), with Stripe's reason, and nothing is sent twice", async () => {
       const name = 'part-refund-fails-partway'
       const recording = await replay(environment, byName(name), newBookingSide())
       const golden = readGolden(name) as Recording
-      expect(results(recording)[3]).toEqual({ unsure: { message: "£50.00 went back to the card, but the refund couldn't be finished on the booking yet. It's on hold: don't refund it again. Check the Orders page in a few minutes." } })
+      expect(results(recording)[3]).toEqual({
+        ...(results(golden)[3] as Record<string, unknown>),
+        warning:
+          'A further card refund of £70.00 was refused (Failed to refund payment: Your card was declined.), so £70.00 shows on the booking as still to refund. Check Stripe first: if the money already reached the customer, use It already arrived; if not, use Refund the rest.',
+      })
+      expect(results(recording)[3]).toMatchObject({ cardRefundedAmount: 50, storeCreditRefundedAmount: 0, pricePaid: 100 })
+      expect(added(recording, 'store_credit_transactions')).toEqual(added(golden, 'store_credit_transactions'))
       // Newest order first: Bea's £50, then the first order's £70 (refused); each sent once.
       expect(refunds(recording).map((call) => [(call.params as { amount: number }).amount, call.idempotencyKey])).toEqual([
         [5000, 'audit_log#2:refund:orders#2'],
@@ -591,7 +597,10 @@ describe("step D's side of the replay (W17)", () => {
       expect(added(recording, 'bookings')).toEqual(added(golden, 'bookings'))
       expect(added(recording, 'order_line_items')).toEqual(added(golden, 'order_line_items'))
       const finished = added(recording, 'audit_log').find((row) => row['action'] === 'booking.refund_finished')
-      expect(finished?.['details']).toMatchObject({ outcome: 'owed', cardRefunded: 50, storeCreditRefunded: 0, owed: 70, by: { how: 'reconcile' } })
+      expect(finished?.['details']).toEqual({ claimId: expect.any(String), outcome: 'owed', cardRefunded: 50, storeCreditRefunded: 0, owed: 70, refused: 'Failed to refund payment: Your card was declined.' })
+      const mark = added(recording, 'audit_log').find((row) => row['action'] === 'booking.refund_refused')
+      expect(mark?.['details']).toMatchObject({ amount: 70, detail: 'Failed to refund payment: Your card was declined.' })
+      expect(added(recording, 'audit_log').filter((row) => row['action'] === 'order.reconcile')).toEqual([])
     })
 
     it('a Part refund across two orders, newest first, each capped at its card money (q25-part-refund-then-a-guest)', async () => {

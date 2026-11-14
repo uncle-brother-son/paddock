@@ -43,11 +43,13 @@ import {
   addGuestReaderNotStartedNotUndoneMessage,
   AMOUNT_CHANGED_MESSAGE,
   MOVE_WORDS,
+  REFUND_OPEN_MESSAGE,
   staffSees,
 } from './failure-messages'
 import { createFlowReaderIntent, recordFlowIntent, settleCardFlow, writeFlowRecord, type CardFlowSnapshot, type ReaderFlowSnapshot } from './flow'
 import { loadBooking, lockAndLoadBooking, paymentOpen, type LoadedBooking } from './load-booking'
 import { claimGiftCard, claimStoreCredit, inC1, partAmount, paymentOpenRefusal } from './money-in'
+import { refundClaimOpen } from './refunds'
 
 export interface AddGuestOptions {
   actor: { type: 'staff'; id: string }
@@ -255,8 +257,8 @@ type Priced =
     }
 
 /**
- * The checks and prices, in the old function's order: the booking's state (cancelled, a payment open on it, the
- * session started, the guest limit), then the add-ons, then the guest's seat. Reads only; every refusal throws.
+ * The checks and prices, in the old function's order: the booking's state (cancelled, a payment open on it, a refund
+ * still being checked (W26a), the session started, the guest limit), then the add-ons, then the guest's seat. Reads only; every refusal throws.
  */
 async function priceTheChange(
   db: Queryable,
@@ -270,6 +272,9 @@ async function priceTheChange(
   // Any payment open on it: a first guest's price is already in price_paid, so a second would be priced on money
   // not collected (the old function's reason), and an undo would take the wrong guest's figures back.
   if (paymentOpen(booking)) throw paymentOpenRefusal(booking, refuse)
+  // W26a (audit A1; W21's rule, as Move and the removals): a refund still being checked may be undone, which puts the
+  // booking's places and prices back as they were, so nothing is added until it is settled.
+  if (await refundClaimOpen(db, booking.id)) throw refuse('CONFLICT', 'refund_open', REFUND_OPEN_MESSAGE)
   const currentCount = booking.seats.length
   const seat = (await db.query<SeatFacts>(SEAT_FACTS_SQL, [booking.id, currentCount + 1]))[0]
   if (!seat) throw refuse('NOT_FOUND', 'booking_not_found', undefined)

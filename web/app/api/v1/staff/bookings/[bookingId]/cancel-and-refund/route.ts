@@ -11,7 +11,8 @@ import { createStripeClient, ORDER_STRIPE_LIMITS } from '@/server/stripe/client'
  * `<claimId>:refund:<orderId>` (one per order, seat and add-ons together), then R2 (server/rules/bookings/cancel.ts,
  * refunds.ts). Issue refunds, as before. Gated by the switch when money goes back (`booking_changes`). Idempotent: the
  * same key gets the same answer, and never cancels or refunds twice. W23a: `clubCancelled` (Block Session, Block Day):
- * no 24-hour rule, everything back until the session starts (cancel.ts).
+ * no 24-hour rule, everything back until the session starts (cancel.ts). W26a (Wayne, 14 Nov): the club's cancel inside
+ * 24 hours needs Issue refunds; this route needs it for every press, and cancel.ts checks it again for both routes.
  */
 export const POST = defineRoute(
   { auth: 'staff', permission: 'issueRefunds', input: cancelAndRefundRouteInputSchema, output: cancelAndRefundOutputSchema, idempotent: true },

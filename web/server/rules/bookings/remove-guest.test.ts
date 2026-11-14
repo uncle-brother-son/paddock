@@ -8,7 +8,7 @@ import type { Db } from '@/server/db'
 import { reconcile } from '@/server/rules/orders/reconcile'
 import { stuckList } from '@/server/rules/orders/stuck-list'
 import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/replay/harness'
-import { bea, ID, paidSeat, sam, seed, tieredPrivatePrices, whileFailing, refundCreditFails, type WriteFailure } from '@/server/rules/testing/replay/scenarios'
+import { bea, ID, paidSeat, sam, seed, tieredPrivatePrices, whileFailing, type WriteFailure } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { BOOKING_KINDS_ON } from '@/server/rules/testing/replay/booking-side'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
@@ -20,6 +20,7 @@ import {
   READER_PAYMENT_OPEN_MESSAGE,
   REFUND_OPEN_MESSAGE,
   REMOVE_GUEST_NOT_SAVED_MESSAGE,
+  laterCardRefundRefusedMessage,
   putBackBlockedMessage,
   refundGoneNotRecordedMessage,
   refundRefusedDetail,
@@ -283,7 +284,7 @@ describe('Remove Guest: the removal (W22)', () => {
     })
   })
 
-  it('a later card part refused: it goes to store credit (today\'s rule), with the old warning; the guest stays removed', async () => {
+  it("W26a (Wayne, 14 Nov): a later card part refused is never store credit: the £10 is still to refund on the booking, with Stripe's reason; the guest stays removed", async () => {
     await withAGuest(async ({ bookingId, guestId, stripe }) => {
       // A £10 part refund takes Bea's order down to £10, so her £20 seat is £10 from her order and £10 from the first.
       expect((await partRefund(bookingId, { amount: 10, refundMethod: 'card', reason: 'Goodwill' })).body.data).toMatchObject({ cardRefundedAmount: 10 })
@@ -293,12 +294,18 @@ describe('Remove Guest: the removal (W22)', () => {
       expect(answer.body.data).toMatchObject({
         removed: true,
         cardRefundedAmount: 10,
-        storeCreditRefundedAmount: 10,
-        warning: 'A further card refund of £10.00 failed (Failed to refund payment: Your card was declined.), so the rest went to store credit.',
+        storeCreditRefundedAmount: 0,
+        warning: laterCardRefundRefusedMessage(10, refundRefusedDetail('Your card was declined.'), 10, false),
       })
-      expect((await creditRefunds()).at(-1)?.note).toMatch(/^Refund for a guest removed from the booking \(Bea Guest\) \(the rest went back to the card\)\. \[ref /)
+      expect(await creditRefunds()).toEqual([])
       expect(await guestRow(guestId)).toBeUndefined()
-      expect(await booking(bookingId)).toMatchObject({ price_paid: '30.00', party_size: 2 })
+      expect(await booking(bookingId)).toMatchObject({ price_paid: '40.00', refund_owed_amount: '10.00', party_size: 2 })
+      expect((await auditRows('booking.refund_finished')).at(-1)?.details).toMatchObject({ outcome: 'owed', cardRefunded: 10, storeCreditRefunded: 0, owed: 10, refused: refundRefusedDetail('Your card was declined.') })
+      expect((await auditRows('booking.guest_remove'))[0]?.details).toMatchObject({ guestId, cardRefunded: 10, storeCreditRefunded: 0, owed: 10 })
+      // Reconcile does nothing for it.
+      pastTheWindow()
+      expect((await runReconcile()).items.filter((item) => item.kind === 'claim')).toEqual([])
+      expect(await creditRefunds()).toEqual([])
     })
   })
 
@@ -344,21 +351,23 @@ describe('Remove Guest: the removal (W22)', () => {
     })
   })
 
-  it("the card went and R2's store credit couldn't be written: held, never sent again; reconcile records the card and gives the store credit", async () => {
+  it("the card went, a later part was refused and R2 couldn't be written: held, never sent again; reconcile records the card and, from the refusal's mark, leaves the refused £10 still to refund (W26a: never store credit)", async () => {
     await withAGuest(async ({ bookingId, guestId, stripe }) => {
       expect((await partRefund(bookingId, { amount: 10, refundMethod: 'card', reason: 'Goodwill' })).body.data).toMatchObject({ cardRefundedAmount: 10 })
-      // Bea's order has £10 left on its card; the first order's card is refused, so R2's store credit takes £10, and fails.
+      // Bea's order has £10 left on its card; the first order's card is refused, and R2's finished row can't be written.
       stripe.failNext('refunds.create', { kind: 'none' })
       stripe.failNext('refunds.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
-      const answer = await whileFailing(db, refundCreditFails, () => remove(guestId, { confirmedRefundAmount: 20, refundMethod: 'card' }))
+      const finishFails: WriteFailure = { table: 'audit_log', event: 'INSERT', when: "NEW.action = 'booking.refund_finished'" }
+      const answer = await whileFailing(db, finishFails, () => remove(guestId, { confirmedRefundAmount: 20, refundMethod: 'card' }))
       expect(answer.body.data).toMatchObject({ removed: true, cardRefundedAmount: 10, held: { reason: 'refund_not_recorded', message: refundGoneNotRecordedMessage(10) } })
       pastTheWindow()
       const sent = refundCalls(stripe).length
       await runReconcile()
       expect(refundCalls(stripe)).toHaveLength(sent)
       // Reconcile finds the £10 that went and the refused part never went: owed (D-plan 4.10), never resent.
-      expect((await auditRows('booking.refund_finished')).at(-1)?.details).toMatchObject({ outcome: 'owed', cardRefunded: 10, owed: 10 })
+      expect((await auditRows('booking.refund_finished')).at(-1)?.details).toMatchObject({ outcome: 'owed', cardRefunded: 10, storeCreditRefunded: 0, owed: 10, refused: refundRefusedDetail('Your card was declined.'), by: { how: 'reconcile' } })
       expect(await booking(bookingId)).toMatchObject({ price_paid: '40.00', refund_owed_amount: '10.00' })
+      expect(await creditRefunds()).toEqual([])
     })
   })
 

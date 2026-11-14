@@ -272,7 +272,7 @@ async function removeR1(
   }
   const claim = await writeClaim(tx, bookingId, details, options)
   if (plan.card.length > 0) return { kind: 'card', claim }
-  const output = await finishClaimInTransaction(tx, claim, { went: [], extraToStoreCredit: 0, owed: 0 }, { actor: options.actor, requestId: options.requestId, how: 'press' })
+  const output = await finishClaimInTransaction(tx, claim, { went: [], owed: 0 }, { actor: options.actor, requestId: options.requestId, how: 'press' })
   if (!output) throw new Error(`Refund claim ${claim.id} was finished in its own transaction.`)
   return { kind: 'done', output }
 }

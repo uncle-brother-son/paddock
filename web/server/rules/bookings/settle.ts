@@ -26,6 +26,7 @@ import { FLOW_INTENT_UNCONFIRMED_MESSAGE, readFlow, undoFlowInTransaction } from
 import {
   AMOUNT_CHANGED_MESSAGE,
   DECLINED_NOT_UNDONE_MESSAGE,
+  REFUND_OPEN_MESSAGE,
   SETTLE_NOT_SAVED_MESSAGE,
   settleReaderNotStartedMessage,
   settleReaderNotStartedNotUndoneMessage,
@@ -34,6 +35,7 @@ import {
 import { createFlowReaderIntent, recordFlowIntent, settleCardFlow, writeFlowRecord, type CardFlowSnapshot, type ReaderFlowSnapshot } from './flow'
 import { lockAndLoadBooking, paymentOpen } from './load-booking'
 import { claimGiftCard, claimStoreCredit, inC1, partAmount, paymentOpenRefusal } from './money-in'
+import { refundClaimOpen } from './refunds'
 
 export interface SettleOptions {
   actor: { type: 'staff'; id: string }
@@ -84,7 +86,7 @@ type Started = { kind: 'settled'; output: SettleBookingOutput } | ({ kind: 'card
 
 /**
  * C1, inside its transaction. The checks run in the old function's order: the booking, its status, seat 1's price, a
- * payment open on it, then the money (the cash figure first, the parts over the amount, a method, the reader with
+ * payment open on it, a refund still being checked (W26a), then the money (the cash figure first, the parts over the amount, a method, the reader with
  * nothing to take), then the confirmed figures (Q18). Every refusal throws, so nothing it did is kept.
  */
 async function c1(tx: Tx, bookingId: string, input: SettleBookingInput, options: SettleOptions, keyLivemode: boolean | null): Promise<Started> {
@@ -100,6 +102,9 @@ async function c1(tx: Tx, bookingId: string, input: SettleBookingInput, options:
   }
   const amount = seat1.unitPrice
   if (paymentOpen(booking)) throw paymentOpenRefusal(booking, settleRefusal)
+  // W26a (audit A1; W21's rule, as Move and the removals): no payment is taken while a refund on the booking is still
+  // being checked (a paid add-on removed from it), under the booking's lock.
+  if (await refundClaimOpen(tx, bookingId)) throw settleRefusal('CONFLICT', 'refund_open', REFUND_OPEN_MESSAGE)
 
   const giftCardAmount = partAmount(payment?.giftCard?.amount, 'gift_card_amount_invalid', settleRefusal)
   const storeCreditAmount = partAmount(payment?.storeCredit?.amount, 'store_credit_amount_invalid', settleRefusal)

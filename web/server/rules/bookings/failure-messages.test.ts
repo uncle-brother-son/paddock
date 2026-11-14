@@ -265,6 +265,10 @@ describe('the words W17 adds', () => {
   })
 
   it('W21a (review L6): the later part not sent in time', () => {
-    expect(words.laterCardRefundNotSentMessage(30)).toBe("A further card refund of £30.00 wasn't sent in time, so it's owed on the booking: use Refund the rest to send it to the card.")
+    expect(words.laterCardRefundNotSentMessage(30, false)).toBe("A further card refund of £30.00 wasn't sent in time, so it's owed on the booking: use Refund the rest to send it to the card.")
+    // W26b: on a cancelled booking it is owed too, and Refund the rest gives store credit only there.
+    expect(words.laterCardRefundNotSentMessage(30, true)).toBe(
+      "A further card refund of £30.00 wasn't sent in time, so it's owed on the booking: use Refund the rest (the booking is cancelled, so it goes to store credit)."
+    )
   })
 })

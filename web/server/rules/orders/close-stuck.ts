@@ -537,7 +537,7 @@ async function closeHeldClaim(db: Db, claimId: string, why: string, options: Clo
     const went: CardPart[] = claim.details.plan.card.filter((part) => findings.get(part.orderId)?.found === 'went')
     const unsettled = claim.details.plan.card.filter((part) => findings.get(part.orderId)?.found !== 'went')
     const owed = Math.round(unsettled.reduce((total, part) => total + part.amount, 0) * 100) / 100
-    const finished = await finishClaimInTransaction(tx, claim, { went, extraToStoreCredit: 0, owed }, { actor: options.actor, requestId: options.requestId, how: 'close', why })
+    const finished = await finishClaimInTransaction(tx, claim, { went, owed }, { actor: options.actor, requestId: options.requestId, how: 'close', why })
     if (!finished) return (await closedBefore(tx, 'held_claim', claimId, undefined, entity)) ? alreadyClosed('held_claim', claimId) : refused('held_claim', claimId, 'not_listed')
     const parts = claim.details.plan.card.map((part) => ({ orderId: part.orderId, amount: part.amount, found: findings.get(part.orderId)?.found ?? 'not_looked', detail: findings.get(part.orderId)?.detail ?? null }))
     await audit.recordAll(tx, [

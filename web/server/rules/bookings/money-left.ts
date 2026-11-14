@@ -9,7 +9,7 @@
 // with no order) counts as gift card money, where the old figures showed it as cash.
 import 'server-only'
 import type { Queryable } from '@/server/db'
-import { leftLineWords } from './failure-messages'
+import { leftLineWords, paidLineWords } from './failure-messages'
 
 const round2 = (n: number): number => Math.round(n * 100) / 100
 const amount = (value: string | null | undefined): number => Number.parseFloat(value ?? '0')
@@ -226,10 +226,14 @@ SELECT recorded.cash::text AS recorded,
                    AND c.details->>'method' = 'cash'), 0)::text AS handed_back
 FROM recorded`
 
-/** W21: the figures as the figures route sends them: the old ones, with Q26's cash and the line of what is left (W21a). */
+/**
+ * W21: the figures as the figures route sends them: the old ones, with Q26's cash and the line of what is left (W21a).
+ * W26a (audit S5; Q37): and `paidWords`, how that money was paid, for the booking detail.
+ */
 export interface RefundFigures extends BookingMoneyLeft {
   cashLeft: number
   paidLine: string
+  paidWords: string
 }
 
 /** The cash a Part refund can hand back (Q26): see CASH_SQL. Never more than the figures' cash part. */
@@ -246,13 +250,15 @@ export async function loadRefundFigures(db: Queryable, bookingId: string): Promi
   return withCashAndLine(db, bookingId, figures)
 }
 
-/** The figures with Q26's cash and the line of what is left to refund (W21a, W21 review S1) added. */
+/** The figures with Q26's cash, the line of what is left to refund (W21a, W21 review S1) and the paid line (W26a) added. */
 export async function withCashAndLine(db: Queryable, bookingId: string, figures: BookingMoneyLeft): Promise<RefundFigures> {
   const { parts } = figures
+  const named = { card: parts.card, giftCardOrStoreCredit: round2(parts.giftCard + parts.storeCredit), cash: parts.cash }
   return {
     ...figures,
     cashLeft: await cashLeftOn(db, bookingId, figures),
-    paidLine: leftLineWords({ card: parts.card, giftCardOrStoreCredit: round2(parts.giftCard + parts.storeCredit), cash: parts.cash }),
+    paidLine: leftLineWords(named),
+    paidWords: paidLineWords(named),
   }
 }
 

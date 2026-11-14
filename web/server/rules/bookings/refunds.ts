@@ -15,10 +15,17 @@
 // `metadata.claim_id`, then R2 (one transaction): each part recorded on its booking line, the rest to store credit, the
 // orders' status worked out again, the claim finished (`booking.refund_finished`).
 // - The first part refused (nothing went): R1 undone in one transaction, with the old words.
-// - A later part refused: it, and every part after it, go to store credit in R2 (today's rule), with the old warning.
+// - W26a (Wayne, 14 Nov): a card part Stripe refused is never given as store credit unseen, because the refusal may
+//   mean the customer has the money already (refunded in Stripe's dashboard, or disputed). The refusal is marked on the
+//   claim first (`booking.refund_refused`). A first refusal whose undo fails for any reason, and a later part refused
+//   (it and every part after it), end as money owed on the booking, live or cancelled, with Stripe's reason in the
+//   words: a person checks Stripe, then uses It already arrived or Refund the rest. Reconcile reads the mark, so a
+//   claim the press couldn't finish ends the same way.
 // - No clear answer: the claim is held (Q35's refund words). No press ever sends it again: reconcile lists the refunds
 //   on each planned PaymentIntent, matches `metadata.claim_id`, and runs R2 with what it found; a part Stripe never
-//   received ends as money owed on the booking (Refund the rest), never resent (D-plan 4.10).
+//   received ends as money owed on the booking (Refund the rest), never resent (D-plan 4.10). W26b (Wayne, 14 Nov):
+//   on a cancelled booking too (it used to be given as store credit there), for Refund the rest (store credit only
+//   there) or It already arrived.
 // - A later part the press had no time left to send (W21a, W21 review L6): it and the parts after it end as owed on the
 //   booking (Refund the rest can still send them to the card), not store credit: Stripe never refused them.
 // W25: the look-up of the old screens' card refunds with no clear answer (`booking.card_refund_unsure`, W21a) is gone:
@@ -43,8 +50,8 @@ import { pence } from '@/server/rules/orders/collect-saved-card'
 import {
   cardRefundFailedMessage,
   CHANGE_REFUND_UNCONFIRMED_MESSAGE,
-  laterCardRefundFailedMessage,
   laterCardRefundNotSentMessage,
+  laterCardRefundRefusedMessage,
   NO_CASH_LEFT_MESSAGE,
   OWED_ON_CANCELLED_STORE_CREDIT_ONLY_MESSAGE,
   onlyCardLeftMessage,
@@ -58,11 +65,12 @@ import {
   REFUND_NOT_SAVED_MESSAGE,
   REFUND_NOT_SENT_DETAIL,
   REFUND_OPEN_MESSAGE,
-  REFUND_REFUSED_NOT_PUT_BACK_MESSAGE,
   REFUND_WORDS,
   refundGoneNotRecordedMessage,
   putBackBlockedMessage,
   putBackBlockedNotRecordedMessage,
+  putBackFailedMessage,
+  putBackFailedNotRecordedMessage,
   refundRefusedDetail,
 } from './failure-messages'
 import { lockAndLoadBooking, paymentOpen, type LoadedBooking } from './load-booking'
@@ -72,6 +80,8 @@ import { ADDONS_INSIDE_LINE, loadBookingLines, loadOrderCardPortion, recordOrder
 
 export const REFUND_CLAIMED = 'booking.refund_claimed'
 export const REFUND_FINISHED = 'booking.refund_finished'
+/** W26a: Stripe refused one of the claim's card parts (`claimId`, the part's `orderId` and `amount`, Stripe's `detail`). */
+export const REFUND_REFUSED = 'booking.refund_refused'
 /** The reason's limit, as the old function's. */
 export const REFUND_REASON_MAX_LENGTH = 200
 
@@ -293,12 +303,13 @@ export interface RefundOptions {
 
 /**
  * Who finishes a claim: the press, reconcile, or a person closing it by hand (their reason). W25a: `undo_blocked` is
- * the press whose first card part was refused and whose undo was blocked (`why`: Stripe's reason).
+ * the press whose first card part was refused and whose undo was blocked (`why`: Stripe's reason). W26a: `undo_failed`
+ * is the same press when the undo failed for any other reason (a database fault).
  */
 export interface FinishedBy {
   actor: { type: 'staff' | 'system'; id: string | null }
   requestId: string
-  how: 'press' | 'reconcile' | 'close' | 'undo_blocked'
+  how: 'press' | 'reconcile' | 'close' | 'undo_blocked' | 'undo_failed'
   why?: string
 }
 
@@ -585,7 +596,7 @@ async function partR1(tx: Tx, bookingId: string, input: PartRefundInput, options
     options
   )
   if (plan.card.length > 0) return { kind: 'card', claim }
-  const output = await finishClaimInTransaction(tx, claim, { went: [], extraToStoreCredit: 0, owed: 0 }, { actor: options.actor, requestId: options.requestId, how: 'press' })
+  const output = await finishClaimInTransaction(tx, claim, { went: [], owed: 0 }, { actor: options.actor, requestId: options.requestId, how: 'press' })
   if (!output) throw new Error(`Refund claim ${claim.id} was finished in its own transaction.`)
   return { kind: 'done', output }
 }
@@ -620,19 +631,22 @@ async function owedR1(tx: Tx, bookingId: string, input: RefundOwedInput, options
     options
   )
   if (plan.card.length > 0) return { kind: 'card', claim }
-  const output = await finishClaimInTransaction(tx, claim, { went: [], extraToStoreCredit: 0, owed: 0 }, { actor: options.actor, requestId: options.requestId, how: 'press' })
+  const output = await finishClaimInTransaction(tx, claim, { went: [], owed: 0 }, { actor: options.actor, requestId: options.requestId, how: 'press' })
   if (!output) throw new Error(`Refund claim ${claim.id} was finished in its own transaction.`)
   return { kind: 'done', output }
 }
 
 // --- R2: what went is recorded, the rest to store credit (or owed), the claim finished
 
-/** What a claim ended with. `owed`: card money Stripe never received (reconcile, a close), back on the booking as owed. */
+/** What a claim ended with. `owed`: card money that never went (the press, reconcile, a close), on the booking as owed, live or cancelled (W26b). */
 export interface ClaimOutcome {
   went: CardPart[]
-  /** Card parts after a later refusal (today's rule): to store credit, with the plan's own store credit. */
-  extraToStoreCredit: number
   owed: number
+  /**
+   * W26a: Stripe refused a card part (its reason), kept on the finished row: the customer may have the money already,
+   * so a person decides. (W26b: what is owed stays owed on a cancelled booking with or without it.)
+   */
+  refused?: string
   warning?: string
 }
 
@@ -825,8 +839,8 @@ export const addonRemovedDetails = (
 /**
  * R2, inside a transaction the caller opened: the booking locked (and its customer), then, unless the claim is
  * finished already (null): each card part that went added to its booking lines' card_refunded_amount; the plan's store
- * credit and any later-refused parts given as one store credit refund; money Stripe never received put back on the
- * booking as owed (on a cancelled booking, which has no button left to give it, as store credit instead); the orders'
+ * credit given as one store credit refund; money Stripe never received, or refused (W26a), put back on the booking as
+ * owed, live or cancelled (W26b: never as store credit instead); the orders'
  * status worked out again; the action's row (`booking.part_refund` / `booking.refund_owed`, as the old function wrote
  * them) and the claim's finished row. Throws on any failure, so the caller's transaction keeps nothing.
  */
@@ -849,19 +863,14 @@ export async function finishClaimInTransaction(tx: Tx, claim: Claim, outcome: Cl
   }
   const cardRefunded = sum(outcome.went.map((part) => part.amount))
   const status = (await tx.query<{ status: string }>('SELECT status FROM bookings WHERE id = $1::uuid', [claim.bookingId]))[0]?.status
-  let owed = round2(outcome.owed)
-  let storeCredit = round2(plan.storeCredit + outcome.extraToStoreCredit)
-  // On a cancelled booking, money Stripe never received goes to store credit (W21). W23: not when a person closes the
-  // claim by hand: reconcile left it because Stripe shows something it can't settle (several refunds, a different
-  // amount, another mode), so the card money may have reached the customer, and store credit on top could pay it twice.
-  // It stays owed on the booking, and the close's words say to check Stripe first, then use It already arrived or
-  // Refund the rest on the cancelled booking (W25: both run there; Refund the rest to store credit only). W25a (W25
-  // review S1): the same when Stripe refused the first card part and the undo was blocked: the refusal may mean the
-  // customer has the money already (refunded in Stripe's dashboard, or disputed), so a person decides, with the reason.
-  if (owed > 0 && status === 'cancelled' && by.how !== 'close' && by.how !== 'undo_blocked') {
-    storeCredit = round2(storeCredit + owed)
-    owed = 0
-  }
+  // W26b (Wayne, 14 Nov): card money that never went is owed on the booking, live or cancelled, however the claim ends
+  // (the press, reconcile's "not found", a refusal, a close by hand). It is never given as store credit here: "not
+  // found" can also be a refusal whose mark couldn't be written, and the customer may have the money already. A person
+  // checks Stripe, then uses It already arrived or Refund the rest on the booking (on a cancelled one, W25: store
+  // credit only). Only the plan's own store credit (what the cards can't take) is given. W21 gave "not found" on a
+  // cancelled booking as store credit; W23, W25a and W26a had already stopped that for a close and for every refusal.
+  const owed = round2(outcome.owed)
+  const storeCredit = round2(plan.storeCredit)
   const cancel = details.cancel ?? null
   // W23: a cancel's seat money and its add-ons' money, each as the old functions recorded it.
   const shares = cancel ? cancelShares(cancel, plan, outcome, owed > 0) : null
@@ -934,7 +943,16 @@ export async function finishClaimInTransaction(tx: Tx, claim: Claim, outcome: Cl
     {
       ...actor,
       action: REFUND_FINISHED,
-      details: { claimId: claim.id, outcome: owed > 0 ? 'owed' : 'given', cardRefunded, storeCreditRefunded: storeCredit, owed, ...(cash > 0 ? { cash } : {}), ...finishedBy },
+      details: {
+        claimId: claim.id,
+        outcome: owed > 0 ? 'owed' : 'given',
+        cardRefunded,
+        storeCreditRefunded: storeCredit,
+        owed,
+        ...(cash > 0 ? { cash } : {}),
+        ...(outcome.refused !== undefined ? { refused: outcome.refused } : {}),
+        ...finishedBy,
+      },
     },
   ]
   await audit.recordAll(tx, entries)
@@ -1142,7 +1160,7 @@ export async function finishClaim(db: Db, claim: Claim, outcome: ClaimOutcome, b
  * W25 (W22 review later 2, W23 review later 2, W24 review L1): the undo can't put the booking back because what R1
  * gave back has been taken since: the session's places (another booking), or the pass session (spent). Thrown inside
  * the undo's transaction, so nothing of the undo is kept: the change stands, and the press finishes the claim there and
- * then with every card part owed on the booking (W25a; `finishBlockedUndo`).
+ * then with every card part owed on the booking (W25a; `finishRefusedNotPutBack`).
  */
 export class PutBackBlocked extends Error {
   constructor(what: string) {
@@ -1349,38 +1367,83 @@ const held = (claim: Claim, reason: string, message: string, cardGone = 0): Refu
 })
 
 /**
- * W25a (W25 review S1): the first card part was refused and the undo was blocked, so the change stands. The claim is
- * finished now as a close by hand finishes it: nothing gone, every card part owed on the booking (kept owed on a
- * cancelled booking too, never store credit: Stripe's refusal may mean the customer has the money already), the plan's
- * own store credit given. Reconcile never sees the claim. The answer is still `held` (the screens show its words),
- * with Stripe's reason and the two buttons. If the finish fails, the claim stays open for reconcile, as before.
+ * W26a: the mark that Stripe refused one of the claim's card parts, written before anything else is tried (the undo,
+ * R2), in a transaction of its own, twice at most. Reconcile reads it (`claimRefusal`): a claim the press couldn't
+ * finish then ends as money owed, never as store credit on a cancelled booking. A mark that can't be written is passed
+ * over: the press carries on, and its own finish records the refusal.
  */
-async function finishBlockedUndo(db: Db, claim: Claim, options: RefundOptions, detail: string): Promise<RefundBookingOutput> {
-  const owed = sum(claim.details.plan.card.map((part) => part.amount))
-  const words = putBackBlockedMessage(detail, owed, claim.details.cancel !== undefined)
+async function markRefused(db: Db, claim: Claim, part: CardPart, detail: string, requestId: string): Promise<void> {
+  const write = (): Promise<void> =>
+    db.transaction((tx) =>
+      audit.recordAll(tx, [
+        {
+          actorType: 'staff',
+          actorId: claim.staffId,
+          action: REFUND_REFUSED,
+          entityType: 'booking',
+          entityId: claim.bookingId,
+          requestId,
+          details: { claimId: claim.id, orderId: part.orderId, amount: part.amount, detail },
+        },
+      ])
+    )
   try {
-    const output = await finishClaim(db, claim, { went: [], extraToStoreCredit: 0, owed }, { actor: options.actor, requestId: options.requestId, how: 'undo_blocked', why: detail })
-    return { ...(output ?? { cardRefundedAmount: 0, storeCreditRefundedAmount: 0 }), held: { claimId: claim.id, reason: 'refund_refused_not_put_back', message: words } }
+    await write()
   } catch {
-    return held(claim, 'refund_refused_not_put_back', putBackBlockedNotRecordedMessage(detail))
+    await write().catch(() => undefined)
+  }
+}
+
+/** W26a: Stripe's reason when it refused one of the claim's card parts (the first mark), or null when it never did. */
+export async function claimRefusal(db: Queryable, claim: Pick<Claim, 'id' | 'bookingId'>): Promise<string | null> {
+  const rows = await db.query<{ detail: string | null }>(
+    "SELECT details->>'detail' AS detail FROM audit_log WHERE action = 'booking.refund_refused' AND entity_type = 'booking' AND entity_id = $1::text AND details->>'claimId' = $2::text ORDER BY at, id LIMIT 1",
+    [claim.bookingId, claim.id]
+  )
+  const row = rows[0]
+  return row ? (row.detail ?? 'refused') : null
+}
+
+/**
+ * The first card part was refused and the undo didn't put the booking back, so the change stands. W25a (W25 review
+ * S1): when the undo was blocked (`PutBackBlocked`); W26a (audit S2; Wayne, 14 Nov): when it failed for any other
+ * reason too. The claim is finished now as a close by hand finishes it: nothing gone, every card part owed on the
+ * booking (kept owed on a cancelled booking too, never store credit: Stripe's refusal may mean the customer has the
+ * money already), the plan's own store credit given. Reconcile never sees the claim. The answer is still `held` (the
+ * screens show its words), with Stripe's reason and the two buttons. If the finish fails as well, the claim stays open
+ * with the refusal's mark, and reconcile finishes it the same way (owed, never store credit). Null when the claim was
+ * finished already: the undo's COMMIT went through and only its answer was lost (nothing else can finish a claim
+ * within a press), so the booking is back as it was and the press answers as for any refused first part.
+ */
+async function finishRefusedNotPutBack(db: Db, claim: Claim, options: RefundOptions, detail: string, blocked: boolean): Promise<RefundBookingOutput | null> {
+  const owed = sum(claim.details.plan.card.map((part) => part.amount))
+  const cancelled = claim.details.cancel !== undefined
+  const words = blocked ? putBackBlockedMessage(detail, owed, cancelled) : putBackFailedMessage(detail, owed, cancelled)
+  try {
+    const output = await finishClaim(db, claim, { went: [], owed }, { actor: options.actor, requestId: options.requestId, how: blocked ? 'undo_blocked' : 'undo_failed', why: detail })
+    if (!output) return null
+    return { ...output, held: { claimId: claim.id, reason: 'refund_refused_not_put_back', message: words } }
+  } catch {
+    return held(claim, 'refund_refused_not_put_back', blocked ? putBackBlockedNotRecordedMessage(detail) : putBackFailedNotRecordedMessage(detail))
   }
 }
 
 /**
  * After R1 has committed a claim with card parts: each part once, in the plan's order (newest order first), then R2.
- * The first part sent that is refused undoes R1 and is thrown with the old words (an undo that is blocked: the claim
- * finished as money owed, `finishBlockedUndo`); a later one sends it and the rest to store credit
- * (the old warning); a later one with no time left to send ends with the rest as owed (W21 review L6); no clear answer
- * holds the claim for reconcile (Q35), as does R2 failing after money went (W6-3's rule for refunds: what went is never
- * sent again, reconcile records it).
+ * A refusal is marked on the claim first (W26a, `markRefused`). The first part sent that is refused undoes R1 and is
+ * thrown with the old words; an undo that doesn't put the booking back (blocked, or failed for any reason) finishes
+ * the claim as money owed (`finishRefusedNotPutBack`). A later part refused ends with it and every part after it owed
+ * on the booking, with Stripe's reason (W26a: no longer store credit); a later one with no time left to send ends with
+ * the rest as owed too (W21 review L6: Stripe never got it). No clear answer holds the claim for reconcile (Q35), as
+ * does R2 failing after money went (W6-3's rule for refunds: what went is never sent again, reconcile records it).
  */
 export async function sendAndFinish(db: Db, stripe: StripeClient, claim: Claim, options: RefundOptions, timing: StripeTiming, firstRefused: FirstRefused): Promise<RefundBookingOutput> {
   const by: FinishedBy = { actor: options.actor, requestId: options.requestId, how: 'press' }
   const went: CardPart[] = []
   const toSend = claim.details.plan.card
   let sentOne = false
-  let extraToStoreCredit = 0
   let owed = 0
+  let refused: string | undefined
   let warning: string | undefined
   for (const [index, part] of toSend.entries()) {
     const answer = await sendCardPart(stripe, claim.id, part, timing)
@@ -1390,31 +1453,34 @@ export async function sendAndFinish(db: Db, stripe: StripeClient, claim: Claim, 
       continue
     }
     if (answer.outcome === 'unclear') return held(claim, 'refund_unconfirmed', CHANGE_REFUND_UNCONFIRMED_MESSAGE)
+    // W26a: Stripe's refusal is on the claim before the undo or R2 is tried, so reconcile never reads it as "not found".
+    if (answer.outcome === 'refused') await markRefused(db, claim, part, answer.detail, options.requestId)
     if (!sentOne) {
       const detail = answer.outcome === 'not_sent' ? REFUND_NOT_SENT_DETAIL : answer.detail
       try {
         await undoClaim(db, claim, by)
       } catch (err) {
-        // W25: the places or the pass session have been taken since, so the change stands, with its own words.
-        if (err instanceof PutBackBlocked) return finishBlockedUndo(db, claim, options, detail)
-        return held(claim, 'refund_refused_not_put_back', REFUND_REFUSED_NOT_PUT_BACK_MESSAGE)
+        // W25: the places or the pass session have been taken since. W26a: or the undo failed for any other reason.
+        // Either way the change stands, and the money is owed on the booking for a person to decide.
+        const ended = await finishRefusedNotPutBack(db, claim, options, detail, err instanceof PutBackBlocked)
+        if (ended) return ended
       }
       throw firstRefused(detail)
     }
-    const rest = sum(toSend.slice(index).map((later) => later.amount))
+    // Never sent (no time left) or refused: this part and every part after it are still owed on the booking.
+    owed = sum(toSend.slice(index).map((later) => later.amount))
     if (answer.outcome === 'not_sent') {
-      // Never sent, so never refused: still owed, for Refund the rest to send to the card.
-      owed = rest
-      warning = laterCardRefundNotSentMessage(rest)
+      // Never sent, so never refused: Refund the rest can send it to the card.
+      warning = laterCardRefundNotSentMessage(owed, claim.details.cancel !== undefined)
     } else {
-      // Today's rule: a later refusal sends the rest to store credit, so money is never left half returned.
-      extraToStoreCredit = rest
-      warning = laterCardRefundFailedMessage(part.amount, answer.detail)
+      // W26a (Wayne, 14 Nov): refused, so a person decides (It already arrived, or Refund the rest), with the reason.
+      refused = answer.detail
+      warning = laterCardRefundRefusedMessage(part.amount, answer.detail, owed, claim.details.cancel !== undefined)
     }
     break
   }
   try {
-    const output = await finishClaim(db, claim, { went, extraToStoreCredit, owed, ...(warning ? { warning } : {}) }, by)
+    const output = await finishClaim(db, claim, { went, owed, ...(refused !== undefined ? { refused } : {}), ...(warning ? { warning } : {}) }, by)
     // Finished by someone else (a close): what went is theirs to report.
     return output ?? held(claim, 'refund_finished_elsewhere', refundGoneNotRecordedMessage(sum(went.map((part) => part.amount))), sum(went.map((part) => part.amount)))
   } catch {
@@ -1503,7 +1569,14 @@ export async function owedArrived(db: Db, bookingId: string, input: OwedArrivedI
 // --- Reconcile (D-plan 4.10) and the close by hand
 
 /** A claim's card part as Stripe shows it: a refund naming the claim, none, or more than one (left for a person). */
-type PartFound = { kind: 'went' } | { kind: 'none' } | { kind: 'several'; ids: string[] } | { kind: 'mismatch'; detail: string } | { kind: 'unclear'; detail: string }
+type PartFound =
+  | { kind: 'went' }
+  | { kind: 'none' }
+  /** W26a: a refund naming the claim that failed or was cancelled, and none that went: Stripe's refusal, with its words. */
+  | { kind: 'refused'; detail: string }
+  | { kind: 'several'; ids: string[] }
+  | { kind: 'mismatch'; detail: string }
+  | { kind: 'unclear'; detail: string }
 
 const LIST_PAGE = 100
 const LIST_MOST_PAGES = 10
@@ -1533,7 +1606,8 @@ async function listRefunds(
 
 /**
  * The refunds on the part's PaymentIntent that name this claim (`metadata.claim_id`), every page. Succeeded or pending
- * is money gone; failed or cancelled, or none, is money that never went. Never sends anything.
+ * is money gone; failed or cancelled, or none, is money that never went. W26a: failed or cancelled is told apart from
+ * none (`refused`): Stripe got it and refused it, so reconcile never gives it as store credit. Never sends anything.
  */
 export async function findCardPart(stripe: StripeClient, claimId: string, part: CardPart, timing: StripeTiming | undefined): Promise<PartFound> {
   const listed = await listRefunds(stripe, part.paymentIntentId, timing)
@@ -1542,7 +1616,10 @@ export async function findCardPart(stripe: StripeClient, claimId: string, part: 
   const live = matched.filter((refund) => refund.status !== 'failed' && refund.status !== 'canceled')
   if (live.length > 1) return { kind: 'several', ids: live.map((refund) => refund.id) }
   const refund = live[0]
-  if (!refund) return { kind: 'none' }
+  if (!refund) {
+    const dead = matched[0]
+    return dead ? { kind: 'refused', detail: refundRefusedDetail(`the refund ${dead.status}`) } : { kind: 'none' }
+  }
   if (refund.amount !== pence(part.amount)) return { kind: 'mismatch', detail: `${refund.id} is ${refund.amount}p, the part ${pence(part.amount)}p` }
   return { kind: 'went' }
 }

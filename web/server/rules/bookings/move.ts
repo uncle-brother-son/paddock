@@ -647,7 +647,7 @@ async function moveC1(tx: Tx, input: C1Input, options: MoveOptions, keyLivemode:
     }
     const claim = await writeClaim(tx, bookingId, details, options)
     if (plan.card.length > 0) return { kind: 'claim', claim, pricePaid: priced.newPricePaid }
-    const output = await finishClaimInTransaction(tx, claim, { went: [], extraToStoreCredit: 0, owed: 0 }, { actor: options.actor, requestId: options.requestId, how: 'press' })
+    const output = await finishClaimInTransaction(tx, claim, { went: [], owed: 0 }, { actor: options.actor, requestId: options.requestId, how: 'press' })
     if (!output) throw new Error(`Refund claim ${claim.id} was finished in its own transaction.`)
     return { kind: 'done', output: { ...answer(output.pricePaid ?? priced.newPricePaid), ...(output.warning ? { warning: output.warning } : {}) } }
   }

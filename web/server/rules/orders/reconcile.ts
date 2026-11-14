@@ -34,7 +34,7 @@
 // W21 (D-plan 4.10): booking refund claims (server/rules/bookings/refunds.ts) a press left held (a card refund with no
 // clear answer, or one that went and couldn't be recorded). Never sends a refund: it lists the refunds on each planned
 // PaymentIntent, matches `metadata.claim_id`, and runs the claim's R2 with what it found; a part Stripe never received
-// ends as money owed on the booking (Refund the rest; store credit if the booking has been cancelled since).
+// ends as money owed on the booking, live or cancelled (W26b: never store credit; Refund the rest or It already arrived).
 //
 // W13c (W13a review L3, first part): a membership subscription a press left live (`order.subscription_left`,
 // `left`) for an order no longer pending is put back here, each run until it is: cancelled (checked), its first
@@ -79,7 +79,7 @@ import {
 } from './reader-flow'
 import { cancelReaderOrder, finaliseReaderOrderFound, otherModeMessage, settleIntent } from './reader-order'
 import { undoOrder } from './undo-order'
-import { CLAIMS_DUE_SQL, findCardPart, finishClaim, readClaim, type CardPart, type Claim } from '@/server/rules/bookings/refunds'
+import { CLAIMS_DUE_SQL, claimRefusal, findCardPart, finishClaim, readClaim, type CardPart, type Claim } from '@/server/rules/bookings/refunds'
 
 /** Q14: a pending order or flow younger than this may still have staff at the reader. */
 export const RECONCILE_WINDOW_MINUTES = PROCESSING_MINUTES
@@ -843,6 +843,10 @@ async function checkWatchedPayment(run: Run, due: WatchedPayment): Promise<Recon
  * Left for the next run: a list Stripe didn't answer, or R2 failing in the database (nothing kept: one transaction).
  * W25 (W21 review L4): every part is looked at before the claim is left for a person, and what was found for each is
  * kept on the left row (`parts`), so the close by hand records the parts that went and puts only the others owed.
+ * W26a (Wayne, 14 Nov): a claim marked refused (`booking.refund_refused`: Stripe refused a part, and the press couldn't
+ * finish), or whose part Stripe shows as a failed or cancelled refund, ends with what never went owed on the booking,
+ * live or cancelled, never store credit, with Stripe's reason on the finished row. W26b (Wayne, 14 Nov): "not found"
+ * (no mark and no such refund) ends owed on a cancelled booking too; only the plan's own store credit is given.
  */
 async function reconcileClaim(run: Run, claim: Claim): Promise<ReconcileItem> {
   const { plan, livemode } = claim.details
@@ -851,6 +855,8 @@ async function reconcileClaim(run: Run, claim: Claim): Promise<ReconcileItem> {
   const never: CardPart[] = []
   const parts: ClaimPartFinding[] = []
   let forAPerson: { reason: 'several_refunds' | 'refund_mismatch'; detail: string } | null = null
+  /** W26a: Stripe shows a refund for a part that failed or was cancelled: a refusal, as the press's mark is. */
+  let refusedInStripe: string | null = null
   for (const part of plan.card) {
     const found = await findCardPart(run.stripe, claim.id, part, run.timing)
     // Stripe didn't answer for this part: nothing is concluded about any part until a run reads them all.
@@ -865,6 +871,10 @@ async function reconcileClaim(run: Run, claim: Claim): Promise<ReconcileItem> {
     } else if (found.kind === 'went') {
       parts.push({ ...finding, found: 'went' })
       went.push(part)
+    } else if (found.kind === 'refused') {
+      parts.push({ ...finding, found: 'none', detail: found.detail })
+      never.push(part)
+      refusedInStripe ??= found.detail
     } else {
       parts.push({ ...finding, found: 'none' })
       never.push(part)
@@ -873,7 +883,8 @@ async function reconcileClaim(run: Run, claim: Claim): Promise<ReconcileItem> {
   if (forAPerson) return left('claim', claim.id, forAPerson.reason, forAPerson.detail, { parts })
   const owed = Math.round(never.reduce((total, part) => total + part.amount, 0) * 100) / 100
   try {
-    const output = await finishClaim(run.db, claim, { went, extraToStoreCredit: 0, owed }, { actor: run.options.actor, requestId: run.options.requestId, how: 'reconcile' })
+    const refused = (await claimRefusal(run.db, claim)) ?? refusedInStripe
+    const output = await finishClaim(run.db, claim, { went, owed, ...(refused !== null ? { refused } : {}) }, { actor: run.options.actor, requestId: run.options.requestId, how: 'reconcile' })
     if (!output) return { kind: 'claim', id: claim.id, outcome: 'settled_elsewhere', detail: 'finished' }
     const detail = `card ${went.map((part) => `${part.orderId} £${part.amount.toFixed(2)}`).join(', ') || 'none'} recorded; £${owed.toFixed(2)} owed; £${output.storeCreditRefundedAmount.toFixed(2)} to store credit`
     return { kind: 'claim', id: claim.id, outcome: 'finalised', detail }

@@ -707,7 +707,7 @@ const OLD_REFUND_NOTES: ReadonlySet<string> = new Set(['booking.card_refund_refu
  * W21: a recording's rows for the refunds now on the Worker. The golden file's: the claims of Part refund and Refund
  * the rest, their finished rows, the actions' own rows, and the old code's refusal and unsure notes written between a
  * claim and its finished row (refundBooking's calls run one at a time). The new side's: the Worker's claims and their
- * finished rows, and the actions' own rows.
+ * finished rows, the actions' own rows, and (W26a) the marks of a card part Stripe refused (`booking.refund_refused`).
  */
 function refundRows(rows: readonly AuditRow[], side: 'golden' | 'new'): Set<AuditRow> {
   // W24: on the new side, an old claim of a kind now on the Worker comes from a setup step run on the old side
@@ -734,6 +734,9 @@ function refundRows(rows: readonly AuditRow[], side: 'golden' | 'new'): Set<Audi
       swapped.add(row)
     } else if (side === 'new' && row.action === 'order.reconcile' && row['entity_type'] === 'refund_claim') {
       // Reconcile's row for a held claim the replay settled (refundAsTheDialogPresses).
+      swapped.add(row)
+    } else if (side === 'new' && row.action === 'booking.refund_refused' && claimIds.has(row.details?.['claimId'])) {
+      // W26a: the Worker's mark that Stripe refused one of a claim's card parts (the old code wrote none).
       swapped.add(row)
     }
   }
@@ -993,13 +996,30 @@ export function newAuditRowProblems(recording: Recording): string[] {
     } else if (row.action === 'booking.refund_finished') {
       const claim = all.find((other) => other['id'] === d['claimId'])
       const c = (claim?.details ?? {}) as Record<string, unknown>
-      if (!sameKeys(d, ['claimId', 'outcome', 'cardRefunded', 'storeCreditRefunded', 'owed', ...('cash' in d ? ['cash'] : []), ...('by' in d ? ['by'] : [])])) wrong('fields')
+      if (!sameKeys(d, ['claimId', 'outcome', 'cardRefunded', 'storeCreditRefunded', 'owed', ...('cash' in d ? ['cash'] : []), ...('refused' in d ? ['refused'] : []), ...('by' in d ? ['by'] : [])])) wrong('fields')
+      // W26a: Stripe's reason, only on a claim that ended with money owed (a refused part never ends as store credit).
+      if ('refused' in d && (typeof d['refused'] !== 'string' || d['refused'] === '' || d['outcome'] !== 'owed')) wrong('refused without money owed')
       const accounted = round2(n('cardRefunded') + n('storeCreditRefunded') + n('owed') + Number(d['cash'] ?? 0))
       if (d['outcome'] === 'put_back') {
         if (accounted !== 0) wrong('a put-back moves nothing')
       } else if (accounted !== Number(c['amount'])) wrong('what went, to store credit and owed is not what was claimed')
       if (d['outcome'] !== 'put_back' && (d['outcome'] === 'owed') !== n('owed') > 0) wrong('owed exactly when something is')
+      // W26b (Wayne, 14 Nov): only the plan's own store credit is ever given. Card money that never went is owed on the
+      // booking, live or cancelled, never store credit on top.
+      const planned = Number(((c['plan'] ?? {}) as { storeCredit?: number }).storeCredit ?? 0)
+      if (d['outcome'] !== 'put_back' && n('storeCreditRefunded') !== round2(planned)) wrong("store credit given is not the plan's own")
       if (typeof row['request_id'] !== 'string') wrong('request id')
+    } else if (row.action === 'booking.refund_refused') {
+      // W26a: the mark of a refused card part: the claim, the planned part it names, Stripe's reason; and the claim never
+      // ends with that part's money given as store credit (put back, or at least that much owed).
+      const claim = all.find((other) => other['id'] === d['claimId'])
+      const plan = ((claim?.details ?? {})['plan'] ?? {}) as { card?: Array<{ orderId?: string; amount: number }> }
+      if (!sameKeys(d, ['claimId', 'orderId', 'amount', 'detail'])) wrong('fields')
+      if (claim?.details?.['worker'] !== true || !(plan.card ?? []).some((part) => part.orderId === d['orderId'] && part.amount === n('amount'))) wrong('not a planned card part of a Worker claim')
+      if (typeof d['detail'] !== 'string' || !d['detail'].startsWith('Failed to refund payment: ')) wrong("Stripe's reason")
+      const finished = all.find((other) => other.action === 'booking.refund_finished' && other.details?.['claimId'] === d['claimId'])
+      if (finished && finished.details?.['outcome'] !== 'put_back' && !(Number(finished.details?.['owed']) >= n('amount'))) wrong('a refused part that did not end owed')
+      if (row['entity_type'] !== 'booking' || typeof row['request_id'] !== 'string') wrong('entity or request id')
     } else if (row.action === 'booking.part_refund' || row.action === 'booking.refund_owed') {
       const part = row.action === 'booking.part_refund'
       const cash = 'cashRefunded' in d
@@ -1408,20 +1428,46 @@ export const CLAIM_KEYS: AllowedDifference = {
 /** W21a (W21 review S1): the line says what is left to refund, by its parts, or that nothing is. */
 const LEFT_LINE = /^(Left to refund: £\d+\.\d{2} (card money|gift card \/ store credit|cash)((, | and )£\d+\.\d{2} (gift card \/ store credit|cash))*\.|Nothing left to refund\.)$/
 
-/** Q26's cash and the line of what is left on every figures answer, and on the figures a refusal carries. Nothing else changes. */
+/** W26a (audit S5; Q37): the booking detail's payment line, by its parts, or that nothing was paid. */
+const PAID_WORDS = /^(Paid £\d+\.\d{2} (by card|by gift card \/ store credit|in cash)((, | and )£\d+\.\d{2} (by gift card \/ store credit|in cash))*\.|Nothing was paid\.)$/
+
+/**
+ * Q26's cash, the line of what is left, and (W26a) how the money on the booking was paid, on every figures answer and
+ * on the figures a refusal carries. Nothing else changes.
+ */
 export const FIGURES_CASH_AND_LINE: AllowedDifference = {
-  name: 'The refund figures also say what cash can be handed back (Q26) and what is left to refund, in words (W21a)',
-  decision: "Wayne's Q26 (6 Nov) and Q37 (12 Nov); lead call L2 (cash refunds for bookings in D); brief W21 items 1 and 5; brief W21a item 1 (W21 review S1)",
-  path: /^\.results\[\d+\]\.(refused\.figures\.)?(cashLeft|paidLine)$/,
+  name: 'The refund figures also say what cash can be handed back (Q26), what is left to refund, in words (W21a), and how the money on the booking was paid, in words (W26a, Q37)',
+  decision: "Wayne's Q26 (6 Nov) and Q37 (12 Nov); lead call L2 (cash refunds for bookings in D); brief W21 items 1 and 5; brief W21a item 1 (W21 review S1); brief W26a item 6 (audit S5; Wayne, 14 Nov)",
+  path: /^\.results\[\d+\]\.(refused\.figures\.)?(cashLeft|paidLine|paidWords)$/,
   actual: (value, expected, path) =>
-    expected === undefined && (path.endsWith('.cashLeft') ? typeof value === 'number' && value >= 0 : typeof value === 'string' && LEFT_LINE.test(value)),
+    expected === undefined &&
+    (path.endsWith('.cashLeft')
+      ? typeof value === 'number' && value >= 0
+      : path.endsWith('.paidWords')
+        ? typeof value === 'string' && PAID_WORDS.test(value)
+        : typeof value === 'string' && LEFT_LINE.test(value)),
 }
+
+/**
+ * W26a (Wayne, 14 Nov; audit table 35): a later card part Stripe refused stays on the booking as still to refund,
+ * never store credit unseen. The four part-refund-fails-partway scenarios end exactly as the old code left them (its
+ * store credit write failed, so £70 stayed owed): only the warning's words differ, and no store credit write is tried.
+ */
+const laterRefusalStaysOwed = (result: number, refusedPart: number, owed: number): AllowedDifference => ({
+  name: `A later card part Stripe refused (£${refusedPart.toFixed(2)}) is never sent to store credit: it stays on the booking as still to refund, and the warning carries Stripe's reason and the two buttons (the old warning said it may not have reached store credit)`,
+  decision: "Brief W26a item 1 (Wayne, 14 Nov: every Stripe card refusal is held for staff, never automatic store credit; audit S2, table 34 and 35)",
+  path: new RegExp(`^\\.results\\[${result}\\]\\.warning$`),
+  actual: (value) =>
+    value ===
+    `A further card refund of £${refusedPart.toFixed(2)} was refused (Failed to refund payment: Your card was declined.), so £${owed.toFixed(2)} shows on the booking as still to refund. Check Stripe first: if the money already reached the customer, use It already arrived; if not, use Refund the rest.`,
+})
 
 /**
  * R2's store credit write fails after a card part went (the scenario's failing write): the claim is held for
  * reconcile, with words saying what went (W6-3's rule for refunds: what went is never sent again). Reconcile, before
- * the next step (as staff would find it), records what went and leaves what Stripe refused owed: the booking ends
- * exactly as the old code left it.
+ * the next step (as staff would find it), records what went and gives the plan's store credit: the booking ends
+ * exactly as the old code left it. W26a: only for a claim whose plan has store credit of its own (Refund the rest
+ * across card and store credit); a refused later part writes no store credit any more (laterRefusalStaysOwed).
  */
 const heldWhileStoreCreditFails = (result: number, gone: number): AllowedDifference => ({
   name: `A card part went and R2's store credit write failed: held (unsure, "£${gone.toFixed(2)} went back to the card, but the refund couldn't be finished…"); reconcile then ends it as the old code did`,
@@ -1537,10 +1583,10 @@ export const REFUND_DIFFERENCES: ReadonlyMap<string, readonly AllowedDifference[
       },
     ],
   ],
-  ['part-refund-fails-partway', [CLAIM_KEYS, heldWhileStoreCreditFails(3, 50)]],
-  ['part-refund-fails-partway-then-the-rest', [CLAIM_KEYS, heldWhileStoreCreditFails(3, 50)]],
-  ['part-refund-fails-partway-then-a-same-price-move', [CLAIM_KEYS, heldWhileStoreCreditFails(3, 50)]],
-  ['part-refund-fails-partway-then-a-guest', [CLAIM_KEYS, heldWhileStoreCreditFails(3, 50)]],
+  ['part-refund-fails-partway', [CLAIM_KEYS, laterRefusalStaysOwed(3, 70, 70)]],
+  ['part-refund-fails-partway-then-the-rest', [CLAIM_KEYS, laterRefusalStaysOwed(3, 70, 70)]],
+  ['part-refund-fails-partway-then-a-same-price-move', [CLAIM_KEYS, laterRefusalStaysOwed(3, 70, 70)]],
+  ['part-refund-fails-partway-then-a-guest', [CLAIM_KEYS, laterRefusalStaysOwed(3, 70, 70)]],
   [
     'refund-the-rest-fails-partway-then-retried',
     [
