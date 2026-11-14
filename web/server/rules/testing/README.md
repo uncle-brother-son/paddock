@@ -309,8 +309,24 @@ E6 (Retool's 60 seconds); E11 (the dialog losing an answer: the function's own a
 cancel's second `order_not_found` and two of `refundOrder`'s three `store_credit_failed` texts (each needs a row the
 foreign keys forbid, or an amount of £0 that the function has already ruled out).
 
-No new side exists yet: W28 to W31 each add theirs (`refund-side.ts`, as `booking-side.ts` is step D's) and name
-every difference.
+W28 adds the first new side: `order-refund-side.ts` sends `refundOrder` to the staff app's thin wrapper and the
+Worker's route, as the dialog presses it (the Worker's figures loaded first and their total sent back as `confirmed`;
+a press key kept after no answer, with the total the dialog is still showing), and settles a held claim as reconcile
+would before the order's next step. `order-refund-replay.test.ts` runs the order refund scenarios
+(`w27-order-refund-*`, E2 to E5) through it and holds each to its golden file with the named differences in
+`order-refund-differences.ts` only (W28: the 57 that aren't a membership's). The
+old code's notes (`card_refund_held`, `order.card_refund_refused`) and the Worker's claim and action rows are set
+aside and checked on their own (`orderRefundRowProblems`). W29 moves the 10 membership scenarios
+(`MEMBERSHIP_SCENARIOS`) in, so all 67 replay: 19 match exactly, 19 differ only in the key, 29 have their own (E3,
+E4 and E10 among them, tied to Wayne's Q40 and Q41 and E-plan 4.3). The E3 recording's order was placed by the old
+createOrder, which never recorded the membership's own payment, so it shows the robe going back to the robe's payment
+and the membership's Card refund refused; `orders/membership-refund.test.ts` shows Q40 whole, on orders the Worker
+placed. The same file checks the W05 invariants on the new side, that a
+deliberate difference is caught, and that an allowance nobody needs fails. The E5 recordings model a used pass by
+lowering its sessions by hand, with no booking that names it, so they can't show E5: `orders/refund-lines.test.ts`
+does, with real bookings.
+
+W30 and W31 each add theirs for the event cancellations.
 
 ### Migration 023 and the saved schema (W27)
 

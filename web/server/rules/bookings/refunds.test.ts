@@ -567,6 +567,28 @@ describe('Refund the rest and It already arrived (W21)', () => {
       expect((await auditRows('booking.refund_owed_arrived'))[0]?.details).toEqual({ amount: 20, reason: 'Seen in Stripe' })
     })
   })
+
+  it('W28 (audit row 31): It already arrived takes part of what is owed; the rest stays owed, and more than is owed is still refused', async () => {
+    await onABooking(async ({ bookingId, stripe }) => {
+      await withTwentyOwed(stripe, bookingId)
+      const sent = stripe.calls.length
+      // £8 of the £20 turns out to be with the customer already (a refund of another amount found in Stripe).
+      const part = await refund('arrived', bookingId, { amount: 8, reason: 'Seen in Stripe: £8 of it' })
+      expect(part.body.data).toEqual({ cardRefundedAmount: 0, storeCreditRefundedAmount: 0, pricePaid: 32 })
+      expect(await booking(bookingId)).toMatchObject({ price_paid: '32.00', refund_owed_amount: '12.00' })
+      expect((await auditRows('booking.refund_owed_arrived'))[0]?.details).toEqual({ amount: 8, reason: 'Seen in Stripe: £8 of it' })
+      // More than what is left owed: refused with the new figure, nothing changed.
+      const over = await refund('arrived', bookingId, { amount: 12.01, reason: 'Seen in Stripe' })
+      expect(over.body.error?.details).toMatchObject({ reason: 'owed_changed', message: owedChangedMessage(12) })
+      expect(await booking(bookingId)).toMatchObject({ price_paid: '32.00', refund_owed_amount: '12.00' })
+      // Refund the rest still gives exactly what is owed, now £12.
+      expect((await refund('owed', bookingId, { amount: 20, refundMethod: 'credit' })).body.error?.details?.reason).toBe('owed_changed')
+      expect((await refund('owed', bookingId, { amount: 12, refundMethod: 'credit' })).body.data).toMatchObject({ storeCreditRefundedAmount: 12, pricePaid: 20 })
+      expect(await booking(bookingId)).toMatchObject({ price_paid: '20.00', refund_owed_amount: '0.00' })
+      expect(stripe.calls.length).toBe(sent)
+      expect((await refund('arrived', bookingId, { amount: 1, reason: 'Seen in Stripe' })).body.error?.details?.reason).toBe('nothing_owed')
+    })
+  })
 })
 
 describe('the figures route (W21)', () => {

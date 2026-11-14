@@ -638,7 +638,11 @@ const SUBSCRIPTION_PUT_BACK_REASONS: ReadonlySet<string> = new Set<SubscriptionP
 /** T2's answer is one on which a subscription the caller made is put back. */
 export const isPutBackReason = (reason: string): reason is SubscriptionPutBackReason => SUBSCRIPTION_PUT_BACK_REASONS.has(reason)
 
-/** Why a subscription was left: what T2 found (W13a, W13d), or reconcile putting back a left one (W13c, L3). */
+/**
+ * Why a subscription was left: what T2 found (W13a, W13d), or reconcile putting back a left one (W13c, L3). W29 adds
+ * a row of its own shape with `found: 'refund'` (refund-subscription.ts): a refunded membership's subscription still
+ * to cancel. Nothing in this file writes or retries those.
+ */
 export type SubscriptionLeftFound = SubscriptionPutBackReason | 'reconcile'
 
 /**

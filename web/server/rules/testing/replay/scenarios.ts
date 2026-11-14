@@ -760,8 +760,9 @@ const WORKER_DOES_IT_NOW: Readonly<Record<string, { route: RegExp; answerLost: R
   // W23: and Cancel & Refund's and Cancel & return credit's (one card part per order, sent inside the cancel route).
   '/api/payments/refund-order': {
     // W24: and a cheaper Move's (inside the move route).
-    route: /^\/api\/v1\/staff\/bookings\/[^/]+\/(refunds(\/owed)?|cancel-and-refund|cancel-credit|move)$/,
-    answerLost: /^\/api\/v1\/staff\/bookings\/[^/]+\/(refunds(\/owed)?|cancel-and-refund|cancel-credit|move)$/,
+    // W28: and an order refund's (inside the order's refunds route; the old refundOrder made the legacy call itself).
+    route: /^\/api\/v1\/staff\/(bookings\/[^/]+\/(refunds(\/owed)?|cancel-and-refund|cancel-credit|move)|orders\/[^/]+\/refunds(\/owed)?)$/,
+    answerLost: /^\/api\/v1\/staff\/(bookings\/[^/]+\/(refunds(\/owed)?|cancel-and-refund|cancel-credit|move)|orders\/[^/]+\/refunds(\/owed)?)$/,
   },
 }
 

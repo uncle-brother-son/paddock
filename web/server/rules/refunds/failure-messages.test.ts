@@ -108,6 +108,45 @@ describe('the words W27 adds', () => {
     expect(words.EVENT_BOOKING_REFUND_OPEN_MESSAGE).toContain('this event booking')
   })
 
+  it('review S2 (W28a): after a refusal Stripe gave, the not-put-back words end with Refund the rest, never "Check Stripe first"; a refund never sent keeps it', () => {
+    const declined = 'Failed to refund payment: Your card was declined.'
+    expect(words.ORDER_REFUND_NEW_WORDS.putBackBlocked(declined, 24, true)).toBe(
+      "The card refund was refused (Failed to refund payment: Your card was declined.), so nothing went back, and the order can't be put back as it was: stock it returned has been sold since. The refund stands, and £24.00 shows on the order as still to refund. Use Refund the rest to give it another way."
+    )
+    expect(words.ORDER_REFUND_NEW_WORDS.putBackFailed(declined, 24, true)).toBe(
+      "The card refund was refused (Failed to refund payment: Your card was declined.), so nothing went back, and the order couldn't be put back as it was. The refund stands, and £24.00 shows on the order as still to refund. Use Refund the rest to give it another way."
+    )
+    for (const text of [words.ORDER_REFUND_NEW_WORDS.putBackBlocked(declined, 24, true), words.ORDER_REFUND_NEW_WORDS.putBackFailed(declined, 24, true)]) expect(text).not.toContain('Check Stripe')
+    // Not sent in time: Stripe said nothing, so staff still check it first.
+    const notSent = words.ORDER_REFUND_NEW_WORDS.notSentDetail
+    for (const text of [words.ORDER_REFUND_NEW_WORDS.putBackBlocked(notSent, 24, false), words.ORDER_REFUND_NEW_WORDS.putBackFailed(notSent, 24, false)]) {
+      expect(text.endsWith('Check Stripe first: if the money already reached the customer, use It already arrived; if not, use Refund the rest.')).toBe(true)
+    }
+  })
+
+  it('W29: the membership words, word for word: Q41\'s line under the line, Q40\'s two refusals, and the cancel left (to staff, and on the stuck list)', () => {
+    expect(words.membershipUsedWords(0, 0)).toBeNull()
+    expect(words.membershipUsedWords(1, 0)).toBe('1 credit session already taken.')
+    expect(words.membershipUsedWords(0, 1)).toBe('1 future credit booking will need payment.')
+    expect(words.membershipUsedWords(4, 2)).toBe('4 credit sessions already taken; 2 future credit bookings will need payment.')
+    expect(words.MEMBERSHIP_REFUND_WORDS.refundAlone).toBe(
+      'This membership was paid by its own card payment, separate from the rest of the order. To refund it to the card, refund the membership line on its own, then the other lines.'
+    )
+    expect(words.MEMBERSHIP_REFUND_WORDS.paymentNotRecorded).toBe(
+      "This membership was paid by its own card payment, which this order doesn't name, so it can't go back to the card from here. Use store credit instead, or tell a manager."
+    )
+    expect(words.MEMBERSHIP_REFUND_WORDS.cancelLeft('sub_1')).toBe(
+      "The refund is done, but the membership's subscription (sub_1) couldn't be confirmed cancelled in Stripe yet, so it could still take its next payment. The automatic check tries again every 5 minutes, and it shows on the Orders page until it is cancelled. Don't refund it again."
+    )
+    expect(words.MEMBERSHIP_REFUND_WORDS.cancelLeftListed('sub_1')).toBe(
+      "A membership was refunded, but its subscription (sub_1) couldn't be confirmed cancelled in Stripe yet, so it could still take its next payment. The automatic check tries again every 5 minutes. If this stays, cancel it in Stripe by hand, then press Mark sorted (needs the Issue refunds permission)."
+    )
+    // W28's stand-in refusal is gone with its reason.
+    expect(words.ORDER_REFUND_NEW_REASONS).not.toContain('membership_not_built')
+    expect(words.ORDER_REFUND_NEW_REASONS).toEqual(expect.arrayContaining(['membership_refund_alone', 'membership_payment_not_recorded']))
+    expect('membershipNotBuilt' in words.ORDER_REFUND_NEW_WORDS).toBe(false)
+  })
+
   it("the pipeline's refusal detail is the legacy refund route's words", () => {
     expect(words.refundRefusedDetail('Your card was declined.')).toBe('Failed to refund payment: Your card was declined.')
   })

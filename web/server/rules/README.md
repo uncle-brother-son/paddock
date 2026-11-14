@@ -692,6 +692,80 @@ changed:** step D's suite, replay and planted bugs pass as before.
 - `supabase/migrations/023_orders_refund_owed_and_cash_refunds.sql`: **written, not applied.** The saved test schema
   already has it (testing/README.md).
 
+## Order refunds on the Worker (W28)
+
+`refundOrder` is the Worker's now: `POST /api/v1/staff/orders/:orderId/refunds`, with
+`GET …/refund-figures`, `POST …/refunds/owed` (Refund the rest) and `POST …/refunds/owed-arrived` (It already
+arrived). The rule is `orders/refund-lines.ts`, on W27's pieces. Gated by `order_refunds` (the figures and It already
+arrived, which move no money, are not). W29 adds the membership line and the payment date change charge (below); W28
+and W29 are released together.
+
+- **R1 (one transaction, no Stripe):** `lockForRefund` (the order, its customer, the passes, variants and gift cards
+  the lines need), `refund_open` while any claim holds the order, the old checks in the old order with the old words,
+  E2 (only an order that is `paid` or `partially_refunded`), E5 (a pass is used when a booking that names it holds its
+  seat: not cancelled, or cancelled with the session not returned; W28a: or while a Move off its seat still waits for
+  its payment, when no booking names the pass and its session hasn't come back; never the pass type's sessions today), the amount
+  staff confirmed (Q18; **no `confirmed`, nothing moves**), the plan, the lines' reversals (gift card voided, pass
+  emptied, stock back with its `stock_adjustments` row), the lines stamped, the claim. With no card part R1 also gives
+  the store credit (or records the cash) and finishes.
+- **The plan:** card capped at the order's card money left (`loadOrderCardPortion`), the rest to store credit; or
+  cash (Wayne's Q42) capped at the cash paid on the order less cash already handed back (`orderCashLeft`), the rest to
+  store credit; or all store credit. One card part at most, keyed `<claimId>:refund:<orderId>`.
+- **The card part:** sent once after R1 commits. Went: R2 (the card money on its lines, the store credit, the order's
+  status, `order.refund`, `order.refund_finished`). Refused: marked (`order.refund_refused`), then R1 undone in one
+  transaction (run once more after a deadlock, W29a: it writes a refunded membership's credit bookings after locking
+  the customer) and the old words answered; never store credit instead. If the undo can't run (a restocked item sold
+  since: `OrderPutBackBlocked`) or fails, the refund stands and the card money is **owed on the order**
+  (`orders.refund_owed_amount`) with Stripe's reason. No clear answer: held; reconcile lists the payment's refunds by
+  `metadata.claim_id` and runs R2 (found) or leaves the money owed (not found). Never sent again by anyone.
+- **Money owed on an order (Q39):** Refund the rest gives exactly what is owed (card as a new claim, store credit, or
+  cash within the cap, never split). It already arrived takes any amount up to what is owed (the W26 audit's row 31;
+  a booking's does too now), with a reason, and moves no money.
+- **Reconcile, the stuck list, the manual close** take order claims (`ORDER_CLAIMS_DUE_SQL`, `reconcileOrderClaim`,
+  `closeHeldOrderClaim`): the same rules as a booking's claim, with the money left on the order.
+- **Words (W27 review L4):** an order held by a *booking's* card part answers "A refund on this order's card payment
+  is still being checked…".
+- **The claim writers** (`refunds/claims.ts`) now throw for an order with no row, and allow cash beside store credit
+  (Q42), never beside a card part.
+- `orders/lock-statements.test.ts` reads `lockForOrder`'s and `lockForBooking`'s statements as W27's test reads
+  `lockForRefund`'s: each lateral must name the one before it.
+
+## The membership line and the payment date change charge (W29)
+
+In `orders/refund-lines.ts`, with the subscription's cancel in `orders/refund-subscription.ts`. Wayne's Q40 and Q41
+(14 Nov); bugs E3, E4, E10.
+
+- **The line (R1):** the membership is marked cancelled with no add-on credits and no end date, as the old function
+  wrote it. `membership_instance_not_found` keeps its words. The undo puts the row back exactly as it was (its status,
+  credits and end date are on the claim's line).
+- **Q41, a used membership still refunds, and says so:** the figures carry `membership.creditSessionsTaken` and
+  `membership.futureCreditBookings` on the line, for the dialog to show before the press. R1 flags the future credit
+  bookings as payment needed **in the same transaction**, through the database's own
+  `flag_uncovered_credit_bookings` (covered through yesterday: a refund in full covers nothing from now on). The old
+  code left that to Stripe's webhook, and a membership with no subscription was never flagged. The claim keeps the
+  flagged ids; the undo confirms those that are still as R1 left them.
+- **Q40, each line goes back to the card payment that took it:** a saved-card membership order with a remainder
+  charge has two card payments. `loadOrderCardPortion` now answers `membershipPayment` for it (the first invoice's
+  PaymentIntent from `orders.reader_payment`, what it took, what has gone back) and no longer counts the membership
+  line's card money against the remainder. A Card refund of the membership line is a refund of that payment, made on
+  its own (`membership_refund_alone` when chosen with other lines: a claim has one card part). The other lines go
+  back to the order's own payment as before. An order placed by the old createOrder (before 11 Nov 2026) never
+  recorded the membership's payment: Card is refused for its membership line (`membership_payment_not_recorded`),
+  never taken from the other payment (E3). Every other membership order has one card payment (the first invoice's,
+  which the order names, or the reader's tap) and refunds as any line. A reader order is known by its record
+  (`orders.reader_payment`), not only by `payment_method`: one part-paid by gift card is written `split`, and its whole
+  tap is still its card money (W29a, W29 review S1). Refund the rest follows the same rule (`owedPayment`).
+- **The subscription is cancelled last (E10):** only once the claim has finished with its refund standing. R2 records
+  each refunded membership's subscription as left in the same transaction as the money
+  (`order.subscription_left`, `found: 'refund'`); the press (or reconcile after its own R2) then cancels it, checked,
+  and writes the `cancelled` row. A cancel refused or unclear stays left: the answer carries a warning, the stuck list
+  shows it (Mark sorted closes it by hand), and every reconcile run cancels again (`retryRefundCancel`), which is
+  harmless twice. **No refund is ever sent by that retry.** A card refund Stripe refuses is undone and never cancels
+  anything; a claim held for reconcile cancels nothing until reconcile's R2. W13's put-back retry
+  (`retryLeftSubscription`, which also refunds a first invoice) never takes a `found: 'refund'` row.
+- **The payment date change charge** is a membership line that sold no membership (its order has a row in
+  `membership_payment_date_changes`): a plain line, with no cancel and no membership change; the new date stays.
+
 ## Refund claims with no finish
 
 The staff app claims a refund's money before it moves. Each claim writes `booking.refund_claimed` to

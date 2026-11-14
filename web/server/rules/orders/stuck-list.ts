@@ -14,6 +14,8 @@ import { CHANGED_SINCE_MESSAGE } from './failure-messages'
 import { isWorkerCardFlow, isWorkerFlow, type FlowSnapshot } from './reader-flow'
 import type { StuckCloseTarget } from '@/contracts'
 import { PROCESSING_MINUTES as RECONCILE_WINDOW_MINUTES } from './pending-order'
+import { MEMBERSHIP_REFUND_WORDS } from '@/server/rules/refunds/failure-messages'
+import { LEFT_BY_REFUND } from './refund-subscription'
 
 /**
  * Words for each reason an item is listed (W12's, W14b: every reason reconcile can leave an order or flow with has
@@ -91,6 +93,14 @@ export const STUCK_WORDS: Readonly<Record<string, string>> = {
  */
 export const CLAIM_WAITING_WORDS =
   "A refund on this booking didn't finish cleanly. The automatic check, every 5 minutes, looks for it in Stripe and finishes it: anything Stripe never received becomes money still to refund on the booking (Refund the rest). Don't refund it again."
+
+/** W28: the same for an order refund's claim (E-plan 4.9): what Stripe never received is left on the order. */
+export const ORDER_CLAIM_WAITING_WORDS =
+  "A refund on this order didn't finish cleanly. The automatic check, every 5 minutes, looks for it in Stripe and finishes it: anything Stripe never received becomes money still to refund on the order (Refund the rest). Don't refund it again."
+/** W28: an order claim's own words where a booking claim's name the booking. */
+const ORDER_CLAIM_WORDS: Readonly<Record<string, string>> = {
+  finish_failed: "The refund was found in Stripe but couldn't be recorded on the order yet. The automatic check tries again every 5 minutes: don't refund it again.",
+}
 
 /**
  * W21 (W19 review later 1): the reasons a Worker flow reconcile left for a person can be closed by hand with
@@ -205,7 +215,10 @@ export interface StuckFlow {
 
 export interface StuckClaim {
   claimId: string
-  bookingId: string
+  /** The booking a booking refund's claim is on; null for an order refund's (W28). */
+  bookingId: string | null
+  /** W28: the order an order refund's claim is on; null for a booking's. */
+  orderId: string | null
   customerName: string
   /** The card money the claim planned to send. */
   amount: number
@@ -310,6 +323,23 @@ WHERE c.action = 'booking.refund_claimed' AND c.entity_type = 'booking' AND c.de
   )
 ORDER BY c.at, c.id`
 
+/** W28: the same for order refund claims (`order.refund_claimed`), with the order's customer. */
+const ORDER_CLAIMS_SQL = `
+SELECT c.id, c.entity_id AS order_id, c.at AS created_at, c.details, cu.first_name, cu.last_name,
+       (SELECT r.details FROM audit_log r
+        WHERE r.entity_type = 'refund_claim' AND r.entity_id = c.id::text AND r.action = 'order.reconcile'
+        ORDER BY r.at DESC LIMIT 1) AS last
+FROM audit_log c
+JOIN orders o ON o.id::text = c.entity_id
+JOIN customers cu ON cu.id = o.customer_id
+WHERE c.action = 'order.refund_claimed' AND c.entity_type = 'order' AND c.details->>'worker' = 'true'
+  AND c.at < now() - make_interval(mins => $1::int)
+  AND NOT EXISTS (
+    SELECT 1 FROM audit_log f
+    WHERE f.action = 'order.refund_finished' AND f.entity_type = 'order' AND f.entity_id = c.entity_id AND f.details->>'claimId' = c.id::text
+  )
+ORDER BY c.at, c.id`
+
 const REFUNDS_SQL = `
 WITH charged AS (
   SELECT a.entity_type, a.entity_id, a.details->>'paymentIntentId' AS payment_intent_id,
@@ -347,11 +377,13 @@ ORDER BY at DESC`
  * (T2 records the subscription as left, then the put-back, or reconcile's retry, may record it left again).
  * Reconcile retries each (L3), from what the row carries. W14b (W13c review L4): a `refused` row (Stripe refused a
  * step for good) is listed the same but never retried; the manual close's `cancelled` row closes either.
+ * W29: also a refunded membership's subscription whose cancel hasn't been confirmed (`found: 'refund'`,
+ * refund-subscription.ts), listed with its own words and retried by reconcile with a cancel only, never a refund.
  */
 export const SUBSCRIPTIONS_LEFT_SQL = `
 SELECT s.entity_id, s.at, s.details->>'subscriptionId' AS subscription_id,
        s.details->>'invoicePaymentIntentId' AS invoice_payment_intent_id, (s.details->>'amountPaid')::int AS amount_paid,
-       s.details->>'state' AS state
+       s.details->>'state' AS state, s.details->>'found' AS found, s.details->>'claimId' AS claim_id
 FROM (
   SELECT DISTINCT ON (entity_id, details->>'subscriptionId') entity_id, at, details
   FROM audit_log
@@ -431,10 +463,19 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
     last_name: string
     last: Last | null
   }>(CLAIMS_SQL, [olderThanMinutes])
+  const orderClaims = await db.query<{
+    id: string
+    order_id: string
+    created_at: unknown
+    details: { plan?: { card?: Array<{ amount: number }> } }
+    first_name: string
+    last_name: string
+    last: Last | null
+  }>(ORDER_CLAIMS_SQL, [olderThanMinutes])
   const refunds = await db.query<{ entity_type: string; entity_id: string; payment_intent_id: string; pence: number; state: string }>(REFUNDS_SQL)
   const warnings = await db.query<{ entity_type: string; entity_id: string; at: unknown; warning: string }>(WARNINGS_SQL, [WARNINGS_FOR_HOURS])
   const alert = (await db.query<{ at: unknown }>(ALERT_SQL, [ALERT_FOR_MINUTES]))[0]
-  const subscriptionsLeft = await db.query<{ entity_id: string; at: unknown; subscription_id: string; state: string }>(SUBSCRIPTIONS_LEFT_SQL)
+  const subscriptionsLeft = await db.query<{ entity_id: string; at: unknown; subscription_id: string; state: string; found: string | null }>(SUBSCRIPTIONS_LEFT_SQL)
 
   return {
     checkout: orders.map((row): StuckOrder => {
@@ -509,6 +550,7 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
       return {
         claimId: row.id,
         bookingId: row.booking_id,
+        orderId: null,
         customerName: `${row.first_name} ${row.last_name}`.trim(),
         amount,
         createdAt,
@@ -517,7 +559,27 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
         words: reason === 'waiting' ? CLAIM_WAITING_WORDS : wordsFor(reason),
         ...(closable ? { close: { kind: 'held_claim' as const, orderId: row.id } } : {}),
       }
-    }),
+    }).concat(
+      // W28: order refund claims, after the bookings', each oldest first.
+      orderClaims.map((row): StuckClaim => {
+        const reason = reasonFor(true, row.last)
+        const createdAt = iso(row.created_at)
+        const amount = Math.round((row.details.plan?.card ?? []).reduce((total, part) => total + Number(part.amount), 0) * 100) / 100
+        const closable = row.last?.outcome === 'left' && HELD_CLAIM_CLOSE_REASONS.has(reason)
+        return {
+          claimId: row.id,
+          bookingId: null,
+          orderId: row.order_id,
+          customerName: `${row.first_name} ${row.last_name}`.trim(),
+          amount,
+          createdAt,
+          ageMinutes: ageMinutes(createdAt),
+          reason,
+          words: reason === 'waiting' ? ORDER_CLAIM_WAITING_WORDS : (ORDER_CLAIM_WORDS[reason] ?? wordsFor(reason)),
+          ...(closable ? { close: { kind: 'held_claim' as const, orderId: row.id } } : {}),
+        }
+      })
+    ),
     refunds: refunds.map((row) => {
       const amount = row.pence / 100
       const state = (['started', 'sent', 'failed'].includes(row.state) ? row.state : 'waiting') as StuckRefund['state']
@@ -538,7 +600,12 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
           kind: 'order',
           id: row.entity_id,
           at: iso(row.at),
-          warning: row.state === 'refused' ? SUBSCRIPTION_REFUSED_WORDS(row.subscription_id) : SUBSCRIPTION_LEFT_WORDS(row.subscription_id),
+          warning:
+            row.found === LEFT_BY_REFUND
+              ? MEMBERSHIP_REFUND_WORDS.cancelLeftListed(row.subscription_id)
+              : row.state === 'refused'
+                ? SUBSCRIPTION_REFUSED_WORDS(row.subscription_id)
+                : SUBSCRIPTION_LEFT_WORDS(row.subscription_id),
           close: { kind: 'subscription_left', orderId: row.entity_id, subscriptionId: row.subscription_id },
         })
       )

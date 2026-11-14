@@ -47,7 +47,12 @@ export interface HeldBookingLocks {
  * booking_guests or order line insert that only points at the booking (a foreign key's KEY SHARE) doesn't wait.
  * Null when the booking doesn't exist: nothing else is locked then.
  */
-const LOCK_SQL = `
+/**
+ * W28 (W27 "Noticed" 1): exported for its test only (server/rules/orders/lock-statements.test.ts). Postgres usually
+ * runs the laterals in the order written even without the reference to the one before, so a missing reference changes
+ * nothing a race test can see until the day the planner reorders them. The test reads lockForBooking's statement itself.
+ */
+export const BOOKING_LOCK_SQL = `
 SELECT b.id AS booking_id, b.customer_id, b.session_id AS booking_session_id, c.id AS customer_locked, s.ids AS session_ids,
        p.ids AS credit_period_ids, sp.id AS session_pass_id, m.ids AS membership_ids, g.id AS gift_card_id
 FROM (SELECT id, customer_id, session_id FROM bookings WHERE id = $1::uuid FOR NO KEY UPDATE) b
@@ -97,7 +102,7 @@ export async function lockForBooking(tx: Tx, targets: BookingLockTargets): Promi
       session_pass_id: string | null
       membership_ids: string[] | null
       gift_card_id: string | null
-    }>(LOCK_SQL, [
+    }>(BOOKING_LOCK_SQL, [
       targets.bookingId,
       sortedIds(targets.sessionIds),
       targets.ownSession ?? false,

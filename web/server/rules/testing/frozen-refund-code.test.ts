@@ -23,6 +23,8 @@ const HARNESS = path.join(TESTING_DIR, 'replay/harness.ts')
 const SKIP_DIRS = new Set(['node_modules', '.next', '.open-next', '.git', 'storybook-static', 'coverage', '.wrangler'])
 /** The one file that isn't a copy: the stand-in for the staff app's typecheck barrel (the copy's README). */
 const STAND_IN = 'typecheckAll.ts'
+/** W28 on: the step E functions the staff app has switched to the Worker (a thin wrapper there; the old body only here). */
+const SWITCHED_TO_THE_WORKER: ReadonlySet<string> = new Set(['refundOrder.ts'])
 /** The three modules the frozen order copy took from the staff app's checkout until W27 (audit row 1). */
 const ONCE_ALIASED = ['shared/cancelMembershipSubscription', 'shared/promoCodes', 'shared/stockAdjustments']
 
@@ -102,13 +104,22 @@ describe('W27: the frozen copy of the old step E functions', () => {
     for (const file of copyFiles) {
       const name = inCopy(file)
       const original = path.join(appDir, 'backend/paddock', name)
-      if (name === STAND_IN || name === 'shared/workerContracts.ts' || !existsSync(original)) continue
+      // W28: the staff app's refundOrder is a thin call to the Worker now; the copy keeps the old body for the replay.
+      if (name === STAND_IN || name === 'shared/workerContracts.ts' || SWITCHED_TO_THE_WORKER.has(name) || !existsSync(original)) continue
       expect(sha256(file), name).toBe(sha256(original))
       compared.push(name)
     }
-    // At W27 every one of them is still in the staff app: 27 compared (29 less the stand-in and the generated contracts,
-    // which each Worker change regenerates). The number only falls as slices delete their old bodies.
-    expect(compared.length).toBeLessThanOrEqual(27)
+    // At W27 every one of them was still in the staff app: 27 compared (29 less the stand-in and the generated contracts,
+    // which each Worker change regenerates). The number only falls as slices switch or delete their old bodies. W28: 26
+    // (refundOrder switched).
+    expect(compared.length).toBeLessThanOrEqual(26)
+    // A switched function is a thin wrapper, not a drifted copy: it calls the Worker and no longer touches the database.
+    for (const name of SWITCHED_TO_THE_WORKER) {
+      const wrapper = code(path.join(appDir, 'backend/paddock', name))
+      expect(wrapper, name).toContain('callWorker')
+      expect(wrapper, name).not.toContain('paddockData')
+      expect(wrapper, name).not.toContain('paddockBackendApi2')
+    }
     for (const name of compared) expect(existsSync(path.join(COPY_CODE, name))).toBe(true)
   })
 

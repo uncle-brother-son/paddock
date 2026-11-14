@@ -70,6 +70,11 @@ const STAFF_PATTERNS: Array<{ pattern: RegExp; load: () => Promise<unknown>; par
   { pattern: /^\/api\/v1\/staff\/bookings\/([^/]+)\/move\/quote$/, load: () => import('@/app/api/v1/staff/bookings/[bookingId]/move/quote/route'), params: (m) => ({ bookingId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/bookings\/([^/]+)\/move$/, load: () => import('@/app/api/v1/staff/bookings/[bookingId]/move/route'), params: (m) => ({ bookingId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/bookings\/([^/]+)\/refund-figures$/, load: () => import('@/app/api/v1/staff/bookings/[bookingId]/refund-figures/route'), params: (m) => ({ bookingId: decodeURIComponent(m[1] ?? '') }) },
+  // W28: the staff app's thin refundOrder, getOrderRefundFigures and refundOrderOwed.
+  { pattern: /^\/api\/v1\/staff\/orders\/([^/]+)\/refund-figures$/, load: () => import('@/app/api/v1/staff/orders/[orderId]/refund-figures/route'), params: (m) => ({ orderId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/orders\/([^/]+)\/refunds$/, load: () => import('@/app/api/v1/staff/orders/[orderId]/refunds/route'), params: (m) => ({ orderId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/orders\/([^/]+)\/refunds\/owed$/, load: () => import('@/app/api/v1/staff/orders/[orderId]/refunds/owed/route'), params: (m) => ({ orderId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/orders\/([^/]+)\/refunds\/owed-arrived$/, load: () => import('@/app/api/v1/staff/orders/[orderId]/refunds/owed-arrived/route'), params: (m) => ({ orderId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/reader-flows\/([^/]+)\/finalise$/, load: () => import('@/app/api/v1/staff/reader-flows/[pendingId]/finalise/route'), params: (m) => ({ pendingId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/reader-flows\/([^/]+)\/cancel$/, load: () => import('@/app/api/v1/staff/reader-flows/[pendingId]/cancel/route'), params: (m) => ({ pendingId: decodeURIComponent(m[1] ?? '') }) },
 ]

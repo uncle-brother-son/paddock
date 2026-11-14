@@ -58,7 +58,7 @@ export const changedElsewhereFindingSchema = z.object({
 export type ChangedElsewhereFindingOutput = z.infer<typeof changedElsewhereFindingSchema>
 
 export const reconcileItemSchema = z.object({
-  /** W21: `claim` is a booking refund's claim (server/rules/bookings/refunds.ts) held for reconcile. */
+  /** W21: `claim` is a booking refund's claim (server/rules/bookings/refunds.ts) held for reconcile. W28: or an order refund's. */
   kind: z.enum(['order', 'flow', 'refund', 'claim']),
   id: z.string(),
   outcome: z.enum(['finalised', 'undone', 'settled_elsewhere', 'refund_pending', 'refund_confirmed', 'refund_failed', 'left']),
@@ -99,7 +99,7 @@ export type ReconcileRunOutput = z.infer<typeof reconcileRunOutputSchema>
  *   `orderId` is the flow's pending id.
  * - `held_claim` (W21): a booking refund's claim reconcile left for a person: its card parts not yet recorded go on
  *   the booking as money still to refund (It already arrived, or Refund the rest), the rest as R2 gives it. `orderId`
- *   is the claim's id.
+ *   is the claim's id. W28: an order refund's claim too, with the money left on the order.
  */
 export const stuckCloseKindSchema = z.enum(['held_order', 'changed_elsewhere', 'subscription_left', 'late_refund', 'held_flow', 'held_claim'])
 export type StuckCloseKind = z.infer<typeof stuckCloseKindSchema>
@@ -155,7 +155,10 @@ export type StuckFlowOutput = z.infer<typeof stuckFlowSchema>
  */
 export const stuckClaimSchema = z.object({
   claimId: z.string(),
-  bookingId: z.string(),
+  /** The booking a booking refund's claim is on; null for an order refund's (W28). */
+  bookingId: z.string().nullable(),
+  /** W28: the order an order refund's claim is on; null for a booking's. */
+  orderId: z.string().nullable(),
   customerName: z.string(),
   amount: z.number(),
   createdAt: z.string(),

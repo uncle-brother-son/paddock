@@ -7,7 +7,7 @@ import { z } from 'zod'
  * function answered for itself (a method is any string, the line ids any array), so the rule refuses with the old
  * reason and words instead of zod giving a generic VALIDATION (W02's lesson). `confirmed` is new: the figure staff
  * were shown (Q18), checked to half a penny before any money moves.
- * Nothing calls these routes yet (dark); each slice firms up its own output when it builds the route.
+ * W28 built the routes; W29 adds the membership line (Q40, Q41) and the payment date change charge.
  *
  *   GET  /api/v1/staff/orders/:orderId/refund-figures        new: the dialog's sums (E1)
  *   POST /api/v1/staff/orders/:orderId/refunds               refundOrder
@@ -46,6 +46,18 @@ export const orderRefundLineFiguresSchema = z.object({
   refunded: z.boolean(),
   /** Why the line can't be refunded as things stand (the old reason and words), or null. */
   blocked: z.object({ reason: z.string(), message: z.string() }).nullable(),
+  /**
+   * W29 (Wayne's Q41), on a line that sells a membership: how much of it has been used, for the dialog to say before
+   * the press. `creditSessionsTaken`: credit sessions already taken with it. `futureCreditBookings`: its credit
+   * bookings still to come, which the refund flags as payment needed in the same step.
+   */
+  membership: z.object({ creditSessionsTaken: z.number(), futureCreditBookings: z.number() }).optional(),
+  /**
+   * W29 (Wayne's Q40), on a membership line paid by a card payment of its own (a saved-card membership bought with
+   * other things): the card money that payment can still give back. A Card refund of this line goes there, never to
+   * the order's own payment (`cardLeft`), and the line is refunded to the card on its own.
+   */
+  ownCardLeft: z.number().optional(),
 })
 export type OrderRefundLineFigures = z.infer<typeof orderRefundLineFiguresSchema>
 
@@ -108,6 +120,13 @@ export const refundOrderOutputSchema = z.object({
   refundOwed: z.number().optional(),
   warning: z.string().optional(),
   held: heldOrderRefundSchema.optional(),
+  /** W29 (Q41): the membership's future credit bookings the refund flagged as payment needed. */
+  bookingsFlagged: z.number().optional(),
+  /**
+   * W29 (E10): a refunded membership's subscription that couldn't be confirmed cancelled in Stripe yet. The refund
+   * stands; the cancel is on the stuck list and the automatic check retries it. `warning` says so.
+   */
+  subscriptionCancelLeft: z.array(z.string()).optional(),
 })
 export type RefundOrderOutput = z.infer<typeof refundOrderOutputSchema>
 

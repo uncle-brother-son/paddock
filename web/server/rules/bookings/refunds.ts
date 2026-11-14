@@ -512,7 +512,7 @@ const OWED_OFF_SQL = {
   cancelled: 'UPDATE bookings SET refund_owed_amount = refund_owed_amount - $1::numeric, updated_at = now() WHERE id = $2::uuid',
 } as const
 
-/** What Refund the rest and It already arrived both refuse: the amount must be what is owed, to half a penny. */
+/** What Refund the rest refuses: the amount must be what is owed, to half a penny. (W28: It already arrived takes part of it too.) */
 function owedRefusal(amount: number, figures: RefundFigures): ApiError | null {
   if (figures.refundOwed <= 0) return refundRefusal('CONFLICT', 'nothing_owed', REFUND_WORDS.nothingOwed, { figures })
   if (overHalfPenny(amount, figures.refundOwed) || overHalfPenny(figures.refundOwed, amount)) {
@@ -1437,6 +1437,7 @@ export function refundOwed(db: Db, bookingId: string, input: RefundOwedInput, op
 /**
  * It already arrived: what is owed reached the customer after all, so it comes off the booking with no money moving.
  * One transaction with its `booking.refund_owed_arrived` row (the old one statement's), as nothing else records it.
+ * W28: all of what is owed, or part of it (the rest stays owed).
  */
 export async function owedArrived(db: Db, bookingId: string, input: OwedArrivedInput, options: Pick<RefundOptions, 'actor' | 'requestId'>): Promise<RefundBookingOutput> {
   return inC1(
@@ -1445,10 +1446,13 @@ export async function owedArrived(db: Db, bookingId: string, input: OwedArrivedI
       const { booking, amount, cancelled } = await lockAndCheck(tx, bookingId, input.amount, true)
       const reason = requiredReason(input.reason, 'this')
       const figures = await withCashAndLine(tx, bookingId, booking.figures)
-      const refused = owedRefusal(amount, figures)
-      if (refused) throw refused
-      const owed = figures.refundOwed
-      await tx.query(cancelled ? OWED_OFF_SQL.cancelled : OWED_OFF_SQL.live, [owed, bookingId])
+      // W28 (the W26 audit's row 31; W25 review L4): any amount up to what is owed, so a part found in Stripe with a
+      // different amount can be settled exactly. More than is owed is still refused, with the figure (as before).
+      if (figures.refundOwed <= 0) throw refundRefusal('CONFLICT', 'nothing_owed', REFUND_WORDS.nothingOwed, { figures })
+      if (overHalfPenny(amount, figures.refundOwed)) throw refundRefusal('CONFLICT', 'owed_changed', owedChangedMessage(figures.refundOwed), { figures })
+      // Within half a penny of all that is owed clears it exactly.
+      const arrived = round2(Math.min(amount, figures.refundOwed))
+      await tx.query(cancelled ? OWED_OFF_SQL.cancelled : OWED_OFF_SQL.live, [arrived, bookingId])
       await audit.recordAll(tx, [
         {
           actorType: 'staff',
@@ -1457,10 +1461,10 @@ export async function owedArrived(db: Db, bookingId: string, input: OwedArrivedI
           entityType: 'booking',
           entityId: bookingId,
           requestId: options.requestId,
-          details: { amount: owed, reason },
+          details: { amount: arrived, reason },
         },
       ])
-      return { cardRefundedAmount: 0, storeCreditRefundedAmount: 0, pricePaid: cancelled ? figures.pricePaid : round2(figures.pricePaid - owed) }
+      return { cardRefundedAmount: 0, storeCreditRefundedAmount: 0, pricePaid: cancelled ? figures.pricePaid : round2(figures.pricePaid - arrived) }
     },
     notSaved
   )

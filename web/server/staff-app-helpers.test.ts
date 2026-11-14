@@ -1401,6 +1401,280 @@ describe('staff app helpers', () => {
     // Brief W21: refundBooking's Part refund, Refund the rest and It already arrived, and getBookingRefundFigures, are
     // thin calls to the Worker. Its rules are tested there (server/rules/bookings/refunds.test.ts); here, the wrappers:
     // what they send, and the answers the dialogs read.
+    describe('order refunds (W28: thin calls to the Worker)', () => {
+      const ORDER = '22222222-2222-4222-8222-222222222222'
+      const LINE = '33333333-3333-4333-8333-333333333333'
+      const figures = {
+        orderId: ORDER,
+        paymentStatus: 'paid',
+        lines: [{ lineItemId: LINE, itemType: 'product', lineTotal: 15, discount: 1.5, cardRefunded: 0, refundable: 13.5, refunded: false, blocked: null }],
+        cardLeft: 13.5,
+        cashLeft: 0,
+        refundOwed: 0,
+        blocked: null,
+      }
+      const refused = (code: string, details: Record<string, unknown>) => ({
+        data: { ok: false, error: { code, message: String(details['message']), details: { action: 'refund', ...details } }, requestId: 'worker-request' },
+      })
+      const refund = async (params: Record<string, unknown> = {}) => {
+        const query = vi.fn()
+        const legacy = vi.fn()
+        vi.stubGlobal('paddockData', { query })
+        vi.stubGlobal('paddockBackendApi2', { rawRequest: legacy })
+        const fn = (await backend('refundOrder')).default
+        const result = await fn({ params: { orderId: ORDER, lineItemIds: [LINE], refundMethod: 'card', restock: { [LINE]: true }, confirmed: { amount: 13.5 }, idempotencyKey: 'press-key-0000000001', ...params }, user })
+        // Never the database, never a legacy route: the Worker holds every rule.
+        expect(query).not.toHaveBeenCalled()
+        expect(legacy).not.toHaveBeenCalled()
+        return result
+      }
+
+      it('refundOrder: sends the lines, the method, the restock choices, the confirmed amount and the press key to the route, and answers in the old shape', async () => {
+        rawRequest.mockResolvedValue(success({ refundedAmount: 13.5, refundMethod: 'card', cardRefundedAmount: 10, storeCreditRefundedAmount: 3.5, storeCreditBalance: 33.5, orderPaymentStatus: 'partially_refunded' }))
+        expect(await refund()).toEqual({ success: true, refundedAmount: 13.5, refundMethod: 'card', cardRefundedAmount: 10, storeCreditRefundedAmount: 3.5, storeCreditBalance: 33.5, orderPaymentStatus: 'partially_refunded' })
+        expect(rawRequest.mock.calls[0]?.[0]).toMatchObject({
+          path: `/api/v1/staff/orders/${ORDER}/refunds`,
+          method: 'POST',
+          body: { lineItemIds: [LINE], refundMethod: 'card', restock: { [LINE]: true }, confirmed: { amount: 13.5 } },
+          headers: expect.objectContaining({ 'Idempotency-Key': 'press-key-0000000001', 'X-Staff-Email': user.email }),
+        })
+      })
+
+      it('cash (Q42) and money left owed (Q39) come back as the dialog reads them, with a warning', async () => {
+        rawRequest.mockResolvedValue(success({ refundedAmount: 24, refundMethod: 'cash', cashRefundedAmount: 14, storeCreditRefundedAmount: 10, storeCreditBalance: 40, orderPaymentStatus: 'refunded', warning: 'w' }))
+        expect(await refund({ refundMethod: 'cash' })).toEqual({ success: true, refundedAmount: 24, refundMethod: 'cash', cashRefundedAmount: 14, storeCreditRefundedAmount: 10, storeCreditBalance: 40, orderPaymentStatus: 'refunded', warning: 'w' })
+      })
+
+      it("W29: a membership's refund comes back with the bookings it flagged (Q41) and, when the cancel is left, the Worker's warning (E10); a refused card refund that stands keeps both sets of words", async () => {
+        const left = "The refund is done, but the membership's subscription (sub_1) couldn't be confirmed cancelled in Stripe yet, so it could still take its next payment. The automatic check tries again every 5 minutes, and it shows on the Orders page until it is cancelled. Don't refund it again."
+        rawRequest.mockResolvedValue(success({ refundedAmount: 40, refundMethod: 'card', cardRefundedAmount: 40, orderPaymentStatus: 'refunded', bookingsFlagged: 2, warning: left, subscriptionCancelLeft: ['sub_1'] }))
+        expect(await refund({ confirmed: { amount: 40 } })).toEqual({ success: true, refundedAmount: 40, refundMethod: 'card', cardRefundedAmount: 40, orderPaymentStatus: 'refunded', bookingsFlagged: 2, warning: left })
+        // No bookings flagged: the field isn't sent.
+        rawRequest.mockResolvedValue(success({ refundedAmount: 40, refundMethod: 'credit', storeCreditRefundedAmount: 40, storeCreditBalance: 70, orderPaymentStatus: 'refunded' }))
+        expect(await refund({ refundMethod: 'credit', confirmed: { amount: 40 } })).toEqual({ success: true, refundedAmount: 40, refundMethod: 'credit', storeCreditRefundedAmount: 40, storeCreditBalance: 70, orderPaymentStatus: 'refunded' })
+        // The card refund refused and not put back (money owed), and the cancel left as well: both, the refusal's first.
+        rawRequest.mockResolvedValue(success({ refundedAmount: 40, refundMethod: 'card', refundOwed: 40, held: { claimId: 'c', reason: 'refund_refused_not_put_back', message: 'Refused words.' }, warning: left, subscriptionCancelLeft: ['sub_1'] }))
+        expect(await refund({ confirmed: { amount: 40 } })).toEqual({ success: true, refundedAmount: 40, refundMethod: 'card', refundOwed: 40, warning: `Refused words. ${left}` })
+        // Q40's two refusals come back as any other, with the Worker's words.
+        const { MEMBERSHIP_REFUND_WORDS } = await import('@/server/rules/refunds/failure-messages')
+        rawRequest.mockResolvedValue(refused('CONFLICT', { reason: 'membership_refund_alone', message: MEMBERSHIP_REFUND_WORDS.refundAlone }))
+        expect(await refund()).toEqual({ success: false, reason: 'membership_refund_alone', message: MEMBERSHIP_REFUND_WORDS.refundAlone })
+        rawRequest.mockResolvedValue(refused('CONFLICT', { reason: 'membership_payment_not_recorded', message: MEMBERSHIP_REFUND_WORDS.paymentNotRecorded }))
+        expect(await refund()).toEqual({ success: false, reason: 'membership_payment_not_recorded', message: MEMBERSHIP_REFUND_WORDS.paymentNotRecorded })
+      })
+
+      it("W29, the dialog: a membership line says how much of it was used before the press (Q41, the Worker's words), and one paid by its own card payment goes back to that payment on its own (Q40)", async () => {
+        const dialog = readFileSync(path.join(appDir, 'frontend/components/RefundOrderDialog.tsx'), 'utf8')
+        const { MEMBERSHIP_REFUND_WORDS, membershipUsedWords } = await import('@/server/rules/refunds/failure-messages')
+        // Q41: the dialog's copy of the words is the Worker's, held to it by running both on the same counts.
+        const copy = /function membershipUsedWords\(creditSessionsTaken: number, futureCreditBookings: number\): string \| null \{\n([\s\S]*?)\n\}\n/.exec(dialog)?.[1]
+        expect(copy).toBeDefined()
+        // The same statements, with the types taken off, as plain JavaScript.
+        const run = new Function('creditSessionsTaken', 'futureCreditBookings', String(copy).replace('const parts: string[] = []', 'const parts = []')) as (taken: number, future: number) => string | null
+        for (const [taken, future] of [[0, 0], [1, 0], [0, 1], [1, 1], [4, 2], [2, 5]] as const) expect(run(taken, future)).toBe(membershipUsedWords(taken, future))
+        expect(membershipUsedWords(4, 2)).toBe('4 credit sessions already taken; 2 future credit bookings will need payment.')
+        expect(membershipUsedWords(0, 0)).toBeNull()
+        // Shown under the line, from the Worker's two counts, before the press.
+        expect(dialog).toContain('{membershipUsedWords(line.membership.creditSessionsTaken, line.membership.futureCreditBookings)}')
+        // Q40: the card money for the chosen lines: the membership's own payment when it is chosen alone; nothing to a card when it is chosen with other lines.
+        expect(dialog).toContain("const own = chosen.find((line) => line.ownCardLeft !== undefined)")
+        expect(dialog).toContain('if (!own) return { left: figures.cardLeft, mixed: false }')
+        expect(dialog).toContain('return chosen.length === 1 ? { left: own.ownCardLeft ?? 0, mixed: false } : { left: 0, mixed: true }')
+        expect(dialog).toContain("const cardPart = figures && refundMethod === 'card' ? round2(Math.min(total, card.left)) : 0")
+        expect(dialog).toContain('<RadioGroupItem value="card" id="refund-card" disabled={card.left <= 0} />')
+        // The default method never lands on a card that can't take it.
+        expect(dialog).toContain("const cardLeft = cardFor(next, new Set(lineItems.map((l) => l.id))).left")
+        expect(dialog).toContain("setRefundMethod(method === 'card' && cardLeft > 0 ? 'card' : method === 'cash' && next.cashLeft > 0 ? 'cash' : 'credit')")
+        expect(dialog).toContain(`const MEMBERSHIP_REFUND_ALONE =\n  ${JSON.stringify(MEMBERSHIP_REFUND_WORDS.refundAlone).replace(/^"|"$/g, "'")}`)
+        expect(dialog).toContain('{card.mixed ? <div className="text-xs text-muted-foreground">{MEMBERSHIP_REFUND_ALONE}</div> : null}')
+        // After the press: how many bookings now need payment.
+        expect(dialog).toContain("{successResult.bookingsFlagged} future credit {successResult.bookingsFlagged === 1 ? 'booking now needs' : 'bookings now need'} payment.")
+        expect(dialog).toContain('bookingsFlagged: result.bookingsFlagged,')
+      })
+
+      it('a refusal: `success: false` with the old reason and words; `order_not_found` with no words, as the old function', async () => {
+        rawRequest.mockResolvedValue(refused('CONFLICT', { reason: 'already_refunded', message: `Already refunded: ${LINE}` }))
+        expect(await refund()).toEqual({ success: false, reason: 'already_refunded', message: `Already refunded: ${LINE}` })
+        rawRequest.mockResolvedValue(refused('NOT_FOUND', { reason: 'order_not_found', message: 'Refund failed (order_not_found).' }))
+        expect(await refund()).toEqual({ success: false, reason: 'order_not_found' })
+      })
+
+      it('figures that no longer fit (Q18): the refusal carries the Worker\'s new figures for the dialog to show', async () => {
+        rawRequest.mockResolvedValue(refused('CONFLICT', { reason: 'figures_changed', message: 'The figures on this order have just changed. Check them and confirm again.', figures }))
+        expect(await refund({ confirmed: { amount: 15 } })).toEqual({ success: false, reason: 'figures_changed', message: 'The figures on this order have just changed. Check them and confirm again.', figures })
+      })
+
+      it('review L2: REFUND_PATH_OFF (order refunds switched off on the Worker) is `refund_path_off` with the switched-off words, not a generic failure', async () => {
+        const words = 'This is switched off in the booking system. Tell a manager.'
+        rawRequest.mockResolvedValue({ data: { ok: false, error: { code: 'REFUND_PATH_OFF', message: words, details: { reason: 'refund_path_off', message: words, kinds: ['order_refunds'] } }, requestId: 'worker-request' } })
+        expect(await refund()).toEqual({ success: false, reason: 'refund_path_off', message: words })
+        // Even if the details were lost on the way, the code alone maps to the same answer.
+        rawRequest.mockResolvedValue(refusal('REFUND_PATH_OFF', words))
+        expect(await refund()).toEqual({ success: false, reason: 'refund_path_off', message: words })
+      })
+
+      it.each([
+        ['no Issue refunds', 'FORBIDDEN', 'Needs Issue refunds permission — this action moves money back to the customer.'],
+        ['no staff record', 'UNAUTHORISED', "No staff record matches the logged-in user's email (jo@example.com). Ask an admin to add you as staff before performing this action."],
+      ])('%s: the old `permission_denied`, with the Worker\'s words', async (_label, code, words) => {
+        rawRequest.mockResolvedValue(refusal(code, words))
+        expect(await refund()).toEqual({ success: false, reason: 'permission_denied', message: words })
+      })
+
+      it('a refund held for reconcile: the old `refund_unsure`, with the Worker\'s words and `held`, which end the dialog', async () => {
+        const words = "The refund didn't get a clear answer, so it may or may not have gone. Don't refund it again. Check the Orders page in a few minutes."
+        rawRequest.mockResolvedValue(success({ refundedAmount: 0, refundMethod: 'card', held: { claimId: 'c', reason: 'refund_unconfirmed', message: words } }))
+        expect(await refund()).toEqual({ success: false, reason: 'refund_unsure', message: words, held: true })
+      })
+
+      it('a refused card refund that could not be undone: the refund stands, so a success with the money owed and the Worker\'s words as the warning', async () => {
+        const words = 'The card refund was refused (Failed to refund payment: Your card was declined.), so nothing went back…'
+        rawRequest.mockResolvedValue(success({ refundedAmount: 24, refundMethod: 'card', orderPaymentStatus: 'refunded', refundOwed: 24, held: { claimId: 'c', reason: 'refund_refused_not_put_back', message: words } }))
+        expect(await refund()).toEqual({ success: true, refundedAmount: 24, refundMethod: 'card', orderPaymentStatus: 'refunded', refundOwed: 24, warning: words })
+      })
+
+      it.each([
+        ['no connection', () => rawRequest.mockRejectedValue(new Error('socket hang up'))],
+        ['an earlier press still running', () => rawRequest.mockResolvedValue(refusal('CONFLICT', 'This request is already being processed'))],
+        ['a fault', () => rawRequest.mockResolvedValue(refusal('INTERNAL', 'Something went wrong and the action may not have finished. Check before trying again.'))],
+      ])('E11, %s: `no_answer` with `noAnswer`, so the dialog keeps its key and the next press gets the first one\'s answer', async (_label, arrange) => {
+        arrange()
+        const { ORDER_REFUND_NO_ANSWER_MESSAGE } = await load('orderRefundWorker')
+        expect(await refund()).toEqual({ success: false, reason: 'no_answer', message: ORDER_REFUND_NO_ANSWER_MESSAGE, noAnswer: true })
+      })
+
+      it("a changed press under a no-answer press's key: refused as `pressed_after_no_answer`, never sent as new", async () => {
+        rawRequest.mockResolvedValue(refusal('IDEMPOTENCY_MISMATCH', 'This Idempotency-Key was already used for a different request.'))
+        const { ORDER_REFUND_PRESSED_AFTER_NO_ANSWER_MESSAGE } = await load('orderRefundWorker')
+        expect(await refund()).toEqual({ success: false, reason: 'pressed_after_no_answer', message: ORDER_REFUND_PRESSED_AFTER_NO_ANSWER_MESSAGE, noAnswer: true })
+      })
+
+      it('getOrderRefundFigures: a read of the figures route, and plain words for a missing order', async () => {
+        const fn = (await backend('getOrderRefundFigures')).default
+        rawRequest.mockResolvedValue(success(figures))
+        expect(await fn({ params: { orderId: ORDER }, user })).toEqual(figures)
+        expect(rawRequest.mock.calls[0]?.[0]).toMatchObject({ path: `/api/v1/staff/orders/${ORDER}/refund-figures`, method: 'GET' })
+        rawRequest.mockResolvedValue(refusal('NOT_FOUND', 'Refund failed (order_not_found).'))
+        await expect(fn({ params: { orderId: ORDER }, user })).rejects.toThrow(new Error('Order not found.'))
+      })
+
+      it('the Refund Line Items dialog: the Worker\'s figures sent back as confirmed (E1, Q18), a press key kept after no answer, closing blocked mid-call, the order read again on close (E11), cash only when offered (Q42)', () => {
+        const dialog = readFileSync(path.join(appDir, 'frontend/components/RefundOrderDialog.tsx'), 'utf8')
+        // E1: the total is the Worker's (each line's `refundable`), never the lines' bare totals.
+        expect(dialog).toContain('useGetOrderRefundFigures')
+        expect(dialog).toContain('chosen.reduce((sum, line) => sum + line.refundable, 0)')
+        expect(dialog).not.toContain('Number.parseFloat(l.line_total)')
+        expect(dialog).toContain('confirmed: { amount: total }')
+        // E11: one key per press, kept after no answer or a throw until the dialog closes.
+        expect(dialog).toContain('pressKey.current ??= crypto.randomUUID()')
+        expect(dialog).toContain('idempotencyKey: pressKey.current')
+        expect(dialog).toMatch(/if \(result\.noAnswer\) \{[\s\S]*?reloadOnClose\.current = true\s+return\s+\}\s+\/\/ Any answer: the next press is a new one\.\s+pressKey\.current = null/)
+        expect(dialog).toMatch(/\} catch \(err\) \{[\s\S]*?reloadOnClose\.current = true\s+\} finally/)
+        // Closing is blocked while a press runs, and a press that may have gone through reads the order again on close.
+        expect(dialog).toContain('if (submitting || inFlight.current) return')
+        expect(dialog).toMatch(/if \(reloadOnClose\.current\) \{\s+reloadOnClose\.current = false\s+onRefunded\(\)/)
+        // A held refund ends the dialog: no Confirm button to press again.
+        expect(dialog).toContain('{successResult || heldMessage ? (')
+        // Q42: cash is offered only while cash paid on the order is left; the split is shown before the press.
+        expect(dialog).toContain('{figures.cashLeft > 0 ? (')
+        expect(dialog).toContain('to the card${creditPart > 0 ? `, ${money(creditPart)} to store credit` : \'\'}.')
+        expect(dialog).toContain('The cash is recorded as handed over by you.')
+        // The old dialog's own words stay (the Worker's word list is held to them).
+        for (const words of ['Choose whether to restock every product line item selected.', 'No response from the refund endpoint.', "`Refund failed (${result.reason ?? 'unknown reason'}).`", 'Failed to refund order.']) expect(dialog).toContain(words)
+      })
+
+      it('review S2 (W28a): a refund whose card part was refused and not put back opens in the warning style with its own first line, never "Refund processed successfully."; the owed bar\'s heading fits Refund the rest', () => {
+        const dialog = readFileSync(path.join(appDir, 'frontend/components/RefundOrderDialog.tsx'), 'utf8')
+        const bar = readFileSync(path.join(appDir, 'frontend/components/OrderOwedBar.tsx'), 'utf8')
+        // The case: the wrapper's success with a warning and money still to refund on the order.
+        expect(dialog).toContain('const cardNotGone = successResult?.warning !== undefined && (successResult.refundOwed ?? 0) > 0')
+        // Its first line replaces the success line, in the warning style with the warning icon.
+        expect(dialog).toContain('{cardNotGone ? <div className="font-medium">The lines are refunded, but the card refund didn\'t go through.</div> : <div>Refund processed successfully.</div>}')
+        expect(dialog).toContain("${cardNotGone ? 'border-warning/30 bg-warning/10' : 'border-success/30 bg-success/10'}")
+        expect(dialog).toContain('{cardNotGone ? <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" /> : <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-success" />}')
+        // The success line is nowhere else on the screen (the other mention is the comment above `cardNotGone`).
+        expect(dialog.match(/<div>Refund processed successfully\.<\/div>/g)).toHaveLength(1)
+        // The toast doesn't call it processed either.
+        expect(dialog).toContain('if (result.warning && (result.refundOwed ?? 0) > 0) toast.warning("The card refund didn\'t go through — see details")')
+        expect(bar).toContain('if (response?.warning && (response.refundOwed ?? 0) > 0) toast.warning("The card refund didn\'t go through — see details")')
+        // The owed bar: Refund the rest's refused card refund says what happened; the Worker's words say what to do.
+        expect(bar).not.toContain('This needs a manual check')
+        expect(bar).toContain('<div className="font-medium">{result.owedAfter > 0 ? "The card refund didn\'t go through" : \'Refunded, with a warning\'}</div>')
+      })
+
+      it('the Orders page: the owed bar with Refund the rest and It already arrived (Issue refunds), and no refund ticks on an order that isn\'t paid (E2)', () => {
+        const page = readFileSync(path.join(appDir, 'frontend/pages/OrdersPage.tsx'), 'utf8')
+        const bar = readFileSync(path.join(appDir, 'frontend/components/OrderOwedBar.tsx'), 'utf8')
+        const table = readFileSync(path.join(appDir, 'frontend/components/OrderLineItemsTable.tsx'), 'utf8')
+        expect(page).toContain("const refundOwed = Number.parseFloat(order.refund_owed_amount ?? '0') || 0")
+        expect(page).toContain('{refundOwed > 0 ? <OrderOwedBar orderId={order.id} owed={refundOwed} onChanged={() => runQuery(view, { skipCache: true })} /> : null}')
+        expect(page).toContain('still to refund')
+        // Both buttons need Issue refunds (the Worker checks it again).
+        expect(bar.match(/disabled=\{!canIssueRefunds\}/g)).toHaveLength(2)
+        expect(bar).toContain('It already arrived')
+        expect(bar).toContain('Refund the rest')
+        // Refund the rest sends exactly what is owed; It already arrived any amount up to it, with a reason.
+        expect(bar).toContain('refundOrderOwed({ orderId, amount: figures.refundOwed, refundMethod, idempotencyKey: pressKey.current }')
+        expect(bar).toContain('refundOrderOwed({ orderId, amount, arrived: true, reason: reason.trim(), idempotencyKey: pressKey.current }')
+        expect(bar).toContain('arrived > 0 && arrived <= owed + 0.005')
+        expect(bar).toContain('pressKey.current ??= crypto.randomUUID()')
+        // Closing is blocked mid-call.
+        expect(bar).toContain('onOpenChange={(next) => (submitting ? undefined : next ? setOpen(true) : resetAndClose())}')
+        // E2: lines can be ticked only on a paid or part refunded order.
+        expect(table).toContain("const orderRefundable = paymentStatus === 'paid' || paymentStatus === 'partially_refunded'")
+        expect(table).toContain("return orderRefundable && line.item_type !== 'booking' && line.item_type !== 'event' && !line.refunded_at")
+      })
+
+      it("the booking's It already arrived takes a part amount too (the W26 audit's row 31)", () => {
+        const rest = readFileSync(path.join(appDir, 'frontend/components/RefundTheRestDialog.tsx'), 'utf8')
+        expect(rest).toContain('amount: Math.round(arrived * 100) / 100, owedArrived: true')
+        expect(rest).toContain('arrived > 0 && arrived <= owed + 0.005')
+        expect(rest).toContain('id="refund-rest-arrived-amount"')
+        // Refund the rest still sends exactly what is owed.
+        expect(rest).toContain('{ bookingId, refundMethod, amount: figures.refundOwed, refundOwed: true, idempotencyKey: pressKey.current }')
+      })
+
+      describe('refundOrderOwed: Refund the rest and It already arrived on an order (Q39)', () => {
+        const owed = async (params: Record<string, unknown>) => {
+          const query = vi.fn()
+          vi.stubGlobal('paddockData', { query })
+          const fn = (await backend('refundOrderOwed')).default
+          const result = await fn({ params: { orderId: ORDER, idempotencyKey: 'press-key-0000000002', ...params }, user })
+          expect(query).not.toHaveBeenCalled()
+          return result
+        }
+
+        it.each([
+          ['Refund the rest', { amount: 24, refundMethod: 'card' }, 'refunds/owed', { amount: 24, refundMethod: 'card' }],
+          ['It already arrived (part of what is owed)', { amount: 10, arrived: true, reason: 'Seen in Stripe' }, 'refunds/owed-arrived', { amount: 10, reason: 'Seen in Stripe' }],
+        ])('%s: sends the amount and the press key to its route and answers its data', async (_label, params, suffix, body) => {
+          rawRequest.mockResolvedValue(success({ cardRefundedAmount: 0, storeCreditRefundedAmount: 0, refundOwed: 14 }))
+          expect(await owed(params)).toEqual({ cardRefundedAmount: 0, storeCreditRefundedAmount: 0, refundOwed: 14 })
+          expect(rawRequest.mock.calls[0]?.[0]).toMatchObject({ path: `/api/v1/staff/orders/${ORDER}/${suffix}`, method: 'POST', body, headers: expect.objectContaining({ 'Idempotency-Key': 'press-key-0000000002' }) })
+        })
+
+        it('an amount that is no longer what is owed: `refused` with the new figures; any other refusal: `failed`; the switch: `refund_path_off`', async () => {
+          rawRequest.mockResolvedValue(refused('CONFLICT', { reason: 'owed_changed', message: 'The amount owed has changed to £14.00. Check it and confirm again.', figures }))
+          expect(await owed({ amount: 24, refundMethod: 'credit' })).toEqual({ refused: { message: 'The amount owed has changed to £14.00. Check it and confirm again.', figures } })
+          rawRequest.mockResolvedValue(refused('PAYMENT_FAILED', { reason: 'refund_failed', message: 'The card refund failed, so nothing was refunded: Failed to refund payment: Your card was declined.' }))
+          expect(await owed({ amount: 24, refundMethod: 'card' })).toEqual({ failed: { reason: 'refund_failed', message: 'The card refund failed, so nothing was refunded: Failed to refund payment: Your card was declined.' } })
+          rawRequest.mockResolvedValue(refusal('REFUND_PATH_OFF', 'This is switched off in the booking system. Tell a manager.'))
+          expect(await owed({ amount: 24, refundMethod: 'card' })).toEqual({ failed: { reason: 'refund_path_off', message: 'This is switched off in the booking system. Tell a manager.' } })
+        })
+
+        it('held: `unsure`; no answer: `noAnswer` (the key kept); a changed press under that key: `pressedAfterNoAnswer`', async () => {
+          rawRequest.mockResolvedValue(success({ cardRefundedAmount: 0, storeCreditRefundedAmount: 0, refundOwed: 0, held: { claimId: 'c', reason: 'refund_unconfirmed', message: 'held words' } }))
+          expect(await owed({ amount: 24, refundMethod: 'card' })).toEqual({ unsure: { message: 'held words' } })
+          const { ORDER_REFUND_NO_ANSWER_MESSAGE, ORDER_REFUND_PRESSED_AFTER_NO_ANSWER_MESSAGE } = await load('orderRefundWorker')
+          rawRequest.mockRejectedValue(new Error('socket hang up'))
+          expect(await owed({ amount: 24, refundMethod: 'card' })).toEqual({ noAnswer: { message: ORDER_REFUND_NO_ANSWER_MESSAGE } })
+          rawRequest.mockReset()
+          rawRequest.mockResolvedValue(refusal('IDEMPOTENCY_MISMATCH', 'This Idempotency-Key was already used for a different request.'))
+          expect(await owed({ amount: 24, refundMethod: 'credit' })).toEqual({ pressedAfterNoAnswer: { message: ORDER_REFUND_PRESSED_AFTER_NO_ANSWER_MESSAGE } })
+        })
+      })
+    })
+
     describe('refunds (W21: thin calls to the Worker)', () => {
       const BOOKING = '11111111-1111-4111-8111-111111111111'
       const figures = { status: 'confirmed', customerId: BOOKING, pricePaid: 40, refundOwed: 0, left: 40, cardLeft: 40, parts: { card: 40, giftCard: 0, storeCredit: 0, cash: 0 }, cashLeft: 0, paidLine: 'Left to refund: £40.00 card money.' }
@@ -2186,13 +2460,6 @@ describe('staff app helpers', () => {
         vi.stubGlobal('paddockBackendApi2', { rawRequest: rawRefund })
         return { rawRefund, ...database }
       }
-      const refundedTo = (rawRefund: ReturnType<typeof vi.fn>) =>
-        rawRefund.mock.calls.map(([call]) => {
-          const body = { ...(call as { body: Record<string, unknown> }).body }
-          delete body['idempotencyKey']
-          return body
-        })
-
       // Brief W21: refundBooking's amount paths are thin calls to the Worker now (the old body's claim, put-back and
       // warning tests went with it); the wrapper's tests are in 'refunds (W21: thin calls to the Worker)', and the rules'
       // in server/rules/bookings/refunds.test.ts. Brief W23: so is Cancel & Refund (its old body's tests went with it;
@@ -2203,36 +2470,6 @@ describe('staff app helpers', () => {
 
 
       describe('the same gap elsewhere', () => {
-        describe('refundOrder', () => {
-          const refund = async (options: { credit: Array<boolean | Error>; portion: number }) => {
-            const stubs = setUp({
-              portions: { 'order-1': options.portion },
-              credit: options.credit,
-              answers: [
-                [/SELECT id, customer_id, stripe_payment_intent_id, order_total FROM orders/, () => [{ id: 'order-1', customer_id: 'customer-1', stripe_payment_intent_id: 'pi_order-1', order_total: '25.00' }]],
-                [/SELECT \* FROM order_line_items/, () => [{ id: 'line-1', item_type: 'product', line_total: '25.00', discount_amount: '0', quantity: 1, refunded_at: null, product_variant_id: 'variant-1', gift_card_id: null }]],
-              ],
-            })
-            const fn = (await backend('refundOrder')).default
-            const result = await fn({ params: { orderId: 'order-1', lineItemIds: ['line-1'], refundMethod: 'card', restock: { 'line-1': false } }, user })
-            return { result, ...stubs }
-          }
-
-          // W05j: store credit nobody can say landed is counted as given, so the line is stamped and
-          // can't be refunded again, and staff are told to check the balance.
-          it('store credit throwing after the card refund: counted as given, the line stamped, and staff told to check', async () => {
-            const { result, sql, rawRefund } = await refund({ portion: 15, credit: [BROKEN] })
-            expect(result).toMatchObject({ success: true, cardRefundedAmount: 15, storeCreditRefundedAmount: 10 })
-            expect(result.warning).toContain('Adding the £10.00 store credit gave no clear answer')
-            expect(sql.filter((text) => /SET refunded_at = now\(\), refund_method = \$1, restocked = \$2/.test(text))).toHaveLength(1)
-            expect(rawRefund).toHaveBeenCalledTimes(1)
-          })
-
-          it('store credit throwing with no card money: counted as given too, never "no refund was processed"', async () => {
-            const { result } = await refund({ portion: 0, credit: [BROKEN] })
-            expect(result).toMatchObject({ success: true, storeCreditRefundedAmount: 25, warning: expect.stringContaining('gave no clear answer') })
-          })
-        })
 
         describe('event places', () => {
           const cancelPlaces = async (options: { credit: Array<boolean | Error>; portion: number }) => {
@@ -2271,210 +2508,11 @@ describe('staff app helpers', () => {
         })
       })
 
-      describe('refundOrder run twice', () => {
-        type Line = { id: string; item_type: string; line_total: string; discount_amount: string; card_refunded_amount: string; refunded_at: string | null; refund_method?: string; quantity: number; product_variant_id: string; gift_card_id: null }
-        const product = (id: string, total: number, card = 0): Line => ({
-          id, item_type: 'product', line_total: total.toFixed(2), discount_amount: '0', card_refunded_amount: card.toFixed(2), refunded_at: null, quantity: 1, product_variant_id: 'variant-1', gift_card_id: null,
-        })
-
-        /** An order with lines that remember what happened to them. `cardTook` is what its card
-         *  took. `markFails` throws on the line's normal final write, `stampFails` on the stamp
-         *  that records it instead. */
-        const world = (options: { lines: Line[]; cardTook: number; credit?: Array<boolean | Error>; refunds?: Array<{ error: string } | { success: true }>; markFails?: boolean; stampFails?: boolean; answers?: Answer[] }) => {
-          const lines = options.lines
-          const credited: number[] = []
-          const credit = [...(options.credit ?? [])]
-          const line = (id: unknown) => lines.find((l) => l.id === id)!
-          const addCard = (id: unknown, amount: unknown) => {
-            line(id).card_refunded_amount = (Number.parseFloat(line(id).card_refunded_amount) + Number(amount)).toFixed(2)
-          }
-          let marksLeft = options.markFails ? 1 : 0
-          const stubs = setUp({
-            ...(options.refunds ? { refunds: options.refunds } : {}),
-            answers: [
-              ...(options.answers ?? []),
-              [/SELECT id, customer_id, stripe_payment_intent_id, order_total FROM orders/, () => [{ id: 'order-1', customer_id: 'customer-1', stripe_payment_intent_id: 'pi_order-1', order_total: '40.00' }]],
-              [/SELECT \* FROM order_line_items/, (params) => lines.filter((l) => (params[0] as string[]).includes(l.id)).map((l) => ({ ...l }))],
-              [/FROM orders o WHERE o\.id/, () => [{
-                customer_id: 'customer-1', stripe_payment_intent_id: 'pi_order-1', payment_method: 'card', order_total: String(options.cardTook), order_discount_amount: '0',
-                gift_card_used: '0', store_credit_used: '0', membership_net: '0',
-                already_card_refunded: String(lines.reduce((sum, l) => sum + Number.parseFloat(l.card_refunded_amount), 0)),
-              }]],
-              [/UPDATE order_line_items SET card_refunded_amount = card_refunded_amount \+ \$1 WHERE id = \$2/, (params) => {
-                addCard(params[1], params[0])
-                return []
-              }],
-              [/SET refunded_at = now\(\), refund_method = \$1, restocked = \$2/, (params) => {
-                if (marksLeft-- > 0) throw BROKEN
-                line(params[3]).refunded_at = 'now'
-                line(params[3]).refund_method = String(params[0])
-                addCard(params[3], params[2])
-                return []
-              }],
-              [/SET refunded_at = now\(\), refund_method = \$1, card_refunded_amount/, (params) => {
-                if (options.stampFails) throw BROKEN
-                line(params[2]).refunded_at = 'now'
-                line(params[2]).refund_method = String(params[0])
-                addCard(params[2], params[1])
-                return []
-              }],
-              [/store_credit_apply/, (params) => {
-                const next = credit.shift()
-                if (next instanceof Error) throw next
-                if (next === false) return [{ result: { ok: false } }]
-                credited.push(Number(params[1]))
-                return [{ result: { ok: true, balance: 40 } }]
-              }],
-            ],
-          })
-          const refund = async (ids: string[], method: 'card' | 'credit' = 'card') => {
-            const fn = (await backend('refundOrder')).default
-            return fn({ params: { orderId: 'order-1', lineItemIds: ids, refundMethod: method, restock: Object.fromEntries(ids.map((id) => [id, false])) }, user })
-          }
-          return { refund, credited, line, ...stubs }
-        }
-        const backToCustomer = (rawRefund: ReturnType<typeof vi.fn>, credited: number[]) =>
-          refundedTo(rawRefund).reduce((sum: number, body) => sum + (body as { amount: number }).amount, 0) + credited.reduce((sum, n) => sum + n, 0)
-
-        it('the review\'s sequence: £20 card then failed store credit, then a retry: £30 back on a £30 line, not £50', async () => {
-          const { refund, credited, line, rawRefund } = world({ lines: [product('line-1', 30)], cardTook: 20, credit: [BROKEN] })
-          const first = await refund(['line-1'])
-          expect(first).toMatchObject({ success: true, cardRefundedAmount: 20, storeCreditRefundedAmount: 0 })
-          expect(line('line-1')).toMatchObject({ card_refunded_amount: '20.00', refunded_at: null })
-
-          const retry = await refund(['line-1'])
-          expect(retry).toMatchObject({ success: true, refundedAmount: 10, storeCreditRefundedAmount: 10 })
-          expect(retry.cardRefundedAmount).toBeUndefined()
-          expect(rawRefund).toHaveBeenCalledTimes(1)
-          expect(credited).toEqual([10])
-          expect(backToCustomer(rawRefund, credited)).toBe(30)
-          expect(line('line-1')).toMatchObject({ card_refunded_amount: '20.00', refunded_at: 'now', refund_method: 'card' })
-        })
-
-        it('the same when the first store credit was refused, and the retry goes to store credit', async () => {
-          const { refund, credited, rawRefund } = world({ lines: [product('line-1', 30)], cardTook: 20, credit: [false] })
-          await refund(['line-1'])
-          expect(await refund(['line-1'], 'credit')).toMatchObject({ success: true, refundedAmount: 10 })
-          expect(backToCustomer(rawRefund, credited)).toBe(30)
-        })
-
-        it('a third press is refused', async () => {
-          const { refund, credited, rawRefund } = world({ lines: [product('line-1', 30)], cardTook: 20, credit: [BROKEN] })
-          await refund(['line-1'])
-          await refund(['line-1'])
-          expect(await refund(['line-1'])).toMatchObject({ success: false, reason: 'already_refunded' })
-          expect(backToCustomer(rawRefund, credited)).toBe(30)
-        })
-
-        it('a line with all its money back on the card pays nothing on a retry, and is finished', async () => {
-          const { refund, credited, line, rawRefund } = world({ lines: [product('line-1', 30, 30)], cardTook: 30 })
-          expect(await refund(['line-1'])).toMatchObject({ success: true, refundedAmount: 0 })
-          expect(rawRefund).not.toHaveBeenCalled()
-          expect(credited).toEqual([])
-          expect(line('line-1').refunded_at).toBe('now')
-        })
-
-        it('a promo comes off as well as what the line has had back', async () => {
-          const { refund, credited } = world({ lines: [{ ...product('line-1', 30, 10), discount_amount: '5.00' }], cardTook: 10 })
-          expect(await refund(['line-1'])).toMatchObject({ refundedAmount: 15, storeCreditRefundedAmount: 15 })
-          expect(credited).toEqual([15])
-        })
-
-        it('card money is spread over what each line can still take, on the failure path and on success', async () => {
-          for (const credit of [[BROKEN], []]) {
-            const { refund, line } = world({ lines: [product('line-a', 30, 20), product('line-b', 10)], cardTook: 35, credit })
-            await refund(['line-a', 'line-b'])
-            expect(line('line-a').card_refunded_amount).toBe('30.00')
-            expect(line('line-b').card_refunded_amount).toBe('5.00')
-          }
-        })
-
-        it('the line that had nothing back still refunds in full', async () => {
-          const { refund, rawRefund, credited } = world({ lines: [product('line-1', 30)], cardTook: 30 })
-          expect(await refund(['line-1'])).toMatchObject({ refundedAmount: 30, cardRefundedAmount: 30 })
-          expect(backToCustomer(rawRefund, credited)).toBe(30)
-        })
-
-        describe('a database error after the money has gone', () => {
-          it('card only: recorded, so a retry refunds nothing', async () => {
-            const { refund, line, rawRefund, credited } = world({ lines: [product('line-1', 30)], cardTook: 30, markFails: true })
-            const first = await refund(['line-1'])
-            expect(first).toMatchObject({ success: true, cardRefundedAmount: 30 })
-            expect(first.warning).toBe(
-              "The refund/credit succeeded, but recording it locally failed partway through and needs a manual check: connection lost The money is recorded on the order lines, so they can't be refunded twice. Check any restock, gift card, session pass or membership on them by hand."
-            )
-            expect(line('line-1')).toMatchObject({ card_refunded_amount: '30.00', refunded_at: 'now', refund_method: 'card' })
-            expect(await refund(['line-1'])).toMatchObject({ success: false, reason: 'already_refunded' })
-            expect(backToCustomer(rawRefund, credited)).toBe(30)
-          })
-
-          it('card and store credit: a retry can\'t pay the store credit part twice either', async () => {
-            const { refund, rawRefund, credited } = world({ lines: [product('line-1', 30)], cardTook: 20, markFails: true })
-            await refund(['line-1'])
-            expect(await refund(['line-1'])).toMatchObject({ success: false, reason: 'already_refunded' })
-            expect(credited).toEqual([10])
-            expect(backToCustomer(rawRefund, credited)).toBe(30)
-          })
-
-          it('only the lines left unfinished are recorded, so none takes its card money twice', async () => {
-            const { line } = world({
-              lines: [product('line-a', 10), product('line-b', 20)],
-              cardTook: 30,
-              answers: [[/UPDATE product_variants|INSERT INTO stock_adjustments/, () => { throw BROKEN }]],
-            })
-            const fn = (await backend('refundOrder')).default
-            const result = await fn({ params: { orderId: 'order-1', lineItemIds: ['line-a', 'line-b'], refundMethod: 'card', restock: { 'line-a': false, 'line-b': true } }, user })
-            expect(result.success).toBe(true)
-            expect(line('line-a').card_refunded_amount).toBe('10.00')
-            expect(line('line-b').card_refunded_amount).toBe('20.00')
-          })
-
-          it('only the order status failing: every line is finished, so nothing more is said about them', async () => {
-            const { refund, sql } = world({
-              lines: [product('line-1', 30)],
-              cardTook: 30,
-              answers: [[/FROM order_line_items oli\s+LEFT JOIN bookings b/, () => { throw BROKEN }]],
-            })
-            expect((await refund(['line-1'])).warning).toBe(
-              'The refund/credit succeeded, but recording it locally failed partway through and needs a manual check: connection lost'
-            )
-            expect(sql.some((text) => /SET refunded_at = now\(\), refund_method = \$1, card_refunded_amount/.test(text))).toBe(false)
-          })
-
-          it('recording failing as well: staff are told to check Stripe first', async () => {
-            const { refund } = world({ lines: [product('line-1', 30)], cardTook: 30, markFails: true, stampFails: true })
-            expect((await refund(['line-1'])).warning).toContain(
-              'Recording it on the order lines also failed, so check in Stripe before refunding this order again: connection lost'
-            )
-          })
-
-          it('with no money gone, it still undoes itself and records nothing', async () => {
-            const { refund, line, credited, sql } = world({ lines: [product('line-1', 30)], cardTook: 0, markFails: true })
-            expect(await refund(['line-1'], 'credit')).toMatchObject({ success: false, reason: 'unexpected_error' })
-            expect(line('line-1').refunded_at).toBeNull()
-            expect(credited).toEqual([30, -30])
-            expect(sql.some((text) => /SET refunded_at = now\(\), refund_method = \$1, card_refunded_amount/.test(text))).toBe(false)
-          })
-        })
-
-        it('a subscription that won\'t cancel after the card refund: recorded too, so a retry can\'t refund it again', async () => {
-          const membership: Line = { ...product('line-1', 30), item_type: 'membership' }
-          const { refund, line, rawRefund, credited } = world({
-            lines: [membership],
-            cardTook: 30,
-            refunds: [{ success: true }, { error: 'stripe down' }],
-            answers: [[/FROM customer_memberships WHERE order_line_item_id/, () => [{ id: 'membership-1', stripe_subscription_id: 'sub_1', cancel_effective_date: null }]]],
-          })
-          const first = await refund(['line-1'])
-          expect(first).toMatchObject({ success: true, cardRefundedAmount: 30 })
-          expect(first.warning).toContain('failed and needs a manual check: stripe down')
-          expect(first.warning).toContain("so they can't be refunded twice")
-          expect(line('line-1')).toMatchObject({ card_refunded_amount: '30.00', refunded_at: 'now' })
-          expect(await refund(['line-1'])).toMatchObject({ success: false, reason: 'already_refunded' })
-          expect(refundedTo(rawRefund).filter((body) => 'amount' in (body as object))).toHaveLength(1)
-          expect(credited).toEqual([])
-        })
-      })
+      // Brief W28: refundOrder is a thin call to the Worker now (the old body's W05j and W05k tests went with it: store
+      // credit counted as given, the retry that can't pay twice, the database error after the money has gone). The
+      // wrapper's tests are in 'order refunds (W28: thin calls to the Worker)'; the rules' in
+      // server/rules/orders/refund-lines.test.ts; the frozen copy of the old code is replayed by
+      // server/rules/testing/replay/order-refund-replay.test.ts (legacy-refund/).
     })
 
     describe('the screens', () => {

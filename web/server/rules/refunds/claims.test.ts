@@ -3,7 +3,7 @@ import type { Db } from '@/server/db'
 import { ApiError } from '@/server/http/errors'
 import * as bookingRefunds from '@/server/rules/bookings/refunds'
 import { REFUND_OPEN_MESSAGE } from '@/server/rules/bookings/failure-messages'
-import { startTestDatabase, type TestDatabase } from '@/server/rules/testing/database'
+import { fixtures, insert, startTestDatabase, type TestDatabase } from '@/server/rules/testing/database'
 import { stripeTiming } from '@/server/stripe/deadline'
 import { FakeStripe } from '@/server/stripe/fake'
 import {
@@ -44,6 +44,13 @@ beforeEach(async () => {
 const STAFF = '30000000-0000-4000-8000-000000000002'
 const by = (requestId = 'w27-claims') => ({ actor: { type: 'staff' as const, id: STAFF }, requestId })
 const id = () => crypto.randomUUID()
+/**
+ * An order with a row. W28: the writers throw for an order that doesn't exist, so a claim is never written on an id
+ * with no row (W27a's call 2), and every claim here is on a real order.
+ */
+async function anOrder(): Promise<string> {
+  return insert(db, 'orders', { customer_id: await fixtures.customer(db), order_total: '100.00', payment_status: 'paid', payment_method: 'card', order_source: 'staff_created' })
+}
 
 const cardPart = (orderId: string, amount: number, paymentIntentId = 'pi_w27'): CardPart => ({ orderId, paymentIntentId, amount, lines: [{ lineId: id(), amount }] })
 const plan = (orderId: string, parts: { card?: number; storeCredit?: number; cash?: number }): StepEPlan => ({
@@ -86,7 +93,7 @@ async function refusal(work: () => Promise<unknown>): Promise<ApiError> {
 
 describe('the same record as step D, on a different subject (L2)', () => {
   it("an order's claim: `order.refund_claimed` on the order, with step D's fields", async () => {
-    const orderId = id()
+    const orderId = await anOrder()
     const details = orderDetails(orderId, { card: 24, storeCredit: 6 }, { reason: 'Damaged in the post' })
     const claim = await onOrder(orderId, details)
     const row = (await db.query<Record<string, unknown>>('SELECT actor_type, actor_id, action, entity_type, entity_id, request_id, details FROM audit_log WHERE id = $1', [claim.id]))[0]
@@ -99,7 +106,7 @@ describe('the same record as step D, on a different subject (L2)', () => {
   })
 
   it("an event booking's claim: `event_booking.refund_claimed` on the booking, naming the order that paid for it", async () => {
-    const orderId = id()
+    const orderId = await anOrder()
     const eventBookingId = id()
     const details = eventDetails(orderId, { card: 40 })
     const claim = await onEventBooking(eventBookingId, details)
@@ -110,16 +117,16 @@ describe('the same record as step D, on a different subject (L2)', () => {
   })
 
   it('cash (Q26) names who handed it over, and has no Stripe mode', async () => {
-    const orderId = id()
+    const orderId = await anOrder()
     const claim = await onOrder(orderId, orderDetails(orderId, { cash: 15 }, { handedOverBy: STAFF }))
     expect(claim.details).toMatchObject({ method: 'cash', handedOverBy: STAFF, livemode: null, plan: { card: [], storeCredit: 0, cash: 15 } })
   })
 
   it("each is its own subject's: an order's claim isn't a booking's or an event booking's, and step D never reads it", async () => {
-    const orderId = id()
+    const orderId = await anOrder()
     const order = await onOrder(orderId, orderDetails(orderId, { card: 10 }))
     const eventBookingId = id()
-    const other = id()
+    const other = await anOrder()
     const event = await onEventBooking(eventBookingId, eventDetails(other, { card: 10 }))
     expect(await readEventBookingClaim(db, order.id)).toBeNull()
     expect(await readOrderClaim(db, event.id)).toBeNull()
@@ -134,7 +141,7 @@ describe("the same keys as step D: `<claimId>:refund:<orderId>`, with the claim 
     const stripe = new FakeStripe()
     stripe.addCustomer('cus_w27')
     const intent = await stripe.paymentIntents.create({ amount: 3000, currency: 'gbp', customer: 'cus_w27', payment_method: 'pm_w27', off_session: true, confirm: true })
-    const orderId = id()
+    const orderId = await anOrder()
     const details = orderDetails(orderId, { card: 24 })
     details.plan.card[0]!.paymentIntentId = intent.id
     const claim = await onOrder(orderId, details)
@@ -150,7 +157,7 @@ describe("the same keys as step D: `<claimId>:refund:<orderId>`, with the claim 
   })
 
   it("an event booking's card part is keyed by its claim and the order that paid for it", async () => {
-    const orderId = id()
+    const orderId = await anOrder()
     const claim = await onEventBooking(id(), eventDetails(orderId, { card: 40 }))
     const part = claim.details.plan.card[0] as CardPart
     expect(cardPartRequest(claim.id, part).metadata).toEqual({ refund_key: `${claim.id}:refund:${orderId}`, claim_id: claim.id })
@@ -166,33 +173,49 @@ describe('one card part at most, and only on the claim\'s own order', () => {
     ["a part whose lines don't add up", (o) => ({ ...orderDetails(o, { card: 10 }), plan: { card: [{ ...cardPart(o, 10), lines: [{ lineId: id(), amount: 9.99 }] }], storeCredit: 0, cash: 0, ownOrderId: o } }), /lines don't add up/],
     ['a plan that gives more than the claim', (o) => ({ ...orderDetails(o, { card: 10, storeCredit: 5 }), amount: 10 }), /the plan gives £15.00, the claim £10.00/],
     ['a plan that gives less than the claim', (o) => ({ ...orderDetails(o, { card: 10 }), amount: 12 }), /the plan gives £10.00, the claim £12.00/],
-    ['cash beside a card part', (o) => ({ ...orderDetails(o, { card: 10 }), amount: 15, plan: { card: [cardPart(o, 10)], storeCredit: 0, cash: 5, ownOrderId: o } }), /cash is handed over on its own/],
-    ['cash beside store credit', (o) => ({ ...orderDetails(o, { storeCredit: 10 }), amount: 15, plan: { card: [], storeCredit: 10, cash: 5, ownOrderId: o } }), /cash is handed over on its own/],
+    ['cash beside a card part', (o) => ({ ...orderDetails(o, { card: 10 }), amount: 15, plan: { card: [cardPart(o, 10)], storeCredit: 0, cash: 5, ownOrderId: o } }), /cash is never handed over beside a card part/],
     ['a negative part', (o) => ({ ...orderDetails(o, { storeCredit: 10 }), amount: 10, plan: { card: [], storeCredit: -5, cash: 0, ownOrderId: o } }), /below £0/],
     ['a claim of nothing', (o) => ({ ...orderDetails(o, {}), amount: 0 }), /gives something/],
   ]
 
   it.each(faults)("an order's claim with %s is never written", async (_, make, words) => {
-    const orderId = id()
+    const orderId = await anOrder()
     await expect(onOrder(orderId, make(orderId))).rejects.toThrow(words)
     expect(await claimRows()).toEqual([])
   })
 
   it.each(faults)("an event booking's claim with %s is never written", async (_, make, words) => {
-    const orderId = id()
+    const orderId = await anOrder()
     await expect(onEventBooking(id(), { ...make(orderId), kind: 'cancel_places', orderId })).rejects.toThrow(words)
     expect(await claimRows()).toEqual([])
   })
 
+  it("W28 (Wayne's Q42): cash beside store credit is written (£10 cash paid on the order, the other £5 to store credit), on an order and on an event booking", async () => {
+    const orderId = await anOrder()
+    const split = { ...orderDetails(orderId, { storeCredit: 5, cash: 10 }), handedOverBy: STAFF }
+    const claim = await onOrder(orderId, split)
+    expect((await readOrderClaim(db, claim.id))?.details).toMatchObject({ amount: 15, method: 'cash', plan: { card: [], storeCredit: 5, cash: 10 }, handedOverBy: STAFF, livemode: null })
+    const eventOrder = await anOrder()
+    const eventClaim = await onEventBooking(id(), { ...orderDetails(eventOrder, { storeCredit: 5, cash: 10 }), kind: 'cancel_places', orderId: eventOrder, handedOverBy: STAFF })
+    expect((await readEventBookingClaim(db, eventClaim.id))?.details.plan).toMatchObject({ card: [], storeCredit: 5, cash: 10 })
+  })
+
+  it("W28 (W27a's call 2): a claim on an order that doesn't exist is never written: the writer throws, for an order and for an event booking", async () => {
+    const gone = id()
+    await expect(onOrder(gone, orderDetails(gone, { storeCredit: 10 }))).rejects.toThrow(/doesn't exist, so no claim can be written on it/)
+    await expect(onEventBooking(id(), eventDetails(gone, { card: 10 }))).rejects.toThrow(/doesn't exist, so no claim can be written on it/)
+    expect(await claimRows()).toEqual([])
+  })
+
   it("an event booking's claim must name its order", async () => {
-    const orderId = id()
+    const orderId = await anOrder()
     await expect(onEventBooking(id(), eventDetails(orderId, { storeCredit: 10 }, { orderId: '' }))).rejects.toThrow(/must name the booking's order/)
     expect(await claimRows()).toEqual([])
   })
 
   it('exactly one part, or none, is written', async () => {
-    const a = id()
-    const b = id()
+    const a = await anOrder()
+    const b = await anOrder()
     expect((await onOrder(a, orderDetails(a, { card: 10, storeCredit: 2.5 }))).details.plan.card).toHaveLength(1)
     expect((await onOrder(b, orderDetails(b, { storeCredit: 12.5 }))).details.plan.card).toHaveLength(0)
   })
@@ -200,7 +223,7 @@ describe('one card part at most, and only on the claim\'s own order', () => {
 
 describe('an open claim holds its subject (`refund_open`)', () => {
   it("an order: a second claim is refused with step D's reason and the order's words, and nothing is written", async () => {
-    const orderId = id()
+    const orderId = await anOrder()
     const first = await onOrder(orderId, orderDetails(orderId, { card: 10 }))
     expect(await openClaimHoldingOrder(db, orderId)).toBe(first.id)
     const refused = await refusal(() => onOrder(orderId, orderDetails(orderId, { storeCredit: 5 })))
@@ -223,15 +246,15 @@ describe('an open claim holds its subject (`refund_open`)', () => {
       (o: string) => orderDetails(o, { card: 5 }),
       (o: string) => orderDetails(o, { card: 5 }, { kind: 'refund_owed' }),
     ]) {
-      const orderId = id()
+      const orderId = await anOrder()
       await onOrder(orderId, details(orderId))
       expect((await refusal(() => onOrder(orderId, orderDetails(orderId, { storeCredit: 1 })))).details).toMatchObject({ reason: 'refund_open' })
     }
   })
 
   it('once the claim is finished the order is free again; another order never was held', async () => {
-    const orderId = id()
-    const other = id()
+    const orderId = await anOrder()
+    const other = await anOrder()
     const first = await onOrder(orderId, orderDetails(orderId, { card: 10 }))
     expect(await stepEClaimFinished(db, first)).toBe(false)
     await expect(onOrder(other, orderDetails(other, { card: 10 }))).resolves.toBeDefined()
@@ -243,7 +266,7 @@ describe('an open claim holds its subject (`refund_open`)', () => {
   })
 
   it("an event booking: a second claim on it is refused with the event booking's words", async () => {
-    const orderId = id()
+    const orderId = await anOrder()
     const eventBookingId = id()
     await onEventBooking(eventBookingId, eventDetails(orderId, { card: 40 }))
     const refused = await refusal(() => onEventBooking(eventBookingId, eventDetails(orderId, { storeCredit: 40 })))
@@ -252,7 +275,7 @@ describe('an open claim holds its subject (`refund_open`)', () => {
   })
 
   it("an order and its event booking share one card payment, so an open claim on either holds both", async () => {
-    const orderId = id()
+    const orderId = await anOrder()
     const eventBookingId = id()
     // The event booking's cancel is open: the order's other lines can't be refunded meanwhile.
     const event = await onEventBooking(eventBookingId, eventDetails(orderId, { card: 40 }))
@@ -267,7 +290,7 @@ describe('an open claim holds its subject (`refund_open`)', () => {
   })
 
   it("a booking's open claim (step D) with a card part on the order's payment holds the order; one with none doesn't; a finished one doesn't", async () => {
-    const orderId = id()
+    const orderId = await anOrder()
     const bookingId = id()
     const bookingClaim = (card: CardPart[], storeCredit: number) =>
       db.transaction((tx) =>
@@ -296,7 +319,7 @@ describe('an open claim holds its subject (`refund_open`)', () => {
   })
 
   it("an old screen's row with a claim's action isn't a claim (no `worker: true`), and holds nothing", async () => {
-    const orderId = id()
+    const orderId = await anOrder()
     await db.query("INSERT INTO audit_log (actor_type, action, entity_type, entity_id, details) VALUES ('staff', 'order.refund_claimed', 'order', $1, $2::jsonb)", [orderId, JSON.stringify({ amount: 5 })])
     expect(await openClaimHoldingOrder(db, orderId)).toBeNull()
   })
@@ -304,9 +327,9 @@ describe('an open claim holds its subject (`refund_open`)', () => {
 
 describe("the refusal mark, the finish and the due lists, on step E's subjects", () => {
   it("a refused card part is marked on the claim's own subject, with the part, and read back", async () => {
-    const orderId = id()
+    const orderId = await anOrder()
     const order = await onOrder(orderId, orderDetails(orderId, { card: 24 }))
-    const eventOrder = id()
+    const eventOrder = await anOrder()
     const eventBookingId = id()
     const event = await onEventBooking(eventBookingId, eventDetails(eventOrder, { card: 40 }))
     expect(await stepEClaimRefusal(db, order)).toBeNull()
@@ -322,15 +345,15 @@ describe("the refusal mark, the finish and the due lists, on step E's subjects",
   })
 
   it('a claim with no card part has nothing to mark', async () => {
-    const orderId = id()
+    const orderId = await anOrder()
     const claim = await onOrder(orderId, orderDetails(orderId, { storeCredit: 5 }))
     await expect(markStepEClaimRefused(db, claim, 'why', 'r')).rejects.toThrow(/no card part/)
   })
 
   it("each due list holds its own subject's open claims past the window, and step D's due list (what reconcile reads today) holds neither", async () => {
-    const orderId = id()
+    const orderId = await anOrder()
     const order = await onOrder(orderId, orderDetails(orderId, { card: 10 }))
-    const event = await onEventBooking(id(), eventDetails(id(), { card: 10 }))
+    const event = await onEventBooking(id(), eventDetails(await anOrder(), { card: 10 }))
     await db.query("UPDATE audit_log SET at = now() - interval '20 minutes'")
     expect((await db.query<{ id: string }>(ORDER_CLAIMS_DUE_SQL, [15])).map((row) => row.id)).toEqual([order.id])
     expect((await db.query<{ id: string }>(EVENT_BOOKING_CLAIMS_DUE_SQL, [15])).map((row) => row.id)).toEqual([event.id])

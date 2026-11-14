@@ -29,7 +29,7 @@
 import 'server-only'
 import type { Db, Queryable, Tx } from '@/server/db'
 import { ApiError } from '@/server/http/errors'
-import { EVENT_BOOKING_REFUND_OPEN_MESSAGE, ORDER_REFUND_OPEN_MESSAGE } from './failure-messages'
+import { EVENT_BOOKING_REFUND_OPEN_MESSAGE, ORDER_PAYMENT_REFUND_OPEN_MESSAGE, ORDER_REFUND_OPEN_MESSAGE } from './failure-messages'
 import {
   BOOKING_CLAIMS,
   claimIsFinished,
@@ -46,7 +46,11 @@ import {
 
 export type StepEClaimMethod = 'card' | 'credit' | 'cash'
 
-/** Where the claimed money goes, as step D's plan: the card part (one at most), store credit for the rest, or (Q26) cash. */
+/**
+ * Where the claimed money goes, as step D's plan: the card part (one at most) with store credit for the rest, or (Q26)
+ * cash. W28 (Wayne's Q42, 14 Nov): cash is capped at the cash paid on the order, and the rest of what the lines give
+ * back goes to store credit in the same claim (an order paid £10 cash + £5 gift card: £10 in cash, £5 store credit).
+ */
 export interface StepEPlan {
   /** None, or exactly one, and always on the claim's own order. */
   card: CardPart[]
@@ -70,12 +74,44 @@ interface StepEClaimCommon {
   handedOverBy?: string
 }
 
+/** W28: one line an order refund's R1 stamped, with what R1 reversed for it, so the undo puts it back exactly. */
+export interface OrderRefundLineClaim {
+  id: string
+  itemType: string
+  /** What the line gives back: its total, less its promo discount, less card money it has already had back. */
+  amount: number
+  /** The line's stamp: `card` while the card part lasts (line order), `cash` while the cash lasts, else `credit`. */
+  method: StepEClaimMethod
+  /** A product line's restock decision (null for every other kind of line). */
+  restocked: boolean | null
+  /** A gift card line: the card R1 voided. */
+  giftCardId?: string
+  /** A pass line: the pass R1 emptied, and the sessions it held. */
+  pass?: { id: string; sessionsRemaining: number }
+  /** A restocked product line: the variant and quantity R1 put back, and its stock adjustment's row. */
+  restock?: { variantId: string; quantity: number; adjustmentId: string }
+  /**
+   * W29, a line that sells a membership: the membership R1 marked cancelled, as it was before (for the undo), the
+   * future credit bookings R1 flagged as payment needed (Q41; the undo confirms them again), and its Stripe
+   * subscription, cancelled last, once the money is settled (null when it never had one).
+   */
+  membership?: {
+    id: string
+    subscriptionId: string | null
+    status: string | null
+    addonCredits: number
+    cancelEffectiveDate: string | null
+    flaggedBookingIds: string[]
+  }
+}
+
 /**
- * An order's claim: `refund` (lines refunded, W28) or `refund_owed` (Refund the rest on an order, W28). What R1
- * changed, for the undo, joins it in the slice that writes R1 (as `guest`, `addon`, `cancel` and `move` joined step D's).
+ * An order's claim: `refund` (lines refunded, W28) or `refund_owed` (Refund the rest on an order, W28). `lines`
+ * (W28, a `refund` only): what R1 stamped and reversed, for the undo and for the action's own row.
  */
 export interface OrderClaimDetails extends StepEClaimCommon {
   kind: 'refund' | 'refund_owed'
+  lines?: OrderRefundLineClaim[]
 }
 
 /**
@@ -115,7 +151,7 @@ export type ClaimBy = { actor: { type: 'staff'; id: string }; requestId: string 
  * Fixed text: the action names are constants.
  */
 const OPEN_CLAIM_HOLDING_ORDER_SQL = `
-SELECT c.id, c.action FROM audit_log c
+SELECT c.id, c.entity_type FROM audit_log c
 WHERE c.details->>'worker' = 'true'
   AND (
     (c.action = '${ORDER_CLAIMS.claimed}' AND c.entity_type = '${ORDER_CLAIMS.entityType}' AND c.entity_id = $1::text)
@@ -131,14 +167,30 @@ WHERE c.details->>'worker' = 'true'
 ORDER BY c.at, c.id
 LIMIT 1`
 
-/** The id of the open claim that holds this order (its own, its event booking's, or a booking's card part on it), if any. */
-export async function openClaimHoldingOrder(db: Queryable, orderId: string): Promise<string | null> {
-  return (await db.query<{ id: string }>(OPEN_CLAIM_HOLDING_ORDER_SQL, [orderId]))[0]?.id ?? null
+/** The open claim that holds this order, and what it is on (W28, for the words). */
+export interface HoldingClaim {
+  id: string
+  on: 'order' | 'event_booking' | 'booking'
 }
 
-/** `refund_open`, step D's reason, with the subject's own words. Nothing was touched. */
-export function refundOpenRefusal(on: 'order' | 'event_booking'): ApiError {
-  const message = on === 'order' ? ORDER_REFUND_OPEN_MESSAGE : EVENT_BOOKING_REFUND_OPEN_MESSAGE
+/** The open claim that holds this order (its own, its event booking's, or a booking's card part on it), if any. */
+export async function openClaimHolding(db: Queryable, orderId: string): Promise<HoldingClaim | null> {
+  const row = (await db.query<{ id: string; entity_type: HoldingClaim['on'] }>(OPEN_CLAIM_HOLDING_ORDER_SQL, [orderId]))[0]
+  return row ? { id: row.id, on: row.entity_type } : null
+}
+
+/** The id of the open claim that holds this order (its own, its event booking's, or a booking's card part on it), if any. */
+export async function openClaimHoldingOrder(db: Queryable, orderId: string): Promise<string | null> {
+  return (await openClaimHolding(db, orderId))?.id ?? null
+}
+
+/**
+ * `refund_open`, step D's reason, with the subject's own words. Nothing was touched. W28 (W27 review L4): when an
+ * order is held by a *booking's* card part (`heldBy: 'booking'`), the words name the order's card payment, because
+ * staff looking at the order would see no refund on it.
+ */
+export function refundOpenRefusal(on: 'order' | 'event_booking', heldBy?: HoldingClaim['on']): ApiError {
+  const message = on === 'event_booking' ? EVENT_BOOKING_REFUND_OPEN_MESSAGE : heldBy === 'booking' ? ORDER_PAYMENT_REFUND_OPEN_MESSAGE : ORDER_REFUND_OPEN_MESSAGE
   return new ApiError('CONFLICT', message, { details: { reason: 'refund_open', message, action: 'refund' } })
 }
 
@@ -149,7 +201,8 @@ export function refundOpenRefusal(on: 'order' | 'event_booking'): ApiError {
  * take that lock themselves before they call it.
  */
 export async function refuseWhileRefundOpen(db: Queryable, on: 'order' | 'event_booking', orderId: string): Promise<void> {
-  if ((await openClaimHoldingOrder(db, orderId)) !== null) throw refundOpenRefusal(on)
+  const holding = await openClaimHolding(db, orderId)
+  if (holding !== null) throw refundOpenRefusal(on, holding.on)
 }
 
 // --- Writing a claim
@@ -157,13 +210,16 @@ export async function refuseWhileRefundOpen(db: Queryable, on: 'order' | 'event_
 /**
  * The order's row lock, as lockForRefund takes it first (locks.ts, LOCK_ORDER's first row). W27a (W27 review S1): the
  * writers take it before the look for an open claim, so the look holds even for a caller that never ran
- * lockForRefund. Taking a row lock this transaction already holds does nothing. An order that doesn't exist locks
- * nothing.
+ * lockForRefund. Taking a row lock this transaction already holds does nothing. W28 (W27a's call 2; the lead's "say
+ * whether the writer should also throw"): an order that doesn't exist is a fault in the caller and throws, so no claim
+ * is ever written on an order id with no row (nothing could settle it: R2, the undo and reconcile all need the order).
+ * R1 refuses a missing order with `order_not_found` before it gets here.
  */
 const ORDER_LOCK_FOR_CLAIM_SQL = 'SELECT 1 FROM orders WHERE id = $1::uuid FOR UPDATE'
 
 async function lockOrderForClaim(tx: Tx, orderId: string): Promise<void> {
-  await tx.query(ORDER_LOCK_FOR_CLAIM_SQL, [orderId])
+  const locked = await tx.query(ORDER_LOCK_FOR_CLAIM_SQL, [orderId])
+  if (locked.length !== 1) throw new Error(`Refund claim: order ${orderId} doesn't exist, so no claim can be written on it.`)
 }
 
 const round2 = (n: number): number => Math.round(n * 100) / 100
@@ -179,7 +235,8 @@ function checkPlan(plan: StepEPlan, amount: number, orderId: string, what: strin
     if (round2(part.lines.reduce((total, line) => total + line.amount, 0)) !== round2(part.amount)) throw new Error(`${what}: the card part's lines don't add up to it.`)
   }
   if (plan.storeCredit < 0 || plan.cash < 0) throw new Error(`${what}: a part of the plan is below £0.`)
-  if (plan.cash > 0 && (plan.card.length > 0 || plan.storeCredit > 0)) throw new Error(`${what}: cash is handed over on its own, never beside a card or store credit part.`)
+  // W28 (Q42): cash beside store credit is the cash paid on the order and the rest of the lines; never beside a card part.
+  if (plan.cash > 0 && plan.card.length > 0) throw new Error(`${what}: cash is never handed over beside a card part.`)
   if (!(amount > 0)) throw new Error(`${what}: a claim gives something, or there is no claim.`)
   const planned = round2((part?.amount ?? 0) + plan.storeCredit + plan.cash)
   if (planned !== round2(amount)) throw new Error(`${what}: the plan gives £${planned.toFixed(2)}, the claim £${round2(amount).toFixed(2)}.`)

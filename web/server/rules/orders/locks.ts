@@ -102,7 +102,12 @@ export interface HeldLocks {
  * sees T1's use and it refuses: one code, one last use, whichever runs first. Nothing else points at
  * a promo code, so nothing else waits.
  */
-const LOCK_SQL = `
+/**
+ * W28 (W27 "Noticed" 1): exported for its test only (server/rules/orders/lock-statements.test.ts). Postgres usually
+ * runs the laterals in the order written even without the reference to the one before, so a missing reference changes
+ * nothing a race test can see until the day the planner reorders them. The test reads lockForOrder's statement itself.
+ */
+export const ORDER_LOCK_SQL = `
 SELECT s.id AS session_id, p.id AS credit_period_id, sp.id AS session_pass_id, m.ids AS membership_ids, v.ids AS variant_ids,
        e.id AS event_id, pc.id AS promo_code_id, g.id AS gift_card_id
 FROM (SELECT id FROM customers WHERE id = $1::uuid FOR NO KEY UPDATE) c
@@ -158,7 +163,7 @@ export async function lockForOrder(tx: Tx, targets: LockTargets): Promise<HeldLo
     event_id: string | null
     promo_code_id: string | null
     gift_card_id: string | null
-  }>(LOCK_SQL, [
+  }>(ORDER_LOCK_SQL, [
     targets.customerId,
     targets.sessionId,
     targets.creditMembershipId,

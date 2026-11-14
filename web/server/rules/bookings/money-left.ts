@@ -64,12 +64,34 @@ export interface OrderCardPortion {
   alreadyCardRefunded: number
   /** cardPortion less alreadyCardRefunded, never negative. Not capped by paymentIntentId: callers decide. */
   cardPortionRemaining: number
+  /**
+   * W29 (Wayne's Q40): set when the order's membership was paid by a card payment of its own beside the order's: a
+   * saved-card membership order with a remainder charge. The subscription's first invoice took the membership, and
+   * the order's PaymentIntent took only the rest of the basket. What that payment took, what has gone back to it (the
+   * card money on the membership lines), and what is left. `paymentIntentId` is the first invoice's, as T2 recorded it
+   * on the order (orders.reader_payment, from W13); null on an order placed by the old code, which never recorded it.
+   * Null on every other order (one card payment, or none).
+   */
+  membershipPayment: { paymentIntentId: string | null; took: number; refunded: number; remaining: number } | null
 }
 
 /**
  * How much of an order can still go back to its card, exactly as loadOrderCardPortion: the total less its promo
  * discount, gift card and store credit parts; for a saved-card membership order with a remainder charge, that
  * remainder; less what has already gone back to the card on its lines.
+ *
+ * W29 (Q40: each line goes back to the card payment that took it): on a saved-card membership order with a remainder
+ * charge, card money back on the membership line went to the membership's own payment, so it no longer comes off the
+ * remainder. `membershipPayment` is that other payment's figures.
+ *
+ * W29a (W29 review S2): the old refundOrder, live until W28 + W29 are published, took a membership's card refund out
+ * of the remainder charge (E3) and recorded it on the membership line too. On an order it refunded that way, this
+ * reads that money as back on the membership's own payment, so the remainder's figure is too high by it. Stripe
+ * refuses the extra, so nothing goes twice. The lead counts such orders live after the publish (0 on 14 Nov).
+ *
+ * W29a (W29 review S1): an order whose record is the reader's is one card payment, the tap, whatever
+ * orders.payment_method says (T2 writes `split` for a reader order part-paid by gift card). Its whole tap is its card
+ * money: no remainder charge, and no membership payment of its own.
  */
 export async function loadOrderCardPortion(db: Queryable, orderId: string): Promise<OrderCardPortion | null> {
   const row = (
@@ -82,6 +104,9 @@ export async function loadOrderCardPortion(db: Queryable, orderId: string): Prom
       gift_card_used: string
       store_credit_used: string
       membership_net: string
+      membership_card_refunded: string
+      membership_payment_intent_id: string | null
+      reader_record: boolean | null
       already_card_refunded: string
     }>(
       `SELECT o.customer_id, o.stripe_payment_intent_id, o.payment_method, o.order_total::text AS order_total,
@@ -91,6 +116,10 @@ export async function loadOrderCardPortion(db: Queryable, orderId: string): Prom
                         WHERE sct.order_id = o.id AND sct.amount < 0 AND sct.reason IN ('redemption', 'redemption_reversal')), 0)::text AS store_credit_used,
               COALESCE((SELECT SUM(oli.line_total - oli.discount_amount) FROM order_line_items oli
                         WHERE oli.order_id = o.id AND oli.item_type = 'membership'), 0)::text AS membership_net,
+              COALESCE((SELECT SUM(oli.card_refunded_amount) FROM order_line_items oli
+                        WHERE oli.order_id = o.id AND oli.item_type = 'membership'), 0)::text AS membership_card_refunded,
+              o.reader_payment->'membership'->>'subscription_payment_intent_id' AS membership_payment_intent_id,
+              (o.reader_payment->>'method' = 'reader' OR o.reader_payment ? 'payment_intent_id') AS reader_record,
               (COALESCE((SELECT SUM(oli.card_refunded_amount) FROM order_line_items oli WHERE oli.order_id = o.id), 0)
                 + COALESCE((SELECT SUM(aol.card_refunded_amount) FROM addon_order_lines aol WHERE aol.order_id = o.id), 0))::text
                 AS already_card_refunded
@@ -101,14 +130,20 @@ export async function loadOrderCardPortion(db: Queryable, orderId: string): Prom
   if (!row) return null
   const paidByCards = round2(amount(row.order_total) - amount(row.order_discount_amount) - amount(row.gift_card_used) - amount(row.store_credit_used))
   let cardPortion = Math.max(0, paidByCards)
+  let membershipPayment: OrderCardPortion['membershipPayment'] = null
   const membershipNet = amount(row.membership_net)
-  if (membershipNet > 0.005 && row.payment_method !== 'reader') {
+  if (membershipNet > 0.005 && row.payment_method !== 'reader' && row.reader_record !== true) {
     // Gift card and store credit cover the rest of the basket first, then spill onto the membership, so the
     // remainder charge is what is left of the part that isn't the membership.
     const remainderCharge = round2(paidByCards - membershipNet)
-    if (remainderCharge > 0.005) cardPortion = remainderCharge
+    if (remainderCharge > 0.005) {
+      cardPortion = remainderCharge
+      // W29 (Q40): the membership's first invoice took the membership itself, on a payment of its own.
+      const refunded = round2(amount(row.membership_card_refunded))
+      membershipPayment = { paymentIntentId: row.membership_payment_intent_id, took: round2(membershipNet), refunded, remaining: Math.max(0, round2(membershipNet - refunded)) }
+    }
   }
-  const alreadyCardRefunded = round2(amount(row.already_card_refunded))
+  const alreadyCardRefunded = round2(amount(row.already_card_refunded) - (membershipPayment?.refunded ?? 0))
   return {
     orderId,
     customerId: row.customer_id,
@@ -116,6 +151,7 @@ export async function loadOrderCardPortion(db: Queryable, orderId: string): Prom
     cardPortion,
     alreadyCardRefunded,
     cardPortionRemaining: Math.max(0, round2(cardPortion - alreadyCardRefunded)),
+    membershipPayment,
   }
 }
 
