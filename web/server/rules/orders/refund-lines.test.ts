@@ -466,6 +466,32 @@ describe('the card: refused, undone, blocked, unclear', () => {
     })
   })
 
+  it("W30a (W30 review S1, the same words here), the split case: refused with the undo blocked on a plan with store credit: the £10 of store credit is given once and named in the warning, the £14 is owed, and the words never say nothing went back", async () => {
+    await onAnOrder({ products: [soap], payment: { method: 'card', storeCredit: { amount: 10 } } }, async ({ orderId, lines, stripe, db: database }) => {
+      const [soapLine] = await lines('product')
+      // £24 of soap, £14 on the card: the plan is £14 to the card and £10 to store credit. Between R1 and the refusal
+      // the restocked soaps are sold, so the order can't be put back.
+      const create = stripe.refunds.create
+      stripe.refunds.create = async () => {
+        stripe.refunds.create = create
+        await database.query('UPDATE product_variants SET stock_quantity = stock_quantity - 5 WHERE id = $1', [ID.variant])
+        throw fakeStripeErrors.cardDeclined()
+      }
+      const held = await refund(orderId, [soapLine as string], 'card', { restock: { [soapLine as string]: true } })
+      expect(held.status).toBe(200)
+      expect(held.body.data).toMatchObject({ refundOwed: 14 })
+      expect(held.body.data?.held?.reason).toBe('refund_refused_not_put_back')
+      expect(held.body.data?.held?.message).toBe(
+        "The card refund was refused (Failed to refund payment: Your card was declined.), so it didn't go back to the card (£10.00 went to store credit as planned), and the order can't be put back as it was: stock it returned has been sold since. The refund stands, and £14.00 shows on the order as still to refund. Use Refund the rest to give it another way."
+      )
+      expect(held.body.data?.held?.message).not.toContain('nothing went back')
+      expect((await creditRefunds()).map((row) => [row.amount, row.order_id])).toEqual([['10.00', orderId]])
+      expect(await order(orderId)).toMatchObject({ owed: '14.00' })
+      expect(moneyBack(stripe)).toBe(0)
+      expect((await auditRows('order.refund_finished'))[0]?.details).toMatchObject({ outcome: 'owed', owed: 14, cardRefunded: 0, storeCreditRefunded: 10, by: { how: 'undo_blocked' } })
+    })
+  })
+
   it('refused with the undo blocked (the restocked soap sold meanwhile): the refund stands, the £24 is owed on the order with Stripe\'s reason, and Refund the rest then It already arrived settle it', async () => {
     await onAnOrder({ products: [soap, mug], payment: card }, async ({ orderId, lines, stripe, db: database }) => {
       const [soapLine] = await lines('product')
@@ -479,10 +505,10 @@ describe('the card: refused, undone, blocked, unclear', () => {
       const held = await refund(orderId, [soapLine as string], 'card', { restock: { [soapLine as string]: true } })
       expect(held.status).toBe(200)
       expect(held.body.data).toMatchObject({ refundedAmount: 24, refundMethod: 'card', refundOwed: 24, orderPaymentStatus: 'partially_refunded' })
-      expect(held.body.data?.held).toMatchObject({ reason: 'refund_refused_not_put_back', message: NEW_WORDS.putBackBlocked('Failed to refund payment: Your card was declined.', 24, true) })
+      expect(held.body.data?.held).toMatchObject({ reason: 'refund_refused_not_put_back', message: NEW_WORDS.putBackBlocked('Failed to refund payment: Your card was declined.', 24) })
       // W28a (review S2): Stripe has just said no, so the advice is Refund the rest, never "Check Stripe first".
       expect(held.body.data?.held?.message).toBe(
-        "The card refund was refused (Failed to refund payment: Your card was declined.), so nothing went back, and the order can't be put back as it was: stock it returned has been sold since. The refund stands, and £24.00 shows on the order as still to refund. Use Refund the rest to give it another way."
+        "The card refund was refused (Failed to refund payment: Your card was declined.), so it didn't go back to the card, and the order can't be put back as it was: stock it returned has been sold since. The refund stands, and £24.00 shows on the order as still to refund. Use Refund the rest to give it another way."
       )
       expect((await lineRows(orderId))[0]).toMatchObject({ refunded: true, refund_method: 'card', restocked: true, card: '0.00' })
       expect(await order(orderId)).toEqual({ payment_status: 'partially_refunded', owed: '24.00' })

@@ -116,11 +116,88 @@ describe("the event cancellations' reasons and words, moved (brief W27 item 5)",
     const places = path.join(components, 'CancelEventPlacesDialog.tsx')
     const event = path.join(components, 'CancelEventDialog.tsx')
     expect(sourceHolds(places, words.EVENT_DIALOG_WORDS.quoteFailed)).toBe(true)
-    expect(sourceHolds(places, words.EVENT_DIALOG_WORDS.cancelFallback)).toBe(true)
-    expect(sourceHolds(event, words.EVENT_DIALOG_WORDS.cancelEventFallback)).toBe(true)
+    // W30: the dialog's "Failed to cancel" went with the press key (a thrown call is no answer, with its own words).
+    expect(sourceHolds(places, 'Failed to cancel')).toBe(false)
+    // W31: the event dialog's "Failed to cancel the event" went the same way (a thrown call is no answer).
+    expect(sourceHolds(event, 'Failed to cancel the event')).toBe(false)
+    expect('cancelEventFallback' in words.EVENT_DIALOG_WORDS).toBe(false)
     expect(sourceHolds(event, words.EVENT_DIALOG_WORDS.eventEnded)).toBe(true)
     // The same sentence as the function's refusal.
     expect(words.EVENT_DIALOG_WORDS.eventEnded).toBe(words.EVENT_WHOLE_CANCEL_WORDS.eventEnded)
+  })
+
+  it('W30: the words the Worker adds for a place cancel, word for word', () => {
+    const added = words.EVENT_CANCEL_NEW_WORDS
+    expect(added.amountNotConfirmed).toBe('Check the refund figure and confirm again.')
+    expect(added.figuresChanged).toBe('The figures on this event booking have just changed. Check them and confirm again.')
+    // W30a (review L7): on a card order Card is possible too, so the words don't say "only store credit".
+    expect(added.noCashLeft).toBe("No cash paid on this booking's order is left to hand back, so it can't be handed back in cash.")
+    expect(added.notSaved).toBe("The cancellation couldn't be saved (the system was busy, or one of its records couldn't be written), so nothing was cancelled. Try again.")
+    expect(added.notSentInTime).toBe("The card refund wasn't sent in time, so nothing was cancelled. Try again.")
+    expect(added.unconfirmed).toBe("The places are cancelled, but the card refund didn't get a clear answer, so it may or may not have gone. Don't refund it again. Check the Orders page in a few minutes.")
+    expect(added.goneNotRecorded(40)).toBe("The places are cancelled and £40.00 went back to the card, but the refund couldn't be finished on the booking yet. It's on hold: don't refund it again. Check the Orders page in a few minutes.")
+    const refusedBy = 'Failed to refund payment: Your card was declined.'
+    // W30a (review S1): the card refund didn't go back (never "nothing went back": the plan's store credit did).
+    expect(added.putBackBlocked(refusedBy, 40)).toBe(
+      "The card refund was refused (Failed to refund payment: Your card was declined.), so it didn't go back to the card, and the places can't be put back: they have been booked by someone else since. The cancellation stands, and £40.00 shows on this booking as still to refund. Use Refund the rest to give it another way."
+    )
+    expect(added.putBackFailed(refusedBy, 40)).toBe(
+      "The card refund was refused (Failed to refund payment: Your card was declined.), so it didn't go back to the card, and the places couldn't be put back. The cancellation stands, and £40.00 shows on this booking as still to refund. Use Refund the rest to give it another way."
+    )
+    // The split case: £50 refused, the plan's £30 of store credit given, and named.
+    expect(added.putBackBlocked(refusedBy, 50, 30)).toBe(
+      "The card refund was refused (Failed to refund payment: Your card was declined.), so it didn't go back to the card (£30.00 went to store credit as planned), and the places can't be put back: they have been booked by someone else since. The cancellation stands, and £50.00 shows on this booking as still to refund. Use Refund the rest to give it another way."
+    )
+    expect(added.putBackFailed(refusedBy, 50, 30)).toContain("so it didn't go back to the card (£30.00 went to store credit as planned), and the places couldn't be put back.")
+    // A refund the press had no time to send was never refused: "wasn't sent in time", and nothing to check in Stripe.
+    expect(added.putBackBlocked(added.notSentDetail, 50, 30)).toBe(
+      "The card refund wasn't sent in time, so it didn't go back to the card (£30.00 went to store credit as planned), and the places can't be put back: they have been booked by someone else since. The cancellation stands, and £50.00 shows on this booking as still to refund. Use Refund the rest to give it another way."
+    )
+    expect(added.putBackFailed(added.notSentDetail, 40)).toBe(
+      "The card refund wasn't sent in time, so it didn't go back to the card, and the places couldn't be put back. The cancellation stands, and £40.00 shows on this booking as still to refund. Use Refund the rest to give it another way."
+    )
+    const everyNotPutBack = [refusedBy, added.notSentDetail].flatMap((detail) => [added.putBackBlocked(detail, 50, 30), added.putBackFailed(detail, 50, 30), added.putBackBlocked(detail, 40), added.putBackFailed(detail, 40)])
+    for (const text of everyNotPutBack) {
+      expect(text).not.toContain('nothing went back')
+      expect(text).not.toContain('Check Stripe')
+    }
+    for (const text of [added.putBackBlocked(added.notSentDetail, 40), added.putBackFailed(added.notSentDetail, 40), added.putBackBlockedNotRecorded(added.notSentDetail), added.putBackFailedNotRecorded(added.notSentDetail)]) {
+      expect(text).not.toContain('was refused')
+      expect(text.startsWith("The card refund wasn't sent in time, so ")).toBe(true)
+    }
+    // R2 failed too: nothing was given, store credit included, so "nothing went back" is true there.
+    expect(added.putBackBlockedNotRecorded(refusedBy)).toContain('(Failed to refund payment: Your card was declined.), so nothing went back, and the places can\'t be put back')
+    for (const text of [added.putBackBlockedNotRecorded(refusedBy), added.putBackFailedNotRecorded(refusedBy)]) {
+      expect(text.endsWith("The cancellation stands, but the money still to refund couldn't be recorded yet. Don't refund it again: check the Orders page in a few minutes.")).toBe(true)
+    }
+    expect(words.EVENT_STORE_CREDIT_AFTER_CASH_NOTE('Full Moon Sauna')).toBe('Event refund: Full Moon Sauna (the rest was handed back in cash).')
+    expect([...words.EVENT_CANCEL_NEW_REASONS]).toEqual(['refund_open', 'amount_not_confirmed', 'figures_changed', 'no_cash_left', 'cancel_not_saved'])
+    // The old reasons are all still there: none was renamed.
+    expect(words.EVENT_CANCEL_REASONS).toContain('changed_by_someone_else')
+    expect(words.EVENT_CANCEL_REASONS.some((reason) => (words.EVENT_CANCEL_NEW_REASONS as readonly string[]).includes(reason))).toBe(false)
+  })
+
+  it('W31: the words the Worker adds for the whole event, word for word', () => {
+    const added = words.EVENT_WHOLE_CANCEL_NEW_WORDS
+    expect(added.eventNotCancelled).toBe("This event hasn't been cancelled, so its bookings can't be cancelled as a whole event. Close this, reload and try again.")
+    expect(added.notSaved).toBe("The event's cancellation couldn't be saved (the system was busy, or one of its records couldn't be written), so the event wasn't cancelled. Try again.")
+    expect([...words.EVENT_WHOLE_CANCEL_NEW_REASONS]).toEqual(['event_not_cancelled', 'cancel_not_saved'])
+    // The old reasons are all still there, and none is also a new one.
+    expect([...words.EVENT_WHOLE_CANCEL_REASONS]).toEqual(['invalid_params', 'event_not_found', 'event_ended', 'bookings_pending'])
+    // Review L1: the places can't go back because the event has been cancelled since. Never "nothing went back" when
+    // store credit was given, and the same advice as when the places were resold.
+    const refusedBy = 'Failed to refund payment: Your card was declined.'
+    const places = words.EVENT_CANCEL_NEW_WORDS
+    expect(places.putBackEventCancelled(refusedBy, 40)).toBe(
+      "The card refund was refused (Failed to refund payment: Your card was declined.), so it didn't go back to the card, and the places can't be put back: the event has been cancelled since. The cancellation stands, and £40.00 shows on this booking as still to refund. Use Refund the rest to give it another way."
+    )
+    expect(places.putBackEventCancelled(refusedBy, 50, 30)).toBe(
+      "The card refund was refused (Failed to refund payment: Your card was declined.), so it didn't go back to the card (£30.00 went to store credit as planned), and the places can't be put back: the event has been cancelled since. The cancellation stands, and £50.00 shows on this booking as still to refund. Use Refund the rest to give it another way."
+    )
+    expect(places.putBackEventCancelled(places.notSentDetail, 40).startsWith("The card refund wasn't sent in time, so it didn't go back to the card, and the places can't be put back: the event has been cancelled since.")).toBe(true)
+    expect(places.putBackEventCancelledNotRecorded(refusedBy)).toBe(
+      "The card refund was refused (Failed to refund payment: Your card was declined.), so nothing went back, and the places can't be put back: the event has been cancelled since. The cancellation stands, but the money still to refund couldn't be recorded yet. Don't refund it again: check the Orders page in a few minutes."
+    )
   })
 
   it('the check would catch a changed word', () => {

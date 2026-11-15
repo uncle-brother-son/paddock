@@ -766,6 +766,93 @@ In `orders/refund-lines.ts`, with the subscription's cancel in `orders/refund-su
 - **The payment date change charge** is a membership line that sold no membership (its order has a row in
   `membership_payment_date_changes`): a plain line, with no cancel and no membership change; the new date stays.
 
+## Event places on the Worker (W30)
+
+In `events/cancel-places.ts`, with the booking as the attendee list shows it in `events/attendee-list.ts`. Routes:
+`POST /api/v1/staff/event-bookings/:id/cancel/quote` (a read, never gated) and `POST …/cancel`. They replace the staff
+app's `getEventCancellationQuote` and `cancelEventPlaces` (and `shared/eventCancellation.ts` for a place cancel). The
+whole-event cancel is W31; W30 and W31 are released together. Wayne's Q39, Q42 and Q43 (14 Nov); bugs E8, E9, E12, E13.
+
+- **Who may:** any money back (card, store credit, cash) needs Issue refunds, checked in the route; No refund is open
+  to every active staff member, as before. Someone with no staff record, or inactive, is refused by `defineRoute`
+  whatever they choose (E12: the old function cancelled the place for them, with nobody's name on it).
+- **The switch:** `event_cancels` gates a cancel with money back only (`eventCancelPathOff`). No refund needs no kind.
+- **R1 (one transaction, no Stripe):** `lockForRefund` (the booking's order, its customer, the event, the event
+  booking; with no order line, the event then the booking); `refund_open` while any claim holds the order, **for
+  every cancel on the booking, No refund too, and for the quote** (an open claim's undo puts its places back); the
+  database's own `event_cancellation_quote` under the lock, with the old refusals and words; the reason rule; the
+  refund staff confirmed (Q18: `confirmed.refund`, half a penny, £0 for No refund; without it nothing is cancelled:
+  E9); the plan; the places stamped with what they were worth (each must still be not cancelled and not checked in,
+  in the same statement: `changed_by_someone_else` otherwise), the booking's places lowered (cancelled at none), the
+  event's places released; the claim (`event_booking.refund_claimed`), **only when money goes back**. With no card
+  part R1 also gives the store credit (or records the cash) and finishes.
+- **Q43:** the database function answers `before_cutoff: false` for an event with no cut-off. The rule reads that as
+  "the cut-off is the event's start": before it, refund freely; after it, a reason is needed and the refund is
+  recorded as after the cut-off. The database function is unchanged.
+- **The plan:** Card is capped at the order's card money left (`loadOrderCardPortion`: the order's own payment, also
+  for an event bought with a membership on a saved card), the rest to store credit; no card payment, all store
+  credit, as before. Cash (Q42) is capped at the cash paid on the order less cash already handed back
+  (`orderCashLeft`), the rest to store credit, with who handed it over on the claim; `no_cash_left` with none.
+- **A card part (E13: nothing is sent before the cancel and its claim are saved):** sent once under
+  `<claimId>:refund:<orderId>`, then R2 (`finishEventClaimInTransaction`): what was given back on the places (shared
+  by unit price, the remainder on the last), the card money on the event line, the store credit, the order's status,
+  `event_booking.cancel_places` and `event_booking.refund_finished`. Refused: marked, then R1 undone (the places
+  booked again), with the old words; never store credit instead. **If the released places have been sold** (the event
+  has no room) or the undo fails, the cancel stands and the card money is owed on the order with Stripe's reason.
+  No clear answer: held, the places stay cancelled; reconcile settles it and never sends a refund.
+- **The event line** is stamped refunded once the booking is fully cancelled and a refund was made on any of its
+  places (`card` when card money went back on it or is owed for it, `cash` when cash was handed back, else `credit`).
+- **Money owed (Q39)** is the order's (`orders.refund_owed_amount`): the attendee list shows it on the booking and
+  opens the order's own Refund the rest and It already arrived. Refund the rest's card money for an event booking is
+  recorded on its event line, not the order's oldest line (W28 review L2, `owedCardLines`), also when another line of
+  the order has already been refunded to the card: the stamped lines' own shortfalls come first, and what is left
+  over goes on the event line with owed money (W30a, W30 review S2). The words after a refused card refund that
+  can't be put back say the card refund didn't go back and name the plan's store credit, which R2 gives all the same
+  (W30a, review S1; the order refund's words too). A place's own figures
+  record what its cancel gave; they aren't changed by what is done about owed money later on the order.
+- **Reconcile, the stuck list, the manual close** take event booking claims (`reconcileEventClaim`,
+  `EVENT_CLAIMS_SQL`, `closeHeldEventClaim`): found, R2; not found or refused, owed on the order; the stuck list shows
+  them with the event booking and its event, so the `refund_open` words that send staff to the Orders page are true.
+- **Check-in stays the staff app's until step G** and takes none of these locks. R1's guard refuses a place checked in
+  at the same moment, and the staff app's check-in refuses a cancelled place (its own guard in the same statement).
+- **`wholeEvent`** is W31's (next section): honoured only once the event is cancelled in the database.
+
+## The whole event on the Worker (W31)
+
+`events/cancel-event.ts`, with `wholeEvent` on the place cancel (`events/cancel-places.ts`). Replaces the staff app's
+`cancelEvent` and `getEventCancellationOverview`. Lead call L5; bugs E6 and E7; Wayne's Q42 for a whole event; W30
+review L1 and L2. Released with W30.
+
+| Route | Does | Gate |
+|---|---|---|
+| `POST events/:id/cancel` | The event off sale and cancelled, who and why. Answers the bookings still to cancel | Issue refunds, then `event_cancels` |
+| `GET events/:id/cancel/overview` | The dialog's list: each booking still to cancel, its figure, any problem, any money owed | any active staff; not switched |
+| `POST event-bookings/:id/cancel` with `wholeEvent` | One booking of a cancelled event, cancelled in full | Issue refunds and `event_cancels`, whatever is sent |
+
+- **The event's cancel is one transaction under the event's row lock** (`FOR NO KEY UPDATE`, the lock New Order
+  takes before it claims places: `orders/locks.ts`). Refused if the event has ended (unless it is already cancelled:
+  that is the retry), or if any booking is `pending` (a payment in progress). It moves no money. An order either
+  commits first, and is seen (a pending one refuses the cancel; a confirmed one is listed), or waits and is refused
+  `event_cancelled` (bug E7; `cancel-event-postgres.test.ts`, both ways round).
+- **It is safe to run again** and takes no idempotency key: on an event already cancelled it keeps the first reason
+  and person, writes no second `event.cancel` row, and answers the bookings as they now stand.
+- **The screen then presses each booking** (bug E6: the old function did them all in one Retool call): the place
+  cancel with `wholeEvent: true`, the one choice of Card or Store credit, the overview's `value` as
+  `confirmed.refund` (Q18), its own key and its own claim. Retry is the same again for the bookings still confirmed.
+- **`wholeEvent` is honoured only when the event is cancelled in the database**, read under the event's lock in R1;
+  on a live event it is refused (`event_not_cancelled`), so no screen can use it to skip the cut-off. With it: every
+  place the booking has left (`attendeeIds` are not read), no cut-off rule and no `refund_after_cutoff`, Card or
+  Store credit only (Q42: a cash booking goes to store credit; staff who want cash cancel that booking from the
+  attendee list first), and the event's own reason when none is sent.
+- **The undo and a cancelled event (W30 review L1).** R1 records on the claim whether the event was already
+  cancelled (`cancel.eventCancelled`). After a refused card refund, the undo never puts places back, or the booking
+  back to confirmed, on an event cancelled *since* R1: the cancel stands and the card money is owed on the order
+  (`EventPlacesPutBackBlocked`, `why: 'event_cancelled'`), as when the places were resold. A cancel made when the
+  event was already cancelled (the whole-event run's own press) is put back as before, so the booking is still to
+  cancel, the overview lists it and Retry presses it again.
+- **Audit:** `event.cancel` on the event, once; each booking's claim and `event_booking.cancel_places` row carry
+  `wholeEvent: true`.
+
 ## Refund claims with no finish
 
 The staff app claims a refund's money before it moves. Each claim writes `booking.refund_claimed` to

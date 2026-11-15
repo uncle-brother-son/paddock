@@ -108,20 +108,45 @@ describe('the words W27 adds', () => {
     expect(words.EVENT_BOOKING_REFUND_OPEN_MESSAGE).toContain('this event booking')
   })
 
-  it('review S2 (W28a): after a refusal Stripe gave, the not-put-back words end with Refund the rest, never "Check Stripe first"; a refund never sent keeps it', () => {
+  it("W31 (W30a \"Noticed\" 2): with no cash left the words say it can't be handed back in cash, never that it can only go to store credit (on a card order Card is possible too)", () => {
+    expect(words.ORDER_REFUND_NEW_WORDS.noCashLeft).toBe("No cash paid on this order is left to hand back, so it can't be handed back in cash.")
+    expect(words.ORDER_REFUND_NEW_WORDS.noCashLeft).not.toContain('only go to store credit')
+  })
+
+  it('review S2 (W28a) and W30a (W30 review S1): the not-put-back words say the card refund didn\'t go back (never "nothing went back"), name the plan\'s store credit, say "wasn\'t sent in time" for a part never sent, and always end with Refund the rest', () => {
     const declined = 'Failed to refund payment: Your card was declined.'
-    expect(words.ORDER_REFUND_NEW_WORDS.putBackBlocked(declined, 24, true)).toBe(
-      "The card refund was refused (Failed to refund payment: Your card was declined.), so nothing went back, and the order can't be put back as it was: stock it returned has been sold since. The refund stands, and £24.00 shows on the order as still to refund. Use Refund the rest to give it another way."
+    const added = words.ORDER_REFUND_NEW_WORDS
+    expect(added.putBackBlocked(declined, 24)).toBe(
+      "The card refund was refused (Failed to refund payment: Your card was declined.), so it didn't go back to the card, and the order can't be put back as it was: stock it returned has been sold since. The refund stands, and £24.00 shows on the order as still to refund. Use Refund the rest to give it another way."
     )
-    expect(words.ORDER_REFUND_NEW_WORDS.putBackFailed(declined, 24, true)).toBe(
-      "The card refund was refused (Failed to refund payment: Your card was declined.), so nothing went back, and the order couldn't be put back as it was. The refund stands, and £24.00 shows on the order as still to refund. Use Refund the rest to give it another way."
+    expect(added.putBackFailed(declined, 24)).toBe(
+      "The card refund was refused (Failed to refund payment: Your card was declined.), so it didn't go back to the card, and the order couldn't be put back as it was. The refund stands, and £24.00 shows on the order as still to refund. Use Refund the rest to give it another way."
     )
-    for (const text of [words.ORDER_REFUND_NEW_WORDS.putBackBlocked(declined, 24, true), words.ORDER_REFUND_NEW_WORDS.putBackFailed(declined, 24, true)]) expect(text).not.toContain('Check Stripe')
-    // Not sent in time: Stripe said nothing, so staff still check it first.
-    const notSent = words.ORDER_REFUND_NEW_WORDS.notSentDetail
-    for (const text of [words.ORDER_REFUND_NEW_WORDS.putBackBlocked(notSent, 24, false), words.ORDER_REFUND_NEW_WORDS.putBackFailed(notSent, 24, false)]) {
-      expect(text.endsWith('Check Stripe first: if the money already reached the customer, use It already arrived; if not, use Refund the rest.')).toBe(true)
+    // The split case: £14 refused, the plan's £10 of store credit given, and named.
+    expect(added.putBackBlocked(declined, 14, 10)).toBe(
+      "The card refund was refused (Failed to refund payment: Your card was declined.), so it didn't go back to the card (£10.00 went to store credit as planned), and the order can't be put back as it was: stock it returned has been sold since. The refund stands, and £14.00 shows on the order as still to refund. Use Refund the rest to give it another way."
+    )
+    expect(added.putBackFailed(declined, 14, 10)).toContain("so it didn't go back to the card (£10.00 went to store credit as planned), and the order couldn't be put back as it was.")
+    // Not sent in time: nothing reached Stripe, so it wasn't refused and there is nothing to check there.
+    const notSent = added.notSentDetail
+    expect(added.putBackBlocked(notSent, 14, 10)).toBe(
+      "The card refund wasn't sent in time, so it didn't go back to the card (£10.00 went to store credit as planned), and the order can't be put back as it was: stock it returned has been sold since. The refund stands, and £14.00 shows on the order as still to refund. Use Refund the rest to give it another way."
+    )
+    expect(added.putBackFailed(notSent, 24)).toBe(
+      "The card refund wasn't sent in time, so it didn't go back to the card, and the order couldn't be put back as it was. The refund stands, and £24.00 shows on the order as still to refund. Use Refund the rest to give it another way."
+    )
+    for (const detail of [declined, notSent]) {
+      for (const text of [added.putBackBlocked(detail, 14, 10), added.putBackFailed(detail, 14, 10), added.putBackBlocked(detail, 24), added.putBackFailed(detail, 24)]) {
+        expect(text).not.toContain('nothing went back')
+        expect(text).not.toContain('Check Stripe')
+      }
     }
+    for (const text of [added.putBackBlockedNotRecorded(notSent), added.putBackFailedNotRecorded(notSent)]) {
+      expect(text).not.toContain('was refused')
+      expect(text.startsWith("The card refund wasn't sent in time, so nothing went back, and the order ")).toBe(true)
+    }
+    // R2 failed too: nothing was given, store credit included, so "nothing went back" is true there.
+    expect(added.putBackBlockedNotRecorded(declined)).toContain("(Failed to refund payment: Your card was declined.), so nothing went back, and the order can't be put back as it was")
   })
 
   it('W29: the membership words, word for word: Q41\'s line under the line, Q40\'s two refusals, and the cancel left (to staff, and on the stuck list)', () => {

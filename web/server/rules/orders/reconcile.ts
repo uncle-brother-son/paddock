@@ -38,6 +38,8 @@
 //
 // W28 (E-plan 4.9): an order refund's claim (server/rules/orders/refund-lines.ts) is settled the same way: its one card
 // part looked for by `metadata.claim_id`, never sent; found, R2; not found or refused, the money owed on the order.
+// W30: and an event booking's claim (server/rules/events/cancel-places.ts), whose card part is on the order that paid
+// for the booking: found, R2; not found or refused, the places stay cancelled and the money is owed on that order.
 //
 // W13c (W13a review L3, first part): a membership subscription a press left live (`order.subscription_left`,
 // `left`) for an order no longer pending is put back here, each run until it is: cancelled (checked), its first
@@ -83,7 +85,8 @@ import {
 import { cancelReaderOrder, finaliseReaderOrderFound, otherModeMessage, settleIntent } from './reader-order'
 import { undoOrder } from './undo-order'
 import { CLAIMS_DUE_SQL, claimRefusal, findCardPart, finishClaim, readClaim, type CardPart, type Claim } from '@/server/rules/bookings/refunds'
-import { ORDER_CLAIMS_DUE_SQL, readOrderClaim, stepEClaimRefusal, type OrderClaim } from '@/server/rules/refunds/claims'
+import { finishEventClaim } from '@/server/rules/events/cancel-places'
+import { EVENT_BOOKING_CLAIMS_DUE_SQL, ORDER_CLAIMS_DUE_SQL, readEventBookingClaim, readOrderClaim, stepEClaimRefusal, type EventBookingClaim, type OrderClaim } from '@/server/rules/refunds/claims'
 import { finishOrderClaim } from './refund-lines'
 import { cancelRefundedSubscription, cancelSubscriptionsAfterRefund, LEFT_BY_REFUND, refundCancelsDue, type RefundCancelDue } from './refund-subscription'
 
@@ -170,7 +173,7 @@ export type ItemOutcome =
   | 'left'
 
 export interface ReconcileItem {
-  /** W21: `claim` is a booking refund's claim. W28: or an order refund's. */
+  /** W21: `claim` is a booking refund's claim. W28: or an order refund's. W30: or an event booking's. */
   kind: 'order' | 'flow' | 'refund' | 'claim'
   id: string
   outcome: ItemOutcome
@@ -950,6 +953,45 @@ async function reconcileOrderClaim(run: Run, claim: OrderClaim): Promise<Reconci
 }
 
 /**
+ * W30 (E-plan 4.9): an event booking's claim held by its press (places cancelled with a card refund), settled as an
+ * order's (reconcileOrderClaim), with its one card part on the order that paid for the booking. Never sends a refund:
+ * the refunds on that order's PaymentIntent are listed and matched by `metadata.claim_id`. Found: R2 (the money on the
+ * places and the event line, the plan's store credit, the order's status). None, or a refund that failed or was
+ * cancelled, or the press's refusal mark: the places stay cancelled and the card money is left on the booking's order
+ * as still to refund (Q39), never store credit. Left for a person: the other Stripe mode, more than one refund, a
+ * refund of another amount. Left for the next run: Stripe didn't answer, or R2 failed.
+ */
+async function reconcileEventClaim(run: Run, claim: EventBookingClaim): Promise<ReconcileItem> {
+  const { plan, livemode } = claim.details
+  if (typeof livemode === 'boolean' && livemode !== run.stripe.keyLivemode) return left('claim', claim.id, 'other_mode')
+  const went: CardPart[] = []
+  const never: CardPart[] = []
+  let refusedInStripe: string | null = null
+  for (const part of plan.card) {
+    const found = await findCardPart(run.stripe, claim.id, part, run.timing)
+    if (found.kind === 'unclear') return left('claim', claim.id, 'unclear', found.detail)
+    const finding = { orderId: part.orderId, amount: part.amount }
+    if (found.kind === 'several') return left('claim', claim.id, 'several_refunds', found.ids.join(', '), { parts: [{ ...finding, found: 'several', detail: found.ids.join(', ') }] })
+    if (found.kind === 'mismatch') return left('claim', claim.id, 'refund_mismatch', found.detail, { parts: [{ ...finding, found: 'mismatch', detail: found.detail }] })
+    if (found.kind === 'went') went.push(part)
+    else {
+      never.push(part)
+      if (found.kind === 'refused') refusedInStripe ??= found.detail
+    }
+  }
+  const owed = Math.round(never.reduce((total, part) => total + part.amount, 0) * 100) / 100
+  try {
+    const refused = (await stepEClaimRefusal(run.db, claim)) ?? refusedInStripe
+    const finished = await finishEventClaim(run.db, claim, { went, owed, ...(refused !== null ? { refused } : {}) }, { actor: run.options.actor, requestId: run.options.requestId, how: 'reconcile' })
+    if (!finished) return { kind: 'claim', id: claim.id, outcome: 'settled_elsewhere', detail: 'finished' }
+    const detail = `card ${went.map((part) => `${part.orderId} £${part.amount.toFixed(2)}`).join(', ') || 'none'} recorded; £${owed.toFixed(2)} owed on the event booking's order; £${finished.storeCreditRefunded.toFixed(2)} to store credit`
+    return { kind: 'claim', id: claim.id, outcome: 'finalised', detail }
+  } catch (err) {
+    return left('claim', claim.id, 'finish_failed', err instanceof Error ? err.message : String(err))
+  }
+}
+
+/**
  * W21: one held claim settled now, as a run settles it, whatever its age, with its `order.reconcile` row: what staff's
  * Resolve now does for it once the claim is past the window. For the replay (a scenario whose next step comes after
  * the staff member checked the Orders page, Q35's words) and the tests.
@@ -972,8 +1014,10 @@ export async function reconcileClaimNow(db: Db, stripeClient: StripeClient, clai
   const claim = await readClaim(db, claimId)
   // W28: an order refund's claim, when it isn't a booking's.
   const orderClaim = claim ? null : await readOrderClaim(db, claimId)
-  if (!claim && !orderClaim) return { kind: 'claim', id: claimId, outcome: 'settled_elsewhere', detail: 'gone' }
-  const item = claim ? await reconcileClaim(run, claim) : await reconcileOrderClaim(run, orderClaim as OrderClaim)
+  // W30: an event booking's claim, when it is neither.
+  const eventClaim = claim || orderClaim ? null : await readEventBookingClaim(db, claimId)
+  if (!claim && !orderClaim && !eventClaim) return { kind: 'claim', id: claimId, outcome: 'settled_elsewhere', detail: 'gone' }
+  const item = claim ? await reconcileClaim(run, claim) : orderClaim ? await reconcileOrderClaim(run, orderClaim) : await reconcileEventClaim(run, eventClaim as EventBookingClaim)
   if (item.outcome !== 'settled_elsewhere') {
     await record('refund_claim', claimId, { outcome: item.outcome, ...(item.reason ? { reason: item.reason } : {}), detail: item.detail ?? null, ...(item.record ?? {}) })
   }
@@ -1299,6 +1343,7 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
   const flows = await db.query<{ id: string }>(FLOWS_DUE_SQL, [window])
   const claims = await db.query<{ id: string }>(CLAIMS_DUE_SQL, [window])
   const orderClaims = await db.query<{ id: string }>(ORDER_CLAIMS_DUE_SQL, [window])
+  const eventClaims = await db.query<{ id: string }>(EVENT_BOOKING_CLAIMS_DUE_SQL, [window])
   const watchedPayments = await db.query<WatchedPayment>(WATCHED_DUE_SQL)
   const refundCancels = await refundCancelsDue(db, SUBSCRIPTIONS_LEFT_SQL)
 
@@ -1336,6 +1381,16 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
         const claim = await readOrderClaim(db, due.id)
         if (!claim) return { kind: 'claim' as const, id: due.id, outcome: 'settled_elsewhere' as const, detail: 'gone' }
         return reconcileOrderClaim(run, claim)
+      },
+    })),
+    // W30: event booking claims (places cancelled with a card refund) held by their press.
+    ...eventClaims.map((due) => ({
+      kind: 'claim' as const,
+      id: due.id,
+      go: async () => {
+        const claim = await readEventBookingClaim(db, due.id)
+        if (!claim) return { kind: 'claim' as const, id: due.id, outcome: 'settled_elsewhere' as const, detail: 'gone' }
+        return reconcileEventClaim(run, claim)
       },
     })),
     // W13c (L3): a subscription left live, which Stripe would bill again next month. W14b (W13c review L4): last, so

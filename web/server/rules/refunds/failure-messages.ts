@@ -127,14 +127,17 @@ export const ORDER_PAYMENT_REFUND_OPEN_MESSAGE =
 
 const money = (pounds: number): string => `£${pounds.toFixed(2)}`
 
-/** What a person does about card money that never went: the two buttons on the order, after checking Stripe. */
-const CHECK_STRIPE_FIRST = 'Check Stripe first: if the money already reached the customer, use It already arrived; if not, use Refund the rest.'
-
-/** W28a (review S2): the same after a refusal Stripe gave. Stripe has just said no, so there is nothing to check there. */
+/** What a person does about card money left owed after a refund that stands (W28a, review S2). */
 const USE_REFUND_THE_REST = 'Use Refund the rest to give it another way.'
-
-/** What to do about card money left owed: `refusedByStripe` is false only for a refund the press had no time to send. */
-const owedAdvice = (refusedByStripe: boolean): string => (refusedByStripe ? USE_REFUND_THE_REST : CHECK_STRIPE_FIRST)
+/** The detail of a card part the press had no time left to send: nothing reached Stripe. */
+const NOT_SENT_DETAIL = 'it was not sent: there was no time left to send it'
+/**
+ * How the not-put-back words open (W30a, W30 review S1): Stripe's refusal with its reason, or, for a part never sent,
+ * that it wasn't sent in time (nothing was refused: Stripe was never asked).
+ */
+const cardRefundDidNotGo = (detail: string): string => (detail === NOT_SENT_DETAIL ? "The card refund wasn't sent in time" : `The card refund was refused (${detail})`)
+/** The plan's store credit, which R2 gives although the card part didn't go: named, so nobody gives it again by hand. */
+const storeCreditGiven = (storeCredit: number): string => (storeCredit > 0 ? ` (${money(storeCredit)} went to store credit as planned)` : '')
 
 /** The words W28 adds (none is moved from the old function: each is for something the old code didn't do). */
 export const ORDER_REFUND_NEW_WORDS = {
@@ -145,7 +148,7 @@ export const ORDER_REFUND_NEW_WORDS = {
   /** Q18's words (E-plan 4.7), for an order. */
   figuresChanged: 'The figures on this order have just changed. Check them and confirm again.',
   /** Q42: cash can only be handed back for cash paid on the order. */
-  noCashLeft: 'No cash paid on this order is left to hand back, so this can only go to store credit.',
+  noCashLeft: "No cash paid on this order is left to hand back, so it can't be handed back in cash.",
   onlyCashLeft: (limit: number): string => `Only ${money(limit)} of the cash paid on this order can be handed back. Check the amount and confirm again.`,
   owedMethodInvalid: 'refundMethod must be "card", "credit" or "cash".',
   amountNotPositive: 'The amount must be more than £0.',
@@ -159,7 +162,7 @@ export const ORDER_REFUND_NEW_WORDS = {
   /** Refund the rest's card refund refused before anything went (the lines' own refusal keeps the old words). */
   owedCardRefundFailed: (detail: string): string => `The card refund failed, so nothing was refunded: ${detail}`,
   /** A part the press had no time left to send: nothing went, as a refusal. */
-  notSentDetail: 'it was not sent: there was no time left to send it',
+  notSentDetail: NOT_SENT_DETAIL,
   /** What staff see for it: R1 was undone, so nothing was refunded and the same refund can be pressed again. */
   notSentInTime: "The card refund wasn't sent in time, so nothing was refunded. Try again.",
   /** No clear answer from Stripe: held for the automatic check (Q35's words). */
@@ -167,16 +170,23 @@ export const ORDER_REFUND_NEW_WORDS = {
   /** The card part went and R2 couldn't record it yet: held for the automatic check, which records it (never resent). */
   goneNotRecorded: (cardGone: number): string =>
     `${money(cardGone)} went back to the card, but the refund couldn't be finished on the order yet. It's on hold: don't refund it again. Check the Orders page in a few minutes.`,
-  /** The card refund was refused and the lines can't go back as they were (a restocked item has been sold since). */
-  putBackBlocked: (detail: string, owed: number, refusedByStripe: boolean): string =>
-    `The card refund was refused (${detail}), so nothing went back, and the order can't be put back as it was: stock it returned has been sold since. The refund stands, and ${money(owed)} shows on the order as still to refund. ${owedAdvice(refusedByStripe)}`,
+  /**
+   * The card refund didn't go and the lines can't go back as they were (a restocked item has been sold since). The
+   * refund stands, the card money is owed, and the plan's store credit (`storeCredit`, what R2 gave) was given.
+   * W30a (W30 review S1, the same words problem here): the words say the card refund didn't go back, never "nothing
+   * went back", and name that store credit; the advice is Refund the rest either way (after a refusal, or a part
+   * never sent, there is nothing to check in Stripe).
+   */
+  putBackBlocked: (detail: string, owed: number, storeCredit = 0): string =>
+    `${cardRefundDidNotGo(detail)}, so it didn't go back to the card${storeCreditGiven(storeCredit)}, and the order can't be put back as it was: stock it returned has been sold since. The refund stands, and ${money(owed)} shows on the order as still to refund. ${USE_REFUND_THE_REST}`,
+  /** The same when R2 failed too: nothing was given (no store credit either) and the claim waits for the automatic check. */
   putBackBlockedNotRecorded: (detail: string): string =>
-    `The card refund was refused (${detail}), so nothing went back, and the order can't be put back as it was: stock it returned has been sold since. The refund stands, but the money still to refund couldn't be recorded on the order yet. Don't refund it again: check the Orders page in a few minutes.`,
+    `${cardRefundDidNotGo(detail)}, so nothing went back, and the order can't be put back as it was: stock it returned has been sold since. The refund stands, but the money still to refund couldn't be recorded on the order yet. Don't refund it again: check the Orders page in a few minutes.`,
   /** The same when the undo failed for any other reason (a database fault). */
-  putBackFailed: (detail: string, owed: number, refusedByStripe: boolean): string =>
-    `The card refund was refused (${detail}), so nothing went back, and the order couldn't be put back as it was. The refund stands, and ${money(owed)} shows on the order as still to refund. ${owedAdvice(refusedByStripe)}`,
+  putBackFailed: (detail: string, owed: number, storeCredit = 0): string =>
+    `${cardRefundDidNotGo(detail)}, so it didn't go back to the card${storeCreditGiven(storeCredit)}, and the order couldn't be put back as it was. The refund stands, and ${money(owed)} shows on the order as still to refund. ${USE_REFUND_THE_REST}`,
   putBackFailedNotRecorded: (detail: string): string =>
-    `The card refund was refused (${detail}), so nothing went back, and the order couldn't be put back as it was. The refund stands, but the money still to refund couldn't be recorded on the order yet. Don't refund it again: check the Orders page in a few minutes.`,
+    `${cardRefundDidNotGo(detail)}, so nothing went back, and the order couldn't be put back as it was. The refund stands, but the money still to refund couldn't be recorded on the order yet. Don't refund it again: check the Orders page in a few minutes.`,
 } as const
 
 // --- New in W29 (the membership line and the payment date change charge; E-plan 4.3, Wayne's Q40 and Q41)

@@ -75,6 +75,12 @@ const STAFF_PATTERNS: Array<{ pattern: RegExp; load: () => Promise<unknown>; par
   { pattern: /^\/api\/v1\/staff\/orders\/([^/]+)\/refunds$/, load: () => import('@/app/api/v1/staff/orders/[orderId]/refunds/route'), params: (m) => ({ orderId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/orders\/([^/]+)\/refunds\/owed$/, load: () => import('@/app/api/v1/staff/orders/[orderId]/refunds/owed/route'), params: (m) => ({ orderId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/orders\/([^/]+)\/refunds\/owed-arrived$/, load: () => import('@/app/api/v1/staff/orders/[orderId]/refunds/owed-arrived/route'), params: (m) => ({ orderId: decodeURIComponent(m[1] ?? '') }) },
+  // W30: the staff app's thin cancelEventPlaces and getEventCancellationQuote.
+  { pattern: /^\/api\/v1\/staff\/event-bookings\/([^/]+)\/cancel\/quote$/, load: () => import('@/app/api/v1/staff/event-bookings/[eventBookingId]/cancel/quote/route'), params: (m) => ({ eventBookingId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/event-bookings\/([^/]+)\/cancel$/, load: () => import('@/app/api/v1/staff/event-bookings/[eventBookingId]/cancel/route'), params: (m) => ({ eventBookingId: decodeURIComponent(m[1] ?? '') }) },
+  // W31: the staff app's thin cancelEvent and getEventCancellationOverview.
+  { pattern: /^\/api\/v1\/staff\/events\/([^/]+)\/cancel\/overview$/, load: () => import('@/app/api/v1/staff/events/[eventId]/cancel/overview/route'), params: (m) => ({ eventId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/events\/([^/]+)\/cancel$/, load: () => import('@/app/api/v1/staff/events/[eventId]/cancel/route'), params: (m) => ({ eventId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/reader-flows\/([^/]+)\/finalise$/, load: () => import('@/app/api/v1/staff/reader-flows/[pendingId]/finalise/route'), params: (m) => ({ pendingId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/reader-flows\/([^/]+)\/cancel$/, load: () => import('@/app/api/v1/staff/reader-flows/[pendingId]/cancel/route'), params: (m) => ({ pendingId: decodeURIComponent(m[1] ?? '') }) },
 ]

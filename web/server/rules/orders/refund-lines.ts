@@ -706,18 +706,37 @@ function owedOutput(finished: Pick<OrderClaimFinished, 'cardRefunded' | 'storeCr
 /**
  * The lines a Refund the rest's card money is recorded on (so the order's card money left stays right): the order's
  * refunded lines stamped `card`, oldest first, each up to what it has not had back to the card; anything over goes on
- * the first of them, or with none (an event booking's money owed, W30) on the order's oldest line.
+ * the first of them.
+ *
+ * W30a (W30 review S2): anything over goes on the order's event line with money owed when there is one (see below),
+ * and on the first stamped line only otherwise.
+ *
+ * W30 (W28 review L2): with no line stamped `card`, the money owed is an event booking's (a place cancel whose card
+ * refund never went, on a booking that still has places, so its event line isn't stamped). It is recorded on that
+ * event line: the order's event line whose booking has a claim that ended owed. Before, it went on the order's oldest
+ * line, refunded or not, which lowered an unrefunded product line's figure by the card money. Only with neither is the
+ * oldest line used.
  */
+/** The order's lines for owedCardLines: those stamped `card` first, oldest first, as before; then an event line with money owed; then the rest. */
+const OWED_CARD_LINES_SQL = `
+SELECT l.id, l.short, l.stamped, l.event_owed
+FROM (
+  SELECT oli.id, oli.created_at,
+         GREATEST(oli.line_total - COALESCE(oli.discount_amount, 0) - oli.card_refunded_amount, 0)::text AS short,
+         (oli.refunded_at IS NOT NULL AND oli.refund_method = 'card') AS stamped,
+         (oli.item_type = 'event' AND EXISTS (
+            SELECT 1 FROM audit_log f
+            WHERE f.action = 'event_booking.refund_finished' AND f.entity_type = 'event_booking'
+              AND f.entity_id = oli.event_booking_id::text AND f.details->>'outcome' = 'owed')) AS event_owed
+  FROM order_line_items oli
+  WHERE oli.order_id = $1::uuid AND ($2::boolean IS NULL OR (oli.item_type = 'membership') = $2::boolean)
+) l
+ORDER BY l.stamped DESC, (l.event_owed AND NOT l.stamped) DESC, l.created_at, l.id`
+
 async function owedCardLines(tx: Tx, orderId: string, amount: number, membershipLines: boolean | null = null): Promise<CardPartLine[]> {
   // W29 (Q40): on an order with two card payments, only the lines the chosen payment took (`membershipLines`: the
   // membership's lines, or every other line), so each payment's card money stays on its own lines.
-  const rows = await tx.query<{ id: string; short: string; stamped: boolean }>(
-    `SELECT id, GREATEST(line_total - COALESCE(discount_amount, 0) - card_refunded_amount, 0)::text AS short,
-            (refunded_at IS NOT NULL AND refund_method = 'card') AS stamped
-     FROM order_line_items WHERE order_id = $1::uuid AND ($2::boolean IS NULL OR (item_type = 'membership') = $2::boolean)
-     ORDER BY (refunded_at IS NOT NULL AND refund_method = 'card') DESC, created_at, id`,
-    [orderId, membershipLines]
-  )
+  const rows = await tx.query<{ id: string; short: string; stamped: boolean; event_owed: boolean }>(OWED_CARD_LINES_SQL, [orderId, membershipLines])
   const first = rows[0]
   if (!first) throw new Error(`Order ${orderId} has no line to record a card refund on.`)
   let left = round2(amount)
@@ -729,9 +748,13 @@ async function owedCardLines(tx: Tx, orderId: string, amount: number, membership
     left = round2(left - take)
   }
   if (left > 0) {
-    const onFirst = shares.find((share) => share.lineId === first.id)
-    if (onFirst) onFirst.amount = round2(onFirst.amount + left)
-    else shares.unshift({ lineId: first.id, amount: left })
+    // W30a (W30 review S2): what is left over is an event booking's owed money when the order has an event line with
+    // money owed, so it goes on that line, not on the oldest stamped line (a soap refunded to the card in full would
+    // read more back than it cost). Only without one does it go on `first`, as before.
+    const over = rows.find((row) => row.event_owed) ?? first
+    const onIt = shares.find((share) => share.lineId === over.id)
+    if (onIt) onIt.amount = round2(onIt.amount + left)
+    else shares.unshift({ lineId: over.id, amount: left })
   }
   return shares
 }
@@ -971,19 +994,19 @@ type FirstRefused = (detail: string) => ApiError
 /**
  * The card part was refused and the undo didn't put the order back (blocked, or failed for any reason), so the refund
  * stands. The claim is finished now with nothing gone and the card money owed on the order, Stripe's reason kept: a
- * person uses Refund the rest (W28a: after a refusal Stripe gave there is nothing to check in Stripe; only a refund
- * the press had no time to send keeps "Check Stripe first"). The answer is `held`, with those words. If the
+ * person uses Refund the rest (W28a: after a refusal Stripe gave there is nothing to check in Stripe; W30a: nor after
+ * a refund the press had no time to send). R2 gives the plan's store credit all the same, and the words name it
+ * (W30a). The answer is `held`, with those words. If the
  * finish fails too, the claim stays open with the refusal's mark, and reconcile finishes it the same way. Null when
  * the claim was finished already (the undo's COMMIT went through and only its answer was lost).
  */
 async function finishRefusedNotPutBack(db: Db, claim: OrderClaim, options: OrderRefundOptions, detail: string, blocked: boolean): Promise<{ finished: OrderClaimFinished | null; held: { claimId: string; reason: string; message: string } } | null> {
   const owed = sum(claim.details.plan.card.map((part) => part.amount))
   const reason = 'refund_refused_not_put_back'
-  const refusedByStripe = detail !== NEW_WORDS.notSentDetail
   try {
     const finished = await finishOrderClaim(db, claim, { went: [], owed, refused: detail }, { actor: options.actor, requestId: options.requestId, how: blocked ? 'undo_blocked' : 'undo_failed', why: detail })
     if (!finished) return null
-    return { finished, held: { claimId: claim.id, reason, message: blocked ? NEW_WORDS.putBackBlocked(detail, owed, refusedByStripe) : NEW_WORDS.putBackFailed(detail, owed, refusedByStripe) } }
+    return { finished, held: { claimId: claim.id, reason, message: blocked ? NEW_WORDS.putBackBlocked(detail, owed, finished.storeCreditRefunded) : NEW_WORDS.putBackFailed(detail, owed, finished.storeCreditRefunded) } }
   } catch {
     return { finished: null, held: { claimId: claim.id, reason, message: blocked ? NEW_WORDS.putBackBlockedNotRecorded(detail) : NEW_WORDS.putBackFailedNotRecorded(detail) } }
   }

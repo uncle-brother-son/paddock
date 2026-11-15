@@ -24,7 +24,13 @@ const SKIP_DIRS = new Set(['node_modules', '.next', '.open-next', '.git', 'story
 /** The one file that isn't a copy: the stand-in for the staff app's typecheck barrel (the copy's README). */
 const STAND_IN = 'typecheckAll.ts'
 /** W28 on: the step E functions the staff app has switched to the Worker (a thin wrapper there; the old body only here). */
-const SWITCHED_TO_THE_WORKER: ReadonlySet<string> = new Set(['refundOrder.ts'])
+const SWITCHED_TO_THE_WORKER: ReadonlySet<string> = new Set(['refundOrder.ts', 'cancelEventPlaces.ts', 'getEventCancellationQuote.ts', 'cancelEvent.ts', 'getEventCancellationOverview.ts'])
+/**
+ * W30: a read-only module the staff app has changed since the copy was frozen, without switching it: the attendee
+ * list's loader now also reads the order that paid for each booking and the money still to refund on it (Q39, for the
+ * list's owed line). The copy keeps the old one, which is what the golden files' `booking` answers were recorded with.
+ */
+const CHANGED_IN_THE_STAFF_APP: ReadonlySet<string> = new Set(['shared/eventAttendeeList.ts'])
 /** The three modules the frozen order copy took from the staff app's checkout until W27 (audit row 1). */
 const ONCE_ALIASED = ['shared/cancelMembershipSubscription', 'shared/promoCodes', 'shared/stockAdjustments']
 
@@ -105,14 +111,20 @@ describe('W27: the frozen copy of the old step E functions', () => {
       const name = inCopy(file)
       const original = path.join(appDir, 'backend/paddock', name)
       // W28: the staff app's refundOrder is a thin call to the Worker now; the copy keeps the old body for the replay.
-      if (name === STAND_IN || name === 'shared/workerContracts.ts' || SWITCHED_TO_THE_WORKER.has(name) || !existsSync(original)) continue
+      if (name === STAND_IN || name === 'shared/workerContracts.ts' || SWITCHED_TO_THE_WORKER.has(name) || CHANGED_IN_THE_STAFF_APP.has(name) || !existsSync(original)) continue
       expect(sha256(file), name).toBe(sha256(original))
       compared.push(name)
     }
     // At W27 every one of them was still in the staff app: 27 compared (29 less the stand-in and the generated contracts,
     // which each Worker change regenerates). The number only falls as slices switch or delete their old bodies. W28: 26
-    // (refundOrder switched).
-    expect(compared.length).toBeLessThanOrEqual(26)
+    // (refundOrder switched). W30: 23 (cancelEventPlaces and getEventCancellationQuote switched; the attendee list's
+    // loader changed). W31: 21 (cancelEvent and getEventCancellationOverview switched: all five are thin wrappers now).
+    expect(compared.length).toBeLessThanOrEqual(21)
+    expect([...SWITCHED_TO_THE_WORKER].sort()).toEqual([...LEGACY_REFUND_ACTIONS].map((action) => `${action}.ts`).sort())
+    // The changed loader is still read-only, and still the old one plus what W30 added.
+    const loader = code(path.join(appDir, 'backend/paddock/shared/eventAttendeeList.ts'))
+    expect(loader).not.toMatch(/\b(INSERT|UPDATE|DELETE)\b/)
+    expect(loader).toContain('refund_owed_amount')
     // A switched function is a thin wrapper, not a drifted copy: it calls the Worker and no longer touches the database.
     for (const name of SWITCHED_TO_THE_WORKER) {
       const wrapper = code(path.join(appDir, 'backend/paddock', name))

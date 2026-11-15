@@ -97,6 +97,16 @@ export const CLAIM_WAITING_WORDS =
 /** W28: the same for an order refund's claim (E-plan 4.9): what Stripe never received is left on the order. */
 export const ORDER_CLAIM_WAITING_WORDS =
   "A refund on this order didn't finish cleanly. The automatic check, every 5 minutes, looks for it in Stripe and finishes it: anything Stripe never received becomes money still to refund on the order (Refund the rest). Don't refund it again."
+/**
+ * W30 (E-plan 4.9; W27 review L5): the same for an event booking's claim (places cancelled with a card refund). The
+ * cancel's `refund_open` words send staff to the Orders page: this is the line they find there.
+ */
+export const EVENT_CLAIM_WAITING_WORDS =
+  "A refund for cancelled event places didn't finish cleanly. The places are cancelled. The automatic check, every 5 minutes, looks for the refund in Stripe and finishes it: anything Stripe never received becomes money still to refund on the event booking (Refund the rest, on the event's attendee list). Don't refund it again."
+/** W30: an event booking claim's own words where a booking claim's name the booking. */
+const EVENT_CLAIM_WORDS: Readonly<Record<string, string>> = {
+  finish_failed: "The refund was found in Stripe but couldn't be recorded on the event booking yet. The automatic check tries again every 5 minutes: don't refund it again.",
+}
 /** W28: an order claim's own words where a booking claim's name the booking. */
 const ORDER_CLAIM_WORDS: Readonly<Record<string, string>> = {
   finish_failed: "The refund was found in Stripe but couldn't be recorded on the order yet. The automatic check tries again every 5 minutes: don't refund it again.",
@@ -217,8 +227,11 @@ export interface StuckClaim {
   claimId: string
   /** The booking a booking refund's claim is on; null for an order refund's (W28). */
   bookingId: string | null
-  /** W28: the order an order refund's claim is on; null for a booking's. */
+  /** W28: the order an order refund's claim is on; null for a booking's. W30: for an event booking's claim, the order that paid for it. */
   orderId: string | null
+  /** W30: the event booking an event place cancel's claim is on, and its event (for the attendee list); absent for the others. */
+  eventBookingId?: string | null
+  eventId?: string | null
   customerName: string
   /** The card money the claim planned to send. */
   amount: number
@@ -337,6 +350,23 @@ WHERE c.action = 'order.refund_claimed' AND c.entity_type = 'order' AND c.detail
   AND NOT EXISTS (
     SELECT 1 FROM audit_log f
     WHERE f.action = 'order.refund_finished' AND f.entity_type = 'order' AND f.entity_id = c.entity_id AND f.details->>'claimId' = c.id::text
+  )
+ORDER BY c.at, c.id`
+
+/** W30: the same for event booking claims (`event_booking.refund_claimed`), with the booking's customer and event. */
+const EVENT_CLAIMS_SQL = `
+SELECT c.id, c.entity_id AS event_booking_id, eb.event_id, c.details->>'orderId' AS order_id, c.at AS created_at, c.details, cu.first_name, cu.last_name,
+       (SELECT r.details FROM audit_log r
+        WHERE r.entity_type = 'refund_claim' AND r.entity_id = c.id::text AND r.action = 'order.reconcile'
+        ORDER BY r.at DESC LIMIT 1) AS last
+FROM audit_log c
+JOIN event_bookings eb ON eb.id::text = c.entity_id
+JOIN customers cu ON cu.id = eb.customer_id
+WHERE c.action = 'event_booking.refund_claimed' AND c.entity_type = 'event_booking' AND c.details->>'worker' = 'true'
+  AND c.at < now() - make_interval(mins => $1::int)
+  AND NOT EXISTS (
+    SELECT 1 FROM audit_log f
+    WHERE f.action = 'event_booking.refund_finished' AND f.entity_type = 'event_booking' AND f.entity_id = c.entity_id AND f.details->>'claimId' = c.id::text
   )
 ORDER BY c.at, c.id`
 
@@ -472,6 +502,17 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
     last_name: string
     last: Last | null
   }>(ORDER_CLAIMS_SQL, [olderThanMinutes])
+  const eventClaims = await db.query<{
+    id: string
+    event_booking_id: string
+    event_id: string
+    order_id: string | null
+    created_at: unknown
+    details: { plan?: { card?: Array<{ amount: number }> } }
+    first_name: string
+    last_name: string
+    last: Last | null
+  }>(EVENT_CLAIMS_SQL, [olderThanMinutes])
   const refunds = await db.query<{ entity_type: string; entity_id: string; payment_intent_id: string; pence: number; state: string }>(REFUNDS_SQL)
   const warnings = await db.query<{ entity_type: string; entity_id: string; at: unknown; warning: string }>(WARNINGS_SQL, [WARNINGS_FOR_HOURS])
   const alert = (await db.query<{ at: unknown }>(ALERT_SQL, [ALERT_FOR_MINUTES]))[0]
@@ -576,6 +617,27 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
           ageMinutes: ageMinutes(createdAt),
           reason,
           words: reason === 'waiting' ? ORDER_CLAIM_WAITING_WORDS : (ORDER_CLAIM_WORDS[reason] ?? wordsFor(reason)),
+          ...(closable ? { close: { kind: 'held_claim' as const, orderId: row.id } } : {}),
+        }
+      }),
+      // W30: event booking claims (places cancelled with a card refund), after the orders', oldest first.
+      eventClaims.map((row): StuckClaim => {
+        const reason = reasonFor(true, row.last)
+        const createdAt = iso(row.created_at)
+        const amount = Math.round((row.details.plan?.card ?? []).reduce((total, part) => total + Number(part.amount), 0) * 100) / 100
+        const closable = row.last?.outcome === 'left' && HELD_CLAIM_CLOSE_REASONS.has(reason)
+        return {
+          claimId: row.id,
+          bookingId: null,
+          orderId: row.order_id,
+          eventBookingId: row.event_booking_id,
+          eventId: row.event_id,
+          customerName: `${row.first_name} ${row.last_name}`.trim(),
+          amount,
+          createdAt,
+          ageMinutes: ageMinutes(createdAt),
+          reason,
+          words: reason === 'waiting' ? EVENT_CLAIM_WAITING_WORDS : (EVENT_CLAIM_WORDS[reason] ?? wordsFor(reason)),
           ...(closable ? { close: { kind: 'held_claim' as const, orderId: row.id } } : {}),
         }
       })

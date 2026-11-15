@@ -290,8 +290,11 @@ describe('Part refund (W21)', () => {
         expect(answer.status).toBe(200)
         expect(answer.body.data).toMatchObject({ cardRefundedAmount: 0, storeCreditRefundedAmount: 0, held: { reason: 'refund_refused_not_put_back', message: putBackFailedMessage(reason, 30, false) } })
         expect(answer.body.data?.held?.message).toBe(
-          "The card refund was refused (Failed to refund payment: Your card was declined.), so nothing went back, and the booking couldn't be put back as it was. The change stands, and £30.00 shows on the booking as still to refund. Check Stripe first: if the money already reached the customer, use It already arrived; if not, use Refund the rest."
+          "The card refund was refused (Failed to refund payment: Your card was declined.), so it didn't go back to the card, and the booking couldn't be put back as it was. The change stands, and £30.00 shows on the booking as still to refund. Check Stripe first: if the money already reached the customer, use It already arrived; if not, use Refund the rest."
         )
+        // W31 (W30a "Noticed" 1): never "nothing went back"; and with no store credit in the plan, none is named.
+        expect(answer.body.data?.held?.message).not.toContain('nothing went back')
+        expect(answer.body.data?.held?.message).not.toContain('went to store credit')
         expect(await booking(bookingId)).toMatchObject({ price_paid: '60.00', refund_owed_amount: '30.00' })
         expect(await storeCredit()).toEqual([])
         const finished = await auditRows('booking.refund_finished')

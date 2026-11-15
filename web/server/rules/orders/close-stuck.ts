@@ -58,7 +58,8 @@ import { changedSince, PARTS_SQL, undoInTransaction, type LockedOrder, type Orde
 import { FLOW_PAYMENT_WATCHED, FLOW_UNDO_BLOCKED_MESSAGE, FlowUndoBlocked, isWorkerCardFlow, isWorkerFlow, readFlow, undoFlowInTransaction } from './reader-flow'
 import { finishClaimInTransaction, readClaim, type CardPart } from '@/server/rules/bookings/refunds'
 import type { ClaimPartFinding } from './reconcile'
-import { readOrderClaim, type OrderClaim } from '@/server/rules/refunds/claims'
+import { finishEventClaimInTransaction } from '@/server/rules/events/cancel-places'
+import { readEventBookingClaim, readOrderClaim, type EventBookingClaim, type OrderClaim } from '@/server/rules/refunds/claims'
 import { lockForRefund } from '@/server/rules/refunds/locks'
 import { finishOrderClaimInTransaction } from './refund-lines'
 import { lockForBooking } from '@/server/rules/bookings/locks'
@@ -86,6 +87,8 @@ export const CLOSE_WORDS = {
   held_claim: "Refund closed: the card money that couldn't be confirmed is back on the booking as money still to refund, and it is no longer listed.",
   // W28: an order refund's claim (E-plan 4.9).
   held_order_claim: "Refund closed: the card money that couldn't be confirmed is on the order as money still to refund, and it is no longer listed.",
+  // W30: an event booking's claim (E-plan 4.9).
+  held_event_claim: "Refund closed: the places stay cancelled, the card money that couldn't be confirmed is on the event booking as money still to refund, and it is no longer listed.",
   // W25: every card part was found gone, so nothing is owed.
   held_claim_all_gone: 'Refund closed: every card part was found in Stripe and is recorded as refunded. Nothing is still to refund, and it is no longer listed.',
   flow_settled: 'This change has been settled in the meantime (finished or undone). Nothing was changed.',
@@ -569,12 +572,60 @@ async function closeHeldOrderClaim(db: Db, claim: OrderClaim, why: string, optio
   })
 }
 
+/**
+ * W30 (E-plan 4.9): an event booking's claim reconcile left for a person, closed as an order's: the card part reconcile
+ * found had gone is recorded as gone (R2: on the places and the event line), anything else goes on the booking's order
+ * as money still to refund, and the plan's own store credit is given. The places stay cancelled. Never sends a refund.
+ */
+async function closeHeldEventClaim(db: Db, claim: EventBookingClaim, why: string, options: CloseOptions): Promise<CloseStuckOutput> {
+  const claimId = claim.id
+  const entity = 'refund_claim'
+  return db.transaction(async (tx) => {
+    // The order first, as R2 locks it: the press's R2 and reconcile's queue behind this, and find it finished.
+    await lockForRefund(tx, { orderId: claim.orderId, eventId: claim.details.cancel?.eventId ?? null, eventBookingId: claim.eventBookingId })
+    const last = await lastReconcile(tx, claimId, entity)
+    if (last?.outcome !== 'left' || !last.reason || !HELD_CLAIM_CLOSE_REASONS.has(last.reason)) {
+      return (await closedBefore(tx, 'held_claim', claimId, undefined, entity)) ? alreadyClosed('held_claim', claimId) : refused('held_claim', claimId, 'claim_not_left_for_a_person')
+    }
+    const findings = new Map((last.parts ?? []).map((part) => [part.orderId, part]))
+    const went: CardPart[] = claim.details.plan.card.filter((part) => findings.get(part.orderId)?.found === 'went')
+    const unsettled = claim.details.plan.card.filter((part) => findings.get(part.orderId)?.found !== 'went')
+    const owed = Math.round(unsettled.reduce((total, part) => total + part.amount, 0) * 100) / 100
+    const finished = await finishEventClaimInTransaction(tx, claim, { went, owed }, { actor: options.actor, requestId: options.requestId, how: 'close', why })
+    if (!finished) return (await closedBefore(tx, 'held_claim', claimId, undefined, entity)) ? alreadyClosed('held_claim', claimId) : refused('held_claim', claimId, 'not_listed')
+    const parts = claim.details.plan.card.map((part) => ({ orderId: part.orderId, amount: part.amount, found: findings.get(part.orderId)?.found ?? 'not_looked', detail: findings.get(part.orderId)?.detail ?? null }))
+    await audit.recordAll(tx, [
+      {
+        actorType: options.actor.type,
+        actorId: options.actor.id,
+        action: CLOSE_ACTION,
+        entityType: entity,
+        entityId: claimId,
+        requestId: options.requestId,
+        details: { kind: 'held_claim', why, reason: last.reason, found: last.detail ?? null, eventBookingId: claim.eventBookingId, orderId: claim.orderId, owed, parts },
+      },
+    ])
+    return answer('held_claim', claimId, {
+      closed: true,
+      message: owed > 0 ? CLOSE_WORDS.held_event_claim : CLOSE_WORDS.held_claim_all_gone,
+      givenBack: [...went.map(partGoneWords), ...(owed > 0 ? [`${money(owed)} on the event booking as money still to refund`] : [])],
+      leftAsFound: [
+        ...unsettled.map((part) => partOwedWords(part, findings.get(part.orderId))),
+        ...(owed > 0 ? ["Check Stripe: if the refund reached the customer, use It already arrived on the event booking (the event's attendee list); if not, use Refund the rest."] : []),
+      ],
+    })
+  })
+}
+
 async function closeHeldClaim(db: Db, claimId: string, why: string, options: CloseOptions): Promise<CloseStuckOutput> {
   const claim = await readClaim(db, claimId)
   if (!claim) {
     // W28: an order refund's claim, when it isn't a booking's.
     const orderClaim = await readOrderClaim(db, claimId)
-    return orderClaim ? closeHeldOrderClaim(db, orderClaim, why, options) : refused('held_claim', claimId, 'not_listed')
+    if (orderClaim) return closeHeldOrderClaim(db, orderClaim, why, options)
+    // W30: an event booking's claim, when it is neither.
+    const eventClaim = await readEventBookingClaim(db, claimId)
+    return eventClaim ? closeHeldEventClaim(db, eventClaim, why, options) : refused('held_claim', claimId, 'not_listed')
   }
   const entity = 'refund_claim'
   return db.transaction(async (tx) => {

@@ -761,8 +761,9 @@ const WORKER_DOES_IT_NOW: Readonly<Record<string, { route: RegExp; answerLost: R
   '/api/payments/refund-order': {
     // W24: and a cheaper Move's (inside the move route).
     // W28: and an order refund's (inside the order's refunds route; the old refundOrder made the legacy call itself).
-    route: /^\/api\/v1\/staff\/(bookings\/[^/]+\/(refunds(\/owed)?|cancel-and-refund|cancel-credit|move)|orders\/[^/]+\/refunds(\/owed)?)$/,
-    answerLost: /^\/api\/v1\/staff\/(bookings\/[^/]+\/(refunds(\/owed)?|cancel-and-refund|cancel-credit|move)|orders\/[^/]+\/refunds(\/owed)?)$/,
+    // W30: and an event place cancel's (inside the event booking's cancel route, not its quote).
+    route: /^\/api\/v1\/staff\/(bookings\/[^/]+\/(refunds(\/owed)?|cancel-and-refund|cancel-credit|move)|orders\/[^/]+\/refunds(\/owed)?|event-bookings\/[^/]+\/cancel)$/,
+    answerLost: /^\/api\/v1\/staff\/(bookings\/[^/]+\/(refunds(\/owed)?|cancel-and-refund|cancel-credit|move)|orders\/[^/]+\/refunds(\/owed)?|event-bookings\/[^/]+\/cancel)$/,
   },
 }
 
@@ -5253,10 +5254,15 @@ function w27Scenarios(): Scenario[] {
           },
           () => call('cancelEvent', storm)
         )
-        const started = pending as { orderId: string; pendingReaderPayment: { paymentIntentId: string } } | null
-        if (!started) throw new Error('E7: the reader order never started.')
-        stripe.completeReaderPayment(started.pendingReaderPayment.paymentIntentId)
-        await call('finaliseReaderOrder', { orderId: started.orderId })
+        let started = pending as { orderId?: string; pendingReaderPayment?: { paymentIntentId: string } } | null
+        // W31: the Worker's cancel is one transaction under the event's lock, so there is no "between" for the gap to
+        // open in (it is hooked on the old code's own statement): an order that starts while the cancel runs waits
+        // for it. On that side the order is started where it would land, straight after the cancel, and is refused.
+        if (!started) started = (await call('createOrder', { customerId: ID.customer, event: eventPlaces, payment: { method: 'reader' } })) as typeof started
+        if (started?.pendingReaderPayment && started.orderId) {
+          stripe.completeReaderPayment(started.pendingReaderPayment.paymentIntentId)
+          await call('finaliseReaderOrder', { orderId: started.orderId })
+        }
         await call('getEventCancellationOverview', { eventId: ID.event })
       },
     },

@@ -326,7 +326,32 @@ deliberate difference is caught, and that an allowance nobody needs fails. The E
 lowering its sessions by hand, with no booking that names it, so they can't show E5: `orders/refund-lines.test.ts`
 does, with real bookings.
 
-W30 and W31 each add theirs for the event cancellations.
+W30 adds the event places' side: `event-places-side.ts` sends `cancelEventPlaces` and `getEventCancellationQuote` to
+the staff app's thin wrappers and the Worker's routes, as the dialog presses them (the quote's value sent back as
+`confirmed.refund`, £0 for No refund; where a scenario asks for the quote and then presses for the same places, that
+is the figure the dialog is showing, which is how E9's recording is replayed; a press key kept after no answer), and
+settles a held claim as reconcile would. `event-places-replay.test.ts` runs the 58 event place scenarios
+(`w27-event-cancel-*`, E8, E9, `p3`, `p5`) through it: 18 match exactly, 11 differ only in the key, 29 have their own,
+each pinned to its exact value in `event-places-differences.ts`. That file's table is written by
+`briefs/W30-logs/generate-event-differences.py` in the staff app repo from a dump of the raw differences
+(`W30_DIFFERENCES_OUT=<file>` on the replay test); the names and decisions are written by hand in the script. The
+whole-event scenarios (`w27-event-whole-cancel-*`, E7) are W31's. Scenarios whose recording hooks a gap on the old
+code's own statements (a line taken away, a place checked in, a second press, between its quote and its recording)
+run without the gap here, because the Worker's quote and cancel are one transaction: each is a named difference, and
+the real races are on real Postgres (`events/cancel-places-postgres.test.ts`).
+
+W31 adds the whole event's side: `whole-event-side.ts` sends `cancelEvent` and `getEventCancellationOverview` to the
+staff app's thin wrappers and the Worker's routes, and drives `cancelEvent` as the Cancel event dialog presses it: the
+event's own cancel, then each booking in turn through the thin `cancelEventPlaces` with `wholeEvent`, its own key and
+the overview's figure as the confirmed refund, with the answer put back in the old `{ ok, results }` shape (each row
+as the dialog lists it; a press that got no answer keeps its key for the scenario's next `cancelEvent`).
+`whole-event-replay.test.ts` runs the 14 whole-event scenarios (`w27-event-whole-cancel-*`, E7) through it: 6 match
+exactly, 5 differ only in the key, 3 have their own (no permission as data; E6's lost answer; E7), each pinned by hand
+in `whole-event-differences.ts` (`W31_DIFFERENCES_OUT=<file>` dumps the raw differences). E7's recording hooks its gap
+on the old code's own statement, which the Worker never runs, so on the new side the scenario starts the reader order
+straight after the cancel, where it would land; the real races are `events/cancel-event-postgres.test.ts`.
+
+W30 and W31 have each added theirs for the event cancellations.
 
 ### Migration 023 and the saved schema (W27)
 

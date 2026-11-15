@@ -74,7 +74,10 @@ export const cancelEventPlacesInputSchema = z.object({
   refund: z.string().optional(),
   /** Required to refund after the event's refund cut-off; recorded either way. */
   reason: looseText,
-  /** The booking is cancelled because its event was: no cut-off rule. Honoured only when the event is cancelled in the database. */
+  /**
+   * The booking is cancelled because its event was (W31): every place left, no cut-off rule, Card or Store credit only
+   * (Q42), Issue refunds. Honoured only when the event is cancelled in the database; refused on a live event.
+   */
   wholeEvent: z.boolean().optional(),
   confirmed: eventCancelConfirmedSchema.optional(),
 })
@@ -122,6 +125,9 @@ export const eventAttendeeBookingSchema = z.object({
   ordered_at: z.string(),
   cancelled_at: z.string().nullable(),
   cancel_reason: z.string().nullable(),
+  /** W30 (Q39): the order that paid for the booking (null when its order line is gone), and the money still to refund on it. */
+  order_id: id.nullable().optional(),
+  refund_owed_amount: z.string().optional(),
   attendees: z.array(eventAttendeeRowSchema),
 })
 export type EventAttendeeBooking = z.infer<typeof eventAttendeeBookingSchema>
@@ -159,9 +165,8 @@ export const eventCancelOverviewBookingSchema = z.object({
   value: z.number(),
   /** Set when the booking can't be cancelled as things stand (a place is checked in). */
   problem: z.string().nullable(),
-  /** From W31: where a Card refund of it would go, for the figure the screen sends back (Q18). */
-  cardAmount: z.number().optional(),
-  storeCreditAmount: z.number().optional(),
+  /** W31 (Q39): money still to refund on the booking's order, when there is any. `value` is the figure the screen sends back (Q18). */
+  refundOwed: z.number().optional(),
 })
 export type EventCancelOverviewBooking = z.infer<typeof eventCancelOverviewBookingSchema>
 
@@ -185,10 +190,12 @@ export const eventCancelOverviewRouteInputSchema = z.object(eventInPath)
 
 /**
  * The whole event: one transaction marks it off sale and cancelled (E7), and answers the bookings still to cancel.
- * The screen then cancels each booking with its own press of the place cancel (`wholeEvent: true`), so `refund` is no
- * longer a param of this route (L5); the old function took it here and cancelled every booking in one call (E6).
+ * The screen then cancels each booking with its own press of the place cancel (`wholeEvent: true`, its own key and
+ * claim: L5); the old function cancelled every booking in one call (E6). `refund` is the one choice the screen will
+ * send with each booking (W31): no money moves here, but a choice that isn't Card or Store credit is refused with the
+ * old words before the event is cancelled, as the old function refused it. Loose, for the old reasons.
  */
-export const cancelEventInputSchema = z.object({ reason: looseText })
+export const cancelEventInputSchema = z.object({ refund: z.string().optional(), reason: looseText })
 export type CancelEventInput = z.infer<typeof cancelEventInputSchema>
 export const cancelEventRouteInputSchema = cancelEventInputSchema.extend(eventInPath)
 
@@ -219,7 +226,8 @@ export type CancelEventBookingOutcome = z.infer<typeof cancelEventBookingOutcome
 export const eventCancelRefusalDetailsSchema = z.object({
   reason: z.string(),
   message: z.string(),
-  action: z.enum(['cancel_places', 'cancel_event', 'quote', 'overview']),
+  /** `refund`: the `refund_open` refusal's (a refund on the booking's order is still being checked). */
+  action: z.enum(['cancel_places', 'cancel_event', 'quote', 'overview', 'refund']),
   quote: eventCancelQuoteOutputSchema.optional(),
   /** REFUND_PATH_OFF: the switch kinds that are off. */
   kinds: z.array(z.string()).optional(),

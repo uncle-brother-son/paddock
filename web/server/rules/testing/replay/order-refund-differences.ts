@@ -178,7 +178,7 @@ export const ORDER_REFUND_DIFFERENCES: ReadonlyMap<string, readonly AllowedDiffe
       "Wayne's Q42 (14 Nov): cash back only up to the cash paid on the order; E-plan 4.6",
       [result(1, 'reason|message|figures')],
       (value, _expected, path) =>
-        path.endsWith('.reason') ? value === 'no_cash_left' : path.endsWith('.message') ? value === 'No cash paid on this order is left to hand back, so this can only go to store credit.' : typeof value === 'object' && value !== null && (value as { cashLeft?: number }).cashLeft === 0
+        path.endsWith('.reason') ? value === 'no_cash_left' : path.endsWith('.message') ? value === "No cash paid on this order is left to hand back, so it can't be handed back in cash." : typeof value === 'object' && value !== null && (value as { cashLeft?: number }).cashLeft === 0
     ),
   ]),
 

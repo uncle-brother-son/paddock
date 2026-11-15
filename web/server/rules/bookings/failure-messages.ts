@@ -422,12 +422,19 @@ const checkStripeFirstWords = (cancelled: boolean): string =>
   `Check Stripe first: if the money already reached the customer, use It already arrived; if not, use Refund the rest${cancelled ? ' (the booking is cancelled, so it goes to store credit)' : ''}.`
 
 /**
+ * W31 (W30a "Noticed" 1, as W30a's review S1 for events and orders): the claim is finished with the plan's own store
+ * credit given although the card part didn't go, so the words name it and never say "nothing went back". `storeCredit`
+ * is what the finish gave. The two `…NotRecorded` sentences keep "nothing went back": there nothing was given.
+ */
+const storeCreditGivenWords = (storeCredit: number): string => (storeCredit > 0 ? ` (${money(storeCredit)} went to store credit as planned)` : '')
+
+/**
  * W26a (audit S2): the first card part was refused, and putting the booking back failed (a database fault, not places
  * taken). As a blocked undo (W25a): the change stands, and the claim is finished there and then with the card money owed
  * on the booking, live or cancelled, with Stripe's reason.
  */
-export const putBackFailedMessage = (detail: string, owed: number, cancelled: boolean): string =>
-  `The card refund was refused (${detail}), so nothing went back, and the booking couldn't be put back as it was. The change stands, and ${money(owed)} shows on the booking as still to refund. ${checkStripeFirstWords(cancelled)}`
+export const putBackFailedMessage = (detail: string, owed: number, cancelled: boolean, storeCredit = 0): string =>
+  `The card refund was refused (${detail}), so it didn't go back to the card${storeCreditGivenWords(storeCredit)}, and the booking couldn't be put back as it was. The change stands, and ${money(owed)} shows on the booking as still to refund. ${checkStripeFirstWords(cancelled)}`
 /** W26a: the same when the money owed couldn't be written either. The claim stays open, marked refused, for the automatic check. */
 export const putBackFailedNotRecordedMessage = (detail: string): string =>
   `The card refund was refused (${detail}), so nothing went back, and the booking couldn't be put back as it was. The change stands, but the money still to refund couldn't be recorded on the booking yet. Don't refund it again: check the Orders page in a few minutes.`
@@ -439,8 +446,8 @@ export const putBackFailedNotRecordedMessage = (detail: string): string =>
  * store credit unseen), so the words carry Stripe's reason (`detail`, "Failed to refund payment: …") and point to the
  * two buttons a person decides with.
  */
-export const putBackBlockedMessage = (detail: string, owed: number, cancelled: boolean): string =>
-  `The card refund was refused (${detail}), so nothing went back, and the booking can't be put back as it was: its places or its pass session have been taken since. The change stands, and ${money(owed)} shows on the booking as still to refund. ${checkStripeFirstWords(cancelled)}`
+export const putBackBlockedMessage = (detail: string, owed: number, cancelled: boolean, storeCredit = 0): string =>
+  `The card refund was refused (${detail}), so it didn't go back to the card${storeCreditGivenWords(storeCredit)}, and the booking can't be put back as it was: its places or its pass session have been taken since. The change stands, and ${money(owed)} shows on the booking as still to refund. ${checkStripeFirstWords(cancelled)}`
 /**
  * W25a: the same refusal when the money owed couldn't be written on the booking yet (the database failed just then).
  * The claim stays open for the automatic check, so the words still carry Stripe's reason. W26a: the claim carries the

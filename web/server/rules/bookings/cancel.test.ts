@@ -1072,6 +1072,30 @@ describe("W25 item 7: the undo after a refused first card part never overfills a
     })
   })
 
+  it("W31 (W30a \"Noticed\" 1), the split case: a £20 seat paid £10 on the card and £10 with store credit, the session filled meanwhile and the card refund refused: the plan's £10 of store credit is given once and named in the words, the £10 is owed, and the words never say nothing went back", async () => {
+    const cardAndCredit = { booking: paidSeat([sam]), payment: { method: 'card', storeCredit: { amount: 10 } } }
+    await withBooking(cardAndCredit, async ({ bookingId, stripe }) => {
+      whileTheRefundIsSent(stripe, () => db.query('UPDATE sessions SET total_booked = capacity WHERE id = $1', [ID.session]))
+      stripe.failNext('refunds.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
+      const answer = await cancel(bookingId, 'card')
+      expect(answer.status).toBe(200)
+      expect(answer.body.data).toMatchObject({ cancelled: true, cardRefundedAmount: 0, storeCreditRefundedAmount: 10 })
+      expect(answer.body.data?.held).toMatchObject({ reason: 'refund_refused_not_put_back', message: putBackBlockedMessage(refundRefusedDetail('Your card was declined.'), 10, true, 10) })
+      expect(answer.body.data?.held?.message).toBe(
+        "The card refund was refused (Failed to refund payment: Your card was declined.), so it didn't go back to the card (£10.00 went to store credit as planned), and the booking can't be put back as it was: its places or its pass session have been taken since. The change stands, and £10.00 shows on the booking as still to refund. Check Stripe first: if the money already reached the customer, use It already arrived; if not, use Refund the rest (the booking is cancelled, so it goes to store credit)."
+      )
+      expect(answer.body.data?.held?.message).not.toContain('nothing went back')
+      // The store credit was given once, and only the card money is owed.
+      expect((await storeCredit()).map((row) => row.amount)).toEqual(['10.00'])
+      expect(await bookingRow(bookingId)).toMatchObject({ status: 'cancelled', refund_owed_amount: '10.00' })
+      // With no store credit in the plan, none is named (the words above this test's).
+      expect(putBackBlockedMessage(refundRefusedDetail('Your card was declined.'), 20, true)).not.toContain('went to store credit')
+      expect(putBackFailedMessage(refundRefusedDetail('Your card was declined.'), 10, false, 10)).toBe(
+        "The card refund was refused (Failed to refund payment: Your card was declined.), so it didn't go back to the card (£10.00 went to store credit as planned), and the booking couldn't be put back as it was. The change stands, and £10.00 shows on the booking as still to refund. Check Stripe first: if the money already reached the customer, use It already arrived; if not, use Refund the rest."
+      )
+    })
+  })
+
   it("the same with a ticked paid towel on the order (£25): all of it owed on the cancelled booking, the towel's line with nothing back, and Refund the rest gives it as store credit once", async () => {
     await withBooking(cardSeatAndTowel, async ({ bookingId, stripe }) => {
       const [line] = await addonLines(bookingId)

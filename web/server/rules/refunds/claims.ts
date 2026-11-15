@@ -2,7 +2,8 @@
 // (pipeline.ts). The same record as a booking's claim with a different subject: `order.refund_claimed` /
 // `event_booking.refund_claimed`, each with its finished and refused rows; the same details (kind, amount, method,
 // reason, `worker: true`, the plan, `livemode`); the same key, `<claimId>:refund:<orderId>`, with `metadata.claim_id`.
-// Not called by any route yet: W28 (order refunds) and W30 (event places) write their R1s, R2s and undos on this.
+// W28 (order refunds, orders/refund-lines.ts) and W30 (event places, events/cancel-places.ts) write their R1s, R2s
+// and undos on this.
 //
 // Two rules of step E are kept here, at the one place a claim is written, so no later slice can forget them:
 // - One card part at most. An order refund or an event cancel only ever touches one order (an event booking is always
@@ -121,6 +122,29 @@ export interface OrderClaimDetails extends StepEClaimCommon {
 export interface EventBookingClaimDetails extends StepEClaimCommon {
   kind: 'cancel_places'
   orderId: string
+  /**
+   * W30: what R1 cancelled, so R2 records the money on exactly those places and the undo puts them back: the event
+   * whose places R1 released, the booking's event line (the card part's line), each place with what it was worth and
+   * its unit price (the split of what is given back), and whether R1 cancelled the booking itself (its last places).
+   */
+  cancel?: EventPlacesCancelled
+}
+
+/** W30: the places an event booking's claim cancelled in R1 (EventBookingClaimDetails.cancel). */
+export interface EventPlacesCancelled {
+  eventId: string
+  lineId: string
+  places: Array<{ id: string; value: number; unitPrice: number }>
+  bookingCancelled: boolean
+  /** A refund after the event's refund cut-off (Q43: its start, when it has none), recorded on the places. */
+  afterCutoff: boolean
+  /** W31: cancelled because the whole event was (no cut-off rule applied). Absent on an ordinary place cancel. */
+  wholeEvent?: boolean
+  /**
+   * W31 (W30 review L1): the event was already cancelled when R1 cancelled these places. Absent when it was live:
+   * the undo then refuses to put the places back if the event has been cancelled since.
+   */
+  eventCancelled?: boolean
 }
 
 export interface OrderClaim {

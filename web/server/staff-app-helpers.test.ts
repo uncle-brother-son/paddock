@@ -1528,7 +1528,7 @@ describe('staff app helpers', () => {
       })
 
       it('a refused card refund that could not be undone: the refund stands, so a success with the money owed and the Worker\'s words as the warning', async () => {
-        const words = 'The card refund was refused (Failed to refund payment: Your card was declined.), so nothing went back…'
+        const words = "The card refund was refused (Failed to refund payment: Your card was declined.), so it didn't go back to the card…"
         rawRequest.mockResolvedValue(success({ refundedAmount: 24, refundMethod: 'card', orderPaymentStatus: 'refunded', refundOwed: 24, held: { claimId: 'c', reason: 'refund_refused_not_put_back', message: words } }))
         expect(await refund()).toEqual({ success: true, refundedAmount: 24, refundMethod: 'card', orderPaymentStatus: 'refunded', refundOwed: 24, warning: words })
       })
@@ -1672,6 +1672,450 @@ describe('staff app helpers', () => {
           rawRequest.mockResolvedValue(refusal('IDEMPOTENCY_MISMATCH', 'This Idempotency-Key was already used for a different request.'))
           expect(await owed({ amount: 24, refundMethod: 'credit' })).toEqual({ pressedAfterNoAnswer: { message: ORDER_REFUND_PRESSED_AFTER_NO_ANSWER_MESSAGE } })
         })
+      })
+    })
+
+    // Brief W30: cancelEventPlaces and getEventCancellationQuote are thin calls to the Worker. Its rules are tested
+    // there (server/rules/events/cancel-places.test.ts); here, the wrappers and the screens: what they send, and the
+    // answers the dialog and the attendee list read.
+    describe('event places (W30: thin calls to the Worker)', () => {
+      const BOOKING = '44444444-4444-4444-8444-444444444444'
+      const PLACE = '55555555-5555-4555-8555-555555555555'
+      const quote = { places: 1, wholeBooking: false, value: 40, refundCutoffAt: '2026-11-30T19:00:00+00:00', beforeCutoff: true, eventStarted: false, cardAmount: 40, storeCreditAmount: 0, cashAmount: 0, refundOwed: 0 }
+      const booking = { id: BOOKING, status: 'confirmed', places: 1, order_id: '22222222-2222-4222-8222-222222222222', refund_owed_amount: '0.00', attendees: [] }
+      const refused = (code: string, details: Record<string, unknown>) => ({
+        data: { ok: false, error: { code, message: String(details['message']), details: { action: 'cancel_places', ...details } }, requestId: 'worker-request' },
+      })
+      const cancel = async (params: Record<string, unknown> = {}) => {
+        const query = vi.fn()
+        const legacy = vi.fn()
+        vi.stubGlobal('paddockData', { query })
+        vi.stubGlobal('paddockBackendApi2', { rawRequest: legacy })
+        const fn = (await backend('cancelEventPlaces')).default
+        const result = await fn({ params: { eventBookingId: BOOKING, attendeeIds: [PLACE], refund: 'card', confirmed: { refund: 40 }, idempotencyKey: 'press-key-0000000001', ...params }, user })
+        // Never the database, never a legacy route: the Worker holds every rule.
+        expect(query).not.toHaveBeenCalled()
+        expect(legacy).not.toHaveBeenCalled()
+        return result
+      }
+
+      it('cancelEventPlaces: sends the places, the refund choice, the reason, the confirmed refund and the press key to the route, and answers in the old shape', async () => {
+        rawRequest.mockResolvedValue(success({ places: 1, refundedAmount: 40, cardRefundedAmount: 40, storeCreditRefundedAmount: 0, booking, eventPlacesBooked: 1 }))
+        expect(await cancel({ reason: 'Train strike' })).toEqual({ ok: true, places: 1, refundedAmount: 40, cardRefundedAmount: 40, storeCreditRefundedAmount: 0, booking, eventPlacesBooked: 1 })
+        expect(rawRequest.mock.calls[0]?.[0]).toMatchObject({
+          path: `/api/v1/staff/event-bookings/${BOOKING}/cancel`,
+          method: 'POST',
+          body: { attendeeIds: [PLACE], refund: 'card', reason: 'Train strike', confirmed: { refund: 40 } },
+          headers: expect.objectContaining({ 'Idempotency-Key': 'press-key-0000000001', 'X-Staff-Email': user.email }),
+        })
+        // The whole booking: no places are sent, and no reason goes as null.
+        rawRequest.mockClear()
+        rawRequest.mockResolvedValue(success({ places: 2, refundedAmount: 0, cardRefundedAmount: 0, storeCreditRefundedAmount: 0, booking: null }))
+        expect(await cancel({ attendeeIds: undefined, refund: 'none', confirmed: { refund: 0 } })).toEqual({ ok: true, places: 2, refundedAmount: 0, cardRefundedAmount: 0, storeCreditRefundedAmount: 0, booking: null })
+        expect((rawRequest.mock.calls[0]?.[0] as { body: unknown }).body).toEqual({ refund: 'none', reason: null, confirmed: { refund: 0 } })
+      })
+
+      it('cash (Q42), the store credit balance and a warning come back as the dialog reads them', async () => {
+        rawRequest.mockResolvedValue(success({ places: 2, refundedAmount: 80, cardRefundedAmount: 0, storeCreditRefundedAmount: 40, cashRefundedAmount: 40, storeCreditBalance: 70, booking, eventPlacesBooked: 0, warning: 'w' }))
+        expect(await cancel({ refund: 'cash', confirmed: { refund: 80 } })).toEqual({ ok: true, places: 2, refundedAmount: 80, cardRefundedAmount: 0, storeCreditRefundedAmount: 40, cashRefundedAmount: 40, storeCreditBalance: 70, booking, eventPlacesBooked: 0, warning: 'w' })
+      })
+
+      it('no booking chosen: the old words, and the Worker is never called (the route is the booking\'s)', async () => {
+        expect(await cancel({ eventBookingId: '' })).toEqual({ ok: false, reason: 'invalid_params', message: 'Choose a booking.' })
+        expect(rawRequest).not.toHaveBeenCalled()
+      })
+
+      it('a refusal: `ok: false` with the old reason and words', async () => {
+        const { EVENT_CANCEL_WORDS, EVENT_QUOTE_REFUSALS } = await import('@/server/rules/events/failure-messages')
+        rawRequest.mockResolvedValue(refused('VALIDATION', { reason: 'reason_required_after_cutoff', message: EVENT_CANCEL_WORDS.reasonRequiredAfterCutoff }))
+        expect(await cancel()).toEqual({ ok: false, reason: 'reason_required_after_cutoff', message: EVENT_CANCEL_WORDS.reasonRequiredAfterCutoff })
+        rawRequest.mockResolvedValue(refused('CONFLICT', { reason: 'attendee_checked_in', message: EVENT_QUOTE_REFUSALS['attendee_checked_in']?.message }))
+        expect(await cancel()).toEqual({ ok: false, reason: 'attendee_checked_in', message: 'A place you chose is checked in. Undo check-in first.' })
+        rawRequest.mockResolvedValue(refused('PAYMENT_FAILED', { reason: 'refund_failed', message: EVENT_CANCEL_WORDS.cardRefundFailed('Failed to refund payment: Your card was declined.') }))
+        expect(await cancel()).toEqual({ ok: false, reason: 'refund_failed', message: 'The card refund failed, so nothing was cancelled: Failed to refund payment: Your card was declined.' })
+      })
+
+      it('a refund that no longer fits what staff confirmed (Q18, bug E9): the refusal carries the Worker\'s quote as it now stands, for the dialog to show', async () => {
+        const { EVENT_CANCEL_NEW_WORDS } = await import('@/server/rules/events/failure-messages')
+        const now = { ...quote, places: 2, wholeBooking: true, value: 76.66, cardAmount: 76.66 }
+        rawRequest.mockResolvedValue(refused('CONFLICT', { reason: 'figures_changed', message: EVENT_CANCEL_NEW_WORDS.figuresChanged, quote: now }))
+        expect(await cancel({ attendeeIds: undefined, confirmed: { refund: 115 } })).toEqual({ ok: false, reason: 'figures_changed', message: 'The figures on this event booking have just changed. Check them and confirm again.', quote: now })
+      })
+
+      it('REFUND_PATH_OFF (event cancels with money back switched off on the Worker) is `refund_path_off` with the switched-off words, not a generic failure', async () => {
+        const words = 'This is switched off in the booking system. Tell a manager.'
+        rawRequest.mockResolvedValue({ data: { ok: false, error: { code: 'REFUND_PATH_OFF', message: words, details: { reason: 'refund_path_off', message: words, kinds: ['event_cancels'] } }, requestId: 'worker-request' } })
+        expect(await cancel()).toEqual({ ok: false, reason: 'refund_path_off', message: words })
+        // Even if the details were lost on the way, the code alone maps to the same answer.
+        rawRequest.mockResolvedValue(refusal('REFUND_PATH_OFF', words))
+        expect(await cancel()).toEqual({ ok: false, reason: 'refund_path_off', message: words })
+      })
+
+      it.each([
+        ['no Issue refunds', 'FORBIDDEN', 'Needs Issue refunds permission — this action moves money back to the customer.'],
+        ['no staff record (bug E12)', 'UNAUTHORISED', "No staff record matches the logged-in user's email (jo@example.com). Ask an admin to add you as staff before performing this action."],
+        ['an inactive account', 'FORBIDDEN', 'This staff account is inactive. Ask an admin to reactivate it.'],
+      ])('%s: `permission_denied` as data, with the Worker\'s words (the old function threw them)', async (_label, code, words) => {
+        rawRequest.mockResolvedValue(refusal(code, words))
+        expect(await cancel()).toEqual({ ok: false, reason: 'permission_denied', message: words })
+      })
+
+      it('a refund held for reconcile: the places are cancelled, so `ok: true` with the booking, the Worker\'s words as the warning and `held`', async () => {
+        const { EVENT_CANCEL_NEW_WORDS } = await import('@/server/rules/events/failure-messages')
+        rawRequest.mockResolvedValue(success({ places: 1, refundedAmount: 0, cardRefundedAmount: 0, storeCreditRefundedAmount: 0, booking, eventPlacesBooked: 1, held: { claimId: 'c', reason: 'refund_unconfirmed', message: EVENT_CANCEL_NEW_WORDS.unconfirmed } }))
+        expect(await cancel()).toEqual({ ok: true, places: 1, refundedAmount: 0, cardRefundedAmount: 0, storeCreditRefundedAmount: 0, booking, eventPlacesBooked: 1, warning: EVENT_CANCEL_NEW_WORDS.unconfirmed, held: true })
+      })
+
+      it('a refused card refund whose places could not be put back: the cancel stands, with the money owed and the Worker\'s words as the warning (not `held`: nothing is still being checked)', async () => {
+        const { EVENT_CANCEL_NEW_WORDS } = await import('@/server/rules/events/failure-messages')
+        const words = EVENT_CANCEL_NEW_WORDS.putBackBlocked('Failed to refund payment: Your card was declined.', 40)
+        rawRequest.mockResolvedValue(success({ places: 1, refundedAmount: 0, cardRefundedAmount: 0, storeCreditRefundedAmount: 0, booking, eventPlacesBooked: 1, refundOwed: 40, held: { claimId: 'c', reason: 'refund_refused_not_put_back', message: words } }))
+        expect(await cancel()).toEqual({ ok: true, places: 1, refundedAmount: 0, cardRefundedAmount: 0, storeCreditRefundedAmount: 0, booking, eventPlacesBooked: 1, refundOwed: 40, warning: words })
+        expect(words).toContain('£40.00 shows on this booking as still to refund. Use Refund the rest to give it another way.')
+      })
+
+      it.each([
+        ['no connection', () => rawRequest.mockRejectedValue(new Error('socket hang up'))],
+        ['an earlier press still running', () => rawRequest.mockResolvedValue(refusal('CONFLICT', 'This request is already being processed'))],
+        ['a fault', () => rawRequest.mockResolvedValue(refusal('INTERNAL', 'Something went wrong and the action may not have finished. Check before trying again.'))],
+      ])('%s: `no_answer` with `noAnswer`, so the dialog keeps its key and the next press gets the first one\'s answer', async (_label, arrange) => {
+        arrange()
+        const { EVENT_CANCEL_NO_ANSWER_MESSAGE } = await load('eventCancelWorker')
+        expect(await cancel()).toEqual({ ok: false, reason: 'no_answer', message: EVENT_CANCEL_NO_ANSWER_MESSAGE, noAnswer: true })
+      })
+
+      it("a changed press under a no-answer press's key: refused as `pressed_after_no_answer`, never sent as new", async () => {
+        rawRequest.mockResolvedValue(refusal('IDEMPOTENCY_MISMATCH', 'This Idempotency-Key was already used for a different request.'))
+        const { EVENT_CANCEL_PRESSED_AFTER_NO_ANSWER_MESSAGE } = await load('eventCancelWorker')
+        expect(await cancel()).toEqual({ ok: false, reason: 'pressed_after_no_answer', message: EVENT_CANCEL_PRESSED_AFTER_NO_ANSWER_MESSAGE, noAnswer: true })
+      })
+
+      it('getEventCancellationQuote: a read of the quote route with the cash and the money owed; a refusal as `ok: false` with the old words; anything else is thrown', async () => {
+        const fn = (await backend('getEventCancellationQuote')).default
+        rawRequest.mockResolvedValue(success({ ...quote, cashAmount: 40, refundOwed: 15 }))
+        expect(await fn({ params: { eventBookingId: BOOKING, attendeeIds: [PLACE] }, user })).toEqual({ ok: true, ...quote, cashAmount: 40, refundOwed: 15 })
+        expect(rawRequest.mock.calls[0]?.[0]).toMatchObject({ path: `/api/v1/staff/event-bookings/${BOOKING}/cancel/quote`, method: 'POST', body: { attendeeIds: [PLACE] } })
+        // A read: it has a time limit and no press key.
+        expect((rawRequest.mock.calls[0]?.[0] as { headers: Record<string, string> }).headers['Idempotency-Key']).toBeUndefined()
+        rawRequest.mockResolvedValue(refused('CONFLICT', { action: 'quote', reason: 'booking_pending', message: 'A card reader payment is still in progress for this booking. Finish or cancel it first.' }))
+        expect(await fn({ params: { eventBookingId: BOOKING }, user })).toEqual({ ok: false, reason: 'booking_pending', message: 'A card reader payment is still in progress for this booking. Finish or cancel it first.' })
+        const { EVENT_BOOKING_REFUND_OPEN_MESSAGE } = await import('@/server/rules/refunds/failure-messages')
+        rawRequest.mockResolvedValue(refused('CONFLICT', { action: 'refund', reason: 'refund_open', message: EVENT_BOOKING_REFUND_OPEN_MESSAGE }))
+        expect(await fn({ params: { eventBookingId: BOOKING }, user })).toEqual({ ok: false, reason: 'refund_open', message: EVENT_BOOKING_REFUND_OPEN_MESSAGE })
+        rawRequest.mockResolvedValue(refusal('FORBIDDEN', 'This staff account is inactive. Ask an admin to reactivate it.'))
+        await expect(fn({ params: { eventBookingId: BOOKING }, user })).rejects.toThrow('This staff account is inactive.')
+      })
+
+      it('neither wrapper touches the database or a legacy route, and neither imports the old cancellation code', () => {
+        for (const name of ['cancelEventPlaces', 'getEventCancellationQuote', 'shared/eventCancelWorker']) {
+          const source = readFileSync(path.join(appDir, `backend/paddock/${name}.ts`), 'utf8')
+          expect(source, name).not.toContain('paddockData')
+          expect(source, name).not.toContain('paddockBackendApi2')
+          expect(source, name).not.toMatch(/from '\.\/(shared\/)?eventCancellation(Quote)?'/)
+          expect(source, name).not.toMatch(/from '\.\/(shared\/)?(heldCardRefund|cardRefundAttempts|storeCreditRefund|refundPaymentIntent|stripeRefundLookup|orderCardPortion|orderPaymentStatus)'/)
+        }
+      })
+
+      describe('the Cancel place / Cancel booking dialog', () => {
+        const dialog = () => readFileSync(path.join(appDir, 'frontend/components/CancelEventPlacesDialog.tsx'), 'utf8')
+
+        it('Q18: the refund shown is the Worker\'s quote (£0 for No refund) and is sent back with the press', () => {
+          const source = dialog()
+          expect(source).toContain('const refundShown = ok && refunding ? ok.value : 0')
+          expect(source).toContain('confirmed: { refund: refundShown },')
+          // The figures changed under the dialog: it moves to the Worker's new quote and reads the list again on close.
+          expect(source).toMatch(/if \(result\.quote\) \{[\s\S]*?showQuote\(\{ ok: true, \.\.\.result\.quote \}, refund\)\s+reloadOnClose\(\)\s+\}/)
+        })
+
+        it('W30a (review L7): the cash choice says how much can go back in cash for these places, not "paid in cash on this order"', () => {
+          const source = dialog()
+          expect(source).toContain('{`Cash, handed over now (up to ${formatCurrency(ok.cashAmount ?? 0)} in cash)`}')
+          expect(source).not.toContain('paid in cash on this order')
+        })
+
+        it('the press key: one per press, kept after a press that got no answer or threw, and dropped on any answer and when the dialog closes', () => {
+          const source = dialog()
+          const confirm = source.slice(source.indexOf('async function handleConfirm'), source.indexOf('return (\n    <>'))
+          expect(confirm).toContain('pressKey.current ??= crypto.randomUUID()')
+          expect(confirm).toContain('idempotencyKey: pressKey.current,')
+          // No answer: the key stays (nothing sets it to null before the return).
+          const noAnswer = confirm.slice(confirm.indexOf('if (!result.ok && result.noAnswer) {'), confirm.indexOf('// Any answer: the next press is a new one.'))
+          expect(noAnswer).not.toContain('pressKey.current = null')
+          expect(noAnswer).toContain('reloadOnClose()')
+          expect(confirm).toMatch(/\/\/ Any answer: the next press is a new one\.\s+pressKey\.current = null/)
+          // The call threw: no answer either.
+          const thrown = confirm.slice(confirm.indexOf('} catch (err) {'))
+          expect(thrown).toContain('setErrorMessage(thrownCallMessage(err))')
+          expect(thrown).toContain('reloadOnClose()')
+          expect(thrown).not.toContain('pressKey.current = null')
+          // Closing ends the press.
+          expect(source).toMatch(/function close\(\) \{[\s\S]*?pressKey\.current = null/)
+        })
+
+        it('closing is blocked while a press runs, and a second press can\'t start a second call', () => {
+          const source = dialog()
+          expect(source).toMatch(/function close\(\) \{\s+\/\/[^\n]*\n\s+if \(saving \|\| inFlight\.current\) return/)
+          expect(source).toMatch(/async function handleConfirm\(\) \{\s+if \(inFlight\.current \|\| !ok\) return\s+inFlight\.current = true/)
+          expect(source).toMatch(/\} finally \{\s+inFlight\.current = false\s+setSaving\(false\)/)
+          expect(source).toContain('onOpenChange={(next) => (saving ? undefined : next ? setOpen(true) : close())}')
+          expect(source).toContain('<Button variant="outline" onClick={close} disabled={saving}>')
+        })
+
+        it('the attendee list is read again on close after a press that got no answer, threw, or found the figures changed', () => {
+          const source = dialog()
+          expect(source).toContain('cancelledOnClose.current ??= () => onCancelled(null)')
+          expect(source).toMatch(/function close\(\) \{[\s\S]*?cancelledOnClose\.current\?\.\(\)\s+cancelledOnClose\.current = null/)
+          // The page reloads the whole list when it is told of a change with no booking to patch in.
+          const page = readFileSync(path.join(appDir, 'frontend/pages/EventAttendeesPage.tsx'), 'utf8')
+          expect(page).toMatch(/function replaceBooking\(updated: EventAttendeeBooking \| null, eventPlacesBooked\?: number\) \{[\s\S]*?if \(inFlight\.current === 0\) reload\(\)/)
+        })
+
+        it('cash (Q42) is offered only when cash paid on the order is left to hand back, needs Issue refunds, and says who hands it over; Q43\'s words for an event with no cut-off', () => {
+          const source = dialog()
+          expect(source).toContain('const cashAmount = ok ? round2(Math.min(ok.value, ok.cashAmount ?? 0)) : 0')
+          expect(source).toMatch(/\{cashAmount > 0 \? \(\s+<div className="flex items-center gap-2">\s+<RadioGroupItem value="cash" id="cancel-refund-cash" disabled=\{!canIssueRefunds\} \/>/)
+          expect(source).toContain("The cash is recorded as handed over by you.")
+          expect(source).toContain("setRefund(choice === 'cash' && cashLeft <= 0 ? 'credit' : choice)")
+          expect(source).toContain("setRefund(v === 'card' || v === 'credit' || v === 'cash' ? v : 'none')")
+          expect(source).toContain("No refund cut-off set, so the event's start is the cut-off")
+          // Card and store credit still need Issue refunds on the screen, and No refund is open to all.
+          expect(source).toContain('<RadioGroupItem value={choice} id={`cancel-refund-${choice}`} disabled={!canIssueRefunds} />')
+          expect(source).toContain('<RadioGroupItem value="none" id="cancel-refund-none" />')
+        })
+
+        it("the dialog's no-answer words are the wrapper's", async () => {
+          const { EVENT_CANCEL_NO_ANSWER_MESSAGE } = await load('eventCancelWorker')
+          expect(dialog()).toContain(`const NO_ANSWER_MESSAGE =\n  ${JSON.stringify(EVENT_CANCEL_NO_ANSWER_MESSAGE)}`)
+        })
+      })
+
+      describe('money owed on the attendee list (Q39)', () => {
+        const page = () => readFileSync(path.join(appDir, 'frontend/pages/EventAttendeesPage.tsx'), 'utf8')
+
+        it("the staff app's loader reads the order that paid for each booking and the money still to refund on it, as the Worker's loader does", async () => {
+          const loader = readFileSync(path.join(appDir, 'backend/paddock/shared/eventAttendeeList.ts'), 'utf8')
+          const worker = readFileSync(path.join(appDir, '..', 'paddock/web/server/rules/events/attendee-list.ts'), 'utf8')
+          const read = /paid\.order_id, COALESCE\(paid\.refund_owed_amount, 0\)::numeric\(10,2\)::text AS refund_owed_amount/
+          const from = /LEFT JOIN LATERAL \(\s+SELECT o\.id AS order_id, o\.refund_owed_amount\s+FROM order_line_items oli JOIN orders o ON o\.id = oli\.order_id\s+WHERE oli\.event_booking_id = eb\.id AND oli\.item_type = 'event'\s+ORDER BY oli\.created_at, oli\.id LIMIT 1\s+\) paid ON true/
+          for (const source of [loader, worker]) {
+            expect(source).toMatch(read)
+            expect(source).toMatch(from)
+          }
+          // Still read-only (getEventAttendees imports it).
+          expect(loader).not.toMatch(/\b(INSERT|UPDATE|DELETE)\b/)
+        })
+
+        it('a booking with money owed shows the order\'s owed bar (Refund the rest, It already arrived), and the list is read again when it changes', () => {
+          const source = page()
+          expect(source).toContain("const refundOwed = Number.parseFloat(b.refund_owed_amount ?? '0') || 0")
+          expect(source).toMatch(/\{refundOwed > 0 && b\.order_id \? \(\s+<div className="px-4 py-3 border-b border-border">\s+<OrderOwedBar orderId=\{b\.order_id\} owed=\{refundOwed\} onChanged=\{onOwedChanged\} where="on this booking's order" \/>/)
+          expect(source).toContain('onOwedChanged={reload}')
+          // The bar is W28's own: its buttons need Issue refunds, checked again by the Worker.
+          const bar = readFileSync(path.join(appDir, 'frontend/components/OrderOwedBar.tsx'), 'utf8')
+          expect(bar).toContain("where = 'on this order'")
+          expect(bar).toContain('<div className="font-medium">{money(owedOnRow)} still to refund {where}</div>')
+          expect(bar).toContain('disabled={!canIssueRefunds}')
+        })
+
+        it('a cancelled place says cash when cash was handed back, and how much of its refund did not go with the cancel', () => {
+          const source = page()
+          expect(source).toContain("a.refund_method === 'cash'")
+          expect(source).toContain('`${formatCurrency(refunded)} refunded in cash`')
+          expect(source).toContain("const refundAsked = a.refund_method === 'card' || a.refund_method === 'credit' || a.refund_method === 'cash'")
+          expect(source).toContain('const short = refundAsked ? Math.round((Number.parseFloat(a.cancelled_value) - refunded) * 100) / 100 : 0')
+        })
+      })
+    })
+
+    describe('the whole event (W31: thin calls to the Worker, one press per booking)', () => {
+      const EVENT = '66666666-6666-4666-8666-666666666666'
+      const BOOKING = '44444444-4444-4444-8444-444444444444'
+      const overview = {
+        eventName: 'Full Moon Sauna',
+        ended: false,
+        cancelledAt: '2026-11-10T09:00:00.000Z',
+        cancelReason: 'Storm',
+        pendingCustomers: [],
+        bookings: [
+          { eventBookingId: BOOKING, customerName: 'Sam Test', places: 2, value: 80, problem: null },
+          { eventBookingId: '77777777-7777-4777-8777-777777777777', customerName: 'Mo Member', places: 1, value: 20, problem: null, refundOwed: 5 },
+        ],
+        totalPlaces: 3,
+        totalValue: 100,
+      }
+      const refused = (code: string, details: Record<string, unknown>) => ({
+        data: { ok: false, error: { code, message: String(details['message']), details: { action: 'cancel_event', ...details } }, requestId: 'worker-request' },
+      })
+      const run = async (name: 'cancelEvent' | 'getEventCancellationOverview', params: Record<string, unknown>) => {
+        const query = vi.fn()
+        const legacy = vi.fn()
+        vi.stubGlobal('paddockData', { query })
+        vi.stubGlobal('paddockBackendApi2', { rawRequest: legacy })
+        const fn = (await backend(name)).default
+        const result = await fn({ params, user })
+        // Never the database, never a legacy route: the Worker holds every rule.
+        expect(query).not.toHaveBeenCalled()
+        expect(legacy).not.toHaveBeenCalled()
+        return result
+      }
+      const cancel = (params: Record<string, unknown> = {}) => run('cancelEvent', { eventId: EVENT, refund: 'card', reason: 'Storm', ...params })
+
+      it('cancelEvent: sends the choice and the reason to the event\'s route, with no key (running it again is safe) and no time limit, and answers the bookings still to cancel', async () => {
+        rawRequest.mockResolvedValue(success(overview))
+        expect(await cancel()).toEqual({ ok: true, overview })
+        expect(rawRequest).toHaveBeenCalledTimes(1)
+        const sent = rawRequest.mock.calls[0]?.[0] as { path: string; method: string; body: unknown; headers: Record<string, string> }
+        expect(sent).toMatchObject({ path: `/api/v1/staff/events/${EVENT}/cancel`, method: 'POST', body: { refund: 'card', reason: 'Storm' } })
+        expect(sent.headers['X-Staff-Email']).toBe(user.email)
+        expect('Idempotency-Key' in sent.headers).toBe(false)
+        // No money moves in this call: the body names no booking, no amount and no confirmed figure.
+        expect(Object.keys(sent.body as object).sort()).toEqual(['reason', 'refund'])
+      })
+
+      it('no event chosen: the old words, and the Worker is never called (the route is the event\'s)', async () => {
+        expect(await cancel({ eventId: '' })).toEqual({ ok: false, reason: 'invalid_params', message: 'Choose an event.' })
+        expect(rawRequest).not.toHaveBeenCalled()
+      })
+
+      it('a refusal: `ok: false` with the old reason and words', async () => {
+        const { EVENT_WHOLE_CANCEL_WORDS } = await import('@/server/rules/events/failure-messages')
+        rawRequest.mockResolvedValue(refused('CONFLICT', { reason: 'event_ended', message: EVENT_WHOLE_CANCEL_WORDS.eventEnded }))
+        expect(await cancel()).toEqual({ ok: false, reason: 'event_ended', message: "This event has already ended, so it can't be cancelled." })
+        rawRequest.mockResolvedValue(refused('CONFLICT', { reason: 'bookings_pending', message: EVENT_WHOLE_CANCEL_WORDS.bookingsPending(['Sam Test']) }))
+        expect(await cancel()).toEqual({ ok: false, reason: 'bookings_pending', message: 'A card reader payment is still in progress for Sam Test. Finish or cancel it first.' })
+        rawRequest.mockResolvedValue(refused('VALIDATION', { reason: 'invalid_params', message: EVENT_WHOLE_CANCEL_WORDS.chooseRefund }))
+        expect(await cancel({ refund: 'cash' })).toEqual({ ok: false, reason: 'invalid_params', message: 'Choose Card or Store credit.' })
+        rawRequest.mockResolvedValue(refused('NOT_FOUND', { reason: 'event_not_found', message: EVENT_WHOLE_CANCEL_WORDS.eventNotFound }))
+        expect(await cancel()).toEqual({ ok: false, reason: 'event_not_found', message: 'This event no longer exists.' })
+        // Rolled back in the database: a definite "not cancelled", not "no answer".
+        const { EVENT_WHOLE_CANCEL_NEW_WORDS } = await import('@/server/rules/events/failure-messages')
+        rawRequest.mockResolvedValue(refused('INTERNAL', { reason: 'cancel_not_saved', message: EVENT_WHOLE_CANCEL_NEW_WORDS.notSaved }))
+        expect(await cancel()).toEqual({ ok: false, reason: 'cancel_not_saved', message: EVENT_WHOLE_CANCEL_NEW_WORDS.notSaved })
+      })
+
+      it('no Issue refunds, and event cancels switched off: as data, with the Worker\'s words (the old function threw the first)', async () => {
+        rawRequest.mockResolvedValue(refusal('FORBIDDEN', 'Needs Issue refunds permission — this action moves money back to the customer.'))
+        expect(await cancel()).toEqual({ ok: false, reason: 'permission_denied', message: 'Needs Issue refunds permission — this action moves money back to the customer.' })
+        const words = 'This is switched off in the booking system. Tell a manager.'
+        rawRequest.mockResolvedValue(refusal('REFUND_PATH_OFF', words))
+        expect(await cancel()).toEqual({ ok: false, reason: 'refund_path_off', message: words })
+      })
+
+      it.each([
+        ['no connection', () => rawRequest.mockRejectedValue(new Error('socket hang up'))],
+        ['a fault', () => rawRequest.mockResolvedValue(refusal('INTERNAL', 'Something went wrong and the action may not have finished. Check before trying again.'))],
+      ])('%s: `noAnswer`, with words that say pressing again is safe and no booking was refunded', async (_label, arrange) => {
+        arrange()
+        const { EVENT_WHOLE_CANCEL_NO_ANSWER_MESSAGE } = await load('eventCancelWorker')
+        expect(await cancel()).toEqual({ ok: false, reason: 'no_answer', message: EVENT_WHOLE_CANCEL_NO_ANSWER_MESSAGE, noAnswer: true })
+        expect(EVENT_WHOLE_CANCEL_NO_ANSWER_MESSAGE).toContain('No booking has been refunded by this press.')
+      })
+
+      it('getEventCancellationOverview: a read of the overview route (with its time limit); null for an event that is gone, as before; any other failure is thrown', async () => {
+        rawRequest.mockResolvedValue(success(overview))
+        expect(await run('getEventCancellationOverview', { eventId: EVENT })).toEqual(overview)
+        const sent = rawRequest.mock.calls[0]?.[0] as { path: string; method: string; body?: unknown }
+        expect(sent).toMatchObject({ path: `/api/v1/staff/events/${EVENT}/cancel/overview`, method: 'GET' })
+        expect(sent.body).toBeUndefined()
+        rawRequest.mockResolvedValue(refused('NOT_FOUND', { reason: 'event_not_found', message: 'This event no longer exists.', action: 'overview' }))
+        expect(await run('getEventCancellationOverview', { eventId: EVENT })).toBeNull()
+        rawRequest.mockResolvedValue(refusal('INTERNAL', 'Something went wrong.'))
+        await expect(run('getEventCancellationOverview', { eventId: EVENT })).rejects.toThrow('Something went wrong.')
+        const wrapper = readFileSync(path.join(appDir, 'backend/paddock/getEventCancellationOverview.ts'), 'utf8')
+        expect(wrapper).toContain('timeoutMs: READ_TIMEOUT_MS')
+      })
+
+      it('cancelEventPlaces passes `wholeEvent` on, only when it is true', async () => {
+        rawRequest.mockResolvedValue(success({ places: 2, refundedAmount: 80, cardRefundedAmount: 80, storeCreditRefundedAmount: 0, booking: null }))
+        const fn = (await backend('cancelEventPlaces')).default
+        await fn({ params: { eventBookingId: BOOKING, refund: 'card', reason: 'Storm', wholeEvent: true, confirmed: { refund: 80 }, idempotencyKey: 'press-key-0000000002' }, user })
+        expect((rawRequest.mock.calls[0]?.[0] as { body: unknown }).body).toEqual({ refund: 'card', reason: 'Storm', wholeEvent: true, confirmed: { refund: 80 } })
+        rawRequest.mockClear()
+        await fn({ params: { eventBookingId: BOOKING, refund: 'card', wholeEvent: false, confirmed: { refund: 80 }, idempotencyKey: 'press-key-0000000003' }, user })
+        expect('wholeEvent' in ((rawRequest.mock.calls[0]?.[0] as { body: object }).body)).toBe(false)
+      })
+
+      it('the two wrappers import none of the old modules, and neither touches the database or a legacy route', () => {
+        for (const name of ['cancelEvent', 'getEventCancellationOverview']) {
+          const source = readFileSync(path.join(appDir, `backend/paddock/${name}.ts`), 'utf8')
+          expect(source, name).toContain('callWorker')
+          expect(source, name).not.toMatch(/paddockData|paddockBackendApi2/)
+          expect(source, name).not.toMatch(/from '\.\/shared\/(eventCancellation|eventCancellationQuote|heldCardRefund|cardRefundAttempts|storeCreditRefund|refundPaymentIntent|stripeRefundLookup|orderCardPortion|orderPaymentStatus|staffAccess|resolveStaffId)'/)
+        }
+        // The shared helper the wrappers use holds no write: a read-only getter imports it.
+        expect(readFileSync(path.join(appDir, 'backend/paddock/shared/eventCancelWorker.ts'), 'utf8')).not.toMatch(/\b(INSERT|UPDATE|DELETE)\b/)
+      })
+
+      describe('the Cancel event dialog', () => {
+        const dialog = () => readFileSync(path.join(appDir, 'frontend/components/CancelEventDialog.tsx'), 'utf8')
+
+        it('cancels the event first, then presses each booking in turn with `wholeEvent`, the overview\'s figure as the confirmed refund (Q18) and its own key (bugs E6, E7)', () => {
+          const source = dialog()
+          expect(source).toContain('cancelled = await cancelEvent({ eventId, refund, reason: reason.trim() }, { skipCache: true })')
+          expect(source).toContain('{ eventBookingId, refund: press.refund, reason: press.reason, wholeEvent: true, confirmed: { refund: press.confirmed }, idempotencyKey: press.key }')
+          // One new key for each booking, and the figure is the overview's own for that booking.
+          expect(source).toContain('waiting.set(b.eventBookingId, { key: crypto.randomUUID(), refund, reason: reason.trim(), confirmed: b.value, customerName: b.customerName, places: b.places })')
+          // The bookings come from the event cancel's own answer, not from what the dialog loaded earlier.
+          expect(source).toContain('for (const b of cancelled.overview.bookings) {')
+          // One at a time: each press is awaited inside the loop, and the list is shown as it grows.
+          expect(source).toMatch(/for \(const \[eventBookingId, press\] of waiting\) \{\s+rows\.set\(eventBookingId, await cancelBooking\(eventBookingId, press\)\)\s+done \+= 1\s+setProgress\(\{ done, total \}\)\s+setResults\(\[\.\.\.rows\.values\(\)\]\)\s+\}/)
+          // The event's own call must come before any booking is pressed.
+          expect(source.indexOf('await cancelEvent(')).toBeLessThan(source.indexOf('await cancelBooking('))
+          // Nothing is pressed when the event's cancel was refused or got no answer.
+          expect(source).toMatch(/if \(!cancelled\.ok\) \{\s+setErrorMessage\(cancelled\.message\)\s+return\s+\}/)
+        })
+
+        it('only Card or Store credit is offered (Q42: never cash for a whole event)', () => {
+          const source = dialog()
+          expect(source).toContain("useState<'card' | 'credit'>('card')")
+          expect(source).toContain("onValueChange={(v) => setRefund(v === 'credit' ? 'credit' : 'card')}")
+          expect(source).not.toMatch(/value="cash"|'cash'/)
+        })
+
+        it("a booking's press that got no answer keeps its key and what was sent, and Retry presses it again exactly so, first, even when it is no longer listed; any answer drops the key", () => {
+          const source = dialog()
+          expect(source).toContain('heldPresses.current.set(eventBookingId, press)')
+          expect(source).toContain('if (!result) return noAnswer(BOOKING_NO_ANSWER_MESSAGE)')
+          expect(source).toContain('if (!result.ok && result.noAnswer) return noAnswer(BOOKING_NO_ANSWER_MESSAGE)')
+          // The row's words are this list's own, and the replay's model of the dialog uses the same sentence.
+          const model = readFileSync(path.join(appDir, '..', 'paddock/web/server/rules/testing/replay/whole-event-side.ts'), 'utf8')
+          const words = /const BOOKING_NO_ANSWER_MESSAGE =\n  ("[^\n]+")/.exec(source)?.[1]
+          expect(words).toBe(JSON.stringify("No answer came back, so this booking may or may not have been cancelled and refunded. Don't refund it by hand: press Retry (it won't cancel or refund twice)."))
+          expect(model).toContain(`export const BOOKING_NO_ANSWER_MESSAGE =\n  ${String(words)}`)
+          expect(source).toMatch(/\} catch \(err\) \{\s+\/\/ The call threw: no answer \(W20a's rule\)\.\s+return noAnswer\(/)
+          expect(source).toContain('heldPresses.current.delete(eventBookingId)')
+          expect(source).toMatch(/for \(const \[id, held\] of heldPresses\.current\) waiting\.set\(id, held\)\s+for \(const b of cancelled\.overview\.bookings\) \{\s+if \(waiting\.has\(b\.eventBookingId\)\) continue/)
+          // The keys last until the dialog closes or is opened for another event.
+          expect(source.match(/heldPresses\.current = new Map\(\)/g)).toHaveLength(2)
+        })
+
+        it('closing is blocked while a run is going, a second press never starts a second run, and the events list is read again', () => {
+          const source = dialog()
+          expect(source).toContain('if (saving || inFlight.current) return\n    heldPresses.current = new Map()\n    onClose()')
+          expect(source).toContain('<Dialog open={open} onOpenChange={(next) => (saving || next ? undefined : close())}>')
+          expect(source).toContain('<Button variant="outline" onClick={close} disabled={saving}>')
+          expect(source).toContain('if (inFlight.current) return\n    inFlight.current = true')
+          expect(source.match(/onChanged\(\)/g)?.length).toBeGreaterThanOrEqual(2)
+        })
+
+        it('a refusal or no answer on the event itself stays in the dialog (no toast), and Retry is offered for what is left, as before', () => {
+          const source = dialog()
+          expect(source).not.toContain('toast.error')
+          expect(source).toContain("{saving ? 'Cancelling…' : results || alreadyCancelled ? 'Retry' : 'Cancel event and refund'}")
+          expect(source).toContain("r.noAnswer\n                            ? 'no answer'\n                            : 'not cancelled'")
+          expect(source).toContain('still to refund on its order')
+        })
+
+        it("the dialog's no-answer words for the event are the wrapper's", async () => {
+          const { EVENT_WHOLE_CANCEL_NO_ANSWER_MESSAGE } = await load('eventCancelWorker')
+          expect(dialog()).toContain(`const EVENT_NO_ANSWER_MESSAGE =\n  ${JSON.stringify(EVENT_WHOLE_CANCEL_NO_ANSWER_MESSAGE)}`)
+        })
+      })
+
+      it("W31 (W30a \"Noticed\" 2): the order refund dialog's cash label says how much can go back in cash, not what was paid", () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/RefundOrderDialog.tsx'), 'utf8')
+        expect(source).toContain('{`Cash, handed over now (up to ${money(figures.cashLeft)} in cash)`}')
+        expect(source).not.toContain('paid in cash on this order')
       })
     })
 
@@ -2885,7 +3329,8 @@ describe('staff app helpers', () => {
           const source = read('CancelEventPlacesDialog')
           expect(source).not.toContain('toast.error')
           expect(source).toContain("setErrorMessage([result.message, result.warning].filter(Boolean).join(' '))")
-          expect(source).toContain("setErrorMessage(err instanceof Error ? err.message : 'Failed to cancel')")
+          // W30: a call that throws got no answer, so the dialog says so and keeps its press key (W20a's rule).
+          expect(source).toContain('setErrorMessage(thrownCallMessage(err))')
           expect(source).toContain('<div>{errorMessage}</div>')
         })
 

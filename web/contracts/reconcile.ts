@@ -157,8 +157,11 @@ export const stuckClaimSchema = z.object({
   claimId: z.string(),
   /** The booking a booking refund's claim is on; null for an order refund's (W28). */
   bookingId: z.string().nullable(),
-  /** W28: the order an order refund's claim is on; null for a booking's. */
+  /** W28: the order an order refund's claim is on; null for a booking's. W30: for an event booking's claim, the order that paid for it. */
   orderId: z.string().nullable(),
+  /** W30: the event booking an event place cancel's claim is on, and its event (for the attendee list); absent for the others. */
+  eventBookingId: z.string().nullable().optional(),
+  eventId: z.string().nullable().optional(),
   customerName: z.string(),
   amount: z.number(),
   createdAt: z.string(),

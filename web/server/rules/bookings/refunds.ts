@@ -1318,10 +1318,12 @@ export async function claimRefusal(db: Queryable, claim: Pick<Claim, 'id' | 'boo
 async function finishRefusedNotPutBack(db: Db, claim: Claim, options: RefundOptions, detail: string, blocked: boolean): Promise<RefundBookingOutput | null> {
   const owed = sum(claim.details.plan.card.map((part) => part.amount))
   const cancelled = claim.details.cancel !== undefined
-  const words = blocked ? putBackBlockedMessage(detail, owed, cancelled) : putBackFailedMessage(detail, owed, cancelled)
   try {
     const output = await finishClaim(db, claim, { went: [], owed }, { actor: options.actor, requestId: options.requestId, how: blocked ? 'undo_blocked' : 'undo_failed', why: detail })
     if (!output) return null
+    // W31: the words name the store credit the finish gave (the plan's own), so nobody gives it again by hand.
+    const storeCredit = output.storeCreditRefundedAmount ?? 0
+    const words = blocked ? putBackBlockedMessage(detail, owed, cancelled, storeCredit) : putBackFailedMessage(detail, owed, cancelled, storeCredit)
     return { ...output, held: { claimId: claim.id, reason: 'refund_refused_not_put_back', message: words } }
   } catch {
     return held(claim, 'refund_refused_not_put_back', blocked ? putBackBlockedNotRecordedMessage(detail) : putBackFailedNotRecordedMessage(detail))
