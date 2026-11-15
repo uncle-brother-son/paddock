@@ -133,6 +133,18 @@ interface FakeRefund {
   created: number
 }
 
+/** W32: a customer balance transaction (a membership compensation's put-back of the customer's balance). */
+interface FakeBalanceTransaction {
+  id: string
+  object: 'customer_balance_transaction'
+  customer: string
+  amount: number
+  currency: string
+  ending_balance: number
+  metadata: Record<string, string>
+  created: number
+}
+
 interface FakeSubscription {
   id: string
   object: 'subscription'
@@ -196,6 +208,8 @@ export class FakeStripe implements StripeClient {
   private readonly intents = new Map<string, FakePaymentIntent>()
   private readonly refunded = new Map<string, number>()
   private readonly refundsMade: FakeRefund[] = []
+  /** W32: every customer balance transaction made, oldest first. */
+  private readonly balanceTransactionsMade: FakeBalanceTransaction[] = []
   private readonly generatedCards = new Map<string, string>()
   private readonly setupIntentsById = new Map<string, FakeSetupIntent>()
   /** The reusable cards Stripe generated for a tap, as payment methods: what paymentMethods.retrieve finds. */
@@ -299,11 +313,17 @@ export class FakeStripe implements StripeClient {
    */
   refundsFailAtOnce = false
 
-  /** W12: a pending refund ends: `succeeded`, or `failed` / `canceled` (its money is back on the payment). */
+  /**
+   * W12: a pending refund ends: `succeeded`, or `failed` / `canceled` (its money is back on the payment).
+   * W32a (W32 review L4): a refund Stripe answered `succeeded` can fail afterwards (its "refund fails" test card,
+   * 4000 0000 0000 5126: "its status begins as succeeded… transitions to failed"): `succeeded` to `failed`, with its
+   * amount back on the payment in the same way. Nothing else moves: an ended refund stays ended.
+   */
   settleRefund(id: string, status: 'succeeded' | 'failed' | 'canceled'): void {
     const refund = this.refundsMade.find((r) => r.id === id)
     if (!refund) throw new Error(`The fake has no refund ${id}.`)
-    if (refund.status !== 'pending') throw new Error(`The fake's refund ${id} is ${refund.status}, not pending.`)
+    const failsLater = refund.status === 'succeeded' && status === 'failed'
+    if (refund.status !== 'pending' && !failsLater) throw new Error(`The fake's refund ${id} is ${refund.status}: only a pending refund ends, and only a succeeded one can fail afterwards.`)
     refund.status = status
     if (status !== 'succeeded') this.refunded.set(refund.payment_intent, (this.refunded.get(refund.payment_intent) ?? 0) - refund.amount)
   }
@@ -325,6 +345,11 @@ export class FakeStripe implements StripeClient {
     intent.status = 'requires_capture'
     intent.amount_received = 0
     intent.latest_charge = null
+  }
+
+  /** W32: every customer balance transaction made, oldest first, as tests read them. */
+  get balanceTransactions(): ReadonlyArray<Readonly<FakeBalanceTransaction>> {
+    return this.balanceTransactionsMade
   }
 
   /** W12: every refund made, oldest first, as tests read them. */
@@ -803,6 +828,36 @@ export class FakeStripe implements StripeClient {
         )
         return { object: 'search_result', data: found, has_more: false, url: '/fake', next_page: null }
       }) as unknown as Promise<Stripe.ApiSearchResult<Stripe.Customer>>,
+
+    // W32: a customer balance transaction adds its amount to the customer's balance (below 0: credit), as Stripe's.
+    createBalanceTransaction: (id, params, options) =>
+      this.run('customers.createBalanceTransaction', { id, ...params }, options, () => {
+        const record = this.customer(id)
+        const ending = Number(record['balance'] ?? 0) + params.amount
+        record['balance'] = ending
+        const transaction: FakeBalanceTransaction = {
+          id: this.nextId('cbtxn'),
+          object: 'customer_balance_transaction',
+          customer: id,
+          amount: params.amount,
+          currency: params.currency,
+          ending_balance: ending,
+          metadata: { ...((params.metadata ?? {}) as Record<string, string>) },
+          created: seconds(),
+        }
+        this.balanceTransactionsMade.push(transaction)
+        return transaction
+      }) as unknown as Promise<Stripe.CustomerBalanceTransaction>,
+
+    // Newest first, as Stripe lists them, a page at a time.
+    listBalanceTransactions: (id, params) =>
+      this.run('customers.listBalanceTransactions', { id, ...params }, undefined, () => {
+        this.customer(id)
+        const all = newestFirst(this.balanceTransactionsMade.filter((t) => t.customer === id))
+        const from = params?.starting_after ? all.findIndex((t) => t.id === params.starting_after) + 1 : 0
+        const limit = params?.limit ?? 10
+        return { ...list(all.slice(from, from + limit)), has_more: from + limit < all.length }
+      }) as unknown as Promise<Stripe.ApiList<Stripe.CustomerBalanceTransaction>>,
   }
 
   readonly prices: StripeClient['prices'] = {

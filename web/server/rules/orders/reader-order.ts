@@ -35,6 +35,7 @@ import {
 } from './failure-messages'
 import { finaliseOrder, MEMBERSHIP_DEFINITE, membershipPrecheck, oldRollbackStarted, paymentMismatch, type FinaliseMismatch } from './finalise-order'
 import {
+  balanceToPutBack,
   cancelSubscriptionChecked,
   checkMembershipPrice,
   compensateOrder,
@@ -362,7 +363,7 @@ async function finaliseMembership(
     subscription = answer.subscription
     if (answer.outcome === 'wrong') {
       return compensate(
-        { subscriptionId: subscription.id, refunds: [tap, ...(subscription.invoicePaymentIntentId && subscription.amountPaid > 0 ? [{ step: 'refund-subscription' as const, paymentIntentId: subscription.invoicePaymentIntentId }] : [])] },
+        { subscriptionId: subscription.id, refunds: [tap, ...(subscription.invoicePaymentIntentId && subscription.amountPaid > 0 ? [{ step: 'refund-subscription' as const, paymentIntentId: subscription.invoicePaymentIntentId }] : [])], ...balanceToPutBack([subscription]) },
         'subscription_failed',
         `Creating the Stripe subscription failed: ${subscriptionWrongMessage(answer.detail)}`,
         `Stripe's subscription was not what was asked: ${answer.detail}`
@@ -372,6 +373,8 @@ async function finaliseMembership(
   const taken: Taken = {
     subscriptionId: subscription.id,
     refunds: [tap, ...(subscription.invoicePaymentIntentId && subscription.amountPaid > 0 ? [{ step: 'refund-subscription' as const, paymentIntentId: subscription.invoicePaymentIntentId }] : [])],
+    // W32 (R6, R7): what the first invoice did to the customer's Stripe balance.
+    ...balanceToPutBack([subscription]),
   }
   const savingFailed = 'Saving the membership failed: the order has no membership to attach the subscription to.'
 

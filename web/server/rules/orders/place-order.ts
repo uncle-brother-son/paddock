@@ -59,6 +59,7 @@ import { lockForOrder, type HeldLocks } from './locks'
 import { pence } from './collect-saved-card'
 import { bookingRefusal, orderRefusal, paymentUnconfirmed, refusalDetails } from './order-refusal'
 import {
+  balanceToPutBack,
   CARD_COUPON_NAME,
   cancelSubscriptionChecked,
   checkMembershipPrice,
@@ -1309,6 +1310,8 @@ async function collectMembershipAndFinish(
   const taken: Taken = {
     subscriptionId: subscription.id,
     refunds: subscription.invoicePaymentIntentId && subscription.amountPaid > 0 ? [{ step: 'refund-subscription', paymentIntentId: subscription.invoicePaymentIntentId }] : [],
+    // W32 (R6, R7): what the first invoice did to the customer's Stripe balance.
+    ...balanceToPutBack([subscription]),
   }
   if (started.outcome === 'wrong') {
     return compensateThenRefuse(steps, taken, membershipRefusal('membership_subscription_failed', subscriptionWrongMessage(started.detail)), `Stripe's subscription was not what was asked: ${started.detail}`)

@@ -853,6 +853,80 @@ review L1 and L2. Released with W30.
 - **Audit:** `event.cancel` on the event, once; each booking's claim and `event_booking.cancel_places` row carry
   `wholeEvent: true`.
 
+## The refund watch and the compensation fixes (W32)
+
+`server/rules/refunds/refund-watch.ts` (the record) and `refund-watch-settle.ts` (reconcile's side). Lead call L7
+(15 Nov): the watch runs in reconcile, not from a webhook, and ends after 30 days. W13 review L2, W21 review L3 and the
+W26 audit's row 11; W13a review L1 (R6, R7); W25 review L3 (audit row 30); W31 review S2.
+
+- **What is kept.** Every finished claim (`booking.` / `order.` / `event_booking.refund_finished`) keeps each card
+  refund's id and status (`refunds`), from the press (Stripe's answer), reconcile or a close by hand (Stripe's list).
+  A refund that wasn't `succeeded` when it was recorded gets one `refund.watch` row (`watching`, entity
+  `refund_watch`, the Stripe refund's id) in the same transaction as the finished row. The part's PaymentIntent is the
+  claim's own: a membership's first invoice (W29), the order's for an event booking (W30).
+- **What reconcile does**, each run, last of all, for every watch with no end: lists the refunds on the payment and
+  finds this one by its id. **It never sends a refund.**
+  - `succeeded`: the watch ends. Nothing else changes.
+  - `failed` or `canceled`: in one transaction under the subject's own locks, the card money is taken off the lines R2
+    recorded it on and put back as owed where R2 puts a part that never went: on the booking (with `price_paid` on a
+    live one; `refund_owed_amount` alone on a cancel's claim or a cancelled booking), or on the order (Q39; an event
+    booking's is the order that paid for it, and its places keep only what the plan's store credit and cash gave).
+    Never store credit by the system. A `<subject>.refund_failed_later` row is written on the subject.
+  - still going after `WATCH_DAYS` (30): the watch ends `expired`, for a person. Nothing is changed.
+  - Stripe didn't answer, or the key is the other mode's: read again next run.
+  - Twice, or two runs at once: the end rows are written under an advisory lock on the refund's id (after the
+    subject's row locks), so the money goes back once.
+- **Compensation refunds (step C).** `refundOnce` answers the refund's status, and `compensateOrder`,
+  `putBackSubscription` and `retryLeftSubscription` have a pending one watched (`on: 'compensation'`), once however
+  often the same refund is seen. A watch that can't be written holds the compensation (or leaves the put-back's row
+  `left`), so the next run records it. A failure can't be owed anywhere (the order was undone, or isn't a refunded
+  order), so it ends as a line for a person. W12's late refunds keep their own watch (`order.reconcile` refund rows).
+- **The stuck list** has one more field, `watched`: watches that ended `failed` or `expired`, each with words that say
+  what to do, until a person marks it sorted (the manual close's `refund_watch`, Issue refunds, nothing moves). The
+  other fields are unchanged, so the staff app published before W32 reads the list as before.
+- **A compensation puts the customer's Stripe balance back (R6, R7).** `MadeSubscription.balanceApplied` is what the
+  first invoice did to the balance (`ending_balance - starting_balance`); `putBalanceBack` reverses it with a customer
+  balance transaction under `<orderId>:balance`. The customer's balance transactions are listed first and one naming
+  the key in its metadata counts as done, because Stripe forgets a key after a day. With no change to the balance no
+  Stripe call is made.
+- **A watched payment's automatic refund is keyed by its PaymentIntent** (`<paymentIntentId>:refund-watched`), so two
+  payments watched on one flow never share a key (audit row 30).
+- **Words (W31 review S2):** the booking sentence after a refused, not-put-back card refund names the add-ons' store
+  credit with the seat's.
+
+## Every card refund is watched (W32a)
+
+Lead calls 1 and 2 on W32's report and the W32 review's S1 to S5, L2 and L4 (15 Nov). Released with W32, the staff app
+first. No migration.
+
+- **Every card refund Stripe accepts is watched for `WATCH_DAYS` (50), whatever its first status.** Stripe can answer a
+  refund `succeeded` and fail it afterwards (its "refund fails" test card, 4000 0000 0000 5126), and can fail a pending
+  one on day 45. `succeeded` no longer ends a watch before its days are up. A claim's refund, a compensation's and (S3)
+  a late payment's automatic refund all get the row; only one already `failed` or `canceled` has nothing to watch.
+- **Which watches a run reads** is decided by `WATCHES_DUE_SQL`: one still going every run; one that reads `succeeded`
+  once it hasn't been read for `WATCH_READ_HOURS` (24); one past its days at once. The one read longest ago comes first
+  and the list stops at the run's item limit, so a run's budget is never spent on the same few. Staff's run (Resolve
+  now) passes 0 hours: it reads the oldest-read ones whatever their last read, inside its 10 items.
+- **"Last read"** is the newest `refund.watch` row with state `checked` (the status seen, and why the watch goes on),
+  written by every read that ends nothing. It is found on `audit_log_entity_idx (entity_type, entity_id)`.
+- **At the end of its days** a watch that reads `succeeded` ends quietly (`succeeded`); any other ends `expired`, with
+  a line. Past its days with Stripe not readable, a watch that last read `succeeded` is read again next run (no
+  answer) or ended quietly (the other Stripe mode); one still going ends `expired`.
+- **Counting (S2).** A read that ends nothing for a person is not an item of the run, and is in neither `refunds` nor
+  `left`. `refundsWaiting` is how many watched refunds are still on their way at Stripe; Resolve now says "N refunds
+  waiting on Stripe". Only a failure or a watch that ran out is left for a person. A refund still pending no longer
+  counts as left either.
+- **W12's late refunds (S3).** `settleLateRefund` writes the watch (`watchLateRefund`: `on: 'compensation'`,
+  `step: 'late-refund'`, `late`: the entity) in the transaction that records the refund's id, and
+  `LATE_REFUNDS_DUE_SQL` and the stuck list's refunds leave a payment whose refund is watched to the watch. One refund
+  is watched once (a compensation's refund the late path meets under the same key keeps its one watch) and listed once.
+- **A late refund keeps its key (S4):** `refundKey` uses the key on the payment's `started` row and works one out only
+  for a first send.
+- **`charge_already_refunded` in a compensation (L2):** the refund the step made is found by `metadata.refund_key` in
+  the payment's refunds and watched; none with the key means it was refunded by hand.
+- **Not built (review L1, for H):** listing a payment's refunds by key before a compensation's send. It adds a Stripe
+  call to every compensation refund, which changes the Stripe calls the order replay compares with its recordings.
+
 ## Refund claims with no finish
 
 The staff app claims a refund's money before it moves. Each claim writes `booking.refund_claimed` to

@@ -153,7 +153,7 @@ describe("the same keys as step D: `<claimId>:refund:<orderId>`, with the claim 
     expect(sent).toEqual([{ method: 'refunds.create', params: cardPartRequest(claim.id, part), idempotencyKey: `${claim.id}:refund:${orderId}` }])
     expect(sent[0]?.params).toEqual({ payment_intent: intent.id, amount: 2400, metadata: { refund_key: `${claim.id}:refund:${orderId}`, claim_id: claim.id } })
     expect(claimRefundKey(claim.id, orderId)).toBe(`${claim.id}:refund:${orderId}`)
-    expect(await findCardPart(stripe, claim.id, part, undefined)).toEqual({ kind: 'went' })
+    expect(await findCardPart(stripe, claim.id, part, undefined)).toEqual({ kind: 'went', refund: { id: stripe.refundsSent[0]?.id, status: 'succeeded' } })
   })
 
   it("an event booking's card part is keyed by its claim and the order that paid for it", async () => {

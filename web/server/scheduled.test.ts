@@ -55,12 +55,13 @@ describe('the scheduled handler', () => {
     await worker.scheduled({ scheduledTime: Date.parse('2026-11-10T12:05:00Z'), cron: '*/5 * * * *' }, env, { waitUntil: (promise) => waited.push(promise) })
     expect(waited).toHaveLength(1)
     const result = await waited[0]
-    expect(result).toEqual({ checked: 0, finalised: 0, undone: 0, refunds: 0, left: 0, deferred: 0, stripeRefused: false, items: [] })
+    expect(result).toEqual({ refundsWaiting: 0, checked: 0, finalised: 0, undone: 0, refunds: 0, left: 0, deferred: 0, stripeRefused: false, items: [] })
     expect(seen.opened).toEqual([env.HYPERDRIVE.connectionString])
     expect(seen.secrets).toEqual([env.STRIPE_SECRET_KEY])
     expect(seen.closed()).toBe(1)
     expect(seen.logged).toEqual([
-      { event: 'reconcile.run', requestId: 'reconcile-2026-11-10T12:05:00.000Z', checked: 0, finalised: 0, undone: 0, refunds: 0, left: [], deferred: 0, stripeRefused: false },
+      // W32a: the log line carries how many watched refunds are still on their way at Stripe.
+      { event: 'reconcile.run', requestId: 'reconcile-2026-11-10T12:05:00.000Z', checked: 0, finalised: 0, undone: 0, refunds: 0, left: [], deferred: 0, stripeRefused: false, refundsWaiting: 0 },
     ])
     // Found nothing: no Stripe call at all.
     expect(stripe.calls).toEqual([])

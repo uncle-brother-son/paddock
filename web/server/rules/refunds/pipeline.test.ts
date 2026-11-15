@@ -475,11 +475,12 @@ describe('the Stripe look-up (reconcile and the close by hand): never a send', (
     const part = await aPart(stripe)
     await sent(stripe, 'claim-1', part)
     const before = sends(stripe)
-    expect(await findCardPart(stripe, 'claim-1', part, undefined)).toEqual({ kind: 'went' })
+    // W32: with the refund itself (its id and status), which the finished row keeps and the watch follows.
+    expect(await findCardPart(stripe, 'claim-1', part, undefined)).toEqual({ kind: 'went', refund: { id: stripe.refundsSent[0]?.id, status: 'succeeded' } })
     stripe.refundsStayPending = true
     const pending = await aPart(stripe)
     await sent(stripe, 'claim-2', pending)
-    expect(await findCardPart(stripe, 'claim-2', pending, undefined)).toEqual({ kind: 'went' })
+    expect(await findCardPart(stripe, 'claim-2', pending, undefined)).toEqual({ kind: 'went', refund: { id: stripe.refundsSent[1]?.id, status: 'pending' } })
     expect(sends(stripe)).toBe(before + 1)
   })
 
@@ -528,7 +529,7 @@ describe('the Stripe look-up (reconcile and the close by hand): never a send', (
     await sent(stripe, 'claim-1', part)
     for (let n = 0; n < 150; n += 1) await stripe.refunds.create({ payment_intent: part.paymentIntentId, amount: 100, metadata: { claim_id: `other-${n}` } }, { idempotencyKey: `other-${n}` })
     const before = stripe.calls.filter((call) => call.method === 'refunds.list').length
-    expect(await findCardPart(stripe, 'claim-1', part, undefined)).toEqual({ kind: 'went' })
+    expect(await findCardPart(stripe, 'claim-1', part, undefined)).toEqual({ kind: 'went', refund: { id: stripe.refundsSent[0]?.id, status: 'succeeded' } })
     expect(stripe.calls.filter((call) => call.method === 'refunds.list').length - before).toBe(2)
     const listed = await listRefunds(stripe, part.paymentIntentId, undefined)
     expect(listed.kind === 'listed' ? listed.refunds.length : 0).toBe(151)

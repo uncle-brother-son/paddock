@@ -1,3 +1,4 @@
+import { REFUND_WATCH_ROW, refundsKeptProblem, refundWatchProblems } from './refunds-kept'
 import { vi } from 'vitest'
 import type { Db } from '@/server/db'
 import type { OrderRefundFigures } from '@/contracts'
@@ -119,6 +120,8 @@ const WORKER_ORDER_REFUND_ROWS: ReadonlySet<string> = new Set([
   'order.owed_arrived',
   // W29: a refunded membership's subscription, recorded as left with the money and closed by its cancel.
   'order.subscription_left',
+  // W32a: the watch on each card refund a finished claim keeps.
+  REFUND_WATCH_ROW,
 ])
 
 const auditRows = (recording: Recording): AuditRow[] => (recording.tables['audit_log']?.added ?? []) as AuditRow[]
@@ -241,7 +244,10 @@ export function orderRefundRowProblems(recording: Recording): string[] {
     } else if (row.action === 'order.refund_finished') {
       const claim = all.find((other) => other['id'] === d['claimId'])
       const c = (claim?.details ?? {}) as Record<string, unknown>
-      if (!sameKeys(d, ['claimId', 'outcome', 'cardRefunded', 'storeCreditRefunded', 'owed', ...('cash' in d ? ['cash'] : []), ...('refused' in d ? ['refused'] : []), ...('by' in d ? ['by'] : [])])) wrong('fields')
+      if (!sameKeys(d, ['claimId', 'outcome', 'cardRefunded', 'storeCreditRefunded', 'owed', ...('cash' in d ? ['cash'] : []), ...('refused' in d ? ['refused'] : []), ...('refunds' in d ? ['refunds'] : []), ...('by' in d ? ['by'] : [])])) wrong('fields')
+      // W32: the card refunds' ids and statuses, kept for the refund watch (refunds-kept.ts).
+      const kept = refundsKeptProblem(d, c)
+      if (kept) wrong(kept)
       if (claim?.action !== 'order.refund_claimed') wrong('no claim')
       if ('refused' in d && (typeof d['refused'] !== 'string' || d['refused'] === '' || d['outcome'] !== 'owed')) wrong('refused without money owed')
       const accounted = round2(n('cardRefunded') + n('storeCreditRefunded') + n('owed') + Number(d['cash'] ?? 0))
@@ -295,10 +301,13 @@ export function orderRefundRowProblems(recording: Recording): string[] {
       const finished = d['outcome'] === 'finalised' && sameKeys(d, ['outcome', 'detail'])
       const leftOnce = d['outcome'] === 'left' && d['reason'] === 'finish_failed' && sameKeys(d, ['outcome', 'reason', 'detail'])
       if (!finished && !leftOnce) wrong('a held claim reconcile finished')
+    } else if (row.action === REFUND_WATCH_ROW) {
+      // W32a: held to one rule, with the refunds the finished rows keep (below).
     } else {
       wrong('an unexpected row')
     }
   }
+  problems.push(...refundWatchProblems(all, 'order', 'order.refund_finished'))
   return problems
 }
 

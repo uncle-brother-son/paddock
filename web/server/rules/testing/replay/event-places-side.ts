@@ -1,3 +1,4 @@
+import { REFUND_WATCH_ROW, refundsKeptProblem, refundWatchProblems } from './refunds-kept'
 import { vi } from 'vitest'
 import type { Db } from '@/server/db'
 import { reconcileClaimNow } from '@/server/rules/orders/reconcile'
@@ -141,7 +142,8 @@ type AuditRow = Row & { action?: unknown; entity_type?: unknown; details?: Recor
 const OLD_EVENT_REFUND_NOTES: ReadonlySet<string> = new Set(['card_refund_held', 'event_booking.card_refund_refused', 'event_booking.card_refund_recorded', 'event_booking.card_refund_unallocated'])
 
 /** The Worker's rows for an event place cancel: the claim, its finish and refusal mark, the cancel's own row. W31: and the whole event's own row. */
-const WORKER_EVENT_ROWS: ReadonlySet<string> = new Set(['event_booking.refund_claimed', 'event_booking.refund_finished', 'event_booking.refund_refused', 'event_booking.cancel_places', 'event.cancel'])
+// W32a: with the watch on each card refund a finished claim keeps.
+const WORKER_EVENT_ROWS: ReadonlySet<string> = new Set(['event_booking.refund_claimed', 'event_booking.refund_finished', 'event_booking.refund_refused', 'event_booking.cancel_places', 'event.cancel', REFUND_WATCH_ROW])
 
 const auditRows = (recording: Recording): AuditRow[] => (recording.tables['audit_log']?.added ?? []) as AuditRow[]
 
@@ -303,7 +305,10 @@ export function eventPlacesRowProblems(recording: Recording): string[] {
     } else if (row.action === 'event_booking.refund_finished') {
       const claim = all.find((other) => other['id'] === d['claimId'])
       const c = (claim?.details ?? {}) as Record<string, unknown>
-      if (!sameKeys(d, ['claimId', 'outcome', 'cardRefunded', 'storeCreditRefunded', 'owed', ...('cash' in d ? ['cash'] : []), ...('refused' in d ? ['refused'] : []), ...('by' in d ? ['by'] : [])])) wrong('fields')
+      if (!sameKeys(d, ['claimId', 'outcome', 'cardRefunded', 'storeCreditRefunded', 'owed', ...('cash' in d ? ['cash'] : []), ...('refused' in d ? ['refused'] : []), ...('refunds' in d ? ['refunds'] : []), ...('by' in d ? ['by'] : [])])) wrong('fields')
+      // W32: the card refunds' ids and statuses, kept for the refund watch (refunds-kept.ts).
+      const kept = refundsKeptProblem(d, c)
+      if (kept) wrong(kept)
       if (claim?.action !== 'event_booking.refund_claimed') wrong('no claim')
       if ('refused' in d && (typeof d['refused'] !== 'string' || d['refused'] === '' || d['outcome'] !== 'owed')) wrong('refused without money owed')
       const accounted = round2(n('cardRefunded') + n('storeCreditRefunded') + n('owed') + Number(d['cash'] ?? 0))
@@ -348,10 +353,13 @@ export function eventPlacesRowProblems(recording: Recording): string[] {
       const finished = d['outcome'] === 'finalised' && sameKeys(d, ['outcome', 'detail'])
       const leftOnce = d['outcome'] === 'left' && d['reason'] === 'finish_failed' && sameKeys(d, ['outcome', 'reason', 'detail'])
       if (!finished && !leftOnce) wrong('a held claim reconcile finished')
+    } else if (row.action === REFUND_WATCH_ROW) {
+      // W32a: held to one rule, with the refunds the finished rows keep (below).
     } else {
       wrong('an unexpected row')
     }
   }
+  problems.push(...refundWatchProblems(all, 'event_booking', 'event_booking.refund_finished'))
   // Every claim that isn't put back has exactly one cancel row beside its finish, and a put-back has none.
   for (const claim of all.filter((row) => row.action === 'event_booking.refund_claimed')) {
     const finished = all.filter((row) => row.action === 'event_booking.refund_finished' && row.details?.['claimId'] === claim['id'])

@@ -11,7 +11,7 @@ import { POST as cancelFlowRoute } from '@/app/api/v1/staff/reader-flows/[pendin
 import { POST as finaliseFlowRoute } from '@/app/api/v1/staff/reader-flows/[pendingId]/finalise/route'
 import type { Db, Tx } from '@/server/db'
 import { reconcile } from '@/server/rules/orders/reconcile'
-import { ORDER_CLAIM_WAITING_WORDS, stuckList } from '@/server/rules/orders/stuck-list'
+import { ORDER_CLAIM_WAITING_WORDS, stuckList, WATCH_WORDS } from '@/server/rules/orders/stuck-list'
 import { claimRefundKey } from '@/server/rules/refunds/pipeline'
 import { readOrderClaim } from '@/server/rules/refunds/claims'
 import {
@@ -28,6 +28,7 @@ import { ID, laterPublicSession, paidSeat, seed } from '@/server/rules/testing/r
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
 import { refundOrderLines, type OrderRefundOptions } from './refund-lines'
+import { WATCH_DAYS } from '@/server/rules/refunds/refund-watch'
 
 // Brief W28 (E-plan 5.1): order refunds on the Worker, on the replay's live schema (its triggers and the store credit
 // function included), through the routes as the staff app calls them. The orders are placed by the old functions (the
@@ -876,6 +877,159 @@ describe('cash back (Q42): only up to the cash paid on the order', () => {
       // £34 was paid in cash, and £34 has been handed back: never more.
       const handed = await db.query<{ cash: string }>("SELECT COALESCE(SUM((details->'plan'->>'cash')::numeric), 0)::text AS cash FROM audit_log WHERE action IN ('order.refund_claimed', 'booking.refund_claimed')")
       expect(Number(handed[0]?.cash)).toBe(34)
+    })
+  })
+})
+
+// Brief W32 (E-plan section 5): the refund watch on an order's claim. A card refund Stripe answers `pending` is
+// recorded as gone and read by reconcile until it ends; a failure is put back as money owed on the order (Q39).
+describe('W32: the refund watch on an order', () => {
+  /** W32a: without the `checked` rows (one for each read that ended nothing). */
+  const watchStates = async () => (await auditRows('refund.watch')).map((row) => String(row.details['state'])).filter((state) => state !== 'checked').sort()
+  const minutes = (n: number) => vi.setSystemTime(Date.now() + n * 60_000)
+  const DAY = 24 * 60
+  const refundItems = async () => (await runReconcile()).items.filter((item) => item.kind === 'refund')
+  async function pendingRefund(orderId: string, lineIds: string[], stripe: FakeStripe): Promise<Answer> {
+    stripe.refundsStayPending = true
+    const answer = await refund(orderId, lineIds, 'card')
+    stripe.refundsStayPending = false
+    return answer
+  }
+
+  it('pending then succeeded: the order is as the press left it and the watch ends', async () => {
+    await onAnOrder({ products: [{ ...soap, quantity: 1 }, mug], payment: card }, async ({ orderId, lines, stripe }) => {
+      const [, mugLine] = await lines('product')
+      const answer = await pendingRefund(orderId, [mugLine as string], stripe)
+      expect(answer.body.data).toMatchObject({ refundedAmount: 15, cardRefundedAmount: 15, orderPaymentStatus: 'partially_refunded' })
+      const sent = stripe.refundsSent[0]
+      const claim = (await auditRows('order.refund_claimed'))[0]
+      expect((await auditRows('order.refund_finished'))[0]?.details).toMatchObject({ outcome: 'given', cardRefunded: 15, refunds: [{ orderId, paymentIntentId: sent?.payment_intent, refundId: sent?.id, status: 'pending', amount: 15 }] })
+      expect((await auditRows('refund.watch')).map((row) => row.details)).toEqual([
+        { state: 'watching', refundId: sent?.id, paymentIntentId: sent?.payment_intent, amount: 15, status: 'pending', livemode: false, on: 'order', subjectId: orderId, orderId, claimId: claim?.id, lines: [{ lineId: mugLine, amount: 15 }] },
+      ])
+      // W32a (W32 review S2): on its way: read, no item, nothing for a person; counted as waiting on Stripe.
+      expect(await runReconcile()).toMatchObject({ refunds: 0, left: 0, refundsWaiting: 1, items: [] })
+      stripe.settleRefund(sent?.id as string, 'succeeded')
+      minutes(5)
+      // W32a (lead call 1): succeeded is not the end of the watch; it ends, quietly, when its 50 days are up.
+      expect(await runReconcile()).toMatchObject({ refunds: 0, left: 0, refundsWaiting: 0, items: [] })
+      expect(await watchStates()).toEqual(['watching'])
+      minutes(WATCH_DAYS * DAY)
+      expect(await refundItems()).toEqual([])
+      expect(await watchStates()).toEqual(['succeeded', 'watching'])
+      expect(await order(orderId)).toEqual({ payment_status: 'partially_refunded', owed: '0.00' })
+      minutes(DAY)
+      expect(await refundItems()).toEqual([])
+      expect(refundsSent(stripe)).toHaveLength(1)
+      expect((await stuckList(db)).watched).toEqual([])
+    })
+  })
+
+  it('pending then failed: the £15 is off the line and owed on the order (Q39), once, never store credit, never sent again; the line stays refunded; listed with what to do; Refund the rest sends it to the card again', async () => {
+    await onAnOrder({ products: [{ ...soap, quantity: 1 }, mug], payment: card }, async ({ orderId, lines, stripe }) => {
+      const [, mugLine] = await lines('product')
+      await pendingRefund(orderId, [mugLine as string], stripe)
+      const sent = stripe.refundsSent[0]
+      expect((await lineRows(orderId)).find((line) => line.id === mugLine)).toMatchObject({ refunded: true, refund_method: 'card', card: '15.00' })
+      stripe.settleRefund(sent?.id as string, 'failed')
+
+      expect(await refundItems()).toMatchObject([{ kind: 'refund', id: sent?.id, outcome: 'refund_failed', reason: 'refund_failed_later' }])
+      expect(await order(orderId)).toEqual({ payment_status: 'partially_refunded', owed: '15.00' })
+      // The line is still refunded (the mug stays refunded: staff decide about the money), with no card money on it.
+      expect((await lineRows(orderId)).find((line) => line.id === mugLine)).toMatchObject({ refunded: true, refund_method: 'card', card: '0.00' })
+      expect((await figures(orderId)).body.data).toMatchObject({ cardLeft: 27, refundOwed: 15 })
+      await Promise.all([runReconcile(), runReconcile()])
+      expect(await refundItems()).toEqual([])
+      expect(await order(orderId)).toMatchObject({ owed: '15.00' })
+      expect(await watchStates()).toEqual(['failed', 'watching'])
+      expect((await auditRows('order.refund_failed_later')).map((row) => [row.entity_id, row.details['owed'], row.details['refundId']])).toEqual([[orderId, 15, sent?.id]])
+      expect(await creditRefunds()).toEqual([])
+      expect(refundsSent(stripe)).toHaveLength(1)
+
+      const listed = (await stuckList(db)).watched
+      expect(listed).toMatchObject([{ refundId: sent?.id, on: 'order', bookingId: null, orderId, amount: 15, owed: 15, state: 'failed', words: WATCH_WORDS.orderFailed(15, sent?.id as string) }])
+      expect(listed[0]?.words).toBe(
+        `A card refund of £15.00 on this order (${sent?.id}) was accepted by Stripe and then failed, so the money never reached the customer. It is back on the order as money still to refund: find the order on the Orders page and use Refund the rest. Then press Mark sorted (needs the Issue refunds permission).`
+      )
+
+      const rest = await post('refunds/owed', orderId, { amount: 15, refundMethod: 'card' })
+      expect(rest.body.data).toMatchObject({ cardRefundedAmount: 15, storeCreditRefundedAmount: 0, refundOwed: 0 })
+      expect(moneyBack(stripe)).toBe(1500)
+      expect(new Set(refundsSent(stripe).map((call) => call.idempotencyKey)).size).toBe(2)
+      expect((await lineRows(orderId)).find((line) => line.id === mugLine)).toMatchObject({ card: '15.00' })
+    })
+  })
+
+  it("W32a (lead call 1; Stripe's 5126 shape, end to end): a card refund that succeeds at once is kept on the finished row and watched too; Stripe fails it afterwards: the next day's read takes the £15 off the line and puts it back as owed on the order, listed; the failed refund is never sent again", async () => {
+    await onAnOrder({ products: [mug], payment: card }, async ({ orderId, lines, stripe }) => {
+      const [mugLine] = await lines('product')
+      await refund(orderId, [mugLine as string], 'card')
+      const sent = stripe.refundsSent[0]
+      const claim = (await auditRows('order.refund_claimed'))[0]
+      expect((await auditRows('order.refund_finished'))[0]?.details).toMatchObject({ refunds: [{ refundId: sent?.id, status: 'succeeded' }] })
+      expect((await auditRows('refund.watch')).map((row) => row.details)).toEqual([
+        { state: 'watching', refundId: sent?.id, paymentIntentId: sent?.payment_intent, amount: 15, status: 'succeeded', livemode: false, on: 'order', subjectId: orderId, orderId, claimId: claim?.id, lines: [{ lineId: mugLine, amount: 15 }] },
+      ])
+      const lists = () => stripe.calls.filter((call) => call.method === 'refunds.list').length
+      // Stripe fails it minutes later; the money is back on the payment.
+      minutes(5)
+      stripe.settleRefund(sent?.id as string, 'failed')
+      expect(moneyBack(stripe)).toBe(0)
+      // Nothing is read until a day after it was recorded.
+      const before = lists()
+      expect(await refundItems()).toEqual([])
+      expect(lists()).toBe(before)
+      expect(await order(orderId)).toMatchObject({ owed: '0.00' })
+      minutes(DAY)
+      const found = await runReconcile()
+      expect(found).toMatchObject({ refunds: 1, left: 1 })
+      expect(found.items).toMatchObject([{ kind: 'refund', id: sent?.id, outcome: 'refund_failed', reason: 'refund_failed_later' }])
+      expect(await order(orderId)).toMatchObject({ owed: '15.00' })
+      expect((await lineRows(orderId)).find((line) => line.id === mugLine)).toMatchObject({ refunded: true, refund_method: 'card', card: '0.00' })
+      expect((await auditRows('order.refund_failed_later')).map((row) => [row.entity_id, row.details['owed'], row.details['refundId']])).toEqual([[orderId, 15, sent?.id]])
+      expect((await stuckList(db)).watched).toMatchObject([{ refundId: sent?.id, on: 'order', orderId, amount: 15, owed: 15, state: 'failed', words: WATCH_WORDS.orderFailed(15, sent?.id as string) }])
+      // Once, and never a second send, however many runs follow.
+      await Promise.all([runReconcile(), runReconcile()])
+      minutes(DAY)
+      expect(await refundItems()).toEqual([])
+      expect(await order(orderId)).toMatchObject({ owed: '15.00' })
+      expect(await creditRefunds()).toEqual([])
+      expect(refundsSent(stripe)).toHaveLength(1)
+      // Staff decide: Refund the rest is a new refund under a new key.
+      const rest = await post('refunds/owed', orderId, { amount: 15, refundMethod: 'card' })
+      expect(rest.body.data).toMatchObject({ cardRefundedAmount: 15, storeCreditRefundedAmount: 0, refundOwed: 0 })
+      expect(new Set(refundsSent(stripe).map((call) => call.idempotencyKey)).size).toBe(2)
+      expect(moneyBack(stripe)).toBe(1500)
+    })
+  })
+
+  it('a refund to store credit or cash has no card refund: no `refunds` on the finished row, no watch', async () => {
+    await onAnOrder({ products: [mug], payment: card }, async ({ orderId, lines }) => {
+      await refund(orderId, await lines('product'), 'credit')
+      expect((await auditRows('order.refund_finished'))[0]?.details).not.toHaveProperty('refunds')
+      expect(await auditRows('refund.watch')).toEqual([])
+    })
+  })
+
+  it("a claim reconcile finished (the press's answers were lost) with its refund still pending: watched from then, and its failure is owed on the order", async () => {
+    await onAnOrder({ products: [mug], payment: card }, async ({ orderId, lines, stripe }) => {
+      stripe.refundsStayPending = true
+      stripe.failNext('refunds.create', { kind: 'lost_response' })
+      stripe.failNext('refunds.create', { kind: 'lost_response' })
+      const held = await refund(orderId, await lines('product'), 'card')
+      stripe.refundsStayPending = false
+      expect(held.body.data?.held).toMatchObject({ reason: 'refund_unconfirmed' })
+      expect(await auditRows('refund.watch')).toEqual([])
+      pastTheWindow()
+      await runReconcile()
+      const sent = stripe.refundsSent[0]
+      expect((await auditRows('order.refund_finished'))[0]?.details).toMatchObject({ outcome: 'given', cardRefunded: 15, refunds: [{ refundId: sent?.id, status: 'pending' }], by: { how: 'reconcile' } })
+      expect((await auditRows('refund.watch')).map((row) => row.details)).toMatchObject([{ state: 'watching', refundId: sent?.id, on: 'order', subjectId: orderId }])
+      stripe.settleRefund(sent?.id as string, 'failed')
+      await runReconcile()
+      expect(await order(orderId)).toMatchObject({ owed: '15.00' })
+      expect(refundsSent(stripe)).toHaveLength(2)
+      expect(stripe.refundsSent).toHaveLength(1)
     })
   })
 })

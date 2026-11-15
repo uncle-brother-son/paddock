@@ -21,6 +21,8 @@ import {
   membershipPriceMismatchMessage,
 } from './failure-messages'
 import type { PendingMembership } from './pending-order'
+import { listRefunds } from '@/server/rules/refunds/pipeline'
+import { toWatch, watchCompensationRefund } from '@/server/rules/refunds/refund-watch'
 import { undoOrder, type UndoOutcome } from './undo-order'
 
 /**
@@ -105,6 +107,14 @@ export interface MadeSubscription {
   invoiceTotal: number | null
   /** The first invoice. */
   invoiceId: string | null
+  /**
+   * W32 (W13a review L1; R6, R7): what the first invoice did to the customer's Stripe balance, in pence: its
+   * `ending_balance` less its `starting_balance`. Above 0: it used up credit the customer had (R6: £5 of credit, +500),
+   * or left a debit on it (R7: 20p under Stripe's minimum carried over, +20). Below 0: it took a debit the customer
+   * owed with its payment. Absent when the invoice left the balance as it was. A compensation puts it back
+   * (`putBalanceBack`): Stripe's cancel and refund don't.
+   */
+  balanceApplied?: number
 }
 
 /** invoice.payments.data[0].payment.payment_intent, as the legacy route read it (getInvoicePaymentIntentId). */
@@ -130,7 +140,15 @@ export function madeSubscription(subscription: Stripe.Subscription): MadeSubscri
     amountPaid: invoice?.amount_paid ?? 0,
     invoiceTotal: typeof invoice?.total === 'number' ? invoice.total : null,
     invoiceId: invoice?.id ?? (typeof subscription.latest_invoice === 'string' ? subscription.latest_invoice : null),
+    ...(balanceApplied(invoice) !== 0 ? { balanceApplied: balanceApplied(invoice) } : {}),
   }
+}
+
+/** W32: what the invoice did to the customer's balance (0 when Stripe gives no balances for it). */
+function balanceApplied(invoice: Stripe.Invoice | null): number {
+  const starting = invoice?.starting_balance
+  const ending = invoice?.ending_balance
+  return typeof starting === 'number' && typeof ending === 'number' ? ending - starting : 0
 }
 
 /**
@@ -337,11 +355,32 @@ export interface Taken {
   /** The order's new subscription, to cancel: null when none was made. */
   subscriptionId: string | null
   refunds: Array<{ step: RefundStep; paymentIntentId: string }>
+  /** W32 (R6, R7): what the first invoice did to the customer's Stripe balance, to put back (`balanceToPutBack`). */
+  balance?: BalancePutBack
+}
+
+/**
+ * W32 (W13a review L1): a customer balance transaction that undoes what an order's first invoice did to the
+ * customer's Stripe balance. `pence` is the transaction's amount as Stripe reads it (below 0 gives credit, above 0
+ * adds a debit): the invoice's change, reversed.
+ */
+export interface BalancePutBack {
+  customer: string
+  pence: number
+}
+
+/** W32: the put-back for the order's subscriptions' first invoices (one, in practice), or nothing when none moved the balance. */
+export function balanceToPutBack(subscriptions: ReadonlyArray<Pick<MadeSubscription, 'customer' | 'balanceApplied'>>): { balance?: BalancePutBack } {
+  const moved = subscriptions.filter((subscription) => subscription.customer && (subscription.balanceApplied ?? 0) !== 0)
+  const customer = moved[0]?.customer
+  if (!customer) return {}
+  const applied = moved.filter((subscription) => subscription.customer === customer).reduce((total, subscription) => total + (subscription.balanceApplied ?? 0), 0)
+  return applied === 0 ? {} : { balance: { customer, pence: -applied } }
 }
 
 export type CompensationOutcome =
   /** Cancelled, refunded, and the order undone: nothing taken is kept, nothing held. */
-  | { settled: true; undo: UndoOutcome; refunded: Array<{ step: RefundStep; paymentIntentId: string; refundId: string | null; amount: number | null }> }
+  | { settled: true; undo: UndoOutcome; refunded: Array<{ step: RefundStep; paymentIntentId: string; refundId: string | null; amount: number | null; status: string | null }> }
   /**
    * Something couldn't be confirmed: the order stays pending (marked, unless the mark wasn't written), for
    * reconcile to finish. `starting` (W13a B1): not marked, because a press is starting the order's subscription
@@ -500,7 +539,7 @@ export async function refundOnce(
   orderId: string,
   refund: { step: RefundStep; paymentIntentId: string },
   timing: StripeTiming | undefined
-): Promise<{ ok: true; refundId: string | null; amount: number | null } | { ok: false; left: string; definite: boolean }> {
+): Promise<{ ok: true; refundId: string | null; amount: number | null; status: string | null } | { ok: false; left: string; definite: boolean }> {
   const key = stripeIdempotencyKey(orderId, refund.step)
   let last = ''
   for (let attempt = 1; attempt <= 2; attempt += 1) {
@@ -510,11 +549,11 @@ export async function refundOnce(
         sendOptions(timing, { idempotencyKey: key })
       )
       if (made.status === 'failed' || made.status === 'canceled') return { ok: false, left: `${refund.step} ${refund.paymentIntentId}: Stripe's refund ${made.id} ${made.status}`, definite: true }
-      return { ok: true, refundId: made.id, amount: made.amount }
+      return { ok: true, refundId: made.id, amount: made.amount, status: made.status }
     } catch (err) {
       const failure = readStripeFailure(err)
       // Refunded already (an earlier send whose key Stripe has since forgotten, or by hand): nothing is owed.
-      if (failure.code === 'charge_already_refunded') return { ok: true, refundId: null, amount: null }
+      if (failure.code === 'charge_already_refunded') return { ok: true, refundId: null, amount: null, status: null }
       if (err instanceof NoTimeLeft) return { ok: false, left: `${refund.step} ${refund.paymentIntentId}: not sent (${err.message})`, definite: false }
       // W14b (W13c review L4): Stripe's own refusal is definite (sending it again meets the same); a refused key isn't
       // (it is fixed in the settings, and the run stops at it anyway).
@@ -523,6 +562,106 @@ export async function refundOnce(
     }
   }
   return { ok: false, left: `${refund.step} ${refund.paymentIntentId}: no clear answer (${last})`, definite: false }
+}
+
+/**
+ * W32 (W13 review L2): a compensation refund Stripe accepted is watched until its watch ends (refund-watch.ts), in a
+ * transaction of its own, twice at most. W32a (lead call 1): whatever its status, `succeeded` included. Null when it is
+ * watched (or there is nothing to watch); otherwise what to say is left, so the caller holds the compensation and the
+ * next run, sending the refund again under its key, gets the same refund back and records the watch then.
+ *
+ * W32a (W32 review L2): `charge_already_refunded` comes with no refund (an earlier send whose key Stripe has since
+ * forgotten, or a refund by hand). The payment's refunds are listed and the one this step made is found by its key
+ * (`metadata.refund_key`, which every compensation refund carries), and watched. None with the key: it was refunded by
+ * hand, and there is nothing of this step's to watch. A list Stripe doesn't answer holds the compensation, as a watch
+ * that can't be written does.
+ */
+async function watchIfPending(
+  db: Db,
+  stripe: StripeClient,
+  orderId: string,
+  refund: { step: RefundStep; paymentIntentId: string },
+  done: { refundId: string | null; amount: number | null; status: string | null },
+  options: CompensationOptions,
+  timing: StripeTiming | undefined
+): Promise<string | null> {
+  let seen = done
+  if (seen.refundId === null) {
+    const key = stripeIdempotencyKey(orderId, refund.step)
+    const listed = await listRefunds(stripe, refund.paymentIntentId, timing)
+    if (listed.kind === 'unclear') return `${refund.step} ${refund.paymentIntentId}: refunded already, but its refund couldn't be read for watching (${listed.detail})`
+    const made = listed.refunds.find((one) => one.metadata?.['refund_key'] === key && toWatch(one.status))
+    if (!made) return null
+    seen = { refundId: made.id, amount: made.amount, status: made.status }
+  }
+  const refundId = seen.refundId
+  if (refundId === null || !toWatch(seen.status)) return null
+  const { amount, status } = seen
+  const write = (): Promise<void> =>
+    db.transaction((tx) =>
+      watchCompensationRefund(tx, { refundId, paymentIntentId: refund.paymentIntentId, amountPence: amount, status, step: refund.step }, orderId, stripe.keyLivemode, {
+        actor: options.actor,
+        requestId: options.requestId,
+      })
+    )
+  try {
+    await write()
+    return null
+  } catch {
+    try {
+      await write()
+      return null
+    } catch (err) {
+      return `${refund.step} ${refund.paymentIntentId}: Stripe's refund ${refundId} is ${String(status)}, and it couldn't be recorded for watching (${message(err)})`
+    }
+  }
+}
+
+/**
+ * W32 (W13a review L1; R6, R7): puts back what the order's first invoice did to the customer's Stripe balance, once,
+ * with a customer balance transaction under `<orderId>:balance`. Stripe forgets a key after a day, and nothing else
+ * stops a second transaction, so the customer's balance transactions are listed first and one already naming the key
+ * (`metadata.refund_key`) counts as done: a compensation finished days later never gives the credit twice.
+ */
+export async function putBalanceBack(
+  stripe: StripeClient,
+  orderId: string,
+  balance: BalancePutBack,
+  timing: StripeTiming | undefined
+): Promise<{ ok: true; transactionId: string | null; already: boolean } | { ok: false; left: string; definite: boolean }> {
+  const key = stripeIdempotencyKey(orderId, 'balance')
+  const what = `balance ${balance.customer} ${balance.pence}p`
+  let startingAfter: string | undefined
+  try {
+    for (let page = 0; ; page += 1) {
+      if (page >= SUBSCRIPTION_MOST_PAGES) return { ok: false, left: `${what}: more than ${SUBSCRIPTION_PAGE * SUBSCRIPTION_MOST_PAGES} balance transactions to look through`, definite: false }
+      const listed = await stripe.customers.listBalanceTransactions(balance.customer, { limit: SUBSCRIPTION_PAGE, ...(startingAfter ? { starting_after: startingAfter } : {}) }, sendOptions(timing))
+      const made = listed.data.find((transaction) => transaction.metadata?.['refund_key'] === key)
+      if (made) return { ok: true, transactionId: made.id, already: true }
+      const last = listed.data.at(-1)
+      if (!listed.has_more || !last) break
+      startingAfter = last.id
+    }
+  } catch (err) {
+    return { ok: false, left: `${what}: not read (${unclearOf(err)})`, definite: false }
+  }
+  let last = ''
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      const made = await stripe.customers.createBalanceTransaction(
+        balance.customer,
+        { amount: balance.pence, currency: 'gbp', description: 'Put back: a membership order that was not completed', metadata: { order_id: orderId, refund_key: key, reason: 'membership_not_set_up' } },
+        sendOptions(timing, { idempotencyKey: key })
+      )
+      return { ok: true, transactionId: made.id, already: false }
+    } catch (err) {
+      const failure = readStripeFailure(err)
+      if (err instanceof NoTimeLeft) return { ok: false, left: `${what}: not sent (${err.message})`, definite: false }
+      if (failure.outcome === 'definite' || accessRefused(err)) return { ok: false, left: `${what}: refused (${failure.message})`, definite: !accessRefused(err) }
+      last = failure.message
+    }
+  }
+  return { ok: false, left: `${what}: no clear answer (${last})`, definite: false }
 }
 
 /** A subscription's first invoice, to refund, when it took money. */
@@ -570,7 +709,7 @@ export async function compensateOrder(
   // W14c (W14b review S1): whether every step in `left` is Stripe's definite refusal (a cancel `refused`, a refund
   // `definite`). Anything else (no clear answer, not listed, more than one live) the next reconcile can still finish.
   let allDefinite = true
-  const work: Taken = { subscriptionId: taken.subscriptionId, refunds: [...taken.refunds] }
+  const work: Taken = { subscriptionId: taken.subscriptionId, refunds: [...taken.refunds], ...(taken.balance ? { balance: taken.balance } : {}) }
   // B1: a press started the subscription (not this one, or W13c: this one in place of an expired start): list
   // Stripe again now the mark stops any more.
   if (guard && taken.subscriptionId === null && mark.startedAt !== null && (mark.startedBy !== guard.press || guard.replacedStart === true)) {
@@ -588,6 +727,9 @@ export async function compensateOrder(
         for (const refund of invoiceRefund(subscription)) if (!work.refunds.some((r) => r.paymentIntentId === refund.paymentIntentId)) work.refunds.push(refund)
       }
       if (live.length === 1) work.subscriptionId = live[0]?.id ?? null
+      // W32: and what its first invoice did to the customer's Stripe balance.
+      const moved = balanceToPutBack(listed.subscriptions).balance
+      if (moved && !work.balance) work.balance = moved
     }
   }
 
@@ -598,17 +740,34 @@ export async function compensateOrder(
       if (cancelled.kind !== 'refused') allDefinite = false
     }
   }
-  const refunded: Array<{ step: RefundStep; paymentIntentId: string; refundId: string | null; amount: number | null }> = []
+  const refunded: Array<{ step: RefundStep; paymentIntentId: string; refundId: string | null; amount: number | null; status: string | null }> = []
   for (const refund of work.refunds) {
     const done = await refundOnce(stripe, orderId, refund, timing)
-    if (done.ok) refunded.push({ ...refund, refundId: done.refundId, amount: done.amount })
-    else {
+    if (done.ok) {
+      refunded.push({ ...refund, refundId: done.refundId, amount: done.amount, status: done.status })
+      // W32: the refund is watched before the order is undone (W32a: whatever its status).
+      const unwatched = await watchIfPending(db, stripe, orderId, refund, done, options, timing)
+      if (unwatched) {
+        left.push(unwatched)
+        allDefinite = false
+      }
+    } else {
       left.push(done.left)
       if (!done.definite) allDefinite = false
     }
   }
+  // W32 (R6, R7): what the first invoice did to the customer's Stripe balance, put back.
+  let balance: (BalancePutBack & { transactionId: string | null }) | undefined
+  if (work.balance) {
+    const put = await putBalanceBack(stripe, orderId, work.balance, timing)
+    if (put.ok) balance = { ...work.balance, transactionId: put.transactionId }
+    else {
+      left.push(put.left)
+      if (!put.definite) allDefinite = false
+    }
+  }
 
-  const details = { why, subscriptionId: work.subscriptionId, refunded, ...(left.length > 0 ? { left } : {}) }
+  const details = { why, subscriptionId: work.subscriptionId, refunded, ...(balance ? { balance } : {}), ...(left.length > 0 ? { left } : {}) }
   if (left.length > 0) {
     // `definite` (W14c, S1): only then may a person close the order by hand (close-stuck.ts); otherwise reconcile
     // finishes it on a later run, whatever a person has done in Stripe meanwhile.
@@ -657,7 +816,7 @@ export function subscriptionLeftEntry(
   orderId: string,
   subscription: Pick<MadeSubscription, 'id' | 'invoicePaymentIntentId' | 'amountPaid'>,
   found: SubscriptionLeftFound,
-  refunded: Array<{ paymentIntentId: string; refundId: string | null }>,
+  refunded: Array<{ paymentIntentId: string; refundId: string | null; status?: string | null }>,
   left: string[],
   /** W14b (W13c review L4): `refused`: Stripe refused a step for good, so reconcile stops retrying it (listed until closed). */
   refused = false
@@ -720,11 +879,21 @@ export async function putBackSubscription(
   const left: string[] = []
   const cancelled = await cancelSubscriptionChecked(stripe, subscription.id, timing)
   if (cancelled.kind !== 'cancelled') left.push(`subscription ${subscription.id}: ${cancelled.kind} (${cancelled.message})`)
-  const refunded: Array<{ paymentIntentId: string; refundId: string | null }> = []
+  const refunded: Array<{ paymentIntentId: string; refundId: string | null; status?: string | null }> = []
   for (const refund of invoiceRefund(subscription)) {
     const done = await refundOnce(stripe, orderId, refund, timing)
-    if (done.ok) refunded.push({ paymentIntentId: refund.paymentIntentId, refundId: done.refundId })
-    else left.push(done.left)
+    if (done.ok) {
+      refunded.push({ paymentIntentId: refund.paymentIntentId, refundId: done.refundId, ...(done.refundId ? { status: done.status } : {}) })
+      // W32: the refund is watched (W32a: whatever its status); one that couldn't be recorded leaves the row `left` for the retry.
+      const unwatched = await watchIfPending(db, stripe, orderId, refund, done, options, timing)
+      if (unwatched) left.push(unwatched)
+    } else left.push(done.left)
+  }
+  // W32 (R6, R7): what the first invoice did to the customer's Stripe balance, put back.
+  const moved = balanceToPutBack([subscription]).balance
+  if (moved) {
+    const put = await putBalanceBack(stripe, orderId, moved, timing)
+    if (!put.ok) left.push(put.left)
   }
   await db.transaction((tx) => audit.recordAll(tx, [subscriptionLeftEntry(options.actor, options.requestId, orderId, subscription, found, refunded, left)]))
   return { cancelled: cancelled.kind === 'cancelled', left }
@@ -739,7 +908,7 @@ export interface LeftSubscription {
 }
 
 export type RetriedPutBack =
-  | { kind: 'cancelled'; refunded: Array<{ paymentIntentId: string; refundId: string | null }> }
+  | { kind: 'cancelled'; refunded: Array<{ paymentIntentId: string; refundId: string | null; status?: string | null }> }
   /** Not confirmed yet: the row stays open, and the next run tries again. */
   | { kind: 'left'; left: string[] }
   /**
@@ -768,12 +937,13 @@ export async function retryLeftSubscription(
 ): Promise<RetriedPutBack> {
   let now: Stripe.Subscription
   try {
-    now = await stripe.subscriptions.retrieve(row.subscriptionId, undefined, sendOptions(timing))
+    // W32: with its first invoice, for what that did to the customer's Stripe balance (R6, R7).
+    now = await stripe.subscriptions.retrieve(row.subscriptionId, { expand: ['latest_invoice.payments'] }, sendOptions(timing))
   } catch (err) {
     return { kind: 'left', left: [`subscription ${row.subscriptionId}: not read (${unclearOf(err)})`] }
   }
   const subscription = { id: row.subscriptionId, invoicePaymentIntentId: row.invoicePaymentIntentId, amountPaid: row.amountPaid ?? 0 }
-  const refusedRow = (left: string[], refunded: Array<{ paymentIntentId: string; refundId: string | null }>) =>
+  const refusedRow = (left: string[], refunded: Array<{ paymentIntentId: string; refundId: string | null; status?: string | null }>) =>
     db.transaction((tx) => audit.recordAll(tx, [subscriptionLeftEntry(options.actor, options.requestId, row.orderId, subscription, 'reconcile', refunded, left, true)]))
   if (now.metadata?.['order_id'] !== row.orderId) {
     const detail = `subscription ${row.subscriptionId} names order ${now.metadata?.['order_id'] ?? 'none'}, not ${row.orderId}`
@@ -787,15 +957,29 @@ export async function retryLeftSubscription(
     if (cancelled.kind !== 'cancelled') left.push(`subscription ${row.subscriptionId}: ${cancelled.kind} (${cancelled.message})`)
     if (cancelled.kind === 'refused') definite = true
   }
-  const refunded: Array<{ paymentIntentId: string; refundId: string | null }> = []
+  const refunded: Array<{ paymentIntentId: string; refundId: string | null; status?: string | null }> = []
   // As the put-back: refunded whether or not the cancel is confirmed (no membership will ever be kept for it). A row
   // with no `amountPaid` (none is written without one from W13c) is refunded if it names a PaymentIntent.
   if (row.invoicePaymentIntentId && (row.amountPaid === null || row.amountPaid > 0)) {
-    const done = await refundOnce(stripe, row.orderId, { step: 'refund-subscription', paymentIntentId: row.invoicePaymentIntentId }, timing)
-    if (done.ok) refunded.push({ paymentIntentId: row.invoicePaymentIntentId, refundId: done.refundId })
-    else {
+    const step = { step: 'refund-subscription' as const, paymentIntentId: row.invoicePaymentIntentId }
+    const done = await refundOnce(stripe, row.orderId, step, timing)
+    if (done.ok) {
+      refunded.push({ paymentIntentId: row.invoicePaymentIntentId, refundId: done.refundId, ...(done.refundId ? { status: done.status } : {}) })
+      // W32: watched (W32a: whatever its status); not recorded, the row stays `left` and the next run tries again.
+      const unwatched = await watchIfPending(db, stripe, row.orderId, step, done, options, timing)
+      if (unwatched) left.push(unwatched)
+    } else {
       left.push(done.left)
       if (done.definite) definite = true
+    }
+  }
+  // W32 (R6, R7): what the first invoice did to the customer's Stripe balance, put back (once: putBalanceBack looks first).
+  const moved = balanceToPutBack([madeSubscription(now)]).balance
+  if (moved) {
+    const put = await putBalanceBack(stripe, row.orderId, moved, timing)
+    if (!put.ok) {
+      left.push(put.left)
+      if (put.definite) definite = true
     }
   }
   if (left.length > 0 && definite) {

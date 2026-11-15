@@ -767,3 +767,47 @@ describe('the subscription is cancelled last, and a cancel that fails is left, l
     })
   })
 })
+
+// Brief W32 item 1: the refund watch on a membership's refund. The part's PaymentIntent is the claim's own: the
+// membership's first invoice (W29, Q40), not the order's remainder charge.
+describe('W32: the refund watch on a membership refund', () => {
+  it("a £40 membership bought with £24 of soap, refunded to the card, pending then failed: watched on the first invoice's payment, £40 owed on the order, the soap's payment untouched; Refund the rest goes back to the first invoice's payment", async () => {
+    await onASeed(async (stripe) => {
+      const orderId = await placed({ ...monthly, products: [soap], payment: card })
+      const [membershipLine] = await linesOf(orderId, 'membership')
+      const order = await orderRow(orderId)
+      const made = await membership()
+      stripe.refundsStayPending = true
+      const answer = await refund(orderId, [membershipLine as string], 'card')
+      stripe.refundsStayPending = false
+      expect(answer.body.data).toMatchObject({ refundedAmount: 40, cardRefundedAmount: 40 })
+      const sent = stripe.refundsSent[0]
+      expect(sent).toMatchObject({ payment_intent: order?.own, amount: 4000, status: 'pending' })
+      expect((await auditRows('refund.watch')).map((row) => row.details)).toMatchObject([
+        { state: 'watching', refundId: sent?.id, paymentIntentId: order?.own, amount: 40, on: 'order', subjectId: orderId, orderId, lines: [{ lineId: membershipLine, amount: 40 }] },
+      ])
+      // The subscription was cancelled last, as before; the watch changes nothing about that.
+      expect(cancelsSent(stripe)).toEqual([made.subscription])
+
+      stripe.settleRefund(sent?.id as string, 'failed')
+      const items = (await runReconcile(stripe)).items.filter((item) => item.kind === 'refund')
+      expect(items).toMatchObject([{ id: sent?.id, outcome: 'refund_failed', reason: 'refund_failed_later' }])
+      expect(await orderRow(orderId)).toMatchObject({ owed: '40.00' })
+      expect((await lineRows(orderId)).find((line) => line.item_type === 'membership')).toMatchObject({ refunded: true, refund_method: 'card', card: '0.00' })
+      // Each payment's card money is right again: the membership's own £40, the soap's £24.
+      const shown = await figures(orderId)
+      expect(shown).toMatchObject({ cardLeft: 24, refundOwed: 40 })
+      expect(await membership()).toMatchObject({ status: 'cancelled' })
+      expect(refundsSent(stripe)).toHaveLength(1)
+      expect((await runReconcile(stripe)).items.filter((item) => item.kind === 'refund')).toEqual([])
+      expect(await orderRow(orderId)).toMatchObject({ owed: '40.00' })
+
+      // Refund the rest to the card: back to the first invoice's payment, never the soap's.
+      const rest = await post('refunds/owed', orderId, { amount: 40, refundMethod: 'card' })
+      expect(rest.body.data).toMatchObject({ cardRefundedAmount: 40, storeCreditRefundedAmount: 0, refundOwed: 0 })
+      expect(stripe.refundedByIntent.get(order?.own as string)).toBe(4000)
+      expect(stripe.refundedByIntent.get(order?.intent as string) ?? 0).toBe(0)
+      expect(cancelsSent(stripe)).toEqual([made.subscription])
+    })
+  })
+})

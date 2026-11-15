@@ -376,6 +376,24 @@ describe('W12: what reconcile reads', () => {
     expect((await stripe.refunds.list({ payment_intent: paid.id })).data.map((r) => r.status)).toEqual(['succeeded', 'failed'])
   })
 
+  it("W32a (W32 review L4): a refund answered succeeded can fail afterwards, as Stripe's 5126 test card does: its amount is back on the payment; no other ended refund moves", async () => {
+    const paid = await stripe.paymentIntents.create(charge)
+    const refund = await stripe.refunds.create({ payment_intent: paid.id, amount: 500 })
+    expect(refund.status).toBe('succeeded')
+    expect(stripe.refundedPence).toBe(500)
+    stripe.settleRefund(refund.id, 'failed')
+    expect(stripe.refundedPence).toBe(0)
+    expect((await stripe.refunds.list({ payment_intent: paid.id })).data.map((r) => r.status)).toEqual(['failed'])
+    // The whole payment can be refunded again: Stripe put the money back on it.
+    const again = await stripe.refunds.create({ payment_intent: paid.id })
+    expect(again.amount).toBe(1500)
+    // A failed refund stays failed, and a succeeded one never goes back to pending or to cancelled.
+    expect(() => stripe.settleRefund(refund.id, 'succeeded')).toThrow('only a pending refund ends')
+    expect(() => stripe.settleRefund(again.id, 'canceled')).toThrow('only a pending refund ends')
+    expect(() => stripe.settleRefund(again.id, 'succeeded')).toThrow('only a pending refund ends')
+    expect(stripe.refundedPence).toBe(1500)
+  })
+
   it('an idTag goes into every id it makes (W12: one PaymentIntent, one order, across fakes)', async () => {
     const tagged = new FakeStripe({ idTag: 'abc' })
     tagged.addCustomer('cus_1')

@@ -17,13 +17,16 @@ import {
   PAYMENT_UNCONFIRMED_MESSAGE,
   REPLACED_UNCONFIRMED_MESSAGE,
 } from './failure-messages'
-import { cancelSubscriptionChecked, COMPENSATED_NOTE, compensateOrder, couponId, findOrderSubscriptions, LEFT_AT_T2, markCompensating, type SubscriptionPutBackReason } from './membership'
+import { balanceToPutBack, cancelSubscriptionChecked, COMPENSATED_NOTE, compensateOrder, couponId, findOrderSubscriptions, LEFT_AT_T2, markCompensating, putBalanceBack, type SubscriptionPutBackReason } from './membership'
 import { finaliseOrder } from './finalise-order'
 import type { PendingSnapshot } from './pending-order'
 import { placeOrder } from './place-order'
 import { finaliseReaderOrder } from './reader-order'
 import { MANUAL_LIMITS, reconcile, SCHEDULED_LIMITS, type ReconcileOptions, type ReconcileResult } from './reconcile'
-import { MEMBERSHIP_STUCK_NOTE, REFUND_FAILED_WORDS, stuckList, SUBSCRIPTION_LEFT_WORDS } from './stuck-list'
+import { MEMBERSHIP_STUCK_NOTE, REFUND_FAILED_WORDS, stuckList, SUBSCRIPTION_LEFT_WORDS, WATCH_WORDS } from './stuck-list'
+import { WATCH_DAYS } from '@/server/rules/refunds/refund-watch'
+import { closeStuckItem } from './close-stuck'
+import { watchCompensationRefund } from '@/server/rules/refunds/refund-watch'
 import { undoOrder } from './undo-order'
 
 // W13: memberships through the real order, finalise, cancel and reconcile routes, on PGlite with the live
@@ -2131,6 +2134,10 @@ describe("W13c L4: the W13a review's plants, caught", () => {
       expect(lists).toBe(2)
       expect(new Set(stripe.calls.filter((call) => call.method === 'refunds.create').map((call) => call.idempotencyKey))).toEqual(new Set([`${orderId}:refund-subscription`, `${orderId}:refund-reader`]))
       expect(stripe.netPence).toBe(0)
+      // W32 (W13a review L1): the £1 debit the first invoice took, and the compensation refunded, is owed on the
+      // customer's Stripe balance again (the subscription was found by the relist after the mark).
+      expect(stripe.customerBalance('cus_seed')).toBe(100)
+      expect(stripe.balanceTransactions.map((made) => [made.amount, made.metadata['refund_key']])).toEqual([[100, `${orderId}:balance`]])
       await invariant(stripe)
     })
   })
@@ -2156,7 +2163,16 @@ describe("W13c L4: the W13a review's plants, caught", () => {
       stripe.settleRefund(refundId, 'failed')
       later(16)
       expect((await runReconcile(stripe)).items).toContainEqual(expect.objectContaining({ kind: 'refund', id: orderId, outcome: 'refund_failed' }))
-      expect((await stuckList(db)).refunds).toEqual([expect.objectContaining({ id: orderId, paymentIntentId: intent, state: 'failed', words: REFUND_FAILED_WORDS(40, intent) })])
+      // W32a (W32 review S3; W32 "Noticed" 1): the compensation's refund is watched, so it is listed once, as the
+      // watch's line (Mark sorted), not as the late refund's too.
+      const listed = await stuckList(db)
+      expect(listed.refunds).toEqual([])
+      expect(listed.watched).toMatchObject([{ refundId, paymentIntentId: intent, on: 'compensation', state: 'failed', owed: 0, words: WATCH_WORDS.compensationFailed(40, intent) }])
+      expect(REFUND_FAILED_WORDS(40, intent)).toContain('press Mark refunded')
+      // Nothing more is read or sent for it.
+      later(6)
+      expect((await runReconcile(stripe)).items).toEqual([])
+      expect(stripe.calls.filter((call) => call.method === 'refunds.create')).toHaveLength(1)
     })
   })
 
@@ -2165,11 +2181,17 @@ describe("W13c L4: the W13a review's plants, caught", () => {
       const { orderId, intent, refundId } = await lateRefundAfterPendingCompensation(stripe)
       later(16)
       expect((await runReconcile(stripe)).items).toContainEqual(expect.objectContaining({ kind: 'refund', id: orderId, outcome: 'refund_pending' }))
-      expect((await stuckList(db)).refunds).toEqual([expect.objectContaining({ id: orderId, paymentIntentId: intent, state: 'sent' })])
+      // W32a (W32 review S3): the refund is the compensation's, already watched: one watch, and the late refund's path
+      // leaves it there. On its way, it is on no list.
+      const watches = async () => (await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'refund.watch' AND details->>'state' = 'watching'")).map((row) => row.details)
+      expect(await watches()).toMatchObject([{ refundId, paymentIntentId: intent, on: 'compensation', status: 'pending' }])
+      expect((await stuckList(db)).refunds).toEqual([])
       stripe.settleRefund(refundId, 'succeeded')
       later(6)
-      expect((await runReconcile(stripe)).items).toContainEqual(expect.objectContaining({ kind: 'refund', id: orderId, outcome: 'refund_confirmed' }))
+      expect((await runReconcile(stripe)).items).toEqual([])
+      expect(await watches()).toHaveLength(1)
       expect((await stuckList(db)).refunds).toEqual([])
+      expect((await stuckList(db)).watched).toEqual([])
       expect(stripe.netPence).toBe(0)
       await invariant(stripe)
     })
@@ -2361,6 +2383,331 @@ describe('W13d L3: the put-back retry takes only orders that no longer exist', (
       expect(stripe.netPence).toBe(6400)
       expect((await stuckList(db)).warnings).toEqual([expect.objectContaining({ id: paid.orderId, warning: SUBSCRIPTION_LEFT_WORDS(theirs) })])
       await invariant(stripe)
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------------------------------
+// Brief W32 item 3 (W13a review L1; R6, R7): a compensation puts back what the customer's Stripe balance did to the
+// first invoice, with a customer balance transaction keyed `<orderId>:balance`. Stripe's cancel and refund don't.
+describe('W32 item 3: a membership compensation puts the customer\'s Stripe balance back (R6, R7)', () => {
+  const balanceCalls = (stripe: FakeStripe) => stripe.calls.filter((call) => call.method === 'customers.createBalanceTransaction')
+  const orderOf = (stripe: FakeStripe) => String((stripe.calls.find((call) => call.method === 'subscriptions.create')?.params as { metadata: Record<string, string> }).metadata['order_id'])
+
+  it("R6: a £5 credit on the balance, the rest of the basket declined: £35 refunded, the subscription cancelled, and the £5 credit back on the customer's balance, once", async () => {
+    await onASeed(async (stripe) => {
+      stripe.setCustomerBalance('cus_seed', -500)
+      stripe.failNext('paymentIntents.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
+      const answer = await place(withSoap)
+      expect(errorOf(answer)).toMatchObject({ code: 'PAYMENT_FAILED', details: { reason: 'charge_failed' } })
+      const orderId = orderOf(stripe)
+      expect(stripe.refundedPence).toBe(3500)
+      expect(stripe.netPence).toBe(0)
+      expect(stripe.liveSubscriptions).toEqual([])
+      // Before W32 the balance stayed at 0: Sam lost the £5 credit.
+      expect(stripe.customerBalance('cus_seed')).toBe(-500)
+      expect(stripe.balanceTransactions).toMatchObject([{ customer: 'cus_seed', amount: -500, currency: 'gbp', metadata: { order_id: orderId, refund_key: `${orderId}:balance` } }])
+      expect(balanceCalls(stripe).map((call) => call.idempotencyKey)).toEqual([`${orderId}:balance`])
+      // The order's own record of it.
+      const compensated = await db.query<{ details: { state: string; balance?: Record<string, unknown> } }>("SELECT details FROM audit_log WHERE action = 'order.compensate' AND entity_id = $1", [orderId])
+      expect(compensated.map((row) => row.details)).toMatchObject([{ state: 'done', balance: { customer: 'cus_seed', pence: -500, transactionId: stripe.balanceTransactions[0]?.id } }])
+      await invariant(stripe)
+    })
+  })
+
+  it("R7: a £39.80 gift card, so the first invoice is 20p, which Stripe marks paid and carries to the balance; then T2 refuses: the subscription cancelled, nothing to refund, the gift card back, and the 20p debit taken off the customer's balance", async () => {
+    await onASeed(async (stripe) => {
+      after(stripe.subscriptions, 'create', tamperMembership)
+      const answer = await place(core({ method: 'card', giftCard: { giftCardId: ID.giftCard, amount: 39.8 } }))
+      expect(errorOf(answer)).toMatchObject({ code: 'PAYMENT_FAILED', details: { reason: 'membership_subscription_failed' } })
+      const orderId = orderOf(stripe)
+      expect(stripe.subscription(stripe.subscriptionsMade[0] as string)).toMatchObject({ status: 'canceled', total: 20, amountPaid: 0 })
+      expect(stripe.refundsSent).toEqual([])
+      // Before W32 the 20p debit stayed, to be added to Sam's next invoice of any subscription.
+      expect(stripe.customerBalance('cus_seed')).toBe(0)
+      expect(stripe.balanceTransactions).toMatchObject([{ customer: 'cus_seed', amount: -20, metadata: { refund_key: `${orderId}:balance` } }])
+      expect(await held()).toEqual(NOTHING_HELD)
+      await invariant(stripe)
+    })
+  })
+
+  it("the other way round (the W13a test's case): a 20p debit carried in and taken with the first invoice (£40.20), the basket declined: £40.20 refunded and the 20p debit back on the balance, so nothing owed from before is forgiven", async () => {
+    await onASeed(async (stripe) => {
+      stripe.setCustomerBalance('cus_seed', 20)
+      stripe.failNext('paymentIntents.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
+      expect(errorOf(await place(withSoap))).toMatchObject({ code: 'PAYMENT_FAILED' })
+      expect(stripe.refundedPence).toBe(4020)
+      expect(stripe.customerBalance('cus_seed')).toBe(20)
+      expect(stripe.balanceTransactions.map((made) => made.amount)).toEqual([20])
+      await invariant(stripe)
+    })
+  })
+
+  it('a balance the invoice left alone: no balance transaction, and no extra Stripe call at all', async () => {
+    await onASeed(async (stripe) => {
+      stripe.failNext('paymentIntents.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
+      expect(errorOf(await place(withSoap))).toMatchObject({ code: 'PAYMENT_FAILED' })
+      expect(stripe.refundedPence).toBe(4000)
+      expect(stripe.calls.filter((call) => call.method.startsWith('customers.') && call.method.includes('BalanceTransaction'))).toEqual([])
+      expect(balanceToPutBack([{ customer: 'cus_seed' }])).toEqual({})
+    })
+  })
+
+  it('never twice: sent again under its key it is the same transaction, and once Stripe has forgotten the key the one already made (found by its key in the metadata) counts as done', async () => {
+    await onASeed(async (stripe) => {
+      const balance = { customer: 'cus_seed', pence: -500 }
+      const first = await putBalanceBack(stripe, 'order-1', balance, undefined)
+      expect(first).toMatchObject({ ok: true, already: false })
+      // A later run (a compensation finished days later): it is found, and nothing is sent.
+      const again = await putBalanceBack(stripe, 'order-1', balance, undefined)
+      expect(again).toEqual({ ok: true, transactionId: (first as { transactionId: string }).transactionId, already: true })
+      expect(balanceCalls(stripe)).toHaveLength(1)
+      expect(stripe.customerBalance('cus_seed')).toBe(-500)
+      // Another order's put-back for the same customer is its own.
+      expect(await putBalanceBack(stripe, 'order-2', { customer: 'cus_seed', pence: -20 }, undefined)).toMatchObject({ ok: true, already: false })
+      expect(stripe.customerBalance('cus_seed')).toBe(-520)
+    })
+  })
+
+  it("a put-back (T2 found the old rollback's mark, test data) with a £5 credit: the subscription cancelled, the £35 its first invoice took refunded, and the £5 credit back on the balance", async () => {
+    await onASeed(async (stripe) => {
+      stripe.setCustomerBalance('cus_seed', -500)
+      after(stripe.paymentIntents, 'create', async () => {
+        const pending = (await orders()).find((order) => order.payment_status === 'pending')
+        await oldRollbackStarts(pending?.id as string)
+      })
+      await place(withSoap)
+      const orderId = (await orders())[0]?.id as string
+      expect(stripe.subscription(stripe.subscriptionsMade[0] as string)?.status).toBe('canceled')
+      expect(refundKeys(stripe)).toEqual([`${orderId}:refund-subscription`])
+      expect(stripe.refundedPence).toBe(3500)
+      expect(stripe.customerBalance('cus_seed')).toBe(-500)
+      expect(stripe.balanceTransactions.map((made) => [made.amount, made.metadata['refund_key']])).toEqual([[-500, `${orderId}:balance`]])
+    })
+  })
+
+  it("a put-back whose cancel and refund got no clear answer, with a £5 credit: the press puts the balance back, and reconcile's retry (which cancels and refunds) finds that transaction and never makes a second", async () => {
+    await onASeed(async (stripe) => {
+      stripe.setCustomerBalance('cus_seed', -500)
+      const held = holdNext(stripe.paymentIntents, 'create')
+      const screen = place(withSoap)
+      await held.reached
+      const orderId = (await orders())[0]?.id as string
+      await compensateOrder(db, stripe, orderId, { subscriptionId: null, refunds: [] }, 'test: unguarded', { actor: { type: 'system', id: null }, requestId: 'w32' }, undefined)
+      stripe.failNext('subscriptions.cancel', { kind: 'unreachable' })
+      stripe.failNext('subscriptions.retrieve', { kind: 'unreachable' })
+      stripe.failNext('refunds.create', { kind: 'unreachable' })
+      stripe.failNext('refunds.create', { kind: 'unreachable' })
+      held.release()
+      await screen
+      expect(stripe.refundedPence).toBe(0)
+      expect(stripe.customerBalance('cus_seed')).toBe(-500)
+      expect(stripe.balanceTransactions).toHaveLength(1)
+      later(16)
+      await runReconcile(stripe)
+      expect(stripe.subscription(stripe.subscriptionsMade[0] as string)?.status).toBe('canceled')
+      expect(stripe.refundedByIntent.size).toBeGreaterThan(0)
+      expect(stripe.customerBalance('cus_seed')).toBe(-500)
+      expect(stripe.balanceTransactions).toHaveLength(1)
+      expect(balanceCalls(stripe)).toHaveLength(1)
+      expect((await stuckList(db)).warnings).toEqual([])
+    })
+  })
+
+  it("Stripe gives no clear answer for the balance: the compensation is held, the order stays pending, and reconcile finishes it with the balance put back once", async () => {
+    await onASeed(async (stripe) => {
+      stripe.setCustomerBalance('cus_seed', -500)
+      stripe.failNext('paymentIntents.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
+      stripe.failNext('customers.createBalanceTransaction', { kind: 'lost_response' })
+      stripe.failNext('customers.createBalanceTransaction', { kind: 'lost_response' })
+      await place(withSoap)
+      expect((await orders()).map((order) => order.payment_status)).toEqual(['pending'])
+      later(16)
+      expect(await runReconcile(stripe)).toMatchObject({ undone: 1 })
+      expect(stripe.customerBalance('cus_seed')).toBe(-500)
+      expect(stripe.balanceTransactions).toHaveLength(1)
+      expect(stripe.netPence).toBe(0)
+      await invariant(stripe)
+    })
+  })
+})
+
+// Brief W32 item 2 (W13 review L2): step C's compensation refunds are watched as a claim's are. Their order is undone
+// (or isn't a refunded order), so a failure can't be owed anywhere: it is a line for a person.
+describe("W32 item 2: a compensation's refund Stripe answers pending is watched", () => {
+  const watchRows = async () => (await db.query<{ id: string; details: Record<string, unknown> }>("SELECT id, details FROM audit_log WHERE action = 'refund.watch' ORDER BY at, id"))
+  const watchStates = async () => (await watchRows()).map((row) => String(row.details['state'])).sort()
+  const refundItems = async (stripe: FakeStripe) => (await runReconcile(stripe)).items.filter((item) => item.kind === 'refund')
+  /** A saved-card membership with soap, the soap's charge declined: the first invoice's £40 refund is answered pending. */
+  async function compensatedWithAPendingRefund(stripe: FakeStripe): Promise<{ orderId: string; refundId: string; paymentIntentId: string }> {
+    stripe.failNext('paymentIntents.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
+    stripe.refundsStayPending = true
+    expect(errorOf(await place(withSoap))).toMatchObject({ code: 'PAYMENT_FAILED', details: { reason: 'charge_failed' } })
+    stripe.refundsStayPending = false
+    const sent = stripe.refundsSent[0]
+    expect(sent).toMatchObject({ amount: 4000, status: 'pending' })
+    return { orderId: String(sent?.metadata['order_id']), refundId: sent?.id as string, paymentIntentId: sent?.payment_intent as string }
+  }
+
+  it('pending then succeeded: the order is undone as before, the refund is watched, and the watch ends', async () => {
+    await onASeed(async (stripe) => {
+      const { orderId, refundId, paymentIntentId } = await compensatedWithAPendingRefund(stripe)
+      expect(await orders()).toEqual([])
+      expect((await watchRows()).map((row) => row.details)).toEqual([
+        { state: 'watching', refundId, paymentIntentId, amount: 40, status: 'pending', livemode: false, on: 'compensation', subjectId: orderId, orderId: null, claimId: null, lines: [], step: 'refund-subscription' },
+      ])
+      // The compensation's own row keeps the status too.
+      const compensated = await db.query<{ details: { refunded: Array<Record<string, unknown>> } }>("SELECT details FROM audit_log WHERE action = 'order.compensate' AND entity_id = $1", [orderId])
+      expect(compensated[0]?.details.refunded).toEqual([{ step: 'refund-subscription', paymentIntentId, refundId, amount: 4000, status: 'pending' }])
+      // W32a (W32 review S2): still on its way: read, no item, nothing left for a person; one refund waiting on Stripe.
+      expect(await runReconcile(stripe)).toMatchObject({ refunds: 0, left: 0, refundsWaiting: 1, items: [] })
+      stripe.settleRefund(refundId, 'succeeded')
+      later(5)
+      // W32a (lead call 1): succeeded does not end the watch: it is read once a day until its 50 days are up.
+      expect(await runReconcile(stripe)).toMatchObject({ refunds: 0, left: 0, refundsWaiting: 0, items: [] })
+      expect(await watchStates()).toEqual(['checked', 'checked', 'watching'])
+      later(5)
+      expect(await refundItems(stripe)).toEqual([])
+      expect(await watchStates()).toEqual(['checked', 'checked', 'watching'])
+      later(WATCH_DAYS * 24 * 60)
+      expect(await refundItems(stripe)).toEqual([])
+      expect(await watchStates()).toEqual(['checked', 'checked', 'succeeded', 'watching'])
+      later(5)
+      expect(await refundItems(stripe)).toEqual([])
+      expect(await watchStates()).toEqual(['checked', 'checked', 'succeeded', 'watching'])
+      expect(stripe.refundsSent).toHaveLength(1)
+      expect((await stuckList(db)).watched).toEqual([])
+      expect(stripe.netPence).toBe(0)
+    })
+  })
+
+  it("W32a (lead call 1; Stripe's 5126 shape): a compensation's refund answered succeeded is watched too; when Stripe fails it afterwards it is a line for a person, with the payment to refund by hand; never sent again", async () => {
+    await onASeed(async (stripe) => {
+      stripe.failNext('paymentIntents.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
+      expect(errorOf(await place(withSoap))).toMatchObject({ code: 'PAYMENT_FAILED', details: { reason: 'charge_failed' } })
+      const sent = stripe.refundsSent[0]
+      const refundId = sent?.id as string
+      const paymentIntentId = sent?.payment_intent as string
+      const orderId = String(sent?.metadata['order_id'])
+      expect(sent).toMatchObject({ amount: 4000, status: 'succeeded' })
+      expect(await orders()).toEqual([])
+      expect((await watchRows()).map((row) => row.details)).toEqual([
+        { state: 'watching', refundId, paymentIntentId, amount: 40, status: 'succeeded', livemode: false, on: 'compensation', subjectId: orderId, orderId: null, claimId: null, lines: [], step: 'refund-subscription' },
+      ])
+      // Not read until a day has passed; then read, and still succeeded.
+      const lists = () => stripe.calls.filter((call) => call.method === 'refunds.list').length
+      expect(await runReconcile(stripe)).toMatchObject({ refundsWaiting: 0, items: [] })
+      expect(lists()).toBe(0)
+      later(24 * 60)
+      expect(await refundItems(stripe)).toEqual([])
+      expect(lists()).toBe(1)
+      // Stripe fails it (the bank sent the money back): the next day's read finds it.
+      stripe.settleRefund(refundId, 'failed')
+      expect(stripe.netPence).toBe(4000)
+      // (The next run after a full day since its last read: five minutes past the day.)
+      later(24 * 60 + 5)
+      const found = await runReconcile(stripe)
+      expect(found).toMatchObject({ refunds: 1, left: 1 })
+      expect(found.items).toMatchObject([{ kind: 'refund', id: refundId, outcome: 'refund_failed', reason: 'refund_failed_later' }])
+      expect(await watchStates()).toEqual(['checked', 'failed', 'watching'])
+      expect((await stuckList(db)).watched).toMatchObject([{ refundId, paymentIntentId, on: 'compensation', orderId, amount: 40, owed: 0, state: 'failed', words: WATCH_WORDS.compensationFailed(40, paymentIntentId) }])
+      // Never a second send: one refund was ever made, and later runs read nothing.
+      later(24 * 60)
+      await Promise.all([runReconcile(stripe), runReconcile(stripe)])
+      expect(await refundItems(stripe)).toEqual([])
+      expect(stripe.calls.filter((call) => call.method === 'refunds.create')).toHaveLength(1)
+      expect(lists()).toBe(2)
+    })
+  })
+
+  it('pending then failed: the order no longer exists, so nothing is owed anywhere: a line for a person, with the payment to refund by hand, until Mark sorted; never sent again', async () => {
+    await onASeed(async (stripe) => {
+      const { orderId, refundId, paymentIntentId } = await compensatedWithAPendingRefund(stripe)
+      stripe.settleRefund(refundId, 'failed')
+      expect(await refundItems(stripe)).toMatchObject([{ kind: 'refund', id: refundId, outcome: 'refund_failed', reason: 'refund_failed_later' }])
+      expect(await watchStates()).toEqual(['failed', 'watching'])
+      await Promise.all([runReconcile(stripe), runReconcile(stripe)])
+      expect(await refundItems(stripe)).toEqual([])
+      expect(stripe.refundsSent).toHaveLength(1)
+      const listed = (await stuckList(db)).watched
+      expect(listed).toMatchObject([{ refundId, paymentIntentId, on: 'compensation', bookingId: null, orderId, customerName: null, amount: 40, owed: 0, state: 'failed', words: WATCH_WORDS.compensationFailed(40, paymentIntentId) }])
+      expect(listed[0]?.words).toBe(
+        `An automatic refund of £40.00 (payment ${paymentIntentId}) for an order that couldn't be completed was accepted by Stripe and then failed, so the customer has not had the money back. Refund that payment in Stripe by hand (or tell a manager if Stripe won't). Then press Mark sorted (needs the Issue refunds permission).`
+      )
+      const closed = await closeStuckItem(db, { kind: 'refund_watch', orderId: listed[0]?.watchId as string, reason: 'Refunded in Stripe by hand' }, { actor: { type: 'staff', id: ID.staff }, requestId: 'w32-close' })
+      expect(closed).toMatchObject({ closed: true, kind: 'refund_watch' })
+      expect((await stuckList(db)).watched).toEqual([])
+    })
+  })
+
+  it('the same refund seen again (a compensation sent again under its key) is watched once', async () => {
+    await onASeed(async () => {
+      const seen = { refundId: 're_same', paymentIntentId: 'pi_x', amountPence: 4000, status: 'pending', step: 'refund-charge' }
+      const by = { actor: { type: 'system' as const, id: null }, requestId: 'w32' }
+      await Promise.all([db.transaction((tx) => watchCompensationRefund(tx, seen, ID.customer, false, by)), db.transaction((tx) => watchCompensationRefund(tx, seen, ID.customer, false, by))])
+      await db.transaction((tx) => watchCompensationRefund(tx, seen, ID.customer, false, by))
+      expect(await watchRows()).toHaveLength(1)
+    })
+  })
+
+  it("the watch can't be recorded (a database fault): the compensation is held, not finished, so the next run records it with the same refund", async () => {
+    await onASeed(async (stripe) => {
+      stripe.failNext('paymentIntents.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
+      stripe.refundsStayPending = true
+      await whileFailing(db, { table: 'audit_log', event: 'INSERT', when: "NEW.action = 'refund.watch'" }, () => place(withSoap))
+      stripe.refundsStayPending = false
+      expect((await orders()).map((order) => order.payment_status)).toEqual(['pending'])
+      expect(await watchRows()).toEqual([])
+      later(16)
+      expect(await runReconcile(stripe)).toMatchObject({ undone: 1 })
+      expect(stripe.refundsSent).toHaveLength(1)
+      expect((await watchRows()).map((row) => row.details)).toMatchObject([{ state: 'watching', refundId: stripe.refundsSent[0]?.id, on: 'compensation' }])
+    })
+  })
+
+  it("W32a (W32 review L2): Stripe says the payment is refunded already (it has forgotten the key): the refund this step made is found by its key in the payment's refunds and watched; never a second refund; a list Stripe doesn't answer holds the compensation", async () => {
+    await onASeed(async (stripe) => {
+      stripe.failNext('paymentIntents.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
+      // The refund goes, but its watch can't be written, so the compensation is held; then Stripe forgets the key.
+      await whileFailing(db, { table: 'audit_log', event: 'INSERT', when: "NEW.action = 'refund.watch'" }, () => place(withSoap))
+      expect((await orders()).map((order) => order.payment_status)).toEqual(['pending'])
+      expect(await watchRows()).toEqual([])
+      const made = stripe.refundsSent[0]
+      stripe.forgetIdempotencyKeys()
+      later(16)
+      // The list isn't answered: nothing is concluded, and the order stays held for the next run.
+      stripe.failNext('refunds.list', { kind: 'unreachable' })
+      expect(await runReconcile(stripe)).toMatchObject({ undone: 0, left: 1 })
+      expect((await orders()).map((order) => order.payment_status)).toEqual(['pending'])
+      expect(await watchRows()).toEqual([])
+      later(6)
+      expect(await runReconcile(stripe)).toMatchObject({ undone: 1 })
+      expect(await orders()).toEqual([])
+      expect((await watchRows()).map((row) => row.details)).toEqual([
+        { state: 'watching', refundId: made?.id, paymentIntentId: made?.payment_intent, amount: 40, status: 'succeeded', livemode: false, on: 'compensation', subjectId: made?.metadata['order_id'], orderId: null, claimId: null, lines: [], step: 'refund-subscription' },
+      ])
+      // Stripe refused each later send as already refunded: one refund was ever made.
+      expect(stripe.refundsSent).toHaveLength(1)
+      expect(stripe.netPence).toBe(0)
+    })
+  })
+
+  it('W32a (W32 review L2): refunded already by hand (no refund carries the step\'s key): there is nothing of this step\'s to watch, and the compensation finishes', async () => {
+    await onASeed(async (stripe) => {
+      stripe.failNext('paymentIntents.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
+      // The compensation's refund never reaches Stripe (twice), so the order is held; a person then refunds it in Stripe.
+      stripe.failNext('refunds.create', { kind: 'unreachable' })
+      stripe.failNext('refunds.create', { kind: 'unreachable' })
+      await place(withSoap)
+      expect((await orders()).map((order) => order.payment_status)).toEqual(['pending'])
+      const invoice = [...stripe.chargedByIntent.keys()][0] as string
+      await stripe.refunds.create({ payment_intent: invoice })
+      later(16)
+      expect(await runReconcile(stripe)).toMatchObject({ undone: 1 })
+      expect(await orders()).toEqual([])
+      expect(await watchRows()).toEqual([])
+      expect(stripe.refundsSent).toHaveLength(1)
+      expect(stripe.netPence).toBe(0)
     })
   })
 })

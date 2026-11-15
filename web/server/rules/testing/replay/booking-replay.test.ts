@@ -597,7 +597,16 @@ describe("step D's side of the replay (W17)", () => {
       expect(added(recording, 'bookings')).toEqual(added(golden, 'bookings'))
       expect(added(recording, 'order_line_items')).toEqual(added(golden, 'order_line_items'))
       const finished = added(recording, 'audit_log').find((row) => row['action'] === 'booking.refund_finished')
-      expect(finished?.['details']).toEqual({ claimId: expect.any(String), outcome: 'owed', cardRefunded: 50, storeCreditRefunded: 0, owed: 70, refused: 'Failed to refund payment: Your card was declined.' })
+      // W32: the finished row keeps the refund of the part that went (Bea's £50), for the refund watch.
+      expect(finished?.['details']).toEqual({
+        claimId: expect.any(String),
+        outcome: 'owed',
+        cardRefunded: 50,
+        storeCreditRefunded: 0,
+        owed: 70,
+        refused: 'Failed to refund payment: Your card was declined.',
+        refunds: [{ orderId: 'orders#2', paymentIntentId: expect.stringMatching(/^pi_fake_/), refundId: expect.stringMatching(/^re_fake_/), status: 'succeeded', amount: 50 }],
+      })
       const mark = added(recording, 'audit_log').find((row) => row['action'] === 'booking.refund_refused')
       expect(mark?.['details']).toMatchObject({ amount: 70, detail: 'Failed to refund payment: Your card was declined.' })
       expect(added(recording, 'audit_log').filter((row) => row['action'] === 'order.reconcile')).toEqual([])

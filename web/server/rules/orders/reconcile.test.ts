@@ -12,7 +12,7 @@ import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { finaliseOrder } from './finalise-order'
 import { CARD_NOT_SAVED_WARNING } from './reader-order'
 import { MANUAL_LIMITS, reconcile, SCHEDULED_LIMITS, type ReconcileOptions, type ReconcileResult } from './reconcile'
-import { STRIPE_REFUSED_WORDS, STUCK_WORDS, stuckList } from './stuck-list'
+import { STRIPE_REFUSED_WORDS, STUCK_WORDS, stuckList, WATCH_WORDS } from './stuck-list'
 import { undoOrder } from './undo-order'
 
 // W12 item 3: reconcile, row by row (W03-plan 2.5 and the brief's extra rows), on PGlite with the live schema
@@ -489,20 +489,105 @@ describe('a payment that succeeded on an order already undone (charged_without_o
     })
   })
 
-  it('Stripe answers pending: listed until a later run sees it succeed', async () => {
+  /** W32a: the refund watch's rows, as tests read them. */
+  const watchRows = async () => (await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'refund.watch' ORDER BY at, id")).map((row) => row.details)
+  const day = 24 * 60
+
+  it('Stripe answers pending (W32a, W32 review S3): the refund is handed to the refund watch with the row that records it, and this path never reads it again; while it is on its way it is on no list and nothing is left for a person', async () => {
     await onASeed(async ({ stripe }) => {
       const { orderId, paymentIntentId } = await chargedWithoutOrder(stripe, 'card')
       stripe.refundsStayPending = true
-      expect((await run(stripe)).items).toEqual([{ kind: 'refund', id: orderId, outcome: 'refund_pending', reason: 'refund_pending' }])
+      const first = await run(stripe)
+      expect(first.items).toEqual([{ kind: 'refund', id: orderId, outcome: 'refund_pending', reason: 'refund_pending' }])
+      // Sent, so a refund "sent or checked"; nothing for a person (S2); one refund waiting on Stripe.
+      expect(first).toMatchObject({ refunds: 1, left: 0, refundsWaiting: 1 })
+      const refundId = stripe.refundsSent[0]?.id as string
+      expect(await watchRows()).toEqual([
+        { state: 'watching', refundId, paymentIntentId, amount: 69, status: 'pending', livemode: false, on: 'compensation', subjectId: orderId, orderId: null, claimId: null, lines: [], step: 'late-refund', late: 'order' },
+      ])
       later(5)
-      expect((await stuckList(db)).refunds).toEqual([expect.objectContaining({ id: orderId, state: 'sent' })])
-      later(5)
-      expect((await run(stripe)).items[0]).toMatchObject({ outcome: 'refund_pending' })
-      stripe.settleRefund(stripe.refundsSent[0]?.id as string, 'succeeded')
-      expect((await run(stripe)).items[0]).toMatchObject({ outcome: 'refund_confirmed' })
       expect((await stuckList(db)).refunds).toEqual([])
+      later(5)
+      // The watch reads it (one list of the payment's refunds); the late-refund path does nothing more.
+      const from = stripe.calls.length
+      expect(await run(stripe)).toMatchObject({ checked: 0, refunds: 0, left: 0, refundsWaiting: 1, items: [] })
+      expect(stripe.calls.slice(from).map((call) => call.method)).toEqual(['refunds.list'])
+      stripe.settleRefund(refundId, 'succeeded')
+      later(5)
+      expect(await run(stripe)).toMatchObject({ checked: 0, refunds: 0, left: 0, refundsWaiting: 0, items: [] })
+      expect((await stuckList(db)).refunds).toEqual([])
+      expect((await stuckList(db)).watched).toEqual([])
       expect(stripe.calls.filter((call) => call.method === 'refunds.create')).toHaveLength(1)
       expect(stripe.refundedByIntent.get(paymentIntentId)).toBe(6900)
+      expect((await watchRows()).filter((row) => row['state'] === 'watching')).toHaveLength(1)
+    })
+  })
+
+  it("W32a (S3; Stripe's 5126 shape): a late refund answered succeeded is watched too; when Stripe fails it afterwards it is one line for a person, the watch's, closed with Mark sorted; never sent again", async () => {
+    await onASeed(async ({ stripe }) => {
+      const { orderId, paymentIntentId } = await chargedWithoutOrder(stripe, 'card')
+      expect((await run(stripe)).items).toEqual([{ kind: 'refund', id: orderId, outcome: 'refund_confirmed' }])
+      const refundId = stripe.refundsSent[0]?.id as string
+      expect(await watchRows()).toMatchObject([{ state: 'watching', refundId, paymentIntentId, amount: 69, status: 'succeeded', on: 'compensation', subjectId: orderId, step: 'late-refund', late: 'order' }])
+      // A day on it is read, and still reads succeeded: nothing to say.
+      later(day)
+      expect(await run(stripe)).toMatchObject({ checked: 0, left: 0, refundsWaiting: 0, items: [] })
+      stripe.settleRefund(refundId, 'failed')
+      expect(stripe.refundedByIntent.get(paymentIntentId)).toBe(0)
+      // Not read again within the day; the next day's read finds it.
+      later(60)
+      expect((await run(stripe)).items).toEqual([])
+      later(day)
+      const found = await run(stripe)
+      expect(found.items).toEqual([{ kind: 'refund', id: refundId, outcome: 'refund_failed', reason: 'refund_failed_later', detail: 'the refund failed: left for a person' }])
+      expect(found).toMatchObject({ refunds: 1, left: 1 })
+      const listed = await stuckList(db)
+      expect(listed.refunds).toEqual([])
+      expect(listed.watched).toMatchObject([{ refundId, paymentIntentId, on: 'compensation', orderId, amount: 69, owed: 0, state: 'failed', words: WATCH_WORDS.lateFailed(69, paymentIntentId) }])
+      // The failure is on the order's own history too.
+      expect((await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'order.refund_failed_later' AND entity_type = 'order' AND entity_id = $1", [orderId]))[0]?.details).toMatchObject({ refundId, paymentIntentId, amount: 69, owed: 0, status: 'failed' })
+      // Never a second send, however many runs follow.
+      later(day)
+      expect((await run(stripe)).items).toEqual([])
+      expect(stripe.calls.filter((call) => call.method === 'refunds.create')).toHaveLength(1)
+      expect(await reconcileRows(orderId)).toHaveLength(2)
+    })
+  })
+
+  it('W32a (S3): a refund recorded as sent before the watch took these over is handed to the watch the next time it is read, and then left to it', async () => {
+    await onASeed(async ({ stripe }) => {
+      const { orderId, paymentIntentId } = await chargedWithoutOrder(stripe, 'card')
+      stripe.refundsStayPending = true
+      await run(stripe)
+      // As a Worker before W32a left it: the `sent` row and no watch.
+      await db.query("DELETE FROM audit_log WHERE action = 'refund.watch'")
+      later(5)
+      expect((await stuckList(db)).refunds).toEqual([expect.objectContaining({ id: orderId, state: 'sent' })])
+      expect((await run(stripe)).items).toEqual([{ kind: 'refund', id: orderId, outcome: 'refund_pending', reason: 'refund_pending' }])
+      expect(await watchRows()).toMatchObject([{ state: 'watching', refundId: stripe.refundsSent[0]?.id, paymentIntentId, status: 'pending', step: 'late-refund' }])
+      expect((await stuckList(db)).refunds).toEqual([])
+      later(5)
+      expect((await run(stripe)).items).toEqual([])
+      expect(stripe.calls.filter((call) => call.method === 'refunds.create')).toHaveLength(1)
+    })
+  })
+
+  it("W32a (W32 review S4): a refund started under one key is tried again under that key, whatever key would be worked out now", async () => {
+    await onASeed(async ({ stripe }) => {
+      const { orderId, paymentIntentId } = await chargedWithoutOrder(stripe, 'card')
+      // The first send got no clear answer, under a key this code would not work out today.
+      const recorded = `${orderId}:refund-under-an-older-rule`
+      await db.query(
+        `INSERT INTO audit_log (actor_type, actor_id, action, entity_type, entity_id, request_id, details)
+         VALUES ('system', NULL, 'order.reconcile', 'order', $1, 't', $2::jsonb)`,
+        [orderId, JSON.stringify({ outcome: 'refund_started', refund: { paymentIntentId, state: 'started', key: recorded, amount: 6900 } })]
+      )
+      expect((await run(stripe)).items).toEqual([{ kind: 'refund', id: orderId, outcome: 'refund_confirmed' }])
+      const sent = stripe.calls.filter((call) => call.method === 'refunds.create')
+      expect(sent.map((call) => call.idempotencyKey)).toEqual([recorded])
+      expect(sent[0]?.params).toMatchObject({ metadata: { refund_key: recorded } })
+      // No second `started` row, and the confirmed row keeps the same key.
+      expect((await reconcileRows(orderId)).map((row) => (row as { refund?: { state: string; key?: string } }).refund)).toMatchObject([{ state: 'started', key: recorded }, { state: 'confirmed', key: recorded }])
     })
   })
 
@@ -563,6 +648,17 @@ describe('a payment that succeeded on an order already undone (charged_without_o
         await run(stripe)
         expect(stripe.calls.filter((call) => call.method === 'refunds.create').map((call) => call.idempotencyKey)).toEqual([`${pendingId}:refund-reader`])
         expect(stripe.netPence).toBe(0)
+        // W32a (W32 review S3): a flow's late refund is watched too, and a later failure is on the flow's own history.
+        const refundId = stripe.refundsSent[0]?.id as string
+        expect(await watchRows()).toMatchObject([{ state: 'watching', refundId, paymentIntentId, status: 'succeeded', on: 'compensation', subjectId: pendingId, step: 'late-refund', late: 'reader_payment' }])
+        stripe.settleRefund(refundId, 'failed')
+        later(day + 5)
+        expect((await run(stripe)).items).toMatchObject([{ kind: 'refund', id: refundId, outcome: 'refund_failed', reason: 'refund_failed_later' }])
+        expect((await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'reader_payment.refund_failed_later' AND entity_type = 'reader_payment' AND entity_id = $1", [pendingId]))[0]?.details).toMatchObject({ refundId, amount: 20, owed: 0 })
+        const listed = await stuckList(db)
+        expect(listed.refunds).toEqual([])
+        expect(listed.watched).toMatchObject([{ refundId, state: 'failed', customerName: null, words: WATCH_WORDS.lateFailed(20, paymentIntentId) }])
+        expect(stripe.calls.filter((call) => call.method === 'refunds.create')).toHaveLength(1)
       }
     )
   })
@@ -667,7 +763,8 @@ describe('reader flows the Worker started (step D) and the old code started', ()
       const result = await run(stripe)
       expect(result).toMatchObject({ checked: 0 })
       // W25: the run counts nothing as "the old code's" any more: these are all its fields.
-      expect(Object.keys(result).sort()).toEqual(['checked', 'deferred', 'finalised', 'items', 'left', 'refunds', 'stripeRefused', 'undone'])
+      // W32a: and how many watched refunds are still on their way at Stripe.
+      expect(Object.keys(result).sort()).toEqual(['checked', 'deferred', 'finalised', 'items', 'left', 'refunds', 'refundsWaiting', 'stripeRefused', 'undone'])
       expect(stripe.calls.length).toBe(calls)
       expect(await flowStatus(flow.pendingId)).toBe('pending')
       expect((await stuckList(db)).flows).toEqual([expect.objectContaining({ pendingId: flow.pendingId, reason: 'not_started_here', words: STUCK_WORDS['not_started_here'] })])
@@ -720,7 +817,8 @@ describe('a run is bounded', () => {
 
   it('the limits are as stated: the schedule 50 items and 120 s, a manual run 10 and 15 s (W13: its Stripe calls by 20 s)', () => {
     expect(SCHEDULED_LIMITS).toEqual({ maxItems: 50, budgetMs: 120_000 })
-    expect(MANUAL_LIMITS).toEqual({ maxItems: 10, budgetMs: 15_000, stripeDeadlineMs: 20_000 })
+    // W32a: a staff run reads the watched refunds read longest ago whatever their last read (inside its 10 items).
+    expect(MANUAL_LIMITS).toEqual({ maxItems: 10, budgetMs: 15_000, stripeDeadlineMs: 20_000, watchReadHours: 0 })
   })
 
   it("a manual run's Stripe calls end by 20 s from the request's start: each gets what is left, none with under 2 s", async () => {

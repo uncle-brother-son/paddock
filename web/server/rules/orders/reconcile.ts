@@ -41,6 +41,15 @@
 // W30: and an event booking's claim (server/rules/events/cancel-places.ts), whose card part is on the order that paid
 // for the booking: found, R2; not found or refused, the places stay cancelled and the money is owed on that order.
 //
+// W32 (lead call L7): a card refund Stripe answered `pending` (a finished claim's, or a compensation's) is read each
+// run until it ends (refund-watch-settle.ts): succeeded ends the watch; failed or cancelled puts its money back as owed
+// on its booking or order (or, with nothing to owe it on, lists it for a person); 30 days ends the watch for a person.
+// Never a send. A watched payment's automatic refund is keyed by its own PaymentIntent (audit row 30).
+// W32a (lead calls 1 and 2; W32 review S1 to S4): every card refund is watched for 50 days, `succeeded` ones read once a
+// day; the due list picks the ones read longest ago, inside the run's budget; a read that ends nothing is not an item
+// and is counted nowhere (`refundsWaiting` says how many are still on their way); a late payment's automatic refund is
+// handed to the same watch once Stripe has given it an id; and a late refund keeps the key its `started` row recorded.
+//
 // W13c (W13a review L3, first part): a membership subscription a press left live (`order.subscription_left`,
 // `left`) for an order no longer pending is put back here, each run until it is: cancelled (checked), its first
 // invoice refunded under its key, then a `cancelled` row, which closes the stuck list's warning. W13d (W13c review
@@ -59,6 +68,7 @@ import { OLD_MEMBERSHIP_CANCELLED_NOTE } from './failure-messages'
 import { finaliseOrder, MEMBERSHIP_DEFINITE, membershipPrecheck } from './finalise-order'
 import { pence } from './collect-saved-card'
 import {
+  balanceToPutBack,
   cancelSubscriptionChecked,
   compensateOrder,
   findOrderSubscriptions,
@@ -88,6 +98,8 @@ import { CLAIMS_DUE_SQL, claimRefusal, findCardPart, finishClaim, readClaim, typ
 import { finishEventClaim } from '@/server/rules/events/cancel-places'
 import { EVENT_BOOKING_CLAIMS_DUE_SQL, ORDER_CLAIMS_DUE_SQL, readEventBookingClaim, readOrderClaim, stepEClaimRefusal, type EventBookingClaim, type OrderClaim } from '@/server/rules/refunds/claims'
 import { finishOrderClaim } from './refund-lines'
+import { refundSeen, WATCH_DAYS, WATCH_READ_HOURS, WATCHES_DUE_SQL, WATCHES_WAITING_SQL, watchLateRefund, type RefundSeen, type WatchDue } from '@/server/rules/refunds/refund-watch'
+import { checkWatchedRefund } from '@/server/rules/refunds/refund-watch-settle'
 import { cancelRefundedSubscription, cancelSubscriptionsAfterRefund, LEFT_BY_REFUND, refundCancelsDue, type RefundCancelDue } from './refund-subscription'
 
 /** Q14: a pending order or flow younger than this may still have staff at the reader. */
@@ -114,6 +126,10 @@ export const RECONCILE_WINDOW_MINUTES = PROCESSING_MINUTES
  *   or of the club's key in a 12-minute window, far past the club's payments) add 90 s, so ≈ 176 s.
  * - W13c, a left put-back's retry (L3): the subscription read, cancel, read again, the refund twice (50) + its row
  *   (13) + the run's row (13) ≈ 76 s.
+ * - W32, a watched refund: the list of its payment's refunds (10, one page) + the transaction that ends the watch
+ *   and puts a failure back (13) ≈ 23 s. A put-back with a customer balance to restore adds two calls (20).
+ *   W32a: a read that ends nothing writes one `checked` row instead (13), so the same 23 s; a late refund's row is
+ *   written with its watch in the one transaction it already had.
  * So a run ends by about 120 + 86 ≈ 206 s (under 3.5 minutes), before the next run; with ten-page lists by
  * about 296 s (just under 5 minutes). Overlap would still be safe (no leases: T2 and the undo lock and
  * re-check; the refund's first row is written once under an advisory lock), and either way it is far inside
@@ -134,7 +150,16 @@ export const SCHEDULED_LIMITS = { maxItems: 50, budgetMs: 120_000 }
  * 13.1 + its row 8.1 + 0.05 ≈ 50.8 s (9.2 inside). A left put-back's retry (L3): Stripe by 20 + its `cancelled` row
  * 8.1 + the run's row 8.1 ≈ 37.7 s.
  */
-export const MANUAL_LIMITS = { maxItems: 10, budgetMs: 15_000, stripeDeadlineMs: 20_000 }
+export const MANUAL_LIMITS = {
+  maxItems: 10,
+  budgetMs: 15_000,
+  stripeDeadlineMs: 20_000,
+  /**
+   * W32a: staff's run reads the watched refunds read longest ago whatever their last read was (inside its 10 items,
+   * after everything else), so Resolve now can find a refund that failed without waiting for its daily read.
+   */
+  watchReadHours: 0,
+}
 
 /** Stripe lists 100 at most per page. Ten pages is far past the club's payments in any window. */
 const LIST_PAGE = 100
@@ -156,6 +181,10 @@ export interface ReconcileOptions {
   stripeDeadlineMs?: number
   now?: () => number
   windowMinutes?: number
+  /** W32: how many days a refund is watched before the watch ends for a person (WATCH_DAYS; the tests shorten it). */
+  watchDays?: number
+  /** W32a: how many hours since its last read before a watched refund that reads `succeeded` is read again (WATCH_READ_HOURS). */
+  watchReadHours?: number
 }
 
 export type ItemOutcome =
@@ -198,6 +227,9 @@ export interface ClaimPartFinding {
   orderId: string
   amount: number
   found: 'went' | 'none' | 'several' | 'mismatch'
+  /** W32: a `went` part's refund, so the close records it and has it watched (W32a: whatever its status), as R2 does. */
+  refundId?: string
+  refundStatus?: string | null
   /** What Stripe showed: the refunds' ids for `several`, the amounts for `mismatch`. */
   detail?: string
 }
@@ -212,6 +244,12 @@ export interface ReconcileResult {
   deferred: number
   /** Stripe refused the key (401/403): nothing more was tried, and an alert row was recorded. */
   stripeRefused: boolean
+  /**
+   * W32a (W32 review S2): watched card refunds still on their way at Stripe (not `succeeded`, not ended), read this run
+   * or not. Nothing to do for them, so they are in neither `refunds` nor `left`: Resolve now says "N refunds waiting on
+   * Stripe".
+   */
+  refundsWaiting: number
   items: ReconcileItem[]
 }
 
@@ -525,7 +563,8 @@ function takenFrom(snapshot: PendingSnapshot, found: Extract<MembershipFound, { 
   for (const intent of found.intents) {
     if (intent.status === 'succeeded') refunds.push({ step: snapshot.method === 'reader' ? 'refund-reader' : 'refund-charge', paymentIntentId: intent.id })
   }
-  return { subscriptionId: live[0]?.id ?? null, refunds }
+  // W32 (R6, R7): what the first invoice did to the customer's Stripe balance, put back with the rest.
+  return { subscriptionId: live[0]?.id ?? null, refunds, ...balanceToPutBack(found.subscriptions) }
 }
 
 async function compensateTheOrder(run: Run, orderId: string, taken: Taken, why: string): Promise<ReconcileItem> {
@@ -861,6 +900,7 @@ async function reconcileClaim(run: Run, claim: Claim): Promise<ReconcileItem> {
   const { plan, livemode } = claim.details
   if (typeof livemode === 'boolean' && livemode !== run.stripe.keyLivemode) return left('claim', claim.id, 'other_mode')
   const went: CardPart[] = []
+  const refunds: RefundSeen[] = []
   const never: CardPart[] = []
   const parts: ClaimPartFinding[] = []
   let forAPerson: { reason: 'several_refunds' | 'refund_mismatch'; detail: string } | null = null
@@ -878,8 +918,9 @@ async function reconcileClaim(run: Run, claim: Claim): Promise<ReconcileItem> {
       parts.push({ ...finding, found: 'mismatch', detail: found.detail })
       forAPerson ??= { reason: 'refund_mismatch', detail: found.detail }
     } else if (found.kind === 'went') {
-      parts.push({ ...finding, found: 'went' })
+      parts.push({ ...finding, found: 'went', refundId: found.refund.id, refundStatus: found.refund.status })
       went.push(part)
+      refunds.push(refundSeen(part, found.refund))
     } else if (found.kind === 'refused') {
       parts.push({ ...finding, found: 'none', detail: found.detail })
       never.push(part)
@@ -893,7 +934,7 @@ async function reconcileClaim(run: Run, claim: Claim): Promise<ReconcileItem> {
   const owed = Math.round(never.reduce((total, part) => total + part.amount, 0) * 100) / 100
   try {
     const refused = (await claimRefusal(run.db, claim)) ?? refusedInStripe
-    const output = await finishClaim(run.db, claim, { went, owed, ...(refused !== null ? { refused } : {}) }, { actor: run.options.actor, requestId: run.options.requestId, how: 'reconcile' })
+    const output = await finishClaim(run.db, claim, { went, refunds, owed, ...(refused !== null ? { refused } : {}) }, { actor: run.options.actor, requestId: run.options.requestId, how: 'reconcile' })
     if (!output) return { kind: 'claim', id: claim.id, outcome: 'settled_elsewhere', detail: 'finished' }
     const detail = `card ${went.map((part) => `${part.orderId} £${part.amount.toFixed(2)}`).join(', ') || 'none'} recorded; £${owed.toFixed(2)} owed; £${output.storeCreditRefundedAmount.toFixed(2)} to store credit`
     return { kind: 'claim', id: claim.id, outcome: 'finalised', detail }
@@ -914,6 +955,7 @@ async function reconcileOrderClaim(run: Run, claim: OrderClaim): Promise<Reconci
   const { plan, livemode } = claim.details
   if (typeof livemode === 'boolean' && livemode !== run.stripe.keyLivemode) return left('claim', claim.id, 'other_mode')
   const went: CardPart[] = []
+  const refunds: RefundSeen[] = []
   const never: CardPart[] = []
   const parts: ClaimPartFinding[] = []
   let refusedInStripe: string | null = null
@@ -924,8 +966,9 @@ async function reconcileOrderClaim(run: Run, claim: OrderClaim): Promise<Reconci
     if (found.kind === 'several') return left('claim', claim.id, 'several_refunds', found.ids.join(', '), { parts: [{ ...finding, found: 'several', detail: found.ids.join(', ') }] })
     if (found.kind === 'mismatch') return left('claim', claim.id, 'refund_mismatch', found.detail, { parts: [{ ...finding, found: 'mismatch', detail: found.detail }] })
     if (found.kind === 'went') {
-      parts.push({ ...finding, found: 'went' })
+      parts.push({ ...finding, found: 'went', refundId: found.refund.id, refundStatus: found.refund.status })
       went.push(part)
+      refunds.push(refundSeen(part, found.refund))
     } else {
       parts.push({ ...finding, found: 'none', ...(found.kind === 'refused' ? { detail: found.detail } : {}) })
       never.push(part)
@@ -935,7 +978,7 @@ async function reconcileOrderClaim(run: Run, claim: OrderClaim): Promise<Reconci
   const owed = Math.round(never.reduce((total, part) => total + part.amount, 0) * 100) / 100
   try {
     const refused = (await stepEClaimRefusal(run.db, claim)) ?? refusedInStripe
-    const finished = await finishOrderClaim(run.db, claim, { went, owed, ...(refused !== null ? { refused } : {}) }, { actor: run.options.actor, requestId: run.options.requestId, how: 'reconcile' })
+    const finished = await finishOrderClaim(run.db, claim, { went, refunds, owed, ...(refused !== null ? { refused } : {}) }, { actor: run.options.actor, requestId: run.options.requestId, how: 'reconcile' })
     if (!finished) return { kind: 'claim', id: claim.id, outcome: 'settled_elsewhere', detail: 'finished' }
     let detail = `card ${went.map((part) => `${part.orderId} £${part.amount.toFixed(2)}`).join(', ') || 'none'} recorded; £${owed.toFixed(2)} owed on the order; £${finished.storeCreditRefunded.toFixed(2)} to store credit`
     // W29 (E-plan 4.3): the money is settled, so a refunded membership's subscription is cancelled now, last, as the
@@ -965,6 +1008,7 @@ async function reconcileEventClaim(run: Run, claim: EventBookingClaim): Promise<
   const { plan, livemode } = claim.details
   if (typeof livemode === 'boolean' && livemode !== run.stripe.keyLivemode) return left('claim', claim.id, 'other_mode')
   const went: CardPart[] = []
+  const refunds: RefundSeen[] = []
   const never: CardPart[] = []
   let refusedInStripe: string | null = null
   for (const part of plan.card) {
@@ -973,8 +1017,10 @@ async function reconcileEventClaim(run: Run, claim: EventBookingClaim): Promise<
     const finding = { orderId: part.orderId, amount: part.amount }
     if (found.kind === 'several') return left('claim', claim.id, 'several_refunds', found.ids.join(', '), { parts: [{ ...finding, found: 'several', detail: found.ids.join(', ') }] })
     if (found.kind === 'mismatch') return left('claim', claim.id, 'refund_mismatch', found.detail, { parts: [{ ...finding, found: 'mismatch', detail: found.detail }] })
-    if (found.kind === 'went') went.push(part)
-    else {
+    if (found.kind === 'went') {
+      went.push(part)
+      refunds.push(refundSeen(part, found.refund))
+    } else {
       never.push(part)
       if (found.kind === 'refused') refusedInStripe ??= found.detail
     }
@@ -982,7 +1028,7 @@ async function reconcileEventClaim(run: Run, claim: EventBookingClaim): Promise<
   const owed = Math.round(never.reduce((total, part) => total + part.amount, 0) * 100) / 100
   try {
     const refused = (await stepEClaimRefusal(run.db, claim)) ?? refusedInStripe
-    const finished = await finishEventClaim(run.db, claim, { went, owed, ...(refused !== null ? { refused } : {}) }, { actor: run.options.actor, requestId: run.options.requestId, how: 'reconcile' })
+    const finished = await finishEventClaim(run.db, claim, { went, refunds, owed, ...(refused !== null ? { refused } : {}) }, { actor: run.options.actor, requestId: run.options.requestId, how: 'reconcile' })
     if (!finished) return { kind: 'claim', id: claim.id, outcome: 'settled_elsewhere', detail: 'finished' }
     const detail = `card ${went.map((part) => `${part.orderId} £${part.amount.toFixed(2)}`).join(', ') || 'none'} recorded; £${owed.toFixed(2)} owed on the event booking's order; £${finished.storeCreditRefunded.toFixed(2)} to store credit`
     return { kind: 'claim', id: claim.id, outcome: 'finalised', detail }
@@ -1031,17 +1077,21 @@ export interface LateRefundDue {
   entity_id: string
   payment_intent_id: string
   /** The last `order.reconcile` refund row for it, if any. */
-  state: { refund?: { state?: string; refundId?: string } } | null
+  state: { refund?: { state?: string; refundId?: string; key?: string } } | null
+  /** W32 (W25 review L3): a payment a manual close left watched (checkWatchedPayment's `watched` row). */
+  watched?: boolean | null
 }
 
 /**
  * Payments that succeeded on an order or flow already undone (T2 recorded each: `order.charge_without_order`,
  * `reader_payment.charge_without_record`) and whose refund isn't settled yet. Settled means Stripe confirmed
- * it, or it failed and is listed for a person.
+ * it, or it failed and is listed for a person. W32a (W32 review S3): or its refund is watched (refund-watch.ts): once
+ * Stripe has given the refund an id it is the watch's to read, for the watch's days, and a failure is the watch's line.
  */
 export const LATE_REFUNDS_DUE_SQL = `
 WITH charged AS (
-  SELECT a.entity_type, a.entity_id, a.details->>'paymentIntentId' AS payment_intent_id, min(a.at) AS first_at
+  SELECT a.entity_type, a.entity_id, a.details->>'paymentIntentId' AS payment_intent_id, min(a.at) AS first_at,
+         bool_or(COALESCE(a.details->>'watched', 'false') = 'true') AS watched
   FROM audit_log a
   WHERE a.action IN ('order.charge_without_order', 'reader_payment.charge_without_record')
   GROUP BY 1, 2, 3
@@ -1056,17 +1106,32 @@ latest AS (
   ORDER BY r.entity_type, r.entity_id, r.details->'refund'->>'paymentIntentId', r.at DESC,
            CASE r.details->'refund'->>'state' WHEN 'confirmed' THEN 3 WHEN 'failed' THEN 3 WHEN 'sent' THEN 2 ELSE 1 END DESC
 )
-SELECT c.entity_type, c.entity_id, c.payment_intent_id, l.state
+SELECT c.entity_type, c.entity_id, c.payment_intent_id, l.state, c.watched
 FROM charged c
 LEFT JOIN latest l ON l.entity_type = c.entity_type AND l.entity_id = c.entity_id AND l.payment_intent_id = c.payment_intent_id
-WHERE l.state IS NULL OR l.state->'refund'->>'state' NOT IN ('confirmed', 'failed')
+WHERE (l.state IS NULL OR l.state->'refund'->>'state' NOT IN ('confirmed', 'failed'))
+  AND NOT EXISTS (
+    SELECT 1 FROM audit_log w
+    WHERE w.action = 'refund.watch' AND w.entity_type = 'refund_watch' AND w.entity_id = l.state->'refund'->>'refundId'
+  )
 ORDER BY c.first_at`
 
 /** What a late payment's refund says it is for, in its metadata. */
 const LATE_REFUND_REASON = 'paid_after_undone'
 
-/** The refund's key: `<orderId>:refund-charge` (a saved card) or `:refund-reader`, or the flow's row id's. */
+/**
+ * The refund's key: `<orderId>:refund-charge` (a saved card) or `:refund-reader`, or the flow's row id's.
+ * W32 (W25 review L3, the W26 audit's row 30): a watched payment's refund is keyed by its own PaymentIntent
+ * (`<paymentIntentId>:refund-watched`). A flow closed by hand can leave more than one payment watched; under the
+ * flow's one key the second refund was a different request, which Stripe refuses for the key, so it was listed for a
+ * person though nothing was wrong with it. Each payment still has one key, so each is refunded once at most.
+ * W32a (W32 review S4): the key already recorded on the payment's `started` (or `sent`) row is the one used again, so a
+ * refund started under one key is never tried under another; the key is worked out only for a first send.
+ */
 function refundKey(due: LateRefundDue, paymentIntent: Stripe.PaymentIntent): string {
+  const recorded = due.state?.refund?.key
+  if (typeof recorded === 'string' && recorded !== '') return recorded
+  if (due.watched === true) return stripeIdempotencyKey(due.payment_intent_id, 'refund-watched')
   const reader = due.entity_type === 'reader_payment' || Boolean(paymentIntent.metadata?.['flow'])
   return stripeIdempotencyKey(due.entity_id, reader ? 'refund-reader' : 'refund-charge')
 }
@@ -1077,6 +1142,9 @@ function refundKey(due: LateRefundDue, paymentIntent: Stripe.PaymentIntent): str
  * Stripe's same refund. Stripe's answer: succeeded, confirmed; pending, listed until a later run sees it
  * succeed; failed or refused, listed for a person; unclear, sent again next run with the same key. A
  * refund already made by hand (`charge_already_refunded`) counts as confirmed.
+ * W32a (W32 review S3): a refund Stripe accepted (`succeeded` or `pending`) is handed to the refund watch with the row
+ * that records its id, in one transaction, and this path never reads it again: the watch does, for its days, so a
+ * refund answered `succeeded` that fails later is found, and one refund is one line.
  */
 async function settleLateRefund(run: Run, due: LateRefundDue): Promise<ReconcileItem> {
   const id = due.entity_id
@@ -1092,14 +1160,16 @@ async function settleLateRefund(run: Run, due: LateRefundDue): Promise<Reconcile
     } catch (err) {
       return item('refund_pending', 'unclear', readStripeFailure(err).message)
     }
+    // W32a: only a row from before the watch took these over gets here (a watched refund is no longer due).
     if (listed?.status === 'succeeded') {
-      await run.recordRefund(due.entity_type, id, { outcome: 'refund_confirmed', refund: { ...base, state: 'confirmed', refundId: listed.id, amount: listed.amount } })
+      await recordRefundWatched(run, due, listed, { outcome: 'refund_confirmed', refund: { ...base, state: 'confirmed', refundId: listed.id, amount: listed.amount } })
       return item('refund_confirmed')
     }
     if (listed && (listed.status === 'failed' || listed.status === 'canceled')) {
       await run.recordRefund(due.entity_type, id, { outcome: 'refund_failed', refund: { ...base, state: 'failed', refundId: listed.id, status: listed.status } })
       return item('refund_failed', 'refund_failed')
     }
+    if (listed) await recordRefundWatched(run, due, listed, null)
     return item('refund_pending', 'refund_pending')
   }
 
@@ -1126,7 +1196,7 @@ async function settleLateRefund(run: Run, due: LateRefundDue): Promise<Reconcile
       return item('refund_pending', 'unclear', readStripeFailure(err).message)
     }
     if (earlier?.status === 'succeeded') {
-      await run.recordRefund(due.entity_type, id, { outcome: 'refund_confirmed', refund: { ...base, state: 'confirmed', key, refundId: earlier.id, amount: earlier.amount, alreadyRefunded: true } })
+      await recordRefundWatched(run, due, earlier, { outcome: 'refund_confirmed', refund: { ...base, state: 'confirmed', key, refundId: earlier.id, amount: earlier.amount, alreadyRefunded: true } })
       return item('refund_confirmed', undefined, 'already refunded under its key')
     }
     if (earlier && (earlier.status === 'failed' || earlier.status === 'canceled')) {
@@ -1134,7 +1204,7 @@ async function settleLateRefund(run: Run, due: LateRefundDue): Promise<Reconcile
       return item('refund_failed', 'refund_failed')
     }
     if (earlier) {
-      await run.recordRefund(due.entity_type, id, { outcome: 'refund_pending', refund: { ...base, state: 'sent', key, refundId: earlier.id, status: earlier.status } })
+      await recordRefundWatched(run, due, earlier, { outcome: 'refund_pending', refund: { ...base, state: 'sent', key, refundId: earlier.id, status: earlier.status } })
       return item('refund_pending', 'refund_pending')
     }
   }
@@ -1161,15 +1231,34 @@ async function settleLateRefund(run: Run, due: LateRefundDue): Promise<Reconcile
     return item('refund_pending', 'unclear', failure.message)
   }
   if (refund.status === 'succeeded') {
-    await run.recordRefund(due.entity_type, id, { outcome: 'refund_confirmed', refund: { ...base, state: 'confirmed', key, refundId: refund.id, amount: refund.amount } })
+    await recordRefundWatched(run, due, refund, { outcome: 'refund_confirmed', refund: { ...base, state: 'confirmed', key, refundId: refund.id, amount: refund.amount } })
     return item('refund_confirmed')
   }
   if (refund.status === 'failed' || refund.status === 'canceled') {
     await run.recordRefund(due.entity_type, id, { outcome: 'refund_failed', refund: { ...base, state: 'failed', key, refundId: refund.id, status: refund.status } })
     return item('refund_failed', 'refund_failed')
   }
-  await run.recordRefund(due.entity_type, id, { outcome: 'refund_pending', refund: { ...base, state: 'sent', key, refundId: refund.id, status: refund.status } })
+  await recordRefundWatched(run, due, refund, { outcome: 'refund_pending', refund: { ...base, state: 'sent', key, refundId: refund.id, status: refund.status } })
   return item('refund_pending', 'refund_pending')
+}
+
+/**
+ * W32a (W32 review S3): a late refund Stripe accepted, handed to the refund watch (once: watchLateRefund finds a watch
+ * already there, a compensation's for the same refund included) in the transaction that writes its row (`details`;
+ * null when only the watch is wanted). So a row that names an accepted refund always has a watch beside it, and
+ * LATE_REFUNDS_DUE_SQL then leaves the payment to the watch. The watch's rows are the system's, as the refund's are.
+ */
+async function recordRefundWatched(run: Run, due: LateRefundDue, refund: Pick<Stripe.Refund, 'id' | 'amount' | 'status'>, details: Record<string, unknown> | null): Promise<void> {
+  await run.db.transaction(async (tx) => {
+    await watchLateRefund(
+      tx,
+      { refundId: refund.id, paymentIntentId: due.payment_intent_id, amountPence: refund.amount, status: refund.status },
+      { type: due.entity_type, id: due.entity_id },
+      run.stripe.keyLivemode,
+      { actor: { type: 'system', id: null }, requestId: run.options.requestId }
+    )
+    if (details) await audit.recordAll(tx, [run.refundEntry(due.entity_type, due.entity_id, details)])
+  })
 }
 
 /**
@@ -1233,6 +1322,29 @@ async function retryPutBack(run: Run, due: LeftSubscription): Promise<ReconcileI
   if (retried.kind === 'not_this_order') return left('order', due.orderId, 'subscription_not_this_order', retried.detail)
   if (retried.kind === 'refused') return left('order', due.orderId, 'subscription_refused', retried.left.join('; '))
   return left('order', due.orderId, 'subscription_left', retried.left.join('; '))
+}
+
+// --- A watched card refund (W32, lead call L7; W32a, lead call 1: every card refund)
+
+/**
+ * W32: one watched refund (refund-watch.ts) read again: a finished claim's card refund, one of step C's compensation
+ * refunds, or (W32a) a late payment's automatic refund. Never a send. Failed or cancelled: its money goes back as owed
+ * on its booking or order, or, with nothing to owe it on, is left as a line for a person (`refund_failed`). Still going
+ * after the watch's days: the watch ends for a person (`refund_failed`, `watch_expired`). Its rows are the watch's own
+ * (`refund.watch`), written with whatever is put back, so the run writes no `order.reconcile` row for it.
+ * W32a (W32 review S2): a read that ends nothing for a person is no item at all (null): still going, `succeeded` so
+ * far, a watch that ends quietly at the end of its days, no answer, the other mode, a refund claim open on its subject,
+ * or ended by another run. It is counted in neither `refunds` nor `left`; `refundsWaiting` counts the ones still going.
+ */
+async function checkWatch(run: Run, due: WatchDue): Promise<ReconcileItem | null> {
+  const id = due.details.refundId
+  const item = (outcome: ItemOutcome, reason?: string, detail?: string): ReconcileItem => ({ kind: 'refund', id, outcome, ...(reason ? { reason } : {}), ...(detail ? { detail } : {}) })
+  const checked = await checkWatchedRefund(run.db, run.stripe, due, { actor: run.options.actor, requestId: run.options.requestId }, run.timing)
+  if (checked.outcome === 'failed') {
+    return item('refund_failed', 'refund_failed_later', checked.owed > 0 ? `the refund ${checked.status}: £${checked.owed.toFixed(2)} is owed again` : `the refund ${checked.status}: left for a person`)
+  }
+  if (checked.outcome === 'expired') return item('refund_failed', 'watch_expired', checked.detail)
+  return null
 }
 
 // --- Reading what is due
@@ -1346,8 +1458,12 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
   const eventClaims = await db.query<{ id: string }>(EVENT_BOOKING_CLAIMS_DUE_SQL, [window])
   const watchedPayments = await db.query<WatchedPayment>(WATCHED_DUE_SQL)
   const refundCancels = await refundCancelsDue(db, SUBSCRIPTIONS_LEFT_SQL)
+  // W32a (W32 review S1): the list itself picks the watches due a read, the one read longest ago first, and no more than
+  // a run can take.
+  const watches = await db.query<WatchDue>(WATCHES_DUE_SQL, [options.watchDays ?? WATCH_DAYS, options.watchReadHours ?? WATCH_READ_HOURS, options.maxItems])
 
-  const work: Array<{ kind: ReconcileItem['kind']; id: string; go: () => Promise<ReconcileItem> }> = [
+  /** `watch`: a watched refund's read, which is no item unless it ends for a person (W32a). */
+  const work: Array<{ kind: ReconcileItem['kind']; id: string; watch?: true; go: () => Promise<ReconcileItem | null> }> = [
     ...refunds.map((due) => ({ kind: 'refund' as const, id: due.entity_id, go: () => settleLateRefund(run, due) })),
     ...orders.map((order) => ({ kind: 'order' as const, id: order.id, go: () => reconcileOrder(run, order) })),
     ...changed.map((order) => ({ kind: 'order' as const, id: order.id, go: () => readChangedElsewhere(run, order) })),
@@ -1404,16 +1520,23 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
     // W29: a refunded membership's subscription still to cancel. Last, as the put-backs: a cancel Stripe keeps
     // refusing can't keep a run from anything else.
     ...refundCancels.map((due) => ({ kind: 'order' as const, id: due.orderId, go: () => retryRefundCancel(run, due) })),
+    // W32: watched card refunds, read until they end. Last of all: a refund is watched for weeks, and must never keep
+    // a run from anything that is waiting to be settled.
+    ...watches.map((due) => ({ kind: 'refund' as const, id: due.details.refundId, watch: true as const, go: () => checkWatch(run, due) })),
   ]
+  /** What still waits from `index` on. A watch's read is never "waiting": nothing is held up by it, and it is due again next run. */
+  const waitingFrom = (index: number): number => work.slice(index).filter((next) => !next.watch).length
 
-  const result: ReconcileResult = { checked: 0, finalised: 0, undone: 0, refunds: 0, left: 0, deferred: 0, stripeRefused: false, items: [] }
+  const result: ReconcileResult = { checked: 0, finalised: 0, undone: 0, refunds: 0, left: 0, deferred: 0, stripeRefused: false, refundsWaiting: 0, items: [] }
+  // W32a: every read uses one of the run's items, a watch's included, though a watch's quiet read is not counted as checked.
+  let used = 0
   for (const [index, next] of work.entries()) {
-    if (result.checked >= options.maxItems || now() - started >= options.budgetMs) {
-      result.deferred = work.length - index
+    if (used >= options.maxItems || now() - started >= options.budgetMs) {
+      result.deferred = waitingFrom(index)
       break
     }
-    result.checked += 1
-    let item: ReconcileItem
+    used += 1
+    let item: ReconcileItem | null
     try {
       item = await next.go()
     } catch (err) {
@@ -1425,16 +1548,15 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
       // that did something before meeting it (W12a L6: a swallowed card read after the payment was found,
       // then T2) keeps its row; one that did nothing is counted as waiting.
       result.stripeRefused = true
-      const acted = item.kind !== 'refund' && (item.outcome === 'finalised' || item.outcome === 'undone')
-      if (acted) {
+      const acted = item !== null && item.kind !== 'refund' && (item.outcome === 'finalised' || item.outcome === 'undone')
+      if (item !== null && acted) {
+        result.checked += 1
         await run.record(entityTypeOf(item.kind), item.id, { outcome: item.outcome, detail: item.detail ?? null, ...(item.warning ? { warning: item.warning } : {}) })
         if (item.outcome === 'finalised') result.finalised += 1
         if (item.outcome === 'undone') result.undone += 1
         result.items.push(forTheAnswer(item))
-      } else {
-        result.checked -= 1
       }
-      result.deferred = acted ? work.length - index - 1 : work.length - index
+      result.deferred = waitingFrom(acted ? index + 1 : index)
       await db.transaction((tx) =>
         audit.recordAll(tx, [{
           actorType: options.actor.type,
@@ -1448,6 +1570,9 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
       )
       break
     }
+    // W32a (W32 review S2): a watched refund's read that ended nothing for a person.
+    if (item === null) continue
+    result.checked += 1
     if (item.kind !== 'refund') {
       const entityType = entityTypeOf(item.kind)
       if (item.outcome === 'left') {
@@ -1465,8 +1590,14 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
     if (item.outcome === 'finalised') result.finalised += 1
     if (item.outcome === 'undone') result.undone += 1
     if (item.outcome.startsWith('refund_')) result.refunds += 1
-    if (item.outcome === 'left' || item.outcome === 'refund_failed' || item.outcome === 'refund_pending') result.left += 1
+    // W32a (W32 review S2): a refund still on its way is nothing for a person: only one that failed (or whose watch ran out) is.
+    if (item.outcome === 'left' || item.outcome === 'refund_failed') result.left += 1
     result.items.push(forTheAnswer(item))
+  }
+  try {
+    result.refundsWaiting = (await db.query<{ waiting: number }>(WATCHES_WAITING_SQL))[0]?.waiting ?? 0
+  } catch {
+    // Only a count for the screen: the run's work is done and recorded, and is answered without it.
   }
   return result
 }

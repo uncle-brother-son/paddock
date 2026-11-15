@@ -90,7 +90,8 @@ describe("Resolve now is the Worker's reconcile alone (W12-3, W13-3; W25: the ol
       const reconciled = (await old.call('reconcileOrders', { idempotencyKey: key })) as { ok: boolean; run: Record<string, unknown> }
       expect(reconciled).toMatchObject({ ok: true, run: { checked: 1, undone: 1 } })
       // W25: nothing is counted as "the old code's" any more: these are all the run's fields.
-      expect(Object.keys(reconciled.run).sort()).toEqual(['checked', 'deferred', 'finalised', 'items', 'left', 'refunds', 'stripeRefused', 'undone'])
+      // W32a: and how many watched refunds are still on their way at Stripe.
+      expect(Object.keys(reconciled.run).sort()).toEqual(['checked', 'deferred', 'finalised', 'items', 'left', 'refunds', 'refundsWaiting', 'stripeRefused', 'undone'])
       expect(await status(workerOrder)).toBe('gone')
       expect((await stripe.paymentIntents.retrieve(workerIntent)).status).toBe('canceled')
       // The same key again: the stored answer, nothing run twice.
@@ -280,19 +281,44 @@ describe("the banner's words (frontend/utils/stuckList.ts)", () => {
     const withClaim = { ...listed, claims: [{ ageMinutes: 55 }] }
     expect(stuckCount(withClaim)).toBe(6)
     expect(oldestAgeMinutes(withClaim)).toBe(55)
+    // W32: a refund that failed after Stripe accepted it (or whose watch ran out) counts too; a list from a Worker
+    // before W32 has no `watched`, and counts as before.
+    expect(stuckCount({ ...withClaim, watched: [{}, {}] })).toBe(8)
+    expect(stuckCount({ ...empty, watched: [{}] })).toBe(1)
+  })
+
+  it('W32: a failed or timed-out refund has its own heading, Mark sorted, and words for the dialog', async () => {
+    const { closeButtonLabel, closeDialogText, watchedLabel } = await stuckHelpers()
+    expect(closeButtonLabel('refund_watch')).toBe('Mark sorted')
+    expect(closeDialogText('refund_watch')).toBe(
+      'Marks this refund as sorted, so it is no longer listed. Only do this once it is dealt with: the money given back with Refund the rest (or It already arrived) where it shows as still to refund, or by hand where the line says so. Nothing is refunded or changed here.'
+    )
+    expect(watchedLabel({ on: 'booking', state: 'failed', customerName: 'Sam Test' })).toBe('Booking refund failed · Sam Test')
+    expect(watchedLabel({ on: 'order', state: 'failed', customerName: 'Sam Test' })).toBe('Order refund failed · Sam Test')
+    expect(watchedLabel({ on: 'event_booking', state: 'expired', customerName: 'Sam Test' })).toBe('Event refund not confirmed · Sam Test')
+    // A compensation's order was undone, so there is no customer to name.
+    expect(watchedLabel({ on: 'compensation', state: 'failed', customerName: null })).toBe('Automatic refund failed')
   })
 
   it("says what each run did, and a close's button and what it does", async () => {
     const helpers = await stuckHelpers()
     const { reconcileLine, closeButtonLabel, closeDialogText } = helpers
     // W25: the old sweep's line went with the sweep: these are all the helpers.
-    expect(Object.keys(helpers).sort()).toEqual(['closeButtonLabel', 'closeDialogText', 'flowLabel', 'oldestAgeMinutes', 'reconcileLine', 'stuckCount'])
+    expect(Object.keys(helpers).sort()).toEqual(['closeButtonLabel', 'closeDialogText', 'flowLabel', 'oldestAgeMinutes', 'reconcileLine', 'stuckCount', 'watchedLabel'])
     const run = (fields: Record<string, unknown>) => ({ ok: true, run: { checked: 0, finalised: 0, undone: 0, refunds: 0, left: 0, deferred: 0, stripeRefused: false, ...fields } })
     expect(reconcileLine(run({}))).toBe('The automatic check found nothing to settle.')
     expect(reconcileLine(run({ checked: 3, finalised: 1, undone: 1, left: 1, deferred: 2 }))).toBe(
       'The automatic check looked at 3 payments: 1 finished, 1 cancelled, 1 left for a person. 2 more payments wait for the next check (every 5 minutes).'
     )
     expect(reconcileLine(run({ stripeRefused: true }))).toContain('Tell a manager straight away')
+    // W32a (W32 review S2): refunds still on their way at Stripe are said on their own, never as "left for a person";
+    // a Worker from before W32a sends no such figure, and the line reads as it did.
+    expect(reconcileLine(run({ refundsWaiting: 2 }))).toBe('The automatic check found nothing to settle. 2 refunds waiting on Stripe: nothing to do.')
+    expect(reconcileLine(run({ checked: 2, finalised: 1, refunds: 1, left: 1, refundsWaiting: 1 }))).toBe(
+      'The automatic check looked at 2 payments: 1 finished, 0 cancelled, 1 refund sent or checked, 1 left for a person, 1 refund waiting on Stripe.'
+    )
+    expect(reconcileLine(run({ checked: 1, finalised: 1, refundsWaiting: 0 }))).toBe('The automatic check looked at 1 payment: 1 finished, 0 cancelled.')
+    expect(reconcileLine(run({ checked: 1, finalised: 1 }))).toBe('The automatic check looked at 1 payment: 1 finished, 0 cancelled.')
     expect(reconcileLine({ ok: false, workerCode: 'WORKER_UNREACHABLE', message: 'No answer.' })).toBe('No answer.')
     expect(closeButtonLabel('held_order')).toBe('Close order')
     expect(closeButtonLabel('changed_elsewhere')).toBe('Mark sorted')
@@ -327,6 +353,41 @@ describe("the banner's words (frontend/utils/stuckList.ts)", () => {
       expect(listed['claims']).toEqual([claim])
       expect(listed['flows']).toEqual([flow])
       expect(query).not.toHaveBeenCalled()
+      // W32: that answer is a Worker's from before W32 (no `watched`): none are listed, and nothing breaks.
+      expect(listed['watched']).toEqual([])
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it("W32: getStuckReaderPayments passes the Worker's failed and timed-out refunds through, each with its words and Mark sorted", async () => {
+    const fn = (await backendFunction('getStuckReaderPayments')).default as (req: { params: object; user: { email: string } }) => Promise<Record<string, unknown>>
+    const watched = {
+      watchId: 'w',
+      refundId: 're_1',
+      paymentIntentId: 'pi_1',
+      on: 'booking',
+      bookingId: 'b',
+      orderId: null,
+      eventBookingId: null,
+      eventId: null,
+      customerName: 'Sam Test',
+      amount: 20,
+      owed: 20,
+      state: 'failed',
+      at: 'x',
+      words: 'w',
+      close: { kind: 'refund_watch', orderId: 'w' },
+    }
+    vi.stubGlobal('paddockData', { query: vi.fn().mockResolvedValue({ data: [] }) })
+    vi.stubGlobal('paddockWorkerV1', {
+      rawRequest: vi.fn().mockResolvedValue({ data: { ok: true, data: { checkout: [], flows: [], claims: [], refunds: [], warnings: [], watched: [watched], alert: null }, requestId: 'r' } }),
+    })
+    try {
+      const listed = await fn({ params: {}, user: { email: 'jo@example.com' } })
+      expect(listed['watched']).toEqual([watched])
+      const { stuckCount } = await stuckHelpers()
+      expect(stuckCount(listed)).toBe(1)
     } finally {
       vi.unstubAllGlobals()
     }

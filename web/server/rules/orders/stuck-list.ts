@@ -16,6 +16,7 @@ import type { StuckCloseTarget } from '@/contracts'
 import { PROCESSING_MINUTES as RECONCILE_WINDOW_MINUTES } from './pending-order'
 import { MEMBERSHIP_REFUND_WORDS } from '@/server/rules/refunds/failure-messages'
 import { LEFT_BY_REFUND } from './refund-subscription'
+import { LATE_REFUND_STEP, WATCH_DAYS, WATCHES_LISTED_SQL, type WatchDetails } from '@/server/rules/refunds/refund-watch'
 
 /**
  * Words for each reason an item is listed (W12's, W14b: every reason reconcile can leave an order or flow with has
@@ -172,6 +173,42 @@ export const REFUND_FAILED_WORDS = (amount: number, paymentIntentId: string): st
 export const STRIPE_REFUSED_WORDS =
   "Stripe turned down the club's payment account details, so the automatic check couldn't look at any payments. Nothing has been changed. Tell a manager straight away so the Stripe connection can be fixed."
 
+/**
+ * W32: a card refund Stripe accepted and then failed, or one still pending when its watch ran out. Each says what
+ * happened to the money and what to do, and ends with Mark sorted (the manual close's `refund_watch`). W32a: a late
+ * payment's automatic refund has its own failed line (review S3), and the ran-out line says what to do while Stripe
+ * still shows the refund pending (review S5).
+ */
+const MARK_SORTED = 'Then press Mark sorted (needs the Issue refunds permission).'
+const pounds = (amount: number): string => `£${amount.toFixed(2)}`
+export const WATCH_WORDS = {
+  bookingFailed: (amount: number, refundId: string): string =>
+    `A card refund of ${pounds(amount)} on this booking (${refundId}) was accepted by Stripe and then failed, so the money never reached the customer. It is back on the booking as money still to refund: open the booking and use Refund the rest. ${MARK_SORTED}`,
+  orderFailed: (amount: number, refundId: string): string =>
+    `A card refund of ${pounds(amount)} on this order (${refundId}) was accepted by Stripe and then failed, so the money never reached the customer. It is back on the order as money still to refund: find the order on the Orders page and use Refund the rest. ${MARK_SORTED}`,
+  eventFailed: (amount: number, refundId: string): string =>
+    `A card refund of ${pounds(amount)} for cancelled event places (${refundId}) was accepted by Stripe and then failed, so the money never reached the customer. The places stay cancelled, and the money is back on the event booking as money still to refund: open the event's attendee list and use Refund the rest. ${MARK_SORTED}`,
+  compensationFailed: (amount: number, paymentIntentId: string): string =>
+    `An automatic refund of ${pounds(amount)} (payment ${paymentIntentId}) for an order that couldn't be completed was accepted by Stripe and then failed, so the customer has not had the money back. Refund that payment in Stripe by hand (or tell a manager if Stripe won't). ${MARK_SORTED}`,
+  /** W32a (W32 review S3): a late payment's automatic refund (its order or change was already cancelled). */
+  lateFailed: (amount: number, paymentIntentId: string): string =>
+    `An automatic refund of ${pounds(amount)} (payment ${paymentIntentId}) for a payment that went through after its order or change had been cancelled was accepted by Stripe and then failed, so the customer has not had the money back. Refund that payment in Stripe by hand (or tell a manager if Stripe won't). ${MARK_SORTED}`,
+  /** Failed, with nothing left to put it on (the booking or order no longer exists). */
+  goneFailed: (amount: number, paymentIntentId: string): string =>
+    `A card refund of ${pounds(amount)} (payment ${paymentIntentId}) was accepted by Stripe and then failed, so the money never reached the customer, and what it was for no longer exists, so it can't be listed as money still to refund. Give the customer the money back by hand (refund the payment in Stripe, or add store credit), or tell a manager. ${MARK_SORTED}`,
+  expired: (amount: number, refundId: string): string =>
+    `A card refund of ${pounds(amount)} (${refundId}) has been waiting at Stripe for more than ${WATCH_DAYS} days, so the automatic check has stopped watching it. It is still recorded as refunded. Look at the refund in Stripe: if it went through, there is nothing more to do; if it failed, the customer has not had the money, so give it back by hand (store credit, or a refund in Stripe) and tell a manager. If Stripe still shows it pending, don't give anything back: tell a manager and leave this line until Stripe says how it ended. ${MARK_SORTED}`,
+} as const
+
+/** W32: the words for one listed watch. */
+export function watchWords(watch: Pick<WatchDetails, 'on' | 'amount' | 'refundId' | 'paymentIntentId' | 'step'>, state: 'failed' | 'expired', owed: number): string {
+  if (state === 'expired') return WATCH_WORDS.expired(watch.amount, watch.refundId)
+  if (watch.on === 'compensation') return watch.step === LATE_REFUND_STEP ? WATCH_WORDS.lateFailed(watch.amount, watch.paymentIntentId) : WATCH_WORDS.compensationFailed(watch.amount, watch.paymentIntentId)
+  if (!(owed > 0)) return WATCH_WORDS.goneFailed(watch.amount, watch.paymentIntentId)
+  if (watch.on === 'booking') return WATCH_WORDS.bookingFailed(watch.amount, watch.refundId)
+  return watch.on === 'order' ? WATCH_WORDS.orderFailed(watch.amount, watch.refundId) : WATCH_WORDS.eventFailed(watch.amount, watch.refundId)
+}
+
 /** W14b: the changed-elsewhere findings the close accepts (close-stuck.ts says why). */
 const CLOSABLE_FINDINGS: ReadonlySet<string> = new Set([...FINAL_FINDINGS, 'other_mode'])
 
@@ -262,12 +299,32 @@ export interface StuckWarning {
   close?: StuckCloseTarget
 }
 
+/** W32: a refund that failed after Stripe accepted it, or a watch that ran out (contracts/reconcile.ts, `watched`). */
+export interface StuckWatched {
+  watchId: string
+  refundId: string
+  paymentIntentId: string
+  on: WatchDetails['on']
+  bookingId: string | null
+  orderId: string | null
+  eventBookingId: string | null
+  eventId: string | null
+  customerName: string | null
+  amount: number
+  owed: number
+  state: 'failed' | 'expired'
+  at: string
+  words: string
+  close?: StuckCloseTarget
+}
+
 export interface StuckListOutput {
   checkout: StuckOrder[]
   flows: StuckFlow[]
   claims: StuckClaim[]
   refunds: StuckRefund[]
   warnings: StuckWarning[]
+  watched: StuckWatched[]
   alert: { at: string; words: string } | null
 }
 
@@ -380,7 +437,8 @@ WITH charged AS (
 ),
 latest AS (
   SELECT DISTINCT ON (r.entity_type, r.entity_id, r.details->'refund'->>'paymentIntentId')
-         r.entity_type, r.entity_id, r.details->'refund'->>'paymentIntentId' AS payment_intent_id, r.details->'refund'->>'state' AS state
+         r.entity_type, r.entity_id, r.details->'refund'->>'paymentIntentId' AS payment_intent_id, r.details->'refund'->>'state' AS state,
+         r.details->'refund'->>'refundId' AS refund_id
   FROM audit_log r
   WHERE r.action = 'order.reconcile' AND r.details ? 'refund'
   -- A refund's state only moves forward (started, sent, then confirmed or failed; W14c: failed, then confirmed by
@@ -391,7 +449,13 @@ latest AS (
 SELECT c.entity_type, c.entity_id, c.payment_intent_id, c.pence::float8 AS pence, COALESCE(l.state, 'waiting') AS state
 FROM charged c
 LEFT JOIN latest l ON l.entity_type = c.entity_type AND l.entity_id = c.entity_id AND l.payment_intent_id = c.payment_intent_id
-WHERE l.state IS NULL OR l.state <> 'confirmed'
+WHERE (l.state IS NULL OR l.state <> 'confirmed')
+  -- W32a (W32 review S3): a refund the watch has (refund-watch.ts) is the watch's: nothing while it is on its way, and
+  -- the watch's own line if it fails, so one refund is never listed twice.
+  AND NOT EXISTS (
+    SELECT 1 FROM audit_log w
+    WHERE w.action = 'refund.watch' AND w.entity_type = 'refund_watch' AND w.entity_id = l.refund_id
+  )
 ORDER BY c.first_at`
 
 const WARNINGS_SQL = `
@@ -428,6 +492,22 @@ WHERE NOT EXISTS (
            OR (d.action = 'order.compensate' AND d.details->>'state' = 'done'))
   )
 ORDER BY s.at DESC`
+
+/**
+ * W32: who a listed watch's refund was for, and the event of an event booking's: `$1` what it is on, `$2` the booking,
+ * order or event booking (as text). No row when it no longer exists.
+ */
+const WATCH_SUBJECT_SQL = `
+SELECT c.first_name, c.last_name, s.event_id
+FROM (
+  SELECT b.customer_id, NULL::uuid AS event_id FROM bookings b WHERE $1::text = 'booking' AND b.id::text = $2::text
+  UNION ALL
+  SELECT o.customer_id, NULL::uuid FROM orders o WHERE $1::text IN ('order', 'compensation') AND o.id::text = $2::text
+  UNION ALL
+  SELECT eb.customer_id, eb.event_id FROM event_bookings eb WHERE $1::text = 'event_booking' AND eb.id::text = $2::text
+) s
+JOIN customers c ON c.id = s.customer_id
+LIMIT 1`
 
 const ALERT_SQL = `
 SELECT at FROM audit_log
@@ -517,6 +597,31 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
   const warnings = await db.query<{ entity_type: string; entity_id: string; at: unknown; warning: string }>(WARNINGS_SQL, [WARNINGS_FOR_HOURS])
   const alert = (await db.query<{ at: unknown }>(ALERT_SQL, [ALERT_FOR_MINUTES]))[0]
   const subscriptionsLeft = await db.query<{ entity_id: string; at: unknown; subscription_id: string; state: string; found: string | null }>(SUBSCRIPTIONS_LEFT_SQL)
+  // W32: refunds that failed after Stripe accepted them, and watches that ran out (few, if ever any: one read each for the name).
+  const watches = await db.query<{ id: string; refund_id: string; details: WatchDetails; ended_at: unknown; state: 'failed' | 'expired'; ended: { owed?: number } }>(WATCHES_LISTED_SQL, [null])
+  const watched: StuckWatched[] = []
+  for (const row of watches) {
+    const watch = row.details
+    const subject = (await db.query<{ first_name: string; last_name: string; event_id: string | null }>(WATCH_SUBJECT_SQL, [watch.on, watch.subjectId]))[0]
+    const owed = Number(row.ended.owed ?? 0)
+    watched.push({
+      watchId: row.id,
+      refundId: watch.refundId,
+      paymentIntentId: watch.paymentIntentId,
+      on: watch.on,
+      bookingId: watch.on === 'booking' ? watch.subjectId : null,
+      orderId: watch.on === 'order' || watch.on === 'compensation' ? watch.subjectId : watch.orderId,
+      eventBookingId: watch.on === 'event_booking' ? watch.subjectId : null,
+      eventId: subject?.event_id ?? null,
+      customerName: subject ? `${subject.first_name} ${subject.last_name}`.trim() : null,
+      amount: watch.amount,
+      owed,
+      state: row.state,
+      at: iso(row.ended_at),
+      words: watchWords(watch, row.state, owed),
+      close: { kind: 'refund_watch', orderId: row.id },
+    })
+  }
 
   return {
     checkout: orders.map((row): StuckOrder => {
@@ -672,6 +777,7 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
         })
       )
       .concat(warnings.map((row) => ({ kind: row.entity_type === 'order' ? 'order' : 'flow', id: row.entity_id, at: iso(row.at), warning: row.warning }))),
+    watched,
     alert: alert ? { at: iso(alert.at), words: STRIPE_REFUSED_WORDS } : null,
   }
 }

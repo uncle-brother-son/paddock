@@ -1,3 +1,4 @@
+import { REFUND_WATCH_ROW, refundsKeptProblem, refundWatchProblems } from './refunds-kept'
 import path from 'node:path'
 import { vi } from 'vitest'
 import type { Db } from '@/server/db'
@@ -738,6 +739,9 @@ function refundRows(rows: readonly AuditRow[], side: 'golden' | 'new'): Set<Audi
     } else if (side === 'new' && row.action === 'booking.refund_refused' && claimIds.has(row.details?.['claimId'])) {
       // W26a: the Worker's mark that Stripe refused one of a claim's card parts (the old code wrote none).
       swapped.add(row)
+    } else if (side === 'new' && row.action === REFUND_WATCH_ROW) {
+      // W32a: the watch on a card refund the Worker's claim kept (the old code kept no refund, so watched none).
+      swapped.add(row)
     }
   }
   return swapped
@@ -996,7 +1000,10 @@ export function newAuditRowProblems(recording: Recording): string[] {
     } else if (row.action === 'booking.refund_finished') {
       const claim = all.find((other) => other['id'] === d['claimId'])
       const c = (claim?.details ?? {}) as Record<string, unknown>
-      if (!sameKeys(d, ['claimId', 'outcome', 'cardRefunded', 'storeCreditRefunded', 'owed', ...('cash' in d ? ['cash'] : []), ...('refused' in d ? ['refused'] : []), ...('by' in d ? ['by'] : [])])) wrong('fields')
+      if (!sameKeys(d, ['claimId', 'outcome', 'cardRefunded', 'storeCreditRefunded', 'owed', ...('cash' in d ? ['cash'] : []), ...('refused' in d ? ['refused'] : []), ...('refunds' in d ? ['refunds'] : []), ...('by' in d ? ['by'] : [])])) wrong('fields')
+      // W32: the card refunds' ids and statuses, kept for the refund watch (refunds-kept.ts).
+      const kept = refundsKeptProblem(d, c)
+      if (kept) wrong(kept)
       // W26a: Stripe's reason, only on a claim that ended with money owed (a refused part never ends as store credit).
       if ('refused' in d && (typeof d['refused'] !== 'string' || d['refused'] === '' || d['outcome'] !== 'owed')) wrong('refused without money owed')
       const accounted = round2(n('cardRefunded') + n('storeCreditRefunded') + n('owed') + Number(d['cash'] ?? 0))
@@ -1009,6 +1016,8 @@ export function newAuditRowProblems(recording: Recording): string[] {
       const planned = Number(((c['plan'] ?? {}) as { storeCredit?: number }).storeCredit ?? 0)
       if (d['outcome'] !== 'put_back' && n('storeCreditRefunded') !== round2(planned)) wrong("store credit given is not the plan's own")
       if (typeof row['request_id'] !== 'string') wrong('request id')
+    } else if (row.action === REFUND_WATCH_ROW) {
+      // W32a: held to one rule, with the refunds the finished rows keep (refundWatchProblems, below).
     } else if (row.action === 'booking.refund_refused') {
       // W26a: the mark of a refused card part: the claim, the planned part it names, Stripe's reason; and the claim never
       // ends with that part's money given as store credit (put back, or at least that much owed).
@@ -1102,6 +1111,8 @@ export function newAuditRowProblems(recording: Recording): string[] {
       wrong('an unexpected row')
     }
   }
+  // W32a: every card refund a finished claim keeps has its one watch row, and there is no other.
+  problems.push(...refundWatchProblems(all, 'booking', 'booking.refund_finished'))
   return problems
 }
 

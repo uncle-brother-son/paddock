@@ -70,6 +70,7 @@ import {
 } from '@/server/rules/refunds/failure-messages'
 import { lockForRefund } from '@/server/rules/refunds/locks'
 import { heldAnswer, ORDER_CLAIMS, sendCardPart, type CardPart, type CardPartLine } from '@/server/rules/refunds/pipeline'
+import { claimWatchEntries, refundSeen, refundsForRow, type RefundSeen } from '@/server/rules/refunds/refund-watch'
 import { lowerMoneyOwed, raiseMoneyOwed } from './money-owed'
 import { cancelLeftWarning, cancelSubscriptionsAfterRefund, refundedSubscriptions, subscriptionsLeftByRefund } from './refund-subscription'
 
@@ -102,6 +103,8 @@ export interface OrderFinishedBy {
 export interface OrderClaimOutcome {
   /** The card part, when it went. */
   went: CardPart[]
+  /** W32: its refund as Stripe answered or lists it: kept on the finished row, and watched while it hasn't succeeded. */
+  refunds?: RefundSeen[]
   owed: number
   /** Stripe's reason when it refused the card part, kept on the finished row. */
   refused?: string
@@ -853,9 +856,12 @@ export async function finishOrderClaimInTransaction(tx: Tx, claim: OrderClaim, o
         owed,
         ...(cash > 0 ? { cash } : {}),
         ...(outcome.refused !== undefined ? { refused: outcome.refused } : {}),
+        ...refundsForRow(outcome.went, outcome.refunds),
         ...finishedBy,
       },
     },
+    // W32: a refund that hadn't succeeded yet is watched from the same transaction that records it as gone.
+    ...claimWatchEntries({ id: claim.id, on: 'order', subjectId: claim.orderId, livemode: details.livemode }, outcome.went, outcome.refunds, { actor: by.actor, requestId: by.requestId }),
   ]
   // W29: each refunded membership's subscription is recorded as still to cancel here, with the money, before Stripe
   // is asked (refund-subscription.ts). Its row first: recordAll stamps rows a millisecond apart in the order given,
@@ -1042,7 +1048,7 @@ async function sendAndFinish(db: Db, stripe: StripeClient, claim: OrderClaim, op
     throw firstRefused(detail)
   }
   try {
-    const finished = await finishOrderClaim(db, claim, { went: [part], owed: 0 }, by)
+    const finished = await finishOrderClaim(db, claim, { went: [part], refunds: [refundSeen(part, answer.refund)], owed: 0 }, by)
     // Finished by someone else (a close): what went is theirs to report.
     return finished ? { finished } : held('refund_finished_elsewhere', NEW_WORDS.goneNotRecorded(part.amount), part.amount)
   } catch {

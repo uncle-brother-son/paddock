@@ -77,6 +77,11 @@ export const reconcileRunOutputSchema = z.object({
   left: z.number(),
   deferred: z.number(),
   stripeRefused: z.boolean(),
+  /**
+   * W32a (W32 review S2): watched card refunds still on their way at Stripe. Nothing to do for them: they are in neither
+   * `refunds` nor `left`. Absent from a Worker before W32a.
+   */
+  refundsWaiting: z.number().optional(),
   items: z.array(reconcileItemSchema),
 })
 export type ReconcileRunOutput = z.infer<typeof reconcileRunOutputSchema>
@@ -100,8 +105,11 @@ export type ReconcileRunOutput = z.infer<typeof reconcileRunOutputSchema>
  * - `held_claim` (W21): a booking refund's claim reconcile left for a person: its card parts not yet recorded go on
  *   the booking as money still to refund (It already arrived, or Refund the rest), the rest as R2 gives it. `orderId`
  *   is the claim's id. W28: an order refund's claim too, with the money left on the order.
+ * - `refund_watch` (W32): a card refund Stripe accepted and then failed, or one still pending when its watch ran out
+ *   (`watched` on the list): recorded as sorted once a person has dealt with it. Nothing moves. `orderId` is the
+ *   watch's id.
  */
-export const stuckCloseKindSchema = z.enum(['held_order', 'changed_elsewhere', 'subscription_left', 'late_refund', 'held_flow', 'held_claim'])
+export const stuckCloseKindSchema = z.enum(['held_order', 'changed_elsewhere', 'subscription_left', 'late_refund', 'held_flow', 'held_claim', 'refund_watch'])
 export type StuckCloseKind = z.infer<typeof stuckCloseKindSchema>
 
 export const stuckCloseTargetSchema = z.object({
@@ -194,6 +202,32 @@ export const stuckWarningSchema = z.object({
 })
 export type StuckWarningOutput = z.infer<typeof stuckWarningSchema>
 
+/**
+ * W32: a card refund Stripe accepted (W32a: whatever its first status) whose watch has ended badly: it `failed` afterwards (its money is back
+ * on the booking or order as money still to refund, or, with nothing to owe it on, is for a person to give back), or
+ * it was still pending when the watch ran out (`expired`). Listed until a person marks it sorted (`refund_watch`).
+ */
+export const stuckWatchedSchema = z.object({
+  watchId: z.string(),
+  refundId: z.string(),
+  paymentIntentId: z.string(),
+  /** What the refund was for: a booking's, an order's or an event booking's refund, or an order that couldn't be completed. */
+  on: z.enum(['booking', 'order', 'event_booking', 'compensation']),
+  bookingId: z.string().nullable(),
+  orderId: z.string().nullable(),
+  eventBookingId: z.string().nullable(),
+  eventId: z.string().nullable(),
+  customerName: z.string().nullable(),
+  amount: z.number(),
+  /** What went back on the booking or order as money still to refund (0: nothing could be, so a person gives it back). */
+  owed: z.number(),
+  state: z.enum(['failed', 'expired']),
+  at: z.string(),
+  words: z.string(),
+  close: stuckCloseTargetSchema.optional(),
+})
+export type StuckWatchedOutput = z.infer<typeof stuckWatchedSchema>
+
 export const stuckListOutputSchema = z.object({
   checkout: z.array(stuckOrderSchema),
   flows: z.array(stuckFlowSchema),
@@ -201,6 +235,11 @@ export const stuckListOutputSchema = z.object({
   claims: z.array(stuckClaimSchema),
   refunds: z.array(stuckRefundSchema),
   warnings: z.array(stuckWarningSchema),
+  /**
+   * W32: refunds that failed after Stripe accepted them, and watches that ran out. A field of its own, so the staff
+   * app published before W32 (which copies the fields it knows) reads the list exactly as before.
+   */
+  watched: z.array(stuckWatchedSchema),
   alert: z.object({ at: z.string(), words: z.string() }).nullable(),
 })
 export type StuckListOutput = z.infer<typeof stuckListOutputSchema>

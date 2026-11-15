@@ -61,6 +61,12 @@ export interface StripeClient {
     create(params: Stripe.CustomerCreateParams, options?: Stripe.RequestOptions): Promise<Stripe.Customer>
     update(id: string, params: Stripe.CustomerUpdateParams, options?: Stripe.RequestOptions): Promise<Stripe.Customer>
     search(params: Stripe.CustomerSearchParams, options?: Stripe.RequestOptions): Promise<Stripe.ApiSearchResult<Stripe.Customer>>
+    /**
+     * W32 (W13a review L1): a membership compensation puts back what the first invoice did to the customer's Stripe
+     * balance, and lists the customer's balance transactions first so it is never done twice (membership.ts).
+     */
+    createBalanceTransaction(id: string, params: Stripe.CustomerCreateBalanceTransactionParams, options?: Stripe.RequestOptions): Promise<Stripe.CustomerBalanceTransaction>
+    listBalanceTransactions(id: string, params?: Stripe.CustomerListBalanceTransactionsParams, options?: Stripe.RequestOptions): Promise<Stripe.ApiList<Stripe.CustomerBalanceTransaction>>
   }
   prices: {
     retrieve(id: string, params?: Stripe.PriceRetrieveParams, options?: Stripe.RequestOptions): Promise<Stripe.Price>

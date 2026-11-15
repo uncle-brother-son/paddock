@@ -260,7 +260,8 @@ export const heldAnswer = (claimId: string, reason: string, message: string, car
 
 /** A claim's card part as Stripe shows it: a refund naming the claim, none, or more than one (left for a person). */
 export type PartFound =
-  | { kind: 'went' }
+  /** W32: with the refund itself (its id and status), which the claim's finished row keeps and the watch follows. */
+  | { kind: 'went'; refund: { id: string; status: string | null } }
   | { kind: 'none' }
   /** W26a: a refund naming the claim that failed or was cancelled, and none that went: Stripe's refusal, with its words. */
   | { kind: 'refused'; detail: string }
@@ -311,5 +312,5 @@ export async function findCardPart(stripe: StripeClient, claimId: string, part: 
     return dead ? { kind: 'refused', detail: refundRefusedDetail(`the refund ${dead.status}`) } : { kind: 'none' }
   }
   if (refund.amount !== pence(part.amount)) return { kind: 'mismatch', detail: `${refund.id} is ${refund.amount}p, the part ${pence(part.amount)}p` }
-  return { kind: 'went' }
+  return { kind: 'went', refund: { id: refund.id, status: refund.status } }
 }

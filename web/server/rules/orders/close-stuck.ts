@@ -61,6 +61,7 @@ import type { ClaimPartFinding } from './reconcile'
 import { finishEventClaimInTransaction } from '@/server/rules/events/cancel-places'
 import { readEventBookingClaim, readOrderClaim, type EventBookingClaim, type OrderClaim } from '@/server/rules/refunds/claims'
 import { lockForRefund } from '@/server/rules/refunds/locks'
+import { REFUND_WATCH_ENTITY, refundSeen, watchEndEntry, WATCHES_LISTED_SQL, type RefundSeen } from '@/server/rules/refunds/refund-watch'
 import { finishOrderClaimInTransaction } from './refund-lines'
 import { lockForBooking } from '@/server/rules/bookings/locks'
 import { CLOSED_ON_A_CANCELLED_BOOKING_WORDS } from '@/server/rules/bookings/failure-messages'
@@ -116,6 +117,8 @@ export const CLOSE_WORDS = {
   // W14c (W14b review S1): answered as `still_checking`.
   compensation_still_checking: 'The automatic check is still finishing this in Stripe. Check again in a few minutes.',
   // W14c (W14b N1).
+  // W32: a refund that failed after Stripe accepted it, or a watch that ran out.
+  refund_watch: 'Marked as sorted. It is no longer listed.',
   refund_not_failed:
     "This refund hasn't failed: the automatic check is still sending it or waiting for Stripe to confirm it. Nothing was changed. Don't refund it by hand.",
 } as const
@@ -544,9 +547,10 @@ async function closeHeldOrderClaim(db: Db, claim: OrderClaim, why: string, optio
     }
     const findings = new Map((last.parts ?? []).map((part) => [part.orderId, part]))
     const went: CardPart[] = claim.details.plan.card.filter((part) => findings.get(part.orderId)?.found === 'went')
+    const refunds = refundsFound(went, findings)
     const unsettled = claim.details.plan.card.filter((part) => findings.get(part.orderId)?.found !== 'went')
     const owed = Math.round(unsettled.reduce((total, part) => total + part.amount, 0) * 100) / 100
-    const finished = await finishOrderClaimInTransaction(tx, claim, { went, owed }, { actor: options.actor, requestId: options.requestId, how: 'close', why })
+    const finished = await finishOrderClaimInTransaction(tx, claim, { went, refunds, owed }, { actor: options.actor, requestId: options.requestId, how: 'close', why })
     if (!finished) return (await closedBefore(tx, 'held_claim', claimId, undefined, entity)) ? alreadyClosed('held_claim', claimId) : refused('held_claim', claimId, 'not_listed')
     const parts = claim.details.plan.card.map((part) => ({ orderId: part.orderId, amount: part.amount, found: findings.get(part.orderId)?.found ?? 'not_looked', detail: findings.get(part.orderId)?.detail ?? null }))
     await audit.recordAll(tx, [
@@ -589,9 +593,10 @@ async function closeHeldEventClaim(db: Db, claim: EventBookingClaim, why: string
     }
     const findings = new Map((last.parts ?? []).map((part) => [part.orderId, part]))
     const went: CardPart[] = claim.details.plan.card.filter((part) => findings.get(part.orderId)?.found === 'went')
+    const refunds = refundsFound(went, findings)
     const unsettled = claim.details.plan.card.filter((part) => findings.get(part.orderId)?.found !== 'went')
     const owed = Math.round(unsettled.reduce((total, part) => total + part.amount, 0) * 100) / 100
-    const finished = await finishEventClaimInTransaction(tx, claim, { went, owed }, { actor: options.actor, requestId: options.requestId, how: 'close', why })
+    const finished = await finishEventClaimInTransaction(tx, claim, { went, refunds, owed }, { actor: options.actor, requestId: options.requestId, how: 'close', why })
     if (!finished) return (await closedBefore(tx, 'held_claim', claimId, undefined, entity)) ? alreadyClosed('held_claim', claimId) : refused('held_claim', claimId, 'not_listed')
     const parts = claim.details.plan.card.map((part) => ({ orderId: part.orderId, amount: part.amount, found: findings.get(part.orderId)?.found ?? 'not_looked', detail: findings.get(part.orderId)?.detail ?? null }))
     await audit.recordAll(tx, [
@@ -640,9 +645,10 @@ async function closeHeldClaim(db: Db, claimId: string, why: string, options: Clo
     // money goes back on the booking as owed. No findings (the other Stripe mode): every part is owed.
     const findings = new Map((last.parts ?? []).map((part) => [part.orderId, part]))
     const went: CardPart[] = claim.details.plan.card.filter((part) => findings.get(part.orderId)?.found === 'went')
+    const refunds = refundsFound(went, findings)
     const unsettled = claim.details.plan.card.filter((part) => findings.get(part.orderId)?.found !== 'went')
     const owed = Math.round(unsettled.reduce((total, part) => total + part.amount, 0) * 100) / 100
-    const finished = await finishClaimInTransaction(tx, claim, { went, owed }, { actor: options.actor, requestId: options.requestId, how: 'close', why })
+    const finished = await finishClaimInTransaction(tx, claim, { went, refunds, owed }, { actor: options.actor, requestId: options.requestId, how: 'close', why })
     if (!finished) return (await closedBefore(tx, 'held_claim', claimId, undefined, entity)) ? alreadyClosed('held_claim', claimId) : refused('held_claim', claimId, 'not_listed')
     const parts = claim.details.plan.card.map((part) => ({ orderId: part.orderId, amount: part.amount, found: findings.get(part.orderId)?.found ?? 'not_looked', detail: findings.get(part.orderId)?.detail ?? null }))
     await audit.recordAll(tx, [
@@ -674,6 +680,19 @@ async function closeHeldClaim(db: Db, claimId: string, why: string, options: Clo
   })
 }
 
+/**
+ * W32: the refunds reconcile found for the parts that went (kept on its left row with each finding), so the close's
+ * finished row keeps them and each is watched (W32a: whatever its status), exactly as R2 from the press or reconcile.
+ */
+function refundsFound(went: readonly CardPart[], findings: ReadonlyMap<string, ClaimPartFinding>): RefundSeen[] {
+  const refunds: RefundSeen[] = []
+  for (const part of went) {
+    const finding = findings.get(part.orderId)
+    if (finding?.refundId) refunds.push(refundSeen(part, { id: finding.refundId, status: finding.refundStatus ?? null }))
+  }
+  return refunds
+}
+
 /** W25 (W21 review L4): one card part the automatic check found had gone, as the close records it. */
 const partGoneWords = (part: CardPart): string => `${money(part.amount)} to the card on order ${part.orderId.slice(0, 8)}: Stripe shows it went, so it is recorded as refunded`
 
@@ -684,6 +703,30 @@ function partOwedWords(part: CardPart, finding: ClaimPartFinding | undefined): s
   if (finding?.found === 'several') return `${which}: Stripe shows more than one refund for it (${finding.detail ?? ''}), so check what reached the customer before giving anything more`
   if (finding?.found === 'mismatch') return `${which}: Stripe shows a refund of a different amount (${finding.detail ?? ''}), so check what reached the customer before giving anything more`
   return `${which}: it couldn't be checked in Stripe with the account in use, so check there whether it reached the customer`
+}
+
+// --- refund_watch (W32)
+
+/**
+ * W32: a watched refund that failed after Stripe accepted it, or whose watch ran out, recorded as sorted by a person:
+ * a `sorted` row for the refund, which takes it off the list, and the close's own row. Nothing moves: money a failure
+ * put back as owed stays on its booking or order until Refund the rest or It already arrived is used there.
+ */
+async function closeRefundWatch(db: Db, watchId: string, why: string, options: CloseOptions): Promise<CloseStuckOutput> {
+  return db.transaction(async (tx) => {
+    const listed = async (): Promise<{ refund_id: string; state: string } | undefined> => (await tx.query<{ refund_id: string; state: string }>(WATCHES_LISTED_SQL, [watchId]))[0]
+    const seen = await listed()
+    if (!seen) return (await closedBefore(tx, 'refund_watch', watchId, undefined, REFUND_WATCH_ENTITY)) ? alreadyClosed('refund_watch', watchId) : refused('refund_watch', watchId, 'not_listed')
+    // The refund's own lock (refund-watch-settle.ts), then read again: two presses queue, and the second finds it sorted.
+    await tx.query('SELECT pg_advisory_xact_lock(hashtext($1::text))', [`refund-watch:${seen.refund_id}`])
+    const row = await listed()
+    if (!row) return (await closedBefore(tx, 'refund_watch', watchId, undefined, REFUND_WATCH_ENTITY)) ? alreadyClosed('refund_watch', watchId) : refused('refund_watch', watchId, 'not_listed')
+    await audit.recordAll(tx, [
+      watchEndEntry({ actor: options.actor, requestId: options.requestId }, row.refund_id, 'sorted', { byHand: { why }, was: row.state }),
+      { actorType: options.actor.type, actorId: options.actor.id, action: CLOSE_ACTION, entityType: REFUND_WATCH_ENTITY, entityId: watchId, requestId: options.requestId, details: { kind: 'refund_watch', why, refundId: row.refund_id, was: row.state } },
+    ])
+    return answer('refund_watch', watchId, { closed: true, message: CLOSE_WORDS.refund_watch })
+  })
 }
 
 /** The route's work: one item, by its kind. */
@@ -702,5 +745,6 @@ export async function closeStuckItem(db: Db, input: CloseStuckInput, options: Cl
     }
   }
   if (input.kind === 'held_claim') return closeHeldClaim(db, input.orderId, why, options)
+  if (input.kind === 'refund_watch') return closeRefundWatch(db, input.orderId, why, options)
   return closeSubscriptionLeft(db, input.orderId, input.subscriptionId ?? '', why, options)
 }

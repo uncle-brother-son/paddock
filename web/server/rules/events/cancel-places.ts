@@ -65,6 +65,7 @@ import {
 } from '@/server/rules/refunds/claims'
 import { lockForRefund } from '@/server/rules/refunds/locks'
 import { EVENT_BOOKING_CLAIMS, heldAnswer, sendCardPart, type CardPart } from '@/server/rules/refunds/pipeline'
+import { claimWatchEntries, refundSeen, refundsForRow, type RefundSeen } from '@/server/rules/refunds/refund-watch'
 import { loadEventAttendeeBooking } from './attendee-list'
 import {
   EVENT_CANCEL_NEW_WORDS as NEW_WORDS,
@@ -102,6 +103,8 @@ export interface EventFinishedBy {
 export interface EventClaimOutcome {
   /** The card part, when it went. */
   went: CardPart[]
+  /** W32: its refund as Stripe answered or lists it: kept on the finished row, and watched while it hasn't succeeded. */
+  refunds?: RefundSeen[]
   owed: number
   /** Stripe's reason when it refused the card part, kept on the finished row. */
   refused?: string
@@ -627,9 +630,12 @@ export async function finishEventClaimInTransaction(tx: Tx, claim: EventBookingC
         owed,
         ...(cash > 0 ? { cash } : {}),
         ...(outcome.refused !== undefined ? { refused: outcome.refused } : {}),
+        ...refundsForRow(outcome.went, outcome.refunds),
         ...finishedBy,
       },
     },
+    // W32: a refund that hadn't succeeded yet is watched from the same transaction that records it as gone.
+    ...claimWatchEntries({ id: claim.id, on: 'event_booking', subjectId: claim.eventBookingId, livemode: details.livemode }, outcome.went, outcome.refunds, { actor: by.actor, requestId: by.requestId }),
   ])
   return {
     places: cancelled.places.length,
@@ -791,7 +797,7 @@ async function sendAndFinish(db: Db, stripe: StripeClient, claim: EventBookingCl
     throw eventCancelRefusal('PAYMENT_FAILED', 'refund_failed', answer.outcome === 'not_sent' ? NEW_WORDS.notSentInTime : WORDS.cardRefundFailed(detail || undefined))
   }
   try {
-    const finished = await finishEventClaim(db, claim, { went: [part], owed: 0 }, by)
+    const finished = await finishEventClaim(db, claim, { went: [part], refunds: [refundSeen(part, answer.refund)], owed: 0 }, by)
     // Finished by someone else (a close): what went is theirs to report.
     return finished ? { finished } : held('refund_finished_elsewhere', NEW_WORDS.goneNotRecorded(part.amount), part.amount)
   } catch {

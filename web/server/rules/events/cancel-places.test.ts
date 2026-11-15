@@ -10,7 +10,7 @@ import { POST as orderRefundRoute } from '@/app/api/v1/staff/orders/[orderId]/re
 import { POST as closeRoute } from '@/app/api/v1/staff/orders/stuck/close/route'
 import type { Db, Tx } from '@/server/db'
 import { reconcile } from '@/server/rules/orders/reconcile'
-import { EVENT_CLAIM_WAITING_WORDS, stuckList } from '@/server/rules/orders/stuck-list'
+import { EVENT_CLAIM_WAITING_WORDS, stuckList, WATCH_WORDS } from '@/server/rules/orders/stuck-list'
 import { EVENT_BOOKING_REFUND_OPEN_MESSAGE, REFUND_PATH_OFF_MESSAGE } from '@/server/rules/refunds/failure-messages'
 import { claimRefundKey } from '@/server/rules/refunds/pipeline'
 import { BOOKING_KINDS_ON, withSwitch } from '@/server/rules/testing/replay/booking-side'
@@ -20,6 +20,7 @@ import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
 import { cancelEventPlaces, splitByUnitPrice, type EventCancelOptions } from './cancel-places'
 import { EVENT_CANCEL_NEW_WORDS as NEW_WORDS, EVENT_CANCEL_WORDS as WORDS, EVENT_QUOTE_REFUSALS } from './failure-messages'
+import { WATCH_DAYS } from '@/server/rules/refunds/refund-watch'
 
 // Brief W30 (E-plan 5.1): event places on the Worker, on the replay's live schema (the database's own
 // event_cancellation_quote, release_event_places and store credit function included), through the routes as the staff
@@ -198,7 +199,17 @@ describe('one place, several places, the whole booking', () => {
       expect(await placesBooked()).toBe(1)
       expect(await eventLine(orderId)).toMatchObject({ refunded: false, card: '40.00' })
       expect(await order(orderId)).toEqual({ payment_status: 'partially_refunded', owed: '0.00' })
-      expect((await auditRows('event_booking.refund_finished'))[0]?.details).toEqual({ claimId: claim?.id, outcome: 'given', cardRefunded: 40, storeCreditRefunded: 0, owed: 0 })
+      // W32: the finished row keeps the card refund's id and status (it succeeded, so nothing is watched).
+      expect((await auditRows('event_booking.refund_finished'))[0]?.details).toEqual({
+        claimId: claim?.id,
+        outcome: 'given',
+        cardRefunded: 40,
+        storeCreditRefunded: 0,
+        owed: 0,
+        refunds: [{ orderId, paymentIntentId: stripe.refundsSent[0]?.payment_intent, refundId: stripe.refundsSent[0]?.id, status: 'succeeded', amount: 40 }],
+      })
+      // W32a (lead call 1): the refund is watched, though it succeeded at once.
+      expect((await auditRows('refund.watch')).map((row) => row.details)).toMatchObject([{ state: 'watching', refundId: stripe.refundsSent[0]?.id, status: 'succeeded', on: 'event_booking', orderId, amount: 40 }])
       expect((await auditRows('event_booking.cancel_places'))[0]?.details).toMatchObject({ attendeeIds: [first], places: 1, value: 40, bookingCancelled: false, refund: 'card', amount: 40, cardRefunded: 40, storeCreditRefunded: 0, owed: 0 })
     })
   })
@@ -975,6 +986,162 @@ describe('a check-in at the same moment', () => {
       expect((await placeRows(eventBookingId)).every((place) => !place.cancelled)).toBe(true)
       expect(await booking(eventBookingId)).toMatchObject({ status: 'confirmed', places: 2 })
       expect(await placesBooked()).toBe(2)
+    })
+  })
+})
+
+// Brief W32 item 1: the refund watch on an event booking's claim. Its card part is on the order that paid for the
+// booking (W30), and a failure is owed on that order (Q39), with the places still cancelled.
+describe('W32: the refund watch on an event booking', () => {
+  /** W32a: without the `checked` rows (one for each read that ended nothing). */
+  const watchStates = async () => (await auditRows('refund.watch')).map((row) => String(row.details['state'])).filter((state) => state !== 'checked').sort()
+  const minutes = (n: number) => vi.setSystemTime(Date.now() + n * 60_000)
+  const DAY = 24 * 60
+  const refundItems = async () => (await runReconcile()).items.filter((item) => item.kind === 'refund')
+  async function pendingCancel(eventBookingId: string, stripe: FakeStripe, attendeeIds?: string[]): Promise<Answer> {
+    stripe.refundsStayPending = true
+    const answer = await cancel(eventBookingId, 'card', attendeeIds)
+    stripe.refundsStayPending = false
+    return answer
+  }
+
+  it('one place to the card, pending then succeeded: the place, the line and the order as the press left them; the watch ends', async () => {
+    await onAnEventOrder({ event: two, payment: card }, async ({ orderId, eventBookingId, places: ids, stripe }) => {
+      const [first] = await ids()
+      expect((await pendingCancel(eventBookingId, stripe, [first as string])).body.data).toMatchObject({ places: 1, cardRefundedAmount: 40 })
+      const sent = stripe.refundsSent[0]
+      const claim = (await auditRows('event_booking.refund_claimed'))[0]
+      expect((await auditRows('refund.watch')).map((row) => row.details)).toEqual([
+        { state: 'watching', refundId: sent?.id, paymentIntentId: sent?.payment_intent, amount: 40, status: 'pending', livemode: false, on: 'event_booking', subjectId: eventBookingId, orderId, claimId: claim?.id, lines: [{ lineId: expect.any(String), amount: 40 }] },
+      ])
+      // W32a (W32 review S2): on its way: read, no item, nothing for a person; counted as waiting on Stripe.
+      expect(await runReconcile()).toMatchObject({ refunds: 0, left: 0, refundsWaiting: 1, items: [] })
+      stripe.settleRefund(sent?.id as string, 'succeeded')
+      minutes(5)
+      // W32a (lead call 1): succeeded is not the end of the watch; it ends, quietly, when its 50 days are up.
+      expect(await runReconcile()).toMatchObject({ refunds: 0, left: 0, refundsWaiting: 0, items: [] })
+      expect(await watchStates()).toEqual(['watching'])
+      minutes(WATCH_DAYS * DAY)
+      expect(await refundItems()).toEqual([])
+      expect(await watchStates()).toEqual(['succeeded', 'watching'])
+      expect((await placeRows(eventBookingId))[0]).toMatchObject({ cancelled: true, refunded: '40.00', card: '40.00' })
+      expect(await order(orderId)).toEqual({ payment_status: 'partially_refunded', owed: '0.00' })
+      minutes(DAY)
+      expect(await refundItems()).toEqual([])
+      expect(refundsSent(stripe)).toHaveLength(1)
+    })
+  })
+
+  it("W32a (lead call 1; Stripe's 5126 shape, end to end): one place to the card, the refund answered succeeded and watched; Stripe fails it afterwards: the next day's read leaves the place cancelled with nothing back on it and puts the £40 as owed on the order that paid, listed for the attendee list; the failed refund is never sent again", async () => {
+    await onAnEventOrder({ event: two, payment: card }, async ({ orderId, eventBookingId, places: ids, stripe }) => {
+      const [first] = await ids()
+      expect((await cancel(eventBookingId, 'card', [first as string])).body.data).toMatchObject({ places: 1, cardRefundedAmount: 40 })
+      const sent = stripe.refundsSent[0]
+      const claim = (await auditRows('event_booking.refund_claimed'))[0]
+      expect((await auditRows('refund.watch')).map((row) => row.details)).toEqual([
+        { state: 'watching', refundId: sent?.id, paymentIntentId: sent?.payment_intent, amount: 40, status: 'succeeded', livemode: false, on: 'event_booking', subjectId: eventBookingId, orderId, claimId: claim?.id, lines: [{ lineId: expect.any(String), amount: 40 }] },
+      ])
+      const lists = () => stripe.calls.filter((call) => call.method === 'refunds.list').length
+      minutes(5)
+      stripe.settleRefund(sent?.id as string, 'failed')
+      expect(moneyBack(stripe)).toBe(0)
+      // Nothing is read until a day after it was recorded.
+      const before = lists()
+      expect(await refundItems()).toEqual([])
+      expect(lists()).toBe(before)
+      expect(await order(orderId)).toMatchObject({ owed: '0.00' })
+      minutes(DAY)
+      const found = await runReconcile()
+      expect(found).toMatchObject({ refunds: 1, left: 1 })
+      expect(found.items).toMatchObject([{ kind: 'refund', id: sent?.id, outcome: 'refund_failed', reason: 'refund_failed_later' }])
+      expect((await placeRows(eventBookingId))[0]).toMatchObject({ cancelled: true, value: '40.00', refunded: '0.00', card: '0.00', method: 'card' })
+      expect(await eventLine(orderId)).toMatchObject({ card: '0.00' })
+      expect(await order(orderId)).toMatchObject({ owed: '40.00' })
+      expect((await auditRows('event_booking.refund_failed_later')).map((row) => [row.entity_id, row.details['owed']])).toEqual([[eventBookingId, 40]])
+      expect((await stuckList(db)).watched).toMatchObject([{ refundId: sent?.id, on: 'event_booking', orderId, eventBookingId, eventId: ID.event, amount: 40, owed: 40, state: 'failed', words: WATCH_WORDS.eventFailed(40, sent?.id as string) }])
+      // Once, and never a second send, however many runs follow.
+      await Promise.all([runReconcile(), runReconcile()])
+      minutes(DAY)
+      expect(await refundItems()).toEqual([])
+      expect(await order(orderId)).toMatchObject({ owed: '40.00' })
+      expect(await creditRefunds()).toEqual([])
+      expect(refundsSent(stripe)).toHaveLength(1)
+    })
+  })
+
+  it('one place to the card, pending then failed: the place stays cancelled with nothing back on it, the £40 is off the event line and owed on the order, once; listed for the attendee list; Refund the rest sends it again', async () => {
+    await onAnEventOrder({ event: two, payment: card }, async ({ orderId, eventBookingId, places: ids, stripe }) => {
+      const [first] = await ids()
+      await pendingCancel(eventBookingId, stripe, [first as string])
+      const sent = stripe.refundsSent[0]
+      stripe.settleRefund(sent?.id as string, 'failed')
+      expect(await refundItems()).toMatchObject([{ id: sent?.id, outcome: 'refund_failed', reason: 'refund_failed_later' }])
+      // As R2 leaves a place whose card part never went: cancelled, its value kept, nothing given back on it.
+      expect((await placeRows(eventBookingId))[0]).toMatchObject({ cancelled: true, value: '40.00', refunded: '0.00', card: '0.00', method: 'card' })
+      expect(await booking(eventBookingId)).toMatchObject({ status: 'confirmed', places: 1 })
+      expect(await placesBooked()).toBe(1)
+      expect(await eventLine(orderId)).toMatchObject({ card: '0.00' })
+      expect(await order(orderId)).toMatchObject({ owed: '40.00' })
+      await Promise.all([runReconcile(), runReconcile()])
+      expect(await refundItems()).toEqual([])
+      expect(await order(orderId)).toMatchObject({ owed: '40.00' })
+      expect(await watchStates()).toEqual(['failed', 'watching'])
+      expect((await auditRows('event_booking.refund_failed_later')).map((row) => [row.entity_id, row.details['owed']])).toEqual([[eventBookingId, 40]])
+      expect(await creditRefunds()).toEqual([])
+      expect(refundsSent(stripe)).toHaveLength(1)
+
+      const listed = (await stuckList(db)).watched
+      expect(listed).toMatchObject([{ refundId: sent?.id, on: 'event_booking', bookingId: null, orderId, eventBookingId, eventId: ID.event, amount: 40, owed: 40, state: 'failed', words: WATCH_WORDS.eventFailed(40, sent?.id as string) }])
+      expect(listed[0]?.words).toBe(
+        `A card refund of £40.00 for cancelled event places (${sent?.id}) was accepted by Stripe and then failed, so the money never reached the customer. The places stay cancelled, and the money is back on the event booking as money still to refund: open the event's attendee list and use Refund the rest. Then press Mark sorted (needs the Issue refunds permission).`
+      )
+
+      const rest = await orderPost(orderOwedRoute as Handler, 'refunds/owed', orderId, { amount: 40, refundMethod: 'card' })
+      expect(rest.body.data).toMatchObject({ cardRefundedAmount: 40, refundOwed: 0 })
+      expect(moneyBack(stripe)).toBe(4000)
+      expect(await eventLine(orderId)).toMatchObject({ card: '40.00' })
+    })
+  })
+
+  it('a whole booking paid £50 on the card and £30 with store credit, the card part pending then failed: the £30 of store credit stands and is what the places show, the £50 is owed', async () => {
+    await onAnEventOrder({ event: two, payment: { method: 'card', storeCredit: { amount: 30 } } }, async ({ orderId, eventBookingId, stripe }) => {
+      const answer = await pendingCancel(eventBookingId, stripe)
+      expect(answer.body.data).toMatchObject({ places: 2, cardRefundedAmount: 50, storeCreditRefundedAmount: 30 })
+      expect((await placeRows(eventBookingId)).map((place) => [place.refunded, place.card])).toEqual([
+        ['40.00', '25.00'],
+        ['40.00', '25.00'],
+      ])
+      stripe.settleRefund(stripe.refundsSent[0]?.id as string, 'canceled')
+      expect(await refundItems()).toMatchObject([{ outcome: 'refund_failed' }])
+      expect((await placeRows(eventBookingId)).map((place) => [place.cancelled, place.refunded, place.card])).toEqual([
+        [true, '15.00', '0.00'],
+        [true, '15.00', '0.00'],
+      ])
+      expect(await booking(eventBookingId)).toMatchObject({ status: 'cancelled', places: 0 })
+      expect(await eventLine(orderId)).toMatchObject({ refunded: true, refund_method: 'card', card: '0.00' })
+      expect(await order(orderId)).toMatchObject({ owed: '50.00' })
+      expect((await creditRefunds()).map((row) => row.amount)).toEqual(['30.00'])
+    })
+  })
+
+  it("a claim reconcile finished (the press's answers were lost) with its refund still pending: watched from then, and its failure is owed on the booking's order", async () => {
+    await onAnEventOrder({ event: two, payment: card }, async ({ orderId, eventBookingId, places: ids, stripe }) => {
+      const [first] = await ids()
+      stripe.refundsStayPending = true
+      stripe.failNext('refunds.create', { kind: 'lost_response' })
+      stripe.failNext('refunds.create', { kind: 'lost_response' })
+      const held = await cancel(eventBookingId, 'card', [first as string])
+      stripe.refundsStayPending = false
+      expect(held.body.data?.held).toMatchObject({ reason: 'refund_unconfirmed' })
+      pastTheWindow()
+      await runReconcile()
+      const sent = stripe.refundsSent[0]
+      expect((await auditRows('event_booking.refund_finished'))[0]?.details).toMatchObject({ outcome: 'given', cardRefunded: 40, refunds: [{ refundId: sent?.id, status: 'pending' }], by: { how: 'reconcile' } })
+      expect((await auditRows('refund.watch')).map((row) => row.details)).toMatchObject([{ state: 'watching', refundId: sent?.id, on: 'event_booking', subjectId: eventBookingId, orderId }])
+      stripe.settleRefund(sent?.id as string, 'failed')
+      await runReconcile()
+      expect(await order(orderId)).toMatchObject({ owed: '40.00' })
+      expect(stripe.refundsSent).toHaveLength(1)
     })
   })
 })

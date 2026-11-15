@@ -440,9 +440,9 @@ describe('W14c (W14b N1): late_refund, a refund Stripe refused, recorded as refu
       const { orderId, paymentIntentId } = await chargedWithoutOrder(stripe)
       stripe.refundsStayPending = true
       expect((await run(stripe)).items[0]).toMatchObject({ outcome: 'refund_pending' })
-      const [listed] = (await stuckList(db)).refunds
-      expect(listed).toMatchObject({ id: orderId, state: 'sent' })
-      expect(listed?.close).toBeUndefined()
+      // W32a (W32 review S3): a refund on its way is the refund watch's, so it is on no list and offers no close.
+      expect((await stuckList(db)).refunds).toEqual([])
+      expect((await stuckList(db)).watched).toEqual([])
       const before = await actions(orderId)
       expect(dataOf(await postClose({ kind: 'late_refund', orderId, paymentIntentId, reason: WHY }))).toMatchObject({ closed: false, reason: 'refund_not_failed', message: CLOSE_WORDS.refund_not_failed })
       expect(await actions(orderId)).toEqual(before)

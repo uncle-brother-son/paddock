@@ -86,6 +86,7 @@ import {
   putBackFailedMessage,
   putBackFailedNotRecordedMessage,
 } from './failure-messages'
+import { claimWatchEntries, refundSeen, refundsForRow, type RefundSeen } from '@/server/rules/refunds/refund-watch'
 import { lockAndLoadBooking, paymentOpen, type LoadedBooking } from './load-booking'
 import { lockForBooking } from './locks'
 import { inC1, paymentOpenRefusal } from './money-in'
@@ -606,6 +607,11 @@ async function owedR1(tx: Tx, bookingId: string, input: RefundOwedInput, options
 /** What a claim ended with. `owed`: card money that never went (the press, reconcile, a close), on the booking as owed, live or cancelled (W26b). */
 export interface ClaimOutcome {
   went: CardPart[]
+  /**
+   * W32: the refund Stripe answered (the press) or lists (reconcile, a close) for each part that went: kept on the
+   * finished row, and watched until it ends when it hadn't succeeded yet (refund-watch.ts).
+   */
+  refunds?: RefundSeen[]
   owed: number
   /**
    * W26a: Stripe refused a card part (its reason), kept on the finished row: the customer may have the money already,
@@ -916,9 +922,12 @@ export async function finishClaimInTransaction(tx: Tx, claim: Claim, outcome: Cl
         owed,
         ...(cash > 0 ? { cash } : {}),
         ...(outcome.refused !== undefined ? { refused: outcome.refused } : {}),
+        ...refundsForRow(outcome.went, outcome.refunds),
         ...finishedBy,
       },
     },
+    // W32: a refund that hadn't succeeded yet is watched from the same transaction that records it as gone.
+    ...claimWatchEntries({ id: claim.id, on: 'booking', subjectId: claim.bookingId, livemode: details.livemode }, outcome.went, outcome.refunds, { actor: by.actor, requestId: by.requestId }),
   ]
   await audit.recordAll(tx, entries)
   const pricePaid = (await tx.query<{ price_paid: string }>('SELECT price_paid::text AS price_paid FROM bookings WHERE id = $1::uuid', [claim.bookingId]))[0]?.price_paid
@@ -1322,7 +1331,8 @@ async function finishRefusedNotPutBack(db: Db, claim: Claim, options: RefundOpti
     const output = await finishClaim(db, claim, { went: [], owed }, { actor: options.actor, requestId: options.requestId, how: blocked ? 'undo_blocked' : 'undo_failed', why: detail })
     if (!output) return null
     // W31: the words name the store credit the finish gave (the plan's own), so nobody gives it again by hand.
-    const storeCredit = output.storeCreditRefundedAmount ?? 0
+    // W32 (W31 review S2): the add-ons' store credit with the seat's (a cancel answers the two apart).
+    const storeCredit = round2((output.storeCreditRefundedAmount ?? 0) + (output.addons?.storeCreditRefundedAmount ?? 0))
     const words = blocked ? putBackBlockedMessage(detail, owed, cancelled, storeCredit) : putBackFailedMessage(detail, owed, cancelled, storeCredit)
     return { ...output, held: { claimId: claim.id, reason: 'refund_refused_not_put_back', message: words } }
   } catch {
@@ -1342,6 +1352,8 @@ async function finishRefusedNotPutBack(db: Db, claim: Claim, options: RefundOpti
 export async function sendAndFinish(db: Db, stripe: StripeClient, claim: Claim, options: RefundOptions, timing: StripeTiming, firstRefused: FirstRefused): Promise<RefundBookingOutput> {
   const by: FinishedBy = { actor: options.actor, requestId: options.requestId, how: 'press' }
   const went: CardPart[] = []
+  /** W32: each part's refund as Stripe answered it. */
+  const refunds: RefundSeen[] = []
   const toSend = claim.details.plan.card
   let sentOne = false
   let owed = 0
@@ -1351,6 +1363,7 @@ export async function sendAndFinish(db: Db, stripe: StripeClient, claim: Claim, 
     const answer = await sendCardPart(stripe, claim.id, part, timing)
     if (answer.outcome === 'went') {
       went.push(part)
+      refunds.push(refundSeen(part, answer.refund))
       sentOne = true
       continue
     }
@@ -1382,7 +1395,7 @@ export async function sendAndFinish(db: Db, stripe: StripeClient, claim: Claim, 
     break
   }
   try {
-    const output = await finishClaim(db, claim, { went, owed, ...(refused !== undefined ? { refused } : {}), ...(warning ? { warning } : {}) }, by)
+    const output = await finishClaim(db, claim, { went, refunds, owed, ...(refused !== undefined ? { refused } : {}), ...(warning ? { warning } : {}) }, by)
     // Finished by someone else (a close): what went is theirs to report.
     return output ?? held(claim, 'refund_finished_elsewhere', refundGoneNotRecordedMessage(sum(went.map((part) => part.amount))), sum(went.map((part) => part.amount)))
   } catch {
