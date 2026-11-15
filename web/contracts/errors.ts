@@ -48,6 +48,8 @@ export const ERROR_CODES = [
    * Step E (W27, E-plan 4.10, lead call L3): this kind of refund is switched off on the Worker (the ORDER_SWITCH
    * secret's `order_refunds` for an order's lines and money owed on an order, `event_cancels` for an event cancel that
    * gives money back), so nothing was touched. An emergency stop, not a fallback. No route answers it until W28 and W30.
+   * W33: the website's cancel routes (/api/v1/customer/.../cancel and their quotes) answer it too, in the customer's
+   * words, while `customer_cancels` is off (or the kind the cancel's money needs: `booking_changes`, `event_cancels`).
    */
   'REFUND_PATH_OFF',
 ] as const

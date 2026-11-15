@@ -370,6 +370,12 @@ what W27 expected and what live has: stop and look before W28.
 The new column is in every recording: each new `orders` row in a golden file gained `"refund_owed_amount": "0.00"`
 (519 files, 676 rows, nothing else: `briefs/W27-logs/golden-column.txt` in the staff app repo).
 
+W33's migration 024 changes what the database's `event_cancellation_quote` answers for an event with no cut-off
+(Q43). The old functions were recorded against the function as it was, so `startReplay` keeps that under another name
+(`event_cancellation_quote_before_024`, built from the saved schema with 024's one line put back) and `oldSide`'s
+`paddockData` points the old functions' SQL at it. Worker code always reads the real function. Without this,
+`w27-e8-event-with-no-cut-off-counts-as-after-it` no longer matches its golden file (seen in W33's first full run).
+
 ## No real Stripe (W11)
 
 `no-real-stripe.ts` is loaded before every unit test file (`vitest.unit.config.ts`, `setupFiles`). Any

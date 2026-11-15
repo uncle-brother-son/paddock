@@ -115,9 +115,29 @@ function tick(): void {
   vi.setSystemTime(Date.now() + 1)
 }
 
+/**
+ * W33 (migration 024, Wayne's Q43): the database's event_cancellation_quote now answers `before_cutoff` with the
+ * event's start when it has no cut-off. The old functions were recorded against the function as it was (bug E8: an
+ * event with no cut-off counted as after it), and that old answer is part of what their golden files hold. So the
+ * replay keeps the function as it was before 024 under this name, and the old functions' own SQL is pointed at it
+ * (oldSide's paddockData, below). Worker code always reads the real one.
+ */
+export const EVENT_QUOTE_BEFORE_024 = 'event_cancellation_quote_before_024'
+const EVENT_QUOTE_LINE_024 = "    'before_cutoff', COALESCE(v_now_london < (COALESCE(b.refund_cutoff_at, b.starts_at) AT TIME ZONE 'UTC'), true),"
+const EVENT_QUOTE_LINE_BEFORE_024 = "    'before_cutoff', b.refund_cutoff_at IS NOT NULL AND v_now_london < (b.refund_cutoff_at AT TIME ZONE 'UTC'),"
+
+/** The saved schema's event_cancellation_quote with 024's one line put back as it was, under the name above. */
+export function eventQuoteBefore024Sql(): string {
+  const catalog = JSON.parse(readFileSync(path.join(__dirname, '..', 'live-catalog.json'), 'utf8')) as { functions: Array<{ name: string; definition: string }> }
+  const saved = catalog.functions.find((fn) => fn.name === 'event_cancellation_quote')?.definition ?? ''
+  if (!saved.includes(EVENT_QUOTE_LINE_024)) throw new Error("The saved schema's event_cancellation_quote isn't migration 024's: the replay can't make the function as it was before it.")
+  return saved.replace(EVENT_QUOTE_LINE_024, EVENT_QUOTE_LINE_BEFORE_024).replace('FUNCTION public.event_cancellation_quote(', `FUNCTION public.${EVENT_QUOTE_BEFORE_024}(`)
+}
+
 export async function startReplay(): Promise<ReplayEnvironment> {
   // Started on the real clock: Postgres's own start-up waits on time passing.
   const database = await startTestDatabase({ schema: 'live' })
+  await database.pg.exec(`RESET ROLE; ${eventQuoteBefore024Sql()}; GRANT EXECUTE ON FUNCTION public.${EVENT_QUOTE_BEFORE_024}(uuid, uuid[]) TO paddock_worker; SET ROLE paddock_worker;`)
   vi.useFakeTimers({ toFake: ['Date'], now: new Date(REPLAY_NOW) })
   return {
     database,
@@ -155,7 +175,9 @@ export function oldSide(db: Db, stripe: FakeStripe): ReplaySide {
     const used = [...sql.matchAll(/\$(\d+)/g)].map((match) => Number(match[1]))
     if (used.some((n, i) => n !== i + 1)) throw new Error(`Placeholders out of order, which Retool would swap: ${sql}`)
     tick()
-    return { data: await db.query<Row>(sql, params.map((value) => value ?? null) as SqlParam[]) }
+    // W33: the old functions read the event quote as it was when they were recorded (before migration 024).
+    const asRecorded = sql.replace(/\bevent_cancellation_quote\(/g, `${EVENT_QUOTE_BEFORE_024}(`)
+    return { data: await db.query<Row>(asRecorded, params.map((value) => value ?? null) as SqlParam[]) }
   }
   vi.stubGlobal('paddockData', { query })
   vi.stubGlobal('paddockBackendApi2', { rawRequest: bindLegacyRoutes(db, stripe) })

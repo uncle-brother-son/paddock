@@ -37,6 +37,15 @@
 // the whole-event run's own press, is still put back after a refusal: the booking is then still to cancel, and Retry
 // presses it again.)
 //
+// W33 (E-plan 4.11; Wayne's Q44, 15 Nov): the same R1 on the customer channel, for the website's cancel (the words and
+// the answer's shape are server/rules/customer/cancels.ts). The signed-in customer cancels their own booking's places
+// (some or all), always to store credit (card, cash and gift card money alike), so there is no card part, no Stripe
+// client is made, and the claim is finished in R1's transaction. Refused: someone else's booking (as not found), after
+// the cut-off (Q43; staff need a reason there, a customer can't give one), and on a cancelled event (the club's
+// whole-event cancel gives that money back; W31 "For the Worker step" 2). No reason, no Issue refunds, never
+// `wholeEvent`. The rows are the customer's (`actor_type` customer; `cancelled_by` and the store credit row's staff
+// are null) and the cancel's record and its own row carry `channel: 'customer'`.
+//
 // What the old code needed and this doesn't (E-plan, "six things" item 4): the settle-on-the-next-press machinery
 // (shared/heldCardRefund), refusal counts in the key (cardRefundAttempts), finding a store credit movement by its
 // note (storeCreditRefund), the `card_refund_recorded` / `card_refund_unallocated` rows and every take-back.
@@ -63,8 +72,9 @@ import {
   type StepEClaimMethod,
   type StepEPlan,
 } from '@/server/rules/refunds/claims'
+import { CUSTOMER_CANCEL_WORDS } from '@/server/rules/customer/cancel-words'
 import { lockForRefund } from '@/server/rules/refunds/locks'
-import { EVENT_BOOKING_CLAIMS, heldAnswer, sendCardPart, type CardPart } from '@/server/rules/refunds/pipeline'
+import { claimRowsActor, EVENT_BOOKING_CLAIMS, heldAnswer, sendCardPart, staffIdOf, type CardPart, type ClaimActor } from '@/server/rules/refunds/pipeline'
 import { claimWatchEntries, refundSeen, refundsForRow, type RefundSeen } from '@/server/rules/refunds/refund-watch'
 import { loadEventAttendeeBooking } from './attendee-list'
 import {
@@ -82,7 +92,8 @@ import {
 export const EVENT_PLACES_CANCELLED = 'event_booking.cancel_places'
 
 export interface EventCancelOptions {
-  actor: { type: 'staff'; id: string }
+  /** A staff member, or (W33) the customer cancelling their own places online. */
+  actor: ClaimActor
   requestId: string
   /** The request's start: the press's Stripe call ends by a deadline from it. */
   startedAt?: number
@@ -93,7 +104,7 @@ export interface EventCancelOptions {
 
 /** Who finishes a claim: the press, reconcile, or a person closing it by hand (as an order claim's). */
 export interface EventFinishedBy {
-  actor: { type: 'staff' | 'system'; id: string | null }
+  actor: { type: 'staff' | 'system' | 'customer'; id: string | null }
   requestId: string
   how: 'press' | 'reconcile' | 'close' | 'undo_blocked' | 'undo_failed'
   why?: string
@@ -186,9 +197,11 @@ LEFT JOIN event_bookings eb ON eb.id = $1::uuid`
  * The database's quote, read and explained as the old quoteEventCancellation: a booking whose reader payment is still
  * open is told apart from a cancelled one, and each refusal keeps its old reason and words.
  *
- * Wayne's Q43 (14 Nov; bug E8): the database function answers `before_cutoff: false` for an event with no cut-off, so
- * every refund on it counted as an exception, months ahead. With no cut-off set, the cut-off is the event's start:
- * before it, refund freely; after it, a reason is needed.
+ * Wayne's Q43 (14 Nov; bug E8): with no cut-off set, the cut-off is the event's start: before it, refund freely; after
+ * it, a reason is needed. The database function used to answer `before_cutoff: false` for an event with no cut-off,
+ * and W30 corrected that here. W33: migration 024 makes the function itself answer by Q43 (a null start counting as
+ * before), so `before_cutoff` is read as it is, and everything that reads the function gets the same answer. The
+ * migration must be applied before this code is live (its header says why).
  */
 async function quotePlaces(db: Queryable, eventBookingId: string, attendeeIds: readonly string[] | undefined, action: Action): Promise<Quote> {
   const chosen = attendeeIds && attendeeIds.length > 0 ? [...attendeeIds] : null
@@ -215,7 +228,7 @@ async function quotePlaces(db: Queryable, eventBookingId: string, attendeeIds: r
     wholeBooking: parsed['whole_booking'] === true,
     value: round2(Number(parsed['value'] ?? 0)),
     refundCutoffAt: cutoff,
-    beforeCutoff: cutoff !== null ? parsed['before_cutoff'] === true : !started,
+    beforeCutoff: parsed['before_cutoff'] === true,
     eventStarted: started,
   }
 }
@@ -223,12 +236,14 @@ async function quotePlaces(db: Queryable, eventBookingId: string, attendeeIds: r
 /** The booking's event, and the order line (and order) that paid for it: none can be sold without one, but a row can be gone. */
 interface BookingIds {
   eventId: string
+  /** Whose booking it is (W33: a customer cancels only their own). */
+  customerId: string
   lineId: string | null
   orderId: string | null
 }
 
 const BOOKING_IDS_SQL = `
-SELECT eb.event_id, line.id AS line_id, line.order_id
+SELECT eb.event_id, eb.customer_id, line.id AS line_id, line.order_id
 FROM event_bookings eb
 LEFT JOIN LATERAL (
   SELECT oli.id, oli.order_id FROM order_line_items oli
@@ -238,8 +253,8 @@ LEFT JOIN LATERAL (
 WHERE eb.id = $1::uuid`
 
 async function bookingIds(db: Queryable, eventBookingId: string): Promise<BookingIds | null> {
-  const row = (await db.query<{ event_id: string; line_id: string | null; order_id: string | null }>(BOOKING_IDS_SQL, [eventBookingId]))[0]
-  return row ? { eventId: row.event_id, lineId: row.line_id, orderId: row.order_id } : null
+  const row = (await db.query<{ event_id: string; customer_id: string; line_id: string | null; order_id: string | null }>(BOOKING_IDS_SQL, [eventBookingId]))[0]
+  return row ? { eventId: row.event_id, customerId: row.customer_id, lineId: row.line_id, orderId: row.order_id } : null
 }
 
 /** Where a refund of `value` would go, for the dialog: the card part and the rest of a Card refund, the cash Q42 allows, and any money owed. */
@@ -282,6 +297,21 @@ export async function quoteEventPlacesCancel(db: Queryable, eventBookingId: stri
   }
   const quote = await quotePlaces(db, eventBookingId, attendeeIds, 'quote')
   return quoteOutput(quote, await destinations(db, ids, quote.value))
+}
+
+// --- W33: the customer channel's own checks
+
+/** Someone else's booking is refused exactly as one that doesn't exist, so the answer never says it does. */
+const notTheCustomers = (action: Action): ApiError => eventCancelRefusal('NOT_FOUND', 'booking_not_found', CUSTOMER_CANCEL_WORDS.eventBookingNotFound, action)
+
+/**
+ * W33 (Q44; W31 "For the Worker step" 2): what the customer channel refuses once the places are quoted: a cancel on a
+ * cancelled event, and one after the cut-off (Q43, from quotePlaces: an event with no cut-off uses its start).
+ */
+function customerCannotCancelPlaces(quote: Quote, eventCancelled: boolean, action: Action): ApiError | null {
+  if (eventCancelled) return eventCancelRefusal('CONFLICT', 'event_cancelled', CUSTOMER_CANCEL_WORDS.eventCancelled, action)
+  if (!quote.beforeCutoff) return eventCancelRefusal('CONFLICT', 'after_cutoff', CUSTOMER_CANCEL_WORDS.afterCutoff, action)
+  return null
 }
 
 // --- R1
@@ -348,6 +378,9 @@ async function cancelR1(tx: Tx, eventBookingId: string, input: CancelEventPlaces
   if (unlocked?.orderId) await lockForRefund(tx, { orderId: unlocked.orderId, eventId: unlocked.eventId, eventBookingId })
   else if (unlocked) await lockWithoutOrder(tx, unlocked, eventBookingId)
   const ids = await bookingIds(tx, eventBookingId)
+  // W33: the customer channel cancels the customer's own booking only; anyone else's is refused as one that isn't there.
+  const online = options.actor.type === 'customer'
+  if (online && ids?.customerId !== options.actor.id) throw notTheCustomers('cancel_places')
   // The line can't move to another order; a line that appeared or went between the two reads is tried again by the press.
   if ((ids?.orderId ?? null) !== (unlocked?.orderId ?? null)) throw eventCancelRefusal('CONFLICT', 'changed_by_someone_else', WORDS.changedBySomeoneElse)
 
@@ -373,6 +406,11 @@ async function cancelR1(tx: Tx, eventBookingId: string, input: CancelEventPlaces
   }
   // No cut-off rule for a whole event: nobody chose to cancel late.
   const afterCutoff = !whole && !quote.beforeCutoff
+  // W33 (Q44): online, not on a cancelled event and only before the cut-off (staff can refund later, with a reason).
+  if (online) {
+    const cannot = customerCannotCancelPlaces(quote, eventCancelled, 'cancel_places')
+    if (cannot) throw cannot
+  }
   if (refund !== 'none' && afterCutoff && !reason) throw eventCancelRefusal('VALIDATION', 'reason_required_after_cutoff', WORDS.reasonRequiredAfterCutoff, 'cancel_places', { field: 'reason' })
   const value = refund === 'none' ? 0 : quote.value
   if (value > 0 && (!ids?.lineId || !ids.orderId)) throw eventCancelRefusal('NOT_FOUND', 'order_not_found', WORDS.orderLineNotFound)
@@ -425,7 +463,8 @@ async function cancelR1(tx: Tx, eventBookingId: string, input: CancelEventPlaces
      FROM unnest($5::uuid[], $6::numeric[]) AS s(id, val)
      WHERE ea.id = s.id AND ea.event_booking_id = $7::uuid AND ea.cancelled_at IS NULL AND ea.checked_in_at IS NULL
      RETURNING ea.id`,
-    [options.actor.id, reason, placeMethod, refundAfterCutoff, places.map((place) => place.id), values, eventBookingId]
+    // cancelled_by points at staff: null when the customer cancelled online (W33).
+    [staffIdOf(options.actor), reason, placeMethod, refundAfterCutoff, places.map((place) => place.id), values, eventBookingId]
   )
   if (stamped.length !== places.length || places.length !== quote.places) throw eventCancelRefusal('CONFLICT', 'changed_by_someone_else', WORDS.changedBySomeoneElse)
 
@@ -441,7 +480,7 @@ async function cancelR1(tx: Tx, eventBookingId: string, input: CancelEventPlaces
            updated_at = now()
        WHERE eb.id = $4::uuid AND eb.status = 'confirmed' AND eb.places >= $1::int
        RETURNING eb.status`,
-      [places.length, options.actor.id, reason, eventBookingId]
+      [places.length, staffIdOf(options.actor), reason, eventBookingId]
     )
   )[0]
   if (!booking) throw eventCancelRefusal('CONFLICT', 'changed_by_someone_else', WORDS.changedBySomeoneElse)
@@ -455,17 +494,20 @@ async function cancelR1(tx: Tx, eventBookingId: string, input: CancelEventPlaces
     afterCutoff: refundAfterCutoff,
     ...(whole ? { wholeEvent: true } : {}),
     ...(eventCancelled ? { eventCancelled: true } : {}),
+    ...(online ? { channel: 'customer' as const } : {}),
   }
 
   // Nothing goes back: the cancel is whole here, with its own row. No claim (E-plan 4.4: only when money goes back).
   if (!(value > 0) || !ids?.orderId || !ids.lineId) {
     await stampEventLine(tx, eventBookingId)
-    await audit.recordAll(tx, [cancelRow(eventBookingId, options.actor.id, options.requestId, { refund, reason, cancelled, amount: 0, cardRefunded: 0, storeCreditRefunded: 0, cashRefunded: 0, owed: 0 })])
+    await audit.recordAll(tx, [cancelRow(eventBookingId, { actorType: options.actor.type, actorId: options.actor.id }, options.requestId, { refund, reason, cancelled, amount: 0, cardRefunded: 0, storeCreditRefunded: 0, cashRefunded: 0, owed: 0 })])
     return { kind: 'done', output: { places: places.length, refundedAmount: 0, cardRefundedAmount: 0, storeCreditRefundedAmount: 0, ...(await listState(tx, eventBookingId, quote.eventId)) } }
   }
 
   const parts: CardPart[] = cardAmount > 0 && paymentIntentId ? [{ orderId: ids.orderId, paymentIntentId, amount: cardAmount, lines: [{ lineId: ids.lineId, amount: cardAmount }] }] : []
   const plan: StepEPlan = { card: parts, storeCredit: storeCredit > 0.005 ? storeCredit : 0, cash, ownOrderId: ids.orderId }
+  // W33: nothing online ever goes back to a card or is handed over in cash. Thrown inside R1, so nothing is kept.
+  if (online && (parts.length > 0 || cash > 0)) throw new Error('A customer cancel planned a card or cash refund.')
   const claim = await writeEventBookingClaim(
     tx,
     eventBookingId,
@@ -480,6 +522,7 @@ async function cancelR1(tx: Tx, eventBookingId: string, input: CancelEventPlaces
       livemode: parts.length > 0 ? livemode : null,
       ...(cash > 0 ? { handedOverBy: options.actor.id } : {}),
       cancel: cancelled,
+      ...(online ? { channel: 'customer' as const } : {}),
     },
     options
   )
@@ -492,14 +535,14 @@ async function cancelR1(tx: Tx, eventBookingId: string, input: CancelEventPlaces
 /** The cancel's own row: what was cancelled, the refund asked for, and where the money went. */
 function cancelRow(
   eventBookingId: string,
-  staffId: string | null,
+  /** The staff member who pressed, or (W33) the customer who cancelled online. */
+  by: { actorType: 'staff' | 'customer'; actorId: string | null },
   requestId: string,
   details: { refund: RefundChoice; reason: string | null; cancelled: EventPlacesCancelled; amount: number; cardRefunded: number; storeCreditRefunded: number; cashRefunded: number; owed: number; handedOverBy?: string | null }
 ): AuditEntry {
   const { cancelled } = details
   return {
-    actorType: 'staff',
-    actorId: staffId,
+    ...by,
     action: EVENT_PLACES_CANCELLED,
     entityType: 'event_booking',
     entityId: eventBookingId,
@@ -513,6 +556,7 @@ function cancelRow(
       reason: details.reason,
       afterCutoff: cancelled.afterCutoff,
       ...(cancelled.wholeEvent ? { wholeEvent: true } : {}),
+      ...(cancelled.channel === 'customer' ? { channel: 'customer' } : {}),
       amount: details.amount,
       cardRefunded: details.cardRefunded,
       storeCreditRefunded: details.storeCreditRefunded,
@@ -604,7 +648,7 @@ export async function finishEventClaimInTransaction(tx: Tx, claim: EventBookingC
 
   const finishedBy = by.how === 'press' ? {} : { by: { how: by.how, type: by.actor.type, id: by.actor.id, ...(by.why ? { why: by.why } : {}) } }
   await audit.recordAll(tx, [
-    cancelRow(claim.eventBookingId, claim.staffId, by.requestId, {
+    cancelRow(claim.eventBookingId, claimRowsActor(claim), by.requestId, {
       refund: details.method,
       reason: details.reason,
       cancelled,
@@ -616,8 +660,7 @@ export async function finishEventClaimInTransaction(tx: Tx, claim: EventBookingC
       handedOverBy: details.handedOverBy ?? null,
     }),
     {
-      actorType: 'staff',
-      actorId: claim.staffId,
+      ...claimRowsActor(claim),
       action: EVENT_BOOKING_CLAIMS.finished,
       entityType: 'event_booking',
       entityId: claim.eventBookingId,
@@ -836,6 +879,58 @@ export async function cancelEventPlaces(db: Db, eventBookingId: string, input: C
   const state = await listState(db, eventBookingId, cancelOf(claim).eventId).catch(() => ({ booking: null }))
   if (pressed.finished) return { ...cancelOutput(pressed.finished), ...state, ...(pressed.held ? { held: pressed.held } : {}) }
   return { places: cancelOf(claim).places.length, refundedAmount: pressed.cardGone, cardRefundedAmount: pressed.cardGone, storeCreditRefundedAmount: 0, ...state, held: pressed.held }
+}
+
+// --- W33: the customer's own cancel online (Q44)
+
+/** What the customer's cancel of these places would give: all of it to store credit. */
+export interface CustomerEventCancelQuote {
+  places: number
+  wholeBooking: boolean
+  value: number
+  refundCutoffAt: string | null
+}
+
+/**
+ * W33: the quote for the customer's own cancel (some places, or all with none named). Reads only, in R1's order:
+ * someone else's booking is not found; then a refund still being checked on its order, the database's own refusals
+ * (a payment still open, a booking or place already cancelled, a place checked in), a cancelled event, the cut-off.
+ * Each is thrown with the staff reason; cancels.ts gives it the customer's words.
+ */
+export async function quoteEventPlacesCancelForCustomer(db: Queryable, eventBookingId: string, attendeeIds: readonly string[] | undefined, customerId: string): Promise<CustomerEventCancelQuote> {
+  const ids = await bookingIds(db, eventBookingId)
+  if (!ids || ids.customerId !== customerId) throw notTheCustomers('quote')
+  if (ids.orderId) {
+    const holding = await openClaimHolding(db, ids.orderId)
+    if (holding) throw refundOpenRefusal('event_booking', holding.on)
+  }
+  const quote = await quotePlaces(db, eventBookingId, attendeeIds, 'quote')
+  const event = (await db.query<{ cancelled: boolean }>('SELECT cancelled_at IS NOT NULL AS cancelled FROM events WHERE id = $1::uuid', [quote.eventId]))[0]
+  const cannot = customerCannotCancelPlaces(quote, event?.cancelled === true, 'quote')
+  if (cannot) throw cannot
+  return { places: quote.places, wholeBooking: quote.wholeBooking, value: quote.value, refundCutoffAt: quote.refundCutoffAt }
+}
+
+/**
+ * W33 (Q44): the customer cancels places on their own event booking online (all of them with none named), with the
+ * store credit they confirmed (Q18: required). One transaction (R1, which finishes its own claim): the refund is
+ * always store credit, so there is no card part, no Stripe client is made and nothing can be held.
+ */
+export async function cancelEventPlacesForCustomer(
+  db: Db,
+  eventBookingId: string,
+  input: { attendeeIds?: string[] | undefined; confirmed: { refund: number } },
+  customer: { id: string },
+  requestId: string
+): Promise<CancelEventPlacesOutput> {
+  if (input.attendeeIds !== undefined && input.attendeeIds.length === 0) throw eventCancelRefusal('VALIDATION', 'invalid_params', WORDS.choosePlace)
+  const unlocked = await bookingIds(db, eventBookingId)
+  if (!unlocked || unlocked.customerId !== customer.id) throw notTheCustomers('cancel_places')
+  const options: EventCancelOptions = { actor: { type: 'customer', id: customer.id }, requestId }
+  const press: CancelEventPlacesInput = { ...(input.attendeeIds ? { attendeeIds: input.attendeeIds } : {}), refund: 'credit', confirmed: input.confirmed }
+  const started = await inC1(db, (tx) => cancelR1(tx, eventBookingId, press, 'credit', options, null, unlocked), notSaved)
+  if (started.kind !== 'done') throw new Error('A customer cancel was not finished in its own transaction.')
+  return started.output
 }
 
 // --- For reconcile and the close by hand

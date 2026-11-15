@@ -42,6 +42,7 @@ import {
   readClaimRow,
   writeClaimRow,
   type CardPart,
+  type ClaimActor,
   type ClaimSubject,
 } from './pipeline'
 
@@ -122,6 +123,8 @@ export interface OrderClaimDetails extends StepEClaimCommon {
 export interface EventBookingClaimDetails extends StepEClaimCommon {
   kind: 'cancel_places'
   orderId: string
+  /** W33: the claim is the customer's own (the website's cancel): its rows name the customer. Absent on a staff claim. */
+  channel?: 'customer'
   /**
    * W30: what R1 cancelled, so R2 records the money on exactly those places and the undo puts them back: the event
    * whose places R1 released, the booking's event line (the card part's line), each place with what it was worth and
@@ -140,6 +143,8 @@ export interface EventPlacesCancelled {
   afterCutoff: boolean
   /** W31: cancelled because the whole event was (no cut-off rule applied). Absent on an ordinary place cancel. */
   wholeEvent?: boolean
+  /** W33: cancelled online by the customer (store credit only, before the cut-off). Absent on a staff cancel. */
+  channel?: 'customer'
   /**
    * W31 (W30 review L1): the event was already cancelled when R1 cancelled these places. Absent when it was live:
    * the undo then refuses to put the places back if the event has been cancelled since.
@@ -161,11 +166,13 @@ export interface EventBookingClaim {
   /** The order that paid for the booking (the details' `orderId`). */
   orderId: string
   staffId: string | null
+  /** W33: the customer who cancelled online, when the claim is theirs (then `staffId` is null). */
+  customerId?: string | null
   at: string
   details: EventBookingClaimDetails
 }
 
-export type ClaimBy = { actor: { type: 'staff'; id: string }; requestId: string }
+export type ClaimBy = { actor: ClaimActor; requestId: string }
 
 // --- An open claim holds its subject
 
@@ -290,7 +297,7 @@ export async function writeEventBookingClaim(tx: Tx, eventBookingId: string, det
   await lockOrderForClaim(tx, details.orderId)
   await refuseWhileRefundOpen(tx, 'event_booking', details.orderId)
   const row = await writeClaimRow(tx, EVENT_BOOKING_CLAIMS, eventBookingId, details, by)
-  return { id: row.id, eventBookingId, orderId: details.orderId, staffId: row.staffId, at: row.at, details }
+  return { id: row.id, eventBookingId, orderId: details.orderId, staffId: row.staffId, customerId: row.customerId, at: row.at, details }
 }
 
 // --- Reading, the finish, the refusal mark, the due list (the shared core, on these two subjects)
@@ -304,7 +311,7 @@ export async function readOrderClaim(db: Queryable, claimId: string): Promise<Or
 /** The event booking's claim, or null when there is no Worker claim with that id on an event booking. */
 export async function readEventBookingClaim(db: Queryable, claimId: string): Promise<EventBookingClaim | null> {
   const row = await readClaimRow<EventBookingClaimDetails>(db, EVENT_BOOKING_CLAIMS, claimId)
-  return row ? { id: row.id, eventBookingId: row.subjectId, orderId: row.details.orderId, staffId: row.staffId, at: row.at, details: row.details } : null
+  return row ? { id: row.id, eventBookingId: row.subjectId, orderId: row.details.orderId, staffId: row.staffId, customerId: row.customerId, at: row.at, details: row.details } : null
 }
 
 type AnyStepEClaim = OrderClaim | EventBookingClaim

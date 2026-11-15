@@ -859,7 +859,7 @@ BEGIN
     'whole_booking', v_sel_count = v_remaining_count,
     'value', v_value,
     'refund_cutoff_at', b.refund_cutoff_at,
-    'before_cutoff', b.refund_cutoff_at IS NOT NULL AND v_now_london < (b.refund_cutoff_at AT TIME ZONE 'UTC'),
+    'before_cutoff', COALESCE(v_now_london < (COALESCE(b.refund_cutoff_at, b.starts_at) AT TIME ZONE 'UTC'), true),
     'event_started', b.starts_at IS NOT NULL AND v_now_london >= (b.starts_at AT TIME ZONE 'UTC'),
     'event_cancelled', b.event_cancelled_at IS NOT NULL
   );

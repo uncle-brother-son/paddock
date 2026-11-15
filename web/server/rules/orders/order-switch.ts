@@ -18,8 +18,12 @@ import { ApiError } from '@/server/http/errors'
  * `event_cancels` (an event place, booking or whole event cancelled with money back) are step E's, checked by its
  * routes as W28 and W30 build them (server/rules/refunds/refund-switch.ts). Both are off until the lead adds them to
  * the secret, and neither turns any order or booking change on.
+ *
+ * W33 (E-plan 4.11, lead call L9): `customer_cancels` is the website's own cancels (/api/v1/customer/.../cancel and
+ * their quotes), checked by server/rules/customer/cancel-switch.ts. Off until the website is built and the lead adds
+ * it; it turns nothing else on, and no staff route asks for it.
  */
-export const ORDER_KINDS = ['no_stripe', 'saved_card', 'reader', 'membership', 'reader_flows', 'booking_changes', 'order_refunds', 'event_cancels'] as const
+export const ORDER_KINDS = ['no_stripe', 'saved_card', 'reader', 'membership', 'reader_flows', 'booking_changes', 'order_refunds', 'event_cancels', 'customer_cancels'] as const
 export type OrderKind = (typeof ORDER_KINDS)[number]
 
 /**
@@ -30,7 +34,7 @@ export type OrderKind = (typeof ORDER_KINDS)[number]
  *   to take (the order then refuses with its own reason, as placeOrder needs Stripe for either);
  * - anything else is `no_stripe`: cash, gift card or store credit alone, nothing owed, or no method.
  */
-export function orderKind(input: Pick<PlaceOrderInput, 'membershipPlanId' | 'payment'>): Exclude<OrderKind, 'reader_flows' | 'booking_changes' | 'order_refunds' | 'event_cancels'> {
+export function orderKind(input: Pick<PlaceOrderInput, 'membershipPlanId' | 'payment'>): Exclude<OrderKind, 'reader_flows' | 'booking_changes' | 'order_refunds' | 'event_cancels' | 'customer_cancels'> {
   if (input.membershipPlanId) return 'membership'
   const method = input.payment?.method
   if (method === 'reader') return 'reader'

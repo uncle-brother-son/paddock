@@ -927,6 +927,61 @@ first. No migration.
 - **Not built (review L1, for H):** listing a payment's refunds by key before a compensation's send. It adds a Stripe
   call to every compensation refund, which changes the Stripe calls the order replay compares with its recordings.
 
+## The website's cancels (W33)
+
+Four customer routes, built before the website exists (E-plan 4.11, lead call L9; Wayne's Q44, 15 Nov), all under
+`/api/v1/customer/`, the customer from their own sign-in:
+
+| Route | What it is |
+|---|---|
+| `POST bookings/:bookingId/cancel/quote` | What cancelling their session booking gives, or why it can't be done now |
+| `POST bookings/:bookingId/cancel` | The whole booking cancelled; everything paid to store credit; the credit back |
+| `POST event-bookings/:eventBookingId/cancel/quote` | The same for places on their event booking |
+| `POST event-bookings/:eventBookingId/cancel` | Chosen places, or the whole booking, to store credit |
+
+They are step D's and E's own rules on a customer channel, not copies: `bookings/cancel.ts` (`cancelForCustomer`,
+`quoteCancelForCustomer`) and `events/cancel-places.ts` (`cancelEventPlacesForCustomer`,
+`quoteEventPlacesCancelForCustomer`) run the same R1 the staff routes run. What the channel changes:
+
+- **Their own booking only.** Anyone else's is refused exactly as one that doesn't exist (`NOT_FOUND`), checked on
+  the read with no lock and again under the lock.
+- **Always store credit.** The method is fixed, so the plan never has a card part, no Stripe client is made, and R1
+  finishes its own claim: one transaction, nothing held, nothing for reconcile. The session R1 throws if a card part
+  is ever planned on this channel, the event R1 if a card or cash part is (a session's plan to store credit can hold
+  no cash part).
+- **Sessions:** the whole booking, with every add-on line still on it. Which cancel it is comes from the booking
+  (`customerKindOf`): a credit, pass or payment-needed booking is Cancel & return credit, anything else Cancel &
+  Refund. Paid guests on a credit booking go to store credit with the cancel (staff are told to remove them first,
+  except on the club's own cancel). The 24-hour rule as from the booking page. Refused as well: a cancelled, finished
+  or still-pending booking, and one with card refund money still owed on it (Q39: staff settle that; Cancel & Refund
+  would give it as store credit).
+- **W33a (the W33 review; Wayne, 15 Nov):**
+  - A private booking is cancellable online like any other, 24 hours or more before: Cancel & Refund to store credit
+    (the whole tier price and every paid add-on), and the whole session is freed.
+  - A payment-needed booking is exempt from the 24-hour rule only when nothing comes back: with money on it (a paid
+    guest, a paid add-on) it is refused inside 24 hours, and once the session has started a customer is refused
+    whatever the booking (`customerTooLate`, the `within_24_hours` words).
+  - A pass booking that holds money not recognised as its paid guests' (an older booking whose seats have no price or
+    pay-by) would go through Cancel & Refund and lose its pass session: refused (`pass_session_not_returned`), and
+    staff handle it. A membership credit booking in that state is left, since its credit comes back by itself.
+- **Events:** before the cut-off only (Q43; staff can refund later with a reason, a customer can't give one), and
+  never on a cancelled event (the club's whole-event cancel gives that money back).
+- **No Issue refunds, no club cancel, no reason.** The amount confirmed is required (Q18).
+- **The rows are the customer's.** `actor_type` is `customer` on the claim, its finish and the cancel's own row;
+  `removed_by`, `cancelled_by` and the store credit row's `staff_id` are null; the claim's details and the cancel's
+  row carry `channel: 'customer'`. `ClaimActor`, `staffIdOf` and `claimRowsActor` in `refunds/pipeline.ts` hold this.
+  The staff claim statements are left word for word (`pipeline.test.ts` pins them); a customer's claim has its own.
+
+`server/rules/customer/` holds what is the channel's alone: `cancels.ts` shapes the answers and turns every refusal
+into the customer's words (`cancel-words.ts`: a reason with no words of its own gets the fallback, so no staff
+sentence reaches the website), and `cancel-switch.ts` is the switch: all four routes answer `REFUND_PATH_OFF` (before any booking is read)
+unless ORDER_SWITCH names `customer_cancels`, and a cancel that gives money back also needs the kind staff need for it
+(`booking_changes`, `event_cancels`).
+
+Migration 024 goes with this slice: `event_cancellation_quote` answers `before_cutoff` by Q43 itself (an event with
+no cut-off uses its start; a null start counts as before), and `quotePlaces` reads it as it is. It must be applied
+before this code is live. `testing/migration-024.test.ts` holds the file to the saved schema.
+
 ## Refund claims with no finish
 
 The staff app claims a refund's money before it moves. Each claim writes `booking.refund_claimed` to

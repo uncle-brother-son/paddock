@@ -82,11 +82,26 @@ export function cardPartRequest(claimId: string, part: CardPart): Stripe.RefundC
 export interface ClaimRow<Details> {
   id: string
   subjectId: string
-  /** The staff member who made the claim: its store credit row and its audit rows name them. */
+  /** The staff member who made the claim: its store credit row and its audit rows name them. Null on a customer's claim. */
   staffId: string | null
+  /** W33: the customer who cancelled online, when the claim is theirs: its audit rows name them, and no staff member. */
+  customerId: string | null
   at: string
   details: Details
 }
+
+/**
+ * W33 (E-plan 4.11): who makes a claim. A staff member, or the signed-in customer cancelling their own booking online
+ * (always to store credit, so their claim never has a card part and is finished in the transaction that wrote it).
+ */
+export type ClaimActor = { type: 'staff'; id: string } | { type: 'customer'; id: string }
+
+/** The staff id for the columns that point at `staff` (removed_by, cancelled_by, a store credit row's staff_id): null for a customer. */
+export const staffIdOf = (actor: ClaimActor): string | null => (actor.type === 'staff' ? actor.id : null)
+
+/** Who a claim's own audit rows are written as: the staff member who pressed, or (W33) the customer who cancelled online. */
+export const claimRowsActor = (claim: { staffId: string | null; customerId?: string | null }): { actorType: 'staff' | 'customer'; actorId: string | null } =>
+  claim.customerId ? { actorType: 'customer', actorId: claim.customerId } : { actorType: 'staff', actorId: claim.staffId }
 
 /** A Worker claim on the subject with no finished row: `$1` the subject's id (as text). */
 export const openClaimSql = (on: ClaimSubject): string => `
@@ -125,6 +140,12 @@ const writeClaimSql = (on: ClaimSubject): string =>
        VALUES (clock_timestamp(), 'staff', $1::text, '${on.claimed}', '${on.entityType}', $2::text, $3::text, $4::jsonb)
        RETURNING id, at`
 
+/** W33: the same row for a customer's own claim (the website's cancel). The staff statement above is left word for word. */
+const writeCustomerClaimSql = (on: ClaimSubject): string =>
+  `INSERT INTO audit_log (at, actor_type, actor_id, action, entity_type, entity_id, request_id, details)
+       VALUES (clock_timestamp(), 'customer', $1::text, '${on.claimed}', '${on.entityType}', $2::text, $3::text, $4::jsonb)
+       RETURNING id, at`
+
 const claimRefusalSql = (on: ClaimSubject): string =>
   `SELECT details->>'detail' AS detail FROM audit_log WHERE action = '${on.refused}' AND entity_type = '${on.entityType}' AND entity_id = $1::text AND details->>'claimId' = $2::text ORDER BY at, id LIMIT 1`
 
@@ -139,7 +160,9 @@ export async function openClaimOn(db: Queryable, on: ClaimSubject, subjectId: st
 export async function readClaimRow<Details>(db: Queryable, on: ClaimSubject, claimId: string): Promise<ClaimRow<Details> | null> {
   const row = (await db.query<{ id: string; entity_id: string; actor_id: string | null; at: unknown; details: Details }>(readClaimSql(on), [claimId]))[0]
   if (!row) return null
-  return { id: row.id, subjectId: row.entity_id, staffId: row.actor_id, at: asIso(row.at), details: row.details }
+  // W33: a customer's claim says so in its details (`channel`), and names the customer, never a staff member.
+  const customer = (row.details as { channel?: unknown } | null)?.channel === 'customer'
+  return { id: row.id, subjectId: row.entity_id, staffId: customer ? null : row.actor_id, customerId: customer ? row.actor_id : null, at: asIso(row.at), details: row.details }
 }
 
 /** True once the claim has its finished row (R2, the undo, reconcile or a close by hand wrote it). */
@@ -153,11 +176,15 @@ export async function writeClaimRow<Details>(
   on: ClaimSubject,
   subjectId: string,
   details: Details,
-  by: { actor: { id: string }; requestId: string }
+  // The actor's `type` may be left out: a staff member, as every claim was before W33.
+  by: { actor: { id: string; type?: ClaimActor['type'] }; requestId: string }
 ): Promise<ClaimRow<Details>> {
-  const row = (await tx.query<{ id: string; at: unknown }>(writeClaimSql(on), [by.actor.id, subjectId, by.requestId, JSON.stringify(details)]))[0]
+  const customer = by.actor.type === 'customer'
+  // A customer's claim always says so in its details too: readClaimRow tells whose it is from there.
+  if (customer !== ((details as { channel?: unknown } | null)?.channel === 'customer')) throw new Error("A customer's refund claim must carry channel 'customer', and only theirs.")
+  const row = (await tx.query<{ id: string; at: unknown }>((customer ? writeCustomerClaimSql : writeClaimSql)(on), [by.actor.id, subjectId, by.requestId, JSON.stringify(details)]))[0]
   if (!row) throw new Error('The refund claim was not written.')
-  return { id: row.id, subjectId, staffId: by.actor.id, at: asIso(row.at), details }
+  return { id: row.id, subjectId, staffId: customer ? null : by.actor.id, customerId: customer ? by.actor.id : null, at: asIso(row.at), details }
 }
 
 // --- Sending one card part
