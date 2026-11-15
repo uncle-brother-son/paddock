@@ -1141,23 +1141,8 @@ describe('staff app helpers', () => {
 
   describe('cash must match what was confirmed', () => {
     const CHANGED = (amount: string) => `The amount due has changed to £${amount}. Check it with the customer and confirm again.`
-    const staffRow = { id: 'staff-1', email: user.email, role: 'admin', can_issue_refunds: true, can_manage_pricing: false, active: true }
     const screen = () => import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/cashConfirmation'))
     const backend = (name: string) => import(/* @vite-ignore */ path.join(appDir, `backend/paddock/${name}`))
-    const isWrite = (sql: string) => /\b(INSERT INTO|UPDATE|DELETE FROM)\b/.test(sql)
-
-    /** A fake database: the first matching pattern answers, and anything else returns no rows. */
-    function stubDatabase(answers: Array<[RegExp, (params: unknown[]) => unknown[]]>) {
-      const sql: string[] = []
-      const query = vi.fn(async (text: string, params: unknown[] = []) => {
-        sql.push(text)
-        if (/FROM staff/.test(text)) return { data: [staffRow] }
-        const answer = answers.find(([pattern]) => pattern.test(text))
-        return { data: answer ? answer[1](params) : [] }
-      })
-      vi.stubGlobal('paddockData', { query })
-      return { sql, writes: () => sql.filter(isWrite) }
-    }
 
     // Brief W24a: the rule's own tests (cashDifferenceRefusal in backend/paddock/shared/cashConfirmation.ts) went with
     // that file. The rule is the Worker's now (server/rules/orders/amounts.ts), tested through the actions that use it
@@ -2848,116 +2833,11 @@ describe('staff app helpers', () => {
       })
     })
 
-    describe('refund safety', () => {
-      const BROKEN = new Error('connection lost')
-      type Answer = [RegExp, (params: unknown[]) => unknown[]]
-
-      /** Two orders paid for the booking, newest first. `portions` is what each order's card took,
-       *  or an Error for a read that fails. `credit` answers each store credit movement in turn
-       *  (an Error throws, and so does looking for it afterwards, so nobody can say whether it
-       *  landed: W05j's read-back is tested in the replay tests) and `refunds` each card refund. */
-      const setUp = (options: {
-        portions?: Record<string, number | Error>
-        credit?: Array<boolean | Error>
-        refunds?: Array<{ error: string } | { success: true }>
-        answers?: Answer[]
-      } = {}) => {
-        const credit = [...(options.credit ?? [])]
-        let creditThrew = false
-        const refunds = [...(options.refunds ?? [])]
-        const portions = options.portions ?? { 'order-new': 15, 'order-old': 25 }
-        const database = stubDatabase([
-          ...(options.answers ?? []),
-          [/WHERE oli\.booking_id = \$1 AND oli\.item_type = 'booking'/, () => {
-            return [
-              { id: 'line-new', order_id: 'order-new', net_remaining: '15.00' },
-              { id: 'line-old', order_id: 'order-old', net_remaining: '25.00' },
-            ]
-          }],
-          [/FROM orders o WHERE o\.id/, (params) => {
-            const portion = portions[String(params[0])] ?? 0
-            if (portion instanceof Error) throw portion
-            return [{
-              customer_id: 'customer-1',
-              stripe_payment_intent_id: portion > 0 ? `pi_${String(params[0])}` : null,
-              payment_method: 'card',
-              order_total: String(portion),
-              order_discount_amount: '0',
-              gift_card_used: '0',
-              store_credit_used: '0',
-              membership_net: '0',
-              already_card_refunded: '0',
-            }]
-          }],
-          [/store_credit_apply/, () => {
-            const next = credit.shift()
-            creditThrew = next instanceof Error
-            if (next instanceof Error) throw next
-            return [{ result: next === false ? { ok: false } : { ok: true, balance: 40 } }]
-          }],
-          [/FOR SHARE/, () => {
-            if (creditThrew) throw BROKEN
-            return []
-          }],
-        ])
-        const rawRefund = vi.fn(async () => ({ data: refunds.shift() ?? { success: true } }))
-        vi.stubGlobal('paddockBackendApi2', { rawRequest: rawRefund })
-        return { rawRefund, ...database }
-      }
-      // Brief W21: refundBooking's amount paths are thin calls to the Worker now (the old body's claim, put-back and
-      // warning tests went with it); the wrapper's tests are in 'refunds (W21: thin calls to the Worker)', and the rules'
-      // in server/rules/bookings/refunds.test.ts. Brief W23: so is Cancel & Refund (its old body's tests went with it;
-      // the wrapper's are in 'Cancel & Refund and Cancel & return credit (W23: thin calls to the Worker)', the rules' in
-      // server/rules/bookings/cancel.test.ts). Brief W24a: giveBookingMoneyBack (shared/bookingRefund.ts) is deleted, and
-      // its tests with it; the Worker's refund pipeline is tested in server/rules/bookings/refunds.test.ts and the
-      // frozen copy of the old code by the replay (server/rules/testing/legacy-booking/).
-
-
-      describe('the same gap elsewhere', () => {
-
-        describe('event places', () => {
-          const cancelPlaces = async (options: { credit: Array<boolean | Error>; portion: number }) => {
-            const stubs = setUp({
-              portions: { 'order-1': options.portion },
-              credit: options.credit,
-              answers: [
-                [/event_cancellation_quote/, () => [{
-                  quote: { ok: true, event_id: 'event-1', customer_id: 'customer-1', attendee_ids: ['place-1'], places: 1, whole_booking: true, value: 25, before_cutoff: true },
-                  status: 'confirmed',
-                  places: 1,
-                }]],
-                [/FROM event_attendees ea\s+WHERE ea\.id = ANY/, () => [{ id: 'place-1', unit_price: '25.00' }]],
-                [/oli\.event_booking_id = \$1 AND oli\.item_type = 'event'/, () => [{ id: 'line-1', order_id: 'order-1', unallocated_card: '0' }]],
-              ],
-            })
-            const { cancelEventBookingPlaces } = await load('eventCancellation')
-            const result = await cancelEventBookingPlaces({ eventBookingId: 'event-booking-1', refund: 'card', reason: null, staffId: 'staff-1' })
-            return { result, ...stubs }
-          }
-
-          // W05j: store credit nobody can say landed is counted as given, so the places are cancelled
-          // and can't be refunded again, and staff are told to check the balance.
-          it('store credit throwing after the card refund: the places are cancelled with it counted as given', async () => {
-            const { result, sql } = await cancelPlaces({ portion: 15, credit: [BROKEN] })
-            expect(result).toMatchObject({ ok: true, cardRefundedAmount: 15, storeCreditRefundedAmount: 10, refundedAmount: 25 })
-            expect(result.warning).toContain('Adding the £10.00 store credit gave no clear answer')
-            expect(sql.some((text) => /WITH p AS/.test(text))).toBe(true)
-          })
-
-          it('store credit throwing with no card money: cancelled with it counted as given, never "nothing was cancelled"', async () => {
-            const { result, sql } = await cancelPlaces({ portion: 0, credit: [BROKEN] })
-            expect(result).toMatchObject({ ok: true, storeCreditRefundedAmount: 25, warning: expect.stringContaining('gave no clear answer') })
-            expect(sql.some((text) => /WITH p AS/.test(text))).toBe(true)
-          })
-        })
-      })
-
-      // Brief W28: refundOrder is a thin call to the Worker now (the old body's W05j and W05k tests went with it: store
-      // credit counted as given, the retry that can't pay twice, the database error after the money has gone). The
-      // wrapper's tests are in 'order refunds (W28: thin calls to the Worker)'; the rules' in
-      // server/rules/orders/refund-lines.test.ts; the frozen copy of the old code is replayed by
-      // server/rules/testing/replay/order-refund-replay.test.ts (legacy-refund/).
-    })
+    // 'refund safety' (W05j, W05k) is gone. Its tests left as each action went to the Worker: refundBooking (W21),
+    // Cancel & Refund (W23), giveBookingMoneyBack (W24a), refundOrder (W28). Brief W34 took the last two, which loaded
+    // the staff app's shared/eventCancellation (deleted at W34; W31 review L2): store credit that gave no clear answer
+    // on an event place cancel. The Worker's rule is tested in server/rules/events/, and the frozen copy of the old
+    // code is replayed by server/rules/testing/replay/event-places-replay.test.ts (legacy-refund/).
 
     describe('the screens', () => {
       it('the tick keeps the figure its words show', async () => {

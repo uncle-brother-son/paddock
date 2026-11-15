@@ -16,8 +16,9 @@ type Route = { POST: (request: never) => Promise<Response> }
 const ROUTES: Record<string, () => Promise<unknown>> = {
   // W25: deleted from app/; the test-only copy of the old step D functions still calls it (legacy-order/README.md).
   '/api/payments/charge-saved-card': () => import('../legacy-order/routes/payments/charge-saved-card/route'),
-  '/api/payments/refund-order': () => import('@/app/api/payments/refund-order/route'),
-  '/api/memberships/cancel-subscription': () => import('@/app/api/memberships/cancel-subscription/route'),
+  // W34: deleted from app/; the test-only copies of the old step D and step E functions still call them.
+  '/api/payments/refund-order': () => import('../legacy-order/routes/payments/refund-order/route'),
+  '/api/memberships/cancel-subscription': () => import('../legacy-order/routes/memberships/cancel-subscription/route'),
   // W16: deleted from app/; the test-only copy of the old order code still calls them (legacy-order/README.md).
   '/api/memberships/create-subscription': () => import('../legacy-order/routes/memberships/create-subscription/route'),
   '/api/terminal/resolve-saved-card': () => import('../legacy-order/routes/terminal/resolve-saved-card/route'),
@@ -28,7 +29,8 @@ const ROUTES: Record<string, () => Promise<unknown>> = {
 
 /** The /api/v1/staff routes the old functions call, beyond the quote shadow's own. */
 const STAFF_ROUTES: Record<string, () => Promise<unknown>> = {
-  '/api/v1/staff/payments/refunds': () => import('@/app/api/v1/staff/payments/refunds/route'),
+  // W34: deleted from app/; the old refund code's look-up by key (shared/stripeRefundLookup in the frozen copies) still calls it.
+  '/api/v1/staff/payments/refunds': () => import('../legacy-order/routes/v1/staff/payments/refunds/route'),
   // W14: the wrappers ask the Worker first (the terminal and the saved card; createOrder and the reader's finalise
   // and cancel when a test runs the staff app's own thin calls). The quote shadow is gone (W16).
   '/api/v1/staff/orders': () => import('@/app/api/v1/staff/orders/route'),

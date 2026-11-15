@@ -28,6 +28,13 @@ chose (12 Nov, option B) to keep this copy for the replay's set-up only.
   core's test). The frozen copy of the old step D functions beside this folder (`../legacy-booking/`) and the old
   order code here call them through `replay/legacy-routes.ts`. `server/rules/testing/removed-booking-code.test.ts` checks nothing
   else does.
+- W34: and the three legacy routes the old refund code called, moved here (`git mv`, byte for byte) from `app/api/`
+  at Worker commit `77705a5`: `payments/refund-order`, `memberships/cancel-subscription` and
+  `v1/staff/payments/refunds` (with its tests, split out of `server/rules/payments/payment-intent-refunds.test.ts`
+  into `route.test.ts` beside it). The frozen copies of the old step D and step E functions call them through
+  `replay/legacy-routes.ts`. `server/rules/testing/removed-refund-code.test.ts` holds their SHA-256 and checks nothing
+  else calls them. The app's other two legacy routes, `/api/bookings/refund` and `/api/bookings/partial-refund`, had no
+  caller at all, so they were deleted with no copy.
 
 Who may use it: only `replay/harness.ts` (`LEGACY_ORDER_ACTIONS`, `legacyOrderDir`) and `replay/legacy-routes.ts`,
 and test files through the harness. `server/removed-order-code.test.ts` checks that, and that nothing else in

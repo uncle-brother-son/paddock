@@ -27,9 +27,12 @@ old step D functions beside it.
   generated `shared/workerContracts.ts`) have changed in the staff app since `453bf38`, and a copy that stands alone
   can't be changed by another's.
 - The legacy routes these functions call (`/api/payments/refund-order`, `/api/v1/staff/payments/refunds`,
-  `/api/memberships/cancel-subscription`) are still the app's own (`app/api/...`), bound through
-  `replay/legacy-routes.ts`. They leave the app at W34, and move into the test tree then (E-plan 4.12), as W25 moved
-  step D's.
+  `/api/memberships/cancel-subscription`) left the app at W34 (E-plan 4.12), as W25 moved step D's: they are in
+  `../legacy-order/routes/` now, bound through `replay/legacy-routes.ts`.
+- W34 also deleted the last ten of these modules from the staff app (`shared/eventCancellation`,
+  `eventCancellationQuote`, `heldCardRefund`, `cardRefundAttempts`, `storeCreditRefund`, `refundPaymentIntent`,
+  `stripeRefundLookup`, `orderCardPortion`, `orderPaymentStatus`, `cancelMembershipSubscription`). The copies here are
+  the only ones left; `server/rules/testing/removed-refund-code.test.ts` checks nothing loads them any other way.
 
 Who may use it: only `replay/harness.ts` (`LEGACY_REFUND_ACTIONS`, `legacyRefundDir`, `oldFunctionPath`) and the
 order copy's three imports, and test files through the harness. `server/rules/testing/frozen-refund-code.test.ts`

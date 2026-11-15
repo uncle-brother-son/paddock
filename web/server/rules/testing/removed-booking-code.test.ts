@@ -191,10 +191,8 @@ describe('W25: nothing still needs what was removed', () => {
   it('the deleted routes answer 404: no route file under app/ serves them (and the ones kept are still served)', () => {
     for (const route of DELETED_ROUTES) expect(routesServing(route), route).toEqual([])
     // The same check finds the routes that stay (a resolver that found nothing would pass the lines above).
-    expect(routesServing('/api/payments/refund-order')).toEqual([path.join('app', 'api', 'payments', 'refund-order', 'route.ts')])
-    expect(routesServing('/api/bookings/refund')).toHaveLength(1)
-    expect(routesServing('/api/bookings/partial-refund')).toHaveLength(1)
-    expect(routesServing('/api/v1/staff/payments/refunds')).toHaveLength(1)
+    // (Until W34 these lines named four legacy routes that stayed; W34 removed those, and removed-refund-code.test.ts guards them.)
+    expect(routesServing('/api/v1/staff/orders/0f0f0f0f-0000-4000-8000-000000000000/refunds')).toEqual([path.join('app', 'api', 'v1', 'staff', 'orders', '[orderId]', 'refunds', 'route.ts')])
     expect(routesServing('/api/v1/staff/reader-flows/0f0f0f0f-0000-4000-8000-000000000000/finalise')).toHaveLength(1)
     expect(routesServing('/api/v1/staff/orders/reconcile')).toHaveLength(1)
     // Nothing rewrites or redirects to them either.

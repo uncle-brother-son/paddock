@@ -1028,6 +1028,8 @@ looks for it on the payment by its key (the Worker writes the key on every refun
 `refund_key`, and `GET /api/v1/staff/payments/refunds` lists them). Found means it went; not found
 means it never did, and counts as a refusal. Booking card refunds with no clear answer are kept the
 same way (`booking.card_refund_unsure`), so Refund the rest a day later looks rather than resends.
+(W34: this was the staff app's old refund code. It and that route are gone from the app; the route's frozen copy is in
+`testing/legacy-order/routes/`, for the replay only. The Worker's refund pipeline looks by key itself.)
 
 Store credit given on a refund carries `[ref <uuid>]` at the end of its note, so after a database
 error the staff app can look for it (`shared/storeCreditRefund.ts`).
