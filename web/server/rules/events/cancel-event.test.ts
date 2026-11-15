@@ -389,6 +389,55 @@ describe('`wholeEvent` on the place cancel (brief W31 item 3; W30 "For the Worke
     })
   })
 
+  it('W35a (W35 audit F5, Wayne 15 Nov): No refund on a place, places or a booking is open to all staff on a live event; once the club has cancelled the event it needs Issue refunds, in the existing permission words, and nothing is cancelled without it', async () => {
+    await onTheEvent(async ({ samOnCard, moInCash, stripe }) => {
+      const sam = await samOnCard()
+      const mo = await moInCash()
+      const [first, second] = (await placeRows(sam.eventBookingId)).map((place) => place.id)
+      const none = { refund: 'none', confirmed: { refund: 0 } }
+      const withIssueRefunds = (on: boolean) => db.query('UPDATE staff SET can_issue_refunds = $1 WHERE id = $2', [on, ID.staff])
+      const needsIssueRefunds = [403, 'FORBIDDEN', 'Needs Issue refunds permission — this action moves money back to the customer.']
+
+      // A live event: No refund is open to every active staff member, as before.
+      await withIssueRefunds(false)
+      expect((await press(sam.eventBookingId, { ...none, attendeeIds: [first] })).body.data).toMatchObject({ places: 1, refundedAmount: 0 })
+
+      // The club cancels the event (which itself needs Issue refunds).
+      await withIssueRefunds(true)
+      expect((await cancelTheEvent()).status).toBe(200)
+      expect(await eventRow()).toMatchObject({ cancelled: true })
+
+      // Without Issue refunds: one place, several places and a whole booking are all refused, and nothing is cancelled.
+      await withIssueRefunds(false)
+      for (const [eventBookingId, body] of [
+        [sam.eventBookingId, { ...none, attendeeIds: [second] }],
+        [sam.eventBookingId, none],
+        [mo.eventBookingId, { ...none, attendeeIds: (await placeRows(mo.eventBookingId)).map((place) => place.id) }],
+        [mo.eventBookingId, none],
+      ] as const) {
+        const denied = await press(eventBookingId, body)
+        expect([denied.status, denied.body.error?.code, denied.body.error?.message]).toEqual(needsIssueRefunds)
+      }
+      expect((await placeRows(sam.eventBookingId)).map((place) => place.cancelled)).toEqual([true, false])
+      expect(await bookingRow(sam.eventBookingId)).toMatchObject({ status: 'confirmed', places: 1 })
+      expect(await bookingRow(mo.eventBookingId)).toMatchObject({ status: 'confirmed', places: 1 })
+      // The whole-event run still lists both, with their full value to give back.
+      expect((await overview()).body.data?.bookings.map((one) => [one.eventBookingId, one.places, one.value]).sort()).toEqual(
+        [
+          [sam.eventBookingId, 1, 40],
+          [mo.eventBookingId, 1, 20],
+        ].sort()
+      )
+
+      // With Issue refunds No refund goes through on the cancelled event.
+      await withIssueRefunds(true)
+      expect((await press(mo.eventBookingId, none)).body.data).toMatchObject({ places: 1, refundedAmount: 0 })
+      expect(await bookingRow(mo.eventBookingId)).toMatchObject({ status: 'cancelled', places: 0 })
+      expect(await creditRefunds()).toHaveLength(0)
+      expect(refundsSent(stripe)).toHaveLength(0)
+    })
+  })
+
   it('the whole run, one booking per press: card to the card, cash and gift card to store credit (Q42), after the cut-off with no reason asked, each with its own claim; the event ends with no places booked and nothing still to cancel', async () => {
     await onTheEvent(async ({ samOnCard, moInCash, giaOnGiftCard, stripe }) => {
       const sam = await samOnCard()
@@ -564,6 +613,7 @@ describe('`wholeEvent` on the place cancel (brief W31 item 3; W30 "For the Worke
       const options: EventCancelOptions = {
         actor: { type: 'staff', id: ID.staff },
         requestId: crypto.randomUUID(),
+        canIssueRefunds: true,
         // The released place is booked by someone else before Stripe answers.
         stripe: () =>
           whileTheRefundIsOnItsWay(stripe, async () => {
@@ -597,6 +647,7 @@ describe("review L1 (W30 review, must): an undo after a refused card refund neve
       const options: EventCancelOptions = {
         actor: { type: 'staff', id: ID.staff },
         requestId: crypto.randomUUID(),
+        canIssueRefunds: true,
         stripe: () =>
           whileTheRefundIsOnItsWay(stripe, async () => {
             // R1 has committed: the booking's places are cancelled and released, its claim open.
@@ -657,6 +708,7 @@ describe("review L1 (W30 review, must): an undo after a refused card refund neve
       const options: EventCancelOptions = {
         actor: { type: 'staff', id: ID.staff },
         requestId: crypto.randomUUID(),
+        canIssueRefunds: true,
         stripe: () =>
           whileTheRefundIsOnItsWay(stripe, async () => {
             expect((await cancelTheEvent()).status).toBe(200)

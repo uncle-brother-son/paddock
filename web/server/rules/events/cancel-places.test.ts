@@ -619,7 +619,7 @@ describe('a card refund Stripe refuses', () => {
           }
         },
       })
-      const options: EventCancelOptions = { actor: { type: 'staff', id: ID.staff }, requestId: crypto.randomUUID(), stripe: () => stripe }
+      const options: EventCancelOptions = { actor: { type: 'staff', id: ID.staff }, requestId: crypto.randomUUID(), canIssueRefunds: true, stripe: () => stripe }
       const stands = await cancelEventPlaces(resold, eventBookingId, { attendeeIds: [first as string], refund: 'card', confirmed: { refund: 40 } }, options)
       expect(stands).toMatchObject({ places: 1, refundedAmount: 0, cardRefundedAmount: 0, storeCreditRefundedAmount: 0, refundOwed: 40 })
       expect(stands.held).toMatchObject({ reason: 'refund_refused_not_put_back', message: NEW_WORDS.putBackBlocked('Failed to refund payment: This charge is disputed.', 40) })
@@ -670,7 +670,7 @@ describe('a card refund Stripe refuses', () => {
       // Room for exactly the booking's two places: one is sold again before Stripe answers, so the two can't go back.
       await db.query('UPDATE events SET capacity = 2 WHERE id = $1', [ID.event])
       stripe.failNext('refunds.create', { kind: 'error', error: refusal() })
-      const options: EventCancelOptions = { actor: { type: 'staff', id: ID.staff }, requestId: crypto.randomUUID(), stripe: () => stripe }
+      const options: EventCancelOptions = { actor: { type: 'staff', id: ID.staff }, requestId: crypto.randomUUID(), canIssueRefunds: true, stripe: () => stripe }
       const stands = await cancelEventPlaces(resoldAfterR1(1), eventBookingId, { refund: 'card', confirmed: { refund: 80 } }, options)
       // The answer: both places cancelled, the store credit part given, the card part owed.
       expect(stands).toMatchObject({ places: 2, refundedAmount: 30, cardRefundedAmount: 0, storeCreditRefundedAmount: 30, refundOwed: 50 })
@@ -706,7 +706,7 @@ describe('a card refund Stripe refuses', () => {
       // a place, so the event line isn't stamped.
       await db.query('UPDATE events SET capacity = 2 WHERE id = $1', [ID.event])
       stripe.failNext('refunds.create', { kind: 'error', error: refusal() })
-      const options: EventCancelOptions = { actor: { type: 'staff', id: ID.staff }, requestId: crypto.randomUUID(), stripe: () => stripe }
+      const options: EventCancelOptions = { actor: { type: 'staff', id: ID.staff }, requestId: crypto.randomUUID(), canIssueRefunds: true, stripe: () => stripe }
       const stands = await cancelEventPlaces(resoldAfterR1(1), eventBookingId, { attendeeIds: [first as string], refund: 'card', confirmed: { refund: 40 } }, options)
       expect(stands).toMatchObject({ places: 1, cardRefundedAmount: 0, refundOwed: 40 })
       expect(await eventLine(orderId)).toMatchObject({ refunded: false, card: '0.00' })
@@ -732,7 +732,7 @@ describe('a card refund Stripe refuses', () => {
       expect((await orderPost(orderRefundRoute as Handler, 'refunds', orderId, { lineItemIds: [soapLine], refundMethod: 'card', restock: { [soapLine]: false }, confirmed: { amount: 24 } })).body.data).toMatchObject({ cardRefundedAmount: 24 })
       await db.query('UPDATE events SET capacity = 2 WHERE id = $1', [ID.event])
       stripe.failNext('refunds.create', { kind: 'error', error: refusal() })
-      const options: EventCancelOptions = { actor: { type: 'staff', id: ID.staff }, requestId: crypto.randomUUID(), stripe: () => stripe }
+      const options: EventCancelOptions = { actor: { type: 'staff', id: ID.staff }, requestId: crypto.randomUUID(), canIssueRefunds: true, stripe: () => stripe }
       expect(await cancelEventPlaces(resoldAfterR1(1), eventBookingId, { attendeeIds: [first as string], refund: 'card', confirmed: { refund: 40 } }, options)).toMatchObject({ refundOwed: 40 })
       // Test data standing in for a soap refund of which £14 never reached the card: the line short by £14, and owed.
       await db.query('UPDATE order_line_items SET card_refunded_amount = 10 WHERE id = $1', [soapLine])
@@ -872,7 +872,7 @@ describe('a crash at each step: nothing is paid twice and nothing is hidden', ()
       },
     })
   }
-  const options = (stripe: FakeStripe): EventCancelOptions => ({ actor: { type: 'staff', id: ID.staff }, requestId: crypto.randomUUID(), stripe: () => stripe })
+  const options = (stripe: FakeStripe): EventCancelOptions => ({ actor: { type: 'staff', id: ID.staff }, requestId: crypto.randomUUID(), canIssueRefunds: true, stripe: () => stripe })
   const press = (through: Db, stripe: FakeStripe, eventBookingId: string, attendeeId: string) => cancelEventPlaces(through, eventBookingId, { attendeeIds: [attendeeId], refund: 'card', confirmed: { refund: 40 } }, options(stripe))
 
   it('dies in R1: nothing is kept, nothing is sent, and the same cancel then goes through', async () => {
@@ -978,7 +978,7 @@ describe('a check-in at the same moment', () => {
             )
         },
       })
-      const options: EventCancelOptions = { actor: { type: 'staff', id: ID.staff }, requestId: crypto.randomUUID(), stripe: () => stripe }
+      const options: EventCancelOptions = { actor: { type: 'staff', id: ID.staff }, requestId: crypto.randomUUID(), canIssueRefunds: true, stripe: () => stripe }
       const pressed = cancelEventPlaces(checkedInMeanwhile, eventBookingId, { attendeeIds: [first as string, second as string], refund: 'card', confirmed: { refund: 80 } }, options)
       await expect(pressed).rejects.toMatchObject({ code: 'CONFLICT', details: { reason: 'changed_by_someone_else', message: WORDS.changedBySomeoneElse } })
       expect(refundsSent(stripe)).toHaveLength(0)
@@ -1142,6 +1142,54 @@ describe('W32: the refund watch on an event booking', () => {
       await runReconcile()
       expect(await order(orderId)).toMatchObject({ owed: '40.00' })
       expect(stripe.refundsSent).toHaveLength(1)
+    })
+  })
+
+  it("W35a (W35 audit S1): soap £24 and two places £80 on one card; place 1's card refund succeeds and fails later; Refund the rest £40 to the card is recorded on the event line, not on the soap: the soap reads £0 card back and still refunds £24", async () => {
+    await onAnEventOrder({ products: [soap], event: two, payment: card }, async ({ orderId, eventBookingId, places: ids, stripe }) => {
+      const [first] = await ids()
+      // The soap is made the order's oldest line: an order's lines share one created_at, so which is first falls to the id.
+      await db.query("UPDATE order_line_items SET created_at = created_at - interval '1 minute' WHERE order_id = $1 AND item_type = 'product'", [orderId])
+      expect((await cancel(eventBookingId, 'card', [first as string])).body.data).toMatchObject({ places: 1, cardRefundedAmount: 40 })
+      const sent = stripe.refundsSent[0]
+      minutes(5)
+      stripe.settleRefund(sent?.id as string, 'failed')
+      minutes(DAY)
+      expect(await refundItems()).toMatchObject([{ id: sent?.id, outcome: 'refund_failed', reason: 'refund_failed_later' }])
+      expect(await order(orderId)).toMatchObject({ owed: '40.00' })
+      // The claim's finished row still says given: the failure is the booking's own row, which is what the lines' query reads.
+      expect((await auditRows('event_booking.refund_finished')).map((row) => row.details['outcome'])).toEqual(['given'])
+      expect((await auditRows('event_booking.refund_failed_later')).map((row) => [row.entity_id, row.details['owed']])).toEqual([[eventBookingId, 40]])
+      expect(await booking(eventBookingId)).toMatchObject({ status: 'confirmed', places: 1 })
+
+      const rest = await orderPost(orderOwedRoute as Handler, 'refunds/owed', orderId, { amount: 40, refundMethod: 'card' })
+      expect(rest.body.data).toMatchObject({ cardRefundedAmount: 40, storeCreditRefundedAmount: 0, refundOwed: 0 })
+      expect(moneyBack(stripe)).toBe(4000)
+      expect((await lineRows(orderId)).map((line) => [line.item_type, line.refunded, line.card])).toEqual([
+        ['product', false, '0.00'],
+        ['event', false, '40.00'],
+      ])
+      const read = await (orderFiguresRoute as Handler)(new Request(`https://worker.test/api/v1/staff/orders/${orderId}/refund-figures`, { headers: headers(REPLAY_USER.email) }), { params: Promise.resolve({ orderId }) })
+      const figures = ((await read.json()) as { data: { cardLeft: number; refundOwed: number; lines: Array<{ itemType: string; cardRefunded: number; refundable: number }> } }).data
+      expect(figures).toMatchObject({ cardLeft: 64, refundOwed: 0 })
+      expect(figures.lines.map((line) => [line.itemType, line.cardRefunded, line.refundable])).toEqual([
+        ['product', 0, 24],
+        ['event', 40, 40],
+      ])
+
+      // The customer brings the soap back: its own refund gives the whole £24, to the card.
+      const soapLine = (await lineRows(orderId)).find((line) => line.item_type === 'product')?.id as string
+      const soapBack = await orderPost(orderRefundRoute as Handler, 'refunds', orderId, { lineItemIds: [soapLine], refundMethod: 'card', restock: { [soapLine]: false }, confirmed: { amount: 24 } })
+      expect(soapBack.body.data).toMatchObject({ cardRefundedAmount: 24 })
+      expect(moneyBack(stripe)).toBe(6400)
+      expect((await lineRows(orderId)).map((line) => [line.item_type, line.refunded, line.card])).toEqual([
+        ['product', true, '24.00'],
+        ['event', false, '40.00'],
+      ])
+      expect(await order(orderId)).toMatchObject({ owed: '0.00' })
+      expect(await creditRefunds()).toEqual([])
+      // The failed refund, Refund the rest, the soap: three sends, none a second send of another.
+      expect(refundsSent(stripe)).toHaveLength(3)
     })
   })
 })

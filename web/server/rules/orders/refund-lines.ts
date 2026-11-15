@@ -719,6 +719,11 @@ function owedOutput(finished: Pick<OrderClaimFinished, 'cardRefunded' | 'storeCr
  * event line: the order's event line whose booking has a claim that ended owed. Before, it went on the order's oldest
  * line, refunded or not, which lowered an unrefunded product line's figure by the card money. Only with neither is the
  * oldest line used.
+ *
+ * W35a (W35 audit S1): an event line also has money owed when a place's card refund was accepted by Stripe and failed
+ * later (the W32 watch: the claim's finished row still says `given`, and the failure is the booking's
+ * `event_booking.refund_failed_later` row). Without it, on an order with another line, Refund the rest recorded the
+ * place's card money on that other line (a £24 soap read £40 back to the card).
  */
 /** The order's lines for owedCardLines: those stamped `card` first, oldest first, as before; then an event line with money owed; then the rest. */
 const OWED_CARD_LINES_SQL = `
@@ -729,8 +734,9 @@ FROM (
          (oli.refunded_at IS NOT NULL AND oli.refund_method = 'card') AS stamped,
          (oli.item_type = 'event' AND EXISTS (
             SELECT 1 FROM audit_log f
-            WHERE f.action = 'event_booking.refund_finished' AND f.entity_type = 'event_booking'
-              AND f.entity_id = oli.event_booking_id::text AND f.details->>'outcome' = 'owed')) AS event_owed
+            WHERE f.entity_type = 'event_booking' AND f.entity_id = oli.event_booking_id::text
+              AND ((f.action = 'event_booking.refund_finished' AND f.details->>'outcome' = 'owed')
+                   OR f.action = 'event_booking.refund_failed_later'))) AS event_owed
   FROM order_line_items oli
   WHERE oli.order_id = $1::uuid AND ($2::boolean IS NULL OR (oli.item_type = 'membership') = $2::boolean)
 ) l

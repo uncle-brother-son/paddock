@@ -140,7 +140,7 @@ describe('the whole-event cancel racing New Order on the same event (bug E7)', (
     expect(await eventRow(eventId)).toMatchObject({ active: false, cancelled: true, places_booked: 1 })
     // The screen's next step for that booking: the whole-event press, to the card choice. Paid in cash, so it all
     // goes to store credit (Q42 for a whole event).
-    const press = await cancelEventPlaces(first, booked[0]?.id as string, { refund: 'card', wholeEvent: true, confirmed: { refund: 40 } }, { ...by(), stripe: () => new FakeStripe({ idTag: 'w31a' }) })
+    const press = await cancelEventPlaces(first, booked[0]?.id as string, { refund: 'card', wholeEvent: true, confirmed: { refund: 40 } }, { ...by(), canIssueRefunds: true, stripe: () => new FakeStripe({ idTag: 'w31a' }) })
     expect(press).toMatchObject({ places: 1, refundedAmount: 40, cardRefundedAmount: 0, storeCreditRefundedAmount: 40 })
     expect(await eventRow(eventId)).toMatchObject({ places_booked: 0 })
     expect((await eventCancelOverview(first, eventId))?.bookings).toEqual([])
@@ -203,7 +203,7 @@ describe('a place cancel racing the whole-event cancel', () => {
       await release.promise
     })
     const holder = await ready
-    const place = outcome(cancelEventPlaces(first, booked.eventBookingId, { attendeeIds: [booked.places[0] as string], refund: 'none', confirmed: { refund: 0 } }, { ...by(), stripe: () => new FakeStripe({ idTag: 'w31b' }) }))
+    const place = outcome(cancelEventPlaces(first, booked.eventBookingId, { attendeeIds: [booked.places[0] as string], refund: 'none', confirmed: { refund: 0 } }, { ...by(), canIssueRefunds: true, stripe: () => new FakeStripe({ idTag: 'w31b' }) }))
     const whole = outcome(cancelEvent(second, booked.eventId, storm, by()))
     // Both queue behind the holder: the second may wait on the first's place in the row's queue, not on the holder itself.
     const giveUpAt = Date.now() + 4_000

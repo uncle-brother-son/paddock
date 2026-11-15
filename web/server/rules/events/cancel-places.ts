@@ -81,6 +81,7 @@ import {
   EVENT_CANCEL_NEW_WORDS as NEW_WORDS,
   EVENT_CANCEL_WORDS as WORDS,
   EVENT_NAME_FALLBACK,
+  EVENT_PERMISSION_WORDS,
   EVENT_QUOTE_REFUSALS,
   EVENT_STORE_CREDIT_AFTER_CASH_NOTE,
   EVENT_WHOLE_CANCEL_NEW_WORDS as WHOLE_NEW_WORDS,
@@ -100,6 +101,8 @@ export interface EventCancelOptions {
   now?: () => number
   /** The Stripe client, made before R1 for a card refund, so a missing key fails with nothing written. */
   stripe?: () => StripeClient
+  /** W35a (F5): the staff member's Issue refunds switch, for No refund on an event the club has cancelled. */
+  canIssueRefunds: boolean
 }
 
 /** Who finishes a claim: the press, reconcile, or a person closing it by hand (as an order claim's). */
@@ -404,6 +407,11 @@ async function cancelR1(tx: Tx, eventBookingId: string, input: CancelEventPlaces
     if (!eventCancelled) throw eventCancelRefusal('CONFLICT', 'event_not_cancelled', WHOLE_NEW_WORDS.eventNotCancelled)
     reason ??= event?.cancel_reason ?? null
   }
+  // W35a (W35 audit F5, Wayne 15 Nov): on an event the club has cancelled, No refund needs Issue refunds too. The
+  // place would be stamped with its value and the whole-event run would pass it by, so the customer would get nothing
+  // for an event the club called off. On a live event No refund stays open to every active staff member. Read under
+  // the event's lock, which the event's own cancel takes. The route's own permission answer.
+  if (!online && eventCancelled && refund === 'none' && !options.canIssueRefunds) throw new ApiError('FORBIDDEN', EVENT_PERMISSION_WORDS.needsIssueRefunds)
   // No cut-off rule for a whole event: nobody chose to cancel late.
   const afterCutoff = !whole && !quote.beforeCutoff
   // W33 (Q44): online, not on a cancelled event and only before the cut-off (staff can refund later, with a reason).
@@ -853,7 +861,7 @@ async function sendAndFinish(db: Db, stripe: StripeClient, claim: EventBookingCl
  * the refund to the card (capped at the order's card money left, the rest to store credit), to store credit, in cash
  * (Q42: up to the cash paid on the order, the rest to store credit) or with no refund. A refusal before anything
  * changed is an ApiError with the old reason and words; a held claim answers as data, with the places cancelled.
- * The route checks Issue refunds for any money back, and the switch. W31: with `wholeEvent` it is cancelEvent's
+ * The route checks Issue refunds for any money back, and the switch; R1 checks it for No refund on a cancelled event (W35a). W31: with `wholeEvent` it is cancelEvent's
  * per-booking half (the whole booking, no cut-off rule, Card or Store credit), once the event itself is cancelled.
  */
 export async function cancelEventPlaces(db: Db, eventBookingId: string, input: CancelEventPlacesInput, options: EventCancelOptions): Promise<CancelEventPlacesOutput> {
@@ -926,7 +934,7 @@ export async function cancelEventPlacesForCustomer(
   if (input.attendeeIds !== undefined && input.attendeeIds.length === 0) throw eventCancelRefusal('VALIDATION', 'invalid_params', WORDS.choosePlace)
   const unlocked = await bookingIds(db, eventBookingId)
   if (!unlocked || unlocked.customerId !== customer.id) throw notTheCustomers('cancel_places')
-  const options: EventCancelOptions = { actor: { type: 'customer', id: customer.id }, requestId }
+  const options: EventCancelOptions = { actor: { type: 'customer', id: customer.id }, requestId, canIssueRefunds: true }
   const press: CancelEventPlacesInput = { ...(input.attendeeIds ? { attendeeIds: input.attendeeIds } : {}), refund: 'credit', confirmed: input.confirmed }
   const started = await inC1(db, (tx) => cancelR1(tx, eventBookingId, press, 'credit', options, null, unlocked), notSaved)
   if (started.kind !== 'done') throw new Error('A customer cancel was not finished in its own transaction.')

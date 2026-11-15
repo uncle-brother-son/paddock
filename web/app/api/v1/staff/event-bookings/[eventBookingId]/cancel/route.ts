@@ -15,7 +15,8 @@ import { createStripeClient, ORDER_STRIPE_LIMITS } from '@/server/stripe/client'
  *
  * Who may: any money back needs Issue refunds; No refund is open to every active staff member, as before (bug E12:
  * someone with no staff record, or an inactive one, is refused by defineRoute whatever is chosen). Then the switch
- * (`event_cancels`), which a cancel with no refund doesn't ask. Idempotent: the same key gets the same answer.
+ * (`event_cancels`), which a cancel with no refund doesn't ask. W35a (F5): on an event the club has cancelled, No
+ * refund needs Issue refunds too (checked in R1, under the event's lock). Idempotent: the same key gets the same answer.
  *
  * W31: with `wholeEvent` this is the whole-event cancel's per-booking half (one press, one key and one claim per
  * booking: lead call L5). Honoured only when the event is cancelled in the database; refused on a live event.
@@ -37,6 +38,7 @@ export const POST = defineRoute(
       actor: { type: 'staff', id: staff.id },
       requestId,
       startedAt,
+      canIssueRefunds: staff.canIssueRefunds,
       stripe: () => createStripeClient(undefined, ORDER_STRIPE_LIMITS),
     })
   }

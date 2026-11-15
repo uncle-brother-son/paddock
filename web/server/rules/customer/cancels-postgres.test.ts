@@ -255,7 +255,7 @@ describe('two cancels of event places at once (brief W33 item 5)', () => {
     const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
     const booked = await eventBooking(stripe)
     const [place] = booked.places
-    const staff: EventCancelOptions = { actor: { type: 'staff', id: staffId }, requestId: crypto.randomUUID(), stripe: () => stripe }
+    const staff: EventCancelOptions = { actor: { type: 'staff', id: staffId }, requestId: crypto.randomUUID(), canIssueRefunds: true, stripe: () => stripe }
     const gate = await holdingTheOrder(booked.orderId)
     const a = customerPress(first, booked, [place as string], 40)
     const b = outcome(cancelEventPlaces(second, booked.eventBookingId, { attendeeIds: [place as string], refund: 'card', confirmed: { refund: 40 } }, staff))

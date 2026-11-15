@@ -33,7 +33,7 @@ beforeAll(async () => {
   staffId = await insert(first, 'staff', { role: 'staff', first_name: 'Jo', last_name: 'Staff', email: 'w30-race@example.com', can_issue_refunds: true })
 })
 
-const options = (stripe: FakeStripe): EventCancelOptions => ({ actor: { type: 'staff', id: staffId }, requestId: crypto.randomUUID(), stripe: () => stripe })
+const options = (stripe: FakeStripe): EventCancelOptions => ({ actor: { type: 'staff', id: staffId }, requestId: crypto.randomUUID(), canIssueRefunds: true, stripe: () => stripe })
 
 interface Booked {
   eventId: string
