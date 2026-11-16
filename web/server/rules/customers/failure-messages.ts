@@ -1,7 +1,7 @@
 // New in W36 (F-plan 4.1, brief W36 item 1): every word staff see from a customer action, moved here word for word
 // from the staff app's functions (adjustCustomerStoreCredit, createCustomer) and their dialogs (AdjustStoreCreditDialog,
 // NewCustomerDialog, SaveCardOnReaderButton), ahead of the slices that use them (W37 store credit, W39 customers, W42
-// replace card). Nothing uses them yet. The test beside this file holds each to its source (the frozen copy,
+// replace card). W37 uses the store credit words and W39 the create words. The test beside this file holds each to its source (the frozen copy,
 // legacy-account/, and the dialogs) until the old code goes. The saved card's own refusals are already the Worker's
 // (server/rules/payments/terminal.ts, W11).
 import 'server-only'
@@ -48,6 +48,19 @@ export const CREATE_CUSTOMER_WORDS = {
   under18: 'Customers must be 18 or over.',
   duplicateEmail: 'A customer with this email address already exists',
 } as const
+
+/**
+ * W39: createCustomer's reasons. The old function threw its words with no reason; the Worker's refusal carries one
+ * beside the same words, so the dialog can tell a duplicate from a mistyped field.
+ */
+export const CREATE_CUSTOMER_REASONS = ['first_name_required', 'last_name_required', 'email_invalid', 'date_of_birth_invalid', 'date_of_birth_in_future', 'under_18', 'duplicate_email'] as const
+export type CreateCustomerReason = (typeof CREATE_CUSTOMER_REASONS)[number]
+
+/**
+ * W39 (FB21, lead call L10): the database's unique rules on a customer's email: the key on `email` as written, and
+ * migration 027's index on `lower(email)`. A violation of either is the duplicate refusal, never a fault.
+ */
+export const CUSTOMER_EMAIL_UNIQUE_RULES = ['customers_email_key', 'customers_email_lower_key'] as const
 
 /** NewCustomerDialog's own words, shown before the press (each ends with a full stop, which the function's don't). */
 export const CREATE_CUSTOMER_DIALOG_WORDS = {

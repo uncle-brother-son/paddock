@@ -39,7 +39,7 @@ const REPOINTED: Record<string, { original: string; copyLine: string; originalLi
 /**
  * From W37 on: the step F functions the staff app has switched to the Worker (a thin wrapper there; the old body
  * only here). Each slice adds its own. None at W36. W37: credits and their history, Herd, and store credit. W38: the
- * five gift card functions.
+ * five gift card functions. W39: the three customer functions.
  */
 const SWITCHED_TO_THE_WORKER: ReadonlySet<string> = new Set([
   'adjustCustomerStoreCredit.ts',
@@ -52,6 +52,10 @@ const SWITCHED_TO_THE_WORKER: ReadonlySet<string> = new Set([
   'getGiftCards.ts',
   'setGiftCardPickedUp.ts',
   'setGiftCardShipped.ts',
+  // W39: the three customer functions.
+  'createCustomer.ts',
+  'getCustomerDetail.ts',
+  'getCustomers.ts',
 ])
 /** W38: the two flag functions are one thin call, kept in a module they share; each names it, and it calls the Worker. */
 const THIN_THROUGH: Record<string, string> = { 'setGiftCardPickedUp.ts': 'shared/giftCardFlag.ts', 'setGiftCardShipped.ts': 'shared/giftCardFlag.ts' }
@@ -173,8 +177,8 @@ describe('W36: the frozen copy of the old step F functions and the three legacy 
       compared.push(name)
     }
     // At W36 every one of the 28 was still in the staff app. The number only falls as slices switch or delete their old
-    // bodies: W37 switched four functions and W38 five, and the 12 modules beside them (and the other 7 functions) are
-    // untouched.
+    // bodies: W37 switched four functions, W38 five and W39 three, and the 12 modules beside them (and the other 4
+    // functions) are untouched.
     expect(compared.length).toBeLessThanOrEqual(28)
     expect(compared.length).toBe(28 - SWITCHED_TO_THE_WORKER.size - backendFiles.filter((file) => !existsSync(path.join(appDir, 'backend/paddock', inBackend(file)))).length)
     // A switched function is a thin wrapper, not a drifted copy: it calls the Worker and no longer touches the database.

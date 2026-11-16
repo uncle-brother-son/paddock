@@ -1,0 +1,52 @@
+-- 027: one customer per email address, whatever its case (brief W39 item 3; F-plan section 3 bug FB21; lead call L10,
+-- 15 Nov 2026).
+-- NOT APPLIED by W39. The lead applies it after W39's review. It can go on before or after the W39 Worker and staff
+-- app are released: see "Order" below.
+--
+-- Before: customers_email_key is unique on `email` as written, so `Sam@Example.com` can sit beside `sam@example.com`.
+-- The staff app's createCustomer lower-cases before it writes, but nothing stops another writer (the website's
+-- sign-up or guest checkout, an import, a fix by hand) adding the same address in another case: two accounts for one
+-- person, and store credit on the one they don't sign in to (FB21).
+-- After: a unique index on lower(email) refuses it, for every writer. The W39 Worker already refuses first, in plain
+-- words ("A customer with this email address already exists"), and turns a violation of this index or of the old key
+-- into the same refusal when two creates race; this is the database's own backstop.
+--
+-- customers_email_key stays: it is the key the old staff app's createCustomer names in its own duplicate check, and
+-- dropping it buys nothing. idx_customers_email (plain, on `email`) stays too.
+--
+-- Who writes customers.email, and why each is safe with the index:
+-- - createCustomer (Worker, W39): lower-cases, checks lower(email) first, and answers either unique rule as the
+--   duplicate refusal.
+-- - The staff app's OLD createCustomer (published until W39 goes live): lower-cases, and reads any "duplicate key"
+--   error as "A customer with this email address already exists". Same words with the index as without.
+-- - Nothing else writes it: there is no "edit customer" action (F-plan 1.10), and the website's sign-up isn't built.
+--   When it is, it goes through the Worker's create rule.
+--
+-- Order: either way round is safe. With 027 on and the old staff app still published, nothing changes for staff. With
+-- the W39 Worker and no 027, the Worker's own check holds for every customer it makes; only a writer outside the
+-- Worker could still add another case, as today.
+--
+-- Check first (read-only). Expect 0 rows; if not, stop and tell the builder (the CREATE would fail anyway, changing
+-- nothing), since two accounts for one person have to be merged by a person:
+--    SELECT lower(email) AS email, count(*) FROM public.customers GROUP BY lower(email) HAVING count(*) > 1;
+-- (The lead's live check on 16 Nov 2026: 8 customers, 0 emails not in lower case, 0 duplicates by lower case.)
+--
+-- No data changes: no row is written or rewritten. CREATE UNIQUE INDEX takes a SHARE lock on customers while it
+-- builds (writes wait, reads don't; 8 rows today: milliseconds), so CONCURRENTLY isn't needed.
+
+CREATE UNIQUE INDEX IF NOT EXISTS customers_email_lower_key ON public.customers (lower(email));
+
+COMMENT ON INDEX public.customers_email_lower_key IS 'One customer per email address in any case (lead call L10; F-plan bug FB21; migration 027).';
+
+-- After applying: refresh the Worker's test schema from the live catalog (web/server/rules/testing/README.md,
+-- "Refreshing the live schema") and run `npm run schema:test -- --check`, then the Worker's tests. The refresh should
+-- show one new index in live-schema.sql and in live-catalog.json:
+--    CREATE UNIQUE INDEX customers_email_lower_key ON public.customers USING btree (lower(email));
+-- The one golden scenario that records the old gap (w36-fb21-the-same-email-in-another-case-added-by-another-writer)
+-- lifts the index for its own run when it is there, and so does the one test that borrows its seed for a run of its
+-- own (customer-replay.test.ts, "FB21 (the same email in another case)"; W39a, review S1: without that lift the test
+-- failed once the index was in the saved schema). Both replay the same before and after the refresh:
+-- customer-replay.test.ts runs every recording with this file applied, and that test both without and with it.
+--
+-- Down (if ever needed):
+--   DROP INDEX IF EXISTS public.customers_email_lower_key;

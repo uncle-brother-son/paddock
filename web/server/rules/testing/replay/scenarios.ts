@@ -2,7 +2,7 @@ import { vi } from 'vitest'
 import type { Db, SqlParam } from '@/server/db'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
 import { insert } from '../database'
-import type { Scenario, ScenarioContext } from './harness'
+import { putBackWhenEmpty, type Scenario, type ScenarioContext } from './harness'
 
 /** Fixed ids, so a recording can name what it was seeded with. */
 export const ID = {
@@ -3323,6 +3323,33 @@ export async function restoreAddonCreditsCheck(db: Db): Promise<void> {
   await db.query('SET ROLE paddock_worker')
 }
 
+/** Migration 027's index (brief W39 item 3, lead call L10): one customer per email address, whatever its case. */
+export const EMAIL_LOWER_INDEX = 'customers_email_lower_key'
+
+/**
+ * Lifts migration 027's index when the schema has it, for the one recording of what another writer could do without
+ * it (FB21: the same email added in another case). Answers whether it was there; put back with
+ * restoreEmailLowerIndex once the scenario's rows are gone (the replay starts each scenario from an empty database).
+ * With the index not yet in the schema (before the lead applies 027) this does nothing, so the recording is the same
+ * either way.
+ */
+export async function liftEmailLowerIndex(db: Db): Promise<boolean> {
+  await db.query('RESET ROLE')
+  try {
+    const found = await db.query("SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = $1", [EMAIL_LOWER_INDEX])
+    if (found.length > 0) await db.query('DROP INDEX public.customers_email_lower_key')
+    return found.length > 0
+  } finally {
+    await db.query('SET ROLE paddock_worker')
+  }
+}
+
+export async function restoreEmailLowerIndex(db: Db): Promise<void> {
+  await db.query('RESET ROLE')
+  await db.query('CREATE UNIQUE INDEX customers_email_lower_key ON public.customers USING btree (lower(email))')
+  await db.query('SET ROLE paddock_worker')
+}
+
 function w08Scenarios(): Scenario[] {
   const UNKNOWN = '10000000-0000-4000-8000-0000000000fd'
   const samAttending = { ...sam, isAccountHolder: true }
@@ -6077,7 +6104,10 @@ function w36Scenarios(): Scenario[] {
     f('fb21-create-customer-with-no-staff-record', async ({ attempt }) => {
       await attempt(CREATE, dee)
     }, noStaffRecord),
+    // W39: once migration 027's index is in the schema another writer can't do this any more, so the index is lifted
+    // for this scenario only, and put back when its rows are gone (the next replay empties the tables first).
     f('fb21-the-same-email-in-another-case-added-by-another-writer', async ({ attempt, db }) => {
+      if (await liftEmailLowerIndex(db)) putBackWhenEmpty(restoreEmailLowerIndex)
       await insert(db, 'customers', { first_name: 'Sam', last_name: 'Again', email: 'SAM@example.com', date_of_birth: '1990-01-01' })
       await attempt(CREATE, { ...dee, email: 'Sam@Example.com' })
     }),

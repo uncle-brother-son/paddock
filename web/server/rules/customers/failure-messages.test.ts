@@ -49,6 +49,16 @@ describe("createCustomer's words, moved (brief W36 item 1)", () => {
     for (const [name, text] of fixed) expect(strings.has(text), name).toBe(true)
   })
 
+  it('W39: each word has its reason (the old function threw the words alone), and the two unique rules on the email are the saved key and migration 027\'s index', () => {
+    expect([...words.CREATE_CUSTOMER_REASONS]).toEqual(['first_name_required', 'last_name_required', 'email_invalid', 'date_of_birth_invalid', 'date_of_birth_in_future', 'under_18', 'duplicate_email'])
+    expect(words.CREATE_CUSTOMER_REASONS).toHaveLength(Object.keys(words.CREATE_CUSTOMER_WORDS).length)
+    const rule = readFileSync(path.resolve(__dirname, 'create.ts'), 'utf8')
+    for (const reason of words.CREATE_CUSTOMER_REASONS) expect(rule, reason).toContain(`'${reason}'`)
+    expect([...words.CUSTOMER_EMAIL_UNIQUE_RULES]).toEqual(['customers_email_key', 'customers_email_lower_key'])
+    expect(readFileSync(path.resolve(__dirname, '../testing/live-schema.sql'), 'utf8')).toContain('ADD CONSTRAINT customers_email_key UNIQUE (email)')
+    expect(readFileSync(path.resolve(__dirname, '../../../../supabase/migrations/027_customers_email_unique_in_any_case.sql'), 'utf8')).toContain('CREATE UNIQUE INDEX IF NOT EXISTS customers_email_lower_key')
+  })
+
   it("the dialog's own words are in the dialog's source (each with the full stop the function's lack)", () => {
     const dialog = component('NewCustomerDialog.tsx')
     for (const [name, text] of Object.entries(words.CREATE_CUSTOMER_DIALOG_WORDS)) expect(sourceHolds(dialog, text), name).toBe(true)

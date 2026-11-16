@@ -110,7 +110,6 @@ describe('staff app helpers', () => {
     // each must refuse straight away: no write, no Worker call.
     const guarded = [
       'addServiceTypeScheduleSlot',
-      'createCustomer',
       'createOneOffSession',
       'deleteServiceTypeScheduleSlot',
       'generateUpcomingSessions',
@@ -147,6 +146,23 @@ describe('staff app helpers', () => {
       const { default: fn } = await import(/* @vite-ignore */ path.join(appDir, `backend/paddock/${name}`))
 
       await expect(fn({ params: { customerId: 'c1', setupIntentId: 'seti_1' }, user })).rejects.toThrow(INACTIVE)
+
+      expect(rawRequest).toHaveBeenCalledTimes(1)
+      expect(legacy).not.toHaveBeenCalled()
+      expect(query).not.toHaveBeenCalled()
+    })
+
+    // Brief W39: createCustomer is a thin call to the Worker now (it was one of W01c's guarded functions), whose
+    // defineRoute refuses an inactive account before anything is read (the route's own tests, customers/customers.test.ts).
+    // The refusal comes back as data with the same words. Never the database or the legacy routes themselves.
+    it('createCustomer asks only the Worker, which refuses an inactive account', async () => {
+      const query = stubStaffTable([row(false)])
+      const legacy = vi.fn()
+      vi.stubGlobal('paddockBackendApi2', { rawRequest: legacy })
+      rawRequest.mockResolvedValue(refusal('FORBIDDEN', INACTIVE))
+      const { default: fn } = await import(/* @vite-ignore */ path.join(appDir, 'backend/paddock/createCustomer'))
+
+      expect(await fn({ params: { firstName: 'Dee', lastName: 'Dale', email: 'dee@example.com', dateOfBirth: '1992-02-29' }, user })).toEqual({ created: false, reason: 'permission_denied', message: INACTIVE })
 
       expect(rawRequest).toHaveBeenCalledTimes(1)
       expect(legacy).not.toHaveBeenCalled()

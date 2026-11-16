@@ -193,6 +193,49 @@ transaction with its audit row, behind a press key, and has no switch kind.
   schema by `admin.test.ts`: a new column on `gift_cards` fails the test until someone decides whether staff see it).
   Any active staff member (FB16).
 
+## Customers (W39)
+
+The three customer actions (F-plan 4.6). None touches Stripe: the one write is one transaction with its audit row,
+behind a press key, and has no switch kind.
+
+- `customers/create.ts`, `POST customers` (createCustomer). One rule for every channel that makes a customer:
+  `staff` today; `customer` is the website's sign-up and guest checkout (F-plan 4.9), which the rule takes but no
+  route sends yet. Every field trimmed and the email lower-cased, then the old checks in the old order with the old
+  words (a first name, a last name, an email that looks like one, a date of birth, not in the future, 18 or over on
+  London's date). Each refusal now carries a reason beside its words (`CREATE_CUSTOMER_REASONS`).
+  - **W39a (review L1):** an email holding a control or format character (a zero-width space U+200B, a byte-order
+    mark U+FEFF: nobody can see either) is refused with the email words, never stripped. It would otherwise be stored
+    as an address of its own that no sign-in matches. The spaces, tabs and line ends around an address are still
+    trimmed.
+  - **FB23:** the date of birth must be a day the calendar has. The old check asked only whether JavaScript could
+    read it, and JavaScript reads 1990-02-30 as 2 March, so the database's own words reached staff.
+  - **FB21:** an email already on file in any case is refused with the old duplicate words (`lower(email)` on both
+    sides, inside the transaction). Two creates of one address at once both pass that check; the second insert waits
+    on the first's and the database's unique rule refuses it: the key on `email` as written, or migration 027's index
+    on `lower(email)` (`CUSTOMER_EMAIL_UNIQUE_RULES`). The rule answers that violation as the same duplicate refusal
+    once the transaction has rolled back, never as a fault. **A writer that doesn't lower-case is only stopped by
+    027** (lead call L10): until it is applied, an address in capitals written outside this rule can still sit beside
+    ours if the two are written at the same moment.
+  - A `customer.created` audit row: who and the channel (on the customer channel, the new customer).
+  - **For the website build (not done here):** the website gives a date of birth only when the account holder
+    attends or buys a membership or pass, and `customers.date_of_birth` is NOT NULL. The customer channel will need a
+    migration that lets it be null, the rule's date checks skipped when the channel is `customer` and none is given,
+    and a check wherever a date of birth is read (an attendee's 18+ check, a membership or pass purchase).
+- `customers/read.ts`, `GET customers` (getCustomers: the Customers page, the customer picker and New Order's payment
+  step). One customer by id, or a search (every word in a name, the email or the phone, or the whole search in "first
+  last"), or the newest 200. Named fields (`CUSTOMER_LIST_FIELDS`): never the Stripe ids, the website login or the
+  consents.
+- `GET customers/:id` (getCustomerDetail: the profile). Memberships, session passes, booking history, store credit
+  and its last 100 movements, event bookings, in the old function's shapes. The membership and pass rows name every
+  column the old `cm.*` and `csp.*` gave but `order_line_item_id`, which no screen reads and W36's contract left out
+  (`CUSTOMER_MEMBERSHIP_COLUMNS`, `CUSTOMER_PASS_COLUMNS`, `CUSTOMER_COLUMNS_NOT_SENT`, held to the saved schema by
+  `customers.test.ts`: a new column on either table fails the test until someone decides whether staff see it).
+  **W40 takes over the membership rows** with the Subscriptions list.
+- `memberships/payment-date-status.ts`: why "Change payment date" is refused on a membership row, for the profile.
+  A copy of the read part of the staff app's `shared/membershipPaymentDate.ts`, which its getSubscriptions and the
+  payment date dialog still use until W40 and W41; `payment-date-status.test.ts` holds the two together.
+- All three routes: any active staff member (FB16: the old reads checked nobody).
+
 ## The reader: T1, the intent, finalise and cancel (W11)
 
 A reader order runs the same pipeline, with the screen collecting between the intent and T2:

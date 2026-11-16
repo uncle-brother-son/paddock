@@ -473,3 +473,24 @@ row for each press answered with a success, an extension's row carrying the date
 their golden files exactly; 8 have pinned named differences (Wayne's Q46 and Q47, bugs FB15 and FB24, and three for
 who may). FB16's recording calls reads that later slices move and stops at the first refusal, so it isn't replayed
 whole: one test runs the switched reads on its seed and holds each refusal.
+
+W39's side (`customer-side.ts`, `customer-differences.ts`, `customer-replay.test.ts`) replays W36's customer
+recordings (12: create with FB21's two and FB23's one, the list, the detail, and the two recordings that carry
+W39's reads beside others) through the staff app's three thin wrappers and the Worker's routes. Create goes under a
+press key as the New Customer dialog holds one; its wrapper answers a refusal as data, and the replay reads it as the
+throw the dialog used to show (as W21's refund side does), so the old refusals match word for word. The Worker's
+`customer.created` row and the stored answers are set aside and checked on their own (`customerRowProblems`: one row
+for each customer the route made, none for a refusal or for a row another writer added). 7 match their golden files
+exactly, the list among them; 5 have pinned named differences: bugs FB16, FB21 and FB23, and the two profiles with a
+membership or a pass, whose rows match field for field but for `order_line_item_id`, which the named-field read no
+longer sends (W36's contract). FB16's recording is now replayed whole: its reads are made with `call`, which stops at the first
+throw, so for that one scenario the new side answers a refused read as `{ thrown }` and sends the three reads W37 and
+W38 moved through their wrappers too (`refusedReadsAsAnswers`). FB21's second recording (the same email in another
+case) matches exactly, because there the lower-cased address is on file as typed and the old function refuses too;
+one test proves the change on its seed (an address on file only in capitals). That recording's own set-up adds the
+address in capitals as another writer would, which migration 027's index refuses, so it lifts the index for its own
+run when the schema has it (`liftEmailLowerIndex`). A unique index can't go back while the pair is there, so it is
+put back by the next replay, straight after it empties the tables (`putBackWhenEmpty` in `harness.ts`; `restoreSchema`
+does the same on its own): the golden file replays the same before and after the lead applies 027. The test that
+borrows that recording's seed for its own run lifts the index the same way, and runs twice, without the index and with
+027 applied (`withEmailLowerIndex`; W39a, review S1: it had no lift, and failed once the index was in the saved schema).

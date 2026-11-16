@@ -233,6 +233,22 @@ export interface ReplayOptions {
   tamper?(db: Db, stripe: FakeStripe): Promise<void>
 }
 
+/**
+ * W39: what a scenario took out of the schema for its own run and can only put back once its rows are gone (a unique
+ * index it lifted to record a duplicate: migration 027's, scenarios.ts liftEmailLowerIndex). Run by the next replay,
+ * straight after it empties the tables, or by restoreSchema.
+ */
+const onceEmpty: Array<(db: Db) => Promise<void>> = []
+export const putBackWhenEmpty = (work: (db: Db) => Promise<void>): void => void onceEmpty.push(work)
+async function putBackOnceEmpty(db: Db): Promise<void> {
+  for (const work of onceEmpty.splice(0)) await work(db)
+}
+/** Empties the tables and puts back anything a scenario lifted: the schema as it was before the last replay. */
+export async function restoreSchema(environment: ReplayEnvironment): Promise<void> {
+  await emptyTables(environment.database)
+  await putBackOnceEmpty(environment.database.db)
+}
+
 export async function replay(
   environment: ReplayEnvironment,
   scenario: Scenario,
@@ -243,6 +259,7 @@ export async function replay(
   const { db } = database
   vi.setSystemTime(new Date(REPLAY_NOW))
   await emptyTables(database)
+  await putBackOnceEmpty(db)
   const stripe = new FakeStripe()
   await scenario.seed(db, stripe)
   const before = await dumpTables(db)
