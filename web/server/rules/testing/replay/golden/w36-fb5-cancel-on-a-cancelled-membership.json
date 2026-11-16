@@ -1,0 +1,32 @@
+{
+  "scenario": "w36-fb5-cancel-on-a-cancelled-membership",
+  "results": [
+    {
+      "updated": true,
+      "membership": {
+        "id": "10000000-0000-4000-8000-000000000010",
+        "cancel_effective_date": "2026-12-09",
+        "billing_frequency": "monthly"
+      },
+      "endDate": "2026-12-10",
+      "stripeUpdated": false
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "customer_memberships": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000010",
+          "cancel_effective_date": [
+            null,
+            "2026-12-09"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

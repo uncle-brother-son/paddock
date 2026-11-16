@@ -83,6 +83,28 @@ const W27_KNOWN_FAULTS = [
   'w27-event-cancel-held-two-days-and-the-look-fails: the places say £0.00 went to the card, Stripe refunded £40.00',
 ]
 
+/**
+ * W36 (F-plan 4.12 item 1, lead call L5): step F's golden files record the old payment date change's faults on
+ * purpose, and this sweep is what catches them: the old code charges the card before anything of its own names the
+ * charge, so a press that stops after the charge leaves a payment that is on no order. Each line is held exactly,
+ * until W41 (the payment date change on the Worker) names the difference on the new side. Every other W36 scenario,
+ * 131 of the 137, is clean.
+ */
+const W36_KNOWN_FAULTS = [
+  // The date move was refused and the charge given back in full: £21.94 out and back, with no order and no line to hold either.
+  'w36-payment-date-move-refused-and-the-charge-refunded: Stripe refunded £21.94, the rows say £0',
+  'w36-payment-date-move-refused-and-the-charge-refunded: pi_fake_0003 is on 0 orders',
+  // FB3: and the refund failed. £21.94 taken, the date not moved, nothing lists it.
+  'w36-fb3-payment-date-move-refused-and-the-refund-fails: pi_fake_0003 is on 0 orders',
+  // FB1: the Worker died after the charge. The first £21.94 is on no order; the press again took a second (which is).
+  'w36-fb1-payment-date-worker-dies-after-the-charge-then-pressed-again: pi_fake_0003 is on 0 orders',
+  // The Worker's answer was lost after it charged and moved the date: £21.94 taken and the date moved in Stripe, nothing recorded.
+  'w36-payment-date-answer-lost-after-everything-then-pressed-again: pi_fake_0003 is on 0 orders',
+  // FB2: charged and moved, then Retool's own write failed: "success" with a warning to add the order by hand.
+  'w36-fb2-payment-date-charged-and-moved-then-recording-fails: pi_fake_0003 is on 0 orders',
+  'w36-fb2-payment-date-charged-and-moved-then-nothing-can-be-recorded: pi_fake_0003 is on 0 orders',
+]
+
 describe('W05d on the old functions', () => {
   let environment: ReplayEnvironment
 
@@ -302,9 +324,12 @@ describe('W05d on the old functions', () => {
     const known = wrong.filter((line) => line.startsWith('w17-'))
     // W27: step E's golden files do the same for the old order refund and event cancellation functions.
     const knownOfStepE = wrong.filter((line) => line.startsWith('w27-'))
-    expect(wrong.filter((line) => !line.startsWith('w17-') && !line.startsWith('w27-'))).toEqual([])
+    // W36: and step F's, for the old payment date change.
+    const knownOfStepF = wrong.filter((line) => line.startsWith('w36-'))
+    expect(wrong.filter((line) => !line.startsWith('w17-') && !line.startsWith('w27-') && !line.startsWith('w36-'))).toEqual([])
     expect(known).toEqual(W17_KNOWN_FAULTS)
     expect(knownOfStepE).toEqual(W27_KNOWN_FAULTS)
+    expect(knownOfStepF).toEqual(W36_KNOWN_FAULTS)
     const stale = [STRIPE_REFUNDS_NOT_ON_ROWS, CANCELLED_WITHOUT_ALL_THE_MONEY, CHARGES_NOT_ON_ONE_ORDER].flatMap((list) =>
       Object.keys(list).filter((name) => !needed.has(`${Object.keys(list)[0]}/${name}`))
     )

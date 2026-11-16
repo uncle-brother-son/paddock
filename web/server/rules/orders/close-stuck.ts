@@ -66,6 +66,7 @@ import { finishOrderClaimInTransaction } from './refund-lines'
 import { lockForBooking } from '@/server/rules/bookings/locks'
 import { CLOSED_ON_A_CANCELLED_BOOKING_WORDS } from '@/server/rules/bookings/failure-messages'
 import { flowClosable, HELD_CLAIM_CLOSE_REASONS } from './stuck-list'
+import { sortLeftStep } from '@/server/rules/memberships/left'
 
 export const CLOSE_ACTION = 'order.close'
 
@@ -746,5 +747,11 @@ export async function closeStuckItem(db: Db, input: CloseStuckInput, options: Cl
   }
   if (input.kind === 'held_claim') return closeHeldClaim(db, input.orderId, why, options)
   if (input.kind === 'refund_watch') return closeRefundWatch(db, input.orderId, why, options)
+  // W36 (F-plan 4.10, lead call L7): a membership's Stripe step that Stripe refused for good, once a person has put
+  // Stripe right by hand: recorded as sorted (memberships/left.ts). Nothing moves; `orderId` is the step's id.
+  if (input.kind === 'left_step') {
+    const sorted = await sortLeftStep(db, input.orderId, why, { actor: options.actor, requestId: options.requestId })
+    return answer('left_step', input.orderId, sorted.closed ? { closed: true, ...(sorted.alreadyClosed ? { alreadyClosed: true } : {}), message: sorted.message } : { closed: false, reason: sorted.reason, message: sorted.message })
+  }
   return closeSubscriptionLeft(db, input.orderId, input.subscriptionId ?? '', why, options)
 }

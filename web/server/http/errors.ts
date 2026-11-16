@@ -32,6 +32,8 @@ export const ERROR_HTTP_STATUS: Record<ApiErrorCode, number> = {
   BOOKING_PATH_OFF: 501,
   // W27: the same for an order refund or an event cancel that gives money back (step E).
   REFUND_PATH_OFF: 501,
+  // W36: the same for a membership change that touches Stripe (step F).
+  MEMBERSHIP_PATH_OFF: 501,
 }
 
 /** Shown when something unexpected fails. The real error goes to the log only. */

@@ -1,0 +1,17 @@
+{
+  "scenario": "w36-credits-refused-without-issue-refunds",
+  "results": [
+    {
+      "adjusted": false,
+      "reason": "permission_denied",
+      "message": "Needs the Issue refunds permission to adjust membership credits."
+    },
+    {
+      "adjusted": false,
+      "reason": "permission_denied",
+      "message": "Needs the Issue refunds permission to adjust membership credits."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

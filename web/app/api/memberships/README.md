@@ -6,6 +6,15 @@ Removed with the staff app's old order code, its only caller. A membership's sub
 order route (`POST /api/v1/staff/orders`, `server/rules/orders/membership.ts`). A frozen copy stays for the
 replay's set-up only (`server/rules/testing/legacy-order/`, deleted at step H).
 
+## The three routes below, and their frozen copy (W36)
+
+`cancel`, `undo-cancel` and `change-payment-date` are the legacy routes step F replaces with `/api/v1/staff/memberships/…`
+routes (W40, W41). They stay here, live, until W44, so a Retool rollback still works. The replay's golden files for
+step F were recorded through a frozen copy of them made at Worker `982db8f`
+(`server/rules/testing/legacy-account/routes/`, deleted at step H), not through these files, so a change here doesn't
+move a golden file. `server/rules/testing/frozen-account-code.test.ts` fails if these and the copy drift apart while
+both exist: decide then which the golden files should hold to.
+
 ## `POST /api/memberships/change-payment-date`
 
 Moves a monthly membership's payment date forward (staff only, from Retool). The member pays now

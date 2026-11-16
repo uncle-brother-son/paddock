@@ -1,0 +1,12 @@
+{
+  "scenario": "w36-cancel-refused-no-staff-record",
+  "results": [
+    {
+      "updated": false,
+      "reason": "permission_denied",
+      "message": "Needs the Issue refunds permission to cancel or re-activate a membership."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

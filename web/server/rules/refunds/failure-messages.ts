@@ -208,6 +208,12 @@ export const MEMBERSHIP_REFUND_WORDS = {
   /** The stuck list's line for it, with what a person does if it stays. */
   cancelLeftListed: (subscriptionId: string): string =>
     `A membership was refunded, but its subscription (${subscriptionId}) couldn't be confirmed cancelled in Stripe yet, so it could still take its next payment. The automatic check tries again every 5 minutes. If this stays, cancel it in Stripe by hand, then press Mark sorted (needs the Issue refunds permission).`,
+  /**
+   * W36 (lead call L7): the stuck list's line once Stripe has refused the cancel for good on the automatic check's
+   * retry: it is a person's now, and isn't tried again.
+   */
+  cancelRefusedListed: (subscriptionId: string): string =>
+    `A membership was refunded, but Stripe refused to cancel its subscription (${subscriptionId}), so the automatic check has stopped trying and it could still take its next payment. Cancel it in Stripe by hand (or tell a manager), then press Mark sorted (needs the Issue refunds permission).`,
   /** R2's own note on the row it writes before the cancel is tried (as W13c's LEFT_AT_T2). */
   notCancelledYet: 'not cancelled yet: its membership has just been refunded',
 } as const

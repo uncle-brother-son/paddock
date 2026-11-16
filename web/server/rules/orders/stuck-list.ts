@@ -17,6 +17,7 @@ import { PROCESSING_MINUTES as RECONCILE_WINDOW_MINUTES } from './pending-order'
 import { MEMBERSHIP_REFUND_WORDS } from '@/server/rules/refunds/failure-messages'
 import { LEFT_BY_REFUND } from './refund-subscription'
 import { LATE_REFUND_STEP, WATCH_DAYS, WATCHES_LISTED_SQL, type WatchDetails } from '@/server/rules/refunds/refund-watch'
+import { openSteps, stepWords, type StepKind } from '@/server/rules/memberships/left'
 
 /**
  * Words for each reason an item is listed (W12's, W14b: every reason reconcile can leave an order or flow with has
@@ -318,6 +319,21 @@ export interface StuckWatched {
   close?: StuckCloseTarget
 }
 
+/** W36 (F-plan 4.10): a membership's Stripe step left to do after its database change (memberships/left.ts). */
+export interface StuckStep {
+  stepId: string
+  membershipId: string
+  subscriptionId: string
+  step: StepKind
+  customerId: string | null
+  customerName: string | null
+  /** `left`: the automatic check is still sending it. `refused`: Stripe said no for good, so it is for a person. */
+  state: 'left' | 'refused'
+  at: string
+  words: string
+  close?: StuckCloseTarget
+}
+
 export interface StuckListOutput {
   checkout: StuckOrder[]
   flows: StuckFlow[]
@@ -325,6 +341,7 @@ export interface StuckListOutput {
   refunds: StuckRefund[]
   warnings: StuckWarning[]
   watched: StuckWatched[]
+  steps: StuckStep[]
   alert: { at: string; words: string } | null
 }
 
@@ -473,6 +490,9 @@ ORDER BY at DESC`
  * step for good) is listed the same but never retried; the manual close's `cancelled` row closes either.
  * W29: also a refunded membership's subscription whose cancel hasn't been confirmed (`found: 'refund'`,
  * refund-subscription.ts), listed with its own words and retried by reconcile with a cancel only, never a refund.
+ * W36 (lead call L7): one of those Stripe refused for good on a retry is `refused` too: listed, never retried. A
+ * `refused` row is always written after the `left` row it follows, so where two share a moment (the tests' clock
+ * ticks in whole milliseconds) the `refused` one is the latest.
  */
 export const SUBSCRIPTIONS_LEFT_SQL = `
 SELECT s.entity_id, s.at, s.details->>'subscriptionId' AS subscription_id,
@@ -482,7 +502,7 @@ FROM (
   SELECT DISTINCT ON (entity_id, details->>'subscriptionId') entity_id, at, details
   FROM audit_log
   WHERE action = 'order.subscription_left' AND entity_type = 'order' AND details->>'state' IN ('left', 'refused')
-  ORDER BY entity_id, details->>'subscriptionId', at DESC
+  ORDER BY entity_id, details->>'subscriptionId', at DESC, (details->>'state' = 'refused') DESC
 ) s
 WHERE NOT EXISTS (
     SELECT 1 FROM audit_log d
@@ -769,7 +789,9 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
           at: iso(row.at),
           warning:
             row.found === LEFT_BY_REFUND
-              ? MEMBERSHIP_REFUND_WORDS.cancelLeftListed(row.subscription_id)
+              ? row.state === 'refused'
+                ? MEMBERSHIP_REFUND_WORDS.cancelRefusedListed(row.subscription_id)
+                : MEMBERSHIP_REFUND_WORDS.cancelLeftListed(row.subscription_id)
               : row.state === 'refused'
                 ? SUBSCRIPTION_REFUSED_WORDS(row.subscription_id)
                 : SUBSCRIPTION_LEFT_WORDS(row.subscription_id),
@@ -778,6 +800,19 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
       )
       .concat(warnings.map((row) => ({ kind: row.entity_type === 'order' ? 'order' : 'flow', id: row.entity_id, at: iso(row.at), warning: row.warning }))),
     watched,
+    // W36 (F-plan 4.10): memberships' Stripe steps left to do. Only one Stripe has refused for good can be closed by hand.
+    steps: (await openSteps(db)).map((step) => ({
+      stepId: step.id,
+      membershipId: step.membershipId,
+      subscriptionId: step.subscriptionId,
+      step: step.kind,
+      customerId: step.customerId,
+      customerName: step.customerName,
+      state: step.refused ? ('refused' as const) : ('left' as const),
+      at: step.at,
+      words: stepWords(step),
+      ...(step.refused ? { close: { kind: 'left_step' as const, orderId: step.id } } : {}),
+    })),
     alert: alert ? { at: iso(alert.at), words: STRIPE_REFUSED_WORDS } : null,
   }
 }

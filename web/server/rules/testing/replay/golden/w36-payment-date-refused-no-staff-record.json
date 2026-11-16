@@ -1,0 +1,11 @@
+{
+  "scenario": "w36-payment-date-refused-no-staff-record",
+  "results": [
+    {
+      "changed": false,
+      "message": "Needs the Issue refunds permission to change a payment date."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

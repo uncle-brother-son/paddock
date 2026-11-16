@@ -1,0 +1,12 @@
+{
+  "scenario": "w36-credits-refused-no-staff-record",
+  "results": [
+    {
+      "adjusted": false,
+      "reason": "permission_denied",
+      "message": "Needs the Issue refunds permission to adjust membership credits."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

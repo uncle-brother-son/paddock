@@ -1,0 +1,19 @@
+{
+  "scenario": "w36-gift-card-picked-up-refusals",
+  "results": [
+    {
+      "updated": false,
+      "reason": "not_found"
+    },
+    {
+      "updated": false,
+      "reason": "not_pickup_fulfillment"
+    },
+    {
+      "updated": false,
+      "reason": "not_pickup_fulfillment"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

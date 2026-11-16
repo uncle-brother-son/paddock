@@ -1,0 +1,11 @@
+{
+  "scenario": "w36-gift-card-extend-refused-unknown-card",
+  "results": [
+    {
+      "updated": false,
+      "reason": "gift_card_not_found"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

@@ -10,9 +10,14 @@
 //   committed with the money, before Stripe is asked, so a crash between the two leaves it listed, never lost.
 // - The press (or reconcile, straight after its own R2) then cancels it, checked (membership.ts,
 //   cancelSubscriptionChecked: only `canceled` counts), and writes the `cancelled` row that closes the record.
-// - A cancel refused or unclear stays `left`: the stuck list shows it, and every reconcile run tries again. Cancelling
+// - A cancel refused or unclear stays `left`: the stuck list shows it, and reconcile tries again. Cancelling
 //   twice is harmless (a DELETE; the read decides). A person can close it by hand once it is cancelled in Stripe
 //   (the stuck list's Mark sorted, `subscription_left`).
+// - W36 (F-plan lead call L7; W29 review L2, the W35 audit's row 11): a cancel Stripe refuses for good on reconcile's
+//   retry (Stripe answered, said no, and the subscription is still live or can't be found with the key in use) is
+//   recorded as `refused`: still listed, with words that say a person must cancel it in Stripe, and never retried
+//   again (W14b's pattern for W13's rows, and the ending memberships/left.ts gives every left step). The press's own
+//   first try still leaves it `left`, so the automatic check always tries once more before giving it to a person.
 // - A card refund Stripe refused is undone (R1 put back) and writes no such row, so a refusal never leaves a cancelled
 //   subscription. A claim held for reconcile cancels nothing until reconcile's R2.
 // - No refund is ever sent from here. (W13's retry of a `left` row, retryLeftSubscription, also refunds the first
@@ -41,7 +46,7 @@ export const refundedSubscriptions = (claim: OrderClaim): string[] => [
  * by hand read are W13's (`state`, `subscriptionId`, `invoicePaymentIntentId`, `amountPaid`, `refunded`, `left`), with
  * no first invoice to refund: a refund's own claim gave the money back.
  */
-function entry(actor: Actor, requestId: string, orderId: string, claimId: string, subscriptionId: string, left: string[]): AuditEntry {
+function entry(actor: Actor, requestId: string, orderId: string, claimId: string, subscriptionId: string, left: string[], refused = false): AuditEntry {
   return {
     actorType: actor.type,
     actorId: actor.id,
@@ -50,7 +55,7 @@ function entry(actor: Actor, requestId: string, orderId: string, claimId: string
     entityId: orderId,
     requestId,
     details: {
-      state: left.length === 0 ? 'cancelled' : 'left',
+      state: left.length === 0 ? 'cancelled' : refused ? 'refused' : 'left',
       subscriptionId,
       invoicePaymentIntentId: null,
       amountPaid: 0,
@@ -67,22 +72,37 @@ export function subscriptionsLeftByRefund(claim: OrderClaim, by: { actor: Actor;
   return refundedSubscriptions(claim).map((subscriptionId) => entry(by.actor, by.requestId, claim.orderId, claim.id, subscriptionId, [MEMBERSHIP_REFUND_WORDS.notCancelledYet]))
 }
 
-export type RefundCancel = { subscriptionId: string; cancelled: true } | { subscriptionId: string; cancelled: false; left: string }
+export type RefundCancel =
+  | { subscriptionId: string; cancelled: true }
+  /** `refused`: Stripe refused for good on reconcile's retry, recorded, so it is a person's now and isn't retried (W36). */
+  | { subscriptionId: string; cancelled: false; left: string; refused?: true }
 
 /**
  * Cancels one refunded membership's subscription, checked, and closes its record when Stripe shows it cancelled.
  * Anything else leaves the record as it is (`left`). Never throws for Stripe, and never sends a refund. A `cancelled`
  * row that can't be written leaves the record open: the next run reads Stripe, finds it cancelled, and writes it.
+ * W36: with `refusedIsForGood` (reconcile's retry), a cancel Stripe refuses writes a `refused` row, which ends the
+ * retries; if that row can't be written the record stays `left` and the next run tries again.
  */
 export async function cancelRefundedSubscription(
   db: Db,
   stripe: StripeClient,
   target: { orderId: string; claimId: string; subscriptionId: string },
   by: { actor: Actor; requestId: string },
-  timing: StripeTiming | undefined
+  timing: StripeTiming | undefined,
+  { refusedIsForGood = false }: { refusedIsForGood?: boolean } = {}
 ): Promise<RefundCancel> {
   const answer = await cancelSubscriptionChecked(stripe, target.subscriptionId, timing)
-  if (answer.kind !== 'cancelled') return { subscriptionId: target.subscriptionId, cancelled: false, left: `${answer.kind} (${answer.message})` }
+  if (answer.kind !== 'cancelled') {
+    const left = `${answer.kind} (${answer.message})`
+    if (answer.kind !== 'refused' || !refusedIsForGood) return { subscriptionId: target.subscriptionId, cancelled: false, left }
+    try {
+      await db.transaction((tx) => audit.recordAll(tx, [entry(by.actor, by.requestId, target.orderId, target.claimId, target.subscriptionId, [left], true)]))
+    } catch (err) {
+      return { subscriptionId: target.subscriptionId, cancelled: false, left: `${left}; not recorded as refused yet (${err instanceof Error ? err.message : String(err)})` }
+    }
+    return { subscriptionId: target.subscriptionId, cancelled: false, left, refused: true }
+  }
   try {
     await db.transaction((tx) => audit.recordAll(tx, [entry(by.actor, by.requestId, target.orderId, target.claimId, target.subscriptionId, [])]))
   } catch (err) {

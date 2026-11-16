@@ -1,0 +1,13 @@
+{
+  "scenario": "w36-credits-refused-amount-not-a-whole-number-or-zero",
+  "results": [
+    {
+      "thrown": "Amount must be a non-zero whole number."
+    },
+    {
+      "thrown": "Amount must be a non-zero whole number."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

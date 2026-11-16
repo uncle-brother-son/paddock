@@ -52,6 +52,13 @@ export const ERROR_CODES = [
    * words, while `customer_cancels` is off (or the kind the cancel's money needs: `booking_changes`, `event_cancels`).
    */
   'REFUND_PATH_OFF',
+  /**
+   * Step F (W36, F-plan 4.11, lead call L3): the membership changes that touch Stripe are switched off on the Worker
+   * (the ORDER_SWITCH secret's `membership_changes`: a cancel or its undo, a payment date change, and moving a
+   * membership's renewals to a replaced card), so nothing was touched. An emergency stop, not a fallback. No route
+   * answers it until W40.
+   */
+  'MEMBERSHIP_PATH_OFF',
 ] as const
 
 export const apiErrorCodeSchema = z.enum(ERROR_CODES)

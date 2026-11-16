@@ -24,6 +24,9 @@ const eslintConfig = defineConfig([
     "server/rules/testing/legacy-booking/**",
     // W27: the same for the old step E functions (legacy-refund/README.md), linted in the staff app. Step H.
     "server/rules/testing/legacy-refund/**",
+    // W36: the same for the old step F functions and the three legacy membership routes (legacy-account/README.md),
+    // linted where they live (the staff app; app/api/memberships). Step H.
+    "server/rules/testing/legacy-account/**",
   ]),
   ...storybook.configs["flat/recommended"],
   // Values go in as $1 parameters. A dynamic query (e.g. a variable number of search words) can

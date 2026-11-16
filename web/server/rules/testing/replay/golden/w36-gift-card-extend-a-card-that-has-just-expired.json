@@ -1,0 +1,30 @@
+{
+  "scenario": "w36-gift-card-extend-a-card-that-has-just-expired",
+  "results": [
+    {
+      "updated": true,
+      "giftCard": {
+        "id": "10000000-0000-4000-8000-000000000009",
+        "expiry_date": "2026-12-01",
+        "voided": false
+      }
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "gift_cards": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000009",
+          "expiry_date": [
+            "2026-11-01",
+            "2026-12-01"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

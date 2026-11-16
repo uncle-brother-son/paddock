@@ -49,6 +49,8 @@ export interface StripeClient {
   subscriptions: {
     create(params: Stripe.SubscriptionCreateParams, options?: Stripe.RequestOptions): Promise<Stripe.Subscription>
     retrieve(id: string, params?: Stripe.SubscriptionRetrieveParams, options?: Stripe.RequestOptions): Promise<Stripe.Subscription>
+    /** W36: a step left after the database change (memberships/left.ts): a cancel date set or cleared, or the card it charges. */
+    update(id: string, params?: Stripe.SubscriptionUpdateParams, options?: Stripe.RequestOptions): Promise<Stripe.Subscription>
     cancel(id: string, params?: Stripe.SubscriptionCancelParams, options?: Stripe.RequestOptions): Promise<Stripe.Subscription>
     list(params: Stripe.SubscriptionListParams, options?: Stripe.RequestOptions): Promise<Stripe.ApiList<Stripe.Subscription>>
   }

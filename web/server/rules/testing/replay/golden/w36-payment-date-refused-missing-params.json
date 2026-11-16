@@ -1,0 +1,16 @@
+{
+  "scenario": "w36-payment-date-refused-missing-params",
+  "results": [
+    {
+      "changed": false,
+      "message": "membershipId and newRenewalDate are required"
+    },
+    {
+      "changed": false,
+      "message": "membershipId and newRenewalDate are required"
+    },
+    null
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

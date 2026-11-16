@@ -101,6 +101,7 @@ import { finishOrderClaim } from './refund-lines'
 import { refundSeen, WATCH_DAYS, WATCH_READ_HOURS, WATCHES_DUE_SQL, WATCHES_WAITING_SQL, watchLateRefund, type RefundSeen, type WatchDue } from '@/server/rules/refunds/refund-watch'
 import { checkWatchedRefund } from '@/server/rules/refunds/refund-watch-settle'
 import { cancelRefundedSubscription, cancelSubscriptionsAfterRefund, LEFT_BY_REFUND, refundCancelsDue, type RefundCancelDue } from './refund-subscription'
+import { settleLeftStep, stepsDue, type OpenStep } from '@/server/rules/memberships/left'
 
 /** Q14: a pending order or flow younger than this may still have staff at the reader. */
 export const RECONCILE_WINDOW_MINUTES = PROCESSING_MINUTES
@@ -130,6 +131,8 @@ export const RECONCILE_WINDOW_MINUTES = PROCESSING_MINUTES
  *   and puts a failure back (13) ≈ 23 s. A put-back with a customer balance to restore adds two calls (20).
  *   W32a: a read that ends nothing writes one `checked` row instead (13), so the same 23 s; a late refund's row is
  *   written with its watch in the one transaction it already had.
+ * - W36, a membership's left step: the read of what is open (8), the subscription read and its update (20), its
+ *   `done` or `refused` row (13) and the run's row (13) ≈ 54 s. Never a charge or a refund.
  * So a run ends by about 120 + 86 ≈ 206 s (under 3.5 minutes), before the next run; with ten-page lists by
  * about 296 s (just under 5 minutes). Overlap would still be safe (no leases: T2 and the undo lock and
  * re-check; the refund's first row is written once under an advisory lock), and either way it is far inside
@@ -202,8 +205,11 @@ export type ItemOutcome =
   | 'left'
 
 export interface ReconcileItem {
-  /** W21: `claim` is a booking refund's claim. W28: or an order refund's. W30: or an event booking's. */
-  kind: 'order' | 'flow' | 'refund' | 'claim'
+  /**
+   * W21: `claim` is a booking refund's claim. W28: or an order refund's. W30: or an event booking's.
+   * W36: `step` is a membership's Stripe step left after its database change (memberships/left.ts).
+   */
+  kind: 'order' | 'flow' | 'refund' | 'claim' | 'step'
   id: string
   outcome: ItemOutcome
   reason?: string
@@ -376,7 +382,7 @@ interface Run {
   timing: StripeTiming | undefined
   options: ReconcileOptions
   /** Each action's row: `order.reconcile`, actor system (or the staff member). */
-  record(entityType: 'order' | 'reader_payment' | 'refund_claim', entityId: string, details: Record<string, unknown>): Promise<void>
+  record(entityType: 'order' | 'reader_payment' | 'refund_claim' | 'membership_step', entityId: string, details: Record<string, unknown>): Promise<void>
   /**
    * W12a (W12 review L7): the automatic refund's rows are always the system's, even on a staff member's
    * manual run (the refund is automatic by Wayne's decision; the button only runs it sooner). On a manual
@@ -1306,10 +1312,13 @@ ORDER BY l.at, l.entity_id`
  * answer, or was never tried (the press died between the refund and the cancel). Cancelled again, checked: cancelling
  * twice is harmless, and one a person cancelled in Stripe reads as cancelled. Nothing else is sent: never a refund.
  * Left again, it stays on the stuck list for the next run.
+ * W36 (lead call L7; W29 review L2, the W35 audit's row 11): refused by Stripe for good, it is recorded as `refused`
+ * and left for a person (`subscription_cancel_refused`): still listed, and not due again.
  */
 async function retryRefundCancel(run: Run, due: RefundCancelDue): Promise<ReconcileItem> {
-  const cancel = await cancelRefundedSubscription(run.db, run.stripe, due, { actor: run.options.actor, requestId: run.options.requestId }, run.timing)
+  const cancel = await cancelRefundedSubscription(run.db, run.stripe, due, { actor: run.options.actor, requestId: run.options.requestId }, run.timing, { refusedIsForGood: true })
   if (cancel.cancelled) return { kind: 'order', id: due.orderId, outcome: 'undone', detail: `subscription ${due.subscriptionId} cancelled: its membership was refunded` }
+  if (cancel.refused) return left('order', due.orderId, 'subscription_cancel_refused', `subscription ${due.subscriptionId}: ${cancel.left}`)
   return left('order', due.orderId, 'subscription_cancel_left', `subscription ${due.subscriptionId}: ${cancel.left}`)
 }
 
@@ -1322,6 +1331,23 @@ async function retryPutBack(run: Run, due: LeftSubscription): Promise<ReconcileI
   if (retried.kind === 'not_this_order') return left('order', due.orderId, 'subscription_not_this_order', retried.detail)
   if (retried.kind === 'refused') return left('order', due.orderId, 'subscription_refused', retried.left.join('; '))
   return left('order', due.orderId, 'subscription_left', retried.left.join('; '))
+}
+
+// --- A membership's Stripe step left after its database change (W36, F-plan 4.10 item 2, lead call L7)
+
+/**
+ * One open step (memberships/left.ts): a membership's cancel date to set or clear on its subscription, or its
+ * subscription to move to a replaced card. Read first, sent only if Stripe doesn't already show it. Done: `finalised`
+ * (what the action started is finished). Refused by Stripe for good: left for a person (`step_refused`), and not due
+ * again. No clear answer: left for the next run (`step_left`). Never a charge or a refund.
+ */
+async function sendLeftStep(run: Run, due: OpenStep): Promise<ReconcileItem> {
+  const settled = await settleLeftStep(run.db, run.stripe, due.id, { actor: run.options.actor, requestId: run.options.requestId }, run.timing)
+  const what = `${due.kind} on subscription ${due.subscriptionId}`
+  if (settled.kind === 'done') return { kind: 'step', id: due.id, outcome: 'finalised', detail: `${what}: ${settled.detail}` }
+  if (settled.kind === 'closed') return { kind: 'step', id: due.id, outcome: 'settled_elsewhere', detail: 'closed' }
+  if (settled.kind === 'refused') return left('step', due.id, 'step_refused', `${what}: ${settled.message}`)
+  return left('step', due.id, 'step_left', `${what}: ${settled.message}`)
 }
 
 // --- A watched card refund (W32, lead call L7; W32a, lead call 1: every card refund)
@@ -1379,7 +1405,8 @@ WHERE status = 'pending' AND snapshot->>'method' IN ('reader', 'card') AND (snap
 ORDER BY created_at, id`
 
 /** The audit entity a non-refund item's `order.reconcile` rows are written against (W21: a claim's own id). */
-const entityTypeOf = (kind: ReconcileItem['kind']): 'order' | 'reader_payment' | 'refund_claim' => (kind === 'order' ? 'order' : kind === 'claim' ? 'refund_claim' : 'reader_payment')
+const entityTypeOf = (kind: ReconcileItem['kind']): 'order' | 'reader_payment' | 'refund_claim' | 'membership_step' =>
+  kind === 'order' ? 'order' : kind === 'claim' ? 'refund_claim' : kind === 'step' ? 'membership_step' : 'reader_payment'
 
 /** W25: what a left row carries for the close (a claim's `parts`, a card flow's `payments`), as one comparable string. */
 function recordKey(record: { parts?: unknown; payments?: unknown } | undefined): string {
@@ -1458,6 +1485,7 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
   const eventClaims = await db.query<{ id: string }>(EVENT_BOOKING_CLAIMS_DUE_SQL, [window])
   const watchedPayments = await db.query<WatchedPayment>(WATCHED_DUE_SQL)
   const refundCancels = await refundCancelsDue(db, SUBSCRIPTIONS_LEFT_SQL)
+  const steps = await stepsDue(db)
   // W32a (W32 review S1): the list itself picks the watches due a read, the one read longest ago first, and no more than
   // a run can take.
   const watches = await db.query<WatchDue>(WATCHES_DUE_SQL, [options.watchDays ?? WATCH_DAYS, options.watchReadHours ?? WATCH_READ_HOURS, options.maxItems])
@@ -1520,6 +1548,9 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
     // W29: a refunded membership's subscription still to cancel. Last, as the put-backs: a cancel Stripe keeps
     // refusing can't keep a run from anything else.
     ...refundCancels.map((due) => ({ kind: 'order' as const, id: due.orderId, go: () => retryRefundCancel(run, due) })),
+    // W36: memberships' Stripe steps left to do. After everything that is waiting on money, as the left cancels: a
+    // step Stripe keeps giving no answer on can't keep a run from anything else.
+    ...steps.map((due) => ({ kind: 'step' as const, id: due.id, go: () => sendLeftStep(run, due) })),
     // W32: watched card refunds, read until they end. Last of all: a refund is watched for weeks, and must never keep
     // a run from anything that is waiting to be settled.
     ...watches.map((due) => ({ kind: 'refund' as const, id: due.details.refundId, watch: true as const, go: () => checkWatch(run, due) })),

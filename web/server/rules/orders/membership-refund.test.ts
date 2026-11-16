@@ -751,6 +751,79 @@ describe('the subscription is cancelled last, and a cancel that fails is left, l
     })
   })
 
+  it("W36 (lead call L7; W29 review L2, the W35 audit's row 11): a cancel Stripe refuses again on the automatic check's retry ends as a line for a person: recorded as refused, listed with its own words, never retried, and Mark sorted closes it", async () => {
+    await onASeed(async (stripe) => {
+      const { orderId, line, subscription } = await usedMembership()
+      const no = () => ({ kind: 'error' as const, error: fakeStripeErrors.invalid('subscription_locked', 'This subscription cannot be cancelled right now.') })
+      stripe.failNext('subscriptions.cancel', no())
+      const answer = await refund(orderId, [line], 'card')
+      // The press: left, exactly as before W36, and its words are still true (the automatic check tries once more).
+      expect(answer.body.data).toMatchObject({ refundedAmount: 40, warning: MEMBERSHIP_REFUND_WORDS.cancelLeft(subscription), subscriptionCancelLeft: [subscription] })
+      expect((await leftWarnings()).map((warning) => warning.warning)).toEqual([MEMBERSHIP_REFUND_WORDS.cancelLeftListed(subscription)])
+
+      // The retry: Stripe says no again, and the subscription still reads as live.
+      stripe.failNext('subscriptions.cancel', no())
+      const run = await runReconcile(stripe)
+      expect(run.items).toEqual([expect.objectContaining({ kind: 'order', id: orderId, outcome: 'left', reason: 'subscription_cancel_refused' })])
+      expect(run.left).toBe(1)
+      const rows = (await auditRows('order.subscription_left')).map((row) => row.details)
+      expect(rows.map((details) => details['state']).sort()).toEqual(['left', 'refused'])
+      expect(rows.find((details) => details['state'] === 'refused')).toMatchObject({
+        found: 'refund',
+        subscriptionId: subscription,
+        invoicePaymentIntentId: null,
+        amountPaid: 0,
+        refunded: [],
+        left: ['refused (This subscription cannot be cancelled right now.)'],
+      })
+      // Listed for a person, in words that no longer promise another try, with the same way to mark it sorted.
+      const words = `A membership was refunded, but Stripe refused to cancel its subscription (${subscription}), so the automatic check has stopped trying and it could still take its next payment. Cancel it in Stripe by hand (or tell a manager), then press Mark sorted (needs the Issue refunds permission).`
+      expect(MEMBERSHIP_REFUND_WORDS.cancelRefusedListed(subscription)).toBe(words)
+      expect(await leftWarnings()).toEqual([expect.objectContaining({ kind: 'order', id: orderId, warning: words, close: { kind: 'subscription_left', orderId, subscriptionId: subscription } })])
+
+      // Not retried: the next two runs send no cancel and find nothing to do. The refund is never sent again.
+      const cancelsBefore = cancelsSent(stripe).length
+      expect((await runReconcile(stripe)).items).toEqual([])
+      expect((await runReconcile(stripe)).items).toEqual([])
+      expect(cancelsSent(stripe)).toHaveLength(cancelsBefore)
+      expect(await subscriptionStatus(stripe, subscription)).toBe('active')
+      expect(refundsSent(stripe)).toHaveLength(1)
+      expect(await leftWarnings()).toHaveLength(1)
+
+      // A person cancels it in Stripe and presses Mark sorted: it leaves the list.
+      const response = await closeRoute(
+        new Request('https://worker.test/api/v1/staff/orders/stuck/close', {
+          method: 'POST',
+          headers: { authorization: `Bearer ${KEY}`, 'x-staff-email': REPLAY_USER.email, 'idempotency-key': crypto.randomUUID(), 'content-type': 'application/json' },
+          body: JSON.stringify({ kind: 'subscription_left', orderId, subscriptionId: subscription, reason: 'Cancelled in Stripe by hand' }),
+        })
+      )
+      expect(((await response.json()) as { data: { closed: boolean } }).data.closed).toBe(true)
+      expect(await leftWarnings()).toEqual([])
+      expect((await runReconcile(stripe)).items).toEqual([])
+    })
+  })
+
+  it("W36: a subscription Stripe can't find with the key in use (deleted, or the other mode's) is refused for good on the retry too; no clear answer is not a refusal and is tried again", async () => {
+    await onASeed(async (stripe) => {
+      const { orderId, line, subscription } = await usedMembership()
+      // The press, and then the first retry: no clear answer either time (neither the cancel nor the read answers).
+      for (let i = 0; i < 2; i++) {
+        stripe.failNext('subscriptions.cancel', { kind: 'error', error: fakeStripeErrors.server() })
+        stripe.failNext('subscriptions.retrieve', { kind: 'error', error: fakeStripeErrors.connection() })
+        if (i === 0) await refund(orderId, [line], 'credit')
+        else expect((await runReconcile(stripe)).items).toEqual([expect.objectContaining({ outcome: 'left', reason: 'subscription_cancel_left' })])
+      }
+      expect((await auditRows('order.subscription_left')).map((row) => row.details['state'])).toEqual(['left'])
+      // The second retry: the cancel fails and the read says there is no such subscription.
+      stripe.failNext('subscriptions.cancel', { kind: 'error', error: fakeStripeErrors.server() })
+      stripe.failNext('subscriptions.retrieve', { kind: 'error', error: fakeStripeErrors.missing(`subscription: '${subscription}'`) })
+      expect((await runReconcile(stripe)).items).toEqual([expect.objectContaining({ kind: 'order', id: orderId, outcome: 'left', reason: 'subscription_cancel_refused' })])
+      expect((await leftWarnings()).map((warning) => warning.warning)).toEqual([MEMBERSHIP_REFUND_WORDS.cancelRefusedListed(subscription)])
+      expect((await runReconcile(stripe)).items).toEqual([])
+    })
+  })
+
   it("W13's put-back retry never takes a refunded membership's subscription, even with its order gone: the first invoice is never refunded by it", async () => {
     await onASeed(async (stripe) => {
       const { orderId, line, subscription } = await usedMembership()

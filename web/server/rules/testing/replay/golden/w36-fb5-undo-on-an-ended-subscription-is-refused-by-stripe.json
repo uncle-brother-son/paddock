@@ -1,0 +1,20 @@
+{
+  "scenario": "w36-fb5-undo-on-an-ended-subscription-is-refused-by-stripe",
+  "results": [
+    {
+      "updated": false,
+      "message": "A canceled subscription can only update its cancellation_details and metadata."
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "subscriptions.update",
+      "params": {
+        "id": "sub_mo",
+        "cancel_at": ""
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {}
+}

@@ -1,0 +1,12 @@
+{
+  "scenario": "w36-store-credit-refused-unknown-customer",
+  "results": [
+    {
+      "ok": false,
+      "reason": "customer_not_found",
+      "message": "That customer no longer exists."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

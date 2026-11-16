@@ -1,0 +1,10 @@
+{
+  "scenario": "w36-credits-session-refused-no-current-period",
+  "results": [
+    {
+      "thrown": "This membership has no current credit period — there is nothing to adjust."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

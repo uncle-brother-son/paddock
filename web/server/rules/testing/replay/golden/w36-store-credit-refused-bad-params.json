@@ -1,0 +1,47 @@
+{
+  "scenario": "w36-store-credit-refused-bad-params",
+  "results": [
+    {
+      "ok": false,
+      "message": "Customer id is required."
+    },
+    {
+      "ok": false,
+      "message": "Mode must be \"add\" or \"remove\"."
+    },
+    {
+      "ok": false,
+      "message": "Amount must be greater than 0."
+    },
+    {
+      "ok": false,
+      "message": "Amount must be greater than 0."
+    },
+    {
+      "ok": false,
+      "message": "Amount must be greater than 0."
+    },
+    {
+      "ok": false,
+      "message": "Amount must be greater than 0."
+    },
+    {
+      "ok": false,
+      "message": "A reason of at least 5 characters is required."
+    },
+    {
+      "ok": false,
+      "message": "A reason of at least 5 characters is required."
+    },
+    {
+      "ok": false,
+      "message": "A reason of at least 5 characters is required."
+    },
+    {
+      "ok": false,
+      "message": "A reason of at least 5 characters is required."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

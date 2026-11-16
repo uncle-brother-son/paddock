@@ -1,0 +1,15 @@
+{
+  "scenario": "w36-herd-refused-unknown-membership",
+  "results": [
+    {
+      "updated": false,
+      "reason": "not_found"
+    },
+    {
+      "updated": false,
+      "reason": "not_found"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

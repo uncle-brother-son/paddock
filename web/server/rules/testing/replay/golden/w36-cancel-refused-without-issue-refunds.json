@@ -1,0 +1,17 @@
+{
+  "scenario": "w36-cancel-refused-without-issue-refunds",
+  "results": [
+    {
+      "updated": false,
+      "reason": "permission_denied",
+      "message": "Needs the Issue refunds permission to cancel or re-activate a membership."
+    },
+    {
+      "updated": false,
+      "reason": "permission_denied",
+      "message": "Needs the Issue refunds permission to cancel or re-activate a membership."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

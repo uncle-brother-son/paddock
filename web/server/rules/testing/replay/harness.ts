@@ -61,10 +61,38 @@ export const LEGACY_REFUND_ACTIONS: ReadonlySet<string> = new Set(['refundOrder'
 export const legacyRefundDir = path.join(__dirname, '../legacy-refund/backend/paddock')
 
 /**
+ * W36 (F-plan 4.12 items 1 and 2, lead call L5): step F moves the staff app's membership, customer, store credit and
+ * gift card functions to the Worker slice by slice (W37 to W41), and each slice deletes that function's old body. Its
+ * golden files were recorded through them and through the three legacy membership routes, so those sixteen functions
+ * and every module they import run from a fourth frozen test-only copy (legacy-account/README.md), which also holds
+ * the three routes (bound in legacy-routes.ts). The recorded side and setup only; it goes at step H.
+ */
+export const LEGACY_ACCOUNT_ACTIONS: ReadonlySet<string> = new Set([
+  'setMembershipCancellation',
+  'changeMembershipPaymentDate',
+  'getMembershipPaymentDateQuote',
+  'adjustMembershipCredits',
+  'getMembershipCreditAdjustments',
+  'setMembershipHerd',
+  'getSubscriptions',
+  'createCustomer',
+  'getCustomers',
+  'getCustomerDetail',
+  'adjustCustomerStoreCredit',
+  'extendGiftCardExpiry',
+  'setGiftCardPickedUp',
+  'setGiftCardShipped',
+  'getGiftCards',
+  'getGiftCardRedemptions',
+])
+export const legacyAccountDir = path.join(__dirname, '../legacy-account/backend/paddock')
+
+/**
  * Where the old side loads a staff app file from (`moveBooking.ts`, `shared/bookingMoneyClaim.ts`): the frozen
  * booking copy for anything it holds (step D), the frozen refund copy for the five old step E actions and the
- * modules only it holds (W27), the frozen order copy for the three old order actions, else the staff app's own
- * checkout (the functions steps F and G move: memberships, the Orders page, the reads). A module both the booking
+ * modules only it holds (W27), the frozen order copy for the three old order actions, the frozen account copy for
+ * the sixteen old step F functions and the modules only it holds (W36), else the staff app's own checkout (the
+ * functions step G moves: the catalogue, the Orders page, the reads). A module both the booking
  * and the refund copy hold (`shared/staffAccess.ts`) is named from the booking copy, as before W27; each copy's own
  * functions import their own, relatively, whatever this answers.
  */
@@ -73,6 +101,8 @@ export function oldFunctionPath(file: string): string {
   if (existsSync(path.join(legacyBookingDir, `${name}.ts`))) return path.join(legacyBookingDir, `${name}.ts`)
   if (LEGACY_REFUND_ACTIONS.has(name) || existsSync(path.join(legacyRefundDir, `${name}.ts`))) return path.join(legacyRefundDir, `${name}.ts`)
   if (LEGACY_ORDER_ACTIONS.has(name)) return path.join(legacyOrderDir, `${name}.ts`)
+  // W36: the sixteen old step F functions, and the modules only that copy holds (`shared/membershipPaymentDate.ts`).
+  if (LEGACY_ACCOUNT_ACTIONS.has(name) || existsSync(path.join(legacyAccountDir, `${name}.ts`))) return path.join(legacyAccountDir, `${name}.ts`)
   return path.join(backendDir, `${name}.ts`)
 }
 const goldenDir = path.join(__dirname, 'golden')

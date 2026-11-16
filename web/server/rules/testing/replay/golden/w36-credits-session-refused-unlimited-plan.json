@@ -1,0 +1,10 @@
+{
+  "scenario": "w36-credits-session-refused-unlimited-plan",
+  "results": [
+    {
+      "thrown": "This membership is unlimited — its session credits cannot be adjusted."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

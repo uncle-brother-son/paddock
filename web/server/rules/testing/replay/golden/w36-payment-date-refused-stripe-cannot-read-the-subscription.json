@@ -1,0 +1,42 @@
+{
+  "scenario": "w36-payment-date-refused-stripe-cannot-read-the-subscription",
+  "results": [
+    {
+      "changed": false,
+      "message": "An error occurred with our API."
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "subscriptions.retrieve",
+      "params": {
+        "id": "sub_mo"
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {
+    "membership_payment_date_changes": {
+      "added": [
+        {
+          "id": "membership_payment_date_changes#1",
+          "membership_id": "10000000-0000-4000-8000-000000000010",
+          "old_renewal_date": "2026-12-10",
+          "new_renewal_date": "2026-12-27",
+          "extra_days": 17,
+          "amount_charged": "21.94",
+          "stripe_payment_intent_id": null,
+          "order_id": null,
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "override_reason": null,
+          "status": "failed",
+          "failure_message": "An error occurred with our API.",
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

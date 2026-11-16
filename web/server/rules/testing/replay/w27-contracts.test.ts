@@ -204,8 +204,10 @@ describe("step E's new inputs, figures and error code", () => {
   })
 
   it('REFUND_PATH_OFF is an error code with a status, added to the end of the list (the screens branch on these: add, never rename)', () => {
-    expect(ERROR_CODES.at(-1)).toBe('REFUND_PATH_OFF')
-    expect(ERROR_CODES.indexOf('BOOKING_PATH_OFF')).toBe(ERROR_CODES.length - 2)
+    // W36 added MEMBERSHIP_PATH_OFF after it, so it is no longer the last (memberships/membership-switch.test.ts holds
+    // the end of the list now): it still comes straight after step D's, where W27 added it.
+    expect(ERROR_CODES.indexOf('REFUND_PATH_OFF')).toBe(ERROR_CODES.indexOf('BOOKING_PATH_OFF') + 1)
+    expect(ERROR_CODES.indexOf('BOOKING_PATH_OFF')).toBe(ERROR_CODES.indexOf('ORDER_PATH_OFF') + 1)
     expect(ERROR_HTTP_STATUS.REFUND_PATH_OFF).toBe(501)
     expect(new Set(ERROR_CODES).size).toBe(ERROR_CODES.length)
   })

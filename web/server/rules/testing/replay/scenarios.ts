@@ -1070,6 +1070,18 @@ function lapsed(name: string, steps: (context: ScenarioContext, bookingId: strin
 
 /** W27: the name every step E golden scenario starts with (declared here, above the list that builds them). */
 export const W27_PREFIX = 'w27-'
+/** W36: the name every step F golden scenario starts with. */
+export const W36_PREFIX = 'w36-'
+/** W36: Mo's Stripe subscription, once a scenario has given her membership one (`moSubscribed`). */
+export const MO_SUBSCRIPTION = 'sub_mo'
+/** W36: a pickup and a shipped gift card, and an id nothing has. */
+export const W36_ID = {
+  pickupCard: '10000000-0000-4000-8000-000000000f31',
+  shippedCard: '10000000-0000-4000-8000-000000000f32',
+  unknown: '10000000-0000-4000-8000-000000000f3f',
+}
+/** W36: the day the payment date scenarios move Mo's payment to: 17 days after 10 Dec, £21.94 of a £40 month of 31 days. */
+export const W36_NEW_PAYMENT_DATE = '2026-12-27'
 
 export const scenarios: Scenario[] = [
   {
@@ -2974,6 +2986,7 @@ export const scenarios: Scenario[] = [
   ...w13Scenarios(),
   ...w17Scenarios(),
   ...w27Scenarios(),
+  ...w36Scenarios(),
 ]
 
 // --- W06: the Worker's order core. Every createOrder and createBooking reason in W06's scope that had
@@ -5279,4 +5292,817 @@ function w27Scenarios(): Scenario[] {
   ]
 
   return [...orderRefusals, ...orderLines, ...orderUnclear, ...orderBugs, ...placeRefusals, ...placeCancels, ...placeUnclear, ...wholeEvent]
+}
+
+// --- W36: step F's golden files (F-plan 4.12 item 1, lead call L5), recorded from the old functions and the three
+// legacy membership routes while they exist: every refusal and each success of the membership cancel and undo, the
+// payment date change and its quote, the credit and Herd adjustments, the store credit adjustment, the gift card
+// actions, creating a customer, each read's shape, the database's lapse sweep, and today's outcome for each bug of
+// the plan's section 3 that can be recorded (FB1 to FB16, FB18, FB19, FB21). They replay against the frozen copy
+// (legacy-account/); W37 to W43 replay them through the Worker's routes and name each difference.
+
+interface W36Steps {
+  call: ScenarioContext['call']
+  attempt: ScenarioContext['attempt']
+  db: Db
+  stripe: FakeStripe
+}
+
+/** W36: the database's own lapse sweep, run as the hourly job runs it (the table owner, not the Worker's role). */
+export async function runLapseSweep(db: Db): Promise<void> {
+  await db.query('RESET ROLE')
+  try {
+    await db.query('SELECT public.lapse_sweep_expired_bookings()')
+  } finally {
+    await db.query('SET ROLE paddock_worker')
+  }
+}
+
+function w36Scenarios(): Scenario[] {
+  type Prepare = (db: Db, stripe: FakeStripe) => Promise<void>
+  type Call = ScenarioContext['call']
+  const all =
+    (...prepares: Prepare[]): Prepare =>
+    async (db, stripe) => {
+      for (const prepare of prepares) await prepare(db, stripe)
+    }
+  const f = (name: string, steps: (made: W36Steps) => Promise<void>, prepare?: Prepare): Scenario => ({
+    name: `${W36_PREFIX}${name}`,
+    async seed(db, stripe) {
+      await seed(db, stripe)
+      await prepare?.(db, stripe)
+    },
+    async run({ call, attempt, db, stripe }) {
+      await steps({ call, attempt, db, stripe })
+    },
+  })
+  /** One statement on Mo's membership (`$1`), the plan (`$1`) or anything else: test data only, each a literal below. */
+  const sql =
+    (statement: string, params: SqlParam[] = []): Prepare =>
+    async (db) => {
+      await db.query(statement, params)
+    }
+  const membershipIs = (statement: string): Prepare => sql(statement, [ID.membership])
+
+  /** Mo's membership as live ones are: a Stripe subscription, and its next payment on 10 December. */
+  const moSubscribed: Prepare = async (db, stripe) => {
+    await db.query("UPDATE customer_memberships SET stripe_subscription_id = $1, next_renewal_date = '2026-12-10' WHERE id = $2", [MO_SUBSCRIPTION, ID.membership])
+    stripe.addSubscription(MO_SUBSCRIPTION, MEMBER_STRIPE_CUSTOMER, MONTHLY_PRICE)
+  }
+  const noIssueRefunds = sql('UPDATE staff SET can_issue_refunds = false WHERE id = $1', [ID.staff])
+  /** Signed in to Retool, with no staff row for that email. */
+  const noStaffRecord = sql("UPDATE staff SET email = 'someone.else@example.com' WHERE id = $1", [ID.staff])
+  const inactiveStaff = sql('UPDATE staff SET active = false WHERE id = $1', [ID.staff])
+  const refusal = () => fakeStripeErrors.invalid('subscription_update_refused', 'This subscription cannot be updated right now.')
+
+  /** Runs `gap` once, straight after the first statement matching `matches` has answered: what another tab does in between. */
+  async function onceAfter<T>(matches: (statement: string) => boolean, gap: () => Promise<unknown>, steps: () => Promise<T>): Promise<T> {
+    type Query = (statement: string, params?: unknown[]) => Promise<unknown>
+    const real = (globalThis as unknown as { paddockData: { query: Query } }).paddockData
+    let done = false
+    vi.stubGlobal('paddockData', {
+      async query(statement: string, params: unknown[] = []) {
+        const answer = await real.query(statement, params)
+        if (!done && matches(statement)) {
+          done = true
+          vi.stubGlobal('paddockData', real)
+          await gap()
+        }
+        return answer
+      },
+    })
+    try {
+      return await steps()
+    } finally {
+      vi.stubGlobal('paddockData', real)
+    }
+  }
+
+  /** Every statement matching `matches` fails before it runs, as when the database is away: nothing is changed by it. */
+  async function whileUnreadable<T>(matches: (statement: string) => boolean, steps: () => Promise<T>): Promise<T> {
+    type Query = (statement: string, params?: unknown[]) => Promise<unknown>
+    const real = (globalThis as unknown as { paddockData: { query: Query } }).paddockData
+    vi.stubGlobal('paddockData', {
+      async query(statement: string, params: unknown[] = []) {
+        if (matches(statement)) throw new Error('connection lost')
+        return real.query(statement, params)
+      },
+    })
+    try {
+      return await steps()
+    } finally {
+      vi.stubGlobal('paddockData', real)
+    }
+  }
+
+  /**
+   * FB1: the Worker stops dead once the card has been charged, before the billing date moves (and so before it can
+   * refund): nothing after the charge reaches Stripe, and the function gets no answer. What a Worker killed at its
+   * limit, or a request cut off, leaves.
+   */
+  async function workerDyingAfterTheCharge<T>(stripe: FakeStripe, steps: () => Promise<T>): Promise<T> {
+    type RawRequest = (request: { path: string }) => Promise<unknown>
+    const api = (globalThis as unknown as { paddockBackendApi2: { rawRequest: RawRequest } }).paddockBackendApi2
+    const subscriptions = stripe.subscriptions as { update: unknown }
+    const refunds = stripe.refunds as { create: unknown }
+    const realUpdate = subscriptions.update
+    const realRefund = refunds.create
+    let dead = false
+    const died = () => {
+      dead = true
+      return Promise.reject(new Error('the Worker died'))
+    }
+    subscriptions.update = died
+    refunds.create = died
+    vi.stubGlobal('paddockBackendApi2', {
+      async rawRequest(request: { path: string }) {
+        const answer = await api.rawRequest(request)
+        if (dead) throw new Error('socket hang up')
+        return answer
+      },
+    })
+    try {
+      return await steps()
+    } finally {
+      subscriptions.update = realUpdate
+      refunds.create = realRefund
+      vi.stubGlobal('paddockBackendApi2', api)
+    }
+  }
+
+  // --- Membership cancel and undo (setMembershipCancellation, /api/memberships/cancel and /undo-cancel)
+
+  const SET = 'setMembershipCancellation'
+  const cancelMo = (call: Call) => call(SET, { membershipId: ID.membership, cancel: true })
+  const undoMo = (call: Call) => call(SET, { membershipId: ID.membership, cancel: false })
+  const membershipWrite: WriteFailure = { table: 'customer_memberships', event: 'UPDATE', when: 'true' }
+  const moCreditSeat = { customerId: ID.member, booking: { ...paidSeat([mo]), ...memberCredit }, payment: {} }
+  const yearly: Prepare = async (db, stripe) => {
+    await db.query("UPDATE customer_memberships SET billing_frequency = 'yearly', stripe_subscription_id = $1, next_renewal_date = '2027-01-10' WHERE id = $2", [MO_SUBSCRIPTION, ID.membership])
+    stripe.addSubscription(MO_SUBSCRIPTION, MEMBER_STRIPE_CUSTOMER, YEARLY_PRICE)
+  }
+
+  const cancels: Scenario[] = [
+    f('cancel-refused-no-membership-id', async ({ call }) => {
+      await call(SET, { membershipId: '', cancel: true })
+    }, moSubscribed),
+    f('cancel-refused-without-issue-refunds', async ({ call }) => {
+      await cancelMo(call)
+      await undoMo(call)
+    }, all(moSubscribed, noIssueRefunds)),
+    f('cancel-refused-no-staff-record', async ({ call }) => {
+      await cancelMo(call)
+    }, all(moSubscribed, noStaffRecord)),
+    f('cancel-refused-inactive-staff', async ({ attempt }) => {
+      await attempt(SET, { membershipId: ID.membership, cancel: true })
+    }, all(moSubscribed, inactiveStaff)),
+    f('cancel-refused-unknown-membership', async ({ call }) => {
+      await call(SET, { membershipId: W36_ID.unknown, cancel: true })
+      await call(SET, { membershipId: W36_ID.unknown, cancel: false })
+    }),
+    // Started 10 Jan, so the two-payment minimum is long past: it ends at the next payment, 10 Dec (last day 9 Dec).
+    f('cancel-monthly-after-the-minimum-term', async ({ call }) => {
+      await cancelMo(call)
+    }, moSubscribed),
+    // Started today: the minimum term (two payments) ends 10 Jan, a month after the next payment.
+    f('cancel-monthly-inside-the-minimum-term', async ({ call }) => {
+      await cancelMo(call)
+    }, all(membershipIs("UPDATE customer_memberships SET start_date = '2026-11-10' WHERE id = $1"), moSubscribed)),
+    f('cancel-yearly', async ({ call }) => {
+      await cancelMo(call)
+    }, yearly),
+    f('cancel-then-undo', async ({ call }) => {
+      await cancelMo(call)
+      await undoMo(call)
+    }, moSubscribed),
+    f('cancel-with-no-subscription', async ({ call }) => {
+      await cancelMo(call)
+      await undoMo(call)
+    }, membershipIs("UPDATE customer_memberships SET next_renewal_date = '2026-12-10' WHERE id = $1")),
+    // The seed's membership has no next payment date: the route's date sum fails on it.
+    f('cancel-with-no-next-renewal-date', async ({ call }) => {
+      await cancelMo(call)
+    }),
+    f('cancel-refused-by-stripe', async ({ call, stripe }) => {
+      stripe.failNext('subscriptions.update', { kind: 'error', error: refusal() })
+      await cancelMo(call)
+    }, moSubscribed),
+    // Stripe took the cancel date; the membership row's write then fails. Stripe's webhook is what repairs it live.
+    f('cancel-stripe-went-then-the-database-write-fails', async ({ call, db }) => {
+      await whileFailing(db, membershipWrite, () => cancelMo(call))
+    }, moSubscribed),
+    f('cancel-answer-lost-then-pressed-again', async ({ call }) => {
+      await losingTheWorkersAnswer('/api/memberships/cancel', () => cancelMo(call))
+      await cancelMo(call)
+    }, moSubscribed),
+    f('undo-refused-by-stripe', async ({ call, stripe }) => {
+      await cancelMo(call)
+      stripe.failNext('subscriptions.update', { kind: 'error', error: refusal() })
+      await undoMo(call)
+    }, moSubscribed),
+    f('undo-stripe-went-then-the-database-write-fails', async ({ call, db }) => {
+      await cancelMo(call)
+      await whileFailing(db, membershipWrite, () => undoMo(call))
+    }, moSubscribed),
+    f('undo-answer-lost-then-pressed-again', async ({ call }) => {
+      await cancelMo(call)
+      await losingTheWorkersAnswer('/api/memberships/undo-cancel', () => undoMo(call))
+      await undoMo(call)
+    }, moSubscribed),
+    // FB5: neither route checks the membership's state.
+    f('fb5-cancel-on-a-cancelled-membership', async ({ call }) => {
+      await cancelMo(call)
+    }, membershipIs("UPDATE customer_memberships SET subscription_status = 'cancelled', next_renewal_date = '2026-12-10' WHERE id = $1")),
+    f('fb5-cancel-on-a-membership-whose-payment-is-failing', async ({ call }) => {
+      await cancelMo(call)
+    }, all(moSubscribed, membershipIs("UPDATE customer_memberships SET subscription_status = 'past_due' WHERE id = $1"))),
+    f('fb5-cancel-twice', async ({ call }) => {
+      await cancelMo(call)
+      await cancelMo(call)
+    }, moSubscribed),
+    f('fb5-undo-with-no-cancel-scheduled', async ({ call }) => {
+      await undoMo(call)
+    }, moSubscribed),
+    // The membership ended yesterday and has no subscription. A credit booking is refused; undo clears the end date;
+    // the same credit booking then goes through, for no payment.
+    f('fb5-undo-on-a-membership-that-ended-yesterday', async ({ call }) => {
+      await call('createOrder', moCreditSeat)
+      await undoMo(call)
+      await call('createOrder', moCreditSeat)
+    }, membershipIs("UPDATE customer_memberships SET cancel_effective_date = '2026-11-09', next_renewal_date = '2026-11-10' WHERE id = $1")),
+    // With a subscription Stripe has already ended, Stripe refuses the undo (what live would do: every membership has one).
+    f('fb5-undo-on-an-ended-subscription-is-refused-by-stripe', async ({ call }) => {
+      await undoMo(call)
+    }, all(moSubscribed, membershipIs("UPDATE customer_memberships SET cancel_effective_date = '2026-11-09' WHERE id = $1"), async (_db, stripe) => stripe.setSubscription(MO_SUBSCRIPTION, { status: 'canceled' }))),
+    // FB6 (Q33): the minimum term's end rolls over instead of ending on the month's last day.
+    f('fb6-monthly-started-31-december-ends-3-march', async ({ call }) => {
+      vi.setSystemTime(new Date('2027-01-05T09:00:00.000Z'))
+      await cancelMo(call)
+    }, async (db, stripe) => {
+      await db.query("UPDATE customer_memberships SET start_date = '2026-12-31', stripe_subscription_id = $1, next_renewal_date = '2027-01-31' WHERE id = $2", [MO_SUBSCRIPTION, ID.membership])
+      stripe.addSubscription(MO_SUBSCRIPTION, MEMBER_STRIPE_CUSTOMER, MONTHLY_PRICE)
+    }),
+    f('fb6-monthly-started-31-july-ends-1-october', async ({ call }) => {
+      await cancelMo(call)
+    }, async (db, stripe) => {
+      // Started 31 July, and its second payment (31 August) hasn't been recorded as taken: the minimum term decides.
+      await db.query("UPDATE customer_memberships SET start_date = '2026-07-31', stripe_subscription_id = $1, next_renewal_date = '2026-08-31' WHERE id = $2", [MO_SUBSCRIPTION, ID.membership])
+      stripe.addSubscription(MO_SUBSCRIPTION, MEMBER_STRIPE_CUSTOMER, MONTHLY_PRICE)
+    }),
+  ]
+
+  // --- Payment date change (changeMembershipPaymentDate, getMembershipPaymentDateQuote, /api/memberships/change-payment-date)
+
+  const CHANGE = 'changeMembershipPaymentDate'
+  const NEW_DATE = W36_NEW_PAYMENT_DATE
+  const quote = (call: Call, newRenewalDate?: string) => call('getMembershipPaymentDateQuote', { membershipId: ID.membership, ...(newRenewalDate ? { newRenewalDate } : {}) })
+  const change = (call: Call, extra: Record<string, unknown> = {}) => call(CHANGE, { membershipId: ID.membership, newRenewalDate: NEW_DATE, ...extra })
+  /** As the dialog: the window, the figure for the picked date, then the press. */
+  const quoteThenChange = async ({ call }: W36Steps) => {
+    await quote(call)
+    await quote(call, NEW_DATE)
+    await change(call)
+  }
+  const planIs = (statement: string): Prepare => sql(statement, [ID.plan])
+  const earlierChange = (fields: Record<string, unknown>): Prepare => async (db) => {
+    await insert(db, 'membership_payment_date_changes', { membership_id: ID.membership, old_renewal_date: '2026-09-10', new_renewal_date: '2026-09-15', extra_days: 5, amount_charged: '6.67', staff_id: ID.staff, ...fields })
+  }
+  const changeRowWrite: WriteFailure = { table: 'membership_payment_date_changes', event: 'UPDATE', when: 'true' }
+  const orderWrite: WriteFailure = { table: 'orders', event: 'INSERT', when: 'true' }
+  const quoteRead = (statement: string) => statement.includes('AS earliest_date')
+
+  const paymentDates: Scenario[] = [
+    f('payment-date-refused-missing-params', async ({ call }) => {
+      await call(CHANGE, { membershipId: ID.membership })
+      await call(CHANGE, { membershipId: '', newRenewalDate: NEW_DATE })
+      await call('getMembershipPaymentDateQuote', { membershipId: '' })
+    }, moSubscribed),
+    f('payment-date-refused-without-issue-refunds', async ({ call }) => {
+      await quote(call, NEW_DATE)
+      await change(call)
+    }, all(moSubscribed, noIssueRefunds)),
+    f('payment-date-refused-no-staff-record', async ({ call }) => {
+      await change(call)
+    }, all(moSubscribed, noStaffRecord)),
+    f('payment-date-refused-inactive-staff', async ({ call, attempt }) => {
+      // The quote checks nobody (FB16); the press refuses an inactive account.
+      await quote(call, NEW_DATE)
+      await attempt(CHANGE, { membershipId: ID.membership, newRenewalDate: NEW_DATE })
+    }, all(moSubscribed, inactiveStaff)),
+    f('payment-date-refused-unknown-membership', async ({ call }) => {
+      await call('getMembershipPaymentDateQuote', { membershipId: W36_ID.unknown, newRenewalDate: NEW_DATE })
+      await call(CHANGE, { membershipId: W36_ID.unknown, newRenewalDate: NEW_DATE })
+    }),
+    // Each of the quote's refusals, in the old order.
+    f('payment-date-refused-yearly', quoteThenChange, yearly),
+    f('payment-date-refused-a-payment-is-failing', quoteThenChange, all(moSubscribed, membershipIs("UPDATE customer_memberships SET subscription_status = 'past_due' WHERE id = $1"))),
+    f('payment-date-refused-not-active', quoteThenChange, all(moSubscribed, membershipIs("UPDATE customer_memberships SET subscription_status = 'cancelled' WHERE id = $1"))),
+    f('payment-date-refused-a-cancellation-is-scheduled', quoteThenChange, all(moSubscribed, membershipIs("UPDATE customer_memberships SET cancel_effective_date = '2026-12-09' WHERE id = $1"))),
+    f('payment-date-refused-the-renewal-is-overdue', quoteThenChange, all(moSubscribed, membershipIs("UPDATE customer_memberships SET next_renewal_date = '2026-11-09' WHERE id = $1"))),
+    f('payment-date-refused-no-next-renewal-date', quoteThenChange, all(moSubscribed, membershipIs('UPDATE customer_memberships SET next_renewal_date = NULL WHERE id = $1'))),
+    f('payment-date-refused-payment-needed-bookings', async (made) => {
+      await lapsedSeat(made.call, made.db)
+      await quoteThenChange(made)
+    }, moSubscribed),
+    f('payment-date-refused-no-subscription', quoteThenChange, membershipIs("UPDATE customer_memberships SET next_renewal_date = '2026-12-10' WHERE id = $1")),
+    f('payment-date-refused-no-saved-card', quoteThenChange, all(moSubscribed, sql('UPDATE customers SET saved_payment_method_id = NULL WHERE id = $1', [ID.member]))),
+    f('payment-date-refused-one-already-in-progress', quoteThenChange, all(moSubscribed, earlierChange({ old_renewal_date: '2026-12-10', new_renewal_date: '2026-12-20', extra_days: 10, amount_charged: '12.90', status: 'pending' }))),
+    f('payment-date-refused-the-plan-has-no-monthly-price', quoteThenChange, all(moSubscribed, planIs('UPDATE membership_plans SET price_monthly = NULL WHERE id = $1'))),
+    // The window: after the current renewal, before the one after it.
+    f('payment-date-refused-date-outside-the-window', async ({ call }) => {
+      for (const date of ['2026-12-10', '2027-01-10', '2026-11-27', 'next Friday']) {
+        await quote(call, date)
+        await change(call, { newRenewalDate: date })
+      }
+      // The first and the last day allowed.
+      await quote(call, '2026-12-11')
+      await quote(call, '2027-01-09')
+    }, moSubscribed),
+    f('payment-date-refused-the-charge-works-out-at-nothing', async ({ call }) => {
+      await quote(call, '2026-12-11')
+      await change(call, { newRenewalDate: '2026-12-11' })
+    }, all(moSubscribed, planIs("UPDATE membership_plans SET price_monthly = '0.10' WHERE id = $1"))),
+    // The six-month rule: a change two months ago.
+    f('payment-date-refused-inside-six-months-without-the-override', async ({ call }) => {
+      await quote(call, NEW_DATE)
+      await change(call)
+      await change(call, { override: true })
+      await change(call, { override: true, overrideReason: '   ' })
+    }, all(moSubscribed, earlierChange({ status: 'done', created_at: '2026-09-10T09:00:00.000Z' }))),
+    f('payment-date-change-inside-six-months-with-the-override', async ({ call }) => {
+      await quote(call, NEW_DATE)
+      await change(call, { override: true, overrideReason: 'Payday moved to the 27th' })
+    }, all(moSubscribed, earlierChange({ status: 'done', created_at: '2026-09-10T09:00:00.000Z' }))),
+    // A change seven months ago needs no override, and an override sent anyway isn't recorded.
+    f('payment-date-change-after-six-months-needs-no-override', async ({ call }) => {
+      await quote(call, NEW_DATE)
+      await change(call, { override: true, overrideReason: 'Not needed' })
+    }, all(moSubscribed, earlierChange({ status: 'done', created_at: '2026-04-09T09:00:00.000Z', old_renewal_date: '2026-04-10', new_renewal_date: '2026-04-15' }))),
+    f('payment-date-change-17-days-on', quoteThenChange, moSubscribed),
+    // After a change the subscription is in its no-charge period until the new date: a second change is refused until then.
+    f('payment-date-change-then-a-second-is-refused-until-the-new-date', async ({ call }) => {
+      await change(call)
+      await quote(call)
+      await change(call, { newRenewalDate: '2027-01-05' })
+    }, moSubscribed),
+    // Two presses at once: the second's own check finds the first's pending row.
+    f('payment-date-refused-a-second-press-while-the-first-is-running', async ({ call, db }) => {
+      await onceAfter(
+        quoteRead,
+        () => insert(db, 'membership_payment_date_changes', { membership_id: ID.membership, old_renewal_date: '2026-12-10', new_renewal_date: NEW_DATE, extra_days: 17, amount_charged: '21.94', staff_id: ID.staff, status: 'pending' }),
+        () => change(call)
+      )
+    }, moSubscribed),
+    // Today a pending row stops holding the membership after 15 minutes, whatever became of its charge.
+    f('payment-date-a-pending-row-stops-blocking-after-15-minutes', async ({ call }) => {
+      await change(call)
+      later(16 * 60 * 1000)
+      await change(call)
+    }, all(moSubscribed, earlierChange({ old_renewal_date: '2026-12-10', new_renewal_date: '2026-12-20', extra_days: 10, amount_charged: '12.90', status: 'pending' }))),
+    // The legacy route's own checks, against Stripe.
+    f('payment-date-refused-stripe-subscription-is-another-customers', quoteThenChange, async (db, stripe) => {
+      await db.query("UPDATE customer_memberships SET stripe_subscription_id = $1, next_renewal_date = '2026-12-10' WHERE id = $2", [MO_SUBSCRIPTION, ID.membership])
+      stripe.addSubscription(MO_SUBSCRIPTION, STRIPE_CUSTOMER, MONTHLY_PRICE)
+    }),
+    f('payment-date-refused-stripe-subscription-not-active', quoteThenChange, all(moSubscribed, async (_db, stripe) => stripe.setSubscription(MO_SUBSCRIPTION, { status: 'past_due' }))),
+    f('payment-date-refused-stripe-has-a-cancellation-scheduled', quoteThenChange, all(moSubscribed, async (_db, stripe) => stripe.setSubscription(MO_SUBSCRIPTION, { cancelAt: 1796860800 }))),
+    f('payment-date-refused-stripe-subscription-not-monthly', quoteThenChange, async (db, stripe) => {
+      await db.query("UPDATE customer_memberships SET stripe_subscription_id = $1, next_renewal_date = '2026-12-10' WHERE id = $2", [MO_SUBSCRIPTION, ID.membership])
+      stripe.addSubscription(MO_SUBSCRIPTION, MEMBER_STRIPE_CUSTOMER, YEARLY_PRICE)
+    }),
+    // The stale-date guard: Stripe's next payment isn't on the date the membership row shows.
+    f('payment-date-refused-stripe-next-payment-is-on-another-date', async ({ call }) => {
+      await quote(call, '2026-12-27')
+      await change(call)
+    }, all(moSubscribed, membershipIs("UPDATE customer_memberships SET next_renewal_date = '2026-12-12' WHERE id = $1"))),
+    f('payment-date-refused-more-than-a-full-month-at-stripes-price', quoteThenChange, all(moSubscribed, planIs("UPDATE membership_plans SET price_monthly = '100.00' WHERE id = $1"))),
+    f('payment-date-refused-stripe-cannot-read-the-subscription', async ({ call, stripe }) => {
+      stripe.failNext('subscriptions.retrieve', { kind: 'error', error: fakeStripeErrors.server() })
+      await change(call)
+    }, moSubscribed),
+    f('payment-date-card-declined', async ({ call, stripe }) => {
+      stripe.failNext('paymentIntents.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
+      await change(call)
+      // A failed attempt doesn't hold the membership: the next press goes through.
+      await change(call)
+    }, moSubscribed),
+    f('payment-date-card-needs-authentication', async ({ call, stripe }) => {
+      stripe.failNext('paymentIntents.create', { kind: 'error', error: fakeStripeErrors.authenticationRequired() })
+      await change(call)
+    }, moSubscribed),
+    f('payment-date-declined-and-the-attempt-cannot-be-marked-failed', async ({ call, db, stripe }) => {
+      stripe.failNext('paymentIntents.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
+      await whileFailing(db, changeRowWrite, () => change(call))
+    }, moSubscribed),
+    // The charge went, the date move was refused: the charge is refunded in full.
+    f('payment-date-move-refused-and-the-charge-refunded', async ({ call, stripe }) => {
+      stripe.failNext('subscriptions.update', { kind: 'error', error: refusal() })
+      await change(call)
+    }, moSubscribed),
+    // FB3: and the refund fails too. £21.94 taken, the date not moved, nothing lists it.
+    f('fb3-payment-date-move-refused-and-the-refund-fails', async ({ call, stripe }) => {
+      stripe.failNext('subscriptions.update', { kind: 'error', error: refusal() })
+      stripe.failNext('refunds.create', { kind: 'error', error: fakeStripeErrors.server() })
+      await change(call)
+    }, moSubscribed),
+    // FB1: the Worker dies after the charge. The row is marked failed, which holds nothing; pressed again, £21.94 again.
+    f('fb1-payment-date-worker-dies-after-the-charge-then-pressed-again', async ({ call, stripe }) => {
+      await workerDyingAfterTheCharge(stripe, () => change(call))
+      await change(call)
+    }, moSubscribed),
+    // The Worker did everything and its answer was lost: charged, the date moved in Stripe, nothing recorded.
+    f('payment-date-answer-lost-after-everything-then-pressed-again', async ({ call }) => {
+      await losingTheWorkersAnswer('/api/memberships/change-payment-date', () => change(call))
+      await change(call)
+    }, moSubscribed),
+    // FB2: charged and moved in Stripe, then Retool's own write fails: "success" with a warning to add an order by hand.
+    f('fb2-payment-date-charged-and-moved-then-recording-fails', async ({ call, db }) => {
+      await whileFailing(db, orderWrite, () => change(call))
+    }, moSubscribed),
+    // And when the attempt's own row can't be written either, the warning adds it to the list to fix by hand.
+    f('fb2-payment-date-charged-and-moved-then-nothing-can-be-recorded', async ({ call, db }) => {
+      await whileFailing(db, changeRowWrite, () => change(call))
+    }, moSubscribed),
+    // FB4: the dialog shows £21.94; the plan's price is changed; the press takes £24.68.
+    f('fb4-payment-date-the-figure-changes-between-the-quote-and-the-press', async ({ call, db }) => {
+      await quote(call, NEW_DATE)
+      await db.query("UPDATE membership_plans SET price_monthly = '45.00' WHERE id = $1", [ID.plan])
+      await change(call)
+    }, moSubscribed),
+  ]
+
+  // --- Membership credits and Herd (adjustMembershipCredits, getMembershipCreditAdjustments, setMembershipHerd)
+
+  const ADJUST = 'adjustMembershipCredits'
+  const adjustment = (creditType: string, amount: number, reason = 'Goodwill after a cold sauna') => ({ membershipId: ID.membership, creditType, amount, reason })
+  const history = (call: Call) => call('getMembershipCreditAdjustments', { membershipId: ID.membership })
+  const adjustmentRow: WriteFailure = { table: 'membership_credit_adjustments', event: 'INSERT', when: 'true' }
+  const currentPeriodRead = (statement: string) => statement.includes('LEFT JOIN membership_current_credits mcc')
+  const HERD = 'setMembershipHerd'
+
+  const credits: Scenario[] = [
+    f('credits-refused-without-issue-refunds', async ({ call }) => {
+      await call(ADJUST, adjustment('session', 1))
+      await call(ADJUST, adjustment('addon', 1))
+    }, noIssueRefunds),
+    f('credits-refused-no-staff-record', async ({ call }) => {
+      await call(ADJUST, adjustment('session', 1))
+    }, noStaffRecord),
+    f('credits-refused-inactive-staff', async ({ attempt }) => {
+      await attempt(ADJUST, adjustment('session', 1))
+    }, inactiveStaff),
+    f('credits-refused-amount-not-a-whole-number-or-zero', async ({ attempt }) => {
+      await attempt(ADJUST, adjustment('session', 0))
+      await attempt(ADJUST, adjustment('addon', 1.5))
+    }),
+    f('credits-refused-unknown-membership', async ({ attempt }) => {
+      await attempt(ADJUST, { ...adjustment('session', 1), membershipId: W36_ID.unknown })
+      await attempt(ADJUST, { ...adjustment('addon', 1), membershipId: W36_ID.unknown })
+    }),
+    f('credits-session-refused-unlimited-plan', async ({ attempt }) => {
+      await attempt(ADJUST, adjustment('session', 1))
+    }, sql('UPDATE membership_plans SET is_unlimited = true WHERE id = $1', [ID.plan])),
+    f('credits-session-refused-no-current-period', async ({ attempt }) => {
+      await attempt(ADJUST, adjustment('session', 1))
+    }, sql('DELETE FROM membership_credit_periods WHERE membership_id = $1', [ID.membership])),
+    // One credit used of 4: taking 4 away would leave 0 allocated, below the 1 used.
+    f('credits-session-refused-below-what-is-used', async ({ call, attempt }) => {
+      await call('createOrder', moCreditSeat)
+      await attempt(ADJUST, adjustment('session', -4))
+      await call(ADJUST, adjustment('session', -3))
+    }),
+    f('credits-session-up-and-down-with-the-history', async ({ call }) => {
+      await history(call)
+      await call(ADJUST, adjustment('session', 2))
+      await call(ADJUST, adjustment('session', -1, 'Added one too many'))
+      await history(call)
+    }),
+    f('credits-addon-up-and-down', async ({ call }) => {
+      await call(ADJUST, adjustment('addon', 3))
+      await call(ADJUST, adjustment('addon', -1, 'Added one too many'))
+      await history(call)
+    }),
+    // FB7: the session branch reads the allocation, then writes a fixed number.
+    f('fb7-two-session-adjustments-at-once-lose-one', async ({ call }) => {
+      await onceAfter(currentPeriodRead, () => call(ADJUST, adjustment('session', 2, 'Second tab')), () => call(ADJUST, adjustment('session', 1)))
+    }),
+    f('fb7-a-credit-booking-lands-between-the-check-and-the-write', async ({ call }) => {
+      // One credit allocated, none used. Staff take it away while a booking takes it: 0 allocated, 1 used.
+      await onceAfter(currentPeriodRead, () => call('createOrder', moCreditSeat), () => call(ADJUST, adjustment('session', -1)))
+    }, sql('UPDATE membership_credit_periods SET credits_allocated = 1 WHERE id = $1', [ID.creditPeriod])),
+    // FB8: the record is a second statement. It fails, the credits have moved, and the error invites a retry.
+    f('fb8-the-record-fails-after-the-credits-moved-then-retried', async ({ call, attempt, db }) => {
+      await whileFailing(db, adjustmentRow, () => attempt(ADJUST, adjustment('session', 2)))
+      await call(ADJUST, adjustment('session', 2))
+      await whileFailing(db, adjustmentRow, () => attempt(ADJUST, adjustment('addon', 2)))
+      await call(ADJUST, adjustment('addon', 2))
+    }),
+    // FB9: no press key. The same press again adds again.
+    f('fb9-the-same-adjustment-pressed-twice-adds-twice', async ({ call }) => {
+      await call(ADJUST, adjustment('session', 2))
+      await call(ADJUST, adjustment('session', 2))
+    }),
+    // FB10: add-on credits can go below zero, and the server takes an empty reason.
+    f('fb10-addon-credits-taken-below-zero', async ({ call }) => {
+      await call(ADJUST, adjustment('addon', -5))
+    }),
+    f('fb10-an-empty-reason-is-accepted', async ({ call }) => {
+      await call(ADJUST, adjustment('session', 1, ''))
+      await call(ADJUST, adjustment('addon', 1, '   '))
+    }),
+    // Herd. Mo is Herd by the automatic rule (a monthly member since January), with 2 add-on credits.
+    f('herd-refused-without-issue-refunds', async ({ attempt }) => {
+      await attempt(HERD, { membershipId: ID.membership, herd: false })
+    }, noIssueRefunds),
+    f('herd-refused-no-staff-record', async ({ attempt }) => {
+      await attempt(HERD, { membershipId: ID.membership, herd: false })
+    }, noStaffRecord),
+    f('herd-refused-unknown-membership', async ({ call }) => {
+      await call(HERD, { membershipId: W36_ID.unknown, herd: true })
+      await call(HERD, { membershipId: W36_ID.unknown, herd: null })
+    }),
+    f('herd-off-then-cleared-goes-back-to-the-automatic-rule', async ({ call }) => {
+      await call(HERD, { membershipId: ID.membership, herd: false })
+      await call(HERD, { membershipId: ID.membership, herd: null })
+    }),
+    // A member of ten days isn't Herd yet. On releases their add-on credits; cleared, the rule takes it away again.
+    f('herd-on-for-a-new-member-then-cleared', async ({ call }) => {
+      await call(HERD, { membershipId: ID.membership, herd: true })
+      await call(HERD, { membershipId: ID.membership, herd: null })
+    }, membershipIs("UPDATE customer_memberships SET start_date = '2026-11-01', is_herd = false WHERE id = $1")),
+    // FB11: clearing is two statements, and nothing records who changed Herd.
+    f('fb11-herd-clear-stops-before-the-automatic-rule-runs', async ({ call, attempt }) => {
+      await call(HERD, { membershipId: ID.membership, herd: true })
+      await whileUnreadable((statement) => statement.includes('refresh_herd_flags'), () => attempt(HERD, { membershipId: ID.membership, herd: null }))
+    }, membershipIs("UPDATE customer_memberships SET start_date = '2026-11-01', is_herd = false WHERE id = $1")),
+  ]
+
+  // --- Store credit (adjustCustomerStoreCredit). Sam has £30.
+
+  const CREDIT = 'adjustCustomerStoreCredit'
+  const storeCredit = (mode: string, amount: unknown, reason: unknown = 'Goodwill for a cold sauna') => ({ customerId: ID.customer, mode, amount, reason })
+
+  const storeCredits: Scenario[] = [
+    f('store-credit-refused-bad-params', async ({ call }) => {
+      await call(CREDIT, { ...storeCredit('add', 20), customerId: '' })
+      await call(CREDIT, storeCredit('give', 20))
+      for (const amount of [0, -5, '20', 0.004]) await call(CREDIT, storeCredit('add', amount))
+      for (const reason of ['', 'ok', '    ', null]) await call(CREDIT, storeCredit('add', 20, reason))
+    }),
+    f('store-credit-refused-without-issue-refunds', async ({ attempt }) => {
+      await attempt(CREDIT, storeCredit('add', 20))
+    }, noIssueRefunds),
+    f('store-credit-refused-no-staff-record', async ({ attempt }) => {
+      await attempt(CREDIT, storeCredit('add', 20))
+    }, noStaffRecord),
+    f('store-credit-refused-inactive-staff', async ({ attempt }) => {
+      await attempt(CREDIT, storeCredit('add', 20))
+    }, inactiveStaff),
+    f('store-credit-refused-unknown-customer', async ({ call }) => {
+      await call(CREDIT, { ...storeCredit('add', 20), customerId: W36_ID.unknown })
+    }),
+    f('store-credit-add', async ({ call }) => {
+      await call(CREDIT, storeCredit('add', 20))
+    }),
+    f('store-credit-remove', async ({ call }) => {
+      await call(CREDIT, storeCredit('remove', 10, '  Given by mistake  '))
+    }),
+    f('store-credit-remove-all-of-it', async ({ call }) => {
+      await call(CREDIT, storeCredit('remove', 30))
+    }),
+    f('store-credit-overdraw-refused', async ({ call }) => {
+      await call(CREDIT, storeCredit('remove', 30.01))
+    }),
+    f('store-credit-amount-rounded-to-the-penny', async ({ call }) => {
+      await call(CREDIT, storeCredit('add', 12.345))
+      await call(CREDIT, storeCredit('add', 0.005))
+    }),
+    // FB12: no press key. The same press again gives £20 again.
+    f('fb12-the-same-adjustment-pressed-twice-gives-twice', async ({ call }) => {
+      await call(CREDIT, storeCredit('add', 20))
+      await call(CREDIT, storeCredit('add', 20))
+    }),
+  ]
+
+  // --- Gift cards (extendGiftCardExpiry, setGiftCardPickedUp, setGiftCardShipped, getGiftCards, getGiftCardRedemptions)
+
+  const EXTEND = 'extendGiftCardExpiry'
+  const extend = (call: Call, extendByMonths: unknown, giftCardId: string = ID.giftCard) => call(EXTEND, { giftCardId, extendByMonths })
+  const cardIs = (statement: string): Prepare => sql(statement, [ID.giftCard])
+  const twoMoreCards: Prepare = async (db) => {
+    const base = { type: 'monetary', original_value: '25.00', remaining_balance: '25.00', origin: 'customer_purchase', expiry_date: '2029-01-01', purchaser_id: ID.customer }
+    await insert(db, 'gift_cards', { ...base, id: W36_ID.pickupCard, code: 'PICKUP01', fulfillment_method: 'pickup', recipient_name: 'Ali Pickup', recipient_email: 'ali@example.com' })
+    await insert(db, 'gift_cards', { ...base, id: W36_ID.shippedCard, code: 'SHIPPED1', fulfillment_method: 'shipping', recipient_name: 'Bo Shipped' })
+  }
+  const boughtCard = { giftCard: { giftCardPresetId: ID.giftCardPreset, fulfillmentMethod: 'digital' }, payment: { method: 'card' } }
+
+  const giftCards: Scenario[] = [
+    f('gift-card-extend-refused-without-issue-refunds', async ({ call }) => {
+      await extend(call, 6)
+    }, noIssueRefunds),
+    f('gift-card-extend-refused-no-staff-record', async ({ call }) => {
+      await extend(call, 6)
+    }, noStaffRecord),
+    f('gift-card-extend-refused-inactive-staff', async ({ attempt }) => {
+      await attempt(EXTEND, { giftCardId: ID.giftCard, extendByMonths: 6 })
+    }, inactiveStaff),
+    f('gift-card-extend-refused-months-not-a-whole-number-above-zero', async ({ call }) => {
+      for (const months of [0, -1, 1.5, '6']) await extend(call, months)
+    }),
+    f('gift-card-extend-refused-unknown-card', async ({ call }) => {
+      await extend(call, 6, W36_ID.unknown)
+    }),
+    f('gift-card-extend-an-active-card', async ({ call }) => {
+      await extend(call, 6)
+    }),
+    // Expired 9 days ago: a month from its old expiry is in date again.
+    f('gift-card-extend-a-card-that-has-just-expired', async ({ call }) => {
+      await extend(call, 1)
+    }, cardIs("UPDATE gift_cards SET expiry_date = '2026-11-01' WHERE id = $1")),
+    // Q33: a month on from 31 January is the month's last day (Postgres's own date sum).
+    f('gift-card-extend-from-the-31st-ends-on-the-months-last-day', async ({ call }) => {
+      await extend(call, 1)
+    }, cardIs("UPDATE gift_cards SET expiry_date = '2027-01-31' WHERE id = $1")),
+    // A card emptied into store credit and voided: Reactivate un-voids it (it holds £0).
+    f('gift-card-extend-a-voided-card-un-voids-it', async ({ call }) => {
+      await extend(call, 6)
+    }, cardIs("UPDATE gift_cards SET voided = true, remaining_balance = 0, redeemed_at = '2026-10-01 09:00:00+00' WHERE id = $1")),
+    // FB13: a £60 card whose order was refunded to the card is reactivated, and spent.
+    f('fb13-a-card-voided-by-its-refund-is-reactivated-and-spent', async ({ call, db }) => {
+      const placed = (await call('createOrder', { customerId: ID.customer, ...boughtCard })) as { orderId: string }
+      const line = await db.query<{ id: string }>("SELECT id FROM order_line_items WHERE order_id = $1::uuid AND item_type = 'gift_card'", [placed.orderId])
+      await call('refundOrder', { orderId: placed.orderId, lineItemIds: [line[0]?.id], refundMethod: 'card', restock: {} })
+      const card = await db.query<{ id: string }>('SELECT id FROM gift_cards WHERE id <> $1::uuid', [ID.giftCard])
+      const giftCardId = String(card[0]?.id)
+      await extend(call, 1, giftCardId)
+      await call('createOrder', { customerId: ID.member, booking: paidSeat([mo]), payment: { giftCard: { giftCardId, amount: 20 } } })
+    }),
+    // FB14: expired 14 months ago and extended by a month: still expired by 13, and the answer says it worked.
+    f('fb14-a-long-expired-card-is-still-expired-after-extend', async ({ call }) => {
+      await extend(call, 1)
+    }, cardIs("UPDATE gift_cards SET expiry_date = '2025-09-10' WHERE id = $1")),
+    // FB15: no press key, and nothing records who extended it.
+    f('fb15-extend-pressed-twice-adds-twice', async ({ call }) => {
+      await extend(call, 1)
+      await extend(call, 1)
+    }),
+    f('gift-card-picked-up-and-back', async ({ call }) => {
+      await call('setGiftCardPickedUp', { giftCardId: W36_ID.pickupCard, pickedUp: true })
+      await call('setGiftCardPickedUp', { giftCardId: W36_ID.pickupCard, pickedUp: false })
+    }, twoMoreCards),
+    f('gift-card-picked-up-refusals', async ({ call }) => {
+      await call('setGiftCardPickedUp', { giftCardId: W36_ID.unknown, pickedUp: true })
+      await call('setGiftCardPickedUp', { giftCardId: ID.giftCard, pickedUp: true })
+      await call('setGiftCardPickedUp', { giftCardId: W36_ID.shippedCard, pickedUp: true })
+    }, twoMoreCards),
+    f('gift-card-shipped-and-back', async ({ call }) => {
+      await call('setGiftCardShipped', { giftCardId: W36_ID.shippedCard, shipped: true })
+      await call('setGiftCardShipped', { giftCardId: W36_ID.shippedCard, shipped: false })
+    }, twoMoreCards),
+    f('gift-card-shipped-refusals', async ({ call }) => {
+      await call('setGiftCardShipped', { giftCardId: W36_ID.unknown, shipped: true })
+      await call('setGiftCardShipped', { giftCardId: ID.giftCard, shipped: true })
+      await call('setGiftCardShipped', { giftCardId: W36_ID.pickupCard, shipped: true })
+    }, twoMoreCards),
+    f('gift-card-flags-refused-inactive-staff', async ({ attempt }) => {
+      await attempt('setGiftCardPickedUp', { giftCardId: W36_ID.pickupCard, pickedUp: true })
+      await attempt('setGiftCardShipped', { giftCardId: W36_ID.shippedCard, shipped: true })
+    }, all(twoMoreCards, inactiveStaff)),
+    // Someone with no staff record can't set a flag (nobody to record), but can clear one.
+    f('gift-card-flags-with-no-staff-record', async ({ attempt }) => {
+      await attempt('setGiftCardPickedUp', { giftCardId: W36_ID.pickupCard, pickedUp: true })
+      await attempt('setGiftCardPickedUp', { giftCardId: W36_ID.pickupCard, pickedUp: false })
+      await attempt('setGiftCardShipped', { giftCardId: W36_ID.shippedCard, shipped: true })
+      await attempt('setGiftCardShipped', { giftCardId: W36_ID.shippedCard, shipped: false })
+    }, all(twoMoreCards, sql("UPDATE gift_cards SET picked_up = true, picked_up_at = '2026-11-09 09:00:00+00', picked_up_by = $1 WHERE id = $2", [ID.staff, W36_ID.pickupCard]), sql("UPDATE gift_cards SET shipped_at = '2026-11-09 09:00:00+00', shipped_by = $1 WHERE id = $2", [ID.staff, W36_ID.shippedCard]), noStaffRecord)),
+    f('gift-cards-list-and-search', async ({ call }) => {
+      await call('getGiftCards', {})
+      for (const search of ['pickup01', 'bo ship', 'ali@', 'sam@example', 'Test', 'nobody']) await call('getGiftCards', { search })
+    }, twoMoreCards),
+    f('gift-card-redemptions', async ({ call }) => {
+      // One use only: gift_card_redemptions has no created_at, so a recording reads its new rows by their random ids,
+      // and two in one scenario would come out in either order.
+      await call('getGiftCardRedemptions', { giftCardId: ID.giftCard })
+      await call('createOrder', { customerId: ID.customer, booking: paidSeat(), payment: { giftCard: { giftCardId: ID.giftCard, amount: 5 }, ...cash(15) } })
+      await call('getGiftCardRedemptions', { giftCardId: ID.giftCard })
+      await call('getGiftCardRedemptions', { giftCardId: W36_ID.unknown })
+    }),
+  ]
+
+  // --- Customers (createCustomer, getCustomers, getCustomerDetail) and the Subscriptions list (getSubscriptions)
+
+  const CREATE = 'createCustomer'
+  const dee = { firstName: 'Dee', lastName: 'Dale', email: 'dee@example.com', dateOfBirth: '1992-02-29' }
+
+  const customers: Scenario[] = [
+    f('create-customer', async ({ call }) => {
+      await call(CREATE, { firstName: '  Dee ', lastName: ' Dale ', email: '  Dee.Dale@Example.COM ', dateOfBirth: ' 1992-02-29 ', phone: ' 07700 900123 ' })
+      await call(CREATE, { ...dee, email: 'dee.two@example.com', phone: '   ' })
+    }),
+    f('create-customer-refused-missing-or-bad-fields', async ({ attempt }) => {
+      await attempt(CREATE, { ...dee, firstName: '  ' })
+      await attempt(CREATE, { ...dee, lastName: '' })
+      await attempt(CREATE, { ...dee, email: 'dee-at-example.com' })
+      await attempt(CREATE, { ...dee, email: '' })
+      await attempt(CREATE, { ...dee, dateOfBirth: '29/02/1992' })
+      await attempt(CREATE, { ...dee, dateOfBirth: '' })
+      await attempt(CREATE, { ...dee, dateOfBirth: '2027-01-01' })
+    }),
+    // 18 today is allowed; 18 tomorrow isn't.
+    f('create-customer-under-18-refused', async ({ attempt }) => {
+      await attempt(CREATE, { ...dee, dateOfBirth: '2008-11-11' })
+      await attempt(CREATE, { ...dee, dateOfBirth: '2008-11-10' })
+    }),
+    f('create-customer-duplicate-email-refused', async ({ attempt }) => {
+      await attempt(CREATE, { ...dee, email: 'sam@example.com' })
+      await attempt(CREATE, { ...dee, email: ' SAM@Example.com' })
+    }),
+    // A date the calendar doesn't have gets past the function's own check and is refused by the database, in its words.
+    f('create-customer-a-date-that-does-not-exist', async ({ attempt }) => {
+      await attempt(CREATE, { ...dee, dateOfBirth: '1990-02-30' })
+    }),
+    f('create-customer-refused-inactive-staff', async ({ attempt }) => {
+      await attempt(CREATE, dee)
+    }, inactiveStaff),
+    // FB21: nothing records who created a customer, so someone with no staff record can; and another writer (the
+    // website) can add the same email in another case beside it.
+    f('fb21-create-customer-with-no-staff-record', async ({ attempt }) => {
+      await attempt(CREATE, dee)
+    }, noStaffRecord),
+    f('fb21-the-same-email-in-another-case-added-by-another-writer', async ({ attempt, db }) => {
+      await insert(db, 'customers', { first_name: 'Sam', last_name: 'Again', email: 'SAM@example.com', date_of_birth: '1990-01-01' })
+      await attempt(CREATE, { ...dee, email: 'Sam@Example.com' })
+    }),
+    f('customers-list-and-search', async ({ call }) => {
+      await call('getCustomers', {})
+      await call('getCustomers', { customerId: ID.customer })
+      await call('getCustomers', { customerId: W36_ID.unknown })
+      for (const search of ['sam test', 'test sam', 'MO@', 'example.com', 'member mo x', '  ']) await call('getCustomers', { search })
+    }),
+    f('customer-detail', async ({ call, db }) => {
+      // Mo: a membership, a credit booking waiting for payment, an event place and a store credit movement. Sam: a pass.
+      const seat = (await call('createOrder', moCreditSeat)) as { bookingId: string }
+      await db.query("UPDATE bookings SET status = 'payment_needed', payment_due_by = now() + interval '1 day' WHERE id = $1", [seat.bookingId])
+      await call('createOrder', { customerId: ID.member, event: { eventId: ID.event, accountHolderAttending: true, attendees: [{ ...mo, isAccountHolder: true }] }, payment: cash(20) })
+      await call('adjustCustomerStoreCredit', { customerId: ID.member, mode: 'add', amount: 15, reason: 'Goodwill for a cold sauna' })
+      await call('getCustomerDetail', { customerId: ID.member })
+      await call('getCustomerDetail', { customerId: ID.customer })
+      await call('getCustomerDetail', { customerId: W36_ID.unknown })
+    }, moSubscribed),
+    f('subscriptions-list-and-search', async ({ call }) => {
+      await call('getSubscriptions', {})
+      for (const search of ['mo member', 'core', 'sam', 'nobody']) await call('getSubscriptions', { search })
+    }, all(moSubscribed, seedExhaustedMembership)),
+    // The Subscriptions list and the customer's profile carry the payment date button's refusal.
+    f('membership-reads-carry-the-payment-date-refusal', async ({ call }) => {
+      await call('getSubscriptions', {})
+      await call('getCustomerDetail', { customerId: ID.member })
+      await call(SET, { membershipId: ID.membership, cancel: true })
+      await call('getSubscriptions', {})
+      await call('getCustomerDetail', { customerId: ID.member })
+    }, moSubscribed),
+    // FB16: none of the reads checks the staff member.
+    f('fb16-every-read-answers-an-inactive-staff-member', async ({ call }) => {
+      await call('getCustomers', { search: 'sam' })
+      await call('getCustomerDetail', { customerId: ID.customer })
+      await call('getSubscriptions', {})
+      await call('getGiftCards', {})
+      await call('getGiftCardRedemptions', { giftCardId: ID.giftCard })
+      await call('getMembershipCreditAdjustments', { membershipId: ID.membership })
+      await call('getMembershipPaymentDateQuote', { membershipId: ID.membership })
+    }, all(moSubscribed, inactiveStaff)),
+  ]
+
+  // --- The lapse sweep (the database's lapse_sweep_expired_bookings, run hourly by run_membership_maintenance)
+
+  /** Mo's credit booking, flagged payment needed, with its deadline a minute ago (or still to come). */
+  const paymentNeeded = async (db: Db, bookingId: string, due = "now() - interval '1 minute'") => {
+    // Test data only: `due` is one of two literals.
+    const statement = `UPDATE bookings SET status = 'payment_needed', payment_due_by = ${due} WHERE id = $1`
+    await db.query(statement, [bookingId])
+  }
+  const booked = async (call: Call, params: Record<string, unknown>) => String(((await call('createOrder', params)) as { bookingId?: string }).bookingId ?? '')
+
+  const lapses: Scenario[] = [
+    f('lapse-sweep-a-booking-with-nothing-paid-is-cancelled', async ({ call, db }) => {
+      await paymentNeeded(db, await booked(call, moCreditSeat))
+      await runLapseSweep(db)
+    }),
+    f('lapse-sweep-leaves-a-booking-whose-deadline-has-not-passed', async ({ call, db }) => {
+      await paymentNeeded(db, await booked(call, moCreditSeat), "now() + interval '1 hour'")
+      await runLapseSweep(db)
+    }),
+    // FB18 (N8): a paid guest beside the credit seat. The booking never lapses and holds its two places.
+    f('fb18-lapse-sweep-never-lapses-a-booking-with-a-paid-guest', async ({ call, db }) => {
+      await paymentNeeded(db, await booked(call, { customerId: ID.member, booking: { ...paidSeat([mo, alex]), ...memberCredit }, payment: cash(20) }))
+      await runLapseSweep(db)
+    }),
+    // FB19: a credit seat with a paid towel. The seat has nothing paid on it, so it lapses, and the £5 is kept.
+    f('fb19-lapse-sweep-cancels-a-credit-booking-and-keeps-its-paid-add-on', async ({ call, db }) => {
+      await paymentNeeded(db, await booked(call, { customerId: ID.member, booking: { ...paidSeat([mo]), ...memberCredit, addons: [{ ...towel, redemptionSource: 'paid' }] }, payment: cash(5) }))
+      await runLapseSweep(db)
+    }),
+  ]
+
+  return [...cancels, ...paymentDates, ...credits, ...storeCredits, ...giftCards, ...customers, ...lapses]
 }

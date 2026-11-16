@@ -19,6 +19,11 @@ const ROUTES: Record<string, () => Promise<unknown>> = {
   // W34: deleted from app/; the test-only copies of the old step D and step E functions still call them.
   '/api/payments/refund-order': () => import('../legacy-order/routes/payments/refund-order/route'),
   '/api/memberships/cancel-subscription': () => import('../legacy-order/routes/memberships/cancel-subscription/route'),
+  // W36: the three legacy membership routes the old step F functions call, from the frozen copy made while they are
+  // still in app/ (legacy-account/README.md), so step F's golden files keep replaying when W44 deletes them there.
+  '/api/memberships/cancel': () => import('../legacy-account/routes/memberships/cancel/route'),
+  '/api/memberships/undo-cancel': () => import('../legacy-account/routes/memberships/undo-cancel/route'),
+  '/api/memberships/change-payment-date': () => import('../legacy-account/routes/memberships/change-payment-date/route'),
   // W16: deleted from app/; the test-only copy of the old order code still calls them (legacy-order/README.md).
   '/api/memberships/create-subscription': () => import('../legacy-order/routes/memberships/create-subscription/route'),
   '/api/terminal/resolve-saved-card': () => import('../legacy-order/routes/terminal/resolve-saved-card/route'),

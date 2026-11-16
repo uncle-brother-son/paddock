@@ -1,0 +1,61 @@
+{
+  "scenario": "w36-gift-card-shipped-and-back",
+  "results": [
+    {
+      "updated": true,
+      "giftCard": {
+        "id": "10000000-0000-4000-8000-000000000f32",
+        "code": "SHIPPED1",
+        "type": "monetary",
+        "original_value": "25.00",
+        "remaining_balance": "25.00",
+        "purchaser_id": "10000000-0000-4000-8000-000000000005",
+        "recipient_name": "Bo Shipped",
+        "recipient_email": null,
+        "gift_message": null,
+        "origin": "customer_purchase",
+        "issue_date": "2026-11-10",
+        "expiry_date": "2029-01-01",
+        "redeemed_at": null,
+        "created_at": "<time>",
+        "updated_at": "<time>",
+        "fulfillment_method": "shipping",
+        "picked_up": false,
+        "picked_up_at": null,
+        "picked_up_by": null,
+        "voided": false,
+        "shipped_at": "<time>",
+        "shipped_by": "10000000-0000-4000-8000-000000000001"
+      }
+    },
+    {
+      "updated": true,
+      "giftCard": {
+        "id": "10000000-0000-4000-8000-000000000f32",
+        "code": "SHIPPED1",
+        "type": "monetary",
+        "original_value": "25.00",
+        "remaining_balance": "25.00",
+        "purchaser_id": "10000000-0000-4000-8000-000000000005",
+        "recipient_name": "Bo Shipped",
+        "recipient_email": null,
+        "gift_message": null,
+        "origin": "customer_purchase",
+        "issue_date": "2026-11-10",
+        "expiry_date": "2029-01-01",
+        "redeemed_at": null,
+        "created_at": "<time>",
+        "updated_at": "<time>",
+        "fulfillment_method": "shipping",
+        "picked_up": false,
+        "picked_up_at": null,
+        "picked_up_by": null,
+        "voided": false,
+        "shipped_at": null,
+        "shipped_by": null
+      }
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

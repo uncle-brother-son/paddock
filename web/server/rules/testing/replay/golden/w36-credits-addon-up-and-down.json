@@ -1,0 +1,83 @@
+{
+  "scenario": "w36-credits-addon-up-and-down",
+  "results": [
+    {
+      "adjusted": true,
+      "addon_credits_remaining": 5
+    },
+    {
+      "adjusted": true,
+      "addon_credits_remaining": 4
+    },
+    [
+      {
+        "id": "membership_credit_adjustments#2",
+        "membership_id": "10000000-0000-4000-8000-000000000010",
+        "credit_type": "addon",
+        "amount": -1,
+        "reason": "Added one too many",
+        "staff_id": "10000000-0000-4000-8000-000000000001",
+        "created_at": "<time>",
+        "staff_first_name": "Jo",
+        "staff_last_name": "Staff",
+        "staff_email": "jo@example.com",
+        "staff_role": "admin"
+      },
+      {
+        "id": "membership_credit_adjustments#1",
+        "membership_id": "10000000-0000-4000-8000-000000000010",
+        "credit_type": "addon",
+        "amount": 3,
+        "reason": "Goodwill after a cold sauna",
+        "staff_id": "10000000-0000-4000-8000-000000000001",
+        "created_at": "<time>",
+        "staff_first_name": "Jo",
+        "staff_last_name": "Staff",
+        "staff_email": "jo@example.com",
+        "staff_role": "admin"
+      }
+    ]
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "customer_memberships": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000010",
+          "addon_credits_remaining": [
+            2,
+            4
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    },
+    "membership_credit_adjustments": {
+      "added": [
+        {
+          "id": "membership_credit_adjustments#1",
+          "membership_id": "10000000-0000-4000-8000-000000000010",
+          "credit_type": "addon",
+          "amount": 3,
+          "reason": "Goodwill after a cold sauna",
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "created_at": "<set>"
+        },
+        {
+          "id": "membership_credit_adjustments#2",
+          "membership_id": "10000000-0000-4000-8000-000000000010",
+          "credit_type": "addon",
+          "amount": -1,
+          "reason": "Added one too many",
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "scenario": "w36-cancel-refused-inactive-staff",
+  "results": [
+    {
+      "thrown": "This staff account is inactive. Ask an admin to reactivate it."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

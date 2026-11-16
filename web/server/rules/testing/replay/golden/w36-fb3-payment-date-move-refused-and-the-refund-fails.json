@@ -1,0 +1,77 @@
+{
+  "scenario": "w36-fb3-payment-date-move-refused-and-the-refund-fails",
+  "results": [
+    {
+      "changed": false,
+      "message": "This subscription cannot be updated right now.. The £21.94 charge (pi_fake_0003) could not be refunded automatically (An error occurred with our API.): refund it in Stripe."
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "subscriptions.retrieve",
+      "params": {
+        "id": "sub_mo"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "paymentIntents.create",
+      "params": {
+        "amount": 2194,
+        "currency": "gbp",
+        "customer": "cus_member",
+        "payment_method": "pm_member",
+        "off_session": true,
+        "confirm": true,
+        "description": "Payment date change: 17 extra days",
+        "metadata": {
+          "purpose": "membership_payment_date_change",
+          "stripe_subscription_id": "sub_mo",
+          "membership_id": "10000000-0000-4000-8000-000000000010",
+          "new_renewal_date": "2026-12-27"
+        }
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "subscriptions.update",
+      "params": {
+        "id": "sub_mo",
+        "trial_end": 1798329600,
+        "proration_behavior": "none"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "refunds.create",
+      "params": {
+        "payment_intent": "pi_fake_0003"
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {
+    "membership_payment_date_changes": {
+      "added": [
+        {
+          "id": "membership_payment_date_changes#1",
+          "membership_id": "10000000-0000-4000-8000-000000000010",
+          "old_renewal_date": "2026-12-10",
+          "new_renewal_date": "2026-12-27",
+          "extra_days": 17,
+          "amount_charged": "21.94",
+          "stripe_payment_intent_id": null,
+          "order_id": null,
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "override_reason": null,
+          "status": "failed",
+          "failure_message": "This subscription cannot be updated right now.. The £21.94 charge (pi_fake_0003) could not be refunded automatically (An error occurred with our API.): refund it in Stripe.",
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

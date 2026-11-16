@@ -1,0 +1,20 @@
+{
+  "scenario": "w36-cancel-stripe-went-then-the-database-write-fails",
+  "results": [
+    {
+      "updated": false,
+      "message": "Failed to update membership record"
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "subscriptions.update",
+      "params": {
+        "id": "sub_mo",
+        "cancel_at": 1796860800
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {}
+}

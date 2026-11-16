@@ -1,0 +1,30 @@
+{
+  "scenario": "w36-gift-card-extend-from-the-31st-ends-on-the-months-last-day",
+  "results": [
+    {
+      "updated": true,
+      "giftCard": {
+        "id": "10000000-0000-4000-8000-000000000009",
+        "expiry_date": "2027-02-28",
+        "voided": false
+      }
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "gift_cards": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000009",
+          "expiry_date": [
+            "2027-01-31",
+            "2027-02-28"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

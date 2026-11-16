@@ -1,0 +1,41 @@
+{
+  "scenario": "w36-cancel-monthly-after-the-minimum-term",
+  "results": [
+    {
+      "updated": true,
+      "membership": {
+        "id": "10000000-0000-4000-8000-000000000010",
+        "cancel_effective_date": "2026-12-09",
+        "billing_frequency": "monthly"
+      },
+      "endDate": "2026-12-10",
+      "stripeUpdated": true
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "subscriptions.update",
+      "params": {
+        "id": "sub_mo",
+        "cancel_at": 1796860800
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {
+    "customer_memberships": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000010",
+          "cancel_effective_date": [
+            null,
+            "2026-12-09"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

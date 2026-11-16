@@ -109,6 +109,26 @@ W16 removed the dry run (`dryRunOrder` and `POST /api/v1/staff/orders/dry-run`),
 parity route with it. `order-rows.ts` (the read-back) stays for the tests. `parity_log` and its 30-day purge stay in
 the database until step H; nothing writes to it any more.
 
+## Step F's foundations (W36)
+
+Step F (the staff app's `briefs/F-plan.md`) moves the membership, customer, store credit and gift card actions here,
+slice by slice (W37 to W43). W36 adds what they share, with nothing switched on and no route:
+
+- `contracts/account.ts`: every F route's input and output, in the old functions' field names.
+- `memberships/failure-messages.ts`, `customers/failure-messages.ts`, `gift-cards/failure-messages.ts`: every word
+  staff see from those actions, moved word for word and held to the old code by the test beside each.
+- `memberships/membership-switch.ts`: the `membership_changes` kind of `ORDER_SWITCH`, for the three actions that
+  touch Stripe (cancel and undo, the payment date change, moving memberships to a replaced card). Off until the lead
+  adds it; off answers `MEMBERSHIP_PATH_OFF`.
+- `memberships/left.ts`: a Stripe step left to do after the database change, for the two steps that are safe to
+  repeat (a subscription's cancel date set or cleared; its card). Written in the action's transaction as a
+  `membership.step_left` audit row (no new table), read before it is sent, sent again by reconcile every run, and
+  closed by a `done` row. A step Stripe refuses for good gets a `refused` row: it is then listed for a person on the
+  stuck list (`steps`) and never sent again, until someone marks it sorted (the manual close's `left_step`). The
+  newest step for a subscription and kind closes an older open one as `replaced`. Nothing here charges or refunds.
+  W29's left cancel of a refunded membership's subscription (`orders/refund-subscription.ts`) ends the same way from
+  W36: refused for good on reconcile's retry, it is recorded as `refused`, listed with its own words and not retried.
+
 ## The reader: T1, the intent, finalise and cancel (W11)
 
 A reader order runs the same pipeline, with the screen collecting between the intent and T2:

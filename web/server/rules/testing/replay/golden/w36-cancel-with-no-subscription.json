@@ -1,0 +1,25 @@
+{
+  "scenario": "w36-cancel-with-no-subscription",
+  "results": [
+    {
+      "updated": true,
+      "membership": {
+        "id": "10000000-0000-4000-8000-000000000010",
+        "cancel_effective_date": "2026-12-09",
+        "billing_frequency": "monthly"
+      },
+      "endDate": "2026-12-10",
+      "stripeUpdated": false
+    },
+    {
+      "updated": true,
+      "membership": {
+        "id": "10000000-0000-4000-8000-000000000010",
+        "cancel_effective_date": null,
+        "billing_frequency": "monthly"
+      }
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

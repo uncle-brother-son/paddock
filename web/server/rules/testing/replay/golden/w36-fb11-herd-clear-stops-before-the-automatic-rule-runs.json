@@ -1,0 +1,36 @@
+{
+  "scenario": "w36-fb11-herd-clear-stops-before-the-automatic-rule-runs",
+  "results": [
+    {
+      "updated": true,
+      "membership": {
+        "id": "10000000-0000-4000-8000-000000000010",
+        "plan_name": "Core",
+        "subscription_status": "active",
+        "is_herd": true,
+        "herd_override": true,
+        "addon_credits_remaining": 2
+      }
+    },
+    {
+      "thrown": "connection lost"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "customer_memberships": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000010",
+          "is_herd": [
+            false,
+            true
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

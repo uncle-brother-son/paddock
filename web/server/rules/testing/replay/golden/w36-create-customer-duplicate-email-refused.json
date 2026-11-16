@@ -1,0 +1,13 @@
+{
+  "scenario": "w36-create-customer-duplicate-email-refused",
+  "results": [
+    {
+      "thrown": "A customer with this email address already exists"
+    },
+    {
+      "thrown": "A customer with this email address already exists"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

@@ -58,8 +58,11 @@ export const changedElsewhereFindingSchema = z.object({
 export type ChangedElsewhereFindingOutput = z.infer<typeof changedElsewhereFindingSchema>
 
 export const reconcileItemSchema = z.object({
-  /** W21: `claim` is a booking refund's claim (server/rules/bookings/refunds.ts) held for reconcile. W28: or an order refund's. */
-  kind: z.enum(['order', 'flow', 'refund', 'claim']),
+  /**
+   * W21: `claim` is a booking refund's claim (server/rules/bookings/refunds.ts) held for reconcile. W28: or an order refund's.
+   * W36: `step` is a membership's Stripe step left after its database change (server/rules/memberships/left.ts).
+   */
+  kind: z.enum(['order', 'flow', 'refund', 'claim', 'step']),
   id: z.string(),
   outcome: z.enum(['finalised', 'undone', 'settled_elsewhere', 'refund_pending', 'refund_confirmed', 'refund_failed', 'left']),
   reason: z.string().optional(),
@@ -108,8 +111,10 @@ export type ReconcileRunOutput = z.infer<typeof reconcileRunOutputSchema>
  * - `refund_watch` (W32): a card refund Stripe accepted and then failed, or one still pending when its watch ran out
  *   (`watched` on the list): recorded as sorted once a person has dealt with it. Nothing moves. `orderId` is the
  *   watch's id.
+ * - `left_step` (W36, F-plan 4.10, lead call L7): a membership's Stripe step that Stripe refused for good (`steps` on
+ *   the list): recorded as sorted once a person has put Stripe right by hand. Nothing moves. `orderId` is the step's id.
  */
-export const stuckCloseKindSchema = z.enum(['held_order', 'changed_elsewhere', 'subscription_left', 'late_refund', 'held_flow', 'held_claim', 'refund_watch'])
+export const stuckCloseKindSchema = z.enum(['held_order', 'changed_elsewhere', 'subscription_left', 'late_refund', 'held_flow', 'held_claim', 'refund_watch', 'left_step'])
 export type StuckCloseKind = z.infer<typeof stuckCloseKindSchema>
 
 export const stuckCloseTargetSchema = z.object({
@@ -228,6 +233,26 @@ export const stuckWatchedSchema = z.object({
 })
 export type StuckWatchedOutput = z.infer<typeof stuckWatchedSchema>
 
+/**
+ * W36 (F-plan 4.10): a membership's Stripe step left to do after its database change (a cancel date set or cleared,
+ * or its subscription moved to a replaced card): still being sent by the automatic check (`left`), or refused by
+ * Stripe for good and listed for a person (`refused`, with `close`).
+ */
+export const stuckStepSchema = z.object({
+  stepId: z.string(),
+  membershipId: z.string(),
+  subscriptionId: z.string(),
+  /** What the step sets on the subscription. */
+  step: z.enum(['cancel_at', 'payment_method']),
+  customerId: z.string().nullable(),
+  customerName: z.string().nullable(),
+  state: z.enum(['left', 'refused']),
+  at: z.string(),
+  words: z.string(),
+  close: stuckCloseTargetSchema.optional(),
+})
+export type StuckStepOutput = z.infer<typeof stuckStepSchema>
+
 export const stuckListOutputSchema = z.object({
   checkout: z.array(stuckOrderSchema),
   flows: z.array(stuckFlowSchema),
@@ -240,6 +265,11 @@ export const stuckListOutputSchema = z.object({
    * app published before W32 (which copies the fields it knows) reads the list exactly as before.
    */
   watched: z.array(stuckWatchedSchema),
+  /**
+   * W36: memberships' Stripe steps left to do. A field of its own, as `watched`: the staff app published before the
+   * slice that shows it reads the list exactly as before. None can exist until W40.
+   */
+  steps: z.array(stuckStepSchema),
   alert: z.object({ at: z.string(), words: z.string() }).nullable(),
 })
 export type StuckListOutput = z.infer<typeof stuckListOutputSchema>

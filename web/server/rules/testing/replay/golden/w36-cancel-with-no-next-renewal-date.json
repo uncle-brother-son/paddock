@@ -1,0 +1,11 @@
+{
+  "scenario": "w36-cancel-with-no-next-renewal-date",
+  "results": [
+    {
+      "updated": false,
+      "message": "Internal server error: Cannot read properties of null (reading 'split')"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

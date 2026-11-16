@@ -57,6 +57,30 @@ export function unionMembers(file: string, typeName: string): string[] {
   return members
 }
 
+/**
+ * W36: the string members of a property's type inside an interface (`reason?: 'a' | 'b'` in a result's interface),
+ * in source order: how the old step F functions declare their reasons. A single literal counts as a union of one.
+ */
+export function propertyUnionMembers(file: string, interfaceName: string, property: string): string[] {
+  const members: string[] = []
+  readSource(file).forEachChild(function visit(node) {
+    if (ts.isInterfaceDeclaration(node) && node.name.text === interfaceName) {
+      for (const member of node.members) {
+        if (!ts.isPropertySignature(member) || !ts.isIdentifier(member.name) || member.name.text !== property || !member.type) continue
+        const collect = (type: ts.TypeNode): void => {
+          if (ts.isUnionTypeNode(type)) type.types.forEach(collect)
+          else if (ts.isLiteralTypeNode(type) && ts.isStringLiteral(type.literal)) members.push(type.literal.text)
+          else throw new Error(`${interfaceName}.${property} has a member that isn't a string literal`)
+        }
+        collect(member.type)
+      }
+    }
+    node.forEachChild(visit)
+  })
+  if (members.length === 0) throw new Error(`${interfaceName}.${property} isn't a union of strings in ${file}`)
+  return members
+}
+
 /** Every string a file's source holds between quotes of any kind, for "the dialog still says this" checks. */
 export function sourceHolds(file: string, words: string): boolean {
   const source = readFileSync(file, 'utf8')

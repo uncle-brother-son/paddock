@@ -1,0 +1,12 @@
+{
+  "scenario": "w36-store-credit-overdraw-refused",
+  "results": [
+    {
+      "ok": false,
+      "reason": "insufficient_store_credit",
+      "message": "Removing that much would take the balance below zero — the adjustment was refused."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

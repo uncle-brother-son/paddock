@@ -1,0 +1,20 @@
+{
+  "scenario": "w36-cancel-refused-by-stripe",
+  "results": [
+    {
+      "updated": false,
+      "message": "This subscription cannot be updated right now."
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "subscriptions.update",
+      "params": {
+        "id": "sub_mo",
+        "cancel_at": 1796860800
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {}
+}

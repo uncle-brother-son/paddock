@@ -1,0 +1,13 @@
+{
+  "scenario": "w36-credits-refused-unknown-membership",
+  "results": [
+    {
+      "thrown": "Membership not found."
+    },
+    {
+      "thrown": "Membership not found."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

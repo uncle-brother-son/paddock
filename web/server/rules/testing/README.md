@@ -353,6 +353,52 @@ straight after the cancel, where it would land; the real races are `events/cance
 
 W30 and W31 have each added theirs for the event cancellations.
 
+### Step F's side (W36)
+
+`legacy-account/` is a fourth frozen test-only copy (its README): the staff app's sixteen old step F functions
+(the membership cancel, payment date change and its quote, credit and Herd adjustments, the Subscriptions list,
+creating, listing and reading a customer, the store credit adjustment, and the five gift card functions) and every
+module they import, byte for byte at staff app `cec4ef1`, and the three legacy membership routes they call
+(`/api/memberships/cancel`, `/undo-cancel`, `/change-payment-date`, with the cancel's date sum), copied from `app/`
+at Worker `982db8f` while they are still live there (they stay until W44). `oldFunctionPath` loads the sixteen from it,
+`legacy-routes.ts` binds the three routes to it, and `frozen-account-code.test.ts` keeps it as frozen and out of reach
+of app code. Two import lines in the route copy are repointed so it stands alone (its README).
+
+The `w36-*` scenarios (137, `w36Scenarios()` at the end of `scenarios.ts`) are step F's golden files, recorded from the
+old code while it exists (F-plan 4.12 item 1): every refusal and each success of the cancel and undo (inside and after
+the minimum term, yearly, with no subscription, Stripe refusing, the write failing, an answer lost); the payment date
+change (every refusal of the quote in the old order, the window, the six-month rule and its override, each check the
+legacy route makes against Stripe, a decline, the date move refused with its refund); credits up and down on both
+kinds; Herd on, off and cleared; store credit added, removed and overdrawn; a gift card extended while active, just
+expired, long expired and voided, picked up and shipped both ways; a customer created, a duplicate, under 18; each
+read's shape; the database's own lapse sweep (`runLapseSweep`: the function the hourly job calls, run as the table
+owner); and today's outcome for the plan's bugs FB1 to FB16, FB18, FB19 and FB21 (`w36-fb1-…` and so on).
+`replay.test.ts` holds each to its file as it does every scenario. `w36.test.ts` says in pounds and pence what each
+one proves (`w36-what-each-proves.ts`, written from the golden files with `W36_OUTCOMES_OUT=<file>` and read through),
+that the list covers every reason and every bug named, and that a deliberate difference is caught and an allowance
+nobody needs fails. `w36-contracts.test.ts` runs them all once more and holds `contracts/account.ts` to what the old
+functions take and give. The sweep in `w05d.test.ts` lists the seven lines six of them break on purpose
+(`W36_KNOWN_FAULTS`: a payment date charge that is on no order).
+
+What can't be recorded, and the W36 report says why: FB17 and Q19 (the saved card is already the Worker's own code,
+so there is no old function: `server/rules/payments/terminal-today.test.ts` holds what it does today); FB20 (the
+legacy routes take the shared key alone: the functions always check the staff member first); the words between Retool
+and the Worker ("returned an HTML page", "did not report success"); and the refusals the functions can't reach
+("Could not work out the part-month charge.", the route's own checks of the membership row, a payment that "did not
+complete", store credit's "The adjustment was refused.").
+
+Keep to one new `gift_card_redemptions` row in a scenario. That table has no `created_at` (its time column is
+`redeemed_at`), so a recording reads its new rows by primary key alone, a random id: two in one scenario come out in
+either order, and the scenario then fails now and then (W36's `w36-gift-card-redemptions` did, once, before it was cut
+to one). `compare.ts`'s `TABLES` shows which column each table is read by.
+
+Three scenario helpers are new: `onceAfter` (another tab's work between two of a function's statements), FB1's
+`workerDyingAfterTheCharge` (the legacy route stops dead once the card is charged: nothing after it reaches Stripe and
+the function gets no answer), and `FakeStripe.setSubscription` (a subscription as Stripe might already hold it, with no
+call recorded). The fake models `subscriptions.update` for exactly what the membership actions send: `cancel_at` (set,
+or `''` to clear), `trial_end` with `proration_behavior: 'none'`, and `default_payment_method`; a cancelled
+subscription refuses any of them.
+
 ### Migration 023 and the saved schema (W27)
 
 `supabase/migrations/023_orders_refund_owed_and_cash_refunds.sql` is written but **not applied to live**: the lead

@@ -1,0 +1,28 @@
+{
+  "scenario": "w36-create-customer-refused-missing-or-bad-fields",
+  "results": [
+    {
+      "thrown": "First name is required"
+    },
+    {
+      "thrown": "Last name is required"
+    },
+    {
+      "thrown": "A valid email address is required"
+    },
+    {
+      "thrown": "A valid email address is required"
+    },
+    {
+      "thrown": "A valid date of birth is required"
+    },
+    {
+      "thrown": "A valid date of birth is required"
+    },
+    {
+      "thrown": "Date of birth cannot be in the future"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

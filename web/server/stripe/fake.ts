@@ -157,6 +157,14 @@ interface FakeSubscription {
   /** W13: the mode of the key it was made with, as an intent's (W11a). */
   livemode: boolean
   created: number
+  /** W36: when it is set to end (a scheduled cancellation), in seconds; null when none is set. */
+  cancel_at: number | null
+  /** W36: the end of a no-charge period set on it (a payment date change), in seconds; null when none. */
+  trial_end: number | null
+  /** W36: the moment its billing periods are counted from. */
+  billing_cycle_anchor: number
+  /** W36: the card its invoices are charged to; null means the customer's own default. */
+  default_payment_method: string | null
 }
 
 interface FakeInvoice {
@@ -292,7 +300,34 @@ export class FakeStripe implements StripeClient {
       invoice,
       livemode: this.keyLivemode === true,
       created: start,
+      cancel_at: null,
+      trial_end: null,
+      billing_cycle_anchor: start,
+      default_payment_method: null,
     })
+  }
+
+  /**
+   * W36: what a subscription is set to, for tests: its scheduled end, its no-charge period's end, its current
+   * period's end (all in seconds) and the card it charges.
+   */
+  subscriptionSettings(id: string): { status: Stripe.Subscription.Status; cancelAt: number | null; trialEnd: number | null; periodEnd: number | null; defaultPaymentMethod: string | null } | null {
+    const sub = this.subs.get(id)
+    return sub
+      ? { status: sub.status, cancelAt: sub.cancel_at, trialEnd: sub.trial_end, periodEnd: sub.items.data[0]?.current_period_end ?? null, defaultPaymentMethod: sub.default_payment_method }
+      : null
+  }
+
+  /**
+   * W36: a subscription as Stripe might already hold it, set up for a test with no call recorded: its status, a
+   * scheduled end, or its current period's end (all times in seconds).
+   */
+  setSubscription(id: string, fields: { status?: Stripe.Subscription.Status; cancelAt?: number | null; periodEnd?: number }): void {
+    const sub = this.subs.get(id)
+    if (!sub) throw new Error(`The fake has no subscription ${id}.`)
+    if (fields.status !== undefined) sub.status = fields.status
+    if (fields.cancelAt !== undefined) sub.cancel_at = fields.cancelAt
+    if (fields.periodEnd !== undefined) for (const item of sub.items.data) item.current_period_end = fields.periodEnd
   }
 
   /** Stripe keeps a key for at least 24 hours, then may drop it: a repeat after that is a new
@@ -681,7 +716,20 @@ export class FakeStripe implements StripeClient {
   private publicSubscription(sub: FakeSubscription, expand: readonly string[] | undefined) {
     const { invoice, ...rest } = sub
     const expanded = expand?.includes('latest_invoice.payments') || expand?.includes('data.latest_invoice.payments')
-    return { ...rest, latest_invoice: expanded ? invoice : invoice.id }
+    // W36: each item with its price as Stripe shows it (what it takes and how often) and its quantity, which the
+    // payment date change reads; and whether it ends at the period's end (never set by anything here).
+    const items = {
+      data: sub.items.data.map((item) => {
+        const price = this.pricesById.get(item.price.id)
+        const recurring = price?.['recurring'] as { interval: string } | null | undefined
+        return {
+          ...item,
+          quantity: 1,
+          price: { id: item.price.id, unit_amount: price ? Number(price['unit_amount']) : null, recurring: recurring ? { interval: recurring.interval, interval_count: 1 } : null },
+        }
+      }),
+    }
+    return { ...rest, items, cancel_at_period_end: false, latest_invoice: expanded ? invoice : invoice.id }
   }
 
   /** As Stripe: a subscription made in the other mode is answered as missing (W13, as an intent, W11a). */
@@ -745,6 +793,10 @@ export class FakeStripe implements StripeClient {
           invoice,
           livemode: this.keyLivemode === true,
           created: start,
+          cancel_at: null,
+          trial_end: null,
+          billing_cycle_anchor: start,
+          default_payment_method: typeof params.default_payment_method === 'string' ? params.default_payment_method : null,
         }
         this.subs.set(sub.id, sub)
         return this.publicSubscription(sub, params.expand)
@@ -753,6 +805,44 @@ export class FakeStripe implements StripeClient {
     // W13: read back, with its first invoice when asked (`latest_invoice.payments`).
     retrieve: (id, params) =>
       this.run('subscriptions.retrieve', { id, ...params }, undefined, () => this.publicSubscription(this.sub(id), params?.expand)) as unknown as Promise<Stripe.Subscription>,
+
+    // W36: the three changes the membership actions make, and nothing else. `cancel_at` sets when it ends ('' clears
+    // it); `trial_end` with `proration_behavior: 'none'` starts a no-charge period to that moment, which moves the
+    // billing anchor and the current period's end there and reads `trialing` until then (Stripe's "change the billing
+    // period using a trial period"); `default_payment_method` is the card its invoices charge. A cancelled
+    // subscription can't be changed: Stripe's words are "A canceled subscription can only update its
+    // cancellation_details and metadata." W40's and W41's test-mode runs check these against real Stripe.
+    update: (id, params, options) =>
+      this.run('subscriptions.update', { id, ...params }, options, () => {
+        const sub = this.sub(id)
+        const known = new Set(['cancel_at', 'trial_end', 'proration_behavior', 'default_payment_method'])
+        const unknown = Object.keys(params ?? {}).filter((name) => !known.has(name))
+        if (unknown.length > 0) throw new Error(`The fake has not modelled updating a subscription's ${unknown.join(', ')}.`)
+        if (sub.status === 'canceled') {
+          throw fakeStripeErrors.invalid('subscription_canceled', 'A canceled subscription can only update its cancellation_details and metadata.')
+        }
+        if (params?.cancel_at !== undefined) {
+          if (params.cancel_at !== '' && typeof params.cancel_at !== 'number') throw new Error('The fake has only modelled cancel_at as a timestamp or an empty string.')
+          sub.cancel_at = typeof params.cancel_at === 'number' ? params.cancel_at : null
+        }
+        if (params?.trial_end !== undefined) {
+          if (typeof params.trial_end !== 'number') throw new Error('The fake has only modelled trial_end as a timestamp.')
+          if (params.proration_behavior !== 'none') throw new Error('The fake has only modelled trial_end with proration_behavior none.')
+          if (params.trial_end <= seconds()) throw fakeStripeErrors.invalid('invalid_trial_end', 'Invalid timestamp: must be an integer Unix timestamp in the future.')
+          sub.trial_end = params.trial_end
+          sub.billing_cycle_anchor = params.trial_end
+          sub.status = 'trialing'
+          for (const item of sub.items.data) {
+            item.current_period_start = seconds()
+            item.current_period_end = params.trial_end
+          }
+        }
+        if (params?.default_payment_method !== undefined) {
+          if (typeof params.default_payment_method !== 'string') throw new Error('The fake has only modelled default_payment_method as a card id.')
+          sub.default_payment_method = params.default_payment_method === '' ? null : params.default_payment_method
+        }
+        return this.publicSubscription(sub, undefined)
+      }) as unknown as Promise<Stripe.Subscription>,
 
     // A DELETE: Stripe ignores a key on it (runIgnoringKey). What Stripe answers to cancelling a subscription
     // already cancelled is not documented where we looked; the fake refuses it as an invalid request, and the

@@ -22,8 +22,14 @@ import { ApiError } from '@/server/http/errors'
  * W33 (E-plan 4.11, lead call L9): `customer_cancels` is the website's own cancels (/api/v1/customer/.../cancel and
  * their quotes), checked by server/rules/customer/cancel-switch.ts. Off until the website is built and the lead adds
  * it; it turns nothing else on, and no staff route asks for it.
+ *
+ * W36 (F-plan 4.11, lead call L3): `membership_changes` is step F's one kind, for its three actions that touch Stripe
+ * (a membership's cancel and undo, a payment date change, and moving memberships to a replaced card), checked by
+ * server/rules/memberships/membership-switch.ts as W40 to W42 build them. Off until the lead adds it to the secret;
+ * it turns nothing else on. Step F's other actions (credits, Herd, store credit, gift cards, customers) are one
+ * transaction with nothing to stop part way, and need no kind.
  */
-export const ORDER_KINDS = ['no_stripe', 'saved_card', 'reader', 'membership', 'reader_flows', 'booking_changes', 'order_refunds', 'event_cancels', 'customer_cancels'] as const
+export const ORDER_KINDS = ['no_stripe', 'saved_card', 'reader', 'membership', 'reader_flows', 'booking_changes', 'order_refunds', 'event_cancels', 'customer_cancels', 'membership_changes'] as const
 export type OrderKind = (typeof ORDER_KINDS)[number]
 
 /**
@@ -34,7 +40,7 @@ export type OrderKind = (typeof ORDER_KINDS)[number]
  *   to take (the order then refuses with its own reason, as placeOrder needs Stripe for either);
  * - anything else is `no_stripe`: cash, gift card or store credit alone, nothing owed, or no method.
  */
-export function orderKind(input: Pick<PlaceOrderInput, 'membershipPlanId' | 'payment'>): Exclude<OrderKind, 'reader_flows' | 'booking_changes' | 'order_refunds' | 'event_cancels' | 'customer_cancels'> {
+export function orderKind(input: Pick<PlaceOrderInput, 'membershipPlanId' | 'payment'>): Exclude<OrderKind, 'reader_flows' | 'booking_changes' | 'order_refunds' | 'event_cancels' | 'customer_cancels' | 'membership_changes'> {
   if (input.membershipPlanId) return 'membership'
   const method = input.payment?.method
   if (method === 'reader') return 'reader'

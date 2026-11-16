@@ -1,0 +1,44 @@
+{
+  "scenario": "w36-fb21-the-same-email-in-another-case-added-by-another-writer",
+  "results": [
+    {
+      "thrown": "A customer with this email address already exists"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "customers": {
+      "added": [
+        {
+          "id": "customers#1",
+          "auth_user_id": null,
+          "first_name": "Sam",
+          "last_name": "Again",
+          "email": "SAM@example.com",
+          "phone": null,
+          "stripe_customer_id": null,
+          "saved_payment_method_id": null,
+          "created_at": "<set>",
+          "marketing_consent": false,
+          "birthday_marketing_consent": false,
+          "address_line1": null,
+          "address_line2": null,
+          "city": null,
+          "postcode": null,
+          "country": "GB",
+          "waiver_accepted": false,
+          "waiver_version": null,
+          "waiver_accepted_at": null,
+          "date_of_birth": "1990-01-01",
+          "updated_at": "<set>",
+          "saved_card_last4": null,
+          "saved_card_brand": null,
+          "store_credit_balance": "0.00"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}
