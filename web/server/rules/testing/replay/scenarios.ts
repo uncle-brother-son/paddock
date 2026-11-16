@@ -3297,6 +3297,32 @@ export async function restoreOnSaleCheck(db: Db): Promise<void> {
   await db.query('SET ROLE paddock_worker')
 }
 
+/** Migration 025's check (brief W37 item 4, lead call L10): a membership's add-on credits are never below zero. */
+export const ADDON_CREDITS_CHECK = 'customer_memberships_addon_credits_remaining_check'
+
+/**
+ * Lifts migration 025's check when the schema has it, for the one recording of what the old code did without it
+ * (FB10: add-on credits taken below zero). Answers whether it was there; put back with restoreAddonCreditsCheck, NOT
+ * VALID, so the row left behind doesn't block it; new rows are still checked. With the check not yet in the schema
+ * (before the lead applies 025) this does nothing, so the recording is the same either way.
+ */
+export async function liftAddonCreditsCheck(db: Db): Promise<boolean> {
+  await db.query('RESET ROLE')
+  try {
+    const found = await db.query('SELECT 1 FROM pg_constraint WHERE conname = $1', [ADDON_CREDITS_CHECK])
+    if (found.length > 0) await db.query('ALTER TABLE public.customer_memberships DROP CONSTRAINT customer_memberships_addon_credits_remaining_check')
+    return found.length > 0
+  } finally {
+    await db.query('SET ROLE paddock_worker')
+  }
+}
+
+export async function restoreAddonCreditsCheck(db: Db): Promise<void> {
+  await db.query('RESET ROLE')
+  await db.query('ALTER TABLE public.customer_memberships ADD CONSTRAINT customer_memberships_addon_credits_remaining_check CHECK ((addon_credits_remaining >= 0)) NOT VALID')
+  await db.query('SET ROLE paddock_worker')
+}
+
 function w08Scenarios(): Scenario[] {
   const UNKNOWN = '10000000-0000-4000-8000-0000000000fd'
   const samAttending = { ...sam, isAccountHolder: true }
@@ -5783,12 +5809,27 @@ function w36Scenarios(): Scenario[] {
       await history(call)
     }),
     // FB7: the session branch reads the allocation, then writes a fixed number.
+    // W37: the Worker's adjustment is one transaction under the credit period's lock, so there is no "between" for the
+    // gap to open in (it is hooked on the old code's own statement): whatever starts while the adjustment runs waits
+    // for it. On that side the second step is run where it would land, straight after the adjustment.
     f('fb7-two-session-adjustments-at-once-lose-one', async ({ call }) => {
-      await onceAfter(currentPeriodRead, () => call(ADJUST, adjustment('session', 2, 'Second tab')), () => call(ADJUST, adjustment('session', 1)))
+      let landed = false
+      const secondTab = async () => {
+        landed = true
+        await call(ADJUST, adjustment('session', 2, 'Second tab'))
+      }
+      await onceAfter(currentPeriodRead, secondTab, () => call(ADJUST, adjustment('session', 1)))
+      if (!landed) await secondTab()
     }),
     f('fb7-a-credit-booking-lands-between-the-check-and-the-write', async ({ call }) => {
       // One credit allocated, none used. Staff take it away while a booking takes it: 0 allocated, 1 used.
-      await onceAfter(currentPeriodRead, () => call('createOrder', moCreditSeat), () => call(ADJUST, adjustment('session', -1)))
+      let landed = false
+      const booking = async () => {
+        landed = true
+        await call('createOrder', moCreditSeat)
+      }
+      await onceAfter(currentPeriodRead, booking, () => call(ADJUST, adjustment('session', -1)))
+      if (!landed) await booking()
     }, sql('UPDATE membership_credit_periods SET credits_allocated = 1 WHERE id = $1', [ID.creditPeriod])),
     // FB8: the record is a second statement. It fails, the credits have moved, and the error invites a retry.
     f('fb8-the-record-fails-after-the-credits-moved-then-retried', async ({ call, attempt, db }) => {
@@ -5803,8 +5844,15 @@ function w36Scenarios(): Scenario[] {
       await call(ADJUST, adjustment('session', 2))
     }),
     // FB10: add-on credits can go below zero, and the server takes an empty reason.
-    f('fb10-addon-credits-taken-below-zero', async ({ call }) => {
-      await call(ADJUST, adjustment('addon', -5))
+    // W37: once migration 025's check is in the schema the old function can't do this any more, so the check is
+    // lifted for this scenario only, and put back as it was (NOT VALID, so the row left behind doesn't block it).
+    f('fb10-addon-credits-taken-below-zero', async ({ call, db }) => {
+      const lifted = await liftAddonCreditsCheck(db)
+      try {
+        await call(ADJUST, adjustment('addon', -5))
+      } finally {
+        if (lifted) await restoreAddonCreditsCheck(db)
+      }
     }),
     f('fb10-an-empty-reason-is-accepted', async ({ call }) => {
       await call(ADJUST, adjustment('session', 1, ''))

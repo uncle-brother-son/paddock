@@ -1082,7 +1082,7 @@ describe("W25 item 7: the undo after a refused first card part never overfills a
       expect(answer.body.data).toMatchObject({ cancelled: true, cardRefundedAmount: 0, storeCreditRefundedAmount: 10 })
       expect(answer.body.data?.held).toMatchObject({ reason: 'refund_refused_not_put_back', message: putBackBlockedMessage(refundRefusedDetail('Your card was declined.'), 10, true, 10) })
       expect(answer.body.data?.held?.message).toBe(
-        "The card refund was refused (Failed to refund payment: Your card was declined.), so it didn't go back to the card (£10.00 went to store credit as planned), and the booking can't be put back as it was: its places or its pass session have been taken since. The change stands, and £10.00 shows on the booking as still to refund. Check Stripe first: if the money already reached the customer, use It already arrived; if not, use Refund the rest (the booking is cancelled, so it goes to store credit)."
+        "The card refund was refused (Failed to refund payment: Your card was declined.), so it didn't go back to the card (£10.00 went to store credit as planned), and the booking can't be put back as it was: its places, its pass session or its membership credit have been taken since. The change stands, and £10.00 shows on the booking as still to refund. Check Stripe first: if the money already reached the customer, use It already arrived; if not, use Refund the rest (the booking is cancelled, so it goes to store credit)."
       )
       expect(answer.body.data?.held?.message).not.toContain('nothing went back')
       // The store credit was given once, and only the card money is owed.
@@ -1423,7 +1423,7 @@ describe("W32 item 5 (W31 review S2): the refused, not-put-back words name the a
         expect(answer.body.data).toMatchObject({ cancelled: true, cardRefundedAmount: 0, storeCreditRefundedAmount: 0, addons: { cardRefundedAmount: 0, storeCreditRefundedAmount: 5 } })
         expect(answer.body.data?.held).toMatchObject({ reason: 'refund_refused_not_put_back', message: putBackBlockedMessage(refundRefusedDetail('Your card was declined.'), 20, true, 5) })
         expect(answer.body.data?.held?.message).toBe(
-          "The card refund was refused (Failed to refund payment: Your card was declined.), so it didn't go back to the card (£5.00 went to store credit as planned), and the booking can't be put back as it was: its places or its pass session have been taken since. The change stands, and £20.00 shows on the booking as still to refund. Check Stripe first: if the money already reached the customer, use It already arrived; if not, use Refund the rest (the booking is cancelled, so it goes to store credit)."
+          "The card refund was refused (Failed to refund payment: Your card was declined.), so it didn't go back to the card (£5.00 went to store credit as planned), and the booking can't be put back as it was: its places, its pass session or its membership credit have been taken since. The change stands, and £20.00 shows on the booking as still to refund. Check Stripe first: if the money already reached the customer, use It already arrived; if not, use Refund the rest (the booking is cancelled, so it goes to store credit)."
         )
         // Given once, and only the card money is owed.
         expect((await storeCredit()).map((row) => row.amount)).toEqual(['5.00'])

@@ -88,6 +88,11 @@ const STAFF_PATTERNS: Array<{ pattern: RegExp; load: () => Promise<unknown>; par
   // W31: the staff app's thin cancelEvent and getEventCancellationOverview.
   { pattern: /^\/api\/v1\/staff\/events\/([^/]+)\/cancel\/overview$/, load: () => import('@/app/api/v1/staff/events/[eventId]/cancel/overview/route'), params: (m) => ({ eventId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/events\/([^/]+)\/cancel$/, load: () => import('@/app/api/v1/staff/events/[eventId]/cancel/route'), params: (m) => ({ eventId: decodeURIComponent(m[1] ?? '') }) },
+  // W37: the staff app's thin adjustMembershipCredits, getMembershipCreditAdjustments, setMembershipHerd and adjustCustomerStoreCredit.
+  { pattern: /^\/api\/v1\/staff\/memberships\/([^/]+)\/credits$/, load: () => import('@/app/api/v1/staff/memberships/[membershipId]/credits/route'), params: (m) => ({ membershipId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/memberships\/([^/]+)\/credit-adjustments$/, load: () => import('@/app/api/v1/staff/memberships/[membershipId]/credit-adjustments/route'), params: (m) => ({ membershipId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/memberships\/([^/]+)\/herd$/, load: () => import('@/app/api/v1/staff/memberships/[membershipId]/herd/route'), params: (m) => ({ membershipId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/customers\/([^/]+)\/store-credit$/, load: () => import('@/app/api/v1/staff/customers/[customerId]/store-credit/route'), params: (m) => ({ customerId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/reader-flows\/([^/]+)\/finalise$/, load: () => import('@/app/api/v1/staff/reader-flows/[pendingId]/finalise/route'), params: (m) => ({ pendingId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/reader-flows\/([^/]+)\/cancel$/, load: () => import('@/app/api/v1/staff/reader-flows/[pendingId]/cancel/route'), params: (m) => ({ pendingId: decodeURIComponent(m[1] ?? '') }) },
 ]

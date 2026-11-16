@@ -447,14 +447,14 @@ export const putBackFailedNotRecordedMessage = (detail: string): string =>
  * two buttons a person decides with.
  */
 export const putBackBlockedMessage = (detail: string, owed: number, cancelled: boolean, storeCredit = 0): string =>
-  `The card refund was refused (${detail}), so it didn't go back to the card${storeCreditGivenWords(storeCredit)}, and the booking can't be put back as it was: its places or its pass session have been taken since. The change stands, and ${money(owed)} shows on the booking as still to refund. ${checkStripeFirstWords(cancelled)}`
+  `The card refund was refused (${detail}), so it didn't go back to the card${storeCreditGivenWords(storeCredit)}, and the booking can't be put back as it was: its places, its pass session or its membership credit have been taken since. The change stands, and ${money(owed)} shows on the booking as still to refund. ${checkStripeFirstWords(cancelled)}`
 /**
  * W25a: the same refusal when the money owed couldn't be written on the booking yet (the database failed just then).
  * The claim stays open for the automatic check, so the words still carry Stripe's reason. W26a: the claim carries the
  * refusal's mark, so the automatic check ends it as money owed too.
  */
 export const putBackBlockedNotRecordedMessage = (detail: string): string =>
-  `The card refund was refused (${detail}), so nothing went back, and the booking can't be put back as it was: its places or its pass session have been taken since. The change stands, but the money still to refund couldn't be recorded on the booking yet. Don't refund it again: check the Orders page in a few minutes.`
+  `The card refund was refused (${detail}), so nothing went back, and the booking can't be put back as it was: its places, its pass session or its membership credit have been taken since. The change stands, but the money still to refund couldn't be recorded on the booking yet. Don't refund it again: check the Orders page in a few minutes.`
 /** W25 (W23 review later 1): Refund the rest to the card on a cancelled booking. */
 export const OWED_ON_CANCELLED_STORE_CREDIT_ONLY_MESSAGE =
   'This booking is cancelled, so what is still to refund can only go to store credit. Choose store credit and confirm again.'

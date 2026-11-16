@@ -1142,7 +1142,8 @@ export async function finishClaim(db: Db, claim: Claim, outcome: ClaimOutcome, b
 
 /**
  * W25 (W22 review later 2, W23 review later 2, W24 review L1): the undo can't put the booking back because what R1
- * gave back has been taken since: the session's places (another booking), or the pass session (spent). Thrown inside
+ * gave back has been taken since: the session's places (another booking), the pass session (spent), or (W37a) the
+ * membership session credit (spent on another booking, or taken off the period by an adjustment). Thrown inside
  * the undo's transaction, so nothing of the undo is kept: the change stands, and the press finishes the claim there and
  * then with every card part owed on the booking (W25a; `finishRefusedNotPutBack`).
  */
@@ -1173,6 +1174,29 @@ async function takePassSessionBack(tx: Tx, passId: string): Promise<void> {
 }
 
 /**
+ * W37a (W37 review S1): the booking takes back the membership session credit a cheaper Move released only while its
+ * period still has one free: unlimited, or fewer credit bookings than it allocates (New Order's own count,
+ * write-booking.ts). The caller holds the period's lock (LOCK_ORDER) and hasn't put the booking back on it yet, so
+ * the count is current and leaves this booking out. Never used above allocated.
+ */
+async function takeCreditBack(tx: Tx, periodId: string): Promise<void> {
+  const free = await tx.query(
+    `SELECT p.id FROM membership_credit_periods p
+     WHERE p.id = $1::uuid
+       AND (p.is_unlimited OR (
+         SELECT count(*) FROM bookings b
+         WHERE b.credit_period_id = p.id AND b.redemption_source = 'membership_credit' AND b.status <> 'cancelled'
+       ) < p.credits_allocated)`,
+    [periodId]
+  )
+  if (free.length !== 1) throw new PutBackBlocked(`credit period ${periodId} has no credit left to take back`)
+}
+
+/** The credit period a cheaper Move's R1 released the booking's membership credit from, or null when it released none. */
+const creditPeriodReleased = (move: MoveClaim | undefined): string | null =>
+  move?.creditReleased && move.oldRedemptionSource === 'membership_credit' ? move.oldCreditPeriodId : null
+
+/**
  * The first card part was refused, so nothing went: R1 undone in one transaction, as the old put-backs did. A part
  * refund was never one (price_paid and part_refunded_amount back); Refund the rest's money is owed again. False when
  * the claim was finished already.
@@ -1182,12 +1206,15 @@ async function undoClaim(db: Db, claim: Claim, by: FinishedBy): Promise<boolean>
     // W22: a removed guest's place goes back to the booking's session, so it is locked too (LOCK_ORDER). W23: a cancel's
     // places too, with the memberships its add-on credits went back to and the pass it gave a session back to.
     const cancel = claim.details.cancel
-    // W24: a Move's two sessions (in id order) and the pass its released seat gave a session back to.
+    // W24: a Move's two sessions (in id order) and the pass its released seat gave a session back to. W37a: and the
+    // credit period its released membership credit goes back to (after the sessions, before the pass).
     const move = claim.details.move
+    const creditPeriod = creditPeriodReleased(move)
     const locks = await lockForBooking(tx, {
       bookingId: claim.bookingId,
       ownSession: claim.details.kind === 'remove_guest' || cancel !== undefined,
       sessionIds: move ? [move.oldSessionId, move.newSessionId] : [],
+      creditPeriodIds: creditPeriod ? [creditPeriod] : [],
       membershipIds: (cancel?.addons ?? []).filter((line) => line.creditsReturned > 0 && line.membershipId).map((line) => line.membershipId as string),
       sessionPassId: cancel?.passReturned ?? move?.passReturned ?? null,
     })
@@ -1267,9 +1294,12 @@ async function undoCancel(tx: Tx, bookingId: string, cancel: CancelClaim): Promi
  * W24: a cheaper Move's R1 put back exactly (the first card part refused, so nothing went): the booking on its old
  * session with its old times, band and credit, price_paid back up by the refund; each seat's price and cover as they
  * were; the new session's places given back and the old session's taken again (by what R1 changed); the pass session
- * a released pass seat gave back taken back.
+ * a released pass seat gave back taken back. W37a: a released membership credit goes back only while its period
+ * still has one free, checked before the booking is put back on it (PutBackBlocked otherwise).
  */
 async function undoMoveClaim(tx: Tx, bookingId: string, amount: number, move: MoveClaim): Promise<void> {
+  const creditPeriod = creditPeriodReleased(move)
+  if (creditPeriod) await takeCreditBack(tx, creditPeriod)
   await tx.query(
     `UPDATE bookings
      SET session_id = $1::uuid, start_time = $2::timestamptz, end_time = $3::timestamptz, price_paid = price_paid + $4::numeric,
@@ -1296,7 +1326,8 @@ async function undoMoveClaim(tx: Tx, bookingId: string, amount: number, move: Mo
     await tx.query('UPDATE sessions SET total_booked = total_booked - $1::int, updated_at = now() WHERE id = $2::uuid', [move.placesClaimed, move.newSessionId])
   }
   // W25: the old session's places only while it still has them, and the pass session only while the pass still has it
-  // (PutBackBlocked otherwise: the move stands and the refund ends as money still to refund).
+  // (PutBackBlocked otherwise: the move stands and the refund ends as money still to refund). W37a: the membership
+  // credit the same way, above.
   await takePlacesBack(tx, move.oldSessionId, move.placesReleased)
   if (move.passReturned) await takePassSessionBack(tx, move.passReturned)
 }

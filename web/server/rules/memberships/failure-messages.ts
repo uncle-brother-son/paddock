@@ -154,6 +154,20 @@ export const MEMBERSHIP_CREDIT_DIALOG_WORDS = {
   failed: 'Failed to adjust credits',
 } as const
 
+/**
+ * New in W37 (brief W37 item 2; FB10): what the old function never refused. A reason is required on the server (the
+ * dialog's own sentence, which staff already see); add-on credits never go below zero (worded as `belowUsed`); and a
+ * credit type that is neither kind is refused before anything moves (the old function took any other value as
+ * session credits and then failed on the record, with the credits already changed).
+ */
+export const MEMBERSHIP_CREDIT_NEW_WORDS = {
+  reasonRequired: MEMBERSHIP_CREDIT_DIALOG_WORDS.reasonRequired,
+  addonBelowZero: (left: number): string => `Adjustment rejected: the membership would be left with ${left} add-on credit(s), below zero.`,
+  creditTypeInvalid: 'Credit type must be "session" or "addon".',
+} as const
+
 /** setMembershipHerd has one reason (`not_found`) and no words of its own; the Customers page shows this. */
 export const HERD_REASONS = ['not_found'] as const
 export const HERD_FALLBACK = 'Failed to update Herd.'
+/** New in W37: the Worker's own words for `not_found`, in the refusal's details (the wrapper answers the reason alone, as before). */
+export const HERD_NOT_FOUND_MESSAGE = MEMBERSHIP_CREDIT_WORDS.notFound

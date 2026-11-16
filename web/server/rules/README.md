@@ -129,6 +129,35 @@ slice by slice (W37 to W43). W36 adds what they share, with nothing switched on 
   W29's left cancel of a refunded membership's subscription (`orders/refund-subscription.ts`) ends the same way from
   W36: refused for good on reconcile's retry, it is recorded as `refused`, listed with its own words and not retried.
 
+## Credits, Herd and store credit (W37)
+
+Step F's first slice: the four actions that never touch Stripe (F-plan 4.5). Each write is one transaction with its
+audit row, behind a press key, and has no switch kind (lead call L3): there is nothing to stop part way.
+
+- `memberships/credits.ts`, `POST memberships/:id/credits` (adjustMembershipCredits). Issue refunds, a whole number
+  that isn't 0, `session` or `addon`, and a reason, in that order. Then it locks **the membership's current credit
+  period, then the membership** (`CREDIT_ADJUSTMENT_LOCK_SQL`, in `LOCK_ORDER`): a booking paid with a session credit
+  locks the credit period (`lockForOrder`, `lockForBooking`), not the membership, and one that draws or returns an
+  add-on credit locks the membership, so an adjustment queues behind either (bug FB7). The facts are read after the
+  locks, in their own statement. Session credits move the period's allocation **from what is there** and are refused
+  below what is used; add-on credits are refused below zero (FB10; migration 025 is the database's backstop). The
+  `membership_credit_adjustments` row and a `membership.credits_adjusted` audit row go in the same transaction (FB8).
+- `GET memberships/:id/credit-adjustments` (getMembershipCreditAdjustments): the history, newest first. Any active
+  staff member.
+- `POST memberships/:id/herd` (setMembershipHerd). Issue refunds. Under the membership's lock: true or false sets the
+  override and the flag; null clears the override and applies the automatic rule **to this membership only**
+  (`HERD_RULE_SQL`, the expression of the database's `refresh_herd_flags()`, held to the saved function word for word
+  by `credits.test.ts`: a migration that changes the rule must change both). A `membership.herd_set` audit row holds
+  who, and the flag and override before and after (FB11; no reason is asked for, lead call L13).
+- `customers/store-credit.ts`, `POST customers/:id/store-credit` (adjustCustomerStoreCredit). The old checks in the old
+  order (mode, amount, reason, then Issue refunds), then the database's `store_credit_apply` (which locks the customer)
+  and a `customer.store_credit_adjusted` audit row. No upper limit on any of them (lead call L14).
+- `account/refusal.ts`: how every step F action refuses (`accountRefusalDetailsSchema`: the reason, the words, the
+  action). Issue refunds is checked by the rule, not the route's `permission`, so the refusal carries the old words.
+- A fault inside the transaction answers INTERNAL with nothing changed, and that answer is stored against the press
+  key like any other: the same press again gets it back (the screens say "no answer" and keep the key); a new press
+  runs afresh.
+
 ## The reader: T1, the intent, finalise and cancel (W11)
 
 A reader order runs the same pipeline, with the screen collecting between the intent and T2:
@@ -385,6 +414,9 @@ call to it. Gated first by the switch (`booking_changes`; the card also `saved_c
   `figures.toCollect`; the cash tick's `confirmedCashAmount` when no `toCollect` is sent; over half a penny refused
   with the new figure and Q11's words), the store credit and the gift card claimed (New Order's words for a voided,
   expired, missing or used-up card), the booking confirmed with seat 1 paid and its credit released, `booking.settle`.
+  **W37a (W37 review S1):** with card money still to come the membership credit is NOT released at C1. Its period and
+  `membership_credit` stay on the booking (the period still counts it used, so nobody can spend it while the payment
+  is pending), the record says `release_credit_on_finalise`, and C2 clears them. The undo has nothing to take back.
   No card money: the gift card's row (the booking, no order), commit, settled. Q36: no order for cash, gift card or
   store credit. A database fault rolls all of it back: `settle_not_saved`, nothing kept.
 - **Card money:** the flow's record (`pending_reader_payments`, `method` card or reader, `request_id`, `livemode`,
@@ -571,6 +603,12 @@ by `booking_changes`. The staff app's `moveBooking` is a thin call.
   booking's membership covers the new date (active, `cancel_effective_date` not before it); a pass seat only while the
   pass covers the new session (`pass_covers_session`) and its `expiry_date` isn't before it. Otherwise the seat is paid
   its full new price, the booking's credit cleared, and a pass session given back (while the pass is unexpired today).
+  **W37a (W37 review S1):** with card money still to come (saved card or reader) a released membership credit stays on
+  the booking until C2 (`release_credit_on_finalise`), as the pass session is given back at C2, so the flow's undo
+  never takes a credit back. A cheaper Move's put back after a refused first card part (`undoMoveClaim`) takes the
+  credit back only while its period still has one free (`takeCreditBack`, under the period's lock: unlimited, or used
+  below allocated); otherwise `PutBackBlocked`: the move stands and the card money is owed, as for places and passes.
+  Used is never above allocated (`bookings/credit-held-postgres.test.ts`, real Postgres).
 - **N1:** the one-booking-a-day check runs before any money moves (quote and press) with New Order's words; should
   another booking race past it, the trigger's refusal gets the same words (`duplicate_day_booking`), never the raw text.
 - **One transaction (C1, or R1):** the booking, its customer, both sessions (id order: two moves the other way round

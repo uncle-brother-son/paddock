@@ -49,6 +49,12 @@ export interface FlowSnapshot {
   old_redeemed_membership_id?: string | null
   old_redeemed_session_pass_id?: string | null
   release_session_pass_on_finalise?: boolean
+  /**
+   * W37a (W37 review S1): the change released the booking's membership session credit, with card money still to come.
+   * The credit stays on the booking (its period and `membership_credit`, so the period still counts it used) until the
+   * payment lands, and C2 clears it; the undo has nothing to take back.
+   */
+  release_credit_on_finalise?: boolean
   seats?: Array<{ id: string; unit_price: string; pay_by: string | null }>
   new_session_id?: string
   new_session_booking_type?: 'public' | 'private'
@@ -295,7 +301,8 @@ export type FlowFinaliseOutcome =
  * out, then what finaliseMovePending, finaliseSettlePending and finaliseAddGuestPending did: the payment
  * recorded as its own paid order with its booking line (none for add-ons alone), the gift card part in the
  * card's history, a move's old places and pass session given back, an Add Guest's add-on lines linked to
- * the order; then the row marked finalised and `reader_payment.finalise` recorded. All or nothing. An
+ * the order, a membership credit the change released cleared from the booking (W37a); then the row marked finalised
+ * and `reader_payment.finalise` recorded. All or nothing. An
  * order already carrying this PaymentIntent (the old finalise recorded it and then failed to mark the row)
  * is taken as recorded: only the mark is left, as the old code did.
  */
@@ -402,6 +409,14 @@ export async function finaliseFlowInTransaction(
         )
       }
     }
+    // W37a (W37 review S1): the membership credit a Move or Settle released was held on the booking until now, so the
+    // period counted it used and nobody could spend it while the payment was pending. Paid: the credit is free.
+    if (snapshot.release_credit_on_finalise) {
+      await tx.query(
+        "UPDATE bookings SET credit_period_id = NULL, redemption_source = 'paid', updated_at = now() WHERE id = $1::uuid AND redemption_source = 'membership_credit'",
+        [row.record_id]
+      )
+    }
     // W17: a saved-card flow learns its PaymentIntent only from the charge's answer, so it is written here.
     const marked = await tx.query(
       "UPDATE pending_reader_payments SET status = 'finalised', payment_intent_id = COALESCE(payment_intent_id, $2::text), updated_at = now() WHERE id = $1::uuid AND status = 'pending' RETURNING id",
@@ -470,7 +485,9 @@ function undoFlow(db: Db, pendingId: string, options: Pick<ReaderRouteOptions, '
     })
 
     if (row.flow === 'move' && snapshot.booking_id && snapshot.old_session_id) {
-      // The new session's places; the old session's were never given back while pending.
+      // The new session's places; the old session's were never given back while pending. W37a: a membership credit
+      // the move released was never given back either (it stayed on the booking), so the old values below are the
+      // booking's own and the period's count doesn't move.
       if (snapshot.new_session_id && snapshot.party_size) await releasePlaces(tx, snapshot.new_session_id, snapshot.party_size, snapshot.new_session_booking_type)
       await tx.query(
         `UPDATE bookings

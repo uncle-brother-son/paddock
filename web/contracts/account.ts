@@ -190,7 +190,7 @@ export type ChangePaymentDateOutput = z.infer<typeof changePaymentDateOutputSche
 /** `creditType` is 'session' or 'addon'; `amount` a whole number, not 0. Any value: the rule refuses with the old words. */
 export const adjustMembershipCreditsInputSchema = z.object({
   creditType: z.string(),
-  amount: z.unknown(),
+  amount: z.unknown().optional(),
   reason: looseText,
 })
 export type AdjustMembershipCreditsInput = z.infer<typeof adjustMembershipCreditsInputSchema>
@@ -213,6 +213,8 @@ export const adjustMembershipCreditsOutputSchema = z.object({
 export type AdjustMembershipCreditsOutput = z.infer<typeof adjustMembershipCreditsOutputSchema>
 
 // --- GET /api/v1/staff/memberships/:membershipId/credit-adjustments (getMembershipCreditAdjustments)
+
+export const membershipCreditAdjustmentsInputSchema = z.object(membershipInPath)
 
 export const membershipCreditAdjustmentRowSchema = z.object({
   id: z.string(),
@@ -254,8 +256,8 @@ export type SetMembershipHerdOutput = z.infer<typeof setMembershipHerdOutputSche
 /** `mode` is 'add' or 'remove'; `amount` pounds above 0; `reason` at least 5 characters. Any value: the rule refuses with the old words. */
 export const adjustStoreCreditInputSchema = z.object({
   mode: z.string(),
-  amount: z.unknown(),
-  reason: z.unknown(),
+  amount: z.unknown().optional(),
+  reason: z.unknown().optional(),
 })
 export type AdjustStoreCreditInput = z.infer<typeof adjustStoreCreditInputSchema>
 export const adjustStoreCreditRouteInputSchema = adjustStoreCreditInputSchema.extend(customerInPath)

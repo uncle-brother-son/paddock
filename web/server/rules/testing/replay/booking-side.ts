@@ -501,15 +501,24 @@ const READER_MARK_VALUES: Readonly<Record<string, (value: unknown) => boolean>> 
   stripe_customer_id: (value) => typeof value === 'string' && value.startsWith('cus_'),
   'gift_card.stamped_redeemed_at': (value) => typeof value === 'boolean',
 }
+/**
+ * W37a (W37 review S1): a Settle's or a Move's record may say the booking's membership credit is held until the
+ * payment lands (`release_credit_on_finalise`), only ever `true`. An Add Guest releases no credit, so its record
+ * never may.
+ */
+const HELD_CREDIT_MARK = 'release_credit_on_finalise'
 
 /** A reader flow's record carries the Worker's marks; nothing else on it may differ (W19 review later 4). */
-export function readerFlowMarks(action: string, decision: string): AllowedDifference {
+export function readerFlowMarks(action: string, decision: string, heldCredit = false): AllowedDifference {
   return {
-    name: `${action} on the reader: its flow record carries the Worker's marks (method, channel, request id, Stripe customer, the key's mode, whether the gift card claim stamped it used up)`,
+    name: `${action} on the reader: its flow record carries the Worker's marks (method, channel, request id, Stripe customer, the key's mode, whether the gift card claim stamped it used up${heldCredit ? '; W37a: and that the membership credit it releases stays on the booking until the payment lands' : ''})`,
     decision,
-    path: /^\.tables\.pending_reader_payments\.added\[\d+\]\.snapshot\.(method|channel|request_id|stripe_customer_id|livemode|gift_card\.stamped_redeemed_at)$/,
+    path: heldCredit
+      ? /^\.tables\.pending_reader_payments\.added\[\d+\]\.snapshot\.(method|channel|request_id|stripe_customer_id|livemode|gift_card\.stamped_redeemed_at|release_credit_on_finalise)$/
+      : /^\.tables\.pending_reader_payments\.added\[\d+\]\.snapshot\.(method|channel|request_id|stripe_customer_id|livemode|gift_card\.stamped_redeemed_at)$/,
     actual: (value, expected, path) => {
       const field = /\.snapshot\.(.+)$/.exec(path)?.[1] ?? ''
+      if (field === HELD_CREDIT_MARK) return heldCredit && expected === undefined && value === true
       return expected === undefined && (READER_MARK_VALUES[field]?.(value) ?? false)
     },
   }
@@ -526,7 +535,11 @@ export function cardOrderMethod(decision: string): AllowedDifference {
 }
 
 export const SETTLE_FLOW_KEYS = flowKeys('A Settle', `${W19}: keys from the record, never from the booking's updated_at`)
-export const SETTLE_FLOW_RECORD = readerFlowMarks('A Settle', `${W19}: pending-first with method, request_id, livemode, stripe_customer_id; a card Settle's record is set aside and checked on its own (cardRecordProblems)`)
+export const SETTLE_FLOW_RECORD = readerFlowMarks(
+  'A Settle',
+  `${W19}: pending-first with method, request_id, livemode, stripe_customer_id; a card Settle's record is set aside and checked on its own (cardRecordProblems). Brief W37a item 1 (W37 review S1): the lapsed booking's membership credit is released at C2, not C1`,
+  true
+)
 export const SETTLE_CARD_ORDER_METHOD = cardOrderMethod("W03-decisions Q9 (an order paid on the saved card records 'card'); W17's card C2; Q36 keeps the card part's own order and line")
 
 /** The old code's overlapping-press hooks wait on its own steps, which the Worker never takes: only one press runs. */
@@ -866,7 +879,7 @@ export function claimLookProblems(recording: Recording): string[] {
 
 /** The fields a Worker card record's snapshot may hold for each flow: the old undo fields and the Worker's marks. */
 const CARD_RECORD_FIELDS: Readonly<Record<string, readonly string[]>> = {
-  settle: ['customer_id', 'description', 'booking_id', 'old_status', 'old_price_paid', 'old_payment_due_by', 'old_redemption_source', 'old_redeemed_membership_id', 'old_credit_period_id', 'old_seat1_pay_by', 'amount', 'store_credit_amount', 'gift_card'],
+  settle: ['customer_id', 'description', 'booking_id', 'old_status', 'old_price_paid', 'old_payment_due_by', 'old_redemption_source', 'old_redeemed_membership_id', 'old_credit_period_id', 'old_seat1_pay_by', 'amount', 'store_credit_amount', 'gift_card', HELD_CREDIT_MARK],
   add_guest: ['customer_id', 'description', 'booking_id', 'session_id', 'addon_credits', 'price_increment', 'claimed_extra_capacity', 'store_credit_amount', 'gift_card', 'guest_row_id', 'addon_line_ids', 'over_18_confirmed_here'],
   // W24: the old reader move's snapshot (W12's undo and C2 read it).
   move: [
@@ -884,6 +897,7 @@ const CARD_RECORD_FIELDS: Readonly<Record<string, readonly string[]>> = {
     'old_redeemed_membership_id',
     'old_redeemed_session_pass_id',
     'release_session_pass_on_finalise',
+    HELD_CREDIT_MARK,
     'seats',
     'new_session_id',
     'new_session_booking_type',
@@ -915,6 +929,11 @@ export function cardRecordProblems(recording: Recording): string[] {
     if (row['status'] === 'finalised' && typeof row['payment_intent_id'] !== 'string') wrong('finished with no PaymentIntent')
     if (row['order_id'] !== null) wrong('an order on the record')
     if (row['flow'] === 'add_guest' && snapshot['guest_row_id'] === undefined && Number(snapshot['price_increment'] ?? 0) !== 0) wrong('a seat price with no guest')
+    // W37a (W37 review S1): only ever `true`, and only on a booking that held a membership credit on a period. A
+    // Settle's booking always does (it is a lapsed credit booking), so its card record always carries the mark.
+    const onACredit = snapshot['old_redemption_source'] === 'membership_credit' && typeof snapshot['old_credit_period_id'] === 'string'
+    if (HELD_CREDIT_MARK in snapshot && (snapshot[HELD_CREDIT_MARK] !== true || !onACredit)) wrong('the held credit mark')
+    if (row['flow'] === 'settle' && onACredit && !(HELD_CREDIT_MARK in snapshot)) wrong('a credit released before the card paid')
     // W25 (W20 review 5): only ever `true`, and only with a guest (it is their tick that stamped the booking).
     if ('over_18_confirmed_here' in snapshot && (snapshot['over_18_confirmed_here'] !== true || snapshot['guest_row_id'] === undefined)) wrong('the over-18 mark')
   }

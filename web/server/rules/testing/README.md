@@ -454,3 +454,12 @@ database give each its own `idTag`, or their `pi_fake_0001`s would collide. Reco
 (the races, 022). `server/scheduled.test.ts` tests the schedule's handler. W14b: the manual close in
 `orders/close-stuck.test.ts` (per item type, refusals, words, L4) and `orders/close-stuck-postgres.test.ts` (racing
 reconcile, two closes at once); the staff app's Orders page wrappers in `server/staff-app-orders-page.test.ts`.
+
+W37's side (`account-side.ts`, `account-differences.ts`, `account-replay.test.ts`) replays W36's credits, Herd and
+store credit recordings (33) through the staff app's thin wrappers and the Worker's routes, as the screens press them:
+a press key for each press, kept for the same press made again after no answer; the two recordings of "the same press
+sent twice" (FB9, FB12) go under one key. The Worker's three audit rows and the stored answers are set aside and
+checked on their own (`accountRowProblems`: one row for each change, with the same figures). Two scenarios hook a gap
+on the old code's own statement (FB7); on the new side the gap never opens, so each runs its second step where it
+would land, straight after. `w36-fb10-addon-credits-taken-below-zero` lifts migration 025's check for its own run when
+the schema has it (`liftAddonCreditsCheck`), so its golden file replays the same before and after the lead applies 025.

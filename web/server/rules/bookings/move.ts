@@ -21,7 +21,8 @@
 //   or store credit (Wayne's Q36: keep today's way); the gift card's redemption row names the booking.
 // - dearer on the card or reader (W19's flow pipeline): C1 claims the new place, holds the old seat, takes the store
 //   credit and gift card, moves the booking and writes the flow record last; then the saved card is charged once under
-//   `<pendingId>:charge` and W12's C2 finishes the move (the old place and a released pass session given back, the
+//   `<pendingId>:charge` and W12's C2 finishes the move (the old place and a released pass session given back, a
+//   released membership credit cleared from the booking (W37a: held until then, so it can't be spent meanwhile), the
 //   card's order written), or the reader's intent is made under `<pendingId>:reader-intent` for the screen to collect.
 //   A definite refusal undoes it in one transaction; no clear answer holds it (Q35) for reconcile.
 // - cheaper to the card (W21's refund pipeline): R1 moves the booking and plans the refund (claim kind `move`), then
@@ -534,19 +535,23 @@ async function moveC1(tx: Tx, input: C1Input, options: MoveOptions, keyLivemode:
 
   // The booking and its seats: the new session, times and band; price_paid moves by exactly what the move settles (a
   // legacy booking keeps it); a released credit clears the booking's credit (its period counts it unused again).
+  // W37a (W37 review S1): with card money still to come a released membership credit isn't cleared here. Its period
+  // and `membership_credit` stay on the booking, so the period still counts it used, and the flow's C2 clears them
+  // (`release_credit_on_finalise`), as the pass session below is given back at C2: an undo never takes it back.
+  const holdCredit = cardMoney !== null && priced.creditReleased && booking.creditPeriodId !== null && booking.redemptionSource === 'membership_credit'
   await tx.query(
     `UPDATE bookings b
      SET session_id = s.id, start_time = s.start_time, end_time = s.end_time,
          price_paid = COALESCE($2::numeric, b.price_paid),
          band_id = $3::uuid,
-         credit_period_id = CASE WHEN $4::boolean THEN NULL ELSE b.credit_period_id END,
-         redemption_source = CASE WHEN $4::boolean THEN 'paid' ELSE b.redemption_source END,
+         credit_period_id = CASE WHEN $4::boolean AND NOT $6::boolean THEN NULL ELSE b.credit_period_id END,
+         redemption_source = CASE WHEN $4::boolean AND NOT $6::boolean THEN 'paid' ELSE b.redemption_source END,
          redeemed_membership_id = CASE WHEN $4::boolean THEN NULL ELSE b.redeemed_membership_id END,
          redeemed_session_pass_id = CASE WHEN $4::boolean THEN NULL ELSE b.redeemed_session_pass_id END,
          updated_at = now()
      FROM sessions s
      WHERE b.id = $1::uuid AND s.id = $5::uuid`,
-    [bookingId, priced.newPricePaid, priced.newBandId, priced.creditReleased, newSessionId]
+    [bookingId, priced.newPricePaid, priced.newBandId, priced.creditReleased, newSessionId, holdCredit]
   )
   if (priced.seatChanges.length > 0) {
     await tx.query(
@@ -590,6 +595,7 @@ async function moveC1(tx: Tx, input: C1Input, options: MoveOptions, keyLivemode:
       old_redeemed_membership_id: booking.redeemedMembershipId,
       old_redeemed_session_pass_id: booking.redeemedSessionPassId,
       ...(priced.passToRelease ? { release_session_pass_on_finalise: true } : {}),
+      ...(holdCredit ? { release_credit_on_finalise: true } : {}),
       seats: booking.seats.map((seat) => ({ id: seat.id, unit_price: seat.unitPrice === null ? '' : seat.unitPrice.toFixed(2), pay_by: seat.payBy })),
       new_session_id: newSessionId,
       new_session_booking_type: (newSession.booking_type === 'private' ? 'private' : 'public') as 'public' | 'private',

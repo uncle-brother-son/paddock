@@ -147,6 +147,30 @@ describe("the credit and Herd words, moved (brief W36 item 1)", () => {
   })
 })
 
+describe('the words W37 adds for a credit adjustment (brief W37 item 2; FB10)', () => {
+  it("a missing reason is refused in the dialog's own sentence, which staff already see", () => {
+    expect(words.MEMBERSHIP_CREDIT_NEW_WORDS.reasonRequired).toBe('A reason is required for the audit trail')
+    expect(words.MEMBERSHIP_CREDIT_NEW_WORDS.reasonRequired).toBe(words.MEMBERSHIP_CREDIT_DIALOG_WORDS.reasonRequired)
+    expect(sourceHolds(component('MembershipCreditDialog.tsx'), words.MEMBERSHIP_CREDIT_NEW_WORDS.reasonRequired)).toBe(true)
+  })
+
+  it('below zero is worded as "below what is used" is, with the figure it would be left at; a credit type that is neither kind names the two', () => {
+    expect(words.MEMBERSHIP_CREDIT_NEW_WORDS.addonBelowZero(-3)).toBe('Adjustment rejected: the membership would be left with -3 add-on credit(s), below zero.')
+    expect(words.MEMBERSHIP_CREDIT_NEW_WORDS.addonBelowZero(-1).startsWith('Adjustment rejected: the ')).toBe(true)
+    expect(words.MEMBERSHIP_CREDIT_WORDS.belowUsed(0, 1).startsWith('Adjustment rejected: the ')).toBe(true)
+    expect(words.MEMBERSHIP_CREDIT_NEW_WORDS.creditTypeInvalid).toBe('Credit type must be "session" or "addon".')
+    expect(Object.keys(words.MEMBERSHIP_CREDIT_NEW_WORDS)).toEqual(['reasonRequired', 'addonBelowZero', 'creditTypeInvalid'])
+    // None of the three is an old word of the function: the old function refused none of them.
+    expect(isOldWord(words.MEMBERSHIP_CREDIT_NEW_WORDS.addonBelowZero(-3))).toBe(false)
+    expect(isOldWord(words.MEMBERSHIP_CREDIT_NEW_WORDS.creditTypeInvalid)).toBe(false)
+  })
+
+  it("Herd's `not_found` carries the membership's own old sentence in its details", () => {
+    expect(words.HERD_NOT_FOUND_MESSAGE).toBe('Membership not found.')
+    expect(isOldWord(words.HERD_NOT_FOUND_MESSAGE)).toBe(true)
+  })
+})
+
 describe('the words W36 adds', () => {
   it('the switch, worded as steps C, D and E worded theirs', () => {
     expect(words.MEMBERSHIP_PATH_OFF_MESSAGE).toBe('This is switched off in the booking system. Tell a manager.')

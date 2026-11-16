@@ -3,7 +3,9 @@
 //
 // C1 is one transaction with no Stripe call: the booking locked and read (lockAndLoadBooking), the checks in the old
 // function's order, the confirmed figures (Q18), the store credit and gift card claimed, the booking confirmed with
-// seat 1 paid and its credit released, and `booking.settle` recorded. Then either:
+// seat 1 paid and its credit released (W37a: with card money still to come, the credit stays on the booking until
+// C2, so nobody can spend it while the payment is pending and the undo has nothing to take back), and `booking.settle`
+// recorded. Then either:
 // - no card money (cash, or gift card and store credit covering it all): the gift card's redemption row, and commit.
 //   Settled. As today, no order is written for cash, gift card or store credit (Wayne's Q36: keep today's way);
 // - card money: the flow's record (W17's writeFlowRecord, `method` card or reader) written last, and commit. Then the
@@ -159,14 +161,21 @@ async function c1(tx: Tx, bookingId: string, input: SettleBookingInput, options:
   const stampedRedeemedAt = giftCardAmount > 0 && giftCardId ? await claimGiftCard(tx, giftCardId, giftCardAmount, settleRefusal) : false
 
   // The booking confirmed and paid for seat 1, its membership credit released; seat 1 a paid seat. Places untouched.
+  // W37a (W37 review S1): with card money still to come the credit isn't released here. Its period and
+  // `membership_credit` stay on the booking, so the period still counts it used, and the flow's C2 clears them
+  // (`release_credit_on_finalise`), as a Move's pass session is given back at C2.
+  const holdCredit = cardMoney !== null && booking.creditPeriodId !== null && booking.redemptionSource === 'membership_credit'
   const updated = (
     await tx.query<{ id: string; status: string; redemption_source: string; price_paid: string; payment_due_by: string | null }>(
       `UPDATE bookings
-       SET status = 'confirmed', redemption_source = 'paid', redeemed_membership_id = NULL, credit_period_id = NULL,
+       SET status = 'confirmed',
+           redemption_source = CASE WHEN $3::boolean THEN redemption_source ELSE 'paid' END,
+           redeemed_membership_id = NULL,
+           credit_period_id = CASE WHEN $3::boolean THEN credit_period_id ELSE NULL END,
            price_paid = COALESCE(price_paid, 0) + $1::numeric, payment_due_by = NULL, updated_at = now()
        WHERE id = $2::uuid AND status = 'payment_needed'
        RETURNING id, status, redemption_source, price_paid::text AS price_paid, payment_due_by::text AS payment_due_by`,
-      [amount, bookingId]
+      [amount, bookingId, holdCredit]
     )
   )[0]
   if (!updated) throw new Error(`Booking ${bookingId} was locked as payment needed but not updated.`)
@@ -186,6 +195,7 @@ async function c1(tx: Tx, bookingId: string, input: SettleBookingInput, options:
       old_redeemed_membership_id: booking.redeemedMembershipId,
       old_credit_period_id: booking.creditPeriodId,
       old_seat1_pay_by: seat1.payBy,
+      ...(holdCredit ? { release_credit_on_finalise: true } : {}),
       amount,
       ...(storeCreditAmount > 0 ? { store_credit_amount: storeCreditAmount } : {}),
       ...(giftCardAmount > 0 && giftCardId ? { gift_card: { gift_card_id: giftCardId, amount: giftCardAmount, stamped_redeemed_at: stampedRedeemedAt } } : {}),

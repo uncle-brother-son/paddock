@@ -38,9 +38,9 @@ const REPOINTED: Record<string, { original: string; copyLine: string; originalLi
 }
 /**
  * From W37 on: the step F functions the staff app has switched to the Worker (a thin wrapper there; the old body
- * only here). Each slice adds its own. None at W36.
+ * only here). Each slice adds its own. None at W36. W37: credits and their history, Herd, and store credit.
  */
-const SWITCHED_TO_THE_WORKER: ReadonlySet<string> = new Set([])
+const SWITCHED_TO_THE_WORKER: ReadonlySet<string> = new Set(['adjustCustomerStoreCredit.ts', 'adjustMembershipCredits.ts', 'getMembershipCreditAdjustments.ts', 'setMembershipHerd.ts'])
 
 function sourceFiles(root: string, dirs: string[]): string[] {
   const found: string[] = []
@@ -158,7 +158,8 @@ describe('W36: the frozen copy of the old step F functions and the three legacy 
       expect(sha256(readFileSync(file)), name).toBe(sha256(readFileSync(original)))
       compared.push(name)
     }
-    // At W36 every one of the 28 is still in the staff app. The number only falls as slices switch or delete their old bodies.
+    // At W36 every one of the 28 was still in the staff app. The number only falls as slices switch or delete their old
+    // bodies: W37 switched four functions, and the 12 modules beside them (and the other 12 functions) are untouched.
     expect(compared.length).toBeLessThanOrEqual(28)
     expect(compared.length).toBe(28 - SWITCHED_TO_THE_WORKER.size - backendFiles.filter((file) => !existsSync(path.join(appDir, 'backend/paddock', inBackend(file)))).length)
     // A switched function is a thin wrapper, not a drifted copy: it calls the Worker and no longer touches the database.
