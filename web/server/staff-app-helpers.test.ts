@@ -119,8 +119,6 @@ describe('staff app helpers', () => {
       'setEventAttendeeCheckIn',
       'setEventAttendeeWaiver',
       'setEventAttendeesCheckIn',
-      'setGiftCardPickedUp',
-      'setGiftCardShipped',
       'setGuestWaiverStatus',
       'setOrderLineItemFulfilled',
       'setSessionStartTime',
@@ -149,6 +147,28 @@ describe('staff app helpers', () => {
       const { default: fn } = await import(/* @vite-ignore */ path.join(appDir, `backend/paddock/${name}`))
 
       await expect(fn({ params: { customerId: 'c1', setupIntentId: 'seti_1' }, user })).rejects.toThrow(INACTIVE)
+
+      expect(rawRequest).toHaveBeenCalledTimes(1)
+      expect(legacy).not.toHaveBeenCalled()
+      expect(query).not.toHaveBeenCalled()
+    })
+
+    // Brief W38: picked up and shipped are thin calls to the Worker now (they were two of W01c's guarded functions),
+    // whose defineRoute refuses an inactive account, setting or clearing (the routes' own tests, gift-cards/admin.test.ts).
+    // The refusal comes back as data with the same words. Never the database or the legacy routes themselves.
+    it.each([
+      ['setGiftCardPickedUp', { pickedUp: true }],
+      ['setGiftCardPickedUp', { pickedUp: false }],
+      ['setGiftCardShipped', { shipped: true }],
+      ['setGiftCardShipped', { shipped: false }],
+    ] as const)('%s %o asks only the Worker, which refuses an inactive account', async (name, flag) => {
+      const query = stubStaffTable([row(false)])
+      const legacy = vi.fn()
+      vi.stubGlobal('paddockBackendApi2', { rawRequest: legacy })
+      rawRequest.mockResolvedValue(refusal('FORBIDDEN', INACTIVE))
+      const { default: fn } = await import(/* @vite-ignore */ path.join(appDir, `backend/paddock/${name}`))
+
+      expect(await fn({ params: { giftCardId: '11111111-1111-4111-8111-111111111111', ...flag }, user })).toEqual({ updated: false, reason: 'permission_denied', message: INACTIVE })
 
       expect(rawRequest).toHaveBeenCalledTimes(1)
       expect(legacy).not.toHaveBeenCalled()

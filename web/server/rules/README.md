@@ -158,6 +158,41 @@ audit row, behind a press key, and has no switch kind (lead call L3): there is n
   key like any other: the same press again gets it back (the screens say "no answer" and keep the key); a new press
   runs afresh.
 
+
+## Gift cards (W38)
+
+The five gift card actions (F-plan 4.6; lead call L2 for picked up and shipped). None touches Stripe: each write is one
+transaction with its audit row, behind a press key, and has no switch kind.
+
+- `gift-cards/admin.ts`, `POST gift-cards/:id/extend` (extendGiftCardExpiry). Issue refunds, then a whole number of
+  months from 1 to 120 (W38a; Wayne, 16 Nov: above 120 is `invalid_months`, refused before the database is touched),
+  then under the card's lock (`FOR NO KEY UPDATE`: the lock an order paying with the card and a refund
+  voiding it both take; a gift card is last in `LOCK_ORDER`, and nothing else is locked). The facts are read after
+  the lock, in their own statement.
+  - **Q46 (Wayne, 15 Nov; bug FB13):** a **voided** card whose own order line has been refunded
+    (`order_line_items.gift_card_id`, `refunded_at` set: the refund voids the card and stamps the line in one
+    transaction, and its undo clears both) is refused `voided_by_refund`; one whose balance was moved to store credit
+    (a `store_credit_transactions` row of reason `migrated_from_gift_card` naming the card: migration 010) is refused
+    `voided_to_store_credit`. Each refusal says why in words. A card voided with neither on record is un-voided, as
+    before. **Anything new that voids a card must leave one of these two marks, or add its own here,** or Reactivate
+    brings the card back. `gift-cards/voided-writers.test.ts` (W38a) holds this: it finds every statement in the
+    Worker that writes `gift_cards.voided` and fails when one appears beyond today's (one that voids, in
+    `orders/refund-lines.ts`, which stamps the line in the same transaction; two that un-void, the extension here
+    and the refund's undo).
+  - **Q47 (Wayne, 15 Nov; bug FB14):** a card that has already expired (its expiry before today's London date, as
+    `claimGiftCard` reads it) counts the months from today; one still in date has them added to its expiry.
+    Postgres's own date sum, so a month on from the 31st is the month's last day (Q33).
+  - A `gift_card.extended` audit row: who, the months, the old and new date, where they were counted from, and
+    whether the card was voided (FB15).
+- `POST gift-cards/:id/picked-up` and `…/shipped` (setGiftCardPickedUp, setGiftCardShipped). The card must be one to
+  pick up (or to ship). Under the card's lock: the flag with who and when, or cleared, and a `gift_card.picked_up` /
+  `gift_card.shipped` audit row with what was there before. Any active staff member, setting or clearing (FB24: the
+  old functions let someone with no staff record clear a flag).
+- `GET gift-cards` (getGiftCards: the Gift Cards page and New Order's gift card search) and
+  `GET gift-cards/:id/redemptions` (getGiftCardRedemptions). Named fields (`GIFT_CARD_COLUMNS`, held to the saved
+  schema by `admin.test.ts`: a new column on `gift_cards` fails the test until someone decides whether staff see it).
+  Any active staff member (FB16).
+
 ## The reader: T1, the intent, finalise and cancel (W11)
 
 A reader order runs the same pipeline, with the screen collecting between the intent and T2:

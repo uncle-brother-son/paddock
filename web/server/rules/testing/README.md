@@ -463,3 +463,13 @@ checked on their own (`accountRowProblems`: one row for each change, with the sa
 on the old code's own statement (FB7); on the new side the gap never opens, so each runs its second step where it
 would land, straight after. `w36-fb10-addon-credits-taken-below-zero` lifts migration 025's check for its own run when
 the schema has it (`liftAddonCreditsCheck`), so its golden file replays the same before and after the lead applies 025.
+
+W38's side (`gift-card-side.ts`, `gift-card-differences.ts`, `gift-card-replay.test.ts`) replays W36's gift card
+recordings (20: extend with FB13 to FB15, picked up and shipped, the list and the history) through the staff app's
+five thin wrappers and the Worker's routes. Extend goes under a press key as its dialog holds one (the recording of
+"the same press sent twice", FB15, under one key); picked up and shipped send none, so each wrapper makes its own. The
+Worker's three audit rows and the stored answers are set aside and checked on their own (`giftCardRowProblems`: one
+row for each press answered with a success, an extension's row carrying the dates the card moved between). 12 match
+their golden files exactly; 8 have pinned named differences (Wayne's Q46 and Q47, bugs FB15 and FB24, and three for
+who may). FB16's recording calls reads that later slices move and stops at the first refusal, so it isn't replayed
+whole: one test runs the switched reads on its seed and holds each refusal.

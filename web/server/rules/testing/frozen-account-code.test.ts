@@ -38,9 +38,23 @@ const REPOINTED: Record<string, { original: string; copyLine: string; originalLi
 }
 /**
  * From W37 on: the step F functions the staff app has switched to the Worker (a thin wrapper there; the old body
- * only here). Each slice adds its own. None at W36. W37: credits and their history, Herd, and store credit.
+ * only here). Each slice adds its own. None at W36. W37: credits and their history, Herd, and store credit. W38: the
+ * five gift card functions.
  */
-const SWITCHED_TO_THE_WORKER: ReadonlySet<string> = new Set(['adjustCustomerStoreCredit.ts', 'adjustMembershipCredits.ts', 'getMembershipCreditAdjustments.ts', 'setMembershipHerd.ts'])
+const SWITCHED_TO_THE_WORKER: ReadonlySet<string> = new Set([
+  'adjustCustomerStoreCredit.ts',
+  'adjustMembershipCredits.ts',
+  'getMembershipCreditAdjustments.ts',
+  'setMembershipHerd.ts',
+  // W38: the five gift card functions.
+  'extendGiftCardExpiry.ts',
+  'getGiftCardRedemptions.ts',
+  'getGiftCards.ts',
+  'setGiftCardPickedUp.ts',
+  'setGiftCardShipped.ts',
+])
+/** W38: the two flag functions are one thin call, kept in a module they share; each names it, and it calls the Worker. */
+const THIN_THROUGH: Record<string, string> = { 'setGiftCardPickedUp.ts': 'shared/giftCardFlag.ts', 'setGiftCardShipped.ts': 'shared/giftCardFlag.ts' }
 
 function sourceFiles(root: string, dirs: string[]): string[] {
   const found: string[] = []
@@ -159,13 +173,19 @@ describe('W36: the frozen copy of the old step F functions and the three legacy 
       compared.push(name)
     }
     // At W36 every one of the 28 was still in the staff app. The number only falls as slices switch or delete their old
-    // bodies: W37 switched four functions, and the 12 modules beside them (and the other 12 functions) are untouched.
+    // bodies: W37 switched four functions and W38 five, and the 12 modules beside them (and the other 7 functions) are
+    // untouched.
     expect(compared.length).toBeLessThanOrEqual(28)
     expect(compared.length).toBe(28 - SWITCHED_TO_THE_WORKER.size - backendFiles.filter((file) => !existsSync(path.join(appDir, 'backend/paddock', inBackend(file)))).length)
     // A switched function is a thin wrapper, not a drifted copy: it calls the Worker and no longer touches the database.
     for (const name of SWITCHED_TO_THE_WORKER) {
       const wrapper = code(path.join(appDir, 'backend/paddock', name))
-      expect(wrapper, name).toContain('callWorker')
+      const through = THIN_THROUGH[name]
+      if (through) {
+        expect(wrapper, name).toContain(`from './${through.replace(/\.ts$/, '')}'`)
+        expect(code(path.join(appDir, 'backend/paddock', through)), through).toContain('callWorker')
+        expect(code(path.join(appDir, 'backend/paddock', through)), through).not.toContain('paddockData')
+      } else expect(wrapper, name).toContain('callWorker')
       expect(wrapper, name).not.toContain('paddockData')
       expect(wrapper, name).not.toContain('paddockBackendApi2')
     }

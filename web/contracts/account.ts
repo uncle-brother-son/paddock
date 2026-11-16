@@ -456,8 +456,8 @@ export type GiftCardRow = z.infer<typeof giftCardRowSchema>
 
 // --- POST /api/v1/staff/gift-cards/:giftCardId/extend (extendGiftCardExpiry)
 
-/** A whole number of months above 0. Any value: the rule refuses a bad one as `invalid_months`. */
-export const extendGiftCardInputSchema = z.object({ extendByMonths: z.unknown() })
+/** A whole number of months from 1 to 120 (W38a). Any value, or none (W38): the rule refuses a bad one as `invalid_months`. */
+export const extendGiftCardInputSchema = z.object({ extendByMonths: z.unknown().optional() })
 export type ExtendGiftCardInput = z.infer<typeof extendGiftCardInputSchema>
 export const extendGiftCardRouteInputSchema = extendGiftCardInputSchema.extend(giftCardInPath)
 

@@ -1,8 +1,9 @@
 // New in W36 (F-plan 4.1, brief W36 item 1): every word staff see from a gift card action, moved here word for word
 // from the staff app's functions (extendGiftCardExpiry, setGiftCardPickedUp, setGiftCardShipped) and the screens that
 // show them (ExtendGiftCardDialog, the Gift Cards page, the order's line items), ahead of the slice that uses them
-// (W38). Nothing uses them yet. The test beside this file holds each to its source (the frozen copy, legacy-account/,
-// and the screens) until the old code goes. Most of these reasons have no words in the function: the screen has them.
+// (W38). Used from W38 by admin.ts. The test beside this file holds each to its source (the frozen copy,
+// legacy-account/, and the screens) until the old code goes. Most of these reasons have no words in the function: the
+// screen has them. W38's own two sentences (Wayne's Q46) are GIFT_CARD_EXTEND_NEW_WORDS.
 import 'server-only'
 
 export { INACTIVE_STAFF_MESSAGE } from '@/server/rules/bookings/failure-messages'
@@ -13,15 +14,30 @@ export { INACTIVE_STAFF_MESSAGE } from '@/server/rules/bookings/failure-messages
 export const GIFT_CARD_EXTEND_REASONS = ['gift_card_not_found', 'invalid_months', 'permission_denied'] as const
 export type GiftCardExtendReason = (typeof GIFT_CARD_EXTEND_REASONS)[number]
 
+/** W38a (review S2; Wayne, 16 Nov): the most months one extension may add. Above it is `invalid_months`. */
+export const GIFT_CARD_EXTEND_MAX_MONTHS = 120
+
 export const GIFT_CARD_EXTEND_WORDS = {
   /** The function's only words. */
   permissionDenied: 'Needs the Issue refunds permission to extend or re-activate a gift card.',
-  /** The dialog's, for `invalid_months` (and before the press). */
-  monthsInvalid: 'Enter a whole number of months greater than 0.',
+  /** The rule's and the dialog's, for `invalid_months` (and before the press). W38a (Wayne, 16 Nov): 1 to 120. */
+  monthsInvalid: 'Enter a whole number of months from 1 to 120.',
   /** The dialog's, when `permission_denied` carries no words. */
   permissionFallback: 'Needs the Issue refunds permission.',
   /** The dialog's, for any other refusal (`gift_card_not_found` among them) and a throw. */
   failed: 'Failed to extend gift card.',
+} as const
+
+/**
+ * New in W38 (Wayne's Q46, 15 Nov; bug FB13): a card voided because its order was refunded, or because its balance was
+ * moved to store credit, can't be reactivated, and the screen says why. The reasons are `voided_by_refund` and
+ * `voided_to_store_credit`. W38a (review S1): neither says where the money is now. A refund's card part may still be
+ * pending, held or owed, and store credit may have been spent since.
+ */
+export const GIFT_CARD_EXTEND_NEW_REASONS = ['voided_by_refund', 'voided_to_store_credit'] as const
+export const GIFT_CARD_EXTEND_NEW_WORDS = {
+  voidedByRefund: "This gift card was voided because its order was refunded, so it can't be reactivated or extended. Its value was refunded with the order: check the order for where it went.",
+  voidedToStoreCredit: "This gift card was voided because its balance was moved to the customer's store credit, so it can't be reactivated or extended. Its balance was moved to their store credit.",
 } as const
 
 // --- Picked up and shipped (setGiftCardPickedUp.ts, setGiftCardShipped.ts, the Gift Cards page, the order's line items)

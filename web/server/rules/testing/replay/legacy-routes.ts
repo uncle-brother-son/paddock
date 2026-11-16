@@ -45,6 +45,8 @@ const STAFF_ROUTES: Record<string, () => Promise<unknown>> = {
   '/api/v1/staff/orders/reconcile': () => import('@/app/api/v1/staff/orders/reconcile/route'),
   '/api/v1/staff/orders/stuck': () => import('@/app/api/v1/staff/orders/stuck/route'),
   '/api/v1/staff/orders/stuck/close': () => import('@/app/api/v1/staff/orders/stuck/close/route'),
+  // W38: the staff app's thin getGiftCards.
+  '/api/v1/staff/gift-cards': () => import('@/app/api/v1/staff/gift-cards/route'),
 }
 
 /** W14: the staff routes with an id in the path, and the path's parameters. */
@@ -93,6 +95,11 @@ const STAFF_PATTERNS: Array<{ pattern: RegExp; load: () => Promise<unknown>; par
   { pattern: /^\/api\/v1\/staff\/memberships\/([^/]+)\/credit-adjustments$/, load: () => import('@/app/api/v1/staff/memberships/[membershipId]/credit-adjustments/route'), params: (m) => ({ membershipId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/memberships\/([^/]+)\/herd$/, load: () => import('@/app/api/v1/staff/memberships/[membershipId]/herd/route'), params: (m) => ({ membershipId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/customers\/([^/]+)\/store-credit$/, load: () => import('@/app/api/v1/staff/customers/[customerId]/store-credit/route'), params: (m) => ({ customerId: decodeURIComponent(m[1] ?? '') }) },
+  // W38: the staff app's thin extendGiftCardExpiry, setGiftCardPickedUp, setGiftCardShipped and getGiftCardRedemptions.
+  { pattern: /^\/api\/v1\/staff\/gift-cards\/([^/]+)\/extend$/, load: () => import('@/app/api/v1/staff/gift-cards/[giftCardId]/extend/route'), params: (m) => ({ giftCardId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/gift-cards\/([^/]+)\/picked-up$/, load: () => import('@/app/api/v1/staff/gift-cards/[giftCardId]/picked-up/route'), params: (m) => ({ giftCardId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/gift-cards\/([^/]+)\/shipped$/, load: () => import('@/app/api/v1/staff/gift-cards/[giftCardId]/shipped/route'), params: (m) => ({ giftCardId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/gift-cards\/([^/]+)\/redemptions$/, load: () => import('@/app/api/v1/staff/gift-cards/[giftCardId]/redemptions/route'), params: (m) => ({ giftCardId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/reader-flows\/([^/]+)\/finalise$/, load: () => import('@/app/api/v1/staff/reader-flows/[pendingId]/finalise/route'), params: (m) => ({ pendingId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/reader-flows\/([^/]+)\/cancel$/, load: () => import('@/app/api/v1/staff/reader-flows/[pendingId]/cancel/route'), params: (m) => ({ pendingId: decodeURIComponent(m[1] ?? '') }) },
 ]

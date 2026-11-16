@@ -22,6 +22,10 @@ const options = { actor: { type: 'staff' as const, id: 'race-test' }, requestId:
 
 beforeAll(async () => {
   pg = await startRealPostgres()
+  // W38a (W38 review L1 and point 8): `deadlocked()` below gives its own writer a long deadlock check, so the order's
+  // is always the one that fires. `deadlock_timeout` is a superuser setting and the tests connect as paddock_worker
+  // (NOSUPERUSER), so that role is given leave to set it, in this file's database only.
+  await pg.admin.unsafe('GRANT SET ON PARAMETER deadlock_timeout TO paddock_worker')
   first = pg.connect()
   second = pg.connect()
   prober = pg.connect()
@@ -445,8 +449,10 @@ describe('an overlapping booking in another service type', () => {
    * A deadlock made on purpose. Another writer books a plunge (10:30 to 11:30) and stays open; the
    * order books the sauna (10:00 to 11:00) and waits on it; then the writer books an earlier plunge
    * (9:00 to 10:15), which overlaps the order's sauna booking but not its own, and waits on the
-   * order. The order has waited longer, so its deadlock check fires first and Postgres aborts it
-   * (40P01). The writer then commits.
+   * order. The order's deadlock check (after a second) is the only one that can fire: the writer's is put off to
+   * 10 seconds, so Postgres aborts the order (40P01) however busy the machine is. The writer then commits. (Before
+   * W38a both checked after a second, and the order's fired first only because it had waited longer: under load
+   * Postgres once stopped the writer instead, W38's run 4.)
    */
   async function deadlocked(order: (customer: string, sauna: string) => Promise<string>) {
     const sauna = await session()
@@ -464,6 +470,9 @@ describe('an overlapping booking in another service type', () => {
       announce = resolve
     })
     const writing = second.transaction(async (tx) => {
+      await tx.query("SET LOCAL deadlock_timeout = '10s'")
+      // Held by the test itself: without the setting the test still passes most runs, by timing alone.
+      expect((await tx.query<{ wait: string }>("SELECT current_setting('deadlock_timeout') AS wait"))[0]?.wait).toBe('10s')
       await tx.query(book, [plunge, writer])
       announce((await tx.query<{ pid: number }>('SELECT pg_backend_pid() AS pid'))[0]?.pid as number)
       await secondStep.promise

@@ -8,7 +8,7 @@ import * as words from './failure-messages'
 // Brief W36 item 1: the gift card words, moved ahead of the slice that uses them (W38). The functions have almost no
 // words of their own (most refusals are a reason alone), so each reason list is held to the old function's own, read
 // from the frozen copy (legacy-account) with the TypeScript parser, and the words the screens show for those reasons
-// are held to the screens' source until W38 changes them.
+// are held to the screens' source. W38 uses them (admin.ts) and adds Q46's two sentences.
 
 const { strings, templates } = frozenWords(legacyAccountDir)
 const fn = (name: string) => path.join(legacyAccountDir, name)
@@ -43,9 +43,29 @@ describe('the gift card reasons and words, moved (brief W36 item 1)', () => {
     expect(sourceHolds(orderLines, words.GIFT_CARD_FLAG_WORDS.shippingFailed)).toBe(true)
   })
 
+  it("W38's own words (Wayne's Q46): each says why the card was voided, that it can't be reactivated, and what was done with its value, without saying where the money is now (W38a, review S1); neither is an old function's sentence", () => {
+    expect([...words.GIFT_CARD_EXTEND_NEW_REASONS]).toEqual(['voided_by_refund', 'voided_to_store_credit'])
+    expect(words.GIFT_CARD_EXTEND_NEW_WORDS).toEqual({
+      voidedByRefund: "This gift card was voided because its order was refunded, so it can't be reactivated or extended. Its value was refunded with the order: check the order for where it went.",
+      voidedToStoreCredit: "This gift card was voided because its balance was moved to the customer's store credit, so it can't be reactivated or extended. Its balance was moved to their store credit.",
+    })
+    for (const sentence of Object.values(words.GIFT_CARD_EXTEND_NEW_WORDS)) {
+      expect(strings.has(sentence)).toBe(false)
+      expect(sentence).toContain("can't be reactivated")
+      // W38a (review S1): a refund's card part may be pending, held or owed, and store credit may have been spent.
+      expect(sentence).not.toMatch(/gone back|is on their store credit/)
+    }
+    // The new reasons are not the old function's: its own three stay as they were.
+    for (const reason of words.GIFT_CARD_EXTEND_NEW_REASONS) expect((words.GIFT_CARD_EXTEND_REASONS as readonly string[]).includes(reason)).toBe(false)
+  })
+
   it('the check would catch a changed word or a reason added to an old function', () => {
     expect(strings.has(words.GIFT_CARD_EXTEND_WORDS.permissionDenied.replace('re-activate', 'reactivate'))).toBe(false)
     expect(sourceHolds(dialog, 'Enter a whole number of months above 0.')).toBe(false)
+    // W38a (review S2): the old sentence, with no ceiling, is gone from the dialog; the words name the ceiling.
+    expect(sourceHolds(dialog, 'Enter a whole number of months greater than 0.')).toBe(false)
+    expect(words.GIFT_CARD_EXTEND_WORDS.monthsInvalid).toBe(`Enter a whole number of months from 1 to ${words.GIFT_CARD_EXTEND_MAX_MONTHS}.`)
+    expect(words.GIFT_CARD_EXTEND_MAX_MONTHS).toBe(120)
     expect(sourceHolds(giftCardsPage, 'This gift card is not a pickup card')).toBe(false)
     expect(() => propertyUnionMembers(fn('extendGiftCardExpiry.ts'), 'ExtendGiftCardExpiryResult', 'outcome')).toThrow("isn't a union of strings")
   })
