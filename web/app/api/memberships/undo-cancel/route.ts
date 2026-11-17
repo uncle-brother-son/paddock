@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import Stripe from 'stripe'
+import { legacyMembershipChangeHeld } from '@/server/rules/memberships/legacy-guard' // W40d guard
 import { undoCancelMembership, type UndoCancelMembershipParams, type StripeUndoCancelDeps } from './core'
 
 function getStripe() {
@@ -40,6 +41,13 @@ export async function POST(request: NextRequest) {
     if (!membershipId) {
       return NextResponse.json({ error: 'Missing required field: membershipId' }, { status: 400 })
     }
+
+    // W40d guard: start (W40c review S2: refused while the new screen's Stripe step is open or not yet checked)
+    const held = await legacyMembershipChangeHeld(membershipId)
+    if (held) {
+      return NextResponse.json({ error: held }, { status: 409 })
+    }
+    // W40d guard: end
 
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,

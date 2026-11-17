@@ -28,20 +28,27 @@ export const PAYMENT_DATE_HELD_MESSAGE = PAYMENT_UNCONFIRMED_MESSAGE
 
 /**
  * A Stripe step left after the database change (memberships/left.ts, F-plan 4.10): the stuck list's line while the
- * automatic check is still sending it, and once Stripe has refused it for good (lead call L7).
+ * automatic check is still sending it, and once Stripe has refused it for good (lead call L7). W40 (W36 review S2):
+ * the `left` words say what to do if it stays (set it in Stripe by hand: the step is read first, so the next check
+ * closes it). W40 (L2): `missing`, when the refusal is that Stripe has no such subscription.
  */
 export const LEFT_STEP_WORDS = {
   cancel_at: {
     left: (subscriptionId: string): string =>
-      `A membership's cancellation was recorded, but its subscription (${subscriptionId}) couldn't be confirmed changed in Stripe yet, so it could still renew past its last day. The automatic check tries again every 5 minutes: nothing to do yet.`,
+      `A membership's cancellation was recorded, but its subscription (${subscriptionId}) couldn't be confirmed changed in Stripe yet, so it could still renew past its last day. The automatic check tries again every 5 minutes. If this is still here after an hour, set it in Stripe by hand (or tell a manager): the next check then sees it and takes it off the list.`,
     refused: (subscriptionId: string): string =>
       `A membership's cancellation was recorded, but Stripe refused to change its subscription (${subscriptionId}), so the automatic check has stopped trying and it could still renew past its last day. Set or clear its cancel date in Stripe by hand to match the membership (or tell a manager), then press Mark sorted (needs the Issue refunds permission).`,
+    /** W40 (W36 review L2): Stripe answered that it has no such subscription (deleted, or the other mode's key). */
+    missing: (subscriptionId: string): string =>
+      `A membership's cancellation was recorded, but Stripe can't find its subscription (${subscriptionId}) with the club's payment account details, so the automatic check has stopped trying. Tell a manager: the subscription may have been deleted in Stripe, or belong to the other mode. Once the membership and Stripe agree, press Mark sorted (needs the Issue refunds permission).`,
   },
   payment_method: {
     left: (subscriptionId: string): string =>
-      `A customer's card was replaced, but a membership's subscription (${subscriptionId}) couldn't be confirmed moved to the new card in Stripe yet, so its next payment could still go to the old card. The automatic check tries again every 5 minutes: nothing to do yet.`,
+      `A customer's card was replaced, but a membership's subscription (${subscriptionId}) couldn't be confirmed moved to the new card in Stripe yet, so its next payment could still go to the old card. The automatic check tries again every 5 minutes. If this is still here after an hour, set it in Stripe by hand (or tell a manager): the next check then sees it and takes it off the list.`,
     refused: (subscriptionId: string): string =>
       `A customer's card was replaced, but Stripe refused to move a membership's subscription (${subscriptionId}) to the new card, so the automatic check has stopped trying and its next payment could still go to the old card. Set the subscription's payment method in Stripe by hand (or tell a manager), then press Mark sorted (needs the Issue refunds permission).`,
+    missing: (subscriptionId: string): string =>
+      `A customer's card was replaced, but Stripe can't find a membership's subscription (${subscriptionId}) with the club's payment account details, so the automatic check has stopped trying. Tell a manager: the subscription may have been deleted in Stripe, or belong to the other mode. Once the membership and Stripe agree, press Mark sorted (needs the Issue refunds permission).`,
   },
   /** The manual close's answer. */
   sorted: 'Marked as sorted. It is no longer listed.',
@@ -77,6 +84,34 @@ export const MEMBERSHIP_CANCEL_DIALOG_WORDS: Readonly<Record<Exclude<MembershipC
 }
 /** The dialog's words when a refusal carries none. */
 export const MEMBERSHIP_CANCEL_FALLBACK = 'Failed to update cancellation.'
+
+/**
+ * New in W40 (brief W40 items 1 and 4; F-plan 4.3): what the old code never said.
+ * - `stillSending` (W36 review S1): the last cancel or undo on this membership is still inside its window, so its
+ *   Stripe step may still be on its way; a new one waits its turn. W40a (W40 review L4): the window is 15 minutes,
+ *   and the words say so.
+ * - `renewalDueToday` (W40a; Wayne, 16 Nov): a cancel on the day the renewal is due (or after, while it is overdue),
+ *   before the payment has moved the next payment date on.
+ * - `noRenewalDate` (FB22): the old date sum threw on a membership with no next payment date.
+ * - `paymentDateChanging`: a cancel while a payment date change is in progress (the press's own sentence for it).
+ * - `left`: the change is saved and Stripe gave no clear answer, so its Stripe step is left for the automatic check.
+ */
+export const MEMBERSHIP_CANCEL_NEW_WORDS = {
+  stillSending: 'The last change to this membership is still being sent to Stripe. Try again in 15 minutes.',
+  renewalDueToday:
+    "Today's payment for this membership hasn't gone through yet, so it can't be cancelled until it has. Try again after the payment (the membership will then end at its next renewal).",
+  noRenewalDate: "This membership has no next payment date, so the day it would end can't be worked out. Nothing was changed. Tell a manager.",
+  paymentDateChanging: 'A payment date change is already in progress for this membership.',
+  left: "Saved here, but Stripe hasn't confirmed it yet. The automatic check keeps sending it (every 5 minutes), and it is listed on the Orders page until Stripe shows it. Don't press again.",
+} as const
+
+/**
+ * New in W40d (W40c review S2): the two legacy routes (/api/memberships/cancel and /undo-cancel) refuse with this,
+ * 409, while the membership has a Stripe step from the new screen that is open, or closed and not yet checked
+ * (memberships/legacy-guard.ts). The old function shows a route's `error` as it is.
+ */
+export const LEGACY_MEMBERSHIP_CHANGE_HELD_MESSAGE =
+  'This membership was changed in the new screen in the last half hour and Stripe is still being checked. Try again in 30 minutes.'
 
 // --- Payment date change (changeMembershipPaymentDate.ts, shared/membershipPaymentDate.ts, the legacy route, the dialog)
 

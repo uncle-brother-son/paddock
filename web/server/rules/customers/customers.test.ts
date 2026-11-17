@@ -481,8 +481,10 @@ describe('the detail (getCustomerDetail)', () => {
           })
           expect(Object.keys(mo['memberships']?.[0] ?? {}).some((name) => name.startsWith('pdc_'))).toBe(false)
           expect(Object.keys(mo['memberships']?.[0] ?? {}).sort()).toEqual(
-            [...CUSTOMER_MEMBERSHIP_COLUMNS, 'plan_name', 'plan_is_unlimited', 'current_period_end', 'current_period_credits_allocated', 'current_period_credits_remaining', 'payment_date_changed_at', 'payment_date_change_blocked', 'payment_date_change_needs_override'].sort()
+            [...CUSTOMER_MEMBERSHIP_COLUMNS, 'plan_name', 'plan_is_unlimited', 'current_period_end', 'current_period_credits_allocated', 'current_period_credits_remaining', 'refunded', 'payment_date_changed_at', 'payment_date_change_blocked', 'payment_date_change_needs_override'].sort()
           )
+          // W40 (W35 row 10): the rows are read by memberships/list.ts now, and say whether the membership was refunded.
+          expect(mo['memberships']?.[0]?.['refunded']).toBe(false)
           expect(mo['bookingHistory']).toEqual([expect.objectContaining({ status: 'payment_needed', party_size: 1, price_paid: '0.00', service_type_name: 'Sauna', checked_in_at: null })])
           expect(String(mo['bookingHistory']?.[0]?.['payment_due_by'])).toMatch(/^2026-11-11T/)
           expect(mo.storeCreditBalance).toBe('15.00')

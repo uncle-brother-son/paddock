@@ -244,6 +244,13 @@ export const stuckStepSchema = z.object({
   subscriptionId: z.string(),
   /** What the step sets on the subscription. */
   step: z.enum(['cancel_at', 'payment_method']),
+  /**
+   * W40: what it is, for the screen: a cancel date to set (`cancel_date`, with `lastDay`), a cancel date to clear
+   * (`clear_cancel_date`: an undo), or the card to charge (`card`).
+   */
+  what: z.enum(['cancel_date', 'clear_cancel_date', 'card']),
+  /** `cancel_date`: the membership's last day of access the step sets (YYYY-MM-DD, London). */
+  lastDay: z.string().optional(),
   customerId: z.string().nullable(),
   customerName: z.string().nullable(),
   state: z.enum(['left', 'refused']),

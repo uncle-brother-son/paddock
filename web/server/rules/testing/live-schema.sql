@@ -1282,12 +1282,12 @@ begin
   select addon_credit_wait_months into wait_months from public.membership_settings where id;
   wait_months := coalesce(wait_months, 6);
   update public.customer_memberships cm
-     set is_herd = (cm.billing_frequency = 'yearly'
-                    or cm.start_date <= (now() at time zone 'Europe/London')::date - (wait_months || ' months')::interval),
+     set is_herd = coalesce((cm.billing_frequency = 'yearly'
+                    or cm.start_date <= (now() at time zone 'Europe/London')::date - (wait_months || ' months')::interval), false),
          updated_at = now()
    where cm.herd_override is null
-     and cm.is_herd is distinct from (cm.billing_frequency = 'yearly'
-                    or cm.start_date <= (now() at time zone 'Europe/London')::date - (wait_months || ' months')::interval);
+     and cm.is_herd is distinct from coalesce((cm.billing_frequency = 'yearly'
+                    or cm.start_date <= (now() at time zone 'Europe/London')::date - (wait_months || ' months')::interval), false);
   get diagnostics changed = row_count;
   return changed;
 end $function$;
@@ -1429,6 +1429,7 @@ ALTER TABLE public.bookings ADD CONSTRAINT bookings_pkey PRIMARY KEY (id);
 ALTER TABLE public.bookings ADD CONSTRAINT bookings_redemption_source_check CHECK ((redemption_source = ANY (ARRAY['paid'::text, 'membership_credit'::text, 'session_pass_credit'::text])));
 ALTER TABLE public.bookings ADD CONSTRAINT bookings_refund_owed_amount_check CHECK ((refund_owed_amount >= (0)::numeric));
 ALTER TABLE public.bookings ADD CONSTRAINT bookings_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'confirmed'::text, 'payment_needed'::text, 'cancelled'::text, 'completed'::text, 'no-show'::text])));
+ALTER TABLE public.customer_memberships ADD CONSTRAINT customer_memberships_addon_credits_remaining_check CHECK ((addon_credits_remaining >= 0));
 ALTER TABLE public.customer_memberships ADD CONSTRAINT customer_memberships_pkey PRIMARY KEY (id);
 ALTER TABLE public.customer_memberships ADD CONSTRAINT customer_memberships_stripe_subscription_id_key UNIQUE (stripe_subscription_id);
 ALTER TABLE public.customer_memberships ADD CONSTRAINT customer_memberships_subscription_status_check CHECK ((subscription_status = ANY (ARRAY['active'::text, 'paused'::text, 'cancelled'::text, 'past_due'::text])));
@@ -1684,6 +1685,7 @@ CREATE INDEX audit_log_actor_idx ON public.audit_log USING btree (actor_id, at);
 CREATE INDEX audit_log_entity_idx ON public.audit_log USING btree (entity_type, entity_id);
 CREATE INDEX audit_log_refund_claims_idx ON public.audit_log USING btree (action, at) WHERE (action = ANY (ARRAY['booking.refund_claimed'::text, 'order.refund_claimed'::text, 'event_booking.refund_claimed'::text]));
 CREATE UNIQUE INDEX customers_auth_user_id_key ON public.customers USING btree (auth_user_id) WHERE (auth_user_id IS NOT NULL);
+CREATE UNIQUE INDEX customers_email_lower_key ON public.customers USING btree (lower(email));
 CREATE INDEX event_attendees_booking_idx ON public.event_attendees USING btree (event_booking_id);
 CREATE UNIQUE INDEX event_attendees_one_account_holder ON public.event_attendees USING btree (event_booking_id) WHERE (attendee_type = 'account_holder'::text);
 CREATE INDEX event_bookings_customer_id_idx ON public.event_bookings USING btree (customer_id);

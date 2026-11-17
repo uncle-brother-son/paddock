@@ -362,7 +362,10 @@ module they import, byte for byte at staff app `cec4ef1`, and the three legacy m
 (`/api/memberships/cancel`, `/undo-cancel`, `/change-payment-date`, with the cancel's date sum), copied from `app/`
 at Worker `982db8f` while they are still live there (they stay until W44). `oldFunctionPath` loads the sixteen from it,
 `legacy-routes.ts` binds the three routes to it, and `frozen-account-code.test.ts` keeps it as frozen and out of reach
-of app code. Two import lines in the route copy are repointed so it stands alone (its README).
+of app code. Two import lines in the route copy are repointed so it stands alone (its README). W40d: the live cancel
+and undo routes now carry a guard the copy never had (they refuse while the new screen's Stripe step is open or not
+yet checked; `memberships/legacy-guard.ts`), as one marked import line and one marked block; the guard test holds each
+live route to the copy with those lines taken out, and the old side still replays the copy, unguarded.
 
 The `w36-*` scenarios (137, `w36Scenarios()` at the end of `scenarios.ts`) are step F's golden files, recorded from the
 old code while it exists (F-plan 4.12 item 1): every refusal and each success of the cancel and undo (inside and after
@@ -494,3 +497,25 @@ put back by the next replay, straight after it empties the tables (`putBackWhenE
 does the same on its own): the golden file replays the same before and after the lead applies 027. The test that
 borrows that recording's seed for its own run lifts the index the same way, and runs twice, without the index and with
 027 applied (`withEmailLowerIndex`; W39a, review S1: it had no lift, and failed once the index was in the saved schema).
+
+W40's side (`membership-side.ts`, `membership-differences.ts`, `membership-replay.test.ts`) replays W36's cancel
+recordings (27: 14 cancel, 3 undo, FB5's 6, FB6's 2, the Subscriptions list, and the recording that reads the list
+and the profile round a cancel) through the staff app's thin `setMembershipCancellation`, `getSubscriptions` and
+`getCustomerDetail` and the Worker's routes, with `membership_changes` on. The cancel goes under a press key as
+CancelMembershipDialog holds one: a press that got no answer keeps it, so the two "answer lost, then pressed again"
+recordings send Stripe the change once. The legacy paths `/api/memberships/cancel` and `/undo-cancel` are in
+`WORKER_DOES_IT_NOW`, so a lost answer is lost on the new route. Set aside and checked on their own: the Worker's
+audit rows (`membershipRowProblems`: a cancel's row carries the `cancel_at` it sends, London midnight on its end
+date, the day after the last day written; each has its one Stripe step; a put-back's step is closed; a last day never
+moves without its row; one row for each press that went or that Stripe refused), the stored answers, and Stripe's
+reads (`stripeReadProblems`: every change is read first, and every cancel date goes with no proration and under a
+key). 4 match their golden files exactly; 23 have pinned named differences: what Stripe is sent (L1 and the key), who
+may (FB20), FB5's six, FB6 (Q33; one recording since W40a: the other, started 31 July, has its renewal overdue, so
+its cancel is now refused `renewal_due_today`, named as Wayne's renewal-day rule), FB22, Stripe's refusal carrying a reason, the database first (a failed write
+changes nothing and sends nothing), the lost answers, and `refunded` on the read rows (W35 row 10). A value that
+equals the golden file's reports no difference, so where the old recording holds the old fault itself (FB5's write,
+a second success, a send with no proration or key) the rows' and the sends' own checks are what catch it, and the
+test plants each. The rule's own tests are `memberships/cancel.test.ts` (PGlite: every refusal, the end dates, Stripe
+refusing, no answer and reconcile both ways, the webhook between M1 and Stripe, the turns) and
+`memberships/cancel-postgres.test.ts` (real Postgres: two presses at once, and reconcile's row waiting for a press).
+`left.test.ts` runs reconcile "past the window" (`pastTheWindow`), because a step inside it is its press's.

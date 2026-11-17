@@ -37,9 +37,24 @@ const REPOINTED: Record<string, { original: string; copyLine: string; originalLi
   },
 }
 /**
+ * W40d (W40c review S2): the live cancel and undo routes carry a guard the frozen copy never had (they refuse while
+ * the new screen's Stripe step is open or not yet checked; memberships/legacy-guard.ts). It is one marked import line
+ * and one marked block; with those taken out, the live route must still be the copy's, byte for byte.
+ */
+const GUARDED_ROUTES: ReadonlySet<string> = new Set(['routes/memberships/cancel/route.ts', 'routes/memberships/undo-cancel/route.ts'])
+const GUARD_IMPORT = "import { legacyMembershipChangeHeld } from '@/server/rules/memberships/legacy-guard' // W40d guard\n"
+const GUARD_BLOCK = /^ *\/\/ W40d guard: start[^\n]*\n[\s\S]*?^ *\/\/ W40d guard: end\n\n/m
+/** A live route's source without the W40d guard, and whether it had the whole guard (the import, the block, the call). */
+function withoutGuard(source: string): { source: string; guarded: boolean } {
+  const block = source.match(GUARD_BLOCK)?.[0] ?? ''
+  const guarded = source.split(GUARD_IMPORT).length === 2 && block.includes('await legacyMembershipChangeHeld(membershipId)') && block.includes('status: 409')
+  return { source: source.replace(GUARD_IMPORT, '').replace(GUARD_BLOCK, ''), guarded }
+}
+
+/**
  * From W37 on: the step F functions the staff app has switched to the Worker (a thin wrapper there; the old body
  * only here). Each slice adds its own. None at W36. W37: credits and their history, Herd, and store credit. W38: the
- * five gift card functions. W39: the three customer functions.
+ * five gift card functions. W39: the three customer functions. W40: the membership cancel and the Subscriptions list.
  */
 const SWITCHED_TO_THE_WORKER: ReadonlySet<string> = new Set([
   'adjustCustomerStoreCredit.ts',
@@ -56,6 +71,9 @@ const SWITCHED_TO_THE_WORKER: ReadonlySet<string> = new Set([
   'createCustomer.ts',
   'getCustomerDetail.ts',
   'getCustomers.ts',
+  // W40: the membership cancel (and its undo) and the Subscriptions list.
+  'setMembershipCancellation.ts',
+  'getSubscriptions.ts',
 ])
 /** W38: the two flag functions are one thin call, kept in a module they share; each names it, and it calls the Worker. */
 const THIN_THROUGH: Record<string, string> = { 'setGiftCardPickedUp.ts': 'shared/giftCardFlag.ts', 'setGiftCardShipped.ts': 'shared/giftCardFlag.ts' }
@@ -177,8 +195,8 @@ describe('W36: the frozen copy of the old step F functions and the three legacy 
       compared.push(name)
     }
     // At W36 every one of the 28 was still in the staff app. The number only falls as slices switch or delete their old
-    // bodies: W37 switched four functions, W38 five and W39 three, and the 12 modules beside them (and the other 4
-    // functions) are untouched.
+    // bodies: W37 switched four functions, W38 five, W39 three and W40 two, and the 12 modules beside them (and the
+    // other 2 functions) are untouched.
     expect(compared.length).toBeLessThanOrEqual(28)
     expect(compared.length).toBe(28 - SWITCHED_TO_THE_WORKER.size - backendFiles.filter((file) => !existsSync(path.join(appDir, 'backend/paddock', inBackend(file)))).length)
     // A switched function is a thin wrapper, not a drifted copy: it calls the Worker and no longer touches the database.
@@ -195,7 +213,7 @@ describe('W36: the frozen copy of the old step F functions and the three legacy 
     }
   })
 
-  it("every route file is the app's own, byte for byte, while the app still has it, but for the two repointed import lines", () => {
+  it("every route file is the app's own, byte for byte, while the app still has it, but for the two repointed import lines and (W40d) the marked guard in the live cancel and undo routes", () => {
     // The live routes stay in app/ until W44 (lead call L4). One still there must not have drifted from the copy.
     let compared = 0
     for (const file of copyFiles.filter((one) => !one.startsWith(COPY_CODE + path.sep))) {
@@ -207,6 +225,12 @@ describe('W36: the frozen copy of the old step F functions and the three legacy 
       if (repointed) {
         expect(copy.split(repointed.copyLine)).toHaveLength(2)
         expect(sha256(copy.replace(repointed.copyLine, repointed.originalLine)), name).toBe(sha256(readFileSync(original)))
+      } else if (GUARDED_ROUTES.has(name)) {
+        // W40d: the live route has the guard; the copy, which the old side replays, does not.
+        const live = withoutGuard(readFileSync(original, 'utf8'))
+        expect(live.guarded, name).toBe(true)
+        expect(copy).not.toContain('legacyMembershipChangeHeld')
+        expect(sha256(copy), name).toBe(sha256(live.source))
       } else {
         expect(sha256(copy), name).toBe(sha256(readFileSync(original)))
       }

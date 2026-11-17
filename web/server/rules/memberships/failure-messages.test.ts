@@ -185,22 +185,35 @@ describe('the words W36 adds', () => {
     )
   })
 
-  it("a left step's lines: still being sent says there is nothing to do; refused says what to do in Stripe and to press Mark sorted", () => {
+  it("a left step's lines: still being sent says the check is trying and what to do if it stays (W36 review S2); refused says what to do in Stripe and to press Mark sorted; a subscription Stripe can't find says so (L2)", () => {
     const { cancel_at: cancel, payment_method: card } = words.LEFT_STEP_WORDS
+    // S2: "nothing to do yet" could stay for ever (a 403 on every run, an outage of a day). The step is read before it
+    // is sent, so setting it in Stripe by hand closes it on the next check.
+    const ifItStays = ' The automatic check tries again every 5 minutes. If this is still here after an hour, set it in Stripe by hand (or tell a manager): the next check then sees it and takes it off the list.'
     expect(cancel.left('sub_1')).toBe(
-      "A membership's cancellation was recorded, but its subscription (sub_1) couldn't be confirmed changed in Stripe yet, so it could still renew past its last day. The automatic check tries again every 5 minutes: nothing to do yet."
+      `A membership's cancellation was recorded, but its subscription (sub_1) couldn't be confirmed changed in Stripe yet, so it could still renew past its last day.${ifItStays}`
     )
     expect(cancel.refused('sub_1')).toBe(
       "A membership's cancellation was recorded, but Stripe refused to change its subscription (sub_1), so the automatic check has stopped trying and it could still renew past its last day. Set or clear its cancel date in Stripe by hand to match the membership (or tell a manager), then press Mark sorted (needs the Issue refunds permission)."
     )
+    expect(cancel.missing('sub_1')).toBe(
+      "A membership's cancellation was recorded, but Stripe can't find its subscription (sub_1) with the club's payment account details, so the automatic check has stopped trying. Tell a manager: the subscription may have been deleted in Stripe, or belong to the other mode. Once the membership and Stripe agree, press Mark sorted (needs the Issue refunds permission)."
+    )
     expect(card.left('sub_1')).toBe(
-      "A customer's card was replaced, but a membership's subscription (sub_1) couldn't be confirmed moved to the new card in Stripe yet, so its next payment could still go to the old card. The automatic check tries again every 5 minutes: nothing to do yet."
+      `A customer's card was replaced, but a membership's subscription (sub_1) couldn't be confirmed moved to the new card in Stripe yet, so its next payment could still go to the old card.${ifItStays}`
     )
     expect(card.refused('sub_1')).toBe(
       "A customer's card was replaced, but Stripe refused to move a membership's subscription (sub_1) to the new card, so the automatic check has stopped trying and its next payment could still go to the old card. Set the subscription's payment method in Stripe by hand (or tell a manager), then press Mark sorted (needs the Issue refunds permission)."
     )
-    for (const line of [cancel.left('s'), card.left('s')]) expect(line).not.toContain('Mark sorted')
-    for (const line of [cancel.refused('s'), card.refused('s')]) expect(line).not.toContain('tries again')
+    expect(card.missing('sub_1')).toBe(
+      "A customer's card was replaced, but Stripe can't find a membership's subscription (sub_1) with the club's payment account details, so the automatic check has stopped trying. Tell a manager: the subscription may have been deleted in Stripe, or belong to the other mode. Once the membership and Stripe agree, press Mark sorted (needs the Issue refunds permission)."
+    )
+    for (const line of [cancel.left('s'), card.left('s')]) {
+      expect(line).not.toContain('Mark sorted')
+      expect(line).not.toContain('nothing to do')
+    }
+    for (const line of [cancel.refused('s'), card.refused('s'), cancel.missing('s'), card.missing('s')]) expect(line).not.toContain('tries again')
+    for (const line of [cancel.missing('s'), card.missing('s')]) expect(line).not.toContain('refused')
     expect(words.LEFT_STEP_WORDS.sorted).toBe('Marked as sorted. It is no longer listed.')
     expect(words.LEFT_STEP_WORDS.notListed).toBe('This is no longer on the list (it was sorted in the meantime). Nothing was changed.')
     expect(words.LEFT_STEP_WORDS.stillTrying).toBe("Stripe hasn't refused this: the automatic check is still sending it. Nothing was changed. Wait for the next check (every 5 minutes) and look again.")

@@ -352,10 +352,14 @@ describe("step F's new inputs, the saved card's addition, and the left step on t
   })
 
   it("the Orders page's contracts know a left step: on the stuck list, as a reconcile item, and as something the manual close can sort", () => {
-    const step = { stepId: 's', membershipId: 'm', subscriptionId: 'sub_1', step: 'cancel_at', customerId: null, customerName: null, state: 'refused', at: '2026-11-15T10:00:00.000Z', words: 'x', close: { kind: 'left_step', orderId: 's' } }
+    // W40: `what` says what it is for the screen (with `lastDay` for a cancel date to set).
+    const step = { stepId: 's', membershipId: 'm', subscriptionId: 'sub_1', step: 'cancel_at', what: 'cancel_date', lastDay: '2026-12-09', customerId: null, customerName: null, state: 'refused', at: '2026-11-15T10:00:00.000Z', words: 'x', close: { kind: 'left_step', orderId: 's' } }
     expect(stuckStepSchema.parse(step)).toEqual(step)
     expect(stuckStepSchema.safeParse({ ...step, step: 'trial_end' }).success).toBe(false)
     expect(stuckStepSchema.safeParse({ ...step, state: 'done' }).success).toBe(false)
+    expect(stuckStepSchema.safeParse({ ...step, what: 'trial' }).success).toBe(false)
+    expect(stuckStepSchema.safeParse({ ...step, what: undefined }).success).toBe(false)
+    expect(stuckStepSchema.parse({ ...step, what: 'clear_cancel_date', lastDay: undefined }).lastDay).toBeUndefined()
     const list = { checkout: [], flows: [], claims: [], refunds: [], warnings: [], watched: [], steps: [step], alert: null }
     expect(stuckListOutputSchema.parse(list).steps).toEqual([step])
     expect(stuckCloseKindSchema.options.at(-1)).toBe('left_step')

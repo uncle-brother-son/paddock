@@ -9,12 +9,15 @@ import type {
   CustomerEventBookingRow,
   CustomerListInput,
   CustomerListRow,
-  CustomerMembershipRow,
   CustomerSessionPassRow,
   StoreCreditTransactionRow,
 } from '@/contracts'
 import type { Queryable } from '@/server/db'
-import { PAYMENT_DATE_FACTS_COLUMNS_SQL, PAYMENT_DATE_FACTS_JOIN_SQL, paymentDateStatus, type PaymentDateFacts } from '@/server/rules/memberships/payment-date-status'
+import { CUSTOMER_MEMBERSHIP_COLUMNS, customerMemberships } from '@/server/rules/memberships/list'
+
+// W40: the profile's membership rows are read by memberships/list.ts, with the Subscriptions list. The column list is
+// still named here for the tests that hold it to the saved schema.
+export { CUSTOMER_MEMBERSHIP_COLUMNS }
 
 const iso = (value: unknown): string => (value instanceof Date ? value.toISOString() : String(value))
 
@@ -95,28 +98,6 @@ export async function listCustomers(db: Queryable, input: CustomerListInput): Pr
 
 // --- getCustomerDetail
 
-/**
- * What the profile reads of customer_memberships, by name. The old read was `cm.*`; this is every column but the one
- * W36's contract leaves out (CUSTOMER_COLUMNS_NOT_SENT).
- */
-export const CUSTOMER_MEMBERSHIP_COLUMNS = [
-  'id',
-  'customer_id',
-  'plan_id',
-  'stripe_subscription_id',
-  'subscription_status',
-  'start_date',
-  'next_renewal_date',
-  'addon_credits_remaining',
-  'bonus_addon_credits',
-  'created_at',
-  'updated_at',
-  'billing_frequency',
-  'cancel_effective_date',
-  'is_herd',
-  'herd_override',
-] as const
-
 /** What the profile reads of customer_session_passes, by name (the old read was `csp.*`), likewise. */
 export const CUSTOMER_PASS_COLUMNS = ['id', 'customer_id', 'pass_type_id', 'purchase_date', 'sessions_remaining', 'expiry_date', 'created_at', 'updated_at'] as const
 
@@ -126,26 +107,8 @@ export const CUSTOMER_PASS_COLUMNS = ['id', 'customer_id', 'pass_type_id', 'purc
  */
 export const CUSTOMER_COLUMNS_NOT_SENT = ['order_line_item_id'] as const
 
-const DATES: ReadonlySet<string> = new Set(['start_date', 'next_renewal_date', 'cancel_effective_date', 'purchase_date', 'expiry_date'])
+const DATES: ReadonlySet<string> = new Set(['purchase_date', 'expiry_date'])
 const columns = (alias: string, names: readonly string[]): string => names.map((name) => (DATES.has(name) ? `${alias}.${name}::text AS ${name}` : `${alias}.${name}`)).join(', ')
-
-/**
- * The membership rows, newest first, each with its plan, its current credit period and the payment date button's
- * facts. W40 takes this over with the Subscriptions list (brief W39 item 2: not changed here).
- */
-const MEMBERSHIPS_SQL = `
-SELECT ${columns('cm', CUSTOMER_MEMBERSHIP_COLUMNS)},
-       mp.name AS plan_name, mp.is_unlimited AS plan_is_unlimited,
-       mcc.period_end::text AS current_period_end, mcc.credits_allocated AS current_period_credits_allocated,
-       mcc.credits_remaining AS current_period_credits_remaining,
-       ${PAYMENT_DATE_FACTS_COLUMNS_SQL}
-FROM customer_memberships cm
-JOIN membership_plans mp ON mp.id = cm.plan_id
-JOIN customers c ON c.id = cm.customer_id
-LEFT JOIN membership_current_credits mcc ON mcc.membership_id = cm.id
-${PAYMENT_DATE_FACTS_JOIN_SQL}
-WHERE cm.customer_id = $1::uuid
-ORDER BY cm.created_at DESC, cm.id`
 
 const PASSES_SQL = `
 SELECT ${columns('csp', CUSTOMER_PASS_COLUMNS)}, spt.name AS pass_type_name, spt.level AS pass_type_level
@@ -195,23 +158,15 @@ WHERE eb.customer_id = $1::uuid
 GROUP BY eb.id, e.id
 ORDER BY e.starts_at DESC NULLS LAST, eb.created_at DESC, eb.id`
 
-type MembershipFacts = Omit<CustomerMembershipRow, 'payment_date_changed_at' | 'payment_date_change_blocked' | 'payment_date_change_needs_override'> & PaymentDateFacts
-
-/** A membership row as the profile reads it: the facts turned into the button's refusal, and left out. */
-function membershipRow(row: MembershipFacts): CustomerMembershipRow {
-  const kept: Record<string, unknown> = {}
-  for (const [name, value] of Object.entries(row)) if (!name.startsWith('pdc_')) kept[name] = value
-  return withTimes({ ...(kept as Omit<MembershipFacts, keyof PaymentDateFacts> & Pick<PaymentDateFacts, 'billing_frequency' | 'subscription_status' | 'stripe_subscription_id'>), ...paymentDateStatus(row) }, ['created_at', 'updated_at'])
-}
-
 /**
- * getCustomerDetail, as before: the customer's memberships (each with why "Change payment date" is refused), session
+ * getCustomerDetail, as before: the customer's memberships (memberships/list.ts: each with why "Change payment date"
+ * is refused and, from W40, whether it was refunded), session
  * passes, booking history (latest session first), store credit balance and last 100 movements, and event bookings
  * (latest event first). A customer that doesn't exist has empty lists and a balance of '0'.
  */
 export async function getCustomerDetail(db: Queryable, customerId: string): Promise<CustomerDetailOutput> {
   const [memberships, sessionPasses, bookingHistory, balance, storeCreditHistory, eventBookings] = await Promise.all([
-    db.query<MembershipFacts>(MEMBERSHIPS_SQL, [customerId]),
+    customerMemberships(db, customerId),
     db.query<CustomerSessionPassRow>(PASSES_SQL, [customerId]),
     db.query<CustomerBookingHistoryRow>(BOOKINGS_SQL, [customerId]),
     db.query<{ store_credit_balance: string }>(BALANCE_SQL, [customerId]),
@@ -219,7 +174,7 @@ export async function getCustomerDetail(db: Queryable, customerId: string): Prom
     db.query<CustomerEventBookingRow>(EVENT_BOOKINGS_SQL, [customerId]),
   ])
   return {
-    memberships: memberships.map(membershipRow),
+    memberships,
     sessionPasses: sessionPasses.map((row) => withTimes(row, ['created_at', 'updated_at'])),
     bookingHistory: bookingHistory.map((row) => withTimes(row, ['checked_in_at', 'created_at', 'payment_due_by', 'start_time', 'end_time'])),
     storeCreditBalance: balance[0]?.store_credit_balance ?? '0',

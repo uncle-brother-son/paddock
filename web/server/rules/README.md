@@ -123,11 +123,92 @@ slice by slice (W37 to W43). W36 adds what they share, with nothing switched on 
 - `memberships/left.ts`: a Stripe step left to do after the database change, for the two steps that are safe to
   repeat (a subscription's cancel date set or cleared; its card). Written in the action's transaction as a
   `membership.step_left` audit row (no new table), read before it is sent, sent again by reconcile every run, and
-  closed by a `done` row. A step Stripe refuses for good gets a `refused` row: it is then listed for a person on the
+  closed by a `done` row (W40: only once it is older than the press's window, and at most 10 a run; see "Turns"
+  below). A step Stripe refuses for good gets a `refused` row: it is then listed for a person on the
   stuck list (`steps`) and never sent again, until someone marks it sorted (the manual close's `left_step`). The
   newest step for a subscription and kind closes an older open one as `replaced`. Nothing here charges or refunds.
   W29's left cancel of a refunded membership's subscription (`orders/refund-subscription.ts`) ends the same way from
   W36: refused for good on reconcile's retry, it is recorded as `refused`, listed with its own words and not retried.
+
+## Membership cancel and undo, and the membership reads (W40)
+
+F-plan 4.3. The staff app's `setMembershipCancellation` and `getSubscriptions` are thin calls to these.
+
+- `memberships/cancel.ts`, `POST memberships/:id/cancel` and `POST memberships/:id/undo-cancel`. The database first,
+  Stripe second (the old routes did it the other way round):
+  - **M1**, one transaction under the membership's lock: who may (staff with Issue refunds, read from the signed-in
+    staff member; or, on the customer channel, the membership's own customer: only the staff routes exist); found and
+    active; cancel: no cancel scheduled, no payment date change in progress, a next renewal date that is after today
+    in London (W40a, Wayne 16 Nov: on the renewal day, or while it is overdue, the cancel is refused
+    `renewal_due_today` until the payment has moved the date on; the end would be a day already here); undo: a cancel
+    scheduled whose last day hasn't passed; no step of the last change still being sent. Then the last day written or
+    cleared, a `membership.cancel_scheduled` or `membership.cancel_undone` audit row with the `cancel_at` it will
+    send, and the Stripe step left (`left.ts`) when the membership has a subscription.
+  - **The end date** (`membershipEnd`): yearly, the next renewal. Monthly, the later of the next renewal and
+    start + 2 months, where a day the later month doesn't have is that month's last day (Q33: started 31 December,
+    28 February; the old sum gave 3 March). `cancel_effective_date` is the day before (the last day of access);
+    `cancel_at` is London midnight at the start of the end date.
+  - **Stripe**, after M1, for the membership's own subscription (never found by its order): read first, then
+    `cancel_at` set or cleared with `proration_behavior: 'none'`, under a key from the step's id. Went: the step is
+    `done`. Refused: M1 is put back in one transaction (`membership.cancel_put_back`; the date only if it is still
+    what M1 wrote), the step closed, and the press refused with Stripe's reason (`stripe_refused`). No clear answer:
+    the step stays left, the answer carries `left`, and reconcile finishes it.
+  - **The webhook stays.** `customer.subscription.updated` still copies Stripe's date onto the membership
+    (`membership_sync_cancel_at_period_end`). An unrelated event between M1 and the Stripe step clears the date for a
+    moment; the step's own event puts it back.
+  - Gated by `membership_changes`: off, both routes answer `MEMBERSHIP_PATH_OFF` before anything is read.
+- **Turns** (`left.ts`; W36 review S1). Reconcile sends a step only once it is older than the press's window
+  (`PROCESSING_MINUTES`); a new cancel or undo is refused while a step of the same kind on that subscription is still
+  inside the window ("still being sent"); after its send, reconcile looks again under the membership's lock, and for a
+  step a newer one has replaced it writes nothing and settles the newest instead; a press Stripe refuses leaves again
+  the wish its step had replaced (W40a: only while its own step is still the newest). Reconcile takes at most
+  `MAX_STEPS_PER_RUN` (10) steps a run.
+  - W40a (W40 review S1). When the newest step was already closed `done` by its own press, and the run's send of it
+    isn't confirmed, or the run's own send of the replaced step got no clear answer (it can still land in Stripe
+    later), the newest step's wish is left again as a new step (`keepForALaterRead`; its `left` row carries
+    `leftAgainFor`). It is listed, a new press waits its window, and the next run past the window reads Stripe after
+    any late send and sends the wish again if needed. A newest step still open is left open in the second case.
+    Without this a stale send could be the last word with every step closed and nothing listed.
+  - W40a. "Newest" (`newestOf`) follows the `replacedBy` links and, past a step that is closed with no link (a
+    press's `done`, a put-back), takes the latest step left after it: a closed step is never linked to the next
+    press's step.
+  - W40b. A newest step still open in that second case is also marked (a `stale_send` row, not an ending), before
+    Stripe is asked about it. Its own press, finishing after the run, finds the mark and leaves the wish again
+    instead of closing the step `done` (`recordStepDone`). If the transaction that leaves a wish again (or writes the
+    mark) fails, the run answers the item as `left` with the reason `step_not_left_again` and its `order.reconcile`
+    row names the step (`leaveAgain`); every later run tries again (`leaveAgainLater`, no Stripe call) until a row
+    with another outcome settles it. `left.ts`'s header says what is guaranteed and what isn't.
+  - W40c. The net under all of that: every step that closes (done, replaced, put back, sorted by hand, left again)
+    is checked once more, 20 minutes after it closed (the window plus 5), by one read of its subscription set against
+    the newest wish for that subscription and kind (`checksDue`, `checkAfterClosing`; never the membership's row,
+    which the webhook makes agree with Stripe). Agrees: one `membership.step_check` row (`checked`). Something else:
+    the newest wish is left again as a new step in the same transaction as the row, under the membership's lock and
+    only while it is still the newest; it is listed, a new press waits, and the next run past the window sends it.
+    A subscription Stripe can't find, or has ended with an undo still wanted, is left again already refused: listed
+    for a person, never sent. No clear read: nothing written, tried again every run, and left again (so listed) after
+    2 hours (W40d; 24 before). At most 5 checks a run (`MAX_STEP_CHECKS_PER_RUN`), before the run's own steps; a check
+    is an item in the run's answer only when it leaves a step (`step_check_disagreed`, `step_check_unread`,
+    `step_refused`).
+  - W40d (W40c review S1, S2, L4, and a loop guard). A sorted wish is a person's: a step marked sorted is never read,
+    held to Stripe or sent again (its check is one `checked` row, no read), so a hand fix that differs from the wish
+    stands; a press made after it is checked as any other. The loop guard: when the check disagrees about a wish that
+    a check itself left again and that was then sent and closed `done`, it is not left to send again but left already
+    refused, for a person with Mark sorted (a Stripe that stores a value differently from the one sent can't make the
+    same change go out over and over). The two legacy routes (`app/api/memberships/cancel` and `undo-cancel`, until
+    W44) ask `memberships/legacy-guard.ts` first and refuse, 409 with `LEGACY_MEMBERSHIP_CHANGE_HELD_MESSAGE`, while
+    the membership has a step that is open, or closed with no check row yet (`stepsUnsettled`), with the switch on or
+    off: so a change made through them after a rollback is never put back by the check. The guard is in the two
+    `route.ts` files, between `W40d guard` marks; `frozen-account-code.test.ts` holds the live routes to the frozen
+    copy with the marked lines taken out.
+- `memberships/list.ts`: `GET memberships` (the Subscriptions list) and the profile's membership rows
+  (`customerMemberships`, used by `customers/read.ts`), from the same code: named columns, the payment date button's
+  refusal (`payment-date-status.ts`), and `refunded`, worked out from the membership's own order line
+  (`order_line_items.refunded_at`; no column of its own). Any active staff member.
+- The stuck list's `steps` say what each is (`what`: a cancel date to set, with `lastDay`; a cancel date to clear; a
+  card), when it was left, and the words: while it is being sent, what to do if it stays (set it in Stripe by hand:
+  the step is read first, so the next check closes it); once Stripe has refused it, what to put right before Mark
+  sorted; and, when Stripe can't find the subscription at all, that. The manual close of a step writes the
+  `order.close` row every other close writes, against the step.
 
 ## Credits, Herd and store credit (W37)
 
@@ -230,10 +311,10 @@ behind a press key, and has no switch kind.
   column the old `cm.*` and `csp.*` gave but `order_line_item_id`, which no screen reads and W36's contract left out
   (`CUSTOMER_MEMBERSHIP_COLUMNS`, `CUSTOMER_PASS_COLUMNS`, `CUSTOMER_COLUMNS_NOT_SENT`, held to the saved schema by
   `customers.test.ts`: a new column on either table fails the test until someone decides whether staff see it).
-  **W40 takes over the membership rows** with the Subscriptions list.
-- `memberships/payment-date-status.ts`: why "Change payment date" is refused on a membership row, for the profile.
-  A copy of the read part of the staff app's `shared/membershipPaymentDate.ts`, which its getSubscriptions and the
-  payment date dialog still use until W40 and W41; `payment-date-status.test.ts` holds the two together.
+  From W40 the membership rows are read by `memberships/list.ts`, with the Subscriptions list.
+- `memberships/payment-date-status.ts`: why "Change payment date" is refused on a membership row, for the profile
+  and, from W40, the Subscriptions list. A copy of the read part of the staff app's `shared/membershipPaymentDate.ts`,
+  which its payment date quote and dialog still use until W41; `payment-date-status.test.ts` holds the two together.
 - All three routes: any active staff member (FB16: the old reads checked nobody).
 
 ## The reader: T1, the intent, finalise and cancel (W11)

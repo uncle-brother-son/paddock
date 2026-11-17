@@ -303,8 +303,19 @@ describe("the banner's words (frontend/utils/stuckList.ts)", () => {
   it("says what each run did, and a close's button and what it does", async () => {
     const helpers = await stuckHelpers()
     const { reconcileLine, closeButtonLabel, closeDialogText } = helpers
-    // W25: the old sweep's line went with the sweep: these are all the helpers.
-    expect(Object.keys(helpers).sort()).toEqual(['closeButtonLabel', 'closeDialogText', 'flowLabel', 'oldestAgeMinutes', 'reconcileLine', 'stuckCount', 'watchedLabel'])
+    // W25: the old sweep's line went with the sweep: these are all the helpers. W40: `stepLabel`, a membership step's heading.
+    expect(Object.keys(helpers).sort()).toEqual(['closeButtonLabel', 'closeDialogText', 'flowLabel', 'oldestAgeMinutes', 'reconcileLine', 'stepLabel', 'stuckCount', 'watchedLabel'])
+    // W40: a membership's Stripe step left to do: what it is, whose, and whether Stripe refused it; counted with the rest.
+    const { stepLabel, stuckCount } = helpers
+    const day = (isoDate: string) => `[${isoDate}]`
+    expect(stepLabel({ what: 'cancel_date', lastDay: '2026-12-09', state: 'left', customerName: 'Mo Member' }, day)).toBe('Membership cancellation (last day [2026-12-09]) not confirmed by Stripe yet · Mo Member')
+    expect(stepLabel({ what: 'clear_cancel_date', state: 'refused', customerName: null }, day)).toBe('Membership cancellation undone refused by Stripe')
+    expect(stepLabel({ what: 'card', state: 'left', customerName: 'Mo Member' }, day)).toBe('Membership card change not confirmed by Stripe yet · Mo Member')
+    const empty = { checkout: [], flows: [], claims: [], refunds: [], warnings: [], watched: [], alert: null }
+    expect(stuckCount(empty)).toBe(0)
+    expect(stuckCount({ ...empty, steps: [{ stepId: 's' }, { stepId: 't' }] })).toBe(2)
+    expect(closeButtonLabel('left_step')).toBe('Mark sorted')
+    expect(closeDialogText('left_step')).toContain('Nothing is changed in Stripe or on the membership here.')
     const run = (fields: Record<string, unknown>) => ({ ok: true, run: { checked: 0, finalised: 0, undone: 0, refunds: 0, left: 0, deferred: 0, stripeRefused: false, ...fields } })
     expect(reconcileLine(run({}))).toBe('The automatic check found nothing to settle.')
     expect(reconcileLine(run({ checked: 3, finalised: 1, undone: 1, left: 1, deferred: 2 }))).toBe(

@@ -66,11 +66,23 @@ const NOT_SENT_DECISION = `${W39}; F-plan 4.6 (named fields, not \`*\`); W36's c
  * old read was `cm.*` and `csp.*`, which sent every column; no screen's type names this one, and W36's contract left
  * it out. Every other field of every row is compared exactly.
  */
-const notSent = (paths: readonly string[]): AllowedDifference =>
+export const notSent = (paths: readonly string[]): AllowedDifference =>
   pinned(
     "Named fields: a membership's and a pass's `order_line_item_id` (the order line that sold it) is no longer sent to the profile. The old read sent every column of both tables; no screen reads this one. Every other field is as it was.",
     NOT_SENT_DECISION,
     paths.map((path) => [path, GONE] as const)
+  )
+
+/**
+ * W40 (W35 row 10, lead call L9): the profile's membership rows say whether the membership's order line was refunded.
+ * New on every membership row; `false` on these recordings (nothing in them is refunded). memberships/cancel.test.ts
+ * holds the `true` case.
+ */
+const refundedMark = (paths: readonly string[]): AllowedDifference =>
+  pinned(
+    "W35 row 10: each of the profile's membership rows now carries `refunded`, worked out from the membership's own order line (false here: none of these was refunded), so the screen can say \"Refunded\" in place of \"Cancelled\". Every other field is as it was.",
+    'Brief W40 item 5; W35 row 10; lead call L9 (worked out from the order line, no new column)',
+    paths.map((path) => [path, false] as const)
   )
 
 // --- The bugs (F-plan section 3; the W36 report for FB23)
@@ -153,8 +165,8 @@ export const FB21_ANOTHER_CASE_SCENARIO = 'w36-fb21-the-same-email-in-another-ca
 export const NOT_SENT_SCENARIOS = ['w36-customer-detail', 'w36-membership-reads-carry-the-payment-date-refusal'] as const
 
 export const W39_DIFFERENCES: ReadonlyMap<string, readonly AllowedDifference[]> = new Map<string, readonly AllowedDifference[]>([
-  [NOT_SENT_SCENARIOS[0], [notSent(['.results[3].memberships[0].order_line_item_id', '.results[4].sessionPasses[0].order_line_item_id'])]],
-  [NOT_SENT_SCENARIOS[1], [notSent(['.results[1].memberships[0].order_line_item_id', '.results[4].memberships[0].order_line_item_id'])]],
+  [NOT_SENT_SCENARIOS[0], [notSent(['.results[3].memberships[0].order_line_item_id', '.results[4].sessionPasses[0].order_line_item_id']), refundedMark(['.results[3].memberships[0].refunded'])]],
+  [NOT_SENT_SCENARIOS[1], [notSent(['.results[1].memberships[0].order_line_item_id', '.results[4].memberships[0].order_line_item_id']), refundedMark(['.results[1].memberships[0].refunded', '.results[4].memberships[0].refunded'])]],
   [DECISION_SCENARIOS.FB23[0], [FB23_A_DATE_THE_CALENDAR_DOES_NOT_HAVE]],
   [DECISION_SCENARIOS.FB21[0], [FB21_NO_STAFF_RECORD_CREATES_NOBODY]],
   [DECISION_SCENARIOS.FB16[0], [FB16_AN_INACTIVE_ACCOUNT_READS_NOTHING]],

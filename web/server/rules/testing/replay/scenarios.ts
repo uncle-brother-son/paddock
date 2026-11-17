@@ -765,6 +765,10 @@ const WORKER_DOES_IT_NOW: Readonly<Record<string, { route: RegExp; answerLost: R
     route: /^\/api\/v1\/staff\/(bookings\/[^/]+\/(refunds(\/owed)?|cancel-and-refund|cancel-credit|move)|orders\/[^/]+\/refunds(\/owed)?|event-bookings\/[^/]+\/cancel)$/,
     answerLost: /^\/api\/v1\/staff\/(bookings\/[^/]+\/(refunds(\/owed)?|cancel-and-refund|cancel-credit|move)|orders\/[^/]+\/refunds(\/owed)?|event-bookings\/[^/]+\/cancel)$/,
   },
+  // W40: a membership's cancel and its undo are whole routes of their own now (the old function called the legacy
+  // route): the route runs to the end and its answer is lost.
+  '/api/memberships/cancel': { route: /^\/api\/v1\/staff\/memberships\/[^/]+\/cancel$/, answerLost: /^\/api\/v1\/staff\/memberships\/[^/]+\/cancel$/ },
+  '/api/memberships/undo-cancel': { route: /^\/api\/v1\/staff\/memberships\/[^/]+\/undo-cancel$/, answerLost: /^\/api\/v1\/staff\/memberships\/[^/]+\/undo-cancel$/ },
 }
 
 const CHARGE_PATH = '/api/payments/charge-saved-card'

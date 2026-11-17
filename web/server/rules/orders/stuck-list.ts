@@ -17,7 +17,7 @@ import { PROCESSING_MINUTES as RECONCILE_WINDOW_MINUTES } from './pending-order'
 import { MEMBERSHIP_REFUND_WORDS } from '@/server/rules/refunds/failure-messages'
 import { LEFT_BY_REFUND } from './refund-subscription'
 import { LATE_REFUND_STEP, WATCH_DAYS, WATCHES_LISTED_SQL, type WatchDetails } from '@/server/rules/refunds/refund-watch'
-import { openSteps, stepWords, type StepKind } from '@/server/rules/memberships/left'
+import { openSteps, stepWhat, stepWords, type StepKind } from '@/server/rules/memberships/left'
 
 /**
  * Words for each reason an item is listed (W12's, W14b: every reason reconcile can leave an order or flow with has
@@ -325,6 +325,9 @@ export interface StuckStep {
   membershipId: string
   subscriptionId: string
   step: StepKind
+  /** W40: what it is: a cancel date to set (with `lastDay`), a cancel date to clear, or the card to charge. */
+  what: 'cancel_date' | 'clear_cancel_date' | 'card'
+  lastDay?: string
   customerId: string | null
   customerName: string | null
   /** `left`: the automatic check is still sending it. `refused`: Stripe said no for good, so it is for a person. */
@@ -806,6 +809,8 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
       membershipId: step.membershipId,
       subscriptionId: step.subscriptionId,
       step: step.kind,
+      // W40: what it is, and for a cancel date the last day of access it sets.
+      ...stepWhat(step),
       customerId: step.customerId,
       customerName: step.customerName,
       state: step.refused ? ('refused' as const) : ('left' as const),

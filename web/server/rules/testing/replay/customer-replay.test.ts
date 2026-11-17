@@ -140,9 +140,12 @@ describe("step F's side of the replay: customers (W39)", () => {
     expect([...NOT_SENT_SCENARIOS]).toEqual(['w36-customer-detail', 'w36-membership-reads-carry-the-payment-date-refusal'])
     for (const name of NOT_SENT_SCENARIOS) {
       const own = named(name)
-      expect(own, name).toHaveLength(1)
+      // W40: and the membership rows' new `refunded` (W35 row 10), false on both recordings.
+      expect(own, name).toHaveLength(2)
       expect(own[0]?.name, name).toMatch(/^Named fields: a membership's and a pass's `order_line_item_id`/)
       expect(own[0]?.decision, name).toMatch(/F-plan 4\.6 \(named fields, not `\*`\); W36's contract/)
+      expect(own[1]?.name, name).toMatch(/^W35 row 10: each of the profile's membership rows now carries `refunded`/)
+      expect(own[1]?.decision, name).toMatch(/^Brief W40 item 5; W35 row 10; lead call L9/)
     }
     // Every recording named for a customer action, or for FB16 or FB21, is in these families.
     expect(scenarios.filter((one) => /^w36-/.test(one.name) && /create-customer|customers-list|customer-detail|fb16|fb21/.test(one.name) && !isW39Scenario(one.name)).map((one) => one.name)).toEqual([])

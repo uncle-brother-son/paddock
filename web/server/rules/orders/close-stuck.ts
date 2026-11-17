@@ -750,7 +750,17 @@ export async function closeStuckItem(db: Db, input: CloseStuckInput, options: Cl
   // W36 (F-plan 4.10, lead call L7): a membership's Stripe step that Stripe refused for good, once a person has put
   // Stripe right by hand: recorded as sorted (memberships/left.ts). Nothing moves; `orderId` is the step's id.
   if (input.kind === 'left_step') {
-    const sorted = await sortLeftStep(db, input.orderId, why, { actor: options.actor, requestId: options.requestId })
+    // W40 (W36 review L4): with the `order.close` row every other close writes, against the step (`membership_step`,
+    // as reconcile's own rows for a step), so the audit trail of closes reads the same for every kind.
+    const sorted = await sortLeftStep(db, input.orderId, why, { actor: options.actor, requestId: options.requestId }, (step) => ({
+      actorType: options.actor.type,
+      actorId: options.actor.id,
+      action: CLOSE_ACTION,
+      entityType: 'membership_step',
+      entityId: step.id,
+      requestId: options.requestId,
+      details: { kind: 'left_step', why, membershipId: step.membershipId, subscriptionId: step.subscriptionId, step: step.kind, want: step.want, refusal: step.refusal },
+    }))
     return answer('left_step', input.orderId, sorted.closed ? { closed: true, ...(sorted.alreadyClosed ? { alreadyClosed: true } : {}), message: sorted.message } : { closed: false, reason: sorted.reason, message: sorted.message })
   }
   return closeSubscriptionLeft(db, input.orderId, input.subscriptionId ?? '', why, options)

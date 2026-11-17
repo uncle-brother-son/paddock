@@ -4671,6 +4671,12 @@
   },
   {
    "table": "customer_memberships",
+   "name": "customer_memberships_addon_credits_remaining_check",
+   "type": "c",
+   "definition": "CHECK ((addon_credits_remaining >= 0))"
+  },
+  {
+   "table": "customer_memberships",
    "name": "customer_memberships_customer_id_fkey",
    "type": "f",
    "definition": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE"
@@ -5874,6 +5880,10 @@
    "definition": "CREATE UNIQUE INDEX customers_auth_user_id_key ON public.customers USING btree (auth_user_id) WHERE (auth_user_id IS NOT NULL)"
   },
   {
+   "name": "customers_email_lower_key",
+   "definition": "CREATE UNIQUE INDEX customers_email_lower_key ON public.customers USING btree (lower(email))"
+  },
+  {
    "name": "event_attendees_booking_idx",
    "definition": "CREATE INDEX event_attendees_booking_idx ON public.event_attendees USING btree (event_booking_id)"
   },
@@ -6236,7 +6246,7 @@
   {
    "name": "refresh_herd_flags",
    "identity": "",
-   "definition": "CREATE OR REPLACE FUNCTION public.refresh_herd_flags()\n RETURNS integer\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\ndeclare\n  wait_months integer;\n  changed integer;\nbegin\n  select addon_credit_wait_months into wait_months from public.membership_settings where id;\n  wait_months := coalesce(wait_months, 6);\n  update public.customer_memberships cm\n     set is_herd = (cm.billing_frequency = 'yearly'\n                    or cm.start_date <= (now() at time zone 'Europe/London')::date - (wait_months || ' months')::interval),\n         updated_at = now()\n   where cm.herd_override is null\n     and cm.is_herd is distinct from (cm.billing_frequency = 'yearly'\n                    or cm.start_date <= (now() at time zone 'Europe/London')::date - (wait_months || ' months')::interval);\n  get diagnostics changed = row_count;\n  return changed;\nend $function$\n"
+   "definition": "CREATE OR REPLACE FUNCTION public.refresh_herd_flags()\n RETURNS integer\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\ndeclare\n  wait_months integer;\n  changed integer;\nbegin\n  select addon_credit_wait_months into wait_months from public.membership_settings where id;\n  wait_months := coalesce(wait_months, 6);\n  update public.customer_memberships cm\n     set is_herd = coalesce((cm.billing_frequency = 'yearly'\n                    or cm.start_date <= (now() at time zone 'Europe/London')::date - (wait_months || ' months')::interval), false),\n         updated_at = now()\n   where cm.herd_override is null\n     and cm.is_herd is distinct from coalesce((cm.billing_frequency = 'yearly'\n                    or cm.start_date <= (now() at time zone 'Europe/London')::date - (wait_months || ' months')::interval), false);\n  get diagnostics changed = row_count;\n  return changed;\nend $function$\n"
   },
   {
    "name": "release_event_places",
