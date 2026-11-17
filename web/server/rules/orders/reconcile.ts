@@ -50,6 +50,14 @@
 // and is counted nowhere (`refundsWaiting` says how many are still on their way); a late payment's automatic refund is
 // handed to the same watch once Stripe has given it an id; and a late refund keeps the key its `started` row recorded.
 //
+// W41 (F-plan 4.4 and 4.10): a payment date change still pending past the window (reconcilePaymentDateChange). Never
+// charges: the customer's payments are listed and matched by `metadata.change_id`. None: the change is ended. One
+// paid: the subscription is read, and the date already as asked means P2; else the date move is sent again (it sets
+// a value, so it is safe to repeat) and, if Stripe refuses it, the charge is refunded once under its key and watched.
+// W41a (W41 review B1 to B3): before the move is sent again the press's checks on the subscription are run again,
+// and a failure (Stripe has renewed it since, say) refunds the charge instead; a refund reconcile sends goes under a
+// key of the run's own; and a refund on the payment is the change's own only when its metadata names the change.
+//
 // W13c (W13a review L3, first part): a membership subscription a press left live (`order.subscription_left`,
 // `left`) for an order no longer pending is put back here, each run until it is: cancelled (checked), its first
 // invoice refunded under its key, then a `cancelled` row, which closes the stuck list's warning. W13d (W13c review
@@ -102,6 +110,21 @@ import { refundSeen, WATCH_DAYS, WATCH_READ_HOURS, WATCHES_DUE_SQL, WATCHES_WAIT
 import { checkWatchedRefund } from '@/server/rules/refunds/refund-watch-settle'
 import { cancelRefundedSubscription, cancelSubscriptionsAfterRefund, LEFT_BY_REFUND, refundCancelsDue, type RefundCancelDue } from './refund-subscription'
 import { checkAfterClosing, checksDue, leaveAgainLater, settleLeftStep, stepsDue, type CheckDue, type OpenStep } from '@/server/rules/memberships/left'
+import {
+  checkSubscription,
+  dateIsMoved,
+  failPaymentDateChange,
+  finishFound,
+  moveAndFinish,
+  NOTHING_TAKEN,
+  PAYMENT_DATE_CHANGES_DUE_SQL,
+  PAYMENT_DATE_METADATA,
+  PAYMENT_DATE_RECONCILE_ENTITY,
+  paymentMatches,
+  readPaymentDateChange,
+  refundAndFail,
+  type ChangeOutcome,
+} from '@/server/rules/memberships/payment-date'
 
 /** Q14: a pending order or flow younger than this may still have staff at the reader. */
 export const RECONCILE_WINDOW_MINUTES = PROCESSING_MINUTES
@@ -133,13 +156,21 @@ export const RECONCILE_WINDOW_MINUTES = PROCESSING_MINUTES
  *   written with its watch in the one transaction it already had.
  * - W36, a membership's left step: the read of what is open (8), the subscription read and its update (20), its
  *   `done` or `refused` row (13) and the run's row (13) ≈ 54 s. Never a charge or a refund.
+ * - W41, W41a, a payment date change (W41 review "For later" 1): the record's read (8), the customer's payments
+ *   (10), that payment's refunds (10), the subscription read (10), the move (10), the refund sent twice (20), the
+ *   `refunding` mark (13), the transaction that ends the record and writes the watch (13) and the run's row (13)
+ *   ≈ 107 s; with a ten-page payments list ≈ 197 s. The longest item there is. Never a charge.
  * - W40c, a closed step's check: the reads that find the newest wish (a few, 8 each at worst), one subscription read
  *   (10), its row and any step it leaves in one transaction (13) and, only when it leaves one, the run's row (13):
  *   under a left step's 54 s. Never a send.
- * So a run ends by about 120 + 86 ≈ 206 s (under 3.5 minutes), before the next run; with ten-page lists by
- * about 296 s (just under 5 minutes). Overlap would still be safe (no leases: T2 and the undo lock and
- * re-check; the refund's first row is written once under an advisory lock), and either way it is far inside
- * 15 minutes. The caps stay.
+ * So a run ends by about 120 + 107 ≈ 227 s (under 4 minutes), before the next run; with ten-page lists by
+ * about 120 + 197 ≈ 317 s, just over the 5-minute schedule, so two runs can then overlap. Overlap is safe (no
+ * leases: T2 and the undo lock and re-check; the refund's first row is written once under an advisory lock), and
+ * either way it is far inside 15 minutes. Two runs at once on one payment date change: each sends the move under its
+ * own key, and it sets a value, so twice is once; each sends the refund under its own key with no amount, so the
+ * second gets "already refunded" (taken as refunded) and the charge is never given back twice; and P2, the mark and
+ * the record's ending each lock the membership and the row and look again, so one writes and the other finds it done.
+ * The caps stay.
  */
 export const SCHEDULED_LIMITS = { maxItems: 50, budgetMs: 120_000 }
 
@@ -220,8 +251,9 @@ export interface ReconcileItem {
   /**
    * W21: `claim` is a booking refund's claim. W28: or an order refund's. W30: or an event booking's.
    * W36: `step` is a membership's Stripe step left after its database change (memberships/left.ts).
+   * W41: `date_change` is a membership's payment date change still pending (memberships/payment-date.ts).
    */
-  kind: 'order' | 'flow' | 'refund' | 'claim' | 'step'
+  kind: 'order' | 'flow' | 'refund' | 'claim' | 'step' | 'date_change'
   id: string
   outcome: ItemOutcome
   reason?: string
@@ -388,13 +420,16 @@ const sameMode = (recorded: boolean | undefined, key: boolean | null): boolean =
 
 // --- The run
 
+/** What a non-refund item's `order.reconcile` rows are written against. */
+type ReconcileEntity = 'order' | 'reader_payment' | 'refund_claim' | 'membership_step' | typeof PAYMENT_DATE_RECONCILE_ENTITY
+
 interface Run {
   db: Db
   stripe: StripeClient
   timing: StripeTiming | undefined
   options: ReconcileOptions
   /** Each action's row: `order.reconcile`, actor system (or the staff member). */
-  record(entityType: 'order' | 'reader_payment' | 'refund_claim' | 'membership_step', entityId: string, details: Record<string, unknown>): Promise<void>
+  record(entityType: ReconcileEntity, entityId: string, details: Record<string, unknown>): Promise<void>
   /**
    * W12a (W12 review L7): the automatic refund's rows are always the system's, even on a staff member's
    * manual run (the refund is automatic by Wayne's decision; the button only runs it sooner). On a manual
@@ -843,6 +878,103 @@ async function reconcileFlow(run: Run, row: FlowRow): Promise<ReconcileItem> {
   } catch (err) {
     return left('flow', row.id, settled.kind === 'succeeded' ? 'finalise_failed' : err instanceof FlowUndoBlocked ? 'undo_blocked' : 'undo_failed', err instanceof Error ? err.message : String(err))
   }
+}
+
+// --- A payment date change still pending (W41, F-plan 4.4 and 4.10)
+
+/** One page of a payment's refunds, newest first: a payment date charge has at most one, so a page is all of them. */
+async function refundsOf(stripe: StripeClient, timing: StripeTiming | undefined, paymentIntentId: string): Promise<{ kind: 'found'; refunds: Stripe.Refund[] } | { kind: 'unclear'; detail: string }> {
+  try {
+    const listed = await stripe.refunds.list({ payment_intent: paymentIntentId, limit: LIST_PAGE }, sendOptions(timing))
+    return { kind: 'found', refunds: listed.data }
+  } catch (err) {
+    return { kind: 'unclear', detail: readStripeFailure(err).message }
+  }
+}
+
+/**
+ * W41: a payment date change whose press left it pending (memberships/payment-date.ts). Never charges (FB1): only the
+ * press that wrote the record sends its charge. The customer's payments are listed and matched by
+ * `metadata.change_id`:
+ * - none, or only declined or cancelled ones: nothing was taken, so the record is ended (`undone`);
+ * - one still at the bank, more than one paid, or one of another amount: left (`payment_processing`, or for a person);
+ * - one paid; the payment's refunds are listed:
+ *   - a refund of the change's own (W41a B3: only one whose `metadata.change_id` names it), or the `refunding` mark
+ *     with none of its own: the refund is recorded, watched, and the record ended. With the mark and none of its
+ *     own, the refund is sent first, under a key of this run's own (W41a B2: Stripe replays a 500 it saved against
+ *     the press's key for ever). It names no amount, so it gives back whatever is left: the whole charge, or the rest
+ *     after a part someone refunded by hand; a charge already refunded in full is refunded;
+ *   - no mark, and a refund nobody here made: left for a person (`refunded_elsewhere`), so the date is never moved
+ *     for a charge that was given back;
+ *   - else the subscription is read: the date as asked means P2 (`finalised`). If not, the press's own checks on the
+ *     subscription are run again first (W41a B1): Stripe may have renewed it since the press, or a cancel been set,
+ *     and a date moved then would be moved over a month already paid for. A check that fails means the change didn't
+ *     happen: the charge is refunded (as a refused move's) with the check's words. Passed, the date move is sent
+ *     again (it sets a value; a key of this run's own) and then P2, or, refused, the refund.
+ * A record the Worker didn't start, or whose refund Stripe refused for good, is left for a person with no call made.
+ */
+async function reconcilePaymentDateChange(run: Run, changeId: string): Promise<ReconcileItem> {
+  const kind = 'date_change' as const
+  const change = await readPaymentDateChange(run.db, changeId)
+  if (!change || change.status !== 'pending') return { kind, id: changeId, outcome: 'settled_elsewhere', detail: change?.status ?? 'gone' }
+  const s = change.started
+  if (!s) return left(kind, changeId, 'not_started_here')
+  if (change.refundRefused) return left(kind, changeId, 'refund_refused', change.paymentIntentId ?? undefined)
+  const started = { ...change, started: s }
+  const by = { actor: run.options.actor, requestId: run.options.requestId }
+  const answer = (outcome: ChangeOutcome, paymentIntentId: string): ReconcileItem => {
+    if (outcome.kind === 'done') return outcome.already ? { kind, id: changeId, outcome: 'settled_elsewhere', detail: 'done' } : { kind, id: changeId, outcome: 'finalised', detail: paymentIntentId }
+    if (outcome.kind === 'failed') return { kind, id: changeId, outcome: 'undone', detail: outcome.detail }
+    if (outcome.kind === 'not_open') return { kind, id: changeId, outcome: 'settled_elsewhere', detail: outcome.status }
+    return left(kind, changeId, outcome.reason, outcome.detail)
+  }
+
+  const found = await findIntents(run.stripe, run.timing, { customer: s.stripeCustomerId, since: change.createdAt, matches: (intent) => intent.metadata?.[PAYMENT_DATE_METADATA] === change.id })
+  if (found.kind === 'unclear') return left(kind, changeId, 'unclear', found.detail)
+  if (found.intents.length === 0 && !sameMode(s.livemode ?? undefined, run.stripe.keyLivemode)) return left(kind, changeId, 'other_mode')
+  const succeeded = found.intents.filter((intent) => intent.status === 'succeeded')
+  if (succeeded.length > 1) return left(kind, changeId, 'several_payments', succeeded.map((intent) => intent.id).join(', '))
+  const paid = succeeded[0]
+  const stillGoing = found.intents.filter((intent) => intent.status !== 'succeeded' && !NOTHING_TAKEN.has(intent.status))
+  if (!paid && stillGoing.length > 0) return left(kind, changeId, 'payment_processing', stillGoing.map((intent) => `${intent.id} ${intent.status}`).join(', '))
+
+  if (!paid) {
+    const why =
+      found.intents.length === 0
+        ? 'Stripe has no payment for this payment date change: nothing was charged'
+        : `Stripe's payments for this payment date change took nothing: ${found.intents.map((intent) => `${intent.id} ${intent.status}`).join(', ')}`
+    try {
+      const failed = await failPaymentDateChange(run.db, change, by, { at: 'reconcile', message: `${why}. The payment date has not changed.` })
+      return failed ? { kind, id: changeId, outcome: 'undone', detail: why } : { kind, id: changeId, outcome: 'settled_elsewhere', detail: 'ended' }
+    } catch (err) {
+      return left(kind, changeId, 'fail_failed', err instanceof Error ? err.message : String(err))
+    }
+  }
+  if (!paymentMatches(paid, s)) return left(kind, changeId, 'amount_mismatch', `${paid.id}: ${paid.amount_received} ${paid.currency} taken, ${pence(s.amount)} gbp asked`)
+
+  const refunds = await refundsOf(run.stripe, run.timing, paid.id)
+  if (refunds.kind === 'unclear') return left(kind, changeId, 'unclear', refunds.detail)
+  // W41a B3: a refund is the change's own only by its metadata, which every refund made here carries.
+  const own = refunds.refunds.find((refund) => refund.metadata?.[PAYMENT_DATE_METADATA] === change.id)
+  if (refunds.refunds.length > 0 && !own && !change.refunding) return left(kind, changeId, 'refunded_elsewhere', refunds.refunds.map((refund) => `${refund.id} ${String(refund.status)}`).join(', '))
+  if (own || change.refunding) {
+    const known = own && own.status !== 'failed' && own.status !== 'canceled' ? { refundId: own.id, status: own.status, amountPence: own.amount } : undefined
+    // W41a B2: with none of its own just listed, the refund goes under this run's key.
+    return answer(await refundAndFail(run.db, run.stripe, started, paid.id, change.refunding?.stripeSaid ?? 'Stripe refused to move the payment date', by, run.timing, known, run.options.requestId), paid.id)
+  }
+
+  let subscription: Stripe.Subscription
+  try {
+    subscription = await run.stripe.subscriptions.retrieve(s.subscriptionId, undefined, sendOptions(run.timing))
+  } catch (err) {
+    const failure = readStripeFailure(err)
+    return failure.code === 'resource_missing' ? left(kind, changeId, 'subscription_missing', `${paid.id}: ${failure.message}`) : left(kind, changeId, 'unclear', failure.message)
+  }
+  if (dateIsMoved(subscription, s)) return answer(await finishFound(run.db, started, paid.id, by), paid.id)
+  // W41a B1: the press's checks again, on the subscription just read, before the move is sent again.
+  const checked = checkSubscription(subscription, s)
+  if (!checked.ok) return answer(await refundAndFail(run.db, run.stripe, started, paid.id, checked.message.replace(/\.+$/, ''), by, run.timing, undefined, run.options.requestId), paid.id)
+  return answer(await moveAndFinish(run.db, run.stripe, started, paid.id, by, run.timing, 'reconcile', run.options.requestId), paid.id)
 }
 
 // --- A payment watched after its flow was undone by hand (W25, W21 review L5)
@@ -1475,8 +1607,8 @@ WHERE status = 'pending' AND snapshot->>'method' IN ('reader', 'card') AND (snap
 ORDER BY created_at, id`
 
 /** The audit entity a non-refund item's `order.reconcile` rows are written against (W21: a claim's own id). */
-const entityTypeOf = (kind: ReconcileItem['kind']): 'order' | 'reader_payment' | 'refund_claim' | 'membership_step' =>
-  kind === 'order' ? 'order' : kind === 'claim' ? 'refund_claim' : kind === 'step' ? 'membership_step' : 'reader_payment'
+const entityTypeOf = (kind: ReconcileItem['kind']): ReconcileEntity =>
+  kind === 'order' ? 'order' : kind === 'claim' ? 'refund_claim' : kind === 'step' ? 'membership_step' : kind === 'date_change' ? PAYMENT_DATE_RECONCILE_ENTITY : 'reader_payment'
 
 /** W25: what a left row carries for the close (a claim's `parts`, a card flow's `payments`), as one comparable string. */
 function recordKey(record: { parts?: unknown; payments?: unknown } | undefined): string {
@@ -1554,6 +1686,8 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
   const orderClaims = await db.query<{ id: string }>(ORDER_CLAIMS_DUE_SQL, [window])
   const eventClaims = await db.query<{ id: string }>(EVENT_BOOKING_CLAIMS_DUE_SQL, [window])
   const watchedPayments = await db.query<WatchedPayment>(WATCHED_DUE_SQL)
+  // W41: payment date changes still pending past the window.
+  const paymentDates = await db.query<{ id: string }>(PAYMENT_DATE_CHANGES_DUE_SQL, [window])
   const refundCancels = await refundCancelsDue(db, SUBSCRIPTIONS_LEFT_SQL)
   // W40 (W36 review L3): at most MAX_STEPS_PER_RUN steps a run, oldest first, so steps Stripe keeps giving no answer
   // on can never take a whole run's items from the watched refunds after them. The rest wait for the next run.
@@ -1614,6 +1748,9 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
         return reconcileEventClaim(run, claim)
       },
     })),
+    // W41 (F-plan 4.10 item 1): payment date changes held, each one of the run's items inside its budget. With the
+    // rest that is waiting on a customer's money, before the put-backs and the steps.
+    ...paymentDates.map((due) => ({ kind: 'date_change' as const, id: due.id, go: () => reconcilePaymentDateChange(run, due.id) })),
     // W13c (L3): a subscription left live, which Stripe would bill again next month. W14b (W13c review L4): last, so
     // a row that never settles can't keep a run from the pending orders and flows.
     ...putBacks.map((due) => ({

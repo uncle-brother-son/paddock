@@ -1817,6 +1817,45 @@ describe('W40a: a stale send is never the last word with nothing listed (W40 rev
         })
       })
 
+      // Brief W41 item 1 (W40d report, "The short version" 2, fix (a)). The staff app published before W40 has no
+      // membership lines on the Orders page, so after a rollback to it nobody can press Mark sorted: a line Stripe
+      // refused for good would hold the old Cancel and Undo for that member for ever.
+      it('W41: after a rollback, a line Stripe refused for good no longer holds the old Cancel and Undo; a step still being sent still does', async () => {
+        await onASeed(async (stripe) => {
+          await press('cancel')
+          pastTheCheck()
+          await reconcileNow(stripe)
+          // 10:00, an undo in the new screen gets no answer: its step is open and still being sent. Both are held.
+          stripe.failNext('subscriptions.retrieve', noAnswer())
+          const left = (await press('undo-cancel')).data?.['left'] as { stepId: string }
+          expect(await legacy('cancel')).toEqual(HELD)
+          expect(await legacy('undo-cancel')).toEqual(HELD)
+          // Past the window the automatic check sends it and Stripe refuses for good: a line for a person, never sent again.
+          pastTheWindow()
+          stripe.failNext('subscriptions.update', no())
+          expect((await reconcileNow(stripe)).items).toEqual([expect.objectContaining({ id: left.stepId, outcome: 'left', reason: 'step_refused' })])
+          expect((await listed()).map((line) => [line.state, line.close])).toEqual([['refused', { kind: 'left_step', orderId: left.stepId }]])
+          // The app is rolled back and the switch turned off. The line is still listed, and nothing can sort it there.
+          vi.stubEnv('ORDER_SWITCH', '')
+          const sent = updates(stripe).length
+          // The old screen's Cancel is taken (Stripe still shows the cancel, so the old route sets it again), and stays.
+          expect(await legacy('cancel')).toMatchObject({ status: 200, body: { success: true } })
+          expect(stripe.subscriptionSettings(MO_SUBSCRIPTION)?.cancelAt).toBe(ENDS)
+          // And its Undo: Stripe has no end date, and no later run puts one back or sends the refused step again.
+          expect(await legacy('undo-cancel')).toEqual({ status: 200, body: { success: true } })
+          expect(stripe.subscriptionSettings(MO_SUBSCRIPTION)?.cancelAt).toBeNull()
+          const after = updates(stripe).length
+          expect(after).toBe(sent + 2)
+          for (let i = 0; i < 3; i++) {
+            pastTheCheck()
+            await reconcileNow(stripe)
+          }
+          expect(updates(stripe)).toHaveLength(after)
+          expect(stripe.subscriptionSettings(MO_SUBSCRIPTION)?.cancelAt).toBeNull()
+          expect((await listed()).map((line) => line.state)).toEqual(['refused'])
+        })
+      })
+
       it("the guard's read failing changes nothing: the route answers 500 and Stripe is not asked", async () => {
         await onASeed(async (stripe) => {
           const calls = stripe.calls.length

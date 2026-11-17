@@ -52,6 +52,22 @@ function withoutGuard(source: string): { source: string; guarded: boolean } {
 }
 
 /**
+ * W41 (brief item 6): the live payment date route carries a guard of its own, marked the same way: with
+ * `payment_date_changes` on (W41a: its own kind) it refuses before anything is read (memberships/legacy-guard.ts,
+ * legacyPaymentDateOff); W41a (W41 review S1): off, it still refuses while the Worker holds a change for the
+ * membership (legacyPaymentDateHeld, on a copy of the request).
+ * With its marked import line and block taken out, the live route must still be the copy's, byte for byte.
+ */
+const SWITCHED_OFF_ROUTES: ReadonlySet<string> = new Set(['routes/memberships/change-payment-date/route.ts'])
+const OFF_IMPORT = "import { legacyPaymentDateHeld, legacyPaymentDateOff } from '@/server/rules/memberships/legacy-guard' // W41 guard\n"
+const OFF_BLOCK = /^ *\/\/ W41 guard: start[^\n]*\n[\s\S]*?^ *\/\/ W41 guard: end\n\n/m
+function withoutOffGuard(source: string): { source: string; guarded: boolean } {
+  const block = source.match(OFF_BLOCK)?.[0] ?? ''
+  const guarded = source.split(OFF_IMPORT).length === 2 && block.includes('legacyPaymentDateOff() ?? (await legacyPaymentDateHeld(request.clone()))') && block.includes('status: 409')
+  return { source: source.replace(OFF_IMPORT, '').replace(OFF_BLOCK, ''), guarded }
+}
+
+/**
  * From W37 on: the step F functions the staff app has switched to the Worker (a thin wrapper there; the old body
  * only here). Each slice adds its own. None at W36. W37: credits and their history, Herd, and store credit. W38: the
  * five gift card functions. W39: the three customer functions. W40: the membership cancel and the Subscriptions list.
@@ -74,6 +90,9 @@ const SWITCHED_TO_THE_WORKER: ReadonlySet<string> = new Set([
   // W40: the membership cancel (and its undo) and the Subscriptions list.
   'setMembershipCancellation.ts',
   'getSubscriptions.ts',
+  // W41: the payment date change and its quote.
+  'changeMembershipPaymentDate.ts',
+  'getMembershipPaymentDateQuote.ts',
 ])
 /** W38: the two flag functions are one thin call, kept in a module they share; each names it, and it calls the Worker. */
 const THIN_THROUGH: Record<string, string> = { 'setGiftCardPickedUp.ts': 'shared/giftCardFlag.ts', 'setGiftCardShipped.ts': 'shared/giftCardFlag.ts' }
@@ -230,6 +249,13 @@ describe('W36: the frozen copy of the old step F functions and the three legacy 
         const live = withoutGuard(readFileSync(original, 'utf8'))
         expect(live.guarded, name).toBe(true)
         expect(copy).not.toContain('legacyMembershipChangeHeld')
+        expect(sha256(copy), name).toBe(sha256(live.source))
+      } else if (SWITCHED_OFF_ROUTES.has(name)) {
+        // W41, W41a: the live route refuses while `payment_date_changes` is on, or the Worker holds a change; the copy, which the old side replays, does not.
+        const live = withoutOffGuard(readFileSync(original, 'utf8'))
+        expect(live.guarded, name).toBe(true)
+        expect(copy).not.toContain('legacyPaymentDateOff')
+        expect(copy).not.toContain('legacyPaymentDateHeld')
         expect(sha256(copy), name).toBe(sha256(live.source))
       } else {
         expect(sha256(copy), name).toBe(sha256(readFileSync(original)))

@@ -6,13 +6,16 @@ import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
 import { formatIsoDate, PAYMENT_DATE_FACTS_COLUMNS_SQL, PAYMENT_DATE_FACTS_JOIN_SQL, paymentDateRefusal, paymentDateStatus, type PaymentDateFacts } from './payment-date-status'
 
 // Brief W39 item 2: the customer's profile carries why "Change payment date" is refused on each membership row. The
-// Worker's copy of that read rule (the facts' SQL and the order of the refusals) is held here to the staff app's
-// shared/membershipPaymentDate.ts, which getSubscriptions and the payment date dialog still use until W40 and W41:
-// to the frozen copy always, and to the staff app's own file while it is still there.
+// Worker's read rule (the facts' SQL and the order of the refusals) is held here to the old module,
+// shared/membershipPaymentDate.ts: to the frozen copy always, and to the staff app's own file while it is still
+// there (W41: nothing in the staff app calls it any more). W41 changes one thing on purpose (brief item 4): a pending
+// change holds the membership until it is settled, where the old rule let one go after 15 minutes.
 
 const sources = [path.join(legacyAccountDir, 'shared/membershipPaymentDate.ts'), path.join(staffAppDir(), 'backend/paddock/shared/membershipPaymentDate.ts')]
 const constant = (source: string, name: string): string => new RegExp(`export const ${name} = \`([^\`]*)\``).exec(source)?.[1] ?? `no ${name}`
 const normal = (sql: string): string => sql.replace(/\s+/g, ' ').trim()
+/** The old rule's 15-minute expiry on a pending change: the one clause W41 takes out. */
+const EXPIRY = " AND pdc_p.created_at > now() - interval '15 minutes'"
 
 const ALLOWED: PaymentDateFacts = {
   billing_frequency: 'monthly',
@@ -40,7 +43,11 @@ describe("the payment date button's refusal on the profile (brief W39 item 2)", 
       } catch {
         continue
       }
-      expect(normal(PAYMENT_DATE_FACTS_COLUMNS_SQL), file).toBe(normal(constant(source, 'PAYMENT_DATE_CHANGE_COLUMNS_SQL')))
+      const old = normal(constant(source, 'PAYMENT_DATE_CHANGE_COLUMNS_SQL'))
+      // The old SQL with its 15-minute expiry taken out, and nothing else changed.
+      expect(old.split(EXPIRY), file).toHaveLength(2)
+      expect(normal(PAYMENT_DATE_FACTS_COLUMNS_SQL), file).toBe(old.replace(EXPIRY, ''))
+      expect(PAYMENT_DATE_FACTS_COLUMNS_SQL).not.toContain('15 minutes')
       expect(normal(PAYMENT_DATE_FACTS_JOIN_SQL), file).toBe(normal(constant(source, 'PAYMENT_DATE_CHANGE_JOIN_SQL')))
       compared += 1
     }

@@ -7,7 +7,7 @@
 //      who may: staff with Issue refunds (FB20), or the membership's own customer (the channel)
 //      cancel: found, active, no cancel scheduled, no payment date change in progress, a next renewal date (FB22)
 //              that is after today in London (W40a: on the renewal day the payment must go through first)
-//      undo:   found, active, a cancel scheduled and not yet passed                                        (FB5)
+//      undo:   found, active, a cancel scheduled and not yet passed, no payment date change in progress    (FB5)
 //      no step of the last change still being sent to Stripe                                               (S1)
 //      the end date: monthly, the later of start + 2 months (clamped: Q33, FB6) and the next renewal;
 //                    yearly, the next renewal
@@ -110,8 +110,9 @@ interface MembershipFacts {
 
 /**
  * Read in its own statement, after the lock: a statement that waited for a lock still sees the rows as they were
- * when it started (server/rules/README.md, "Locks before reads"). "A payment date change in progress" is the old
- * rule's own test (shared/membershipPaymentDate: a pending record less than 15 minutes old), until W41 rebuilds it.
+ * when it started (server/rules/README.md, "Locks before reads"). "A payment date change in progress" (W41, brief
+ * item 4): a pending record of any age. It holds the membership until the press or reconcile settles it
+ * (payment-date.ts); the old rule let one go after 15 minutes.
  */
 const FACTS_SQL = `
 SELECT cm.id, cm.customer_id, cm.start_date::text AS start_date, cm.next_renewal_date::text AS next_renewal_date,
@@ -119,8 +120,7 @@ SELECT cm.id, cm.customer_id, cm.start_date::text AS start_date, cm.next_renewal
        cm.cancel_effective_date::text AS cancel_effective_date,
        (now() AT TIME ZONE 'Europe/London')::date::text AS today,
        EXISTS (SELECT 1 FROM membership_payment_date_changes p
-               WHERE p.membership_id = cm.id AND p.status = 'pending'
-                 AND p.created_at > now() - interval '15 minutes') AS payment_date_changing
+               WHERE p.membership_id = cm.id AND p.status = 'pending') AS payment_date_changing
 FROM customer_memberships cm
 WHERE cm.id = $1::uuid`
 
@@ -301,6 +301,9 @@ export async function undoMembershipCancel(db: Db, membershipId: string, options
     if (facts.cancel_effective_date === null || facts.cancel_effective_date < facts.today) {
       throw accountRefusal('CONFLICT', 'undo_cancel', 'not_cancelling', MEMBERSHIP_CANCEL_DIALOG_WORDS.not_cancelling)
     }
+    // W41 (brief item 4): a pending payment date change holds the membership against an undo too. One can only meet a
+    // scheduled cancel that arrived after its P1 (the webhook copying a cancel made in Stripe, or a legacy cancel).
+    if (facts.payment_date_changing) throw accountRefusal('CONFLICT', 'undo_cancel', 'payment_date_changing', MEMBERSHIP_CANCEL_NEW_WORDS.paymentDateChanging)
     if (facts.stripe_subscription_id && (await stepStillBeingSent(tx, facts.stripe_subscription_id, 'cancel_at'))) {
       throw accountRefusal('CONFLICT', 'undo_cancel', 'still_sending', MEMBERSHIP_CANCEL_NEW_WORDS.stillSending)
     }

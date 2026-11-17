@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import Stripe from 'stripe'
+import { legacyPaymentDateHeld, legacyPaymentDateOff } from '@/server/rules/memberships/legacy-guard' // W41 guard
 import {
   changeMembershipPaymentDate,
   type ChangePaymentDateParams,
@@ -37,6 +38,13 @@ export async function POST(request: NextRequest) {
     if (!verifyRetoolAuth(request)) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+
+    // W41 guard: start (W41 item 6, W41a: with `payment_date_changes` on, the new screen's route owns this action; off, refused while the Worker holds a change)
+    const off = legacyPaymentDateOff() ?? (await legacyPaymentDateHeld(request.clone()))
+    if (off) {
+      return NextResponse.json({ error: off }, { status: 409 })
+    }
+    // W41 guard: end
 
     const body: ChangePaymentDateParams = await request.json()
     const { stripeSubscriptionId, newRenewalDate, partMonthAmount } = body

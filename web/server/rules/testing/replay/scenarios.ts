@@ -769,6 +769,8 @@ const WORKER_DOES_IT_NOW: Readonly<Record<string, { route: RegExp; answerLost: R
   // route): the route runs to the end and its answer is lost.
   '/api/memberships/cancel': { route: /^\/api\/v1\/staff\/memberships\/[^/]+\/cancel$/, answerLost: /^\/api\/v1\/staff\/memberships\/[^/]+\/cancel$/ },
   '/api/memberships/undo-cancel': { route: /^\/api\/v1\/staff\/memberships\/[^/]+\/undo-cancel$/, answerLost: /^\/api\/v1\/staff\/memberships\/[^/]+\/undo-cancel$/ },
+  // W41: and the payment date change (the old function called the legacy route for the charge and the date move).
+  '/api/memberships/change-payment-date': { route: /^\/api\/v1\/staff\/memberships\/[^/]+\/payment-date$/, answerLost: /^\/api\/v1\/staff\/memberships\/[^/]+\/payment-date$/ },
 }
 
 const CHARGE_PATH = '/api/payments/charge-saved-card'

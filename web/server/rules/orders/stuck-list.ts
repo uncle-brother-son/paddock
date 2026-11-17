@@ -18,6 +18,8 @@ import { MEMBERSHIP_REFUND_WORDS } from '@/server/rules/refunds/failure-messages
 import { LEFT_BY_REFUND } from './refund-subscription'
 import { LATE_REFUND_STEP, WATCH_DAYS, WATCHES_LISTED_SQL, type WatchDetails } from '@/server/rules/refunds/refund-watch'
 import { openSteps, stepWhat, stepWords, type StepKind } from '@/server/rules/memberships/left'
+import { PAYMENT_DATE_STUCK_WORDS } from '@/server/rules/memberships/failure-messages'
+import { PAYMENT_DATE_CHANGES_LISTED_SQL, PAYMENT_DATE_CLOSE_REASONS, PAYMENT_DATE_REFUND_WATCH_STEP, paymentDateListedReason, type ListedPaymentDateChange } from '@/server/rules/memberships/payment-date'
 
 /**
  * Words for each reason an item is listed (W12's, W14b: every reason reconcile can leave an order or flow with has
@@ -189,6 +191,9 @@ export const WATCH_WORDS = {
     `A card refund of ${pounds(amount)} on this order (${refundId}) was accepted by Stripe and then failed, so the money never reached the customer. It is back on the order as money still to refund: find the order on the Orders page and use Refund the rest. ${MARK_SORTED}`,
   eventFailed: (amount: number, refundId: string): string =>
     `A card refund of ${pounds(amount)} for cancelled event places (${refundId}) was accepted by Stripe and then failed, so the money never reached the customer. The places stay cancelled, and the money is back on the event booking as money still to refund: open the event's attendee list and use Refund the rest. ${MARK_SORTED}`,
+  /** W41 (FB3): the refund of a payment date change's part-month charge, after Stripe refused to move the date. */
+  paymentDateFailed: (amount: number, paymentIntentId: string): string =>
+    `An automatic refund of ${pounds(amount)} (payment ${paymentIntentId}) for a payment date change that Stripe refused was accepted by Stripe and then failed, so the customer has paid for a change that didn't happen and has not had the money back. Refund that payment in Stripe by hand (or tell a manager if Stripe won't). ${MARK_SORTED}`,
   compensationFailed: (amount: number, paymentIntentId: string): string =>
     `An automatic refund of ${pounds(amount)} (payment ${paymentIntentId}) for an order that couldn't be completed was accepted by Stripe and then failed, so the customer has not had the money back. Refund that payment in Stripe by hand (or tell a manager if Stripe won't). ${MARK_SORTED}`,
   /** W32a (W32 review S3): a late payment's automatic refund (its order or change was already cancelled). */
@@ -204,6 +209,7 @@ export const WATCH_WORDS = {
 /** W32: the words for one listed watch. */
 export function watchWords(watch: Pick<WatchDetails, 'on' | 'amount' | 'refundId' | 'paymentIntentId' | 'step'>, state: 'failed' | 'expired', owed: number): string {
   if (state === 'expired') return WATCH_WORDS.expired(watch.amount, watch.refundId)
+  if (watch.on === 'compensation' && watch.step === PAYMENT_DATE_REFUND_WATCH_STEP) return WATCH_WORDS.paymentDateFailed(watch.amount, watch.paymentIntentId)
   if (watch.on === 'compensation') return watch.step === LATE_REFUND_STEP ? WATCH_WORDS.lateFailed(watch.amount, watch.paymentIntentId) : WATCH_WORDS.compensationFailed(watch.amount, watch.paymentIntentId)
   if (!(owed > 0)) return WATCH_WORDS.goneFailed(watch.amount, watch.paymentIntentId)
   if (watch.on === 'booking') return WATCH_WORDS.bookingFailed(watch.amount, watch.refundId)
@@ -337,6 +343,23 @@ export interface StuckStep {
   close?: StuckCloseTarget
 }
 
+/** W41 (F-plan 4.10): a membership's payment date change still pending past the window (memberships/payment-date.ts). */
+export interface StuckPaymentDate {
+  changeId: string
+  membershipId: string
+  customerId: string
+  customerName: string
+  newRenewalDate: string
+  /** The part-month charge, in pounds. */
+  amount: number
+  paymentIntentId: string | null
+  createdAt: string
+  ageMinutes: number
+  reason: string
+  words: string
+  close?: StuckCloseTarget
+}
+
 export interface StuckListOutput {
   checkout: StuckOrder[]
   flows: StuckFlow[]
@@ -345,6 +368,7 @@ export interface StuckListOutput {
   warnings: StuckWarning[]
   watched: StuckWatched[]
   steps: StuckStep[]
+  paymentDates: StuckPaymentDate[]
   alert: { at: string; words: string } | null
 }
 
@@ -527,6 +551,10 @@ FROM (
   UNION ALL
   SELECT o.customer_id, NULL::uuid FROM orders o WHERE $1::text IN ('order', 'compensation') AND o.id::text = $2::text
   UNION ALL
+  -- W41: a payment date change's compensation refund names the change, which has no order.
+  SELECT cm.customer_id, NULL::uuid FROM membership_payment_date_changes pd JOIN customer_memberships cm ON cm.id = pd.membership_id
+  WHERE $1::text = 'compensation' AND pd.id::text = $2::text
+  UNION ALL
   SELECT eb.customer_id, eb.event_id FROM event_bookings eb WHERE $1::text = 'event_booking' AND eb.id::text = $2::text
 ) s
 JOIN customers c ON c.id = s.customer_id
@@ -620,6 +648,8 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
   const warnings = await db.query<{ entity_type: string; entity_id: string; at: unknown; warning: string }>(WARNINGS_SQL, [WARNINGS_FOR_HOURS])
   const alert = (await db.query<{ at: unknown }>(ALERT_SQL, [ALERT_FOR_MINUTES]))[0]
   const subscriptionsLeft = await db.query<{ entity_id: string; at: unknown; subscription_id: string; state: string; found: string | null }>(SUBSCRIPTIONS_LEFT_SQL)
+  // W41: payment date changes still pending past the window.
+  const paymentDates = await db.query<ListedPaymentDateChange>(PAYMENT_DATE_CHANGES_LISTED_SQL, [olderThanMinutes, null])
   // W32: refunds that failed after Stripe accepted them, and watches that ran out (few, if ever any: one read each for the name).
   const watches = await db.query<{ id: string; refund_id: string; details: WatchDetails; ended_at: unknown; state: 'failed' | 'expired'; ended: { owed?: number } }>(WATCHES_LISTED_SQL, [null])
   const watched: StuckWatched[] = []
@@ -633,7 +663,8 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
       paymentIntentId: watch.paymentIntentId,
       on: watch.on,
       bookingId: watch.on === 'booking' ? watch.subjectId : null,
-      orderId: watch.on === 'order' || watch.on === 'compensation' ? watch.subjectId : watch.orderId,
+      // W41: a payment date change's compensation refund names its change, not an order.
+      orderId: watch.on === 'order' || (watch.on === 'compensation' && watch.step !== PAYMENT_DATE_REFUND_WATCH_STEP) ? watch.subjectId : watch.orderId,
       eventBookingId: watch.on === 'event_booking' ? watch.subjectId : null,
       eventId: subject?.event_id ?? null,
       customerName: subject ? `${subject.first_name} ${subject.last_name}`.trim() : null,
@@ -803,6 +834,26 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
       )
       .concat(warnings.map((row) => ({ kind: row.entity_type === 'order' ? 'order' : 'flow', id: row.entity_id, at: iso(row.at), warning: row.warning }))),
     watched,
+    // W41 (F-plan 4.10): payment date changes still pending past the window, with what each is waiting on. Only one
+    // the automatic check has left for a person can be closed by hand.
+    paymentDates: paymentDates.map((row): StuckPaymentDate => {
+      const reason = paymentDateListedReason(row)
+      const createdAt = iso(row.created_at)
+      return {
+        changeId: row.id,
+        membershipId: row.membership_id,
+        customerId: row.customer_id,
+        customerName: `${row.first_name} ${row.last_name}`.trim(),
+        newRenewalDate: row.new_renewal_date,
+        amount: Number.parseFloat(row.amount),
+        paymentIntentId: row.stripe_payment_intent_id,
+        createdAt,
+        ageMinutes: ageMinutes(createdAt),
+        reason,
+        words: PAYMENT_DATE_STUCK_WORDS[reason] ?? wordsFor(reason),
+        ...(PAYMENT_DATE_CLOSE_REASONS.has(reason) ? { close: { kind: 'held_payment_date' as const, orderId: row.id } } : {}),
+      }
+    }),
     // W36 (F-plan 4.10): memberships' Stripe steps left to do. Only one Stripe has refused for good can be closed by hand.
     steps: (await openSteps(db)).map((step) => ({
       stepId: step.id,

@@ -591,8 +591,9 @@ describe('what the list reads', () => {
       await settleLeftStep(db, stripe, refused.id, { actor: { type: 'system', id: null }, requestId: 'run-1' }, undefined)
       const list = await stuckList(db)
       // The published getStuckReaderPayments copies the six fields it knows by name, and `watched` since W32.
-      expect(Object.keys(list).sort()).toEqual(['alert', 'checkout', 'claims', 'flows', 'refunds', 'steps', 'warnings', 'watched'])
-      expect(list).toMatchObject({ checkout: [], flows: [], claims: [], refunds: [], warnings: [], watched: [], alert: null })
+      // W41: and `paymentDates`, a field of its own too.
+      expect(Object.keys(list).sort()).toEqual(['alert', 'checkout', 'claims', 'flows', 'paymentDates', 'refunds', 'steps', 'warnings', 'watched'])
+      expect(list).toMatchObject({ checkout: [], flows: [], claims: [], refunds: [], warnings: [], watched: [], paymentDates: [], alert: null })
       expect(list.steps.map((step) => [step.stepId, step.state]).sort()).toEqual([[left.id, 'left'], [refused.id, 'refused']].sort())
       // The route's own output check takes it.
       const parsed = stuckListOutputSchema.parse(list)

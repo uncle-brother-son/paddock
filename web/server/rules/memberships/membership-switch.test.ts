@@ -9,7 +9,7 @@ import { BOOKING_KINDS_ON } from '@/server/rules/testing/replay/booking-side'
 import { ORDER_REFUND_KINDS_ON } from '@/server/rules/testing/replay/order-refund-side'
 import { ALL_KINDS_ON } from '@/server/rules/testing/replay/order-side'
 import { MEMBERSHIP_PATH_OFF_MESSAGE } from './failure-messages'
-import { MEMBERSHIP_KINDS, membershipChangePathOff, membershipChangesOn } from './membership-switch'
+import { MEMBERSHIP_KINDS, membershipChangePathOff, membershipChangesOn, PAYMENT_DATE_KINDS, paymentDateChangesOn, paymentDatePathOff } from './membership-switch'
 
 // Brief W36 item 2 (F-plan 4.11, lead call L3): ORDER_SWITCH gains `membership_changes`, off by default, with a test
 // that it is off with today's live value. "Off by default" means: with the secret unset or empty; with the value live
@@ -23,8 +23,8 @@ describe("step F's switch kind (brief W36 item 2)", () => {
   it('ORDER_SWITCH knows the kind, and only by its exact name', () => {
     expect(MEMBERSHIP_KINDS).toEqual(['membership_changes'])
     expect(ORDER_KINDS).toContain('membership_changes')
-    // Added at the end: the nine kinds before it are as they were, in their order.
-    expect(ORDER_KINDS).toEqual(['no_stripe', 'saved_card', 'reader', 'membership', 'reader_flows', 'booking_changes', 'order_refunds', 'event_cancels', 'customer_cancels', 'membership_changes'])
+    // Added at the end: the nine kinds before it are as they were, in their order. W41a: the payment date's own kind after it.
+    expect(ORDER_KINDS).toEqual(['no_stripe', 'saved_card', 'reader', 'membership', 'reader_flows', 'booking_changes', 'order_refunds', 'event_cancels', 'customer_cancels', 'membership_changes', 'payment_date_changes'])
     expect([...kindsOn('membership_changes')]).toEqual(['membership_changes'])
     expect([...kindsOn(' Membership_Changes ,')]).toEqual(['membership_changes'])
     for (const typo of ['membership_change', 'memberships_changes', 'membership-changes', 'membershipchanges', 'changes', 'membership']) expect(kindsOn(typo).has('membership_changes'), typo).toBe(false)
@@ -89,5 +89,55 @@ describe("step F's switch kind (brief W36 item 2)", () => {
     expect(ERROR_CODES.slice(-4)).toEqual(['ORDER_PATH_OFF', 'BOOKING_PATH_OFF', 'REFUND_PATH_OFF', 'MEMBERSHIP_PATH_OFF'])
     expect(ERROR_HTTP_STATUS.MEMBERSHIP_PATH_OFF).toBe(501)
     expect(new Set(ERROR_CODES).size).toBe(ERROR_CODES.length)
+  })
+})
+
+// Brief W41a item 1 (lead call, 17 Nov 2026): the payment date change has a kind of its own, so it can be switched
+// off (and the old staff app put back for it) without taking W40's cancel and undo with it.
+describe("the payment date change's own switch kind (brief W41a item 1)", () => {
+  /** The secret's value on live since 17 Nov (W40: `membership_changes` on). */
+  const LIVE_SINCE_W40 = `${LIVE_TODAY},membership_changes`
+
+  it('ORDER_SWITCH knows the kind, and only by its exact name', () => {
+    expect(PAYMENT_DATE_KINDS).toEqual(['payment_date_changes'])
+    expect(ORDER_KINDS.at(-1)).toBe('payment_date_changes')
+    expect([...kindsOn(' Payment_Date_Changes ,')]).toEqual(['payment_date_changes'])
+    for (const typo of ['payment_date_change', 'payment_dates_changes', 'payment-date-changes', 'paymentdatechanges', 'payment_date', 'date_changes', 'membership_changes']) expect(kindsOn(typo).has('payment_date_changes'), typo).toBe(false)
+  })
+
+  it('off by default: unset, empty, the value live runs today (with `membership_changes` on), and every other kind on', () => {
+    const everyOtherKind = ORDER_KINDS.filter((kind) => kind !== 'payment_date_changes').join(',')
+    for (const value of [undefined, null, '', '   ', LIVE_TODAY, LIVE_SINCE_W40, everyOtherKind]) {
+      expect(paymentDateChangesOn(value), String(value)).toBe(false)
+      expect(paymentDatePathOff(value), String(value)).toMatchObject({ code: 'MEMBERSHIP_PATH_OFF', status: 501, details: { kinds: ['payment_date_changes'] } })
+    }
+    // Deploying this Worker changes nothing for the cancel and the undo: they are on as they were.
+    expect(membershipChangePathOff(LIVE_SINCE_W40)).toBeNull()
+  })
+
+  it('off answers the same switched-off words as the other kinds, naming its own kind', () => {
+    const refusal = paymentDatePathOff(LIVE_SINCE_W40)
+    expect(refusal?.message).toBe('This is switched off in the booking system. Tell a manager.')
+    expect(refusal?.details).toEqual({ reason: 'membership_path_off', message: MEMBERSHIP_PATH_OFF_MESSAGE, kinds: ['payment_date_changes'] })
+  })
+
+  it('the two kinds are independent: each turns on its own action and nothing of the other', () => {
+    expect(paymentDatePathOff('payment_date_changes')).toBeNull()
+    expect(paymentDatePathOff(`${LIVE_SINCE_W40},payment_date_changes`)).toBeNull()
+    // The date change on, the cancel and undo off.
+    expect(membershipChangesOn('payment_date_changes')).toBe(false)
+    expect(membershipChangePathOff('payment_date_changes')?.code).toBe('MEMBERSHIP_PATH_OFF')
+    // The cancel and undo on, the date change off.
+    expect(paymentDateChangesOn('membership_changes')).toBe(false)
+    expect(paymentDatePathOff('membership_changes')?.code).toBe('MEMBERSHIP_PATH_OFF')
+  })
+
+  it('turns on nothing else: no order, booking change, refund, event cancel or website cancel', () => {
+    const only = 'payment_date_changes'
+    for (const payment of [{ method: 'cash' }, { method: 'card' }, { method: 'reader' }, {}]) expect(orderPathOff({ payment }, only)?.code).toBe('ORDER_PATH_OFF')
+    for (const money of ['cash', 'card', 'reader'] as const) expect(bookingPathOff(money, only, 'in')?.code).toBe('BOOKING_PATH_OFF')
+    expect(orderRefundPathOff(only)?.code).toBe('REFUND_PATH_OFF')
+    expect(eventCancelPathOff('card', only)?.code).toBe('REFUND_PATH_OFF')
+    expect(customerCancelPathOff(only)?.code).toBe('REFUND_PATH_OFF')
   })
 })

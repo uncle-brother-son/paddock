@@ -1,10 +1,11 @@
-// Ported in W39 from the staff app's shared/membershipPaymentDate.ts: only what the customer's profile reads, which
-// is why "Change payment date" is refused on a membership row (F-plan 1.7; brief W39 item 2: the detail's membership
-// rows keep today's shape). Read-only. The quote, the window and the action stay in the staff app until W41; W40
-// takes over the membership rows (the Subscriptions list reads the same facts). Until then the staff app's
-// getSubscriptions and its dialog still use the old module, so payment-date-status.test.ts holds this copy to it.
+// Ported in W39 from the staff app's shared/membershipPaymentDate.ts: why "Change payment date" is refused on a
+// membership row (F-plan 1.7; brief W39 item 2). Read-only. W41: this is now the rule's one home. The Subscriptions
+// list, the customer's profile, the quote and the press (payment-date.ts) all read these facts and this order of
+// refusals; the staff app's module has no caller left. payment-date-status.test.ts holds it to the frozen copy, but
+// for the one change W41 makes on purpose: a pending change holds the membership until it is settled, with no
+// 15-minute expiry (brief W41 item 4; reconcile ends it).
 import 'server-only'
-import { PAYMENT_DATE_REFUSALS } from './failure-messages'
+import { PAYMENT_DATE_NEW_WORDS, PAYMENT_DATE_REFUSALS } from './failure-messages'
 
 /** The facts the refusal is worked out from. Needs `cm` (customer_memberships) and `c` (customers), and the join below. */
 export const PAYMENT_DATE_FACTS_COLUMNS_SQL = `
@@ -19,8 +20,7 @@ export const PAYMENT_DATE_FACTS_COLUMNS_SQL = `
   pdc_last.new_renewal_date::text AS pdc_last_done_new_date,
   COALESCE(pdc_last.created_at > now() - interval '6 months', false) AS pdc_within_six_months,
   EXISTS (SELECT 1 FROM membership_payment_date_changes pdc_p
-          WHERE pdc_p.membership_id = cm.id AND pdc_p.status = 'pending'
-            AND pdc_p.created_at > now() - interval '15 minutes') AS pdc_pending`
+          WHERE pdc_p.membership_id = cm.id AND pdc_p.status = 'pending') AS pdc_pending`
 
 /** The membership's latest finished payment date change. */
 export const PAYMENT_DATE_FACTS_JOIN_SQL = `
@@ -64,12 +64,22 @@ export function formatIsoDate(isoDate: string): string {
   return `${Number(match[3])} ${month} ${match[1]}`
 }
 
-/** The first rule that refuses a payment date change, in the old order, or null. The 6-month rule is separate: it can be overridden. */
-export function paymentDateRefusal(f: PaymentDateFacts): string | null {
+/** Every YYYY-MM-DD date in a message worded the same way (shared/formatIsoDate, formatIsoDatesIn): Stripe's own text, say. */
+export function formatIsoDatesIn(text: string): string {
+  return text.replace(/\b\d{4}-\d{2}-\d{2}\b/g, (date) => formatIsoDate(date))
+}
+
+/**
+ * The first rule that refuses a payment date change, in the old order, or null. The 6-month rule is separate: it can be overridden.
+ * `renewalDay` (W41a; Wayne, 17 Nov 2026), for the quote and the press only: a renewal due today is refused too, and
+ * today or earlier is worded as W40a's cancel is. The lists and the profile don't pass it and answer as before.
+ */
+export function paymentDateRefusal(f: PaymentDateFacts, renewalDay = false): string | null {
   if (f.billing_frequency !== 'monthly') return PAYMENT_DATE_REFUSALS.yearly
   if (f.subscription_status === 'past_due') return PAYMENT_DATE_REFUSALS.paymentFailing
   if (f.subscription_status !== 'active') return PAYMENT_DATE_REFUSALS.notActive
   if (f.pdc_cancel_effective_date) return PAYMENT_DATE_REFUSALS.cancelScheduled
+  if (renewalDay && f.pdc_next_renewal_date && f.pdc_next_renewal_date <= f.pdc_today) return PAYMENT_DATE_NEW_WORDS.renewalDueToday
   if (!f.pdc_next_renewal_date || f.pdc_next_renewal_date < f.pdc_today) return PAYMENT_DATE_REFUSALS.renewalOverdue
   if (f.pdc_has_payment_needed) return PAYMENT_DATE_REFUSALS.paymentNeeded
   if (!f.stripe_subscription_id) return PAYMENT_DATE_REFUSALS.noSubscription

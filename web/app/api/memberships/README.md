@@ -15,6 +15,14 @@ step F were recorded through a frozen copy of them made at Worker `982db8f`
 move a golden file. `server/rules/testing/frozen-account-code.test.ts` fails if these and the copy drift apart while
 both exist: decide then which the golden files should hold to.
 
+Each live route carries one marked guard the copy doesn't have (`server/rules/memberships/legacy-guard.ts`): `cancel`
+and `undo-cancel` refuse while the new screen's Stripe step for that membership is unsettled (W40d; W41: a step Stripe
+has refused for good no longer counts), and `change-payment-date` refuses while the `payment_date_changes` switch kind
+is on (W41, W41a: the new route owns the action then; with the kind off, after a rollback, it runs as below, whatever
+`membership_changes` says). W41a: all three also refuse while the membership has a payment date change the Worker
+started and is still finishing (a pending row with its `started` audit row), with the kind on or off: "A payment date
+change for this membership is still being finished. Try again later, or check the Orders page."
+
 ## `POST /api/memberships/change-payment-date`
 
 Moves a monthly membership's payment date forward (staff only, from Retool). The member pays now

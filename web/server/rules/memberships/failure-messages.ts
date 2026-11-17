@@ -11,7 +11,8 @@
 // be marked failed"; and the legacy route's own checks of the membership row, which the quote refuses first in its own
 // words. W40 and W41 name each as a difference.
 import 'server-only'
-import { PAYMENT_UNCONFIRMED_MESSAGE } from '@/server/rules/orders/failure-messages'
+import { CARD_FLOW_PAID_NOT_FINISHED_MESSAGE, CHANGE_PAYMENT_UNCONFIRMED_MESSAGE } from '@/server/rules/bookings/failure-messages'
+import { ORDER_STILL_PROCESSING_MESSAGE } from '@/server/rules/orders/failure-messages'
 
 export { INACTIVE_STAFF_MESSAGE, ISSUE_REFUNDS_NEEDED_MESSAGE } from '@/server/rules/bookings/failure-messages'
 
@@ -21,10 +22,11 @@ export { INACTIVE_STAFF_MESSAGE, ISSUE_REFUNDS_NEEDED_MESSAGE } from '@/server/r
 export const MEMBERSHIP_PATH_OFF_MESSAGE = 'This is switched off in the booking system. Tell a manager.'
 
 /**
- * Lead call L15: a payment date change whose charge got no clear answer is held, in step C's saved-card sentence
- * (Wayne's Q35 pattern). W41 uses it.
+ * Lead call L15, as the W36 review's L5 changed it (lead, 17 Nov): a payment date change whose charge got no clear
+ * answer is held, in step D's saved-card sentence ("The change is on hold…"), not step C's ("The order is on hold"):
+ * a payment date change has no order until it is finished. W41 uses it.
  */
-export const PAYMENT_DATE_HELD_MESSAGE = PAYMENT_UNCONFIRMED_MESSAGE
+export const PAYMENT_DATE_HELD_MESSAGE = CHANGE_PAYMENT_UNCONFIRMED_MESSAGE
 
 /**
  * A Stripe step left after the database change (memberships/left.ts, F-plan 4.10): the stuck list's line while the
@@ -113,6 +115,14 @@ export const MEMBERSHIP_CANCEL_NEW_WORDS = {
 export const LEGACY_MEMBERSHIP_CHANGE_HELD_MESSAGE =
   'This membership was changed in the new screen in the last half hour and Stripe is still being checked. Try again in 30 minutes.'
 
+/**
+ * New in W41a (W41 review S1): the three legacy routes (/api/memberships/cancel, /undo-cancel and
+ * /change-payment-date) refuse with this, 409, while the membership has a payment date change the Worker started
+ * that is still pending (memberships/legacy-guard.ts), whatever the switch says. The old functions show a route's
+ * `error` as it is.
+ */
+export const LEGACY_PAYMENT_DATE_HELD_MESSAGE = 'A payment date change for this membership is still being finished. Try again later, or check the Orders page.'
+
 // --- Payment date change (changeMembershipPaymentDate.ts, shared/membershipPaymentDate.ts, the legacy route, the dialog)
 
 /**
@@ -162,13 +172,80 @@ export const PAYMENT_DATE_WORDS = {
   refundedInFull: (stripeMessage: string): string => `${stripeMessage}. The part-month charge was refunded in full.`,
   /** What the charge is called in Stripe. */
   chargeDescription: (extraDays: number): string => `Payment date change: ${extraDays} extra days`,
+  /** The two warnings on a change that went through (W41 keeps them): the legacy route's, and the old function's. */
+  stripeReports: (trialEnd: number | null, anchor: number | null, expected: number): string =>
+    `Stripe accepted the change but reports trial_end ${trialEnd} and billing_cycle_anchor ${anchor}, expected ${expected}: check the subscription in Stripe.`,
+  nextPaymentNowOn: (stripeDate: string, askedDate: string): string => `Stripe's next payment is now on ${stripeDate}, not ${askedDate}: check the subscription in Stripe.`,
 } as const
 
-/** ChangePaymentDateDialog's own words. */
+const money = (pounds: number): string => `£${pounds.toFixed(2)}`
+
+/**
+ * New in W41 (F-plan 4.4; brief W41 items 3 to 6): what the old code never said.
+ * - `orderStillProcessing` (Q10, lead call L8): the customer has a card order on hold, in the order's own words.
+ * - `figureChanged`, `figureMissing` (Q18, FB4): the charge worked out at the press isn't the one the dialog showed.
+ * - `stepOpen`: a cancel or undo on this membership still has its Stripe step open.
+ * - `notSent`: the charge wasn't sent for lack of time. Nothing reached Stripe.
+ * - `paidNotFinished`: the card was charged and the change couldn't be finished here (the date move got no clear
+ *   answer, or the record couldn't be written): held for the automatic check, in step D's sentence.
+ * - `refundHeld`: Stripe refused the date move and the refund of the charge got no clear answer: held.
+ * - `refundRefused`: Stripe refused the date move and then the refund too (FB3): listed for a person.
+ * - `legacyOff`: the legacy route (/api/memberships/change-payment-date) while `payment_date_changes` is on (W41a: its own kind).
+ * - `renewalDueToday` (W41a; Wayne, 17 Nov 2026): the quote and the press on the day the renewal is due, or after it
+ *   while it is overdue (London), as W40a's cancel. Stripe takes that payment at the time of day the subscription
+ *   began; a date moved before it lands would be moved over a month about to be paid for. The lists and the profile
+ *   keep `renewalOverdue` for an overdue one and say nothing on the day itself.
+ */
+export const PAYMENT_DATE_NEW_WORDS = {
+  orderStillProcessing: ORDER_STILL_PROCESSING_MESSAGE,
+  figureChanged: (shown: number, now: number): string =>
+    `The part-month charge is now ${money(now)}, not the ${money(shown)} shown. Nothing was charged and the payment date has not changed. Check the new figure with the customer and press again.`,
+  figureMissing: 'The part-month charge shown on screen was not sent, so nothing was charged and the payment date has not changed. Refresh the page and try again.',
+  stepOpen: "The last change to this membership hasn't been confirmed by Stripe yet (it is listed on the Orders page), so its payment date can't be changed. Nothing was charged. Try again once it is off the list.",
+  notSent: 'The card was not charged: there was no time left to ask Stripe. Nothing was charged and the payment date has not changed. Try again.',
+  paidNotFinished: CARD_FLOW_PAID_NOT_FINISHED_MESSAGE,
+  refundHeld: (stripeMessage: string): string =>
+    `Stripe refused to move the payment date (${stripeMessage}), and the refund of the part-month charge hasn't been confirmed yet. The change is on hold and the automatic check will finish the refund: don't take payment again. Check the Orders page in a few minutes.`,
+  refundRefused: (stripeMessage: string, amount: number, paymentIntentId: string, refundMessage: string): string =>
+    `${stripeMessage}. The ${money(amount)} charge (${paymentIntentId}) could not be refunded automatically (${refundMessage}). It is listed on the Orders page: refund it in Stripe by hand, then close the line there.`,
+  legacyOff: 'This is now done in the new screen. Tell a manager.',
+  renewalDueToday: "Today's payment for this membership hasn't gone through yet, so its payment date can't be changed until it has. Try again after the payment.",
+} as const
+
+const DONT_CHARGE_AGAIN = "Don't change the payment date or take the part-month charge again."
+const CLOSE_DATE_CHANGE = 'Then press Close (needs the Issue refunds permission).'
+
+/**
+ * New in W41 (brief W41 item 5; F-plan 4.10): the stuck list's line for a payment date change that is held, by what
+ * it is waiting on. A reason with no entry here uses the list's own words for it (step D's: `unclear`, `other_mode`,
+ * `several_payments`, `amount_mismatch`, `payment_processing`, `not_started_here`, `unexpected`).
+ */
+export const PAYMENT_DATE_STUCK_WORDS: Readonly<Record<string, string>> = {
+  waiting: `A payment date change didn't finish cleanly: its part-month charge may or may not have been taken. The automatic check, every 5 minutes, looks for the payment in Stripe and finishes the change or ends it; it never charges again. ${DONT_CHARGE_AGAIN}`,
+  move_unconfirmed: `A payment date change's part-month charge was taken, but Stripe hasn't confirmed the new payment date yet. The automatic check tries again every 5 minutes. ${DONT_CHARGE_AGAIN}`,
+  finalise_failed: `A payment date change's part-month charge was taken and Stripe shows the new payment date, but it couldn't be recorded yet. The automatic check tries again every 5 minutes. ${DONT_CHARGE_AGAIN}`,
+  refund_unconfirmed: `Stripe refused to move a membership's payment date, and the refund of the part-month charge hasn't been confirmed yet. The automatic check tries again every 5 minutes. ${DONT_CHARGE_AGAIN}`,
+  refund_refused: `Stripe refused to move a membership's payment date, and then refused the refund of the part-month charge, so the customer has paid for a change that didn't happen. Refund that payment in Stripe by hand (or tell a manager if Stripe won't). ${CLOSE_DATE_CHANGE}`,
+  refunded_elsewhere: `A payment date change's part-month charge was taken and has since been refunded outside the booking system, so the automatic check has stopped: it won't move the payment date for a charge that was given back. Check the subscription's next payment date in Stripe (or tell a manager). ${CLOSE_DATE_CHANGE}`,
+  subscription_missing: `A payment date change's part-month charge was taken, but Stripe can't find the membership's subscription with the club's payment account details, so the date can't be moved. Tell a manager: refund the payment in Stripe by hand if the date wasn't moved. ${CLOSE_DATE_CHANGE}`,
+  fail_failed: "A payment date change took no money, but it couldn't be ended yet. The automatic check tries again every 5 minutes.",
+}
+
+/** The manual close's answers for a held payment date change (brief W41 item 5). */
+export const PAYMENT_DATE_CLOSE_WORDS = {
+  closed: (found: string): string => `Closed. The payment date change is recorded as not finished, and the membership can be changed again. What Stripe last showed: ${found}. Nothing was sent to Stripe.`,
+  notListed: 'This payment date change is no longer on hold (it was finished or ended in the meantime). Nothing was changed.',
+  stillChecking: "The automatic check is still working on this payment date change, so it can't be closed by hand. Nothing was changed. Wait for the next check (every 5 minutes) and look again.",
+} as const
+
+/**
+ * ChangePaymentDateDialog's own words. W41: the dialog no longer has "No response from the server." or "Failed to
+ * change the payment date." (a press with no answer now keeps its key and says the card may have been charged); it
+ * has a fallback for a change on hold that came back with no words.
+ */
 export const PAYMENT_DATE_DIALOG_WORDS = {
-  noResponse: 'No response from the server.',
-  failed: 'Failed to change the payment date.',
   notChanged: 'The payment date was not changed.',
+  onHold: 'The change is on hold. Check the Orders page in a few minutes.',
 } as const
 
 // --- Credits and Herd (adjustMembershipCredits.ts, setMembershipHerd.ts, MembershipCreditDialog, the Customers page)

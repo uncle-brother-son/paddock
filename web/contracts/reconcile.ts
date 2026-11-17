@@ -61,8 +61,9 @@ export const reconcileItemSchema = z.object({
   /**
    * W21: `claim` is a booking refund's claim (server/rules/bookings/refunds.ts) held for reconcile. W28: or an order refund's.
    * W36: `step` is a membership's Stripe step left after its database change (server/rules/memberships/left.ts).
+   * W41: `date_change` is a membership's payment date change still pending (server/rules/memberships/payment-date.ts).
    */
-  kind: z.enum(['order', 'flow', 'refund', 'claim', 'step']),
+  kind: z.enum(['order', 'flow', 'refund', 'claim', 'step', 'date_change']),
   id: z.string(),
   outcome: z.enum(['finalised', 'undone', 'settled_elsewhere', 'refund_pending', 'refund_confirmed', 'refund_failed', 'left']),
   reason: z.string().optional(),
@@ -113,8 +114,11 @@ export type ReconcileRunOutput = z.infer<typeof reconcileRunOutputSchema>
  *   watch's id.
  * - `left_step` (W36, F-plan 4.10, lead call L7): a membership's Stripe step that Stripe refused for good (`steps` on
  *   the list): recorded as sorted once a person has put Stripe right by hand. Nothing moves. `orderId` is the step's id.
+ * - `held_payment_date` (W41, F-plan 4.10): a membership's payment date change the automatic check has left for a
+ *   person (`paymentDates` on the list): recorded as not finished, with what Stripe last showed, so the membership can
+ *   be changed again. Nothing is sent to Stripe. `orderId` is the change's id.
  */
-export const stuckCloseKindSchema = z.enum(['held_order', 'changed_elsewhere', 'subscription_left', 'late_refund', 'held_flow', 'held_claim', 'refund_watch', 'left_step'])
+export const stuckCloseKindSchema = z.enum(['held_order', 'changed_elsewhere', 'subscription_left', 'late_refund', 'held_flow', 'held_claim', 'refund_watch', 'left_step', 'held_payment_date'])
 export type StuckCloseKind = z.infer<typeof stuckCloseKindSchema>
 
 export const stuckCloseTargetSchema = z.object({
@@ -260,6 +264,29 @@ export const stuckStepSchema = z.object({
 })
 export type StuckStepOutput = z.infer<typeof stuckStepSchema>
 
+/**
+ * W41 (F-plan 4.10): a membership's payment date change still pending past the window: held for the automatic check
+ * (which never charges), or left by it for a person (with `close`). `amount` is the part-month charge.
+ */
+export const stuckPaymentDateSchema = z.object({
+  changeId: z.string(),
+  membershipId: z.string(),
+  customerId: z.string(),
+  customerName: z.string(),
+  /** The payment date asked for (YYYY-MM-DD). */
+  newRenewalDate: z.string(),
+  amount: z.number(),
+  /** The part-month charge's payment, once known. */
+  paymentIntentId: z.string().nullable(),
+  createdAt: z.string(),
+  ageMinutes: z.number(),
+  /** What it is waiting on. */
+  reason: z.string(),
+  words: z.string(),
+  close: stuckCloseTargetSchema.optional(),
+})
+export type StuckPaymentDateOutput = z.infer<typeof stuckPaymentDateSchema>
+
 export const stuckListOutputSchema = z.object({
   checkout: z.array(stuckOrderSchema),
   flows: z.array(stuckFlowSchema),
@@ -277,6 +304,11 @@ export const stuckListOutputSchema = z.object({
    * slice that shows it reads the list exactly as before. None can exist until W40.
    */
   steps: z.array(stuckStepSchema),
+  /**
+   * W41: payment date changes held. A field of its own, as `watched` and `steps`: the staff app published before W41
+   * reads the list exactly as before. Optional, so a staff app with W41's types still reads an older Worker's list.
+   */
+  paymentDates: z.array(stuckPaymentDateSchema).optional(),
   alert: z.object({ at: z.string(), words: z.string() }).nullable(),
 })
 export type StuckListOutput = z.infer<typeof stuckListOutputSchema>

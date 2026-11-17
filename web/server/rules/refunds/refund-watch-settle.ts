@@ -24,6 +24,7 @@
 // Run twice, or by two runs at once: the end rows are written under an advisory lock on the refund's id (after the
 // subject's row locks, never before them), and the watch is read as ended under it, so the money is put back once.
 import 'server-only'
+import { PAYMENT_DATE_RECONCILE_ENTITY, PAYMENT_DATE_REFUND_WATCH_STEP } from '@/server/rules/memberships/payment-date'
 import { audit, type AuditEntry } from '@/server/audit'
 import type { Db, Tx } from '@/server/db'
 import type { StripeClient } from '@/server/stripe/client'
@@ -57,7 +58,9 @@ const waitsForClaim = (claimId: string): WatchChecked => ({ outcome: 'waiting', 
 const lockRefund = (tx: Tx, refundId: string): Promise<unknown> => tx.query('SELECT pg_advisory_xact_lock(hashtext($1::text))', [`refund-watch:${refundId}`])
 
 /** What the subject's own row is on: a compensation's order; W32a: a late refund's order or flow (`reader_payment`). */
-const subjectEntity = (watch: WatchDetails): string => (watch.on === 'compensation' ? (watch.late ?? 'order') : watch.on)
+const subjectEntity = (watch: WatchDetails): string =>
+  // W41: a payment date change's compensation refund names its change (memberships/payment-date.ts), which has no order.
+  watch.on === 'compensation' ? (watch.step === PAYMENT_DATE_REFUND_WATCH_STEP ? PAYMENT_DATE_RECONCILE_ENTITY : (watch.late ?? 'order')) : watch.on
 
 /** The row on the subject itself (its history), beside the watch's own end row. */
 const subjectRow = (by: WatchBy, watch: WatchDetails, owed: number, status: string): AuditEntry => ({

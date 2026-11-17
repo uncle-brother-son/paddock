@@ -362,10 +362,15 @@ describe("step F's new inputs, the saved card's addition, and the left step on t
     expect(stuckStepSchema.parse({ ...step, what: 'clear_cancel_date', lastDay: undefined }).lastDay).toBeUndefined()
     const list = { checkout: [], flows: [], claims: [], refunds: [], warnings: [], watched: [], steps: [step], alert: null }
     expect(stuckListOutputSchema.parse(list).steps).toEqual([step])
-    expect(stuckCloseKindSchema.options.at(-1)).toBe('left_step')
+    // W41 adds one kind after it (`held_payment_date`: a payment date change left for a person), as W36 added this one.
+    expect(stuckCloseKindSchema.options.slice(7)).toEqual(['left_step', 'held_payment_date'])
     // The seven kinds before it are as they were, in their order.
     expect(stuckCloseKindSchema.options.slice(0, 7)).toEqual(['held_order', 'changed_elsewhere', 'subscription_left', 'late_refund', 'held_flow', 'held_claim', 'refund_watch'])
     expect(reconcileItemSchema.parse({ kind: 'step', id: 's', outcome: 'left', reason: 'step_refused' })).toMatchObject({ kind: 'step' })
-    expect(reconcileItemSchema.shape.kind.options).toEqual(['order', 'flow', 'refund', 'claim', 'step'])
+    // W41: and `date_change`, a payment date change still pending, after it.
+    expect(reconcileItemSchema.shape.kind.options).toEqual(['order', 'flow', 'refund', 'claim', 'step', 'date_change'])
+    expect(reconcileItemSchema.parse({ kind: 'date_change', id: 'c', outcome: 'left', reason: 'payment_processing' })).toMatchObject({ kind: 'date_change' })
+    // An older Worker's list has no `paymentDates`: the contract still reads it.
+    expect(stuckListOutputSchema.parse(list).paymentDates).toBeUndefined()
   })
 })

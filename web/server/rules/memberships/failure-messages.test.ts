@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { BOOKING_PATH_OFF_MESSAGE } from '@/server/rules/bookings/failure-messages'
+import { BOOKING_PATH_OFF_MESSAGE, CHANGE_PAYMENT_UNCONFIRMED_MESSAGE } from '@/server/rules/bookings/failure-messages'
 import { PAYMENT_UNCONFIRMED_MESSAGE } from '@/server/rules/orders/failure-messages'
 import { REFUND_PATH_OFF_MESSAGE } from '@/server/rules/refunds/failure-messages'
 import { frozenWords, propertyUnionMembers, sourceHolds, templatesFilledBy } from '@/server/rules/testing/frozen-words'
@@ -97,6 +97,19 @@ describe("the payment date change's words, moved (brief W36 item 1)", () => {
       ['paymentNotCompleted', words.PAYMENT_DATE_WORDS.paymentNotCompleted('processing'), 'The card payment did not complete (status: processing)', routes],
       ['refundedInFull', words.PAYMENT_DATE_WORDS.refundedInFull('No such subscription'), 'No such subscription. The part-month charge was refunded in full.', routes],
       ['chargeDescription', words.PAYMENT_DATE_WORDS.chargeDescription(17), 'Payment date change: 17 extra days', routes],
+      // W41 keeps the two warnings on a change that went through: the legacy route's, and the old function's.
+      [
+        'stripeReports',
+        words.PAYMENT_DATE_WORDS.stripeReports(1798329600, 1798329600, 1798326000),
+        'Stripe accepted the change but reports trial_end 1798329600 and billing_cycle_anchor 1798329600, expected 1798326000: check the subscription in Stripe.',
+        routes,
+      ],
+      [
+        'nextPaymentNowOn',
+        words.PAYMENT_DATE_WORDS.nextPaymentNowOn('28 Dec 2026', '27 Dec 2026'),
+        "Stripe's next payment is now on 28 Dec 2026, not 27 Dec 2026: check the subscription in Stripe.",
+        functions,
+      ],
     ]
     expect(functionsOf(words.PAYMENT_DATE_WORDS).sort()).toEqual(built.map(([name]) => name).sort())
     for (const [name, text, expected, from] of built) {
@@ -178,10 +191,11 @@ describe('the words W36 adds', () => {
     expect(words.MEMBERSHIP_PATH_OFF_MESSAGE).toBe(REFUND_PATH_OFF_MESSAGE)
   })
 
-  it("lead call L15: a held payment date change says step C's saved-card sentence", () => {
-    expect(words.PAYMENT_DATE_HELD_MESSAGE).toBe(PAYMENT_UNCONFIRMED_MESSAGE)
+  it("lead call L15, as the W36 review's L5 changed it (lead, 17 Nov): a held payment date change says step D's saved-card sentence, not step C's (it has no order until it is finished)", () => {
+    expect(words.PAYMENT_DATE_HELD_MESSAGE).toBe(CHANGE_PAYMENT_UNCONFIRMED_MESSAGE)
+    expect(words.PAYMENT_DATE_HELD_MESSAGE).not.toBe(PAYMENT_UNCONFIRMED_MESSAGE)
     expect(words.PAYMENT_DATE_HELD_MESSAGE).toBe(
-      "The card payment didn't get a clear answer, so it may or may not have been taken. The order is on hold: don't take payment again. Check the Orders page in a few minutes."
+      "The card payment didn't get a clear answer, so it may or may not have been taken. The change is on hold: don't take payment again. Check the Orders page in a few minutes."
     )
   })
 

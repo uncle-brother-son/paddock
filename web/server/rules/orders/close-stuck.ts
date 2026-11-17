@@ -67,6 +67,7 @@ import { lockForBooking } from '@/server/rules/bookings/locks'
 import { CLOSED_ON_A_CANCELLED_BOOKING_WORDS } from '@/server/rules/bookings/failure-messages'
 import { flowClosable, HELD_CLAIM_CLOSE_REASONS } from './stuck-list'
 import { sortLeftStep } from '@/server/rules/memberships/left'
+import { closePaymentDateChange, PAYMENT_DATE_RECONCILE_ENTITY } from '@/server/rules/memberships/payment-date'
 
 export const CLOSE_ACTION = 'order.close'
 
@@ -762,6 +763,21 @@ export async function closeStuckItem(db: Db, input: CloseStuckInput, options: Cl
       details: { kind: 'left_step', why, membershipId: step.membershipId, subscriptionId: step.subscriptionId, step: step.kind, want: step.want, refusal: step.refusal },
     }))
     return answer('left_step', input.orderId, sorted.closed ? { closed: true, ...(sorted.alreadyClosed ? { alreadyClosed: true } : {}), message: sorted.message } : { closed: false, reason: sorted.reason, message: sorted.message })
+  }
+  // W41 (F-plan 4.10): a membership's payment date change the automatic check left for a person: recorded as not
+  // finished with what Stripe last showed (reconcile's own last row), so the membership can be changed again. Never a
+  // send (memberships/payment-date.ts). `orderId` is the change's id.
+  if (input.kind === 'held_payment_date') {
+    const closed = await closePaymentDateChange(db, input.orderId, why, { actor: options.actor, requestId: options.requestId }, PROCESSING_MINUTES, (found) => ({
+      actorType: options.actor.type,
+      actorId: options.actor.id,
+      action: CLOSE_ACTION,
+      entityType: PAYMENT_DATE_RECONCILE_ENTITY,
+      entityId: input.orderId,
+      requestId: options.requestId,
+      details: { kind: 'held_payment_date', why, ...found },
+    }))
+    return answer('held_payment_date', input.orderId, closed.closed ? { closed: true, message: closed.message } : { closed: false, reason: closed.reason, message: closed.message })
   }
   return closeSubscriptionLeft(db, input.orderId, input.subscriptionId ?? '', why, options)
 }

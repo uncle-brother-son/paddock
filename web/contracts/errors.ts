@@ -56,7 +56,8 @@ export const ERROR_CODES = [
    * Step F (W36, F-plan 4.11, lead call L3): the membership changes that touch Stripe are switched off on the Worker
    * (the ORDER_SWITCH secret's `membership_changes`: a cancel or its undo, a payment date change, and moving a
    * membership's renewals to a replaced card), so nothing was touched. An emergency stop, not a fallback. No route
-   * answers it until W40.
+   * answers it until W40. W41a: a payment date change answers it for its own kind, `payment_date_changes`, and never
+   * asks `membership_changes`.
    */
   'MEMBERSHIP_PATH_OFF',
 ] as const

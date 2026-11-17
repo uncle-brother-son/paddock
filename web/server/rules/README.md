@@ -117,9 +117,11 @@ slice by slice (W37 to W43). W36 adds what they share, with nothing switched on 
 - `contracts/account.ts`: every F route's input and output, in the old functions' field names.
 - `memberships/failure-messages.ts`, `customers/failure-messages.ts`, `gift-cards/failure-messages.ts`: every word
   staff see from those actions, moved word for word and held to the old code by the test beside each.
-- `memberships/membership-switch.ts`: the `membership_changes` kind of `ORDER_SWITCH`, for the three actions that
-  touch Stripe (cancel and undo, the payment date change, moving memberships to a replaced card). Off until the lead
-  adds it; off answers `MEMBERSHIP_PATH_OFF`.
+- `memberships/membership-switch.ts`: step F's two kinds of `ORDER_SWITCH`. `membership_changes`: the cancel and
+  undo, and moving memberships to a replaced card (W42). `payment_date_changes` (W41a): the payment date change's
+  press and the legacy change-payment-date route's guard, and nothing else, so the date change can be switched off
+  (and the old staff app put back for it) while the cancel and undo stay on. Each is off until the lead adds it; off
+  answers `MEMBERSHIP_PATH_OFF`, naming its kind. The quotes, reconcile and the check never ask either.
 - `memberships/left.ts`: a Stripe step left to do after the database change, for the two steps that are safe to
   repeat (a subscription's cancel date set or cleared; its card). Written in the action's transaction as a
   `membership.step_left` audit row (no new table), read before it is sent, sent again by reconcile every run, and
@@ -209,6 +211,55 @@ F-plan 4.3. The staff app's `setMembershipCancellation` and `getSubscriptions` a
   the step is read first, so the next check closes it); once Stripe has refused it, what to put right before Mark
   sorted; and, when Stripe can't find the subscription at all, that. The manual close of a step writes the
   `order.close` row every other close writes, against the step.
+
+## The payment date change (W41)
+
+`memberships/payment-date.ts` (F-plan 4.4, 4.10; bugs FB1 to FB4; Q10 / lead call L8; Q18; R7). The one step F action
+that takes money, on the saved-card pattern: the record first, every Stripe key from the record, an unclear answer
+held and reconciled, and the card never charged a second time.
+
+- **The quote** (`GET /api/v1/staff/memberships/:id/payment-date/quote?newRenewalDate=`): the old quote, field for
+  field; any active staff member; never asks the switch.
+- **The press** (`POST /api/v1/staff/memberships/:id/payment-date`, body `newRenewalDate`, `override`,
+  `overrideReason`, `confirmed.amount`; Issue refunds; a press key; behind its own kind, `payment_date_changes`, W41a):
+  - **P1**, one transaction, no Stripe: the customer's lock, then the membership's; every old refusal in the old
+    order (W41a: and, in the quote too, a renewal due today or earlier in London, `renewal_due_today`, as W40a's
+    cancel: Stripe takes that payment later in the day, and the date must not move before it lands); the window; nothing to charge; the six-month rule and its override; Q10 (the order's own test and words);
+    Q18 (the figure worked out now against `confirmed.amount`, half a penny either way, else `TOTAL_CHANGED` with the
+    new quote); no cancel or undo step still open on the subscription; the `pending` row (one per membership); the
+    `membership.payment_date_changed` row `started`, which carries everything the later steps need (no new table).
+  - **S1** the subscription read and the legacy route's checks (the stale-date guard included): refused, the row
+    `failed`, nothing charged.
+  - **S2** the charge, once, key `<changeId>:charge`, `metadata.change_id`: declined, the row `failed`; unclear, held
+    (`PAYMENT_UNCONFIRMED`, step D's words).
+  - **S3** the date move (`trial_end`, `proration_behavior: 'none'`), key `<changeId>:move`: refused, a `refunding`
+    mark is committed, then the charge is refunded once (key `<changeId>:refund`) with its watch (W32) written in the
+    transaction that fails the row; unclear, held. A refund Stripe refuses outright leaves the row pending for a person.
+  - **P2**, one transaction: the order (paid, card, the payment), its membership line, `next_renewal_date`, the row
+    `done`, the audit row.
+- **A pending row holds the membership**: no second change, no cancel, no undo, however old it is.
+- **Reconcile** (`orders/reconcile.ts`, `reconcilePaymentDateChange`; item kind `date_change`): never charges. It
+  lists the customer's payments by `metadata.change_id`: none, the row is failed; one paid, it lists the payment's
+  refunds (a refund of ours, or the mark: the refund is recorded or sent and the row failed; with no mark, a refund
+  nobody here made: left for a person), then reads the subscription (the date as asked: P2; else the move again under
+  a key of the run's own, then P2 or the refund). Only with a key of the record's own mode is "nothing found" taken as
+  "nothing charged". W41a (W41 review B1 to B3): before the move is sent again, S1's checks are run again on the
+  subscription just read, and a failure (Stripe renewed it since the press, a cancel was set) refunds the charge with
+  the check's words instead of moving the date over a month already paid for; a refund reconcile sends goes under
+  `<changeId>:refund:<requestId>` (Stripe replays a 500 saved against the press's key for ever); and a refund is ours
+  only when its `metadata.change_id` says so: with the mark and a part refund someone made by hand, ours (no amount)
+  gives back the rest.
+- **The stuck list** (`paymentDates`) shows each one past the window with what it is waiting on. **The manual close**
+  (`held_payment_date`, Issue refunds) is only for one reconcile has left for a person (`PAYMENT_DATE_CLOSE_REASONS`):
+  it records what Stripe last showed, fails the row, and sends nothing.
+- **The legacy route** `/api/memberships/change-payment-date` refuses (409) while `payment_date_changes` is on
+  (`legacy-guard.ts`, `legacyPaymentDateOff`); off, it runs as before, for a rollback. W41a (W41 review S1): off or on,
+  it and the legacy cancel and undo routes refuse while the membership has a pending change the Worker started
+  (`legacyPaymentDateHeld`, `legacyMembershipChangeHeld`), so an old screen can't charge again or cancel over a
+  change that is held.
+- Tests: `payment-date.test.ts` (every refusal in order, each Stripe outcome, a crash at each step, reconcile each
+  way, the close), `payment-date-postgres.test.ts` (two presses at once; a press against a cancel, both ways),
+  `testing/replay/payment-date-replay.test.ts` (the 42 recorded scenarios, with their named differences).
 
 ## Credits, Herd and store credit (W37)
 
@@ -313,8 +364,9 @@ behind a press key, and has no switch kind.
   `customers.test.ts`: a new column on either table fails the test until someone decides whether staff see it).
   From W40 the membership rows are read by `memberships/list.ts`, with the Subscriptions list.
 - `memberships/payment-date-status.ts`: why "Change payment date" is refused on a membership row, for the profile
-  and, from W40, the Subscriptions list. A copy of the read part of the staff app's `shared/membershipPaymentDate.ts`,
-  which its payment date quote and dialog still use until W41; `payment-date-status.test.ts` holds the two together.
+  and, from W40, the Subscriptions list. Ported from the read part of the staff app's `shared/membershipPaymentDate.ts`.
+  From W41 it is the rule's one home (the quote and the press read it too), with one change: a pending change holds
+  the membership with no 15-minute expiry. `payment-date-status.test.ts` holds it to the frozen copy but for that.
 - All three routes: any active staff member (FB16: the old reads checked nobody).
 
 ## The reader: T1, the intent, finalise and cancel (W11)

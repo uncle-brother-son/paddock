@@ -304,7 +304,16 @@ describe("the banner's words (frontend/utils/stuckList.ts)", () => {
     const helpers = await stuckHelpers()
     const { reconcileLine, closeButtonLabel, closeDialogText } = helpers
     // W25: the old sweep's line went with the sweep: these are all the helpers. W40: `stepLabel`, a membership step's heading.
-    expect(Object.keys(helpers).sort()).toEqual(['closeButtonLabel', 'closeDialogText', 'flowLabel', 'oldestAgeMinutes', 'reconcileLine', 'stepLabel', 'stuckCount', 'watchedLabel'])
+    // W41: `paymentDateLabel`, a held payment date change's heading.
+    expect(Object.keys(helpers).sort()).toEqual(['closeButtonLabel', 'closeDialogText', 'flowLabel', 'oldestAgeMinutes', 'paymentDateLabel', 'reconcileLine', 'stepLabel', 'stuckCount', 'watchedLabel'])
+    // W41: a payment date change on hold: the date asked for, whose, and whether it needs a person; counted with the rest; its close.
+    const { paymentDateLabel } = helpers
+    const date = (isoDate: string) => `[${isoDate}]`
+    expect(paymentDateLabel({ customerName: 'Mo Member', newRenewalDate: '2026-12-27' }, date)).toBe('Payment date change to [2026-12-27] on hold · Mo Member')
+    expect(paymentDateLabel({ customerName: '', newRenewalDate: '2026-12-27', close: { kind: 'held_payment_date', orderId: 'c1' } }, date)).toBe('Payment date change to [2026-12-27] needs a person')
+    expect(closeButtonLabel('held_payment_date')).toBe('Close')
+    expect(closeDialogText('held_payment_date')).toContain('Nothing is charged, refunded or changed in Stripe here.')
+    expect(helpers.stuckCount({ checkout: [], flows: [], claims: [], refunds: [], warnings: [], watched: [], steps: [], paymentDates: [{}, {}], alert: null } as never)).toBe(2)
     // W40: a membership's Stripe step left to do: what it is, whose, and whether Stripe refused it; counted with the rest.
     const { stepLabel, stuckCount } = helpers
     const day = (isoDate: string) => `[${isoDate}]`

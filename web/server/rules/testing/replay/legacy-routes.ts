@@ -102,6 +102,8 @@ const STAFF_PATTERNS: Array<{ pattern: RegExp; load: () => Promise<unknown>; par
   // W40: the staff app's thin setMembershipCancellation (cancel and undo).
   { pattern: /^\/api\/v1\/staff\/memberships\/([^/]+)\/cancel$/, load: () => import('@/app/api/v1/staff/memberships/[membershipId]/cancel/route'), params: (m) => ({ membershipId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/memberships\/([^/]+)\/undo-cancel$/, load: () => import('@/app/api/v1/staff/memberships/[membershipId]/undo-cancel/route'), params: (m) => ({ membershipId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/memberships\/([^/]+)\/payment-date$/, load: () => import('@/app/api/v1/staff/memberships/[membershipId]/payment-date/route'), params: (m) => ({ membershipId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/memberships\/([^/]+)\/payment-date\/quote$/, load: () => import('@/app/api/v1/staff/memberships/[membershipId]/payment-date/quote/route'), params: (m) => ({ membershipId: decodeURIComponent(m[1] ?? '') }) },
   // W38: the staff app's thin extendGiftCardExpiry, setGiftCardPickedUp, setGiftCardShipped and getGiftCardRedemptions.
   { pattern: /^\/api\/v1\/staff\/gift-cards\/([^/]+)\/extend$/, load: () => import('@/app/api/v1/staff/gift-cards/[giftCardId]/extend/route'), params: (m) => ({ giftCardId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/gift-cards\/([^/]+)\/picked-up$/, load: () => import('@/app/api/v1/staff/gift-cards/[giftCardId]/picked-up/route'), params: (m) => ({ giftCardId: decodeURIComponent(m[1] ?? '') }) },

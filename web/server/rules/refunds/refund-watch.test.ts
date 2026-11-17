@@ -424,7 +424,8 @@ describe("the stuck list's contract stays readable by the staff app published be
     // The published getStuckReaderPayments reads exactly these six, by name; anything else in the answer is dropped.
     // W36 adds `steps` (a membership's Stripe step left to do), as `watched` was added: a field of its own, which that
     // app drops too (memberships/left.test.ts holds that a step is only ever there).
-    expect(Object.keys(listed).sort()).toEqual(['alert', 'checkout', 'claims', 'flows', 'refunds', 'steps', 'warnings', 'watched'])
+    // W41 adds `paymentDates` (a payment date change on hold) the same way (memberships/payment-date.test.ts).
+    expect(Object.keys(listed).sort()).toEqual(['alert', 'checkout', 'claims', 'flows', 'paymentDates', 'refunds', 'steps', 'warnings', 'watched'])
     expect(listed).toMatchObject({ checkout: [], flows: [], claims: [], refunds: [], warnings: [], alert: null })
     expect(listed.watched).toHaveLength(1)
     // The route's own output check takes it, and none of the older fields carries the new close kind.
