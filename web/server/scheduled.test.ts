@@ -3,7 +3,8 @@ import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Db } from '@/server/db'
 import { FakeStripe } from '@/server/stripe/fake'
-import { startTestDatabase, type TestDatabase } from '@/server/rules/testing/database'
+import { fixtures, insert, startTestDatabase, type TestDatabase } from '@/server/rules/testing/database'
+import { lapseSweep, type LapseSweepOptions } from '@/server/rules/bookings/lapse-sweep'
 import { reconcile, type ReconcileOptions } from '@/server/rules/orders/reconcile'
 import { runScheduledReconcile, withScheduled, type ScheduledDeps } from './scheduled'
 
@@ -34,6 +35,7 @@ function depsFor(stripe: FakeStripe) {
     },
     log: (entry) => logged.push(entry),
     reconcile,
+    lapseSweep,
   }
   return { deps, opened, secrets, logged, closed: () => closed }
 }
@@ -80,6 +82,126 @@ describe('the scheduled handler', () => {
     const asked: ReconcileOptions[] = []
     await runScheduledReconcile({ ...env, ORDER_SWITCH: 'no_stripe,membership,card_moves' }, Date.parse('2026-11-10T12:15:00Z'), { ...seen.deps, reconcile: (db, stripe, options) => (asked.push(options), reconcile(db, stripe, options)) })
     expect(asked.map((options) => options.orderSwitch)).toEqual(['no_stripe,membership,card_moves'])
+  })
+
+  // --- W43 (brief items 1 and 2): the lapse sweep runs before reconcile, handed the switch from the handler's env.
+
+  /** A member's credit seat awaiting payment, its deadline a minute ago. */
+  async function lapsedBooking(): Promise<{ bookingId: string; sessionId: string }> {
+    const serviceType = await fixtures.serviceType(database.db)
+    const customerId = await fixtures.customer(database.db)
+    const sessionId = await fixtures.session(database.db, { service_type_id: serviceType, total_booked: 1 })
+    const bookingId = await fixtures.booking(database.db, {
+      session_id: sessionId,
+      customer_id: customerId,
+      status: 'payment_needed',
+      redemption_source: 'membership_credit',
+      payment_due_by: new Date(Date.now() - 60_000).toISOString(),
+      start_time: '2030-06-15 10:00:00+00',
+      end_time: '2030-06-15 11:00:00+00',
+    })
+    await insert(database.db, 'booking_guests', { booking_id: bookingId, guest_type: 'account_holder', guest_name: 'Mo Member', unit_price: '20', pay_by: 'membership_credit' })
+    return { bookingId, sessionId }
+  }
+  const statusOf = async (bookingId: string) => (await database.db.query<{ status: string; cancel_reason: string | null }>('SELECT status, cancel_reason FROM bookings WHERE id = $1', [bookingId]))[0]
+
+  it('W43: the lapse sweep is run before reconcile, handed the switch from the env (never process.env), the run\'s time in its request id, and the scheduled cap', async () => {
+    const seen = depsFor(new FakeStripe())
+    const order: string[] = []
+    const asked: LapseSweepOptions[] = []
+    vi.stubEnv('ORDER_SWITCH', 'lapse_sweep')
+    try {
+      // The environment names the kind; the handler's env doesn't: the sweep is told it is off.
+      await runScheduledReconcile(env, Date.parse('2026-11-10T12:20:00Z'), {
+        ...seen.deps,
+        lapseSweep: (db, options) => (order.push('sweep'), asked.push(options), lapseSweep(db, options)),
+        reconcile: (db, stripe, options) => (order.push('reconcile'), reconcile(db, stripe, options)),
+      })
+      await runScheduledReconcile({ ...env, ORDER_SWITCH: 'no_stripe,lapse_sweep' }, Date.parse('2026-11-10T12:25:00Z'), {
+        ...seen.deps,
+        lapseSweep: (db, options) => (order.push('sweep'), asked.push(options), lapseSweep(db, options)),
+        reconcile: (db, stripe, options) => (order.push('reconcile'), reconcile(db, stripe, options)),
+      })
+    } finally {
+      vi.unstubAllEnvs()
+    }
+    expect(order).toEqual(['sweep', 'reconcile', 'sweep', 'reconcile'])
+    expect(asked).toEqual([
+      { requestId: 'lapse-sweep-2026-11-10T12:20:00.000Z', orderSwitch: null, maxItems: 50 },
+      { requestId: 'lapse-sweep-2026-11-10T12:25:00.000Z', orderSwitch: 'no_stripe,lapse_sweep', maxItems: 50 },
+    ])
+    // Nothing was due: the sweep logs nothing, and the run's log is reconcile's line alone.
+    expect(seen.logged.map((entry) => entry['event'])).toEqual(['reconcile.run', 'reconcile.run'])
+  })
+
+  it("W43: a booking past its deadline is left by a run whose switch doesn't name `lapse_sweep`, and lapsed by one that does, with a log line; no Stripe call", async () => {
+    const stripe = new FakeStripe()
+    const seen = depsFor(stripe)
+    const { bookingId, sessionId } = await lapsedBooking()
+    await runScheduledReconcile({ ...env, ORDER_SWITCH: 'no_stripe,saved_card,reader,membership,booking_changes,reader_flows' }, Date.parse('2026-11-10T12:30:00Z'), seen.deps)
+    expect(await statusOf(bookingId)).toEqual({ status: 'payment_needed', cancel_reason: null })
+    expect(seen.logged.map((entry) => entry['event'])).toEqual(['reconcile.run'])
+
+    await runScheduledReconcile({ ...env, ORDER_SWITCH: 'no_stripe,saved_card,reader,membership,booking_changes,reader_flows,lapse_sweep' }, Date.parse('2026-11-10T12:35:00Z'), seen.deps)
+    expect(await statusOf(bookingId)).toEqual({ status: 'cancelled', cancel_reason: 'membership_lapsed' })
+    expect((await database.db.query<{ total_booked: number }>('SELECT total_booked FROM sessions WHERE id = $1', [sessionId]))[0]?.total_booked).toBe(0)
+    expect(seen.logged.slice(1)).toEqual([
+      { event: 'lapse_sweep.run', requestId: 'reconcile-2026-11-10T12:35:00.000Z', lapsed: 1, left: 0, failed: 0, storeCreditRefunded: 0, more: false, notLapsed: [] },
+      expect.objectContaining({ event: 'reconcile.run', requestId: 'reconcile-2026-11-10T12:35:00.000Z' }),
+    ])
+    const rows = await database.db.query<{ actor_type: string; request_id: string }>("SELECT actor_type, request_id FROM audit_log WHERE entity_type = 'booking' AND entity_id = $1 AND action = 'booking.lapsed'", [bookingId])
+    expect(rows).toEqual([{ actor_type: 'system', request_id: 'lapse-sweep-2026-11-10T12:35:00.000Z' }])
+    expect(stripe.calls).toEqual([])
+  })
+
+  it('W43: a sweep that throws is logged and never stops reconcile; a booking it left or failed on is named in its log line', async () => {
+    const seen = depsFor(new FakeStripe())
+    let reconciled = 0
+    const counting: ScheduledDeps['reconcile'] = (db, stripe, options) => ((reconciled += 1), reconcile(db, stripe, options))
+    await runScheduledReconcile({ ...env, ORDER_SWITCH: 'lapse_sweep' }, 0, { ...seen.deps, reconcile: counting, lapseSweep: async () => Promise.reject(new Error('sweep broke')) })
+    await runScheduledReconcile({ ...env, ORDER_SWITCH: 'lapse_sweep' }, 0, {
+      ...seen.deps,
+      reconcile: counting,
+      lapseSweep: async () => ({
+        ran: true,
+        lapsed: 1,
+        left: 1,
+        failed: 1,
+        storeCreditRefunded: 20,
+        more: true,
+        items: [
+          { bookingId: 'b1', outcome: 'lapsed', kind: 'cancel_credit', back: true, kept: null, storeCreditRefunded: 20, addonCreditsReturned: 0 },
+          { bookingId: 'b2', outcome: 'left', reason: 'reader_payment_open' },
+          { bookingId: 'b3', outcome: 'failed', error: 'Error: no' },
+        ],
+      }),
+    })
+    expect(reconciled).toBe(2)
+    expect(seen.logged.filter((entry) => String(entry['event']).startsWith('lapse_sweep'))).toEqual([
+      { event: 'lapse_sweep.failed', requestId: 'reconcile-1970-01-01T00:00:00.000Z', error: 'Error: sweep broke' },
+      {
+        event: 'lapse_sweep.run',
+        requestId: 'reconcile-1970-01-01T00:00:00.000Z',
+        lapsed: 1,
+        left: 1,
+        failed: 1,
+        storeCreditRefunded: 20,
+        more: true,
+        notLapsed: [
+          { id: 'b2', outcome: 'left', reason: 'reader_payment_open' },
+          { id: 'b3', outcome: 'failed', reason: 'Error: no' },
+        ],
+      },
+    ])
+  })
+
+  it("W43: scheduled.ts never reads process.env (the run's switch is the handler's env)", () => {
+    const source = readFileSync(path.join(__dirname, 'scheduled.ts'), 'utf8')
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+    expect(code).not.toMatch(/process\.env/)
+    expect(code).toMatch(/deps\.lapseSweep\(db, \{ requestId: `lapse-sweep-\$\{new Date\(scheduledTime\)\.toISOString\(\)\}`, orderSwitch: env\.ORDER_SWITCH \?\? null, maxItems: SCHEDULED_LIMITS\.maxItems \}\)/)
+    const sweep = readFileSync(path.join(__dirname, 'rules/bookings/lapse-sweep.ts'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+    expect(sweep).not.toMatch(/process\.env/)
   })
 
   it('with a binding or the secret missing: logs it and runs nothing', async () => {

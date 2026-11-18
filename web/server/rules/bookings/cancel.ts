@@ -54,6 +54,25 @@
 //   refused whatever the booking (customerTooLate);
 // - S2: a pass booking that holds money which isn't recognised as its paid guests' would go through Cancel & Refund,
 //   which never gives the pass session back: refused, and staff handle it (customerCannotCancel).
+//
+// W43 (F-plan 4.8; Wayne's Q48, 15 Nov; bugs FB18 and FB19): the same R1 on the system channel, for the lapse sweep
+// (lapse-sweep.ts): a payment-needed booking past its deadline is cancelled, whole, as any lapsed booking.
+// - Checked again under the booking's lock: still payment needed, its deadline passed (so Settle, a staff cancel or the
+//   database's own sweep getting there first leaves nothing to do), no payment being taken and no refund being checked;
+// - nothing paid: cancelled and its places released, as the database's sweep leaves it (the reason `membership_lapsed`
+//   included), with every add-on line still on it removed;
+// - money on it, 24 hours or more before the session: everything paid (the paid guests, paid add-ons) to store credit,
+//   through the same claim as the customer's online cancel, and add-on credits back while the membership is active;
+// - inside 24 hours, or the session started: cancelled with nothing back. The money is kept: the cancelled booking
+//   keeps its price paid, and `booking.lapsed` says what was kept (`pricePaid`, `addonsKept`). No refund button takes
+//   it from there (Part refund refuses every cancelled booking); goodwill is Adjust store credit (Wayne, 18 Nov);
+// - W43a (the W43 review's S1): card refund money still owed on it (Q39) is never turned into store credit by the
+//   system and never cleared by a lapse: it stays owed on the cancelled booking for staff (Refund the rest, It
+//   already arrived). 24 hours or more before, the rest goes back as above: the price paid less what is owed, and
+//   every paid add-on;
+// - never a card part and never a Stripe call; the rows are the system's (`actor_type` system, no id; `removed_by` and
+//   the store credit row's staff are null); the cancel's record and its own row carry `channel: 'system'` and what
+//   the lapse decided, and `booking.lapsed` is written with every lapse.
 import 'server-only'
 import type {
   ApiErrorCode,
@@ -65,11 +84,11 @@ import type {
   CancelQuote,
   RefundBookingOutput,
 } from '@/contracts'
-import { audit } from '@/server/audit'
+import { audit, type AuditEntry } from '@/server/audit'
 import type { Db, Queryable, Tx } from '@/server/db'
 import { ApiError } from '@/server/http/errors'
 import { CUSTOMER_CANCEL_WORDS } from '@/server/rules/customer/cancel-words'
-import { staffIdOf, type ClaimActor } from '@/server/rules/refunds/pipeline'
+import { staffIdOf, type ClaimActor, type SystemActor } from '@/server/rules/refunds/pipeline'
 import { startsWithinRealHours } from '@/server/rules/time/london-time'
 import {
   ADDON_INSIDE_24_HOURS_NOTE,
@@ -107,6 +126,8 @@ import {
   type AddonRefundLine,
   type CancelAddonLine,
   type CancelClaim,
+  type LapseKept,
+  type LapseRecord,
   type RefundOptions,
   type Started,
 } from './refunds'
@@ -124,9 +145,9 @@ export interface CancelOptions extends RefundOptions {
   canIssueRefunds: boolean
 }
 
-/** What R1 itself needs: who is cancelling (W33: a staff member, or the customer online) and Issue refunds. */
+/** What R1 itself needs: who is cancelling (W33: a staff member, or the customer online; W43: the system) and Issue refunds. */
 interface R1Options {
-  actor: ClaimActor
+  actor: ClaimActor | SystemActor
   requestId: string
   canIssueRefunds: boolean
 }
@@ -188,6 +209,8 @@ interface StartCheck {
   club: boolean
   /** W33: the customer is cancelling online (never with `club`): everything paid comes back, to store credit. */
   customer: boolean
+  /** W43: the lapse sweep is cancelling (never with `club` or `customer`): `ruleApplies` is then "nothing comes back". */
+  lapse: boolean
   ruleApplies: boolean
 }
 
@@ -195,7 +218,7 @@ async function startCheckOf(db: Queryable, bookingId: string, club: boolean, cus
   const start = await sessionStartWallClock(db, bookingId)
   const inside = start !== null && startsWithinRealHours(start, 24)
   const started = start !== null && startsWithinRealHours(start, 0)
-  return { inside, started, club, customer, ruleApplies: inside && !club }
+  return { inside, started, club, customer, lapse: false, ruleApplies: inside && !club }
 }
 
 /** W23a: the club's cancel after its session started (the club gives everything back only before then). */
@@ -313,7 +336,9 @@ async function cancelCreditRefusal(db: Queryable, booking: LoadedBooking, at: St
   // A money payment must be refunded, not dropped: only when seat 1 itself is credit-covered and the money is from paid
   // guests does "remove guests first" apply (N5: a pass booking with paid guests now shows this button and these words).
   // W25: not when the club is cancelling: its cancel refunds the paid guests itself (clubRefundsPaidGuests).
-  if (booking.pricePaid > 0) {
+  // W43: not at the booking's deadline either. The lapse sweep cancels it whatever is on it (Q48): the money goes to
+  // store credit, or (inside 24 hours) is kept (lapsePlanOf).
+  if (booking.pricePaid > 0 && !at.lapse) {
     if (!paidGuestsOnACreditSeat(booking)) return refuse('CONFLICT', 'money_paid', CANCEL_CREDIT_WORDS.moneyPaid)
     // W33 (Q44): nor when the customer cancels online: their paid guests' money goes to store credit with the cancel.
     if (!at.club && !at.customer) return refuse('CONFLICT', 'paid_guests_present', CANCEL_CREDIT_WORDS.paidGuestsPresent)
@@ -328,16 +353,67 @@ async function cancelCreditRefusal(db: Queryable, booking: LoadedBooking, at: St
 const refusalFor = (kind: CancelKind, db: Queryable, booking: LoadedBooking, at: StartCheck): Promise<ApiError | null> =>
   kind === 'cancel' ? cancelAndRefundRefusal(db, booking, at) : cancelCreditRefusal(db, booking, at)
 
+// --- W43: the lapse sweep's own checks
+
+/** W43: what the lapse sweep's cancel is, from the booking and where its session's start stands. */
+export interface LapsePlan {
+  kind: CancelKind
+  /** Q48: what was paid comes back (to store credit). False: the booking is cancelled with nothing back. */
+  back: boolean
+  /** Why nothing comes back, when it doesn't. */
+  kept: LapseKept | null
+}
+
+/**
+ * W43 (Q48): 24 hours or more before the session, everything paid comes back as store credit, through the cancel the
+ * customer's own would be (customerKindOf: Cancel & return credit, its paid guests refunded; Cancel & Refund when the
+ * booking holds money that isn't its paid guests'). Inside 24 hours, or once the session has started, nothing comes
+ * back: it is cancelled as Cancel & return credit with no money moved.
+ * W43a (review S1): card refund money still owed on the booking (Q39) no longer decides the plan. Only the clock
+ * does. What is owed is left out of what comes back (figuresFor) and stays owed on the cancelled booking.
+ */
+export function lapsePlanOf(booking: LoadedBooking, at: Pick<StartCheck, 'inside' | 'started'>): LapsePlan {
+  const kept: LapseKept | null = at.started ? 'session_started' : at.inside ? 'inside_24_hours' : null
+  if (kept) return { kind: 'cancel_credit', back: false, kept }
+  return { kind: customerKindOf(booking), back: true, kept: null }
+}
+
+/** Under the booking's lock: it is still payment needed and its deadline has passed (the database sweep's own test). */
+const LAPSE_DUE_SQL = "SELECT (status = 'payment_needed' AND payment_due_by <= now()) AS due FROM bookings WHERE id = $1::uuid"
+
+/** The sweep's two refusals of its own. Nobody is shown them: they are the reason a booking was left, in the run's log. */
+export const LAPSE_LEFT_WORDS = {
+  notLapsed: 'The booking is no longer waiting for payment past its deadline.',
+  // Only a change to the cancel it would be, to whether money comes back, or to its add-on lines (W43a, review L1).
+  bookingChanged: 'The booking changed while the sweep was reading it. The next run reads it again.',
+} as const
+
+/**
+ * The cancel's one statement. The reason is the database sweep's own (`membership_lapsed`), so reports read the same.
+ * W43a: a lapse has one statement only, and it never touches `refund_owed_amount` (what is owed stays owed).
+ */
+const CANCEL_BOOKING_SQL = {
+  plain: "UPDATE bookings SET status = 'cancelled', cancelled_at = now(), updated_at = now() WHERE id = $1::uuid",
+  owedCleared: "UPDATE bookings SET status = 'cancelled', cancelled_at = now(), refund_owed_amount = 0, updated_at = now() WHERE id = $1::uuid",
+  lapsed: "UPDATE bookings SET status = 'cancelled', cancelled_at = now(), cancel_reason = 'membership_lapsed', updated_at = now() WHERE id = $1::uuid",
+} as const
+
+/** W43: the lapse's own audit row, written with every lapse beside the cancel's (F-plan 4.11). */
+export const BOOKING_LAPSED = 'booking.lapsed'
+
 // --- The quote
 
 /**
  * What cancelling gives back with these ticked lines: the figures both the quote and R1 work out. Inside 24 hours the
  * paid add-ons give nothing back (`ruleApplies`; never for the club's cancel, W23a).
+ * W43a (review S1; Q39): `lapse`, the lapse sweep's cancel, gives the price paid less what is owed. Card refund money
+ * owed is part of a live booking's price paid; the system never turns it into store credit, so it is left out here
+ * and stays owed on the cancelled booking. Every other cancel gives the whole price paid, what is owed included.
  */
-async function figuresFor(db: Queryable, kind: CancelKind, booking: LoadedBooking, rows: readonly AddonRow[], ruleApplies: boolean, paidRefunded: boolean, everythingBack: boolean) {
+async function figuresFor(db: Queryable, kind: CancelKind, booking: LoadedBooking, rows: readonly AddonRow[], ruleApplies: boolean, paidRefunded: boolean, everythingBack: boolean, lapse = false) {
   // The booking's own money: Cancel & Refund's, and (W25) the paid guests' on the club's Cancel & return credit (W33: or the customer's).
   const seatMoney = kind === 'cancel' || clubRefundsPaidGuests(kind, booking, everythingBack)
-  const refund = seatMoney ? round2(booking.pricePaid) : 0
+  const refund = !seatMoney ? 0 : lapse ? Math.max(0, round2(booking.pricePaid - booking.refundOwed)) : round2(booking.pricePaid)
   const owed = seatMoney ? round2(booking.refundOwed) : 0
   const paidLines: AddonRefundLine[] =
     paidRefunded && !ruleApplies ? rows.filter((row) => !isCreditLine(row) && lineAmount(row) > 0).map((row) => ({ id: row.id, orderId: row.order_id, amount: lineAmount(row) })) : []
@@ -409,11 +485,17 @@ interface R1Input {
    * (the seat money and the add-ons' together: the website shows one figure).
    */
   customer?: { id: string; total: number }
+  /**
+   * W43: the lapse sweep cancelling (never with `clubCancelled` or `customer`). `kind` and `back` are lapsePlanOf's
+   * from a read with no lock, `lineIds` every add-on line on the booking, `method` 'credit'. R1 checks all of it again
+   * under the lock, and that the booking is still payment needed past its deadline.
+   */
+  lapse?: { back: boolean }
 }
 
 async function cancelR1(tx: Tx, input: R1Input, options: R1Options, livemode: boolean | null, result: R1Result): Promise<Started> {
   Object.assign(result, newResult())
-  const { kind, bookingId, lineIds, method, customer } = input
+  const { kind, bookingId, lineIds, method, customer, lapse } = input
   const refuse = cancelRefusal(kind)
   // The memberships the ticked credit add-ons go back to, read before the lock (a line's membership never changes), so
   // they are locked in LOCK_ORDER with the rest.
@@ -434,16 +516,32 @@ async function cancelR1(tx: Tx, input: R1Input, options: R1Options, livemode: bo
       throw refuse('CONFLICT', 'booking_changed', CUSTOMER_CANCEL_WORDS.bookingChanged)
     }
   }
+  let at = await startCheckOf(tx, bookingId, input.clubCancelled, customer !== undefined)
+  let lapsed: LapseRecord | null = null
+  if (lapse) {
+    // W43: under the lock, the booking is still the sweep's to cancel (Settle, a staff cancel or the database's own
+    // sweep may have got there first), and it is still the cancel the sweep read it as.
+    const due = (await tx.query<{ due: boolean | null }>(LAPSE_DUE_SQL, [bookingId]))[0]?.due === true
+    if (!due) throw refuse('CONFLICT', 'not_lapsed', LAPSE_LEFT_WORDS.notLapsed)
+    const plan = lapsePlanOf(booking, at)
+    const every = await allAddonLineIds(tx, bookingId)
+    if (plan.kind !== kind || plan.back !== lapse.back || every.length !== lineIds.length || every.some((id) => !lineIds.includes(id))) {
+      throw refuse('CONFLICT', 'booking_changed', LAPSE_LEFT_WORDS.bookingChanged)
+    }
+    // Nothing comes back when the plan says so (inside 24 hours, or the session started).
+    at = { ...at, lapse: true, ruleApplies: !plan.back }
+    lapsed = { back: plan.back, kept: plan.kept, paymentDueBy: booking.paymentDueBy }
+  }
   // Read again under the booking's lock: a second tab that waited for it finds them removed (and the booking cancelled).
   const rows = await readAddonLines(tx, bookingId, lineIds, true)
   const paidTicked = rows.some((row) => !isCreditLine(row))
   // Cancel & return credit: refunding paid add-ons moves money, so Issue refunds first, as the old function checked it.
   if (kind === 'cancel_credit' && method && paidTicked && !options.canIssueRefunds) throw refuse('FORBIDDEN', 'no_refund_permission', ISSUE_REFUNDS_NEEDED_MESSAGE)
   // W25: the club's cancel refunding paid guests moves money too, and needs to know where it goes.
-  const everythingBack = input.clubCancelled || customer !== undefined
+  // W43 (Q48): and the lapse sweep's, 24 hours or more before the session.
+  const everythingBack = input.clubCancelled || customer !== undefined || lapse?.back === true
   const guestsRefunded = clubRefundsPaidGuests(kind, booking, everythingBack)
   if (guestsRefunded && !options.canIssueRefunds) throw refuse('FORBIDDEN', 'no_refund_permission', ISSUE_REFUNDS_NEEDED_MESSAGE)
-  const at = await startCheckOf(tx, bookingId, input.clubCancelled, customer !== undefined)
   // W26a (audit S6; Wayne, 14 Nov): inside 24 hours the club's cancel gives back what the rule would keep (the credit,
   // the pass session, the add-ons), and the flag comes from the screen, so it needs Issue refunds. Outside 24 hours
   // nothing changes, and a payment-needed booking (which the rule never covered) is as before.
@@ -458,10 +556,13 @@ async function cancelR1(tx: Tx, input: R1Input, options: R1Options, livemode: bo
 
   // Cancel & return credit leaves the paid lines alone without a method (the old includePaidLines).
   const claimed = rows.filter((row) => isCreditLine(row) || method !== null)
-  const { refund, paidLines, addonsRefund } = await figuresFor(tx, kind, booking, claimed, inside, method !== null, everythingBack)
+  const { refund, paidLines, addonsRefund } = await figuresFor(tx, kind, booking, claimed, inside, method !== null, everythingBack, lapse !== undefined)
   result.seatRefund = kind === 'cancel_credit' ? refund : 0
   // Q18: what staff confirmed, half a penny each way (missing counts as £0). W33: the customer confirms the one total.
-  const figuresChanged = customer
+  // W43: the sweep confirms no figure: it gives what the rule gives when it runs.
+  const figuresChanged = lapse
+    ? false
+    : customer
     ? differsByMoreThanHalfAPenny(customer.total, round2(refund + addonsRefund))
     : differsByMoreThanHalfAPenny(input.confirmed.refund, refund) || differsByMoreThanHalfAPenny(input.confirmed.addonsRefund, addonsRefund)
   if (figuresChanged) {
@@ -473,12 +574,10 @@ async function cancelR1(tx: Tx, input: R1Input, options: R1Options, livemode: bo
 
   // The cancel. Cancel & Refund gives what is owed too, so nothing stays owed; price_paid stays, as on every cancelled booking.
   // W25: so does the club's Cancel & return credit when it refunds paid guests (their money, what is owed included).
-  await tx.query(
-    kind === 'cancel' || guestsRefunded
-      ? "UPDATE bookings SET status = 'cancelled', cancelled_at = now(), refund_owed_amount = 0, updated_at = now() WHERE id = $1::uuid"
-      : "UPDATE bookings SET status = 'cancelled', cancelled_at = now(), updated_at = now() WHERE id = $1::uuid",
-    [bookingId]
-  )
+  // W43: a lapse also writes the database sweep's reason. W43a (review S1; Q39): and never clears what is owed. It
+  // didn't give it (figuresFor), so it stays owed on the cancelled booking for staff.
+  const owedCleared = !lapse && (kind === 'cancel' || guestsRefunded)
+  await tx.query(lapse ? CANCEL_BOOKING_SQL.lapsed : owedCleared ? CANCEL_BOOKING_SQL.owedCleared : CANCEL_BOOKING_SQL.plain, [bookingId])
   // Its places: a private booking holds the whole session; a public one its party.
   const totalBefore = booking.session.totalBooked
   const totalAfter = (
@@ -576,7 +675,27 @@ async function cancelR1(tx: Tx, input: R1Input, options: R1Options, livemode: bo
     ...(kind === 'cancel_credit' ? { creditUsableAgain: result.creditUsableAgain } : {}),
     ...(input.clubCancelled ? { clubCancelled: true as const } : {}),
     ...(customer ? { channel: 'customer' as const } : {}),
+    ...(lapsed ? { channel: 'system' as const, lapse: lapsed } : {}),
   }
+  // W43: the lapse's own row, with what it gave. W43a (review S2): and what it kept or left. `addonsKept` is the paid
+  // add-on lines removed with nothing back (price × quantity): that money is in no other figure here, since
+  // `pricePaid` never holds add-on money. `refundOwed` is the card refund money left owed on the cancelled booking
+  // (part of `pricePaid`), so the money a lapse kept is `pricePaid - refundOwed + addonsKept` when `back` is false.
+  const addonsKept = sum(claimed.filter((row) => !isCreditLine(row) && !refunded.has(row.id)).map(lineAmount))
+  const lapsedRow = (storeCreditRefunded: number): AuditEntry[] =>
+    lapsed
+      ? [
+          {
+            actorType: options.actor.type,
+            actorId: options.actor.id,
+            entityType: 'booking',
+            entityId: bookingId,
+            requestId: options.requestId,
+            action: BOOKING_LAPSED,
+            details: { ...lapsed, pricePaid: round2(booking.pricePaid), refundOwed: round2(booking.refundOwed), addonsKept, storeCreditRefunded, placesReleased },
+          },
+        ]
+      : []
   const total = round2(refund + addonsRefund)
   const by = { actor: options.actor, requestId: options.requestId, how: 'press' as const }
 
@@ -601,6 +720,7 @@ async function cancelR1(tx: Tx, input: R1Input, options: R1Options, livemode: bo
         requestId: options.requestId,
         ...cancelActionRow(kind, method, cancel, { cardRefunded: 0, storeCreditRefunded: 0, owed: 0 }),
       },
+      ...lapsedRow(0),
     ])
     return { kind: 'done', output: { cardRefundedAmount: 0, storeCreditRefundedAmount: 0, ...(cancel.addons.length > 0 ? { addons: { cardRefundedAmount: 0, storeCreditRefundedAmount: 0 } } : {}) } }
   }
@@ -608,6 +728,8 @@ async function cancelR1(tx: Tx, input: R1Input, options: R1Options, livemode: bo
   const plan = await planRefund(tx, bookingId, refund, method, paidLines)
   // W33: nothing online ever goes back to a card. Thrown inside R1, so nothing of the cancel is kept.
   if (customer && plan.card.length > 0) throw new Error('A customer cancel planned a card refund.')
+  // W43: nor does anything the lapse sweep gives.
+  if (lapse && plan.card.length > 0) throw new Error('A lapse planned a card refund.')
   const claim = await writeClaim(
     tx,
     bookingId,
@@ -622,6 +744,7 @@ async function cancelR1(tx: Tx, input: R1Input, options: R1Options, livemode: bo
       livemode: plan.card.length > 0 ? livemode : null,
       cancel,
       ...(customer ? { channel: 'customer' as const } : {}),
+      ...(lapse ? { channel: 'system' as const } : {}),
     },
     options
   )
@@ -629,6 +752,7 @@ async function cancelR1(tx: Tx, input: R1Input, options: R1Options, livemode: bo
   if (plan.card.length > 0) return { kind: 'card', claim }
   const output = await finishClaimInTransaction(tx, claim, { went: [], owed: 0 }, by)
   if (!output) throw new Error(`Refund claim ${claim.id} was finished in its own transaction.`)
+  await audit.recordAll(tx, lapsedRow(round2(output.storeCreditRefundedAmount + (output.addons?.storeCreditRefundedAmount ?? 0))))
   return { kind: 'done', output }
 }
 
@@ -799,6 +923,69 @@ export async function cancelForCustomer(db: Db, bookingId: string, customer: { i
     ...(balances.length > 0 ? { storeCreditBalance: Math.max(...balances) } : {}),
     returnsCredit: creditReturnedBy(kind, booking),
     creditUsableAgain: result.creditUsableAgain,
+    addonCreditsReturned: result.addons.reduce((total, line) => total + line.creditsReturned, 0),
+  }
+}
+
+// --- W43: the lapse sweep's cancel (Q48)
+
+/** What the sweep did with one booking. */
+export type LapseOutcome =
+  | {
+      outcome: 'lapsed'
+      kind: CancelKind
+      back: boolean
+      kept: LapseKept | null
+      /** Everything paid that went to store credit: the seats (paid guests among them) and the paid add-ons. */
+      storeCreditRefunded: number
+      addonCreditsReturned: number
+    }
+  /**
+   * Not cancelled, with the refusal's reason: no longer due, a payment being taken, a refund being checked, or
+   * (`booking_changed`) a different cancel, a different answer to "does money come back", or different add-on lines
+   * than the read saw. The next run reads it again.
+   */
+  | { outcome: 'left'; reason: string }
+
+/**
+ * W43 (F-plan 4.8; Q48): the lapse sweep cancels one payment-needed booking past its deadline. One transaction (R1,
+ * which finishes its own claim): the method is store credit, so there is no card part, no Stripe client is made and
+ * nothing can be held. A refusal (an ApiError) is answered as `left`; anything else is thrown, with nothing kept.
+ */
+export async function lapseBooking(db: Db, bookingId: string, requestId: string): Promise<LapseOutcome> {
+  // Which cancel it is, and its add-on lines, from a read with no lock; R1 checks both again under the lock.
+  const booking = await loadBooking(db, bookingId)
+  if (!booking || booking.status !== 'payment_needed') return { outcome: 'left', reason: 'not_lapsed' }
+  const plan = lapsePlanOf(booking, await startCheckOf(db, bookingId, false))
+  const result = newResult()
+  const input: R1Input = {
+    kind: plan.kind,
+    bookingId,
+    lineIds: await allAddonLineIds(db, bookingId),
+    method: 'credit',
+    confirmed: { refund: 0, addonsRefund: 0 },
+    clubCancelled: false,
+    lapse: { back: plan.back },
+  }
+  // No staff permission is involved: by rule the money can only go to the customer's own store credit.
+  const options: R1Options = { actor: { type: 'system', id: null }, requestId, canIssueRefunds: true }
+  let started: Started
+  try {
+    started = await inC1(db, (tx) => cancelR1(tx, input, options, null, result), notSavedFor(plan.kind))
+  } catch (err) {
+    const reason = err instanceof ApiError ? (err.details as { reason?: string } | undefined)?.reason : undefined
+    // A database fault (`cancel_not_saved`) is not a reason to leave the booking quietly: the sweep logs it as failed.
+    if (reason === undefined || reason === 'cancel_not_saved') throw err
+    return { outcome: 'left', reason }
+  }
+  if (started.kind !== 'done') throw new Error('A lapse was not finished in its own transaction.')
+  const { output } = started
+  return {
+    outcome: 'lapsed',
+    kind: plan.kind,
+    back: plan.back,
+    kept: plan.kept,
+    storeCreditRefunded: round2(output.storeCreditRefundedAmount + (output.addons?.storeCreditRefundedAmount ?? 0)),
     addonCreditsReturned: result.addons.reduce((total, line) => total + line.creditsReturned, 0),
   }
 }

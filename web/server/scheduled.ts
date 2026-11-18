@@ -8,6 +8,7 @@ import 'server-only'
 import { createDb, type Db } from '@/server/db'
 import { createPostgresDriver } from '@/server/db/postgres-driver'
 import { pruneClientSecrets } from '@/server/http/idempotency'
+import { lapseSweep } from '@/server/rules/bookings/lapse-sweep'
 import { reconcile, SCHEDULED_LIMITS, type ReconcileResult } from '@/server/rules/orders/reconcile'
 import { createStripeClient, ORDER_STRIPE_LIMITS, type StripeClient } from '@/server/stripe/client'
 
@@ -15,7 +16,10 @@ import { createStripeClient, ORDER_STRIPE_LIMITS, type StripeClient } from '@/se
 export interface ScheduledEnv {
   HYPERDRIVE?: { connectionString: string }
   STRIPE_SECRET_KEY?: string
-  /** W42a: the switch secret, for `card_moves` on an order the run finalises (orders/finalise-order.ts). Unset: off. */
+  /**
+   * W42a: the switch secret, for `card_moves` on an order the run finalises (orders/finalise-order.ts). Unset: off.
+   * W43: and for `lapse_sweep`, which turns the run's lapse sweep on (rules/bookings/lapse-sweep.ts).
+   */
   ORDER_SWITCH?: string
 }
 
@@ -34,6 +38,8 @@ export interface ScheduledDeps {
   /** One JSON line per run to the Worker's logs (Workers Logs are on in wrangler.jsonc). */
   log(entry: Record<string, unknown>): void
   reconcile: typeof reconcile
+  /** W43: the lapse sweep, run before reconcile. */
+  lapseSweep: typeof lapseSweep
 }
 
 export const SCHEDULED_DEPS: ScheduledDeps = {
@@ -43,11 +49,16 @@ export const SCHEDULED_DEPS: ScheduledDeps = {
   stripe: (secretKey) => createStripeClient(secretKey, ORDER_STRIPE_LIMITS),
   log: (entry) => console.log(JSON.stringify(entry)),
   reconcile,
+  lapseSweep,
 }
 
 /**
  * One scheduled run: reconcile as the system, within SCHEDULED_LIMITS, then a log line with the counts.
  * A missing binding or secret is logged and the run does nothing (nothing can be checked without them).
+ *
+ * W43: before reconcile, the lapse sweep (payment-needed bookings past their deadline are cancelled), when the switch
+ * the handler was given names `lapse_sweep`. It is handed the switch from `env`, as reconcile is. It logs a line when
+ * it found anything, and a fault in it is logged and never stops reconcile.
  */
 export async function runScheduledReconcile(env: ScheduledEnv, scheduledTime: number, deps: ScheduledDeps = SCHEDULED_DEPS): Promise<ReconcileResult | null> {
   const requestId = `reconcile-${new Date(scheduledTime).toISOString()}`
@@ -65,6 +76,16 @@ export async function runScheduledReconcile(env: ScheduledEnv, scheduledTime: nu
       if (pruned > 0) deps.log({ event: 'idempotency.secrets_pruned', requestId, pruned })
     } catch (err) {
       deps.log({ event: 'idempotency.secrets_not_pruned', requestId, error: err instanceof Error ? `${err.name}: ${err.message}` : String(err) })
+    }
+    // W43: the lapse sweep. Off (the kind not named): it reads nothing and logs nothing.
+    try {
+      const swept = await deps.lapseSweep(db, { requestId: `lapse-sweep-${new Date(scheduledTime).toISOString()}`, orderSwitch: env.ORDER_SWITCH ?? null, maxItems: SCHEDULED_LIMITS.maxItems })
+      if (swept.ran && swept.items.length > 0) {
+        const { items, lapsed, left, failed, storeCreditRefunded, more } = swept
+        deps.log({ event: 'lapse_sweep.run', requestId, lapsed, left, failed, storeCreditRefunded, more, notLapsed: items.filter((item) => item.outcome !== 'lapsed').map((item) => ({ id: item.bookingId, outcome: item.outcome, reason: item.outcome === 'left' ? item.reason : item.error })) })
+      }
+    } catch (err) {
+      deps.log({ event: 'lapse_sweep.failed', requestId, error: err instanceof Error ? `${err.name}: ${err.message}` : String(err) })
     }
     const result = await deps.reconcile(db, deps.stripe(secretKey), { actor: { type: 'system', id: null }, requestId, orderSwitch: env.ORDER_SWITCH ?? null, ...SCHEDULED_LIMITS })
     const { items, ...counts } = result

@@ -1422,3 +1422,58 @@ exactly as W11 built it (`payments/terminal.ts`, `saveCustomerCard`, untouched) 
 - **Races on real Postgres:** `customers/card-steps-postgres.test.ts` (a membership order and a replace, both ways
   round, each held until Postgres reports the other waiting on the customer's row; and free-running rounds). W42b:
   with the kind off, a membership order's T2 shown waiting on a customer's row another transaction holds.
+
+## The lapse sweep (W43)
+
+F-plan 1.9 and 4.8; Wayne's Q48 (15 Nov); N8, bugs FB18 and FB19. `bookings/lapse-sweep.ts`, and the system channel
+of `bookings/cancel.ts` (`lapseBooking`, `lapsePlanOf`).
+
+- **What it replaces.** The database's hourly job (`run_membership_maintenance`) called
+  `lapse_sweep_expired_bookings`: every payment-needed booking past its deadline with `price_paid = 0` set cancelled
+  (`membership_lapsed`) and its places released. No audit row, nothing of what a cancel does, and a booking with
+  money on it was never lapsed (it held its places for ever).
+- **Where it runs.** On the Worker's five-minute schedule, before reconcile (`server/scheduled.ts`), behind its own
+  switch kind `lapse_sweep`. The run hands it the switch from the handler's `env` (never `process.env`). Off: it
+  reads nothing, and the database's sweep stays in charge. No route runs it.
+- **One booking, one transaction.** Each due booking (oldest deadline first, capped at 50 a run; `more` says some
+  wait for the next) goes through the cancel's R1 on the system channel: the booking's locks in LOCK_ORDER, checked
+  again under them (still payment needed, the deadline passed, the same cancel the read saw), the cancel with the
+  database sweep's reason, its places released, every add-on line still on it removed. No Stripe client is made.
+- **Money on it (Q48).** 24 hours or more before the session: everything paid (paid guests, paid add-ons) to store
+  credit, through the same claim as the customer's online cancel, finished in the same transaction; add-on credits
+  back while the membership is active. Inside 24 hours, or once the session has started: cancelled with nothing
+  back. That money is kept: the cancelled booking keeps its price paid, the paid add-on lines are removed with
+  nothing back, and `booking.lapsed` records both. **No refund button gives it afterwards** (Part refund refuses
+  every cancelled booking, Remove add-on a removed line): goodwill on a lapsed booking is Adjust store credit
+  (Wayne, 18 Nov; W43a, the W43 review's S3). Never a card part: R1 throws if one is planned.
+- **Card refund money owed on it (Q39; W43a, review S1).** Never turned into store credit by the system and never
+  cleared by a lapse: `refund_owed_amount` stays as it is on the cancelled booking, for staff (Refund the rest, store
+  credit only there, or It already arrived). 24 hours or more before, the rest still goes back: the price paid
+  **less what is owed**, and every paid add-on (a £20 guest with £5 owed: £15 to store credit, £5 still owed, £20 in
+  all once staff give the £5). Inside 24 hours nothing goes back and what is owed stays owed.
+- **Whose rows.** The system's: `actor_type` system, no id; `removed_by` and the store credit row's staff are null.
+  The claim, the cancel's record and its own row carry `channel: 'system'` and the lapse's record (`back`, `kept`,
+  `paymentDueBy`); `booking.lapsed` is written with every lapse: `pricePaid`, `refundOwed` (left owed, part of the
+  price paid), `addonsKept` (W43a, review S2: paid add-on lines removed with nothing back, price × quantity; never
+  part of the price paid), `storeCreditRefunded`, `placesReleased`. Money a lapse kept: `back` false and
+  `pricePaid - refundOwed + addonsKept > 0`. The system's claim is `refunds/pipeline.ts`'s third writer (`SystemActor`, `writeSystemClaimSql`),
+  taken only by a booking's cancel.
+- **What it leaves, for the next run.** A payment still being taken on the booking (`reader_payment_open`,
+  `card_payment_open`: Settle), a refund still being checked (`refund_open`), a booking whose cancel, "does money
+  come back" or add-on lines changed between the read and the lock (`booking_changed`; any other change, such as a
+  guest removed, is not left: it lapses from what is under the lock, W43a review L1). One no longer due under its lock (settled, cancelled by staff, cancelled by the
+  database's sweep) is `not_lapsed`. A fault on one booking is counted as `failed` and never stops the others; a
+  fault in the sweep itself is logged and never stops reconcile.
+- **The log.** `lapse_sweep.run` when the run found anything (the counts, and each booking not lapsed with why);
+  `lapse_sweep.failed`.
+- **Migration 028** (file only) takes the database's sweep out of the hourly job and keeps the function. Both
+  running is harmless, with one exception while it lasts: the database's sweep can reach a `price_paid = 0` booking
+  with a paid add-on first, and then the add-on's money is kept as before with nothing recorded. So (W43a, review
+  S4; the order is in 028's header): the pre-check (no such booking waiting), the kind on, then 028 **in the same
+  sitting**. Rollback: the kind off first, then 028's Down straight after.
+- **Parity:** `testing/replay/lapse-replay.test.ts` runs W36's four recordings of the database's sweep through the
+  Worker's on the same seed: nothing paid and a deadline not passed match exactly (the sweep's audit rows apart,
+  held to `lapseRowProblems`); FB18 and FB19 have one pinned, named difference each (`lapse-differences.ts`), and
+  every pinned path must differ.
+- **Races on real Postgres:** `bookings/lapse-sweep-postgres.test.ts` (against Settle, Remove Guest, a staff cancel,
+  the database's sweep and a second run, each held until Postgres reports both waiting on the booking; the cap).

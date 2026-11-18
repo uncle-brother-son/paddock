@@ -375,7 +375,8 @@ legacy route makes against Stripe, a decline, the date move refused with its ref
 kinds; Herd on, off and cleared; store credit added, removed and overdrawn; a gift card extended while active, just
 expired, long expired and voided, picked up and shipped both ways; a customer created, a duplicate, under 18; each
 read's shape; the database's own lapse sweep (`runLapseSweep`: the function the hourly job calls, run as the table
-owner); and today's outcome for the plan's bugs FB1 to FB16, FB18, FB19 and FB21 (`w36-fb1-…` and so on).
+owner; W43: a side may bring its own, `ReplaySide.lapseSweep`, which `lapse-replay.test.ts` uses to run the Worker's on
+the same seeds); and today's outcome for the plan's bugs FB1 to FB16, FB18, FB19 and FB21 (`w36-fb1-…` and so on).
 `replay.test.ts` holds each to its file as it does every scenario. `w36.test.ts` says in pounds and pence what each
 one proves (`w36-what-each-proves.ts`, written from the golden files with `W36_OUTCOMES_OUT=<file>` and read through),
 that the list covers every reason and every bug named, and that a deliberate difference is caught and an allowance

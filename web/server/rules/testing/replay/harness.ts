@@ -115,6 +115,11 @@ export const REPLAY_USER = { email: 'jo@example.com' }
 export interface ReplaySide {
   name: string
   call(action: string, params: unknown): Promise<unknown>
+  /**
+   * W43: the lapse sweep this side runs where a scenario recorded the database's own (scenarios.ts, sweepLapsed).
+   * Left out (the old side, and every side before W43): the database's lapse_sweep_expired_bookings, as recorded.
+   */
+  lapseSweep?(db: Db): Promise<void>
 }
 
 export interface ScenarioContext {

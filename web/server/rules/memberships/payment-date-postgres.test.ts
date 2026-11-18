@@ -226,11 +226,17 @@ describe('a payment date press against a cancel, and a cancel against a press: n
     const write = "INSERT INTO membership_payment_date_changes (membership_id, old_renewal_date, new_renewal_date, extra_days, amount_charged, status) VALUES ($1::uuid, $2::date, $3::date, 10, 12.90, 'pending')"
     const renews = (await facts(m.membership))?.renews as string
     const gate = deferred()
+    // W43 (W42b report, Noticed 1): transaction two starts only once transaction one has looked. Started together,
+    // two could look, write and commit before one's look, which then found two's record and wrote none (a timing
+    // failure of the control, not of the code).
+    const looked = deferred()
     const one = first.transaction(async (tx) => {
       const found = await tx.query(look, [m.membership])
+      looked.resolve()
       await gate.promise
       if (found.length === 0) await tx.query(write, [m.membership, renews, m.newDate])
     })
+    await looked.promise
     const two = second.transaction(async (tx) => {
       const found = await tx.query(look, [m.membership])
       if (found.length === 0) await tx.query(write, [m.membership, renews, m.newDate])

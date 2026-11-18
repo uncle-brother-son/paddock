@@ -5365,6 +5365,8 @@ interface W36Steps {
   attempt: ScenarioContext['attempt']
   db: Db
   stripe: FakeStripe
+  /** W43: the side being driven, for the lapse scenarios' sweep (sweepLapsed). */
+  side: ScenarioContext['side']
 }
 
 /** W36: the database's own lapse sweep, run as the hourly job runs it (the table owner, not the Worker's role). */
@@ -5376,6 +5378,12 @@ export async function runLapseSweep(db: Db): Promise<void> {
     await db.query('SET ROLE paddock_worker')
   }
 }
+
+/**
+ * W43: the sweep a lapse scenario runs: the side's own when it has one (the Worker's, lapse-side.ts), else the
+ * database's, which is what the golden files recorded.
+ */
+const sweepLapsed = (context: Pick<ScenarioContext, 'side' | 'db'>): Promise<void> => (context.side.lapseSweep ? context.side.lapseSweep(context.db) : runLapseSweep(context.db))
 
 function w36Scenarios(): Scenario[] {
   type Prepare = (db: Db, stripe: FakeStripe) => Promise<void>
@@ -5391,8 +5399,9 @@ function w36Scenarios(): Scenario[] {
       await seed(db, stripe)
       await prepare?.(db, stripe)
     },
-    async run({ call, attempt, db, stripe }) {
-      await steps({ call, attempt, db, stripe })
+    // W43: the side too, for the lapse scenarios' sweep (sweepLapsed).
+    async run({ call, attempt, db, stripe, side }) {
+      await steps({ call, attempt, db, stripe, side })
     },
   })
   /** One statement on Mo's membership (`$1`), the plan (`$1`) or anything else: test data only, each a literal below. */
@@ -6168,23 +6177,23 @@ function w36Scenarios(): Scenario[] {
   const booked = async (call: Call, params: Record<string, unknown>) => String(((await call('createOrder', params)) as { bookingId?: string }).bookingId ?? '')
 
   const lapses: Scenario[] = [
-    f('lapse-sweep-a-booking-with-nothing-paid-is-cancelled', async ({ call, db }) => {
+    f('lapse-sweep-a-booking-with-nothing-paid-is-cancelled', async ({ call, db, side }) => {
       await paymentNeeded(db, await booked(call, moCreditSeat))
-      await runLapseSweep(db)
+      await sweepLapsed({ side, db })
     }),
-    f('lapse-sweep-leaves-a-booking-whose-deadline-has-not-passed', async ({ call, db }) => {
+    f('lapse-sweep-leaves-a-booking-whose-deadline-has-not-passed', async ({ call, db, side }) => {
       await paymentNeeded(db, await booked(call, moCreditSeat), "now() + interval '1 hour'")
-      await runLapseSweep(db)
+      await sweepLapsed({ side, db })
     }),
     // FB18 (N8): a paid guest beside the credit seat. The booking never lapses and holds its two places.
-    f('fb18-lapse-sweep-never-lapses-a-booking-with-a-paid-guest', async ({ call, db }) => {
+    f('fb18-lapse-sweep-never-lapses-a-booking-with-a-paid-guest', async ({ call, db, side }) => {
       await paymentNeeded(db, await booked(call, { customerId: ID.member, booking: { ...paidSeat([mo, alex]), ...memberCredit }, payment: cash(20) }))
-      await runLapseSweep(db)
+      await sweepLapsed({ side, db })
     }),
     // FB19: a credit seat with a paid towel. The seat has nothing paid on it, so it lapses, and the £5 is kept.
-    f('fb19-lapse-sweep-cancels-a-credit-booking-and-keeps-its-paid-add-on', async ({ call, db }) => {
+    f('fb19-lapse-sweep-cancels-a-credit-booking-and-keeps-its-paid-add-on', async ({ call, db, side }) => {
       await paymentNeeded(db, await booked(call, { customerId: ID.member, booking: { ...paidSeat([mo]), ...memberCredit, addons: [{ ...towel, redemptionSource: 'paid' }] }, payment: cash(5) }))
-      await runLapseSweep(db)
+      await sweepLapsed({ side, db })
     }),
   ]
 

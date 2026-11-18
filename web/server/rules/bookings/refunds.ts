@@ -51,7 +51,7 @@ import {
   BOOKING_CLAIMS,
   claimIsFinished,
   claimRefusal as claimRefusalOn,
-  claimRowsActor,
+  claimRowsActorOrSystem,
   claimsDueSql,
   heldAnswer,
   markRefused as markRefusedOn,
@@ -62,6 +62,7 @@ import {
   type CardPart,
   type CardPartLine,
   type ClaimActor,
+  type SystemActor,
 } from '@/server/rules/refunds/pipeline'
 import {
   cardRefundFailedMessage,
@@ -186,7 +187,8 @@ export interface CancelClaim {
   passReturned: string | null
   /**
    * The seat money given back: Cancel & Refund's price paid (money owed included); £0 for Cancel & return credit,
-   * except (W25) the club's cancel of a credit booking with paid guests, which gives their money back.
+   * except (W25) the club's cancel of a credit booking with paid guests, which gives their money back. W43a: on the
+   * lapse sweep's cancel, the price paid less what is owed (what is owed stays owed on the cancelled booking).
    */
   seatAmount: number
   /** The booking lines are stamped refunded once seat money goes back, or when all of it had gone back already. */
@@ -199,8 +201,30 @@ export interface CancelClaim {
   creditUsableAgain?: boolean
   /** W23a (Wayne, 13 Nov): the club cancelled (Block Session, Block Day), so the 24-hour rule didn't apply. Only when true. */
   clubCancelled?: true
-  /** W33 (Q44): cancelled online by the customer: everything paid to store credit, every add-on line. Absent on a staff cancel. */
-  channel?: 'customer'
+  /**
+   * W33 (Q44): cancelled online by the customer: everything paid to store credit, every add-on line. W43 (Q48):
+   * `system`, cancelled by the lapse sweep at its payment deadline. Absent on a staff cancel.
+   */
+  channel?: 'customer' | 'system'
+  /**
+   * W43: the lapse sweep's cancel. `back` says whether what was paid came back (to store credit), and `kept` why not
+   * when it didn't. Only on a `system` cancel.
+   */
+  lapse?: LapseRecord
+}
+
+/**
+ * W43 (Q48): why a lapsed booking's money wasn't given back: inside 24 hours of its session, or the session started.
+ * (W43a: card refund money owed on it is no longer a reason. It stays owed, and the rest follows the clock.)
+ */
+export type LapseKept = 'inside_24_hours' | 'session_started'
+
+/** W43: what the lapse sweep's cancel records of itself (the cancel's record, its own row, and `booking.lapsed`). */
+export interface LapseRecord {
+  back: boolean
+  kept: LapseKept | null
+  /** The deadline that passed (bookings.payment_due_by). */
+  paymentDueBy: string | null
 }
 
 /**
@@ -290,8 +314,11 @@ export interface ClaimDetails {
   cancel?: CancelClaim
   /** W24: a cheaper Move's claim. */
   move?: MoveClaim
-  /** W33: the claim is the customer's own (the website's cancel): its rows name the customer. Absent on a staff claim. */
-  channel?: 'customer'
+  /**
+   * W33: the claim is the customer's own (the website's cancel): its rows name the customer. W43: `system`, the lapse
+   * sweep's: its rows name nobody. Absent on a staff claim.
+   */
+  channel?: 'customer' | 'system'
 }
 
 export interface Claim {
@@ -301,6 +328,8 @@ export interface Claim {
   staffId: string | null
   /** W33: the customer who cancelled online, when the claim is theirs (then `staffId` is null). */
   customerId?: string | null
+  /** W43: the system's own claim (the lapse sweep). Only when true. */
+  system?: true
   at: string
   details: ClaimDetails
 }
@@ -375,7 +404,7 @@ export async function openRefundClaimOn(db: Queryable, bookingId: string): Promi
 export async function readClaim(db: Queryable, claimId: string): Promise<Claim | null> {
   const row = await readClaimRow<ClaimDetails>(db, BOOKING_CLAIMS, claimId)
   if (!row) return null
-  return { id: row.id, bookingId: row.subjectId, staffId: row.staffId, customerId: row.customerId, at: row.at, details: row.details }
+  return { id: row.id, bookingId: row.subjectId, staffId: row.staffId, customerId: row.customerId, ...(row.system ? { system: true as const } : {}), at: row.at, details: row.details }
 }
 
 async function claimFinished(db: Queryable, claim: Pick<Claim, 'id' | 'bookingId'>): Promise<boolean> {
@@ -383,9 +412,9 @@ async function claimFinished(db: Queryable, claim: Pick<Claim, 'id' | 'bookingId
 }
 
 /** Writes the claim's row (`booking.refund_claimed`, lead call L3): the record every key and the finish come from. */
-export async function writeClaim(tx: Tx, bookingId: string, details: ClaimDetails, options: { actor: ClaimActor; requestId: string }): Promise<Claim> {
+export async function writeClaim(tx: Tx, bookingId: string, details: ClaimDetails, options: { actor: ClaimActor | SystemActor; requestId: string }): Promise<Claim> {
   const row = await writeClaimRow(tx, BOOKING_CLAIMS, bookingId, details, options)
-  return { id: row.id, bookingId, staffId: row.staffId, customerId: row.customerId, at: row.at, details }
+  return { id: row.id, bookingId, staffId: row.staffId, customerId: row.customerId, ...(row.system ? { system: true as const } : {}), at: row.at, details }
 }
 
 // --- The plan
@@ -790,8 +819,12 @@ export function cancelActionRow(
     placesReleased: cancel?.placesReleased ?? 0,
   }
   // W23a: a club cancel says so (only then, so every other cancel's row is as W23 wrote it).
-  // W33: so does a cancel the customer made online.
-  const club = { ...(cancel?.clubCancelled ? { clubCancelled: true } : {}), ...(cancel?.channel === 'customer' ? { channel: 'customer' } : {}) }
+  // W33: so does a cancel the customer made online. W43: and the lapse sweep's, with what it recorded of itself.
+  const club = {
+    ...(cancel?.clubCancelled ? { clubCancelled: true } : {}),
+    ...(cancel?.channel === 'customer' ? { channel: 'customer' } : {}),
+    ...(cancel?.channel === 'system' ? { channel: 'system', lapse: cancel.lapse ?? null } : {}),
+  }
   if (kind === 'cancel') return { action: BOOKING_CANCELLED, details: { refundMethod: method, seatRefund: cancel?.seatAmount ?? 0, ...common, ...club } }
   // W25: the club's Cancel & return credit that refunded paid guests says so (only then, so every other row is as W23's).
   const guests = (cancel?.seatAmount ?? 0) > 0 ? { refundMethod: method, seatRefund: cancel?.seatAmount ?? 0 } : {}
@@ -916,8 +949,8 @@ export async function finishClaimInTransaction(tx: Tx, claim: Claim, outcome: Cl
   if (details.kind === 'remove_guest' && details.guest && owed <= 0) await stampRemovedGuestLine(tx, claim.bookingId, details.guest.seatPrice)
 
   const cash = plan.cash
-  // W33: a customer's own cancel is written as the customer's.
-  const actor = { ...claimRowsActor(claim), entityType: 'booking', entityId: claim.bookingId, requestId: by.requestId }
+  // W33: a customer's own cancel is written as the customer's. W43: the lapse sweep's as the system's.
+  const actor = { ...claimRowsActorOrSystem(claim), entityType: 'booking', entityId: claim.bookingId, requestId: by.requestId }
   const finishedBy = by.how === 'press' ? {} : { by: { how: by.how, type: by.actor.type, id: by.actor.id, ...(by.why ? { why: by.why } : {}) } }
   const entries: AuditEntry[] = [
     { ...actor, ...actionRow(details, { cardRefunded, storeCredit, owed, cash }) },

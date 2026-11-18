@@ -23,8 +23,8 @@ describe("step F's switch kind (brief W36 item 2)", () => {
   it('ORDER_SWITCH knows the kind, and only by its exact name', () => {
     expect(MEMBERSHIP_KINDS).toEqual(['membership_changes'])
     expect(ORDER_KINDS).toContain('membership_changes')
-    // Added at the end: the nine kinds before it are as they were, in their order. W41a: the payment date's own kind after it. W42: the replaced card's after that.
-    expect(ORDER_KINDS).toEqual(['no_stripe', 'saved_card', 'reader', 'membership', 'reader_flows', 'booking_changes', 'order_refunds', 'event_cancels', 'customer_cancels', 'membership_changes', 'payment_date_changes', 'card_moves'])
+    // Added at the end: the nine kinds before it are as they were, in their order. W41a: the payment date's own kind after it. W42: the replaced card's after that. W43: the lapse sweep's last.
+    expect(ORDER_KINDS).toEqual(['no_stripe', 'saved_card', 'reader', 'membership', 'reader_flows', 'booking_changes', 'order_refunds', 'event_cancels', 'customer_cancels', 'membership_changes', 'payment_date_changes', 'card_moves', 'lapse_sweep'])
     expect([...kindsOn('membership_changes')]).toEqual(['membership_changes'])
     expect([...kindsOn(' Membership_Changes ,')]).toEqual(['membership_changes'])
     for (const typo of ['membership_change', 'memberships_changes', 'membership-changes', 'membershipchanges', 'changes', 'membership']) expect(kindsOn(typo).has('membership_changes'), typo).toBe(false)
@@ -100,7 +100,8 @@ describe("the payment date change's own switch kind (brief W41a item 1)", () => 
 
   it('ORDER_SWITCH knows the kind, and only by its exact name', () => {
     expect(PAYMENT_DATE_KINDS).toEqual(['payment_date_changes'])
-    expect(ORDER_KINDS.at(-2)).toBe('payment_date_changes')
+    // W43: counted from the front (the list grows at the end: `lapse_sweep` is after `card_moves` now).
+    expect(ORDER_KINDS.indexOf('payment_date_changes')).toBe(10)
     expect([...kindsOn(' Payment_Date_Changes ,')]).toEqual(['payment_date_changes'])
     for (const typo of ['payment_date_change', 'payment_dates_changes', 'payment-date-changes', 'paymentdatechanges', 'payment_date', 'date_changes', 'membership_changes']) expect(kindsOn(typo).has('payment_date_changes'), typo).toBe(false)
   })
@@ -150,7 +151,8 @@ describe("the replaced card's own switch kind (brief W42 item 1)", () => {
 
   it('ORDER_SWITCH knows the kind, and only by its exact name', () => {
     expect(CARD_MOVE_KINDS).toEqual(['card_moves'])
-    expect(ORDER_KINDS.at(-1)).toBe('card_moves')
+    // W43: counted from the front (`lapse_sweep` was added after it).
+    expect(ORDER_KINDS.indexOf('card_moves')).toBe(11)
     expect([...kindsOn(' Card_Moves ,')]).toEqual(['card_moves'])
     for (const typo of ['card_move', 'cards_moves', 'card-moves', 'cardmoves', 'card', 'moves', 'saved_card', 'membership_changes']) expect(kindsOn(typo).has('card_moves'), typo).toBe(false)
   })

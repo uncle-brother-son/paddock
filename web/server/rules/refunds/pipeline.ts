@@ -86,6 +86,8 @@ export interface ClaimRow<Details> {
   staffId: string | null
   /** W33: the customer who cancelled online, when the claim is theirs: its audit rows name them, and no staff member. */
   customerId: string | null
+  /** W43: the system's own claim (the lapse sweep): its audit rows name nobody. Only when true. */
+  system?: true
   at: string
   details: Details
 }
@@ -96,12 +98,23 @@ export interface ClaimRow<Details> {
  */
 export type ClaimActor = { type: 'staff'; id: string } | { type: 'customer'; id: string }
 
-/** The staff id for the columns that point at `staff` (removed_by, cancelled_by, a store credit row's staff_id): null for a customer. */
-export const staffIdOf = (actor: ClaimActor): string | null => (actor.type === 'staff' ? actor.id : null)
+/**
+ * W43 (F-plan 4.8; Wayne's Q48): the system itself, for the lapse sweep's cancel of a payment-needed booking past its
+ * deadline. As a customer's, its claim is always to store credit, so it never has a card part and is finished in the
+ * transaction that wrote it. Kept apart from ClaimActor: only a booking's cancel takes it (bookings/cancel.ts).
+ */
+export type SystemActor = { type: 'system'; id: null }
+
+/** The staff id for the columns that point at `staff` (removed_by, cancelled_by, a store credit row's staff_id): null for a customer and for the system. */
+export const staffIdOf = (actor: ClaimActor | SystemActor): string | null => (actor.type === 'staff' ? actor.id : null)
 
 /** Who a claim's own audit rows are written as: the staff member who pressed, or (W33) the customer who cancelled online. */
 export const claimRowsActor = (claim: { staffId: string | null; customerId?: string | null }): { actorType: 'staff' | 'customer'; actorId: string | null } =>
   claim.customerId ? { actorType: 'customer', actorId: claim.customerId } : { actorType: 'staff', actorId: claim.staffId }
+
+/** W43: the same for a claim that may be the system's own (a booking's, from the lapse sweep): then nobody is named. */
+export const claimRowsActorOrSystem = (claim: { staffId: string | null; customerId?: string | null; system?: true }): { actorType: 'staff' | 'customer' | 'system'; actorId: string | null } =>
+  claim.system ? { actorType: 'system', actorId: null } : claimRowsActor(claim)
 
 /** A Worker claim on the subject with no finished row: `$1` the subject's id (as text). */
 export const openClaimSql = (on: ClaimSubject): string => `
@@ -146,6 +159,12 @@ const writeCustomerClaimSql = (on: ClaimSubject): string =>
        VALUES (clock_timestamp(), 'customer', $1::text, '${on.claimed}', '${on.entityType}', $2::text, $3::text, $4::jsonb)
        RETURNING id, at`
 
+/** W43: the same row for the system's own claim (the lapse sweep): nobody's id. The two statements above are left word for word. */
+const writeSystemClaimSql = (on: ClaimSubject): string =>
+  `INSERT INTO audit_log (at, actor_type, actor_id, action, entity_type, entity_id, request_id, details)
+       VALUES (clock_timestamp(), 'system', NULL, '${on.claimed}', '${on.entityType}', $1::text, $2::text, $3::jsonb)
+       RETURNING id, at`
+
 const claimRefusalSql = (on: ClaimSubject): string =>
   `SELECT details->>'detail' AS detail FROM audit_log WHERE action = '${on.refused}' AND entity_type = '${on.entityType}' AND entity_id = $1::text AND details->>'claimId' = $2::text ORDER BY at, id LIMIT 1`
 
@@ -161,8 +180,11 @@ export async function readClaimRow<Details>(db: Queryable, on: ClaimSubject, cla
   const row = (await db.query<{ id: string; entity_id: string; actor_id: string | null; at: unknown; details: Details }>(readClaimSql(on), [claimId]))[0]
   if (!row) return null
   // W33: a customer's claim says so in its details (`channel`), and names the customer, never a staff member.
-  const customer = (row.details as { channel?: unknown } | null)?.channel === 'customer'
-  return { id: row.id, subjectId: row.entity_id, staffId: customer ? null : row.actor_id, customerId: customer ? row.actor_id : null, at: asIso(row.at), details: row.details }
+  const channel = (row.details as { channel?: unknown } | null)?.channel
+  const customer = channel === 'customer'
+  // W43: the system's claim says so the same way, and names nobody.
+  const system = channel === 'system'
+  return { id: row.id, subjectId: row.entity_id, staffId: customer || system ? null : row.actor_id, customerId: customer ? row.actor_id : null, ...(system ? { system: true as const } : {}), at: asIso(row.at), details: row.details }
 }
 
 /** True once the claim has its finished row (R2, the undo, reconcile or a close by hand wrote it). */
@@ -177,11 +199,20 @@ export async function writeClaimRow<Details>(
   subjectId: string,
   details: Details,
   // The actor's `type` may be left out: a staff member, as every claim was before W33.
-  by: { actor: { id: string; type?: ClaimActor['type'] }; requestId: string }
+  by: { actor: { id: string; type?: ClaimActor['type'] } | SystemActor; requestId: string }
 ): Promise<ClaimRow<Details>> {
   const customer = by.actor.type === 'customer'
+  const channel = (details as { channel?: unknown } | null)?.channel
   // A customer's claim always says so in its details too: readClaimRow tells whose it is from there.
-  if (customer !== ((details as { channel?: unknown } | null)?.channel === 'customer')) throw new Error("A customer's refund claim must carry channel 'customer', and only theirs.")
+  if (customer !== (channel === 'customer')) throw new Error("A customer's refund claim must carry channel 'customer', and only theirs.")
+  // W43: and so does the system's.
+  if (by.actor.type === 'system' || by.actor.id === null) {
+    if (channel !== 'system') throw new Error("The system's refund claim must carry channel 'system'.")
+    const written = (await tx.query<{ id: string; at: unknown }>(writeSystemClaimSql(on), [subjectId, by.requestId, JSON.stringify(details)]))[0]
+    if (!written) throw new Error('The refund claim was not written.')
+    return { id: written.id, subjectId, staffId: null, customerId: null, system: true, at: asIso(written.at), details }
+  }
+  if (channel === 'system') throw new Error("Only the system's refund claim may carry channel 'system'.")
   const row = (await tx.query<{ id: string; at: unknown }>((customer ? writeCustomerClaimSql : writeClaimSql)(on), [by.actor.id, subjectId, by.requestId, JSON.stringify(details)]))[0]
   if (!row) throw new Error('The refund claim was not written.')
   return { id: row.id, subjectId, staffId: customer ? null : by.actor.id, customerId: customer ? by.actor.id : null, at: asIso(row.at), details }
