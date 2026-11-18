@@ -58,7 +58,7 @@ export const LEFT_STEP_WORDS = {
   stillTrying: "Stripe hasn't refused this: the automatic check is still sending it. Nothing was changed. Wait for the next check (every 5 minutes) and look again.",
 } as const
 
-// --- Cancel and undo (setMembershipCancellation.ts, /api/memberships/cancel and /undo-cancel, CancelMembershipDialog)
+// --- Cancel and undo (setMembershipCancellation.ts, CancelMembershipDialog; the legacy routes /api/memberships/cancel and /undo-cancel left at W44)
 
 /** setMembershipCancellation's reasons, as its result's `reason`. The test holds this list to the old function's own. */
 export const MEMBERSHIP_CANCEL_REASONS = ['membership_not_found', 'not_active', 'already_cancelling', 'not_cancelling', 'permission_denied'] as const
@@ -106,22 +106,6 @@ export const MEMBERSHIP_CANCEL_NEW_WORDS = {
   paymentDateChanging: 'A payment date change is already in progress for this membership.',
   left: "Saved here, but Stripe hasn't confirmed it yet. The automatic check keeps sending it (every 5 minutes), and it is listed on the Orders page until Stripe shows it. Don't press again.",
 } as const
-
-/**
- * New in W40d (W40c review S2): the two legacy routes (/api/memberships/cancel and /undo-cancel) refuse with this,
- * 409, while the membership has a Stripe step from the new screen that is open, or closed and not yet checked
- * (memberships/legacy-guard.ts). The old function shows a route's `error` as it is.
- */
-export const LEGACY_MEMBERSHIP_CHANGE_HELD_MESSAGE =
-  'This membership was changed in the new screen in the last half hour and Stripe is still being checked. Try again in 30 minutes.'
-
-/**
- * New in W41a (W41 review S1): the three legacy routes (/api/memberships/cancel, /undo-cancel and
- * /change-payment-date) refuse with this, 409, while the membership has a payment date change the Worker started
- * that is still pending (memberships/legacy-guard.ts), whatever the switch says. The old functions show a route's
- * `error` as it is.
- */
-export const LEGACY_PAYMENT_DATE_HELD_MESSAGE = 'A payment date change for this membership is still being finished. Try again later, or check the Orders page.'
 
 // --- Payment date change (changeMembershipPaymentDate.ts, shared/membershipPaymentDate.ts, the legacy route, the dialog)
 
@@ -190,7 +174,6 @@ const money = (pounds: number): string => `£${pounds.toFixed(2)}`
  *   answer, or the record couldn't be written): held for the automatic check, in step D's sentence.
  * - `refundHeld`: Stripe refused the date move and the refund of the charge got no clear answer: held.
  * - `refundRefused`: Stripe refused the date move and then the refund too (FB3): listed for a person.
- * - `legacyOff`: the legacy route (/api/memberships/change-payment-date) while `payment_date_changes` is on (W41a: its own kind).
  * - `renewalDueToday` (W41a; Wayne, 17 Nov 2026): the quote and the press on the day the renewal is due, or after it
  *   while it is overdue (London), as W40a's cancel. Stripe takes that payment at the time of day the subscription
  *   began; a date moved before it lands would be moved over a month about to be paid for. The lists and the profile
@@ -208,7 +191,6 @@ export const PAYMENT_DATE_NEW_WORDS = {
     `Stripe refused to move the payment date (${stripeMessage}), and the refund of the part-month charge hasn't been confirmed yet. The change is on hold and the automatic check will finish the refund: don't take payment again. Check the Orders page in a few minutes.`,
   refundRefused: (stripeMessage: string, amount: number, paymentIntentId: string, refundMessage: string): string =>
     `${stripeMessage}. The ${money(amount)} charge (${paymentIntentId}) could not be refunded automatically (${refundMessage}). It is listed on the Orders page: refund it in Stripe by hand, then close the line there.`,
-  legacyOff: 'This is now done in the new screen. Tell a manager.',
   renewalDueToday: "Today's payment for this membership hasn't gone through yet, so its payment date can't be changed until it has. Try again after the payment.",
 } as const
 

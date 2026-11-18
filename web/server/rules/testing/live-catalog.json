@@ -6261,7 +6261,7 @@
   {
    "name": "run_membership_maintenance",
    "identity": "",
-   "definition": "CREATE OR REPLACE FUNCTION public.run_membership_maintenance()\n RETURNS jsonb\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\nDECLARE p integer; s integer;\nBEGIN\n  p := public.allocate_membership_credit_periods();\n  s := public.lapse_sweep_expired_bookings();\n  RETURN jsonb_build_object('periods_created', p, 'lapsed_bookings_cancelled', s);\nEND $function$\n"
+   "definition": "CREATE OR REPLACE FUNCTION public.run_membership_maintenance()\n RETURNS jsonb\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\nDECLARE p integer;\nBEGIN\n  p := public.allocate_membership_credit_periods();\n  RETURN jsonb_build_object('periods_created', p, 'lapsed_bookings_cancelled', 0);\nEND $function$\n"
   },
   {
    "name": "sessions_assign_band",

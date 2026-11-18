@@ -1,71 +1,38 @@
 # Memberships API
 
+No route is left in this folder. Each membership action is a `/api/v1/staff/…` route over `server/rules/`.
+
 ## `POST /api/memberships/create-subscription` (removed at W16)
 
 Removed with the staff app's old order code, its only caller. A membership's subscription is now made by the
 order route (`POST /api/v1/staff/orders`, `server/rules/orders/membership.ts`). A frozen copy stays for the
 replay's set-up only (`server/rules/testing/legacy-order/`, deleted at step H).
 
-## The three routes below, and their frozen copy (W36)
+## `POST /api/memberships/cancel-subscription` (removed at W34)
 
-`cancel`, `undo-cancel` and `change-payment-date` are the legacy routes step F replaces with `/api/v1/staff/memberships/…`
-routes (W40, W41). They stay here, live, until W44, so a Retool rollback still works. The replay's golden files for
-step F were recorded through a frozen copy of them made at Worker `982db8f`
-(`server/rules/testing/legacy-account/routes/`, deleted at step H), not through these files, so a change here doesn't
-move a golden file. `server/rules/testing/frozen-account-code.test.ts` fails if these and the copy drift apart while
-both exist: decide then which the golden files should hold to.
+Removed with the old order refund, its only caller. A frozen copy stays for the replay
+(`server/rules/testing/legacy-order/`, deleted at step H).
 
-Each live route carries one marked guard the copy doesn't have (`server/rules/memberships/legacy-guard.ts`): `cancel`
-and `undo-cancel` refuse while the new screen's Stripe step for that membership is unsettled (W40d; W41: a step Stripe
-has refused for good no longer counts), and `change-payment-date` refuses while the `payment_date_changes` switch kind
-is on (W41, W41a: the new route owns the action then; with the kind off, after a rollback, it runs as below, whatever
-`membership_changes` says). W41a: all three also refuse while the membership has a payment date change the Worker
-started and is still finishing (a pending row with its `started` audit row), with the kind on or off: "A payment date
-change for this membership is still being finished. Try again later, or check the Orders page."
+## `POST /api/memberships/cancel`, `/undo-cancel` and `/change-payment-date` (removed at W44)
 
-## `POST /api/memberships/change-payment-date`
+The three legacy routes step F replaced (Wayne's yes, 18 Nov 2026). They answer 404 now. What does each job:
 
-Moves a monthly membership's payment date forward (staff only, from Retool). The member pays now
-for the extra days, then the full monthly price from the new date. Same Retool bearer auth.
+| Was | Now | Rule | Switch kind |
+|---|---|---|---|
+| `/api/memberships/cancel` | `POST /api/v1/staff/memberships/:membershipId/cancel` (W40) | `server/rules/memberships/cancel.ts` | `membership_changes` |
+| `/api/memberships/undo-cancel` | `POST /api/v1/staff/memberships/:membershipId/undo-cancel` (W40) | `server/rules/memberships/cancel.ts` | `membership_changes` |
+| `/api/memberships/change-payment-date` | `POST /api/v1/staff/memberships/:membershipId/payment-date` (W41) | `server/rules/memberships/payment-date.ts` | `payment_date_changes` |
 
-### Request
-```json
-{
-  "stripeSubscriptionId": "sub_...",
-  "newRenewalDate": "2026-12-25 (London date)",
-  "partMonthAmount": 22.00
-}
-```
+Removed with them: each route's `core.ts` and tests, `lib/membership-cancellation.ts` (the old cancel's date sum; the
+new cancel has its own) and `server/rules/memberships/legacy-guard.ts` (the guards that kept a rolled-back staff app
+from cancelling or charging over a change the Worker was still finishing), with the words and the two reads only the
+guards used.
 
-1. Refuses unless the membership row is monthly, active and has no `cancel_effective_date`; the
-   customer has a saved card; and the Stripe subscription is `active`, one monthly price, not
-   `cancel_at_period_end` / `cancel_at`, with its current period end (London date) equal to the
-   row's `next_renewal_date` (stale data guard). The new date must be after that date and before
-   the same day a month later; `partMonthAmount` can't be more than a full month.
-2. Charges `partMonthAmount` off-session on the saved card (description "Payment date change: N
-   extra days"). A failed charge stops here.
-3. Updates the subscription with `trial_end` = the new date 00:00 Europe/London and
-   `proration_behavior: 'none'`, which moves `billing_cycle_anchor` to the new date. If this
-   fails, the charge is refunded in full.
+**Rollback since W44:** a staff app from before W40 (cancel) or W41 (payment date) gets a 404 from these paths, so
+putting the old staff app back no longer brings the old action back. Switching the kind off stops the action (staff
+see the switched-off words); the fix is then made forward in the new route. To have an old route again: revert W44's
+Worker commit and deploy.
 
-The subscription reports `trialing` until the new date. Stripe sends a £0 invoice
-(`billing_reason: 'subscription_update'`) whose `invoice.paid` runs `membership_mark_paid` with
-the new date as the period end, and `customer.subscription.updated`, which only re-syncs the
-(empty) cancellation. Credits and Herd stay on `start_date`. This route does not write to
-Postgres: Retool records the order, the new `next_renewal_date` and the
-`membership_payment_date_changes` row.
-
-### Success response (200)
-```json
-{ "success": true, "paymentIntentId": "pi_...", "newPeriodEnd": "2026-12-25T00:00:00.000Z", "extraDays": 22 }
-```
-A `warning` is added if Stripe doesn't report the expected `trial_end` / `billing_cycle_anchor`.
-
-### Error codes
-| HTTP | `code` | Meaning |
-|---|---|---|
-| 400 | `not_monthly` / `not_active` / `cancel_scheduled` / `no_saved_card` / `date_out_of_range` / `amount_too_high` | Refused before any charge. |
-| 409 | `stale_renewal_date` / `not_active` / `cancel_scheduled` / `not_monthly` / `customer_mismatch` | Stripe disagrees with the row; nothing charged. |
-| 402 | `payment_failed` | Card declined or needs authentication; nothing changed. |
-| 500 | `subscription_update_failed` | Charged, the date move failed, the charge was refunded. |
-| 500 | `refund_failed` | Charged, the date move failed and the refund failed: refund the PaymentIntent in Stripe. |
+A frozen copy of the three routes, as they were at Worker `982db8f`, stays for the replay's old side only
+(`server/rules/testing/legacy-account/routes/`, deleted at step H). `server/rules/testing/removed-account-code.test.ts`
+fails if one of the removed files, or anything that names them, comes back.

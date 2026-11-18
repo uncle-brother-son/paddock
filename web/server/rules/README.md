@@ -196,12 +196,8 @@ F-plan 4.3. The staff app's `setMembershipCancellation` and `getSubscriptions` a
     stands; a press made after it is checked as any other. The loop guard: when the check disagrees about a wish that
     a check itself left again and that was then sent and closed `done`, it is not left to send again but left already
     refused, for a person with Mark sorted (a Stripe that stores a value differently from the one sent can't make the
-    same change go out over and over). The two legacy routes (`app/api/memberships/cancel` and `undo-cancel`, until
-    W44) ask `memberships/legacy-guard.ts` first and refuse, 409 with `LEGACY_MEMBERSHIP_CHANGE_HELD_MESSAGE`, while
-    the membership has a step that is open, or closed with no check row yet (`stepsUnsettled`), with the switch on or
-    off: so a change made through them after a rollback is never put back by the check. The guard is in the two
-    `route.ts` files, between `W40d guard` marks; `frozen-account-code.test.ts` holds the live routes to the frozen
-    copy with the marked lines taken out.
+    same change go out over and over). W40d also gave the two legacy routes (`app/api/memberships/cancel` and
+    `undo-cancel`) a guard, `memberships/legacy-guard.ts`: both routes and the guard were removed at W44.
 - `memberships/list.ts`: `GET memberships` (the Subscriptions list) and the profile's membership rows
   (`customerMemberships`, used by `customers/read.ts`), from the same code: named columns, the payment date button's
   refusal (`payment-date-status.ts`), and `refunded`, worked out from the membership's own order line
@@ -252,11 +248,8 @@ held and reconciled, and the card never charged a second time.
 - **The stuck list** (`paymentDates`) shows each one past the window with what it is waiting on. **The manual close**
   (`held_payment_date`, Issue refunds) is only for one reconcile has left for a person (`PAYMENT_DATE_CLOSE_REASONS`):
   it records what Stripe last showed, fails the row, and sends nothing.
-- **The legacy route** `/api/memberships/change-payment-date` refuses (409) while `payment_date_changes` is on
-  (`legacy-guard.ts`, `legacyPaymentDateOff`); off, it runs as before, for a rollback. W41a (W41 review S1): off or on,
-  it and the legacy cancel and undo routes refuse while the membership has a pending change the Worker started
-  (`legacyPaymentDateHeld`, `legacyMembershipChangeHeld`), so an old screen can't charge again or cancel over a
-  change that is held.
+- **The legacy route** `/api/memberships/change-payment-date` was removed at W44, with its guards (W41, W41a). With
+  `payment_date_changes` off nobody can change a payment date until it is on again: there is no old route behind it.
 - Tests: `payment-date.test.ts` (every refusal in order, each Stripe outcome, a crash at each step, reconcile each
   way, the close), `payment-date-postgres.test.ts` (two presses at once; a press against a cancel, both ways),
   `testing/replay/payment-date-replay.test.ts` (the 42 recorded scenarios, with their named differences).
@@ -1413,7 +1406,7 @@ exactly as W11 built it (`payments/terminal.ts`, `saveCustomerCard`, untouched) 
   first whatever the kind, so T2 and the payment date change (customer, then membership) lock in the same order.
 - **The answer** is the customer's five fields plus `membershipsMoved` and `membershipsToMove` (absent with the kind
   off). The staff app's wrapper names them `moved` and `toMove`, and answers a refusal as data.
-- **W40d Noticed 2:** `stepsUnsettled` (the two legacy cancel routes' guard) counts `cancel_at` steps only.
+- **W40d Noticed 2** (the legacy cancel routes' guard counted `cancel_at` steps only): the guard was removed at W44.
 - **Who writes a subscription's card:** a step, and `subscriptionRequest` when a subscription is made
   (`orders/membership.ts`). `customers/saved-card.test.ts` holds the list.
 - **Parity:** `testing/replay/saved-card-replay.test.ts` runs each press with the kind off and on and allows only the

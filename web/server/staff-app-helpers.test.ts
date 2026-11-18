@@ -57,7 +57,7 @@ describe('staff app helpers', () => {
       return {
         getStaffAccessRow: access.getStaffAccessRow,
         requireStaffAdmin: access.requireStaffAdmin,
-        requireCanIssueRefunds: access.requireCanIssueRefunds,
+        // W44: requireCanIssueRefunds left the staff app (no caller: the Worker checks Issue refunds).
         resolveStaffId: ids.resolveStaffId,
         requireStaffId: ids.requireStaffId,
         requireCanManagePricing: pricing.requireCanManagePricing,

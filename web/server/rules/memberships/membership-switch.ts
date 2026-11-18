@@ -8,10 +8,10 @@
 // No route calls this until W40 (cancel and undo) and W42 (replace card).
 //
 // W41a (lead call, 17 Nov 2026): the payment date change has a kind of its own, `payment_date_changes`. Its press
-// and the legacy change-payment-date route's guard (legacy-guard.ts) ask that kind and never `membership_changes`;
-// the cancel and the undo ask `membership_changes` and never that one. So the date change can be switched off, and
-// the old staff app put back for it, while W40's cancel and undo stay on. The quote, reconcile and the check never
-// ask either: a held change is always finished.
+// asks that kind and never `membership_changes` (the legacy change-payment-date route and its guard left at W44);
+// the cancel and the undo ask `membership_changes` and never that one. So the date change can be switched off while
+// W40's cancel and undo stay on (since W44 there is no old route behind it: off, nobody can change a payment date
+// until it is on again). The quote, reconcile and the check never ask either: a held change is always finished.
 //
 // W42 (brief item 1): the replaced card has a kind of its own too, `card_moves`. The saved-card route asks that kind
 // and never `membership_changes`: off, the card is saved as before W42 and no membership is moved; on, each live

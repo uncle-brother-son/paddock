@@ -23,49 +23,17 @@ const LEGACY_ROUTES = path.join(TESTING_DIR, 'replay/legacy-routes.ts')
 const SKIP_DIRS = new Set(['node_modules', '.next', '.open-next', '.git', 'storybook-static', 'coverage', '.wrangler'])
 /** The three legacy membership routes, as the old functions call them. */
 const ROUTES = ['cancel', 'undo-cancel', 'change-payment-date']
-/** The two files whose one import line was repointed, with the line as the original has it. */
-const REPOINTED: Record<string, { original: string; copyLine: string; originalLine: string }> = {
-  'routes/memberships/cancel/core.ts': {
-    original: 'app/api/memberships/cancel/core.ts',
-    copyLine: "from '../../../lib/membership-cancellation'",
-    originalLine: "from '@/lib/membership-cancellation'",
-  },
-  'lib/membership-cancellation.ts': {
-    original: 'lib/membership-cancellation.ts',
-    copyLine: "from '@/lib/london-time'",
-    originalLine: "from './london-time'",
-  },
-}
 /**
- * W40d (W40c review S2): the live cancel and undo routes carry a guard the frozen copy never had (they refuse while
- * the new screen's Stripe step is open or not yet checked; memberships/legacy-guard.ts). It is one marked import line
- * and one marked block; with those taken out, the live route must still be the copy's, byte for byte.
+ * The two files whose one import line was repointed so the copy stands alone, with the line as the copy has it. Their
+ * originals (and the live routes, with the guards W40d and W41 gave them) left the app at W44: until then this test
+ * held each copy to its original. Now manifest.json alone holds them, and removed-account-code.test.ts the removal.
  */
-const GUARDED_ROUTES: ReadonlySet<string> = new Set(['routes/memberships/cancel/route.ts', 'routes/memberships/undo-cancel/route.ts'])
-const GUARD_IMPORT = "import { legacyMembershipChangeHeld } from '@/server/rules/memberships/legacy-guard' // W40d guard\n"
-const GUARD_BLOCK = /^ *\/\/ W40d guard: start[^\n]*\n[\s\S]*?^ *\/\/ W40d guard: end\n\n/m
-/** A live route's source without the W40d guard, and whether it had the whole guard (the import, the block, the call). */
-function withoutGuard(source: string): { source: string; guarded: boolean } {
-  const block = source.match(GUARD_BLOCK)?.[0] ?? ''
-  const guarded = source.split(GUARD_IMPORT).length === 2 && block.includes('await legacyMembershipChangeHeld(membershipId)') && block.includes('status: 409')
-  return { source: source.replace(GUARD_IMPORT, '').replace(GUARD_BLOCK, ''), guarded }
+const REPOINTED: Record<string, string> = {
+  'routes/memberships/cancel/core.ts': "from '../../../lib/membership-cancellation'",
+  'lib/membership-cancellation.ts': "from '@/lib/london-time'",
 }
-
-/**
- * W41 (brief item 6): the live payment date route carries a guard of its own, marked the same way: with
- * `payment_date_changes` on (W41a: its own kind) it refuses before anything is read (memberships/legacy-guard.ts,
- * legacyPaymentDateOff); W41a (W41 review S1): off, it still refuses while the Worker holds a change for the
- * membership (legacyPaymentDateHeld, on a copy of the request).
- * With its marked import line and block taken out, the live route must still be the copy's, byte for byte.
- */
-const SWITCHED_OFF_ROUTES: ReadonlySet<string> = new Set(['routes/memberships/change-payment-date/route.ts'])
-const OFF_IMPORT = "import { legacyPaymentDateHeld, legacyPaymentDateOff } from '@/server/rules/memberships/legacy-guard' // W41 guard\n"
-const OFF_BLOCK = /^ *\/\/ W41 guard: start[^\n]*\n[\s\S]*?^ *\/\/ W41 guard: end\n\n/m
-function withoutOffGuard(source: string): { source: string; guarded: boolean } {
-  const block = source.match(OFF_BLOCK)?.[0] ?? ''
-  const guarded = source.split(OFF_IMPORT).length === 2 && block.includes('legacyPaymentDateOff() ?? (await legacyPaymentDateHeld(request.clone()))') && block.includes('status: 409')
-  return { source: source.replace(OFF_IMPORT, '').replace(OFF_BLOCK, ''), guarded }
-}
+/** Where each file of the route copy came from, in the app. */
+const originalOf = (name: string): string => (name.startsWith('lib/') ? name : name.replace(/^routes\//, 'app/api/'))
 
 /**
  * From W37 on: the step F functions the staff app has switched to the Worker (a thin wrapper there; the old body
@@ -94,6 +62,16 @@ const SWITCHED_TO_THE_WORKER: ReadonlySet<string> = new Set([
   'changeMembershipPaymentDate.ts',
   'getMembershipPaymentDateQuote.ts',
 ])
+/**
+ * W44 (Wayne's yes, 18 Nov 2026, inventory D1, D3, D5, D6): four modules the staff app trimmed of exports nothing
+ * there called any more. The copy keeps them whole: the old functions here still call them.
+ */
+const TRIMMED_IN_THE_STAFF_APP: Record<string, string[]> = {
+  'shared/staffAccess.ts': ['requireCanIssueRefunds'],
+  'shared/guestValidation.ts': ['validateGuests', 'findAccountHolderIndex', 'AccountHolderProfile', 'GuestValidationReason', 'GuestValidationResult', 'GUESTS_OVER_18_NOT_CONFIRMED_MESSAGE'],
+  'shared/londonTime.ts': ['startsWithinRealHours', 'addMonthsToIsoDate'],
+  'shared/eventAttendance.ts': ['loadEventAttendeeState'],
+}
 /** W38: the two flag functions are one thin call, kept in a module they share; each names it, and it calls the Worker. */
 const THIN_THROUGH: Record<string, string> = { 'setGiftCardPickedUp.ts': 'shared/giftCardFlag.ts', 'setGiftCardShipped.ts': 'shared/giftCardFlag.ts' }
 
@@ -209,7 +187,7 @@ describe('W36: the frozen copy of the old step F functions and the three legacy 
     for (const file of backendFiles) {
       const name = inBackend(file)
       const original = path.join(appDir, 'backend/paddock', name)
-      if (SWITCHED_TO_THE_WORKER.has(name) || !existsSync(original)) continue
+      if (SWITCHED_TO_THE_WORKER.has(name) || name in TRIMMED_IN_THE_STAFF_APP || !existsSync(original)) continue
       expect(sha256(readFileSync(file)), name).toBe(sha256(readFileSync(original)))
       compared.push(name)
     }
@@ -217,7 +195,18 @@ describe('W36: the frozen copy of the old step F functions and the three legacy 
     // bodies: W37 switched four functions, W38 five, W39 three and W40 two, and the 12 modules beside them (and the
     // other 2 functions) are untouched.
     expect(compared.length).toBeLessThanOrEqual(28)
-    expect(compared.length).toBe(28 - SWITCHED_TO_THE_WORKER.size - backendFiles.filter((file) => !existsSync(path.join(appDir, 'backend/paddock', inBackend(file)))).length)
+    const trimmed = Object.keys(TRIMMED_IN_THE_STAFF_APP).filter((name) => existsSync(path.join(appDir, 'backend/paddock', name)))
+    expect(compared.length).toBe(28 - SWITCHED_TO_THE_WORKER.size - trimmed.length - backendFiles.filter((file) => !existsSync(path.join(appDir, 'backend/paddock', inBackend(file)))).length)
+    // W44: a trimmed module is the copy's with those exports gone: the staff app no longer names them, the copy does.
+    for (const name of trimmed) {
+      const now = code(path.join(appDir, 'backend/paddock', name))
+      const frozen = code(path.join(COPY_CODE, name))
+      for (const one of TRIMMED_IN_THE_STAFF_APP[name] ?? []) {
+        expect(new RegExp(`\\b${one}\\b`).test(now), `${name}: ${one}`).toBe(false)
+        expect(new RegExp(`\\b${one}\\b`).test(frozen), `${name}: ${one} (copy)`).toBe(true)
+      }
+      expect(now.length, name).toBeLessThan(frozen.length)
+    }
     // A switched function is a thin wrapper, not a drifted copy: it calls the Worker and no longer touches the database.
     for (const name of SWITCHED_TO_THE_WORKER) {
       const wrapper = code(path.join(appDir, 'backend/paddock', name))
@@ -232,38 +221,12 @@ describe('W36: the frozen copy of the old step F functions and the three legacy 
     }
   })
 
-  it("every route file is the app's own, byte for byte, while the app still has it, but for the two repointed import lines and (W40d) the marked guard in the live cancel and undo routes", () => {
-    // The live routes stay in app/ until W44 (lead call L4). One still there must not have drifted from the copy.
-    let compared = 0
-    for (const file of copyFiles.filter((one) => !one.startsWith(COPY_CODE + path.sep))) {
-      const name = inCopy(file)
-      const repointed = REPOINTED[name]
-      const original = path.join(workerDir, repointed?.original ?? name.replace(/^routes\//, 'app/api/'))
-      if (!existsSync(original)) continue
-      const copy = readFileSync(file, 'utf8')
-      if (repointed) {
-        expect(copy.split(repointed.copyLine)).toHaveLength(2)
-        expect(sha256(copy.replace(repointed.copyLine, repointed.originalLine)), name).toBe(sha256(readFileSync(original)))
-      } else if (GUARDED_ROUTES.has(name)) {
-        // W40d: the live route has the guard; the copy, which the old side replays, does not.
-        const live = withoutGuard(readFileSync(original, 'utf8'))
-        expect(live.guarded, name).toBe(true)
-        expect(copy).not.toContain('legacyMembershipChangeHeld')
-        expect(sha256(copy), name).toBe(sha256(live.source))
-      } else if (SWITCHED_OFF_ROUTES.has(name)) {
-        // W41, W41a: the live route refuses while `payment_date_changes` is on, or the Worker holds a change; the copy, which the old side replays, does not.
-        const live = withoutOffGuard(readFileSync(original, 'utf8'))
-        expect(live.guarded, name).toBe(true)
-        expect(copy).not.toContain('legacyPaymentDateOff')
-        expect(copy).not.toContain('legacyPaymentDateHeld')
-        expect(sha256(copy), name).toBe(sha256(live.source))
-      } else {
-        expect(sha256(copy), name).toBe(sha256(readFileSync(original)))
-      }
-      compared += 1
-    }
-    expect(compared).toBeLessThanOrEqual(7)
-    expect(Object.keys(REPOINTED).every((name) => existsSync(path.join(COPY_DIR, name)))).toBe(true)
+  it('W44: the app no longer has the routes or the date sum, so the copy is the only one; its two repointed import lines are still there, once each', () => {
+    const routeCopies = copyFiles.filter((one) => !one.startsWith(COPY_CODE + path.sep)).map(inCopy)
+    expect(routeCopies).toHaveLength(7)
+    expect(routeCopies.filter((name) => existsSync(path.join(workerDir, originalOf(name))))).toEqual([])
+    expect(originalOf('routes/memberships/cancel/route.ts')).toBe('app/api/memberships/cancel/route.ts')
+    for (const [name, copyLine] of Object.entries(REPOINTED)) expect(readFileSync(path.join(COPY_DIR, name), 'utf8').split(copyLine), name).toHaveLength(2)
   })
 
   it('the old side loads every step F function from it; the earlier copies still answer for what they hold; the rest from where it was', () => {

@@ -5,7 +5,7 @@ import { POST as savedCardRoute } from '@/app/api/v1/staff/customers/[customerId
 import { POST as cancelRoute } from '@/app/api/v1/staff/memberships/[membershipId]/cancel/route'
 import type { Db } from '@/server/db'
 import { LEFT_STEP_WORDS } from '@/server/rules/memberships/failure-messages'
-import { CHECK_AFTER_MINUTES, OPEN_STEPS_SQL, sortLeftStep, STEP_CHECK_ACTION, STEP_LEFT_ACTION, stepKey, stepsUnsettled } from '@/server/rules/memberships/left'
+import { CHECK_AFTER_MINUTES, OPEN_STEPS_SQL, sortLeftStep, STEP_CHECK_ACTION, STEP_LEFT_ACTION, stepKey } from '@/server/rules/memberships/left'
 import { reconcile } from '@/server/rules/orders/reconcile'
 import { stuckList } from '@/server/rules/orders/stuck-list'
 import { insert } from '@/server/rules/testing/database'
@@ -918,23 +918,6 @@ describe('a card step and a cancel step on one subscription (W40 review L5, W40c
         ['cancel_at', 'done'],
       ])
       expect(subscriptionCard(stripe)).toBeNull()
-    })
-  })
-
-  it("the legacy cancel and undo guard counts cancel steps only: a card step, open or closed and unchecked, doesn't hold the old screen", async () => {
-    await onASeed(async (stripe) => {
-      stripe.failNext('subscriptions.update', noAnswer())
-      await replace(stripe, 'pm_mos_new_card')
-      // Open.
-      expect(await stepsUnsettled(db, ID.membership)).toBe(false)
-      pastTheWindow()
-      await reconcileNow(stripe)
-      // Closed, not yet checked.
-      expect((await stepRows()).map(([, state]) => state)).toEqual(['left', 'done'])
-      expect(await stepsUnsettled(db, ID.membership)).toBe(false)
-      // A cancel step still holds it, as W40d built it.
-      expect((await cancel()).status).toBe(200)
-      expect(await stepsUnsettled(db, ID.membership)).toBe(true)
     })
   })
 })

@@ -290,31 +290,6 @@ export async function readPaymentDateChange(db: Queryable, changeId: string): Pr
 
 type Started = PaymentDateChange & { started: PaymentDateStarted }
 
-const STARTED_HERE_SQL = `EXISTS (SELECT 1 FROM audit_log s
-        WHERE s.action = '${PAYMENT_DATE_ACTION}' AND s.entity_type = '${PAYMENT_DATE_ENTITY}' AND s.entity_id = p.membership_id::text
-          AND s.details->>'changeId' = p.id::text AND s.details->>'state' = 'started')`
-/** W41a (W41 review S1): whether a membership has a pending change the Worker started. `$1`: the membership's id, compared as text so any value can be asked. */
-const WORKER_CHANGE_PENDING_SQL = `
-SELECT 1 FROM membership_payment_date_changes p
-WHERE p.status = 'pending' AND p.membership_id::text = $1::text AND ${STARTED_HERE_SQL}
-LIMIT 1`
-/** The same, for the membership a Stripe subscription belongs to (`$1`: the subscription's id). */
-const WORKER_CHANGE_PENDING_BY_SUBSCRIPTION_SQL = `
-SELECT 1 FROM membership_payment_date_changes p
-JOIN customer_memberships cm ON cm.id = p.membership_id
-WHERE p.status = 'pending' AND cm.stripe_subscription_id = $1::text AND ${STARTED_HERE_SQL}
-LIMIT 1`
-
-/**
- * W41a (W41 review S1), for the legacy routes' guard (legacy-guard.ts): whether the membership (by its id, or by its
- * Stripe subscription's) has a payment date change the Worker started that is still pending, however old. A pending
- * row the old code wrote doesn't count: the old function's own 15-minute rule is all the old screen ever had for it.
- */
-export async function workerPaymentDateChangePending(db: Queryable, of: { membershipId: string } | { subscriptionId: string }): Promise<boolean> {
-  const rows = 'membershipId' in of ? await db.query(WORKER_CHANGE_PENDING_SQL, [of.membershipId]) : await db.query(WORKER_CHANGE_PENDING_BY_SUBSCRIPTION_SQL, [of.subscriptionId])
-  return rows.length > 0
-}
-
 const entry = (change: Pick<PaymentDateChange, 'id' | 'membershipId'>, by: ChangeBy, state: string, details: Record<string, unknown> = {}) => ({
   actorType: by.actor.type,
   actorId: by.actor.id,

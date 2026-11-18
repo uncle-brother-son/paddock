@@ -89,10 +89,7 @@
 //   or twice: its row and the step it leaves are one transaction under the membership's lock, after looking again.
 // - A check with no clear read is tried again every run, and after 2 hours the wish is left again, so it is listed.
 // - A run reads at most 5 checks, oldest closing first: with more due than that, the rest are read by the next runs.
-// - The two legacy routes (cancel and undo, which stay until W44) protect themselves (W40d, `stepsUnsettled`): each
-//   refuses, before it reads or sends anything, while the membership has a step that is open (W41: and not refused
-//   by Stripe for good), or closed and not yet checked. So a change made through them is never taken for a stale send and put back by the check, with
-//   `membership_changes` on or off (reconcile and the check never ask the switch).
+// - (W40d's guard on the two legacy routes, cancel and undo, left with them at W44.)
 // Not guaranteed:
 // - Anything while the database refuses writes: a check that can't write its row leaves nothing, and is due again.
 // - A change made to the subscription outside this code (in Stripe's dashboard, say) more than 20 minutes after the
@@ -845,56 +842,6 @@ JOIN audit_log d ON d.action = '${STEP_LEFT_ACTION}' AND d.entity_type = '${STEP
   AND d.details->>'stepId' = c.details->>'leftAgain' AND d.details->>'state' = 'done' AND d.details->>'sent' = 'true'
 WHERE c.action = '${STEP_CHECK_ACTION}' AND c.entity_type = '${STEP_LEFT_ENTITY}' AND c.details->>'leftAgain' = $1
 LIMIT 1`
-
-/**
- * W40d (W40c review S2): whether a membership (`$1`) has a step no check row names: one still open (a check row only
- * ever names closed steps), or one closed and not checked yet. The same test as OPEN_STEPS_SQL and CHECKS_DUE_SQL
- * together, for one membership, without the check's 20 minute wait: a closing is unsettled from the moment it is
- * written.
- *
- * W41 (W40d report, "The short version" 2, fix (a)): an open step Stripe has refused for good is not counted. It is
- * never sent again, the check reads nothing while it is the newest step and still open, and once a person marks it
- * sorted its wish is never held to Stripe, so a legacy change made meanwhile is never taken for a stale send. Without
- * this, after a rollback to a staff app with no Mark sorted, a refused line held the old Cancel and Undo for good.
- * Once it is closed (sorted, or replaced by a new press) it counts again until its check row, as any closed step.
- *
- * W42 (W40d report, Noticed 2): only `cancel_at` steps count. The two legacy routes set or clear a cancel date and
- * nothing else, so only a cancel step's check could take a legacy change for a stale send and put it back. A card
- * step (a replaced card, customers/saved-card.ts) sends and checks `default_payment_method` alone, which no legacy
- * route writes: counted, it would hold the old screen's Cancel and Undo for half an hour after every replaced card.
- */
-const UNSETTLED_STEP_SQL = `
-SELECT 1 FROM audit_log s
-WHERE s.action = '${STEP_LEFT_ACTION}' AND s.entity_type = '${STEP_LEFT_ENTITY}' AND s.entity_id = $1 AND s.details->>'state' = 'left'
-  AND s.details->>'kind' = 'cancel_at'
-  AND NOT EXISTS (
-    SELECT 1 FROM audit_log c
-    WHERE c.action = '${STEP_CHECK_ACTION}' AND c.entity_type = '${STEP_LEFT_ENTITY}' AND c.entity_id = s.entity_id
-      AND c.details->'steps' ? (s.details->>'stepId')
-  )
-  AND NOT (
-    EXISTS (
-      SELECT 1 FROM audit_log f
-      WHERE f.action = '${STEP_LEFT_ACTION}' AND f.entity_type = '${STEP_LEFT_ENTITY}' AND f.entity_id = s.entity_id
-        AND f.details->>'stepId' = s.details->>'stepId' AND f.details->>'state' = 'refused'
-    )
-    AND NOT EXISTS (
-      SELECT 1 FROM audit_log e
-      WHERE e.action = '${STEP_LEFT_ACTION}' AND e.entity_type = '${STEP_LEFT_ENTITY}' AND e.entity_id = s.entity_id
-        AND e.details->>'stepId' = s.details->>'stepId' AND e.details->>'state' IN (${closingStates})
-    )
-  )
-LIMIT 1`
-
-/**
- * W40d (W40c review S2): whether a membership has a step still open, or closed and not yet checked against Stripe.
- * The two legacy routes ask before they change anything (legacy-guard.ts): while this is true, a change they made
- * would look like a stale send to the check, which would put the step's wish back over it. W41: an open step Stripe
- * has refused for good doesn't count (it is never sent, and is listed for a person). W42: nor does a card step.
- */
-export async function stepsUnsettled(db: Queryable, membershipId: string): Promise<boolean> {
-  return (await db.query(UNSETTLED_STEP_SQL, [membershipId])).length > 0
-}
 
 /** The step whose wish Stripe should show: `closedAs` null while it is open. */
 interface WishInForce extends LeftStep {

@@ -31,6 +31,16 @@ const SWITCHED_TO_THE_WORKER: ReadonlySet<string> = new Set(['refundOrder.ts', '
  * list's owed line). The copy keeps the old one, which is what the golden files' `booking` answers were recorded with.
  */
 const CHANGED_IN_THE_STAFF_APP: ReadonlySet<string> = new Set(['shared/eventAttendeeList.ts'])
+/**
+ * W44 (Wayne's yes, 18 Nov 2026, inventory D1, D2, D6): three modules the staff app trimmed of exports nothing there
+ * called any more (`requireCanIssueRefunds`; `applyPromoCode`, `spreadFixedDiscount`, `PROMO_FAILURE_MESSAGES`,
+ * `PromoUsageCounts`; `loadEventAttendeeState`). The copy keeps them whole: the old functions here still call them.
+ */
+const TRIMMED_IN_THE_STAFF_APP: Record<string, string[]> = {
+  'shared/staffAccess.ts': ['requireCanIssueRefunds'],
+  'shared/promoCodes.ts': ['applyPromoCode', 'spreadFixedDiscount', 'PROMO_FAILURE_MESSAGES', 'PromoUsageCounts'],
+  'shared/eventAttendance.ts': ['loadEventAttendeeState'],
+}
 /** The three modules the frozen order copy took from the staff app's checkout until W27 (audit row 1). */
 const ONCE_ALIASED = ['shared/cancelMembershipSubscription', 'shared/promoCodes', 'shared/stockAdjustments']
 
@@ -111,7 +121,7 @@ describe('W27: the frozen copy of the old step E functions', () => {
       const name = inCopy(file)
       const original = path.join(appDir, 'backend/paddock', name)
       // W28: the staff app's refundOrder is a thin call to the Worker now; the copy keeps the old body for the replay.
-      if (name === STAND_IN || name === 'shared/workerContracts.ts' || SWITCHED_TO_THE_WORKER.has(name) || CHANGED_IN_THE_STAFF_APP.has(name) || !existsSync(original)) continue
+      if (name === STAND_IN || name === 'shared/workerContracts.ts' || SWITCHED_TO_THE_WORKER.has(name) || CHANGED_IN_THE_STAFF_APP.has(name) || name in TRIMMED_IN_THE_STAFF_APP || !existsSync(original)) continue
       expect(sha256(file), name).toBe(sha256(original))
       compared.push(name)
     }
@@ -119,7 +129,19 @@ describe('W27: the frozen copy of the old step E functions', () => {
     // which each Worker change regenerates). The number only falls as slices switch or delete their old bodies. W28: 26
     // (refundOrder switched). W30: 23 (cancelEventPlaces and getEventCancellationQuote switched; the attendee list's
     // loader changed). W31: 21 (cancelEvent and getEventCancellationOverview switched: all five are thin wrappers now).
-    expect(compared.length).toBeLessThanOrEqual(21)
+    // W44: 18 (three modules trimmed of unused exports in the staff app).
+    expect(compared.length).toBeLessThanOrEqual(18)
+    // A trimmed module is the copy's with those exports gone, and nothing the copy doesn't have: the staff app no
+    // longer names them, the copy still does.
+    for (const [name, gone] of Object.entries(TRIMMED_IN_THE_STAFF_APP)) {
+      const now = code(path.join(appDir, 'backend/paddock', name))
+      const frozen = code(path.join(COPY_CODE, name))
+      for (const one of gone) {
+        expect(new RegExp(`\\b${one}\\b`).test(now), `${name}: ${one}`).toBe(false)
+        expect(new RegExp(`\\b${one}\\b`).test(frozen), `${name}: ${one} (copy)`).toBe(true)
+      }
+      expect(now.length, name).toBeLessThan(frozen.length)
+    }
     expect([...SWITCHED_TO_THE_WORKER].sort()).toEqual([...LEGACY_REFUND_ACTIONS].map((action) => `${action}.ts`).sort())
     // The changed loader is still read-only, and still the old one plus what W30 added.
     const loader = code(path.join(appDir, 'backend/paddock/shared/eventAttendeeList.ts'))

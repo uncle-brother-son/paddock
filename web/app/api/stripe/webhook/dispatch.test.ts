@@ -113,7 +113,7 @@ describe('dispatchStripeEvent', () => {
     })
   })
 
-  // Payment date change (/api/memberships/change-payment-date) sets trial_end on an active
+  // Payment date change (server/rules/memberships/payment-date.ts) sets trial_end on an active
   // subscription. The subscription reports 'trialing' until the new date; these events must keep
   // the membership as it is and move next_renewal_date to the new date.
   const trialEnd = Date.UTC(2026, 11, 25) / 1000 // 25 Dec 2026 00:00 London (GMT)

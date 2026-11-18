@@ -1336,11 +1336,10 @@ CREATE OR REPLACE FUNCTION public.run_membership_maintenance()
  SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
-DECLARE p integer; s integer;
+DECLARE p integer;
 BEGIN
   p := public.allocate_membership_credit_periods();
-  s := public.lapse_sweep_expired_bookings();
-  RETURN jsonb_build_object('periods_created', p, 'lapsed_bookings_cancelled', s);
+  RETURN jsonb_build_object('periods_created', p, 'lapsed_bookings_cancelled', 0);
 END $function$;
 
 CREATE OR REPLACE FUNCTION public.sessions_assign_band()

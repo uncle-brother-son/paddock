@@ -21,16 +21,17 @@ exactly whichever actions have switched, W36 froze this copy, as W16, W17 and W2
   W11 F4) is the Worker's own code, held by `server/rules/payments/terminal-today.test.ts`.
 - `routes/memberships/`: the three legacy routes the old functions call (`cancel`, `undo-cancel`,
   `change-payment-date`: each `core.ts` and `route.ts`), copied from `app/api/memberships/` at Worker commit `982db8f`
-  **while they are still in the app** (they stay live until W44, lead call L4, so a Retool rollback works). They are
-  bound through `replay/legacy-routes.ts`, so step F's golden files don't change if a slice edits the live routes, and
-  W44 can delete those with nothing to move.
-- `lib/membership-cancellation.ts`: the cancel route's date sum (`lib/membership-cancellation.ts` at `982db8f`), which
+  while they were still in the app. They are bound through `replay/legacy-routes.ts`. **W44 removed the live routes**
+  (Wayne's yes, 18 Nov 2026), with nothing to move: this copy is the only one left.
+- `lib/membership-cancellation.ts`: the cancel route's date sum (`lib/membership-cancellation.ts` at `982db8f`,
+  removed from the app at W44), which
   holds FB6 (the minimum term's end rolls over instead of ending on the month's last day, Q33). W40 fixes that in the
   Worker's own rule; the copy keeps what the old route did.
 - **Two import lines differ from their originals,** and nothing else: `routes/memberships/cancel/core.ts` imports the
   copy's `lib/membership-cancellation` (the original imports `@/lib/membership-cancellation`), and that file imports
-  `@/lib/london-time` (the original's `./london-time`), which stays in the app. `frozen-account-code.test.ts` compares
-  each with its original with that one line put back.
+  `@/lib/london-time` (the original's `./london-time`), which stays in the app until step H for this copy alone.
+  `frozen-account-code.test.ts` compared each with its original, with that one line put back, while the originals
+  existed; since W44 `manifest.json` alone holds them.
 - `manifest.json` holds each file's SHA-256; `server/rules/testing/frozen-account-code.test.ts` fails if one changes.
 - Some modules are in the other copies too (`staffAccess`, `storeCredit`, `resolveStaffId`...). This copy has its
   own, as at `cec4ef1`, rather than reaching into those: a copy that stands alone can't be changed by another's.

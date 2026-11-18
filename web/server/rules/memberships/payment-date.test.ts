@@ -21,7 +21,6 @@ import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import type { StripeClient } from '@/server/stripe/client'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
 import {
-  LEGACY_PAYMENT_DATE_HELD_MESSAGE,
   MEMBERSHIP_CANCEL_NEW_WORDS,
   MEMBERSHIP_PATH_OFF_MESSAGE,
   PAYMENT_DATE_CLOSE_WORDS,
@@ -1316,108 +1315,6 @@ describe('reconcile counts payment date changes inside the run\'s budget (brief 
       expect(one.items.map((item) => item.kind)).toEqual(['date_change'])
       // Its row is on the change's own entity, for the list and the close.
       expect((await audited('order.reconcile')).map((row) => [row.entity_type, row.details['outcome']])).toEqual([['payment_date_change', 'undone']])
-    })
-  })
-})
-
-describe('the legacy route (brief W41 item 6)', () => {
-  /** The live legacy route (app/api/memberships), loaded here, after the replay has put its stand-ins for supabase-js and Stripe's SDK in place. */
-  const legacyRoute = async () => (await import('@/app/api/memberships/change-payment-date/route')) as unknown as { POST: (request: never) => Promise<Response> }
-  const legacy = async (body: Record<string, unknown>) => {
-    const response = await (await legacyRoute()).POST(new Request('http://replay.test/api/memberships/change-payment-date', { method: 'POST', headers: { authorization: `Bearer ${process.env.RETOOL_API_KEY}`, 'content-type': 'application/json' }, body: JSON.stringify(body) }) as never)
-    return { status: response.status, body: (await response.json()) as Record<string, unknown> }
-  }
-  const BODY_OLD = { stripeSubscriptionId: MO_SUBSCRIPTION, newRenewalDate: NEW_DATE, partMonthAmount: AMOUNT }
-
-  it('with `payment_date_changes` on (W41a: its own kind) it refuses, 409, before anything is read or sent, with or without `membership_changes`; off (a rollback), it runs as it always did, with `membership_changes` still on; the shared key is still asked for first', async () => {
-    await onASeed(async (stripe) => {
-      for (const value of ['membership_changes,payment_date_changes', 'payment_date_changes']) {
-        vi.stubEnv('ORDER_SWITCH', value)
-        expect(await legacy(BODY_OLD), value).toEqual({ status: 409, body: { error: 'This is now done in the new screen. Tell a manager.' } })
-      }
-      expect(PAYMENT_DATE_NEW_WORDS.legacyOff).toBe('This is now done in the new screen. Tell a manager.')
-      expect(stripe.calls).toEqual([])
-      const unauthorised = await (await legacyRoute()).POST(new Request('http://replay.test/api/memberships/change-payment-date', { method: 'POST', headers: { authorization: 'Bearer wrong' }, body: '{}' }) as never)
-      expect(unauthorised.status).toBe(401)
-      // The date change's own rollback: its kind out of the secret, the cancel and undo's kind left on.
-      vi.stubEnv('ORDER_SWITCH', 'no_stripe,saved_card,reader,membership_changes')
-      const answer = await legacy(BODY_OLD)
-      expect(answer).toMatchObject({ status: 200, body: { success: true, extraDays: 17 } })
-      expect(stripe.calls.map((call) => call.method)).toEqual(['subscriptions.retrieve', 'paymentIntents.create', 'subscriptions.update'])
-    })
-  })
-
-  // Brief W41a item 6 (W41 review S1). With the kind off and the old staff app back, a page loaded before a hold could
-  // still press: the old date route would charge £21.94 again with no key, and an old cancel could go over a change
-  // reconcile is about to finish. So all three legacy routes refuse while the Worker holds a change for the membership.
-  describe('W41a: the legacy routes see a change the Worker is holding (W41 review S1)', () => {
-    type LegacyRoute = { POST: (request: never) => Promise<Response> }
-    const legacyCancel = async (route: 'cancel' | 'undo-cancel', membershipId: string = ID.membership) => {
-      const loaded = (route === 'cancel' ? await import('@/app/api/memberships/cancel/route') : await import('@/app/api/memberships/undo-cancel/route')) as unknown as LegacyRoute
-      const response = await loaded.POST(new Request(`http://replay.test/api/memberships/${route}`, { method: 'POST', headers: { authorization: `Bearer ${process.env.RETOOL_API_KEY}`, 'content-type': 'application/json' }, body: JSON.stringify({ membershipId }) }) as never)
-      return { status: response.status, body: (await response.json()) as Record<string, unknown> }
-    }
-    const WORDS = 'A payment date change for this membership is still being finished. Try again later, or check the Orders page.'
-    const HELD = { status: 409, body: { error: WORDS } }
-    const everyRow = async () => (await db.query<{ n: number }>('SELECT count(*)::int AS n FROM audit_log'))[0]?.n
-
-    it('the words', () => {
-      expect(LEGACY_PAYMENT_DATE_HELD_MESSAGE).toBe(WORDS)
-    })
-
-    it.each(['', 'membership_changes', 'membership_changes,payment_date_changes'])('a change held at the charge, then ORDER_SWITCH "%s": the legacy cancel and undo are refused, 409, with nothing read, written or sent, however old the hold; once reconcile has ended it they run as they always did', async (value) => {
-      await onASeed(async (stripe) => {
-        stripe.failNext('paymentIntents.create', noAnswer())
-        expect(refusalOf(await press())[2]).toBe('payment_unconfirmed')
-        vi.stubEnv('ORDER_SWITCH', value)
-        // An hour on: the old screen's own rule let a pending record go after 15 minutes.
-        vi.setSystemTime(Date.now() + 60 * 60_000)
-        const calls = stripe.calls.length
-        const written = await everyRow()
-        expect(await legacyCancel('cancel')).toEqual(HELD)
-        expect(await legacyCancel('undo-cancel')).toEqual(HELD)
-        expect(stripe.calls).toHaveLength(calls)
-        expect(await everyRow()).toBe(written)
-        // Another membership is not held by it.
-        expect((await legacyCancel('cancel', crypto.randomUUID())).body['error']).not.toBe(WORDS)
-        expect((await dateItems(stripe)).map((item) => item.outcome)).toEqual(['undone'])
-        expect(await legacyCancel('cancel')).toMatchObject({ status: 200, body: { success: true } })
-      })
-    })
-
-    it('a change held after the charge, then the kind switched off (the rollback): the legacy date route is refused, 409, before anything is read or sent, so the card is not charged a second time; once reconcile has finished the change it answers as it always did', async () => {
-      await onASeed(async (stripe) => {
-        stripe.failNext('subscriptions.update', noAnswer())
-        expect(refusalOf(await press())[2]).toBe('move_unconfirmed')
-        vi.stubEnv('ORDER_SWITCH', 'no_stripe,saved_card,reader,membership_changes')
-        vi.setSystemTime(Date.now() + 60 * 60_000)
-        const calls = stripe.calls.length
-        const written = await everyRow()
-        expect(await legacy(BODY_OLD)).toEqual(HELD)
-        expect(stripe.calls).toHaveLength(calls)
-        expect(await everyRow()).toBe(written)
-        expect(await taken(stripe)).toHaveLength(1)
-        // A body with no subscription is still the route's own refusal; another subscription's is not held.
-        expect(await legacy({ newRenewalDate: NEW_DATE, partMonthAmount: AMOUNT })).toMatchObject({ status: 400 })
-        expect((await legacy({ ...BODY_OLD, stripeSubscriptionId: 'sub_someone_else' })).body['error']).not.toBe(WORDS)
-        expect(stripe.calls.filter((call) => call.method === 'paymentIntents.create')).toHaveLength(1)
-        // Reconcile finishes the held change; the old route then reads Stripe again (and refuses for its own reason: the date has moved).
-        expect((await dateItems(stripe)).map((item) => item.outcome)).toEqual(['finalised'])
-        const after = await legacy(BODY_OLD)
-        expect(after.body['error']).not.toBe(WORDS)
-        expect(await taken(stripe)).toHaveLength(1)
-      })
-    })
-
-    it("a pending record the old code wrote (no `started` row) holds none of the legacy routes: the old function's own 15-minute rule is all the old screen ever had for it", async () => {
-      await onASeed(
-        async () => {
-          vi.stubEnv('ORDER_SWITCH', '')
-          expect((await legacy(BODY_OLD)).body['error']).not.toBe(WORDS)
-          expect((await legacyCancel('cancel')).body['error']).not.toBe(WORDS)
-        },
-        earlier({ status: 'pending', created_at: '2026-11-09T09:00:00.000Z', old_renewal_date: '2026-12-10', new_renewal_date: '2026-12-20', extra_days: 10, amount_charged: '12.90' })
-      )
     })
   })
 })

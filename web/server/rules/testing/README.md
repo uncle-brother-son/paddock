@@ -6,7 +6,6 @@
 |---|---|---|---|
 | `startTestDatabase()` | PGlite, `schema.sql`: the tables the read rules use, no foreign keys or triggers | Read rules, where fixtures set ids directly | The step B rule and route suites |
 | `startTestDatabase({ schema: 'live' })` | PGlite, `live-schema.sql`: everything in the live catalog | Anything that writes | Replay, `live-schema.test.ts` |
-| `reader-orders-schema.sql` | PGlite, a hand copy from W03a | Nothing since W16 (`reader-rollback.test.ts` went with the old reader order code) | Delete (left for Wayne's yes) |
 | `startRealPostgres()` | Real Postgres 17.6, `live-schema.sql` | Anything about one connection waiting on another | `two-connections.test.ts`, `replay/refund-races.test.ts` |
 
 PGlite is one session, so it can't show one connection waiting on another's lock. It is also
@@ -360,12 +359,11 @@ W30 and W31 have each added theirs for the event cancellations.
 creating, listing and reading a customer, the store credit adjustment, and the five gift card functions) and every
 module they import, byte for byte at staff app `cec4ef1`, and the three legacy membership routes they call
 (`/api/memberships/cancel`, `/undo-cancel`, `/change-payment-date`, with the cancel's date sum), copied from `app/`
-at Worker `982db8f` while they are still live there (they stay until W44). `oldFunctionPath` loads the sixteen from it,
-`legacy-routes.ts` binds the three routes to it, and `frozen-account-code.test.ts` keeps it as frozen and out of reach
-of app code. Two import lines in the route copy are repointed so it stands alone (its README). W40d: the live cancel
-and undo routes now carry a guard the copy never had (they refuse while the new screen's Stripe step is open or not
-yet checked; `memberships/legacy-guard.ts`), as one marked import line and one marked block; the guard test holds each
-live route to the copy with those lines taken out, and the old side still replays the copy, unguarded.
+at Worker `982db8f`. `oldFunctionPath` loads the sixteen from it, `legacy-routes.ts` binds the three routes to it, and
+`frozen-account-code.test.ts` keeps it as frozen and out of reach of app code. Two import lines in the route copy are
+repointed so it stands alone (its README). W44 removed the three live routes from `app/`, with the guards W40d and
+W41 had given them (`memberships/legacy-guard.ts`): the copy is now the only place they exist, and
+`removed-account-code.test.ts` holds that nothing removed comes back.
 
 The `w36-*` scenarios (137, `w36Scenarios()` at the end of `scenarios.ts`) are step F's golden files, recorded from the
 old code while it exists (F-plan 4.12 item 1): every refusal and each success of the cancel and undo (inside and after
