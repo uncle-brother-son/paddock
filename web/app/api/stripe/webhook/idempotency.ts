@@ -1,5 +1,5 @@
 import Stripe from 'stripe'
-import { dispatchStripeEvent } from './dispatch'
+import { dispatchStripeEvent, type SubscriptionReader } from './dispatch'
 
 export interface ProcessResult {
   status: number
@@ -10,7 +10,9 @@ export interface ProcessResult {
 // route.ts so it can be unit tested without mocking Stripe signature verification or NextRequest.
 // supabase is typed `any` (matching the rest of this codebase, e.g. sanity/webhook/route.ts) —
 // PostgREST's query builder is thenable but not a strict Promise, which fights a stricter type.
-export async function processWebhookEvent(event: Stripe.Event, supabase: any): Promise<ProcessResult> {
+// W45a: `stripe` is the handlers' one read of Stripe (dispatch.ts). A read that fails throws out of the dispatch and
+// lands in the catch below: outcome 'error' and a 500, never 'processed', so Stripe sends the event again.
+export async function processWebhookEvent(event: Stripe.Event, supabase: any, stripe: SubscriptionReader): Promise<ProcessResult> {
   // Step 1: claim this event id. ON CONFLICT DO NOTHING via ignoreDuplicates — a conflict just
   // means we've seen this event before, which the lookup below distinguishes from a fresh claim.
   const { error: upsertError } = await supabase
@@ -41,7 +43,7 @@ export async function processWebhookEvent(event: Stripe.Event, supabase: any): P
   }
 
   try {
-    const result = await dispatchStripeEvent(event, supabase)
+    const result = await dispatchStripeEvent(event, supabase, stripe)
 
     const { error: updateError } = await supabase
       .from('stripe_webhook_events')

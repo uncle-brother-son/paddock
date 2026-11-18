@@ -2,9 +2,9 @@
 // ORDER_SWITCH lists the kinds on; with `membership_changes` off, a membership's cancel or undo, a payment date
 // change, and the move of memberships to a replaced card answer MEMBERSHIP_PATH_OFF before anything is read. As the
 // other switches (bookings/booking-switch.ts, refunds/refund-switch.ts): an emergency stop, not a fallback (each slice
-// deletes its old body, L4, and switching back is a Retool rollback), and only starting is gated: reconcile still
-// settles a payment date change that is held and sends a step that was left. Step F's other actions (credits, Herd,
-// store credit, gift cards, customers) are one transaction with nothing to stop part way, and never ask.
+// deletes its old body, L4, and switching back is the kind off, then fixing forward), and only starting is gated:
+// reconcile still settles a payment date change that is held and sends a step that was left. Step F's other actions
+// (credits, Herd, store credit, gift cards, customers) are one transaction with nothing to stop part way, and never ask.
 // No route calls this until W40 (cancel and undo) and W42 (replace card).
 //
 // W41a (lead call, 17 Nov 2026): the payment date change has a kind of its own, `payment_date_changes`. Its press

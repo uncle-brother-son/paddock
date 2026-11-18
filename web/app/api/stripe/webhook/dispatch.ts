@@ -43,7 +43,19 @@ function unixSecondsToIso(seconds: number): string {
   return new Date(seconds * 1000).toISOString()
 }
 
-export async function dispatchStripeEvent(event: Stripe.Event, supabase: RpcClient): Promise<DispatchResult> {
+// W45a (W45 audit S1): the one Stripe read the handlers make. An event carries the subscription as it was when the
+// event was made, and events are not handled in the order things happened: a delivery that failed is sent again up to
+// days later, and two deliveries can be handled at once. So what is written to a membership comes from the
+// subscription as Stripe holds it now, never from the event. Kept to the one call, so tests pass the fake Stripe
+// (server/stripe/fake.ts) and the route passes the real client.
+export interface SubscriptionReader {
+  subscriptions: { retrieve(id: string): Promise<Stripe.Subscription> }
+}
+
+/** A subscription whose latest payment is still owed: what an invoice.payment_failed event must find to act. */
+const BEHIND_ON_PAYMENT: readonly Stripe.Subscription.Status[] = ['past_due', 'unpaid']
+
+export async function dispatchStripeEvent(event: Stripe.Event, supabase: RpcClient, stripe: SubscriptionReader): Promise<DispatchResult> {
   switch (event.type) {
     case 'invoice.paid': {
       const invoice = event.data.object as Stripe.Invoice
@@ -77,6 +89,14 @@ export async function dispatchStripeEvent(event: Stripe.Event, supabase: RpcClie
       if (!subscriptionId) {
         return { outcome: 'ignored', detail: { reason: 'no_subscription_id' } }
       }
+      // W45a (audit S1): a failed payment handled late, after the payment that followed it went through, must not
+      // mark a paid member past due and flag their credit bookings. The subscription is read now, and only one
+      // still behind on its payment marks the membership. A read that fails throws: the event is recorded as an
+      // error and answered 500, so Stripe sends it again.
+      const subscription = await stripe.subscriptions.retrieve(subscriptionId)
+      if (!BEHIND_ON_PAYMENT.includes(subscription.status)) {
+        return { outcome: 'ignored', detail: { reason: 'subscription_not_past_due', status: subscription.status } }
+      }
       const { data, error } = await supabase.rpc('membership_mark_payment_failed', {
         p_stripe_subscription_id: subscriptionId,
       })
@@ -85,6 +105,9 @@ export async function dispatchStripeEvent(event: Stripe.Event, supabase: RpcClie
     }
 
     case 'customer.subscription.deleted': {
+      // W45a: no read here. Only the subscription's id is taken from the event (the end date is worked out in the
+      // database from the membership's own rows), and a subscription that has ended never comes back, so this event
+      // is still true however late it is handled.
       const subscription = event.data.object as Stripe.Subscription
       const { data, error } = await supabase.rpc('membership_mark_cancelled_by_stripe', {
         p_stripe_subscription_id: subscription.id,
@@ -94,7 +117,12 @@ export async function dispatchStripeEvent(event: Stripe.Event, supabase: RpcClie
     }
 
     case 'customer.subscription.updated': {
-      const subscription = event.data.object as Stripe.Subscription
+      // W45a (audit S1): the event only says which subscription changed. Its own cancel_at, cancel_at_period_end and
+      // period end are what the subscription showed when the event was made; handled after a newer event (Cancel,
+      // then Undo, with the Cancel's event last) they left the membership ending on a date Stripe no longer had.
+      // The subscription is read now and its current values are passed. A read that fails throws: the event is
+      // recorded as an error and answered 500, so Stripe sends it again; nothing is written from the event.
+      const subscription = await stripe.subscriptions.retrieve((event.data.object as Stripe.Subscription).id)
       const periodEndSeconds = getSubscriptionPeriodEnd(subscription)
       if (!periodEndSeconds) {
         return { outcome: 'ignored', detail: { reason: 'no_period_end' } }

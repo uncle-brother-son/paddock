@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import Stripe from 'stripe'
+import { createStripeClient, READ_STRIPE_LIMITS } from '@/server/stripe/client'
 import { processWebhookEvent } from './idempotency'
 
 function getStripe() {
@@ -47,6 +48,8 @@ export async function POST(request: NextRequest) {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   )
 
-  const result = await processWebhookEvent(event, supabase)
+  // W45a (W45 audit S1): the handlers read a subscription as Stripe holds it now (dispatch.ts). A read only: 10
+  // seconds a call, and one more send by the SDK itself.
+  const result = await processWebhookEvent(event, supabase, createStripeClient(process.env.STRIPE_SECRET_KEY, READ_STRIPE_LIMITS))
   return NextResponse.json(result.body, { status: result.status })
 }

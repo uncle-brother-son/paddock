@@ -318,7 +318,8 @@ describe('reader flows on two connections', () => {
       expect(await ordersFor(flow.intent), `round ${round}`).toBe(1)
       expect(await creditOf(flow.customerId), `round ${round}`).toBe('5.00')
     }
-  })
+    // W45a (F3; W40d "Noticed" 7): 20 rounds of three connections at once. Its own limit: the default 5 seconds ran out once (W40d run 1, on battery).
+  }, 30_000)
 })
 
 // --- Migration 022

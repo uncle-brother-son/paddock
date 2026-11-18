@@ -274,4 +274,24 @@ describe('W44: nothing still needs what was removed', () => {
     expect(staffAppFiles.some((file) => file.endsWith(path.join('frontend', 'components', 'CancelMembershipDialog.tsx')))).toBe(true)
     expect(routePatterns().length).toBeGreaterThan(30)
   })
+
+  // W45a items 3 (W45 audit F1, F2): two header comments still described what W44 took out.
+  it("the Worker's own headers no longer describe what W44 removed: left.ts's \"Not guaranteed\" has no legacy routes or their guard, and membership-switch.ts no longer calls switching back a Retool rollback", () => {
+    /** A file's comment lines as one run of text, so a sentence is found however it is wrapped. */
+    const comments = (file: string) =>
+      readFileSync(path.join(workerDir, file), 'utf8')
+        .split('\n')
+        .filter((line) => line.trimStart().startsWith('//'))
+        .map((line) => line.trimStart().replace(/^\/\/\s?/, '').trim())
+        .join(' ')
+    const left = comments('server/rules/memberships/left.ts')
+    expect(left).toContain('- A wish with no step: a membership with no subscription has none.')
+    expect(left).not.toContain('a change made through the two legacy routes')
+    expect(left).not.toContain('Their guard is a read before the change')
+    // The history line stays: it says the guard left, which is true.
+    expect(left).toContain("(W40d's guard on the two legacy routes, cancel and undo, left with them at W44.)")
+    const membershipSwitch = comments('server/rules/memberships/membership-switch.ts')
+    expect(membershipSwitch).toContain('switching back is the kind off, then fixing forward')
+    expect(membershipSwitch).not.toContain('switching back is a Retool rollback')
+  })
 })

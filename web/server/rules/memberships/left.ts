@@ -97,9 +97,7 @@
 //   shows it, but no line is listed. Inside the 20 minutes the check puts the newest wish back.
 // - Stripe unreadable for hours: nothing is listed until 2 hours have passed with no clear read.
 // - A send that lands more than 20 minutes after its step closed: see the 10 second limit above.
-// - A wish with no step: a membership with no subscription has none, and neither has a change made through the two
-//   legacy routes. Their guard is a read before the change, not a lock: a press in the new screen in the same moment
-//   as a legacy change is not stopped by it.
+// - A wish with no step: a membership with no subscription has none.
 import 'server-only'
 import type Stripe from 'stripe'
 import { audit, type AuditEntry } from '@/server/audit'

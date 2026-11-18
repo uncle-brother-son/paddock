@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { dispatchStripeEvent } from '@/app/api/stripe/webhook/dispatch'
 import { POST as cancelRoute } from '@/app/api/v1/staff/memberships/[membershipId]/cancel/route'
 import { GET as quoteRoute } from '@/app/api/v1/staff/memberships/[membershipId]/payment-date/quote/route'
 import { POST as changeRoute } from '@/app/api/v1/staff/memberships/[membershipId]/payment-date/route'
@@ -15,9 +16,11 @@ import { reconcile } from '@/server/rules/orders/reconcile'
 import { stuckList, WATCH_WORDS } from '@/server/rules/orders/stuck-list'
 import { REFUND_WATCH } from '@/server/rules/refunds/refund-watch'
 import { insert } from '@/server/rules/testing/database'
+import { TABLES } from '@/server/rules/testing/replay/compare'
 import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
 import { ID, MO_SUBSCRIPTION, seed, whileFailing } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
+import { invoiceEvent, webhookRpc } from '@/server/rules/testing/webhook'
 import type { StripeClient } from '@/server/stripe/client'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
 import {
@@ -1315,6 +1318,110 @@ describe('reconcile counts payment date changes inside the run\'s budget (brief 
       expect(one.items.map((item) => item.kind)).toEqual(['date_change'])
       // Its row is on the change's own entity, for the list and the close.
       expect((await audited('order.reconcile')).map((row) => [row.entity_type, row.details['outcome']])).toEqual([['payment_date_change', 'undone']])
+    })
+  })
+})
+
+// Brief W45a item 5 (W45 audit F4; W41 review, test-mode item 1). S3 moves the date by starting a no-charge period
+// to the new date, and Stripe raises a GBP 0 invoice for it (billing_reason `subscription_update`), paid at once. Its
+// invoice.paid reaches the webhook, which calls the database's membership_mark_paid with the invoice line's period
+// end: the new date. That is a second writer of next_renewal_date beside P2, landing before or after it. It must
+// write no order (the change's one order is P2's), leave the credits alone, and agree with P2 on the date.
+describe("the date change's GBP 0 invoice at the webhook (brief W45a item 5; audit F4)", () => {
+  type Rows = Record<string, Record<string, unknown>[]>
+  /** Every row of every table, by table. */
+  const everything = async (): Promise<Rows> => {
+    const all: Rows = {}
+    for (const table of TABLES.keys()) {
+      const sql = `SELECT to_jsonb(t) AS row FROM public.${table} t`
+      const rows = (await db.query<{ row: Record<string, unknown> | string }>(sql)).map(({ row }) => (typeof row === 'string' ? (JSON.parse(row) as Record<string, unknown>) : row))
+      all[table] = rows.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
+    }
+    return all
+  }
+  /** The same, without the two columns the invoice's event may write: a membership's next payment date and when it was last touched. */
+  const butTheDate = (all: Rows): Rows => ({
+    ...all,
+    customer_memberships: (all['customer_memberships'] ?? []).map((row) => Object.fromEntries(Object.entries(row).filter(([column]) => column !== 'next_renewal_date' && column !== 'updated_at'))),
+  })
+  const credits = async () => ({
+    periods: await db.query('SELECT id, membership_id, period_start::text, period_end::text, credits_allocated, is_unlimited FROM membership_credit_periods ORDER BY id'),
+    addOns: await db.query('SELECT id, addon_credits_remaining, bonus_addon_credits FROM customer_memberships ORDER BY id'),
+  })
+  /** The invoice.paid event for the GBP 0 invoice, as Stripe makes it once the date is moved, handled by the webhook's own code. */
+  const zeroInvoicePaid = (stripe: FakeStripe) => {
+    // The no-charge period S3 started runs to the new date: that is the invoice line's period end.
+    expect(stripe.subscriptionSettings(MO_SUBSCRIPTION)).toMatchObject({ status: 'trialing', trialEnd: TRIAL_END, periodEnd: TRIAL_END })
+    const event = invoiceEvent('invoice.paid', MO_SUBSCRIPTION, { billingReason: 'subscription_update', amountPaid: 0, periodStart: Math.floor(Date.now() / 1000), periodEnd: TRIAL_END })
+    return dispatchStripeEvent(event, webhookRpc(db), stripe)
+  }
+  const MARKED_PAID = { outcome: 'processed', detail: { found: true, action: 'reactivated', was: 'active', bookings_restored: 0, periods_created: 0 } }
+
+  it("after P2: the invoice's event writes no order and nothing else at all, leaves the credits alone, and its date is P2's", async () => {
+    await onASeed(async (stripe) => {
+      expect((await press()).status).toBe(200)
+      expect(await renewal()).toBe(NEW_DATE)
+      const [order] = await orders()
+      expect(await orders()).toHaveLength(1)
+      const before = await everything()
+      const creditsBefore = await credits()
+      expect(creditsBefore.periods.length).toBeGreaterThan(0)
+
+      vi.setSystemTime(Date.now() + 5_000)
+      expect(await zeroInvoicePaid(stripe)).toEqual(MARKED_PAID)
+
+      // The date the webhook wrote is the one P2 wrote; the change's one order is still the only order.
+      expect(await renewal()).toBe(NEW_DATE)
+      expect(await orders()).toEqual([order])
+      expect(await lines()).toHaveLength(1)
+      expect(await credits()).toEqual(creditsBefore)
+      const after = await everything()
+      expect(butTheDate(after)).toEqual(butTheDate(before))
+      // And the date column itself did not move, on any membership.
+      expect((after['customer_memberships'] ?? []).map((row) => [row['id'], row['next_renewal_date']])).toEqual((before['customer_memberships'] ?? []).map((row) => [row['id'], row['next_renewal_date']]))
+      expect(charges(stripe)).toHaveLength(1)
+    })
+  })
+
+  it("before P2 (the press died once the date was moved): the invoice's event writes the new date first, with no order and the credits alone; reconcile's P2 then writes the one order and the same date; the event handled again changes nothing", async () => {
+    await onASeed(async (stripe) => {
+      await pressThatDies(stripe, 'subscriptions', 'update', true)
+      expect((await changes()).map((row) => row.status)).toEqual(['pending'])
+      expect(await orders()).toEqual([])
+      expect(await renewal()).toBe('2026-12-10')
+      const before = await everything()
+      const creditsBefore = await credits()
+
+      vi.setSystemTime(Date.now() + 5_000)
+      expect(await zeroInvoicePaid(stripe)).toEqual(MARKED_PAID)
+
+      // The webhook moved the date on its own, to the date P2 will write: nothing else in the database changed.
+      expect(await renewal()).toBe(NEW_DATE)
+      expect(await orders()).toEqual([])
+      expect(await lines()).toEqual([])
+      expect((await changes()).map((row) => [row.status, row.order_id])).toEqual([['pending', null]])
+      expect(await credits()).toEqual(creditsBefore)
+      expect(butTheDate(await everything())).toEqual(butTheDate(before))
+
+      // P2, by reconcile, with the date already as asked: the order, the record done, the same date. Nothing is sent.
+      pastTheWindow()
+      expect((await dateItems(stripe)).map((item) => item.outcome)).toEqual(['finalised'])
+      const [order] = await orders()
+      expect(await orders()).toHaveLength(1)
+      expect(order).toMatchObject({ order_total: '21.94', payment_status: 'paid', payment_method: 'card' })
+      expect(await changes()).toMatchObject([{ status: 'done', order_id: order?.id, new: NEW_DATE }])
+      expect(await renewal()).toBe(NEW_DATE)
+      expect(await credits()).toEqual(creditsBefore)
+      expect(moves(stripe)).toHaveLength(1)
+      expect(charges(stripe)).toHaveLength(1)
+      expect(await taken(stripe)).toHaveLength(1)
+
+      // The same invoice's event handled once more, after P2 (a second delivery): still one order, the same date.
+      const settled = await everything()
+      expect(await zeroInvoicePaid(stripe)).toEqual(MARKED_PAID)
+      expect(butTheDate(await everything())).toEqual(butTheDate(settled))
+      expect(await renewal()).toBe(NEW_DATE)
+      expect(await orders()).toEqual([order])
     })
   })
 })
