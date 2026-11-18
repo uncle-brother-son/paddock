@@ -1470,3 +1470,95 @@ of `bookings/cancel.ts` (`lapseBooking`, `lapsePlanOf`).
   every pinned path must differ.
 - **Races on real Postgres:** `bookings/lapse-sweep-postgres.test.ts` (against Settle, Remove Guest, a staff cancel,
   the database's sweep and a second run, each held until Postgres reports both waiting on the booking; the cap).
+
+## First in line 1: the webhook, the membership check, the lapse reason, line stamping (W46)
+
+G-plan 2.1 and 5; lead call L8. Worker only, with no switch kind and no migration.
+
+- **The webhook** (`app/api/stripe/webhook/dispatch.ts`, `idempotency.ts`).
+  - `invoice.paid` reads the subscription, as the other two events do since W45a. Only one Stripe shows as `active`
+    or `trialing` records the payment, and the next payment date is the period's end as Stripe has it, never the
+    invoice's. A date change's £0 invoice handled after the first full payment failed is ignored
+    (`subscription_not_paid_up`, with the status): the member stays past due.
+  - Stripe answering that it has no such subscription (`resource_missing`) is ignored with the reason
+    (`subscription_missing`), not an error. Any other failed read is still an error, so Stripe sends the event again.
+  - L8: after each write to a live membership the subscription is read again, and what it then shows is written if
+    it is something else (`writeAndConfirm`), up to two more writes; after that the event is an error. So every
+    write is followed by a read that agrees with it. A read after the write that fails is an error too.
+  - The folder's client is typed (`RpcClient`, `WebhookEventsClient`); the route names the real client as that.
+- **The check after a step closes** (`memberships/left.ts`).
+  - It also sets the membership's own last day against the one Stripe's subscription gives (the webhook's sum). A
+    difference leaves the newest wish again as a refused step carrying both days (`row_differs`,
+    `step_check_row_differs`): listed with its own words and Mark sorted, never sent, and the row is not changed.
+  - A sorted wish's `checked` row is written with its `sorted` row.
+  - A wish a run could not leave again (`step_not_left_again`) is on the stuck list until a run settles it.
+- **Reconcile** (`orders/reconcile.ts`).
+  - Steps and checks are taken by when they were last tried: a run that could not get to every one due writes one
+    `reconcile.steps_tried` row, and the next runs take the others first. A run that gets to everything writes none.
+  - On staff's run the steps go before the checks.
+  - A membership with no Stripe subscription whose last day has passed is marked cancelled
+    (`memberships/no-subscription.ts`): the day kept, its credit bookings after that day flagged as the database
+    flags them when Stripe ends a subscription, one `membership.ended_without_subscription` row. Only `active` ones.
+- **The lapse sweep** (`bookings/lapse-sweep.ts`) starts no booking after 30 seconds; the rest go with the next run.
+- **The lapse reason** (`bookings/lapse-facts.ts`): the booking's refund-figures read carries `lapse` (when, the
+  deadline, given back, kept and why, owed then, and the line of words), only for a booking that lapsed: any other
+  booking's answer is exactly as it was.
+- **Line stamping** (`bookings/refunds.ts`, `stampWhenOwedSettled`): when Refund the rest or It already arrived
+  leaves nothing owed on a cancelled booking, its booking lines are stamped if all of their seat money is then back,
+  Refund the rest also stamps the add-on lines whose refund was part of what was owed, and the orders' status is
+  worked out again. Money a lapse kept is never stamped as refunded.
+
+## A failed renewal flags the period it did not pay for (W46a, migration 030)
+
+No Worker code: a migration file and its tests. 030 is written and **not applied** by W46a; the lead applies it.
+
+- **What it mends.** The credit allocation gives every active member their new period at the start of its first day,
+  before Stripe has taken the payment for it. The database's `membership_mark_payment_failed` and
+  `membership_mark_cancelled_by_stripe` took "covered through" from the newest credit period's end, so a failed
+  renewal flagged no credit booking, and Stripe ending the subscription wrote the unpaid month's end as the last day.
+- **030** adds five lines to each function: when the membership's `next_renewal_date` is today or earlier (London),
+  the member is covered through the day before it. Otherwise the old sum, untouched. It never flags less than before.
+- **The tests put 030 in themselves** (`testing/migration-030.ts`: the two functions before and after, word for
+  word, and `asOwner`), so they read the same before and after the saved schema is refreshed:
+  `testing/migration-030.test.ts` (the file, on real Postgres) and `memberships/covered-through.test.ts` (the edges on
+  the replay's clock: the allocation first, a retry that succeeds, Stripe ending the subscription, a payment date
+  change, a yearly membership, the renewal day, the lapse sweep).
+- **The credit period given for the unpaid month is left as it is.** A past-due or ended membership can't spend it
+  (the credit read and the booking write both need `active`), and it becomes the paid period if a retry goes through.
+- **Not mended** (held by a test): an `invoice.paid` handled late in the hour Stripe holds a renewal's invoice as a
+  draft writes next month's date, and a failure after that still uses the old sum.
+
+## The webhook records a payment only for the newest invoice; a live "no such subscription" is an error (W46b)
+
+The W46 review's blocker (B1) and should-fix (S1), both in `app/api/stripe/webhook/dispatch.ts`. No migration, no
+switch kind, no contract. This section corrects two lines above: W46's "Stripe answering that it has no such
+subscription is ignored" (test mode only, now) and W46a's "Not mended" (mended here).
+
+- **What Stripe shows at a renewal.** The period moves on at once. The new invoice is held as a draft for about an
+  hour before the charge is tried, and in that hour the subscription reads `active` with the draft as its
+  `latest_invoice`. W46's `invoice.paid` went by the status alone, so an older `invoice.paid` handled in that hour
+  (one Stripe is sending again after a failed delivery: a date change's £0 invoice, say) wrote next month's date.
+  030 goes by that date, so the renewal's failure an hour later flagged nothing.
+- **B1.** `invoice.paid` records a payment only when the subscription's `latest_invoice` (an id; no expand) is the
+  event's own invoice. Otherwise it is ignored with `not_latest_invoice` and nothing is written.
+  - The same holds for the read after the write (L8), for both invoice events: `paymentWrite` takes the event's
+    invoice id and asks for `membership_mark_paid` only while that invoice is the newest. A payment whose second read
+    lands in the next renewal's draft hour writes nothing more, and a failure's second read records a payment only
+    for the invoice that failed (a retry that goes through leaves it the newest).
+  - An older invoice paid while a newer one exists (a hand change in Stripe) is ignored: the newer invoice's own
+    events set the state.
+  - `invoice.payment_failed` does not look at the newest invoice before its write: a subscription behind on its
+    payment is marked past due whichever invoice the event is for.
+- **S1.** "No such subscription" (`resource_missing`) is ignored only when the event's own `livemode` is `false`.
+  For a live event it is an error: answered 500, left as `error`, sent again by Stripe for three days. A live event
+  is signed for a subscription Stripe has, so that answer means the key in use is the wrong one (the test key still
+  in place at go-live); ignored, each payment and failed payment in those hours was dropped for good. The same on the
+  read after the write.
+- **The fake Stripe** (`server/stripe/fake.ts`): `setSubscription(..., { latestInvoice })`, `latestInvoice(id)`, and
+  `startRenewal(id, periodEnd?)`, the draft hour (active, the period moved on, a new draft the newest invoice).
+  Expanding a later invoice is not modelled and throws.
+- **Tests.** Every invoice event the tests make says which invoice it is for (`testing/webhook.ts`: `invoiceEvent`
+  takes `id`; events are test mode, `asLive` gives the live one). The review's proofs A and B turned round, the £0
+  invoice on time, a paid retry, a payment between the failure's read and its write, an older invoice, and the L8
+  read in the draft hour: `memberships/latest-invoice.test.ts`, with 030 put in as W46a's tests do. The 404 tests run
+  in both modes (`dispatch.test.ts`, `idempotency.test.ts`, `memberships/webhook-live-state.test.ts`).

@@ -1,18 +1,40 @@
 import Stripe from 'stripe'
-import { dispatchStripeEvent, type SubscriptionReader } from './dispatch'
+import { dispatchStripeEvent, type RpcClient, type SubscriptionReader } from './dispatch'
 
 export interface ProcessResult {
   status: number
   body: Record<string, unknown>
 }
 
+/** A failure as Supabase's client answers it (it never throws). */
+type ClientError = { message: string } | null
+
+/** What is written to an event's row when its handler ends. */
+interface EventOutcomeFields {
+  processed_at: string
+  outcome: string
+  detail?: Record<string, unknown> | null
+  error?: string | null
+}
+
+/**
+ * W46: the part of Supabase's client this file uses, typed (it was `any`): the membership functions (dispatch.ts)
+ * and the three calls made on `stripe_webhook_events`. PostgREST's builders are thenable, not Promises, so each
+ * answer is a PromiseLike. A test passes a stand-in with the same calls (server/rules/testing/webhook.ts).
+ */
+export interface WebhookEventsClient extends RpcClient {
+  from(table: 'stripe_webhook_events'): {
+    upsert(row: { event_id: string; event_type: string }, options: { onConflict: string; ignoreDuplicates: boolean }): PromiseLike<{ error: ClientError }>
+    select(columns: string): { eq(column: string, value: string): { single(): PromiseLike<{ data: { outcome: string | null } | null; error: ClientError }> } }
+    update(fields: EventOutcomeFields): { eq(column: string, value: string): PromiseLike<{ error: ClientError }> }
+  }
+}
+
 // Idempotency + dispatch for a single, already signature-verified Stripe event. Split out from
 // route.ts so it can be unit tested without mocking Stripe signature verification or NextRequest.
-// supabase is typed `any` (matching the rest of this codebase, e.g. sanity/webhook/route.ts) —
-// PostgREST's query builder is thenable but not a strict Promise, which fights a stricter type.
-// W45a: `stripe` is the handlers' one read of Stripe (dispatch.ts). A read that fails throws out of the dispatch and
+// W45a: `stripe` is the handlers' read of Stripe (dispatch.ts). A read that fails throws out of the dispatch and
 // lands in the catch below: outcome 'error' and a 500, never 'processed', so Stripe sends the event again.
-export async function processWebhookEvent(event: Stripe.Event, supabase: any, stripe: SubscriptionReader): Promise<ProcessResult> {
+export async function processWebhookEvent(event: Stripe.Event, supabase: WebhookEventsClient, stripe: SubscriptionReader): Promise<ProcessResult> {
   // Step 1: claim this event id. ON CONFLICT DO NOTHING via ignoreDuplicates — a conflict just
   // means we've seen this event before, which the lookup below distinguishes from a fresh claim.
   const { error: upsertError } = await supabase

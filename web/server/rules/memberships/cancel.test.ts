@@ -6,6 +6,7 @@ import { GET as listRoute } from '@/app/api/v1/staff/memberships/route'
 import { membershipListRowSchema } from '@/contracts'
 import type { Db } from '@/server/db'
 import { ApiError } from '@/server/http/errors'
+import { closeStuckItem } from '@/server/rules/orders/close-stuck'
 import { reconcile } from '@/server/rules/orders/reconcile'
 import { stuckList } from '@/server/rules/orders/stuck-list'
 import { insert } from '@/server/rules/testing/database'
@@ -122,6 +123,8 @@ const statesOf = async (stepId: string) => (await stepStates()).filter(([id]) =>
 const paramsOf = (call: { params: unknown } | undefined): Record<string, unknown> => (call?.params ?? {}) as Record<string, unknown>
 const updates = (stripe: FakeStripe) => stripe.calls.filter((call) => call.method === 'subscriptions.update')
 const listed = async () => (await stuckList(db)).steps
+/** W46 (W40b "Noticed" 2): the list's line for a wish a run could not leave again: still being tried, so no close. */
+const notLeftAgainLine = (stepId: string) => ({ stepId, membershipId: ID.membership, subscriptionId: MO_SUBSCRIPTION, step: 'cancel_at', what: 'cancel_date', lastDay: '2026-12-09', customerId: ID.member, customerName: 'Mo Member', state: 'left', at: expect.any(String), words: LEFT_STEP_WORDS.notLeftAgain(MO_SUBSCRIPTION) })
 const reconcileNow = (stripe: FakeStripe, requestId: string = crypto.randomUUID()) => reconcile(db, stripe, { actor: { type: 'system', id: null }, requestId, maxItems: 50, budgetMs: 60_000 })
 const no = () => ({ kind: 'error' as const, error: fakeStripeErrors.invalid('subscription_update_refused', 'This subscription cannot be updated right now.') })
 const noAnswer = () => ({ kind: 'error' as const, error: fakeStripeErrors.server() })
@@ -1161,7 +1164,7 @@ describe('W40a: a stale send is never the last word with nothing listed (W40 rev
       })
     })
 
-    it("item 2: the transaction that leaves C's wish again fails. The run reports the item as left with its own reason, and its audit row names the step; nothing is listed yet. The next run leaves the wish again; the late clear is then found and the cancel sent again", async () => {
+    it("item 2: the transaction that leaves C's wish again fails. The run reports the item as left with its own reason, and its audit row names the step; C's wish is listed as not left again yet (W46), with no close. The next run leaves the wish again; the late clear is then found and the cancel sent again", async () => {
       await onASeed(async (stripe) => {
         const b = await cancelThenUnclearUndo(stripe)
         pastTheWindow()
@@ -1171,7 +1174,8 @@ describe('W40a: a stale send is never the last word with nothing listed (W40 rev
         expect(run.items).toEqual([{ kind: 'step', id: b, outcome: 'left', reason: 'step_not_left_again', detail }])
         expect(run.left).toBe(1)
         expect(await reconcileRows()).toEqual([[b, { outcome: 'left', reason: 'step_not_left_again', detail, leaveAgain: c }]])
-        expect(await listed()).toEqual([])
+        // W46 (W40b "Noticed" 2): listed until a run settles it. Before W46 nothing was listed here.
+        expect(await listed()).toEqual([notLeftAgainLine(c)])
         expect(await statesOf(c)).toEqual(['done', 'left'])
         // The next run, a moment later: no Stripe call, the wish left again.
         const calls = stripe.calls.length
@@ -1206,7 +1210,8 @@ describe('W40a: a stale send is never the last word with nothing listed (W40 rev
         const c = await lastStepOf(CANCEL_SCHEDULED_ACTION)
         const second = await whileFailing(db, fails, () => reconcileNow(stripe, 'run-2'))
         expect(second.items).toEqual([{ kind: 'step', id: c, outcome: 'left', reason: 'step_not_left_again', detail: expect.stringMatching(new RegExp(`^step ${c}: not left again yet \\(.*connection lost.*\\)$`)) }])
-        expect(await listed()).toEqual([])
+        // W46: still listed, once, after two runs that could not leave it again.
+        expect(await listed()).toEqual([notLeftAgainLine(c)])
         const third = await reconcileNow(stripe, 'run-3')
         const again = String((await listed())[0]?.stepId)
         expect(third.items).toEqual([{ kind: 'step', id: c, outcome: 'settled_elsewhere', detail: `step ${c}: its wish left again as step ${again}` }])
@@ -1220,6 +1225,7 @@ describe('W40a: a stale send is never the last word with nothing listed (W40 rev
         pastTheWindow()
         await whileFailing(db, failing("NEW.details->>'leftAgainFor' IS NOT NULL"), () => reconcileNow(racing(stripe, pressC, false), 'run-1'))
         const c = await lastStepOf(CANCEL_SCHEDULED_ACTION)
+        expect(await listed()).toEqual([notLeftAgainLine(c)])
         expect((await press('undo-cancel')).status).toBe(200)
         const next = await reconcileNow(stripe, 'run-2')
         expect(next.items).toEqual([{ kind: 'step', id: c, outcome: 'settled_elsewhere', detail: `step ${c}: not left again (a newer change has been made since)` }])
@@ -1238,9 +1244,12 @@ describe('W40a: a stale send is never the last word with nothing listed (W40 rev
         const c = await lastStepOf(CANCEL_SCHEDULED_ACTION)
         expect(run.items).toEqual([{ kind: 'step', id: b, outcome: 'left', reason: 'step_not_left_again', detail: expect.stringMatching(new RegExp(`^replaced by step ${c}: this run's send of the replaced step got no clear answer and may still land: not marked yet \\(.*connection lost.*\\)$`)) }])
         expect((await reconcileRows()).at(-1)?.[1]).toMatchObject({ leaveAgain: c })
+        // W46: while C's step is open it is on the list as itself, once (not twice).
+        expect((await listed()).map((line) => [line.stepId, line.words])).toEqual([[c, LEFT_STEP_WORDS.cancel_at.left(MO_SUBSCRIPTION)]])
         await pressOfC.finish()
         expect(await statesOf(c)).toEqual(['done', 'left'])
-        expect(await listed()).toEqual([])
+        // W46: closed by its press with its mark never written: listed as not left again yet, until the next run.
+        expect(await listed()).toEqual([notLeftAgainLine(c)])
         const next = await reconcileNow(stripe, 'run-2')
         const again = String((await listed())[0]?.stepId)
         expect(next.items).toEqual([{ kind: 'step', id: c, outcome: 'settled_elsewhere', detail: `step ${c}: its wish left again as step ${again}` }])
@@ -1674,7 +1683,7 @@ describe('W40a: a stale send is never the last word with nothing listed (W40 rev
         })
       })
 
-      it("the newest wish, not the membership's row: the webhook has copied a late clear onto the membership, which then agrees with Stripe, and the check still finds the cancel missing. With the row changed and Stripe right, it leaves nothing", async () => {
+      it("the newest wish, not the membership's row: the webhook has copied a late clear onto the membership, which then agrees with Stripe, and the check still finds the cancel missing", async () => {
         await onASeed(async (stripe) => {
           await press('cancel')
           const c = await lastStepOf(CANCEL_SCHEDULED_ACTION)
@@ -1686,16 +1695,191 @@ describe('W40a: a stale send is never the last word with nothing listed (W40 rev
           expect((await reconcileNow(stripe)).items).toMatchObject([{ kind: 'step', outcome: 'left', reason: 'step_check_disagreed' }])
           expect((await checkRows())[0]).toMatchObject({ outcome: 'left_again', wish: c })
         })
-        await onASeed(async (stripe) => {
-          await press('cancel')
-          // The other way: the row is changed by something else, and Stripe shows the wish. Nothing to do.
-          await db.query('UPDATE customer_memberships SET cancel_effective_date = NULL WHERE id = $1', [ID.membership])
-          pastTheCheck()
-          expect((await reconcileNow(stripe)).items).toEqual([])
-          expect(await checkRows()).toMatchObject([{ outcome: 'checked' }])
-          expect(await listed()).toEqual([])
-        })
       })
+    })
+  })
+})
+
+// Brief W46 item 3 (G-plan 2.1; W45a "Noticed" 8, the W45 audit's S1 fix 3). The check after closing also sets the
+// membership's own row against Stripe. Before W46 a row that disagreed with Stripe while Stripe showed the newest wish
+// left nothing ("With the row changed and Stripe right, it leaves nothing"): the member read as ending, or not, on a
+// day Stripe didn't have, and nothing listed it.
+describe("W46: the check sets the membership's own last day against Stripe's, and lists a mismatch for a person", () => {
+  const pastTheCheck = () => vi.setSystemTime(Date.now() + CHECK_AFTER_MINUTES * 60_000 + 60_000)
+  const checkRows = async () => (await audited(STEP_CHECK_ACTION)).map((row) => row.details)
+  const sends = (stripe: FakeStripe) => stripe.calls.filter((call) => call.method === 'subscriptions.update').length
+  const setRow = (day: string | null) => db.query('UPDATE customer_memberships SET cancel_effective_date = $1::date WHERE id = $2', [day, ID.membership])
+  const lastStepOf = async (action: string) => String((await db.query<{ step: string }>("SELECT details->>'stepId' AS step FROM audit_log WHERE action = $1 ORDER BY at DESC LIMIT 1", [action]))[0]?.step)
+
+  it.each([
+    ['the row has no last day, Stripe ends the subscription on 10 December (the wish)', 'cancel', null, { row: null, stripe: '2026-12-09' }],
+    ['the row says 20 December, Stripe ends it on 10 December (the wish)', 'cancel', '2026-12-20', { row: '2026-12-20', stripe: '2026-12-09' }],
+    ['the row says 9 December, Stripe has no end (the wish: an undo)', 'undo', '2026-12-09', { row: '2026-12-09', stripe: null }],
+  ] as const)('%s: one read, no send; the wish is left again as a refused step with both days, listed with its own words and Mark sorted; the row is not changed; no later run reads, sends or lists again', async (_name, wish, rowDay, mismatch) => {
+    await onASeed(async (stripe) => {
+      expect((await press('cancel')).status).toBe(200)
+      if (wish === 'undo') expect((await press('undo-cancel')).status).toBe(200)
+      const newest = await lastStepOf(wish === 'cancel' ? CANCEL_SCHEDULED_ACTION : CANCEL_UNDONE_ACTION)
+      // Stripe shows the wish. Something else has changed the membership's row.
+      expect(stripe.subscriptionSettings(MO_SUBSCRIPTION)?.cancelAt ?? null).toBe(wish === 'cancel' ? ENDS : null)
+      await setRow(rowDay)
+      // Not before the 20 minutes.
+      expect((await reconcileNow(stripe)).items).toEqual([])
+      expect(await listed()).toEqual([])
+      pastTheCheck()
+      const calls = stripe.calls.length
+      const sent = sends(stripe)
+      const run = await reconcileNow(stripe)
+      const [line] = await listed()
+      const again = String(line?.stepId)
+      const message = `The membership's last day is ${mismatch.row ?? 'not set'}, but subscription ${MO_SUBSCRIPTION} in Stripe gives ${mismatch.stripe ?? 'no end'}. Nothing was sent or changed.`
+      expect(run.items).toEqual([
+        { kind: 'step', id: again, outcome: 'left', reason: 'step_check_row_differs', detail: `cancel_at on subscription ${MO_SUBSCRIPTION}: checked after closing: step ${newest}: Stripe shows it. ${message} Left for a person` },
+      ])
+      // One read of Stripe, and nothing sent.
+      expect(stripe.calls.slice(calls).map((call) => call.method)).toEqual(['subscriptions.retrieve'])
+      expect(sends(stripe)).toBe(sent)
+      expect((await checkRows()).at(-1)).toMatchObject({ outcome: 'row_differs', wish: newest, leftAgain: again })
+      // Listed for a person: refused, with both days in its words, and Mark sorted.
+      expect(await listed()).toHaveLength(1)
+      expect(line).toMatchObject({
+        state: 'refused',
+        what: wish === 'cancel' ? 'cancel_date' : 'clear_cancel_date',
+        words: LEFT_STEP_WORDS.rowDiffers(MO_SUBSCRIPTION, mismatch.row, mismatch.stripe),
+        close: { kind: 'left_step', orderId: again },
+      })
+      expect(line?.words).not.toBe(LEFT_STEP_WORDS.cancel_at.refused(MO_SUBSCRIPTION))
+      const refusedRow = (await audited(STEP_LEFT_ACTION)).find((row) => row.details['stepId'] === again && row.details['state'] === 'refused')
+      expect(refusedRow?.details).toMatchObject({ detail: message, mismatch, want: { cancelAt: wish === 'cancel' ? ENDS : null } })
+      // The row is as it was found, and Stripe as it was.
+      expect(await lastDay()).toBe(rowDay)
+      expect(stripe.subscriptionSettings(MO_SUBSCRIPTION)?.cancelAt ?? null).toBe(wish === 'cancel' ? ENDS : null)
+      // Later runs: the refused step is never sent, and nothing more is read or listed.
+      for (let round = 0; round < 3; round++) {
+        pastTheCheck()
+        const before = stripe.calls.length
+        // A refused step is not due: the run has no item for it at all.
+        expect((await reconcileNow(stripe)).items).toEqual([])
+        expect(stripe.calls).toHaveLength(before)
+        expect((await listed()).map((one) => one.stepId)).toEqual([again])
+      }
+      expect(sends(stripe)).toBe(sent)
+    })
+  })
+
+  it('the row and Stripe agree: one `checked` row and nothing listed, as before W46 (with an end, and with none)', async () => {
+    await onASeed(async (stripe) => {
+      expect((await press('cancel')).status).toBe(200)
+      pastTheCheck()
+      expect((await reconcileNow(stripe)).items).toEqual([])
+      expect(await checkRows()).toMatchObject([{ outcome: 'checked' }])
+      expect(await listed()).toEqual([])
+      expect((await press('undo-cancel')).status).toBe(200)
+      pastTheCheck()
+      expect((await reconcileNow(stripe)).items).toEqual([])
+      expect((await checkRows()).map((row) => row['outcome'])).toEqual(['checked', 'checked'])
+      expect(await listed()).toEqual([])
+    })
+  })
+
+  it("the person puts the membership right with the app's own button (Undo cancellation): the mismatch line goes, Stripe is sent nothing it already shows, and the next check finds the two agree", async () => {
+    await onASeed(async (stripe) => {
+      expect((await press('cancel')).status).toBe(200)
+      expect((await press('undo-cancel')).status).toBe(200)
+      await setRow('2026-12-09')
+      pastTheCheck()
+      await reconcileNow(stripe)
+      expect((await listed()).map((line) => line.state)).toEqual(['refused'])
+      // The row says the membership ends on 9 December and Stripe has no end. Staff press Undo cancellation.
+      const sent = sends(stripe)
+      expect((await press('undo-cancel')).status).toBe(200)
+      expect(sends(stripe)).toBe(sent)
+      expect(await lastDay()).toBeNull()
+      expect(stripe.subscriptionSettings(MO_SUBSCRIPTION)?.cancelAt ?? null).toBeNull()
+      expect(await listed()).toEqual([])
+      pastTheCheck()
+      expect((await reconcileNow(stripe)).items).toEqual([])
+      expect((await checkRows()).at(-1)).toMatchObject({ outcome: 'checked' })
+      expect(await listed()).toEqual([])
+    })
+  })
+
+  it('Mark sorted on the mismatch line closes it: its `checked` row is written at once, and it is never read, sent or listed again', async () => {
+    await onASeed(async (stripe) => {
+      expect((await press('cancel')).status).toBe(200)
+      await setRow(null)
+      pastTheCheck()
+      await reconcileNow(stripe)
+      const [line] = await listed()
+      const again = String(line?.stepId)
+      const calls = stripe.calls.length
+      const sorted = await closeStuckItem(db, { kind: 'left_step', orderId: again, reason: 'the membership was put right by hand' }, { actor: { type: 'staff', id: ID.staff }, requestId: crypto.randomUUID() })
+      expect(sorted).toMatchObject({ closed: true })
+      expect(await listed()).toEqual([])
+      expect((await checkRows()).at(-1)).toEqual({ subscriptionId: MO_SUBSCRIPTION, kind: 'cancel_at', steps: [again], outcome: 'checked', wish: again, detail: `step ${again} was marked sorted by a person: not held to Stripe` })
+      for (let round = 0; round < 3; round++) {
+        pastTheCheck()
+        expect((await reconcileNow(stripe)).items).toEqual([])
+      }
+      expect(stripe.calls).toHaveLength(calls)
+      expect(await listed()).toEqual([])
+    })
+  })
+
+  it('a membership that has ended in the database is not compared (it keeps the day it ended on)', async () => {
+    await onASeed(async (stripe) => {
+      expect((await press('cancel')).status).toBe(200)
+      // The row ended some other way, on another day; Stripe still shows the wish on a running subscription.
+      await db.query("UPDATE customer_memberships SET subscription_status = 'cancelled', cancel_effective_date = '2026-11-30' WHERE id = $1", [ID.membership])
+      pastTheCheck()
+      expect((await reconcileNow(stripe)).items).toEqual([])
+      expect(await checkRows()).toMatchObject([{ outcome: 'checked' }])
+      expect(await listed()).toEqual([])
+    })
+  })
+
+  it("the row changes between the check's read and its lock (the webhook lands): nothing is written, and the next run reads again and finds the two agree", async () => {
+    await onASeed(async (stripe) => {
+      expect((await press('cancel')).status).toBe(200)
+      await setRow(null)
+      pastTheCheck()
+      // The webhook's write lands after the check has read Stripe and the row, just before the check's own
+      // transaction (the first one the run opens).
+      let landed = false
+      const landing: Db = new Proxy(db, {
+        get: (target, prop) =>
+          prop === 'transaction'
+            ? async (work: Parameters<Db['transaction']>[0]) => {
+                if (!landed) {
+                  landed = true
+                  await webhook(ENDS)
+                }
+                return target.transaction(work)
+              }
+            : Reflect.get(target, prop),
+      })
+      expect((await reconcile(landing, stripe, { actor: { type: 'system', id: null }, requestId: crypto.randomUUID(), maxItems: 50, budgetMs: 60_000 })).items).toEqual([])
+      expect(landed).toBe(true)
+      expect(await checkRows()).toEqual([])
+      expect(await listed()).toEqual([])
+      expect(await lastDay()).toBe('2026-12-09')
+      expect((await reconcileNow(stripe)).items).toEqual([])
+      expect(await checkRows()).toMatchObject([{ outcome: 'checked' }])
+      expect(await listed()).toEqual([])
+    })
+  })
+
+  it("Stripe ends the subscription with its period (set in Stripe's dashboard, cancel_at_period_end): the row is set against the period's end, as the webhook writes it", async () => {
+    await onASeed(async (stripe) => {
+      expect((await press('cancel')).status).toBe(200)
+      expect((await press('undo-cancel')).status).toBe(200)
+      // The undo's wish is "no cancel_at", which Stripe shows; someone ticks "cancel at period end" in the dashboard.
+      // The fake's period ends on 10 December at 09:00, so the last day that gives is 9 December.
+      const endsWithPeriod = { ...stripe, subscriptions: { ...stripe.subscriptions, retrieve: async (...args: Parameters<FakeStripe['subscriptions']['retrieve']>) => ({ ...(await stripe.subscriptions.retrieve(...args)), cancel_at_period_end: true }) } } as unknown as FakeStripe
+      pastTheCheck()
+      const run = await reconcileNow(endsWithPeriod)
+      expect(run.items).toMatchObject([{ kind: 'step', outcome: 'left', reason: 'step_check_row_differs' }])
+      expect((await listed())[0]?.words).toBe(LEFT_STEP_WORDS.rowDiffers(MO_SUBSCRIPTION, null, '2026-12-09'))
     })
   })
 })

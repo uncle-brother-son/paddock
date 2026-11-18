@@ -110,7 +110,8 @@ import { finishOrderClaim } from './refund-lines'
 import { refundSeen, WATCH_DAYS, WATCH_READ_HOURS, WATCHES_DUE_SQL, WATCHES_WAITING_SQL, watchLateRefund, type RefundSeen, type WatchDue } from '@/server/rules/refunds/refund-watch'
 import { checkWatchedRefund } from '@/server/rules/refunds/refund-watch-settle'
 import { cancelRefundedSubscription, cancelSubscriptionsAfterRefund, LEFT_BY_REFUND, refundCancelsDue, type RefundCancelDue } from './refund-subscription'
-import { checkAfterClosing, checksDue, leaveAgainLater, settleLeftStep, stepsDue, type CheckDue, type OpenStep } from '@/server/rules/memberships/left'
+import { checkAfterClosing, checksDue, LEAVE_AGAIN_DUE_SQL, leaveAgainLater, settleLeftStep, STEP_NOT_LEFT_AGAIN, stepsDue, type CheckDue, type OpenStep } from '@/server/rules/memberships/left'
+import { endMembershipWithoutSubscription, membershipsToEnd } from '@/server/rules/memberships/no-subscription'
 import {
   checkSubscription,
   dateIsMoved,
@@ -1515,8 +1516,9 @@ async function retryPutBack(run: Run, due: LeftSubscription): Promise<ReconcileI
 
 // --- A membership's Stripe step left after its database change (W36, F-plan 4.10 item 2, lead call L7)
 
-/** W40b: the reason on a run's row for a newest step's wish it could not leave again (the database failed). */
-export const STEP_NOT_LEFT_AGAIN = 'step_not_left_again'
+// W40b: the reason on a run's row for a newest step's wish it could not leave again (the database failed). W46: it
+// lives in memberships/left.ts with the list of what is due, so the stuck list can read both; still exported from here.
+export { STEP_NOT_LEFT_AGAIN }
 
 /**
  * One open step (memberships/left.ts): a membership's cancel date to set or clear on its subscription, or its
@@ -1532,27 +1534,10 @@ async function sendLeftStep(run: Run, due: OpenStep): Promise<ReconcileItem> {
   if (settled.kind === 'closed') return { kind: 'step', id: due.id, outcome: 'settled_elsewhere', detail: settled.detail ?? 'closed' }
   if (settled.kind === 'refused') return left('step', due.id, 'step_refused', `${what}: ${settled.message}`)
   // W40b: an error, not a step still to send: the newer step's wish could not be left again. The row names that step
-  // (`leaveAgain`), and every later run tries again until it is settled (LEAVE_AGAIN_DUE_SQL).
+  // (`leaveAgain`), and every later run tries again until it is settled (LEAVE_AGAIN_DUE_SQL, memberships/left.ts).
   if (settled.kind === 'not_left_again') return left('step', due.id, STEP_NOT_LEFT_AGAIN, settled.message, { leaveAgain: settled.stepId })
   return left('step', due.id, 'step_left', `${what}: ${settled.message}`)
 }
-
-/**
- * W40b: the steps whose wish a run could not leave again and no run has settled since: a `left` row with the reason
- * above naming the step (`leaveAgain`), and no row for that step with any other outcome. Whether a row exists, never
- * which came last: rows written back to back can share a time.
- */
-const LEAVE_AGAIN_DUE_SQL = `
-SELECT DISTINCT r.details->>'leaveAgain' AS step_id
-FROM audit_log r
-WHERE r.action = 'order.reconcile' AND r.entity_type = 'membership_step' AND r.details->>'outcome' = 'left'
-  AND r.details->>'reason' = '${STEP_NOT_LEFT_AGAIN}' AND r.details->>'leaveAgain' IS NOT NULL
-  AND NOT EXISTS (
-    SELECT 1 FROM audit_log d
-    WHERE d.action = 'order.reconcile' AND d.entity_type = 'membership_step'
-      AND d.details->>'leaveAgain' = r.details->>'leaveAgain' AND d.details->>'outcome' <> 'left'
-  )
-ORDER BY 1`
 
 /**
  * W40b: one of those, tried again: the wish is left again (or its open step marked) only while the step it stands
@@ -1573,19 +1558,94 @@ async function retryLeaveAgain(run: Run, stepId: string): Promise<ReconcileItem>
 /** W40c: the reasons on a run's row for a wish a check left again: Stripe showed something else, or could not be read for 2 hours (W40d; a day before). */
 export const STEP_CHECK_DISAGREED = 'step_check_disagreed'
 export const STEP_CHECK_UNREAD = 'step_check_unread'
+/** W46: the reason for a wish a check left for a person because the membership's own last day and the one Stripe gives differ. */
+export const STEP_CHECK_ROW_DIFFERS = 'step_check_row_differs'
 
 /**
  * W40c: one subscription's closed steps, checked once more against Stripe (memberships/left.ts, `checkAfterClosing`):
  * one read, never a send. No item unless it leaves the newest wish again, as a watched refund's read is none unless
  * it ends for a person: then the item is the new step, left, with why (Stripe showed something else; Stripe can't
  * find the subscription or has ended it, or (W40d) still shows something else after the check's own left-again step
- * was sent, each `step_refused` as any step for a person; no clear read in 2 hours).
+ * was sent, each `step_refused` as any step for a person; no clear read in 2 hours; W46: the membership's own last
+ * day is not the one Stripe gives, `step_check_row_differs`, a refused step that is never sent).
  */
 async function checkClosedSteps(run: Run, due: CheckDue): Promise<ReconcileItem | null> {
   const checked = await checkAfterClosing(run.db, run.stripe, due, { actor: run.options.actor, requestId: run.options.requestId }, run.timing)
   if (checked.kind !== 'listed') return null
-  const reason = checked.outcome === 'left_again' ? STEP_CHECK_DISAGREED : checked.outcome === 'unread' ? STEP_CHECK_UNREAD : 'step_refused'
+  const reason = checked.outcome === 'left_again' ? STEP_CHECK_DISAGREED : checked.outcome === 'unread' ? STEP_CHECK_UNREAD : checked.outcome === 'row_differs' ? STEP_CHECK_ROW_DIFFERS : 'step_refused'
   return left('step', checked.stepId, reason, `${due.kind} on subscription ${due.subscriptionId}: checked after closing: ${checked.detail}`)
+}
+
+// --- A membership with no subscription, past its last day (W46)
+
+/**
+ * W46 (W45a "Noticed" 8): one membership with no Stripe subscription whose last day has passed, marked cancelled
+ * (memberships/no-subscription.ts). No Stripe call. `finalised` when it was ended (the run's row says so); one that is
+ * no longer due under its lock is nothing to report.
+ */
+async function endWithoutSubscription(run: Run, membershipId: string): Promise<ReconcileItem> {
+  const ended = await endMembershipWithoutSubscription(run.db, membershipId, { actor: run.options.actor, requestId: run.options.requestId })
+  if (!ended.ended) return { kind: 'step', id: membershipId, outcome: 'settled_elsewhere', detail: 'closed' }
+  return {
+    kind: 'step',
+    id: membershipId,
+    outcome: 'finalised',
+    detail: `membership ${membershipId} has no Stripe subscription and its last day (${ended.lastDay}) has passed: marked cancelled${ended.bookingsFlagged > 0 ? `, ${ended.bookingsFlagged} credit booking${ended.bookingsFlagged === 1 ? '' : 's'} after that day now payment needed` : ''}`,
+  }
+}
+
+// --- Steps and checks taken by when they were last tried (W46)
+
+/**
+ * W46 (W45 audit rows 25 and 31; W40 review L6, W40c review L2 and L3). A run sends at most MAX_STEPS_PER_RUN steps
+ * and reads at most MAX_STEP_CHECKS_PER_RUN checks, and they were taken oldest first: ones Stripe never answers
+ * stayed at the front and held the rest behind them for as long as they were due. Now a run that could not try
+ * every step and check that was due writes one row naming the ones it did try, and the next runs take first the ones
+ * not tried since (oldest first, as before), then the rest by when they were last tried, longest ago first. A run
+ * that tries everything writes nothing, so in ordinary use there is no row and the order is the old one.
+ */
+export const STEPS_TRIED_ACTION = 'reconcile.steps_tried'
+/** How far back a run looks for those rows: a step not named in a day of them counts as never tried. */
+const TRIED_LOOK_BACK_HOURS = 24
+
+/** The rows of the last day, newest first (a run every five minutes is 288 a day). */
+const TRIED_SQL = `
+SELECT details, at FROM audit_log
+WHERE action = '${STEPS_TRIED_ACTION}' AND entity_type = 'reconcile' AND at > now() - interval '${TRIED_LOOK_BACK_HOURS} hours'
+ORDER BY at DESC
+LIMIT 300`
+
+/** A check has no id of its own: its membership, subscription and kind. */
+const checkKey = (due: Pick<CheckDue, 'membershipId' | 'subscriptionId' | 'kind'>): string => `${due.membershipId}|${due.subscriptionId}|${due.kind}`
+
+interface LastTried {
+  steps: Map<string, number>
+  checks: Map<string, number>
+}
+
+/** When each step and check was last tried by a run that recorded it. A failed read is "never": the old order. */
+async function lastTried(db: Db): Promise<LastTried> {
+  const tried: LastTried = { steps: new Map(), checks: new Map() }
+  let rows: Array<{ details: { steps?: unknown; checks?: unknown } | null; at: string | Date }>
+  try {
+    rows = await db.query(TRIED_SQL)
+  } catch {
+    return tried
+  }
+  // Newest first: the first time a key is met is the last time it was tried.
+  for (const row of rows) {
+    const at = new Date(row.at).getTime()
+    for (const [list, into] of [[row.details?.steps, tried.steps], [row.details?.checks, tried.checks]] as const) {
+      if (!Array.isArray(list)) continue
+      for (const key of list) if (typeof key === 'string' && !into.has(key)) into.set(key, at)
+    }
+  }
+  return tried
+}
+
+/** Never tried first, in the order given (oldest first); then by when last tried, longest ago first. The sort is stable. */
+export function byLastTried<T>(due: readonly T[], keyOf: (item: T) => string, tried: ReadonlyMap<string, number>): T[] {
+  return [...due].sort((a, b) => (tried.get(keyOf(a)) ?? 0) - (tried.get(keyOf(b)) ?? 0))
 }
 
 // --- A watched card refund (W32, lead call L7; W32a, lead call 1: every card refund)
@@ -1728,18 +1788,38 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
   const refundCancels = await refundCancelsDue(db, SUBSCRIPTIONS_LEFT_SQL)
   // W40 (W36 review L3): at most MAX_STEPS_PER_RUN steps a run, oldest first, so steps Stripe keeps giving no answer
   // on can never take a whole run's items from the watched refunds after them. The rest wait for the next run.
-  const stepsWaiting = await stepsDue(db)
+  // W46: taken by when they were last tried (never tried first, then longest ago), so steps Stripe never answers
+  // can't hold the front of the queue (byLastTried).
+  const tried = await lastTried(db)
+  const stepsWaiting = byLastTried(await stepsDue(db), (step) => step.id, tried.steps)
   const steps = stepsWaiting.slice(0, MAX_STEPS_PER_RUN)
   // W40b: wishes an earlier run could not leave again. No Stripe call, and there is one only after a database failure.
   const leaveAgains = await db.query<{ step_id: string }>(LEAVE_AGAIN_DUE_SQL)
   // W40c: closed steps due their one check against Stripe, oldest closing first, at most MAX_STEP_CHECKS_PER_RUN a run.
-  const checks = (await checksDue(db)).slice(0, MAX_STEP_CHECKS_PER_RUN)
+  // W46: by when they were last tried, as the steps.
+  const checksWaiting = byLastTried(await checksDue(db), checkKey, tried.checks)
+  const checks = checksWaiting.slice(0, MAX_STEP_CHECKS_PER_RUN)
+  // W46: memberships with no subscription whose last day has passed (memberships/no-subscription.ts). No Stripe call.
+  const endings = await membershipsToEnd(db)
+  /** W46: the steps and checks this run got to, for the row that orders the next runs. */
+  const triedNow = { steps: [] as string[], checks: [] as string[] }
   // W32a (W32 review S1): the list itself picks the watches due a read, the one read longest ago first, and no more than
   // a run can take.
   const watches = await db.query<WatchDue>(WATCHES_DUE_SQL, [options.watchDays ?? WATCH_DAYS, options.watchReadHours ?? WATCH_READ_HOURS, options.maxItems])
 
   /** `watch`: a read that is no item unless it ends for a person: a watched refund's (W32a), a closed step's check (W40c). */
-  const work: Array<{ kind: ReconcileItem['kind']; id: string; watch?: true; go: () => Promise<ReconcileItem | null> }> = [
+  type Work = { kind: ReconcileItem['kind']; id: string; watch?: true; go: () => Promise<ReconcileItem | null> }
+  const checkWork = (): Work[] =>
+    checks.map((due) => ({
+      kind: 'step' as const,
+      id: due.stepIds[0] ?? due.membershipId,
+      watch: true as const,
+      go: () => {
+        triedNow.checks.push(checkKey(due))
+        return checkClosedSteps(run, due)
+      },
+    }))
+  const work: Work[] = [
     ...refunds.map((due) => ({ kind: 'refund' as const, id: due.entity_id, go: () => settleLateRefund(run, due) })),
     ...orders.map((order) => ({ kind: 'order' as const, id: order.id, go: () => reconcileOrder(run, order) })),
     ...changed.map((order) => ({ kind: 'order' as const, id: order.id, go: () => readChangedElsewhere(run, order) })),
@@ -1799,14 +1879,27 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
     // W29: a refunded membership's subscription still to cancel. Last, as the put-backs: a cancel Stripe keeps
     // refusing can't keep a run from anything else.
     ...refundCancels.map((due) => ({ kind: 'order' as const, id: due.orderId, go: () => retryRefundCancel(run, due) })),
+    // W46: memberships with no subscription past their last day: a database change each, before anything that reads Stripe.
+    ...endings.map((membershipId) => ({ kind: 'step' as const, id: membershipId, go: () => endWithoutSubscription(run, membershipId) })),
     // W36: memberships' Stripe steps left to do. After everything that is waiting on money, as the left cancels: a
     // step Stripe keeps giving no answer on can't keep a run from anything else.
     // W40c: closed steps' checks, before the run's own steps: a read each, and a wish left again here is inside its
     // window, so this run's sends leave it alone. Its id is the first closed step it covers.
-    ...checks.map((due) => ({ kind: 'step' as const, id: due.stepIds[0] ?? due.membershipId, watch: true as const, go: () => checkClosedSteps(run, due) })),
+    // W46 (W40c review L2): on staff's run the steps go first. It takes no new item after 15 seconds, and five slow
+    // reads for checks could use that up before the step staff pressed Resolve now for. Either order is safe: a step
+    // is read as open again before it is sent, and a wish a check leaves is inside its window either way.
+    ...(options.actor.type === 'staff' ? [] : checkWork()),
     // W40b: before the steps, so a wish left again here is in place before this run's own sends.
     ...leaveAgains.map((due) => ({ kind: 'step' as const, id: due.step_id, go: () => retryLeaveAgain(run, due.step_id) })),
-    ...steps.map((due) => ({ kind: 'step' as const, id: due.id, go: () => sendLeftStep(run, due) })),
+    ...steps.map((due) => ({
+      kind: 'step' as const,
+      id: due.id,
+      go: () => {
+        triedNow.steps.push(due.id)
+        return sendLeftStep(run, due)
+      },
+    })),
+    ...(options.actor.type === 'staff' ? checkWork() : []),
     // W32: watched card refunds, read until they end. Last of all: a refund is watched for weeks, and must never keep
     // a run from anything that is waiting to be settled.
     ...watches.map((due) => ({ kind: 'refund' as const, id: due.details.refundId, watch: true as const, go: () => checkWatch(run, due) })),
@@ -1885,6 +1978,17 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
   }
   // W40 (L3): steps over the run's cap wait for the next run, as anything over its bounds does.
   result.deferred += stepsWaiting.length - steps.length
+  // W46: a run that could not get to every step and check that was due says which it did try, so the next runs take
+  // the others first. Only a note for the order: a run that can't write it is answered all the same.
+  if ((triedNow.steps.length > 0 || triedNow.checks.length > 0) && (triedNow.steps.length < stepsWaiting.length || triedNow.checks.length < checksWaiting.length)) {
+    try {
+      await db.transaction((tx) =>
+        audit.recordAll(tx, [{ actorType: options.actor.type, actorId: options.actor.id, action: STEPS_TRIED_ACTION, entityType: 'reconcile', entityId: options.requestId, requestId: options.requestId, details: triedNow }])
+      )
+    } catch {
+      // The next run takes them oldest first, as before W46.
+    }
+  }
   try {
     result.refundsWaiting = (await db.query<{ waiting: number }>(WATCHES_WAITING_SQL))[0]?.waiting ?? 0
   } catch {

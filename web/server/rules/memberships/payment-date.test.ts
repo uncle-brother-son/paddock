@@ -1352,7 +1352,8 @@ describe("the date change's GBP 0 invoice at the webhook (brief W45a item 5; aud
   const zeroInvoicePaid = (stripe: FakeStripe) => {
     // The no-charge period S3 started runs to the new date: that is the invoice line's period end.
     expect(stripe.subscriptionSettings(MO_SUBSCRIPTION)).toMatchObject({ status: 'trialing', trialEnd: TRIAL_END, periodEnd: TRIAL_END })
-    const event = invoiceEvent('invoice.paid', MO_SUBSCRIPTION, { billingReason: 'subscription_update', amountPaid: 0, periodStart: Math.floor(Date.now() / 1000), periodEnd: TRIAL_END })
+    // W46b: the £0 invoice is the subscription's newest (the fake keeps one invoice per subscription unless a test says).
+    const event = invoiceEvent('invoice.paid', MO_SUBSCRIPTION, { id: stripe.latestInvoice(MO_SUBSCRIPTION), billingReason: 'subscription_update', amountPaid: 0, periodStart: Math.floor(Date.now() / 1000), periodEnd: TRIAL_END })
     return dispatchStripeEvent(event, webhookRpc(db), stripe)
   }
   const MARKED_PAID = { outcome: 'processed', detail: { found: true, action: 'reactivated', was: 'active', bookings_restored: 0, periods_created: 0 } }

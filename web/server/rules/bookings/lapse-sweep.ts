@@ -17,6 +17,10 @@
 //   the read (a guest removed, money owed) is not left: the booking lapses from what is found under its lock. One that
 //   is no longer due under its lock (settled, cancelled by staff, or by the database's sweep) is left as `not_lapsed`.
 // - A fault on one booking is logged in the result and never stops the others.
+// - W46 (W43 review L2): a time budget of its own. No booking is started once the run has taken LAPSE_SWEEP_BUDGET_MS;
+//   the ones not reached are still due and go with the next run (`more`), as reconcile's items over its budget do.
+//   Without it 50 bookings that each waited the 5 seconds a lock can take would have held reconcile, which runs
+//   after the sweep in the same scheduled run, for about 250 seconds.
 import 'server-only'
 import type { Db } from '@/server/db'
 import { kindsOn } from '@/server/rules/orders/order-switch'
@@ -24,6 +28,13 @@ import { lapseBooking, type LapseOutcome } from './cancel'
 
 /** As reconcile's scheduled bound (SCHEDULED_LIMITS.maxItems): at most this many bookings read in one run. */
 export const LAPSE_SWEEP_MAX_ITEMS = 50
+/**
+ * W46 (W43 review L2): no booking is started after this long. One already started is finished (one transaction: at
+ * worst a 5 second wait for a lock and its statements), so the sweep ends by about 45 seconds. Reconcile, after it,
+ * ends by about 227 seconds from its own start (reconcile.ts, SCHEDULED_LIMITS): together inside the 5 minutes
+ * between scheduled runs.
+ */
+export const LAPSE_SWEEP_BUDGET_MS = 30_000
 
 export interface LapseSweepOptions {
   /** The run's id: every row the sweep writes carries it. */
@@ -31,6 +42,10 @@ export interface LapseSweepOptions {
   /** The Worker's ORDER_SWITCH, as the run was handed it. Null or unset: every kind off. Never read from process.env here. */
   orderSwitch: string | null
   maxItems?: number
+  /** W46: no booking is started once the run has taken this long (LAPSE_SWEEP_BUDGET_MS when absent). */
+  budgetMs?: number
+  /** The clock the budget is counted on (the tests'). */
+  now?: () => number
 }
 
 export type LapseSweepItem = ({ bookingId: string } & LapseOutcome) | { bookingId: string; outcome: 'failed'; error: string }
@@ -43,7 +58,7 @@ export interface LapseSweepResult {
   failed: number
   /** Store credit given across the run, in pounds. */
   storeCreditRefunded: number
-  /** More bookings were due than the run's cap: the next run carries on. */
+  /** More bookings were due than the run's cap, or (W46) than its time budget let it start: the next run carries on. */
   more: boolean
   items: LapseSweepItem[]
 }
@@ -67,9 +82,17 @@ export async function lapseSweep(db: Db, options: LapseSweepOptions): Promise<La
   if (!lapseSweepOn(options.orderSwitch)) return result
   result.ran = true
   const maxItems = options.maxItems ?? LAPSE_SWEEP_MAX_ITEMS
+  const budgetMs = options.budgetMs ?? LAPSE_SWEEP_BUDGET_MS
+  const now = options.now ?? Date.now
+  const started = now()
   const due = await db.query<{ id: string }>(DUE_SQL, [maxItems + 1])
   result.more = due.length > maxItems
   for (const { id } of due.slice(0, maxItems)) {
+    // W46: out of time. This booking and the ones after it are untouched and still due: the next run reads them.
+    if (now() - started >= budgetMs) {
+      result.more = true
+      break
+    }
     try {
       const outcome = await lapseBooking(db, id, options.requestId)
       result.items.push({ bookingId: id, ...outcome })

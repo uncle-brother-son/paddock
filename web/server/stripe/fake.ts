@@ -152,7 +152,9 @@ interface FakeSubscription {
   customer: string
   metadata: Record<string, string>
   items: { data: Array<{ price: { id: string }; current_period_start: number; current_period_end: number }> }
-  latest_invoice: string | FakeInvoice
+  /** The id of its newest invoice: the one it was made with (`invoice`), until a test gives it a later one (W46b). */
+  latest_invoice: string
+  /** The invoice it was made with. */
   invoice: FakeInvoice
   /** W13: the mode of the key it was made with, as an intent's (W11a). */
   livemode: boolean
@@ -328,12 +330,43 @@ export class FakeStripe implements StripeClient {
    * W36: a subscription as Stripe might already hold it, set up for a test with no call recorded: its status, a
    * scheduled end, or its current period's end (all times in seconds).
    */
-  setSubscription(id: string, fields: { status?: Stripe.Subscription.Status; cancelAt?: number | null; periodEnd?: number }): void {
+  setSubscription(id: string, fields: { status?: Stripe.Subscription.Status; cancelAt?: number | null; periodEnd?: number; latestInvoice?: string }): void {
     const sub = this.subs.get(id)
     if (!sub) throw new Error(`The fake has no subscription ${id}.`)
     if (fields.status !== undefined) sub.status = fields.status
     if (fields.cancelAt !== undefined) sub.cancel_at = fields.cancelAt
     if (fields.periodEnd !== undefined) for (const item of sub.items.data) item.current_period_end = fields.periodEnd
+    // W46b: its newest invoice, by id (a later invoice than the one it was made with: a renewal's, a date change's).
+    if (fields.latestInvoice !== undefined) sub.latest_invoice = fields.latestInvoice
+  }
+
+  /** W46b: the id of a subscription's newest invoice, as a read of it answers `latest_invoice`. */
+  latestInvoice(id: string): string {
+    const sub = this.subs.get(id)
+    if (!sub) throw new Error(`The fake has no subscription ${id}.`)
+    return sub.latest_invoice
+  }
+
+  /**
+   * W46b (W46 review B1): a renewal as Stripe shows it in the hour before it charges. The period has moved on (to
+   * `periodEnd`, or one of the price's periods after the old end), the subscription still reads `active`, and its
+   * newest invoice is a new one, a draft nothing has been taken for. Answers the draft's id. What follows is the
+   * test's to set: `past_due` when the charge fails, `active` still when it goes through; the invoice stays the
+   * newest either way.
+   */
+  startRenewal(id: string, periodEnd?: number): string {
+    const sub = this.subs.get(id)
+    if (!sub) throw new Error(`The fake has no subscription ${id}.`)
+    const interval = (this.pricesById.get(sub.items.data[0]?.price.id ?? '')?.['recurring'] as { interval: string } | null | undefined)?.interval ?? 'month'
+    for (const item of sub.items.data) {
+      const start = item.current_period_end
+      item.current_period_start = start
+      item.current_period_end = periodEnd ?? addPeriod(start, interval)
+    }
+    sub.status = 'active'
+    sub.trial_end = null
+    sub.latest_invoice = this.nextId('in')
+    return sub.latest_invoice
   }
 
   /** Stripe keeps a key for at least 24 hours, then may drop it: a repeat after that is a new
@@ -735,7 +768,9 @@ export class FakeStripe implements StripeClient {
         }
       }),
     }
-    return { ...rest, items, cancel_at_period_end: false, latest_invoice: expanded ? invoice : invoice.id }
+    // W46b: the newest invoice by id. Expanded, only the invoice it was made with is modelled (what the order flows read).
+    if (expanded && sub.latest_invoice !== invoice.id) throw new Error('The fake has only modelled expanding the invoice a subscription was made with, not a later one.')
+    return { ...rest, items, cancel_at_period_end: false, latest_invoice: expanded ? invoice : sub.latest_invoice }
   }
 
   /** As Stripe: a subscription made in the other mode is answered as missing (W13, as an intent, W11a). */

@@ -674,7 +674,7 @@ begin
     where cm.start_date is not null
       and cm.start_date <= today
       and (
-        cm.subscription_status = 'active'
+        (cm.subscription_status = 'active' and (cm.cancel_effective_date is null or cm.cancel_effective_date >= today))
         or (cm.subscription_status = 'cancelled' and cm.cancel_effective_date >= today)
       )
   ), periods as (

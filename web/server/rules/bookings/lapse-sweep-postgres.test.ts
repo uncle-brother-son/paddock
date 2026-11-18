@@ -6,7 +6,7 @@ import { deferred, Refused, waitingOn } from '@/server/rules/testing/race'
 import { startRealPostgres, type RealPostgres } from '@/server/rules/testing/real-postgres'
 import { FakeStripe } from '@/server/stripe/fake'
 import { cancelCredit, lapseBooking, type CancelOptions } from './cancel'
-import { lapseSweep } from './lapse-sweep'
+import { LAPSE_SWEEP_BUDGET_MS, lapseSweep } from './lapse-sweep'
 import { removeGuest, type RemoveGuestOptions } from './remove-guest'
 import { settleBooking } from './settle'
 
@@ -354,5 +354,83 @@ describe('the cap (brief W43 item 2: capped per run, and carries on next run)', 
     await lapsedBooking()
     await lapsedBooking()
     expect(await lapseSweep(first, { requestId: 'w43-cap', orderSwitch: 'lapse_sweep', maxItems: 2 })).toMatchObject({ lapsed: 2, more: false })
+  })
+})
+
+// Brief W46 item 4 (W43 review L2): the sweep has a time budget of its own. Before W46 it had none: 50 bookings that
+// each waited the 5 seconds a lock can take held reconcile, which runs after it in the same scheduled run, for about
+// 250 seconds.
+describe('the time budget (brief W46 item 4): no booking is started once the run has taken 30 seconds, and the rest go with the next run', () => {
+  const run = (options: { budgetMs?: number; now?: () => number } = {}) => lapseSweep(first, { requestId: 'w46-budget', orderSwitch: 'lapse_sweep', ...options })
+  /** The run's clock: its start and its first `starts` bookings at 0 seconds, everything after at `then` milliseconds. */
+  const clock = (starts: number, then: number) => {
+    let asked = 0
+    return () => (asked++ <= starts ? 0 : then)
+  }
+
+  it('the budget is 30 seconds', () => {
+    expect(LAPSE_SWEEP_BUDGET_MS).toBe(30_000)
+  })
+
+  it("three bookings due and the run out of time after the first: the oldest lapses (its guest's £20 to store credit, once), the other two are untouched and still due, and `more` says so; the next run lapses them", async () => {
+    // Anything left due by the tests above is lapsed first, so this test's three are the only ones due.
+    await sweepOn(first)
+    const newest = await lapsedBooking({ minutesAgo: 1 })
+    const oldest = await lapsedBooking({ minutesAgo: 30, paidGuest: true })
+    const middle = await lapsedBooking({ minutesAgo: 10, paidGuest: true })
+    const before = [await state(middle), await state(newest)]
+    const out = await run({ now: clock(1, 30_000) })
+    expect(out).toMatchObject({ ran: true, lapsed: 1, left: 0, failed: 0, storeCreditRefunded: 20, more: true })
+    expect(out.items.map((item) => item.bookingId)).toEqual([oldest.bookingId])
+    expect(await state(oldest)).toMatchObject({ status: 'cancelled', balance: '20.00', store_credit_rows: 1, lapsed_rows: 1 })
+    // Not started: exactly as they were, and still payment needed past their deadline.
+    expect([await state(middle), await state(newest)]).toEqual(before)
+    expect(before.map((one) => one?.status)).toEqual(['payment_needed', 'payment_needed'])
+    const next = await run()
+    expect(next).toMatchObject({ lapsed: 2, storeCreditRefunded: 20, more: false })
+    expect(next.items.map((item) => item.bookingId)).toEqual([middle.bookingId, newest.bookingId])
+    expect(await state(middle)).toMatchObject({ status: 'cancelled', balance: '20.00', store_credit_rows: 1, lapsed_rows: 1 })
+    expect(await run()).toMatchObject({ ran: true, lapsed: 0, more: false, items: [] })
+  })
+
+  it('a millisecond inside the budget every booking is started; at the budget none is', async () => {
+    await sweepOn(first)
+    const a = await lapsedBooking({ minutesAgo: 20 })
+    const b = await lapsedBooking({ minutesAgo: 10 })
+    // Out of time before the first booking: nothing is started, and `more` says they wait.
+    expect(await run({ now: clock(0, 30_000) })).toMatchObject({ ran: true, lapsed: 0, left: 0, failed: 0, more: true, items: [] })
+    expect([(await state(a))?.status, (await state(b))?.status]).toEqual(['payment_needed', 'payment_needed'])
+    const out = await run({ now: clock(0, 29_999) })
+    expect(out).toMatchObject({ lapsed: 2, more: false })
+    expect(out.items.map((item) => item.bookingId)).toEqual([a.bookingId, b.bookingId])
+  })
+
+  it('nothing due: `more` is false whatever the clock says', async () => {
+    await sweepOn(first)
+    expect(await run({ now: clock(0, 99_000) })).toMatchObject({ ran: true, lapsed: 0, more: false, items: [] })
+  })
+
+  it("on the real clock: the oldest booking's lock is held by another transaction, so the sweep waits for it; with a 1 second budget the wait uses it up, the second booking is not started, and reconcile is not held behind it", async () => {
+    await sweepOn(first)
+    const held = await lapsedBooking({ minutesAgo: 30 })
+    const behind = await lapsedBooking({ minutesAgo: 10 })
+    const holder = await holdingTheBooking(held.bookingId)
+    try {
+      const started = Date.now()
+      const sweeping = lapseSweep(second, { requestId: 'w46-budget', orderSwitch: 'lapse_sweep', budgetMs: 1_000 })
+      // The sweep is waiting on the held booking's lock; it is let go after the budget has passed.
+      await allBlockedBy(holder.pid, 1)
+      await new Promise((resolve) => setTimeout(resolve, 1_200))
+      await holder.finish()
+      const out = await sweeping
+      expect(Date.now() - started).toBeGreaterThanOrEqual(1_000)
+      expect(out.items.map((item) => item.bookingId)).toEqual([held.bookingId])
+      expect(out).toMatchObject({ lapsed: 1, more: true })
+      expect((await state(behind))?.status).toBe('payment_needed')
+    } finally {
+      await holder.finish()
+    }
+    expect(await run()).toMatchObject({ lapsed: 1, more: false })
+    expect((await state(behind))?.status).toBe('cancelled')
   })
 })

@@ -421,8 +421,34 @@ export type BookingRefusalDetails = z.infer<typeof bookingRefusalDetailsSchema>
 
 /** W21: GET /api/v1/staff/bookings/:bookingId/refund-figures (getBookingRefundFigures). */
 export const bookingRefundFiguresRouteInputSchema = z.object(bookingInPath)
-/** The figures route always sends `cashLeft`, `paidLine` and (W26a) `paidWords`. */
-export const bookingRefundFiguresRouteOutputSchema = bookingRefundFiguresSchema.extend({ cashLeft: z.number(), paidLine: z.string(), paidWords: z.string() })
+
+/**
+ * W46 (G-plan 2.1; W43 "Noticed" 4): why a booking was cancelled by the lapse sweep and what happened to its money,
+ * from the lapse's own record (`booking.lapsed`). Amounts in pounds. The booking detail shows `words` (W47).
+ */
+export const bookingLapseSchema = z.object({
+  /** When it lapsed. */
+  at: z.string(),
+  /** The payment deadline that had passed. Null when the lapse didn't record one. */
+  paymentDueBy: z.string().nullable(),
+  /** Given back as store credit by the lapse. */
+  givenBack: z.number(),
+  /** Kept: money paid on it that was neither given back nor left owed (the price paid less what was owed, and paid add-ons removed with nothing back). */
+  kept: z.number(),
+  /** Why it was kept, when any was: inside 24 hours of the session, or the session had started. */
+  keptBecause: z.enum(['inside_24_hours', 'session_started']).nullable(),
+  /** Card refund money still owed on it when it lapsed: left owed for staff (what is owed now is `refundOwed`). */
+  owed: z.number(),
+  /** The line for the booking detail: when and why it lapsed, and what was given back, kept and left owed. */
+  words: z.string(),
+})
+export type BookingLapse = z.infer<typeof bookingLapseSchema>
+
+/**
+ * The figures route always sends `cashLeft`, `paidLine` and (W26a) `paidWords`. W46: and `lapse`, only for a booking
+ * the lapse sweep cancelled; for every other booking the answer is exactly as it was, with no such field.
+ */
+export const bookingRefundFiguresRouteOutputSchema = bookingRefundFiguresSchema.extend({ cashLeft: z.number(), paidLine: z.string(), paidWords: z.string(), lapse: bookingLapseSchema.optional() })
 export type BookingRefundFiguresRouteOutput = z.infer<typeof bookingRefundFiguresRouteOutputSchema>
 
 export const partRefundRouteInputSchema = partRefundInputSchema.extend(bookingInPath)

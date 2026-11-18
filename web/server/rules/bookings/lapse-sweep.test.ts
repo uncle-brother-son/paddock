@@ -1,15 +1,18 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { GET as figuresRoute } from '@/app/api/v1/staff/bookings/[bookingId]/refund-figures/route'
+import type { BookingRefundFiguresRouteOutput } from '@/contracts'
 import type { Db } from '@/server/db'
 import { ORDER_KINDS } from '@/server/rules/orders/order-switch'
 import { BOOKING_KINDS_ON, withSwitch } from '@/server/rules/testing/replay/booking-side'
-import { oldSide, replay, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/replay/harness'
+import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/replay/harness'
 import { bea, ID, memberCredit, mo, paidSeat, runLapseSweep, seed } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { ApiError } from '@/server/http/errors'
 import { BOOKING_LAPSED, LAPSE_LEFT_WORDS, lapseBooking, lapsePlanOf } from './cancel'
+import { lapsedWords } from './failure-messages'
 import { LAPSE_SWEEP_MAX_ITEMS, lapseSweep, lapseSweepOn, type LapseSweepResult } from './lapse-sweep'
 import type { LoadedBooking } from './load-booking'
-import { partRefund, refundOwed } from './refunds'
+import { owedArrived, partRefund, refundOwed } from './refunds'
 
 // Brief W43 (F-plan 1.9, 4.8; Wayne's Q48, 15 Nov; N8, bugs FB18 and FB19): the lapse sweep on the Worker, on the
 // replay's live schema (the database's own functions, constraints and its own sweep). The bookings are made by the old
@@ -378,6 +381,138 @@ describe('the lapse sweep: money on the booking (Q48; bug FB18)', () => {
       // Two rows, from two presses. Compared as a set: the replay's clock stands still, so they can share an instant and
       // read back in either order.
       expect((await storeCreditRows()).map((row) => row.amount).sort()).toEqual(['15.00', '5.00'])
+    })
+  })
+
+  // Brief W46 item 6 (W43a "Noticed" 3). Before W46 the guest's order line kept `refunded_at` null for ever: the lapse
+  // can't stamp it (£5 is still owed), and nothing stamped it when staff later gave the £5.
+  const guestLine = async (bookingId: string) =>
+    (
+      await db.query<{ stamped: boolean; at: string | null; method: string | null; order_status: string }>(
+        `SELECT oli.refunded_at IS NOT NULL AS stamped, oli.refunded_at::text AS at, oli.refund_method AS method, o.payment_status AS order_status
+         FROM order_line_items oli JOIN orders o ON o.id = oli.order_id WHERE oli.booking_id = $1 AND oli.item_type = 'booking'`,
+        [bookingId]
+      )
+    )
+  const arrived = (bookingId: string, amount: number) => owedArrived(db, bookingId, { amount, reason: 'Seen in Stripe' }, staff)
+
+  it("W46: a £20 guest with £5 owed, 25 hours before: the lapse gives £15 and can't stamp the guest's line (£5 is still owed). Refund the rest gives the £5: the line is stamped refunded, once, the order reads refunded, £20 in all, given once", async () => {
+    await withBooking(creditSeatAndPaidGuest, async ({ bookingId }) => {
+      vi.setSystemTime(SESSION_START - 25 * HOUR)
+      await paymentNeeded(bookingId)
+      await owed(bookingId, '5.00')
+      expect(await sweep()).toMatchObject({ lapsed: 1, storeCreditRefunded: 15 })
+      expect(await balance()).toBe(15)
+      // One line holds the guest's £20. Not all of it is back yet: not stamped.
+      expect(await guestLine(bookingId)).toEqual([{ stamped: false, at: null, method: null, order_status: 'partially_refunded' }])
+      expect(await refundOwed(db, bookingId, { amount: 5, refundMethod: 'credit' }, staff)).toMatchObject({ storeCreditRefundedAmount: 5, cardRefundedAmount: 0 })
+      const [line] = await guestLine(bookingId)
+      expect(line).toMatchObject({ stamped: true, method: 'credit', order_status: 'refunded' })
+      expect(await balance()).toBe(20)
+      expect(await bookingRow(bookingId)).toMatchObject({ status: 'cancelled', price_paid: '20.00', refund_owed_amount: '0.00' })
+      // Once: a second press, a minute later, finds nothing owed; the stamp keeps its time and no more money is given.
+      vi.setSystemTime(Date.now() + 60_000)
+      expect(await refusedWith(() => refundOwed(db, bookingId, { amount: 5, refundMethod: 'credit' }, staff))).toBe('nothing_owed')
+      expect(await guestLine(bookingId)).toEqual([line])
+      expect(await balance()).toBe(20)
+      expect((await storeCreditRows()).map((row) => row.amount).sort()).toEqual(['15.00', '5.00'])
+      // And a later run of the sweep changes nothing.
+      expect(await sweep()).toEqual(NOTHING)
+      expect(await guestLine(bookingId)).toEqual([line])
+    })
+  })
+
+  it('W46: the same with It already arrived for the £5 (it did reach the card): no money moves, the line is stamped and the order reads refunded; £15 of store credit is all that was given', async () => {
+    await withBooking(creditSeatAndPaidGuest, async ({ bookingId }) => {
+      vi.setSystemTime(SESSION_START - 25 * HOUR)
+      await paymentNeeded(bookingId)
+      await owed(bookingId, '5.00')
+      expect(await sweep()).toMatchObject({ lapsed: 1, storeCreditRefunded: 15 })
+      expect((await guestLine(bookingId))[0]).toMatchObject({ stamped: false })
+      expect(await arrived(bookingId, 5)).toMatchObject({ cardRefundedAmount: 0, storeCreditRefundedAmount: 0 })
+      expect((await guestLine(bookingId))[0]).toMatchObject({ stamped: true, order_status: 'refunded' })
+      expect(await balance()).toBe(15)
+      expect(await bookingRow(bookingId)).toMatchObject({ status: 'cancelled', refund_owed_amount: '0.00' })
+    })
+  })
+
+  it("W46: money a lapse kept is not stamped as refunded. 23 hours before, £5 of the £20 owed: nothing back, £15 kept. Refund the rest gives the £5: the guest's line stays unstamped (£5 of its £20 is back), and the order reads partially refunded, not refunded", async () => {
+    await withBooking(creditSeatAndPaidGuest, async ({ bookingId }) => {
+      vi.setSystemTime(SESSION_START - 23 * HOUR)
+      await paymentNeeded(bookingId)
+      await owed(bookingId, '5.00')
+      expect(await sweep()).toMatchObject({ lapsed: 1, storeCreditRefunded: 0 })
+      expect(await guestLine(bookingId)).toMatchObject([{ stamped: false, order_status: 'paid' }])
+      expect(await refundOwed(db, bookingId, { amount: 5, refundMethod: 'credit' }, staff)).toMatchObject({ storeCreditRefundedAmount: 5 })
+      expect(await guestLine(bookingId)).toMatchObject([{ stamped: false, order_status: 'partially_refunded' }])
+      expect(await balance()).toBe(5)
+    })
+    // And with It already arrived: nothing stamped either, and the order as it was.
+    await withBooking(creditSeatAndPaidGuest, async ({ bookingId }) => {
+      vi.setSystemTime(SESSION_START - 23 * HOUR)
+      await paymentNeeded(bookingId)
+      await owed(bookingId, '5.00')
+      expect(await sweep()).toMatchObject({ lapsed: 1, storeCreditRefunded: 0 })
+      await arrived(bookingId, 5)
+      expect(await guestLine(bookingId)).toMatchObject([{ stamped: false, order_status: 'paid' }])
+    })
+  })
+
+  /**
+   * Four towels (£20) removed from the booking earlier, their refund planned to a card in a claim that ended as
+   * `outcome`, the line reading £0 back. Answers the towels' line id.
+   */
+  async function removedTowels(bookingId: string, outcome: 'owed' | 'put_back'): Promise<string> {
+    const [guest] = await db.query<{ order_id: string }>("SELECT order_id FROM order_line_items WHERE booking_id = $1 AND item_type = 'booking'", [bookingId])
+    const [towels] = await db.query<{ id: string }>(
+      `INSERT INTO addon_order_lines (booking_id, addon_id, quantity, price_at_purchase, sku_at_purchase, redemption_source, order_id, removed_at, refunded_amount, card_refunded_amount, refund_method)
+       VALUES ($1, $2, 4, 5, 'TOWEL', 'paid', NULL, now(), 0, 0, 'none') RETURNING id`,
+      [bookingId, ID.addon]
+    )
+    const plan = { card: [{ orderId: guest?.order_id, paymentIntentId: 'pi_never_arrived', amount: 20, lines: [{ lineId: towels?.id, amount: 20 }] }], storeCredit: 0, cash: 0, ownOrderId: null }
+    const [claim] = await db.query<{ id: string }>(
+      "INSERT INTO audit_log (actor_type, actor_id, action, entity_type, entity_id, request_id, details) VALUES ('staff', $1, 'booking.refund_claimed', 'booking', $2, 'w46-towels', $3::jsonb) RETURNING id",
+      [ID.staff, bookingId, JSON.stringify({ kind: 'remove_addon', amount: 20, method: 'card', worker: true, plan })]
+    )
+    await db.query(
+      "INSERT INTO audit_log (actor_type, actor_id, action, entity_type, entity_id, request_id, details) VALUES ('staff', $1, 'booking.refund_finished', 'booking', $2, 'w46-towels', $3::jsonb)",
+      [ID.staff, bookingId, JSON.stringify({ claimId: claim?.id, outcome, cardRefunded: 0, storeCreditRefunded: 0, owed: outcome === 'owed' ? 20 : 0 })]
+    )
+    return towels?.id as string
+  }
+  const towelsLine = async (lineId: string) => (await db.query<{ refunded: string; method: string }>('SELECT refunded_amount::numeric(10,2)::text AS refunded, refund_method AS method FROM addon_order_lines WHERE id = $1', [lineId]))[0]
+
+  it("W46: money owed that was an add-on's never stamps a seat whose money was kept. £20 owed for removed towels (their card refund never arrived), the booking lapsed 23 hours before with the guest's £20 kept: It already arrived for the £20 leaves the guest's line unstamped; Refund the rest instead gives the towels' line its £20 and still leaves the guest's line unstamped", async () => {
+    for (const how of ['arrived', 'refund the rest'] as const) {
+      await withBooking(creditSeatAndPaidGuest, async ({ bookingId }) => {
+        // The towels' £20 is on the booking as owed (part of its price paid while it is live).
+        const towels = await removedTowels(bookingId, 'owed')
+        await db.query('UPDATE bookings SET price_paid = 40, refund_owed_amount = 20 WHERE id = $1', [bookingId])
+        vi.setSystemTime(SESSION_START - 23 * HOUR)
+        await paymentNeeded(bookingId)
+        expect(await sweep()).toMatchObject({ lapsed: 1, storeCreditRefunded: 0 })
+        expect(await bookingRow(bookingId)).toMatchObject({ status: 'cancelled', refund_owed_amount: '20.00' })
+        if (how === 'arrived') await arrived(bookingId, 20)
+        else expect(await refundOwed(db, bookingId, { amount: 20, refundMethod: 'credit' }, staff)).toMatchObject({ storeCreditRefundedAmount: 20 })
+        expect(await bookingRow(bookingId)).toMatchObject({ refund_owed_amount: '0.00' })
+        // The guest's £20 was kept by the lapse: none of it is back, whatever the towels' £20 did.
+        expect((await guestLine(bookingId))[0]).toMatchObject({ stamped: false })
+        expect(await towelsLine(towels)).toEqual(how === 'arrived' ? { refunded: '0.00', method: 'none' } : { refunded: '20.00', method: 'credit' })
+      })
+    }
+  })
+
+  it("W46: a removed add-on whose refund claim was put back is not part of what is owed: £5 of the guest's £20 owed, towels removed with nothing back after their own claim was put back, lapsed 23 hours before: Refund the rest gives the £5 and the towels' line still reads £0 back (their money was kept)", async () => {
+    await withBooking(creditSeatAndPaidGuest, async ({ bookingId }) => {
+      const towels = await removedTowels(bookingId, 'put_back')
+      vi.setSystemTime(SESSION_START - 23 * HOUR)
+      await paymentNeeded(bookingId)
+      await owed(bookingId, '5.00')
+      expect(await sweep()).toMatchObject({ lapsed: 1, storeCreditRefunded: 0 })
+      expect(await refundOwed(db, bookingId, { amount: 5, refundMethod: 'credit' }, staff)).toMatchObject({ storeCreditRefundedAmount: 5 })
+      expect(await towelsLine(towels)).toEqual({ refunded: '0.00', method: 'none' })
+      expect((await guestLine(bookingId))[0]).toMatchObject({ stamped: false })
+      expect(await balance()).toBe(5)
     })
   })
 
@@ -780,3 +915,115 @@ describe('lapsePlanOf (Q48)', () => {
   })
 })
 
+
+// Brief W46 item 5 (G-plan 2.1; W43 "Noticed" 4): the booking's lapse facts on the refund-figures read, which the
+// booking detail already calls (W47 shows them). Before W46 a lapsed booking said nothing about why it was cancelled or
+// what happened to its money on any screen.
+describe('W46 item 5: the refund-figures read says why a booking lapsed, and what was given back, kept and left owed (only a lapsed booking has `lapse`)', () => {
+  async function figures(bookingId: string): Promise<BookingRefundFiguresRouteOutput> {
+    const response = await figuresRoute(
+      new Request(`https://worker.test/api/v1/staff/bookings/${bookingId}/refund-figures`, { headers: { authorization: 'Bearer test-staff-api-key', 'x-staff-email': REPLAY_USER.email } }),
+      { params: Promise.resolve({ bookingId }) }
+    )
+    expect(response.status).toBe(200)
+    return ((await response.json()) as { data: BookingRefundFiguresRouteOutput }).data
+  }
+  const owed = (bookingId: string, amount: string) => db.query('UPDATE bookings SET refund_owed_amount = $1::numeric WHERE id = $2', [amount, bookingId])
+  const FIRST = "the membership payment wasn't made by the deadline."
+
+  it('a booking that has not lapsed has no lapse: payment needed, confirmed, and cancelled by staff', async () => {
+    await withBooking(creditSeatAndPaidGuest, async ({ bookingId }) => {
+      const before = await figures(bookingId)
+      // The read is exactly as it was before W46: the figures and their words, and no `lapse` field at all.
+      expect(before).not.toHaveProperty('lapse')
+      expect(Object.keys(before).sort()).toEqual(['cardLeft', 'cashLeft', 'customerId', 'left', 'paidLine', 'paidWords', 'parts', 'pricePaid', 'refundOwed', 'status'])
+      expect(before).toMatchObject({ status: 'confirmed', pricePaid: 20, refundOwed: 0, left: 20, cashLeft: 20, paidLine: expect.any(String), paidWords: expect.any(String) })
+      await paymentNeeded(bookingId)
+      expect(await figures(bookingId)).not.toHaveProperty('lapse')
+      await db.query("UPDATE bookings SET status = 'cancelled', cancelled_at = now() WHERE id = $1", [bookingId])
+      const cancelled = await figures(bookingId)
+      expect(cancelled.status).toBe('cancelled')
+      expect(cancelled).not.toHaveProperty('lapse')
+    })
+  })
+
+  it('nothing paid: when it lapsed and the deadline that passed, with nothing given, kept or owed, and the one sentence', async () => {
+    await withBooking(creditSeat, async ({ bookingId }) => {
+      vi.setSystemTime(SESSION_START - 25 * HOUR)
+      await paymentNeeded(bookingId)
+      await sweep()
+      const { lapse, status } = await figures(bookingId)
+      expect(status).toBe('cancelled')
+      expect(lapse).toEqual({ at: expect.any(String), paymentDueBy: expect.any(String), givenBack: 0, kept: 0, keptBecause: null, owed: 0, words: `Lapsed on 11 November 2026: ${FIRST}` })
+      // The time is the lapse's own row's, and the deadline the one that passed (a minute before).
+      const [row] = await db.query<{ at: Date }>("SELECT at FROM audit_log WHERE action = 'booking.lapsed' AND entity_id = $1", [bookingId])
+      expect(lapse?.at).toBe(new Date(row?.at as Date).toISOString())
+      expect(new Date(lapse?.paymentDueBy ?? 0).getTime()).toBeLessThan(new Date(lapse?.at ?? 0).getTime())
+    })
+  })
+
+  it('a £20 paid guest, 25 hours before: £20 given back as store credit, nothing kept', async () => {
+    await withBooking(creditSeatAndPaidGuest, async ({ bookingId }) => {
+      vi.setSystemTime(SESSION_START - 25 * HOUR)
+      await paymentNeeded(bookingId)
+      await sweep()
+      expect((await figures(bookingId)).lapse).toMatchObject({ givenBack: 20, kept: 0, keptBecause: null, owed: 0, words: `Lapsed on 11 November 2026: ${FIRST} £20.00 went back as store credit.` })
+    })
+  })
+
+  it.each([
+    ['23 hours before', SESSION_START - 23 * HOUR, 'inside_24_hours', 'it lapsed inside 24 hours of the session'],
+    ['an hour after the session started', SESSION_START + HOUR, 'session_started', 'the session had already started'],
+  ] as const)('a £20 paid guest, %s: nothing given back, £20 kept, and why', async (_name, at, because, why) => {
+    await withBooking(creditSeatAndPaidGuest, async ({ bookingId }) => {
+      vi.setSystemTime(at)
+      await paymentNeeded(bookingId)
+      await sweep()
+      const day = at < SESSION_START ? '11 November 2026' : '12 November 2026'
+      expect((await figures(bookingId)).lapse).toMatchObject({ givenBack: 0, kept: 20, keptBecause: because, owed: 0, words: `Lapsed on ${day}: ${FIRST} £20.00 was kept: ${why}.` })
+    })
+  })
+
+  it('£5 of the £20 owed, 25 hours before: £15 given back, nothing kept, £5 left owed; what is owed now is in the figures, and comes off when staff give it, while the lapse still says £5 was owed then', async () => {
+    await withBooking(creditSeatAndPaidGuest, async ({ bookingId }) => {
+      vi.setSystemTime(SESSION_START - 25 * HOUR)
+      await paymentNeeded(bookingId)
+      await owed(bookingId, '5.00')
+      await sweep()
+      const words = `Lapsed on 11 November 2026: ${FIRST} £15.00 went back as store credit. £5.00 of card refund money was still owed on it, and was left owed.`
+      expect(await figures(bookingId)).toMatchObject({ refundOwed: 5, lapse: { givenBack: 15, kept: 0, keptBecause: null, owed: 5, words } })
+      await refundOwed(db, bookingId, { amount: 5, refundMethod: 'credit' }, staff)
+      expect(await figures(bookingId)).toMatchObject({ refundOwed: 0, lapse: { givenBack: 15, kept: 0, owed: 5, words } })
+    })
+  })
+
+  it("£5 of the £20 owed and a paid towel (£5), 23 hours before: nothing given back; £20 kept (the guest's £15 that isn't owed and the towel's £5); £5 left owed", async () => {
+    await withBooking({ booking: { ...paidSeat([mo, alex]), ...memberCredit, addons: [{ ...towel, redemptionSource: 'paid' }] }, payment: { method: 'cash', confirmedCashAmount: 25 } }, async ({ bookingId }) => {
+      vi.setSystemTime(SESSION_START - 23 * HOUR)
+      await paymentNeeded(bookingId)
+      await owed(bookingId, '5.00')
+      await sweep()
+      expect((await figures(bookingId)).lapse).toMatchObject({
+        givenBack: 0,
+        kept: 20,
+        keptBecause: 'inside_24_hours',
+        owed: 5,
+        words: `Lapsed on 11 November 2026: ${FIRST} £20.00 was kept: it lapsed inside 24 hours of the session. £5.00 of card refund money was still owed on it, and was left owed.`,
+      })
+    })
+  })
+
+  it("a booking the database's old sweep lapsed (its reason on the booking, no row of its own; it only ever lapsed one with nothing paid): when it was cancelled, and the one sentence", async () => {
+    await withBooking(creditSeat, async ({ bookingId }) => {
+      await db.query("UPDATE bookings SET status = 'cancelled', cancelled_at = '2026-11-09T14:00:00Z', cancel_reason = 'membership_lapsed' WHERE id = $1", [bookingId])
+      expect((await figures(bookingId)).lapse).toEqual({ at: '2026-11-09T14:00:00.000Z', paymentDueBy: null, givenBack: 0, kept: 0, keptBecause: null, owed: 0, words: `Lapsed on 9 November 2026: ${FIRST}` })
+    })
+  })
+
+  it('the words: the date is the London date (23:30 UTC on 10 July is 11 July in London); each part appears only when it has an amount', () => {
+    const none = { givenBack: 0, kept: 0, keptBecause: null, owed: 0 }
+    expect(lapsedWords({ at: '2026-07-10T23:30:00.000Z', ...none })).toBe(`Lapsed on 11 July 2026: ${FIRST}`)
+    expect(lapsedWords({ at: '2026-12-01T00:30:00.000Z', ...none, givenBack: 20.5, owed: 4 })).toBe(`Lapsed on 1 December 2026: ${FIRST} £20.50 went back as store credit. £4.00 of card refund money was still owed on it, and was left owed.`)
+    expect(lapsedWords({ at: '2026-12-01T00:30:00.000Z', ...none, kept: 5, keptBecause: 'session_started' })).toBe(`Lapsed on 1 December 2026: ${FIRST} £5.00 was kept: the session had already started.`)
+  })
+})

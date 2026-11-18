@@ -294,4 +294,16 @@ describe('W44: nothing still needs what was removed', () => {
     expect(membershipSwitch).toContain('switching back is the kind off, then fixing forward')
     expect(membershipSwitch).not.toContain('switching back is a Retool rollback')
   })
+
+  // W46 item 7 (W45a "Noticed" 4): the same sentence was in two more headers. Their old routes left at W25 and W34.
+  it.each(['server/rules/bookings/booking-switch.ts', 'server/rules/refunds/refund-switch.ts'])("%s no longer calls switching back a Retool rollback: a kind off has no old route behind it", (file) => {
+    const comments = readFileSync(path.join(workerDir, file), 'utf8')
+      .split('\n')
+      .filter((line) => line.trimStart().startsWith('//'))
+      .map((line) => line.trimStart().replace(/^\/\/\s?/, '').trim())
+      .join(' ')
+    expect(comments).toContain('switching back is the kind off, then fixing forward')
+    expect(comments).toContain('a kind off has no old route behind it')
+    expect(comments).not.toMatch(/Retool rollback/)
+  })
 })

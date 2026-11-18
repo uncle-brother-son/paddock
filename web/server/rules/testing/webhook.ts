@@ -119,7 +119,12 @@ export function webhookClient(db: Queryable) {
   }
 }
 
-const eventOf = (type: string, object: unknown): Stripe.Event => ({ id: `evt_${crypto.randomUUID()}`, type, data: { object } }) as unknown as Stripe.Event
+// W46b (W46 review S1): an event says which mode it was made in, and the handlers go by it. These are test-mode
+// events, as the fake Stripe's key is; `asLive` gives the same event as live Stripe would send it.
+const eventOf = (type: string, object: unknown): Stripe.Event => ({ id: `evt_${crypto.randomUUID()}`, type, livemode: false, data: { object } }) as unknown as Stripe.Event
+
+/** The same event (the same id) as Stripe sends it in live mode. */
+export const asLive = (event: Stripe.Event): Stripe.Event => ({ ...event, livemode: true })
 
 /**
  * A customer.subscription.updated event: the subscription as it was when the event was made (its snapshot), which is
@@ -136,13 +141,18 @@ export function subscriptionUpdatedEvent(subscriptionId: string, snapshot: { can
   })
 }
 
-/** An invoice.paid or invoice.payment_failed event for a subscription's invoice, as the handlers read it. Times in seconds. */
+/**
+ * An invoice.paid or invoice.payment_failed event for a subscription's invoice, as the handlers read it. Times in
+ * seconds. W46b (W46 review B1): `id` is the invoice's own id, which the handlers hold against the subscription's
+ * newest invoice as Stripe has it (the fake's `latestInvoice`), so every event says which invoice it is for.
+ */
 export function invoiceEvent(
   type: 'invoice.paid' | 'invoice.payment_failed',
   subscriptionId: string,
-  invoice: { periodStart?: number; periodEnd: number; billingReason?: Stripe.Invoice.BillingReason; amountPaid?: number }
+  invoice: { id: string; periodStart?: number; periodEnd: number; billingReason?: Stripe.Invoice.BillingReason; amountPaid?: number }
 ): Stripe.Event {
   return eventOf(type, {
+    id: invoice.id,
     object: 'invoice',
     billing_reason: invoice.billingReason ?? 'subscription_cycle',
     amount_paid: invoice.amountPaid ?? 0,

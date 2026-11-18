@@ -1,7 +1,8 @@
 // New in W17 (D-plan 4.9, lead call L1): which booking changes the Worker takes. ORDER_SWITCH lists the kinds on;
 // a booking change whose kinds aren't all on answers BOOKING_PATH_OFF before anything is touched. An emergency stop,
-// not a fallback: the old bodies go slice by slice (L1), and switching back is a Retool rollback. As for orders, only
-// starting a change is gated: a flow's finalise and cancel, and reconcile, still settle whatever is already held.
+// not a fallback: the old bodies went slice by slice (L1; the last at W25), so a kind off has no old route behind it,
+// and switching back is the kind off, then fixing forward. As for orders, only starting a change is gated: a flow's
+// finalise and cancel, and reconcile, still settle whatever is already held.
 import 'server-only'
 import { ApiError } from '@/server/http/errors'
 import { kindsOn, type OrderKind } from '@/server/rules/orders/order-switch'

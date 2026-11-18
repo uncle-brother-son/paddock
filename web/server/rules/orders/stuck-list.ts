@@ -17,8 +17,8 @@ import { PROCESSING_MINUTES as RECONCILE_WINDOW_MINUTES } from './pending-order'
 import { MEMBERSHIP_REFUND_WORDS } from '@/server/rules/refunds/failure-messages'
 import { LEFT_BY_REFUND } from './refund-subscription'
 import { LATE_REFUND_STEP, WATCH_DAYS, WATCHES_LISTED_SQL, type WatchDetails } from '@/server/rules/refunds/refund-watch'
-import { openSteps, stepWhat, stepWords, type StepKind } from '@/server/rules/memberships/left'
-import { PAYMENT_DATE_STUCK_WORDS } from '@/server/rules/memberships/failure-messages'
+import { notLeftAgain, openSteps, stepWhat, stepWords, type StepKind } from '@/server/rules/memberships/left'
+import { LEFT_STEP_WORDS, PAYMENT_DATE_STUCK_WORDS } from '@/server/rules/memberships/failure-messages'
 import { PAYMENT_DATE_CHANGES_LISTED_SQL, PAYMENT_DATE_CLOSE_REASONS, PAYMENT_DATE_REFUND_WATCH_STEP, paymentDateListedReason, type ListedPaymentDateChange } from '@/server/rules/memberships/payment-date'
 
 /**
@@ -580,6 +580,8 @@ function reasonFor(madeByWorker: boolean, last: Last | null): string {
 export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MINUTES, now = Date.now }: { olderThanMinutes?: number; now?: () => number } = {}): Promise<StuckListOutput> {
   const ageMinutes = (iso: string | null): number => (iso ? Math.max(0, Math.round((now() - new Date(iso).getTime()) / 60000)) : 0)
   const iso = (value: unknown): string => (value instanceof Date ? value.toISOString() : String(value ?? ''))
+  // W36: memberships' Stripe steps still open (read once: W46 sets the wishes not left again against them).
+  const open = await openSteps(db)
 
   const orders = await db.query<{
     id: string
@@ -855,20 +857,39 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
       }
     }),
     // W36 (F-plan 4.10): memberships' Stripe steps left to do. Only one Stripe has refused for good can be closed by hand.
-    steps: (await openSteps(db)).map((step) => ({
-      stepId: step.id,
-      membershipId: step.membershipId,
-      subscriptionId: step.subscriptionId,
-      step: step.kind,
-      // W40: what it is, and for a cancel date the last day of access it sets.
-      ...stepWhat(step),
-      customerId: step.customerId,
-      customerName: step.customerName,
-      state: step.refused ? ('refused' as const) : ('left' as const),
-      at: step.at,
-      words: stepWords(step),
-      ...(step.refused ? { close: { kind: 'left_step' as const, orderId: step.id } } : {}),
-    })),
+    steps: [
+      ...open.map((step) => ({
+        stepId: step.id,
+        membershipId: step.membershipId,
+        subscriptionId: step.subscriptionId,
+        step: step.kind,
+        // W40: what it is, and for a cancel date the last day of access it sets.
+        ...stepWhat(step),
+        customerId: step.customerId,
+        customerName: step.customerName,
+        state: step.refused ? ('refused' as const) : ('left' as const),
+        at: step.at,
+        words: stepWords(step),
+        ...(step.refused ? { close: { kind: 'left_step' as const, orderId: step.id } } : {}),
+      })),
+      // W46 (W40b "Noticed" 2): a wish a run could not leave again because the database failed. The automatic check
+      // tries again every run, so it has no close; it goes once a run has settled it. One whose step is still open is
+      // on the list already, above.
+      ...(await notLeftAgain(db))
+        .filter((step) => !open.some((listed) => listed.id === step.id))
+        .map((step) => ({
+          stepId: step.id,
+          membershipId: step.membershipId,
+          subscriptionId: step.subscriptionId,
+          step: step.kind,
+          ...stepWhat(step),
+          customerId: step.customerId,
+          customerName: step.customerName,
+          state: 'left' as const,
+          at: step.at,
+          words: LEFT_STEP_WORDS.notLeftAgain(step.subscriptionId),
+        })),
+    ],
     alert: alert ? { at: iso(alert.at), words: STRIPE_REFUSED_WORDS } : null,
   }
 }

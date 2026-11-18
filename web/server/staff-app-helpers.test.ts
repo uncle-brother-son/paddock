@@ -3544,7 +3544,8 @@ describe('staff app helpers', () => {
       const types = readFileSync(path.join(appDir, 'frontend/types/paddock.ts'), 'utf8')
       expect(types).toContain('paidWords?: string')
       const contracts = readFileSync(path.join(shared, 'workerContracts.ts'), 'utf8')
-      expect(contracts).toMatch(/export type BookingRefundFiguresRouteOutput = \{[^\n]*paidLine: string; paidWords: string; \}/)
+      // W46: for a lapsed booking the route's answer also carries `lapse` (why it lapsed), after the words.
+      expect(contracts).toMatch(/export type BookingRefundFiguresRouteOutput = \{[^\n]*paidLine: string; paidWords: string; lapse\?: \{[^\n]*words: string; \} \| undefined; \}/)
     })
   })
 

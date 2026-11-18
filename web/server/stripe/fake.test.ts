@@ -243,6 +243,53 @@ describe('readStripeFailure', () => {
       expect(stripe.liveSubscriptions).not.toContain('sub_seeded')
     })
 
+    // W46b (W46 review B1): the webhook holds an invoice event against the subscription's newest invoice.
+    it("a subscription's newest invoice is the one it was made with, answered as an id, until a test gives it a later one", async () => {
+      stripe.addPrice('price_seeded', 4000, 'month')
+      stripe.addSubscription('sub_seeded', 'cus_1', 'price_seeded')
+      const first = stripe.latestInvoice('sub_seeded')
+      expect(first).toMatch(/^in_/)
+      expect((await stripe.subscriptions.retrieve('sub_seeded')).latest_invoice).toBe(first)
+      expect((await stripe.subscriptions.retrieve('sub_seeded', { expand: ['latest_invoice.payments'] })).latest_invoice).toMatchObject({ id: first, object: 'invoice' })
+      stripe.setSubscription('sub_seeded', { latestInvoice: 'in_later' })
+      expect(stripe.latestInvoice('sub_seeded')).toBe('in_later')
+      expect((await stripe.subscriptions.retrieve('sub_seeded')).latest_invoice).toBe('in_later')
+      // Nothing else moved.
+      expect(stripe.subscriptionSettings('sub_seeded')).toMatchObject({ status: 'active', cancelAt: null, trialEnd: null })
+      // Only the invoice it was made with is modelled expanded.
+      await expect(stripe.subscriptions.retrieve('sub_seeded', { expand: ['latest_invoice.payments'] })).rejects.toThrow('The fake has only modelled expanding the invoice a subscription was made with')
+      expect(() => stripe.latestInvoice('sub_none')).toThrow('The fake has no subscription sub_none.')
+    })
+
+    it.each([
+      ['month', (start: Date) => start.setUTCMonth(start.getUTCMonth() + 1)],
+      ['year', (start: Date) => start.setUTCFullYear(start.getUTCFullYear() + 1)],
+    ] as const)('startRenewal, a %sly price: the hour before the charge: active, the period moved on one period from the old end, and a new draft its newest invoice', async (interval, on) => {
+      stripe.addPrice('price_seeded', 4000, interval)
+      stripe.addSubscription('sub_seeded', 'cus_1', 'price_seeded')
+      const first = stripe.latestInvoice('sub_seeded')
+      const oldEnd = stripe.subscriptionSettings('sub_seeded')?.periodEnd ?? 0
+      // Left trialing by a payment date change: the renewal ends the no-charge days.
+      stripe.setSubscription('sub_seeded', { status: 'trialing' })
+      const draft = stripe.startRenewal('sub_seeded')
+      expect(draft).toMatch(/^in_/)
+      expect(draft).not.toBe(first)
+      const read = await stripe.subscriptions.retrieve('sub_seeded')
+      expect(read.status).toBe('active')
+      expect(read.latest_invoice).toBe(draft)
+      expect(read.items.data[0]?.current_period_start).toBe(oldEnd)
+      expect(read.items.data[0]?.current_period_end).toBe(on(new Date(oldEnd * 1000)) / 1000)
+      expect(stripe.subscriptionSettings('sub_seeded')).toMatchObject({ status: 'active', trialEnd: null })
+      // The charge failing or going through is the test's to set; the invoice stays the newest.
+      stripe.setSubscription('sub_seeded', { status: 'past_due' })
+      expect((await stripe.subscriptions.retrieve('sub_seeded')).latest_invoice).toBe(draft)
+      // A second renewal gives another draft, and a period end can be given.
+      const next = stripe.startRenewal('sub_seeded', 1900000000)
+      expect(next).not.toBe(draft)
+      expect(stripe.subscriptionSettings('sub_seeded')).toMatchObject({ status: 'active', periodEnd: 1900000000 })
+      expect(() => stripe.startRenewal('sub_none')).toThrow('The fake has no subscription sub_none.')
+    })
+
     it('a tap that saves the card shows the generated card on the charge, and only then', async () => {
       const made = await stripe.paymentIntents.create({ amount: 500, currency: 'gbp' })
       stripe.completeReaderPayment(made.id, { generatedCard: 'pm_saved' })

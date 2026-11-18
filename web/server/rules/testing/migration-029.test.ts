@@ -163,6 +163,19 @@ describe('migration 029 (brief W45a item 1; W45 audit S1): the credit allocation
     expect(statement().match(/\$function\$/g)).toHaveLength(2)
   })
 
+  // Brief W46 item 1: the lead applied 029 on live on 18 Nov and the snapshot was refreshed from live's catalogue
+  // (briefs/W46-logs/live-catalog-answer-2026-11-18-029.json). The refresh's whole diff was this one line.
+  it("W46: the saved schema is live's after 029: both saved files hold the function as 029 leaves it, word for word, and no longer the line it replaced", () => {
+    const saved = JSON.parse(readFileSync(path.join(__dirname, 'live-catalog.json'), 'utf8')) as Catalog
+    const allocation = saved.functions.filter((fn) => fn.name === FUNCTION)
+    expect(allocation).toHaveLength(1)
+    expect(`${allocation[0]?.definition.trim()}\n`).toBe(AFTER_029)
+    const schema = readFileSync(path.join(__dirname, 'live-schema.sql'), 'utf8')
+    expect(schema.split(`\n${LINE_AFTER}\n`)).toHaveLength(2)
+    expect(schema).not.toContain(`\n${LINE_BEFORE}\n`)
+    expect(schema).toContain(`${AFTER_029.trim()};`)
+  })
+
   it('029 is the function as it was with one line changed: an active membership is eligible only with no cancel date or one of today or later, the test a cancelled one already has', () => {
     const before = BEFORE_029.split('\n')
     const after = AFTER_029.split('\n')

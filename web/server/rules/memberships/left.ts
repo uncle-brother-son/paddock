@@ -97,7 +97,17 @@
 //   shows it, but no line is listed. Inside the 20 minutes the check puts the newest wish back.
 // - Stripe unreadable for hours: nothing is listed until 2 hours have passed with no clear read.
 // - A send that lands more than 20 minutes after its step closed: see the 10 second limit above.
-// - A wish with no step: a membership with no subscription has none.
+// - A wish with no step: a membership with no subscription has none. (W46: such a membership is ended in the database
+//   once its last day has passed, no-subscription.ts.)
+//
+// W46 (G-plan 2.1; W45a "Noticed" 8, the W45 audit's S1 fix 3; W40d "Noticed" 5; W40b "Noticed" 2):
+// - The check also sets the membership's own row against Stripe. When Stripe shows the newest wish for a cancel date
+//   but the row's last day is not the one Stripe's `cancel_at` gives (the webhook's own sum), the wish is left again
+//   as a step already refused, with both dates: listed for a person, with Mark sorted. Nothing is ever sent from the
+//   row, and the row is not changed: a person decides which is right.
+// - A sorted wish's `checked` row is written with its `sorted` row, in the same transaction (it waited 20 minutes).
+// - A wish a run could not leave again because the database failed (`step_not_left_again`) is listed until a run
+//   settles it (`notLeftAgain`).
 import 'server-only'
 import type Stripe from 'stripe'
 import { audit, type AuditEntry } from '@/server/audit'
@@ -153,8 +163,19 @@ export interface OpenStep extends LeftStep {
   missing: boolean
   /** W40 (S1): recorded less than PROCESSING_MINUTES ago: its press may still be sending it, so reconcile leaves it. */
   inWindow: boolean
+  /** W46: it is listed because the membership's last day and the one Stripe gives differ (the check found it): both days. */
+  mismatch: RowMismatch | null
   customerId: string | null
   customerName: string | null
+}
+
+/**
+ * W46: a membership's last day of access as its row has it (`row`) and as Stripe's subscription gives it (`stripe`),
+ * London dates, null for no end. Kept on the refused row of the step the check leaves for a person.
+ */
+export interface RowMismatch {
+  row: string | null
+  stripe: string | null
 }
 
 type Actor = { type: 'staff' | 'customer' | 'system'; id: string | null }
@@ -209,12 +230,12 @@ export function stepEndEntry(step: LeftStep, state: Extract<StepState, 'done' | 
 export const OPEN_STEPS_SQL = `
 SELECT s.entity_id AS membership_id, s.details->>'stepId' AS step_id, s.details->>'kind' AS kind,
        s.details->>'subscriptionId' AS subscription_id, s.details->'want' AS want, s.at,
-       r.detail IS NOT NULL AS refused, r.detail AS refusal, COALESCE(r.missing, false) AS missing,
+       r.detail IS NOT NULL AS refused, r.detail AS refusal, COALESCE(r.missing, false) AS missing, r.mismatch,
        s.at > now() - interval '${PROCESSING_MINUTES} minutes' AS in_window,
        c.id AS customer_id, NULLIF(trim(concat_ws(' ', c.first_name, c.last_name)), '') AS customer_name
 FROM audit_log s
 LEFT JOIN LATERAL (
-  SELECT COALESCE(f.details->>'detail', '') AS detail, (f.details->>'missing') = 'true' AS missing
+  SELECT COALESCE(f.details->>'detail', '') AS detail, (f.details->>'missing') = 'true' AS missing, f.details->'mismatch' AS mismatch
   FROM audit_log f
   WHERE f.action = '${STEP_LEFT_ACTION}' AND f.entity_type = '${STEP_LEFT_ENTITY}' AND f.entity_id = s.entity_id
     AND f.details->>'stepId' = s.details->>'stepId' AND f.details->>'state' = 'refused'
@@ -251,6 +272,7 @@ interface OpenStepRow {
   refused: boolean
   refusal: string | null
   missing: boolean
+  mismatch: Partial<RowMismatch> | null
   in_window: boolean
   customer_id: string | null
   customer_name: string | null
@@ -272,6 +294,7 @@ function openStep(row: OpenStepRow): OpenStep | null {
     refusal: row.refused ? (row.refusal ?? '') : null,
     missing: row.refused && row.missing === true,
     inWindow: row.in_window === true,
+    mismatch: row.refused && row.mismatch ? { row: row.mismatch.row ?? null, stripe: row.mismatch.stripe ?? null } : null,
     customerId: row.customer_id,
     customerName: row.customer_name,
   }
@@ -306,7 +329,9 @@ async function openStepById(db: Queryable, stepId: string): Promise<OpenStep | n
 }
 
 /** What the stuck list says for an open step. W40 (L2): a subscription Stripe can't find has its own words. */
-export function stepWords(step: Pick<OpenStep, 'kind' | 'subscriptionId' | 'refused'> & { missing?: boolean }): string {
+export function stepWords(step: Pick<OpenStep, 'kind' | 'subscriptionId' | 'refused'> & { missing?: boolean; mismatch?: RowMismatch | null }): string {
+  // W46: listed by the check because the membership's last day and Stripe's differ. Stripe refused nothing.
+  if (step.refused && step.mismatch) return LEFT_STEP_WORDS.rowDiffers(step.subscriptionId, step.mismatch.row, step.mismatch.stripe)
   return LEFT_STEP_WORDS[step.kind][step.refused ? (step.missing ? 'missing' : 'refused') : 'left'](step.subscriptionId)
 }
 
@@ -871,14 +896,53 @@ async function wishInForce(db: Queryable, stepId: string): Promise<WishInForce |
 }
 
 type StripeSeen =
-  /** Stripe shows the wish, or the subscription has ended where that settles it. */
-  | { kind: 'agrees'; detail: string }
+  /**
+   * Stripe shows the wish, or the subscription has ended where that settles it. `ends` (W46), for a subscription still
+   * running: the moment Stripe ends it, in seconds, or null for no end. Absent when it has ended, or can't be told.
+   */
+  | { kind: 'agrees'; detail: string; ends?: number | null }
   /** Stripe shows something else. */
   | { kind: 'differs'; detail: string }
   /** Stripe can't find the subscription, or it has ended and the wish can't be met: for a person, never sent. */
   | { kind: 'person'; message: string; missing?: true }
   /** No clear answer. */
   | { kind: 'unread'; message: string }
+
+/**
+ * W46: the moment Stripe ends a running subscription, as the webhook reads it (membership_sync_cancel_at_period_end):
+ * its `cancel_at`; else, when it ends with its period, the period's end; else null. Undefined when it ends with a
+ * period whose end Stripe didn't give: nothing to set the membership's row against.
+ */
+function stripeEnds(subscription: Stripe.Subscription): number | null | undefined {
+  if (typeof subscription.cancel_at === 'number') return subscription.cancel_at
+  if (subscription.cancel_at_period_end !== true) return null
+  const periodEnd = subscription.items?.data?.[0]?.current_period_end
+  return typeof periodEnd === 'number' ? periodEnd : undefined
+}
+
+/**
+ * W46: a membership's last day as its row has it, and as Stripe's end gives it (`$2`, seconds, or null): the London
+ * date of that moment, less a day, which is the webhook's own sum when it copies Stripe's date onto the row.
+ */
+const ROW_AGAINST_STRIPE_SQL = `
+SELECT cm.subscription_status AS status, cm.cancel_effective_date::text AS row_day,
+       ((to_timestamp($2::double precision) AT TIME ZONE 'Europe/London')::date - 1)::text AS stripe_day
+FROM customer_memberships cm
+WHERE cm.id::text = $1`
+
+/**
+ * W46: the two last days when they differ, else null. A membership that has ended in the database keeps the day it
+ * ended on and is not compared; nor is one that can't be read.
+ */
+async function rowAgainstStripe(db: Queryable, membershipId: string, ends: number | null): Promise<RowMismatch | null> {
+  const [row] = await db.query<{ status: string; row_day: string | null; stripe_day: string | null }>(ROW_AGAINST_STRIPE_SQL, [membershipId, ends])
+  if (!row || row.status === 'cancelled' || row.row_day === row.stripe_day) return null
+  return { row: row.row_day, stripe: row.stripe_day }
+}
+
+/** W46: what the check records when the row and Stripe differ. */
+const rowDiffersMessage = (subscriptionId: string, mismatch: RowMismatch): string =>
+  `The membership's last day is ${mismatch.row ?? 'not set'}, but subscription ${subscriptionId} in Stripe gives ${mismatch.stripe ?? 'no end'}. Nothing was sent or changed.`
 
 /** One read of the subscription, set against the wish. Never a send, and never throws for Stripe. */
 async function readForCheck(stripe: StripeClient, wish: Pick<LeftStep, 'kind' | 'want' | 'subscriptionId'>, timing: StripeTiming | undefined): Promise<StripeSeen> {
@@ -895,7 +959,10 @@ async function readForCheck(stripe: StripeClient, wish: Pick<LeftStep, 'kind' | 
     const ended = endedAnswer(wish)
     return ended.kind === 'refused' ? { kind: 'person', message: ended.message } : { kind: 'agrees', detail: 'the subscription has already ended in Stripe' }
   }
-  if (stepIsDone(now, wish)) return { kind: 'agrees', detail: 'Stripe shows it' }
+  if (stepIsDone(now, wish)) {
+    const ends = stripeEnds(now)
+    return { kind: 'agrees', detail: 'Stripe shows it', ...(ends === undefined ? {} : { ends }) }
+  }
   return { kind: 'differs', detail: wish.kind === 'cancel_at' ? `Stripe shows cancel_at ${now.cancel_at ?? 'none'}` : `Stripe shows the card ${idOf(now.default_payment_method) ?? 'none'}` }
 }
 
@@ -914,6 +981,11 @@ export type CheckOutcome =
   | 'for_a_person'
   /** No clear read in CHECK_UNREAD_HOURS: the newest wish was left again, so it is listed and read by every run. */
   | 'unread'
+  /**
+   * W46: Stripe shows the newest wish, but the membership's own last day is not the one Stripe gives: the wish was
+   * left again as a refused step carrying both days, for a person. Nothing is sent, and the row is not changed.
+   */
+  | 'row_differs'
 
 export type StepChecked =
   /** A check row was written and nothing is left to do. */
@@ -923,8 +995,13 @@ export type StepChecked =
   /** Nothing was written: the next run looks again. */
   | { kind: 'wait'; detail: string }
 
-/** What a check leaves with its row: the newest wish again, to send (`send`) or as refused for a person. */
-type CheckLeaves = { how: 'send' } | { how: 'refused'; message: string; missing?: true }
+/** What a check leaves with its row: the newest wish again, to send (`send`) or as refused for a person (W46: `mismatch`, the two last days). */
+type CheckLeaves = { how: 'send' } | { how: 'refused'; message: string; missing?: true; mismatch?: RowMismatch }
+
+/** One `membership.step_check` row. */
+function checkEntry(by: StepBy, membershipId: string, details: { subscriptionId: string; kind: StepKind; steps: string[]; outcome: CheckOutcome; wish: string | null; leftAgain?: string; detail: string }): AuditEntry {
+  return { actorType: by.actor.type, actorId: by.actor.id, action: STEP_CHECK_ACTION, entityType: STEP_LEFT_ENTITY, entityId: membershipId, requestId: by.requestId, details }
+}
 
 /**
  * A check's ending, in one transaction under the membership's lock, after looking again. Nothing is written when
@@ -933,7 +1010,17 @@ type CheckLeaves = { how: 'send' } | { how: 'refused'; message: string; missing?
  * covers, and with `leaves` the newest wish left again as a new step in the same transaction (as `keepForALaterRead`
  * does), so two runs at once can't leave it twice and it is never left over a newer change.
  */
-async function endCheck(db: Db, due: CheckDue, wish: WishInForce | null, by: StepBy, outcome: CheckOutcome, detail: string, leaves?: CheckLeaves): Promise<StepChecked> {
+async function endCheck(
+  db: Db,
+  due: CheckDue,
+  wish: WishInForce | null,
+  by: StepBy,
+  outcome: CheckOutcome,
+  detail: string,
+  leaves?: CheckLeaves,
+  /** W46: what the check found about the membership's own row, asked again under its lock. False: nothing is written. */
+  rowStillAsFound?: (tx: Tx) => Promise<boolean>
+): Promise<StepChecked> {
   return db.transaction(async (tx) => {
     await lockMembership(tx, due.membershipId)
     const [still] = await tx.query<{ step_ids: string[] | null }>(CHECK_DUE_FOR_SQL, [due.membershipId, due.subscriptionId, due.kind])
@@ -941,18 +1028,14 @@ async function endCheck(db: Db, due: CheckDue, wish: WishInForce | null, by: Ste
     if (steps.length === 0) return { kind: 'wait' as const, detail: 'checked by another run meanwhile' }
     const now = await wishInForce(tx, steps[0] as string)
     if ((now?.id ?? null) !== (wish?.id ?? null) || (now?.closedAs ?? null) !== (wish?.closedAs ?? null)) return { kind: 'wait' as const, detail: 'a change has been made since: not checked yet' }
+    // W46: the webhook writes the row under the same lock, so one that changed since it was read is read again next run.
+    if (rowStillAsFound && !(await rowStillAsFound(tx))) return { kind: 'wait' as const, detail: "the membership's last day changed meanwhile: not checked yet" }
     const again = wish && leaves ? (await leaveStepReplacing(tx, { membershipId: wish.membershipId, subscriptionId: wish.subscriptionId, kind: wish.kind, want: wish.want }, by, { leftAgainFor: wish.id })).step : null
     await audit.recordAll(tx, [
-      ...(again && leaves?.how === 'refused' ? [entry(again, 'refused', by, { detail: leaves.message, ...(leaves.missing ? { missing: true } : {}) })] : []),
-      {
-        actorType: by.actor.type,
-        actorId: by.actor.id,
-        action: STEP_CHECK_ACTION,
-        entityType: STEP_LEFT_ENTITY,
-        entityId: due.membershipId,
-        requestId: by.requestId,
-        details: { subscriptionId: due.subscriptionId, kind: due.kind, steps, outcome, wish: wish?.id ?? null, ...(again ? { leftAgain: again.id } : {}), detail },
-      },
+      ...(again && leaves?.how === 'refused'
+        ? [entry(again, 'refused', by, { detail: leaves.message, ...(leaves.missing ? { missing: true } : {}), ...(leaves.mismatch ? { mismatch: leaves.mismatch } : {}) })]
+        : []),
+      checkEntry(by, due.membershipId, { subscriptionId: due.subscriptionId, kind: due.kind, steps, outcome, wish: wish?.id ?? null, ...(again ? { leftAgain: again.id } : {}), detail }),
     ])
     if (again && outcome !== 'checked' && outcome !== 'open') return { kind: 'listed' as const, outcome, stepId: again.id, detail }
     return { kind: 'checked' as const, outcome: outcome === 'open' ? ('open' as const) : ('checked' as const), detail }
@@ -974,6 +1057,8 @@ async function endCheck(db: Db, due: CheckDue, wish: WishInForce | null, by: Ste
  *   wish again would undo their fix, or be refused and listed again for ever. No older send can still be on its way:
  *   Stripe had refused the step before the person touched it.
  * - Stripe shows the wish (or has ended the subscription, where that settles it): one `checked` row, and that is all.
+ * - W46: Stripe shows the wish for a cancel date, and the membership's own last day is another: the wish is left again
+ *   as a step already refused, with both days (`row_differs`). Listed for a person; never sent; the row unchanged.
  * - Stripe shows something else: the newest wish is left again as a new step. It is listed, a new press waits its
  *   window, and the next run past the window sends it. That step is checked in its turn when it closes.
  * - W40d, the loop guard: Stripe shows something else, and the wish is itself a step a check left again that was then
@@ -999,7 +1084,23 @@ export async function checkAfterClosing(db: Db, stripe: StripeClient, due: Check
   // W40d (S1): a sorted wish is a person's. Not read, not held to Stripe, never sent again.
   if (wish.closedAs === 'sorted') return endCheck(db, due, wish, by, 'checked', `step ${wish.id} was marked sorted by a person: not held to Stripe`)
   const seen = await readForCheck(stripe, wish, timing)
-  if (seen.kind === 'agrees') return endCheck(db, due, wish, by, 'checked', `step ${wish.id}: ${seen.detail}`)
+  if (seen.kind === 'agrees') {
+    // W46 (W45a "Noticed" 8; the W45 audit's S1 fix 3): Stripe shows the wish. The membership's own row is set against
+    // Stripe too, for a cancel date on a subscription still running. If its last day is not the one Stripe gives,
+    // the wish is left again as a step already refused, with both days: listed for a person, never sent. The row is
+    // looked at again under the membership's lock before anything is written.
+    const { ends } = seen
+    const mismatch = wish.kind === 'cancel_at' && ends !== undefined ? await rowAgainstStripe(db, wish.membershipId, ends) : null
+    if (mismatch && ends !== undefined) {
+      const message = rowDiffersMessage(wish.subscriptionId, mismatch)
+      const sameAsFound = async (tx: Tx): Promise<boolean> => {
+        const now = await rowAgainstStripe(tx, wish.membershipId, ends)
+        return now !== null && now.row === mismatch.row && now.stripe === mismatch.stripe
+      }
+      return endCheck(db, due, wish, by, 'row_differs', `step ${wish.id}: ${seen.detail}. ${message} Left for a person`, { how: 'refused', message, mismatch }, sameAsFound)
+    }
+    return endCheck(db, due, wish, by, 'checked', `step ${wish.id}: ${seen.detail}`)
+  }
   if (seen.kind === 'differs') {
     // W40d, the loop guard: a check left this wish again, it was sent and closed `done`, and Stripe still differs.
     if (wish.closedAs === 'done' && (await db.query(CHECK_LEFT_AND_SENT_SQL, [wish.id])).length > 0) {
@@ -1038,7 +1139,73 @@ export async function sortLeftStep(db: Db, stepId: string, why: string, by: Step
     }
     if (!step.refused) return { closed: false as const, reason: 'still_trying' as const, message: LEFT_STEP_WORDS.stillTrying }
     // W40 (W36 review L4): `closeRow` is the manual close's own `order.close` row, written with the `sorted` row.
-    await audit.recordAll(tx, [entry(step, 'sorted', by, { byHand: { why } }), ...(closeRow ? [closeRow(step)] : [])])
+    // W46 (W40d "Noticed" 5): and the sorted wish's `checked` row, last. Its check reads nothing (a sorted wish is a
+    // person's, W40d), so there is nothing to wait 20 minutes for. The step closes in this transaction, so no run's
+    // check can have covered it; a check that later covers older closings of this subscription finds this wish sorted.
+    await audit.recordAll(tx, [
+      entry(step, 'sorted', by, { byHand: { why } }),
+      ...(closeRow ? [closeRow(step)] : []),
+      checkEntry(by, step.membershipId, { subscriptionId: step.subscriptionId, kind: step.kind, steps: [step.id], outcome: 'checked', wish: step.id, detail: `step ${step.id} was marked sorted by a person: not held to Stripe` }),
+    ])
     return { closed: true as const, message: LEFT_STEP_WORDS.sorted }
   })
+}
+
+// --- A wish a run could not leave again (W40b), listed (W46)
+
+/** W40b: the reason on a run's row for a newest step's wish it could not leave again (the database failed). */
+export const STEP_NOT_LEFT_AGAIN = 'step_not_left_again'
+
+/**
+ * W40b: the steps whose wish a run could not leave again and no run has settled since: a run's `left` row with the
+ * reason above naming the step (`leaveAgain`), and no row for that step with any other outcome. Whether a row exists,
+ * never which came last: rows written back to back can share a time. (The run's rows are reconcile's: action
+ * `order.reconcile` on `membership_step`.)
+ */
+export const LEAVE_AGAIN_DUE_SQL = `
+SELECT DISTINCT r.details->>'leaveAgain' AS step_id
+FROM audit_log r
+WHERE r.action = 'order.reconcile' AND r.entity_type = 'membership_step' AND r.details->>'outcome' = 'left'
+  AND r.details->>'reason' = '${STEP_NOT_LEFT_AGAIN}' AND r.details->>'leaveAgain' IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM audit_log d
+    WHERE d.action = 'order.reconcile' AND d.entity_type = 'membership_step'
+      AND d.details->>'leaveAgain' = r.details->>'leaveAgain' AND d.details->>'outcome' <> 'left'
+  )
+ORDER BY 1`
+
+/** W46 (W40b "Noticed" 2): one of those, as the stuck list shows it. */
+export interface NotLeftAgain extends LeftStep {
+  /** When a run first could not leave it again. */
+  at: string
+  customerId: string | null
+  customerName: string | null
+}
+
+/** Each step in LEAVE_AGAIN_DUE_SQL with what the list needs: its `left` row, when it was first reported, and the customer. */
+const NOT_LEFT_AGAIN_SQL = `
+SELECT s.entity_id AS membership_id, s.details->>'stepId' AS step_id, s.details->>'kind' AS kind,
+       s.details->>'subscriptionId' AS subscription_id, s.details->'want' AS want,
+       (SELECT min(r.at) FROM audit_log r
+        WHERE r.action = 'order.reconcile' AND r.entity_type = 'membership_step' AND r.details->>'reason' = '${STEP_NOT_LEFT_AGAIN}'
+          AND r.details->>'leaveAgain' = s.details->>'stepId') AS at,
+       c.id AS customer_id, NULLIF(trim(concat_ws(' ', c.first_name, c.last_name)), '') AS customer_name
+FROM (${LEAVE_AGAIN_DUE_SQL}) due
+JOIN audit_log s ON s.action = '${STEP_LEFT_ACTION}' AND s.entity_type = '${STEP_LEFT_ENTITY}' AND s.details->>'state' = 'left' AND s.details->>'stepId' = due.step_id
+LEFT JOIN customer_memberships cm ON cm.id::text = s.entity_id
+LEFT JOIN customers c ON c.id = cm.customer_id
+ORDER BY 6, 2`
+
+/**
+ * W46 (W40b "Noticed" 2): the wishes a run could not leave again, for the stuck list. Each is tried again by every
+ * run with no Stripe call, so it goes with the first run the database takes; until then it showed nowhere but the
+ * run's own answer.
+ */
+export async function notLeftAgain(db: Queryable): Promise<NotLeftAgain[]> {
+  const rows = await db.query<{ membership_id: string; step_id: string; kind: string; subscription_id: string; want: StepWant | null; at: string | Date; customer_id: string | null; customer_name: string | null }>(NOT_LEFT_AGAIN_SQL)
+  return rows.flatMap((row) =>
+    isStepKind(row.kind)
+      ? [{ id: row.step_id, membershipId: row.membership_id, subscriptionId: row.subscription_id, kind: row.kind, want: row.want ?? {}, at: iso(row.at), customerId: row.customer_id, customerName: row.customer_name }]
+      : []
+  )
 }

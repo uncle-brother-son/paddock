@@ -552,3 +552,22 @@ export const moveReaderNotStartedNotUndoneMessage = (detail: string): string => 
  */
 export const moveRefundFailedMessage = (detail: string): string =>
   `The card refund failed (${detail}), so the booking wasn't moved and nothing was refunded. Try again, or refund the difference to store credit.`
+
+// --- W46: why a booking lapsed (G-plan 2.1; W43 "Noticed" 4), for the booking detail (W47 shows it)
+
+/** A date as staff read it: 12 November 2026, in London. */
+const londonDay = (iso: string): string => new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', day: 'numeric', month: 'long', year: 'numeric' }).format(new Date(iso))
+
+/**
+ * The booking detail's line for a booking the lapse sweep cancelled: when and why, then what was given back, what
+ * was kept and why, and what was left owed. A lapse with no money on it has the first sentence only.
+ */
+export function lapsedWords(lapse: { at: string; givenBack: number; kept: number; keptBecause: 'inside_24_hours' | 'session_started' | null; owed: number }): string {
+  const why = lapse.keptBecause === 'session_started' ? 'the session had already started' : 'it lapsed inside 24 hours of the session'
+  return [
+    `Lapsed on ${londonDay(lapse.at)}: the membership payment wasn't made by the deadline.`,
+    ...(lapse.givenBack > 0 ? [`£${lapse.givenBack.toFixed(2)} went back as store credit.`] : []),
+    ...(lapse.kept > 0 ? [`£${lapse.kept.toFixed(2)} was kept: ${why}.`] : []),
+    ...(lapse.owed > 0 ? [`£${lapse.owed.toFixed(2)} of card refund money was still owed on it, and was left owed.`] : []),
+  ].join(' ')
+}

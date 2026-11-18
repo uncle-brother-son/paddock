@@ -52,6 +52,19 @@ export const LEFT_STEP_WORDS = {
     missing: (subscriptionId: string): string =>
       `A customer's card was replaced, but Stripe can't find a membership's subscription (${subscriptionId}) with the club's payment account details, so the automatic check has stopped trying. Tell a manager: the subscription may have been deleted in Stripe, or belong to the other mode. Once the membership and Stripe agree, press Mark sorted (needs the Issue refunds permission).`,
   },
+  /**
+   * W46: the check found the membership's own last day and the one Stripe's subscription gives are not the same
+   * (`rowDay`, `stripeDay`: dates as YYYY-MM-DD, null for no end). Stripe refused nothing, and nothing was sent or
+   * changed: a person decides which is right.
+   */
+  rowDiffers: (subscriptionId: string, rowDay: string | null, stripeDay: string | null): string =>
+    `A membership and its subscription in Stripe (${subscriptionId}) don't agree about when it ends: the membership ${rowDay ? `says its last day is ${rowDay}` : 'has no last day'}, and Stripe ${stripeDay ? `ends it after ${stripeDay}` : 'has no end date, so it will keep renewing'}. Nothing was changed. Check which is right. If the membership is wrong, use Cancel membership or Undo cancellation on it so the two match (if it offers neither, tell a manager). If Stripe is wrong, set or clear the subscription's cancel date in Stripe by hand (or tell a manager). Then press Mark sorted (needs the Issue refunds permission).`,
+  /**
+   * W46 (W40b "Noticed" 2): a change that may not have reached Stripe, which the automatic check could not record to
+   * send again because the database didn't take it. Every check tries again.
+   */
+  notLeftAgain: (subscriptionId: string): string =>
+    `A membership's change may not have reached its subscription (${subscriptionId}) in Stripe, and the automatic check couldn't record it to try again. It tries again every 5 minutes, and this goes once it has. If this is still here after an hour, tell a manager.`,
   /** The manual close's answer. */
   sorted: 'Marked as sorted. It is no longer listed.',
   notListed: 'This is no longer on the list (it was sorted in the meantime). Nothing was changed.',

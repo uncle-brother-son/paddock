@@ -947,6 +947,11 @@ export async function finishClaimInTransaction(tx: Tx, claim: Claim, outcome: Cl
   // W22: the removed guest's line, once all of their seat's money went back (the old function didn't stamp it while
   // some was still to refund).
   if (details.kind === 'remove_guest' && details.guest && owed <= 0) await stampRemovedGuestLine(tx, claim.bookingId, details.guest.seatPrice)
+  // W46 (W43a "Noticed" 3; W26 audit row 22): Refund the rest on a cancelled booking gave what was owed. Its lines
+  // are stamped once all of their money is back, after the status above, and their orders' status worked out again.
+  if (details.kind === 'refund_owed' && status === 'cancelled' && owed <= 0) {
+    for (const orderId of await stampWhenOwedSettled(tx, claim.bookingId, 'refund_owed')) await recordOrderPaymentStatus(tx, orderId)
+  }
 
   const cash = plan.cash
   // W33: a customer's own cancel is written as the customer's. W43: the lapse sweep's as the system's.
@@ -1131,6 +1136,108 @@ export async function stampLinesIfSeatMoneyAllBack(tx: Tx, bookingId: string): P
   if (!(await seatMoneyAllBack(tx, bookingId))) return []
   const stamped = await tx.query<{ order_id: string }>(STAMP_ALL_BACK_SQL, [bookingId])
   return [...new Set(stamped.map((row) => row.order_id))]
+}
+
+// --- W46: a cancelled booking's money owed, settled (W43a "Noticed" 3; the W26 audit's row 22)
+//
+// Money owed on a cancelled booking is card refund money that never reached the customer (Q39): the booking's lines
+// stay unstamped while it is owed, because not all of their money is back. Before W46 nothing stamped them when staff
+// later settled it (Refund the rest, It already arrived): the £20 guest whose lapse gave £15 with £5 owed kept
+// `refunded_at` null for ever after the £5 was given, and its order never read as refunded. And an add-on line whose
+// refund was part of the money owed went on reading "£0 back" after Refund the rest had given its share.
+// Now, when either action leaves nothing owed on a cancelled booking:
+// - Refund the rest: every removed add-on line whose refund a claim planned to send to a card, and which is not
+//   stamped with all of its money, is stamped with it (store credit, or card when some of it had gone to the card).
+//   Such a line is short of its money only because its card share never arrived (never sent, refused, not found, or
+//   failed later and taken off the line by the refund watch, W32), so its share is in what was owed, and what is
+//   owed is always given whole on a cancelled booking. A claim that was put back doesn't count: its line went back
+//   on the booking, and if it was removed again later with nothing back, that money was kept;
+// - both: the booking lines that held seat money are stamped refunded when all of that money is then back. "Back"
+//   counts what the old test counted (card refunds on the lines, the booking's store credit refunds less the add-ons'
+//   share) and what It already arrived recorded as having reached the customer, less any add-on share of the money
+//   owed that no stamp accounts for;
+// - the orders of every line stamped have their status worked out again.
+// A booking whose money was kept (a lapse inside 24 hours) is not stamped by settling what was owed on it: the test is
+// all of the seat money, not what was owed. The stamps are written once: a line already stamped keeps its time.
+
+/**
+ * W46: the booking's (`$1`) removed add-on lines that a finished refund claim planned to send to a card (one that was
+ * not put back), and that are not stamped with all of their money: their refund is part of what is, or was, owed. A
+ * cancel's card part marks its add-on lines (`addon`); a removed add-on's own claim holds add-on lines only.
+ */
+const OWED_ADDON_LINES_SQL = `
+SELECT DISTINCT aol.id, aol.order_id, aol.price_at_purchase * aol.quantity AS amount, aol.refunded_amount
+FROM audit_log c
+CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(c.details->'plan'->'card') = 'array' THEN c.details->'plan'->'card' ELSE '[]'::jsonb END) part
+CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(part->'lines') = 'array' THEN part->'lines' ELSE '[]'::jsonb END) line
+JOIN addon_order_lines aol ON aol.id::text = line->>'lineId' AND aol.booking_id = $1::uuid
+WHERE c.action = '${REFUND_CLAIMED}' AND c.entity_type = 'booking' AND c.entity_id = $1::text
+  AND ((line->>'addon') = 'true' OR c.details->>'kind' = 'remove_addon')
+  AND EXISTS (
+    SELECT 1 FROM audit_log f
+    WHERE f.action = '${REFUND_FINISHED}' AND f.entity_type = 'booking' AND f.entity_id = c.entity_id
+      AND f.details->>'claimId' = c.id::text AND f.details->>'outcome' IS DISTINCT FROM 'put_back'
+  )
+  AND aol.removed_at IS NOT NULL
+  AND aol.refunded_amount < aol.price_at_purchase * aol.quantity`
+
+/** W46: those lines stamped with all of their money: store credit, or card when some of it went to the card. */
+const STAMP_OWED_ADDON_LINES_SQL = `
+UPDATE addon_order_lines
+SET refunded_amount = price_at_purchase * quantity,
+    refund_method = CASE WHEN card_refunded_amount > 0 THEN 'card' ELSE 'credit' END
+WHERE id IN (SELECT owed.id FROM (${OWED_ADDON_LINES_SQL}) owed)
+RETURNING order_id`
+
+/**
+ * W46: SEAT_MONEY_ALL_BACK_SQL for a cancelled booking with nothing owed any more, also counting the money It already
+ * arrived recorded as having reached the customer (`booking.refund_owed_arrived`), less any add-on share of the money
+ * owed that no add-on line's stamp accounts for (it was settled by It already arrived). False while anything is owed,
+ * on a booking that isn't cancelled, and when the lines held no seat money. Fixed text; the booking comes in as $1.
+ */
+const SEAT_MONEY_SETTLED_SQL = `
+WITH p AS (SELECT b.id AS booking_id FROM bookings b WHERE b.id = $1::uuid AND b.status = 'cancelled' AND b.refund_owed_amount <= 0),
+seats AS (
+  SELECT COALESCE(SUM(GREATEST(oli.line_total - COALESCE(oli.discount_amount, 0) - inside.addons, 0)), 0) AS money,
+         COALESCE(SUM(oli.card_refunded_amount), 0) AS card
+  FROM p
+  JOIN order_line_items oli ON oli.booking_id = p.booking_id AND oli.item_type = 'booking'
+  ${ADDONS_INSIDE_LINE}
+),
+credit AS (
+  SELECT COALESCE(SUM(sct.amount), 0) AS back
+  FROM p JOIN store_credit_transactions sct ON sct.booking_id = p.booking_id AND sct.reason = 'refund'
+),
+addons AS (
+  SELECT COALESCE(SUM(aol.refunded_amount - aol.card_refunded_amount), 0) AS credit
+  FROM p JOIN addon_order_lines aol ON aol.booking_id = p.booking_id
+),
+arrived AS (
+  SELECT COALESCE(SUM((a.details->>'amount')::numeric), 0) AS back
+  FROM p JOIN audit_log a ON a.action = 'booking.refund_owed_arrived' AND a.entity_type = 'booking' AND a.entity_id = p.booking_id::text
+),
+owed_addons AS (
+  SELECT COALESCE(SUM(owed.amount - owed.refunded_amount), 0) AS unstamped FROM (${OWED_ADDON_LINES_SQL}) owed
+)
+SELECT EXISTS (SELECT 1 FROM p) AND seats.money > 0
+       AND seats.card + credit.back + arrived.back - addons.credit - owed_addons.unstamped >= seats.money AS all_back
+FROM seats, credit, addons, arrived, owed_addons`
+
+/**
+ * W46: after Refund the rest (`refund_owed`) or It already arrived (`arrived`) on a cancelled booking, under its lock.
+ * Nothing is stamped while anything is still owed. Answers the orders of the lines it stamped, whose status the
+ * caller works out again.
+ */
+export async function stampWhenOwedSettled(tx: Tx, bookingId: string, how: 'refund_owed' | 'arrived'): Promise<string[]> {
+  const settled = (await tx.query<{ settled: boolean }>("SELECT (status = 'cancelled' AND refund_owed_amount <= 0) AS settled FROM bookings WHERE id = $1::uuid", [bookingId]))[0]?.settled === true
+  if (!settled) return []
+  const orders = new Set<string>()
+  // Refund the rest gave everything owed: the add-on lines whose refund was part of it now have their money.
+  if (how === 'refund_owed') for (const row of await tx.query<{ order_id: string | null }>(STAMP_OWED_ADDON_LINES_SQL, [bookingId])) if (row.order_id) orders.add(row.order_id)
+  if ((await tx.query<{ all_back: boolean }>(SEAT_MONEY_SETTLED_SQL, [bookingId]))[0]?.all_back === true) {
+    for (const row of await tx.query<{ order_id: string }>(STAMP_ALL_BACK_SQL, [bookingId])) orders.add(row.order_id)
+  }
+  return [...orders]
 }
 
 /**
@@ -1553,6 +1660,9 @@ export async function owedArrived(db: Db, bookingId: string, input: OwedArrivedI
           details: { amount: arrived, reason },
         },
       ])
+      // W46: on a cancelled booking, once nothing is owed any more, its lines are stamped if all of their seat money is
+      // then back (counting what arrived, recorded just above), and their orders' status worked out again.
+      if (cancelled) for (const orderId of await stampWhenOwedSettled(tx, bookingId, 'arrived')) await recordOrderPaymentStatus(tx, orderId)
       return { cardRefundedAmount: 0, storeCreditRefundedAmount: 0, pricePaid: cancelled ? figures.pricePaid : round2(figures.pricePaid - arrived) }
     },
     notSaved

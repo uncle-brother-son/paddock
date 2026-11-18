@@ -1,8 +1,9 @@
 // New in W27 (E-plan 4.10, lead call L3): which of step E's refunds the Worker takes. ORDER_SWITCH lists the kinds on;
 // an order refund or an event cancel whose kind is off answers REFUND_PATH_OFF before anything is touched. As step D's
-// switch (bookings/booking-switch.ts): an emergency stop, not a fallback (each slice deletes its old body, L4, and
-// switching back is a Retool rollback), and only starting is gated: reconcile and the closes by hand still settle
-// whatever is already held. No route calls this until W28 (orders) and W30 (events).
+// switch (bookings/booking-switch.ts): an emergency stop, not a fallback (each slice deleted its old body, L4; the
+// last legacy refund routes left at W34, so a kind off has no old route behind it, and switching back is the kind
+// off, then fixing forward), and only starting is gated: reconcile and the closes by hand still settle whatever is
+// already held. No route calls this until W28 (orders) and W30 (events).
 import 'server-only'
 import { ApiError } from '@/server/http/errors'
 import { kindsOn, type OrderKind } from '@/server/rules/orders/order-switch'

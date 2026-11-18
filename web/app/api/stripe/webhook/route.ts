@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import Stripe from 'stripe'
 import { createStripeClient, READ_STRIPE_LIMITS } from '@/server/stripe/client'
-import { processWebhookEvent } from './idempotency'
+import { processWebhookEvent, type WebhookEventsClient } from './idempotency'
 
 function getStripe() {
   return new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -50,6 +50,9 @@ export async function POST(request: NextRequest) {
 
   // W45a (W45 audit S1): the handlers read a subscription as Stripe holds it now (dispatch.ts). A read only: 10
   // seconds a call, and one more send by the SDK itself.
-  const result = await processWebhookEvent(event, supabase, createStripeClient(process.env.STRIPE_SECRET_KEY, READ_STRIPE_LIMITS))
+  // W46: the handlers are typed against the calls they make (WebhookEventsClient). Supabase's own types for a client
+  // with no database type are too deep for TypeScript to set against it (TS2589), so the client is named as that
+  // here: the same object as before, with nothing wrapped round it.
+  const result = await processWebhookEvent(event, supabase as unknown as WebhookEventsClient, createStripeClient(process.env.STRIPE_SECRET_KEY, READ_STRIPE_LIMITS))
   return NextResponse.json(result.body, { status: result.status })
 }

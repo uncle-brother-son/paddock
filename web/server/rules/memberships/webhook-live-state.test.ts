@@ -1,6 +1,6 @@
 import type Stripe from 'stripe'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { dispatchStripeEvent, type DispatchResult } from '@/app/api/stripe/webhook/dispatch'
+import { dispatchStripeEvent, type DispatchResult, type RpcClient, type SubscriptionReader } from '@/app/api/stripe/webhook/dispatch'
 import { processWebhookEvent } from '@/app/api/stripe/webhook/idempotency'
 import { POST as cancelRoute } from '@/app/api/v1/staff/memberships/[membershipId]/cancel/route'
 import { POST as undoRoute } from '@/app/api/v1/staff/memberships/[membershipId]/undo-cancel/route'
@@ -8,10 +8,11 @@ import type { Db } from '@/server/db'
 import { reconcile } from '@/server/rules/orders/reconcile'
 import { stuckList } from '@/server/rules/orders/stuck-list'
 import { insert } from '@/server/rules/testing/database'
+import { asOwner, BEFORE_030_SQL, migration030, savedFunctionsSql } from '@/server/rules/testing/migration-030'
 import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
 import { ID, MO_SUBSCRIPTION, seed } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
-import { invoiceEvent, subscriptionUpdatedEvent, webhookClient, webhookRpc } from '@/server/rules/testing/webhook'
+import { asLive, invoiceEvent, subscriptionUpdatedEvent, webhookClient, webhookRpc } from '@/server/rules/testing/webhook'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
 import { CHECK_AFTER_MINUTES } from './left'
 
@@ -26,6 +27,17 @@ import { CHECK_AFTER_MINUTES } from './left'
 //   handled after the payment that followed it went through leaves the member active and no booking flagged.
 // - A read of Stripe that fails: nothing is written from the event, and the event is not marked processed, so
 //   Stripe sends it again.
+// Brief W46 item 2 (W45a "Noticed" 1, 2 and 3), the same way:
+// - invoice.paid: only a subscription Stripe shows as paid up (active, or trialing) records the payment, and the next
+//   payment date is the period's end as Stripe has it. The date change's £0 invoice handled after the first full
+//   payment failed leaves the member past due, as Stripe.
+// - Stripe has no such subscription (a 404): the event is finished as ignored, with the reason.
+// - A change that lands between a handler's read and its write (lead call L8): the handler reads again after the
+//   write and writes what Stripe then shows, so the membership ends as Stripe is.
+// Brief W46b (W46 review B1 and S1):
+// - invoice.paid records a payment only for the subscription's newest invoice (every invoice event here says which
+//   invoice it is for). The review's proofs, turned round, are in latest-invoice.test.ts.
+// - "No such subscription" is ignored only for a test-mode event. For a live event it is an error, sent again.
 
 vi.setConfig({ testTimeout: 120_000 })
 
@@ -78,6 +90,8 @@ async function onASeed(work: (stripe: FakeStripe) => Promise<void>): Promise<voi
         await seed(seedDb, stripe)
         await seedDb.query("UPDATE customer_memberships SET stripe_subscription_id = $1, next_renewal_date = '2026-12-10' WHERE id = $2", [MO_SUBSCRIPTION, ID.membership])
         stripe.addSubscription(MO_SUBSCRIPTION, MEMBER_STRIPE_CUSTOMER, MONTHLY_PRICE)
+        // W46: invoice.paid reads the subscription, so Sam's is in Stripe too.
+        stripe.addSubscription(SAM_SUBSCRIPTION, MEMBER_STRIPE_CUSTOMER, MONTHLY_PRICE)
         await insert(seedDb, 'customer_memberships', {
           id: SAM_MEMBERSHIP,
           customer_id: ID.customer,
@@ -169,8 +183,9 @@ describe('customer.subscription.updated: the membership ends when Stripe says, w
         for (const which of order) {
           const before = reads(stripe)
           const result = await handle(stripe, which === 'cancel' ? cancelEvent() : undoEvent())
-          // Each event is one read of Stripe, and what is written is what Stripe shows: no end, whatever the event said.
-          expect(reads(stripe) - before).toBe(1)
+          // What is written is what Stripe shows: no end, whatever the event said. Each event reads Stripe twice
+          // (W46, L8): before its write, and after it, where Stripe still shows the same.
+          expect(reads(stripe) - before).toBe(2)
           expect(result).toEqual({ outcome: 'processed', detail: { found: true, action: 'unchanged', cancel_effective_date: null } })
           expect(await both(stripe)).toEqual({ row: null, stripe: null })
         }
@@ -182,7 +197,9 @@ describe('customer.subscription.updated: the membership ends when Stripe says, w
         vi.setSystemTime(new Date('2026-12-10T00:05:00.000Z'))
         expect(await attempt('SELECT public.allocate_membership_credit_periods()')).toBe('ok')
         expect(await attempt('SELECT public.run_membership_maintenance()')).toBe('ok')
-        expect((await handle(stripe, invoiceEvent('invoice.paid', SAM_SUBSCRIPTION, { periodEnd: NEXT_END }))).outcome).toBe('processed')
+        // Sam's renewal went through: Stripe shows the new period.
+        stripe.setSubscription(SAM_SUBSCRIPTION, { status: 'active', periodEnd: NEXT_END })
+        expect((await handle(stripe, invoiceEvent('invoice.paid', SAM_SUBSCRIPTION, { id: stripe.latestInvoice(SAM_SUBSCRIPTION), periodEnd: NEXT_END }))).outcome).toBe('processed')
         expect(await samPeriods()).toEqual(['2026-12-10'])
         expect(await memberLevel()).toBe('herd')
         expect(await both(stripe)).toEqual({ row: null, stripe: null })
@@ -269,20 +286,21 @@ describe('customer.subscription.updated: the membership ends when Stripe says, w
 describe('invoice.payment_failed: only a subscription Stripe still shows behind on its payment marks the membership (W45a item 2; audit S1)', () => {
   /** 10 December, 14:00: Mo's renewal. */
   const RENEWAL = new Date('2026-12-10T14:00:00.000Z')
-  const failedEvent = () => invoiceEvent('invoice.payment_failed', MO_SUBSCRIPTION, { periodStart: ENDS, periodEnd: NEXT_END })
-  const paidEvent = () => invoiceEvent('invoice.paid', MO_SUBSCRIPTION, { periodStart: ENDS, periodEnd: NEXT_END })
+  // W46b: both are for the renewal's invoice, the subscription's newest.
+  const failedEvent = (stripe: FakeStripe) => invoiceEvent('invoice.payment_failed', MO_SUBSCRIPTION, { id: stripe.latestInvoice(MO_SUBSCRIPTION), periodStart: ENDS, periodEnd: NEXT_END })
+  const paidEvent = (stripe: FakeStripe) => invoiceEvent('invoice.paid', MO_SUBSCRIPTION, { id: stripe.latestInvoice(MO_SUBSCRIPTION), periodStart: ENDS, periodEnd: NEXT_END })
   const PAID_UP = { status: 'active', booking: 'confirmed', deadline: false }
 
   it('the events in order: the failure, handled while Stripe shows the subscription past due, marks the member past due and flags the credit booking; the payment going through puts both back', async () => {
     await onASeed(async (stripe) => {
       vi.setSystemTime(RENEWAL)
       stripe.setSubscription(MO_SUBSCRIPTION, { status: 'past_due' })
-      expect(await handle(stripe, failedEvent())).toMatchObject({ outcome: 'processed', detail: { found: true, action: 'past_due', covered_through: '2026-12-09', bookings_flagged: 1 } })
+      expect(await handle(stripe, failedEvent(stripe))).toMatchObject({ outcome: 'processed', detail: { found: true, action: 'past_due', covered_through: '2026-12-09', bookings_flagged: 1 } })
       expect(await member()).toEqual({ status: 'past_due', booking: 'payment_needed', deadline: true })
       // Two days on the retry goes through: Stripe shows active, and invoice.paid is handled.
       vi.setSystemTime(new Date('2026-12-12T14:00:00.000Z'))
       stripe.setSubscription(MO_SUBSCRIPTION, { status: 'active', periodEnd: NEXT_END })
-      expect(await handle(stripe, paidEvent())).toMatchObject({ outcome: 'processed', detail: { action: 'reactivated', was: 'past_due', bookings_restored: 1 } })
+      expect(await handle(stripe, paidEvent(stripe))).toMatchObject({ outcome: 'processed', detail: { action: 'reactivated', was: 'past_due', bookings_restored: 1 } })
       expect(await member()).toEqual(PAID_UP)
     })
   })
@@ -292,12 +310,12 @@ describe('invoice.payment_failed: only a subscription Stripe still shows behind 
       vi.setSystemTime(RENEWAL)
       // The first try failed and the retry went through; the failure's own delivery failed and comes again later.
       stripe.setSubscription(MO_SUBSCRIPTION, { status: 'active', periodEnd: NEXT_END })
-      expect((await handle(stripe, paidEvent())).outcome).toBe('processed')
+      expect((await handle(stripe, paidEvent(stripe))).outcome).toBe('processed')
       expect(await member()).toEqual(PAID_UP)
       vi.setSystemTime(new Date('2026-12-10T20:00:00.000Z'))
       const rpc = webhookRpc(db)
       const before = reads(stripe)
-      expect(await dispatchStripeEvent(failedEvent(), rpc, stripe)).toEqual({ outcome: 'ignored', detail: { reason: 'subscription_not_past_due', status: 'active' } })
+      expect(await dispatchStripeEvent(failedEvent(stripe), rpc, stripe)).toEqual({ outcome: 'ignored', detail: { reason: 'subscription_not_past_due', status: 'active' } })
       expect(reads(stripe) - before).toBe(1)
       expect(rpc.calls).toEqual([])
       expect(await member()).toEqual(PAID_UP)
@@ -308,9 +326,9 @@ describe('invoice.payment_failed: only a subscription Stripe still shows behind 
     await onASeed(async (stripe) => {
       vi.setSystemTime(RENEWAL)
       stripe.setSubscription(MO_SUBSCRIPTION, { status: 'active', periodEnd: NEXT_END })
-      expect((await handle(stripe, failedEvent())).outcome).toBe('ignored')
+      expect((await handle(stripe, failedEvent(stripe))).outcome).toBe('ignored')
       expect(await member()).toEqual(PAID_UP)
-      expect(await handle(stripe, paidEvent())).toMatchObject({ outcome: 'processed', detail: { action: 'reactivated', was: 'active', bookings_restored: 0 } })
+      expect(await handle(stripe, paidEvent(stripe))).toMatchObject({ outcome: 'processed', detail: { action: 'reactivated', was: 'active', bookings_restored: 0 } })
       expect(await member()).toEqual(PAID_UP)
     })
   })
@@ -319,7 +337,7 @@ describe('invoice.payment_failed: only a subscription Stripe still shows behind 
     await onASeed(async (stripe) => {
       vi.setSystemTime(RENEWAL)
       stripe.setSubscription(MO_SUBSCRIPTION, { status })
-      expect((await handle(stripe, failedEvent())).detail).toMatchObject({ action: 'past_due', bookings_flagged: 1 })
+      expect((await handle(stripe, failedEvent(stripe))).detail).toMatchObject({ action: 'past_due', bookings_flagged: 1 })
       expect(await member()).toEqual({ status: 'past_due', booking: 'payment_needed', deadline: true })
     })
   })
@@ -328,7 +346,7 @@ describe('invoice.payment_failed: only a subscription Stripe still shows behind 
     await onASeed(async (stripe) => {
       vi.setSystemTime(RENEWAL)
       stripe.setSubscription(MO_SUBSCRIPTION, { status })
-      expect(await handle(stripe, failedEvent())).toEqual({ outcome: 'ignored', detail: { reason: 'subscription_not_past_due', status } })
+      expect(await handle(stripe, failedEvent(stripe))).toEqual({ outcome: 'ignored', detail: { reason: 'subscription_not_past_due', status } })
       expect(await member()).toEqual(PAID_UP)
     })
   })
@@ -338,7 +356,7 @@ describe('invoice.payment_failed: only a subscription Stripe still shows behind 
       vi.setSystemTime(RENEWAL)
       const client = webhookClient(db)
       stripe.setSubscription(MO_SUBSCRIPTION, { status: 'past_due' })
-      const event = failedEvent()
+      const event = failedEvent(stripe)
       stripe.failNext('subscriptions.retrieve', stripeDown())
       expect(await processWebhookEvent(event, client, stripe)).toEqual({ status: 500, body: { error: 'Internal server error' } })
       expect(await client.eventRow(event.id)).toMatchObject({ event_type: 'invoice.payment_failed', outcome: 'error', detail: null })
@@ -348,6 +366,402 @@ describe('invoice.payment_failed: only a subscription Stripe still shows behind 
       expect(await client.eventRow(event.id)).toMatchObject({ outcome: 'processed', error: null, detail: { action: 'past_due', bookings_flagged: 1 } })
       expect(client.calls.map((call) => call.fn)).toEqual(['membership_mark_payment_failed'])
       expect(await member()).toEqual({ status: 'past_due', booking: 'payment_needed', deadline: true })
+    })
+  })
+})
+
+// --- Brief W46 item 2
+
+/** 12 December 2026, 00:00 in London: the new payment date Mo's is moved to on 9 December (2 days later than the 10th). */
+const NEW_DATE = Date.UTC(2026, 11, 12) / 1000
+/** 12 January 2027: the end of the period his first full payment on the new date starts. */
+const NEW_NEXT_END = Date.UTC(2027, 0, 12) / 1000
+const renews = async () => (await db.query<{ renews: string | null }>('SELECT next_renewal_date::text AS renews FROM customer_memberships WHERE id = $1', [ID.membership]))[0]?.renews ?? null
+/** W46b: the two invoices by id. Each is the subscription's newest from the moment Stripe makes it. */
+const ZERO_INVOICE = 'in_date_change_zero'
+const FULL_INVOICE = 'in_first_full_payment'
+/** The date change's £0 invoice (9 December: no charge until the 12th). */
+const zeroInvoicePaid = () => invoiceEvent('invoice.paid', MO_SUBSCRIPTION, { id: ZERO_INVOICE, periodStart: Date.UTC(2026, 11, 9) / 1000, periodEnd: NEW_DATE, billingReason: 'subscription_update', amountPaid: 0 })
+/** The first full payment on the new date (12 December, £40), paid or failed. */
+const fullInvoice = (type: 'invoice.paid' | 'invoice.payment_failed') => invoiceEvent(type, MO_SUBSCRIPTION, { id: FULL_INVOICE, periodStart: NEW_DATE, periodEnd: NEW_NEXT_END, amountPaid: type === 'invoice.paid' ? 4000 : 0 })
+/** Stripe after the date change on 9 December: no charge until the 12th. */
+const dateChanged = (stripe: FakeStripe) => stripe.setSubscription(MO_SUBSCRIPTION, { status: 'trialing', periodEnd: NEW_DATE, latestInvoice: ZERO_INVOICE })
+/**
+ * W46b (W46 review B1): Stripe on 12 December in the hour before it charges the £40. The no-charge days are over, the
+ * new period has started and the subscription reads active; its newest invoice is the £40 one, still a draft.
+ */
+const fullInvoiceIsADraft = (stripe: FakeStripe) => stripe.setSubscription(MO_SUBSCRIPTION, { status: 'active', periodEnd: NEW_NEXT_END, latestInvoice: FULL_INVOICE })
+/** Stripe on 12 December once the £40 has failed: the new period has started, and its payment is owed. */
+const fullPaymentFailed = (stripe: FakeStripe) => stripe.setSubscription(MO_SUBSCRIPTION, { status: 'past_due', periodEnd: NEW_NEXT_END, latestInvoice: FULL_INVOICE })
+const fullPaymentTaken = (stripe: FakeStripe) => stripe.setSubscription(MO_SUBSCRIPTION, { status: 'active', periodEnd: NEW_NEXT_END, latestInvoice: FULL_INVOICE })
+const NINTH = new Date('2026-12-09T15:00:00.000Z')
+const TWELFTH = new Date('2026-12-12T09:00:00.000Z')
+const OWING = { status: 'past_due', booking: 'payment_needed', deadline: true }
+const PAID = { status: 'active', booking: 'confirmed', deadline: false }
+
+describe('invoice.paid: only a subscription Stripe shows as paid up records the payment, with the period end Stripe has (W46 item 2; W45a "Noticed" 1)', () => {
+  it("the date change's £0 invoice, then the failed first full payment, in the order they happened: the new date is written, then the member is past due and the credit booking flagged", async () => {
+    await onASeed(async (stripe) => {
+      vi.setSystemTime(NINTH)
+      dateChanged(stripe)
+      expect(await handle(stripe, zeroInvoicePaid())).toMatchObject({ outcome: 'processed', detail: { action: 'reactivated', was: 'active', bookings_restored: 0 } })
+      expect(await renews()).toBe('2026-12-12')
+      expect(await member()).toEqual(PAID)
+      vi.setSystemTime(TWELFTH)
+      fullPaymentFailed(stripe)
+      expect(await handle(stripe, fullInvoice('invoice.payment_failed'))).toMatchObject({ outcome: 'processed', detail: { action: 'past_due', bookings_flagged: 1 } })
+      expect(await member()).toEqual(OWING)
+    })
+  })
+
+  it("the same two with the £0 invoice's event handled last (it failed at the webhook and Stripe sent it again): Stripe shows the subscription past due, so it is ignored; the member stays past due with £40 unpaid, the booking stays flagged and the payment date is not written; the retry going through then records the payment", async () => {
+    await onASeed(async (stripe) => {
+      vi.setSystemTime(TWELFTH)
+      fullPaymentFailed(stripe)
+      expect((await handle(stripe, fullInvoice('invoice.payment_failed'))).detail).toMatchObject({ action: 'past_due', bookings_flagged: 1 })
+      expect(await member()).toEqual(OWING)
+      // Later that day the £0 invoice's event gets through. Before W46 it marked Mo active and confirmed the booking.
+      vi.setSystemTime(new Date('2026-12-12T18:00:00.000Z'))
+      const rpc = webhookRpc(db)
+      const before = reads(stripe)
+      expect(await dispatchStripeEvent(zeroInvoicePaid(), rpc, stripe)).toEqual({ outcome: 'ignored', detail: { reason: 'subscription_not_paid_up', status: 'past_due' } })
+      expect(reads(stripe) - before).toBe(1)
+      expect(rpc.calls).toEqual([])
+      expect(await member()).toEqual(OWING)
+      expect(await renews()).toBe('2026-12-10')
+      // Two days on Stripe's retry takes the £40.
+      vi.setSystemTime(new Date('2026-12-14T09:00:00.000Z'))
+      fullPaymentTaken(stripe)
+      expect(await handle(stripe, fullInvoice('invoice.paid'))).toMatchObject({ outcome: 'processed', detail: { action: 'reactivated', was: 'past_due', bookings_restored: 1 } })
+      expect(await member()).toEqual(PAID)
+      expect(await renews()).toBe('2027-01-12')
+    })
+  })
+
+  // W46b (W46 review B1): W46 had the £0 invoice's event, handled last, write the period Stripe was in. It is no longer
+  // the subscription's newest invoice then, so it is ignored: the £40 invoice's own event writes the date.
+  it.each([
+    ['in the order they happened', ['zero', 'full']],
+    ["with the £0 invoice's event last", ['full', 'zero']],
+  ] as const)("two paid invoices, the date change's £0 one and the first full payment, their events handled %s: the next payment date ends as the period Stripe is in (12 January), written by the £40 invoice's event, never back on the £0 invoice's 12 December; the £0 event handled last is ignored (not the newest invoice)", async (_name, order) => {
+    await onASeed(async (stripe) => {
+      vi.setSystemTime(TWELFTH)
+      if (order[0] === 'zero') {
+        // Handled in time: Stripe still showed the no-charge days, and the £0 invoice was its newest.
+        dateChanged(stripe)
+        const rpc = webhookRpc(db)
+        expect((await dispatchStripeEvent(zeroInvoicePaid(), rpc, stripe)).outcome).toBe('processed')
+        expect(rpc.calls).toEqual([{ fn: 'membership_mark_paid', params: { p_stripe_subscription_id: MO_SUBSCRIPTION, p_period_end: new Date(NEW_DATE * 1000).toISOString() } }])
+        expect(await renews()).toBe('2026-12-12')
+      }
+      fullPaymentTaken(stripe)
+      const full = webhookRpc(db)
+      expect((await dispatchStripeEvent(fullInvoice('invoice.paid'), full, stripe)).outcome).toBe('processed')
+      // The date written is Stripe's own period end.
+      expect(full.calls).toEqual([{ fn: 'membership_mark_paid', params: { p_stripe_subscription_id: MO_SUBSCRIPTION, p_period_end: new Date(NEW_NEXT_END * 1000).toISOString() } }])
+      expect(await renews()).toBe('2027-01-12')
+      expect(await member()).toEqual(PAID)
+      if (order[0] === 'full') {
+        const late = webhookRpc(db)
+        expect(await dispatchStripeEvent(zeroInvoicePaid(), late, stripe)).toEqual({ outcome: 'ignored', detail: { reason: 'not_latest_invoice' } })
+        expect(late.calls).toEqual([])
+        expect(await renews()).toBe('2027-01-12')
+        expect(await member()).toEqual(PAID)
+      }
+    })
+  })
+
+  it.each(['past_due', 'unpaid', 'canceled', 'incomplete_expired', 'paused'] as const)('a subscription Stripe shows as %s: an invoice.paid for it is left alone, with the status it showed kept on the event', async (status) => {
+    await onASeed(async (stripe) => {
+      vi.setSystemTime(TWELFTH)
+      stripe.setSubscription(MO_SUBSCRIPTION, { status, periodEnd: NEW_NEXT_END })
+      expect(await handle(stripe, fullInvoice('invoice.paid'))).toEqual({ outcome: 'ignored', detail: { reason: 'subscription_not_paid_up', status } })
+      expect(await renews()).toBe('2026-12-10')
+      expect(await member()).toEqual(PAID)
+    })
+  })
+
+  it("Stripe can't be read: the payment is not recorded, the event is an error answered 500; sent again, it records the payment", async () => {
+    await onASeed(async (stripe) => {
+      vi.setSystemTime(TWELFTH)
+      const client = webhookClient(db)
+      fullPaymentTaken(stripe)
+      const event = fullInvoice('invoice.paid')
+      stripe.failNext('subscriptions.retrieve', stripeDown())
+      expect(await processWebhookEvent(event, client, stripe)).toEqual({ status: 500, body: { error: 'Internal server error' } })
+      expect(await client.eventRow(event.id)).toMatchObject({ event_type: 'invoice.paid', outcome: 'error', detail: null })
+      expect(client.calls).toEqual([])
+      expect(await renews()).toBe('2026-12-10')
+      expect(await processWebhookEvent(event, client, stripe)).toEqual({ status: 200, body: { received: true } })
+      expect(await client.eventRow(event.id)).toMatchObject({ outcome: 'processed', error: null, detail: { action: 'reactivated' } })
+      expect(await renews()).toBe('2027-01-12')
+    })
+  })
+})
+
+describe('Stripe has no such subscription (a 404): a test-mode event is finished as ignored, with the reason; a live event is an error, sent again (W46 item 2; W45a "Noticed" 3; W46b, W46 review S1)', () => {
+  const GONE = 'sub_deleted_in_stripe'
+  const events = (): Stripe.Event[] => [
+    subscriptionUpdatedEvent(GONE, { cancelAt: ENDS, periodEnd: ENDS }),
+    invoiceEvent('invoice.payment_failed', GONE, { id: 'in_gone', periodStart: ENDS, periodEnd: NEXT_END }),
+    invoiceEvent('invoice.paid', GONE, { id: 'in_gone', periodStart: ENDS, periodEnd: NEXT_END }),
+  ]
+  const membershipRow = () => db.query('SELECT to_jsonb(cm) AS row FROM customer_memberships cm WHERE id = $1', [ID.membership])
+
+  it('test mode, each event that reads Stripe: answered 200 and recorded as ignored with the reason and the subscription, no database function called and the membership untouched; sent again it is a duplicate, with no read', async () => {
+    await onASeed(async (stripe) => {
+      // Mo's membership names a subscription Stripe doesn't have with this key (test data deleted).
+      await db.query('UPDATE customer_memberships SET stripe_subscription_id = $1 WHERE id = $2', [GONE, ID.membership])
+      const before = await membershipRow()
+      for (const event of events()) {
+        expect(event.livemode).toBe(false)
+        const client = webhookClient(db)
+        const readsBefore = reads(stripe)
+        expect(await processWebhookEvent(event, client, stripe)).toEqual({ status: 200, body: { received: true } })
+        expect(reads(stripe) - readsBefore).toBe(1)
+        expect(await client.eventRow(event.id)).toEqual({ event_type: event.type, outcome: 'ignored', error: null, detail: { reason: 'subscription_missing', subscription: GONE, message: `No such subscription: '${GONE}'` } })
+        expect(client.calls).toEqual([])
+        expect(await processWebhookEvent(event, client, stripe)).toEqual({ status: 200, body: { received: true, duplicate: true } })
+        expect(reads(stripe) - readsBefore).toBe(1)
+      }
+      expect(await membershipRow()).toEqual(before)
+      expect(await member()).toEqual(PAID)
+    })
+  })
+
+  // W46b (S1): the same three events as live Stripe sends them. Nothing is finished: each delivery is a 500 with the
+  // event left as an error, so Stripe keeps sending it (for three days), and each delivery reads Stripe afresh.
+  it('live mode, each event that reads Stripe: answered 500 and recorded as an error, never as ignored or processed, no database function called and the membership untouched; sent again it is read again and is still an error, not a duplicate', async () => {
+    await onASeed(async (stripe) => {
+      await db.query('UPDATE customer_memberships SET stripe_subscription_id = $1 WHERE id = $2', [GONE, ID.membership])
+      const before = await membershipRow()
+      for (const event of events().map(asLive)) {
+        expect(event.livemode).toBe(true)
+        const client = webhookClient(db)
+        const readsBefore = reads(stripe)
+        for (const delivery of [1, 2]) {
+          expect(await processWebhookEvent(event, client, stripe)).toEqual({ status: 500, body: { error: 'Internal server error' } })
+          expect(reads(stripe) - readsBefore).toBe(delivery)
+          expect(await client.eventRow(event.id)).toEqual({ event_type: event.type, outcome: 'error', error: `No such subscription: '${GONE}'`, detail: null })
+          expect(client.calls).toEqual([])
+        }
+      }
+      expect(await membershipRow()).toEqual(before)
+      expect(await member()).toEqual(PAID)
+    })
+  })
+
+  it.each([
+    ['test mode', false],
+    ['live mode', true],
+  ] as const)("%s: a subscription made with the other mode's key is a 404 too: a test-mode event is ignored, a live one is an error", async (_name, live) => {
+    await onASeed(async (stripe) => {
+      const client = webhookClient(db)
+      // The fake answers a subscription of the other mode as missing, as Stripe does.
+      stripe.keyLivemode = true
+      const made = subscriptionUpdatedEvent(MO_SUBSCRIPTION, { cancelAt: ENDS, periodEnd: ENDS })
+      const event = live ? asLive(made) : made
+      if (live) {
+        expect(await processWebhookEvent(event, client, stripe)).toEqual({ status: 500, body: { error: 'Internal server error' } })
+        expect(await client.eventRow(event.id)).toMatchObject({ outcome: 'error', detail: null })
+      } else {
+        expect(await processWebhookEvent(event, client, stripe)).toEqual({ status: 200, body: { received: true } })
+        expect(await client.eventRow(event.id)).toMatchObject({ outcome: 'ignored', detail: { reason: 'subscription_missing', subscription: MO_SUBSCRIPTION } })
+      }
+      expect(client.calls).toEqual([])
+      expect(await lastDay()).toBeNull()
+    })
+  })
+
+  // W46b (S1), the review's example: the go-live evening, with STRIPE_SECRET_KEY still the test key for two hours.
+  // Mo's live subscription is past due, his 15 December booking flagged. Stripe's retry takes his £40 at 19:00.
+  it("the review's example: a live invoice.paid while the Worker still has the test key is an error answered 500, and Mo stays past due with nothing written; once the key is the live one Stripe's next delivery records the payment: active, the booking confirmed and its deadline cleared", async () => {
+    await onASeed(async (stripe) => {
+      const LIVE_SUBSCRIPTION = 'sub_mo_live'
+      stripe.keyLivemode = true
+      stripe.addSubscription(LIVE_SUBSCRIPTION, MEMBER_STRIPE_CUSTOMER, MONTHLY_PRICE)
+      await db.query('UPDATE customer_memberships SET stripe_subscription_id = $1 WHERE id = $2', [LIVE_SUBSCRIPTION, ID.membership])
+      // 10 December 14:00: his renewal fails, handled with the live key.
+      vi.setSystemTime(new Date('2026-12-10T14:00:00.000Z'))
+      const invoice = stripe.startRenewal(LIVE_SUBSCRIPTION, NEXT_END)
+      stripe.setSubscription(LIVE_SUBSCRIPTION, { status: 'past_due' })
+      expect((await handle(stripe, asLive(invoiceEvent('invoice.payment_failed', LIVE_SUBSCRIPTION, { id: invoice, periodStart: ENDS, periodEnd: NEXT_END })))).detail).toMatchObject({ action: 'past_due', bookings_flagged: 1 })
+      expect(await member()).toEqual(OWING)
+      // 19:00: the retry takes the £40. The Worker has the test key: Stripe answers "no such subscription".
+      vi.setSystemTime(new Date('2026-12-10T19:00:00.000Z'))
+      stripe.setSubscription(LIVE_SUBSCRIPTION, { status: 'active' })
+      stripe.keyLivemode = false
+      const client = webhookClient(db)
+      const paid = asLive(invoiceEvent('invoice.paid', LIVE_SUBSCRIPTION, { id: invoice, periodStart: ENDS, periodEnd: NEXT_END, amountPaid: 4000 }))
+      expect(await processWebhookEvent(paid, client, stripe)).toEqual({ status: 500, body: { error: 'Internal server error' } })
+      expect(await client.eventRow(paid.id)).toMatchObject({ outcome: 'error', detail: null })
+      expect(client.calls).toEqual([])
+      expect(await member()).toEqual(OWING)
+      // 21:00: the key is put right, and Stripe sends the event again.
+      vi.setSystemTime(new Date('2026-12-10T21:00:00.000Z'))
+      stripe.keyLivemode = true
+      expect(await processWebhookEvent(paid, client, stripe)).toEqual({ status: 200, body: { received: true } })
+      expect(await client.eventRow(paid.id)).toMatchObject({ outcome: 'processed', error: null, detail: { action: 'reactivated', was: 'past_due', bookings_restored: 1 } })
+      expect(await member()).toEqual(PAID)
+      expect(await renews()).toBe('2027-01-10')
+    })
+  })
+
+  it('any other failed read is still an error, sent again: a 500 from Stripe, and Stripe not reached', async () => {
+    await onASeed(async (stripe) => {
+      for (const fault of [stripeDown(), { kind: 'unreachable' as const }]) {
+        for (const event of [subscriptionUpdatedEvent(MO_SUBSCRIPTION, { cancelAt: ENDS, periodEnd: ENDS }), invoiceEvent('invoice.payment_failed', MO_SUBSCRIPTION, { id: stripe.latestInvoice(MO_SUBSCRIPTION), periodEnd: NEXT_END }), invoiceEvent('invoice.paid', MO_SUBSCRIPTION, { id: stripe.latestInvoice(MO_SUBSCRIPTION), periodEnd: NEXT_END })]) {
+          const client = webhookClient(db)
+          stripe.failNext('subscriptions.retrieve', fault)
+          expect(await processWebhookEvent(event, client, stripe)).toEqual({ status: 500, body: { error: 'Internal server error' } })
+          expect(await client.eventRow(event.id)).toMatchObject({ outcome: 'error', detail: null })
+          expect(client.calls).toEqual([])
+        }
+      }
+    })
+  })
+})
+
+describe('a change that lands between a handler\'s read and its write: the handler reads again and writes what Stripe then shows (W46 item 2; lead call L8)', () => {
+  /** The webhook's database calls on `db`, with `landing` run once, after the handler's first read and before its first write is made. */
+  const withAChangeBeforeTheWrite = (landing: () => Promise<void>): RpcClient & { calls: ReturnType<typeof webhookRpc>['calls'] } => {
+    const real = webhookRpc(db)
+    let landed = false
+    return {
+      calls: real.calls,
+      async rpc(fn, params) {
+        if (!landed) {
+          landed = true
+          await landing()
+        }
+        return real.rpc(fn, params)
+      },
+    }
+  }
+
+  /** Stripe as the handlers read it, with `landing` run once, after the handler's first read is answered and before the handler carries on with it. */
+  const withAChangeAfterTheRead = (stripe: FakeStripe, landing: () => Promise<void>): SubscriptionReader => {
+    let landed = false
+    return {
+      subscriptions: {
+        async retrieve(id) {
+          const read = await stripe.subscriptions.retrieve(id)
+          if (!landed) {
+            landed = true
+            await landing()
+          }
+          return read
+        },
+      },
+    }
+  }
+
+  it("customer.subscription.updated: the Cancel's event is read (ends 10 December), then the Undo lands and is written before the event's own write: the stale date is written, the second read shows no end, and it is cleared: the membership has no end, as Stripe", async () => {
+    await onASeed(async (stripe) => {
+      expect(await press('cancel')).toBe(200)
+      expect(await both(stripe)).toEqual({ row: '2026-12-09', stripe: ENDS })
+      let readsWhileLanding = 0
+      const rpc = withAChangeBeforeTheWrite(async () => {
+        // The Undo, and its own event handled in full, while the Cancel's handler is between its read and its write.
+        const landingFrom = reads(stripe)
+        expect(await press('undo-cancel')).toBe(200)
+        expect((await handle(stripe, undoEvent())).outcome).toBe('processed')
+        expect(await both(stripe)).toEqual({ row: null, stripe: null })
+        readsWhileLanding = reads(stripe) - landingFrom
+      })
+      const before = reads(stripe)
+      const result = await dispatchStripeEvent(cancelEvent(), rpc, stripe)
+      // Written twice: the date it read, then (Stripe showing no end after that write) no date.
+      expect(rpc.calls.map((call) => call.params['p_cancel_at'])).toEqual([new Date(ENDS * 1000).toISOString(), null])
+      expect(result).toEqual({ outcome: 'processed', detail: { found: true, action: 'cancel_cleared', cancel_effective_date: null, written_again: 1, last_write: 'membership_sync_cancel_at_period_end' } })
+      // The handler's own reads: before its write, after it, and after its second write.
+      expect(reads(stripe) - before - readsWhileLanding).toBe(3)
+      expect(await both(stripe)).toEqual({ row: null, stripe: null })
+    })
+  })
+
+  it('invoice.payment_failed: read while Stripe shows past due, then the retry goes through and its invoice.paid is handled before the failure\'s own write: the member is marked past due and the booking flagged, the second read shows the subscription active, and the payment is recorded again: active, the booking confirmed, the date Stripe has', async () => {
+    await onASeed(async (stripe) => {
+      vi.setSystemTime(TWELFTH)
+      fullPaymentFailed(stripe)
+      const rpc = withAChangeBeforeTheWrite(async () => {
+        fullPaymentTaken(stripe)
+        expect((await handle(stripe, fullInvoice('invoice.paid'))).outcome).toBe('processed')
+        expect(await member()).toEqual(PAID)
+      })
+      const result = await dispatchStripeEvent(fullInvoice('invoice.payment_failed'), rpc, stripe)
+      expect(rpc.calls.map((call) => call.fn)).toEqual(['membership_mark_payment_failed', 'membership_mark_paid'])
+      // `was: 'past_due'`: the failure's own write did land over the payment. It flagged no booking: the payment's
+      // event had already given Mo his next credit period, which covers 15 December.
+      expect(result).toMatchObject({ outcome: 'processed', detail: { action: 'reactivated', was: 'past_due', bookings_restored: 0, written_again: 1, last_write: 'membership_mark_paid' } })
+      expect(await member()).toEqual(PAID)
+      expect(await renews()).toBe('2027-01-12')
+    })
+  })
+
+  // W46a pinned W46's "Noticed" 2 here with the £0 event's read showing `trialing` just before the £40's failure, and
+  // said 030 mended it. Stripe would not show that at that moment (W46 review, B1 and proof B): between the no-charge
+  // days ending and the charge there is the hour the £40 invoice is a draft, when the subscription reads active with
+  // its period already moved on. Read then, W46's handler wrote 12 January, and 030 (which goes by that date) flagged
+  // nothing after it. W46b: the read is modelled as Stripe shows it, and the £0 invoice is not the subscription's
+  // newest, so its event is ignored and writes nothing. There is no stale write left to take back, with either
+  // version of the two functions (each put in for the test, as W46a did).
+  it.each([
+    ['before 030', false],
+    ['with 030', true],
+  ] as const)(
+    "invoice.paid, %s: the £0 invoice's event, sent again, is read in the hour the £40 invoice is a draft (the subscription active, its period to 12 January), then the £40 fails and its event is handled before the £0 event's handler carries on: the £0 event is ignored (not the newest invoice) and calls no database function; the member is past due and the booking flagged, as the failure left them, and the payment date is not written",
+    async (_name, with030) => {
+      await asOwner(environment.database.pg, with030 ? migration030() : BEFORE_030_SQL)
+      try {
+        await onASeed(async (stripe) => {
+          vi.setSystemTime(TWELFTH)
+          fullInvoiceIsADraft(stripe)
+          const reader = withAChangeAfterTheRead(stripe, async () => {
+            fullPaymentFailed(stripe)
+            expect((await handle(stripe, fullInvoice('invoice.payment_failed'))).detail).toMatchObject({ action: 'past_due', covered_through: '2026-12-09', bookings_flagged: 1 })
+            expect(await member()).toEqual(OWING)
+          })
+          const rpc = webhookRpc(db)
+          expect(await dispatchStripeEvent(zeroInvoicePaid(), rpc, reader)).toEqual({ outcome: 'ignored', detail: { reason: 'not_latest_invoice' } })
+          expect(rpc.calls).toEqual([])
+          expect(await member()).toEqual(OWING)
+          expect(await renews()).toBe('2026-12-10')
+        })
+      } finally {
+        await asOwner(environment.database.pg, savedFunctionsSql())
+      }
+    }
+  )
+
+  it('nothing changes between the read and the write: one write, a second read that agrees, and the answer as it was before W46', async () => {
+    await onASeed(async (stripe) => {
+      vi.setSystemTime(TWELFTH)
+      fullPaymentFailed(stripe)
+      const rpc = webhookRpc(db)
+      const before = reads(stripe)
+      expect(await dispatchStripeEvent(fullInvoice('invoice.payment_failed'), rpc, stripe)).toEqual({ outcome: 'processed', detail: { found: true, action: 'past_due', covered_through: '2026-12-09', bookings_flagged: 1 } })
+      expect(rpc.calls).toHaveLength(1)
+      expect(reads(stripe) - before).toBe(2)
+    })
+  })
+
+  it("the read after the write fails: the event is an error answered 500 with its write made; sent again, it is processed and the membership is as Stripe shows", async () => {
+    await onASeed(async (stripe) => {
+      vi.setSystemTime(TWELFTH)
+      const client = webhookClient(db)
+      fullPaymentFailed(stripe)
+      const event = fullInvoice('invoice.payment_failed')
+      // The first read answers; the one after the write gets a 500.
+      stripe.failNext('subscriptions.retrieve', { kind: 'none' })
+      stripe.failNext('subscriptions.retrieve', stripeDown())
+      expect(await processWebhookEvent(event, client, stripe)).toEqual({ status: 500, body: { error: 'Internal server error' } })
+      expect(await client.eventRow(event.id)).toMatchObject({ outcome: 'error' })
+      expect(client.calls.map((call) => call.fn)).toEqual(['membership_mark_payment_failed'])
+      expect(await member()).toEqual(OWING)
+      expect(await processWebhookEvent(event, client, stripe)).toEqual({ status: 200, body: { received: true } })
+      expect(await client.eventRow(event.id)).toMatchObject({ outcome: 'processed', error: null, detail: { action: 'past_due' } })
+      expect(await member()).toEqual(OWING)
     })
   })
 })

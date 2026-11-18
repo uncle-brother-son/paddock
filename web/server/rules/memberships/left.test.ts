@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { POST as closeRoute } from '@/app/api/v1/staff/orders/stuck/close/route'
 import type { Db } from '@/server/db'
-import { MAX_STEP_CHECKS_PER_RUN, MAX_STEPS_PER_RUN, reconcile } from '@/server/rules/orders/reconcile'
+import { byLastTried, MAX_STEP_CHECKS_PER_RUN, MAX_STEPS_PER_RUN, reconcile, STEPS_TRIED_ACTION } from '@/server/rules/orders/reconcile'
 import { stuckList } from '@/server/rules/orders/stuck-list'
 import { REPLAY_USER, replay, startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
 import { ID, MO_SUBSCRIPTION, seed, whileFailing } from '@/server/rules/testing/replay/scenarios'
@@ -63,8 +63,14 @@ async function onASeed(work: (stripe: FakeStripe) => Promise<void>): Promise<voi
   )
 }
 
+// W46: a cancel date's step is left with the membership's last day written beside it, as the action's own transaction
+// does (memberships/cancel.ts, M1): the check after closing now sets the row against Stripe as well as the wish.
+const LAST_DAY_SQL = "UPDATE customer_memberships SET cancel_effective_date = ((to_timestamp($1::double precision) AT TIME ZONE 'Europe/London')::date - 1) WHERE id = $2::uuid"
 const leave = (kind: StepKind, want: StepWant, subscriptionId = MO_SUBSCRIPTION): Promise<LeftStep> =>
-  db.transaction((tx) => leaveStep(tx, { membershipId: ID.membership, subscriptionId, kind, want }, BY))
+  db.transaction(async (tx) => {
+    if (kind === 'cancel_at') await tx.query(LAST_DAY_SQL, [want.cancelAt ?? null, ID.membership])
+    return leaveStep(tx, { membershipId: ID.membership, subscriptionId, kind, want }, BY)
+  })
 const cancelStep = () => leave('cancel_at', { cancelAt: ENDS })
 type StepRow = { entity_type: string; entity_id: string; actor_type: string; actor_id: string | null; request_id: string; details: Record<string, unknown> }
 const rows = () => db.query<StepRow>('SELECT entity_type, entity_id, actor_type, actor_id, request_id, details FROM audit_log WHERE action = $1', [STEP_LEFT_ACTION])
@@ -1043,9 +1049,11 @@ describe('W40c: a closed step is checked once more against Stripe', () => {
       await onASeed(async (stripe) => {
         const step = await refusedThenSortedByHand(stripe)
         const calls = stripe.calls.length
-        // Not before its 20 minutes, as any closing.
+        // W46 (W40d "Noticed" 5): its `checked` row was written with the `sorted` row, at once: nothing is read for a
+        // sorted wish, so there is nothing to wait 20 minutes for. (Before W46 there was no row until then.)
+        expect(await checkRows()).toEqual([sortedRow(step)])
         expect((await reconcileNow(stripe)).items).toEqual([])
-        expect(await checkRows()).toEqual([])
+        expect(await checkRows()).toEqual([sortedRow(step)])
         pastTheCheck()
         expect((await reconcileNow(stripe)).items).toEqual([])
         expect(await checkRows()).toEqual([sortedRow(step)])
@@ -1106,9 +1114,11 @@ describe('W40c: a closed step is checked once more against Stripe', () => {
         const again = String((await listed())[0]?.stepId)
         expect(run.items).toMatchObject([{ kind: 'step', id: again, outcome: 'left', reason: 'step_check_disagreed' }])
         expect(methods(stripe, calls)).toEqual(['subscriptions.retrieve'])
-        const [row] = await checkRows()
+        // W46: the sorted step's own row was written when it was sorted; this check covers the press's step.
+        const [sortedCheck, row] = await checkRows()
+        expect(sortedCheck).toEqual(sortedRow(sorted))
         expect(row).toMatchObject({ outcome: 'left_again', wish: undo.id, leftAgain: again })
-        expect([...(row?.['steps'] as string[])].sort()).toEqual([sorted.id, undo.id].sort())
+        expect(row?.['steps']).toEqual([undo.id])
         expect((await runReconcile(stripe)).items).toEqual([{ kind: 'step', id: again, outcome: 'finalised', detail: `cancel_at on subscription ${MO_SUBSCRIPTION}: sent` }])
         expect(stripe.subscriptionSettings(MO_SUBSCRIPTION)?.cancelAt).toBeNull()
       })
@@ -1124,9 +1134,12 @@ describe('W40c: a closed step is checked once more against Stripe', () => {
         pastTheCheck()
         expect((await reconcileNow(stripe)).items).toEqual([])
         expect(stripe.calls).toHaveLength(calls)
-        const [row] = await checkRows()
+        // W46: the sorted step's own row was written when it was sorted; this check covers the press that was put back.
+        const [sortedCheck, row] = await checkRows()
+        expect(sortedCheck).toEqual(sortedRow(sorted))
         expect(row).toMatchObject({ outcome: 'checked', wish: sorted.id, detail: `step ${sorted.id} was marked sorted by a person: not held to Stripe` })
-        expect([...(row?.['steps'] as string[])].sort()).toEqual([sorted.id, undo.id].sort())
+        expect(row?.['steps']).toEqual([undo.id])
+        expect(await checkRows()).toHaveLength(2)
         expect(await listed()).toEqual([])
         expect(stripe.subscriptionSettings(MO_SUBSCRIPTION)?.cancelAt).toBe(BY_HAND)
       })
@@ -1237,6 +1250,177 @@ describe('W40c: a closed step is checked once more against Stripe', () => {
         expect((await reconcileNow(stripe)).items).toMatchObject([{ kind: 'step', outcome: 'left', reason: 'step_check_disagreed' }])
         expect((await listed()).map((line) => line.state)).toEqual(['left'])
       })
+    })
+  })
+})
+
+// Brief W46 item 3 (W45 audit rows 25 and 31; W40 review L6; W40c review L2, L3). A run sends at most 10 steps and
+// reads at most 5 checks. Taken oldest first, ones Stripe never answered stayed at the front and held the rest behind
+// them. Now they are taken by when they were last tried; and on staff's run the steps go before the checks.
+describe('W46: steps and checks are taken by when they were last tried, and steps go first on a staff run', () => {
+  const pastTheCheck = () => vi.setSystemTime(Date.now() + CHECK_AFTER_MINUTES * 60_000 + 60_000)
+  const nextRun = () => vi.setSystemTime(Date.now() + 5 * 60_000)
+  const checkRows = async () => (await db.query<{ details: Record<string, unknown> }>('SELECT details FROM audit_log WHERE action = $1 ORDER BY at', [STEP_CHECK_ACTION])).map((row) => row.details)
+  const triedRows = async () => (await db.query<{ details: { steps: string[]; checks: string[] } }>('SELECT details FROM audit_log WHERE action = $1 ORDER BY at', [STEPS_TRIED_ACTION])).map((row) => row.details)
+  /** Stripe with no answer for some subscriptions' reads: a 500 every time, however often they are asked. */
+  function unanswering(stripe: FakeStripe, silent: readonly string[]): StripeClient {
+    const real = stripe.subscriptions as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>
+    const subscriptions = {
+      ...real,
+      retrieve: async (...args: unknown[]) => {
+        if (silent.includes(String(args[0]))) throw fakeStripeErrors.server()
+        return (real['retrieve'] as (...a: unknown[]) => Promise<unknown>)(...args)
+      },
+    }
+    return new Proxy(stripe, { get: (target, prop) => (prop === 'subscriptions' ? subscriptions : Reflect.get(target, prop)) }) as unknown as StripeClient
+  }
+  const subs = (count: number) => Array.from({ length: count }, (_, i) => `sub_w46_${i}`)
+
+  it('byLastTried: never tried first, in the order given; then longest ago first; ties keep the order given', () => {
+    const tried = new Map([['b', 300], ['c', 100], ['e', 100]])
+    expect(byLastTried(['a', 'b', 'c', 'd', 'e'], (id) => id, tried)).toEqual(['a', 'd', 'c', 'e', 'b'])
+    expect(byLastTried(['a', 'b'], (id) => id, new Map())).toEqual(['a', 'b'])
+  })
+
+  it(`steps: 12 are due and Stripe never answers for the 10 oldest. The first run tries those 10 and says so in one row; the next run takes the two it didn't get to first, and they are sent (before W46 they waited behind the 10 for ever); a run that gets to every step due writes no row`, async () => {
+    await onASeed(async (stripe) => {
+      expect(MAX_STEPS_PER_RUN).toBe(10)
+      const ids = subs(12)
+      const steps: LeftStep[] = []
+      for (const id of ids) {
+        stripe.addSubscription(id, MEMBER_STRIPE_CUSTOMER, MONTHLY_PRICE)
+        // The replay holds the clock still: a second apart, so "oldest first" is the order they were left in.
+        vi.setSystemTime(Date.now() + 1000)
+        steps.push(await leave('cancel_at', { cancelAt: ENDS }, id))
+      }
+      const silent = unanswering(stripe, ids.slice(0, 10))
+      const idsOf = (items: Array<{ id: string }>) => items.map((item) => item.id)
+      const stepIds = steps.map((step) => step.id)
+      pastTheWindow()
+      const first = await reconcileNow(silent)
+      expect(idsOf(first.items)).toEqual(stepIds.slice(0, 10))
+      expect(first.items.every((item) => item.outcome === 'left' && item.reason === 'step_left')).toBe(true)
+      expect(first.deferred).toBe(2)
+      expect(await triedRows()).toEqual([{ steps: stepIds.slice(0, 10), checks: [] }])
+      // Five minutes on: the two never tried go first, then the eight tried longest ago (all at once: oldest first).
+      nextRun()
+      const second = await reconcileNow(silent)
+      expect(idsOf(second.items)).toEqual([...stepIds.slice(10), ...stepIds.slice(0, 8)])
+      expect(second.items.slice(0, 2).map((item) => item.outcome)).toEqual(['finalised', 'finalised'])
+      expect(second.finalised).toBe(2)
+      expect(await triedRows()).toHaveLength(2)
+      // The third run: ten are due, the cap. The two not tried since the first run go first. Every one is tried, so no row.
+      nextRun()
+      const third = await reconcileNow(silent)
+      expect(idsOf(third.items)).toEqual([...stepIds.slice(8, 10), ...stepIds.slice(0, 8)])
+      expect(third.deferred).toBe(0)
+      expect(await triedRows()).toHaveLength(2)
+    })
+  })
+
+  it(`checks: 7 are due and Stripe can't be read for the 5 oldest. The first run reads those 5 (no clear read: nothing written) and names them in its row; the next run reads the two it didn't get to first, and they are checked (before W46 they waited behind the 5 for two hours)`, async () => {
+    await onASeed(async (stripe) => {
+      expect(MAX_STEP_CHECKS_PER_RUN).toBe(5)
+      const ids = subs(7)
+      const steps: LeftStep[] = []
+      for (const id of ids) {
+        stripe.addSubscription(id, MEMBER_STRIPE_CUSTOMER, MONTHLY_PRICE)
+        vi.setSystemTime(Date.now() + 1000)
+        const step = await leave('cancel_at', { cancelAt: ENDS }, id)
+        expect(await trySendStep(stripe, step, undefined)).toMatchObject({ kind: 'done' })
+        expect(await recordStepDone(db, step, BY, 'sent')).toBe(true)
+        steps.push(step)
+      }
+      const silent = unanswering(stripe, ids.slice(0, 5))
+      pastTheCheck()
+      expect((await reconcileNow(silent)).items).toEqual([])
+      expect(await checkRows()).toEqual([])
+      expect(await triedRows()).toEqual([{ steps: [], checks: ids.slice(0, 5).map((id) => `${ID.membership}|${id}|cancel_at`) }])
+      nextRun()
+      expect((await reconcileNow(silent)).items).toEqual([])
+      expect((await checkRows()).map((row) => [row['subscriptionId'], row['outcome']])).toEqual([[ids[5], 'checked'], [ids[6], 'checked']])
+    })
+  })
+
+  it("a card step's check never sets the membership's last day against Stripe: the row says 20 December and Stripe has no end, and the card's check is one `checked` row with nothing listed", async () => {
+    await onASeed(async (stripe) => {
+      const card = await leave('payment_method', { paymentMethod: 'pm_new' })
+      expect(await trySendStep(stripe, card, undefined)).toMatchObject({ kind: 'done' })
+      expect(await recordStepDone(db, card, BY, 'sent')).toBe(true)
+      // The membership's row and Stripe disagree about its end; no cancel step has ever been left.
+      await db.query("UPDATE customer_memberships SET cancel_effective_date = '2026-12-20' WHERE id = $1", [ID.membership])
+      expect(stripe.subscriptionSettings(MO_SUBSCRIPTION)?.cancelAt ?? null).toBeNull()
+      pastTheCheck()
+      expect((await reconcileNow(stripe)).items).toEqual([])
+      expect(await checkRows()).toEqual([{ subscriptionId: MO_SUBSCRIPTION, kind: 'payment_method', steps: [card.id], outcome: 'checked', wish: card.id, detail: `step ${card.id}: Stripe shows it` }])
+      expect(await listed()).toEqual([])
+    })
+  })
+
+  it('a run that gets to everything due writes no row: three steps and two checks', async () => {
+    await onASeed(async (stripe) => {
+      const ids = subs(5)
+      for (const id of ids) stripe.addSubscription(id, MEMBER_STRIPE_CUSTOMER, MONTHLY_PRICE)
+      for (const id of ids.slice(0, 2)) {
+        const step = await leave('cancel_at', { cancelAt: ENDS }, id)
+        expect(await trySendStep(stripe, step, undefined)).toMatchObject({ kind: 'done' })
+        expect(await recordStepDone(db, step, BY, 'sent')).toBe(true)
+      }
+      pastTheCheck()
+      for (const id of ids.slice(2)) await leave('cancel_at', { cancelAt: ENDS }, id)
+      pastTheWindow()
+      const run = await reconcileNow(stripe)
+      expect(run.finalised).toBe(3)
+      expect(await checkRows()).toHaveLength(2)
+      expect(await triedRows()).toEqual([])
+    })
+  })
+
+  it("on staff's run the step goes before the checks: with 6 checks due and a step to send, the step is read and sent first, then 5 checks are read; on the scheduled run the checks still go first", async () => {
+    for (const actor of [{ type: 'staff' as const, id: ID.staff as string }, { type: 'system' as const, id: null }]) {
+      await onASeed(async (stripe) => {
+        const ids = subs(6)
+        for (const id of ids) {
+          stripe.addSubscription(id, MEMBER_STRIPE_CUSTOMER, MONTHLY_PRICE)
+          const step = await leave('cancel_at', { cancelAt: ENDS }, id)
+          expect(await trySendStep(stripe, step, undefined)).toMatchObject({ kind: 'done' })
+          expect(await recordStepDone(db, step, BY, 'sent')).toBe(true)
+        }
+        pastTheCheck()
+        const open = await cancelStep()
+        pastTheWindow()
+        const from = stripe.calls.length
+        const run = await reconcile(db, stripe, { actor, requestId: crypto.randomUUID(), maxItems: 10, budgetMs: 15_000 })
+        expect(run.items).toEqual([{ kind: 'step', id: open.id, outcome: 'finalised', detail: `cancel_at on subscription ${MO_SUBSCRIPTION}: sent` }])
+        const made = stripe.calls.slice(from).map((call) => [call.method, (call.params as { id?: string }).id === MO_SUBSCRIPTION ? 'step' : 'check'])
+        const stepCalls = [['subscriptions.retrieve', 'step'], ['subscriptions.update', 'step']]
+        const checkCalls = Array.from({ length: 5 }, () => ['subscriptions.retrieve', 'check'])
+        expect(made).toEqual(actor.type === 'staff' ? [...stepCalls, ...checkCalls] : [...checkCalls, ...stepCalls])
+        expect(await checkRows()).toHaveLength(5)
+      })
+    }
+  })
+
+  it("staff's run with no time left after its first item (15 seconds): the step staff pressed Resolve now for is sent, no check is read, and the run's row names what it got to; before W46 the checks went first and the step waited for the schedule", async () => {
+    await onASeed(async (stripe) => {
+      const ids = subs(6)
+      for (const id of ids) {
+        stripe.addSubscription(id, MEMBER_STRIPE_CUSTOMER, MONTHLY_PRICE)
+        const step = await leave('cancel_at', { cancelAt: ENDS }, id)
+        expect(await trySendStep(stripe, step, undefined)).toMatchObject({ kind: 'done' })
+        expect(await recordStepDone(db, step, BY, 'sent')).toBe(true)
+      }
+      pastTheCheck()
+      const open = await cancelStep()
+      pastTheWindow()
+      const from = stripe.calls.length
+      // The run's clock: its start and its first item at 0 s, everything after at 20 s (past the 15 s budget).
+      let asked = 0
+      const run = await reconcile(db, stripe, { actor: { type: 'staff', id: ID.staff }, requestId: crypto.randomUUID(), maxItems: 10, budgetMs: 15_000, now: () => (asked++ < 2 ? 0 : 20_000) })
+      expect(run.items).toEqual([{ kind: 'step', id: open.id, outcome: 'finalised', detail: `cancel_at on subscription ${MO_SUBSCRIPTION}: sent` }])
+      expect(stripe.calls.slice(from).map((call) => call.method)).toEqual(['subscriptions.retrieve', 'subscriptions.update'])
+      expect(await checkRows()).toEqual([])
+      expect(await triedRows()).toEqual([{ steps: [open.id], checks: [] }])
     })
   })
 })
