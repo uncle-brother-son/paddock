@@ -942,3 +942,27 @@ export const W13_CALLS_BY_THEIR_OWN_TEST = new Set<string>([
 export const NOT_BUILT_SCENARIOS: Readonly<Record<string, readonly string[]>> = {
   // W13 built memberships, the last part T1 answered NOT_BUILT for: nothing is left here.
 }
+
+// --- W42a
+
+/** The three W11 scenarios that save a card while taking a payment on the reader (brief W42a item 1). */
+export const W42A_CARD_SAVING_SCENARIOS = ['w11-reader-save-card-reusable', 'w11-reader-save-card-simulated-reader', 'w11-reader-save-card-with-all-three'] as const
+
+/**
+ * With `card_moves` on, the order's T2 runs the rule for "the memberships follow the customer's saved card" when it
+ * saves a card, and the reader's finalise then sends as the replace press does: each live membership's subscription,
+ * then the Stripe customer's invoice default. The scenarios' customer (Sam) has no membership, so the one difference
+ * is that last call, pinned to the card the tap left; its `customer.invoice_default` row is among the Worker's own
+ * audit rows (held by name in order-replay.test.ts). The simulated reader saves no card: nothing differs.
+ */
+const INVOICE_DEFAULT_AFTER_THE_SAVE: AllowedDifference = {
+  name: "The Stripe customer's invoice default is set to the card the order saved, after the reader's finalise has marked it paid. The old finalise saved the card to the customer and sent Stripe nothing more",
+  decision: "Brief W42a item 1 (W42 review S1; W42 report, Noticed 1): one rule for a customer's saved card, the order's T2 included, sent as the replace press sends (Q19, Q45)",
+  path: /^\.stripeCalls\[3\]$/,
+  actual: (value) => JSON.stringify(value) === JSON.stringify({ method: 'customers.update', params: { id: 'cus_seed', invoice_settings: { default_payment_method: 'pm_reader_saved' } }, idempotencyKey: null }),
+}
+
+export const W42A_CARD_MOVES_DIFFERENCES: Readonly<Record<string, readonly AllowedDifference[]>> = {
+  'w11-reader-save-card-reusable': [INVOICE_DEFAULT_AFTER_THE_SAVE],
+  'w11-reader-save-card-with-all-three': [INVOICE_DEFAULT_AFTER_THE_SAVE],
+}

@@ -50,6 +50,10 @@
 //   `step_not_left_again`, its row names the step, and every later run tries again until it is settled
 //   (`leaveAgainLater`; reconcile.ts lists what is due from its own rows).
 //
+// - W42a (W42 review S2): a card step is never refused for one still being sent (the newest card must be the one
+//   saved), so its press can still be at Stripe when a newer step replaces it. The action that leaves the newer step
+//   writes the same `stale_send` mark on it, in its own transaction (`leaveStepReplacing`, `markStaleSends`).
+//
 // - W40c: the net under all of that. Every step that closes, however it closes, is checked once more: 20 minutes
 //   later (the window and a margin) reconcile reads its subscription and sets it against the newest wish for that
 //   subscription and kind (`checksDue`, `checkAfterClosing`). Stripe showing something else leaves the newest wish
@@ -128,7 +132,8 @@ export interface StepWant {
 
 /**
  * `left`: recorded, to send. `refused`: Stripe said no for good. `stale_send` (W40b): a mark on an open step, not an
- * ending: a run's send of the step this one replaced got no clear answer and may still land. The rest close it.
+ * ending: a run's send of the step this one replaced got no clear answer and may still land (W42a: or the press of the
+ * card step this one replaced may still be sending it). The rest close it.
  */
 export type StepState = 'left' | 'refused' | 'done' | 'sorted' | 'replaced' | 'undone' | 'stale_send'
 const CLOSING_STATES: readonly StepState[] = ['done', 'sorted', 'replaced', 'undone']
@@ -337,13 +342,37 @@ export async function leaveStep(tx: Tx, step: Omit<LeftStep, 'id'>, by: StepBy):
 /**
  * leaveStep, also answering the open steps it closed as `replaced` (W40): a press Stripe then refuses leaves their
  * wish again when it puts its own database change back. `extra` (W40a): more for the `left` row's details.
+ *
+ * `markStaleSends` (W42a, W42 review S2), for an action that doesn't refuse a new change while the last one is still
+ * being sent (a replaced card, customers/card-steps.ts; a cancel does refuse, `stepStillBeingSent`). When a step it
+ * closes is still inside its press's window and not refused, that press may still be at Stripe, and its send can land
+ * after the new step's. The new step is then given W40b's `stale_send` mark here, in the same transaction, naming
+ * that step: its own press's ending (`recordStepDone`) finds the mark and leaves the wish again instead of closing
+ * the step `done`, so it stays listed and a run past its window reads Stripe for it.
+ *
+ * `open` (W42b, W42a review L4): the open steps, already read in this transaction by a caller that leaves several
+ * steps for different memberships under their locks (`openSteps(tx)`, read once). Absent: read here. Never pass a
+ * list read before an earlier step for the same membership, subscription and kind was left: it wouldn't hold it.
  */
-export async function leaveStepReplacing(tx: Tx, step: Omit<LeftStep, 'id'>, by: StepBy, extra: Record<string, unknown> = {}): Promise<{ step: LeftStep; replaced: OpenStep[] }> {
+export async function leaveStepReplacing(
+  tx: Tx,
+  step: Omit<LeftStep, 'id'>,
+  by: StepBy,
+  extra: Record<string, unknown> = {},
+  markStaleSends = false,
+  open?: readonly OpenStep[]
+): Promise<{ step: LeftStep; replaced: OpenStep[] }> {
   if (!isStepKind(step.kind)) throw new Error(`Unknown step kind: ${String(step.kind)}`)
   if (!step.membershipId || !step.subscriptionId) throw new Error('A step needs its membership and its subscription.')
   const left: LeftStep = { ...step, want: checkWant(step.kind, step.want), id: crypto.randomUUID() }
-  const older = (await openSteps(tx)).filter((open) => open.membershipId === left.membershipId && open.subscriptionId === left.subscriptionId && open.kind === left.kind)
-  await audit.recordAll(tx, [...older.map((open) => entry(open, 'replaced', by, { replacedBy: left.id })), entry(left, 'left', by, extra)])
+  const older = (open ?? (await openSteps(tx))).filter((step) => step.membershipId === left.membershipId && step.subscriptionId === left.subscriptionId && step.kind === left.kind)
+  // W42a (S2): the press of a step still inside its window, and not refused, may still be sending it.
+  const stale = markStaleSends ? older.find((step) => step.inWindow && !step.refused) : undefined
+  await audit.recordAll(tx, [
+    ...older.map((step) => entry(step, 'replaced', by, { replacedBy: left.id })),
+    entry(left, 'left', by, extra),
+    ...(stale ? [entry(left, 'stale_send', by, { staleStep: stale.id })] : []),
+  ])
   return { step: left, replaced: older }
 }
 
@@ -828,10 +857,16 @@ LIMIT 1`
  * sorted its wish is never held to Stripe, so a legacy change made meanwhile is never taken for a stale send. Without
  * this, after a rollback to a staff app with no Mark sorted, a refused line held the old Cancel and Undo for good.
  * Once it is closed (sorted, or replaced by a new press) it counts again until its check row, as any closed step.
+ *
+ * W42 (W40d report, Noticed 2): only `cancel_at` steps count. The two legacy routes set or clear a cancel date and
+ * nothing else, so only a cancel step's check could take a legacy change for a stale send and put it back. A card
+ * step (a replaced card, customers/saved-card.ts) sends and checks `default_payment_method` alone, which no legacy
+ * route writes: counted, it would hold the old screen's Cancel and Undo for half an hour after every replaced card.
  */
 const UNSETTLED_STEP_SQL = `
 SELECT 1 FROM audit_log s
 WHERE s.action = '${STEP_LEFT_ACTION}' AND s.entity_type = '${STEP_LEFT_ENTITY}' AND s.entity_id = $1 AND s.details->>'state' = 'left'
+  AND s.details->>'kind' = 'cancel_at'
   AND NOT EXISTS (
     SELECT 1 FROM audit_log c
     WHERE c.action = '${STEP_CHECK_ACTION}' AND c.entity_type = '${STEP_LEFT_ENTITY}' AND c.entity_id = s.entity_id
@@ -855,7 +890,7 @@ LIMIT 1`
  * W40d (W40c review S2): whether a membership has a step still open, or closed and not yet checked against Stripe.
  * The two legacy routes ask before they change anything (legacy-guard.ts): while this is true, a change they made
  * would look like a stale send to the check, which would put the step's wish back over it. W41: an open step Stripe
- * has refused for good doesn't count (it is never sent, and is listed for a person).
+ * has refused for good doesn't count (it is never sent, and is listed for a person). W42: nor does a card step.
  */
 export async function stepsUnsettled(db: Queryable, membershipId: string): Promise<boolean> {
   return (await db.query(UNSETTLED_STEP_SQL, [membershipId])).length > 0

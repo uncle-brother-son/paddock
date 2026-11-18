@@ -4,10 +4,24 @@
 // finaliseReaderOrder did once the tap had taken the money (the card saved, the method recorded). W13 adds
 // the membership: createOrder's and finaliseReaderOrder's customer_memberships row (written, or a buy-new
 // row patched), its first credit period, and the exhausted membership marked cancelled (Q8).
+// W42a (W42 review S1; W42 report, Noticed 1): with `card_moves` on, a T2 that writes a membership or saves a card
+// also runs the one rule for "the memberships follow the customer's saved card" (customers/card-steps.ts): it takes
+// the customer's lock (LOCK_ORDER: order, then customer) before it writes anything of theirs, and after its writes
+// leaves a card step for every live membership against the customer's saved card as it is then. The caller sends
+// them after the commit (`cardSteps` in the answer). Off, T2 is as it was.
+// W42b (W42a review S2): with `card_moves` on, an older tap never takes the place of a newer card. T2 saves the card
+// its tap left only when no card has been saved to the customer since that tap (`NEWER_CARD_SAVED_SQL`, under the
+// customer's lock). Otherwise the customer's card stays as it is, a `customer.card_not_saved` row says why, and the
+// rule above moves every membership (a reader membership order's new one, made on the tapped card, included) to the
+// customer's card as it is. Off, the tap's card is saved whatever came after it, as W11 had it.
+// W42b (W42a report, Noticed 1): a T2 that writes a membership takes the customer's lock first whatever the kind, so
+// T2 and the payment date change (memberships/payment-date.ts: customer, then membership) lock in the same order.
 import 'server-only'
 import type Stripe from 'stripe'
 import { audit, type AuditEntry } from '@/server/audit'
 import type { Db, Tx } from '@/server/db'
+import { followSavedCard, lockCustomerForCardSteps, type CardStepsLeft } from '@/server/rules/customers/card-steps'
+import { cardMovesOn } from '@/server/rules/memberships/membership-switch'
 import type { ResolvedCard } from '@/server/stripe/saved-card'
 import { londonToday } from '@/server/rules/time/london-time'
 import { pence } from './collect-saved-card'
@@ -16,7 +30,18 @@ import type { PendingSnapshot } from './pending-order'
 
 export type FinaliseOutcome =
   /** Marked paid by this call, or found already paid with this PaymentIntent (safe twice). */
-  | { finalised: true; alreadyPaid: boolean; cardSaved: boolean; membershipId?: string | null }
+  | {
+      finalised: true
+      alreadyPaid: boolean
+      cardSaved: boolean
+      membershipId?: string | null
+      /**
+       * W42a: the card steps this T2 left (with `card_moves` on, when it wrote a membership or saved a card), for the
+       * caller to send once T2 has committed (customers/card-steps.ts, `sendCardSteps`). Unsent, they are listed and
+       * reconcile sends them past the window.
+       */
+      cardSteps?: CardStepsLeft
+    }
   /**
    * Nothing written. `order_gone`: the order was undone, so a charge that succeeded has no order (a
    * person must refund it; T2 records it in audit_log). `rollback_started`: the old code's rollback has
@@ -78,6 +103,12 @@ export interface FinaliseOptions {
    * another actor between its list and T2 leaves a row that the next run's retry puts back.
    */
   subscriptionMadeHere?: boolean
+  /**
+   * W42a: ORDER_SWITCH, for `card_moves` alone. Absent: read from the Worker's environment, as the routes read it.
+   * The scheduled run passes its own (OpenNext copies the environment into process.env only inside its fetch
+   * handler, which a scheduled run doesn't go through).
+   */
+  orderSwitch?: string | null
 }
 
 interface LockedOrder {
@@ -272,6 +303,23 @@ SELECT (SELECT count(*)::int FROM paid) AS paid,
        (SELECT count(*)::int FROM customer WHERE address_saved) AS addresses_saved,
        (SELECT count(*)::int FROM customer WHERE card_saved) AS cards_saved`
 
+/** W42b: T2's row for a tap's card it did not save, because a newer card is on file (`details.reason`). */
+export const CARD_NOT_SAVED_ACTION = 'customer.card_not_saved'
+
+/**
+ * W42b (W42a review S2): whether a card has been saved to the customer (`$1`) since the tap. Every writer of a
+ * customer's saved card writes a `customer.card_saved` row in the same transaction (the replace press,
+ * customers/saved-card.ts; the card saved with `card_moves` off, payments/terminal.ts; T2 here), so a row later than
+ * the tap is a card later than the tap's. The tap's time is Stripe's (`$2`, whole seconds: the charge's `created`);
+ * with none, the order's own start (`$3`), which is earlier, so a card saved since then counts as newer. Asked under
+ * the customer's lock, which every one of those writers but the kind-off save holds.
+ */
+const NEWER_CARD_SAVED_SQL = `
+SELECT 1 FROM audit_log a
+WHERE a.action = 'customer.card_saved' AND a.entity_type = 'customer' AND a.entity_id = $1::text
+  AND a.at > COALESCE(to_timestamp($2::double precision), (SELECT o.created_at FROM orders o WHERE o.id = $3::uuid))
+LIMIT 1`
+
 /*
  * Its audit row is stamped from the clock (audit.recordAll), as T1's are: T1 stamps its rows a
  * millisecond or two ahead, so a row stamped now() could sort before them when T2 or the undo follows
@@ -369,7 +417,8 @@ export async function finaliseOrder(db: Db, orderId: string, paymentIntent: Stri
     }
 
     const method = methodAtFinalise(record)
-    const card = record.method === 'reader' && record.save_card && options.saveCard?.reusable ? options.saveCard : null
+    // The reusable card the tap left, when the customer agreed to save it. Whether it is saved is settled below.
+    const tapCard = record.method === 'reader' && record.save_card && options.saveCard?.reusable ? options.saveCard : null
     const newRecord: PendingSnapshot =
       record.method === 'card'
         ? { ...record, charge_payment_intent_id: paymentIntent?.id ?? null }
@@ -392,6 +441,18 @@ export async function finaliseOrder(db: Db, orderId: string, paymentIntent: Stri
           }]
         : []
     const replaced = membership && record.replaces_membership_id ? record.replaces_membership_id : null
+    // W42a: this T2 changes which card a membership should renew on (a new membership, or a new saved card), so it
+    // takes the customer's lock first, before it writes their membership or their card: a card replace
+    // (customers/saved-card.ts, K1) holds the same lock, so one of the two goes first and the other sees what it did.
+    const followsCard = (membershipWrite.length > 0 || tapCard !== null) && cardMovesOn(options.orderSwitch === undefined ? process.env.ORDER_SWITCH : options.orderSwitch)
+    // W42b (W42a report, Noticed 1): and whatever the kind, a T2 that writes a membership takes the customer's lock
+    // before the membership's, as the payment date change does, so the two can't each hold what the other waits for.
+    if (followsCard || membershipWrite.length > 0) await lockCustomerForCardSteps(tx, order.customer_id)
+    // W42b (W42a review S2), with `card_moves` on: a card saved to the customer since this tap is their newer
+    // instruction (a replace made while this order was held, say), so the tap's card is not saved over it.
+    const newerOnFile =
+      followsCard && tapCard !== null && (await tx.query(NEWER_CARD_SAVED_SQL, [order.customer_id, tapCard.tappedAt ?? paymentIntent?.created ?? null, orderId])).length > 0
+    const card = newerOnFile ? null : tapCard
     const written = (
       await tx.query<{
         paid: number
@@ -444,7 +505,26 @@ export async function finaliseOrder(db: Db, orderId: string, paymentIntent: Stri
             details: { paymentMethodId: card.paymentMethodId, last4: card.last4, brand: card.brand, fromPaymentIntent: paymentIntent?.id ?? null, orderId },
           }]
         : []),
+      // W42b: the tap's card was left unsaved for a newer one. The memberships follow the customer's card as it is (below).
+      ...(tapCard && newerOnFile
+        ? [{
+            ...entry,
+            action: CARD_NOT_SAVED_ACTION,
+            entityType: 'customer',
+            entityId: order.customer_id,
+            details: { reason: 'newer_card_on_file', paymentMethodId: tapCard.paymentMethodId, last4: tapCard.last4, brand: tapCard.brand, tappedAt: tapCard.tappedAt, fromPaymentIntent: paymentIntent?.id ?? null, orderId },
+          }]
+        : []),
     ])
-    return { finalised: true, alreadyPaid: false, cardSaved: written.cards_saved > 0, ...(membership ? { membershipId: written.membership_id } : {}) }
+    // W42a: every live membership of the customer's, the one just written included, is to renew on their saved card
+    // as it is now (read under the locks: a card replaced since the order was placed is the one that counts).
+    const cardSteps = followsCard ? await followSavedCard(tx, order.customer_id, { actor: options.actor, requestId: options.requestId }) : null
+    return {
+      finalised: true,
+      alreadyPaid: false,
+      cardSaved: written.cards_saved > 0,
+      ...(membership ? { membershipId: written.membership_id } : {}),
+      ...(cardSteps ? { cardSteps } : {}),
+    }
   })
 }

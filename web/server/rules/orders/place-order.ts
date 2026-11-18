@@ -29,6 +29,7 @@ import type {
 import { audit } from '@/server/audit'
 import { DbCommitUnknownError, DbError, inOpenTransaction, isDeadlock, postgresRefusal, type Db, type Tx } from '@/server/db'
 import { ApiError } from '@/server/http/errors'
+import { sendCardSteps } from '@/server/rules/customers/card-steps'
 import { addMonthsToIsoDate } from '@/server/rules/time/london-time'
 import type { StripeClient } from '@/server/stripe/client'
 import { stripeTiming, type StripeTiming } from '@/server/stripe/deadline'
@@ -1392,6 +1393,11 @@ async function collectMembershipAndFinish(
     if (finalised.reason === 'order_gone') throw paymentUnconfirmed('charged_without_order', CHARGED_WITHOUT_ORDER_MESSAGE, orderId, `${subscription.id} made for an order that is gone`)
     throw paymentUnconfirmed('payment_unconfirmed', PAYMENT_UNCONFIRMED_MESSAGE, orderId, `T2 left the order pending: ${finalised.reason}`)
   }
+  // W42a (W42 review S1): the subscription was made on the card T1 read. T2 has left a card step for it (and for
+  // any other live membership) against the customer's saved card as it is now: sent here. In the usual case Stripe
+  // already shows that card and one read settles it; if the card was replaced while the order was at Stripe, the
+  // new membership is moved to the new card.
+  if (finalised.cardSteps) await sendCardSteps(db, stripe, finalised.cardSteps, { actor, requestId: options.requestId, timing })
   return {
     ...placed.output,
     membershipId: finalised.membershipId ?? null,

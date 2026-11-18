@@ -11,6 +11,17 @@ export interface ResolvedCard {
   reusable: boolean
   last4: string | null
   brand: string | null
+  /**
+   * W42 (F4, FB17): the Stripe customer the intent was made for, or null when it names none. A card is only saved to
+   * the customer whose Stripe customer this is (customers/saved-card.ts).
+   */
+  stripeCustomerId: string | null
+  /**
+   * W42b (W42a review S2): when the tap was, in Stripe's seconds: the charge's `created` (a reader payment) or the
+   * attempt's (a card-save). Null when Stripe's answer carries neither. An order's T2 sets it against the customer's
+   * later card saves, so an older tap never takes the place of a newer card (orders/finalise-order.ts).
+   */
+  tappedAt: number | null
 }
 
 /** The tap: a reader charge with "save card" ticked, or a reader card-save (SetupIntent) with no charge. */
@@ -33,6 +44,9 @@ interface CardPresentDetails {
 const cardPresentOf = (details: unknown): CardPresentDetails | undefined =>
   (details as { card_present?: CardPresentDetails } | null | undefined)?.card_present ?? undefined
 
+/** A Stripe time in whole seconds, or null when the answer has none. */
+const secondsOf = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null)
+
 const idOf = (value: string | { id: string } | null | undefined): string | undefined => (typeof value === 'string' ? value : value?.id)
 
 /**
@@ -49,17 +63,23 @@ const idOf = (value: string | { id: string } | null | undefined): string | undef
 export async function resolveSavedCard(stripe: StripeClient, source: CardSource, send: () => Stripe.RequestOptions = () => ({})): Promise<ResolvedCard> {
   let rawPaymentMethodId: string | undefined
   let cardPresent: CardPresentDetails | undefined
+  let stripeCustomerId: string | null = null
+  let tappedAt: number | null = null
   try {
     if ('setupIntentId' in source) {
       const setupIntent = await stripe.setupIntents.retrieve(source.setupIntentId, { expand: ['latest_attempt'] }, send())
       rawPaymentMethodId = idOf(setupIntent.payment_method)
+      stripeCustomerId = idOf(setupIntent.customer) ?? null
       const attempt = setupIntent.latest_attempt
       cardPresent = typeof attempt === 'object' && attempt !== null ? cardPresentOf(attempt.payment_method_details) : undefined
+      tappedAt = typeof attempt === 'object' && attempt !== null ? secondsOf(attempt.created) : null
     } else {
       const paymentIntent = await stripe.paymentIntents.retrieve(source.paymentIntentId, { expand: ['latest_charge'] }, send())
       rawPaymentMethodId = idOf(paymentIntent.payment_method)
+      stripeCustomerId = idOf(paymentIntent.customer) ?? null
       const charge = paymentIntent.latest_charge
       cardPresent = typeof charge === 'object' && charge !== null ? cardPresentOf(charge.payment_method_details) : undefined
+      tappedAt = typeof charge === 'object' && charge !== null ? secondsOf(charge.created) : null
     }
   } catch (err) {
     throw new SavedCardError(`Failed to resolve saved card: ${err instanceof Error ? err.message : 'Unknown error'}`)
@@ -80,7 +100,7 @@ export async function resolveSavedCard(stripe: StripeClient, source: CardSource,
     }
   }
 
-  return { paymentMethodId: generatedCardId ?? rawPaymentMethodId, reusable: Boolean(generatedCardId), last4, brand }
+  return { paymentMethodId: generatedCardId ?? rawPaymentMethodId, reusable: Boolean(generatedCardId), last4, brand, stripeCustomerId, tappedAt }
 }
 
 /** The old words for a card Stripe won't let the club charge later (saveCustomerCardOnFile.ts). */

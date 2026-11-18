@@ -69,11 +69,12 @@ import type { Db } from '@/server/db'
 import { stripeIdempotencyKey } from '@/server/http/idempotency'
 import type { StripeClient } from '@/server/stripe/client'
 import { sendOptions, STRIPE_DEADLINE_MS, stripeTiming, type StripeTiming } from '@/server/stripe/deadline'
-import type { FinaliseReaderOrderOutput } from '@/contracts'
+import type { CancelReaderOrderOutput, FinaliseReaderOrderOutput } from '@/contracts'
 import { readStripeFailure } from '@/server/stripe/outcome'
 import { CHANGED_ELSEWHERE, CHANGED_ELSEWHERE_DAYS, CHANGED_ELSEWHERE_WHERE, FINAL_FINDINGS, type ChangedElsewhereFinding } from './changed-elsewhere'
 import { OLD_MEMBERSHIP_CANCELLED_NOTE } from './failure-messages'
-import { finaliseOrder, MEMBERSHIP_DEFINITE, membershipPrecheck } from './finalise-order'
+import { sendCardSteps } from '@/server/rules/customers/card-steps'
+import { finaliseOrder, MEMBERSHIP_DEFINITE, membershipPrecheck, type FinaliseOptions, type FinaliseOutcome } from './finalise-order'
 import { pence } from './collect-saved-card'
 import {
   balanceToPutBack,
@@ -100,7 +101,7 @@ import {
   undoFlowInTransaction,
   type FlowRow,
 } from './reader-flow'
-import { cancelReaderOrder, finaliseReaderOrderFound, otherModeMessage, settleIntent } from './reader-order'
+import { cancelReaderOrder, finaliseReaderOrderFound, otherModeMessage, settleIntent, type ReaderRouteOptions } from './reader-order'
 import { undoOrder } from './undo-order'
 import { CLAIMS_DUE_SQL, claimRefusal, findCardPart, finishClaim, readClaim, type CardPart, type Claim } from '@/server/rules/bookings/refunds'
 import { finishEventClaim } from '@/server/rules/events/cancel-places'
@@ -231,6 +232,14 @@ export interface ReconcileOptions {
   watchDays?: number
   /** W32a: how many hours since its last read before a watched refund that reads `succeeded` is read again (WATCH_READ_HOURS). */
   watchReadHours?: number
+  /**
+   * W42a: ORDER_SWITCH, for one thing only: whether an order this run finalises also leaves card steps for the
+   * customer's memberships (`card_moves`; finalise-order.ts). Absent: the Worker's environment, as the routes read
+   * it. The scheduled run passes its own, because its environment isn't copied into process.env (server/scheduled.ts).
+   * Nothing else in a run asks the switch: it settles whatever was started.
+   * W42b: read once when the run starts (`runSwitch`) and given to every T2 the run reaches (`t2By`).
+   */
+  orderSwitch?: string | null
 }
 
 export type ItemOutcome =
@@ -428,6 +437,11 @@ interface Run {
   stripe: StripeClient
   timing: StripeTiming | undefined
   options: ReconcileOptions
+  /**
+   * W42b (W42a review S1): ORDER_SWITCH as this run has it, settled once when the run starts (`runSwitch`) and given
+   * to every T2 the run reaches (`t2By`). No T2 of a run reads the environment for itself.
+   */
+  orderSwitch: string | null
   /** Each action's row: `order.reconcile`, actor system (or the staff member). */
   record(entityType: ReconcileEntity, entityId: string, details: Record<string, unknown>): Promise<void>
   /**
@@ -463,6 +477,36 @@ interface PendingOrder {
   reader_payment: PendingSnapshot
 }
 
+/**
+ * W42b (W42a review S1): the run's ORDER_SWITCH, read once, here, when the run starts. The scheduled run gives its
+ * own (its environment isn't in process.env: server/scheduled.ts). A run started by a request (staff's Resolve now)
+ * gives none, and the request's environment is read here, as its route would read it. This is the only place a run
+ * reads the environment for the switch.
+ */
+const runSwitch = (options: Pick<ReconcileOptions, 'orderSwitch'>): string | null => (options.orderSwitch === undefined ? (process.env.ORDER_SWITCH ?? null) : options.orderSwitch)
+
+/** Who a run's T2 is by, and the run's switch: always given, so T2 never falls back to the environment (W42b). */
+interface RunT2 {
+  actor: ReconcileOptions['actor']
+  requestId: string
+  orderSwitch: string | null
+}
+const t2By = (run: Run): RunT2 => ({ actor: run.options.actor, requestId: run.options.requestId, orderSwitch: run.orderSwitch })
+
+// W42b: the three ways a run reaches T2, each given the run's switch by its type. Nothing else in this file calls
+// finaliseOrder, cancelReaderOrder or finaliseReaderOrderFound (reconcile.test.ts holds that), so a new path can't
+// leave the switch out.
+/** T2 itself, for an order the run finalises without the reader's steps. */
+const runT2 = (run: Run, orderId: string, paymentIntent: Stripe.PaymentIntent | null, more: Pick<FinaliseOptions, 'subscription' | 'subscriptionMadeHere'> = {}): Promise<FinaliseOutcome> =>
+  finaliseOrder(run.db, orderId, paymentIntent, { ...t2By(run), ...more })
+/** The reader's cancel (which finalises instead when the tap went through), with the run's deadline. */
+const runReaderCancel = (run: Run, orderId: string, more: Pick<ReaderRouteOptions, 'subscriptionFound'>): Promise<CancelReaderOrderOutput> =>
+  // W13 (W12a N1): the run's own deadline, not the press's 30 s.
+  cancelReaderOrder(run.db, run.stripe, orderId, { ...t2By(run), ...(run.timing ? { timing: run.timing } : {}), ...more })
+/** The reader's finalise for a succeeded intent the run found by listing. */
+const runReaderFinalise = (run: Run, orderId: string, snapshot: ReaderSnapshot, paymentIntent: Stripe.PaymentIntent, more: Pick<ReaderRouteOptions, 'subscriptionFound'>): Promise<FinaliseReaderOrderOutput> =>
+  finaliseReaderOrderFound(run.db, run.stripe, orderId, snapshot, paymentIntent, { ...t2By(run), ...more }, run.timing)
+
 async function undoTheOrder(run: Run, orderId: string, why: string): Promise<ReconcileItem> {
   try {
     const undone = await undoOrder(run.db, orderId, { actor: run.options.actor, requestId: run.options.requestId, why })
@@ -477,7 +521,7 @@ async function undoTheOrder(run: Run, orderId: string, why: string): Promise<Rec
 
 async function finaliseTheOrder(run: Run, orderId: string, paymentIntent: Stripe.PaymentIntent): Promise<ReconcileItem> {
   try {
-    const outcome = await finaliseOrder(run.db, orderId, paymentIntent, { actor: run.options.actor, requestId: run.options.requestId })
+    const outcome = await runT2(run, orderId, paymentIntent)
     if (outcome.finalised) return outcome.alreadyPaid ? { kind: 'order', id: orderId, outcome: 'settled_elsewhere', detail: 'paid' } : { kind: 'order', id: orderId, outcome: 'finalised', detail: paymentIntent.id }
     // order_gone: T2 recorded the payment for the automatic refund (the refunds step, this run or the next).
     return left('order', orderId, outcome.reason === 'order_gone' ? 'charged_without_order' : outcome.reason, paymentIntent.id)
@@ -524,13 +568,9 @@ async function reconcileReaderOrder(run: Run, order: PendingOrder, snapshot: Rea
     if ('several' in looked) return left('order', order.id, 'several_subscriptions', looked.several)
     subscriptionFound = looked.found
   }
-  const answer = await cancelReaderOrder(run.db, run.stripe, order.id, {
-    actor: run.options.actor,
-    requestId: run.options.requestId,
-    // W13 (W12a N1): the run's own deadline, not the press's 30 s.
-    ...(run.timing ? { timing: run.timing } : {}),
-    ...(subscriptionFound !== undefined ? { subscriptionFound } : {}),
-  })
+  // W42b (W42a review S1): with the run's switch, as every T2 of a run. This is the usual way a held reader order is
+  // finished, and without the switch its T2 read an environment a scheduled run doesn't have.
+  const answer = await runReaderCancel(run, order.id, subscriptionFound !== undefined ? { subscriptionFound } : {})
   if (answer.cancelled) return answer.alreadyGone ? { kind: 'order', id: order.id, outcome: 'settled_elsewhere', detail: 'gone' } : { kind: 'order', id: order.id, outcome: 'undone', detail: 'the reader payment was cancelled' }
   if (answer.finalisedInstead) return readerFinaliseItem(order.id, answer.finaliseResult, snapshot.payment_intent_id)
   if (answer.reason === 'stripe_error') {
@@ -564,15 +604,7 @@ async function finaliseHeldReaderOrder(run: Run, orderId: string, snapshot: Read
     if ('several' in looked) return left('order', orderId, 'several_subscriptions', looked.several)
     subscriptionFound = looked.found
   }
-  const result = await finaliseReaderOrderFound(
-    run.db,
-    run.stripe,
-    orderId,
-    snapshot,
-    paymentIntent,
-    { actor: run.options.actor, requestId: run.options.requestId, ...(subscriptionFound !== undefined ? { subscriptionFound } : {}) },
-    run.timing
-  )
+  const result = await runReaderFinalise(run, orderId, snapshot, paymentIntent, subscriptionFound !== undefined ? { subscriptionFound } : {})
   return readerFinaliseItem(orderId, result, paymentIntent.id)
 }
 
@@ -718,7 +750,10 @@ async function reconcileMembershipCardOrder(run: Run, order: PendingOrder, snaps
     // W13d (W13c review S-2): the subscription it found is passed as made here, so if another actor undoes the order
     // between this run's list and T2, T2 records it as left and the next run's retry puts it back (the charge is
     // T2's `order.charge_without_order`, for the late refund).
-    const outcome = await finaliseOrder(run.db, order.id, paid, { actor: run.options.actor, requestId: run.options.requestId, subscription, subscriptionMadeHere: true })
+    const outcome = await runT2(run, order.id, paid, { subscription, subscriptionMadeHere: true })
+    // W42a: the membership this run's T2 wrote follows the customer's saved card: its step, left by T2, is sent now
+    // (never throws; unsent, it is listed and a later run sends it past its window).
+    if (outcome.finalised && outcome.cardSteps) await sendCardSteps(run.db, run.stripe, outcome.cardSteps, { actor: run.options.actor, requestId: run.options.requestId, timing: run.timing })
     if (outcome.finalised) return outcome.alreadyPaid ? { kind: 'order', id: order.id, outcome: 'settled_elsewhere', detail: 'paid' } : { kind: 'order', id: order.id, outcome: 'finalised', detail: subscription.id }
     if (MEMBERSHIP_DEFINITE.has(outcome.reason)) {
       return compensateTheOrder(run, order.id, taken, `T2 refused the membership: ${outcome.reason}${oldCancelled ? `. ${OLD_MEMBERSHIP_CANCELLED_NOTE}` : ''}`)
@@ -1203,6 +1238,7 @@ export async function reconcileClaimNow(db: Db, stripeClient: StripeClient, clai
     stripe: stripeClient,
     timing: undefined,
     options: { ...options, maxItems: 1, budgetMs: 0 },
+    orderSwitch: runSwitch({}),
     record,
     refundEntry: (entityType, entityId, details) => ({ actorType: 'system', actorId: null, action: 'order.reconcile', entityType, entityId, requestId: options.requestId, details }),
     recordRefund: () => Promise.resolve(),
@@ -1658,6 +1694,7 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
     stripe: watched.client,
     timing,
     options,
+    orderSwitch: runSwitch(options),
     async record(entityType, entityId, details) {
       await db.transaction((tx) =>
         audit.recordAll(tx, [{ actorType: options.actor.type, actorId: options.actor.id, action: 'order.reconcile', entityType, entityId, requestId: options.requestId, details }])

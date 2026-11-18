@@ -1,13 +1,14 @@
+import { appendFileSync } from 'node:fs'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Db } from '@/server/db'
 import { READER_INTENT_UNCONFIRMED_MESSAGE, staffSees } from '@/server/rules/orders/failure-messages'
 import { ORDER_NOT_SAVED_MESSAGE } from '@/server/rules/orders/place-order'
 import { SUB_PENNY_PAYMENT_MESSAGE } from '@/server/rules/orders/price-basket'
-import { compareRecordings, withCanonicalGoneNumbers, withCanonicalStripeIds, type Recording } from './compare'
+import { compareRecordings, withCanonicalGoneNumbers, withCanonicalStripeIds, type AllowedDifference, type Recording } from './compare'
 import { readGolden, replay, startReplay, type ReplayEnvironment, type Scenario } from './harness'
-import { NEW_SIDE_CONFIRMS, NOT_BUILT_SCENARIOS, ORDER_SCENARIOS, orderDifferences, OUTCOME_DIFFERS, W13_SCENARIOS } from './order-differences'
+import { NEW_SIDE_CONFIRMS, NOT_BUILT_SCENARIOS, ORDER_SCENARIOS, orderDifferences, OUTCOME_DIFFERS, W13_SCENARIOS, W42A_CARD_MOVES_DIFFERENCES, W42A_CARD_SAVING_SCENARIOS } from './order-differences'
 import type { StripeCallRecord } from './compare'
-import { newOrderSide, type OrderAnswer } from './order-side'
+import { ALL_KINDS_ON, newOrderSide, type OrderAnswer } from './order-side'
 import { ID, scenarios } from './scenarios'
 
 // The order route's parity proof (W03-plan 3.1 layer 1): each scenario in W06's to W08's scope runs
@@ -438,6 +439,69 @@ describe('the order route against the old createOrder', () => {
       const { recording, answers } = await runNew(name)
       expect(answer(answers).data).toMatchObject({ membershipId: expect.any(String), sessionPassId: expect.any(String) })
       expect(recording.stripeCalls.map((call) => call.method)).toEqual(['prices.retrieve', 'customers.update', 'subscriptions.create', 'paymentIntents.create'])
+    })
+  })
+
+  // W42a item 1 (W42 report, Noticed 1): with `card_moves` on, a reader order that saves a card runs the rule for
+  // "the memberships follow the customer's saved card" after its T2. The three W11 scenarios that save a card with a
+  // payment are run again with the kind on and held to the same golden files: only the named difference is allowed
+  // (order-differences.ts, W42A_CARD_MOVES_DIFFERENCES). With the kind off they are the scenarios above, unchanged.
+  describe('W42a: the reader scenarios that save a card, with card_moves on', () => {
+    async function runWithCardMoves(name: string): Promise<{ recording: Recording; answers: OrderAnswer[] }> {
+      const answers: OrderAnswer[] = []
+      const side = newOrderSide(answers)
+      const recording = await replay(environment, byName(name), (db, stripe) => {
+        const inner = side(db, stripe)
+        return {
+          name: 'new, card_moves on',
+          async call(action, params) {
+            // T2 runs at the reader's finalise and reads the Worker's environment (postOrder sets its own for the order's kinds).
+            vi.stubEnv('ORDER_SWITCH', `${ALL_KINDS_ON},card_moves`)
+            try {
+              return await inner.call(action, params)
+            } finally {
+              vi.stubEnv('ORDER_SWITCH', '')
+            }
+          },
+        }
+      })
+      return { recording, answers }
+    }
+    const differencesOf = async (name: string, extra: readonly AllowedDifference[]) => {
+      const golden = readGolden(name) as Recording
+      const { recording, answers } = await runWithCardMoves(name)
+      const found = compareRecordings(withCanonicalGoneNumbers(golden), withCanonicalGoneNumbers(recording), [...orderDifferences(answers[0]?.body.ok === true, name, golden), ...extra])
+      if (process.env.W42A_DUMP) for (const d of found) appendFileSync(process.env.W42A_DUMP, `${JSON.stringify({ name, ...d })}\n`)
+      return { found, recording, answers }
+    }
+
+    it.each(W42A_CARD_SAVING_SCENARIOS)('%s: the golden file, and only the named difference', async (name) => {
+      const { found } = await differencesOf(name, W42A_CARD_MOVES_DIFFERENCES[name] ?? [])
+      expect(found).toEqual([])
+    })
+
+    it('the rows: a card saved gets its invoice default recorded beside order.paid and customer.card_saved, and no step (the customer has no membership); the simulated reader, which saves no card, gets neither', async () => {
+      const saved = (await runWithCardMoves('w11-reader-save-card-reusable')).recording
+      // The replay's clock stands still during the finalise, so the rows of that press are compared as a set.
+      expect(saved.tables['audit_log']?.added.map((row) => row['action']).sort()).toEqual(['customer.card_saved', 'customer.invoice_default', 'order.create', 'order.paid'])
+      expect(saved.tables['audit_log']?.added.find((row) => row['action'] === 'customer.invoice_default')).toMatchObject({ entity_type: 'customer', entity_id: ID.customer, details: { set: true, paymentMethodId: 'pm_reader_saved', stripeCustomerId: 'cus_seed' } })
+      const simulated = (await runWithCardMoves('w11-reader-save-card-simulated-reader')).recording
+      expect(simulated.tables['audit_log']?.added.map((row) => row['action'])).toEqual(['order.create', 'order.paid'])
+      expect(simulated.stripeCalls.filter((call) => /^(customers\.update|subscriptions\.)/.test(call.method))).toEqual([])
+    })
+
+    it('the comparison bites: with no allowance the kind on shows as a difference; the allowance takes no other card; and it fails where nothing needs it', async () => {
+      expect((await differencesOf('w11-reader-save-card-reusable', [])).found.map((difference) => difference.path)).toEqual(['.stripeCalls[3]'])
+      // Another card sent as the invoice default is not what the allowance names.
+      const golden = readGolden('w11-reader-save-card-reusable') as Recording
+      const { recording, answers } = await runWithCardMoves('w11-reader-save-card-reusable')
+      const altered = JSON.parse(JSON.stringify(recording)) as Recording
+      ;((altered.stripeCalls[3]?.params as { invoice_settings: { default_payment_method: string } }).invoice_settings).default_payment_method = 'pm_some_other_card'
+      const allowed = [...orderDifferences(answers[0]?.body.ok === true, 'w11-reader-save-card-reusable', golden), ...(W42A_CARD_MOVES_DIFFERENCES['w11-reader-save-card-reusable'] ?? [])]
+      expect(compareRecordings(withCanonicalGoneNumbers(golden), withCanonicalGoneNumbers(altered), allowed).map((difference) => difference.path)).toContain('.stripeCalls[3]')
+      // The simulated reader has no difference to allow: the allowance there is reported as not seen.
+      const unused = await differencesOf('w11-reader-save-card-simulated-reader', W42A_CARD_MOVES_DIFFERENCES['w11-reader-save-card-reusable'] ?? [])
+      expect(unused.found.map((difference) => difference.path)).toEqual([`(allowed difference not seen: ${W42A_CARD_MOVES_DIFFERENCES['w11-reader-save-card-reusable']?.[0]?.name})`])
     })
   })
 

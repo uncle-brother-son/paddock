@@ -105,7 +105,12 @@ export interface SaveCardOptions {
  * saveCustomerCardOnFile, ported as it is (W03-decisions Q19): resolves the reusable card a reader tap
  * or card-save left, refuses one Stripe won't let the club charge later, and writes it to the customer,
  * its last four and brand exactly as resolved (never kept from an older card). Existing memberships keep
- * their old card until step F ("replace card"), as today. One transaction with its audit row.
+ * their old card. One transaction with its audit row.
+ *
+ * W42: this is what the saved-card route does with the switch kind `card_moves` off, kept exactly as W11 wrote it so
+ * that taking the kind out of the secret puts the old behaviour back. With the kind on the route calls
+ * replaceCustomerCard (server/rules/customers/saved-card.ts), which also checks whose tap it was (F4 / FB17) and
+ * moves the customer's memberships to the new card (Q19).
  */
 export async function saveCustomerCard(db: Db, stripe: StripeClient, input: SaveCustomerCardInput, options: SaveCardOptions): Promise<SaveCustomerCardOutput> {
   const { customerId, paymentIntentId, setupIntentId } = input

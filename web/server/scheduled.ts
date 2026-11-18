@@ -15,6 +15,8 @@ import { createStripeClient, ORDER_STRIPE_LIMITS, type StripeClient } from '@/se
 export interface ScheduledEnv {
   HYPERDRIVE?: { connectionString: string }
   STRIPE_SECRET_KEY?: string
+  /** W42a: the switch secret, for `card_moves` on an order the run finalises (orders/finalise-order.ts). Unset: off. */
+  ORDER_SWITCH?: string
 }
 
 export interface ScheduledController {
@@ -64,7 +66,7 @@ export async function runScheduledReconcile(env: ScheduledEnv, scheduledTime: nu
     } catch (err) {
       deps.log({ event: 'idempotency.secrets_not_pruned', requestId, error: err instanceof Error ? `${err.name}: ${err.message}` : String(err) })
     }
-    const result = await deps.reconcile(db, deps.stripe(secretKey), { actor: { type: 'system', id: null }, requestId, ...SCHEDULED_LIMITS })
+    const result = await deps.reconcile(db, deps.stripe(secretKey), { actor: { type: 'system', id: null }, requestId, orderSwitch: env.ORDER_SWITCH ?? null, ...SCHEDULED_LIMITS })
     const { items, ...counts } = result
     deps.log({ event: 'reconcile.run', requestId, ...counts, left: items.filter((item) => item.outcome === 'left').map((item) => ({ kind: item.kind, id: item.id, reason: item.reason })) })
     return result

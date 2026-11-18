@@ -219,6 +219,12 @@ export class FakeStripe implements StripeClient {
   /** W32: every customer balance transaction made, oldest first. */
   private readonly balanceTransactionsMade: FakeBalanceTransaction[] = []
   private readonly generatedCards = new Map<string, string>()
+  /** W42b: when each charge or card-save attempt was made (Stripe's `created`, seconds), by its id: the tap's time. */
+  private readonly tapTimes = new Map<string, number>()
+  private tapped(id: string): string {
+    this.tapTimes.set(id, seconds())
+    return id
+  }
   private readonly setupIntentsById = new Map<string, FakeSetupIntent>()
   /** The reusable cards Stripe generated for a tap, as payment methods: what paymentMethods.retrieve finds. */
   private readonly cardsById = new Map<string, { last4: string; brand: string }>()
@@ -416,7 +422,7 @@ export class FakeStripe implements StripeClient {
     intent.status = 'succeeded'
     if (options.amount !== undefined) intent.amount = options.amount
     intent.amount_received = intent.amount
-    intent.latest_charge = this.nextId('ch')
+    intent.latest_charge = this.tapped(this.nextId('ch'))
     if (options.generatedCard || options.simulatedReader) intent.payment_method = `${id}_card_present`
     if (options.generatedCard) {
       this.generatedCards.set(id, options.generatedCard)
@@ -434,7 +440,7 @@ export class FakeStripe implements StripeClient {
     if (!setupIntent) throw new Error(`The fake has no SetupIntent ${id}.`)
     setupIntent.status = 'succeeded'
     setupIntent.payment_method = `${id}_card_present`
-    setupIntent.latest_attempt = this.nextId('setatt')
+    setupIntent.latest_attempt = this.tapped(this.nextId('setatt'))
     if (options.generatedCard) {
       this.generatedCards.set(id, options.generatedCard)
       this.cardsById.set(options.generatedCard, { last4: '1881', brand: 'mastercard' })
@@ -571,7 +577,7 @@ export class FakeStripe implements StripeClient {
           description: params.description ?? null,
           metadata: (params.metadata ?? {}) as Record<string, string>,
           setup_future_usage: params.setup_future_usage ?? null,
-          ...(confirmed ? { status: 'succeeded' as const, amount_received: params.amount, latest_charge: this.nextId('ch') } : {}),
+          ...(confirmed ? { status: 'succeeded' as const, amount_received: params.amount, latest_charge: this.tapped(this.nextId('ch')) } : {}),
         })
       }) as unknown as Promise<Stripe.PaymentIntent>,
 
@@ -581,7 +587,7 @@ export class FakeStripe implements StripeClient {
         if (!params?.expand) return intent
         if (params.expand.join() !== 'latest_charge') throw new Error('The fake has not modelled expanding anything but latest_charge.')
         const card_present = { last4: '4242', brand: 'visa', generated_card: this.generatedCards.get(id) ?? null }
-        return { ...intent, latest_charge: intent.latest_charge && { id: intent.latest_charge, payment_method_details: { card_present } } }
+        return { ...intent, latest_charge: intent.latest_charge && { id: intent.latest_charge, created: this.tapTimes.get(intent.latest_charge) ?? intent.created, payment_method_details: { card_present } } }
       }) as unknown as Promise<Stripe.PaymentIntent>,
 
     cancel: (id) =>
@@ -649,7 +655,7 @@ export class FakeStripe implements StripeClient {
         if (!params?.expand) return setupIntent
         if (params.expand.join() !== 'latest_attempt') throw new Error('The fake has not modelled expanding anything but latest_attempt.')
         const card_present = { generated_card: this.generatedCards.get(id) ?? null }
-        return { ...setupIntent, latest_attempt: setupIntent.latest_attempt && { id: setupIntent.latest_attempt, payment_method_details: { card_present } } }
+        return { ...setupIntent, latest_attempt: setupIntent.latest_attempt && { id: setupIntent.latest_attempt, created: this.tapTimes.get(setupIntent.latest_attempt) ?? setupIntent.created, payment_method_details: { card_present } } }
       }) as unknown as Promise<Stripe.SetupIntent>,
   }
 

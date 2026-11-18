@@ -467,7 +467,7 @@ describe('finalise (finaliseReaderOrder, T2)', () => {
       const placed = placedOf(await placeThrough(readerBasket))
       stripe.completeReaderPayment(placed.pendingReaderPayment.paymentIntentId, { generatedCard: 'pm_reader_saved' })
       const intent = await stripe.paymentIntents.retrieve(placed.pendingReaderPayment.paymentIntentId)
-      const card = { paymentMethodId: 'pm_reader_saved', reusable: true, last4: '4242', brand: 'visa' }
+      const card = { paymentMethodId: 'pm_reader_saved', reusable: true, last4: '4242', brand: 'visa', stripeCustomerId: null, tappedAt: null }
       expect(await finaliseOrder(db, placed.orderId, intent, { actor, requestId: 'direct', saveCard: card })).toEqual({ finalised: true, alreadyPaid: false, cardSaved: false })
       expect((await customerCard())?.saved_payment_method_id).toBe('pm_seed')
     })

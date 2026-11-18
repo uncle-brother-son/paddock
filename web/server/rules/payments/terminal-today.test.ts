@@ -12,8 +12,10 @@ import { saveCustomerCard } from './terminal'
 // - FB17 (W11 F4): the intent's Stripe customer is never compared with the customer being saved to.
 // - Q19: a membership's subscription keeps charging its old card after the customer's card is replaced.
 //
-// W42 fixes both (F-plan 4.7), and changes these two tests when it does: the first becomes a refusal with nothing
-// written, the second a subscription moved to the new card (or left to move).
+// W42 fixes both (F-plan 4.7) in server/rules/customers/saved-card.ts, behind its own switch kind `card_moves`. This
+// function is kept exactly as it was, as what the route does with the kind off (a rollback of the moves alone), so
+// these two tests stay as they are and now hold that: off, the card is saved as before W42. The fixed behaviour is
+// held by customers/saved-card.test.ts, and the two set against each other by testing/replay/saved-card-replay.test.ts.
 
 vi.setConfig({ testTimeout: 60_000 })
 
@@ -51,7 +53,7 @@ async function tapped(stripe: FakeStripe, stripeCustomer: string, card: string):
   return intent.id
 }
 
-describe('the saved card as it is today, before W42 (F-plan 4.7)', () => {
+describe('the saved card as it was before W42, which is what `card_moves` off still does (F-plan 4.7)', () => {
   it("FB17 (W11 F4): another customer's card-save is saved to this customer, and nothing refuses it", async () => {
     await onASeed(async (stripe) => {
       // Mo taps her card (Stripe customer cus_member). The save names Sam.

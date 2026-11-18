@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { saveCustomerCardOutputSchema } from './terminal'
 
 /**
  * Step F (new in W36, F-plan 4.1 to 4.7): the membership, customer, store credit and gift card routes, ahead of the
@@ -520,6 +521,14 @@ export const savedCardMembershipsSchema = z.object({
   membershipsToMove: z.number(),
 })
 export type SavedCardMemberships = z.infer<typeof savedCardMembershipsSchema>
+
+/**
+ * W42: the route's answer. The customer's card as saved (today's five fields), and, with the switch kind `card_moves`
+ * on, the two counts. With it off the card is saved as before W42, no membership is moved and neither count is sent,
+ * so the screen says nothing about memberships.
+ */
+export const savedCardRouteOutputSchema = saveCustomerCardOutputSchema.extend(savedCardMembershipsSchema.partial().shape)
+export type SavedCardRouteOutput = z.infer<typeof savedCardRouteOutputSchema>
 
 // --- What a refusal carries
 

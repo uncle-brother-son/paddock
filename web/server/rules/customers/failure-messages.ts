@@ -78,3 +78,14 @@ export const SAVED_CARD_DIALOG_WORDS = {
   failed: 'Failed to save the card via the reader.',
   notSaved: 'The card was read but could not be saved to the customer.',
 } as const
+
+// --- The saved card (W42: customers/saved-card.ts)
+
+/**
+ * New in W42 (F4 / FB17). `otherCustomer`: the reader's tap was made for another customer's Stripe customer (or for
+ * none), so its card is not saved here.
+ */
+export const SAVED_CARD_WORDS = {
+  otherCustomer:
+    "This card was tapped for a different customer, so it can't be saved to this one. Nothing was saved. Start again from this customer's own page and ask them to tap their card.",
+} as const

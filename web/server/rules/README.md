@@ -1360,3 +1360,65 @@ ORDER BY s.at;
 The five minutes leaves out presses still running. For each, check the booking and the payment in
 Stripe: either finish what the press was doing by hand, or refund the payment. The step C
 reconciler replaces this.
+
+## Replace card (W42, W42a, W42b)
+
+`POST /api/v1/staff/customers/:customerId/saved-card` (F-plan 4.7; Q19; Wayne's Q45; W11 F4 / FB17; lead call L11),
+behind its own switch kind `card_moves` (`memberships/membership-switch.ts`, `cardMovesOn`). Off: the card is saved
+exactly as W11 built it (`payments/terminal.ts`, `saveCustomerCard`, untouched) and no membership is moved. On:
+`customers/saved-card.ts`, `replaceCustomerCard`.
+
+- **The tap is read** as before (`stripe/saved-card.ts`, which now also answers the intent's Stripe customer), and a
+  card that can't be charged later is refused in the old words.
+- **K1**, one transaction under the customer's lock, then each of their memberships' locks in id order (LOCK_ORDER:
+  customer, then membership): F4 / FB17 first (refused, `other_customer`, with nothing written, unless the intent's
+  Stripe customer is this customer's); the card on the customer; `customer.card_saved` (with the card it replaced and
+  the subscriptions to move); one card step (`memberships/left.ts`, kind `payment_method`) per live membership
+  (`active` or `past_due`, with a subscription). An open card step on the same subscription is closed as `replaced`.
+- **Then Stripe**, none of it money (`customers/card-steps.ts`, `sendCardSteps`): each subscription's
+  `default_payment_method`, and only that field, under the step's key. Went: the step is done. Refused or unclear: the
+  step stays left, is listed on the Orders page, is sent again by reconcile past the press's window, and is checked 20
+  minutes after it closes (W40 to W40d's machinery, unchanged). A refusal reconcile itself gets is for a person. Then,
+  last (W42a, W42 review L4), the Stripe customer's invoice default (once, recorded as `customer.invoice_default`; not
+  listed and not sent again on its own, because every live subscription gets a card of its own and nothing else is
+  charged from the default: see `saved-card.ts`'s header).
+- **The card is never put back**, whatever Stripe says about a membership. A second replace is never refused for a
+  step still being sent: the newest card wins. W42a (W42 review S2): the first press may still be at Stripe then, so
+  the second's step is left with W40b's `stale_send` mark (`left.ts`, `leaveStepReplacing`'s `markStaleSends`); its
+  press's ending leaves the wish again instead of closing it, it stays listed, and the first run past the window sends
+  the newest card if the older one landed over it. A press also sends nothing for a step that has been replaced by
+  the time it comes to send it. The check after closing is still the net under both.
+- **One rule, the order's T2 included (W42a; W42 review S1; W42 report, Noticed 1).** With `card_moves` on, an order's
+  T2 (`orders/finalise-order.ts`) that writes a membership, or saves a card on the reader, takes the customer's lock
+  before it writes anything of theirs (LOCK_ORDER: order, then customer, then memberships) and, after its writes,
+  leaves a card step for every live membership against the customer's saved card as it is then
+  (`card-steps.ts`, `followSavedCard`). The caller sends them after the commit, as the press does (the saved card's
+  press, the reader's finalise, reconcile). K1 holds the same lock, so a replace and an order take turns: either K1
+  finds the new membership, or T2 reads the new card. A step whose subscription already shows the card is settled by
+  one read. T2 asks the switch from the Worker's environment; the scheduled run passes its own
+  (`ReconcileOptions.orderSwitch`), since its env is not copied into `process.env`. Off, T2 is as it was.
+- **W42b (W42a review S1): every T2 of a run hears the run's switch.** A run settles ORDER_SWITCH once when it starts
+  (`reconcile.ts`, `runSwitch`: the scheduled run's own, or the request's environment for staff's Resolve now) and
+  reaches T2 only through three helpers (`runT2`, `runReaderCancel`, `runReaderFinalise`), each given the switch by
+  its type. The usual reader path (`reconcileReaderOrder`, through the reader's cancel) had been left without it.
+- **W42b (W42a review S2): an older tap never takes the place of a newer card.** With `card_moves` on, T2 saves the
+  card its tap left only when no `customer.card_saved` row for the customer is later than the tap (the charge's
+  `created`, `ResolvedCard.tappedAt`), asked under the customer's lock. Otherwise the customer's card stays, a
+  `customer.card_not_saved` row (`reason: newer_card_on_file`) says why, `order.paid` says `cardSaved: false`, and
+  the rule moves every membership (a reader membership order's new one, made on the tapped card, included) to the
+  customer's card as it is. Off, the tap's card is saved whatever came after it, as W11 had it.
+- **W42b (W42a review L3, L4; W42a report, Noticed 1).** The invoice default is not sent when the customer's saved
+  card, read again just before, is no longer the action's card (recorded with outcome `replaced`). The open steps
+  are read once per action, not once per membership. And a T2 that writes a membership takes the customer's lock
+  first whatever the kind, so T2 and the payment date change (customer, then membership) lock in the same order.
+- **The answer** is the customer's five fields plus `membershipsMoved` and `membershipsToMove` (absent with the kind
+  off). The staff app's wrapper names them `moved` and `toMove`, and answers a refusal as data.
+- **W40d Noticed 2:** `stepsUnsettled` (the two legacy cancel routes' guard) counts `cancel_at` steps only.
+- **Who writes a subscription's card:** a step, and `subscriptionRequest` when a subscription is made
+  (`orders/membership.ts`). `customers/saved-card.test.ts` holds the list.
+- **Parity:** `testing/replay/saved-card-replay.test.ts` runs each press with the kind off and on and allows only the
+  named differences in `saved-card-differences.ts` (Q19, FB17). W42a: `order-replay.test.ts` runs the three W11
+  scenarios that save a card on the reader again with the kind on (`W42A_CARD_MOVES_DIFFERENCES`).
+- **Races on real Postgres:** `customers/card-steps-postgres.test.ts` (a membership order and a replace, both ways
+  round, each held until Postgres reports the other waiting on the customer's row; and free-running rounds). W42b:
+  with the kind off, a membership order's T2 shown waiting on a customer's row another transaction holds.

@@ -33,8 +33,15 @@ import { ApiError } from '@/server/http/errors'
  * the legacy change-payment-date route's guard), so it can be switched off, and the old way put back, without taking
  * W40's cancel and undo with it. `membership_changes` keeps the cancel, the undo and (W42) the replaced card. Off
  * until the lead adds it to the secret; it turns nothing else on.
+ *
+ * W42 (brief item 1): `card_moves` is the replaced card's own kind, as W41a's for the date change: on, saving a
+ * customer's card also moves each of their live memberships' renewals to it (server/rules/customers/saved-card.ts).
+ * Off, the card is saved as before W42 and no membership is moved, whatever `membership_changes` says (which keeps
+ * the cancel and the undo only). Off until the lead adds it to the secret; it turns nothing else on.
+ * W42a: on, an order's T2 that writes a membership or saves a card on the reader also leaves a card step for each of
+ * the customer's live memberships against their saved card (finalise-order.ts); off, T2 is as it was.
  */
-export const ORDER_KINDS = ['no_stripe', 'saved_card', 'reader', 'membership', 'reader_flows', 'booking_changes', 'order_refunds', 'event_cancels', 'customer_cancels', 'membership_changes', 'payment_date_changes'] as const
+export const ORDER_KINDS = ['no_stripe', 'saved_card', 'reader', 'membership', 'reader_flows', 'booking_changes', 'order_refunds', 'event_cancels', 'customer_cancels', 'membership_changes', 'payment_date_changes', 'card_moves'] as const
 export type OrderKind = (typeof ORDER_KINDS)[number]
 
 /**
@@ -45,7 +52,7 @@ export type OrderKind = (typeof ORDER_KINDS)[number]
  *   to take (the order then refuses with its own reason, as placeOrder needs Stripe for either);
  * - anything else is `no_stripe`: cash, gift card or store credit alone, nothing owed, or no method.
  */
-export function orderKind(input: Pick<PlaceOrderInput, 'membershipPlanId' | 'payment'>): Exclude<OrderKind, 'reader_flows' | 'booking_changes' | 'order_refunds' | 'event_cancels' | 'customer_cancels' | 'membership_changes' | 'payment_date_changes'> {
+export function orderKind(input: Pick<PlaceOrderInput, 'membershipPlanId' | 'payment'>): Exclude<OrderKind, 'reader_flows' | 'booking_changes' | 'order_refunds' | 'event_cancels' | 'customer_cancels' | 'membership_changes' | 'payment_date_changes' | 'card_moves'> {
   if (input.membershipPlanId) return 'membership'
   const method = input.payment?.method
   if (method === 'reader') return 'reader'

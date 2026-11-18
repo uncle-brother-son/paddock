@@ -12,17 +12,26 @@
 // the cancel and the undo ask `membership_changes` and never that one. So the date change can be switched off, and
 // the old staff app put back for it, while W40's cancel and undo stay on. The quote, reconcile and the check never
 // ask either: a held change is always finished.
+//
+// W42 (brief item 1): the replaced card has a kind of its own too, `card_moves`. The saved-card route asks that kind
+// and never `membership_changes`: off, the card is saved as before W42 and no membership is moved; on, each live
+// membership's renewals move to the new card (customers/saved-card.ts). So the moves can be switched off on their own
+// (no Retool rollback: the staff app shows whatever the Worker answers). Reconcile and the check never ask it for a
+// step: a card step that was left is always sent, listed and checked.
+// W42a: an order's T2 asks it too (orders/finalise-order.ts): on, a T2 that writes a membership or saves a card
+// leaves a card step for each of the customer's live memberships; off, it is as it was. That is asked wherever T2
+// runs, a reconcile run included (an order it finalises is the same T2).
 import 'server-only'
 import { ApiError } from '@/server/http/errors'
 import { kindsOn, type OrderKind } from '@/server/rules/orders/order-switch'
 import { MEMBERSHIP_PATH_OFF_MESSAGE } from './failure-messages'
 
-/** Step F's kind for a cancel, its undo and the replaced card. Off unless the ORDER_SWITCH secret names it. */
+/** Step F's kind for a cancel and its undo. Off unless the ORDER_SWITCH secret names it. */
 export const MEMBERSHIP_KINDS = ['membership_changes'] as const satisfies readonly OrderKind[]
 /** W41a: the payment date change's own kind. Off unless the ORDER_SWITCH secret names it. */
 export const PAYMENT_DATE_KINDS = ['payment_date_changes'] as const satisfies readonly OrderKind[]
 
-/** Whether `membership_changes` is on. For the saved card (W42): off, the card is still saved and the memberships are left to move. */
+/** Whether `membership_changes` is on: the cancel and the undo. */
 export function membershipChangesOn(switchValue: string | undefined | null): boolean {
   return kindsOn(switchValue).has('membership_changes')
 }
@@ -44,4 +53,15 @@ export function paymentDatePathOff(switchValue: string | undefined | null): ApiE
   return paymentDateChangesOn(switchValue)
     ? null
     : new ApiError('MEMBERSHIP_PATH_OFF', MEMBERSHIP_PATH_OFF_MESSAGE, { details: { reason: 'membership_path_off', message: MEMBERSHIP_PATH_OFF_MESSAGE, kinds: [...PAYMENT_DATE_KINDS] } })
+}
+
+/** W42: the replaced card's own kind. Off unless the ORDER_SWITCH secret names it. */
+export const CARD_MOVE_KINDS = ['card_moves'] as const satisfies readonly OrderKind[]
+
+/**
+ * W42: whether `card_moves` is on. Off is not a refusal: the card is saved as before W42 and no membership is moved.
+ * `membership_changes` and `payment_date_changes` say nothing about it, either way.
+ */
+export function cardMovesOn(switchValue: string | undefined | null): boolean {
+  return kindsOn(switchValue).has('card_moves')
 }

@@ -117,7 +117,7 @@ describe('finalise twice at once', () => {
     const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
     const { orderId, intent, customerId } = await onTheReader(stripe, true)
     stripe.completeReaderPayment(intent, { generatedCard: 'pm_race' })
-    const card = { paymentMethodId: 'pm_race', reusable: true, last4: '4242', brand: 'visa' }
+    const card = { paymentMethodId: 'pm_race', reusable: true, last4: '4242', brand: 'visa', stripeCustomerId: null, tappedAt: null }
     const paymentIntent = await retrieved(stripe, intent)
     const t2 = await holding(first, () => finaliseOrder(first, orderId, paymentIntent, { ...asReconcile, saveCard: card }))
     expect(t2.result).toEqual({ finalised: true, alreadyPaid: false, cardSaved: true })

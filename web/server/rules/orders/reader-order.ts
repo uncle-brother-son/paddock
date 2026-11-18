@@ -33,6 +33,7 @@ import {
   readerCustomerMismatchMessage,
   SUBSCRIPTION_STARTING_MESSAGE,
 } from './failure-messages'
+import { sendCardSteps } from '@/server/rules/customers/card-steps'
 import { finaliseOrder, MEMBERSHIP_DEFINITE, membershipPrecheck, oldRollbackStarted, paymentMismatch, type FinaliseMismatch } from './finalise-order'
 import {
   balanceToPutBack,
@@ -73,6 +74,8 @@ export interface ReaderRouteOptions {
    * order's tap is refunded and the order undone. Absent (the screen's finalise): the subscription is made.
    */
   subscriptionFound?: MadeSubscription | null
+  /** W42a: ORDER_SWITCH for T2's `card_moves` (finalise-order.ts). Absent: the Worker's environment. Reconcile passes its run's. */
+  orderSwitch?: string | null
 }
 
 // --- The old words (finaliseReaderOrder.ts, cancelReaderOrder.ts, and the legacy route's errors)
@@ -155,6 +158,9 @@ type Found =
   | { kind: 'no_intent' }
   | { kind: 'reader'; order: OrderRead; snapshot: ReaderSnapshot & { payment_intent_id: string } }
 
+/** W42a: the run's ORDER_SWITCH for T2, when the caller gave one (reconcile); else T2 reads the environment. */
+const switchOf = (options: ReaderRouteOptions): { orderSwitch?: string | null } => (options.orderSwitch === undefined ? {} : { orderSwitch: options.orderSwitch })
+
 async function findOrder(db: Db, orderId: string): Promise<Found> {
   const order = (
     await db.query<OrderRead>('SELECT payment_status, stripe_payment_intent_id, reader_payment FROM orders WHERE id = $1::uuid', [orderId])
@@ -236,11 +242,13 @@ async function finaliseFound(
   // reconcile (W12): never refunded for it (W6-3), where finaliseReaderOrder refunded.
   let outcome: Awaited<ReturnType<typeof finaliseOrder>>
   try {
-    outcome = await finaliseOrder(db, orderId, paymentIntent, { actor: options.actor, requestId: options.requestId, saveCard: card })
+    outcome = await finaliseOrder(db, orderId, paymentIntent, { actor: options.actor, requestId: options.requestId, saveCard: card, ...switchOf(options) })
   } catch {
     return { finalised: false, orderId, reason: 'finalise_failed', message: READER_PAID_NOT_FINISHED_MESSAGE }
   }
   if (!outcome.finalised) return mismatchAnswer(outcome.reason, orderId, paymentIntent, snapshot)
+  // W42a: the card this order saved is the customer's card now: their memberships' steps, left by T2, are sent.
+  if (outcome.cardSteps) await sendCardSteps(db, stripe, outcome.cardSteps, { actor: options.actor, requestId: options.requestId, timing })
   if (outcome.alreadyPaid) return { finalised: true, orderId, paymentIntentId: paymentIntent.id, alreadyFinalised: true, message: ALREADY_FINALISED_MESSAGE }
   return { finalised: true, orderId, paymentIntentId: paymentIntent.id, ...(warnings.length > 0 ? { warning: warnings.join(' ') } : {}) }
 }
@@ -408,7 +416,7 @@ async function finaliseMembership(
   // 4. T2. A database fault holds it (reconcile finalises it: finalise is safe twice); a membership it can't write is definite.
   let outcome: Awaited<ReturnType<typeof finaliseOrder>>
   try {
-    outcome = await finaliseOrder(db, orderId, paymentIntent, { actor: options.actor, requestId: options.requestId, saveCard: card, subscription, subscriptionMadeHere: madeHere })
+    outcome = await finaliseOrder(db, orderId, paymentIntent, { actor: options.actor, requestId: options.requestId, saveCard: card, subscription, subscriptionMadeHere: madeHere, ...switchOf(options) })
   } catch {
     return { finalised: false, orderId, reason: 'finalise_failed', message: READER_PAID_NOT_FINISHED_MESSAGE }
   }
@@ -431,6 +439,8 @@ async function finaliseMembership(
     }
     return mismatchAnswer(outcome.reason, orderId, paymentIntent, snapshot)
   }
+  // W42a: the new membership, and any other live one, follow the card this order saved: T2's steps are sent.
+  if (outcome.cardSteps) await sendCardSteps(db, stripe, outcome.cardSteps, { actor: options.actor, requestId: options.requestId, timing })
   if (outcome.alreadyPaid) return { finalised: true, orderId, paymentIntentId: paymentIntent.id, alreadyFinalised: true, message: ALREADY_FINALISED_MESSAGE }
   return {
     finalised: true,
