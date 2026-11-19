@@ -272,6 +272,213 @@ export const PAYMENT_DATE_DIALOG_WORDS = {
   onHold: 'The change is on hold. Check the Orders page in a few minutes.',
 } as const
 
+// --- W47r: "Try the payment again now" (memberships/retry-payment.ts; Wayne, 18 Nov 2026; the W47 review's point 10)
+
+const bookings = (count: number): string => (count === 1 ? '1 booking' : `${count} bookings`)
+/** "the Visa card ending 4444", "the card ending 4444", or "the saved card" when the last four aren't known. */
+const cardWords = (brand: string | null, last4: string | null): string =>
+  last4 ? `the ${brand ? `${brand.charAt(0).toUpperCase()}${brand.slice(1)} ` : ''}card ending ${last4}` : 'the saved card'
+const NOTHING_CHARGED = 'Nothing was charged.'
+/** W47r-a's `paid_after_end` sentence up to its last clause (W47r-b: with the check of the subscription for a row cancelled here). */
+const paidAfterEndLead = (amount: number, last4: string | null, cancelledHere: boolean): string =>
+  cancelledHere
+    ? `${money(amount)} was taken on ${cardWords(null, last4)} after this membership had ended here. Refund it in Stripe (tell a manager) and check the subscription is cancelled in Stripe`
+    : `${money(amount)} was taken on ${cardWords(null, last4)} after this membership's subscription had ended. Refund it in Stripe (tell a manager)`
+const DONT_TAKE_AGAIN = "Don't take the payment again or another way."
+/** Stripe's plain decline message, as the press hands it over (its last full stop taken off). */
+const GENERIC_DECLINE = 'Your card was declined'
+
+/**
+ * Why a past-due membership's payment can't be tried again, before anything is sent to Stripe. Every one of these
+ * ends "Nothing was charged." Dates are worded "28 Nov 2026" by the caller.
+ * - The membership's own row: `notPastDue`, `lastDayPassed`, `noSubscription`, `noSavedCard`.
+ * - Stripe's subscription, read at that moment (review point 2): `subscriptionMissing`, `notRead`, `customerMismatch`,
+ *   `stripeCancelled`, `stripeCancelDateReached`, `stripeNotBehind`, `noInvoice`, `invoiceNotOpen`, `nothingToPay`,
+ *   `notPounds`.
+ * - The card (review point 1): `cardNotMoved` (the subscription's default card in Stripe isn't the customer's saved
+ *   card), `cardStepOpen` (a card step of the customer's is open: being sent, held, or left for a person).
+ * - Taking turns (W40): `paymentDateChanging`, `stepOpen`, `retryHeld` (review point 3).
+ * - What the window showed (Q18's rule): `figureMissing`, `invoiceChanged`, `amountChanged`, `changedSince`, and
+ *   (W47r-a, the W47r review's S3) `cardChanged`: the saved card is no longer the card the window named.
+ * - `notSent`, `keyRefused`: the record was written and the payment was then not sent.
+ */
+export const PAYMENT_RETRY_REFUSALS = {
+  permissionDenied: 'Needs the Issue refunds permission to try a membership payment again.',
+  notFound: 'Membership not found.',
+  notPastDue: `This membership's payment isn't overdue, so there is nothing to try again. ${NOTHING_CHARGED}`,
+  lastDayPassed: (lastDay: string): string => `This membership's last day was ${lastDay}, so its overdue payment can't be taken. ${NOTHING_CHARGED}`,
+  noSubscription: `This membership has no Stripe subscription, so it has no payment to try again. ${NOTHING_CHARGED}`,
+  noSavedCard: `The customer has no saved card to charge. ${NOTHING_CHARGED} Save their card on the reader first, then try the payment again.`,
+  subscriptionMissing: `Stripe can't find this membership's subscription or its invoice with the club's payment account details. ${NOTHING_CHARGED} Tell a manager.`,
+  notRead: `Stripe couldn't be asked about this membership just now, so the payment wasn't tried. ${NOTHING_CHARGED} Try again in a minute.`,
+  customerMismatch: `The subscription in Stripe doesn't belong to this customer's Stripe account. ${NOTHING_CHARGED} Tell a manager.`,
+  stripeCancelled: `Stripe shows this membership's subscription has been cancelled, so its unpaid invoice won't be charged: that would take money from someone whose membership has ended. ${NOTHING_CHARGED} If they want to carry on, sell them a new membership.`,
+  stripeCancelDateReached: (date: string): string =>
+    `Stripe shows this membership's subscription was set to end on ${date}, and that has passed, so its unpaid invoice won't be charged. ${NOTHING_CHARGED} If they want to carry on, sell them a new membership.`,
+  stripeNotBehind: (status: string): string => `Stripe shows this membership's subscription as ${status}, not behind on a payment, so there is nothing to try again. ${NOTHING_CHARGED}`,
+  noInvoice: `Stripe shows no invoice for this membership's subscription, so there is nothing to try again. ${NOTHING_CHARGED} Tell a manager.`,
+  invoiceNotOpen: (status: string): string => `Stripe's newest invoice for this membership is ${status}, not waiting to be paid, so there is nothing to try again. ${NOTHING_CHARGED} Tell a manager.`,
+  nothingToPay: `Stripe's newest invoice for this membership has nothing left to pay. ${NOTHING_CHARGED}`,
+  notPounds: `Stripe's newest invoice for this membership isn't in pounds, so it can't be paid from here. ${NOTHING_CHARGED} Tell a manager.`,
+  cardNotMoved: `This membership's subscription in Stripe isn't set to the customer's saved card, so the payment won't be tried: Stripe's own retries would still go to another card. ${NOTHING_CHARGED} Finish the card replace first: save the customer's card on the reader, wait until the membership's card change is off the Orders page list, then try the payment again.`,
+  cardStepOpen: `The customer's card replace hasn't finished: a membership's move to the new card is still listed on the Orders page. ${NOTHING_CHARGED} Finish the card replace first: once that line is off the list, try the payment again.`,
+  paymentDateChanging: `A payment date change is on hold for this membership (it is listed on the Orders page). ${NOTHING_CHARGED} Try the payment again once that line is off the list.`,
+  stepOpen: `The last change to this membership hasn't been confirmed by Stripe yet (it is listed on the Orders page). ${NOTHING_CHARGED} Try the payment again once it is off the list.`,
+  retryHeld: `A payment was already tried for this membership and Stripe hasn't said how it ended, so it can't be tried again yet: the card could be charged twice. Nothing was charged by this press. The automatic check finishes the first one once Stripe answers (the Orders page lists it).`,
+  figureMissing: `The amount and the card shown on screen were not sent, so the payment wasn't tried. ${NOTHING_CHARGED} Close this, open it again and try again.`,
+  cardChanged: `The customer's saved card has changed since this window opened. ${NOTHING_CHARGED} Close this and open it again.`,
+  invoiceChanged: `Stripe now shows a different invoice as this membership's newest than the one this window showed. ${NOTHING_CHARGED} Close this and open it again to see what is owed now.`,
+  amountChanged: (shown: number, now: number): string => `The amount to pay is now ${money(now)}, not the ${money(shown)} shown. ${NOTHING_CHARGED} Check the new amount with the customer and press again.`,
+  changedSince: `This membership changed while the payment was being set up. ${NOTHING_CHARGED} Close this, open it again and try again.`,
+  notSent: `The card was not charged: there was no time left to ask Stripe. ${NOTHING_CHARGED} Try again.`,
+  keyRefused: `Stripe turned down the club's payment account details, so the card was not charged. ${NOTHING_CHARGED} Tell a manager straight away.`,
+} as const
+
+/**
+ * W47r-b: what "already paid before the press" says when the write found the subscription ended, by what the write's
+ * listing answered (dispatch.ts, recordInvoicePaid; paid-after-end.ts).
+ * - Listed for a refund (by this press, by Stripe's notice before it, or held on a retry's own record): the Orders
+ *   page has the line and its Mark refunded button.
+ * - Paid before the subscription ended: the money was owed, and nothing is listed.
+ * - Nothing was taken for the invoice: nothing to give back.
+ * - Anything else (no membership to list it against, the invoice gone in test mode, no listing asked): W47r-a's words.
+ */
+function subscriptionEnded(listing: string | null): string {
+  if (listing === 'listed' || listing === 'already_listed' || listing === 'retry_holds') {
+    return 'Stripe shows its subscription has ended, so the payment Stripe took for it has nothing to pay for. Refund it in Stripe (tell a manager), then press Mark refunded on the Orders page.'
+  }
+  if (listing === 'paid_before_end') return 'Stripe shows its subscription has ended since, and the payment was taken before it ended, so it paid for time the member had. Nothing needs refunding.'
+  if (listing === 'nothing_taken') return 'Stripe shows its subscription has ended, and nothing was taken for this invoice. Nothing needs refunding.'
+  return 'Stripe shows its subscription has ended, so the payment Stripe took for it has nothing to pay for. Refund it in Stripe (tell a manager).'
+}
+
+/**
+ * What the window and the press say (brief items 4 and 5).
+ * - `ifPaid`, `ifAlreadyPaid`: the quote's line about the membership's bookings waiting for payment.
+ * - `paid`: the payment went through and the membership was marked paid here (the webhook's own write).
+ * - `alreadyPaid`: Stripe showed the invoice already paid (its own retry got there first, review point 3).
+ * - `membershipNotUpdated`: the payment is in, and the write found nothing to do for the reason given.
+ * - `declined`: the bank said no. `notTaken`: Stripe refused the payment for another reason, or answered without
+ *   taking it. Either way nothing is written to the membership, and the bookings' deadline is unchanged.
+ * - `held`: no clear answer. `paidNotRecorded`: paid in Stripe, and the write here failed; reconcile does it.
+ * - W47r-a (the W47r review's S1): `paidAfterEnd` is the stuck list's line for a payment taken after the membership's
+ *   subscription had ended (held for a person, with Mark refunded); `paidAfterEndAtThePress` is the press's answer,
+ *   the same sentence with where the button is.
+ */
+export const PAYMENT_RETRY_WORDS = {
+  ifPaid: (waiting: number): string =>
+    waiting === 0
+      ? 'If the payment goes through, the membership is active again straight away. None of its bookings is waiting for payment.'
+      : `If the payment goes through, the membership is active again and its ${bookings(waiting)} waiting for payment ${waiting === 1 ? 'goes' : 'go'} back to confirmed straight away.`,
+  ifAlreadyPaid: (waiting: number): string =>
+    waiting === 0
+      ? 'Stripe shows this payment has already gone through, so nothing will be charged. Pressing brings the membership up to date here: it will be active again.'
+      : `Stripe shows this payment has already gone through, so nothing will be charged. Pressing brings the membership up to date here: it will be active again and its ${bookings(waiting)} waiting for payment ${waiting === 1 ? 'goes' : 'go'} back to confirmed.`,
+  /** The membership once it is marked paid. `nextPayment`: worded "10 Jan 2027", or null when the row has none. */
+  membershipActive: (restored: number, stillWaiting: number, nextPayment: string | null): string =>
+    [
+      `The membership is active again${nextPayment ? ` and its next payment is on ${nextPayment}` : ''}.`,
+      restored > 0 ? `${bookings(restored)} that ${restored === 1 ? 'was' : 'were'} waiting for payment ${restored === 1 ? 'is' : 'are'} confirmed again.` : null,
+      stillWaiting > 0 ? `${bookings(stillWaiting)} on this membership ${stillWaiting === 1 ? 'is' : 'are'} still waiting for payment: open ${stillWaiting === 1 ? 'it' : 'them'} to see why.` : null,
+    ]
+      .filter((part): part is string => part !== null)
+      .join(' '),
+  paid: (amount: number, brand: string | null, last4: string | null, membership: string): string => `${money(amount)} was taken on ${cardWords(brand, last4)}. ${membership}`,
+  alreadyPaid: (membership: string): string => `Stripe shows this payment had already gone through (one of its own retries got there first), so nothing was charged by this press. ${membership}`,
+  /** `why`: one of the `notUpdated` sentences. */
+  membershipNotUpdated: (why: string): string => `The membership here was not changed: ${why}`,
+  notUpdated: {
+    /**
+     * W47r-a (review S4.2). Ended in Stripe: the money has nothing to pay for, so it says a refund is needed (only the
+     * "already paid before the press" path can say this now: a payment this press took is held as `paidAfterEnd`).
+     * `past_due`: Stripe hasn't caught up with its own invoice yet, and its notice makes the write.
+     * W47r-b: `unpaid` is said as `past_due` is (W47r-a "Noticed" 5: paying its newest invoice makes an unpaid
+     * subscription active too, so the same lag shows there). And an ended subscription's words go by what the write
+     * found (`listing`: dispatch.ts, `detail.paid_after_end.why`): see `subscriptionEnded`.
+     */
+    subscription_not_paid_up: (status: string, listing: string | null = null): string =>
+      status === 'canceled' || status === 'incomplete_expired'
+        ? subscriptionEnded(listing)
+        : status === 'past_due' || status === 'unpaid'
+          ? "Stripe hasn't shown the subscription as paid up yet; the membership is brought up to date when Stripe's notice arrives. Look again in a few minutes."
+          : `Stripe still shows its subscription as ${status}. Tell a manager.`,
+    not_latest_invoice: "Stripe has started a newer invoice for it since, and that invoice's own payment decides whether the membership is paid up. Look at the membership again in an hour.",
+    no_period_end: 'Stripe gave no date for its next payment. Tell a manager.',
+    subscription_missing: "Stripe can't find its subscription with the club's payment account details. Tell a manager.",
+    not_found: 'no membership here has that subscription any more. Tell a manager.',
+    ignored_cancelled: 'it has ended here. Tell a manager: the payment may need refunding in Stripe.',
+    other: 'the booking system could not tell why. Tell a manager.',
+  },
+  /**
+   * `stripeMessage` is Stripe's own, with its last full stop taken off. W47r-a (review S4.3): left out when it is
+   * Stripe's plain "Your card was declined", which only says the same thing twice.
+   */
+  declined: (stripeMessage: string): string =>
+    `The card was declined${stripeMessage === GENERIC_DECLINE ? '' : `: ${stripeMessage}`}. Nothing was charged and the membership is still overdue. Stripe's own retries carry on, and the bookings waiting for payment keep the deadline they had.`,
+  // W47r-a (review S4.1): there is nowhere to pay online (Stripe's customer portal and its failed-payment emails are
+  // off, and the website has no page for an overdue invoice), so the words no longer offer it.
+  authenticationRequired:
+    "The card needs the customer to approve the payment with their bank, which can't be done from here. Nothing was charged and the membership is still overdue. Stripe's own retries carry on, and the bookings waiting for payment keep the deadline they had. Ask the customer for another card and save it on the reader, then try again.",
+  /** Stripe refused the payment for a reason that isn't the bank's (its own words), or answered without taking it. */
+  notTaken: (stripeSaid: string): string =>
+    `The payment was not taken: ${stripeSaid}. Nothing was charged and the membership is still overdue. Stripe's own retries carry on, and the bookings waiting for payment keep the deadline they had. If this happens again, tell a manager.`,
+  notCompleted: (status: string): string => `the payment did not complete (Stripe shows the invoice as ${status})`,
+  held: `The payment didn't get a clear answer from Stripe, so the card may or may not have been charged. It is on hold and the automatic check will finish it. ${DONT_TAKE_AGAIN} Check the Orders page in a few minutes.`,
+  heldProcessing: `The payment is still being processed by the customer's bank, so it isn't known yet whether it went through. It is on hold and the automatic check will finish it once the bank answers. ${DONT_TAKE_AGAIN} Check the Orders page in a few minutes.`,
+  heldNeedsAction: `The payment is waiting for a step Stripe needs (usually the customer's approval with their bank), which can't be done from here. Nothing has been taken yet, but it could still go through. It is on hold and listed on the Orders page, which says what to do. ${DONT_TAKE_AGAIN}`,
+  paidNotRecorded: `The payment went through, but the membership couldn't be brought up to date here yet. The automatic check does that within a few minutes, and the bookings waiting for payment go back to confirmed then. Don't take the payment again.`,
+  /**
+   * W47r-a (S1): the stuck list's line. `last4`: the card's last four, or null when they aren't known.
+   * W47r-b (W47r-a "Noticed" 2): `cancelledHere`: the membership's row had ended here while Stripe's subscription was
+   * still live (the write answered `ignored_cancelled`), so it would bill again next month: the words add checking it.
+   */
+  paidAfterEnd: (amount: number, last4: string | null, cancelledHere = false): string => `${paidAfterEndLead(amount, last4, cancelledHere)}, then press Mark refunded.`,
+  /** W47r-a (S1): the press's answer: the same, with where the button is. */
+  paidAfterEndAtThePress: (amount: number, last4: string | null, cancelledHere = false): string => `${paidAfterEndLead(amount, last4, cancelledHere)}, then press Mark refunded on the Orders page.`,
+  /**
+   * W47r-b: the stuck list's line for an invoice Stripe's notice (or a press that charged nothing) found paid after
+   * its subscription had ended: W47r-a's sentence, without a card, since the Worker didn't make the payment.
+   */
+  invoicePaidAfterEnd: (amount: number): string => `${money(amount)} was taken by Stripe after this membership's subscription had ended. Refund it in Stripe (tell a manager), then press Mark refunded.`,
+} as const
+
+/**
+ * W47r-a (W47r review S1): Mark refunded's answers for a retry held as paid after the subscription ended
+ * (retry-payment.ts, markRetryRefunded). It reads the payment's refunds in Stripe first and sends nothing.
+ */
+export const PAYMENT_RETRY_CLOSE_WORDS = {
+  refunded: (amount: number): string => `Marked as refunded: Stripe shows the ${money(amount)} refunded in full. It is no longer listed.`,
+  already: 'This was already marked as refunded (an earlier press went through). Nothing more was done.',
+  notListed: 'This payment is no longer on the list (it was settled in the meantime). Nothing was changed.',
+  notForAPerson:
+    "This payment isn't one taken after its membership's subscription had ended, so it can't be marked as refunded: the automatic check finishes it from what Stripe shows. Nothing was changed.",
+  notRead: "The booking system couldn't read this payment's refunds in Stripe just now, so it can't tell whether the money has gone back. Nothing was changed. Press Mark refunded again in a minute.",
+  noPayment: "Stripe shows no card payment that went through on this invoice, so there is nothing to check a refund against. Nothing was changed. Tell a manager.",
+  /** Pounds: what the payment took, what Stripe shows refunded (refunds that have succeeded), and what is still on its way. */
+  notRefunded: (taken: number, refunded: number, onTheWay: number): string =>
+    `Stripe shows ${refunded > 0 ? `only ${money(refunded)} of the ${money(taken)}` : `none of the ${money(taken)}`} refunded${onTheWay > 0 ? `, with a refund of ${money(onTheWay)} still on its way` : ''}. Nothing was changed. ${
+      onTheWay > 0 && refunded + onTheWay >= taken ? 'Press Mark refunded again once Stripe shows the refund as succeeded.' : `Refund ${refunded > 0 || onTheWay > 0 ? 'the rest' : 'it'} in Stripe, then press Mark refunded again.`
+    }`,
+} as const
+
+/**
+ * The stuck list's line for a retry that is held, by what it is waiting on (brief item 4, "Unclear"). None has a
+ * Close: a retry is ended only by what Stripe shows (review point 3; W47a S2's lesson), however long that takes.
+ * W47r-a: the one exception is `paid_after_end`, whose line is PAYMENT_RETRY_WORDS.paidAfterEnd (it names the amount
+ * and the card) and which carries Mark refunded. `payment_needs_action` says the way out when Stripe has ended the
+ * subscription (the W47r review's L1).
+ */
+export const PAYMENT_RETRY_STUCK_WORDS: Readonly<Record<string, string>> = {
+  waiting: `A membership payment tried again from the desk didn't get a clear answer: the card may or may not have been charged. The automatic check, every 5 minutes, reads the invoice in Stripe and records the payment or ends this as not taken; it never charges. ${DONT_TAKE_AGAIN}`,
+  unclear: `A membership payment tried again from the desk didn't get a clear answer, and Stripe couldn't be read about it at the last check. The automatic check tries again every 5 minutes; it never charges. ${DONT_TAKE_AGAIN}`,
+  payment_processing: `A membership payment tried again from the desk is still being processed by the customer's bank. Wait for the bank: the automatic check looks every 5 minutes and, once Stripe says whether it went through, records the payment or ends this as not taken. It can't be closed by hand, and the payment can't be tried again until then. ${DONT_TAKE_AGAIN}`,
+  payment_needs_action: `A membership payment tried again from the desk is waiting for a step Stripe needs (usually the customer's approval with their bank), which can't be done from here. Nothing has been taken yet. Tell a manager: the invoice's page in Stripe has a payment link to send the customer, and Stripe's own retries carry on. Once Stripe shows the payment as gone through or failed, the automatic check records it or ends this as not taken within 5 minutes. If Stripe has ended the subscription, the payment stays waiting: a manager voids the invoice in Stripe, and the automatic check then ends this as not taken. It can't be closed by hand, and the payment can't be tried again until then. ${DONT_TAKE_AGAIN}`,
+  paid_not_recorded: "A membership payment tried again from the desk went through in Stripe, but the membership couldn't be brought up to date here yet. The automatic check tries again every 5 minutes. Don't take the payment again.",
+  close_failed: "A membership payment tried again from the desk has ended in Stripe, but that couldn't be recorded here yet. The automatic check tries again every 5 minutes. Don't take the payment again.",
+  other_mode: `A membership payment tried again from the desk can't be found in Stripe with the payment account the system is using now (it may be in the other Stripe mode, live or test), so the automatic check can't finish it. Tell a manager. ${DONT_TAKE_AGAIN}`,
+  invoice_missing: `Stripe can no longer find the invoice of a membership payment tried again from the desk, so the automatic check can't finish it. Tell a manager. ${DONT_TAKE_AGAIN}`,
+}
+
 // --- Credits and Herd (adjustMembershipCredits.ts, setMembershipHerd.ts, MembershipCreditDialog, the Customers page)
 
 export const MEMBERSHIP_CREDIT_WORDS = {

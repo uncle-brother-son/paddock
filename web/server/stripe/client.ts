@@ -54,6 +54,15 @@ export interface StripeClient {
     cancel(id: string, params?: Stripe.SubscriptionCancelParams, options?: Stripe.RequestOptions): Promise<Stripe.Subscription>
     list(params: Stripe.SubscriptionListParams, options?: Stripe.RequestOptions): Promise<Stripe.ApiList<Stripe.Subscription>>
   }
+  /**
+   * W47r: a past-due membership's open renewal invoice, read and paid from the desk ("Try the payment again now",
+   * server/rules/memberships/retry-payment.ts). `pay` is sent once for a record, with the card named and a key from
+   * the record; `retrieve` is what the press and reconcile read to find out how a payment ended.
+   */
+  invoices: {
+    retrieve(id: string, params?: Stripe.InvoiceRetrieveParams, options?: Stripe.RequestOptions): Promise<Stripe.Invoice>
+    pay(id: string, params?: Stripe.InvoicePayParams, options?: Stripe.RequestOptions): Promise<Stripe.Invoice>
+  }
   coupons: {
     create(params: Stripe.CouponCreateParams, options?: Stripe.RequestOptions): Promise<Stripe.Coupon>
     /** W13a: options too (the press's time limit, deleteCouponQuietly). */

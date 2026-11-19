@@ -88,6 +88,7 @@ import { audit, type AuditEntry } from '@/server/audit'
 import type { Db, Queryable, Tx } from '@/server/db'
 import { ApiError } from '@/server/http/errors'
 import { CUSTOMER_CANCEL_WORDS } from '@/server/rules/customer/cancel-words'
+import { PAYMENT_RETRY_HOLDS_LAPSE_MINUTES, RECENT_OPEN_RETRY_SQL } from '@/server/rules/memberships/retry-record'
 import { staffIdOf, type ClaimActor, type SystemActor } from '@/server/rules/refunds/pipeline'
 import { startsWithinRealHours } from '@/server/rules/time/london-time'
 import {
@@ -384,6 +385,8 @@ const LAPSE_DUE_SQL = "SELECT (status = 'payment_needed' AND payment_due_by <= n
 /** The sweep's two refusals of its own. Nobody is shown them: they are the reason a booking was left, in the run's log. */
 export const LAPSE_LEFT_WORDS = {
   notLapsed: 'The booking is no longer waiting for payment past its deadline.',
+  // W47r-a (W47r review S2 b).
+  paymentRetryHeld: "The membership's overdue payment was tried again from the desk in the last hour and hasn't been settled yet. The next run reads the booking again.",
   // Only a change to the cancel it would be, to whether money comes back, or to its add-on lines (W43a, review L1).
   bookingChanged: 'The booking changed while the sweep was reading it. The next run reads it again.',
 } as const
@@ -523,6 +526,16 @@ async function cancelR1(tx: Tx, input: R1Input, options: R1Options, livemode: bo
     // sweep may have got there first), and it is still the cancel the sweep read it as.
     const due = (await tx.query<{ due: boolean | null }>(LAPSE_DUE_SQL, [bookingId]))[0]?.due === true
     if (!due) throw refuse('CONFLICT', 'not_lapsed', LAPSE_LEFT_WORDS.notLapsed)
+    // W47r-a (W47r review S2 b): a credit booking whose membership's overdue payment was tried again from the desk
+    // ("Try the payment again now") less than an hour ago, with that retry still open, is left: the payment may have
+    // gone through with nothing recorded yet (its write failed, or its answer was lost), and marking the membership
+    // paid gives back only bookings still waiting for payment, never one this sweep has cancelled. Asked under this
+    // transaction's locks: a press writes its retry's first row under the customer's lock, which is held here. Only
+    // for an hour (retry-record.ts): a retry that never ends must not keep unpaid bookings for ever.
+    if (booking.redemptionSource === 'membership_credit' && booking.redeemedMembershipId) {
+      const retried = await tx.query(RECENT_OPEN_RETRY_SQL, [booking.redeemedMembershipId, PAYMENT_RETRY_HOLDS_LAPSE_MINUTES])
+      if (retried.length > 0) throw refuse('CONFLICT', 'payment_retry_held', LAPSE_LEFT_WORDS.paymentRetryHeld)
+    }
     const plan = lapsePlanOf(booking, at)
     const every = await allAddonLineIds(tx, bookingId)
     if (plan.kind !== kind || plan.back !== lapse.back || every.length !== lineIds.length || every.some((id) => !lineIds.includes(id))) {

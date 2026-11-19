@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import Stripe from 'stripe'
+import { closeRequestDb, openRequestDb } from '@/server/db/connection'
+import { listPaidAfterEnd } from '@/server/rules/memberships/paid-after-end'
 import { createStripeClient, READ_STRIPE_LIMITS } from '@/server/stripe/client'
+import type { ListPaidAfterEnd } from './dispatch'
 import { processWebhookEvent, type WebhookEventsClient } from './idempotency'
 
 function getStripe() {
@@ -53,6 +56,19 @@ export async function POST(request: NextRequest) {
   // W46: the handlers are typed against the calls they make (WebhookEventsClient). Supabase's own types for a client
   // with no database type are too deep for TypeScript to set against it (TS2589), so the client is named as that
   // here: the same object as before, with nothing wrapped round it.
-  const result = await processWebhookEvent(event, supabase as unknown as WebhookEventsClient, createStripeClient(process.env.STRIPE_SECRET_KEY, READ_STRIPE_LIMITS))
+  // W47r-b (W47r-a "Noticed" 1): an `invoice.paid` for a subscription that had already ended when the invoice was
+  // paid is listed for a refund (dispatch.ts, recordInvoicePaid). The line is an audit row, written on the Worker's
+  // own database connection (a transaction under the membership's lock, which Supabase's client can't hold). The
+  // connection is opened only when there is a line to write, so every other notice is handled exactly as before; a
+  // failure to open it or to write throws, the notice is an error, and Stripe sends it again.
+  const list: ListPaidAfterEnd = async (found) => {
+    const db = openRequestDb()
+    try {
+      return await listPaidAfterEnd(db, { actor: { type: 'system', id: null }, requestId: event.id }, 'webhook')(found)
+    } finally {
+      await closeRequestDb(db)
+    }
+  }
+  const result = await processWebhookEvent(event, supabase as unknown as WebhookEventsClient, createStripeClient(process.env.STRIPE_SECRET_KEY, READ_STRIPE_LIMITS), list)
   return NextResponse.json(result.body, { status: result.status })
 }

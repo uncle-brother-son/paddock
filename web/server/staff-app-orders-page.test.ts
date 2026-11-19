@@ -312,6 +312,7 @@ describe("the banner's words (frontend/utils/stuckList.ts)", () => {
     // W41: `paymentDateLabel`, a held payment date change's heading.
     // W47, named differences: the count by kind and the first line's words (`stuckCounts`, `stuckHeadline`,
     // `stuckAnythingToShow`), the two quiet lines, and a watched payment's heading.
+    // W47r, a named difference: `paymentRetryLabel`, the heading of a membership payment tried again from the desk and on hold.
     expect(Object.keys(helpers).sort()).toEqual([
       'NOTHING_STUCK_LINE',
       'STUCK_LIST_NOT_READ_LINE',
@@ -320,6 +321,7 @@ describe("the banner's words (frontend/utils/stuckList.ts)", () => {
       'flowLabel',
       'oldestAgeMinutes',
       'paymentDateLabel',
+      'paymentRetryLabel',
       'reconcileLine',
       'stepLabel',
       'stuckAnythingToShow',

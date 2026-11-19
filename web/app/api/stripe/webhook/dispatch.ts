@@ -74,6 +74,8 @@ function unixSecondsToIso(seconds: number): string {
 // (server/stripe/fake.ts) and the route passes the real client.
 export interface SubscriptionReader {
   subscriptions: { retrieve(id: string): Promise<Stripe.Subscription> }
+  /** W47r-b: one more read, made only for an invoice whose subscription has ended (recordInvoicePaid): when it was paid. */
+  invoices?: { retrieve(id: string): Promise<Stripe.Invoice> }
 }
 
 /** A subscription whose latest payment is still owed: what an invoice.payment_failed event must find to act. */
@@ -82,6 +84,41 @@ const BEHIND_ON_PAYMENT: readonly Stripe.Subscription.Status[] = ['past_due', 'u
 const PAID_UP: readonly Stripe.Subscription.Status[] = ['active', 'trialing']
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
+
+/** W47r-b: a subscription Stripe has ended for good. Nothing brings it back, so a payment of its invoice taken afterwards has nothing to pay for. */
+export const ENDED_IN_STRIPE: readonly Stripe.Subscription.Status[] = ['canceled', 'incomplete_expired']
+
+/**
+ * W47r-b (W47r-a "Noticed" 1): an invoice Stripe shows as paid, with money taken, whose subscription Stripe shows
+ * as ended, where the payment was not before the end. Times in seconds, as Stripe gives them; null when it gave none.
+ */
+export interface PaidAfterEndFound {
+  subscriptionId: string
+  invoiceId: string
+  /** The subscription's status: `canceled` or `incomplete_expired`. */
+  status: string
+  /** Pence taken for the invoice (`amount_paid`). */
+  amountPaid: number
+  /** The invoice's `status_transitions.paid_at`. */
+  paidAt: number | null
+  /** The subscription's `ended_at`, or its `canceled_at` when Stripe gives no `ended_at`. */
+  endedAt: number | null
+  livemode: boolean
+}
+
+/** What the listing answered: whether this call wrote the line, and if not why (it is listed already, or held another way). */
+export interface PaidAfterEndListed {
+  listed: boolean
+  why: string
+  [key: string]: unknown
+}
+
+/**
+ * W47r-b: writes the line for a person (server/rules/memberships/paid-after-end.ts, on the Worker's own database
+ * connection: the audit row, once for an invoice). Given by the webhook's route and by "Try the payment again now".
+ * A caller that gives none (a test of something else) gets recordInvoicePaid as it was before W47r-b.
+ */
+export type ListPaidAfterEnd = (found: PaidAfterEndFound) => Promise<PaidAfterEndListed>
 
 /** One call of a membership function: its name and what it is given. */
 interface MembershipWrite {
@@ -225,7 +262,95 @@ async function writeAndConfirm(
   }
 }
 
-export async function dispatchStripeEvent(event: Stripe.Event, supabase: RpcClient, stripe: SubscriptionReader): Promise<DispatchResult> {
+/**
+ * W47r-b: the invoice of a subscription that has ended, read now, and listed for a refund when its payment was not
+ * before the end. Answers what it found, for the event's row.
+ * - Not paid, or paid with nothing taken (a £0 invoice): nothing to give back.
+ * - Paid before the subscription ended (`paid_at` earlier than `ended_at`; `canceled_at` only when Stripe gives no
+ *   `ended_at`): the money was owed. The same second counts as after: Stripe's times are whole seconds, so the order
+ *   inside one can't be told, and a line a person looks at is the safe side.
+ * - A time Stripe didn't give: listed. It can't be shown the payment came first.
+ * - The invoice can't be read: thrown, so the event is an error and Stripe sends it again (the retry holds its
+ *   record, or its press says to try again). Except "no such invoice" for a test-mode event: test data since deleted.
+ */
+async function paidAfterEnd(
+  stripe: SubscriptionReader,
+  subscriptionId: string,
+  subscription: Stripe.Subscription,
+  invoiceId: string,
+  livemode: boolean,
+  list: ListPaidAfterEnd
+): Promise<PaidAfterEndListed> {
+  if (!stripe.invoices) throw new Error(`Subscription ${subscriptionId} has ended and its invoice ${invoiceId} can't be read: no invoice read was given.`)
+  let invoice: Stripe.Invoice
+  try {
+    invoice = await stripe.invoices.retrieve(invoiceId)
+  } catch (err) {
+    if (readStripeFailure(err).code === 'resource_missing' && livemode === false) return { listed: false, why: 'invoice_missing' }
+    throw err
+  }
+  if (invoice.status !== 'paid' || !(invoice.amount_paid > 0)) return { listed: false, why: 'nothing_taken', invoice_status: invoice.status ?? null, amount_paid: invoice.amount_paid ?? 0 }
+  const paidAt = invoice.status_transitions?.paid_at ?? null
+  const endedAt = subscription.ended_at ?? subscription.canceled_at ?? null
+  if (paidAt !== null && endedAt !== null && paidAt < endedAt) return { listed: false, why: 'paid_before_end', paid_at: paidAt, ended_at: endedAt }
+  const listed = await list({ subscriptionId, invoiceId, status: subscription.status, amountPaid: invoice.amount_paid, paidAt, endedAt, livemode })
+  return { ...listed, paid_at: paidAt, ended_at: endedAt }
+}
+
+/**
+ * An invoice's payment recorded on its membership: what `invoice.paid` does once it knows the subscription (W47r: its
+ * own lines, moved here unchanged, so that a caller that has just seen an invoice paid in Stripe, without the event,
+ * records it by the same rule. "Try the payment again now" does, at the press and from reconcile: the member's flagged
+ * credit bookings then go back to confirmed at once, and the event itself, when it arrives, changes nothing).
+ * `livemode`: the event's own mode; a caller with no event gives the mode of the key it reads with.
+ *
+ * W47r-b (W47r-a "Noticed" 1; the lead's call, 19 Nov): money taken for a subscription that had already ended is
+ * always listed for a refund, and this is where, so the webhook and the retry go by one rule. When the subscription
+ * reads `canceled` or `incomplete_expired`, the invoice is read (one more read, on this path only), and when Stripe
+ * shows it paid with money taken at or after the moment the subscription ended, `list` writes the line: once for an
+ * invoice, however many times the event is sent or the press is made, and not at all while a retry's own record holds
+ * the same invoice. An invoice paid BEFORE the subscription ended is not listed: that payment was for time the member
+ * had (a late or re-sent notice for a month already paid for, or a cancel just after a renewal). The answer says what
+ * was found (`detail.paid_after_end`).
+ */
+export async function recordInvoicePaid(
+  stripe: SubscriptionReader,
+  supabase: RpcClient,
+  subscriptionId: string,
+  invoiceId: string | undefined,
+  livemode: boolean,
+  list?: ListPaidAfterEnd
+): Promise<DispatchResult> {
+  // W46 (W45a "Noticed" 1): an invoice.paid handled late, after a later payment failed, must not mark a member
+  // who owes that payment as paid, restore their flagged credit bookings and write an older period's end as the
+  // next payment date. The date change's £0 invoice, then the first full payment failing, is two invoices inside
+  // the three days Stripe keeps sending an event. The subscription is read now: only one Stripe shows as paid up
+  // records the payment, and the next payment date is the period's end as Stripe has it, not the invoice's.
+  const read = await readSubscription(stripe, subscriptionId, livemode)
+  if ('missing' in read) return missing(subscriptionId, read.missing, livemode)
+  if (!PAID_UP.includes(read.subscription.status)) {
+    const detail = { reason: 'subscription_not_paid_up', status: read.subscription.status }
+    if (!list || !invoiceId || !ENDED_IN_STRIPE.includes(read.subscription.status)) return { outcome: 'ignored', detail }
+    return { outcome: 'ignored', detail: { ...detail, paid_after_end: await paidAfterEnd(stripe, subscriptionId, read.subscription, invoiceId, livemode, list) } }
+  }
+  // W46b (W46 review B1): and only when the event's invoice is the subscription's newest. In the hour Stripe holds
+  // a renewal's invoice as a draft the subscription reads active with its period already moved on; an older
+  // invoice.paid handled then (sent again after a failed delivery) wrote next month's date, and the renewal's
+  // failure an hour later then flagged nothing (migration 030 goes by that date). The newer invoice's own events
+  // set the state.
+  if (!isLatestInvoice(read.subscription, invoiceId)) {
+    return { outcome: 'ignored', detail: { reason: NOT_LATEST_INVOICE } }
+  }
+  const write = paymentWrite(subscriptionId, read.subscription, invoiceId)
+  if (!write) {
+    return { outcome: 'ignored', detail: { reason: 'no_period_end' } }
+  }
+  // The same holds for the read after the write (L8): a payment whose second read lands in the next renewal's
+  // draft hour must not write that renewal's date.
+  return writeAndConfirm(stripe, supabase, subscriptionId, livemode, write, (subscription) => paymentWrite(subscriptionId, subscription, invoiceId))
+}
+
+export async function dispatchStripeEvent(event: Stripe.Event, supabase: RpcClient, stripe: SubscriptionReader, list?: ListPaidAfterEnd): Promise<DispatchResult> {
   // W46b (S1): the event's own mode, as Stripe signed it. Anything but `false` is treated as live.
   const livemode = event.livemode
   switch (event.type) {
@@ -240,31 +365,10 @@ export async function dispatchStripeEvent(event: Stripe.Event, supabase: RpcClie
       if (!subscriptionId) {
         return { outcome: 'ignored', detail: { reason: 'no_subscription_id' } }
       }
-      // W46 (W45a "Noticed" 1): an invoice.paid handled late, after a later payment failed, must not mark a member
-      // who owes that payment as paid, restore their flagged credit bookings and write an older period's end as the
-      // next payment date. The date change's £0 invoice, then the first full payment failing, is two invoices inside
-      // the three days Stripe keeps sending an event. The subscription is read now: only one Stripe shows as paid up
-      // records the payment, and the next payment date is the period's end as Stripe has it, not the invoice's.
-      const read = await readSubscription(stripe, subscriptionId, livemode)
-      if ('missing' in read) return missing(subscriptionId, read.missing, livemode)
-      if (!PAID_UP.includes(read.subscription.status)) {
-        return { outcome: 'ignored', detail: { reason: 'subscription_not_paid_up', status: read.subscription.status } }
-      }
-      // W46b (W46 review B1): and only when the event's invoice is the subscription's newest. In the hour Stripe holds
-      // a renewal's invoice as a draft the subscription reads active with its period already moved on; an older
-      // invoice.paid handled then (sent again after a failed delivery) wrote next month's date, and the renewal's
-      // failure an hour later then flagged nothing (migration 030 goes by that date). The newer invoice's own events
-      // set the state.
-      if (!isLatestInvoice(read.subscription, invoice.id)) {
-        return { outcome: 'ignored', detail: { reason: NOT_LATEST_INVOICE } }
-      }
-      const write = paymentWrite(subscriptionId, read.subscription, invoice.id)
-      if (!write) {
-        return { outcome: 'ignored', detail: { reason: 'no_period_end' } }
-      }
-      // The same holds for the read after the write (L8): a payment whose second read lands in the next renewal's
-      // draft hour must not write that renewal's date.
-      return writeAndConfirm(stripe, supabase, subscriptionId, livemode, write, (subscription) => paymentWrite(subscriptionId, subscription, invoice.id))
+      // W47r: the handler's steps from here on are `recordInvoicePaid`, unchanged, so that "Try the payment again now"
+      // (server/rules/memberships/retry-payment.ts) records a payment by the very same rule.
+      // W47r-b: `list` is the line for a person when the invoice was paid after its subscription had ended.
+      return recordInvoicePaid(stripe, supabase, subscriptionId, invoice.id, livemode, list)
     }
 
     case 'invoice.payment_failed': {

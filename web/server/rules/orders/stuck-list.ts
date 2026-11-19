@@ -18,9 +18,11 @@ import { MEMBERSHIP_REFUND_WORDS } from '@/server/rules/refunds/failure-messages
 import { LEFT_BY_REFUND } from './refund-subscription'
 import { LATE_REFUND_STEP, WATCH_DAYS, WATCHES_LISTED_SQL, type WatchDetails } from '@/server/rules/refunds/refund-watch'
 import { notLeftAgain, openSteps, stepWhat, stepWords, type StepKind } from '@/server/rules/memberships/left'
-import { LEFT_STEP_WORDS, PAYMENT_DATE_STUCK_WORDS, WEBHOOK_NOTICE_WORDS } from '@/server/rules/memberships/failure-messages'
+import { LEFT_STEP_WORDS, PAYMENT_DATE_STUCK_WORDS, PAYMENT_RETRY_STUCK_WORDS, PAYMENT_RETRY_WORDS, WEBHOOK_NOTICE_WORDS } from '@/server/rules/memberships/failure-messages'
 import { WATCHED_PAYMENT_WORDS, WATCHED_PAYMENTS_LISTED_SQL, type ListedWatchedPayment } from './payment-watch'
 import { PAYMENT_DATE_CHANGES_LISTED_SQL, PAYMENT_DATE_CLOSE_REASONS, PAYMENT_DATE_REFUND_WATCH_STEP, paymentDateListedReason, type ListedPaymentDateChange } from '@/server/rules/memberships/payment-date'
+import { INVOICES_PAID_AFTER_END_LISTED_SQL, type ListedInvoicePaidAfterEnd } from '@/server/rules/memberships/paid-after-end'
+import { PAID_AFTER_END, PAID_AFTER_END_CLOSE_KIND, PAYMENT_RETRIES_LISTED_SQL, paymentRetryListedReason, type ListedPaymentRetry } from '@/server/rules/memberships/retry-payment'
 
 /**
  * Words for each reason an item is listed (W12's, W14b: every reason reconcile can leave an order or flow with has
@@ -361,6 +363,31 @@ export interface StuckPaymentDate {
   close?: StuckCloseTarget
 }
 
+/**
+ * W47r: a past-due membership's payment tried again from the desk that got no clear answer
+ * (memberships/retry-payment.ts). It has no close: only what Stripe shows ends it. W47r-a: but for one taken after
+ * the membership's subscription had ended (`paid_after_end`), which carries Mark refunded.
+ * W47r-b: an invoice Stripe took a payment for after its subscription had ended, found by Stripe's notice or by a
+ * press that charged nothing (memberships/paid-after-end.ts), is listed here too, the same way: reason
+ * `paid_after_end`, the same close. `retryId` is then the line's own id, and no card is named.
+ */
+export interface StuckPaymentRetry {
+  retryId: string
+  membershipId: string
+  customerId: string
+  customerName: string
+  invoiceId: string
+  /** What was still to pay on the invoice, in pounds. */
+  amount: number
+  cardBrand: string | null
+  cardLast4: string | null
+  createdAt: string
+  ageMinutes: number
+  reason: string
+  words: string
+  close?: StuckCloseTarget
+}
+
 /** W47 (W25 review L1, L2): a payment watched after its booking change was undone by hand (payment-watch.ts). */
 export interface StuckWatchedPayment {
   watchId: string
@@ -394,6 +421,8 @@ export interface StuckListOutput {
   paymentDates: StuckPaymentDate[]
   watchedPayments: StuckWatchedPayment[]
   webhook: StuckWebhookNotice | null
+  /** W47r: payments tried again from the desk, held for the automatic check. */
+  paymentRetries: StuckPaymentRetry[]
   alert: { at: string; words: string } | null
 }
 
@@ -702,6 +731,10 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
   const subscriptionsLeft = await db.query<{ entity_id: string; at: unknown; subscription_id: string; state: string; found: string | null }>(SUBSCRIPTIONS_LEFT_SQL)
   // W41: payment date changes still pending past the window.
   const paymentDates = await db.query<ListedPaymentDateChange>(PAYMENT_DATE_CHANGES_LISTED_SQL, [olderThanMinutes, null])
+  // W47r: payments tried again from the desk, still open. W47r-a: the ones a run reads (held by the press, or past the window).
+  const paymentRetries = await db.query<ListedPaymentRetry>(PAYMENT_RETRIES_LISTED_SQL, [olderThanMinutes])
+  // W47r-b: invoices paid after their subscription had ended, listed by the paid write and not yet marked refunded.
+  const invoicesPaidAfterEnd = await db.query<ListedInvoicePaidAfterEnd>(INVOICES_PAID_AFTER_END_LISTED_SQL)
   // W32: refunds that failed after Stripe accepted them, and watches that ran out (few, if ever any: one read each for the name).
   const watches = await db.query<{ id: string; refund_id: string; details: WatchDetails; ended_at: unknown; state: 'failed' | 'expired'; ended: { owed?: number } }>(WATCHES_LISTED_SQL, [null])
   // W47: payments watched after their change was undone by hand, and watches that ran out.
@@ -968,6 +1001,68 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
       }
     }),
     webhook,
+    // W47r: payments tried again from the desk that got no clear answer, with what each is waiting on. None can be
+    // closed by hand: the automatic check ends each one from what Stripe shows. W47r-a (W47r review S1): but one
+    // taken after the subscription had ended, which is for a person: its own words, and Mark refunded.
+    // W47r-b: after them, each invoice the paid write listed (Stripe's notice, or a press that charged nothing): the
+    // same reason and the same Mark refunded. An invoice a retry's record holds is never among these.
+    paymentRetries: [
+      ...paymentRetries.map((row): StuckPaymentRetry => {
+        const reason = paymentRetryListedReason(row)
+        const createdAt = iso(row.created_at)
+        const amount = Number.parseFloat(row.amount)
+        if (reason === PAID_AFTER_END) {
+          return {
+            retryId: row.id,
+            membershipId: row.membership_id,
+            customerId: row.customer_id,
+            customerName: `${row.first_name} ${row.last_name}`.trim(),
+            invoiceId: row.invoice_id,
+            amount,
+            cardBrand: row.card_brand,
+            cardLast4: row.card_last4,
+            createdAt,
+            ageMinutes: ageMinutes(createdAt),
+            reason,
+            words: PAYMENT_RETRY_WORDS.paidAfterEnd(amount, row.card_last4, row.cancelled_here === true),
+            close: { kind: PAID_AFTER_END_CLOSE_KIND, orderId: row.id },
+          }
+        }
+        return {
+          retryId: row.id,
+          membershipId: row.membership_id,
+          customerId: row.customer_id,
+          customerName: `${row.first_name} ${row.last_name}`.trim(),
+          invoiceId: row.invoice_id,
+          amount,
+          cardBrand: row.card_brand,
+          cardLast4: row.card_last4,
+          createdAt,
+          ageMinutes: ageMinutes(createdAt),
+          reason,
+          words: PAYMENT_RETRY_STUCK_WORDS[reason] ?? PAYMENT_RETRY_STUCK_WORDS['unclear'] ?? '',
+        }
+      }),
+      ...invoicesPaidAfterEnd.map((row): StuckPaymentRetry => {
+        const createdAt = iso(row.created_at)
+        const amount = Number.parseFloat(row.amount)
+        return {
+          retryId: row.id,
+          membershipId: row.membership_id,
+          customerId: row.customer_id,
+          customerName: `${row.first_name} ${row.last_name}`.trim(),
+          invoiceId: row.invoice_id,
+          amount,
+          cardBrand: null,
+          cardLast4: null,
+          createdAt,
+          ageMinutes: ageMinutes(createdAt),
+          reason: PAID_AFTER_END,
+          words: PAYMENT_RETRY_WORDS.invoicePaidAfterEnd(amount),
+          close: { kind: PAID_AFTER_END_CLOSE_KIND, orderId: row.id },
+        }
+      }),
+    ],
     alert: alert ? { at: iso(alert.at), words: STRIPE_REFUSED_WORDS } : null,
   }
 }

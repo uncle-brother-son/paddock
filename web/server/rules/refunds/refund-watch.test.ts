@@ -430,11 +430,14 @@ describe("the stuck list's contract stays readable by the staff app published be
     // bookings/refunds.test.ts) and `webhook` (Stripe's notices in error: memberships/webhook-live-state.test.ts), each
     // a field of its own, which that app drops too. Both are optional in the contract, so a staff app with W47's types
     // still reads an older Worker's list.
-    expect(Object.keys(listed).sort()).toEqual(['alert', 'checkout', 'claims', 'flows', 'paymentDates', 'refunds', 'steps', 'warnings', 'watched', 'watchedPayments', 'webhook'])
-    expect(listed).toMatchObject({ watchedPayments: [], webhook: null })
+    // W47r, a named difference: `paymentRetries` (a membership payment tried again from the desk, on hold:
+    // memberships/retry-payment.test.ts), a field of its own and optional in the contract, as those two.
+    expect(Object.keys(listed).sort()).toEqual(['alert', 'checkout', 'claims', 'flows', 'paymentDates', 'paymentRetries', 'refunds', 'steps', 'warnings', 'watched', 'watchedPayments', 'webhook'])
+    expect(listed).toMatchObject({ watchedPayments: [], webhook: null, paymentRetries: [] })
     const beforeW47 = { ...listed } as Partial<typeof listed>
     delete beforeW47.watchedPayments
     delete beforeW47.webhook
+    delete beforeW47.paymentRetries
     expect(stuckListOutputSchema.safeParse(beforeW47).success).toBe(true)
     expect(listed).toMatchObject({ checkout: [], flows: [], claims: [], refunds: [], warnings: [], alert: null })
     expect(listed.watched).toHaveLength(1)

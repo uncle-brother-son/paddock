@@ -14,6 +14,9 @@ import type { StripeClient } from './client'
  * - A failure can be set to happen before Stripe sees the call, or after it took effect with the
  *   response lost, which are the two things a timeout can mean.
  *
+ * W47r: a renewal's invoice, for "Try the payment again now" (the test-only calls from `startRenewal` on, and
+ * `invoices` below). Where a line there is a guess about Stripe, its comment says so.
+ *
  * Anything else throws "not modelled", so a test can't pass on behaviour nobody wrote down.
  */
 
@@ -167,6 +170,13 @@ interface FakeSubscription {
   billing_cycle_anchor: number
   /** W36: the card its invoices are charged to; null means the customer's own default. */
   default_payment_method: string | null
+  /**
+   * W47r-b: when it ended, and when its cancellation was asked for, in seconds; null while it is live. Stripe's
+   * `ended_at` is the moment the subscription stopped; `canceled_at` is the cancel request's time, which for a
+   * scheduled cancel is earlier than the end (Stripe's API reference, the Subscription object).
+   */
+  ended_at: number | null
+  canceled_at: number | null
 }
 
 interface FakeInvoice {
@@ -181,6 +191,29 @@ interface FakeInvoice {
   ending_balance: number
   amount_paid: number
   payments: { data: Array<{ payment: { payment_intent: string | null } }> }
+}
+
+/**
+ * W47r: an invoice Stripe made after the one a subscription was made with: a renewal's. A draft for its first hour
+ * (`startRenewal`); then finalised and charged (`renewalFails`: open, with its payment declined). `paymentIntent` is
+ * the one payment Stripe makes for it, tried again by each later attempt; null while it is a draft.
+ */
+interface FakeRenewalInvoice {
+  id: string
+  object: 'invoice'
+  status: 'draft' | 'open' | 'paid' | 'void' | 'uncollectible'
+  customer: string
+  subscription: string
+  currency: string
+  amount_due: number
+  amount_paid: number
+  amount_remaining: number
+  attempt_count: number
+  livemode: boolean
+  created: number
+  paymentIntent: string | null
+  /** W47r-b: when it was paid, in seconds (Stripe's `status_transitions.paid_at`); null until it is. */
+  status_transitions: { paid_at: number | null }
 }
 
 /**
@@ -231,6 +264,12 @@ export class FakeStripe implements StripeClient {
   /** The reusable cards Stripe generated for a tap, as payment methods: what paymentMethods.retrieve finds. */
   private readonly cardsById = new Map<string, { last4: string; brand: string }>()
   private readonly subs = new Map<string, FakeSubscription>()
+  /** W47r: renewal invoices, by id. */
+  private readonly renewalInvoices = new Map<string, FakeRenewalInvoice>()
+  /** W47r: how the next `invoices.pay` of an invoice ends at the bank, when not at once (`nextPayEnds`). */
+  private readonly payEndings = new Map<string, 'processing' | 'requires_action'>()
+  /** W47r: cards the bank declines (`declineCard`). */
+  private readonly decliningCards = new Set<string>()
   private readonly couponsById = new Map<string, Stripe.Coupon>()
   private readonly customersById = new Map<string, Record<string, unknown>>()
   private readonly pricesById = new Map<string, Record<string, unknown>>()
@@ -312,6 +351,8 @@ export class FakeStripe implements StripeClient {
       trial_end: null,
       billing_cycle_anchor: start,
       default_payment_method: null,
+      ended_at: null,
+      canceled_at: null,
     })
   }
 
@@ -330,10 +371,26 @@ export class FakeStripe implements StripeClient {
    * W36: a subscription as Stripe might already hold it, set up for a test with no call recorded: its status, a
    * scheduled end, or its current period's end (all times in seconds).
    */
-  setSubscription(id: string, fields: { status?: Stripe.Subscription.Status; cancelAt?: number | null; periodEnd?: number; latestInvoice?: string }): void {
+  setSubscription(
+    id: string,
+    fields: { status?: Stripe.Subscription.Status; cancelAt?: number | null; periodEnd?: number; latestInvoice?: string; endedAt?: number | null; canceledAt?: number | null }
+  ): void {
     const sub = this.subs.get(id)
     if (!sub) throw new Error(`The fake has no subscription ${id}.`)
-    if (fields.status !== undefined) sub.status = fields.status
+    if (fields.status !== undefined) {
+      sub.status = fields.status
+      // W47r-b: a subscription that ends has the moment it ended, as Stripe gives it: now, unless the test says when
+      // (`endedAt`, `canceledAt`; null for "Stripe gave none"). One set live again has neither.
+      const ended = fields.status === 'canceled' || fields.status === 'incomplete_expired'
+      if (ended && sub.ended_at === null) sub.ended_at = seconds()
+      if (ended && sub.canceled_at === null) sub.canceled_at = sub.ended_at
+      if (!ended) {
+        sub.ended_at = null
+        sub.canceled_at = null
+      }
+    }
+    if (fields.endedAt !== undefined) sub.ended_at = fields.endedAt
+    if (fields.canceledAt !== undefined) sub.canceled_at = fields.canceledAt
     if (fields.cancelAt !== undefined) sub.cancel_at = fields.cancelAt
     if (fields.periodEnd !== undefined) for (const item of sub.items.data) item.current_period_end = fields.periodEnd
     // W46b: its newest invoice, by id (a later invoice than the one it was made with: a renewal's, a date change's).
@@ -366,7 +423,127 @@ export class FakeStripe implements StripeClient {
     sub.status = 'active'
     sub.trial_end = null
     sub.latest_invoice = this.nextId('in')
+    // W47r: the draft itself, for the price's amount, so it can be finalised and paid (`renewalFails`, `invoices`).
+    const price = this.pricesById.get(sub.items.data[0]?.price.id ?? '')
+    this.renewalInvoices.set(sub.latest_invoice, {
+      id: sub.latest_invoice,
+      object: 'invoice',
+      status: 'draft',
+      customer: sub.customer,
+      subscription: sub.id,
+      currency: String(price?.['currency'] ?? 'gbp'),
+      amount_due: Number(price?.['unit_amount'] ?? 0),
+      amount_paid: 0,
+      amount_remaining: Number(price?.['unit_amount'] ?? 0),
+      attempt_count: 0,
+      livemode: sub.livemode,
+      created: seconds(),
+      paymentIntent: null,
+      status_transitions: { paid_at: null },
+    })
     return sub.latest_invoice
+  }
+
+  private renewalInvoice(id: string): FakeRenewalInvoice {
+    const invoice = this.renewalInvoices.get(id)
+    if (!invoice) throw new Error(`The fake has no renewal invoice ${id}.`)
+    return invoice
+  }
+
+  /**
+   * W47r: the draft's hour is up. Stripe finalises the renewal's invoice and tries its charge on the subscription's
+   * card, which the bank declines: the invoice is `open` with all of it still to pay, its one payment is at
+   * `requires_payment_method` (nothing taken), and the subscription reads `past_due`. The subscription's newest
+   * invoice must be a draft made by `startRenewal`. Answers the invoice and its payment.
+   */
+  renewalFails(subscriptionId: string): { invoice: string; paymentIntent: string } {
+    const sub = this.subs.get(subscriptionId)
+    if (!sub) throw new Error(`The fake has no subscription ${subscriptionId}.`)
+    const invoice = this.renewalInvoice(sub.latest_invoice)
+    if (invoice.status !== 'draft') throw new Error(`The fake's invoice ${invoice.id} is ${invoice.status}: only a draft is finalised.`)
+    const intent = this.addIntent({ amount: invoice.amount_due, currency: invoice.currency, customer: invoice.customer, payment_method: sub.default_payment_method })
+    invoice.status = 'open'
+    invoice.attempt_count = 1
+    invoice.paymentIntent = intent.id
+    sub.status = 'past_due'
+    return { invoice: invoice.id, paymentIntent: intent.id }
+  }
+
+  /** W47r: a renewal invoice as Stripe holds it now, for tests: its status, what was paid, its payment and the card that payment was last tried on. */
+  invoiceState(id: string): { status: FakeRenewalInvoice['status']; amountPaid: number; paymentIntent: string | null; paymentStatus: Stripe.PaymentIntent.Status | null; paymentMethod: string | null } {
+    const invoice = this.renewalInvoice(id)
+    const intent = invoice.paymentIntent ? this.intents.get(invoice.paymentIntent) : undefined
+    return { status: invoice.status, amountPaid: invoice.amount_paid, paymentIntent: invoice.paymentIntent, paymentStatus: intent?.status ?? null, paymentMethod: intent?.payment_method ?? null }
+  }
+
+  /** W47r-b: when a paid invoice was paid, as Stripe has it (seconds), for a test that sets the order of a payment and a cancel to the second. */
+  setInvoicePaidAt(id: string, paidAt: number | null): void {
+    const invoice = this.renewalInvoice(id)
+    if (invoice.status !== 'paid') throw new Error(`The fake's invoice ${id} is ${invoice.status}: only a paid one has a time it was paid.`)
+    invoice.status_transitions.paid_at = paidAt
+  }
+
+  /** W47r: an invoice someone voided or wrote off in Stripe's dashboard. Nothing is taken for it by that. */
+  setInvoiceStatus(id: string, status: 'void' | 'uncollectible'): void {
+    this.renewalInvoice(id).status = status
+  }
+
+  /** W47r: the bank declines this card from now on (`false`: it takes it again). */
+  declineCard(paymentMethod: string, declines = true): void {
+    if (declines) this.decliningCards.add(paymentMethod)
+    else this.decliningCards.delete(paymentMethod)
+  }
+
+  /**
+   * W47r: the next `invoices.pay` of this invoice doesn't end at once. `processing`: the bank is still working on it
+   * (the invoice stays open; `settleInvoicePayment` says how it ended). `requires_action`: the bank wants the
+   * customer to approve it, which nobody at the desk can do: Stripe answers the pay with an error and leaves the
+   * payment waiting.
+   */
+  nextPayEnds(invoiceId: string, how: 'processing' | 'requires_action'): void {
+    this.renewalInvoice(invoiceId)
+    this.payEndings.set(invoiceId, how)
+  }
+
+  /** The invoice paid in full by its payment: the money taken on `paymentMethod`, and a subscription that was behind on it paid up. */
+  private takeInvoicePayment(invoice: FakeRenewalInvoice, paymentMethod: string | null): void {
+    const intent = invoice.paymentIntent ? this.intents.get(invoice.paymentIntent) : undefined
+    if (!intent) throw new Error(`The fake's invoice ${invoice.id} has no payment to take.`)
+    intent.status = 'succeeded'
+    intent.amount_received = intent.amount
+    intent.payment_method = paymentMethod
+    intent.latest_charge = this.tapped(this.nextId('ch'))
+    invoice.status = 'paid'
+    invoice.amount_paid = invoice.amount_due
+    invoice.amount_remaining = 0
+    invoice.status_transitions.paid_at = seconds()
+    // Stripe: paying the newest invoice of a subscription that is behind on it makes the subscription `active`
+    // (docs, "How subscriptions work", past_due, read 19 Nov 2026). One that has ended stays ended.
+    const sub = this.subs.get(invoice.subscription)
+    if (sub && sub.latest_invoice === invoice.id && (sub.status === 'past_due' || sub.status === 'unpaid')) sub.status = 'active'
+  }
+
+  /**
+   * W47r: a payment `nextPayEnds` left unfinished ends: `succeeded` (the invoice is paid), or `failed` / `canceled`
+   * (nothing taken: the payment is back at `requires_payment_method`, or cancelled, and the invoice stays open).
+   */
+  settleInvoicePayment(invoiceId: string, how: 'succeeded' | 'failed' | 'canceled'): void {
+    const invoice = this.renewalInvoice(invoiceId)
+    const intent = invoice.paymentIntent ? this.intents.get(invoice.paymentIntent) : undefined
+    if (!intent || (intent.status !== 'processing' && intent.status !== 'requires_action')) throw new Error(`The fake's invoice ${invoiceId} has no payment still going.`)
+    if (how === 'succeeded') this.takeInvoicePayment(invoice, intent.payment_method)
+    else intent.status = how === 'failed' ? 'requires_payment_method' : 'canceled'
+  }
+
+  /**
+   * W47r: one of Stripe's own retries of an open invoice (Smart Retries) goes through, on the subscription's card:
+   * no call of ours is recorded. The invoice is paid and a subscription behind on it reads `active`.
+   */
+  stripeRetryPays(invoiceId: string): void {
+    const invoice = this.renewalInvoice(invoiceId)
+    if (invoice.status !== 'open') throw new Error(`The fake's invoice ${invoiceId} is ${invoice.status}: only an open one is retried.`)
+    invoice.attempt_count += 1
+    this.takeInvoicePayment(invoice, this.subs.get(invoice.subscription)?.default_payment_method ?? null)
   }
 
   /** Stripe keeps a key for at least 24 hours, then may drop it: a repeat after that is a new
@@ -850,6 +1027,8 @@ export class FakeStripe implements StripeClient {
           trial_end: null,
           billing_cycle_anchor: start,
           default_payment_method: typeof params.default_payment_method === 'string' ? params.default_payment_method : null,
+          ended_at: null,
+          canceled_at: null,
         }
         this.subs.set(sub.id, sub)
         return this.publicSubscription(sub, params.expand)
@@ -906,6 +1085,9 @@ export class FakeStripe implements StripeClient {
         const sub = this.sub(id)
         if (sub.status === 'canceled') throw fakeStripeErrors.invalid('subscription_canceled', `The subscription ${id} has already been canceled.`)
         sub.status = 'canceled'
+        // W47r-b: cancelled now, so it ended now.
+        sub.ended_at = seconds()
+        sub.canceled_at = sub.ended_at
         return this.publicSubscription(sub, undefined)
       }) as unknown as Promise<Stripe.Subscription>,
 
@@ -926,6 +1108,81 @@ export class FakeStripe implements StripeClient {
         const limit = params.limit ?? 10
         return { ...list(all.slice(from, from + limit).map((s) => this.publicSubscription(s, params.expand))), has_more: from + limit < all.length }
       }) as unknown as Promise<Stripe.ApiList<Stripe.Subscription>>,
+  }
+
+  /** A renewal invoice as Stripe answers it: with its payments only when asked to include them. */
+  private publicInvoice(invoice: FakeRenewalInvoice, expand: readonly string[] | undefined) {
+    if (expand && expand.join() !== 'payments') throw new Error('The fake has not modelled expanding anything of an invoice but payments.')
+    const { paymentIntent, subscription, ...rest } = invoice
+    const payments = paymentIntent
+      ? [{ id: `inpay_${invoice.id}`, object: 'invoice_payment', is_default: true, status: invoice.status === 'paid' ? 'paid' : 'open', payment: { type: 'payment_intent', payment_intent: paymentIntent } }]
+      : []
+    return { ...rest, billing_reason: 'subscription_cycle', parent: { subscription_details: { subscription } }, ...(expand ? { payments: list(payments) } : {}) }
+  }
+
+  /** As Stripe: an invoice made in the other mode is answered as missing (as an intent, W11a). Only renewal invoices are modelled. */
+  private invoiceFor(id: string): FakeRenewalInvoice {
+    const invoice = this.renewalInvoices.get(id)
+    if (!invoice) {
+      if ([...this.subs.values()].some((sub) => sub.invoice.id === id)) throw new Error('The fake has only modelled reading or paying an invoice made by a renewal, not the one a subscription was made with.')
+      throw fakeStripeErrors.missing(`invoice: '${id}'`)
+    }
+    if (invoice.livemode !== (this.keyLivemode === true)) throw fakeStripeErrors.missing(`invoice: '${id}'`)
+    return invoice
+  }
+
+  // W47r: "Try the payment again now" (server/rules/memberships/retry-payment.ts).
+  readonly invoices: StripeClient['invoices'] = {
+    retrieve: (id, params) =>
+      this.run('invoices.retrieve', { id, ...params }, undefined, () => this.publicInvoice(this.invoiceFor(id), params?.expand)) as unknown as Promise<Stripe.Invoice>,
+
+    // An attempt to pay an open invoice now, off session, on the card named (`payment_method`), else the
+    // subscription's default card. The invoice's one payment is tried again on that card. A POST, so its answer, a
+    // decline included, is saved against the key.
+    // - Paid: the invoice is `paid`, and a subscription behind on it reads `active`. A subscription that has ended
+    //   stays ended and the money is taken all the same (Stripe leaves a cancelled subscription's invoices open and
+    //   payable: the retry's own checks are what stop that).
+    // - Declined: a card error, the invoice still open, the payment back at `requires_payment_method`.
+    // - An invoice already paid: refused. NOT CHECKED against Stripe: the words ("Invoice is already paid") are as
+    //   remembered and the code is a guess. The rule doesn't go by either: after any refusal it reads the invoice.
+    // - A payment still at the bank from an earlier attempt: refused. NOT CHECKED against Stripe either, and again
+    //   the rule reads the invoice and its payment rather than the refusal.
+    // - `nextPayEnds`: left `processing` (answered 200 with the invoice still open), or waiting on the customer
+    //   (`requires_action`, with Stripe's documented error code `invoice_payment_intent_requires_action`).
+    pay: (id, params, options) =>
+      this.run('invoices.pay', { id, ...params }, options, () => {
+        const known = new Set(['payment_method', 'off_session'])
+        const unknown = Object.keys(params ?? {}).filter((name) => !known.has(name))
+        if (unknown.length > 0) throw new Error(`The fake has not modelled paying an invoice with ${unknown.join(', ')}.`)
+        if (params?.off_session === false) throw new Error('The fake has only modelled paying an invoice off session.')
+        const invoice = this.invoiceFor(id)
+        if (invoice.status === 'paid') throw fakeStripeErrors.invalid('invoice_already_paid', 'Invoice is already paid')
+        if (invoice.status !== 'open') throw new Error(`The fake has not modelled paying an invoice that is ${invoice.status}.`)
+        const intent = invoice.paymentIntent ? this.intents.get(invoice.paymentIntent) : undefined
+        if (!intent) throw new Error(`The fake's open invoice ${id} has no payment.`)
+        if (intent.status === 'processing') throw fakeStripeErrors.invalid('payment_intent_unexpected_state', "This invoice's payment is still processing.")
+        const card = params?.payment_method ?? this.subs.get(invoice.subscription)?.default_payment_method ?? null
+        if (card === null) throw new Error('The fake has only modelled paying an invoice with a card: one named, or the subscription\'s default.')
+        invoice.attempt_count += 1
+        intent.payment_method = card
+        if (this.decliningCards.has(card)) {
+          intent.status = 'requires_payment_method'
+          throw fakeStripeErrors.cardDeclined()
+        }
+        const ending = this.payEndings.get(id)
+        this.payEndings.delete(id)
+        if (ending === 'requires_action') {
+          intent.status = 'requires_action'
+          throw new Stripe.errors.StripeCardError({
+            type: 'card_error',
+            code: 'invoice_payment_intent_requires_action',
+            message: 'This payment requires additional user action before it can be completed successfully. Payment can be completed using the PaymentIntent associated with the invoice.',
+          })
+        }
+        if (ending === 'processing') intent.status = 'processing'
+        else this.takeInvoicePayment(invoice, card)
+        return this.publicInvoice(invoice, undefined)
+      }) as unknown as Promise<Stripe.Invoice>,
   }
 
   readonly coupons: StripeClient['coupons'] = {

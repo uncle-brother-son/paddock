@@ -9,7 +9,19 @@ import { BOOKING_KINDS_ON } from '@/server/rules/testing/replay/booking-side'
 import { ORDER_REFUND_KINDS_ON } from '@/server/rules/testing/replay/order-refund-side'
 import { ALL_KINDS_ON } from '@/server/rules/testing/replay/order-side'
 import { MEMBERSHIP_PATH_OFF_MESSAGE } from './failure-messages'
-import { CARD_MOVE_KINDS, cardMovesOn, MEMBERSHIP_KINDS, membershipChangePathOff, membershipChangesOn, PAYMENT_DATE_KINDS, paymentDateChangesOn, paymentDatePathOff } from './membership-switch'
+import {
+  CARD_MOVE_KINDS,
+  cardMovesOn,
+  MEMBERSHIP_KINDS,
+  membershipChangePathOff,
+  membershipChangesOn,
+  PAYMENT_DATE_KINDS,
+  PAYMENT_RETRY_KINDS,
+  paymentDateChangesOn,
+  paymentDatePathOff,
+  paymentRetriesOn,
+  paymentRetryPathOff,
+} from './membership-switch'
 
 // Brief W36 item 2 (F-plan 4.11, lead call L3): ORDER_SWITCH gains `membership_changes`, off by default, with a test
 // that it is off with today's live value. "Off by default" means: with the secret unset or empty; with the value live
@@ -23,8 +35,8 @@ describe("step F's switch kind (brief W36 item 2)", () => {
   it('ORDER_SWITCH knows the kind, and only by its exact name', () => {
     expect(MEMBERSHIP_KINDS).toEqual(['membership_changes'])
     expect(ORDER_KINDS).toContain('membership_changes')
-    // Added at the end: the nine kinds before it are as they were, in their order. W41a: the payment date's own kind after it. W42: the replaced card's after that. W43: the lapse sweep's last.
-    expect(ORDER_KINDS).toEqual(['no_stripe', 'saved_card', 'reader', 'membership', 'reader_flows', 'booking_changes', 'order_refunds', 'event_cancels', 'customer_cancels', 'membership_changes', 'payment_date_changes', 'card_moves', 'lapse_sweep'])
+    // Added at the end: the nine kinds before it are as they were, in their order. W41a: the payment date's own kind after it. W42: the replaced card's after that. W43: the lapse sweep's. W47r: the payment retry's last.
+    expect(ORDER_KINDS).toEqual(['no_stripe', 'saved_card', 'reader', 'membership', 'reader_flows', 'booking_changes', 'order_refunds', 'event_cancels', 'customer_cancels', 'membership_changes', 'payment_date_changes', 'card_moves', 'lapse_sweep', 'payment_retries'])
     expect([...kindsOn('membership_changes')]).toEqual(['membership_changes'])
     expect([...kindsOn(' Membership_Changes ,')]).toEqual(['membership_changes'])
     for (const typo of ['membership_change', 'memberships_changes', 'membership-changes', 'membershipchanges', 'changes', 'membership']) expect(kindsOn(typo).has('membership_changes'), typo).toBe(false)
@@ -175,5 +187,52 @@ describe("the replaced card's own switch kind (brief W42 item 1)", () => {
     expect(cardMovesOn('membership_changes,payment_date_changes')).toBe(false)
     // A basket is never this kind: it gates no order.
     expect(orderKind({ payment: { method: 'card' } } as Parameters<typeof orderKind>[0])).toBe('saved_card')
+  })
+})
+
+// Brief W47r item 1: "Try the payment again now" has a kind of its own, `payment_retries`, off until Wayne adds it to
+// the secret after the release. It charges a card, so nothing else may turn it on, and it turns nothing else on.
+describe("the payment retry's own kind (brief W47r item 1)", () => {
+  /** The secret's value on live since W43 (staff app CLAUDE.md, 18 Nov 2026). */
+  const LIVE_SINCE_W43 = 'no_stripe,saved_card,reader,membership,booking_changes,reader_flows,order_refunds,event_cancels,membership_changes,payment_date_changes,card_moves,lapse_sweep'
+
+  it('ORDER_SWITCH knows the kind, and only by its exact name; it is the last in the list', () => {
+    expect(PAYMENT_RETRY_KINDS).toEqual(['payment_retries'])
+    expect(ORDER_KINDS.indexOf('payment_retries')).toBe(13)
+    expect(ORDER_KINDS.at(-1)).toBe('payment_retries')
+    expect([...kindsOn(' Payment_Retries ,')]).toEqual(['payment_retries'])
+    for (const typo of ['payment_retry', 'payments_retries', 'payment-retries', 'paymentretries', 'retries', 'retry_payment', 'payment_date_changes', 'membership_changes']) expect(kindsOn(typo).has('payment_retries'), typo).toBe(false)
+  })
+
+  it('off by default: unset, empty, the value live runs today, and every other kind on. Deploying this Worker starts no retry', () => {
+    const everyOtherKind = ORDER_KINDS.filter((kind) => kind !== 'payment_retries').join(',')
+    // Every other kind: the ones on live, and the website's own cancels (off on live).
+    expect(everyOtherKind.split(',').sort()).toEqual([...LIVE_SINCE_W43.split(','), 'customer_cancels'].sort())
+    for (const value of [undefined, null, '', '   ', LIVE_TODAY, LIVE_SINCE_W43, everyOtherKind]) {
+      expect(paymentRetriesOn(value), String(value)).toBe(false)
+      expect(paymentRetryPathOff(value), String(value)).toMatchObject({
+        code: 'MEMBERSHIP_PATH_OFF',
+        status: 501,
+        message: 'This is switched off in the booking system. Tell a manager.',
+        details: { reason: 'membership_path_off', message: MEMBERSHIP_PATH_OFF_MESSAGE, kinds: ['payment_retries'] },
+      })
+    }
+    // And it changes nothing for the kinds that are on.
+    expect(membershipChangePathOff(LIVE_SINCE_W43)).toBeNull()
+    expect(paymentDatePathOff(LIVE_SINCE_W43)).toBeNull()
+    expect(cardMovesOn(LIVE_SINCE_W43)).toBe(true)
+  })
+
+  it('on only when the secret names it, and it turns nothing else on or off', () => {
+    expect(paymentRetriesOn(`${LIVE_SINCE_W43},payment_retries`)).toBe(true)
+    expect(paymentRetryPathOff(`${LIVE_SINCE_W43},payment_retries`)).toBeNull()
+    expect(paymentRetryPathOff('payment_retries')).toBeNull()
+    expect([...kindsOn('payment_retries')]).toEqual(['payment_retries'])
+    expect(membershipChangesOn('payment_retries')).toBe(false)
+    expect(paymentDateChangesOn('payment_retries')).toBe(false)
+    expect(cardMovesOn('payment_retries')).toBe(false)
+    // A basket is never this kind: it gates no order.
+    expect(orderKind({ payment: { method: 'card' } } as Parameters<typeof orderKind>[0])).toBe('saved_card')
+    expect(orderKind({ membershipPlanId: 'plan' } as Parameters<typeof orderKind>[0])).toBe('membership')
   })
 })

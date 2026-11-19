@@ -62,8 +62,10 @@ export const reconcileItemSchema = z.object({
    * W21: `claim` is a booking refund's claim (server/rules/bookings/refunds.ts) held for reconcile. W28: or an order refund's.
    * W36: `step` is a membership's Stripe step left after its database change (server/rules/memberships/left.ts).
    * W41: `date_change` is a membership's payment date change still pending (server/rules/memberships/payment-date.ts).
+   * W47r: `payment_retry` is a past-due membership's payment tried again from the desk, with no clear answer yet
+   * (server/rules/memberships/retry-payment.ts). The run only reads Stripe for it.
    */
-  kind: z.enum(['order', 'flow', 'refund', 'claim', 'step', 'date_change']),
+  kind: z.enum(['order', 'flow', 'refund', 'claim', 'step', 'date_change', 'payment_retry']),
   id: z.string(),
   outcome: z.enum(['finalised', 'undone', 'settled_elsewhere', 'refund_pending', 'refund_confirmed', 'refund_failed', 'left']),
   reason: z.string().optional(),
@@ -127,8 +129,15 @@ export type ReconcileRunOutput = z.infer<typeof reconcileRunOutputSchema>
  *   has looked at the payment in Stripe. Nothing moves. `orderId` is the watch's id. W47b: sorted only when Stripe
  *   still can't find the payment; when it can, the payment is handed back to the automatic check instead (answered
  *   `closed: true` with `reason: 'handed_back'`: the line for a person is gone, and the payment is watched again).
+ * - `retry_paid_after_end` (W47r-a; the W47r review's S1): a membership payment tried again from the desk that was
+ *   taken after the membership's subscription had ended (`paymentRetries` on the list, reason `paid_after_end`), once
+ *   a person has refunded it in Stripe: Mark refunded. The payment's refunds are read in Stripe first, and it is
+ *   refused unless Stripe shows the payment refunded in full. Nothing is sent. `orderId` is the retry's id.
+ *   W47r-b: also the close of an invoice Stripe took a payment for after its subscription had ended, found by
+ *   Stripe's notice or by a press that charged nothing (listed in `paymentRetries` the same way). `orderId` is then
+ *   that line's `retryId`.
  */
-export const stuckCloseKindSchema = z.enum(['held_order', 'changed_elsewhere', 'subscription_left', 'late_refund', 'held_flow', 'held_claim', 'refund_watch', 'left_step', 'held_payment_date', 'payment_watch'])
+export const stuckCloseKindSchema = z.enum(['held_order', 'changed_elsewhere', 'subscription_left', 'late_refund', 'held_flow', 'held_claim', 'refund_watch', 'left_step', 'held_payment_date', 'payment_watch', 'retry_paid_after_end'])
 export type StuckCloseKind = z.infer<typeof stuckCloseKindSchema>
 
 export const stuckCloseTargetSchema = z.object({
@@ -298,6 +307,36 @@ export const stuckPaymentDateSchema = z.object({
 export type StuckPaymentDateOutput = z.infer<typeof stuckPaymentDateSchema>
 
 /**
+ * W47r: a past-due membership's payment tried again from the desk ("Try the payment again now") that got no clear
+ * answer: held for the automatic check, which only reads Stripe (it never charges) until Stripe says how the payment
+ * ended. `amount` is what was still to pay on the invoice. It has no `close`, and nothing ends it by hand, with one
+ * exception (W47r-a): the reason `paid_after_end`, a payment taken after the membership's subscription had ended,
+ * which a person refunds in Stripe and then closes with Mark refunded (`close`, kind `retry_paid_after_end`).
+ * W47r-b: any invoice paid at or after the moment its subscription ended is listed here the same way (reason
+ * `paid_after_end`, the same `close`), whether or not a press at the desk took the payment: one Stripe's own retry
+ * took, or one the customer approved late, is found by Stripe's notice. For those `retryId` is the line's own id,
+ * `amount` is what Stripe took for the invoice, and no card is named (`cardBrand` and `cardLast4` are null).
+ */
+export const stuckPaymentRetrySchema = z.object({
+  retryId: z.string(),
+  membershipId: z.string(),
+  customerId: z.string(),
+  customerName: z.string(),
+  invoiceId: z.string(),
+  amount: z.number(),
+  cardBrand: z.string().nullable(),
+  cardLast4: z.string().nullable(),
+  createdAt: z.string(),
+  ageMinutes: z.number(),
+  /** What it is waiting on. */
+  reason: z.string(),
+  words: z.string(),
+  /** W47r-a: Mark refunded, only for the reason `paid_after_end`. */
+  close: stuckCloseTargetSchema.optional(),
+})
+export type StuckPaymentRetryOutput = z.infer<typeof stuckPaymentRetrySchema>
+
+/**
  * W47 (W25 review L1, L2): a card payment that was still at the bank when a person undid its booking change by hand.
  * `watching`: the automatic check reads it every run and refunds it if it goes through: nothing to do. `expired`: the
  * watch ran out with Stripe still giving no clear answer, so it is for a person (with `close`).
@@ -360,6 +399,12 @@ export const stuckListOutputSchema = z.object({
   watchedPayments: z.array(stuckWatchedPaymentSchema).optional(),
   /** W47: Stripe's notices in error for over an hour, as one line; null with none. Optional, as `watchedPayments`. */
   webhook: stuckWebhookNoticeSchema.nullable().optional(),
+  /**
+   * W47r: payments tried again from the desk that got no clear answer. A field of its own and optional, as
+   * `paymentDates`: a staff app with W47r's types still reads an older Worker's list, and an older staff app reads
+   * this one as before.
+   */
+  paymentRetries: z.array(stuckPaymentRetrySchema).optional(),
   alert: z.object({ at: z.string(), words: z.string() }).nullable(),
 })
 export type StuckListOutput = z.infer<typeof stuckListOutputSchema>

@@ -1689,3 +1689,165 @@ money kept with nothing recorded is never "for later". No migration, no switch k
   moment can't be ordered by `at`, two runs at once can each write an `expired` row (the hand-back names both), and
   an expiry after the hand-back must count again.
 - The staff app's Mark sorted dialog for a watched payment says both things the press can do.
+
+## "Try the payment again now": a past-due member's failed renewal, charged from the desk (W47r)
+
+`memberships/retry-payment.ts` (Wayne, 18 Nov 2026; the W47 review's point 10, all five points). When a renewal
+fails, the member's credit bookings in the unpaid month are flagged payment needed and lapse at 72 hours (migration
+030, Q48). Replacing the card at the desk (W42) takes no payment, so they still lapse unless one of Stripe's own
+retries lands in time. Example: Mo's £40 fails at 14:00 on the 10th; he replaces his card at 16:00; his 18:00 booking
+on the 11th still lapses. This pays the subscription's open invoice there and then. No migration, no new table.
+
+- **The routes.** `GET /api/v1/staff/memberships/:id/retry-payment/quote` (what the window shows; read only; any
+  active staff member) and `POST /api/v1/staff/memberships/:id/retry-payment` (the press; body `confirmed:
+  { invoiceId, amount, paymentMethodId }` (W47r-a: the card too); press key required; Issue refunds, checked by the rule). Both ask the kind
+  **`payment_retries`** (`memberships/membership-switch.ts`): off, they answer MEMBERSHIP_PATH_OFF with the existing
+  "switched off" words before anything is read. No other kind turns it on, and it turns nothing else on. Reconcile
+  never asks.
+- **Refusals before anything is sent** (each ends "Nothing was charged."; the words are `PAYMENT_RETRY_REFUSALS`):
+  - the row: not `past_due`; its last day passed; no subscription; no saved card. Stripe is not read for these;
+  - Stripe read now (review point 2), the subscription and then its newest invoice: can't be read or found; another
+    customer's; `canceled` (Stripe leaves a cancelled subscription's invoices open, and paying one charges a member
+    whose membership has ended); a cancel date already reached; neither behind (`past_due`, `unpaid`) nor paid up;
+    the invoice not `open`, not in pounds, or with nothing left to pay;
+  - the card (review point 1): the subscription's default card in Stripe is not the customer's saved card as the
+    Worker has it, or ANY card step of the customer's is open: being sent, held past its window, or refused by
+    Stripe and left for a person (`openSteps`). The words say to finish the card replace first;
+  - taking turns (W40): a payment date change pending on the membership; a step open on its subscription; another
+    retry open on the membership (review point 3);
+  - what the window showed (Q18's rule): the invoice is no longer the subscription's newest, or the amount differs
+    by more than half a penny (TOTAL_CHANGED, with the amount now). W47r-a (the W47r review's S3): or the customer's
+    saved card under the lock is no longer the card the window named (`card_changed`). The quote carries the card's
+    `paymentMethodId` for this. A press with no invoice, amount or card in `confirmed` is refused
+    (`amount_not_confirmed`).
+- **The record first, then one send.** P1 is one transaction under the customer's lock and then the membership's:
+  the row and every database check again, then a `membership.payment_retried` row with `state: 'started'` naming the
+  membership, the subscription, the invoice, the amount and the card. Then ONE `invoices.pay` with `payment_method`
+  (the card on the record) and the key `<retryId>:pay`. Nothing else in the code sends for a record: not the press a
+  second time (W41's charge allows itself one repeat; this does not), not reconcile. A repeat of the key after
+  Stripe has dropped it (24 hours) would be a new attempt, so the one-send rule is the guard, not the key (review
+  point 5). Stripe itself never takes an invoice's amount twice: a paid invoice refuses a pay.
+- **The answer.**
+  - **Paid** (Stripe answers the invoice `paid`; or it refuses the pay and the invoice then reads `paid`, because one
+    of its own retries got there first; or the answer was lost and the invoice reads `paid`): the route runs the
+    webhook's own `invoice.paid` steps for that invoice (`app/api/stripe/webhook/dispatch.ts`, `recordInvoicePaid`:
+    the subscription read now, `membership_mark_paid` only when it is paid up and the invoice is its newest, read
+    again after the write), on the Worker's own connection (`membershipRpc`). The flagged bookings go back to
+    confirmed at once; the event, when it arrives, changes nothing. The answer says what changed. A write that finds
+    nothing to do (Stripe has started a newer invoice, say) still ends the record `paid`, and the words say why the
+    membership was not changed.
+  - **Already paid before the press** (Stripe shows the subscription paid up and its newest invoice paid, and the
+    membership here hasn't caught up): nothing is sent and no record is opened; the same write is run, and one
+    `paid` row says who pressed (`sent: false`). That row is a **lone `paid` row**: it has a `retryId` of its own
+    and no `started` row before it, so a count of `started` rows against endings finds one ending more for each
+    such press (the W47r review's L6).
+  - **Declined** (Stripe answered no, and nothing of the invoice is still going): the record ends `declined`. Nothing
+    is written to the membership; the words say Stripe's own retries carry on and the bookings keep their deadline.
+  - **No clear answer** (a 500, a timeout, no time left to read; or the invoice's PaymentIntent is `processing`,
+    `requires_action` or in any state that can still take money): HELD. PAYMENT_UNCONFIRMED, with the record's id. A
+    new press is refused while it is open. After a timeout only "the invoice reads paid" is believed; "still open"
+    is not "not taken" while the send may still land.
+  - **Paid in Stripe and the write here failed:** held as `paid_not_recorded`; reconcile makes the write.
+  - **Not sent** (no time left, or Stripe turned the key away before the endpoint ran): the record ends `not_sent`.
+- **Reconcile** (`orders/reconcile.ts` `reconcilePaymentRetry`, `settlePaymentRetry`), for a record still open (see
+  W47r-a below for when a run takes it up): it reads the invoice with its payments, then each payment's
+  PaymentIntent, and nothing else.
+  Paid: the same write, and the record ends `paid` (`finalised`). Not paid with every payment ended and nothing taken
+  (`requires_payment_method`, `canceled`, or no payment): the record ends `not_taken` (`undone`), and the payment can
+  be tried again. A payment still at the bank or waiting on the customer: left (`payment_processing`,
+  `payment_needs_action`) for as long as it takes. Stripe not readable: left (`unclear`); "no such invoice" is
+  `other_mode` when the key isn't of the record's own mode, else `invoice_missing`. It never sends, cancels or refunds.
+- **The stuck list** (`orders/stuck-list.ts`): `paymentRetries`, a field of its own and optional in the contract, with
+  what each is waiting on (`PAYMENT_RETRY_STUCK_WORDS`). **There is no manual close and no time limit** (review point
+  3; W47a S2's lesson): only what Stripe shows ends a retry. The one exception is W47r-a's `paid_after_end`, below.
+- **W47r-a (the W47r review's S1 to S4; before the kind goes on).**
+  - **S1: money taken after the subscription ended is held for a person, never closed as paid.** Stripe can end a
+    subscription in the second between the press reading it and the one send (its own dunning, or a manager), and a
+    cancelled subscription's open invoice can still be paid. Example: Mo's press reads `past_due`; Stripe cancels;
+    £40 is taken on the Visa ending 4444; the paid write rightly marks nothing. Until W47r-a the record ended `paid`
+    and nothing was listed. Now, whenever the invoice reads paid and the write finds the subscription `canceled` or
+    `incomplete_expired`, the row here cancelled (`ignored_cancelled`) or no membership with the subscription
+    (`found: false`) (`paidAfterEnd`), the record stays **open**, with a `held` row whose reason is
+    `paid_after_end`: at the press (PAYMENT_UNCONFIRMED, "£40.00 was taken on the card ending 4444 after this
+    membership's subscription had ended. Refund it in Stripe (tell a manager), then press Mark refunded on the Orders
+    page.") and in reconcile (left `paid_after_end`; the run writes the `held` row once if the press didn't). The
+    stuck list shows it at once with those words and one close, **Mark refunded** (close kind
+    `retry_paid_after_end`, Issue refunds, `markRetryRefunded`): it reads the invoice's payments and their refunds in
+    Stripe first (reads only), refuses unless every payment that went through is refunded in full by refunds that
+    have `succeeded` (one still `pending` is not money back yet), and then ends the record `refunded`, with an
+    `order.close` row against `payment_retry`. Nothing in the Worker sends a refund for it. A write that left the
+    membership alone for any other reason (a newer invoice, Stripe still showing `past_due`) is not money to give
+    back, and ends the record `paid` as before.
+  - **S2: a paid retry is recorded fast, and its booking doesn't lapse in the gap.** (a) A run takes an open record
+    as soon as it has a `held` row (the press writes that last, so it has finished); the 15-minute window is only for
+    a record with no `held` row. The stuck list shows the same records the run reads. Inside the window a run records
+    a payment it finds paid, and **never ends a record as not taken** (left `waiting`): a send that got no clear
+    answer may still land, and "nothing taken" a minute later proves nothing. (b) The lapse sweep leaves (`left`,
+    `payment_retry_held`) a credit booking whose membership has an open record younger than an hour
+    (`memberships/retry-record.ts`, `PAYMENT_RETRY_HOLDS_LAPSE_MINUTES`: the hour the banner's line for Stripe's
+    notices uses), checked in the lapse's own transaction under the booking's locks (`bookings/cancel.ts`). Older
+    than that the booking lapses as before: a retry waiting on the customer for ever must not keep unpaid bookings
+    for ever. Example: Mo pays at 13:55, the write's read gets a 500, his booking's deadline is 14:00; the 14:00 run's
+    sweep leaves the booking and its reconcile records the payment, so the booking is confirmed.
+  - **S4 and L1: words.** "Authentication needed" no longer offers paying online (there is nowhere to); Stripe's
+    plain "Your card was declined" is not said twice; a subscription still `past_due` straight after its invoice is
+    paid says Stripe's notice will bring the membership up to date; the held `payment_needs_action` line says that
+    when Stripe has ended the subscription a manager voids the invoice, and the run then ends it as not taken.
+- **W47r-b (W47r-a "Noticed" 1, 2 and 5; the lead's call, 19 Nov): an invoice paid after its subscription ended is
+  always listed for a refund.** This part is not behind the kind: the webhook's half is live as soon as the Worker is.
+  - **The gap.** Stripe leaves a cancelled subscription's open invoice payable. Its own retry can land, or the
+    customer can approve the payment with their bank, after the subscription has ended. `invoice.paid` then finds the
+    subscription ended and (W46) rightly marks nothing, and until W47r-b nothing was listed: the money was kept. The
+    retry's "already paid before the press" path had the same gap. Example: Mo's subscription is cancelled at
+    16:00:00; his bank approval goes through at 16:00:05 and £40 is taken.
+  - **The rule, in the one place both paths share** (`app/api/stripe/webhook/dispatch.ts`, `recordInvoicePaid`): the
+    subscription reads `canceled` or `incomplete_expired`; the invoice is then read (one more read, on this path
+    only) and must be `paid` with money taken (`amount_paid` above nothing); and it was paid **at or after** the
+    moment the subscription ended: `status_transitions.paid_at` >= the subscription's `ended_at` (`canceled_at` only
+    when Stripe gives no `ended_at`: for a scheduled cancel `canceled_at` is the day it was asked for, not the end).
+    Stripe's times are whole seconds, so the same second counts as after; a time Stripe didn't give counts as after
+    too (it can't be shown the payment came first).
+  - **Not listed: paid before the end.** That money was owed. Stripe's retry pays at 16:00:00 and a manager cancels at
+    16:00:01; or a member's last paid month, whose `invoice.paid` Stripe sends again after the membership has ended.
+  - **The line** (`memberships/paid-after-end.ts`, `listPaidAfterEnd`): one audit row
+    (`membership.invoice_paid_after_end`, entity `membership_invoice`, the invoice's id), written in one transaction
+    under the membership's lock and only while (a) the invoice has no row yet (the same notice again, another notice
+    for the invoice, or a press after the notice writes nothing more; a line marked refunded is never listed again)
+    and (b) no retry's record holds the invoice: one still open (W47r-a's own `paid_after_end` hold lists it) or one
+    ended `refunded`. So an invoice has one line, whoever finds it first. The webhook has only Supabase's client, which
+    can't hold a transaction, so its route (`route.ts`) gives the handler a listing on the Worker's own connection,
+    opened only when there is a line to write. A read or a write that fails throws: the notice is an error and Stripe
+    sends it again. What was found is on the notice's row (`detail.paid_after_end`: `listed`, `already_listed`,
+    `retry_holds`, `paid_before_end`, `nothing_taken`, `no_membership`, `invoice_missing`).
+  - **The stuck list** shows it with the retries (`paymentRetries`, reason `paid_after_end`, no card named:
+    "£40.00 was taken by Stripe after this membership's subscription had ended. Refund it in Stripe (tell a manager),
+    then press Mark refunded.") and the same close, **Mark refunded** (`retry_paid_after_end`; `orderId` is the
+    line's own id; `markInvoiceRefunded`): the same read of the refunds in Stripe, the same refusals and words, then
+    its `refunded` row and an `order.close` row against the invoice. Nothing sends a refund. A run reads nothing for
+    it.
+  - **No membership here has the subscription:** nothing is written (there is nobody to list it against); the
+    notice's row says `no_membership`.
+  - **The press's words** for "already paid before the press" with the subscription ended go by what the write found:
+    listed ("…then press Mark refunded on the Orders page"), paid before the end ("…it paid for time the member had.
+    Nothing needs refunding."), else W47r-a's.
+  - **Words ("Noticed" 2 and 5).** A retry held because the membership's row had ended here while Stripe's
+    subscription was still live (`ignored_cancelled`; its `held` row carries `cancelledHere`) says "…after this
+    membership had ended here. Refund it in Stripe (tell a manager) and check the subscription is cancelled in
+    Stripe, then press Mark refunded." `unpaid` straight after the pay is said as `past_due` is.
+  - **The fake:** a subscription's `ended_at` and `canceled_at` (set when it ends; `setSubscription` takes
+    `endedAt`, `canceledAt`), and an invoice's `status_transitions.paid_at` (`setInvoicePaidAt`).
+- **The fake** (`server/stripe/fake.ts`): renewal invoices as objects (`startRenewal` makes the draft, `renewalFails`
+  finalises it with its payment declined), `invoices.retrieve` (with `payments` when asked) and `invoices.pay` (the
+  card named, declines, already paid, `processing`, `requires_action`), and `stripeRetryPays` for one of Stripe's own
+  retries. What it says of an already-paid invoice's refusal is a guess, marked as one; the rule reads the invoice
+  after any refusal and doesn't go by the refusal's code.
+- Tests: `memberships/retry-payment.test.ts` (the brief's case end to end through the card replace route, each
+  refusal, each Stripe outcome, a Worker that dies at the send, reconcile each way, 31 days still held, the one-send
+  rule, the staff app's wrappers through the real routes; W47r-a: paid after the subscription ended at the press and
+  in reconcile, Mark refunded before and after the refund, the sweep and the hour, the card the window showed;
+  W47r-b: paid before and after the end through the notice and through the press, the notice sent again, a retry's own
+  hold never listed twice, Mark refunded on a listed invoice, an end-of-term cancel, the times Stripe gives, what
+  can't be read or written), `memberships/retry-payment-postgres.test.ts` (two presses
+  at once on real Postgres: one record, one send, one charge; W47r-b: two listings of one invoice at once write one
+  line), `server/staff-app-retry-payment.test.ts` (the staff
+  app's wrappers, words and screens), `server/stripe/fake.test.ts` (what the fake holds Stripe to do).

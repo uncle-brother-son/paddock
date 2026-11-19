@@ -58,6 +58,15 @@
 // and a failure (Stripe has renewed it since, say) refunds the charge instead; a refund reconcile sends goes under a
 // key of the run's own; and a refund on the payment is the change's own only when its metadata names the change.
 //
+// W47r ("Try the payment again now"): a past-due membership's payment tried again from the desk and still open
+// (reconcilePaymentRetry; memberships/retry-payment.ts, settlePaymentRetry). It only reads: the invoice and
+// its payment. Paid: the webhook's own `invoice.paid` write, and the record ends. Not paid with nothing still going:
+// the record ends, nothing taken. A payment still at the bank or waiting on the customer: left, for as long as it
+// takes. Never a send of any kind. W47r-a: a record is read as soon as the press has written its `held` row, without
+// waiting for the window (a payment that went through is recorded at the next run, before the lapse sweep can take
+// the member's bookings); inside the window it is never ended as not taken. Paid after the subscription had ended:
+// left for a person (`paid_after_end`), who refunds it in Stripe and presses Mark refunded (close-stuck.ts).
+//
 // W13c (W13a review L3, first part): a membership subscription a press left live (`order.subscription_left`,
 // `left`) for an order no longer pending is put back here, each run until it is: cancelled (checked), its first
 // invoice refunded under its key, then a `cancelled` row, which closes the stuck list's warning. W13d (W13c review
@@ -129,6 +138,7 @@ import {
   refundAndFail,
   type ChangeOutcome,
 } from '@/server/rules/memberships/payment-date'
+import { PAYMENT_RETRIES_DUE_SQL, PAYMENT_RETRY_RECONCILE_ENTITY, settlePaymentRetry } from '@/server/rules/memberships/retry-payment'
 
 /** Q14: a pending order or flow younger than this may still have staff at the reader. */
 export const RECONCILE_WINDOW_MINUTES = PROCESSING_MINUTES
@@ -266,8 +276,9 @@ export interface ReconcileItem {
    * W21: `claim` is a booking refund's claim. W28: or an order refund's. W30: or an event booking's.
    * W36: `step` is a membership's Stripe step left after its database change (memberships/left.ts).
    * W41: `date_change` is a membership's payment date change still pending (memberships/payment-date.ts).
+   * W47r: `payment_retry` is a membership payment tried again from the desk, still open (memberships/retry-payment.ts).
    */
-  kind: 'order' | 'flow' | 'refund' | 'claim' | 'step' | 'date_change'
+  kind: 'order' | 'flow' | 'refund' | 'claim' | 'step' | 'date_change' | 'payment_retry'
   id: string
   outcome: ItemOutcome
   reason?: string
@@ -440,7 +451,7 @@ const sameMode = (recorded: boolean | undefined, key: boolean | null): boolean =
 // --- The run
 
 /** What a non-refund item's `order.reconcile` rows are written against. */
-type ReconcileEntity = 'order' | 'reader_payment' | 'refund_claim' | 'membership_step' | typeof PAYMENT_DATE_RECONCILE_ENTITY
+type ReconcileEntity = 'order' | 'reader_payment' | 'refund_claim' | 'membership_step' | typeof PAYMENT_DATE_RECONCILE_ENTITY | typeof PAYMENT_RETRY_RECONCILE_ENTITY
 
 interface Run {
   db: Db
@@ -1021,6 +1032,24 @@ async function reconcilePaymentDateChange(run: Run, changeId: string): Promise<R
   const checked = checkSubscription(subscription, s)
   if (!checked.ok) return answer(await refundAndFail(run.db, run.stripe, started, paid.id, checked.message.replace(/\.+$/, ''), by, run.timing, undefined, run.options.requestId), paid.id)
   return answer(await moveAndFinish(run.db, run.stripe, started, paid.id, by, run.timing, 'reconcile', run.options.requestId), paid.id)
+}
+
+/**
+ * W47r: a past-due membership's payment tried again from the desk, still open past the window
+ * (memberships/retry-payment.ts). The run only reads Stripe for it: the invoice, and its payment.
+ * - paid: the webhook's own `invoice.paid` write is run (it changes nothing when the notice, or the press, already
+ *   made it), and the record ends (`finalised`);
+ * - not paid, and nothing of it still going: the record ends with nothing taken (`undone`);
+ * - a payment still at the bank or waiting on the customer, or Stripe not readable: left, and read again next run,
+ *   with no limit. Nothing here ever sends, and nothing closes it by hand.
+ */
+async function reconcilePaymentRetry(run: Run, retryId: string): Promise<ReconcileItem> {
+  const kind = 'payment_retry' as const
+  const settled = await settlePaymentRetry(run.db, run.stripe, retryId, { actor: run.options.actor, requestId: run.options.requestId }, run.timing, run.options.windowMinutes ?? RECONCILE_WINDOW_MINUTES)
+  if (settled.kind === 'closed') return { kind, id: retryId, outcome: 'settled_elsewhere', detail: 'ended' }
+  if (settled.kind === 'paid') return { kind, id: retryId, outcome: 'finalised', detail: settled.detail }
+  if (settled.kind === 'not_taken') return { kind, id: retryId, outcome: 'undone', detail: settled.detail }
+  return left(kind, retryId, settled.reason, settled.detail)
 }
 
 // --- A payment watched after its flow was undone by hand (W25, W21 review L5)
@@ -1719,7 +1748,17 @@ ORDER BY created_at, id`
 
 /** The audit entity a non-refund item's `order.reconcile` rows are written against (W21: a claim's own id). */
 const entityTypeOf = (kind: ReconcileItem['kind']): ReconcileEntity =>
-  kind === 'order' ? 'order' : kind === 'claim' ? 'refund_claim' : kind === 'step' ? 'membership_step' : kind === 'date_change' ? PAYMENT_DATE_RECONCILE_ENTITY : 'reader_payment'
+  kind === 'order'
+    ? 'order'
+    : kind === 'claim'
+      ? 'refund_claim'
+      : kind === 'step'
+        ? 'membership_step'
+        : kind === 'date_change'
+          ? PAYMENT_DATE_RECONCILE_ENTITY
+          : kind === 'payment_retry'
+            ? PAYMENT_RETRY_RECONCILE_ENTITY
+            : 'reader_payment'
 
 /** W25: what a left row carries for the close (a claim's `parts`, a card flow's `payments`), as one comparable string. */
 function recordKey(record: { parts?: unknown; payments?: unknown } | undefined): string {
@@ -1800,6 +1839,8 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
   const watchedPayments = await db.query<WatchedPayment>(WATCHED_PAYMENTS_DUE_SQL, [options.paymentWatchDays ?? PAYMENT_WATCH_DAYS])
   // W41: payment date changes still pending past the window.
   const paymentDates = await db.query<{ id: string }>(PAYMENT_DATE_CHANGES_DUE_SQL, [window])
+  // W47r: payments tried again from the desk, still open. W47r-a: held by the press, or (with no `held` row) past the window.
+  const paymentRetries = await db.query<{ id: string }>(PAYMENT_RETRIES_DUE_SQL, [window])
   const refundCancels = await refundCancelsDue(db, SUBSCRIPTIONS_LEFT_SQL)
   // W40 (W36 review L3): at most MAX_STEPS_PER_RUN steps a run, oldest first, so steps Stripe keeps giving no answer
   // on can never take a whole run's items from the watched refunds after them. The rest wait for the next run.
@@ -1884,6 +1925,8 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
     // W41 (F-plan 4.10 item 1): payment date changes held, each one of the run's items inside its budget. With the
     // rest that is waiting on a customer's money, before the put-backs and the steps.
     ...paymentDates.map((due) => ({ kind: 'date_change' as const, id: due.id, go: () => reconcilePaymentDateChange(run, due.id) })),
+    // W47r: payments tried again from the desk, held. Reads only. With the date changes: a member's money may have moved.
+    ...paymentRetries.map((due) => ({ kind: 'payment_retry' as const, id: due.id, go: () => reconcilePaymentRetry(run, due.id) })),
     // W13c (L3): a subscription left live, which Stripe would bill again next month. W14b (W13c review L4): last, so
     // a row that never settles can't keep a run from the pending orders and flows.
     ...putBacks.map((due) => ({

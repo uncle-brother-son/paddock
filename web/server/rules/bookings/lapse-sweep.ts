@@ -16,6 +16,9 @@
 //   was read to the cancel it would be, to whether money comes back, or to its add-on lines. Any other change since
 //   the read (a guest removed, money owed) is not left: the booking lapses from what is found under its lock. One that
 //   is no longer due under its lock (settled, cancelled by staff, or by the database's sweep) is left as `not_lapsed`.
+// - W47r-a (the W47r review's S2 b): a credit booking whose membership's overdue payment was tried again from the desk
+//   less than an hour ago, with that retry still open, is left as `payment_retry_held` (cancel.ts checks it under the
+//   booking's locks): the payment may have gone through and not be recorded yet. After the hour it lapses as before.
 // - A fault on one booking is logged in the result and never stops the others.
 // - W46 (W43 review L2): a time budget of its own. No booking is started once the run has taken LAPSE_SWEEP_BUDGET_MS;
 //   the ones not reached are still due and go with the next run (`more`), as reconcile's items over its budget do.

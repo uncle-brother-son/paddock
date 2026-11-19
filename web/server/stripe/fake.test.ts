@@ -476,3 +476,128 @@ describe('W12a: a refused key saves nothing against the idempotency key', () => 
     expect(stripe.refundedPence).toBe(0)
   })
 })
+
+// W47r ("Try the payment again now"): a renewal's invoice, read and paid. What the fake holds Stripe to do.
+describe("W47r: a renewal's invoice, read and paid", () => {
+  const SUB = 'sub_1'
+  let invoice: string
+  let paymentIntent: string
+
+  beforeEach(async () => {
+    stripe.addPrice('price_1', 4000, 'month')
+    stripe.addSubscription(SUB, 'cus_1', 'price_1')
+    await stripe.subscriptions.update(SUB, { default_payment_method: 'pm_old' })
+    stripe.startRenewal(SUB)
+    ;({ invoice, paymentIntent } = stripe.renewalFails(SUB))
+  })
+
+  it('a failed renewal: the invoice is open with all of it to pay, its one payment took nothing, and the subscription is past due; it is the subscription\'s newest invoice', async () => {
+    expect(stripe.subscriptionSettings(SUB)?.status).toBe('past_due')
+    expect(stripe.latestInvoice(SUB)).toBe(invoice)
+    expect(await stripe.invoices.retrieve(invoice)).toMatchObject({ id: invoice, object: 'invoice', status: 'open', currency: 'gbp', customer: 'cus_1', amount_due: 4000, amount_paid: 0, amount_remaining: 4000, billing_reason: 'subscription_cycle', parent: { subscription_details: { subscription: SUB } } })
+    // Its payments only when asked for, as Stripe: an includable property.
+    expect('payments' in (await stripe.invoices.retrieve(invoice))).toBe(false)
+    expect((await stripe.invoices.retrieve(invoice, { expand: ['payments'] })).payments?.data).toMatchObject([{ status: 'open', payment: { type: 'payment_intent', payment_intent: paymentIntent } }])
+    expect((await stripe.paymentIntents.retrieve(paymentIntent)).status).toBe('requires_payment_method')
+    expect(stripe.netPence).toBe(0)
+    await expect(stripe.invoices.retrieve(invoice, { expand: ['lines'] })).rejects.toThrow('not modelled')
+  })
+
+  it('pay names the card it charges, else the subscription\'s default; paid, the subscription is active again; the answer is saved against the key', async () => {
+    const key = { idempotencyKey: 'retry-1:pay' }
+    const paid = await stripe.invoices.pay(invoice, { payment_method: 'pm_new', off_session: true }, key)
+    expect(paid).toMatchObject({ status: 'paid', amount_paid: 4000, amount_remaining: 0 })
+    expect(stripe.invoiceState(invoice)).toEqual({ status: 'paid', amountPaid: 4000, paymentIntent, paymentStatus: 'succeeded', paymentMethod: 'pm_new' })
+    expect(stripe.subscriptionSettings(SUB)?.status).toBe('active')
+    expect(await stripe.invoices.pay(invoice, { payment_method: 'pm_new', off_session: true }, key)).toEqual(paid)
+    expect(stripe.netPence).toBe(4000)
+    // With no card named, the subscription's own.
+    const other = new FakeStripe()
+    other.addCustomer('cus_1')
+    other.addPrice('price_1', 4000, 'month')
+    other.addSubscription(SUB, 'cus_1', 'price_1')
+    await other.subscriptions.update(SUB, { default_payment_method: 'pm_old' })
+    other.startRenewal(SUB)
+    const failed = other.renewalFails(SUB)
+    await other.invoices.pay(failed.invoice)
+    expect(other.invoiceState(failed.invoice).paymentMethod).toBe('pm_old')
+  })
+
+  it('an invoice already paid refuses a pay (so its amount is never taken twice), with a new key or an old one Stripe has dropped', async () => {
+    await stripe.invoices.pay(invoice, { payment_method: 'pm_new' }, { idempotencyKey: 'retry-1:pay' })
+    await expect(stripe.invoices.pay(invoice, { payment_method: 'pm_new' }, { idempotencyKey: 'retry-2:pay' })).rejects.toMatchObject({ code: 'invoice_already_paid' })
+    stripe.forgetIdempotencyKeys()
+    const refused = await stripe.invoices.pay(invoice, { payment_method: 'pm_new' }, { idempotencyKey: 'retry-1:pay' }).catch((err: unknown) => err)
+    expect(readStripeFailure(refused)).toMatchObject({ outcome: 'definite', code: 'invoice_already_paid' })
+    expect(stripe.netPence).toBe(4000)
+  })
+
+  it('a declined card: a card error, the invoice still open, nothing taken, the subscription still past due; the decline is saved against the key', async () => {
+    stripe.declineCard('pm_old')
+    const key = { idempotencyKey: 'retry-1:pay' }
+    const declined = await stripe.invoices.pay(invoice, { payment_method: 'pm_old' }, key).catch((err: unknown) => err)
+    expect(readStripeFailure(declined)).toMatchObject({ outcome: 'definite', code: 'card_declined' })
+    expect(stripe.invoiceState(invoice)).toMatchObject({ status: 'open', paymentStatus: 'requires_payment_method', paymentMethod: 'pm_old' })
+    expect(stripe.subscriptionSettings(SUB)?.status).toBe('past_due')
+    stripe.declineCard('pm_old', false)
+    await expect(stripe.invoices.pay(invoice, { payment_method: 'pm_old' }, key)).rejects.toMatchObject({ code: 'card_declined' })
+    expect(stripe.netPence).toBe(0)
+  })
+
+  it('a payment left at the bank or waiting on the customer: the invoice stays open until it ends; a pay while it is processing is refused', async () => {
+    stripe.nextPayEnds(invoice, 'processing')
+    expect((await stripe.invoices.pay(invoice, { payment_method: 'pm_new' })).status).toBe('open')
+    expect(stripe.invoiceState(invoice)).toMatchObject({ status: 'open', paymentStatus: 'processing' })
+    await expect(stripe.invoices.pay(invoice, { payment_method: 'pm_new' })).rejects.toMatchObject({ code: 'payment_intent_unexpected_state' })
+    stripe.settleInvoicePayment(invoice, 'failed')
+    expect(stripe.invoiceState(invoice)).toMatchObject({ status: 'open', paymentStatus: 'requires_payment_method' })
+    stripe.nextPayEnds(invoice, 'requires_action')
+    const waiting = await stripe.invoices.pay(invoice, { payment_method: 'pm_new' }).catch((err: unknown) => err)
+    expect(readStripeFailure(waiting)).toMatchObject({ outcome: 'definite', code: 'invoice_payment_intent_requires_action' })
+    expect(stripe.invoiceState(invoice)).toMatchObject({ status: 'open', paymentStatus: 'requires_action' })
+    stripe.settleInvoicePayment(invoice, 'succeeded')
+    expect(stripe.invoiceState(invoice)).toMatchObject({ status: 'paid', amountPaid: 4000 })
+    expect(stripe.subscriptionSettings(SUB)?.status).toBe('active')
+    expect(() => stripe.settleInvoicePayment(invoice, 'failed')).toThrow('no payment still going')
+  })
+
+  it("Stripe's own retry pays an open invoice on the subscription's card, with no call of ours; a subscription that has ended stays ended, and its open invoice can still be paid", async () => {
+    const before = stripe.calls.length
+    stripe.stripeRetryPays(invoice)
+    expect(stripe.calls.length).toBe(before)
+    expect(stripe.invoiceState(invoice)).toMatchObject({ status: 'paid', paymentMethod: 'pm_old' })
+    expect(stripe.subscriptionSettings(SUB)?.status).toBe('active')
+    expect(() => stripe.stripeRetryPays(invoice)).toThrow('only an open one is retried')
+
+    const ended = new FakeStripe()
+    ended.addCustomer('cus_1')
+    ended.addPrice('price_1', 4000, 'month')
+    ended.addSubscription(SUB, 'cus_1', 'price_1')
+    ended.startRenewal(SUB)
+    const failed = ended.renewalFails(SUB)
+    ended.setSubscription(SUB, { status: 'canceled' })
+    // Stripe leaves the invoice open and payable: only the caller's own checks stop a cancelled member being charged.
+    await ended.invoices.pay(failed.invoice, { payment_method: 'pm_new' })
+    expect(ended.netPence).toBe(4000)
+    expect(ended.subscriptionSettings(SUB)?.status).toBe('canceled')
+  })
+
+  it("an invoice of the other mode's key, or one that never existed, is answered as missing; only a renewal's invoice is modelled; void and written-off invoices are not paid", async () => {
+    await expect(stripe.invoices.retrieve('in_nope')).rejects.toMatchObject({ code: 'resource_missing' })
+    stripe.keyLivemode = true
+    await expect(stripe.invoices.retrieve(invoice)).rejects.toMatchObject({ code: 'resource_missing' })
+    await expect(stripe.invoices.pay(invoice, { payment_method: 'pm_new' })).rejects.toMatchObject({ code: 'resource_missing' })
+    stripe.keyLivemode = false
+    stripe.setInvoiceStatus(invoice, 'void')
+    expect((await stripe.invoices.retrieve(invoice)).status).toBe('void')
+    await expect(stripe.invoices.pay(invoice, { payment_method: 'pm_new' })).rejects.toThrow('not modelled')
+    await expect(stripe.invoices.pay(invoice, { payment_method: 'pm_new', forgive: true })).rejects.toThrow('not modelled')
+    expect(stripe.netPence).toBe(0)
+  })
+
+  it('the client interface has the two calls the retry makes, as the SDK names them', () => {
+    const sdk = new Stripe('sk_test_shape_only', { httpClient: Stripe.createFetchHttpClient() })
+    expect(typeof sdk.invoices.retrieve).toBe('function')
+    expect(typeof sdk.invoices.pay).toBe('function')
+  })
+})

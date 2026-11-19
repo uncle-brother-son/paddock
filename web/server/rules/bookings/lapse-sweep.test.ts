@@ -893,9 +893,12 @@ describe('the lapse sweep: what it leaves (brief W43 item 2: Settle, Remove Gues
 })
 
 describe('the switch kind `lapse_sweep` (brief W43 item 1)', () => {
-  it('is its own kind, the last in the list, and turns nothing else on', () => {
+  it('is its own kind, the last in the list when it was added, and turns nothing else on', () => {
     expect(ORDER_KINDS.indexOf('lapse_sweep')).toBe(12)
-    expect(ORDER_KINDS).toHaveLength(13)
+    // W47r, a named difference: one kind after it now (`payment_retries`, "Try the payment again now"). The twelve before it are as they were.
+    expect(ORDER_KINDS).toHaveLength(14)
+    expect(ORDER_KINDS.slice(13)).toEqual(['payment_retries'])
+    expect(lapseSweepOn('payment_retries')).toBe(false)
     expect(lapseSweepOn('lapse_sweep')).toBe(true)
     expect(lapseSweepOn(ON)).toBe(true)
     for (const off of [null, undefined, '', BOOKING_KINDS_ON, 'lapse', 'lapse_sweeps', 'membership_changes,payment_date_changes,card_moves']) expect(lapseSweepOn(off)).toBe(false)

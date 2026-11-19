@@ -40,6 +40,10 @@
 //   again first (one read, nothing sent). W47b: sorted only when Stripe still can't find it. When Stripe finds it,
 //   whatever its status, it is handed back to the automatic check instead (the watch's `expired` state ended), which
 //   refunds it if it went through; refused when the read got no answer.
+// - `retry_paid_after_end` (W47r-a; the W47r review's S1): a membership payment tried again from the desk that was
+//   taken after the membership's subscription had ended, once a person has refunded it in Stripe: Mark refunded. The
+//   payment's refunds are read in Stripe first (reads only), and it is refused unless Stripe shows the payment
+//   refunded in full; then the retry's record ends `refunded` (memberships/retry-payment.ts, markRetryRefunded).
 //
 // W14c (W14b review S1): a compensation is closed only when its latest held row says every step left is Stripe's
 // definite refusal. Anything else reconcile finishes on its own (each step is safe to repeat, and reads a step a
@@ -77,7 +81,9 @@ import { CLOSED_ON_A_CANCELLED_BOOKING_WORDS } from '@/server/rules/bookings/fai
 import { flowClosable, HELD_CLAIM_CLOSE_REASONS } from './stuck-list'
 import { WATCHED_PAYMENTS_LISTED_SQL, type ListedWatchedPayment } from './payment-watch'
 import { sortLeftStep } from '@/server/rules/memberships/left'
+import { INVOICE_PAID_AFTER_END_ENTITY, markInvoiceRefunded, readInvoicePaidAfterEnd } from '@/server/rules/memberships/paid-after-end'
 import { closePaymentDateChange, PAYMENT_DATE_RECONCILE_ENTITY } from '@/server/rules/memberships/payment-date'
+import { markRetryRefunded, PAID_AFTER_END_CLOSE_KIND, PAYMENT_RETRY_RECONCILE_ENTITY } from '@/server/rules/memberships/retry-payment'
 
 export const CLOSE_ACTION = 'order.close'
 
@@ -85,7 +91,7 @@ export const CLOSE_ACTION = 'order.close'
 export interface CloseOptions {
   actor: { type: 'staff' | 'system'; id: string | null }
   requestId: string
-  /** W47a: for Mark sorted on a watched payment (`payment_watch`), the one close that reads Stripe. Made only then. */
+  /** W47a: for Mark sorted on a watched payment (`payment_watch`), and (W47r-a) Mark refunded on a retry paid after its subscription ended: the two closes that read Stripe. Made only then. */
   stripe?: () => StripeClient
   /** When the request started: that read's deadline counts from it. */
   startedAt?: number
@@ -886,6 +892,37 @@ export async function closeStuckItem(db: Db, input: CloseStuckInput, options: Cl
       details: { kind: 'held_payment_date', why, ...found },
     }))
     return answer('held_payment_date', input.orderId, closed.closed ? { closed: true, message: closed.message } : { closed: false, reason: closed.reason, message: closed.message })
+  }
+  // W47r-a (W47r review S1): a retry's payment taken after the subscription had ended, refunded in Stripe by a person.
+  // Its refunds are read in Stripe first; nothing is sent. `orderId` is the retry's id.
+  // W47r-b: or the id of an invoice's own line (memberships/paid-after-end.ts: found paid after the end by Stripe's
+  // notice, or by a press that charged nothing). The same read, the same refusals and the same words; its `order.close`
+  // row is written against the invoice.
+  if (input.kind === PAID_AFTER_END_CLOSE_KIND) {
+    if (!options.stripe) throw new Error("Mark refunded reads the payment's refunds in Stripe, and no Stripe client was given.")
+    const listing = await readInvoicePaidAfterEnd(db, input.orderId)
+    if (listing) {
+      const marked = await markInvoiceRefunded(db, options.stripe, listing, why, { actor: options.actor, requestId: options.requestId }, stripeTiming(options.startedAt ?? Date.now()), (line, found) => ({
+        actorType: options.actor.type,
+        actorId: options.actor.id,
+        action: CLOSE_ACTION,
+        entityType: INVOICE_PAID_AFTER_END_ENTITY,
+        entityId: line.invoiceId,
+        requestId: options.requestId,
+        details: { kind: PAID_AFTER_END_CLOSE_KIND, why, listingId: line.id, membershipId: line.membershipId, ...found },
+      }))
+      return answer(PAID_AFTER_END_CLOSE_KIND, input.orderId, marked.closed ? { closed: true, ...(marked.alreadyClosed ? { alreadyClosed: true } : {}), message: marked.message } : { closed: false, reason: marked.reason, message: marked.message })
+    }
+    const marked = await markRetryRefunded(db, options.stripe, input.orderId, why, { actor: options.actor, requestId: options.requestId }, stripeTiming(options.startedAt ?? Date.now()), (retry, found) => ({
+      actorType: options.actor.type,
+      actorId: options.actor.id,
+      action: CLOSE_ACTION,
+      entityType: PAYMENT_RETRY_RECONCILE_ENTITY,
+      entityId: retry.id,
+      requestId: options.requestId,
+      details: { kind: PAID_AFTER_END_CLOSE_KIND, why, membershipId: retry.membershipId, ...found },
+    }))
+    return answer(PAID_AFTER_END_CLOSE_KIND, input.orderId, marked.closed ? { closed: true, ...(marked.alreadyClosed ? { alreadyClosed: true } : {}), message: marked.message } : { closed: false, reason: marked.reason, message: marked.message })
   }
   return closeSubscriptionLeft(db, input.orderId, input.subscriptionId ?? '', why, options)
 }

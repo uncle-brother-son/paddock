@@ -21,6 +21,10 @@
 // W42a: an order's T2 asks it too (orders/finalise-order.ts): on, a T2 that writes a membership or saves a card
 // leaves a card step for each of the customer's live memberships; off, it is as it was. That is asked wherever T2
 // runs, a reconcile run included (an order it finalises is the same T2).
+//
+// W47r (brief item 1): "Try the payment again now" has a kind of its own, `payment_retries`. Its press and its quote
+// ask that kind and no other; off, they answer MEMBERSHIP_PATH_OFF (the same words) before anything is read, in the
+// database or in Stripe. Nothing else asks it. Reconcile never asks: a retry that is held is always settled.
 import 'server-only'
 import { ApiError } from '@/server/http/errors'
 import { kindsOn, type OrderKind } from '@/server/rules/orders/order-switch'
@@ -64,4 +68,19 @@ export const CARD_MOVE_KINDS = ['card_moves'] as const satisfies readonly OrderK
  */
 export function cardMovesOn(switchValue: string | undefined | null): boolean {
   return kindsOn(switchValue).has('card_moves')
+}
+
+/** W47r: "Try the payment again now"'s own kind. Off unless the ORDER_SWITCH secret names it. */
+export const PAYMENT_RETRY_KINDS = ['payment_retries'] as const satisfies readonly OrderKind[]
+
+/** W47r: whether `payment_retries` is on. No other kind says anything about it, either way. */
+export function paymentRetriesOn(switchValue: string | undefined | null): boolean {
+  return kindsOn(switchValue).has('payment_retries')
+}
+
+/** W47r: MEMBERSHIP_PATH_OFF (the same code and words, naming its own kind) when `payment_retries` is off, else null. Reconcile never asks. */
+export function paymentRetryPathOff(switchValue: string | undefined | null): ApiError | null {
+  return paymentRetriesOn(switchValue)
+    ? null
+    : new ApiError('MEMBERSHIP_PATH_OFF', MEMBERSHIP_PATH_OFF_MESSAGE, { details: { reason: 'membership_path_off', message: MEMBERSHIP_PATH_OFF_MESSAGE, kinds: [...PAYMENT_RETRY_KINDS] } })
 }
