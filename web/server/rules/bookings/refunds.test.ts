@@ -8,6 +8,10 @@ import type { Db } from '@/server/db'
 import { MANUAL_LIMITS, reconcile } from '@/server/rules/orders/reconcile'
 import { CLAIM_WAITING_WORDS, stuckList, WATCH_WORDS } from '@/server/rules/orders/stuck-list'
 import { readFlow } from '@/server/rules/orders/reader-flow'
+import { CLOSE_WORDS } from '@/server/rules/orders/close-stuck'
+import { PAYMENT_WATCH_DAYS, WATCHED_PAYMENT_WORDS } from '@/server/rules/orders/payment-watch'
+import { MONEY_OWED_WORDS } from '@/server/rules/refunds/failure-messages'
+import { moneyOwedList } from '@/server/rules/refunds/money-owed-list'
 import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/replay/harness'
 import { bea, ID, paidSeat, sam, seed, whileFailing } from '@/server/rules/testing/replay/scenarios'
 import { STRIPE_DEADLINE_MS } from '@/server/stripe/deadline'
@@ -29,7 +33,7 @@ import {
   REFUND_WORDS,
   refundGoneNotRecordedMessage,
 } from './failure-messages'
-import { loadBookingMoneyLeft } from './money-left'
+import { loadBookingMoneyLeft, loadRefundFigures } from './money-left'
 import { WATCH_DAYS, WATCH_READ_HOURS, WATCHES_DUE_SQL, type WatchDue } from '@/server/rules/refunds/refund-watch'
 import { checkWatchedRefund } from '@/server/rules/refunds/refund-watch-settle'
 import { claimRefundKey, readClaim, REFUND_CLAIMED, type ClaimDetails } from './refunds'
@@ -147,7 +151,7 @@ async function figures(bookingId: string): Promise<Answer> {
   return { status: response.status, body: (await response.json()) as Answer['body'] }
 }
 
-async function close(kind: 'held_flow' | 'held_claim' | 'refund_watch', id: string): Promise<Answer> {
+async function close(kind: 'held_flow' | 'held_claim' | 'refund_watch' | 'payment_watch', id: string): Promise<Answer> {
   const response = await closeRoute(
     new Request('https://worker.test/api/v1/staff/orders/stuck/close', {
       method: 'POST',
@@ -543,6 +547,11 @@ describe('Refund the rest and It already arrived (W21)', () => {
   it('Refund the rest: exactly what is owed (half a penny either way), to store credit; never a part refund', async () => {
     await onABooking(async ({ bookingId, stripe }) => {
       await withTwentyOwed(stripe, bookingId)
+      // W47 item 1: a live booking with money owed is on the "Money still to refund" list, once.
+      const listed = await moneyOwedList(db)
+      expect(listed.owed).toHaveLength(1)
+      expect(listed.owed[0]).toMatchObject({ on: 'booking', bookingId, orderId: null, amount: 20, bookingStatus: 'confirmed', lapsed: false, daysOwed: 0, where: MONEY_OWED_WORDS.booking })
+      expect(listed.owed[0]?.owedSince).toEqual(expect.any(String))
       const changed = await refund('owed', bookingId, { amount: 19.99, refundMethod: 'credit' })
       expect(changed.body.error?.details).toMatchObject({ reason: 'owed_changed', message: owedChangedMessage(20) })
       const more = await refund('owed', bookingId, { amount: 20.01, refundMethod: 'credit' })
@@ -555,6 +564,8 @@ describe('Refund the rest and It already arrived (W21)', () => {
       expect((await auditRows('booking.refund_owed'))[0]?.details).toEqual({ amount: 20, method: 'credit', cardRefunded: 0, storeCreditRefunded: 20, owed: 0 })
       const nothing = await refund('owed', bookingId, { amount: 20, refundMethod: 'credit' })
       expect(nothing.body.error?.details).toMatchObject({ reason: 'nothing_owed', message: REFUND_WORDS.nothingOwed })
+      // Given: off the list.
+      expect((await moneyOwedList(db)).owed).toEqual([])
     })
   })
 
@@ -576,11 +587,17 @@ describe('Refund the rest and It already arrived (W21)', () => {
       expect((await refund('arrived', bookingId, { amount: 20, reason: '' })).body.error?.message).toBe('A reason is required for this.')
       expect((await refund('arrived', bookingId, { amount: 21, reason: 'Seen in Stripe' })).body.error?.details?.reason).toBe('owed_changed')
       // Moves no money: not gated by the switch.
-      const done = await refund('arrived', bookingId, { amount: 20, reason: 'Seen in Stripe' }, { orderSwitch: '' })
+      const done = await refund('arrived', bookingId, { amount: 20, reason: 'Seen in Stripe', arrivedOn: 'card' }, { orderSwitch: '' })
       expect(done.body.data).toEqual({ cardRefundedAmount: 0, storeCreditRefundedAmount: 0, pricePaid: 20 })
       expect(stripe.calls.length).toBe(sent)
       expect(await booking(bookingId)).toMatchObject({ price_paid: '20.00', refund_owed_amount: '0.00' })
-      expect((await auditRows('booking.refund_owed_arrived'))[0]?.details).toEqual({ amount: 20, reason: 'Seen in Stripe' })
+      // W47 item 8 (the W35 audit's row 6), a named difference: staff said it reached the card, so the £20 is
+      // recorded on the booking's line as card money, and the row says so (before W47: `{ amount, reason }`, nothing
+      // on any line, and the booking's card money left read £20 too high).
+      const [line] = await db.query<{ id: string; order_id: string; card: string }>("SELECT id, order_id, card_refunded_amount::numeric(10,2)::text AS card FROM order_line_items WHERE booking_id = $1 AND item_type = 'booking'", [bookingId])
+      expect((await auditRows('booking.refund_owed_arrived'))[0]?.details).toEqual({ amount: 20, reason: 'Seen in Stripe', arrivedOn: 'card', card: 20, lines: [{ lineId: line?.id, orderId: line?.order_id, amount: 20 }] })
+      expect(line?.card).toBe('20.00')
+      expect(await loadRefundFigures(db, bookingId)).toMatchObject({ pricePaid: 20, refundOwed: 0, cardLeft: 20, parts: { card: 20 } })
     })
   })
 
@@ -589,10 +606,12 @@ describe('Refund the rest and It already arrived (W21)', () => {
       await withTwentyOwed(stripe, bookingId)
       const sent = stripe.calls.length
       // £8 of the £20 turns out to be with the customer already (a refund of another amount found in Stripe).
-      const part = await refund('arrived', bookingId, { amount: 8, reason: 'Seen in Stripe: £8 of it' })
+      const part = await refund('arrived', bookingId, { amount: 8, reason: 'Seen in Stripe: £8 of it', arrivedOn: 'card' })
       expect(part.body.data).toEqual({ cardRefundedAmount: 0, storeCreditRefundedAmount: 0, pricePaid: 32 })
       expect(await booking(bookingId)).toMatchObject({ price_paid: '32.00', refund_owed_amount: '12.00' })
-      expect((await auditRows('booking.refund_owed_arrived'))[0]?.details).toEqual({ amount: 8, reason: 'Seen in Stripe: £8 of it' })
+      // W47 item 8, a named difference: the £8 is on the line as card money, and the row says so.
+      expect((await auditRows('booking.refund_owed_arrived'))[0]?.details).toMatchObject({ amount: 8, reason: 'Seen in Stripe: £8 of it', arrivedOn: 'card', card: 8, lines: [{ amount: 8 }] })
+      expect((await db.query<{ card: string }>("SELECT card_refunded_amount::numeric(10,2)::text AS card FROM order_line_items WHERE booking_id = $1 AND item_type = 'booking'", [bookingId]))[0]?.card).toBe('8.00')
       // More than what is left owed: refused with the new figure, nothing changed.
       const over = await refund('arrived', bookingId, { amount: 12.01, reason: 'Seen in Stripe' })
       expect(over.body.error?.details).toMatchObject({ reason: 'owed_changed', message: owedChangedMessage(12) })
@@ -923,9 +942,21 @@ describe('W25 item 9: the manual close shows per-part findings, and watches a pa
             expect(await watchRows(pendingId)).toMatchObject([{ action: 'reader_payment.payment_watched', details: { state: 'watching', paymentIntentId: processing.id } }])
 
             // Still at the bank: watched, nothing refunded, nothing more written.
-            expect(await flowItems()).toMatchObject([{ kind: 'flow', outcome: 'left', reason: 'payment_watched' }])
+            // W47 (W25 review L1), a named difference: until W47 this read was an item of the run, `left` with the
+            // reason `payment_watched`, so every Resolve now said "1 left for a person" with nothing listed. Now it
+            // is no item: counted as watched, and a line of its own on the stuck list with nothing to do.
+            const still = await runReconcile()
+            expect(still.items.filter((item) => item.kind === 'flow' || item.kind === 'refund')).toEqual([])
+            expect([still.left, still.checked, still.deferred, still.paymentsWatched]).toEqual([0, 0, 0, 1])
             expect(context.stripe.refundsSent).toHaveLength(0)
             expect(await watchRows(pendingId)).toHaveLength(1)
+            const listed = (await stuckList(db)).watchedPayments
+            expect(listed).toMatchObject([{ pendingId, paymentIntentId: processing.id, flow: 'settle', recordId: bookingId, customerName: 'Mo Member', state: 'watching' }])
+            expect(listed[0]?.words).toBe(WATCHED_PAYMENT_WORDS.watching(processing.id))
+            expect(listed[0]?.words).toContain('Nothing to do.')
+            expect(listed[0]?.close).toBeUndefined()
+            // One still watched can't be marked sorted: the automatic check has it.
+            expect((await close('payment_watch', listed[0]?.watchId ?? '')).body.data).toMatchObject({ closed: false, reason: 'payment_still_watched' })
 
             // The bank completes it, two days on: recorded as a payment for a change already undone.
             vi.setSystemTime(Date.now() + 48 * 60 * 60_000)
@@ -937,12 +968,16 @@ describe('W25 item 9: the manual close shows per-part findings, and watches a pa
               { action: 'reader_payment.charge_without_record', details: { paymentIntentId: processing.id, amount: 2000, watched: true } },
             ])
             expect((await stuckList(db)).refunds).toMatchObject([{ kind: 'flow', id: pendingId, paymentIntentId: processing.id, amount: 20 }])
+            // W47: once it has landed it is the automatic refund's line, and no longer a watched payment's.
+            expect((await stuckList(db)).watchedPayments).toEqual([])
             // The next run refunds it in full, once; then nothing is left to watch or refund.
             expect(await flowItems()).toMatchObject([{ kind: 'refund', id: pendingId, outcome: 'refund_confirmed' }])
             expect(context.stripe.refundsSent).toMatchObject([{ payment_intent: processing.id, amount: 2000 }])
             // W32: a watched payment's refund is keyed by its own PaymentIntent.
             expect(refundCalls(context.stripe).map((call) => call.idempotencyKey)).toEqual([`${processing.id}:refund-watched`])
-            expect(await flowItems()).toEqual([])
+            const after = await runReconcile()
+            expect(after.items.filter((item) => item.kind === 'flow' || item.kind === 'refund')).toEqual([])
+            expect(after.paymentsWatched).toBe(0)
             expect(context.stripe.refundsSent).toHaveLength(1)
             expect((await stuckList(db)).refunds).toEqual([])
           } finally {
@@ -1042,6 +1077,444 @@ describe('W25 item 9: the manual close shows per-part findings, and watches a pa
       },
       oldSide
     )
+  })
+  // Brief W47 item 4 and brief W47a item 2 (W47 review S2). A watch runs out one way only: Stripe can't find the payment
+  // with the key in use. A payment Stripe can read stays watched until it ends, and Mark sorted reads it again first.
+  type ReplayContext = Parameters<Parameters<typeof replay>[1]['run']>[0]
+  const DAY_MS = 24 * 60 * 60_000
+  /** A £20 saved-card payment still `processing` when its Settle was undone by hand: watched from then on. */
+  async function watchedPayment(context: ReplayContext): Promise<{ bookingId: string; pendingId: string; paymentIntentId: string; reads: () => number; states: () => Promise<unknown[]> }> {
+    const { bookingId, pendingId } = await heldCardSettle(context)
+    const row = await readFlow(db, pendingId)
+    const processing = await context.stripe.paymentIntents.create({ amount: 2000, currency: 'gbp', customer: 'cus_member', metadata: { flow: 'settle', record_id: row?.record_id ?? '', pending_id: pendingId } })
+    context.stripe.markProcessing(processing.id)
+    pastTheWindow()
+    await runReconcile()
+    vi.setSystemTime(Date.now() + 25 * 60 * 60_000)
+    expect((await close('held_flow', pendingId)).body.data).toMatchObject({ closed: true })
+    return {
+      bookingId,
+      pendingId,
+      paymentIntentId: processing.id,
+      reads: () => context.stripe.calls.filter((call) => call.method === 'paymentIntents.retrieve' && (call.params as { id?: string }).id === processing.id).length,
+      states: async () => (await watchRows(pendingId)).map((watched) => watched.details['state'] ?? watched.action),
+    }
+  }
+  const inAReplay = (name: string, work: (context: ReplayContext) => Promise<void>) =>
+    replay(
+      environment,
+      {
+        name,
+        seed,
+        async run(context) {
+          replayStripe.current = context.stripe
+          try {
+            await work(context)
+          } finally {
+            replayStripe.current = null
+          }
+        },
+      },
+      oldSide
+    )
+  const closeRows = async () => (await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'order.close' AND details->>'kind' = 'payment_watch' ORDER BY at, id")).map((row) => row.details)
+
+  it("W47a item 2 (W47 review S2): a payment Stripe reads as `processing` stays watched for as long as it takes. 31 days on, and 90, it is still read every run and still a line with nothing to do; when the bank then completes it, it is recorded and refunded automatically, once", async () => {
+    await inAReplay('w47a watched payment, processing for months', async (context) => {
+      const { pendingId, paymentIntentId, reads, states } = await watchedPayment(context)
+      // The watch's days are 30 (written out here, so a changed constant can't move the test with it).
+      expect(PAYMENT_WATCH_DAYS).toBe(30)
+      for (const days of [31, 59]) {
+        vi.setSystemTime(Date.now() + days * DAY_MS)
+        const before = reads()
+        const run = await runReconcile()
+        // W47, as built, ended the watch here (`payment_watch_expired`), and nothing read the payment again.
+        expect(run.items.filter((item) => item.kind === 'flow')).toEqual([])
+        expect([run.left, run.paymentsWatched]).toEqual([0, 1])
+        expect(reads()).toBeGreaterThan(before)
+        expect(await states()).toEqual(['watching'])
+        const line = (await stuckList(db)).watchedPayments[0]
+        expect(line).toMatchObject({ pendingId, paymentIntentId, state: 'watching' })
+        expect(line?.words).toBe(WATCHED_PAYMENT_WORDS.watching(paymentIntentId))
+        expect(line?.close).toBeUndefined()
+        // Still watched, so it can't be marked sorted, and that refusal reads nothing in Stripe.
+        const readsBeforePress = reads()
+        expect((await close('payment_watch', line?.watchId ?? '')).body.data).toMatchObject({ closed: false, reason: 'payment_still_watched' })
+        expect(reads()).toBe(readsBeforePress)
+      }
+      // Day 91: the bank completes it. Recorded as a payment for a change already undone, then refunded in full, once.
+      vi.setSystemTime(Date.now() + DAY_MS)
+      context.stripe.completeReaderPayment(paymentIntentId)
+      expect(await flowItems()).toMatchObject([{ kind: 'flow', outcome: 'left', reason: 'charged_without_record' }])
+      expect(await states()).toEqual(['watching', 'landed', 'reader_payment.charge_without_record'])
+      expect(await flowItems()).toMatchObject([{ kind: 'refund', id: pendingId, outcome: 'refund_confirmed' }])
+      expect(context.stripe.refundsSent).toMatchObject([{ payment_intent: paymentIntentId, amount: 2000 }])
+      expect(refundCalls(context.stripe).map((call) => call.idempotencyKey)).toEqual([`${paymentIntentId}:refund-watched`])
+      const after = await runReconcile()
+      expect([after.items.filter((item) => item.kind === 'flow' || item.kind === 'refund').length, after.paymentsWatched]).toEqual([0, 0])
+      expect(context.stripe.refundsSent).toHaveLength(1)
+      expect((await stuckList(db)).watchedPayments).toEqual([])
+    })
+  })
+
+  it("W47a item 2: a read that gets no answer says nothing about the payment, so past the watch's days it ends nothing either: watched again next run", async () => {
+    await inAReplay('w47a watched payment, a read with no answer', async (context) => {
+      const { paymentIntentId, reads, states } = await watchedPayment(context)
+      vi.setSystemTime(Date.now() + 31 * DAY_MS)
+      context.stripe.failNext('paymentIntents.retrieve', { kind: 'lost_response' })
+      const before = reads()
+      const run = await runReconcile()
+      expect(reads()).toBe(before + 1)
+      expect([run.items.filter((item) => item.kind === 'flow').length, run.left, run.paymentsWatched]).toEqual([0, 0, 1])
+      expect(await states()).toEqual(['watching'])
+      expect((await stuckList(db)).watchedPayments).toMatchObject([{ paymentIntentId, state: 'watching' }])
+    })
+  })
+
+  it("W47 item 4 (W25 review L2, the W26 audit's row 29), W47a: a payment Stripe still can't find with the key in use after the watch's 30 days (the key is the other Stripe mode's): the watch ends, once, as a line for a person with Mark sorted, and no run reads it again", async () => {
+    await inAReplay('w47 watched payment, never readable', async (context) => {
+      const { pendingId, paymentIntentId, reads, states } = await watchedPayment(context)
+      // From here the system's key is the other mode's: Stripe answers "no such payment" for a payment that exists.
+      context.stripe.keyLivemode = true
+      // Day 29: still watched, read every run, nothing for a person.
+      vi.setSystemTime(Date.now() + 29 * DAY_MS)
+      const before = reads()
+      const waiting = await runReconcile()
+      expect([waiting.left, waiting.paymentsWatched, waiting.items.filter((item) => item.kind === 'flow').length]).toEqual([0, 1, 0])
+      expect(reads()).toBeGreaterThan(before)
+      expect((await stuckList(db)).watchedPayments).toMatchObject([{ state: 'watching' }])
+
+      // Day 31: the watch ends for a person.
+      vi.setSystemTime(Date.now() + 2 * DAY_MS)
+      const ended = await runReconcile()
+      expect(ended.items.filter((item) => item.kind === 'flow')).toMatchObject([{ kind: 'flow', id: pendingId, outcome: 'left', reason: 'payment_watch_expired' }])
+      expect([ended.left, ended.paymentsWatched]).toEqual([1, 0])
+      expect(await states()).toEqual(['watching', 'expired'])
+      expect(context.stripe.refundsSent).toHaveLength(0)
+      const line = (await stuckList(db)).watchedPayments[0]
+      expect(line).toMatchObject({ pendingId, paymentIntentId, state: 'expired', close: { kind: 'payment_watch', orderId: line?.watchId } })
+      // What Stripe said is kept on the end row; the line says it in its own words, true for the one way a watch ends.
+      expect((await watchRows(pendingId))[1]?.details).toMatchObject({ state: 'expired', days: 30, detail: expect.stringContaining("Stripe can't find the reader payment") })
+      expect(line?.words).toBe(WATCHED_PAYMENT_WORDS.expired(paymentIntentId))
+      expect(line?.words).toBe(
+        `A card payment (${paymentIntentId}) was still at the bank when its booking change was undone by hand, and after 30 days Stripe still can't say how it ended with the payment account the system is using: it can't find the payment there (the system's Stripe key may be for the other Stripe mode, live or test, than the payment). So the automatic check has stopped watching it. Look at the payment in Stripe: if it took money, refund it there by hand (or tell a manager). Then press Mark sorted (needs the Issue refunds permission).`
+      )
+
+      // No later run reads it, or lists it again as an item.
+      const readsAtEnd = reads()
+      const later = await runReconcile()
+      expect([later.items.filter((item) => item.kind === 'flow').length, later.left, later.paymentsWatched]).toEqual([0, 0, 0])
+      expect(reads()).toBe(readsAtEnd)
+
+      // Mark sorted, a minute later (under the test's clock the end rows would otherwise share a moment). W47a: it
+      // reads the payment once; Stripe still can't find it, which is what the watch ran out on, so it is sorted, and
+      // the close's row keeps what Stripe showed. A second press answers that it was closed already, with no read.
+      vi.setSystemTime(Date.now() + 60_000)
+      const sorted = await close('payment_watch', line?.watchId ?? '')
+      expect(sorted.body.data).toMatchObject({ closed: true, kind: 'payment_watch', message: 'Marked as sorted. It is no longer listed.' })
+      expect(reads()).toBe(readsAtEnd + 1)
+      expect(await closeRows()).toMatchObject([{ kind: 'payment_watch', watchId: line?.watchId, paymentIntentId, stripeStatus: 'not_found' }])
+      expect((await stuckList(db)).watchedPayments).toEqual([])
+      expect(await states()).toEqual(['watching', 'expired', 'sorted'])
+      expect((await close('payment_watch', line?.watchId ?? '')).body.data).toMatchObject({ closed: true, alreadyClosed: true })
+      expect(reads()).toBe(readsAtEnd + 1)
+      expect((await states()).filter((state) => state === 'sorted')).toHaveLength(1)
+      // A watch that was never there is refused.
+      expect((await close('payment_watch', crypto.randomUUID())).body.data).toMatchObject({ closed: false, reason: 'not_listed' })
+      // Nothing was ever sent to Stripe for it by the close: reads only.
+      expect(context.stripe.calls.filter((call) => call.method === 'paymentIntents.cancel' || call.method === 'refunds.create')).toEqual([])
+    })
+  })
+
+  // Brief W47b item 1 (W47a "Noticed" 1 and 2; the lead's call, 19 Nov). Mark sorted never sorts a payment Stripe can
+  // see: found, whatever its status, it is handed back to the automatic check; only "still not found" sorts it (the
+  // test above); a read with no answer stays refused. A named difference: until W47b a `succeeded` or `canceled`
+  // payment was sorted (W47a's last step here), and one still moving was refused (`payment_still_moving`).
+  const HANDED_BACK_WORDS =
+    'Stripe can see this payment now, so it has not been marked as sorted: the automatic check has taken it back. It reads the payment at its next run (every 5 minutes) and refunds it automatically if it took money; a payment already refunded in Stripe by hand is not refunded again. Nothing to do.'
+  /**
+   * A watch that ran out under the other mode's key (the wrong key for 31 days), then the key put right: Stripe can
+   * read the payment again, the line for a person is still there, and the payment is still `processing`.
+   */
+  async function ranOutThenTheKeyPutRight(context: ReplayContext) {
+    const watched = await watchedPayment(context)
+    context.stripe.keyLivemode = true
+    vi.setSystemTime(Date.now() + 31 * DAY_MS)
+    expect((await runReconcile()).items.filter((item) => item.kind === 'flow')).toMatchObject([{ reason: 'payment_watch_expired' }])
+    const line = (await stuckList(db)).watchedPayments[0]
+    expect(line).toMatchObject({ state: 'expired', close: { kind: 'payment_watch' } })
+    context.stripe.keyLivemode = false
+    vi.setSystemTime(Date.now() + 60_000)
+    return { ...watched, watchId: line?.watchId ?? '' }
+  }
+  /** The ids of a flow's `expired` rows, oldest first: what a hand-back names in `ends`. */
+  const expiredIds = async (pendingId: string) =>
+    (
+      await db.query<{ id: string }>(
+        "SELECT id::text AS id FROM audit_log WHERE entity_type = 'reader_payment' AND entity_id = $1 AND action = 'reader_payment.payment_watched' AND details->>'state' = 'expired' ORDER BY at, id",
+        [pendingId]
+      )
+    ).map((row) => row.id)
+  const sentToStripe = (stripe: FakeStripe) => stripe.calls.filter((call) => call.method === 'paymentIntents.cancel' || call.method === 'refunds.create')
+  const lateRefundRows = async (pendingId: string) =>
+    (
+      await db.query<{ details: { refund?: Record<string, unknown> } }>(
+        "SELECT details FROM audit_log WHERE entity_type = 'reader_payment' AND entity_id = $1 AND action = 'order.reconcile' AND details ? 'refund' ORDER BY at, CASE details->'refund'->>'state' WHEN 'started' THEN 1 ELSE 2 END",
+        [pendingId]
+      )
+    ).map((row) => row.details.refund)
+
+  it("W47b item 1 (W47a \"Noticed\" 1): Mark sorted never sorts a payment Stripe can see. The wrong key for 31 days, the key put right, the bank completed Mo's £20: Mark sorted hands it back to the automatic check; the next run records it, the run after refunds the £20 once under its own key, and a further run does nothing", async () => {
+    await inAReplay('w47b mark sorted hands back a payment that went through', async (context) => {
+      const { pendingId, bookingId, paymentIntentId, watchId, reads, states } = await ranOutThenTheKeyPutRight(context)
+      context.stripe.completeReaderPayment(paymentIntentId)
+      // The press: one read, and the whole answer. Until W47b this was sorted, and the £20 kept with nothing recorded.
+      const before = reads()
+      const pressed = await close('payment_watch', watchId)
+      expect(pressed.body.data).toEqual({ kind: 'payment_watch', orderId: watchId, closed: true, reason: 'handed_back', message: HANDED_BACK_WORDS })
+      expect(CLOSE_WORDS.payment_handed_back).toBe(HANDED_BACK_WORDS)
+      expect(reads()).toBe(before + 1)
+      // Not sorted: no `sorted` row and no close row. The hand-back's own row names the expiry it ends, who and why.
+      expect(await states()).toEqual(['watching', 'expired', 'handed_back'])
+      expect(await closeRows()).toEqual([])
+      const handedBack = (await db.query<{ actor_type: string; actor_id: string | null; details: Record<string, unknown> }>(
+        "SELECT actor_type, actor_id, details FROM audit_log WHERE entity_type = 'reader_payment' AND entity_id = $1 AND details->>'state' = 'handed_back'",
+        [pendingId]
+      ))[0]
+      expect(handedBack).toMatchObject({ actor_type: 'staff', actor_id: ID.staff })
+      expect(handedBack?.details).toEqual({ state: 'handed_back', paymentIntentId, ends: await expiredIds(pendingId), stripeStatus: 'succeeded', watchId, byHand: { why: 'Checked in Stripe by hand' } })
+      expect(await expiredIds(pendingId)).toHaveLength(1)
+      // On the list it is a watched payment again, with nothing to do and no Mark sorted.
+      const line = (await stuckList(db)).watchedPayments
+      expect(line).toMatchObject([{ watchId, pendingId, paymentIntentId, state: 'watching' }])
+      expect(line[0]?.words).toBe(WATCHED_PAYMENT_WORDS.watching(paymentIntentId))
+      expect(line[0]?.close).toBeUndefined()
+      // A second press is refused as for any payment still watched, with no read.
+      expect((await close('payment_watch', watchId)).body.data).toMatchObject({ closed: false, reason: 'payment_still_watched' })
+      expect(reads()).toBe(before + 1)
+      // The press sent nothing to Stripe: it only read.
+      expect(sentToStripe(context.stripe)).toEqual([])
+
+      // The next run, five minutes on, reads it: gone through, so recorded as a payment for a change already undone.
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      expect(await flowItems()).toMatchObject([{ kind: 'flow', id: pendingId, outcome: 'left', reason: 'charged_without_record' }])
+      expect(await states()).toEqual(['watching', 'expired', 'handed_back', 'landed', 'reader_payment.charge_without_record'])
+      expect((await stuckList(db)).watchedPayments).toEqual([])
+      expect((await stuckList(db)).refunds).toMatchObject([{ kind: 'flow', id: pendingId, paymentIntentId, amount: 20 }])
+      // The run after refunds the £20, once, under the payment's own key.
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      expect(await flowItems()).toMatchObject([{ kind: 'refund', id: pendingId, outcome: 'refund_confirmed' }])
+      expect(context.stripe.refundsSent).toMatchObject([{ payment_intent: paymentIntentId, amount: 2000, status: 'succeeded' }])
+      expect(refundCalls(context.stripe).map((call) => call.idempotencyKey)).toEqual([`${paymentIntentId}:refund-watched`])
+      // A further run does nothing: no item, no read of the payment's watch, no second refund.
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      const after = await runReconcile()
+      expect([after.items.filter((item) => item.kind === 'flow' || item.kind === 'refund').length, after.paymentsWatched]).toEqual([0, 0])
+      expect(context.stripe.refundsSent).toHaveLength(1)
+      expect(context.stripe.refundedPence).toBe(2000)
+      expect(refundCalls(context.stripe)).toHaveLength(1)
+      expect((await stuckList(db)).refunds).toEqual([])
+      expect((await stuckList(db)).watchedPayments).toEqual([])
+      // Nothing is owed on the booking, and Mark sorted has nothing left to act on.
+      expect(await booking(bookingId)).toMatchObject({ refund_owed_amount: '0.00' })
+      expect((await close('payment_watch', watchId)).body.data).toMatchObject({ closed: false, reason: 'not_listed' })
+      expect((await states()).filter((state) => state === 'sorted')).toEqual([])
+    })
+  })
+
+  it('W47b item 1: the same when Stripe shows the payment `canceled`: handed back, the next run ends the watch with nothing taken and nothing refunded, and a further run does nothing', async () => {
+    await inAReplay('w47b mark sorted hands back a cancelled payment', async (context) => {
+      const { pendingId, paymentIntentId, watchId, reads, states } = await ranOutThenTheKeyPutRight(context)
+      // The bank let go of it without taking anything, and a person cancelled it in Stripe by hand.
+      context.stripe.markRequiresCapture(paymentIntentId)
+      await context.stripe.paymentIntents.cancel(paymentIntentId)
+      const sentBefore = sentToStripe(context.stripe).length
+      expect((await close('payment_watch', watchId)).body.data).toEqual({ kind: 'payment_watch', orderId: watchId, closed: true, reason: 'handed_back', message: HANDED_BACK_WORDS })
+      expect(await states()).toEqual(['watching', 'expired', 'handed_back'])
+      expect((await watchRows(pendingId))[2]?.details).toMatchObject({ state: 'handed_back', stripeStatus: 'canceled' })
+      expect(await closeRows()).toEqual([])
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      expect(await flowItems()).toEqual([{ kind: 'flow', id: pendingId, outcome: 'settled_elsewhere', detail: `watched payment ${paymentIntentId} took nothing (canceled)` }])
+      expect(await states()).toEqual(['watching', 'expired', 'handed_back', 'nothing_taken'])
+      expect((await stuckList(db)).watchedPayments).toEqual([])
+      // A further run reads nothing and does nothing; nothing was ever refunded or sent.
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      const readsAtEnd = reads()
+      const after = await runReconcile()
+      expect([after.items.filter((item) => item.kind === 'flow' || item.kind === 'refund').length, after.left, after.paymentsWatched]).toEqual([0, 0, 0])
+      expect(reads()).toBe(readsAtEnd)
+      expect(context.stripe.refundsSent).toHaveLength(0)
+      expect(sentToStripe(context.stripe)).toHaveLength(sentBefore)
+      expect((await stuckList(db)).refunds).toEqual([])
+    })
+  })
+
+  it("W47b item 1 (W47a \"Noticed\" 2): a payment still `processing` is handed back too (W47a refused it), and stays watched until the bank ends it; a read with no answer is still refused with nothing written; when the bank completes it months later it is refunded automatically, once", async () => {
+    await inAReplay('w47b mark sorted hands back a payment still processing', async (context) => {
+      const { pendingId, paymentIntentId, watchId, reads, states } = await ranOutThenTheKeyPutRight(context)
+      // A read that gets no answer says nothing about the payment: refused, nothing written, still a line for a person.
+      context.stripe.failNext('paymentIntents.retrieve', { kind: 'lost_response' })
+      expect((await close('payment_watch', watchId)).body.data).toEqual({
+        kind: 'payment_watch',
+        orderId: watchId,
+        closed: false,
+        reason: 'payment_not_read',
+        message: "The booking system couldn't read this payment in Stripe just now, so it can't tell whether it could still take money. Nothing was changed. Press Mark sorted again in a minute.",
+      })
+      expect(await states()).toEqual(['watching', 'expired'])
+      expect((await stuckList(db)).watchedPayments).toMatchObject([{ state: 'expired', close: { kind: 'payment_watch' } }])
+      // Pressed again, the read answers: `processing`. Handed back, not refused and not sorted.
+      const before = reads()
+      expect((await close('payment_watch', watchId)).body.data).toEqual({ kind: 'payment_watch', orderId: watchId, closed: true, reason: 'handed_back', message: HANDED_BACK_WORDS })
+      expect(reads()).toBe(before + 1)
+      expect((await watchRows(pendingId))[2]?.details).toMatchObject({ state: 'handed_back', stripeStatus: 'processing' })
+      expect(await closeRows()).toEqual([])
+      // Every run reads it again, though it is long past the watch's 30 days: Stripe can read it, so nothing ends.
+      for (const days of [1, 60]) {
+        vi.setSystemTime(Date.now() + days * DAY_MS)
+        const readsBefore = reads()
+        const run = await runReconcile()
+        expect(reads()).toBeGreaterThan(readsBefore)
+        expect([run.items.filter((item) => item.kind === 'flow').length, run.left, run.paymentsWatched]).toEqual([0, 0, 1])
+        expect(await states()).toEqual(['watching', 'expired', 'handed_back'])
+        expect((await stuckList(db)).watchedPayments).toMatchObject([{ watchId, state: 'watching' }])
+      }
+      // The bank completes it: recorded, then refunded in full, once.
+      vi.setSystemTime(Date.now() + DAY_MS)
+      context.stripe.completeReaderPayment(paymentIntentId)
+      expect(await flowItems()).toMatchObject([{ kind: 'flow', outcome: 'left', reason: 'charged_without_record' }])
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      expect(await flowItems()).toMatchObject([{ kind: 'refund', id: pendingId, outcome: 'refund_confirmed' }])
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      expect(await flowItems()).toEqual([])
+      expect(context.stripe.refundsSent).toMatchObject([{ payment_intent: paymentIntentId, amount: 2000 }])
+      expect(refundCalls(context.stripe).map((call) => call.idempotencyKey)).toEqual([`${paymentIntentId}:refund-watched`])
+    })
+  })
+
+  it('W47b item 1: a payment waiting on the customer\'s bank approval (`requires_action`) is handed back, and the next run cancels it in Stripe so nothing can be taken later: the watch ends with nothing taken', async () => {
+    await inAReplay('w47b mark sorted hands back a payment waiting for approval', async (context) => {
+      const { pendingId, paymentIntentId, watchId, states } = await ranOutThenTheKeyPutRight(context)
+      context.stripe.markRequiresAction(paymentIntentId)
+      expect((await close('payment_watch', watchId)).body.data).toMatchObject({ closed: true, reason: 'handed_back' })
+      expect((await watchRows(pendingId))[2]?.details).toMatchObject({ state: 'handed_back', stripeStatus: 'requires_action' })
+      // The press itself cancelled nothing.
+      expect(sentToStripe(context.stripe)).toEqual([])
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      expect(await flowItems()).toMatchObject([{ kind: 'flow', id: pendingId, outcome: 'settled_elsewhere' }])
+      expect(await states()).toEqual(['watching', 'expired', 'handed_back', 'nothing_taken'])
+      expect((await context.stripe.paymentIntents.retrieve(paymentIntentId)).status).toBe('canceled')
+      expect(context.stripe.refundsSent).toHaveLength(0)
+    })
+  })
+
+  it("W47b item 1: refunded in Stripe by hand first (as the expired line says), then Mark sorted: handed back, and the automatic check doesn't refund it again. Stripe refuses the second refund, which is recorded as done (\"already refunded\"): one refund in Stripe, nothing owed, nothing listed, and no later run tries again", async () => {
+    await inAReplay('w47b mark sorted after a refund by hand', async (context) => {
+      const { pendingId, bookingId, paymentIntentId, watchId, states } = await ranOutThenTheKeyPutRight(context)
+      context.stripe.completeReaderPayment(paymentIntentId)
+      const byHand = await context.stripe.refunds.create({ payment_intent: paymentIntentId })
+      expect(byHand).toMatchObject({ amount: 2000, status: 'succeeded' })
+      expect((await close('payment_watch', watchId)).body.data).toEqual({ kind: 'payment_watch', orderId: watchId, closed: true, reason: 'handed_back', message: HANDED_BACK_WORDS })
+      // The next run records that it went through; until the refund is settled it is the automatic refund's line.
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      expect(await flowItems()).toMatchObject([{ kind: 'flow', id: pendingId, outcome: 'left', reason: 'charged_without_record' }])
+      // The run after sends the refund under the payment's own key; Stripe refuses it (nothing is left to refund), and
+      // that is recorded as done, in words, not as failed and not as money owed.
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      expect(await flowItems()).toEqual([{ kind: 'refund', id: pendingId, outcome: 'refund_confirmed', detail: 'already refunded' }])
+      expect(refundCalls(context.stripe).map((call) => call.idempotencyKey ?? null)).toEqual([null, `${paymentIntentId}:refund-watched`])
+      expect(context.stripe.refundsSent.map((refund) => [refund.id, refund.amount])).toEqual([[byHand.id, 2000]])
+      expect(context.stripe.refundedPence).toBe(2000)
+      expect(await lateRefundRows(pendingId)).toMatchObject([
+        { state: 'started', paymentIntentId, key: `${paymentIntentId}:refund-watched` },
+        { state: 'confirmed', paymentIntentId, key: `${paymentIntentId}:refund-watched`, alreadyRefunded: true },
+      ])
+      expect(await states()).toEqual(['watching', 'expired', 'handed_back', 'landed', 'reader_payment.charge_without_record'])
+      // Nothing is left anywhere: no line, no watched payment, nothing owed, no store credit given.
+      const list = await stuckList(db)
+      expect([list.refunds, list.watchedPayments, list.watched]).toEqual([[], [], []])
+      expect(await booking(bookingId)).toMatchObject({ refund_owed_amount: '0.00' })
+      expect(await storeCredit()).toEqual([])
+      // No retry: two more runs have no item and send nothing.
+      for (let n = 0; n < 2; n += 1) {
+        vi.setSystemTime(Date.now() + 5 * 60_000)
+        const run = await runReconcile()
+        expect([run.items.filter((item) => item.kind === 'flow' || item.kind === 'refund').length, run.left, run.paymentsWatched]).toEqual([0, 0, 0])
+      }
+      expect(refundCalls(context.stripe)).toHaveLength(2)
+      expect(context.stripe.refundsSent).toHaveLength(1)
+      expect(await lateRefundRows(pendingId)).toHaveLength(2)
+    })
+  })
+
+  it('W47b item 1: part of it refunded by hand first (£5 of the £20): handed back, and the automatic refund gives back only the £15 Stripe still holds, once', async () => {
+    await inAReplay('w47b mark sorted after a part refund by hand', async (context) => {
+      const { pendingId, paymentIntentId, watchId } = await ranOutThenTheKeyPutRight(context)
+      context.stripe.completeReaderPayment(paymentIntentId)
+      await context.stripe.refunds.create({ payment_intent: paymentIntentId, amount: 500 })
+      expect((await close('payment_watch', watchId)).body.data).toMatchObject({ closed: true, reason: 'handed_back' })
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      expect(await flowItems()).toMatchObject([{ kind: 'flow', outcome: 'left', reason: 'charged_without_record' }])
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      expect(await flowItems()).toMatchObject([{ kind: 'refund', id: pendingId, outcome: 'refund_confirmed' }])
+      expect(context.stripe.refundsSent.map((refund) => refund.amount)).toEqual([500, 1500])
+      expect(context.stripe.refundedPence).toBe(2000)
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      expect(await flowItems()).toEqual([])
+      expect(context.stripe.refundsSent).toHaveLength(2)
+    })
+  })
+
+  it("W47b item 1: a hand-back ends every `expired` row standing (two runs at once can each write one), and only those: if the key stops finding the payment again, the watch runs out again at the next read, as a line for a person, and Mark sorted then sorts it (still not found)", async () => {
+    await inAReplay('w47b handed back, then not found again', async (context) => {
+      const { pendingId, paymentIntentId, watchId, reads, states } = await ranOutThenTheKeyPutRight(context)
+      // A second `expired` row, as a second run reading the payment at the same moment would have written.
+      await db.query(
+        "INSERT INTO audit_log (at, actor_type, actor_id, action, entity_type, entity_id, request_id, details) SELECT at, actor_type, actor_id, action, entity_type, entity_id, request_id, details FROM audit_log WHERE entity_type = 'reader_payment' AND entity_id = $1 AND details->>'state' = 'expired'",
+        [pendingId]
+      )
+      const both = await expiredIds(pendingId)
+      expect(both).toHaveLength(2)
+      expect((await stuckList(db)).watchedPayments).toMatchObject([{ watchId, state: 'expired' }])
+      // Still `processing`: handed back, and one hand-back ends both rows.
+      expect((await close('payment_watch', watchId)).body.data).toMatchObject({ closed: true, reason: 'handed_back' })
+      const handedBack = (await watchRows(pendingId)).find((row) => row.details['state'] === 'handed_back')
+      expect([...(handedBack?.details['ends'] as string[])].sort()).toEqual([...both].sort())
+      expect((await stuckList(db)).watchedPayments).toMatchObject([{ watchId, state: 'watching' }])
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      const watchedAgain = await runReconcile()
+      expect([watchedAgain.items.filter((item) => item.kind === 'flow').length, watchedAgain.paymentsWatched]).toEqual([0, 1])
+
+      // The key is the other mode's again. The payment is past its days, so the next read ends the watch again.
+      context.stripe.keyLivemode = true
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      expect((await runReconcile()).items.filter((item) => item.kind === 'flow')).toMatchObject([{ id: pendingId, outcome: 'left', reason: 'payment_watch_expired' }])
+      expect(await expiredIds(pendingId)).toHaveLength(3)
+      const line = (await stuckList(db)).watchedPayments
+      expect(line).toMatchObject([{ watchId, state: 'expired', close: { kind: 'payment_watch', orderId: watchId } }])
+      expect(line[0]?.words).toBe(WATCHED_PAYMENT_WORDS.expired(paymentIntentId))
+      // No run reads it while it is expired again.
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      const readsExpired = reads()
+      const quiet = await runReconcile()
+      expect([quiet.items.filter((item) => item.kind === 'flow').length, quiet.paymentsWatched, reads()]).toEqual([0, 0, readsExpired])
+      // Mark sorted: Stripe still can't find it, so this time it is sorted, as before W47b.
+      vi.setSystemTime(Date.now() + 60_000)
+      expect((await close('payment_watch', watchId)).body.data).toMatchObject({ closed: true, message: 'Marked as sorted. It is no longer listed.' })
+      expect((await close('payment_watch', watchId)).body.data).toMatchObject({ closed: true, alreadyClosed: true })
+      expect(await closeRows()).toMatchObject([{ kind: 'payment_watch', watchId, paymentIntentId, stripeStatus: 'not_found' }])
+      expect((await states()).filter((state) => state !== 'expired')).toEqual(['watching', 'handed_back', 'sorted'])
+      expect((await stuckList(db)).watchedPayments).toEqual([])
+      // Sorted for good: no later run reads it.
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      const readsSorted = reads()
+      await runReconcile()
+      expect(reads()).toBe(readsSorted)
+      // Nothing was ever refunded. (The one cancel Stripe was sent is the automatic check's, while it was watched
+      // again: it tries to cancel a watched payment at every read, and Stripe refuses while the bank has it.)
+      expect(refundCalls(context.stripe)).toEqual([])
+      expect(sentToStripe(context.stripe).map((call) => call.method)).toEqual(['paymentIntents.cancel'])
+    })
   })
 })
 

@@ -11,6 +11,8 @@ import { POST as closeRoute } from '@/app/api/v1/staff/orders/stuck/close/route'
 import type { Db, Tx } from '@/server/db'
 import { reconcile } from '@/server/rules/orders/reconcile'
 import { EVENT_CLAIM_WAITING_WORDS, stuckList, WATCH_WORDS } from '@/server/rules/orders/stuck-list'
+import { MONEY_OWED_WORDS } from '@/server/rules/refunds/failure-messages'
+import { moneyOwedList } from '@/server/rules/refunds/money-owed-list'
 import { EVENT_BOOKING_REFUND_OPEN_MESSAGE, REFUND_PATH_OFF_MESSAGE } from '@/server/rules/refunds/failure-messages'
 import { claimRefundKey } from '@/server/rules/refunds/pipeline'
 import { BOOKING_KINDS_ON, withSwitch } from '@/server/rules/testing/replay/booking-side'
@@ -744,6 +746,111 @@ describe('a card refund Stripe refuses', () => {
     })
   })
 
+  // Brief W47a item 1 (W47 review S1): an event line counts as owed only while its booking's money is still owed.
+  // These hold the other side of that rule: the money is still the event line's after a Refund the rest that didn't
+  // stand, and after an It already arrived for part of it. Otherwise the next press would record the card money on
+  // the soap (W30a's fault again).
+  /** The soap (the order's oldest line) refunded to the card in full, then place 1's £40 owed after a refused cancel with the place resold. */
+  async function soapBackThenPlaceOwed({ orderId, eventBookingId, places: ids, stripe }: Context): Promise<void> {
+    const [first] = await ids()
+    await db.query("UPDATE order_line_items SET created_at = created_at - interval '1 minute' WHERE order_id = $1 AND item_type = 'product'", [orderId])
+    const soapLine = (await lineRows(orderId)).find((line) => line.item_type === 'product')?.id as string
+    expect((await orderPost(orderRefundRoute as Handler, 'refunds', orderId, { lineItemIds: [soapLine], refundMethod: 'card', restock: { [soapLine]: false }, confirmed: { amount: 24 } })).body.data).toMatchObject({ cardRefundedAmount: 24 })
+    await db.query('UPDATE events SET capacity = 2 WHERE id = $1', [ID.event])
+    stripe.failNext('refunds.create', { kind: 'error', error: refusal() })
+    const options: EventCancelOptions = { actor: { type: 'staff', id: ID.staff }, requestId: crypto.randomUUID(), canIssueRefunds: true, stripe: () => stripe }
+    expect(await cancelEventPlaces(resoldAfterR1(1), eventBookingId, { attendeeIds: [first as string], refund: 'card', confirmed: { refund: 40 } }, options)).toMatchObject({ places: 1, cardRefundedAmount: 0, refundOwed: 40 })
+    vi.setSystemTime(Date.now() + 5 * 60_000)
+  }
+  const cardOnLines = async (orderId: string) => (await lineRows(orderId)).map((line) => [line.item_type, line.card])
+
+  it("W47a (W47 review S1): Refund the rest to the card refused by Stripe, so the £40 is owed again, then pressed again: the £40 is still the event line's (recorded there, the soap still £24)", async () => {
+    await onAnEventOrder({ products: [soap], event: two, payment: card }, async (context) => {
+      const { orderId, stripe } = context
+      await soapBackThenPlaceOwed(context)
+      stripe.failNext('refunds.create', { kind: 'error', error: refusal() })
+      const refused = await orderPost(orderOwedRoute as Handler, 'refunds/owed', orderId, { amount: 40, refundMethod: 'card' })
+      expect([refused.body.ok, refused.body.error?.details?.reason]).toEqual([false, 'refund_failed'])
+      expect(await order(orderId)).toMatchObject({ owed: '40.00' })
+      // Owed again by the order's own row now (the Refund the rest claim, put back), not by the event booking's.
+      expect((await auditRows('order.refund_finished')).at(-1)?.details).toMatchObject({ outcome: 'owed', owed: 40 })
+      expect(await cardOnLines(orderId)).toEqual([['product', '24.00'], ['event', '0.00']])
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      const rest = await orderPost(orderOwedRoute as Handler, 'refunds/owed', orderId, { amount: 40, refundMethod: 'card' })
+      expect(rest.body.data).toMatchObject({ cardRefundedAmount: 40, storeCreditRefundedAmount: 0, refundOwed: 0 })
+      expect(await cardOnLines(orderId)).toEqual([['product', '24.00'], ['event', '40.00']])
+      expect(moneyBack(stripe)).toBe(6400)
+    })
+  })
+
+  it("W47a (W47 review S1): only money coming off what is owed clears the event line, never an ordinary refund of another line. A place's £40 owed first, then the soap refunded to the card, then Refund the rest: the £40 is recorded on the event line", async () => {
+    await onAnEventOrder({ products: [soap], event: two, payment: card }, async ({ orderId, eventBookingId, places: ids, stripe }) => {
+      const [first] = await ids()
+      await db.query("UPDATE order_line_items SET created_at = created_at - interval '1 minute' WHERE order_id = $1 AND item_type = 'product'", [orderId])
+      await db.query('UPDATE events SET capacity = 2 WHERE id = $1', [ID.event])
+      stripe.failNext('refunds.create', { kind: 'error', error: refusal() })
+      const options: EventCancelOptions = { actor: { type: 'staff', id: ID.staff }, requestId: crypto.randomUUID(), canIssueRefunds: true, stripe: () => stripe }
+      expect(await cancelEventPlaces(resoldAfterR1(1), eventBookingId, { attendeeIds: [first as string], refund: 'card', confirmed: { refund: 40 } }, options)).toMatchObject({ refundOwed: 40 })
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      // The soap comes back a few minutes later: an order refund's claim, newer than the place's owed row.
+      const soapLine = (await lineRows(orderId)).find((line) => line.item_type === 'product')?.id as string
+      expect((await orderPost(orderRefundRoute as Handler, 'refunds', orderId, { lineItemIds: [soapLine], refundMethod: 'card', restock: { [soapLine]: false }, confirmed: { amount: 24 } })).body.data).toMatchObject({ cardRefundedAmount: 24 })
+      expect(await order(orderId)).toMatchObject({ owed: '40.00' })
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      const rest = await orderPost(orderOwedRoute as Handler, 'refunds/owed', orderId, { amount: 40, refundMethod: 'card' })
+      expect(rest.body.data).toMatchObject({ cardRefundedAmount: 40, storeCreditRefundedAmount: 0, refundOwed: 0 })
+      expect(await cardOnLines(orderId)).toEqual([['product', '24.00'], ['event', '40.00']])
+    })
+  })
+
+  it("W47a (W47 review S1): Refund the rest to the card accepted by Stripe and failed later, so the £40 is owed again, then pressed again: still the event line's", async () => {
+    await onAnEventOrder({ products: [soap], event: two, payment: card }, async (context) => {
+      const { orderId, stripe } = context
+      await soapBackThenPlaceOwed(context)
+      stripe.refundsStayPending = true
+      expect((await orderPost(orderOwedRoute as Handler, 'refunds/owed', orderId, { amount: 40, refundMethod: 'card' })).body.data).toMatchObject({ cardRefundedAmount: 40, refundOwed: 0 })
+      stripe.refundsStayPending = false
+      expect(await cardOnLines(orderId)).toEqual([['product', '24.00'], ['event', '40.00']])
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      stripe.settleRefund(stripe.refundsSent.at(-1)?.id as string, 'failed')
+      expect((await runReconcile()).items.filter((item) => item.kind === 'refund')).toMatchObject([{ outcome: 'refund_failed', reason: 'refund_failed_later' }])
+      expect(await order(orderId)).toMatchObject({ owed: '40.00' })
+      expect((await auditRows('order.refund_failed_later')).map((row) => [row.entity_id, row.details['owed']])).toEqual([[orderId, 40]])
+      expect(await cardOnLines(orderId)).toEqual([['product', '24.00'], ['event', '0.00']])
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      const rest = await orderPost(orderOwedRoute as Handler, 'refunds/owed', orderId, { amount: 40, refundMethod: 'card' })
+      expect(rest.body.data).toMatchObject({ cardRefundedAmount: 40, storeCreditRefundedAmount: 0, refundOwed: 0 })
+      expect(await cardOnLines(orderId)).toEqual([['product', '24.00'], ['event', '40.00']])
+    })
+  })
+
+  it("W47a (W47 review S1): It already arrived for part of the £40 leaves the rest still the event line's: £10 another way, £5 on the card (on the event line), then Refund the rest puts the last £25 on the event line too", async () => {
+    await onAnEventOrder({ products: [soap], event: two, payment: card }, async (context) => {
+      const { orderId } = context
+      await soapBackThenPlaceOwed(context)
+      expect((await orderPost(orderArrivedRoute as Handler, 'refunds/owed-arrived', orderId, { amount: 10, reason: 'Found on their balance' })).body.data).toMatchObject({ refundOwed: 30 })
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      expect((await orderPost(orderArrivedRoute as Handler, 'refunds/owed-arrived', orderId, { amount: 5, reason: 'Seen in Stripe', arrivedOn: 'card' })).body.data).toMatchObject({ refundOwed: 25 })
+      expect(await cardOnLines(orderId)).toEqual([['product', '24.00'], ['event', '5.00']])
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      const rest = await orderPost(orderOwedRoute as Handler, 'refunds/owed', orderId, { amount: 25, refundMethod: 'card' })
+      expect(rest.body.data).toMatchObject({ cardRefundedAmount: 25, storeCreditRefundedAmount: 0, refundOwed: 0 })
+      expect(await cardOnLines(orderId)).toEqual([['product', '24.00'], ['event', '30.00']])
+    })
+  })
+
+  it("W47a (W47 review S1), the lines' order: once the place's £40 has been given, the event line no longer draws owed money no line accounts for. Test data standing in for £10 an old screen left owed: it goes on the first stamped line, as it did before W30", async () => {
+    await onAnEventOrder({ products: [soap], event: two, payment: card }, async (context) => {
+      const { orderId } = context
+      await soapBackThenPlaceOwed(context)
+      expect((await orderPost(orderOwedRoute as Handler, 'refunds/owed', orderId, { amount: 40, refundMethod: 'card' })).body.data).toMatchObject({ cardRefundedAmount: 40, refundOwed: 0 })
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      await db.query('UPDATE orders SET refund_owed_amount = 10 WHERE id = $1', [orderId])
+      expect((await orderPost(orderOwedRoute as Handler, 'refunds/owed', orderId, { amount: 10, refundMethod: 'card' })).body.data).toMatchObject({ cardRefundedAmount: 10, refundOwed: 0 })
+      expect(await cardOnLines(orderId)).toEqual([['product', '34.00'], ['event', '40.00']])
+    })
+  })
+
   it('money owed on an event booking is cleared by It already arrived on its order, and an open order refund holds the booking (`refund_open`) for every cancel and for the quote', async () => {
     await onAnEventOrder({ products: [soap], event: two, payment: card }, async ({ orderId, eventBookingId, places: ids, stripe }) => {
       const [first, second] = await ids()
@@ -1059,6 +1166,14 @@ describe('W32: the refund watch on an event booking', () => {
       expect(await order(orderId)).toMatchObject({ owed: '40.00' })
       expect((await auditRows('event_booking.refund_failed_later')).map((row) => [row.entity_id, row.details['owed']])).toEqual([[eventBookingId, 40]])
       expect((await stuckList(db)).watched).toMatchObject([{ refundId: sent?.id, on: 'event_booking', orderId, eventBookingId, eventId: ID.event, amount: 40, owed: 40, state: 'failed', words: WATCH_WORDS.eventFailed(40, sent?.id as string) }])
+      // W47 item 1: an event booking's money owed is its order's, so the "Money still to refund" list has one line:
+      // the order, with the event booking beside it, dated from the refund that failed later.
+      const owedList = await moneyOwedList(db)
+      expect(owedList.owed).toHaveLength(1)
+      expect(owedList.owed[0]).toMatchObject({ on: 'order', orderId, bookingId: null, amount: 40, daysOwed: 0, where: MONEY_OWED_WORDS.orderWithEvent })
+      expect(owedList.owed[0]?.eventBookings).toMatchObject([{ eventBookingId, eventId: ID.event }])
+      expect(owedList.owed[0]?.owedSince).toEqual(expect.any(String))
+      expect(JSON.stringify(owedList.owed).split(eventBookingId)).toHaveLength(2)
       // Once, and never a second send, however many runs follow.
       await Promise.all([runReconcile(), runReconcile()])
       minutes(DAY)

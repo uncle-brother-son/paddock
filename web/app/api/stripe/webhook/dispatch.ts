@@ -151,7 +151,11 @@ async function readSubscription(stripe: SubscriptionReader, subscriptionId: stri
 /** The reason a test-mode event is ignored when Stripe can't find its subscription with the key in use. */
 export const SUBSCRIPTION_MISSING = 'subscription_missing'
 
-const missing = (subscriptionId: string, message: string): DispatchResult => ({ outcome: 'ignored', detail: { reason: SUBSCRIPTION_MISSING, subscription: subscriptionId, message } })
+/**
+ * W47 (W46 review L2): the row says which mode the event was (`livemode`), so the Orders page's banner can list a live
+ * event left like this and leave test data alone (stuck-list.ts). Only a test-mode event gets here today (W46b).
+ */
+const missing = (subscriptionId: string, message: string, livemode: boolean): DispatchResult => ({ outcome: 'ignored', detail: { reason: SUBSCRIPTION_MISSING, subscription: subscriptionId, message, livemode } })
 
 async function call(supabase: RpcClient, write: MembershipWrite): Promise<unknown> {
   const { data, error } = await supabase.rpc(write.fn, write.params)
@@ -242,7 +246,7 @@ export async function dispatchStripeEvent(event: Stripe.Event, supabase: RpcClie
       // the three days Stripe keeps sending an event. The subscription is read now: only one Stripe shows as paid up
       // records the payment, and the next payment date is the period's end as Stripe has it, not the invoice's.
       const read = await readSubscription(stripe, subscriptionId, livemode)
-      if ('missing' in read) return missing(subscriptionId, read.missing)
+      if ('missing' in read) return missing(subscriptionId, read.missing, livemode)
       if (!PAID_UP.includes(read.subscription.status)) {
         return { outcome: 'ignored', detail: { reason: 'subscription_not_paid_up', status: read.subscription.status } }
       }
@@ -278,7 +282,7 @@ export async function dispatchStripeEvent(event: Stripe.Event, supabase: RpcClie
       // error and answered 500, so Stripe sends it again. (W46, W46b: except "no such subscription" for a test-mode
       // event, which is ignored.)
       const read = await readSubscription(stripe, subscriptionId, livemode)
-      if ('missing' in read) return missing(subscriptionId, read.missing)
+      if ('missing' in read) return missing(subscriptionId, read.missing, livemode)
       if (!BEHIND_ON_PAYMENT.includes(read.subscription.status)) {
         return { outcome: 'ignored', detail: { reason: 'subscription_not_past_due', status: read.subscription.status } }
       }
@@ -308,7 +312,7 @@ export async function dispatchStripeEvent(event: Stripe.Event, supabase: RpcClie
       // (W46, W46b: except "no such subscription" for a test-mode event, which is ignored.)
       const subscriptionId = (event.data.object as Stripe.Subscription).id
       const read = await readSubscription(stripe, subscriptionId, livemode)
-      if ('missing' in read) return missing(subscriptionId, read.missing)
+      if ('missing' in read) return missing(subscriptionId, read.missing, livemode)
       const write = cancelDateWrite(subscriptionId, read.subscription)
       if (!write) {
         return { outcome: 'ignored', detail: { reason: 'no_period_end' } }

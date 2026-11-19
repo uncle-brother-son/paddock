@@ -363,7 +363,8 @@ describe("step F's new inputs, the saved card's addition, and the left step on t
     const list = { checkout: [], flows: [], claims: [], refunds: [], warnings: [], watched: [], steps: [step], alert: null }
     expect(stuckListOutputSchema.parse(list).steps).toEqual([step])
     // W41 adds one kind after it (`held_payment_date`: a payment date change left for a person), as W36 added this one.
-    expect(stuckCloseKindSchema.options.slice(7)).toEqual(['left_step', 'held_payment_date'])
+    // W47, a named difference: one more after those (`payment_watch`: a watched payment whose watch ran out).
+    expect(stuckCloseKindSchema.options.slice(7)).toEqual(['left_step', 'held_payment_date', 'payment_watch'])
     // The seven kinds before it are as they were, in their order.
     expect(stuckCloseKindSchema.options.slice(0, 7)).toEqual(['held_order', 'changed_elsewhere', 'subscription_left', 'late_refund', 'held_flow', 'held_claim', 'refund_watch'])
     expect(reconcileItemSchema.parse({ kind: 'step', id: 's', outcome: 'left', reason: 'step_refused' })).toMatchObject({ kind: 'step' })

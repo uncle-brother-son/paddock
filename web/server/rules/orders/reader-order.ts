@@ -518,8 +518,14 @@ export type Settled =
   | { kind: 'succeeded'; paymentIntent: Stripe.PaymentIntent }
   /** Cancelled now or before, or Stripe has no such intent: nothing was or can be taken. */
   | { kind: 'cancelled'; status: string }
-  /** No clear answer: the money may still move, so nothing is undone. */
-  | { kind: 'unclear'; message: string }
+  /**
+   * No clear answer: the money may still move, so nothing is undone. W47a (W47 review S2): `cause` says which kind of
+   * no clear answer it is, for the one caller that must tell them apart (reconcile's watched payment):
+   * - `not_found`: Stripe can't find the payment with the key in use, which isn't known to be of the payment's mode;
+   * - `no_answer`: the read itself failed (no answer in time, a fault at Stripe), so nothing was learned this time;
+   * - `moving`: Stripe read the payment and it hasn't ended (`processing`, or a `requires_…` state it wouldn't cancel).
+   */
+  | { kind: 'unclear'; message: string; cause: 'not_found' | 'no_answer' | 'moving' }
 
 /** The legacy route's cancellable statuses: never a succeeded intent. */
 const CANCELLABLE: readonly string[] = ['requires_payment_method', 'requires_confirmation', 'requires_action', 'requires_capture', 'processing']
@@ -551,13 +557,13 @@ export async function settleIntent(
     if (isMissing(err)) {
       // An intent that doesn't exist never took any money (cancelReaderOrder went ahead on not_found).
       const sameMode = typeof snapshot.livemode === 'boolean' && snapshot.livemode === stripe.keyLivemode
-      return sameMode ? { kind: 'cancelled', status: 'not_found' } : { kind: 'unclear', message: otherModeMessage(paymentIntentId) }
+      return sameMode ? { kind: 'cancelled', status: 'not_found' } : { kind: 'unclear', message: otherModeMessage(paymentIntentId), cause: 'not_found' }
     }
-    return { kind: 'unclear', message: stripeMessage(err) ?? CANCEL_FAILED_MESSAGE }
+    return { kind: 'unclear', message: stripeMessage(err) ?? CANCEL_FAILED_MESSAGE, cause: 'no_answer' }
   }
   if (paymentIntent.status === 'succeeded') return { kind: 'succeeded', paymentIntent }
   if (paymentIntent.status === 'canceled') return { kind: 'cancelled', status: 'canceled' }
-  if (!CANCELLABLE.includes(paymentIntent.status)) return { kind: 'unclear', message: `PaymentIntent cannot be cancelled in status ${paymentIntent.status}` }
+  if (!CANCELLABLE.includes(paymentIntent.status)) return { kind: 'unclear', message: `PaymentIntent cannot be cancelled in status ${paymentIntent.status}`, cause: 'moving' }
   try {
     await stripe.paymentIntents.cancel(paymentIntentId, undefined, sendOptions(timing))
     return { kind: 'cancelled', status: paymentIntent.status }
@@ -570,7 +576,8 @@ export async function settleIntent(
     } catch {
       // Fall through to the cancel's own error.
     }
-    return { kind: 'unclear', message: stripeMessage(cancelError) ?? CANCEL_FAILED_MESSAGE }
+    // The payment was read (above) and hadn't ended, and Stripe wouldn't cancel it: `processing`, most often.
+    return { kind: 'unclear', message: stripeMessage(cancelError) ?? CANCEL_FAILED_MESSAGE, cause: 'moving' }
   }
 }
 

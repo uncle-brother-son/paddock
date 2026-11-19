@@ -410,6 +410,18 @@ export class FakeStripe implements StripeClient {
   }
 
   /**
+   * W47: a charge waiting for the customer to approve it with their bank (`requires_action`): nothing taken, it never
+   * ends on its own, and it can be cancelled.
+   */
+  markRequiresAction(id: string): void {
+    const intent = this.intents.get(id)
+    if (!intent) throw new Error(`The fake has no PaymentIntent ${id}.`)
+    intent.status = 'requires_action'
+    intent.amount_received = 0
+    intent.latest_charge = null
+  }
+
+  /**
    * W13b: a charge Stripe has authorised but not yet captured (`requires_capture`): nothing taken yet, and it
    * can still be cancelled, or succeed (completeReaderPayment, which works for any intent).
    */

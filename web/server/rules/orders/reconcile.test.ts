@@ -764,7 +764,8 @@ describe('reader flows the Worker started (step D) and the old code started', ()
       expect(result).toMatchObject({ checked: 0 })
       // W25: the run counts nothing as "the old code's" any more: these are all its fields.
       // W32a: and how many watched refunds are still on their way at Stripe.
-      expect(Object.keys(result).sort()).toEqual(['checked', 'deferred', 'finalised', 'items', 'left', 'refunds', 'refundsWaiting', 'stripeRefused', 'undone'])
+      // W47, a named difference: and how many payments are still watched (`paymentsWatched`), never counted as left.
+      expect(Object.keys(result).sort()).toEqual(['checked', 'deferred', 'finalised', 'items', 'left', 'paymentsWatched', 'refunds', 'refundsWaiting', 'stripeRefused', 'undone'])
       expect(stripe.calls.length).toBe(calls)
       expect(await flowStatus(flow.pendingId)).toBe('pending')
       expect((await stuckList(db)).flows).toEqual([expect.objectContaining({ pendingId: flow.pendingId, reason: 'not_started_here', words: STUCK_WORDS['not_started_here'] })])

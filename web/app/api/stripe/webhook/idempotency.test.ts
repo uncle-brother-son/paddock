@@ -142,7 +142,8 @@ describe('processWebhookEvent', () => {
     expect(supabase.rpc).not.toHaveBeenCalled()
     expect(supabase.update).toHaveBeenCalledTimes(1)
     expect(supabase.update).toHaveBeenCalledWith(
-      expect.objectContaining({ outcome: 'ignored', error: null, detail: { reason: 'subscription_missing', subscription: 'sub_1', message: "No such subscription: 'sub_1'" } })
+      // W47, a named difference: `livemode` (false here) is on the row too.
+      expect.objectContaining({ outcome: 'ignored', error: null, detail: { reason: 'subscription_missing', subscription: 'sub_1', message: "No such subscription: 'sub_1'", livemode: false } })
     )
   })
 

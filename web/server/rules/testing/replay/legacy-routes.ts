@@ -45,6 +45,8 @@ const STAFF_ROUTES: Record<string, () => Promise<unknown>> = {
   '/api/v1/staff/orders/reconcile': () => import('@/app/api/v1/staff/orders/reconcile/route'),
   '/api/v1/staff/orders/stuck': () => import('@/app/api/v1/staff/orders/stuck/route'),
   '/api/v1/staff/orders/stuck/close': () => import('@/app/api/v1/staff/orders/stuck/close/route'),
+  // W47: the staff app's thin getMoneyOwed (the Orders page's "Money still to refund" section and Overview's count).
+  '/api/v1/staff/money-owed': () => import('@/app/api/v1/staff/money-owed/route'),
   // W38: the staff app's thin getGiftCards.
   '/api/v1/staff/gift-cards': () => import('@/app/api/v1/staff/gift-cards/route'),
   // W39: the staff app's thin createCustomer and getCustomers.

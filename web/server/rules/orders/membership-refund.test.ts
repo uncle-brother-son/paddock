@@ -12,10 +12,11 @@ import { withSwitch } from '@/server/rules/testing/replay/booking-side'
 import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
 import { ORDER_REFUND_KINDS_ON } from '@/server/rules/testing/replay/order-refund-side'
 import { orderInput, postOrder, postReaderStep, withQuotedCardFigure, type OrderAnswer } from '@/server/rules/testing/replay/order-side'
-import { ID, laterPublicSession, paidSeat, seed } from '@/server/rules/testing/replay/scenarios'
+import { ID, laterPublicSession, paidSeat, sam, seed } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
-import { refundOrderLines, type OrderRefundOptions } from './refund-lines'
+import { loadOrderCardPortion } from '@/server/rules/bookings/money-left'
+import { orderOwedArrived, refundOrderLines, type OrderRefundOptions } from './refund-lines'
 
 // Brief W29 (E-plan 4.3, 4.9, 5.1; Wayne's Q40 and Q41; bugs E3, E4, E10): the membership line and the payment date
 // change charge, through the routes as the staff app calls them, on the replay's live schema (its functions and
@@ -76,7 +77,7 @@ async function post(path: 'refunds' | 'refunds/owed', orderId: string, body: unk
 }
 
 type LineFigures = { lineItemId: string; itemType: string; refundable: number; blocked: { reason: string; message: string } | null; membership?: { creditSessionsTaken: number; futureCreditBookings: number }; ownCardLeft?: number }
-type Figures = { lines: LineFigures[]; cardLeft: number; cashLeft: number; refundOwed: number; blocked: unknown }
+type Figures = { lines: LineFigures[]; cardLeft: number; cashLeft: number; refundOwed: number; owedCard?: { payment: string; left: number }; blocked: unknown }
 
 async function figures(orderId: string): Promise<Figures> {
   const response = await (figuresRoute as Handler)(
@@ -870,6 +871,10 @@ describe('W32: the refund watch on a membership refund', () => {
       // Each payment's card money is right again: the membership's own £40, the soap's £24.
       const shown = await figures(orderId)
       expect(shown).toMatchObject({ cardLeft: 24, refundOwed: 40 })
+      // W47 item 6 (the W35 audit's F3, its own example): `cardLeft` is the soap's payment, so the dialog showed "£24
+      // to the card, £16 to store credit" while the press sent all £40 to the membership's own payment. The figures
+      // now name the payment Refund the rest will use and what it can take: all £40, so nothing goes to store credit.
+      expect(shown.owedCard).toEqual({ payment: 'membership', left: 40 })
       expect(await membership()).toMatchObject({ status: 'cancelled' })
       expect(refundsSent(stripe)).toHaveLength(1)
       expect((await runReconcile(stripe)).items.filter((item) => item.kind === 'refund')).toEqual([])
@@ -881,6 +886,219 @@ describe('W32: the refund watch on a membership refund', () => {
       expect(stripe.refundedByIntent.get(order?.own as string)).toBe(4000)
       expect(stripe.refundedByIntent.get(order?.intent as string) ?? 0).toBe(0)
       expect(cancelsSent(stripe)).toEqual([made.subscription])
+    })
+  })
+  // Brief W47 items 6 and 8 on an order with two card payments (Q40): the £40 membership's first invoice, and the
+  // order's own payment for the £24 of soap.
+  const failedLater = async (stripe: FakeStripe, orderId: string): Promise<void> => {
+    const [membershipLine] = await linesOf(orderId, 'membership')
+    stripe.refundsStayPending = true
+    await refund(orderId, [membershipLine as string], 'card')
+    stripe.refundsStayPending = false
+    const sent = stripe.refundsSent.at(-1)
+    stripe.settleRefund(sent?.id as string, 'failed')
+    await runReconcile(stripe)
+    expect(await orderRow(orderId)).toMatchObject({ owed: '40.00' })
+  }
+  const by = { actor: { type: 'staff' as const, id: ID.staff }, requestId: 'w47-arrived' }
+
+  it("W47 item 6 (F3, the other half of its example): with the soap already refunded to its own payment, the order's card money left is £0, and Card was greyed out though the membership's payment can take all £40. The figures say so, and Refund the rest sends the £40 there", async () => {
+    await onASeed(async (stripe) => {
+      const orderId = await placed({ ...monthly, products: [soap], payment: card })
+      const order = await orderRow(orderId)
+      const [soapLine] = await linesOf(orderId, 'product')
+      expect((await refund(orderId, [soapLine as string], 'card')).body.data).toMatchObject({ cardRefundedAmount: 24 })
+      await failedLater(stripe, orderId)
+      expect(await figures(orderId)).toMatchObject({ cardLeft: 0, refundOwed: 40, owedCard: { payment: 'membership', left: 40 } })
+      const rest = await post('refunds/owed', orderId, { amount: 40, refundMethod: 'card' })
+      expect(rest.body.data).toMatchObject({ cardRefundedAmount: 40, storeCreditRefundedAmount: 0, refundOwed: 0 })
+      expect(stripe.refundedByIntent.get(order?.own as string)).toBe(4000)
+      expect(stripe.refundedByIntent.get(order?.intent as string)).toBe(2400)
+      // Nothing owed any more: the read carries no `owedCard`.
+      expect(await figures(orderId)).not.toHaveProperty('owedCard')
+    })
+  })
+
+  it("W47 item 6: money owed for lines of both payments is the order's own payment's, as the press has always sent it: the figures name the order's payment and what it can take, and the rest goes to store credit", async () => {
+    await onASeed(async (stripe) => {
+      const orderId = await placed({ ...monthly, products: [soap], payment: card })
+      const order = await orderRow(orderId)
+      await failedLater(stripe, orderId)
+      // The soap's refund fails later too: £64 owed, for lines of both payments.
+      const [soapLine] = await linesOf(orderId, 'product')
+      stripe.refundsStayPending = true
+      await refund(orderId, [soapLine as string], 'card')
+      stripe.refundsStayPending = false
+      stripe.settleRefund(stripe.refundsSent.at(-1)?.id as string, 'failed')
+      await runReconcile(stripe)
+      expect(await figures(orderId)).toMatchObject({ cardLeft: 24, refundOwed: 64, owedCard: { payment: 'order', left: 24 } })
+      const rest = await post('refunds/owed', orderId, { amount: 64, refundMethod: 'card' })
+      expect(rest.body.data).toMatchObject({ cardRefundedAmount: 24, storeCreditRefundedAmount: 40, refundOwed: 0 })
+      expect(stripe.refundedByIntent.get(order?.intent as string)).toBe(2400)
+      expect(stripe.refundedByIntent.get(order?.own as string) ?? 0).toBe(0)
+    })
+  })
+
+  it("W47 item 8 on two payments: It already arrived for the membership's £40 records it on the membership's line, so its own payment has nothing left to give and the soap's £24 is still all there; no money moves", async () => {
+    await onASeed(async (stripe) => {
+      const orderId = await placed({ ...monthly, products: [soap], payment: card })
+      const [membershipLine] = await linesOf(orderId, 'membership')
+      await failedLater(stripe, orderId)
+      const sent = refundsSent(stripe).length
+      expect(await orderOwedArrived(db, orderId, { amount: 40, reason: 'Seen on the first invoice in Stripe', arrivedOn: 'card' }, by)).toEqual({ cardRefundedAmount: 0, storeCreditRefundedAmount: 0, refundOwed: 0 })
+      expect((await auditRows('order.owed_arrived')).at(-1)?.details).toEqual({ amount: 40, reason: 'Seen on the first invoice in Stripe', owedBefore: 40, owedAfter: 0, arrivedOn: 'card', card: 40, lines: [{ lineId: membershipLine, amount: 40 }] })
+      expect((await lineRows(orderId)).map((line) => [line.item_type, line.card])).toEqual(expect.arrayContaining([['membership', '40.00'], ['product', '0.00']]))
+      expect(await loadOrderCardPortion(db, orderId)).toMatchObject({ cardPortionRemaining: 24, membershipPayment: { took: 40, refunded: 40, remaining: 0 } })
+      expect(await figures(orderId)).toMatchObject({ cardLeft: 24, refundOwed: 0 })
+      expect(refundsSent(stripe)).toHaveLength(sent)
+    })
+  })
+
+  it("W47 item 6 (the W35 audit's row 19; W30 review L5): an event booking's owed money on a two-payment order is the order's own payment's, even when the membership's line is short of its card money. Before W47 it went to the membership's payment", async () => {
+    await onASeed(async (stripe) => {
+      const orderId = await placed({ ...monthly, event: { eventId: ID.event, accountHolderAttending: true, guestsOver18Confirmed: true, attendees: [{ ...sam, isAccountHolder: true }] }, payment: card })
+      const order = await orderRow(orderId)
+      const portion = await loadOrderCardPortion(db, orderId)
+      // Two payments: the membership's own, and the order's for the event place.
+      expect(portion?.membershipPayment).toMatchObject({ took: 40, remaining: 40 })
+      const eventPaid = portion?.cardPortionRemaining as number
+      expect(eventPaid).toBeGreaterThan(0)
+      const [membershipLine] = await linesOf(orderId, 'membership')
+      const [eventLine] = await db.query<{ id: string; event_booking_id: string }>("SELECT id, event_booking_id FROM order_line_items WHERE order_id = $1 AND item_type = 'event'", [orderId])
+      // The membership was refunded, £30 of it to its card and £10 to store credit by design: stamped `card`, £10 short.
+      await db.query("UPDATE order_line_items SET refunded_at = now(), refund_method = 'card', card_refunded_amount = 30 WHERE id = $1", [membershipLine])
+      // A place was cancelled and its card refund never reached the customer: owed on the order, the claim ended `owed`.
+      await db.query('UPDATE orders SET refund_owed_amount = $1::numeric WHERE id = $2', [eventPaid, orderId])
+      await db.query(
+        "INSERT INTO audit_log (actor_type, actor_id, action, entity_type, entity_id, details) VALUES ('staff', $1, 'event_booking.refund_finished', 'event_booking', $2, $3::jsonb)",
+        [ID.staff, eventLine?.event_booking_id, JSON.stringify({ claimId: crypto.randomUUID(), outcome: 'owed', owed: eventPaid, orderId })]
+      )
+      expect(await figures(orderId)).toMatchObject({ refundOwed: eventPaid, owedCard: { payment: 'order', left: eventPaid } })
+      const rest = await post('refunds/owed', orderId, { amount: eventPaid, refundMethod: 'card' })
+      expect(rest.body.data).toMatchObject({ cardRefundedAmount: eventPaid, storeCreditRefundedAmount: 0, refundOwed: 0 })
+      // To the order's own payment, and recorded on the event's line; the membership's payment is untouched.
+      expect(stripe.refundedByIntent.get(order?.intent as string)).toBe(Math.round(eventPaid * 100))
+      expect(stripe.refundedByIntent.get(order?.own as string) ?? 0).toBe(0)
+      expect((await db.query<{ card: string }>('SELECT card_refunded_amount::float8 AS card FROM order_line_items WHERE id = $1', [eventLine?.id]))[0]?.card).toBe(eventPaid)
+      expect((await lineRows(orderId)).find((line) => line.item_type === 'membership')).toMatchObject({ card: '30.00' })
+    })
+  })
+
+  // Brief W47a item 1 (W47 review S1, its proof A). Sam buys Core monthly (£40, the subscription's first invoice) and
+  // an event place (the order's own payment) on one saved card. The place's card refund once ended owed and staff
+  // gave it with Refund the rest. Days later the membership is refunded to the card and that refund fails: £40 owed,
+  // and it is the membership's. W47 read "this order has an event line with money owed" from rows that never clear,
+  // so the £40 went to the order's own payment, which had nothing left: store credit.
+  const later = (minutes = 5) => vi.setSystemTime(Date.now() + minutes * 60_000)
+  async function eventMoneyGivenThenMembershipOwed(stripe: FakeStripe, how: 'refund_the_rest' | 'it_already_arrived' = 'refund_the_rest'): Promise<{ orderId: string; own: string; intent: string; eventPaid: number; membershipLine: string; eventLine: string }> {
+    const orderId = await placed({ ...monthly, event: { eventId: ID.event, accountHolderAttending: true, guestsOver18Confirmed: true, attendees: [{ ...sam, isAccountHolder: true }] }, payment: card })
+    const order = await orderRow(orderId)
+    const eventPaid = (await loadOrderCardPortion(db, orderId))?.cardPortionRemaining as number
+    expect(eventPaid).toBeGreaterThan(0)
+    const [membershipLine] = await linesOf(orderId, 'membership')
+    const [eventLine] = await db.query<{ id: string; event_booking_id: string }>("SELECT id, event_booking_id FROM order_line_items WHERE order_id = $1 AND item_type = 'event'", [orderId])
+    // A place's card refund never reached Sam: owed on the order, the claim ended `owed` (the row-19 test's set-up).
+    await db.query('UPDATE orders SET refund_owed_amount = $1::numeric WHERE id = $2', [eventPaid, orderId])
+    await db.query(
+      "INSERT INTO audit_log (actor_type, actor_id, action, entity_type, entity_id, details) VALUES ('staff', $1, 'event_booking.refund_finished', 'event_booking', $2, $3::jsonb)",
+      [ID.staff, eventLine?.event_booking_id, JSON.stringify({ claimId: crypto.randomUUID(), outcome: 'owed', owed: eventPaid, orderId })]
+    )
+    later()
+    // While it is owed, it is the order's own payment's (W47's row 19, unchanged).
+    expect(await figures(orderId)).toMatchObject({ refundOwed: eventPaid, owedCard: { payment: 'order', left: eventPaid } })
+    if (how === 'it_already_arrived') {
+      // Staff find it reached Sam another way after all: It already arrived, all of it. Nothing on any line.
+      expect(await orderOwedArrived(db, orderId, { amount: eventPaid, reason: 'Found on their balance' }, by)).toEqual({ cardRefundedAmount: 0, storeCreditRefundedAmount: 0, refundOwed: 0 })
+    } else {
+      // The next day staff give it with Refund the rest, to the card: back to the order's own payment, on the event's line.
+      const given = await post('refunds/owed', orderId, { amount: eventPaid, refundMethod: 'card' })
+      expect(given.body.data).toMatchObject({ cardRefundedAmount: eventPaid, storeCreditRefundedAmount: 0, refundOwed: 0 })
+      expect(stripe.refundedByIntent.get(order?.intent as string)).toBe(Math.round(eventPaid * 100))
+      expect((await db.query<{ card: number }>('SELECT card_refunded_amount::float8 AS card FROM order_line_items WHERE id = $1', [eventLine?.id]))[0]?.card).toBe(eventPaid)
+    }
+    later(10 * 24 * 60)
+    // Ten days on the membership is refunded to the card, and that refund fails later: £40 owed, the membership's own.
+    await failedLater(stripe, orderId)
+    later()
+    return { orderId, own: order?.own as string, intent: order?.intent as string, eventPaid, membershipLine: membershipLine as string, eventLine: eventLine?.id as string }
+  }
+
+  it("W47a (W47 review S1, proof A): an event place's owed money that was given days ago no longer turns a later owed membership refund away from the membership's own payment: the figures name it, and Refund the rest sends Sam's £40 there, not to store credit", async () => {
+    await onASeed(async (stripe) => {
+      const { orderId, own, intent, eventPaid, membershipLine } = await eventMoneyGivenThenMembershipOwed(stripe)
+      // The order's own payment has nothing left (the place's money went back to it); the membership's has all £40.
+      expect(await figures(orderId)).toMatchObject({ cardLeft: 0, refundOwed: 40, owedCard: { payment: 'membership', left: 40 } })
+      const balance = await storeCredit()
+      const rest = await post('refunds/owed', orderId, { amount: 40, refundMethod: 'card' })
+      expect(rest.body.data).toMatchObject({ cardRefundedAmount: 40, storeCreditRefundedAmount: 0, refundOwed: 0 })
+      expect(stripe.refundedByIntent.get(own)).toBe(4000)
+      expect(stripe.refundedByIntent.get(intent)).toBe(Math.round(eventPaid * 100))
+      expect(await storeCredit()).toBe(balance)
+      // Recorded on the membership's line, as the claim's card part says.
+      expect((await auditRows('order.refund_claimed')).at(-1)?.details).toMatchObject({ kind: 'refund_owed', plan: { card: [{ paymentIntentId: own, amount: 40, lines: [{ lineId: membershipLine, amount: 40 }] }], storeCredit: 0 } })
+      expect((await lineRows(orderId)).find((line) => line.item_type === 'membership')).toMatchObject({ card: '40.00' })
+      expect(await loadOrderCardPortion(db, orderId)).toMatchObject({ membershipPayment: { took: 40, refunded: 40, remaining: 0 } })
+      // That Refund the rest fails later too: the £40 is owed again, by the order's own row this time. Its claim put
+      // the money on the membership's line, not the event's, so it is still the membership's own payment's.
+      later()
+      stripe.settleRefund(stripe.refundsSent.at(-1)?.id as string, 'failed')
+      later(24 * 60)
+      await runReconcile(stripe)
+      expect(await orderRow(orderId)).toMatchObject({ owed: '40.00' })
+      later()
+      expect(await figures(orderId)).toMatchObject({ refundOwed: 40, owedCard: { payment: 'membership', left: 40 } })
+      const again = await post('refunds/owed', orderId, { amount: 40, refundMethod: 'card' })
+      expect(again.body.data).toMatchObject({ cardRefundedAmount: 40, storeCreditRefundedAmount: 0, refundOwed: 0 })
+      expect(stripe.refundedByIntent.get(own)).toBe(4000)
+      expect(await storeCredit()).toBe(balance)
+    })
+  })
+
+  it("W47a (W47 review S1): the same when the place's owed money was settled with It already arrived (all of it) and not Refund the rest: the later owed membership refund is the membership's own payment's, and the order's own payment keeps the place's money", async () => {
+    await onASeed(async (stripe) => {
+      const { orderId, own, intent, eventPaid } = await eventMoneyGivenThenMembershipOwed(stripe, 'it_already_arrived')
+      expect(await figures(orderId)).toMatchObject({ cardLeft: eventPaid, refundOwed: 40, owedCard: { payment: 'membership', left: 40 } })
+      const rest = await post('refunds/owed', orderId, { amount: 40, refundMethod: 'card' })
+      expect(rest.body.data).toMatchObject({ cardRefundedAmount: 40, storeCreditRefundedAmount: 0, refundOwed: 0 })
+      expect(stripe.refundedByIntent.get(own)).toBe(4000)
+      expect(stripe.refundedByIntent.get(intent) ?? 0).toBe(0)
+    })
+  })
+
+  it("W47a (W47 review S1), It already arrived \"on the card\" in the same case: the £40 is recorded on the membership's line against its own payment (it was recorded nowhere, the order's own payment having nothing left); no money moves", async () => {
+    await onASeed(async (stripe) => {
+      const { orderId, eventPaid, membershipLine, eventLine } = await eventMoneyGivenThenMembershipOwed(stripe)
+      const sent = refundsSent(stripe).length
+      expect(await orderOwedArrived(db, orderId, { amount: 40, reason: 'Seen on the first invoice in Stripe', arrivedOn: 'card' }, by)).toEqual({ cardRefundedAmount: 0, storeCreditRefundedAmount: 0, refundOwed: 0 })
+      expect((await auditRows('order.owed_arrived')).at(-1)?.details).toEqual({ amount: 40, reason: 'Seen on the first invoice in Stripe', owedBefore: 40, owedAfter: 0, arrivedOn: 'card', card: 40, lines: [{ lineId: membershipLine, amount: 40 }] })
+      expect((await lineRows(orderId)).find((line) => line.item_type === 'membership')).toMatchObject({ card: '40.00' })
+      // The event's line keeps what Refund the rest recorded on it, and no more.
+      expect((await db.query<{ card: number }>('SELECT card_refunded_amount::float8 AS card FROM order_line_items WHERE id = $1', [eventLine]))[0]?.card).toBe(eventPaid)
+      expect(await loadOrderCardPortion(db, orderId)).toMatchObject({ cardPortionRemaining: 0, membershipPayment: { took: 40, refunded: 40, remaining: 0 } })
+      expect(await figures(orderId)).toMatchObject({ refundOwed: 0 })
+      expect(refundsSent(stripe)).toHaveLength(sent)
+    })
+  })
+
+  it("W47a (W47 review S1): the place's money owed again counts again. The Refund the rest that gave it fails later (it is the order's row now, of a claim that names the event's line): with the membership's £40 owed too, the owed money is the order's own payment's (row 19; the review's L6), and the place's part goes back on the event's line", async () => {
+    await onASeed(async (stripe) => {
+      const { orderId, own, intent, eventPaid, eventLine } = await eventMoneyGivenThenMembershipOwed(stripe)
+      // The refund that gave the place's money back fails after all, 10 days on: off the event's line, owed on the order.
+      const gave = stripe.refundsSent.find((sent) => sent.payment_intent === intent)
+      stripe.settleRefund(gave?.id as string, 'failed')
+      later(24 * 60)
+      await runReconcile(stripe)
+      const owed = Math.round((40 + eventPaid) * 100) / 100
+      expect(Number((await orderRow(orderId))?.owed)).toBe(owed)
+      expect((await auditRows('order.refund_failed_later')).at(-1)?.details).toMatchObject({ refundId: gave?.id, owed: eventPaid })
+      expect((await db.query<{ card: number }>('SELECT card_refunded_amount::float8 AS card FROM order_line_items WHERE id = $1', [eventLine]))[0]?.card).toBe(0)
+      later()
+      expect(await figures(orderId)).toMatchObject({ refundOwed: owed, owedCard: { payment: 'order', left: eventPaid } })
+      const rest = await post('refunds/owed', orderId, { amount: owed, refundMethod: 'card' })
+      expect(rest.body.data).toMatchObject({ cardRefundedAmount: eventPaid, storeCreditRefundedAmount: 40, refundOwed: 0 })
+      expect(stripe.refundedByIntent.get(intent)).toBe(Math.round(eventPaid * 100))
+      expect(stripe.refundedByIntent.get(own) ?? 0).toBe(0)
+      expect((await db.query<{ card: number }>('SELECT card_refunded_amount::float8 AS card FROM order_line_items WHERE id = $1', [eventLine]))[0]?.card).toBe(eventPaid)
     })
   })
 })

@@ -75,6 +75,13 @@ export const orderRefundFiguresSchema = z.object({
   cashLeft: z.number(),
   /** Money still to refund on the order (Q39): Refund the rest and It already arrived act on it. */
   refundOwed: z.number(),
+  /**
+   * W47 (the W35 audit's F3 and row 19): the card payment Refund the rest would send the money owed to, and what that
+   * payment can still take. `membership`: the membership's own payment, on a saved-card membership order with two
+   * payments (Q40); `order`: the order's own. The screen shows the split from this, not from `cardLeft`, which is
+   * always the order's own payment. Sent only while money is owed (so every other read is as it was).
+   */
+  owedCard: z.object({ payment: z.string(), left: z.number() }).optional(),
   /** Why no refund can start on the order as things stand (a payment or a refund still open: E2, `refund_open`), or null. */
   blocked: z.object({ reason: z.string(), message: z.string() }).nullable(),
 })
@@ -141,7 +148,12 @@ export const orderRefundOwedRouteInputSchema = orderRefundOwedInputSchema.extend
  * It already arrived on an order: what is owed reached the customer after all; no money moves. Any amount up to what
  * is owed (the W26 audit's row 31), with a reason.
  */
-export const orderOwedArrivedInputSchema = z.object({ amount: pounds, reason: looseText })
+export const orderOwedArrivedInputSchema = z.object({
+  amount: pounds,
+  reason: looseText,
+  /** W47 (Wayne, 19 Nov): where staff saw it. `card`: recorded on the lines as card money back. `other`, or nothing: as before W47. */
+  arrivedOn: z.enum(['card', 'other']).optional(),
+})
 export type OrderOwedArrivedInput = z.infer<typeof orderOwedArrivedInputSchema>
 export const orderOwedArrivedRouteInputSchema = orderOwedArrivedInputSchema.extend(orderInPath)
 
@@ -154,6 +166,12 @@ export const orderOwedOutputSchema = z.object({
   refundOwed: z.number(),
   warning: z.string().optional(),
   held: heldOrderRefundSchema.optional(),
+  /**
+   * W47a (W47 review L2): It already arrived "on the card" when less than what arrived could be recorded as card money
+   * (the card payment had less left): what was recorded against the card, and the rest, which is on no line (as
+   * "another way"). `warning` then says so in words. In no other answer.
+   */
+  arrivedOnCard: z.object({ recorded: z.number(), other: z.number() }).optional(),
 })
 export type OrderOwedOutput = z.infer<typeof orderOwedOutputSchema>
 

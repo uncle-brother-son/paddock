@@ -1562,3 +1562,130 @@ subscription is ignored" (test mode only, now) and W46a's "Not mended" (mended h
   invoice on time, a paid retry, a payment between the failure's read and its write, an older invoice, and the L8
   read in the draft hour: `memberships/latest-invoice.test.ts`, with 030 put in as W46a's tests do. The 404 tests run
   in both modes (`dispatch.test.ts`, `idempotency.test.ts`, `memberships/webhook-live-state.test.ts`).
+
+## First in line 2: money still to refund, Resolve now, the banner, watched payments, It already arrived (W47)
+
+G-plan 4.7 and section 2's rows placed in W47. No migration and no switch kind. The saved schema was refreshed for
+migration 030 first (the lead's catalogue answer: ten lines in two functions, nothing else).
+
+- **`GET /api/v1/staff/money-owed`** (`refunds/money-owed-list.ts`, `contracts/money-owed.ts`): every order and
+  every booking with `refund_owed_amount` above £0, whatever its status, each once. An event booking has no money owed
+  of its own (it is its order's), so it is shown beside its order. Each line has the customer, the amount, when it
+  became owed (the first record that raised it since money was last taken off: a claim finished `owed`, or a refund
+  that failed later; null when no record says) and where Refund the rest runs, in words. Below, for information, the
+  money a lapse kept in the last 90 days, from `booking.lapsed` (`bookings/lapse-facts.ts`, `lapseFacts`, the same sum
+  the booking detail shows), with a note that names Adjust store credit as the goodwill route (Wayne, 18 Nov). A
+  read: nothing is written. Any active staff member.
+- **The stuck list** (`orders/stuck-list.ts`) gains two optional fields, as `paymentDates` was added:
+  - `watchedPayments` (`orders/payment-watch.ts`; W25 review L1, L2): a card payment still at the bank when its booking
+    change was undone by hand. While it is watched it is a line with nothing to do, and reconcile's read of it is no
+    item of the run: counted in `paymentsWatched`, never in `left` (it was "1 left for a person" on every Resolve
+    now, with nothing listed). After `PAYMENT_WATCH_DAYS` (30) with Stripe still giving no clear answer, the watch
+    ends `expired`, once: a line for a person, closed with the manual close's new kind `payment_watch` (Mark sorted;
+    nothing moves).
+  - `webhook` (W46 review L2): one line when Stripe's notices (`stripe_webhook_events`) have been in error, or never
+    finished, for over an hour, or a live one was ignored because Stripe had no such subscription. Only notices
+    received in the last 30 days (Stripe can't send an older one again, so it could never clear). The row of an
+    ignored "no such subscription" now says which mode the event was (`detail.livemode`); none is written for a live
+    event today (W46b makes that an error). `not_latest_invoice` rows are not counted. Words in
+    `memberships/failure-messages.ts` (`WEBHOOK_NOTICE_WORDS`): what the notices are for, that it is a set-up fault
+    and not a member's doing, and who to call. If the table can't be read, the line says so and the rest of the list
+    still answers.
+- **A payment date change's line** (`memberships/payment-date.ts`, `memberships/failure-messages.ts`): a payment
+  that is neither paid nor "took nothing" is left as `payment_processing` (the bank is still working on it: wait) or
+  `payment_needs_action` (waiting on the customer: it ends only when the payment is cancelled in Stripe), each with
+  its own words. Neither has a Close: one is offered once Stripe says how the payment ended and the automatic check
+  has left the change for a person. A change whose refund Stripe refused reads `refund_refused` (with its Close)
+  from the press's own mark, before reconcile's first run; it said "waiting" for up to 5 minutes.
+- **Refund the rest's figures** (`orders/refund-lines.ts`): the order's refund figures carry `owedCard` while money
+  is owed: the payment Refund the rest would use (`order`, or `membership` on a saved-card membership order with two
+  payments) and what it can take. It is `owedPayment`'s own answer, so the screen's split is the press's. An event
+  line with money owed now counts as the order's own payment's (the W35 audit's row 19): it went to the membership's
+  payment when the membership's line was short.
+- **It already arrived can record the card money on the lines** (the W35 audit's row 6; Wayne, 19 Nov). Staff say
+  where they saw the money (`arrivedOn` on both routes). `card` (the refund is in Stripe): what arrived is recorded
+  where Refund the rest to the card would record it, with no money moving and nothing sent to Stripe. On an order:
+  `owedPayment` and `owedCardLines`, capped at what the payment can still take. On a booking (`bookings/refunds.ts`,
+  `stampArrivedCard`): on a cancelled booking, the removed add-on lines whose card refund is part of what is owed
+  first, then the booking's lines as `planRefund` plans a card refund. The action's row then says so, how much was
+  recorded and on which lines (`arrivedOn`, `card`, `lines`); what the cards can't account for is on no line.
+  `other`, or no choice (a staff app from before W47): nothing on the lines and the row exactly as before W47. Money
+  found on the customer's store credit balance is already in the store credit rows, and recorded as card money too it
+  would be counted twice (the replay's `owed-arrived-*` scenarios are that case, and are unchanged).
+  `SEAT_MONEY_SETTLED_SQL` no longer adds the whole of each `booking.refund_owed_arrived` row (W46): only the part a
+  row says is on no line (`amount` less `card`), so nothing is counted twice. When It already arrived settles what
+  was owed on a cancelled booking it stamps the add-on lines, as Refund the rest does.
+- **The staff app** (W47): `getMoneyOwed` (thin), the "Money still to refund" section on the Orders page with Refund
+  the rest on each line, a count on Overview, Resolve now always on the Orders page, the banner's count by kind, the
+  line for Stripe's notices, watched payments, the lapse reason on the booking detail, the card or another-way choice
+  in both It already arrived windows, and "The card refund didn't go through" decided from the press's own `held`. `getOrders` counts an order with money owed as needing action.
+
+## The W47 review's fixes: the event line's owed money, watched payments, three sets of words (W47a)
+
+The W47 review (19 Nov) found no blocker and two things to fix before release. No migration, no switch kind.
+
+- **An event line counts as owed only while its booking's money is still owed** (review S1; `orders/refund-lines.ts`,
+  `EVENT_LINE_OWED_SQL`, read by `owedPayment` and `owedCardLines`). Until W47a the flag was true for ever once the
+  event booking had a claim that ended owed or a refund that failed later. W47 had made it choose the payment too, so
+  on a saved-card membership order whose event place's owed money had long been given, a later owed membership refund
+  went to store credit instead of the membership's own payment. Now the line counts only while one of these is later
+  than the last time nothing was owed on the order (its newest Refund the rest, which takes all that is owed off
+  first, or its newest It already arrived that left nothing owed):
+  - a claim of its booking that ended owed, or a refund of its booking that failed later; or
+  - a Refund the rest that put card money on the line and didn't stand (refused and put back, never found, or failed
+    later): the same money is owed again, by the order's own row this time, and it is still the event line's.
+  An It already arrived for part of what is owed clears nothing: the rest is still that line's. The money-owed list's
+  `owedSince` (`refunds/money-owed-list.ts`) is a different question (since when, not whose) and is unchanged.
+- **A watched payment's watch ends only when Stripe can't find the payment with the key in use** (review S2;
+  `orders/reconcile.ts` `checkWatchedPayment`, `orders/payment-watch.ts`). `settleIntent`'s `unclear`
+  (`orders/reader-order.ts`) now says which kind it is (`cause`): `not_found` (the other Stripe mode, or a record that
+  never said its mode), `no_answer` (the read failed), or `moving` (Stripe read it and it hasn't ended). Only
+  `not_found` past `PAYMENT_WATCH_DAYS` (30) ends the watch `expired`. A payment Stripe reads as `processing` or
+  `requires_…` stays watched for as long as it takes, and is refunded automatically if it then goes through; a read
+  with no answer ends nothing. W47 ended the watch on any unclear read, so a payment still `processing` at 30 days
+  was never read again. The expired line now says the one thing it can mean, in its own words.
+- **Mark sorted reads the payment first** (review S2, the second guard; `orders/close-stuck.ts` `closePaymentWatch`,
+  the close route). One read, nothing sent. Refused while Stripe shows the payment hasn't ended
+  (`payment_still_moving`, with its status), and when the read got no answer (`payment_not_read`). Allowed when Stripe
+  shows it ended, or still can't find it. The close's row keeps what Stripe showed (`stripeStatus`). It is the one
+  close that makes a Stripe client, and only for this kind.
+- **Words.** It already arrived "on the card" that could record less than arrived says so (review L2): both answers
+  carry `arrivedOnCard: { recorded, other }` and a `warning` in words (`refunds/failure-messages.ts`,
+  `arrivedCardShortWords`), and both staff app windows show it. `payment_needs_action` reads "waiting for a step
+  Stripe needs (usually the customer's bank approval)" (L7). The staff app's quiet banner line reads "No card payments
+  or membership changes need attention." (L8). `stuck-list.ts`'s comment on the Stripe notices line now says a wrong
+  API key leaves notices in error, and a wrong signing secret writes no row at all, so the line can't see it (L4).
+
+## Mark sorted never sorts a payment Stripe can see (W47b)
+
+W47a's report noticed two things with one root (its "Noticed" 1 and 2), and the lead called them for now (19 Nov):
+money kept with nothing recorded is never "for later". No migration, no switch kind, no contract field.
+
+- **Until W47b.** A watch that ran out (`expired`: Stripe couldn't find the payment with the key in use for 30 days)
+  was never read again by the automatic check, even once the key was put right. Mark sorted then read the payment,
+  refused while it was still moving, and sorted it when Stripe showed `succeeded` or `canceled`, without checking a
+  payment that went through had been refunded. Example: the wrong key for 30 days, the key put right, the bank
+  completes Mo's £5, staff press Mark sorted without refunding: sorted, £5 kept for a change that was undone.
+- **Now** (`orders/close-stuck.ts` `closePaymentWatch`; `orders/payment-watch.ts`). When Mark sorted's one read finds
+  the payment at all (`succeeded`, `canceled`, `processing`, a `requires_…` state), it is not sorted: a
+  `reader_payment.payment_watched` row with `state: 'handed_back'` is written, naming the `expired` rows it ends
+  (`ends`, by id), who pressed, why, and what Stripe showed (`stripeStatus`). From then on the watch is due again in
+  `WATCHED_PAYMENTS_DUE_SQL` and reads as `watching` on the stuck list, and `checkWatchedPayment`
+  (`orders/reconcile.ts`, unchanged code) reads it every run as before it ran out: gone through, recorded
+  (`landed`, `charge_without_record`) and refunded by the automatic refund on the run after, once, under its own key
+  (`<paymentIntentId>:refund-watched`); nothing taken, the watch ends; still at the bank, watched for as long as it
+  takes; not found again, `expired` again (it is past its days) and a line for a person again.
+- **The answer** is `closed: true` with `reason: 'handed_back'` and its own words (`CLOSE_WORDS.payment_handed_back`):
+  the line for a person is gone, so the screen shows the words and reads the list again. No `order.close` row is
+  written (nothing was closed). A second press is refused as for any watched payment (`payment_still_watched`).
+- **Only "still not found" sorts it**, as before, with `stripeStatus: 'not_found'` on the close's row. A read with no
+  answer is still refused (`payment_not_read`). `payment_still_moving` and its words are gone: nothing answers it.
+- **Refunded by hand first.** The expired line tells staff to refund in Stripe by hand, so a handed-back payment may
+  already be refunded. The automatic refund's send is then refused by Stripe (`charge_already_refunded`), which
+  `settleLateRefund` has recorded as done since W12 (`confirmed`, `alreadyRefunded`): one refund in Stripe, nothing
+  owed, nothing listed, no retry. Part refunded by hand: the automatic refund names no amount, so Stripe gives back
+  what is left (as the fake models it; tested).
+- **Why by id, not by time.** An `expired` row stops counting only when a hand-back names it. Rows written in one
+  moment can't be ordered by `at`, two runs at once can each write an `expired` row (the hand-back names both), and
+  an expiry after the hand-back must count again.
+- The staff app's Mark sorted dialog for a watched payment says both things the press can do.

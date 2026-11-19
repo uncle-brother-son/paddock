@@ -598,8 +598,9 @@ describe('what the list reads', () => {
       const list = await stuckList(db)
       // The published getStuckReaderPayments copies the six fields it knows by name, and `watched` since W32.
       // W41: and `paymentDates`, a field of its own too.
-      expect(Object.keys(list).sort()).toEqual(['alert', 'checkout', 'claims', 'flows', 'paymentDates', 'refunds', 'steps', 'warnings', 'watched'])
-      expect(list).toMatchObject({ checkout: [], flows: [], claims: [], refunds: [], warnings: [], watched: [], paymentDates: [], alert: null })
+      // W47, a named difference: and `watchedPayments` and `webhook`, each a field of its own, which that app drops too.
+      expect(Object.keys(list).sort()).toEqual(['alert', 'checkout', 'claims', 'flows', 'paymentDates', 'refunds', 'steps', 'warnings', 'watched', 'watchedPayments', 'webhook'])
+      expect(list).toMatchObject({ checkout: [], flows: [], claims: [], refunds: [], warnings: [], watched: [], paymentDates: [], watchedPayments: [], webhook: null, alert: null })
       expect(list.steps.map((step) => [step.stepId, step.state]).sort()).toEqual([[left.id, 'left'], [refused.id, 'refused']].sort())
       // The route's own output check takes it.
       const parsed = stuckListOutputSchema.parse(list)

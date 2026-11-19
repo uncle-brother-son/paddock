@@ -61,6 +61,7 @@ import {
   type StepEPlan,
 } from '@/server/rules/refunds/claims'
 import {
+  arrivedCardShortWords,
   MEMBERSHIP_REFUND_WORDS,
   ORDER_OWED_NOTES,
   ORDER_REFUND_DIALOG_WORDS,
@@ -415,13 +416,17 @@ async function figuresFrom(db: Queryable, order: OrderRow, lines: readonly LineR
       : order.payment_status === 'refunded'
         ? null
         : { reason: 'order_not_paid', message: NEW_WORDS.orderNotPaid }
+  const refundOwed = round2(amountOf(order.refund_owed_amount))
+  // W47 (F3): the payment Refund the rest would use for the money owed, and what it can take: the press's own choice.
+  const owedOn = refundOwed > 0 ? await owedPayment(db, order.id) : null
   return {
     orderId: order.id,
     paymentStatus: order.payment_status,
     lines: lineFigures,
     cardLeft: card?.order.left ?? 0,
     cashLeft: await orderCashLeft(db, order.id),
-    refundOwed: round2(amountOf(order.refund_owed_amount)),
+    refundOwed,
+    ...(owedOn ? { owedCard: { payment: owedOn.membershipLines === true ? 'membership' : 'order', left: owedOn.card.left } } : {}),
     blocked,
   }
 }
@@ -725,24 +730,66 @@ function owedOutput(finished: Pick<OrderClaimFinished, 'cardRefunded' | 'storeCr
  * `event_booking.refund_failed_later` row). Without it, on an order with another line, Refund the rest recorded the
  * place's card money on that other line (a £24 soap read £40 back to the card).
  */
-/** The order's lines for owedCardLines: those stamped `card` first, oldest first, as before; then an event line with money owed; then the rest. */
+/**
+ * W47a (W47 review S1): when nothing was last owed on the order of line `oli`: its newest Refund the rest (the claim
+ * takes all that is owed off the order before anything is sent) or its newest It already arrived that left nothing
+ * owed. `-infinity` when there is neither. An It already arrived for part of what is owed is not one: the rest is
+ * still owed, and still the same line's.
+ */
+const ORDER_OWED_CLEARED_SQL = `COALESCE((
+              SELECT max(l.at) FROM audit_log l
+              WHERE l.entity_type = 'order' AND l.entity_id = oli.order_id::text
+                AND ((l.action = '${ORDER_CLAIMS.claimed}' AND l.details->>'kind' = 'refund_owed')
+                     OR (l.action = '${ORDER_OWED_ARRIVED}' AND COALESCE((l.details->>'owedAfter')::numeric, 0) <= 0))), '-infinity'::timestamptz)`
+
+/**
+ * True for an order line `oli` that is an event line whose booking's money is still owed (W30, W35a: above). Fixed
+ * text.
+ *
+ * W47a (W47 review S1): "still". Until W47a this was true for ever once the booking had a claim that ended owed or a
+ * refund that failed later, also after that money was given (Refund the rest) or had arrived (It already arrived).
+ * W47 made the flag choose the payment too (owedPayment, below), so on a saved-card membership order a later owed
+ * membership refund went to store credit instead of the membership's own payment. Now the line counts only while one
+ * of these is later than the last time nothing was owed on the order (ORDER_OWED_CLEARED_SQL):
+ * - a claim of its booking that ended owed, or a refund of its booking that failed later (as before); or
+ * - a Refund the rest that put card money on this line and didn't stand: refused and put back, never found, or
+ *   failed later (`order.refund_finished` with outcome `owed`, or `order.refund_failed_later`, of an order claim
+ *   whose card part names the line). The same money is owed again, and it is still this line's: without this the
+ *   second press would record it on another line. Such a row is always later than its own claim: the claim is
+ *   committed first, Stripe is asked in between, and audit.recordAll stamps its rows after the clock's reading.
+ */
+const EVENT_LINE_OWED_SQL = `(oli.item_type = 'event' AND EXISTS (
+            SELECT 1 FROM audit_log f
+            WHERE f.at > ${ORDER_OWED_CLEARED_SQL}
+              AND ((f.entity_type = 'event_booking' AND f.entity_id = oli.event_booking_id::text
+                    AND ((f.action = 'event_booking.refund_finished' AND f.details->>'outcome' = 'owed')
+                         OR f.action = 'event_booking.refund_failed_later'))
+                   OR (f.entity_type = 'order' AND f.entity_id = oli.order_id::text
+                       AND ((f.action = '${ORDER_CLAIMS.finished}' AND f.details->>'outcome' = 'owed')
+                            OR f.action = 'order.refund_failed_later')
+                       AND EXISTS (
+                         SELECT 1 FROM audit_log c
+                         WHERE c.entity_type = 'order' AND c.entity_id = oli.order_id::text AND c.action = '${ORDER_CLAIMS.claimed}'
+                           AND c.id::text = f.details->>'claimId'
+                           AND c.details->'plan'->'card' @> jsonb_build_array(jsonb_build_object('lines', jsonb_build_array(jsonb_build_object('lineId', oli.id::text)))))))))`
+
+/**
+ * The order's lines for owedCardLines: those stamped `card` first, oldest first, as before; then an event line whose
+ * booking's money is still owed (W47a: only while it is, EVENT_LINE_OWED_SQL); then the rest.
+ */
 const OWED_CARD_LINES_SQL = `
 SELECT l.id, l.short, l.stamped, l.event_owed
 FROM (
   SELECT oli.id, oli.created_at,
          GREATEST(oli.line_total - COALESCE(oli.discount_amount, 0) - oli.card_refunded_amount, 0)::text AS short,
          (oli.refunded_at IS NOT NULL AND oli.refund_method = 'card') AS stamped,
-         (oli.item_type = 'event' AND EXISTS (
-            SELECT 1 FROM audit_log f
-            WHERE f.entity_type = 'event_booking' AND f.entity_id = oli.event_booking_id::text
-              AND ((f.action = 'event_booking.refund_finished' AND f.details->>'outcome' = 'owed')
-                   OR f.action = 'event_booking.refund_failed_later'))) AS event_owed
+         ${EVENT_LINE_OWED_SQL} AS event_owed
   FROM order_line_items oli
   WHERE oli.order_id = $1::uuid AND ($2::boolean IS NULL OR (oli.item_type = 'membership') = $2::boolean)
 ) l
 ORDER BY l.stamped DESC, (l.event_owed AND NOT l.stamped) DESC, l.created_at, l.id`
 
-async function owedCardLines(tx: Tx, orderId: string, amount: number, membershipLines: boolean | null = null): Promise<CardPartLine[]> {
+async function owedCardLines(tx: Queryable, orderId: string, amount: number, membershipLines: boolean | null = null): Promise<CardPartLine[]> {
   // W29 (Q40): on an order with two card payments, only the lines the chosen payment took (`membershipLines`: the
   // membership's lines, or every other line), so each payment's card money stays on its own lines.
   const rows = await tx.query<{ id: string; short: string; stamped: boolean; event_owed: boolean }>(OWED_CARD_LINES_SQL, [orderId, membershipLines])
@@ -774,21 +821,31 @@ async function owedCardLines(tx: Tx, orderId: string, amount: number, membership
  * card lines still short of their card money are the membership's (its card refund is what never went); in every
  * other case the order's own payment, as before. Money owed is one figure on the order, so when lines of both
  * payments are short the order's payment is used and what it can't take goes to store credit, as it always has.
+ *
+ * W47 (the W35 audit's row 19; W30 review L5): an event line with money owed is the order's own payment's too. Its
+ * line isn't stamped `card` (the booking still has places), so it was not counted, and an event's owed card money on
+ * an order whose membership line was short went to the membership's payment. W47 (F3): the figures read answers the
+ * same choice (`owedCard`), so the screen shows the payment and the split the press will use.
+ *
+ * W47a (W47 review S1): only while that event line's money is still owed (EVENT_LINE_OWED_SQL). Once it has been
+ * given or has arrived, a membership refund that later ends owed goes back to the membership's own payment again.
  */
-async function owedPayment(tx: Tx, orderId: string): Promise<{ card: CardLeft; membershipLines: boolean | null } | null> {
-  const cards = await orderCardLeft(tx, orderId)
+const OWED_SHORT_SQL = `
+SELECT COALESCE(SUM(s.short) FILTER (WHERE s.item_type = 'membership'), 0)::text AS membership,
+       COALESCE(SUM(s.short) FILTER (WHERE s.item_type <> 'membership'), 0)::text AS others,
+       COALESCE(bool_or(s.event_owed), false) AS event_owed
+FROM (SELECT oli.item_type,
+             CASE WHEN oli.refunded_at IS NOT NULL AND oli.refund_method = 'card'
+                  THEN GREATEST(oli.line_total - COALESCE(oli.discount_amount, 0) - oli.card_refunded_amount, 0) ELSE 0 END AS short,
+             ${EVENT_LINE_OWED_SQL} AS event_owed
+      FROM order_line_items oli WHERE oli.order_id = $1::uuid) s`
+
+async function owedPayment(db: Queryable, orderId: string): Promise<{ card: CardLeft; membershipLines: boolean | null } | null> {
+  const cards = await orderCardLeft(db, orderId)
   if (!cards) return null
   if (!cards.membership) return { card: cards.order, membershipLines: null }
-  const short = (
-    await tx.query<{ membership: string; others: string }>(
-      `SELECT COALESCE(SUM(s.short) FILTER (WHERE s.item_type = 'membership'), 0)::text AS membership,
-              COALESCE(SUM(s.short) FILTER (WHERE s.item_type <> 'membership'), 0)::text AS others
-       FROM (SELECT item_type, GREATEST(line_total - COALESCE(discount_amount, 0) - card_refunded_amount, 0) AS short
-             FROM order_line_items WHERE order_id = $1::uuid AND refunded_at IS NOT NULL AND refund_method = 'card') s`,
-      [orderId]
-    )
-  )[0]
-  const membership = amountOf(short?.membership) > 0.005 && !(amountOf(short?.others) > 0.005)
+  const short = (await db.query<{ membership: string; others: string; event_owed: boolean | null }>(OWED_SHORT_SQL, [orderId]))[0]
+  const membership = amountOf(short?.membership) > 0.005 && !(amountOf(short?.others) > 0.005) && short?.event_owed !== true
   return membership ? { card: cards.membership, membershipLines: true } : { card: cards.order, membershipLines: false }
 }
 
@@ -1220,12 +1277,32 @@ export async function orderOwedArrived(db: Db, orderId: string, input: OrderOwed
       if (overHalfPenny(amount, owed)) throw orderRefundRefusal('CONFLICT', 'more_than_owed', NEW_WORDS.onlyOwed(owed), 'owed_arrived', { figures: await figures() })
       // Within half a penny of all that is owed clears it exactly.
       const take = round2(Math.min(amount, owed))
+      // W47 (the W35 audit's row 6; W28 review L4; Wayne, 19 Nov): staff say where they saw the money. On the card
+      // (`arrivedOn: 'card'`, the refund is in Stripe): it is recorded on the lines as card money, exactly where
+      // Refund the rest to the card would record it (the payment it would use, capped at what that payment can still
+      // take; owedCardLines). Until W47 nothing was recorded, so the order's card money left read too high by it, and a
+      // later Card refund asked Stripe for money the payment no longer had. What the payment can't account for is on
+      // no line (`card` on the row is then less than `amount`). Another way (store credit on their balance, cash), or
+      // no choice sent (a staff app from before W47): nothing on the lines and the row as it was. Recording store
+      // credit they already have as card money too would count it twice. No money moves here either way.
+      const onCard = input.arrivedOn === 'card'
+      const owedOn = onCard ? await owedPayment(tx, orderId) : null
+      const card = owedOn?.card.paymentIntentId ? round2(Math.min(take, owedOn.card.left)) : 0
+      const lines = card > 0 ? await owedCardLines(tx, orderId, card, owedOn?.membershipLines ?? null) : []
+      for (const line of lines) {
+        await tx.query('UPDATE order_line_items SET card_refunded_amount = card_refunded_amount + $1::numeric WHERE id = $2::uuid', [line.amount, line.lineId])
+      }
       const lowered = await lowerMoneyOwed(tx, orderId, take)
       if (!lowered.ok) throw new Error(`The money owed on order ${orderId} changed under its lock.`)
       await audit.recordAll(tx, [
-        { actorType: 'staff', actorId: options.actor.id, action: ORDER_OWED_ARRIVED, entityType: 'order', entityId: orderId, requestId: options.requestId, details: { amount: take, reason, owedBefore: owed, owedAfter: lowered.owed } },
+        { actorType: 'staff', actorId: options.actor.id, action: ORDER_OWED_ARRIVED, entityType: 'order', entityId: orderId, requestId: options.requestId, details: { amount: take, reason, owedBefore: owed, owedAfter: lowered.owed, ...(onCard ? { arrivedOn: 'card', card, lines } : {}) } },
       ])
-      return { cardRefundedAmount: 0, storeCreditRefundedAmount: 0, refundOwed: lowered.owed }
+      // W47a (W47 review L2): less than what arrived could be recorded as card money (the payment had less left, or
+      // the order has no card payment). The cap stands; the answer now says so, with both figures, so staff who chose
+      // the wrong place can see it.
+      const other = round2(take - card)
+      const short = onCard && other > 0.005 ? { arrivedOnCard: { recorded: card, other }, warning: arrivedCardShortWords('order', card, other) } : {}
+      return { cardRefundedAmount: 0, storeCreditRefundedAmount: 0, refundOwed: lowered.owed, ...short }
     },
     notSaved('owed_arrived')
   )

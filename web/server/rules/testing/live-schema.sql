@@ -981,6 +981,11 @@ BEGIN
                       CASE WHEN m.subscription_status = 'past_due'
                            THEN (SELECT COALESCE(max(period_end), today - 1) FROM membership_credit_periods WHERE membership_id = m.id)
                            ELSE today END);
+  -- 030: past due with a payment due today or earlier: that payment was never made, so access ended the day before
+  -- it was due, whatever credit period had already been allocated for it.
+  IF m.cancel_effective_date IS NULL AND m.subscription_status = 'past_due' AND m.next_renewal_date <= today THEN
+    covered := m.next_renewal_date - 1;
+  END IF;
   UPDATE customer_memberships
   SET subscription_status = 'cancelled',
       cancel_effective_date = COALESCE(cancel_effective_date, covered),
@@ -1034,6 +1039,11 @@ BEGIN
   UPDATE customer_memberships SET subscription_status = 'past_due', updated_at = now() WHERE id = m.id;
   SELECT COALESCE(max(period_end), (now() AT TIME ZONE 'Europe/London')::date - 1) INTO covered
   FROM membership_credit_periods WHERE membership_id = m.id;
+  -- 030: a payment due today or earlier has not been made, so the period it was for is not covered, whatever credit
+  -- period has already been allocated for it. Covered through the day before that payment was due.
+  IF m.next_renewal_date <= (now() AT TIME ZONE 'Europe/London')::date THEN
+    covered := m.next_renewal_date - 1;
+  END IF;
   flagged := public.flag_uncovered_credit_bookings(m.id, covered);
   RETURN jsonb_build_object('found', true, 'action', 'past_due', 'covered_through', covered, 'bookings_flagged', flagged);
 END $function$;

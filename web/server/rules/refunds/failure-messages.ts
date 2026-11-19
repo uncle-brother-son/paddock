@@ -251,3 +251,42 @@ export const ORDER_OWED_NOTES = {
   storeCredit: 'Refund the rest of a failed order refund.',
   storeCreditAfterCard: 'Refund the rest of a failed order refund (the rest went back to the card).',
 } as const
+
+// --- W47a (W47 review L2): It already arrived "on the card", when the card can't account for all of it
+
+/**
+ * It already arrived "on the card" records what arrived as card money only up to what the card payment still has
+ * (W47), so the lines never read more card money back than the payment took; the rest is on no line, exactly as
+ * "another way" records it. That cap is right (a refusal would leave money staff have seen arrive impossible to
+ * clear), but until W47a nothing told staff, so someone who chose the wrong place never learned. `card`: what was
+ * recorded against the card payment; `other`: the rest. On a booking the limit is the card money its own lines can
+ * still give back, so the words say that.
+ */
+export const arrivedCardShortWords = (on: 'order' | 'booking', card: number, other: number): string => {
+  const check = 'Check you chose the right place.'
+  if (on === 'order') {
+    return card > 0
+      ? `Only ${money(card)} could be recorded against the card payment (it had ${money(card)} left); the other ${money(other)} is recorded as reached another way. ${check}`
+      : `None of the ${money(other)} could be recorded against a card payment (the order has no card money left to record it against); it is recorded as reached another way. ${check}`
+  }
+  return card > 0
+    ? `Only ${money(card)} could be recorded against the card payment (this booking had ${money(card)} of card money left); the other ${money(other)} is recorded as reached another way. ${check}`
+    : `None of the ${money(other)} could be recorded against a card payment (this booking has no card money left to record it against); it is recorded as reached another way. ${check}`
+}
+
+// --- W47 (G-plan 4.7; W35 audit F1, W45 audit row 54): the "Money still to refund" list (refunds/money-owed-list.ts)
+
+/**
+ * Where Refund the rest runs for each line of the list, and what the list says under the money kept on lapsed
+ * bookings. Kept money is not owed: Wayne (18 Nov) named Adjust store credit as the way to give some back as goodwill.
+ */
+export const MONEY_OWED_WORDS = {
+  order: 'On this order: Refund the rest (to the card, to store credit, or in cash where cash was paid) or It already arrived.',
+  orderWithEvent:
+    "On the order that paid for this event booking: Refund the rest or It already arrived, here or on the event's attendee list (turn on Show cancelled there if the booking is fully cancelled).",
+  booking: 'On the booking: open it and use Refund the rest (to the card or to store credit) or It already arrived.',
+  cancelledBooking: 'On the cancelled booking: open it and use Refund the rest (store credit only on a cancelled booking) or It already arrived.',
+  lapsedBooking: 'On the lapsed booking: open it and use Refund the rest (store credit only on a cancelled booking) or It already arrived.',
+  keptNote:
+    "This money was kept under the club's rule for a booking that lapses inside 24 hours of its session, or after it has started. None of it is owed. To give some back as goodwill, use Adjust store credit on the customer.",
+} as const

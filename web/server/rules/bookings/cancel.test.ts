@@ -9,6 +9,9 @@ import { POST as owedArrivedRoute } from '@/app/api/v1/staff/bookings/[bookingId
 import { POST as closeRoute } from '@/app/api/v1/staff/orders/stuck/close/route'
 import type { Db } from '@/server/db'
 import { reconcile } from '@/server/rules/orders/reconcile'
+import { loadOrderCardPortion } from './money-left'
+import { MONEY_OWED_WORDS } from '@/server/rules/refunds/failure-messages'
+import { moneyOwedList } from '@/server/rules/refunds/money-owed-list'
 import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/replay/harness'
 import { bea, ID, memberCredit, mo, paidSeat, sam, seed, whileFailing, type WriteFailure } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
@@ -951,7 +954,9 @@ async function cancelHeldThenClosed(bookingId: string, stripe: FakeStripe, addon
   return closeClaim(claimId)
 }
 const refundTheRest = (bookingId: string, amount: number, refundMethod: string) => post(owedRoute, `${base(bookingId)}/refunds/owed`, bookingId, { amount, refundMethod })
-const itAlreadyArrived = (bookingId: string, amount: number) => post(owedArrivedRoute, `${base(bookingId)}/refunds/owed-arrived`, bookingId, { amount, reason: 'Seen in Stripe' })
+/** W47: `arrivedOn` is where staff saw the money: 'card', 'other', or nothing (a staff app from before W47, read as another way). */
+const itAlreadyArrived = (bookingId: string, amount: number, arrivedOn?: 'card' | 'other') =>
+  post(owedArrivedRoute, `${base(bookingId)}/refunds/owed-arrived`, bookingId, { amount, reason: 'Seen in Stripe', ...(arrivedOn ? { arrivedOn } : {}) })
 
 describe('W25 item 6: money still owed on a cancelled booking (W23 review later 1)', () => {
   it('Refund the rest runs on the cancelled booking: store credit only, exactly what is owed, once; the price paid stays', async () => {
@@ -992,14 +997,25 @@ describe('W25 item 6: money still owed on a cancelled booking (W23 review later 
   it('It already arrived runs on the cancelled booking: what is owed comes off, no money moves', async () => {
     await withBooking(onCard, async ({ bookingId, stripe }) => {
       await cancelHeldThenClosed(bookingId, stripe)
+      // W47 item 1: a cancelled booking with money owed is on the "Money still to refund" list, once, with where
+      // Refund the rest runs for it (store credit only there).
+      const listed = await moneyOwedList(db)
+      expect(listed.owed).toHaveLength(1)
+      expect(listed.owed[0]).toMatchObject({ on: 'booking', bookingId, orderId: null, amount: 20, bookingStatus: 'cancelled', lapsed: false, where: MONEY_OWED_WORDS.cancelledBooking })
+      expect(listed.owed[0]?.owedSince).toEqual(expect.any(String))
       const sent = refunds(stripe).length
-      const arrived = await itAlreadyArrived(bookingId, 20)
+      const arrived = await itAlreadyArrived(bookingId, 20, 'card')
       expect(arrived.body.data).toMatchObject({ cardRefundedAmount: 0, storeCreditRefundedAmount: 0, pricePaid: 20 })
       expect(await bookingRow(bookingId)).toMatchObject({ status: 'cancelled', price_paid: '20.00', refund_owed_amount: '0.00' })
       expect(await storeCredit()).toEqual([])
       expect(refunds(stripe)).toHaveLength(sent)
-      expect((await auditRows(bookingId, 'booking.refund_owed_arrived'))[0]?.details).toEqual({ amount: 20, reason: 'Seen in Stripe' })
+      // W47 item 8, a named difference: staff said it reached the card, so the row also says so, how much of it was
+      // recorded as card money, and on which lines (before W47: `{ amount, reason }`, and nothing on any line).
+      const [line] = await bookingLines(bookingId)
+      expect((await auditRows(bookingId, 'booking.refund_owed_arrived'))[0]?.details).toEqual({ amount: 20, reason: 'Seen in Stripe', arrivedOn: 'card', card: 20, lines: [{ lineId: line?.id, orderId: line?.order_id, amount: 20 }] })
+      expect(Number(line?.card_refunded_amount)).toBe(20)
       expect((await itAlreadyArrived(bookingId, 20)).body.error?.details).toMatchObject({ reason: 'nothing_owed' })
+      expect((await moneyOwedList(db)).owed).toEqual([])
     })
   })
 
@@ -1558,9 +1574,11 @@ describe('W46 item 6: when money owed on a cancelled booking is settled, its lin
     await withBooking(onCard, async ({ bookingId, stripe }) => {
       expect(await cancelHeldThenClosed(bookingId, stripe)).toMatchObject({ closed: true })
       const sent = refunds(stripe).length
-      expect((await itAlreadyArrived(bookingId, 20)).body.data).toMatchObject({ cardRefundedAmount: 0, storeCreditRefundedAmount: 0 })
+      expect((await itAlreadyArrived(bookingId, 20, 'card')).body.data).toMatchObject({ cardRefundedAmount: 0, storeCreditRefundedAmount: 0 })
       expect(await bookingRow(bookingId)).toMatchObject({ status: 'cancelled', refund_owed_amount: '0.00' })
-      expect(await seatLine(bookingId)).toMatchObject({ stamped: true, order: 'refunded' })
+      // W47 item 8, a named difference: the £20 is on the line as card money, so the line is stamped `card` (before
+      // W47: no card money on it, stamped `credit` from the count of the arrived rows).
+      expect(await seatLine(bookingId)).toMatchObject({ stamped: true, method: 'card', card: 20, order: 'refunded' })
       expect(await storeCredit()).toEqual([])
       expect(refunds(stripe)).toHaveLength(sent)
     })
@@ -1569,21 +1587,25 @@ describe('W46 item 6: when money owed on a cancelled booking is settled, its lin
   it('It already arrived in two parts (£8, then £12): nothing is stamped while £12 is still owed; once nothing is owed the line is stamped and the order reads refunded', async () => {
     await withBooking(onCard, async ({ bookingId, stripe }) => {
       expect(await cancelHeldThenClosed(bookingId, stripe)).toMatchObject({ closed: true })
-      expect((await itAlreadyArrived(bookingId, 8)).status).toBe(200)
+      expect((await itAlreadyArrived(bookingId, 8, 'card')).status).toBe(200)
       expect(await bookingRow(bookingId)).toMatchObject({ refund_owed_amount: '12.00' })
-      expect(await seatLine(bookingId)).toMatchObject({ stamped: false, order: 'paid' })
-      expect((await itAlreadyArrived(bookingId, 12)).status).toBe(200)
-      expect(await seatLine(bookingId)).toMatchObject({ stamped: true, order: 'refunded' })
+      // W47 item 8, a named difference: the £8 is on the line as card money at once, so the order reads partially
+      // refunded while £12 is still owed (before W47: nothing on the line, and the order still `paid`).
+      expect(await seatLine(bookingId)).toMatchObject({ stamped: false, card: 8, order: 'partially_refunded' })
+      expect((await itAlreadyArrived(bookingId, 12, 'card')).status).toBe(200)
+      expect(await seatLine(bookingId)).toMatchObject({ stamped: true, method: 'card', card: 20, order: 'refunded' })
     })
   })
 
   it('part arrived (£8) and the rest given with Refund the rest (£12): stamped only then, the order refunded, £12 of store credit given once', async () => {
     await withBooking(onCard, async ({ bookingId, stripe }) => {
       expect(await cancelHeldThenClosed(bookingId, stripe)).toMatchObject({ closed: true })
-      expect((await itAlreadyArrived(bookingId, 8)).status).toBe(200)
-      expect(await seatLine(bookingId)).toMatchObject({ stamped: false })
+      expect((await itAlreadyArrived(bookingId, 8, 'card')).status).toBe(200)
+      expect(await seatLine(bookingId)).toMatchObject({ stamped: false, card: 8 })
       expect((await refundTheRest(bookingId, 12, 'credit')).body.data).toMatchObject({ storeCreditRefundedAmount: 12 })
-      expect(await seatLine(bookingId)).toMatchObject({ stamped: true, method: 'credit', order: 'refunded' })
+      // W47 item 8, a named difference: stamped `card`, the rule for a line some of whose money went back to the
+      // card (before W47 the £8 was on no line, so it read `credit`). £8 on the card and £12 of store credit: its £20.
+      expect(await seatLine(bookingId)).toMatchObject({ stamped: true, method: 'card', card: 8, order: 'refunded' })
       expect((await storeCredit()).map((row) => row.amount)).toEqual(['12.00'])
     })
   })
@@ -1605,13 +1627,112 @@ describe('W46 item 6: when money owed on a cancelled booking is settled, its lin
     })
   })
 
-  it("the same £25 settled with It already arrived: the seat's line is stamped (its £20 is back: what arrived, less the towel's £5 share of what was owed); the towel's line is left as it was (recording arrived money on lines is W47's), so the order reads partially refunded", async () => {
+  // W47 item 8 (the W35 audit's row 6; W46 "Noticed" 8), a named difference. Before W47 this test read: the seat's
+  // line stamped, the towel's line left reading £0 back, and the order "partially refunded" for ever.
+  it("W47 item 8: the same £25 settled with It already arrived (it did reach the card): the towel's line reads its £5 back to the card and the seat's line its £20, each stamped once; the order reads refunded and its card has nothing left to give; no money moves and nothing is counted twice", async () => {
     await withBooking(cardSeatAndTowel, async ({ bookingId, stripe }) => {
-      const [line] = await addonLines(bookingId)
-      expect(await cancelHeldThenClosed(bookingId, stripe, [line?.id ?? ''])).toMatchObject({ closed: true })
-      expect((await itAlreadyArrived(bookingId, 25)).status).toBe(200)
-      expect(await seatLine(bookingId)).toMatchObject({ stamped: true, order: 'partially_refunded' })
-      expect(await towelLineOf(bookingId)).toEqual({ refunded: 0, card: 0, method: 'none' })
+      const [towel] = await addonLines(bookingId)
+      expect(await cancelHeldThenClosed(bookingId, stripe, [towel?.id ?? ''])).toMatchObject({ closed: true })
+      const [seat] = await bookingLines(bookingId)
+      const orderId = seat?.order_id as string
+      expect((await loadOrderCardPortion(db, orderId))?.cardPortionRemaining).toBe(25)
+      const sent = refunds(stripe).length
+      const arrived = await itAlreadyArrived(bookingId, 25, 'card')
+      expect(arrived.body.data).toMatchObject({ cardRefundedAmount: 0, storeCreditRefundedAmount: 0 })
+      expect(await bookingRow(bookingId)).toMatchObject({ status: 'cancelled', refund_owed_amount: '0.00' })
+      const seatAfter = await seatLine(bookingId)
+      expect(seatAfter).toMatchObject({ stamped: true, method: 'card', card: 20, order: 'refunded' })
+      expect(await towelLineOf(bookingId)).toEqual({ refunded: 5, card: 5, method: 'card' })
+      // The row says where the £25 was recorded: the towel's £5 first, then the seat's £20.
+      expect((await auditRows(bookingId, 'booking.refund_owed_arrived'))[0]?.details).toEqual({
+        amount: 25,
+        reason: 'Seen in Stripe',
+        arrivedOn: 'card',
+        card: 25,
+        lines: [
+          { lineId: towel?.id, orderId, amount: 5, addon: true },
+          { lineId: seat?.id, orderId, amount: 20 },
+        ],
+      })
+      // Counted once: the order's card money back is exactly the £25, and it has nothing left to give.
+      expect(await loadOrderCardPortion(db, orderId)).toMatchObject({ cardPortion: 25, alreadyCardRefunded: 25, cardPortionRemaining: 0 })
+      expect(await storeCredit()).toEqual([])
+      expect(refunds(stripe)).toHaveLength(sent)
+      // Once: a second press, a minute later, finds nothing owed, and both stamps are as they were.
+      vi.setSystemTime(Date.now() + 60_000)
+      expect((await itAlreadyArrived(bookingId, 25, 'card')).body.error?.details).toMatchObject({ reason: 'nothing_owed' })
+      expect(await seatLine(bookingId)).toEqual(seatAfter)
+      expect(await towelLineOf(bookingId)).toEqual({ refunded: 5, card: 5, method: 'card' })
+    })
+  })
+
+  it.each([
+    ['no choice sent (a staff app from before W47)', undefined],
+    ['staff say it reached them another way (store credit on their balance, cash)', 'other'],
+  ] as const)("W47 item 8, %s: the £25 comes off what is owed with nothing recorded on any line and the row as it was before W47; the card has all £25 left; the add-on's line is stamped as Refund the rest stamps it, the seat's line is stamped, and the order reads refunded", async (_name, arrivedOn) => {
+    await withBooking(cardSeatAndTowel, async ({ bookingId, stripe }) => {
+      const [towel] = await addonLines(bookingId)
+      expect(await cancelHeldThenClosed(bookingId, stripe, [towel?.id ?? ''])).toMatchObject({ closed: true })
+      const [seat] = await bookingLines(bookingId)
+      const sent = refunds(stripe).length
+      expect((await itAlreadyArrived(bookingId, 25, arrivedOn)).body.data).toMatchObject({ cardRefundedAmount: 0, storeCreditRefundedAmount: 0 })
+      expect(await bookingRow(bookingId)).toMatchObject({ status: 'cancelled', refund_owed_amount: '0.00' })
+      // The row is exactly the one written before W47: no card money, no lines.
+      expect((await auditRows(bookingId, 'booking.refund_owed_arrived'))[0]?.details).toEqual({ amount: 25, reason: 'Seen in Stripe' })
+      // Nothing is on any line as card money, and the payment still reads all £25 left to give.
+      expect(await loadOrderCardPortion(db, seat?.order_id as string)).toMatchObject({ alreadyCardRefunded: 0, cardPortionRemaining: 25 })
+      // W47, a named difference: It already arrived stamps the add-on's line as Refund the rest does (before W47 it was
+      // left reading £0 back, and the order "partially refunded" for ever).
+      expect(await towelLineOf(bookingId)).toEqual({ refunded: 5, card: 0, method: 'credit' })
+      expect(await seatLine(bookingId)).toMatchObject({ stamped: true, method: 'credit', card: 0, order: 'refunded' })
+      expect(await storeCredit()).toEqual([])
+      expect(refunds(stripe)).toHaveLength(sent)
+    })
+  })
+
+  it("W47 item 8, on the card for more than the card can account for: £22 of the order's £25 card payment has gone back since, so only the £3 it has left is recorded as card money (on the towel's line, which comes first), the row says so, and the rest is on no line", async () => {
+    await withBooking(cardSeatAndTowel, async ({ bookingId, stripe }) => {
+      const [towel] = await addonLines(bookingId)
+      expect(await cancelHeldThenClosed(bookingId, stripe, [towel?.id ?? ''])).toMatchObject({ closed: true })
+      const [seat] = await bookingLines(bookingId)
+      const orderId = seat?.order_id as string
+      // £22 of the payment went back to the card some other way (recorded on the seat's line): £3 is left.
+      await db.query('UPDATE order_line_items SET card_refunded_amount = 22 WHERE id = $1', [seat?.id])
+      expect((await loadOrderCardPortion(db, orderId))?.cardPortionRemaining).toBe(3)
+      const answer = await itAlreadyArrived(bookingId, 25, 'card')
+      expect(answer.status).toBe(200)
+      // W47a (W47 review L2), a named difference: the answer now says how much could be recorded against the card and
+      // how much couldn't, in figures and in words (the review's own example: £3 of £25).
+      expect(answer.body.data).toMatchObject({
+        arrivedOnCard: { recorded: 3, other: 22 },
+        warning: 'Only £3.00 could be recorded against the card payment (this booking had £3.00 of card money left); the other £22.00 is recorded as reached another way. Check you chose the right place.',
+      })
+      expect(await bookingRow(bookingId)).toMatchObject({ refund_owed_amount: '0.00' })
+      // Never more card money on the lines than the payment took.
+      expect((await auditRows(bookingId, 'booking.refund_owed_arrived'))[0]?.details).toEqual({ amount: 25, reason: 'Seen in Stripe', arrivedOn: 'card', card: 3, lines: [{ lineId: towel?.id, orderId, amount: 3, addon: true }] })
+      expect(await towelLineOf(bookingId)).toMatchObject({ card: 3 })
+      expect(await loadOrderCardPortion(db, orderId)).toMatchObject({ cardPortion: 25, alreadyCardRefunded: 25, cardPortionRemaining: 0 })
+      expect(Number((await bookingLines(bookingId))[0]?.card_refunded_amount)).toBe(22)
+    })
+  })
+
+  it("W47 item 8: only £10 of the £25 arrived: the towel's £5 and £5 of the seat's are on the lines as card money, nothing is stamped and the order reads partially refunded; the £15 left is still owed, and Refund the rest then settles it", async () => {
+    await withBooking(cardSeatAndTowel, async ({ bookingId, stripe }) => {
+      const [towel] = await addonLines(bookingId)
+      expect(await cancelHeldThenClosed(bookingId, stripe, [towel?.id ?? ''])).toMatchObject({ closed: true })
+      const part = await itAlreadyArrived(bookingId, 10, 'card')
+      expect(part.status).toBe(200)
+      // W47a (W47 review L2): all of it could be recorded against the card, so the answer has nothing to say about it.
+      expect(part.body.data).not.toHaveProperty('arrivedOnCard')
+      expect(part.body.data).not.toHaveProperty('warning')
+      expect(await bookingRow(bookingId)).toMatchObject({ refund_owed_amount: '15.00' })
+      // The towel's line has its money but keeps its stamp until nothing is owed, so the order doesn't read refunded.
+      expect(await towelLineOf(bookingId)).toEqual({ refunded: 5, card: 5, method: 'none' })
+      expect(await seatLine(bookingId)).toMatchObject({ stamped: false, card: 5, order: 'partially_refunded' })
+      expect((await refundTheRest(bookingId, 15, 'credit')).body.data).toMatchObject({ storeCreditRefundedAmount: 15 })
+      expect(await towelLineOf(bookingId)).toEqual({ refunded: 5, card: 5, method: 'card' })
+      expect(await seatLine(bookingId)).toMatchObject({ stamped: true, method: 'card', card: 5, order: 'refunded' })
+      expect((await storeCredit()).map((row) => row.amount)).toEqual(['15.00'])
     })
   })
 
@@ -1619,11 +1740,15 @@ describe('W46 item 6: when money owed on a cancelled booking is settled, its lin
     await withBooking(cardSeatAndTowel, async ({ bookingId, stripe }) => {
       const [line] = await addonLines(bookingId)
       expect(await cancelHeldThenClosed(bookingId, stripe, [line?.id ?? ''])).toMatchObject({ closed: true })
-      expect((await itAlreadyArrived(bookingId, 5)).status).toBe(200)
-      expect(await seatLine(bookingId)).toMatchObject({ stamped: false, order: 'paid' })
+      expect((await itAlreadyArrived(bookingId, 5, 'card')).status).toBe(200)
+      // W47 item 8, a named difference: the £5 is on the towel's line as card money at once (before W47: on no line).
+      // Its stamp waits until nothing is owed, so the order still reads paid, as before.
+      expect(await towelLineOf(bookingId)).toEqual({ refunded: 5, card: 5, method: 'none' })
+      expect(await seatLine(bookingId)).toMatchObject({ stamped: false, card: 0, order: 'paid' })
       expect((await refundTheRest(bookingId, 20, 'credit')).body.data).toMatchObject({ storeCreditRefundedAmount: 20 })
-      expect(await towelLineOf(bookingId)).toEqual({ refunded: 5, card: 0, method: 'credit' })
-      expect(await seatLine(bookingId)).toMatchObject({ stamped: true, order: 'refunded' })
+      // W47, a named difference: the towel's line reads `card` (before W47: `credit`, with no card money on it).
+      expect(await towelLineOf(bookingId)).toEqual({ refunded: 5, card: 5, method: 'card' })
+      expect(await seatLine(bookingId)).toMatchObject({ stamped: true, method: 'credit', card: 0, order: 'refunded' })
     })
   })
 

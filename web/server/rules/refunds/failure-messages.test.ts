@@ -176,3 +176,18 @@ describe('the words W27 adds', () => {
     expect(words.refundRefusedDetail('Your card was declined.')).toBe('Failed to refund payment: Your card was declined.')
   })
 })
+
+describe('W47a (W47 review L2): It already arrived "on the card" when the card can\'t account for all of it', () => {
+  it("the review's own example, word for word: £3 of £25 on an order; a booking says whose card money; nothing at all recorded says so", () => {
+    expect(words.arrivedCardShortWords('order', 3, 22)).toBe('Only £3.00 could be recorded against the card payment (it had £3.00 left); the other £22.00 is recorded as reached another way. Check you chose the right place.')
+    expect(words.arrivedCardShortWords('booking', 3, 22)).toBe(
+      'Only £3.00 could be recorded against the card payment (this booking had £3.00 of card money left); the other £22.00 is recorded as reached another way. Check you chose the right place.'
+    )
+    expect(words.arrivedCardShortWords('order', 0, 25)).toBe(
+      'None of the £25.00 could be recorded against a card payment (the order has no card money left to record it against); it is recorded as reached another way. Check you chose the right place.'
+    )
+    expect(words.arrivedCardShortWords('booking', 0, 25)).toBe(
+      'None of the £25.00 could be recorded against a card payment (this booking has no card money left to record it against); it is recorded as reached another way. Check you chose the right place.'
+    )
+  })
+})

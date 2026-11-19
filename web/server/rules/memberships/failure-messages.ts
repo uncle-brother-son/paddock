@@ -224,7 +224,36 @@ export const PAYMENT_DATE_STUCK_WORDS: Readonly<Record<string, string>> = {
   refunded_elsewhere: `A payment date change's part-month charge was taken and has since been refunded outside the booking system, so the automatic check has stopped: it won't move the payment date for a charge that was given back. Check the subscription's next payment date in Stripe (or tell a manager). ${CLOSE_DATE_CHANGE}`,
   subscription_missing: `A payment date change's part-month charge was taken, but Stripe can't find the membership's subscription with the club's payment account details, so the date can't be moved. Tell a manager: refund the payment in Stripe by hand if the date wasn't moved. ${CLOSE_DATE_CHANGE}`,
   fail_failed: "A payment date change took no money, but it couldn't be ended yet. The automatic check tries again every 5 minutes.",
+  // W47 (W41 call 7, review L2; the W45 audit's row 37): what each is waiting for, and why there is no Close yet. A
+  // close while the bank may still finish the payment could hide one that lands later, so Close is offered only once
+  // Stripe says how the payment ended and the automatic check has left the change for a person.
+  payment_processing: `A payment date change's part-month charge is still being processed by the customer's bank. Wait for the bank: the automatic check looks every 5 minutes and, once Stripe says whether the payment went through, finishes the change or ends it. It can't be closed by hand until then. ${DONT_CHARGE_AGAIN}`,
+  // W47a (W47 review L7): the reason also covers a payment Stripe holds at `requires_confirmation` or
+  // `requires_capture`, where nothing is waiting on the customer, so the words name the step as Stripe's.
+  payment_needs_action: `A payment date change's part-month charge is waiting for a step Stripe needs (usually the customer's bank approval), which can't be done from here, so it won't finish on its own. Tell a manager: cancel that payment in Stripe. Once Stripe shows it cancelled, the automatic check ends the change within 5 minutes (nothing was taken) and the date can be changed again. It can't be closed by hand until then. ${DONT_CHARGE_AGAIN}`,
 }
+
+// --- W47 (W46 review L2; W46b "Noticed" 2): Stripe's notices the Worker couldn't take in, on the Orders page's banner
+
+/** A date and time as staff read it, in London: 12 November 2026 at 14:05. Built from two parts, so the join is ours. */
+const londonMoment = (iso: string): string => {
+  const at = new Date(iso)
+  const day = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', day: 'numeric', month: 'long', year: 'numeric' }).format(at)
+  const time = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(at)
+  return `${day} at ${time}`
+}
+
+/**
+ * The banner's line for Stripe notices (webhook events) left in error, or never finished, for over an hour, or a live
+ * one ignored because Stripe had no such subscription. It says what the notices are for, that it is a fault in the
+ * set-up and not a member's doing, and who to call. `unreadable`: the notices couldn't be read at all.
+ */
+export const WEBHOOK_NOTICE_WORDS = {
+  inError: (count: number, oldestAt: string): string =>
+    `${count === 1 ? "The booking system couldn't take in 1 notice from Stripe" : `The booking system couldn't take in ${count} notices from Stripe`} (the oldest came in on ${londonMoment(oldestAt)}). Stripe's notices are how it hears that a membership payment was taken or failed, or that a membership ended, so a member's payment date, credits or bookings may be out of date here. This is a fault in the set-up between the booking system and Stripe, not anything a member has done, and nothing on this page can fix it: don't change memberships by hand to work round it. Tell a manager today, so they can call Uncle Brother Son, who look after the booking system.`,
+  unreadable:
+    "The booking system couldn't check whether Stripe's notices are getting through. This is a fault in its set-up, not anything a member has done. Tell a manager, so they can call Uncle Brother Son, who look after the booking system.",
+} as const
 
 /** The manual close's answers for a held payment date change (brief W41 item 5). */
 export const PAYMENT_DATE_CLOSE_WORDS = {

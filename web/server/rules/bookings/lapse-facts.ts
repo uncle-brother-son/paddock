@@ -26,7 +26,7 @@ LEFT JOIN LATERAL (
 WHERE b.id = $1::uuid AND b.status = 'cancelled' AND (l.at IS NOT NULL OR b.cancel_reason = 'membership_lapsed')`
 
 /** What `booking.lapsed` holds (bookings/cancel.ts, lapsedRow). */
-interface LapsedDetails {
+export interface LapsedDetails {
   back?: boolean
   kept?: LapseKept | null
   paymentDueBy?: string | null
@@ -39,22 +39,30 @@ interface LapsedDetails {
 const round2 = (n: number): number => Math.round(n * 100) / 100
 const amount = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) ? value : 0)
 
+/**
+ * A lapse's facts from its row's time and details, with the words for them. W47: also what the "money kept on lapsed
+ * bookings" list reads (refunds/money-owed-list.ts), so the list and the booking detail can't give two figures.
+ */
+export function lapseFacts(at: string | Date, details: LapsedDetails | null): BookingLapse {
+  const row = details ?? {}
+  const owed = round2(amount(row.refundOwed))
+  // W43a: what a lapse kept is the price paid less what was owed, and the paid add-ons removed with nothing back.
+  // Only when nothing came back: 24 hours or more before, everything that isn't owed is given.
+  const kept = row.back === false ? Math.max(0, round2(amount(row.pricePaid) - owed + amount(row.addonsKept))) : 0
+  const facts = {
+    at: new Date(at).toISOString(),
+    paymentDueBy: row.paymentDueBy ? new Date(row.paymentDueBy).toISOString() : null,
+    givenBack: round2(amount(row.storeCreditRefunded)),
+    kept,
+    keptBecause: kept > 0 ? (row.kept ?? null) : null,
+    owed,
+  }
+  return { ...facts, words: lapsedWords(facts) }
+}
+
 /** The booking's lapse facts, or null when it wasn't cancelled by a lapse. */
 export async function loadBookingLapse(db: Queryable, bookingId: string): Promise<BookingLapse | null> {
   const [row] = await db.query<{ at: string | Date | null; details: LapsedDetails | null }>(LAPSE_SQL, [bookingId])
   if (!row || row.at === null) return null
-  const details = row.details ?? {}
-  const owed = round2(amount(details.refundOwed))
-  // W43a: what a lapse kept is the price paid less what was owed, and the paid add-ons removed with nothing back.
-  // Only when nothing came back: 24 hours or more before, everything that isn't owed is given.
-  const kept = details.back === false ? Math.max(0, round2(amount(details.pricePaid) - owed + amount(details.addonsKept))) : 0
-  const facts = {
-    at: new Date(row.at).toISOString(),
-    paymentDueBy: details.paymentDueBy ? new Date(details.paymentDueBy).toISOString() : null,
-    givenBack: round2(amount(details.storeCreditRefunded)),
-    kept,
-    keptBecause: kept > 0 ? (details.kept ?? null) : null,
-    owed,
-  }
-  return { ...facts, words: lapsedWords(facts) }
+  return lapseFacts(row.at, row.details)
 }

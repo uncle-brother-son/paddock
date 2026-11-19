@@ -458,7 +458,8 @@ describe('dispatchStripeEvent: a subscription Stripe cannot find (W46, W46b)', (
     const stripe = { subscriptions: { retrieve: vi.fn().mockRejectedValue(noSuchSubscription('sub_gone')) } }
     const result = await dispatchStripeEvent(fakeEvent(type, object, false), supabase, stripe)
 
-    expect(result).toEqual({ outcome: 'ignored', detail: { reason: 'subscription_missing', subscription: 'sub_gone', message: "No such subscription: 'sub_gone'" } })
+    // W47, a named difference: the row also says which mode the event was (false: a test-mode one), for the banner.
+    expect(result).toEqual({ outcome: 'ignored', detail: { reason: 'subscription_missing', subscription: 'sub_gone', message: "No such subscription: 'sub_gone'", livemode: false } })
     expect(stripe.subscriptions.retrieve).toHaveBeenCalledTimes(1)
     expect(supabase.rpc).not.toHaveBeenCalled()
   })

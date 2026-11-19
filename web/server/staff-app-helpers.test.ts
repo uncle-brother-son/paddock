@@ -1475,7 +1475,9 @@ describe('staff app helpers', () => {
         expect(await refund({ refundMethod: 'credit', confirmed: { amount: 40 } })).toEqual({ success: true, refundedAmount: 40, refundMethod: 'credit', storeCreditRefundedAmount: 40, storeCreditBalance: 70, orderPaymentStatus: 'refunded' })
         // The card refund refused and not put back (money owed), and the cancel left as well: both, the refusal's first.
         rawRequest.mockResolvedValue(success({ refundedAmount: 40, refundMethod: 'card', refundOwed: 40, held: { claimId: 'c', reason: 'refund_refused_not_put_back', message: 'Refused words.' }, warning: left, subscriptionCancelLeft: ['sub_1'] }))
-        expect(await refund({ confirmed: { amount: 40 } })).toEqual({ success: true, refundedAmount: 40, refundMethod: 'card', refundOwed: 40, warning: `Refused words. ${left}` })
+        // W47 (the W35 audit's F4), a named difference: the wrapper also says this press's own card refund was refused
+        // (`cardRefundRefused`), which is what the dialog's heading now reads.
+        expect(await refund({ confirmed: { amount: 40 } })).toEqual({ success: true, refundedAmount: 40, refundMethod: 'card', refundOwed: 40, cardRefundRefused: true, warning: `Refused words. ${left}` })
         // Q40's two refusals come back as any other, with the Worker's words.
         const { MEMBERSHIP_REFUND_WORDS } = await import('@/server/rules/refunds/failure-messages')
         rawRequest.mockResolvedValue(refused('CONFLICT', { reason: 'membership_refund_alone', message: MEMBERSHIP_REFUND_WORDS.refundAlone }))
@@ -1551,7 +1553,8 @@ describe('staff app helpers', () => {
       it('a refused card refund that could not be undone: the refund stands, so a success with the money owed and the Worker\'s words as the warning', async () => {
         const words = "The card refund was refused (Failed to refund payment: Your card was declined.), so it didn't go back to the card…"
         rawRequest.mockResolvedValue(success({ refundedAmount: 24, refundMethod: 'card', orderPaymentStatus: 'refunded', refundOwed: 24, held: { claimId: 'c', reason: 'refund_refused_not_put_back', message: words } }))
-        expect(await refund()).toEqual({ success: true, refundedAmount: 24, refundMethod: 'card', orderPaymentStatus: 'refunded', refundOwed: 24, warning: words })
+        // W47 (F4), a named difference: `cardRefundRefused`, from the Worker's `held`.
+        expect(await refund()).toEqual({ success: true, refundedAmount: 24, refundMethod: 'card', orderPaymentStatus: 'refunded', refundOwed: 24, cardRefundRefused: true, warning: words })
       })
 
       it.each([
@@ -1607,8 +1610,13 @@ describe('staff app helpers', () => {
       it('review S2 (W28a): a refund whose card part was refused and not put back opens in the warning style with its own first line, never "Refund processed successfully."; the owed bar\'s heading fits Refund the rest', () => {
         const dialog = readFileSync(path.join(appDir, 'frontend/components/RefundOrderDialog.tsx'), 'utf8')
         const bar = readFileSync(path.join(appDir, 'frontend/components/OrderOwedBar.tsx'), 'utf8')
-        // The case: the wrapper's success with a warning and money still to refund on the order.
-        expect(dialog).toContain('const cardNotGone = successResult?.warning !== undefined && (successResult.refundOwed ?? 0) > 0')
+        // The case: this press's own card refund refused and not put back. W47 (the W35 audit's F4), a named
+        // difference: read from the wrapper's `cardRefundRefused` (the Worker's `held`). It was "a warning and money
+        // still to refund on the order", which is also true of a refund that went through with a warning on an order
+        // that already had money owed from an earlier one.
+        expect(dialog).toContain('const cardNotGone = successResult?.cardRefundRefused === true')
+        expect(dialog).toContain('...(result.cardRefundRefused ? { cardRefundRefused: true } : {}),')
+        expect(dialog).not.toContain('(successResult.refundOwed ?? 0) > 0')
         // Its first line replaces the success line, in the warning style with the warning icon.
         expect(dialog).toContain('{cardNotGone ? <div className="font-medium">The lines are refunded, but the card refund didn\'t go through.</div> : <div>Refund processed successfully.</div>}')
         expect(dialog).toContain("${cardNotGone ? 'border-warning/30 bg-warning/10' : 'border-success/30 bg-success/10'}")
@@ -1616,11 +1624,15 @@ describe('staff app helpers', () => {
         // The success line is nowhere else on the screen (the other mention is the comment above `cardNotGone`).
         expect(dialog.match(/<div>Refund processed successfully\.<\/div>/g)).toHaveLength(1)
         // The toast doesn't call it processed either.
-        expect(dialog).toContain('if (result.warning && (result.refundOwed ?? 0) > 0) toast.warning("The card refund didn\'t go through — see details")')
-        expect(bar).toContain('if (response?.warning && (response.refundOwed ?? 0) > 0) toast.warning("The card refund didn\'t go through — see details")')
+        // W47 (F4), named differences: both from the press's own answer.
+        expect(dialog).toContain('if (result.cardRefundRefused) toast.warning("The card refund didn\'t go through — see details")')
+        expect(bar).toContain('if (response?.cardRefundRefused) toast.warning("The card refund didn\'t go through — see details")')
+        expect(bar).toContain('...(response?.cardRefundRefused ? { cardRefused: true } : {}),')
         // The owed bar: Refund the rest's refused card refund says what happened; the Worker's words say what to do.
         expect(bar).not.toContain('This needs a manual check')
-        expect(bar).toContain('<div className="font-medium">{result.owedAfter > 0 ? "The card refund didn\'t go through" : \'Refunded, with a warning\'}</div>')
+        // W47 (F4), a named difference: `result.cardRefused`, not what is owed on the order afterwards.
+        expect(bar).toContain('<div className="font-medium">{result.cardRefused ? "The card refund didn\'t go through" : \'Refunded, with a warning\'}</div>')
+        expect(bar).not.toContain('result.owedAfter > 0 ? "The card refund')
       })
 
       it('the Orders page: the owed bar with Refund the rest and It already arrived (Issue refunds), and no refund ticks on an order that isn\'t paid (E2)', () => {
@@ -1628,7 +1640,10 @@ describe('staff app helpers', () => {
         const bar = readFileSync(path.join(appDir, 'frontend/components/OrderOwedBar.tsx'), 'utf8')
         const table = readFileSync(path.join(appDir, 'frontend/components/OrderLineItemsTable.tsx'), 'utf8')
         expect(page).toContain("const refundOwed = Number.parseFloat(order.refund_owed_amount ?? '0') || 0")
-        expect(page).toContain('{refundOwed > 0 ? <OrderOwedBar orderId={order.id} owed={refundOwed} onChanged={() => runQuery(view, { skipCache: true })} /> : null}')
+        // W47, a named difference: after a press on the bar the "Money still to refund" section is read again too
+        // (`owedMayHaveChanged`); it was the orders' own list alone.
+        expect(page).toContain('{refundOwed > 0 ? <OrderOwedBar orderId={order.id} owed={refundOwed} onChanged={owedMayHaveChanged} /> : null}')
+        expect(page).toContain('const owedMayHaveChanged = () => {\n    setOwedToken((token) => token + 1)\n    runQuery(view, { skipCache: true })\n  }')
         expect(page).toContain('still to refund')
         // Both buttons need Issue refunds (the Worker checks it again).
         expect(bar.match(/disabled=\{!canIssueRefunds\}/g)).toHaveLength(2)
@@ -1636,7 +1651,8 @@ describe('staff app helpers', () => {
         expect(bar).toContain('Refund the rest')
         // Refund the rest sends exactly what is owed; It already arrived any amount up to it, with a reason.
         expect(bar).toContain('refundOrderOwed({ orderId, amount: figures.refundOwed, refundMethod, idempotencyKey: pressKey.current }')
-        expect(bar).toContain('refundOrderOwed({ orderId, amount, arrived: true, reason: reason.trim(), idempotencyKey: pressKey.current }')
+        // W47 item 8 (Wayne, 19 Nov), a named difference: It already arrived also sends where staff saw the money.
+        expect(bar).toContain('refundOrderOwed({ orderId, amount, arrived: true, reason: reason.trim(), arrivedOn, idempotencyKey: pressKey.current }')
         expect(bar).toContain('arrived > 0 && arrived <= owed + 0.005')
         expect(bar).toContain('pressKey.current ??= crypto.randomUUID()')
         // Closing is blocked mid-call.
@@ -3538,8 +3554,10 @@ describe('staff app helpers', () => {
       const detail = component('BookingDetailContent.tsx')
       expect(detail).toContain('const { trigger: loadFigures } = useGetBookingRefundFigures()')
       expect(detail).toContain("const showsPaidWords = booking.redemption_source === 'paid' && booking.status !== 'cancelled'")
-      expect(detail).toContain('setPaidWords(figures && figures.left > 0 && figures.paidWords ? figures.paidWords : null)')
-      expect(detail).toContain('}, [data, bookingId, showsPaidWords])')
+      // W47 item 9, named differences: the same read is made for a cancelled booking too (for why it lapsed), so the
+      // payment line is set only for the booking it is shown on, and the effect follows both conditions.
+      expect(detail).toContain('setPaidWords(showsPaidWords && figures && figures.left > 0 && figures.paidWords ? figures.paidWords : null)')
+      expect(detail).toContain('}, [data, bookingId, showsPaidWords, mayHaveLapsed])')
       expect(detail).toMatch(/\{paidWords\s+\? `\$\{paidWords\} Card money goes back to the card, the rest to store credit\.`\s+: 'Paid — eligible for refund: card money goes back to the card, the rest to store credit\.'\}/)
       const types = readFileSync(path.join(appDir, 'frontend/types/paddock.ts'), 'utf8')
       expect(types).toContain('paidWords?: string')
@@ -3549,4 +3567,161 @@ describe('staff app helpers', () => {
     })
   })
 
+
+  // Brief W47: the screens' own code, read from the staff app's checkout (it has no test runner of its own). The
+  // words and sums they show are tested as functions in server/staff-app-orders-page.test.ts.
+  describe('W47: the Orders page, Overview, the owed bar and the booking detail', () => {
+    const component = (name: string) => readFileSync(path.join(appDir, 'frontend/components', name), 'utf8')
+    const page = (name: string) => readFileSync(path.join(appDir, 'frontend/pages', name), 'utf8')
+
+    it('item 2: Resolve now is on the Orders page with nothing listed; the banner itself is only drawn when it has something to show', () => {
+      const banner = component('StuckPaymentsBanner.tsx')
+      // The old line returned nothing at all, button included.
+      expect(banner).not.toContain('if (count === 0 && !reconcileSaid && !data?.workerProblem) return null')
+      // With nothing to show: a quiet line and the button, which runs the same press.
+      expect(banner).toMatch(/if \(!stuckAnythingToShow\(data\) && !data\?\.workerProblem\) \{\s+return \(\s+<div className="flex items-center justify-between gap-3 flex-wrap mb-4 text-sm text-muted-foreground">\s+<span>\{reconcileSaid \?\? NOTHING_STUCK_LINE\}<\/span>\s+<Button size="sm" variant="outline" onClick=\{resolveNow\} disabled=\{running\}>/)
+      expect(banner.match(/onClick=\{resolveNow\}/g)).toHaveLength(2)
+      // After every run that answered the page reads its lists again (a run can leave money owed).
+      expect(banner).toContain('if (answer?.ok) onSwept()')
+    })
+
+    it("item 3: the banner's first line counts by kind, and Stripe's notices have a line of their own in the Worker's words", () => {
+      const banner = component('StuckPaymentsBanner.tsx')
+      expect(banner).toContain('{data?.workerProblem && listed === 0 ? STUCK_LIST_NOT_READ_LINE : stuckHeadline(data)}')
+      expect(banner).not.toContain('card payment{count === 1')
+      expect(banner).toMatch(/\{data\?\.webhook \? \(\s+<div className="flex items-start gap-2 rounded border border-destructive\/40 bg-destructive\/10 p-2 text-destructive">\s+<AlertTriangle className="w-4 h-4 shrink-0 mt-0\.5" \/>\s+<span>\{data\.webhook\.words\}<\/span>/)
+    })
+
+    it('item 4: a watched payment is a line of its own, with its close only when the Worker offers one', () => {
+      const banner = component('StuckPaymentsBanner.tsx')
+      expect(banner).toContain('{data?.watchedPayments?.map((item) => (')
+      expect(banner).toContain('{watchedPaymentLabel(item)} · since {formatDateTime(item.since)}')
+      expect(banner).toContain('{closeButton(item.close, watchedPaymentLabel(item), item.words)}')
+      expect(banner).toContain('const listed = counts.payments + counts.memberships + counts.watching')
+      expect(banner).toContain('{listed > 0 ? (')
+    })
+
+    it('item 1: the Orders page has the "Money still to refund" section, read again after anything that may change what is owed; Overview counts it', () => {
+      const orders = page('OrdersPage.tsx')
+      expect(orders).toContain('<MoneyOwedSection onChanged={() => runQuery(view, { skipCache: true })} reloadToken={owedToken} />')
+      expect(orders).toContain('<StuckPaymentsBanner onSwept={owedMayHaveChanged} />')
+      expect(orders).toContain('onLinesChanged={owedMayHaveChanged}')
+      const section = component('MoneyOwedSection.tsx')
+      expect(section).toContain('const { data: loaded, loading, trigger: loadList } = useGetMoneyOwed()')
+      expect(section).toContain('<h2 className="font-semibold text-foreground">Money still to refund</h2>')
+      // Every line of the Worker's list, once, keyed by what it is on.
+      expect(section).toContain('{data?.owed.map((item) => (')
+      expect(section).toContain('<li key={`${item.on}-${item.orderId ?? item.bookingId}`}')
+      expect(section).toContain('{item.customerName} · {formatCurrency(item.amount.toFixed(2))} · {owedForWords(item)}')
+      expect(section).toContain('<div className="text-muted-foreground">{item.where}</div>')
+      // Refund the rest runs from the list: an order's line has the order's own bar; a booking's opens the booking.
+      expect(section).toMatch(/\{item\.on === 'order' && item\.orderId \? \(\s+<OrderOwedBar\s+orderId=\{item\.orderId\}\s+owed=\{item\.amount\}\s+onChanged=\{changed\}/)
+      expect(section).toContain("{item.on === 'booking' && item.bookingId ? (")
+      expect(section).toContain('onClick={() => setBookingId(item.bookingId)}')
+      // The money kept on lapsed bookings, with the Worker's note (which names Adjust store credit).
+      expect(section).toContain('<div className="text-muted-foreground">{data?.keptNote}</div>')
+      expect(section).toContain('{item.customerName} · {formatCurrency(item.kept.toFixed(2))} kept')
+      const overview = page('OverviewPage.tsx')
+      expect(overview).toContain('const { data: moneyOwedData, loading: moneyOwedLoading, trigger: loadMoneyOwed } = useGetMoneyOwed()')
+      expect(overview).toContain('value={moneyOwedCount(moneyOwedData as MoneyOwedResult | undefined)}')
+      expect(overview).toContain('label={moneyOwedTileLabel(moneyOwedCount(moneyOwedData as MoneyOwedResult | undefined))}')
+      expect(overview).toContain('    loadMoneyOwed({}, { skipCache: true })')
+    })
+
+    it("item 6 (the W35 audit's F3): the owed bar's split comes from the payment the Worker names, not from the order's own card money", () => {
+      const bar = component('OrderOwedBar.tsx')
+      expect(bar).toContain('const split = figures ? owedCardSplit(figures) : null')
+      expect(bar).toContain('const cardTakes = split?.card ?? 0')
+      expect(bar).toContain("const whichCard = split?.payment === 'membership' ? \" (the membership's own card payment)\" : ''")
+      expect(bar).toContain("setRefundMethod(method === 'card' && owedCardSplit(next).cardLeft > 0 ? 'card' :")
+      expect(bar).not.toContain('Math.min(figures.cardLeft, owed)')
+      expect(bar).not.toContain("method === 'card' && next.cardLeft > 0")
+    })
+
+    it('item 8 (Wayne, 19 Nov): both It already arrived windows ask where the money arrived, send it, and keep the button off until staff have said', () => {
+      const choice = component('ArrivedOnChoice.tsx')
+      expect(choice).toContain('<RadioGroup value={value ?? \'\'} onValueChange={(next) => onChange(next as ArrivedOn)}>')
+      expect(choice).toContain('<RadioGroupItem value="card"')
+      expect(choice).toContain('<RadioGroupItem value="other"')
+      const bar = component('OrderOwedBar.tsx')
+      expect(bar).toContain('const [arrivedOn, setArrivedOn] = useState<ArrivedOn | null>(null)')
+      expect(bar).toContain('<ArrivedOnChoice value={arrivedOn} onChange={setArrivedOn} idPrefix="order-owed" />')
+      expect(bar).toContain('if (inFlight.current || !figures || !arrivedValid || !reasonValid || !arrivedOn) return')
+      expect(bar).toContain("disabled={submitting || owed <= 0 || !arrivedValid || !reasonValid || !arrivedOn || figures?.blocked?.reason === 'refund_open'}>")
+      const booking = component('RefundTheRestDialog.tsx')
+      expect(booking).toContain('const [arrivedOn, setArrivedOn] = useState<ArrivedOn | null>(null)')
+      expect(booking).toContain('<ArrivedOnChoice value={arrivedOn} onChange={setArrivedOn} idPrefix="refund-rest" />')
+      expect(booking).toContain('if (inFlight.current || !figures || !arrivedValid || !arrivedOn) return')
+      expect(booking).toContain("{ bookingId, refundMethod: 'credit', amount: Math.round(arrived * 100) / 100, owedArrived: true, reason: reason.trim(), arrivedOn, idempotencyKey: pressKey.current },")
+      expect(booking).toContain('disabled={submitting || owed <= 0 || !reasonValid || !arrivedValid || !arrivedOn}>')
+      // Closing either window forgets the choice.
+      expect(bar.match(/setArrivedOn\(null\)/g)).toHaveLength(1)
+      expect(booking.match(/setArrivedOn\(null\)/g)).toHaveLength(1)
+    })
+
+    it("item 9: the booking detail shows why a booking lapsed, in the Worker's words, from the figures read it already makes", () => {
+      const detail = component('BookingDetailContent.tsx')
+      expect(detail).toContain("const mayHaveLapsed = booking.status === 'cancelled'")
+      expect(detail).toContain('if (!data || (!showsPaidWords && !mayHaveLapsed)) {')
+      expect(detail).toContain('setLapseWords(mayHaveLapsed && figures?.lapse?.words ? figures.lapse.words : null)')
+      expect(detail).toMatch(/\{lapseWords \? \(\s+<div className="flex items-start gap-2 rounded-md border border-border bg-muted\/30 px-3 py-2 text-sm">\s+<AlertTriangle className="w-4 h-4 text-muted-foreground shrink-0 mt-0\.5" \/>\s+<span>\{lapseWords\}<\/span>/)
+      // No new read: the one hook the detail already had.
+      expect(detail.match(/useGetBookingRefundFigures\(\)/g)).toHaveLength(1)
+      const types = readFileSync(path.join(appDir, 'frontend/types/paddock.ts'), 'utf8')
+      expect(types).toContain('lapse?: { at: string; givenBack: number; kept: number; owed: number; words: string }')
+    })
+
+    it('the wrappers pass where the money arrived to the Worker, and send nothing when the screen sends none', async () => {
+      const rawRequest = vi.fn().mockResolvedValue({ data: { ok: true, data: { cardRefundedAmount: 0, storeCreditRefundedAmount: 0, refundOwed: 0, pricePaid: 20 }, requestId: 'r' } })
+      vi.stubGlobal('paddockWorkerV1', { rawRequest })
+      try {
+        const user = { email: 'jo@example.com' }
+        const owed = (await import(/* @vite-ignore */ path.join(appDir, 'backend/paddock/refundOrderOwed'))).default as (req: { params: object; user: object }) => Promise<unknown>
+        const booking = (await import(/* @vite-ignore */ path.join(appDir, 'backend/paddock/refundBooking'))).default as (req: { params: object; user: object }) => Promise<unknown>
+        const bodies = () => rawRequest.mock.calls.map((call) => [(call[0] as { path: string }).path.split('/').slice(-2).join('/'), (call[0] as { body: unknown }).body])
+        await owed({ params: { orderId: 'o1', amount: 10, arrived: true, reason: 'Seen in Stripe', arrivedOn: 'card' }, user })
+        await owed({ params: { orderId: 'o1', amount: 10, arrived: true, reason: 'On their balance', arrivedOn: 'other' }, user })
+        await owed({ params: { orderId: 'o1', amount: 10, arrived: true, reason: 'An older screen' }, user })
+        await booking({ params: { bookingId: 'b1', refundMethod: 'credit', amount: 20, owedArrived: true, reason: 'Seen in Stripe', arrivedOn: 'card' }, user })
+        await booking({ params: { bookingId: 'b1', refundMethod: 'credit', amount: 20, owedArrived: true, reason: 'An older screen' }, user })
+        expect(bodies()).toEqual([
+          ['refunds/owed-arrived', { amount: 10, reason: 'Seen in Stripe', arrivedOn: 'card' }],
+          ['refunds/owed-arrived', { amount: 10, reason: 'On their balance', arrivedOn: 'other' }],
+          ['refunds/owed-arrived', { amount: 10, reason: 'An older screen' }],
+          ['refunds/owed-arrived', { amount: 20, reason: 'Seen in Stripe', arrivedOn: 'card' }],
+          ['refunds/owed-arrived', { amount: 20, reason: 'An older screen' }],
+        ])
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
+
+    it("W47a (W47 review L2): when It already arrived \"on the card\" could record less than arrived, the Worker's note reaches both windows through the wrappers and is shown under the result", async () => {
+      const note = 'Only £3.00 could be recorded against the card payment (it had £3.00 left); the other £22.00 is recorded as reached another way. Check you chose the right place.'
+      const rawRequest = vi.fn().mockResolvedValue({
+        data: { ok: true, data: { cardRefundedAmount: 0, storeCreditRefundedAmount: 0, refundOwed: 0, pricePaid: 20, arrivedOnCard: { recorded: 3, other: 22 }, warning: note }, requestId: 'r' },
+      })
+      vi.stubGlobal('paddockWorkerV1', { rawRequest })
+      try {
+        const user = { email: 'jo@example.com' }
+        const owed = (await import(/* @vite-ignore */ path.join(appDir, 'backend/paddock/refundOrderOwed'))).default as (req: { params: object; user: object }) => Promise<unknown>
+        const booking = (await import(/* @vite-ignore */ path.join(appDir, 'backend/paddock/refundBooking'))).default as (req: { params: object; user: object }) => Promise<unknown>
+        expect(await owed({ params: { orderId: 'o1', amount: 25, arrived: true, reason: 'Seen in Stripe', arrivedOn: 'card' }, user })).toMatchObject({ refundOwed: 0, warning: note })
+        expect(await booking({ params: { bookingId: 'b1', refundMethod: 'credit', amount: 25, owedArrived: true, reason: 'Seen in Stripe', arrivedOn: 'card' }, user })).toMatchObject({ warning: note })
+      } finally {
+        vi.unstubAllGlobals()
+      }
+      const bar = component('OrderOwedBar.tsx')
+      const dialog = component('RefundTheRestDialog.tsx')
+      // Each window keeps the note with its result...
+      expect(bar).toContain("setResult({ card: 0, storeCredit: 0, cash: 0, owedAfter: response?.refundOwed ?? 0, arrived: amount, ...(response?.warning ? { warning: response.warning } : {}) })")
+      expect(dialog).toContain("setResult({ cardRefunded: 0, storeCreditRefunded: 0, arrived: true, ...(response?.warning ? { warning: response.warning } : {}) })")
+      // ...and shows it straight under "No money moved", in the It already arrived view.
+      for (const source of [bar, dialog]) {
+        expect(source).toMatch(
+          /No money moved\.[\s\S]{0,260}\{result\.warning \? \(\s+<div className="flex items-start gap-2 rounded-md border border-warning\/30 bg-warning\/10 p-3 text-sm">\s+<AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0\.5" \/>\s+<div>\{result\.warning\}<\/div>/
+        )
+      }
+    })
+  })
 })

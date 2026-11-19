@@ -12,6 +12,8 @@ import { POST as finaliseFlowRoute } from '@/app/api/v1/staff/reader-flows/[pend
 import type { Db, Tx } from '@/server/db'
 import { reconcile } from '@/server/rules/orders/reconcile'
 import { ORDER_CLAIM_WAITING_WORDS, stuckList, WATCH_WORDS } from '@/server/rules/orders/stuck-list'
+import { MONEY_OWED_WORDS } from '@/server/rules/refunds/failure-messages'
+import { moneyOwedList } from '@/server/rules/refunds/money-owed-list'
 import { claimRefundKey } from '@/server/rules/refunds/pipeline'
 import { readOrderClaim } from '@/server/rules/refunds/claims'
 import {
@@ -516,6 +518,15 @@ describe('the card: refused, undone, blocked, unclear', () => {
       expect(await creditRefunds()).toHaveLength(0)
       expect((await auditRows('order.refund_finished'))[0]?.details).toMatchObject({ outcome: 'owed', owed: 24, cardRefunded: 0, storeCreditRefunded: 0, refused: 'Failed to refund payment: Your card was declined.', by: { how: 'undo_blocked' } })
       expect((await figures(orderId)).body.data).toMatchObject({ refundOwed: 24, cardLeft: 39, blocked: null })
+      // W47 item 6 (F3): while money is owed, the figures name the payment Refund the rest would use and what it can take.
+      expect((await figures(orderId)).body.data?.owedCard).toEqual({ payment: 'order', left: 39 })
+      // W47 item 1: the order is on the "Money still to refund" list, once, from the moment the money is owed.
+      const listed = await moneyOwedList(database)
+      expect(listed.owed).toHaveLength(1)
+      expect(listed.owed[0]).toMatchObject({ on: 'order', orderId, bookingId: null, amount: 24, daysOwed: 0, where: MONEY_OWED_WORDS.order })
+      expect(listed.owed[0]?.owedSince).toEqual(expect.any(String))
+      expect(listed.owed[0]).not.toHaveProperty('eventBookings')
+      expect(listed.total).toBe(24)
       // Refund the rest: exactly what is owed (my call), to the card as a new claim.
       expect((await post('refunds/owed', orderId, { amount: 20, refundMethod: 'card' })).body.error?.details).toMatchObject({ reason: 'owed_changed', message: NEW_WORDS.owedChanged(24) })
       expect((await post('refunds/owed', orderId, { amount: 24, refundMethod: 'cheque' })).body.error?.details?.reason).toBe('invalid_params')
@@ -527,16 +538,97 @@ describe('the card: refused, undone, blocked, unclear', () => {
       // £10 of it turns out to have reached the customer: It already arrived takes part of it (audit row 31).
       expect((await post('refunds/owed-arrived', orderId, { amount: 10, reason: '' })).body.error?.details?.reason).toBe('reason_required')
       expect((await post('refunds/owed-arrived', orderId, { amount: 24.01, reason: 'Seen in Stripe' })).body.error?.details).toMatchObject({ reason: 'more_than_owed', message: NEW_WORDS.onlyOwed(24) })
-      expect((await post('refunds/owed-arrived', orderId, { amount: 10, reason: 'Seen in Stripe' })).body.data).toEqual({ cardRefundedAmount: 0, storeCreditRefundedAmount: 0, refundOwed: 14 })
-      expect((await auditRows('order.owed_arrived'))[0]?.details).toEqual({ amount: 10, reason: 'Seen in Stripe', owedBefore: 24, owedAfter: 14 })
+      expect((await post('refunds/owed-arrived', orderId, { amount: 10, reason: 'Seen in Stripe', arrivedOn: 'card' })).body.data).toEqual({ cardRefundedAmount: 0, storeCreditRefundedAmount: 0, refundOwed: 14 })
+      // W47 item 8 (the W35 audit's row 6; W28 review L4), a named difference: staff said it reached the card, so the
+      // £10 is recorded on the refunded line as card money, where Refund the rest to the card would record it, and the
+      // row says so. Before W47 nothing
+      // was recorded (`{ amount, reason, owedBefore, owedAfter }`), so the order's card money left read £10 too high
+      // from here on (£39, and £25 at the end, where the payment really had £29 and then £15 left).
+      expect((await auditRows('order.owed_arrived'))[0]?.details).toEqual({ amount: 10, reason: 'Seen in Stripe', owedBefore: 24, owedAfter: 14, arrivedOn: 'card', card: 10, lines: [{ lineId: soapLine, amount: 10 }] })
+      expect((await lineRows(orderId))[0]).toMatchObject({ card: '10.00' })
+      expect((await figures(orderId)).body.data).toMatchObject({ refundOwed: 14, cardLeft: 29, owedCard: { payment: 'order', left: 29 } })
+      expect(moneyBack(stripe)).toBe(0)
       // The other £14 goes to the card now: recorded on the refunded line, so the order's card money left stays right.
       const rest = await post('refunds/owed', orderId, { amount: 14, refundMethod: 'card' })
       expect(rest.body.data).toEqual({ cardRefundedAmount: 14, storeCreditRefundedAmount: 0, refundOwed: 0 })
-      expect((await lineRows(orderId))[0]).toMatchObject({ card: '14.00' })
+      expect((await lineRows(orderId))[0]).toMatchObject({ card: '24.00' })
       expect(await order(orderId)).toMatchObject({ owed: '0.00' })
-      expect((await figures(orderId)).body.data).toMatchObject({ refundOwed: 0, cardLeft: 25 })
+      expect((await figures(orderId)).body.data).toMatchObject({ refundOwed: 0, cardLeft: 15 })
+      // Nothing owed any more: the read is as it was before W47, with no `owedCard`, and the order is off the list.
+      expect((await figures(orderId)).body.data).not.toHaveProperty('owedCard')
+      expect(await moneyOwedList(database)).toMatchObject({ owed: [], total: 0 })
       expect(moneyBack(stripe)).toBe(1400)
       expect((await post('refunds/owed', orderId, { amount: 14, refundMethod: 'card' })).body.error?.details?.reason).toBe('nothing_owed')
+    })
+  })
+
+  /** The £24 soap's card refund refused with the order not put back (its restocked soap sold meanwhile): £24 owed, the card with £39 left. */
+  async function soapOwed(orderId: string, soapLine: string, stripe: FakeStripe, database: Db): Promise<void> {
+    const create = stripe.refunds.create
+    stripe.refunds.create = async () => {
+      stripe.refunds.create = create
+      await database.query('UPDATE product_variants SET stock_quantity = stock_quantity - 5 WHERE id = $1', [ID.variant])
+      throw fakeStripeErrors.cardDeclined()
+    }
+    await refund(orderId, [soapLine], 'card', { restock: { [soapLine]: true } })
+    expect(await order(orderId)).toMatchObject({ owed: '24.00' })
+  }
+
+  it.each([
+    ['no choice sent (a staff app from before W47)', undefined],
+    ['staff say it reached them another way', 'other'],
+  ] as const)('W47 item 8, It already arrived, %s: the money comes off what is owed with nothing recorded on any line, the row as it was before W47, and the card money left unchanged', async (_name, arrivedOn) => {
+    await onAnOrder({ products: [soap, mug], payment: card }, async ({ orderId, lines, stripe, db: database }) => {
+      const [soapLine] = await lines('product')
+      await soapOwed(orderId, soapLine as string, stripe, database)
+      const answer = await post('refunds/owed-arrived', orderId, { amount: 24, reason: 'Found on their balance', ...(arrivedOn ? { arrivedOn } : {}) })
+      expect(answer.body.data).toEqual({ cardRefundedAmount: 0, storeCreditRefundedAmount: 0, refundOwed: 0 })
+      expect((await auditRows('order.owed_arrived'))[0]?.details).toEqual({ amount: 24, reason: 'Found on their balance', owedBefore: 24, owedAfter: 0 })
+      expect((await lineRows(orderId)).map((line) => line.card)).toEqual(['0.00', '0.00'])
+      expect((await figures(orderId)).body.data).toMatchObject({ refundOwed: 0, cardLeft: 39 })
+      expect(moneyBack(stripe)).toBe(0)
+    })
+  })
+
+  it("W47 item 8, It already arrived on the card for more than the payment can account for: only what the payment has left is recorded as card money, and the row says how much; the rest is on no line", async () => {
+    await onAnOrder({ products: [soap, mug], payment: card }, async ({ orderId, lines, stripe, db: database }) => {
+      const [soapLine, mugLine] = await lines('product')
+      await soapOwed(orderId, soapLine as string, stripe, database)
+      // £30 of the payment's £39 has gone back to the card since (recorded on the mug's line): £9 is left.
+      await database.query('UPDATE order_line_items SET card_refunded_amount = 30 WHERE id = $1', [mugLine])
+      expect((await figures(orderId)).body.data).toMatchObject({ refundOwed: 24, cardLeft: 9, owedCard: { payment: 'order', left: 9 } })
+      const answer = await post('refunds/owed-arrived', orderId, { amount: 24, reason: 'Seen in Stripe', arrivedOn: 'card' })
+      // W47a (W47 review L2), a named difference: the answer was the three figures alone and the screen said nothing.
+      // Now it carries what was recorded against the card and what wasn't, and says so in words.
+      expect(answer.body.data).toEqual({
+        cardRefundedAmount: 0,
+        storeCreditRefundedAmount: 0,
+        refundOwed: 0,
+        arrivedOnCard: { recorded: 9, other: 15 },
+        warning: 'Only £9.00 could be recorded against the card payment (it had £9.00 left); the other £15.00 is recorded as reached another way. Check you chose the right place.',
+      })
+      expect((await auditRows('order.owed_arrived'))[0]?.details).toEqual({ amount: 24, reason: 'Seen in Stripe', owedBefore: 24, owedAfter: 0, arrivedOn: 'card', card: 9, lines: [{ lineId: soapLine, amount: 9 }] })
+      expect((await lineRows(orderId)).map((line) => line.card)).toEqual(['9.00', '30.00'])
+      expect((await figures(orderId)).body.data).toMatchObject({ refundOwed: 0, cardLeft: 0 })
+    })
+  })
+
+  it('W47a (W47 review L2): It already arrived "on the card" on an order with no card payment records nothing as card money and says so; "another way" for the same money says nothing', async () => {
+    await onAnOrder({ products: [soap], payment: cash(24) }, async ({ orderId, db: database }) => {
+      // Test data standing in for money an old screen left owed on a cash order.
+      await database.query('UPDATE orders SET refund_owed_amount = 10 WHERE id = $1', [orderId])
+      const onCard = await post('refunds/owed-arrived', orderId, { amount: 6, reason: 'Seen in Stripe', arrivedOn: 'card' })
+      expect(onCard.body.data).toEqual({
+        cardRefundedAmount: 0,
+        storeCreditRefundedAmount: 0,
+        refundOwed: 4,
+        arrivedOnCard: { recorded: 0, other: 6 },
+        warning: 'None of the £6.00 could be recorded against a card payment (the order has no card money left to record it against); it is recorded as reached another way. Check you chose the right place.',
+      })
+      expect((await auditRows('order.owed_arrived'))[0]?.details).toEqual({ amount: 6, reason: 'Seen in Stripe', owedBefore: 10, owedAfter: 4, arrivedOn: 'card', card: 0, lines: [] })
+      expect((await lineRows(orderId)).map((line) => line.card)).toEqual(['0.00'])
+      const another = await post('refunds/owed-arrived', orderId, { amount: 4, reason: 'Handed back in cash', arrivedOn: 'other' })
+      expect(another.body.data).toEqual({ cardRefundedAmount: 0, storeCreditRefundedAmount: 0, refundOwed: 0 })
     })
   })
 

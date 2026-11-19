@@ -18,7 +18,8 @@ import { MEMBERSHIP_REFUND_WORDS } from '@/server/rules/refunds/failure-messages
 import { LEFT_BY_REFUND } from './refund-subscription'
 import { LATE_REFUND_STEP, WATCH_DAYS, WATCHES_LISTED_SQL, type WatchDetails } from '@/server/rules/refunds/refund-watch'
 import { notLeftAgain, openSteps, stepWhat, stepWords, type StepKind } from '@/server/rules/memberships/left'
-import { LEFT_STEP_WORDS, PAYMENT_DATE_STUCK_WORDS } from '@/server/rules/memberships/failure-messages'
+import { LEFT_STEP_WORDS, PAYMENT_DATE_STUCK_WORDS, WEBHOOK_NOTICE_WORDS } from '@/server/rules/memberships/failure-messages'
+import { WATCHED_PAYMENT_WORDS, WATCHED_PAYMENTS_LISTED_SQL, type ListedWatchedPayment } from './payment-watch'
 import { PAYMENT_DATE_CHANGES_LISTED_SQL, PAYMENT_DATE_CLOSE_REASONS, PAYMENT_DATE_REFUND_WATCH_STEP, paymentDateListedReason, type ListedPaymentDateChange } from '@/server/rules/memberships/payment-date'
 
 /**
@@ -360,6 +361,28 @@ export interface StuckPaymentDate {
   close?: StuckCloseTarget
 }
 
+/** W47 (W25 review L1, L2): a payment watched after its booking change was undone by hand (payment-watch.ts). */
+export interface StuckWatchedPayment {
+  watchId: string
+  pendingId: string
+  paymentIntentId: string
+  flow: string | null
+  recordId: string | null
+  customerName: string | null
+  since: string
+  /** `watching`: the automatic check has it, nothing to do. `expired`: its watch ran out, so it is for a person. */
+  state: 'watching' | 'expired'
+  words: string
+  close?: StuckCloseTarget
+}
+
+/** W47 (W46 review L2): Stripe's notices the Worker couldn't take in, as one line. */
+export interface StuckWebhookNotice {
+  count: number
+  oldestAt: string | null
+  words: string
+}
+
 export interface StuckListOutput {
   checkout: StuckOrder[]
   flows: StuckFlow[]
@@ -369,6 +392,8 @@ export interface StuckListOutput {
   watched: StuckWatched[]
   steps: StuckStep[]
   paymentDates: StuckPaymentDate[]
+  watchedPayments: StuckWatchedPayment[]
+  webhook: StuckWebhookNotice | null
   alert: { at: string; words: string } | null
 }
 
@@ -565,6 +590,31 @@ SELECT at FROM audit_log
 WHERE action = 'reconcile.stripe_refused' AND entity_type = 'reconcile' AND at > now() - make_interval(mins => $1::int)
 ORDER BY at DESC LIMIT 1`
 
+/**
+ * W47 (W46 review L2; W46b "Noticed" 2): Stripe's notices (`stripe_webhook_events`) that need someone told.
+ * - In error, or never finished (no outcome), and received more than `$1` minutes ago. A notice that fails is sent
+ *   again by Stripe for three days, and its row becomes `processed` when one goes through, so anything still here
+ *   after an hour is more than a blip. A wrong Stripe API key at go-live leaves every membership notice like this
+ *   (the handler can't read the subscription, so each notice ends in error). W47a (W47 review L4): a wrong webhook
+ *   signing secret is not seen here. Its notices fail the signature check before any row is written, so this line
+ *   has nothing to count; that one is a go-live check (a live notice's row arrives within the first hour).
+ * - A live notice ignored because Stripe had no such subscription. Since W46b a live one is an error instead, so
+ *   none is written today; the row says which mode it was (`detail.livemode`, from W47) so that one written by a
+ *   later change would show. A test-mode one (or an older row that doesn't say) is not listed: that is test data
+ *   since deleted.
+ * Only notices received in the last `$2` days: Stripe keeps an event for 30 days, after which it can't be sent again,
+ * so an older row can never clear and would hold the line up for ever. `not_latest_invoice` rows are not counted
+ * (W46b "Noticed" 3): each is a notice correctly set aside, and belongs in the lead's own query.
+ */
+export const WEBHOOK_ERROR_MINUTES = 60
+export const WEBHOOK_LISTED_DAYS = 30
+const WEBHOOK_SQL = `
+SELECT count(*)::int AS count, min(received_at) AS oldest
+FROM stripe_webhook_events
+WHERE received_at > now() - make_interval(days => $2::int)
+  AND (((outcome = 'error' OR outcome IS NULL) AND received_at < now() - make_interval(mins => $1::int))
+       OR (outcome = 'ignored' AND detail->>'reason' = 'subscription_missing' AND detail->>'livemode' = 'true'))`
+
 interface Last {
   outcome?: string
   reason?: string
@@ -654,6 +704,17 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
   const paymentDates = await db.query<ListedPaymentDateChange>(PAYMENT_DATE_CHANGES_LISTED_SQL, [olderThanMinutes, null])
   // W32: refunds that failed after Stripe accepted them, and watches that ran out (few, if ever any: one read each for the name).
   const watches = await db.query<{ id: string; refund_id: string; details: WatchDetails; ended_at: unknown; state: 'failed' | 'expired'; ended: { owed?: number } }>(WATCHES_LISTED_SQL, [null])
+  // W47: payments watched after their change was undone by hand, and watches that ran out.
+  const watchedPayments = await db.query<ListedWatchedPayment>(WATCHED_PAYMENTS_LISTED_SQL, [null])
+  // W47: Stripe's notices in error. A read that fails (the table can't be read) is said on the line, not thrown: the
+  // rest of the list is the money, and must still show.
+  let webhook: StuckWebhookNotice | null = null
+  try {
+    const notices = (await db.query<{ count: number; oldest: unknown }>(WEBHOOK_SQL, [WEBHOOK_ERROR_MINUTES, WEBHOOK_LISTED_DAYS]))[0]
+    if (notices && notices.count > 0 && notices.oldest) webhook = { count: notices.count, oldestAt: iso(notices.oldest), words: WEBHOOK_NOTICE_WORDS.inError(notices.count, iso(notices.oldest)) }
+  } catch {
+    webhook = { count: 0, oldestAt: null, words: WEBHOOK_NOTICE_WORDS.unreadable }
+  }
   const watched: StuckWatched[] = []
   for (const row of watches) {
     const watch = row.details
@@ -890,6 +951,23 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
           words: LEFT_STEP_WORDS.notLeftAgain(step.subscriptionId),
         })),
     ],
+    watchedPayments: watchedPayments.map((row): StuckWatchedPayment => {
+      const expired = row.expired !== null
+      return {
+        watchId: row.id,
+        pendingId: row.entity_id,
+        paymentIntentId: row.payment_intent_id,
+        flow: row.flow,
+        recordId: row.record_id,
+        customerName: row.first_name !== null && row.last_name !== null ? `${row.first_name} ${row.last_name}`.trim() : null,
+        since: iso(row.at),
+        state: expired ? 'expired' : 'watching',
+        words: expired ? WATCHED_PAYMENT_WORDS.expired(row.payment_intent_id) : WATCHED_PAYMENT_WORDS.watching(row.payment_intent_id),
+        // Only one whose watch ran out: one still watched is the automatic check's.
+        ...(expired ? { close: { kind: 'payment_watch' as const, orderId: row.id } } : {}),
+      }
+    }),
+    webhook,
     alert: alert ? { at: iso(alert.at), words: STRIPE_REFUSED_WORDS } : null,
   }
 }

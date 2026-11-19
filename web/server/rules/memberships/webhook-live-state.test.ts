@@ -6,7 +6,7 @@ import { POST as cancelRoute } from '@/app/api/v1/staff/memberships/[membershipI
 import { POST as undoRoute } from '@/app/api/v1/staff/memberships/[membershipId]/undo-cancel/route'
 import type { Db } from '@/server/db'
 import { reconcile } from '@/server/rules/orders/reconcile'
-import { stuckList } from '@/server/rules/orders/stuck-list'
+import { stuckList, WEBHOOK_ERROR_MINUTES, WEBHOOK_LISTED_DAYS } from '@/server/rules/orders/stuck-list'
 import { insert } from '@/server/rules/testing/database'
 import { asOwner, BEFORE_030_SQL, migration030, savedFunctionsSql } from '@/server/rules/testing/migration-030'
 import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
@@ -15,6 +15,8 @@ import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { asLive, invoiceEvent, subscriptionUpdatedEvent, webhookClient, webhookRpc } from '@/server/rules/testing/webhook'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
 import { CHECK_AFTER_MINUTES } from './left'
+import { WEBHOOK_NOTICE_WORDS } from './failure-messages'
+import { stuckListOutputSchema } from '@/contracts'
 
 // Brief W45a item 2 (W45 audit S1, briefs/W45-audit-logs/proof-a.test.ts.txt turned round): Stripe's webhook acts on
 // the subscription as Stripe holds it when the event is handled, never on the event's own snapshot. Real events
@@ -519,7 +521,8 @@ describe('Stripe has no such subscription (a 404): a test-mode event is finished
         const readsBefore = reads(stripe)
         expect(await processWebhookEvent(event, client, stripe)).toEqual({ status: 200, body: { received: true } })
         expect(reads(stripe) - readsBefore).toBe(1)
-        expect(await client.eventRow(event.id)).toEqual({ event_type: event.type, outcome: 'ignored', error: null, detail: { reason: 'subscription_missing', subscription: GONE, message: `No such subscription: '${GONE}'` } })
+        // W47, a named difference: `livemode` (false: a test-mode event) is on the row too, for the banner's line.
+        expect(await client.eventRow(event.id)).toEqual({ event_type: event.type, outcome: 'ignored', error: null, detail: { reason: 'subscription_missing', subscription: GONE, message: `No such subscription: '${GONE}'`, livemode: false } })
         expect(client.calls).toEqual([])
         expect(await processWebhookEvent(event, client, stripe)).toEqual({ status: 200, body: { received: true, duplicate: true } })
         expect(reads(stripe) - readsBefore).toBe(1)
@@ -762,6 +765,136 @@ describe('a change that lands between a handler\'s read and its write: the handl
       expect(await processWebhookEvent(event, client, stripe)).toEqual({ status: 200, body: { received: true } })
       expect(await client.eventRow(event.id)).toMatchObject({ outcome: 'processed', error: null, detail: { action: 'past_due' } })
       expect(await member()).toEqual(OWING)
+    })
+  })
+})
+
+// Brief W47 item 3 (W46 review L2; W46b "Noticed" 2): the Orders page's line for Stripe notices the Worker couldn't
+// take in. Real events through the real handler leave the rows; the stuck list reads them.
+describe("the banner's line for Stripe notices in error for over an hour (W47 item 3)", () => {
+  const GONE = 'sub_w47_gone'
+  const notice = async () => (await stuckList(db)).webhook
+  const minutesOn = (minutes: number) => vi.setSystemTime(Date.now() + minutes * 60_000)
+  const failedLive = async (stripe: FakeStripe, id: string): Promise<Stripe.Event> => {
+    // A live notice for a subscription Stripe doesn't have with the key in use: the wrong key at go-live (W46b).
+    const event = { ...asLive(invoiceEvent('invoice.paid', GONE, { id: `in_${id}`, periodStart: ENDS, periodEnd: NEXT_END })), id: `evt_w47_${id}` }
+    expect(await processWebhookEvent(event, webhookClient(db), stripe)).toEqual({ status: 500, body: { error: 'Internal server error' } })
+    return event
+  }
+
+  it('nothing in error: no line', async () => {
+    await onASeed(async () => {
+      expect(await notice()).toBeNull()
+    })
+  })
+
+  it('a notice in error for 59 minutes shows no line; for 61 minutes it does, with the count, when the oldest came in, what it means and who to call', async () => {
+    await onASeed(async (stripe) => {
+      vi.setSystemTime(new Date('2026-12-10T14:00:00.000Z'))
+      const event = await failedLive(stripe, 'one')
+      expect(await webhookClient(db).eventRow(event.id)).toMatchObject({ outcome: 'error' })
+      minutesOn(59)
+      expect(await notice()).toBeNull()
+      minutesOn(2)
+      const line = await notice()
+      expect(line).toEqual({ count: 1, oldestAt: '2026-12-10T14:00:00.000Z', words: WEBHOOK_NOTICE_WORDS.inError(1, '2026-12-10T14:00:00.000Z') })
+      expect(line?.words).toBe(
+        "The booking system couldn't take in 1 notice from Stripe (the oldest came in on 10 December 2026 at 14:00). Stripe's notices are how it hears that a membership payment was taken or failed, or that a membership ended, so a member's payment date, credits or bookings may be out of date here. This is a fault in the set-up between the booking system and Stripe, not anything a member has done, and nothing on this page can fix it: don't change memberships by hand to work round it. Tell a manager today, so they can call Uncle Brother Son, who look after the booking system."
+      )
+      // A second one: counted, and the oldest is still the first.
+      await failedLive(stripe, 'two')
+      minutesOn(61)
+      expect(await notice()).toMatchObject({ count: 2, oldestAt: '2026-12-10T14:00:00.000Z' })
+      expect((await notice())?.words).toContain("couldn't take in 2 notices from Stripe")
+    })
+  })
+
+  it('a notice sent again that goes through leaves the line: its row is processed', async () => {
+    await onASeed(async (stripe) => {
+      vi.setSystemTime(TWELFTH)
+      const client = webhookClient(db)
+      fullPaymentFailed(stripe)
+      const event = fullInvoice('invoice.payment_failed')
+      stripe.failNext('subscriptions.retrieve', stripeDown())
+      expect(await processWebhookEvent(event, client, stripe)).toEqual({ status: 500, body: { error: 'Internal server error' } })
+      minutesOn(61)
+      expect(await notice()).toMatchObject({ count: 1 })
+      expect(await processWebhookEvent(event, client, stripe)).toEqual({ status: 200, body: { received: true } })
+      expect(await notice()).toBeNull()
+    })
+  })
+
+  it('a notice never finished (claimed, no outcome) counts after an hour, not before', async () => {
+    await onASeed(async () => {
+      vi.setSystemTime(new Date('2026-12-10T14:00:00.000Z'))
+      await db.query("INSERT INTO stripe_webhook_events (event_id, event_type) VALUES ('evt_w47_unfinished', 'invoice.paid')")
+      minutesOn(59)
+      expect(await notice()).toBeNull()
+      minutesOn(2)
+      expect(await notice()).toMatchObject({ count: 1, oldestAt: '2026-12-10T14:00:00.000Z' })
+    })
+  })
+
+  it("a test-mode notice ignored because Stripe has no such subscription shows no line, however old; a live one left like that does, at once", async () => {
+    await onASeed(async (stripe) => {
+      vi.setSystemTime(new Date('2026-12-10T14:00:00.000Z'))
+      const event = { ...invoiceEvent('invoice.paid', GONE, { id: 'in_w47_test', periodStart: ENDS, periodEnd: NEXT_END }), id: 'evt_w47_test_mode' }
+      expect(event.livemode).toBe(false)
+      const client = webhookClient(db)
+      expect(await processWebhookEvent(event, client, stripe)).toEqual({ status: 200, body: { received: true } })
+      expect(await client.eventRow(event.id)).toMatchObject({ outcome: 'ignored', detail: { reason: 'subscription_missing', livemode: false } })
+      minutesOn(61)
+      expect(await notice()).toBeNull()
+      // A row from before W47 doesn't say which mode it was: test data, not listed.
+      await db.query(`INSERT INTO stripe_webhook_events (event_id, event_type, processed_at, outcome, detail) VALUES ('evt_w47_old_row', 'invoice.paid', now(), 'ignored', '{"reason":"subscription_missing","subscription":"sub_x"}'::jsonb)`)
+      expect(await notice()).toBeNull()
+      // No handler writes this today (a live one is an error, W46b): if a later change ever does, it shows.
+      await db.query(`INSERT INTO stripe_webhook_events (event_id, event_type, processed_at, outcome, detail) VALUES ('evt_w47_live_ignored', 'invoice.paid', now(), 'ignored', '{"reason":"subscription_missing","subscription":"sub_y","livemode":true}'::jsonb)`)
+      expect(await notice()).toMatchObject({ count: 1 })
+    })
+  })
+
+  it('what is set aside on purpose is never counted: processed, ignored for any other reason (not_latest_invoice among them)', async () => {
+    await onASeed(async () => {
+      vi.setSystemTime(new Date('2026-12-10T14:00:00.000Z'))
+      for (const [id, outcome, detail] of [
+        ['a', 'processed', '{"found":true}'],
+        ['b', 'ignored', '{"reason":"not_latest_invoice"}'],
+        ['c', 'ignored', '{"reason":"first_invoice"}'],
+        ['d', 'ignored', '{"reason":"unhandled_event_type"}'],
+      ] as const) {
+        await db.query('INSERT INTO stripe_webhook_events (event_id, event_type, processed_at, outcome, detail) VALUES ($1::text, $2::text, now(), $3::text, $4::text::jsonb)', [`evt_w47_${id}`, 'invoice.paid', outcome, detail])
+      }
+      minutesOn(600)
+      expect(await notice()).toBeNull()
+    })
+  })
+
+  it("a notice in error from more than 30 days ago is no longer counted: Stripe can't send it again, so it could never clear", async () => {
+    // The figures are written out here, not read from the code: 30 days is how long Stripe keeps an event, and an
+    // hour is the brief's.
+    expect([WEBHOOK_LISTED_DAYS, WEBHOOK_ERROR_MINUTES]).toEqual([30, 60])
+    await onASeed(async (stripe) => {
+      vi.setSystemTime(new Date('2026-12-10T14:00:00.000Z'))
+      await failedLive(stripe, 'old')
+      // 29 days on it still counts; 31 days on it doesn't.
+      vi.setSystemTime(new Date('2027-01-08T14:00:00.000Z'))
+      expect(await notice()).toMatchObject({ count: 1, oldestAt: '2026-12-10T14:00:00.000Z' })
+      vi.setSystemTime(new Date('2027-01-10T14:00:00.000Z'))
+      expect(await notice()).toBeNull()
+    })
+  })
+
+  it("the line doesn't stop the rest of the list: when the notices can't be read, the list still answers and the line says so", async () => {
+    await onASeed(async () => {
+      const failing: Db = {
+        ...db,
+        query: ((sql: string, params?: readonly never[]) => (sql.includes('stripe_webhook_events') ? Promise.reject(new Error('permission denied for table stripe_webhook_events')) : db.query(sql, params))) as Db['query'],
+      }
+      const list = await stuckList(failing)
+      expect(list.webhook).toEqual({ count: 0, oldestAt: null, words: WEBHOOK_NOTICE_WORDS.unreadable })
+      expect(list.checkout).toEqual([])
+      expect(stuckListOutputSchema.parse(list)).toEqual(list)
     })
   })
 })

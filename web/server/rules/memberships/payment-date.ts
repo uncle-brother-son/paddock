@@ -868,13 +868,20 @@ SELECT id FROM membership_payment_date_changes
 WHERE status = 'pending' AND created_at < now() - make_interval(mins => $1::int)
 ORDER BY created_at, id`
 
-/** The pending rows older than the window, for the stuck list, with reconcile's last row for each and whether the Worker started it. */
+/**
+ * The pending rows older than the window, for the stuck list, with reconcile's last row for each and whether the
+ * Worker started it. W47: and the press's own mark that Stripe refused the refund (`refund_refused`), so the line says
+ * so before reconcile's first run.
+ */
 export const PAYMENT_DATE_CHANGES_LISTED_SQL = `
 SELECT p.id, p.membership_id, p.new_renewal_date::text AS new_renewal_date, p.amount_charged::text AS amount, p.stripe_payment_intent_id, p.created_at,
        c.id AS customer_id, c.first_name, c.last_name,
        EXISTS (SELECT 1 FROM audit_log s
         WHERE s.action = '${PAYMENT_DATE_ACTION}' AND s.entity_type = '${PAYMENT_DATE_ENTITY}' AND s.entity_id = p.membership_id::text
           AND s.details->>'changeId' = p.id::text AND s.details->>'state' = 'started') AS started_here,
+       EXISTS (SELECT 1 FROM audit_log h
+        WHERE h.action = '${PAYMENT_DATE_ACTION}' AND h.entity_type = '${PAYMENT_DATE_ENTITY}' AND h.entity_id = p.membership_id::text
+          AND h.details->>'changeId' = p.id::text AND h.details->>'state' = 'held' AND h.details->>'reason' = 'refund_refused') AS refund_refused,
        (SELECT r.details FROM audit_log r
         WHERE r.entity_type = '${PAYMENT_DATE_RECONCILE_ENTITY}' AND r.entity_id = p.id::text AND r.action = 'order.reconcile'
         ORDER BY r.at DESC LIMIT 1) AS last
@@ -896,6 +903,8 @@ export interface ListedPaymentDateChange {
   first_name: string
   last_name: string
   started_here: boolean
+  /** W47: the press marked the change as one whose refund Stripe refused (its own `held` row). */
+  refund_refused?: boolean | null
   last: { outcome?: string; reason?: string; detail?: string | null } | null
 }
 
@@ -905,11 +914,26 @@ export interface ListedPaymentDateChange {
  */
 export const PAYMENT_DATE_CLOSE_REASONS: ReadonlySet<string> = new Set(['not_started_here', 'several_payments', 'amount_mismatch', 'other_mode', 'refund_refused', 'refunded_elsewhere', 'subscription_missing'])
 
-/** Why a held change is listed: what reconcile last left it with, or that it hasn't looked yet, or that the Worker never started it. */
-export function paymentDateListedReason(row: Pick<ListedPaymentDateChange, 'started_here' | 'last'>): string {
+/**
+ * Why a held change is listed: what reconcile last left it with, or that it hasn't looked yet, or that the Worker
+ * never started it. W47 (W41 "Noticed" 4, review L4; the W45 audit's row 39): a change whose refund Stripe refused
+ * reads `refund_refused` from the press's own mark, before reconcile's first run (which leaves it with the same reason
+ * from the same mark, and makes no call for it). Until W47 its line said "waiting" for up to 5 minutes, with no Close.
+ */
+export function paymentDateListedReason(row: Pick<ListedPaymentDateChange, 'started_here' | 'last' | 'refund_refused'>): string {
   if (!row.started_here) return 'not_started_here'
-  return row.last?.outcome === 'left' && row.last.reason ? row.last.reason : 'waiting'
+  if (row.last?.outcome === 'left' && row.last.reason) return row.last.reason
+  return row.refund_refused === true ? 'refund_refused' : 'waiting'
 }
+
+/**
+ * W47 (W41 call 7; the W45 audit's row 37): why a change whose payment is neither paid nor "took nothing" is left.
+ * `payment_processing` while the bank is still working on any of them (it will end on its own); else
+ * `payment_needs_action` (waiting on the customer or on a confirm nobody will send: it ends only when the payment is
+ * cancelled in Stripe). Neither has a Close: one is offered once Stripe says how the payment ended.
+ */
+export const paymentStillGoingReason = (statuses: readonly string[]): 'payment_processing' | 'payment_needs_action' =>
+  statuses.length === 0 || statuses.includes('processing') ? 'payment_processing' : 'payment_needs_action'
 
 export type ClosedPaymentDateChange = { closed: true; message: string } | { closed: false; reason: 'not_listed' | 'still_checking'; message: string }
 

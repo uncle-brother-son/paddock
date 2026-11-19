@@ -374,7 +374,8 @@ describe('W32a (W32 review S2): what a read of a watched refund counts as', () =
     // All three are read (three lists), and the run has nothing to say but how many are waiting on Stripe.
     const from = stripe.calls.length
     const quiet = await staffRun()
-    expect(quiet).toEqual({ checked: 0, finalised: 0, undone: 0, refunds: 0, left: 0, deferred: 0, stripeRefused: false, refundsWaiting: 2, items: [] })
+    // W47, a named difference: `paymentsWatched` is on the run's answer too (none here).
+    expect(quiet).toEqual({ checked: 0, finalised: 0, undone: 0, refunds: 0, left: 0, deferred: 0, stripeRefused: false, refundsWaiting: 2, paymentsWatched: 0, items: [] })
     // The run's contract carries the figure (the staff app's types are made from it).
     expect(reconcileRunOutputSchema.parse(quiet).refundsWaiting).toBe(2)
     expect(stripe.calls.slice(from).map((call) => call.method)).toEqual(['refunds.list', 'refunds.list', 'refunds.list'])
@@ -425,7 +426,16 @@ describe("the stuck list's contract stays readable by the staff app published be
     // W36 adds `steps` (a membership's Stripe step left to do), as `watched` was added: a field of its own, which that
     // app drops too (memberships/left.test.ts holds that a step is only ever there).
     // W41 adds `paymentDates` (a payment date change on hold) the same way (memberships/payment-date.test.ts).
-    expect(Object.keys(listed).sort()).toEqual(['alert', 'checkout', 'claims', 'flows', 'paymentDates', 'refunds', 'steps', 'warnings', 'watched'])
+    // W47, named differences: `watchedPayments` (a payment watched after its change was undone by hand:
+    // bookings/refunds.test.ts) and `webhook` (Stripe's notices in error: memberships/webhook-live-state.test.ts), each
+    // a field of its own, which that app drops too. Both are optional in the contract, so a staff app with W47's types
+    // still reads an older Worker's list.
+    expect(Object.keys(listed).sort()).toEqual(['alert', 'checkout', 'claims', 'flows', 'paymentDates', 'refunds', 'steps', 'warnings', 'watched', 'watchedPayments', 'webhook'])
+    expect(listed).toMatchObject({ watchedPayments: [], webhook: null })
+    const beforeW47 = { ...listed } as Partial<typeof listed>
+    delete beforeW47.watchedPayments
+    delete beforeW47.webhook
+    expect(stuckListOutputSchema.safeParse(beforeW47).success).toBe(true)
     expect(listed).toMatchObject({ checkout: [], flows: [], claims: [], refunds: [], warnings: [], alert: null })
     expect(listed.watched).toHaveLength(1)
     // The route's own output check takes it, and none of the older fields carries the new close kind.

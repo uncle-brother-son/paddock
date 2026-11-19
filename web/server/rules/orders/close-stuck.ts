@@ -1,6 +1,7 @@
 // The manual close (brief W14b item 4; W12 review L2, W12a N2, W13 to W13d, W13c review L4): what a person does
 // with an item reconcile has left for them on the Orders page's stuck list. Issue refunds, with a reason (the
-// route checks both). It never calls Stripe and never moves money. Per item, only what that item needs:
+// route checks both). It never moves money, and never calls Stripe but for one read (W47a: Mark sorted on a watched
+// payment reads that payment once, below). Per item, only what that item needs:
 //
 // - `held_order`: a Worker order still pending that reconcile left for a person: `changed_since` (old code
 //   changed its booking or event booking after T1), or a membership's `compensation_unfinished` that a person has
@@ -34,6 +35,11 @@
 // - W25 (W21 review L5): a `held_flow` closed while its saved-card payment was still processing has that payment
 //   watched (`reader_payment.payment_watched`): reconcile reads it each run and, if it lands, records it as a payment
 //   for a change already undone, which its automatic refund then gives back.
+// - `payment_watch` (W47; W47a, W47 review S2): a watched payment whose watch ran out because Stripe couldn't find it
+//   with the key in use, once a person has looked at it in Stripe: recorded as sorted. W47a: the payment is read
+//   again first (one read, nothing sent). W47b: sorted only when Stripe still can't find it. When Stripe finds it,
+//   whatever its status, it is handed back to the automatic check instead (the watch's `expired` state ended), which
+//   refunds it if it went through; refused when the read got no answer.
 //
 // W14c (W14b review S1): a compensation is closed only when its latest held row says every step left is Stripe's
 // definite refusal. Anything else reconcile finishes on its own (each step is safe to repeat, and reads a step a
@@ -48,6 +54,8 @@ import 'server-only'
 import { audit, type AuditEntry } from '@/server/audit'
 import type { CloseStuckInput, CloseStuckOutput, StuckCloseKind } from '@/contracts'
 import type { Db, Tx } from '@/server/db'
+import type { StripeClient } from '@/server/stripe/client'
+import { sendOptions, stripeTiming, type StripeTiming } from '@/server/stripe/deadline'
 import { CHANGED_ELSEWHERE, CHANGED_ELSEWHERE_DAYS, CHANGED_ELSEWHERE_WHERE, FINAL_FINDINGS, type ChangedElsewhereFinding } from './changed-elsewhere'
 import { oldRollbackStarted } from './finalise-order'
 import { lockForOrder } from './locks'
@@ -56,6 +64,7 @@ import { PROCESSING_MINUTES } from './pending-order'
 import { compensationDefiniteSql, HELD_ORDER_CLOSE_REASONS, OLD_ROLLBACK_WORDS, SUBSCRIPTIONS_LEFT_SQL } from './stuck-list'
 import { changedSince, PARTS_SQL, undoInTransaction, type LockedOrder, type OrderParts } from './undo-order'
 import { FLOW_PAYMENT_WATCHED, FLOW_UNDO_BLOCKED_MESSAGE, FlowUndoBlocked, isWorkerCardFlow, isWorkerFlow, readFlow, undoFlowInTransaction } from './reader-flow'
+import { isMissing } from './reader-order'
 import { finishClaimInTransaction, readClaim, type CardPart } from '@/server/rules/bookings/refunds'
 import type { ClaimPartFinding } from './reconcile'
 import { finishEventClaimInTransaction } from '@/server/rules/events/cancel-places'
@@ -66,6 +75,7 @@ import { finishOrderClaimInTransaction } from './refund-lines'
 import { lockForBooking } from '@/server/rules/bookings/locks'
 import { CLOSED_ON_A_CANCELLED_BOOKING_WORDS } from '@/server/rules/bookings/failure-messages'
 import { flowClosable, HELD_CLAIM_CLOSE_REASONS } from './stuck-list'
+import { WATCHED_PAYMENTS_LISTED_SQL, type ListedWatchedPayment } from './payment-watch'
 import { sortLeftStep } from '@/server/rules/memberships/left'
 import { closePaymentDateChange, PAYMENT_DATE_RECONCILE_ENTITY } from '@/server/rules/memberships/payment-date'
 
@@ -75,6 +85,10 @@ export const CLOSE_ACTION = 'order.close'
 export interface CloseOptions {
   actor: { type: 'staff' | 'system'; id: string | null }
   requestId: string
+  /** W47a: for Mark sorted on a watched payment (`payment_watch`), the one close that reads Stripe. Made only then. */
+  stripe?: () => StripeClient
+  /** When the request started: that read's deadline counts from it. */
+  startedAt?: number
 }
 
 // --- Words
@@ -121,6 +135,16 @@ export const CLOSE_WORDS = {
   // W14c (W14b N1).
   // W32: a refund that failed after Stripe accepted it, or a watch that ran out.
   refund_watch: 'Marked as sorted. It is no longer listed.',
+  // W47 (W25 review L2): a watched payment whose watch ran out.
+  payment_watch: 'Marked as sorted. It is no longer listed.',
+  payment_still_watched: "The automatic check is still watching this payment: it reads it every 5 minutes and refunds it if it goes through. Nothing was changed. Don't refund it by hand.",
+  // W47a (W47 review S2): Mark sorted reads the payment first. Its read got no answer, so nothing is known.
+  payment_not_read:
+    "The booking system couldn't read this payment in Stripe just now, so it can't tell whether it could still take money. Nothing was changed. Press Mark sorted again in a minute.",
+  // W47b: Mark sorted's read found the payment, so it isn't sorted: the automatic check has it again. (The run that
+  // finds it went through records it; the run after that sends the refund, as for every watched payment.)
+  payment_handed_back:
+    'Stripe can see this payment now, so it has not been marked as sorted: the automatic check has taken it back. It reads the payment at its next run (every 5 minutes) and refunds it automatically if it took money; a payment already refunded in Stripe by hand is not refunded again. Nothing to do.',
   refund_not_failed:
     "This refund hasn't failed: the automatic check is still sending it or waiting for Stripe to confirm it. Nothing was changed. Don't refund it by hand.",
 } as const
@@ -731,6 +755,89 @@ async function closeRefundWatch(db: Db, watchId: string, why: string, options: C
   })
 }
 
+// --- payment_watch (W47; W25 review L2)
+
+/**
+ * W47: a watched payment whose watch ran out with Stripe still unable to find it (payment-watch.ts), recorded as
+ * sorted by a person who has looked at the payment in Stripe: a `sorted` row for the payment, which takes it off the
+ * list, and the close's own row. Nothing moves. One still being watched is refused: the automatic check has it.
+ *
+ * W47a (W47 review S2, its fix b; a second guard beside the watch's own rule in reconcile.ts): the payment is read
+ * again first, before the transaction (one read; nothing is sent to Stripe). Refused when the read got no answer.
+ *
+ * W47b (W47a "Noticed" 1 and 2; the lead's call, 19 Nov: money kept with nothing recorded is never "for later"):
+ * sorted only when Stripe still can't find the payment with the key in use (what the watch ran out on; what Stripe
+ * showed is kept on the close's row). When the read finds the payment at all, whatever its status (`succeeded`,
+ * `canceled`, `processing`, a `requires_…` state), it is not sorted: a `handed_back` row ends the watch's `expired`
+ * rows, so every run reads the payment again, as before its watch ran out (reconcile.ts, checkWatchedPayment). One
+ * that went through is then recorded and refunded automatically, once, under its own key; one that took nothing ends
+ * the watch; one still at the bank stays watched. Until W47b a `succeeded` payment could be sorted unrefunded (£5
+ * kept for a change that was undone), and W47a's refusal while it was still moving left a person to watch Stripe by
+ * hand. One already refunded in Stripe by hand is not refunded again: Stripe refuses the second refund
+ * (`charge_already_refunded`) and the automatic refund records that as done (settleLateRefund). No `order.close` row
+ * is written for a hand-back: nothing was closed, and the `handed_back` row says who pressed, why and what Stripe showed.
+ */
+const PAYMENT_WATCH_CLOSED_SQL = "SELECT 1 FROM audit_log WHERE action = $1::text AND entity_type = 'reader_payment' AND details->>'kind' = 'payment_watch' AND details->>'watchId' = $2::text LIMIT 1"
+
+/**
+ * What Stripe shows for a payment at Mark sorted: `found` with its status when it could be read, not found
+ * (`status: 'not_found'`), or null for no answer.
+ */
+type PaymentSeen = { found: boolean; status: string } | null
+
+async function seePayment(stripe: StripeClient, paymentIntentId: string, timing: StripeTiming): Promise<PaymentSeen> {
+  try {
+    const { status } = await stripe.paymentIntents.retrieve(paymentIntentId, undefined, sendOptions(timing))
+    return { found: true, status }
+  } catch (err) {
+    return isMissing(err) ? { found: false, status: 'not_found' } : null
+  }
+}
+
+async function closePaymentWatch(db: Db, watchId: string, why: string, options: CloseOptions): Promise<CloseStuckOutput> {
+  // W47a: Stripe's own answer first, outside the transaction (no lock is held across the call). W47b: what the read
+  // decides can't go wrong either way. Found: the payment exists, and the automatic check reads it again whatever it
+  // does next. Not found: the same answer the watch ran out on.
+  const first = (await db.query<ListedWatchedPayment>(WATCHED_PAYMENTS_LISTED_SQL, [watchId]))[0]
+  let seen: PaymentSeen = null
+  if (first && first.expired !== null) {
+    if (!options.stripe) throw new Error('Mark sorted on a watched payment reads the payment in Stripe, and no Stripe client was given.')
+    seen = await seePayment(options.stripe(), first.payment_intent_id, stripeTiming(options.startedAt ?? Date.now()))
+    if (!seen) return refused('payment_watch', watchId, 'payment_not_read')
+  }
+  return db.transaction(async (tx) => {
+    const listed = async (): Promise<ListedWatchedPayment | undefined> => (await tx.query<ListedWatchedPayment>(WATCHED_PAYMENTS_LISTED_SQL, [watchId]))[0]
+    const entity = 'reader_payment'
+    const seenListed = await listed()
+    // No longer listed: sorted by an earlier press (its close row names this watch), or ended by the automatic check.
+    const gone = async (): Promise<CloseStuckOutput> =>
+      (await tx.query(PAYMENT_WATCH_CLOSED_SQL, [CLOSE_ACTION, watchId])).length > 0 ? alreadyClosed('payment_watch', watchId) : refused('payment_watch', watchId, 'not_listed')
+    if (!seenListed) return gone()
+    // The payment's own lock, then read again: two presses queue, and the second finds it sorted.
+    await tx.query('SELECT pg_advisory_xact_lock(hashtext($1::text))', [`payment-watch:${seenListed.payment_intent_id}`])
+    const row = await listed()
+    if (!row) return gone()
+    if (row.expired === null) return refused('payment_watch', watchId, 'payment_still_watched')
+    // Its watch ran out between the first look and the lock, so the payment wasn't read: nothing is closed unread.
+    if (!seen) return refused('payment_watch', watchId, 'payment_not_read')
+    const actor = { actorType: options.actor.type, actorId: options.actor.id, entityType: entity, entityId: row.entity_id, requestId: options.requestId }
+    // W47b: Stripe can find the payment, so it goes back to the automatic check, never sorted. `ends`: every `expired`
+    // row standing now, read under the payment's lock. `closed`: the line for a person is gone (the screen shows the
+    // words and reads the list again); `reason` says it was not sorted.
+    if (seen.found) {
+      await audit.recordAll(tx, [
+        { ...actor, action: FLOW_PAYMENT_WATCHED, details: { state: 'handed_back', paymentIntentId: row.payment_intent_id, ends: row.expired_ids, stripeStatus: seen.status, watchId, byHand: { why } } },
+      ])
+      return answer('payment_watch', watchId, { closed: true, reason: 'handed_back', message: CLOSE_WORDS.payment_handed_back })
+    }
+    await audit.recordAll(tx, [
+      { ...actor, action: FLOW_PAYMENT_WATCHED, details: { state: 'sorted', paymentIntentId: row.payment_intent_id, byHand: { why } } },
+      { ...actor, action: CLOSE_ACTION, details: { kind: 'payment_watch', why, watchId, paymentIntentId: row.payment_intent_id, found: row.expired.detail ?? null, stripeStatus: seen.status } },
+    ])
+    return answer('payment_watch', watchId, { closed: true, message: CLOSE_WORDS.payment_watch })
+  })
+}
+
 /** The route's work: one item, by its kind. */
 export async function closeStuckItem(db: Db, input: CloseStuckInput, options: CloseOptions): Promise<CloseStuckOutput> {
   const why = input.reason.trim()
@@ -748,6 +855,7 @@ export async function closeStuckItem(db: Db, input: CloseStuckInput, options: Cl
   }
   if (input.kind === 'held_claim') return closeHeldClaim(db, input.orderId, why, options)
   if (input.kind === 'refund_watch') return closeRefundWatch(db, input.orderId, why, options)
+  if (input.kind === 'payment_watch') return closePaymentWatch(db, input.orderId, why, options)
   // W36 (F-plan 4.10, lead call L7): a membership's Stripe step that Stripe refused for good, once a person has put
   // Stripe right by hand: recorded as sorted (memberships/left.ts). Nothing moves; `orderId` is the step's id.
   if (input.kind === 'left_step') {

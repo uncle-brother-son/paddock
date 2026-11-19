@@ -109,6 +109,7 @@ import { EVENT_BOOKING_CLAIMS_DUE_SQL, ORDER_CLAIMS_DUE_SQL, readEventBookingCla
 import { finishOrderClaim } from './refund-lines'
 import { refundSeen, WATCH_DAYS, WATCH_READ_HOURS, WATCHES_DUE_SQL, WATCHES_WAITING_SQL, watchLateRefund, type RefundSeen, type WatchDue } from '@/server/rules/refunds/refund-watch'
 import { checkWatchedRefund } from '@/server/rules/refunds/refund-watch-settle'
+import { PAYMENT_WATCH_DAYS, WATCHED_PAYMENTS_COUNT_SQL, WATCHED_PAYMENTS_DUE_SQL } from './payment-watch'
 import { cancelRefundedSubscription, cancelSubscriptionsAfterRefund, LEFT_BY_REFUND, refundCancelsDue, type RefundCancelDue } from './refund-subscription'
 import { checkAfterClosing, checksDue, LEAVE_AGAIN_DUE_SQL, leaveAgainLater, settleLeftStep, STEP_NOT_LEFT_AGAIN, stepsDue, type CheckDue, type OpenStep } from '@/server/rules/memberships/left'
 import { endMembershipWithoutSubscription, membershipsToEnd } from '@/server/rules/memberships/no-subscription'
@@ -120,6 +121,7 @@ import {
   moveAndFinish,
   NOTHING_TAKEN,
   PAYMENT_DATE_CHANGES_DUE_SQL,
+  paymentStillGoingReason,
   PAYMENT_DATE_METADATA,
   PAYMENT_DATE_RECONCILE_ENTITY,
   paymentMatches,
@@ -233,6 +235,8 @@ export interface ReconcileOptions {
   watchDays?: number
   /** W32a: how many hours since its last read before a watched refund that reads `succeeded` is read again (WATCH_READ_HOURS). */
   watchReadHours?: number
+  /** W47: how many days a payment is watched before a read Stripe can't find it on ends its watch for a person (PAYMENT_WATCH_DAYS; the tests shorten it). */
+  paymentWatchDays?: number
   /**
    * W42a: ORDER_SWITCH, for one thing only: whether an order this run finalises also leaves card steps for the
    * customer's memberships (`card_moves`; finalise-order.ts). Absent: the Worker's environment, as the routes read
@@ -310,6 +314,11 @@ export interface ReconcileResult {
    * Stripe".
    */
   refundsWaiting: number
+  /**
+   * W47 (W25 review L1): card payments still watched after their booking change was undone by hand. Nothing to do for
+   * them: each is a line of its own on the stuck list, and none is counted in `left`.
+   */
+  paymentsWatched: number
   items: ReconcileItem[]
 }
 
@@ -972,7 +981,8 @@ async function reconcilePaymentDateChange(run: Run, changeId: string): Promise<R
   if (succeeded.length > 1) return left(kind, changeId, 'several_payments', succeeded.map((intent) => intent.id).join(', '))
   const paid = succeeded[0]
   const stillGoing = found.intents.filter((intent) => intent.status !== 'succeeded' && !NOTHING_TAKEN.has(intent.status))
-  if (!paid && stillGoing.length > 0) return left(kind, changeId, 'payment_processing', stillGoing.map((intent) => `${intent.id} ${intent.status}`).join(', '))
+  // W47: the reason says what it is waiting for (the bank, or a payment that must be cancelled in Stripe).
+  if (!paid && stillGoing.length > 0) return left(kind, changeId, paymentStillGoingReason(stillGoing.map((intent) => intent.status)), stillGoing.map((intent) => `${intent.id} ${intent.status}`).join(', '))
 
   if (!paid) {
     const why =
@@ -1015,28 +1025,14 @@ async function reconcilePaymentDateChange(run: Run, changeId: string): Promise<R
 
 // --- A payment watched after its flow was undone by hand (W25, W21 review L5)
 
-/**
- * The payments a manual close left watched (`watching` rows) with no end yet: `landed` or `nothing_taken`, or a
- * `charge_without_record` row for that payment (the automatic refund has it). Oldest first.
- */
-const WATCHED_DUE_SQL = `
-SELECT w.entity_id, w.details->>'paymentIntentId' AS payment_intent_id, (w.details->>'livemode')::boolean AS livemode,
-       w.details->>'flow' AS flow, w.details->>'recordId' AS record_id
-FROM audit_log w
-WHERE w.action = '${FLOW_PAYMENT_WATCHED}' AND w.entity_type = 'reader_payment' AND w.details->>'state' = 'watching'
-  AND NOT EXISTS (
-    SELECT 1 FROM audit_log d
-    WHERE d.entity_type = 'reader_payment' AND d.entity_id = w.entity_id AND d.details->>'paymentIntentId' = w.details->>'paymentIntentId'
-      AND ((d.action = '${FLOW_PAYMENT_WATCHED}' AND d.details->>'state' IN ('landed', 'nothing_taken')) OR d.action = '${FLOW_CHARGE_WITHOUT_RECORD}')
-  )
-ORDER BY w.at, w.id`
-
 interface WatchedPayment {
   entity_id: string
   payment_intent_id: string
   livemode: boolean | null
   flow: string | null
   record_id: string | null
+  /** W47: it has been watched for the watch's days (PAYMENT_WATCH_DAYS), so a read Stripe still can't find it on ends it (W47a: only that). */
+  past_window: boolean | null
 }
 
 /**
@@ -1045,12 +1041,31 @@ interface WatchedPayment {
  * that is gone). If it went through, it is recorded exactly as C2 records a payment for a flow already undone
  * (`reader_payment.charge_without_record`), and the automatic refund gives it back from the next run. Cancelled, or it
  * took nothing: the watch ends. Anything unclear: watched again next run. Never refunds here, never charges.
+ * W47 (W25 review L1, L2): a read that ends nothing is no item of the run (null): the payment is on the stuck list as a
+ * line of its own with nothing to do, and counted in `paymentsWatched`, never in `left`. Once it has been watched for
+ * the watch's days and Stripe still can't find it with the key in use (the other Stripe mode, or a record that never
+ * said which mode), the watch ends `expired` and is left for a person, once, with what Stripe said.
+ * W47a (W47 review S2): only then. W47 ended the watch on any unclear read past its days, which included a payment
+ * Stripe reads perfectly well and still shows as `processing`: its watch ended, nothing read it again, and had it
+ * gone through after a person pressed Mark sorted, the money would have been taken with nothing recorded or refunded.
+ * A payment Stripe can read and that hasn't ended stays watched for as long as it takes. So does one whose read got
+ * no answer this run: a read that failed says nothing about the payment, and the next run reads it again.
+ * W47b (W47a "Noticed" 2): an expired watch comes back here when Mark sorted finds the payment in Stripe after all
+ * (close-stuck.ts hands it back; payment-watch.ts no longer counts its `expired` rows). It is then read as any
+ * watched payment: gone through, recorded and refunded automatically; nothing taken, ended; still at the bank,
+ * watched; not found again (it is past its days), `expired` again for a person.
  */
-async function checkWatchedPayment(run: Run, due: WatchedPayment): Promise<ReconcileItem> {
+async function checkWatchedPayment(run: Run, due: WatchedPayment): Promise<ReconcileItem | null> {
   const id = due.entity_id
   const settled = await settleIntent(run.stripe, { payment_intent_id: due.payment_intent_id, livemode: due.livemode ?? undefined }, run.timing)
-  if (settled.kind === 'unclear') return left('flow', id, 'payment_watched', `${due.payment_intent_id}: ${settled.message}`)
   const entry = { actorType: run.options.actor.type, actorId: run.options.actor.id, entityType: 'reader_payment', entityId: id, requestId: run.options.requestId }
+  if (settled.kind === 'unclear') {
+    if (due.past_window !== true || settled.cause !== 'not_found') return null
+    await run.db.transaction((tx) =>
+      audit.recordAll(tx, [{ ...entry, action: FLOW_PAYMENT_WATCHED, details: { state: 'expired', paymentIntentId: due.payment_intent_id, days: run.options.paymentWatchDays ?? PAYMENT_WATCH_DAYS, detail: settled.message } }])
+    )
+    return left('flow', id, 'payment_watch_expired', `${due.payment_intent_id}: ${settled.message}`)
+  }
   if (settled.kind === 'succeeded') {
     const amount = settled.paymentIntent.amount_received
     await run.db.transaction((tx) =>
@@ -1782,7 +1797,7 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
   const claims = await db.query<{ id: string }>(CLAIMS_DUE_SQL, [window])
   const orderClaims = await db.query<{ id: string }>(ORDER_CLAIMS_DUE_SQL, [window])
   const eventClaims = await db.query<{ id: string }>(EVENT_BOOKING_CLAIMS_DUE_SQL, [window])
-  const watchedPayments = await db.query<WatchedPayment>(WATCHED_DUE_SQL)
+  const watchedPayments = await db.query<WatchedPayment>(WATCHED_PAYMENTS_DUE_SQL, [options.paymentWatchDays ?? PAYMENT_WATCH_DAYS])
   // W41: payment date changes still pending past the window.
   const paymentDates = await db.query<{ id: string }>(PAYMENT_DATE_CHANGES_DUE_SQL, [window])
   const refundCancels = await refundCancelsDue(db, SUBSCRIPTIONS_LEFT_SQL)
@@ -1807,7 +1822,7 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
   // a run can take.
   const watches = await db.query<WatchDue>(WATCHES_DUE_SQL, [options.watchDays ?? WATCH_DAYS, options.watchReadHours ?? WATCH_READ_HOURS, options.maxItems])
 
-  /** `watch`: a read that is no item unless it ends for a person: a watched refund's (W32a), a closed step's check (W40c). */
+  /** `watch`: a read that is no item unless it ends for a person: a watched refund's (W32a), a closed step's check (W40c), a watched payment's (W47). */
   type Work = { kind: ReconcileItem['kind']; id: string; watch?: true; go: () => Promise<ReconcileItem | null> }
   const checkWork = (): Work[] =>
     checks.map((due) => ({
@@ -1834,7 +1849,8 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
       },
     })),
     // W25 (W21 review L5): payments watched since their change was undone by hand.
-    ...watchedPayments.map((due) => ({ kind: 'flow' as const, id: due.entity_id, go: () => checkWatchedPayment(run, due) })),
+    // W47: a read that ends nothing is no item (`watch`), so nothing "waits" on it and it is never counted as left.
+    ...watchedPayments.map((due) => ({ kind: 'flow' as const, id: due.entity_id, watch: true as const, go: () => checkWatchedPayment(run, due) })),
     // W21: booking refund claims held by their press.
     ...claims.map((due) => ({
       kind: 'claim' as const,
@@ -1907,7 +1923,7 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
   /** What still waits from `index` on. A watch's read is never "waiting": nothing is held up by it, and it is due again next run. */
   const waitingFrom = (index: number): number => work.slice(index).filter((next) => !next.watch).length
 
-  const result: ReconcileResult = { checked: 0, finalised: 0, undone: 0, refunds: 0, left: 0, deferred: 0, stripeRefused: false, refundsWaiting: 0, items: [] }
+  const result: ReconcileResult = { checked: 0, finalised: 0, undone: 0, refunds: 0, left: 0, deferred: 0, stripeRefused: false, refundsWaiting: 0, paymentsWatched: 0, items: [] }
   // W32a: every read uses one of the run's items, a watch's included, though a watch's quiet read is not counted as checked.
   let used = 0
   for (const [index, next] of work.entries()) {
@@ -1991,6 +2007,8 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
   }
   try {
     result.refundsWaiting = (await db.query<{ waiting: number }>(WATCHES_WAITING_SQL))[0]?.waiting ?? 0
+    // W47: the payments still watched after this run (one that ended this run is no longer counted).
+    result.paymentsWatched = (await db.query<{ watched: number }>(WATCHED_PAYMENTS_COUNT_SQL))[0]?.watched ?? 0
   } catch {
     // Only a count for the screen: the run's work is done and recorded, and is answered without it.
   }

@@ -86,6 +86,11 @@ export const reconcileRunOutputSchema = z.object({
    * `refunds` nor `left`. Absent from a Worker before W32a.
    */
   refundsWaiting: z.number().optional(),
+  /**
+   * W47 (W25 review L1): card payments still watched after their booking change was undone by hand: each is a line of
+   * its own on the stuck list with nothing to do, and none is counted in `left`. Absent from a Worker before W47.
+   */
+  paymentsWatched: z.number().optional(),
   items: z.array(reconcileItemSchema),
 })
 export type ReconcileRunOutput = z.infer<typeof reconcileRunOutputSchema>
@@ -117,8 +122,13 @@ export type ReconcileRunOutput = z.infer<typeof reconcileRunOutputSchema>
  * - `held_payment_date` (W41, F-plan 4.10): a membership's payment date change the automatic check has left for a
  *   person (`paymentDates` on the list): recorded as not finished, with what Stripe last showed, so the membership can
  *   be changed again. Nothing is sent to Stripe. `orderId` is the change's id.
+ * - `payment_watch` (W47; W25 review L2): a payment watched after its booking change was undone by hand, whose watch
+ *   ran out with Stripe still giving no clear answer (`watchedPayments` on the list): recorded as sorted once a person
+ *   has looked at the payment in Stripe. Nothing moves. `orderId` is the watch's id. W47b: sorted only when Stripe
+ *   still can't find the payment; when it can, the payment is handed back to the automatic check instead (answered
+ *   `closed: true` with `reason: 'handed_back'`: the line for a person is gone, and the payment is watched again).
  */
-export const stuckCloseKindSchema = z.enum(['held_order', 'changed_elsewhere', 'subscription_left', 'late_refund', 'held_flow', 'held_claim', 'refund_watch', 'left_step', 'held_payment_date'])
+export const stuckCloseKindSchema = z.enum(['held_order', 'changed_elsewhere', 'subscription_left', 'late_refund', 'held_flow', 'held_claim', 'refund_watch', 'left_step', 'held_payment_date', 'payment_watch'])
 export type StuckCloseKind = z.infer<typeof stuckCloseKindSchema>
 
 export const stuckCloseTargetSchema = z.object({
@@ -287,6 +297,40 @@ export const stuckPaymentDateSchema = z.object({
 })
 export type StuckPaymentDateOutput = z.infer<typeof stuckPaymentDateSchema>
 
+/**
+ * W47 (W25 review L1, L2): a card payment that was still at the bank when a person undid its booking change by hand.
+ * `watching`: the automatic check reads it every run and refunds it if it goes through: nothing to do. `expired`: the
+ * watch ran out with Stripe still giving no clear answer, so it is for a person (with `close`).
+ */
+export const stuckWatchedPaymentSchema = z.object({
+  watchId: z.string(),
+  /** The undone change's record (a flow's pending id). */
+  pendingId: z.string(),
+  paymentIntentId: z.string(),
+  flow: z.string().nullable(),
+  /** The booking the change was on. */
+  recordId: z.string().nullable(),
+  customerName: z.string().nullable(),
+  /** When the watch began. */
+  since: z.string(),
+  state: z.enum(['watching', 'expired']),
+  words: z.string(),
+  close: stuckCloseTargetSchema.optional(),
+})
+export type StuckWatchedPaymentOutput = z.infer<typeof stuckWatchedPaymentSchema>
+
+/**
+ * W47 (W46 review L2): Stripe's notices (webhook events) the Worker couldn't take in: in error, or never finished, for
+ * over an hour, and any live one ignored because Stripe had no such subscription. One line for all of them. `count`
+ * is 0 with `oldestAt` null only when the notices couldn't be read at all (the words say so).
+ */
+export const stuckWebhookNoticeSchema = z.object({
+  count: z.number(),
+  oldestAt: z.string().nullable(),
+  words: z.string(),
+})
+export type StuckWebhookNoticeOutput = z.infer<typeof stuckWebhookNoticeSchema>
+
 export const stuckListOutputSchema = z.object({
   checkout: z.array(stuckOrderSchema),
   flows: z.array(stuckFlowSchema),
@@ -309,6 +353,13 @@ export const stuckListOutputSchema = z.object({
    * reads the list exactly as before. Optional, so a staff app with W41's types still reads an older Worker's list.
    */
   paymentDates: z.array(stuckPaymentDateSchema).optional(),
+  /**
+   * W47: payments watched after their change was undone by hand. A field of its own and optional, as `paymentDates`:
+   * a staff app with W47's types still reads an older Worker's list, and an older staff app reads this one as before.
+   */
+  watchedPayments: z.array(stuckWatchedPaymentSchema).optional(),
+  /** W47: Stripe's notices in error for over an hour, as one line; null with none. Optional, as `watchedPayments`. */
+  webhook: stuckWebhookNoticeSchema.nullable().optional(),
   alert: z.object({ at: z.string(), words: z.string() }).nullable(),
 })
 export type StuckListOutput = z.infer<typeof stuckListOutputSchema>

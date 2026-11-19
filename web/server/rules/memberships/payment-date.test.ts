@@ -33,7 +33,7 @@ import {
   PAYMENT_DATE_STUCK_WORDS,
   PAYMENT_DATE_WORDS,
 } from './failure-messages'
-import { checkSubscription, londonMidnightSeconds, ORDER_PROCESSING_SQL, PAYMENT_DATE_ACTION, PAYMENT_DATE_CLOSE_REASONS, PAYMENT_DATE_REFUND_WATCH_STEP } from './payment-date'
+import { checkSubscription, londonMidnightSeconds, ORDER_PROCESSING_SQL, PAYMENT_DATE_ACTION, PAYMENT_DATE_CLOSE_REASONS, PAYMENT_DATE_REFUND_WATCH_STEP, paymentStillGoingReason } from './payment-date'
 
 // Brief W41 items 2 to 6 and 9 (F-plan 4.4, 4.10; bugs FB1 to FB4; Q10; Q18; R7): a membership's payment date change
 // through the Worker's routes, on the replay's live schema with the fake Stripe. What must hold: the record is
@@ -799,9 +799,94 @@ describe('S2: the charge', () => {
       stripe.markProcessing(paid?.id as string)
       pastTheWindow()
       expect(await dateItems(stripe)).toEqual([{ kind: 'date_change', id: change?.id, outcome: 'left', reason: 'payment_processing', detail: `${paid?.id} processing` }])
-      expect((await listed()).map((line) => [line.reason, line.close])).toEqual([['payment_processing', undefined]])
+      // W47 item 5 (the W45 audit's row 37), a named difference: the line used step D's words for a booking change
+      // ("The card payment for this change is still being processed by the bank..."). It now says what the payment
+      // date change is waiting for, and that it can't be closed by hand until Stripe says how the payment ended.
+      expect((await listed()).map((line) => [line.reason, line.words, line.close])).toEqual([['payment_processing', PAYMENT_DATE_STUCK_WORDS['payment_processing'], undefined]])
+      expect(PAYMENT_DATE_STUCK_WORDS['payment_processing']).toBe(
+        "A payment date change's part-month charge is still being processed by the customer's bank. Wait for the bank: the automatic check looks every 5 minutes and, once Stripe says whether the payment went through, finishes the change or ends it. It can't be closed by hand until then. Don't change the payment date or take the part-month charge again."
+      )
+      // The close itself refuses while the bank may still finish the payment.
+      const refused = await closeStuckItem(db, { kind: 'held_payment_date', orderId: change?.id as string, reason: 'Trying to close it early' }, { actor: { type: 'staff', id: ID.staff }, requestId: crypto.randomUUID() })
+      expect(refused).toMatchObject({ closed: false, reason: 'still_checking' })
       expect(moves(stripe)).toEqual([])
     })
+  })
+
+  it('W47 item 5: once Stripe gives the payment a final state, the change is finished by the automatic check (paid), or left for a person with a Close (paid, but another amount)', async () => {
+    await onASeed(async (stripe) => {
+      stripe.failNext('paymentIntents.create', { kind: 'lost_response' })
+      stripe.failNext('paymentIntents.create', { kind: 'lost_response' })
+      await press()
+      const [paid] = await taken(stripe)
+      stripe.markProcessing(paid?.id as string)
+      pastTheWindow()
+      expect((await dateItems(stripe)).map((item) => item.reason)).toEqual(['payment_processing'])
+      expect((await listed()).map((line) => line.close)).toEqual([undefined])
+      // The bank finishes it: paid in full. The next run, five minutes on, moves the date and the line goes.
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      stripe.completeReaderPayment(paid?.id as string)
+      expect((await dateItems(stripe)).map((item) => item.outcome)).toEqual(['finalised'])
+      expect(await listed()).toEqual([])
+      expect(await changes()).toMatchObject([{ status: 'done' }])
+    })
+    await onASeed(async (stripe) => {
+      stripe.failNext('paymentIntents.create', { kind: 'lost_response' })
+      stripe.failNext('paymentIntents.create', { kind: 'lost_response' })
+      await press()
+      const [change] = await changes()
+      const [paid] = await taken(stripe)
+      stripe.markProcessing(paid?.id as string)
+      pastTheWindow()
+      await dateItems(stripe)
+      expect((await listed()).map((line) => [line.reason, line.close])).toEqual([['payment_processing', undefined]])
+      // The bank finishes it for another amount than the change asked for: final, and for a person. The next run is
+      // five minutes on (under the test's clock two runs' rows would otherwise share a moment).
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      stripe.completeReaderPayment(paid?.id as string, { amount: 100 })
+      expect((await dateItems(stripe)).map((item) => item.reason)).toEqual(['amount_mismatch'])
+      expect((await listed()).map((line) => [line.reason, line.close])).toEqual([['amount_mismatch', { kind: 'held_payment_date', orderId: change?.id }]])
+    })
+  })
+
+  it('W47 item 5: a payment waiting for the customer to approve it with their bank is listed with what to do (cancel it in Stripe), no Close; once it is cancelled there, the automatic check ends the change and the date can be changed again', async () => {
+    await onASeed(async (stripe) => {
+      stripe.failNext('paymentIntents.create', { kind: 'lost_response' })
+      stripe.failNext('paymentIntents.create', { kind: 'lost_response' })
+      await press()
+      const [change] = await changes()
+      const [paid] = await taken(stripe)
+      stripe.markRequiresAction(paid?.id as string)
+      pastTheWindow()
+      const calls = () => stripe.calls.filter((call) => call.method === 'paymentIntents.cancel' || call.method === 'paymentIntents.create' || call.method === 'paymentIntents.confirm').length
+      const before = calls()
+      expect(await dateItems(stripe)).toEqual([{ kind: 'date_change', id: change?.id, outcome: 'left', reason: 'payment_needs_action', detail: `${paid?.id} requires_action` }])
+      // The automatic check reads only: it neither cancels the payment nor charges again.
+      expect(calls()).toBe(before)
+      expect((await listed()).map((line) => [line.reason, line.words, line.close])).toEqual([['payment_needs_action', PAYMENT_DATE_STUCK_WORDS['payment_needs_action'], undefined]])
+      expect(PAYMENT_DATE_STUCK_WORDS['payment_needs_action']).toBe(
+        "A payment date change's part-month charge is waiting for a step Stripe needs (usually the customer's bank approval), which can't be done from here, so it won't finish on its own. Tell a manager: cancel that payment in Stripe. Once Stripe shows it cancelled, the automatic check ends the change within 5 minutes (nothing was taken) and the date can be changed again. It can't be closed by hand until then. Don't change the payment date or take the part-month charge again."
+      )
+      const refused = await closeStuckItem(db, { kind: 'held_payment_date', orderId: change?.id as string, reason: 'Trying to close it early' }, { actor: { type: 'staff', id: ID.staff }, requestId: crypto.randomUUID() })
+      expect(refused).toMatchObject({ closed: false, reason: 'still_checking' })
+      expect(refusalOf(await press())).toEqual([409, 'CONFLICT', 'refused', PAYMENT_DATE_REFUSALS.inProgress])
+      // A manager cancels the payment in Stripe: a final state, and nothing was taken. The next run is five minutes on.
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      await stripe.paymentIntents.cancel(paid?.id as string)
+      expect((await dateItems(stripe)).map((item) => item.outcome)).toEqual(['undone'])
+      expect(await listed()).toEqual([])
+      expect((await changes()).map((row) => row.status)).toEqual(['failed'])
+      expect(moves(stripe)).toEqual([])
+    })
+  })
+
+  it('W47 item 5: one payment at the bank and one waiting on the customer reads as waiting for the bank, which will end on its own', () => {
+    expect(paymentStillGoingReason(['processing'])).toBe('payment_processing')
+    expect(paymentStillGoingReason(['requires_action', 'processing'])).toBe('payment_processing')
+    expect(paymentStillGoingReason(['requires_action'])).toBe('payment_needs_action')
+    expect(paymentStillGoingReason(['requires_confirmation', 'requires_capture'])).toBe('payment_needs_action')
+    expect(PAYMENT_DATE_CLOSE_REASONS.has('payment_processing')).toBe(false)
+    expect(PAYMENT_DATE_CLOSE_REASONS.has('payment_needs_action')).toBe(false)
   })
 })
 
@@ -863,6 +948,10 @@ describe('S3: the date move', () => {
       expect(await states()).toEqual(['started', 'refunding', 'held'])
       pastTheWindow()
       const calls = stripe.calls.length
+      // W47 item 5 (W41 "Noticed" 4; the W45 audit's row 39), a named difference: before reconcile's first run past
+      // the window the line read "waiting", with no Close, for up to 5 minutes. It now reads the press's own mark.
+      expect((await listed()).map((line) => [line.reason, line.words, line.close, line.paymentIntentId])).toEqual([['refund_refused', PAYMENT_DATE_STUCK_WORDS['refund_refused'], { kind: 'held_payment_date', orderId: change?.id }, paid?.id]])
+      expect(stripe.calls).toHaveLength(calls)
       expect(await dateItems(stripe)).toEqual([{ kind: 'date_change', id: change?.id, outcome: 'left', reason: 'refund_refused', detail: paid?.id }])
       // No call at all: a refusal for good is never retried (lead call L7's lesson).
       expect(stripe.calls).toHaveLength(calls)

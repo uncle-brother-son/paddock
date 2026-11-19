@@ -209,8 +209,14 @@ export type PartRefundInput = z.infer<typeof partRefundInputSchema>
 export const refundOwedInputSchema = z.object({ amount: pounds, refundMethod })
 export type RefundOwedInput = z.infer<typeof refundOwedInputSchema>
 
-/** It already arrived: what is owed reached the customer after all; no money moves. */
-export const owedArrivedInputSchema = z.object({ amount: pounds, reason: looseText })
+/**
+ * It already arrived: what is owed reached the customer after all; no money moves.
+ * W47 (Wayne, 19 Nov): `arrivedOn` says where staff saw it. `card`: on the customer's card (the refund is in Stripe),
+ * so it is recorded on the lines as card money given back and the card money left reads right. `other`, or nothing
+ * (a staff app from before W47): another way (store credit on their balance, cash), and nothing is recorded on the
+ * lines, exactly as before W47.
+ */
+export const owedArrivedInputSchema = z.object({ amount: pounds, reason: looseText, arrivedOn: z.enum(['card', 'other']).optional() })
 export type OwedArrivedInput = z.infer<typeof owedArrivedInputSchema>
 
 // --- Cancel & Refund, Cancel & return credit, Remove add-on
@@ -474,6 +480,12 @@ export const refundBookingOutputSchema = z.object({
   held: z.object({ claimId: z.string(), reason: z.string(), message: z.string() }).optional(),
   /** W23: a cancel's ticked add-ons' share (the amounts above are then the booking's own money, as the old answer had them). */
   addons: z.object({ cardRefundedAmount: z.number(), storeCreditRefundedAmount: z.number(), storeCreditBalance: z.number().optional() }).optional(),
+  /**
+   * W47a (W47 review L2): It already arrived "on the card" when less than what arrived could be recorded as card money
+   * (the booking had less card money left): what was recorded against the card, and the rest, which is on no line
+   * (as "another way"). `warning` then says so in words. In no other answer.
+   */
+  arrivedOnCard: z.object({ recorded: z.number(), other: z.number() }).optional(),
 })
 export type RefundBookingOutput = z.infer<typeof refundBookingOutputSchema>
 
