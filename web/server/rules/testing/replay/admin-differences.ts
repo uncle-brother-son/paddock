@@ -1,3 +1,4 @@
+import { BOOKING_ADMIN_NEW_WORDS } from '@/server/rules/bookings/admin-failure-messages'
 import { PRICING_ADMIN_NEW_WORDS } from '@/server/rules/pricing/admin-failure-messages'
 import { PROMO_ADMIN_WORDS } from '@/server/rules/promo/admin-failure-messages'
 import { STAFF_ADMIN_WORDS } from '@/server/rules/staff/failure-messages'
@@ -119,19 +120,40 @@ const refusedAs =
  * GB14. None of the old reads asked who was calling, so an inactive account, and a sign-in with no staff row, read
  * every promo code and a code's uses. Now each is refused by the route's own staff check. The recording makes every
  * read twice (inactive, then no staff row); the reads later slices move still answer on both passes.
+ *
+ * W50: built from the golden file. A read that answered a list is now one refusal in its place (pinned whole); a
+ * read that answered an object (one booking, its detail, the payments needing attention) differs field by field, so
+ * each of the golden answer's fields is gone and what was thrown is pinned.
  */
-const GB14_THE_MOVED_READS_REFUSE = pinned(
-  "Bug GB14 is closed for the reads moved so far: an inactive account, and a sign-in with no staff row, are refused the promo code list and a code's uses (W54), each in the words every staff route gives. (The old code answered them both. The reads W50 to W57 move still do.)",
-  'Bug GB14 (G-plan section 3); G-plan 4.2 (reads: an active staff member); brief W49 + W54 "Parity and tests" (the staff check on reads)',
-  [
-    // The inactive pass: getPromoCodes, getPromoCodeRedemptions.
-    ['.results[11]', refusedAs(INACTIVE_WORDS)],
-    ['.results[12]', refusedAs(INACTIVE_WORDS)],
-    // The pass with no staff row.
-    ['.results[35]', refusedAs(NO_STAFF_RECORD_WORDS)],
-    ['.results[36]', refusedAs(NO_STAFF_RECORD_WORDS)],
-  ]
-)
+const GB14_READS_MOVED: ReadonlyArray<readonly [index: number, read: string]> = [
+  // W50 (result 0 is the order that sets the scenario up).
+  [1, 'getBookings'],
+  [2, 'getBookingById'],
+  [3, 'getBookingDetail'],
+  [4, 'getAddonPrepChecklistForRange'],
+  [5, 'getWaiverGapsForRange'],
+  [8, 'getPaymentAttentionItems'],
+  // W54.
+  [11, 'getPromoCodes'],
+  [12, 'getPromoCodeRedemptions'],
+]
+/** The recording's two passes: an inactive account, then (24 results further on) a sign-in with no staff row. */
+const GB14_PASSES: ReadonlyArray<readonly [offset: number, words: string]> = [
+  [0, INACTIVE_WORDS],
+  [24, NO_STAFF_RECORD_WORDS],
+]
+
+const gb14TheMovedReadsRefuse = (golden: Recording): AllowedDifference =>
+  pinned(
+    "Bug GB14 is closed for the reads moved so far: an inactive account, and a sign-in with no staff row, are refused the promo code list and a code's uses (W54), and the booking list, one booking, its detail (with its guests' dates of birth), the add-on prep list, the waiver gaps and the payments needing attention (W50), each in the words every staff route gives. (The old code answered them all. The reads W51 to W57 move still do.)",
+    'Bug GB14 (G-plan section 3); G-plan 4.2 (reads: an active staff member); briefs W49 + W54 and W50 "Parity and tests" (the staff check on reads)',
+    GB14_PASSES.flatMap(([offset, words]) =>
+      GB14_READS_MOVED.flatMap(([index]): Array<readonly [string, Pin]> => {
+        const at = index + offset
+        return Array.isArray(golden.results[at]) ? [[`.results[${at}]`, refusedAs(words)]] : answerRefused(golden, at, words)
+      })
+    )
+  )
 
 // --- W49: Staff (GB16)
 
@@ -278,7 +300,9 @@ export const NOW_RECORDED_SCENARIOS = ['w48-gb16-a-permission-change-leaves-no-r
 /** The named differences of each W49 + W54 scenario. S3's are built from the scenario's own golden file. */
 export function w49W54Differences(name: string, golden: Recording): readonly AllowedDifference[] {
   const s3 = (DECISION_SCENARIOS.S3 as readonly string[]).includes(name) ? [s3UnknownStaffOnManagePricing(golden)] : []
-  return [...(W49_W54_DIFFERENCES.get(name) ?? []), ...s3]
+  // W50: GB14's is built from its golden file too (the reads that answer an object differ field by field).
+  const gb14 = name === GB14_SCENARIO ? [gb14TheMovedReadsRefuse(golden)] : []
+  return [...(W49_W54_DIFFERENCES.get(name) ?? []), ...s3, ...gb14]
 }
 
 export const W49_W54_DIFFERENCES: ReadonlyMap<string, readonly AllowedDifference[]> = new Map<string, readonly AllowedDifference[]>([
@@ -292,5 +316,115 @@ export const W49_W54_DIFFERENCES: ReadonlyMap<string, readonly AllowedDifference
   [DECISION_SCENARIOS.GB8_FAILED[0], [GB8_A_FAILED_SAVE_LEAVES_THE_DAY_AS_IT_WAS]],
   [DECISION_SCENARIOS.GB8_FAILED[1], [GB8_A_FAILED_SAVE_LEAVES_THE_DAY_AS_IT_WAS]],
   [DECISION_SCENARIOS.GB8_FAILED[2], [GB8_A_FAILED_SAVE_LEAVES_THE_DAY_AS_IT_WAS]],
-  [DECISION_SCENARIOS.GB14[0], [GB14_THE_MOVED_READS_REFUSE]],
+  // GB14's one difference is built from its golden file (w49W54Differences): listed here so the recording counts as differing.
+  [DECISION_SCENARIOS.GB14[0], []],
 ])
+
+// ---------------------------------------------------------------------------------------------------------------------
+// W50: Bookings admin and Overview (GB14, GB17, Wayne's Q49)
+
+/** The 16 recordings of the booking and Overview reads and the three flags (GB14's own recording is in W49 + W54's family above). */
+export const isW50Scenario = (name: string): boolean =>
+  /^w48-(bookings-read|booking-detail-read-|addon-prep-read$|waiver-gaps-read$|booking-check-in-|guest-waiver-|addon-prepared-|payment-attention-read$|gb17-)/.test(name)
+
+/*
+ * What W50's replay shows (briefs/W50-logs/04-replay-differences-first-pass-run3.jsonl, staff app repo): ten of the
+ * sixteen match their golden files exactly, field for field: all seven recordings of the six reads (the booking list
+ * by range and status, one booking, the detail with each kind of open payment, the prep list, the waiver gaps,
+ * payments needing attention), and the three flags pressed on a live booking by an active staff member. Named
+ * columns in place of `b.*` and `RETURNING *` change nothing: every column the old answers carried is named. The
+ * check-in time is the database's clock where it was the staff app's: both are a time (the recordings hold a time's
+ * place, not its value), so it shows in no recording; server/rules/bookings/admin.test.ts holds it.
+ *
+ * Also on every recording and set aside before the comparison, as for W49 + W54: the Worker's audit rows (one for
+ * each flag set, with who) and the stored answers that hold each call's key.
+ *
+ * Six differ, each by a decision, named below. Each is split so that the refused answer and the row left unchanged
+ * are separate allowances: a press that was refused in the right words but still changed the row would leave the
+ * row's allowance unseen, which fails.
+ */
+
+const W50_FLAG = 'G-plan 4.2 (level C: one guarded statement, where the guard is the rule, and an audit row)'
+export const W50_DECISIONS = {
+  NO_STAFF_ROW: `W48 report "For the Worker step" 1 and W48 review point 7 (the old flag functions ignored a sign-in with no staff row); bug GB14's fix (G-plan 4.2: every /api/v1/staff route refuses an unknown sign-in before its rule runs)`,
+  Q49: `Wayne's Q49 (20 Nov 2026: Check In is refused on a Payment needed booking, "This booking needs payment first. Use Take Payment.", his words as changed in W50a to name the button); bug GB17 (G-plan section 3); ${W50_FLAG}`,
+  GB17_CANCELLED: `Bug GB17 (G-plan section 3); the lead's call in brief W50 (a cancelled booking: every flag change refused, on and off); ${W50_FLAG}`,
+  GB17_REMOVED_ADDON: `Bug GB17 (G-plan section 3); brief W50 item 5 (a removed add-on line can't be marked prepared); ${W50_FLAG}`,
+} as const
+
+/**
+ * A step the old function answered and the Worker refuses: every field of the golden answer is gone, and what was
+ * thrown is exactly `words`. Built from the golden file's own answer, so it allows that step and nothing else.
+ */
+function answerRefused(golden: Recording, index: number, words: string): Array<readonly [string, Pin]> {
+  const answered = golden.results[index]
+  const fields = answered !== null && typeof answered === 'object' && !Array.isArray(answered) ? Object.keys(answered) : []
+  return [...fields.map((field) => [`.results[${index}].${field}`, GONE] as const), [`.results[${index}].thrown`, words] as const]
+}
+
+const NOT_CHECKED_IN: ReadonlyArray<readonly [string, Pin]> = [['.tables.bookings.added[0].checked_in_at', GONE]]
+const WAIVER_NOT_SIGNED: ReadonlyArray<readonly [string, Pin]> = [
+  ['.tables.booking_guests.added[0].waiver_accepted', false],
+  ['.tables.booking_guests.added[0].waiver_version', GONE],
+  ['.tables.booking_guests.added[0].waiver_accepted_at', GONE],
+  ['.tables.booking_guests.added[0].waiver_method', GONE],
+]
+const ADDON_NOT_PREPARED: ReadonlyArray<readonly [string, Pin]> = [
+  ['.tables.addon_order_lines.added[0].prepared', false],
+  ['.tables.addon_order_lines.added[0].prepared_at', GONE],
+  ['.tables.addon_order_lines.added[0].prepared_by', GONE],
+]
+
+/** The three "who may" recordings: an active sign-in, then an inactive account (refused before and now), then a sign-in with no staff row. */
+const noStaffRow = (golden: Recording, index: number, what: string, unchanged: ReadonlyArray<readonly [string, Pin]>, row: string): AllowedDifference[] => [
+  pinned(
+    `${what}, pressed by a sign-in with no staff row, is refused in the words every staff route gives ("No staff record matches the logged-in user's email…"). (The old function ignored that the sign-in had no staff row and went ahead: nobody who is staff had done it.)`,
+    W50_DECISIONS.NO_STAFF_ROW,
+    answerRefused(golden, index, NO_STAFF_RECORD_WORDS)
+  ),
+  ...(unchanged.length > 0 ? [pinned(`…and ${row} (The old function changed it.)`, W50_DECISIONS.NO_STAFF_ROW, unchanged)] : []),
+]
+
+/** The named differences of each W50 recording that has any, built from its own golden file. Ten have none. */
+const W50_NAMED: Readonly<Record<string, (golden: Recording) => AllowedDifference[]>> = {
+  'w48-booking-check-in-who-may': (golden) => noStaffRow(golden, 2, 'Check In', NOT_CHECKED_IN, 'the booking is not checked in.'),
+  'w48-guest-waiver-who-may': (golden) => noStaffRow(golden, 2, "Marking a guest's waiver signed", WAIVER_NOT_SIGNED, "the guest's waiver is still not signed."),
+  // Marking prepared already needed a staff row (it is recorded on the line): only un-preparing went ahead without one,
+  // on a line that was not prepared, so no row differs.
+  'w48-addon-prepared-who-may': (golden) => noStaffRow(golden, 3, 'Un-marking an add-on as prepared', [], ''),
+  'w48-gb17-a-cancelled-booking-and-a-payment-needed-one-are-checked-in': (golden) => [
+    pinned(
+      'Q49 (bug GB17 is closed for a booking at Payment needed): Check In on a booking that needs payment is refused, "This booking needs payment first. Use Take Payment." (The old code checked it in: a member whose payment had failed was checked in without paying.)',
+      W50_DECISIONS.Q49,
+      answerRefused(golden, 1, BOOKING_ADMIN_NEW_WORDS.paymentNeededCheckIn)
+    ),
+    pinned(
+      'Bug GB17 is closed for a cancelled booking: Check In on a cancelled booking is refused, "This booking is cancelled, so it can\'t be checked in and its check-in can\'t be undone." (The old code checked it in, so it read as attended on the customer\'s history.)',
+      W50_DECISIONS.GB17_CANCELLED,
+      answerRefused(golden, 2, BOOKING_ADMIN_NEW_WORDS.cancelledCheckIn)
+    ),
+    pinned('…and the cancelled booking is not checked in. (The old code left it checked in.)', W50_DECISIONS.GB17_CANCELLED, NOT_CHECKED_IN),
+  ],
+  'w48-gb17-a-cancelled-bookings-waiver-is-changed': (golden) => [
+    pinned(
+      "Bug GB17 is closed for a cancelled booking's waivers: marking a guest's waiver signed on a cancelled booking is refused, \"This booking is cancelled, so its guests' waivers can no longer be changed.\" (The old code changed it like any other.)",
+      W50_DECISIONS.GB17_CANCELLED,
+      answerRefused(golden, 1, BOOKING_ADMIN_NEW_WORDS.cancelledWaiver)
+    ),
+    pinned("…and the guest's waiver is still not signed. (The old code signed it.)", W50_DECISIONS.GB17_CANCELLED, WAIVER_NOT_SIGNED),
+  ],
+  'w48-gb17-a-removed-addon-is-marked-prepared': (golden) => [
+    pinned(
+      'Bug GB17 is closed for a removed add-on: marking an add-on prepared after it was removed from its booking is refused, "This add-on has been removed from the booking, so it can\'t be marked prepared or not prepared." (The old code marked it prepared.)',
+      W50_DECISIONS.GB17_REMOVED_ADDON,
+      answerRefused(golden, 1, BOOKING_ADMIN_NEW_WORDS.removedAddonPrepared)
+    ),
+    pinned('…and the removed add-on is not marked prepared, by anyone. (The old code marked it, with the staff member and the time.)', W50_DECISIONS.GB17_REMOVED_ADDON, ADDON_NOT_PREPARED),
+  ],
+}
+
+/** The W50 recordings that have a named difference. */
+export const W50_DIFFERING: readonly string[] = Object.keys(W50_NAMED)
+
+/** The named differences of a W50 recording: none for the ten that match their golden files exactly. */
+export const w50Differences = (name: string, golden: Recording): readonly AllowedDifference[] => W50_NAMED[name]?.(golden) ?? []

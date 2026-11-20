@@ -85,6 +85,21 @@ const iso = (value: unknown): string => (value instanceof Date ? value.toISOStri
 const isoOrNull = (value: unknown): string | null => (value === null || value === undefined ? null : iso(value))
 const amount = (value: string | null): number => Number.parseFloat(value ?? '0')
 
+/**
+ * For a booking aliased `b`: a pending order paying for it that still counts as open (one with a reader intent, or
+ * one under 15 minutes old). W50: named, so the booking detail's read (admin.ts) asks the same question in the same
+ * words; the statement below is the text it always was.
+ */
+export const ORDER_BEING_PAID_SQL = `EXISTS (
+         SELECT 1 FROM orders paying
+         JOIN order_line_items paying_line ON paying_line.order_id = paying.id
+         WHERE paying_line.booking_id = b.id AND paying.payment_status = 'pending'
+           AND (paying.reader_payment->>'payment_intent_id' IS NOT NULL OR paying.created_at > now() - interval '15 minutes')
+       )`
+
+/** The flows that hold a booking while a payment is taken on it (a pending pending_reader_payments row of one of them). */
+export const BOOKING_FLOWS_SQL = "('move', 'settle', 'add_guest')"
+
 const BOOKING_SQL = `
 SELECT b.id, b.customer_id, b.session_id, b.status, b.party_size, b.price_paid::text AS price_paid,
        b.part_refunded_amount::text AS part_refunded_amount, b.refund_owed_amount::text AS refund_owed_amount,
@@ -92,12 +107,7 @@ SELECT b.id, b.customer_id, b.session_id, b.status, b.party_size, b.price_paid::
        b.start_time, b.end_time, b.payment_due_by, b.special_requests, b.cancelled_at, b.updated_at,
        s.service_type_id, st.booking_type, s.start_time AS session_start, s.end_time AS session_end, s.capacity,
        s.total_booked, s.status AS session_status, s.band_id AS session_band_id,
-       EXISTS (
-         SELECT 1 FROM orders paying
-         JOIN order_line_items paying_line ON paying_line.order_id = paying.id
-         WHERE paying_line.booking_id = b.id AND paying.payment_status = 'pending'
-           AND (paying.reader_payment->>'payment_intent_id' IS NOT NULL OR paying.created_at > now() - interval '15 minutes')
-       ) AS order_being_paid
+       ${ORDER_BEING_PAID_SQL} AS order_being_paid
 FROM bookings b
 JOIN sessions s ON s.id = b.session_id
 JOIN service_types st ON st.id = s.service_type_id
@@ -138,32 +148,62 @@ type BookingRow = {
 const workerMethod = (method: string | null, requestId: string | null): OpenFlow['method'] =>
   requestId !== null && (method === 'card' || method === 'reader') ? method : null
 
-/** The booking as a change reads it, or null when it doesn't exist. Locks nothing: lockAndLoadBooking locks first. */
-export async function loadBooking(db: Queryable, bookingId: string): Promise<LoadedBooking | null> {
-  const row = (await db.query<BookingRow>(BOOKING_SQL, [bookingId]))[0]
-  if (!row) return null
-  const seats = await db.query<{
-    id: string
-    guest_type: string
-    guest_name: string
-    guest_email: string | null
-    date_of_birth: unknown
-    unit_price: string | null
-    pay_by: string | null
-    created_at: unknown
-  }>(
-    `SELECT id, guest_type, guest_name, guest_email, date_of_birth::text AS date_of_birth, unit_price::text AS unit_price, pay_by, created_at
+type SeatRow = {
+  id: string
+  guest_type: string
+  guest_name: string
+  guest_email: string | null
+  date_of_birth: unknown
+  unit_price: string | null
+  pay_by: string | null
+  created_at: unknown
+}
+type FlowRow = { id: string; flow: string; method: string | null; request_id: string | null; created_at: unknown }
+
+/**
+ * The booking as a change reads it, or null when it doesn't exist. Locks nothing: lockAndLoadBooking locks first.
+ *
+ * W50 (brief item 12): its four reads (the booking with its session, its seats, its open flows, its money left) each
+ * need only the booking's id. `together` sends them at once, for a quote read on the request's own client, which
+ * holds several connections. Left out, they go one after another, exactly as before: inside a change's transaction
+ * (one connection) there is nothing to gain, and every caller there is unchanged.
+ */
+export async function loadBooking(db: Queryable, bookingId: string, reads: 'in_turn' | 'together' = 'in_turn'): Promise<LoadedBooking | null> {
+  const readRow = () => db.query<BookingRow>(BOOKING_SQL, [bookingId])
+  const readSeats = () =>
+    db.query<SeatRow>(
+      `SELECT id, guest_type, guest_name, guest_email, date_of_birth::text AS date_of_birth, unit_price::text AS unit_price, pay_by, created_at
      FROM booking_guests WHERE booking_id = $1::uuid ORDER BY created_at, id`,
-    [bookingId]
-  )
-  const flows = await db.query<{ id: string; flow: string; method: string | null; request_id: string | null; created_at: unknown }>(
-    `SELECT id, flow, snapshot->>'method' AS method, snapshot->>'request_id' AS request_id, created_at
+      [bookingId]
+    )
+  const readFlows = () =>
+    db.query<FlowRow>(
+      `SELECT id, flow, snapshot->>'method' AS method, snapshot->>'request_id' AS request_id, created_at
      FROM pending_reader_payments
      WHERE record_id = $1::uuid AND flow IN ('move', 'settle', 'add_guest') AND status = 'pending'
      ORDER BY created_at, id`,
-    [bookingId]
-  )
-  const figures = await loadBookingMoneyLeft(db, bookingId)
+      [bookingId]
+    )
+  const readFigures = () => loadBookingMoneyLeft(db, bookingId)
+
+  let row: BookingRow | undefined
+  let seats: SeatRow[]
+  let flows: FlowRow[]
+  let figures: BookingMoneyLeft | null
+  if (reads === 'together') {
+    const [rows, seatRows, flowRows, moneyLeft] = await Promise.all([readRow(), readSeats(), readFlows(), readFigures()])
+    row = rows[0]
+    seats = seatRows
+    flows = flowRows
+    figures = moneyLeft
+    if (!row) return null
+  } else {
+    row = (await readRow())[0]
+    if (!row) return null
+    seats = await readSeats()
+    flows = await readFlows()
+    figures = await readFigures()
+  }
   if (!figures) return null
   return {
     id: row.id,

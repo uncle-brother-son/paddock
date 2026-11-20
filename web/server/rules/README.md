@@ -2151,3 +2151,166 @@ saved, the reviewer's two examples, a press with no stamp); `pricing/` and `prom
 presses at once from pages loaded before either: the second waits, then is refused; a control with the comparison
 made before the lock lets it through); `http/route.test.ts` (F3); `testing/replay/admin-replay.test.ts` (the golden
 files pressed as the screens press them); `server/staff-app-helpers.test.ts` (the staff app sends and keeps the stamp).
+
+## Bookings admin and Overview on the Worker (W50)
+
+G-plan 1.10, 1.12, 4.3 and 4.8; bugs GB14 and GB17; Wayne's Q49 (20 Nov); W48 review L2 and L5. `bookings/admin.ts`,
+its words in `bookings/admin-failure-messages.ts` (`BOOKING_ADMIN_NEW_WORDS`: every one is new, because the old flag
+functions refused nothing about the booking), the day fragments in `time/london-day-sql.ts`, the waiver methods in
+`waivers/methods.ts`.
+
+| Staff app function | Route | What |
+|---|---|---|
+| `getBookings` | `GET bookings` | The bookings whose session is on a London day from `startDate` to `endDate` (each optional), with a status; none of the three lists every booking |
+| `getBookingById` | `GET bookings/:bookingId` | One booking's row, or null |
+| `getBookingDetail` | `GET bookings/:bookingId/detail` | Guests, add-on lines, special requests, money still to give back, the open-payment words |
+| `getAddonPrepChecklistForRange` | `GET bookings/addon-prep` | Add-ons still on bookings that aren't cancelled, for the days |
+| `getWaiverGapsForRange` | `GET bookings/waiver-gaps` | Guests without a signed waiver on bookings that aren't cancelled, for the days |
+| `getPaymentAttentionItems` | `GET overview/payment-attention` | Bookings at Payment needed and memberships whose payment is overdue |
+| `setBookingCheckedIn` | `POST bookings/:bookingId/check-in` | Check In and its undo |
+| `setGuestWaiverStatus` | `POST bookings/guests/:guestId/waiver` | Mark Signed and Revoke |
+| `setAddonLinePrepared` | `POST bookings/addon-lines/:lineId/prepared` | The prepared tick, on and off |
+
+**The reads.**
+
+- **GB14:** an active staff member, through `adminRead`. The old six checked nobody.
+- **Named columns:** every column the old `b.*` and `RETURNING *` gave is named, so the answers are the old ones
+  field for field (the replay holds that), and a new column is a decision.
+- **The channel (4.8).** Every read takes a `BookingReader`: `{ channel: 'staff', actor }` or `{ channel: 'customer',
+  customerId }`. On the customer channel every statement carries `AND b.customer_id = $n` (`ownOnly`), so a customer
+  is only ever shown their own bookings; a booking that isn't theirs reads as one that isn't there. No customer route
+  exists (lead call L13). `guestsOfBookings` and `addonLinesOfBookings` take a LIST of bookings, so the website's
+  account pages can later say "1 of 2 signed", list the add-ons and word what was paid (each guest's `unit_price` and
+  `pay_by`: "£18.00 + 1 credit") for a page of bookings in two statements. Not built now.
+- **The open-payment words** moved with the detail: the card words when every open flow on the booking is one the
+  Worker started on a saved card, the reader words otherwise, including an order still being paid with no flow open.
+  The "order still being paid" test is `load-booking.ts`'s own (`ORDER_BEING_PAID_SQL`), so the detail and every
+  refusal ask the same question. The staff app's `shared/readerPaymentOpen.ts` and `shared/bookingPaymentOpenWords.ts`
+  have no caller left.
+
+**London days (W48 review L5).** A session's `start_time` holds London wall-clock digits labelled UTC (CLAUDE.md
+"Session times"), so its London day is the date of those digits read as UTC. The old reads wrote `start_time::date`,
+the date in the connection's time zone: the same day only while the connection is on UTC, which the Worker's and
+Supabase's both are. So **no answer changes**: a session at 00:30 London in summer was, and is, on its own day. What
+changes is that the day no longer depends on a setting: `time/london-day-sql.ts` compares the column against the
+day's two ends as UTC moments (`withinLondonDaysSql`), which also lets an index on `start_time` be used. It is NOT
+the stored moment turned into London time, which would add the summer hour twice and put a 23:30 session on the next
+day. "Today" is the screen's (the staff app's `londonTodayIso`), sent as the range. `getAvailableSessions` (step B)
+and the session reads W51 moves still write `start_time::date`: W51's to change with the same fragments.
+
+**The three flags** (level C: `admin/flag.ts`, one guarded statement and an audit row in one transaction, under the
+call's own key).
+
+| | Cancelled booking | Payment needed booking | Also refused | Audit row |
+|---|---|---|---|---|
+| Check In | refused | **refused (Q49)**: "This booking needs payment first. Use Take Payment." | while a payment is still being taken on the booking (W50a, `payment_open`) | `booking.checked_in` |
+| Undo check-in | refused | allowed | | `booking.check_in_undone` |
+| Waiver signed / revoked | refused | allowed | a method that isn't `in_person` or `email_link` (the old words) | `booking.guest_waiver_set` |
+| Add-on prepared / not | refused | allowed | a line already removed from its booking | `booking.addon_prepared_set` |
+
+- A row that isn't there is `booking_not_found`, `guest_not_found` or `addon_line_not_found` (404): the staff app's
+  functions answer null for exactly these, as the old ones answered a row that isn't there.
+- **A repeat press keeps the flag and who set it** (G-plan 4.2): a second Check In keeps the first time; a waiver
+  already signed keeps how and when; an add-on already prepared keeps who and when. (The old functions overwrote
+  each.) It is not quite "changes nothing" (W50 review, "Claims" 1): a repeat Check In still moves the booking's
+  `updated_at`, and every repeat press writes another audit row (`booking.checked_in`, `booking.guest_waiver_set` or
+  `booking.addon_prepared_set`) carrying the unchanged value and who pressed.
+- The check-in time is the database's clock (`now()`), as every other Worker write's. The staff app sends none.
+- The audit row keeps who and the flag as set (`after`), never a guest's name, email or date of birth.
+- **W54a's stale-page rule doesn't apply:** a flag writes only what was pressed.
+
+**The booking is held first (W48 review L2).** Postgres re-checks only the row a statement updates after it has
+waited for it. Check In's guard is on the row it updates, so it is safe by itself. A waiver's and a prepared tick's
+guard reads the BOOKING's status, another table's row: without more, a tick pressed while a cancel is half way
+would be judged on the status before the cancel and go through. So each first holds its booking `FOR SHARE` in a
+statement of its own (`FlagWrite.holdFirst`): a cancel in progress is waited for, and the flag's own statement,
+which starts after the wait, is decided on the committed status; a cancel that starts later waits for the flag.
+`FOR SHARE` conflicts with the lock every booking change takes (`lockForBooking`) and not with another flag's, so
+two flags on one booking don't queue. It is LOCK_ORDER's `booking`, the first lock the press takes and its only one
+besides the row it updates. No booking action reads these flags today, so nothing went wrong before; the hold makes
+it a rule rather than luck. (W50a: Check In's guard now also reads the booking's open payments, another table's
+rows, so Check In holds its booking first as well, `FOR NO KEY UPDATE`: the W50a section below.)
+
+**The waiver rule for the website (4.8; backend log 12 and 18): the rule only, no route.** `waivers/methods.ts` is
+the one place the methods live: staff `in_person` and `email_link`; the customer channel `email_link`. The website's
+`checkout` is added there when its checkout is built (`booking_guests_waiver_method_check` allows only the first two
+today: the lead's migration first). `setGuestWaiver` takes a `WaiverPress` of either channel. On the customer
+channel: only a guest on one of the customer's own bookings (told nothing about anyone else's), never a revoke,
+refused once the booking is cancelled, and refused once the session has passed (its end, on London's wall clock).
+Staff can still record a waiver after the session. The audit row's actor is then the customer.
+
+**The cancel quotes read together (brief item 12).** `quoteCancel` (Cancel & return credit, Cancel (payment needed)
+and Cancel & Refund's dialogs) made 13 reads one after another for a booking with a paid add-on. The six that need
+only the booking's id now go together, then the three that need those answers but not each other's. The same reads
+and the same answer; six waits where there were thirteen. Only the quote on the request's own client: inside a
+change's transaction every read is still one after another (`loadBooking`'s `reads` defaults to `'in_turn'`).
+
+Tests: `bookings/admin.test.ts` (each read's fields, ranges, the staff check and capitals, London days at 00:30 and
+23:30 under three connection time zones, the customer channel; every refusal of each flag with its words, the audit
+rows, the customer's waiver rule); `bookings/admin-postgres.test.ts` (a waiver, a tick and a check-in each against
+a cancel, both ways round, with a control without the hold; Q49 under a race);
+`testing/replay/booking-admin-replay.test.ts` (W48's 16 recordings: ten exact, six with named differences);
+`bookings/cancel-quote-reads.test.ts` (the quote's reads); `server/staff-app-helpers.test.ts` (the nine thin
+functions and the screens).
+
+## W50's review fixes: Take Payment, Undo, Check In while a payment is open, the customer channel (W50a)
+
+W50's review (Opus 5.5, no blocker) and Wayne's three answers of 20 Nov. No route, contract, migration or switch
+kind is new; the same nine routes.
+
+**Q49's words name the button.** "This booking needs payment first. Use Take Payment." (`paymentNeededCheckIn`).
+"Settle" is the dialog's name; "Take Payment" is what the button on the booking window says. The replay's named
+difference for the GB17 check-in recording is pinned to the new sentence. The line the booking window carried under
+Check In ("Needs payment first: use Take Payment below.") is gone: it would say the same thing as the refusal.
+
+**Undo check-in (review L5).** A screen change only: a small "Undo" beside the check-in time in the staff app's
+`BookingDetailDialog`, not drawn on a cancelled booking. It calls `POST bookings/:bookingId/check-in` with
+`checkedIn: false`, which already existed with its audit row (`booking.check_in_undone`).
+
+**Check In is refused while a payment is still being taken on the booking (review L2).** Reason `payment_open`,
+409, "A payment on this booking is still going through. Check in once it has completed." (`paymentOpenCheckIn`).
+
+- **The test is the window's own.** `PAYMENT_OPEN_ON_BOOKING_SQL` in `bookings/admin.ts` is one condition: a pending
+  `pending_reader_payments` row of a booking flow (Move, Settle, Add Guest; card reader or saved card, the Worker's
+  or an old screen's), or an order still being paid for the booking (`ORDER_BEING_PAID_SQL`: a reader intent, or
+  under 15 minutes old). The detail's `readerPaymentOpenMessage` and Check In's guard both use it, so Check In is
+  refused exactly while the window shows its payment-open line.
+- **Why:** a new order's booking is `confirmed` while its reader or saved-card payment is pending. A customer
+  checked in on it would lose the check-in with the booking if the payment then failed and the order was undone.
+- **Only Check In.** Undo, waivers and the prepared tick go through while a payment is open, as before.
+- **Which words win.** Cancelled first, then payment open, then Payment needed. A Payment needed booking with a
+  payment open is one whose Settle is in progress: "Use Take Payment" would be the wrong thing to say then.
+- **The booking is held first here too.** An open payment is another table's row, and Postgres re-checks only the
+  row a statement updates (the same reason as the waiver's hold above). Without more, a Check In pressed while a
+  flow is opening would wait for the flow's lock on the booking and then go through on what it read before the
+  wait. So Check In first takes its booking in a statement of its own (`HOLD_BOOKING_FOR_CHECK_IN_SQL`), and its
+  own statement, which starts after the wait, sees the flow's committed record. A flow's C1 locks the booking
+  (`lockForBooking`) and then writes its record in one transaction, so there is no moment a record exists that the
+  hold didn't wait for. The other way round, a flow that starts while a Check In is open waits for it: checked in
+  first, then the payment opens, which is fine.
+- **`FOR NO KEY UPDATE`, not `FOR SHARE`.** The row held is the row Check In updates. Two presses that each held it
+  `FOR SHARE` would each wait for the other when they came to update it, and Postgres would end one with a
+  deadlock error. `FOR NO KEY UPDATE` is the lock the UPDATE takes anyway, so two presses queue at the hold. It is
+  still LOCK_ORDER's `booking`, the press's first and only lock.
+- **A window too small to matter:** an order that is paid or undone between the guard's statement and the refusal's
+  read answers `booking_changed` ("…Reload the page and try again."), which is true.
+
+**The customer channel (review L6; the rule only, no route).**
+
+- **(a) Nobody else's booking is ever locked.** On the customer channel the waiver's hold is
+  `HOLD_OWN_BOOKING_OF_GUEST_SQL`: the same statement with `AND b.customer_id = $2`. A customer pressing on someone
+  else's guest locks nothing, waits for nothing and holds nothing up; the guard then refuses and they are told only
+  "This guest isn't on one of your bookings…". Staff's hold is unchanged.
+- **(b) Each flag says which channels it accepts** (`FlagWrite.channels`, required). `flagWrite` refuses any other
+  before the key, the permission or any statement: 403, reason `channel_not_accepted`, "This can't be changed from
+  here." (`FLAG_CHANNEL_NOT_ACCEPTED_MESSAGE`; nobody can see it today). Check In, its undo and the prepared tick
+  say `['staff']`; a guest's waiver says `['staff', 'customer']`. This matters because `flagWrite` checks the
+  permission only for staff: a flag that never said "customer" can no longer run for one.
+
+Tests: `bookings/admin.test.ts` ("W50a: Check In while a payment is still being taken on the booking": each kind of
+open payment with its words, exactly when the window shows its line; what isn't the booking's; undo, waivers and
+prepared unchanged; which words win; the hold and the guard's statement; and the two customer-channel tests);
+`bookings/admin-postgres.test.ts` (a flow opening as Check In is pressed, both ways round, with a control without
+the hold that checks the booking in; two Check Ins at once; and a customer's press on someone else's guest against
+a cancel, both ways round, with its control); `admin/helpers.test.ts` (the channel refusal, at the start);
+`server/staff-app-helpers.test.ts` (the Undo on the screen, the words, the line gone).

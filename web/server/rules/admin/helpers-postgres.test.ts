@@ -224,6 +224,7 @@ describe('S1: a settings row can be locked through the helper (real Postgres)', 
 const checkIn = (booking: string): FlagWrite<{ id: string; checked_in: boolean }> => ({
   action: 'booking.checked_in',
   needs: 'staff',
+  channels: ['staff'],
   entity: { type: 'booking', id: booking },
   statement: { sql: "UPDATE bookings SET checked_in_at = now(), updated_at = now() WHERE id = $1::uuid AND status <> 'cancelled' RETURNING id, checked_in_at IS NOT NULL AS checked_in", params: [booking] },
   refusal: async () => adminRefusal('CONFLICT', 'booking.checked_in', 'booking_cancelled', 'This booking has been cancelled.'),

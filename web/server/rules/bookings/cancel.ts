@@ -423,11 +423,35 @@ async function figuresFor(db: Queryable, kind: CancelKind, booking: LoadedBookin
   return { refund, owed, paidLines, addonsRefund: sum(paidLines.map((line) => line.amount)) }
 }
 
-async function quoteFor(db: Queryable, kind: CancelKind, booking: LoadedBooking, rows: readonly AddonRow[], at: StartCheck, blocked: ApiError | null): Promise<CancelQuote> {
+/**
+ * W50 (brief item 12): `blocked` may be given as the read that finds it (the dialogs' quote), and `reads: 'together'`
+ * then sends it with the quote's other two reads (where the card money can go, and the booking's paid line): none of
+ * the three needs another's answer. Inside R1's transaction (one connection) they go one after another, as before.
+ */
+async function quoteFor(
+  db: Queryable,
+  kind: CancelKind,
+  booking: LoadedBooking,
+  rows: readonly AddonRow[],
+  at: StartCheck,
+  blockedOrItsRead: ApiError | null | (() => Promise<ApiError | null>),
+  reads: 'in_turn' | 'together' = 'in_turn'
+): Promise<CancelQuote> {
   const { refund, owed, paidLines, addonsRefund } = await figuresFor(db, kind, booking, rows, at.ruleApplies, true, at.club || at.customer)
-  const plan = await planRefund(db, booking.id, refund, 'card', paidLines)
+  const readBlocked = async (): Promise<ApiError | null> => (typeof blockedOrItsRead === 'function' ? blockedOrItsRead() : blockedOrItsRead)
+  const readPlan = () => planRefund(db, booking.id, refund, 'card', paidLines)
+  const readFigures = () => withCashAndLine(db, booking.id, booking.figures)
+  let blocked: ApiError | null
+  let plan: Awaited<ReturnType<typeof planRefund>>
+  let figures: Awaited<ReturnType<typeof withCashAndLine>>
+  if (reads === 'together') {
+    ;[blocked, plan, figures] = await Promise.all([readBlocked(), readPlan(), readFigures()])
+  } else {
+    blocked = await readBlocked()
+    plan = await readPlan()
+    figures = await readFigures()
+  }
   const card = sum(plan.card.map((part) => part.amount))
-  const figures = await withCashAndLine(db, booking.id, booking.figures)
   const details = blocked?.details as { reason?: string; message?: string } | undefined
   return {
     bookingId: booking.id,
@@ -450,12 +474,23 @@ async function quoteFor(db: Queryable, kind: CancelKind, booking: LoadedBooking,
  * booking. `addonLineIds` missing: none ticked, as the press reads it. W23a: `clubCancelled` (Block Session, Block Day)
  * shows the whole amount inside 24 hours too (`insideTwentyFourHours` still says where the session stands).
  */
+/*
+ * W50 (brief item 12; step D's close list: "the cancel-credit quote takes about 10 seconds"). The quote made its
+ * reads one after another: 13 round trips to the database for a booking with a paid add-on. Which read depends on
+ * which:
+ *  - the booking (its row, its seats, its open flows, its money left), the ticked add-on lines and where the session
+ *    start stands each need only the booking's id: sent together;
+ *  - then what a press would be refused with, where the card money can go, and the paid line each need those answers
+ *    but not each other's: sent together.
+ * The same reads, the same statements and the same answer; only the waiting is shared. It is a read on the request's
+ * own client (several connections), never inside a transaction. Both dialogs' quotes come through here (Cancel &
+ * return credit, Cancel (payment needed) and Cancel & Refund). server/rules/bookings/cancel-quote-reads.test.ts
+ * holds the count of reads, that they are the ones made before, and how many are waited for one after another.
+ */
 export async function quoteCancel(db: Db, kind: CancelKind, bookingId: string, addonLineIds: readonly string[] | undefined, clubCancelled = false): Promise<CancelQuote> {
-  const booking = await loadBooking(db, bookingId)
+  const [booking, rows, at] = await Promise.all([loadBooking(db, bookingId, 'together'), readAddonLines(db, bookingId, addonLineIds ?? [], false), startCheckOf(db, bookingId, clubCancelled)])
   if (!booking) throw cancelRefusal(kind)('NOT_FOUND', 'booking_not_found', kind === 'cancel' ? REFUND_WORDS.bookingNotFound : CANCEL_CREDIT_WORDS.bookingNotFound)
-  const rows = await readAddonLines(db, bookingId, addonLineIds ?? [], false)
-  const at = await startCheckOf(db, bookingId, clubCancelled)
-  return quoteFor(db, kind, booking, rows, at, await refusalFor(kind, db, booking, at))
+  return quoteFor(db, kind, booking, rows, at, () => refusalFor(kind, db, booking, at), 'together')
 }
 
 // --- R1

@@ -511,6 +511,41 @@ in another letter case than its staff row, which the old function refused before
 file shows it and no scenario lists it. `admin-replay.test.ts` shows it on `promo-create`'s steps with the staff row
 in capitals.
 
+#### Bookings admin and Overview in the replay (W50)
+
+`booking-admin-replay.test.ts` replays W48's 16 recordings of the six booking and Overview reads and the three flags
+(`isW50Scenario`) through the staff app's nine thin functions and the Worker's routes. `W50_ACTIONS` joined
+`STEP_G_ACTIONS_MOVED`; the routes are in `legacy-routes.ts`'s staff tables.
+
+- **Ten match their golden files exactly**, field for field: all seven recordings of the reads, and the three flags
+  pressed on a live booking by an active staff member. Naming the columns changed nothing: every column the old
+  `b.*` and `RETURNING *` answers carried is named.
+- **Six have named differences** (`w50Differences`, built from each golden file): GB17's three (a cancelled booking
+  checked in and its waiver changed, a removed add-on marked prepared; Q49 on the same recording as the cancelled
+  check-in), and the three "who may" recordings, where the old function ignored that the sign-in had no staff row
+  and went ahead. Each is split in two allowances, the refused answer and the row left unchanged, so a press refused
+  in the right words that still changed the row leaves the row's allowance unseen, which fails.
+- GB17's three recordings were made with `call`, which stops at the first throw. The Worker now refuses those steps,
+  so each step is attempted (`asPressedNow`) and the scenario runs to its end.
+- **GB14's recording stays in `admin-replay.test.ts`** (W49 + W54's family). Its one named difference now pins
+  W50's six reads too, on both passes (an inactive account, a sign-in with no staff row).
+- **A flag's audit row** (`STEP_G_FLAG_ROWS`) keeps `after` and the key and no `before`: a flag is one guarded
+  statement and reads no row first. `adminRowProblems` checks what each keeps (never a guest's name, email or date
+  of birth). The check-in route writes one of two actions (`also` in `STEP_G_WRITE_ROUTES`), counted together
+  against the route's presses.
+- **Two things no recording can show**, held in `bookings/admin.test.ts` instead: the check-in time's clock (the
+  recordings hold a time's place, not its value), and the London day (the replay's clock is 12 November, GMT, and
+  its sessions are at 10:00).
+- **W50a.** Q49's named difference is pinned to Wayne's new sentence, "This booking needs payment first. Use Take
+  Payment." (`BOOKING_ADMIN_NEW_WORDS.paymentNeededCheckIn`; `W50_DECISIONS.Q49` says when it changed). No other
+  allowance changed, and none was added: no recording presses Check In while a payment is open on the booking, so
+  W50a's `payment_open` refusal shows in no recording. It is held in `bookings/admin.test.ts` and raced on real
+  Postgres in `bookings/admin-postgres.test.ts`. The count stays ten exact, six named.
+
+`cancel-quote-reads.test.ts` (in `rules/bookings/`) uses the replay's seed and the old order code to make a pass
+booking with a paid add-on, then counts the cancel quote's reads and how many it waits for one after another, with
+a fixed wait added to each round trip.
+
 ### Migration 023 and the saved schema (W27)
 
 `supabase/migrations/023_orders_refund_owed_and_cash_refunds.sql` is written but **not applied to live**: the lead

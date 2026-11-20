@@ -73,6 +73,11 @@ const STAFF_ROUTES: Record<string, () => Promise<unknown>> = {
   '/api/v1/staff/pricing/config': () => import('@/app/api/v1/staff/pricing/config/route'),
   // W54: New Order's basket quote (the staff app's thin quoteBasket), read before and after a pricing change.
   '/api/v1/staff/quotes/basket': () => import('@/app/api/v1/staff/quotes/basket/route'),
+  // W50: the staff app's thin getBookings, getAddonPrepChecklistForRange, getWaiverGapsForRange and getPaymentAttentionItems.
+  '/api/v1/staff/bookings': () => import('@/app/api/v1/staff/bookings/route'),
+  '/api/v1/staff/bookings/addon-prep': () => import('@/app/api/v1/staff/bookings/addon-prep/route'),
+  '/api/v1/staff/bookings/waiver-gaps': () => import('@/app/api/v1/staff/bookings/waiver-gaps/route'),
+  '/api/v1/staff/overview/payment-attention': () => import('@/app/api/v1/staff/overview/payment-attention/route'),
 }
 
 /** W14: the staff routes with an id in the path, and the path's parameters. */
@@ -147,6 +152,13 @@ const STAFF_PATTERNS: Array<{ pattern: RegExp; load: () => Promise<unknown>; par
   { pattern: /^\/api\/v1\/staff\/pricing\/band-rules\/([^/]+)$/, load: () => import('@/app/api/v1/staff/pricing/band-rules/[dayOfWeek]/route'), params: (m) => ({ dayOfWeek: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/promo-codes\/([^/]+)\/redemptions$/, load: () => import('@/app/api/v1/staff/promo-codes/[promoCodeId]/redemptions/route'), params: (m) => ({ promoCodeId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/promo-codes\/(?!validate$)([^/]+)$/, load: () => import('@/app/api/v1/staff/promo-codes/[promoCodeId]/route'), params: (m) => ({ promoCodeId: decodeURIComponent(m[1] ?? '') }) },
+  // W50: the staff app's thin getBookingById and getBookingDetail, and the three flags. A booking's own row is the
+  // path with an id and nothing after it (never one of the fixed paths beside it, which are looked up first).
+  { pattern: /^\/api\/v1\/staff\/bookings\/([^/]+)\/detail$/, load: () => import('@/app/api/v1/staff/bookings/[bookingId]/detail/route'), params: (m) => ({ bookingId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/bookings\/([^/]+)\/check-in$/, load: () => import('@/app/api/v1/staff/bookings/[bookingId]/check-in/route'), params: (m) => ({ bookingId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/bookings\/guests\/([^/]+)\/waiver$/, load: () => import('@/app/api/v1/staff/bookings/guests/[guestId]/waiver/route'), params: (m) => ({ guestId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/bookings\/addon-lines\/([^/]+)\/prepared$/, load: () => import('@/app/api/v1/staff/bookings/addon-lines/[lineId]/prepared/route'), params: (m) => ({ lineId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/bookings\/(?!addon-prep$|waiver-gaps$|day-conflict$)([^/]+)$/, load: () => import('@/app/api/v1/staff/bookings/[bookingId]/route'), params: (m) => ({ bookingId: decodeURIComponent(m[1] ?? '') }) },
 ]
 
 function staffRoute(path: string): { load: () => Promise<unknown>; params: Record<string, string> } | null {

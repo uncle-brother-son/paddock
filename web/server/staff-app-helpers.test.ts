@@ -108,17 +108,17 @@ describe('staff app helpers', () => {
 
     // Every function W01c added the check to. Called as an inactive account with empty params,
     // each must refuse straight away: no write, no Worker call.
+    // W50: setAddonLinePrepared, setBookingCheckedIn and setGuestWaiverStatus left this list. They are thin calls to
+    // the Worker now, which refuses an inactive account before anything happens: held in "W50: the booking and
+    // Overview functions are thin calls to the Worker" below, with the same words.
     const guarded = [
       'addServiceTypeScheduleSlot',
       'createOneOffSession',
       'deleteServiceTypeScheduleSlot',
       'generateUpcomingSessions',
-      'setAddonLinePrepared',
-      'setBookingCheckedIn',
       'setEventAttendeeCheckIn',
       'setEventAttendeeWaiver',
       'setEventAttendeesCheckIn',
-      'setGuestWaiverStatus',
       'setOrderLineItemFulfilled',
       'setSessionStartTime',
       'unblockSession',
@@ -433,6 +433,328 @@ describe('staff app helpers', () => {
         expect(pricingPage).toContain('}, [day, dayStamp])')
         expect(pricingPage).toContain('key={`${term.id}:${term.stamp}`}')
         expect(pricingPage).toContain('if (data && data.stamp !== shownStamp.current) show(data)')
+      })
+    })
+  })
+
+  // Brief W50 (item 8; lead calls L4 and L11): the six booking and Overview reads and the three flags are thin calls
+  // to the Worker, one function for each old one, with the old bodies gone. What each makes of the Worker's answers
+  // is held here; the rules themselves in server/rules/bookings/admin.test.ts and its races.
+  describe('W50: the booking and Overview functions are thin calls to the Worker', () => {
+    const INACTIVE = 'This staff account is inactive. Ask an admin to reactivate it.'
+    const NO_ANSWER = "That didn't get an answer, so it may or may not have been saved. The screen has been reloaded: check it, and press again if it hasn't changed."
+    // W50a item 1: Wayne's words now name the button on the booking window.
+    const Q49 = 'This booking needs payment first. Use Take Payment.'
+    // W50a item 3: Check In while a payment is still being taken on the booking.
+    const PAYMENT_OPEN = 'A payment on this booking is still going through. Check in once it has completed.'
+    const ID = '22222222-2222-4222-8222-222222222222'
+    const fn = async (name: string) => (await import(/* @vite-ignore */ path.join(appDir, `backend/paddock/${name}`))).default as (req: { params: Record<string, unknown>; user: typeof user }) => Promise<unknown>
+    const refused = (code: string, reason: string, message: string) => ({ data: { ok: false, error: { code, message, details: { reason, message, action: 'x' } }, requestId: 'worker-request' } })
+    const sent = () => rawRequest.mock.calls[0]?.[0] as { path: string; method: string; body?: unknown; queryParams?: Record<string, string>; headers: Record<string, string> }
+
+    /** Each function with params a screen sends, the route it must call, and what it sends there. */
+    const thin: Array<[string, Record<string, unknown>, string, string, { queryParams?: Record<string, string>; body?: unknown }]> = [
+      ['getBookings', { startDate: '2026-11-20', endDate: '2026-11-26', status: 'cancelled' }, 'GET', '/api/v1/staff/bookings', { queryParams: { startDate: '2026-11-20', endDate: '2026-11-26', status: 'cancelled' } }],
+      ['getBookingById', { bookingId: ID }, 'GET', `/api/v1/staff/bookings/${ID}`, {}],
+      ['getBookingDetail', { bookingId: ID }, 'GET', `/api/v1/staff/bookings/${ID}/detail`, {}],
+      ['getAddonPrepChecklistForRange', { startDate: '2026-11-20', endDate: '2026-11-20' }, 'GET', '/api/v1/staff/bookings/addon-prep', { queryParams: { startDate: '2026-11-20', endDate: '2026-11-20' } }],
+      ['getWaiverGapsForRange', { startDate: '2026-11-20', endDate: '2026-11-20' }, 'GET', '/api/v1/staff/bookings/waiver-gaps', { queryParams: { startDate: '2026-11-20', endDate: '2026-11-20' } }],
+      ['getPaymentAttentionItems', {}, 'GET', '/api/v1/staff/overview/payment-attention', {}],
+      ['setBookingCheckedIn', { bookingId: ID, checkedIn: true }, 'POST', `/api/v1/staff/bookings/${ID}/check-in`, { body: { checkedIn: true } }],
+      ['setGuestWaiverStatus', { guestId: ID, accepted: true, waiverMethod: 'in_person', waiverVersion: 'v1' }, 'POST', `/api/v1/staff/bookings/guests/${ID}/waiver`, { body: { accepted: true, waiverMethod: 'in_person', waiverVersion: 'v1' } }],
+      ['setAddonLinePrepared', { lineId: ID, prepared: true }, 'POST', `/api/v1/staff/bookings/addon-lines/${ID}/prepared`, { body: { prepared: true } }],
+    ]
+
+    it.each(thin)('%s asks only the Worker, on its own route, and an inactive account is refused in the same words as before', async (name, params, method, route, sends) => {
+      const query = vi.fn()
+      const legacy = vi.fn()
+      vi.stubGlobal('paddockData', { query })
+      vi.stubGlobal('paddockBackendApi2', { rawRequest: legacy })
+      rawRequest.mockResolvedValue(refusal('FORBIDDEN', INACTIVE))
+
+      // Thrown as the words alone, as the old functions threw them: no code and no request id after them.
+      await expect((await fn(name))({ params, user })).rejects.toThrow(new Error(INACTIVE))
+
+      expect(rawRequest).toHaveBeenCalledTimes(1)
+      expect(sent()).toMatchObject({ method, path: route, headers: { 'X-Staff-Email': user.email } })
+      if (sends.queryParams) expect(sent().queryParams).toEqual(sends.queryParams)
+      if (sends.body) expect(sent().body).toEqual(sends.body)
+      // A flag goes under a key made for the call; a read has none.
+      expect(typeof sent().headers['Idempotency-Key']).toBe(method === 'POST' ? 'string' : 'undefined')
+      // The database and the legacy resource are never touched: the exact-case email comparison is gone with them.
+      expect(legacy).not.toHaveBeenCalled()
+      expect(query).not.toHaveBeenCalled()
+    })
+
+    it('none of the nine reads the database, the legacy resource or the old staff lookups any more', () => {
+      for (const [name] of thin) {
+        const source = readFileSync(path.join(appDir, `backend/paddock/${name}.ts`), 'utf8')
+        expect(source, name).not.toMatch(/paddockData|paddockBackendApi2|resolveStaffId|requireStaffId/)
+        expect(source, name).not.toMatch(/from '\.\/shared\/(staffAccess|readerPaymentOpen|bookingPaymentOpenWords)'/)
+        expect(source, name).toMatch(/from '\.\/shared\/adminWorker'/)
+      }
+    })
+
+    it('a sign-in with capitals is sent as it is: the Worker finds the staff row in lower case (the old functions compared exactly)', async () => {
+      rawRequest.mockResolvedValue(success([]))
+      await (await fn('getBookings'))({ params: {}, user: { email: 'Jo@Example.COM' } })
+      expect(sent().headers['X-Staff-Email']).toBe('Jo@Example.COM')
+      // No filter asked for: none sent (every booking, as before).
+      expect(sent().queryParams).toEqual({})
+    })
+
+    it('the old result shapes come back unchanged from a success', async () => {
+      const row = { id: ID, status: 'confirmed', price_paid: '20.00' }
+      rawRequest.mockResolvedValue(success([row]))
+      expect(await (await fn('getBookings'))({ params: { status: 'confirmed' }, user })).toEqual([row])
+      rawRequest.mockResolvedValue(success(row))
+      expect(await (await fn('getBookingById'))({ params: { bookingId: ID }, user })).toEqual(row)
+      rawRequest.mockResolvedValue(success(null))
+      expect(await (await fn('getBookingById'))({ params: { bookingId: ID }, user })).toBeNull()
+      const detail = { guests: [], addonLines: [], specialRequests: null, refundOwedAmount: '0', readerPaymentOpenMessage: null }
+      rawRequest.mockResolvedValue(success(detail))
+      expect(await (await fn('getBookingDetail'))({ params: { bookingId: ID }, user })).toEqual(detail)
+      rawRequest.mockResolvedValue(success({ bookings: [row], memberships: [] }))
+      expect(await (await fn('getPaymentAttentionItems'))({ params: {}, user })).toEqual({ bookings: [row], memberships: [] })
+      rawRequest.mockResolvedValue(success({ id: ID, checked_in_at: '2026-11-20T10:00:00.000Z' }))
+      expect(await (await fn('setBookingCheckedIn'))({ params: { bookingId: ID, checkedIn: true }, user })).toEqual({ id: ID, checked_in_at: '2026-11-20T10:00:00.000Z' })
+    })
+
+    it('getBookingById with no id answers null without asking, as before', async () => {
+      expect(await (await fn('getBookingById'))({ params: { bookingId: '' }, user })).toBeNull()
+      expect(rawRequest).not.toHaveBeenCalled()
+    })
+
+    it('a flag pressed on a row that is not there answers null, as the old functions did; each only for its own reason', async () => {
+      rawRequest.mockResolvedValue(refused('NOT_FOUND', 'booking_not_found', 'That booking no longer exists. Reload the page and try again.'))
+      expect(await (await fn('setBookingCheckedIn'))({ params: { bookingId: ID, checkedIn: true }, user })).toBeNull()
+      await expect((await fn('setGuestWaiverStatus'))({ params: { guestId: ID, accepted: false }, user })).rejects.toThrow(new Error('That booking no longer exists. Reload the page and try again.'))
+      rawRequest.mockResolvedValue(refused('NOT_FOUND', 'guest_not_found', 'That guest is no longer on the booking. Reload the page and try again.'))
+      expect(await (await fn('setGuestWaiverStatus'))({ params: { guestId: ID, accepted: false }, user })).toBeNull()
+      rawRequest.mockResolvedValue(refused('NOT_FOUND', 'addon_line_not_found', 'That add-on is no longer on the booking. Reload the page and try again.'))
+      expect(await (await fn('setAddonLinePrepared'))({ params: { lineId: ID, prepared: false }, user })).toBeNull()
+    })
+
+    it("a refusal is thrown in the Worker's words, exactly: Q49's, a cancelled booking's, a removed add-on's, the old waiver-method words", async () => {
+      rawRequest.mockResolvedValue(refused('CONFLICT', 'payment_needed', Q49))
+      await expect((await fn('setBookingCheckedIn'))({ params: { bookingId: ID, checkedIn: true }, user })).rejects.toThrow(new Error(Q49))
+      // W50a item 3: a payment still going through, in the Worker's words.
+      rawRequest.mockResolvedValue(refused('CONFLICT', 'payment_open', PAYMENT_OPEN))
+      await expect((await fn('setBookingCheckedIn'))({ params: { bookingId: ID, checkedIn: true }, user })).rejects.toThrow(new Error(PAYMENT_OPEN))
+      const cancelled ="This booking is cancelled, so its guests' waivers can no longer be changed."
+      rawRequest.mockResolvedValue(refused('CONFLICT', 'booking_cancelled', cancelled))
+      await expect((await fn('setGuestWaiverStatus'))({ params: { guestId: ID, accepted: true, waiverMethod: 'in_person' }, user })).rejects.toThrow(new Error(cancelled))
+      const removed = "This add-on has been removed from the booking, so it can't be marked prepared or not prepared."
+      rawRequest.mockResolvedValue(refused('CONFLICT', 'addon_removed', removed))
+      await expect((await fn('setAddonLinePrepared'))({ params: { lineId: ID, prepared: true }, user })).rejects.toThrow(new Error(removed))
+      const method = 'waiverMethod must be "email_link" or "in_person" when accepting a waiver'
+      rawRequest.mockResolvedValue(refused('VALIDATION', 'invalid_waiver_method', method))
+      await expect((await fn('setGuestWaiverStatus'))({ params: { guestId: ID, accepted: true }, user })).rejects.toThrow(new Error(method))
+      // Accepting with no method sends none: the Worker says the old words.
+      expect((rawRequest.mock.calls.at(-1)?.[0] as { body: unknown }).body).toEqual({ accepted: true })
+    })
+
+    it("a press's key is the screen's own when it sends one, and is never part of what is sent as the change", async () => {
+      rawRequest.mockResolvedValue(success({ id: ID, checked_in_at: null }))
+      await (await fn('setBookingCheckedIn'))({ params: { bookingId: ID, checkedIn: false, idempotencyKey: 'key-from-the-screen-1234' }, user })
+      expect(sent().headers['Idempotency-Key']).toBe('key-from-the-screen-1234')
+      expect(sent().body).toEqual({ checkedIn: false })
+    })
+
+    it('no answer: a flag says the change may or may not have been saved; a read keeps the "didn\'t answer" error', async () => {
+      rawRequest.mockRejectedValue(new Error('socket hang up'))
+      for (const [name, params] of [['setBookingCheckedIn', { bookingId: ID, checkedIn: true }], ['setGuestWaiverStatus', { guestId: ID, accepted: false }], ['setAddonLinePrepared', { lineId: ID, prepared: true }]] as const) {
+        await expect((await fn(name))({ params, user }), name).rejects.toThrow(new Error(NO_ANSWER))
+      }
+      rawRequest.mockResolvedValue(refusal('INTERNAL', 'Something went wrong and the action may not have finished. Check before trying again.'))
+      await expect((await fn('setAddonLinePrepared'))({ params: { lineId: ID, prepared: true }, user })).rejects.toThrow(new Error(NO_ANSWER))
+      rawRequest.mockRejectedValue(new Error('socket hang up'))
+      await expect((await fn('getBookingDetail'))({ params: { bookingId: ID }, user })).rejects.toThrow(/Could not reach the Worker: socket hang up \(WORKER_UNREACHABLE, request /)
+    })
+
+    // The screens' own code, read from the staff app's checkout (it has no test runner of its own).
+    describe('the screens', () => {
+      const component = (name: string) => readFileSync(path.join(appDir, 'frontend/components', name), 'utf8')
+      const page = (name: string) => readFileSync(path.join(appDir, 'frontend/pages', name), 'utf8')
+
+      it("item 9: a cancelled booking shows no Check In, Mark Signed, Revoke, remove guest or prepared button, in the one booking window every screen opens", () => {
+        const dialog = component('BookingDetailDialog.tsx')
+        // The window is the same one for the Bookings page, BookingByIdDialog (Booking History, Money still to refund) and Overview.
+        for (const opener of [page('BookingsPage.tsx'), component('BookingByIdDialog.tsx'), page('OverviewPage.tsx')]) expect(opener).toContain('<BookingDetailDialog')
+        // Checked in already: the time. Cancelled: words, no button. Otherwise the button.
+        expect(dialog).toMatch(/\{booking\.checked_in_at \? \([^]*?\) : booking\.status === 'cancelled' \? \([^]*?Not checked in<\/div>\s*\) : \([^]*?'Check In'\}/)
+        expect(dialog.split("'Check In'")).toHaveLength(2)
+
+        const detail = component('BookingDetailContent.tsx')
+        expect(detail).toContain("const isCancelled = booking.status === 'cancelled'")
+        // The guest's actions cell is empty on a cancelled booking: Revoke, Mark Signed and remove guest are all inside it.
+        const actions = detail.slice(detail.indexOf('<TableCell className="px-2 py-2 align-top text-right">'), detail.indexOf('</TableBody>'))
+        expect(actions).toMatch(/^<TableCell className="px-2 py-2 align-top text-right">\s*\{isCancelled \? null : \(/)
+        for (const control of ['handleRevokeWaiver(g.id)', '<AcceptWaiverDialog', '<RemoveGuestDialog']) {
+          expect(detail.split(control), control).toHaveLength(2)
+          expect(actions, control).toContain(control)
+        }
+        // The prepared button: the badge alone on a cancelled booking, nothing to press.
+        expect(detail).toMatch(/\{isCancelled \? \(\s*\/\/[^\n]*\n\s*line\.prepared \? <Badge variant="success">Prepared<\/Badge> : null\s*\) : line\.prepared \? \(/)
+        expect(detail.split('handleTogglePrepared(line.id,')).toHaveLength(3)
+      })
+
+      it("item 9 (Q49) and W50a items 1 and 3: Check In stays on a booking that needs payment or has a payment still going through, and the press shows the Worker's words; every check-in handler shows the words it is given", () => {
+        const dialog = component('BookingDetailDialog.tsx')
+        // W50a item 1: Q49's words name the Take Payment button themselves, so the line that said so under Check In is
+        // gone (the toast and the line would say the same thing twice).
+        expect(dialog).not.toContain('Needs payment first')
+        expect(dialog).not.toContain('use Take Payment below')
+        // "Take Payment" is the Settle dialog's own button on the same window.
+        expect(component('SettleLapsedPaymentDialog.tsx')).toContain('Take Payment')
+        // W50a item 3: the button is drawn for every booking that isn't checked in or cancelled, and is only ever
+        // greyed while a press is being saved: nothing about the status or an open payment hides or disables it, so
+        // the press reaches the Worker and its words ("needs payment first", "still going through") are shown.
+        expect(dialog).toMatch(/Not checked in<\/div>\s*\) : \(\s*(\/\/[^\n]*\n\s*)+<Button variant="outline" size="sm" disabled=\{checkingIn\} onClick=\{\(\) => void handleCheckIn\(booking\.id, true\)\}>\s*\{checkingIn \? 'Saving…' : 'Check In'\}\s*<\/Button>\s*\)\}/)
+        expect(dialog).not.toMatch(/readerPaymentOpenMessage|paymentOpen/)
+        const handlers: Array<[string, string]> = [['BookingsPage.tsx', page('BookingsPage.tsx')], ['OverviewPage.tsx', page('OverviewPage.tsx')], ['BookingByIdDialog.tsx', component('BookingByIdDialog.tsx')], ['MoneyOwedSection.tsx', component('MoneyOwedSection.tsx')]]
+        for (const [name, source] of handlers) {
+          expect(source, name).toContain("toast.error(err instanceof Error && err.message ? err.message : checkedIn ? 'Failed to check in booking' : 'Failed to undo the check-in')")
+          expect(source, name).not.toContain("toast.error('Failed to check in booking')")
+        }
+        // The Bookings page no longer shows its own clock's time as the check-in time: it waits for the Worker's.
+        const bookings = page('BookingsPage.tsx')
+        expect(bookings).not.toContain('const now = new Date().toISOString()')
+        expect(bookings).toContain('if (row) setRows((prev) => prev.map((b) => (b.id === bookingId ? { ...b, checked_in_at: row.checked_in_at } : b)))')
+        // A waiver and the prepared tick show the Worker's words too, and read their list again.
+        expect(component('AcceptWaiverDialog.tsx')).toContain("toast.error(err instanceof Error && err.message ? err.message : 'Failed to update waiver status')")
+        expect(component('AcceptWaiverDialog.tsx')).toContain('onRefused?.()')
+        for (const [name, source] of [['BookingsPage.tsx', bookings], ['OverviewPage.tsx', page('OverviewPage.tsx')], ['BookingDetailContent.tsx', component('BookingDetailContent.tsx')]] as const) {
+          expect(source, name).toContain("toast.error(err instanceof Error && err.message ? err.message : 'Failed to update prepared status')")
+        }
+        expect(component('BookingDetailContent.tsx')).toContain("toast.error(err instanceof Error && err.message ? err.message : 'Failed to revoke waiver')")
+      })
+
+      // Brief W50a item 2 (W50 review L5; Wayne, 20 Nov).
+      it('W50a item 2: a small Undo beside the check-in time, hidden on a cancelled booking; it calls the same route with checkedIn false, shows the Worker\'s words on a refusal and reads the booking again', async () => {
+        const dialog = component('BookingDetailDialog.tsx')
+        // Beside the time, in the checked-in branch; nothing on a cancelled booking; "Saving…" while it is sent.
+        expect(dialog).toMatch(
+          /\{booking\.checked_in_at \? \(\s*<div className="flex items-center gap-2">[^]*?\{formatDateTime\(booking\.checked_in_at\)\}\s*<\/div>\s*\{booking\.status === 'cancelled' \? null : \(\s*(\/\/[^\n]*\n\s*)+<Button variant="ghost" size="sm" className="[^"]*" disabled=\{checkingIn\} onClick=\{\(\) => void handleCheckIn\(booking\.id, false\)\}>\s*\{checkingIn \? 'Saving…' : 'Undo'\}\s*<\/Button>\s*\)\}\s*<\/div>\s*\) : booking\.status === 'cancelled' \? \(/
+        )
+        expect(dialog.split("'Undo'")).toHaveLength(2)
+        expect(dialog.split('handleCheckIn(booking.id, false)')).toHaveLength(2)
+        expect(dialog.split('handleCheckIn(booking.id, true)')).toHaveLength(2)
+        // The window hands the press to the page behind it, saying which way.
+        expect(dialog).toContain('onCheckIn: (bookingId: string, checkedIn: boolean) => void | Promise<void>')
+        expect(dialog).toContain('await onCheckIn(bookingId, checkedIn)')
+
+        // Each of the four pages behind the window sends what it is given (never a fixed `true` any more), shows the
+        // Worker's words when refused, and reads the booking again whether it was saved or refused.
+        const handlers: Array<[string, string, RegExp]> = [
+          ['BookingsPage.tsx', page('BookingsPage.tsx'), /setCheckedIn\(\{ bookingId, checkedIn \}, \{ skipCache: true \}\)[^]*?refetchAfterMutation\(\)\s*\} catch \(err\) \{\s*toast\.error\([^\n]*\)\s*runCalendarQuery\(granularity, referenceDate\)\s*\}/],
+          ['OverviewPage.tsx', page('OverviewPage.tsx'), /setCheckedIn\(\s*\{ bookingId, checkedIn \},\s*\{ skipCache: true \}\s*\)[^]*?\} catch \(err\) \{\s*(\/\/[^\n]*\n\s*)*toast\.error\([^\n]*\)\s*\}\s*refreshDetailAndLists\(\)/],
+          ['BookingByIdDialog.tsx', component('BookingByIdDialog.tsx'), /setCheckedIn\(\{ bookingId: id, checkedIn \}, \{ skipCache: true \}\)\s*\} catch \(err\) \{\s*(\/\/[^\n]*\n\s*)*toast\.error\([^\n]*\)\s*\}\s*refresh\(\)/],
+          ['MoneyOwedSection.tsx', component('MoneyOwedSection.tsx'), /setCheckedIn\(\{ bookingId: id, checkedIn \}, \{ skipCache: true \}\)\s*\} catch \(err\) \{\s*(\/\/[^\n]*\n\s*)*toast\.error\([^\n]*\)\s*\}\s*changed\(\)/],
+        ]
+        for (const [name, source, sendsAndReadsAgain] of handlers) {
+          const handler = source.slice(source.indexOf('async function handleCheckIn('))
+          expect(handler, name).toMatch(/^async function handleCheckIn\((bookingId|id): string, checkedIn: boolean\) \{/)
+          expect(handler, name).toMatch(sendsAndReadsAgain)
+          expect(source, name).not.toContain('checkedIn: true')
+          expect(source, name).toContain('onCheckIn={handleCheckIn}')
+        }
+        // The pages that show the time from the answer take it away when the answer has none.
+        expect(page('BookingsPage.tsx')).toContain('checked_in_at: row.checked_in_at } : b)))')
+        expect(page('OverviewPage.tsx')).toContain('setSelectedBooking((prev) => (prev && prev.id === bookingId ? { ...prev, checked_in_at: row.checked_in_at } : prev))')
+
+        // The function behind the button: the existing route, `checkedIn: false`, the Worker's answer back, and a
+        // refusal (a booking cancelled since the page loaded) thrown in the Worker's own words.
+        rawRequest.mockResolvedValue(success({ id: ID, checked_in_at: null }))
+        expect(await (await fn('setBookingCheckedIn'))({ params: { bookingId: ID, checkedIn: false }, user })).toEqual({ id: ID, checked_in_at: null })
+        expect(sent()).toMatchObject({ method: 'POST', path: `/api/v1/staff/bookings/${ID}/check-in`, body: { checkedIn: false } })
+        const cancelled = "This booking is cancelled, so it can't be checked in and its check-in can't be undone."
+        rawRequest.mockResolvedValue(refused('CONFLICT', 'booking_cancelled', cancelled))
+        await expect((await fn('setBookingCheckedIn'))({ params: { bookingId: ID, checkedIn: false }, user })).rejects.toThrow(new Error(cancelled))
+      })
+
+      it('item 11: the add-ons picker never treats a failed read as "no add-ons": an error line with Try again, not loaded, and the three cancel dialogs show no Cancel button', () => {
+        const picker = component('CancelAddonsPicker.tsx')
+        expect(picker).toContain('const readFailed = Boolean(error) && !loading && detail === null')
+        expect(picker).toContain('loaded: detail !== null,')
+        expect(picker).toContain('failed: readFailed,')
+        expect(picker).not.toContain('loaded: detail !== null || Boolean(error)')
+        expect(picker).toMatch(/if \(readFailed\) \{\s*return \([^]*?\{ADDONS_READ_FAILED_MESSAGE\}[^]*?onClick=\{\(\) => trigger\(\{ bookingId \}, \{ skipCache: true \}\)\}[^]*?Try again/)
+        expect(picker).toContain("couldn't be read, so it can't be cancelled from here yet")
+        expect(picker).toContain('loaded: false, failed: false }')
+        // The quote is asked for only once the add-ons have loaded, so a failed read asks for none and nothing can be confirmed.
+        expect(component('useCancelCreditPress.ts')).toContain('if (!active || !addons.loaded) return')
+        expect(component('CancelAndRefundDialog.tsx')).toContain('if (!open || !addons.loaded || result || unsure) return')
+        // …and the button itself is not drawn.
+        expect(component('CancelAndRefundDialog.tsx')).toMatch(/\) : addons\.failed \? null : \(\s*\/\/[^\n]*\n\s*<Button variant="destructive" onClick=\{handleSubmit\} disabled=\{!canConfirm\}>/)
+        expect(component('CancelCreditBookingDialog.tsx')).toMatch(/\) : press\.addons\.failed \? null : \(\s*\/\/[^\n]*\n\s*<Button variant="destructive" onClick=\{\(\) => void handleConfirm\(\)\} disabled=\{!press\.canConfirm\}>/)
+        expect(component('CancelPaymentNeededDialog.tsx')).toMatch(/\{press\.addons\.failed \? null : \(\s*<Button variant="destructive" onClick=\{\(\) => void handleConfirm\(\)\} disabled=\{!press\.canConfirm\}>/)
+      })
+
+      it('item 10: under the Cancelled filter every cancelled booking in range is on a card, under a "Cancelled" heading, and a card with only cancelled bookings never looks booked', async () => {
+        const { buildDaySlotCards, buildCardsByDate, summarizeDayCards } = await import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/dayViewSlots.ts'))
+        const session = (id: string, bookingType: string, start: string, end: string, more: Record<string, unknown> = {}) => ({ id, booking_type: bookingType, status: 'open', total_booked: 0, start_time: `2026-11-20T${start}:00`, end_time: `2026-11-20T${end}:00`, ...more })
+        const booking = (id: string, sessionId: string, status: string) => ({ id, session_id: sessionId, status, start_time: '2026-11-20T10:00:00' })
+        type Card = { session: { id: string }; bookings: Array<{ id: string }>; cancelledBookings: Array<{ id: string }>; visualState: string; occupied: boolean; cancelledListed: boolean }
+        const shape = (cards: Card[]) => cards.map((card) => [card.session.id, card.visualState, card.bookings.map((b) => b.id), card.cancelledBookings.map((b) => b.id)])
+
+        const sessions = [
+          session('pub', 'public', '10:00', '11:00'),
+          session('blocked', 'public', '12:00', '13:00', { status: 'blocked' }),
+          session('busy', 'public', '14:00', '15:00', { total_booked: 2 }),
+          session('priv', 'private', '10:00', '12:00'),
+          session('priv-empty', 'private', '16:00', '18:00'),
+        ]
+        const cancelled = [booking('b1', 'pub', 'cancelled'), booking('b2', 'priv', 'cancelled'), booking('b3', 'blocked', 'cancelled'), booking('b4', 'busy', 'cancelled')]
+
+        // Any other filter: cancelled bookings are on no card, as before.
+        expect(shape(buildDaySlotCards(sessions, cancelled, false))).toEqual([['pub', 'empty', [], []], ['blocked', 'blocked', [], []], ['busy', 'empty', [], []]])
+
+        // The Cancelled filter, default (public) view. Every cancelled booking is listed:
+        const listed: Card[] = buildDaySlotCards(sessions, cancelled, false, true)
+        expect(shape(listed)).toEqual([
+          // an open session's: the card is "open" (its true places), never "booked";
+          ['pub', 'empty', [], ['b1']],
+          // a private session's, without the Private toggle, after the public card at the same time;
+          ['priv', 'empty', [], ['b2']],
+          // a blocked session's (W26a review R1): still "Blocked";
+          ['blocked', 'blocked', [], ['b3']],
+          // and one on a session that still has live bookings (not loaded under this filter).
+          ['busy', 'empty', [], ['b4']],
+        ])
+        expect(listed.every((card) => card.cancelledListed)).toBe(true)
+        // A private session with no cancelled booking gets no card in the public view; it claims no public slot either.
+        expect(listed.some((card) => card.session.id === 'priv-empty')).toBe(false)
+        // Only a session with places still booked is "occupied" (Block slot and Edit start time stay off it).
+        expect(listed.map((card) => [card.session.id, card.occupied])).toEqual([['pub', false], ['priv', false], ['blocked', false], ['busy', true]])
+        // With the Private toggle: the private sessions, the cancelled booking under its heading.
+        expect(shape(buildDaySlotCards(sessions, cancelled, true, true))).toEqual([['priv', 'empty', [], ['b2']], ['priv-empty', 'empty', [], []]])
+
+        // A live booking is never in the cancelled list, and still makes its card booked and occupied.
+        const live: Card[] = buildDaySlotCards(sessions, [booking('b5', 'pub', 'confirmed'), booking('b1', 'pub', 'cancelled')], false)
+        expect(shape(live)[0]).toEqual(['pub', 'public_booked', ['b5'], []])
+        expect(live[0]?.occupied).toBe(true)
+        // An active private booking still claims the public slot it spans.
+        expect(shape(buildDaySlotCards(sessions, [booking('b6', 'priv', 'confirmed')], false, true)).map((card) => card[0])).toEqual(['blocked', 'busy'])
+
+        // The Month view's number for the day is its cancelled bookings; nothing reads as booked.
+        const day = buildCardsByDate(sessions, cancelled, false, true).get('2026-11-20') ?? []
+        expect(summarizeDayCards(day)).toMatchObject({ totalBookings: 4, publicBookedCount: 0, privateBookedCount: 0, blockedCount: 1 })
+        expect(summarizeDayCards(buildCardsByDate(sessions, cancelled).get('2026-11-20') ?? [])).toMatchObject({ totalBookings: 0 })
+
+        // The session window: the cancelled bookings under a "Cancelled" heading whatever the card's state, each row opening its booking.
+        const window = component('SessionDetailDialog.tsx')
+        expect(window).toMatch(/\{cancelledBookings\.length > 0 \? \(\s*<div>\s*<div className="[^"]*">Cancelled<\/div>[^]*?\{cancelledBookings\.map\(\(b\) => \([^]*?onClick=\{\(\) => onSelectBooking\(b\)\}[^]*?<BookingStatusBadge status=\{b\.status\} \/>/)
+        // The live list is still drawn only for a booked card, and no longer carries a cancelled row.
+        expect(window).toContain("{visualState === 'public_booked' || visualState === 'private_booked' ? (")
+        expect(window).not.toContain("b.status === 'cancelled' ? (")
+        // Block slot and Edit start time follow `occupied`, not the rows that happen to be loaded.
+        expect(window).toContain('{!occupied ? (')
+        expect(window).not.toContain('bookings.length === 0 ? (')
+        // The card itself says "Cancelled: n bookings" beside the session's own state.
+        expect(component('SessionSummaryCard.tsx')).toMatch(/\{cancelledBookings\.length > 0 \? \([^]*?Cancelled: \{cancelledBookings\.length\} booking/)
+        // Overview's "booked slots" still count live bookings only.
+        expect(page('OverviewPage.tsx')).toContain('buildDaySlotCards(sessions, bookings, false)')
       })
     })
   })
@@ -3686,15 +4008,18 @@ describe('staff app helpers', () => {
         const sessions = [session('pub', 'public', '10:00', '11:00'), session('priv', 'private', '10:00', '12:00')]
         const cancelledOnly = [booking('b1', 'pub', 'cancelled'), booking('b2', 'priv', 'cancelled')]
         // As before: cancelled bookings are never on a card.
-        expect(buildDaySlotCards(sessions, cancelledOnly, false).map((card: { bookings: unknown[]; visualState: string }) => [card.bookings.length, card.visualState])).toEqual([[0, 'empty']])
+        expect(buildDaySlotCards(sessions, cancelledOnly, false).map((card: { bookings: unknown[]; cancelledBookings: unknown[]; visualState: string }) => [card.bookings.length, card.cancelledBookings.length, card.visualState])).toEqual([[0, 0, 'empty']])
         // With the Cancelled filter: listed, so one can be opened; a cancelled private booking doesn't hide the public slot.
+        // W50 item 10 (W26a review R1, L5) changed how: the cancelled bookings are in `cancelledBookings`, apart from the
+        // live ones, so the card keeps the session's own state ('empty', not 'public_booked'), and the private
+        // session's cancelled booking has a card in the public view too. Held in full in "W50: … item 10" above.
         const listed = buildDaySlotCards(sessions, cancelledOnly, false, true)
-        expect(listed.map((card: { session: { id: string }; bookings: Array<{ id: string }>; visualState: string }) => [card.session.id, card.bookings.map((b) => b.id), card.visualState])).toEqual([['pub', ['b1'], 'public_booked']])
-        expect(buildDaySlotCards(sessions, cancelledOnly, true, true)[0]).toMatchObject({ session: { id: 'priv' }, bookings: [{ id: 'b2' }], visualState: 'private_booked' })
+        expect(listed.map((card: { session: { id: string }; cancelledBookings: Array<{ id: string }>; visualState: string }) => [card.session.id, card.cancelledBookings.map((b) => b.id), card.visualState])).toEqual([['pub', ['b1'], 'empty'], ['priv', ['b2'], 'empty']])
+        expect(buildDaySlotCards(sessions, cancelledOnly, true, true)[0]).toMatchObject({ session: { id: 'priv' }, bookings: [], cancelledBookings: [{ id: 'b2' }], visualState: 'empty' })
         // An active private booking still claims the public slot it spans, listed or not.
         expect(buildDaySlotCards(sessions, [booking('b3', 'priv', 'confirmed')], false, true)).toEqual([])
-        expect(buildCardsByDate(sessions, cancelledOnly, false, true).get('2026-11-20')?.[0]?.bookings).toHaveLength(1)
-        expect(buildCardsByDate(sessions, cancelledOnly).get('2026-11-20')?.[0]?.bookings).toHaveLength(0)
+        expect(buildCardsByDate(sessions, cancelledOnly, false, true).get('2026-11-20')?.[0]?.cancelledBookings).toHaveLength(1)
+        expect(buildCardsByDate(sessions, cancelledOnly).get('2026-11-20')?.[0]?.cancelledBookings).toHaveLength(0)
 
         const bookings = page('BookingsPage.tsx')
         // From the filter the rows were loaded with (Apply Filters), not the select's value.
@@ -3709,10 +4034,10 @@ describe('staff app helpers', () => {
         expect(component('BookingSessionAgendaView.tsx')).toContain('buildDaySlotCards(sessions, bookings, showPrivateSessions, listCancelled)')
         expect(component('BookingWeekView.tsx')).toContain('buildCardsByDate(sessions, bookings, showPrivateSessions, listCancelled)')
         expect(component('BookingMonthView.tsx')).toContain('buildCardsByDate(sessions, bookings, false, listCancelled)')
-        // The card's row opens the booking and says it is cancelled.
+        // The card's row opens the booking and says it is cancelled (W50: in the window's own "Cancelled" list).
         const card = component('SessionDetailDialog.tsx')
         expect(card).toContain('onClick={() => onSelectBooking(b)}')
-        expect(card).toMatch(/b\.status === 'cancelled' \? \(\s+\/\/[^\n]+\s+<BookingStatusBadge status=\{b\.status\} \/>/)
+        expect(card).toMatch(/\{cancelledBookings\.map\(\(b\) => \([^]*?<BookingStatusBadge status=\{b\.status\} \/>/)
       })
     })
 

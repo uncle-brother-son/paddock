@@ -22,13 +22,17 @@ import { oldSide, type ReplaySide } from './harness'
 export const W49_ACTIONS: ReadonlySet<string> = new Set(['getCurrentStaff', 'getStaff', 'createStaff', 'setStaffRole', 'setStaffPermission', 'setStaffCanManagePricing'])
 /** W54: the four pricing setters and the four promo code functions. */
 export const W54_ACTIONS: ReadonlySet<string> = new Set(['setBandPrice', 'setBandRules', 'setMembershipBandTerm', 'setPostageSettings', 'getPromoCodes', 'getPromoCodeRedemptions', 'createPromoCode', 'updatePromoCode'])
+/** W50: the six booking and Overview reads, and the three flags. */
+export const W50_READS: ReadonlySet<string> = new Set(['getBookings', 'getBookingById', 'getBookingDetail', 'getAddonPrepChecklistForRange', 'getWaiverGapsForRange', 'getPaymentAttentionItems'])
+export const W50_FLAGS: ReadonlySet<string> = new Set(['setBookingCheckedIn', 'setGuestWaiverStatus', 'setAddonLinePrepared'])
+export const W50_ACTIONS: ReadonlySet<string> = new Set([...W50_READS, ...W50_FLAGS])
 /** Every old step G function now a thin call to the Worker. */
-export const STEP_G_ACTIONS_MOVED: ReadonlySet<string> = new Set([...W49_ACTIONS, ...W54_ACTIONS])
+export const STEP_G_ACTIONS_MOVED: ReadonlySet<string> = new Set([...W49_ACTIONS, ...W54_ACTIONS, ...W50_ACTIONS])
 
 /** The two that add something: their dialogs keep a press key, and their wrappers answer a refusal as data. */
 const CREATES: ReadonlySet<string> = new Set(['createStaff', 'createPromoCode'])
 /** The moved reads GB14's recording makes with `call`, which stops at the first throw. */
-const READS: ReadonlySet<string> = new Set(['getStaff', 'getPromoCodes', 'getPromoCodeRedemptions'])
+const READS: ReadonlySet<string> = new Set(['getStaff', 'getPromoCodes', 'getPromoCodeRedemptions', ...W50_READS])
 
 type CreateAnswer = { created?: boolean; message?: string; noAnswer?: boolean } | null
 
@@ -207,10 +211,27 @@ export const STEP_G_AUDIT_ROWS: ReadonlySet<string> = new Set([
   'postage.set',
   'promo.created',
   'promo.updated',
+  // W50: the three flags (check-in writes one of two, by which way it was pressed).
+  'booking.checked_in',
+  'booking.check_in_undone',
+  'booking.guest_waiver_set',
+  'booking.addon_prepared_set',
 ])
 
-/** Each moved write route, and the one audit action a press of it answered with a success writes. */
-export const STEP_G_WRITE_ROUTES: ReadonlyArray<{ route: RegExp; action: string; entityType: string }> = [
+/**
+ * W50: the audit rows of a flag (admin/flag.ts): who, the flag as it now is (`after`) and the call's key. A flag is
+ * one guarded statement, so it reads no row first and keeps no `before`.
+ */
+export const STEP_G_FLAG_ROWS: ReadonlySet<string> = new Set(['booking.checked_in', 'booking.check_in_undone', 'booking.guest_waiver_set', 'booking.addon_prepared_set'])
+
+/**
+ * Each moved write route, and the one audit action a press of it answered with a success writes. W50: `also` names a
+ * second action the same route writes instead (Check In's undo), so the route's presses are counted against both.
+ */
+export const STEP_G_WRITE_ROUTES: ReadonlyArray<{ route: RegExp; action: string; entityType: string; also?: readonly string[] }> = [
+  { route: /^POST \/api\/v1\/staff\/bookings\/[^/]+\/check-in$/, action: 'booking.checked_in', entityType: 'booking', also: ['booking.check_in_undone'] },
+  { route: /^POST \/api\/v1\/staff\/bookings\/guests\/[^/]+\/waiver$/, action: 'booking.guest_waiver_set', entityType: 'booking_guest' },
+  { route: /^POST \/api\/v1\/staff\/bookings\/addon-lines\/[^/]+\/prepared$/, action: 'booking.addon_prepared_set', entityType: 'addon_order_line' },
   { route: /^POST \/api\/v1\/staff\/staff$/, action: 'staff.created', entityType: 'staff' },
   { route: /^POST \/api\/v1\/staff\/staff\/[^/]+\/role$/, action: 'staff.role_set', entityType: 'staff' },
   { route: /^POST \/api\/v1\/staff\/staff\/[^/]+\/permissions$/, action: 'staff.permission_set', entityType: 'staff' },
@@ -267,10 +288,25 @@ export function adminRowProblems(recording: Recording): string[] {
     const wrong = (why: string) => problems.push(`${String(row.action)}: ${why} (${JSON.stringify(d)})`)
     const byStaff = row['actor_type'] === 'staff' && typeof row['actor_id'] === 'string' && row['actor_id'] !== '' && typeof row['request_id'] === 'string' && row['request_id'] !== ''
     if (!byStaff) wrong('actor or request id')
-    const expected = STEP_G_WRITE_ROUTES.find((one) => one.action === row.action)
+    const expected = STEP_G_WRITE_ROUTES.find((one) => one.action === row.action || (one.also ?? []).includes(String(row.action)))
     if (row['entity_type'] !== expected?.entityType || typeof row['entity_id'] !== 'string' || row['entity_id'] === '') wrong('entity')
-    if (!('before' in d) || !('after' in d)) wrong('before and after')
     if (typeof d['key'] !== 'string' || d['key'] === '') wrong('the key')
+    if (STEP_G_FLAG_ROWS.has(String(row.action))) {
+      // W50: a flag's row. The flag as set, and nothing about the customer: never a name, an email or a date of birth.
+      if (!isObject(d['after']) || 'before' in d) wrong('a flag keeps `after` and no `before`')
+      const kept = isObject(d['after']) ? Object.keys(d['after']).sort().join() : ''
+      const expectedKeys: Record<string, string> = {
+        'booking.checked_in': 'checked_in_at',
+        'booking.check_in_undone': 'checked_in_at',
+        'booking.guest_waiver_set': 'booking_id,waiver_accepted,waiver_accepted_at,waiver_method,waiver_version',
+        'booking.addon_prepared_set': 'booking_id,prepared,prepared_at,prepared_by',
+      }
+      if (kept !== expectedKeys[String(row.action)]) wrong('what is kept of the flag')
+      if (row.action === 'booking.guest_waiver_set' && typeof d['accepted'] !== 'boolean') wrong('which way the waiver was pressed')
+      if (row.action === 'booking.addon_prepared_set' && typeof d['prepared'] !== 'boolean') wrong('which way the tick was pressed')
+      continue
+    }
+    if (!('before' in d) || !('after' in d)) wrong('before and after')
     const created = row.action === 'staff.created' || row.action === 'promo.created'
     // A create has nothing before it; an edit has the row as it was. A member term's first save has nothing before it either.
     if (created ? d['before'] !== null : row.action !== 'pricing.member_term_set' && d['before'] === null) wrong('what was there before')
@@ -284,9 +320,9 @@ export function adminRowProblems(recording: Recording): string[] {
       }
     }
   }
-  for (const { route, action } of STEP_G_WRITE_ROUTES) {
+  for (const { route, action, also } of STEP_G_WRITE_ROUTES) {
     const presses = stored.filter((row) => route.test(String(row['endpoint'])) && row['http_status'] === 200).length
-    const written = rows.filter((row) => row.action === action).length
+    const written = rows.filter((row) => row.action === action || (also ?? []).includes(String(row.action))).length
     if (written !== presses) problems.push(`${action}: ${written} rows for ${presses} presses answered with a success`)
   }
   return problems

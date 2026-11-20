@@ -8,7 +8,7 @@ import { LOCK_ORDER } from '@/server/rules/orders/locks'
 import { PRICING_ADMIN_WORDS } from '@/server/rules/pricing/admin-failure-messages'
 import { STAFF_ADMIN_WORDS } from '@/server/rules/staff/failure-messages'
 import { fixtures, insert, startTestDatabase, type TestDatabase } from '@/server/rules/testing/database'
-import { flagWrite, type FlagWrite } from './flag'
+import { FLAG_CHANNEL_NOT_ACCEPTED_MESSAGE, flagWrite, type FlagWrite } from './flag'
 import { ADMIN_LOCK_TABLES, EVERY_ROW, inLockOrder, isUuid, lockAdminRows, SETTINGS_ROW } from './locks'
 import { adminRead, namedColumns, ownStaffRow } from './read'
 import { adminActor, adminRefusal, requireAdminPermission, type AdminActor } from './refusal'
@@ -104,6 +104,7 @@ const bandDetails = (band: string, to: { name: string; price: number }, seen: un
 const checkIn = (booking: string, to: boolean): FlagWrite<{ id: string; checked_in: boolean }> => ({
   action: 'booking.checked_in',
   needs: 'staff',
+  channels: ['staff'],
   entity: { type: 'booking', id: booking },
   statement: {
     sql: "UPDATE bookings SET checked_in_at = CASE WHEN $1::boolean THEN now() ELSE NULL END, updated_at = now() WHERE id = $2::uuid AND status <> 'cancelled' RETURNING id, checked_in_at IS NOT NULL AS checked_in",
@@ -571,6 +572,35 @@ describe('the flag write helper (level C: one guarded statement, an audit row, a
     expect(await db.query('SELECT 1 FROM bookings WHERE checked_in_at IS NOT NULL')).toEqual([])
     expect(await auditRows()).toEqual([])
   })
+
+  // Brief W50a item 4b (W50 review L6b): the permission is only checked for staff, so a flag must say who else may set it.
+  it('W50a: a flag is refused from a channel it does not accept, at the start: before the key, the permission and any statement', async () => {
+    const customer = { type: 'customer' as const, id: (await db.query<{ customer_id: string }>('SELECT customer_id FROM bookings WHERE id = $1', [bookingId]))[0]?.customer_id ?? '' }
+    const refusedChannel = { code: 'FORBIDDEN', message: FLAG_CHANNEL_NOT_ACCEPTED_MESSAGE, details: { reason: 'channel_not_accepted', action: 'booking.checked_in' } }
+    // A client that fails the test if the flag asks anything of the database.
+    const watched = new Proxy(db, {
+      get(inner, property, receiver) {
+        if (property === 'transaction' || property === 'query') return () => Promise.reject(new Error(`The flag reached the database (${String(property)}), which a refused channel never should.`))
+        return Reflect.get(inner, property, receiver) as unknown
+      },
+    })
+    // Staff only (every flag but a guest's waiver): a customer is refused, with a key and without one, and even on a
+    // flag that needs a switch the customer could never be asked for.
+    await expect(flagWrite(watched, checkIn(bookingId, true), { actor: customer, requestId: 'r', pressKey: key() })).rejects.toMatchObject(refusedChannel)
+    await expect(flagWrite(watched, checkIn(bookingId, true), { actor: customer, requestId: 'r', pressKey: null })).rejects.toMatchObject(refusedChannel)
+    await expect(flagWrite(watched, { ...checkIn(bookingId, true), needs: 'manage_pricing' }, { actor: customer, requestId: 'r', pressKey: key() })).rejects.toMatchObject(refusedChannel)
+    // A flag that accepts no channel at all runs for nobody.
+    await expect(flagWrite(watched, { ...checkIn(bookingId, true), channels: [] }, { actor: await jo(), requestId: 'r', pressKey: key() })).rejects.toMatchObject(refusedChannel)
+    // A customer-only flag refuses staff the same way.
+    await expect(flagWrite(watched, { ...checkIn(bookingId, true), channels: ['customer'] }, { actor: await jo(), requestId: 'r', pressKey: key() })).rejects.toMatchObject(refusedChannel)
+    expect(await checkedIn()).toBe(false)
+    expect(await auditRows()).toEqual([])
+
+    // A flag that says it accepts a customer runs for one, and the audit row says the customer did it.
+    await flagWrite(db, { ...checkIn(bookingId, true), channels: ['staff', 'customer'] }, { actor: customer, requestId: 'r', pressKey: key() })
+    expect(await checkedIn()).toBe(true)
+    expect(await db.query('SELECT actor_type, actor_id, action FROM audit_log')).toEqual([{ actor_type: 'customer', actor_id: customer.id, action: 'booking.checked_in' }])
+  })
 })
 
 describe('the read helper (an active staff member; admin for the staff list; named columns; L10)', () => {
@@ -641,10 +671,14 @@ describe('the read helper (an active staff member; admin for the staff list; nam
 })
 
 describe("step G's audit actions (G-plan 4.6)", () => {
-  it('names the 39 actions a step G write records, each once, as noun.verb', () => {
-    expect(ADMIN_ACTIONS).toHaveLength(39)
-    expect(new Set(ADMIN_ACTIONS).size).toBe(39)
+  // W50 (the brief's names): 40. Undoing a check-in is its own action (`booking.check_in_undone`), and the prepared
+  // tick is the booking's (`booking.addon_prepared_set`, in place of W48's `addon_line.prepared_set`, which no route
+  // had written).
+  it('names the 40 actions a step G write records, each once, as noun.verb', () => {
+    expect(ADMIN_ACTIONS).toHaveLength(40)
+    expect(new Set(ADMIN_ACTIONS).size).toBe(40)
     for (const action of ADMIN_ACTIONS) expect(action).toMatch(/^[a-z_]+\.[a-z_]+$/)
-    expect(ADMIN_ACTIONS).toEqual(expect.arrayContaining(['staff.created', 'catalog.price_set', 'stock.adjusted', 'plan.price_change', 'membership.price_moved', 'session.blocked', 'timetable.slot_added', 'booking.checked_in', 'order_line.fulfilled_set']))
+    expect(ADMIN_ACTIONS).toEqual(expect.arrayContaining(['staff.created', 'catalog.price_set', 'stock.adjusted', 'plan.price_change', 'membership.price_moved', 'session.blocked', 'timetable.slot_added', 'booking.checked_in', 'booking.check_in_undone', 'booking.guest_waiver_set', 'booking.addon_prepared_set', 'order_line.fulfilled_set']))
+    expect(ADMIN_ACTIONS as readonly string[]).not.toContain('addon_line.prepared_set')
   })
 })

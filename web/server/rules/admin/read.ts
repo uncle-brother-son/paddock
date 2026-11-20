@@ -40,6 +40,16 @@ const iso = (value: unknown): unknown => (value instanceof Date ? value.toISOStr
  */
 export async function adminRead<Row extends Record<string, unknown>>(db: Queryable, read: AdminRead, options: AdminReadOptions): Promise<Row[]> {
   requireAdminPermission(options.actor, read.needs, read.name)
+  return namedRead<Row>(db, read)
+}
+
+/**
+ * W50 (G-plan 4.8; brief item 3): the read itself, without the staff permission: named columns only, and each moment
+ * as ISO text. For a read that takes the channel: on the staff channel it runs through adminRead (the permission
+ * first); on the customer channel the rule limits the statement to the signed-in customer's own rows and runs it
+ * here. Never called for a staff route without adminRead in front of it.
+ */
+export async function namedRead<Row extends Record<string, unknown>>(db: Queryable, read: Pick<AdminRead, 'name' | 'sql' | 'params' | 'times'>): Promise<Row[]> {
   if (READS_EVERY_COLUMN.test(read.sql)) throw new Error(`The read ${read.name} selects every column (*): name the columns it answers.`)
   const rows = await db.query<Row>(read.sql, read.params ?? [])
   const times = read.times ?? []

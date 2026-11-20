@@ -642,8 +642,10 @@ export const ADMIN_ACTIONS = [
   'timetable.slot_added',
   'timetable.slot_removed',
   'booking.checked_in',
+  // W50 (the brief's names): undoing a check-in is its own action, and the prepared tick is the booking's.
+  'booking.check_in_undone',
   'booking.guest_waiver_set',
-  'addon_line.prepared_set',
+  'booking.addon_prepared_set',
   'event_attendee.checked_in',
   'event_attendee.waiver_set',
   'order_line.fulfilled_set',
@@ -761,3 +763,63 @@ export type MemberBandTermRouteOutput = z.infer<typeof memberBandTermRouteOutput
 /** `POST postage/settings`: setPostageSettings' answer, with the settings row's new stamp. */
 export const postageSettingsRouteOutputSchema = adminSetPostageSettingsOutputSchema.extend({ stamp: z.string() })
 export type PostageSettingsRouteOutput = z.infer<typeof postageSettingsRouteOutputSchema>
+
+// ---------------------------------------------------------------------------------------------------------------------
+// W50 (G-plan 4.3, the "Booking detail" and "Overview" rows): Bookings admin and Overview. The six reads answer the
+// old functions' own shapes (W48's contracts above), so only their inputs are the routes' own: a range's dates must
+// be dates, and a booking id is any text (one that names no booking answers null, or an empty detail, as before).
+// The three flags answer the row as it now is, by named columns (every column the old `RETURNING *` gave, so nothing
+// a screen could read is gone). Kept last, so the staff app's generated types keep their order.
+
+/** A calendar day, as the screens send it: `YYYY-MM-DD`, a London date (session times are London wall-clock digits). */
+const londonDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be a date in the form YYYY-MM-DD')
+
+/** `GET bookings`: getBookings. Each of the three is optional, as before: none of them lists every booking. Answers adminGetBookingsOutputSchema. */
+export const bookingListRouteInputSchema = z.object({ startDate: londonDay.optional(), endDate: londonDay.optional(), status: z.string().optional() })
+export type BookingListRouteInput = z.infer<typeof bookingListRouteInputSchema>
+
+/** `GET bookings/:bookingId` (getBookingById, answers adminGetBookingByIdOutputSchema) and `GET bookings/:bookingId/detail` (getBookingDetail, answers adminGetBookingDetailOutputSchema). */
+export const bookingByIdRouteInputSchema = z.object({ bookingId: z.string() })
+export type BookingByIdRouteInput = z.infer<typeof bookingByIdRouteInputSchema>
+
+/** `GET bookings/addon-prep` (getAddonPrepChecklistForRange) and `GET bookings/waiver-gaps` (getWaiverGapsForRange): both days inclusive. */
+export const bookingDayRangeRouteInputSchema = z.object({ startDate: londonDay, endDate: londonDay })
+export type BookingDayRangeRouteInput = z.infer<typeof bookingDayRangeRouteInputSchema>
+
+/** `POST bookings/:bookingId/check-in`: setBookingCheckedIn, on and undo. Answers the booking's id and its check-in time (the Worker's clock), or null once undone. */
+export const bookingCheckInRouteInputSchema = z.object({ bookingId: z.string(), checkedIn: z.boolean() })
+export type BookingCheckInRouteInput = z.infer<typeof bookingCheckInRouteInputSchema>
+export const bookingCheckInRouteOutputSchema = z.object({ id: z.string(), checked_in_at: z.string().nullable() })
+export type BookingCheckInRouteOutput = z.infer<typeof bookingCheckInRouteOutputSchema>
+
+/** `POST bookings/guests/:guestId/waiver`: setGuestWaiverStatus, sign and revoke. The method and version are checked by the rule, in the old words. Answers the guest's row. */
+export const guestWaiverRouteInputSchema = z.object({ guestId: z.string(), accepted: z.boolean(), waiverMethod: loose, waiverVersion: loose })
+export type GuestWaiverRouteInput = z.infer<typeof guestWaiverRouteInputSchema>
+export const guestWaiverRouteOutputSchema = adminGetBookingDetailOutputSchema.shape.guests.element
+export type GuestWaiverRouteOutput = z.infer<typeof guestWaiverRouteOutputSchema>
+
+/** `POST bookings/addon-lines/:lineId/prepared`: setAddonLinePrepared, on and off. Answers the add-on line's row. */
+export const addonPreparedRouteInputSchema = z.object({ lineId: z.string(), prepared: z.boolean() })
+export type AddonPreparedRouteInput = z.infer<typeof addonPreparedRouteInputSchema>
+export const addonPreparedRouteOutputSchema = z.object({
+  id: z.string(),
+  booking_id: z.string(),
+  addon_id: z.string(),
+  quantity: z.number(),
+  price_at_purchase: z.string(),
+  sku_at_purchase: z.string(),
+  redemption_source: z.string().nullable(),
+  stripe_price_id: z.string().nullable(),
+  created_at: z.string(),
+  prepared: z.boolean(),
+  prepared_at: z.string().nullable(),
+  prepared_by: z.string().nullable(),
+  redeemed_membership_id: z.string().nullable(),
+  order_id: z.string().nullable(),
+  removed_at: z.string().nullable(),
+  removed_by: z.string().nullable(),
+  refunded_amount: z.string(),
+  card_refunded_amount: z.string(),
+  refund_method: z.enum(['card', 'credit', 'none', 'credit_returned']).nullable(),
+})
+export type AddonPreparedRouteOutput = z.infer<typeof addonPreparedRouteOutputSchema>
