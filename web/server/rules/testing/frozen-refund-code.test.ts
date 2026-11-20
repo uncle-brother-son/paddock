@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { LEGACY_REFUND_ACTIONS, legacyBookingDir, legacyOrderDir, legacyRefundDir, oldFunctionPath } from './replay/harness'
+import { LEGACY_REFUND_ACTIONS, legacyAdminDir, legacyBookingDir, legacyOrderDir, legacyRefundDir, oldFunctionPath } from './replay/harness'
 import { staffAppDir } from './staff-app-dir'
 
 // Brief W27 item 7 (E-plan 4.13 item 2, lead call L6; W17 later 1 / audit row 1): a frozen test-only copy of the old
@@ -41,6 +41,14 @@ const TRIMMED_IN_THE_STAFF_APP: Record<string, string[]> = {
   'shared/promoCodes.ts': ['applyPromoCode', 'spreadFixedDiscount', 'PROMO_FAILURE_MESSAGES', 'PromoUsageCounts'],
   'shared/eventAttendance.ts': ['loadEventAttendeeState'],
 }
+/**
+ * W48 (G-plan 2.5, W45 row 4): where a module of this copy is compared with "the staff app's own". Step G trims and
+ * deletes the staff app's shared modules slice by slice, so from W48 that is the step G copy's file (legacy-admin: the
+ * staff app's as at `7a4aede`, held by its own manifest), not the staff app's live one. A module the step G copy
+ * doesn't hold (`shared/callWorker.ts`) is held by this copy's manifest alone. Only the five switched functions are
+ * still read in the staff app: each must be a thin call there.
+ */
+const asTheStaffAppHadIt = (name: string): string => path.join(legacyAdminDir, name)
 /** The three modules the frozen order copy took from the staff app's checkout until W27 (audit row 1). */
 const ONCE_ALIASED = ['shared/cancelMembershipSubscription', 'shared/promoCodes', 'shared/stockAdjustments']
 
@@ -113,13 +121,13 @@ describe('W27: the frozen copy of the old step E functions', () => {
     expect(code(path.join(COPY_CODE, 'globals.ts')).trim()).toBe('export {}')
   })
 
-  it("every file but the stand-in is the staff app's own, byte for byte, while the staff app still has it", () => {
-    // Step E deletes these from the staff app slice by slice; a file still there must not have drifted from the copy.
-    // (When the lead changes one in the staff app before its slice, this fails: decide then which the golden files hold to.)
+  it("every module the step G copy also holds is the staff app's own as frozen there (W48), byte for byte, unless named as changed or trimmed", () => {
+    // Until W48 this read the staff app's live files, so a step G edit to a shared module failed it (W45 row 4). It
+    // now reads the step G copy, which is the staff app's as at W48 and never changes.
     const compared: string[] = []
     for (const file of copyFiles) {
       const name = inCopy(file)
-      const original = path.join(appDir, 'backend/paddock', name)
+      const original = asTheStaffAppHadIt(name)
       // W28: the staff app's refundOrder is a thin call to the Worker now; the copy keeps the old body for the replay.
       if (name === STAND_IN || name === 'shared/workerContracts.ts' || SWITCHED_TO_THE_WORKER.has(name) || CHANGED_IN_THE_STAFF_APP.has(name) || name in TRIMMED_IN_THE_STAFF_APP || !existsSync(original)) continue
       expect(sha256(file), name).toBe(sha256(original))
@@ -129,12 +137,14 @@ describe('W27: the frozen copy of the old step E functions', () => {
     // which each Worker change regenerates). The number only falls as slices switch or delete their old bodies. W28: 26
     // (refundOrder switched). W30: 23 (cancelEventPlaces and getEventCancellationQuote switched; the attendee list's
     // loader changed). W31: 21 (cancelEvent and getEventCancellationOverview switched: all five are thin wrappers now).
-    // W44: 18 (three modules trimmed of unused exports in the staff app).
-    expect(compared.length).toBeLessThanOrEqual(18)
+    // W44: 18 at most (three modules trimmed of unused exports in the staff app). W48: exactly these six, for good:
+    // the modules the step G copy holds too, less the one changed (W30) and the three trimmed (W44). What only the
+    // staff app had (`shared/callWorker.ts`) is held by this copy's manifest.
+    expect(compared.sort()).toEqual(['globals.ts', 'shared/extractApiErrorMessage.ts', 'shared/extractStructuredApiError.ts', 'shared/isHtmlErrorPage.ts', 'shared/resolveStaffId.ts', 'shared/stockAdjustments.ts'])
     // A trimmed module is the copy's with those exports gone, and nothing the copy doesn't have: the staff app no
     // longer names them, the copy still does.
     for (const [name, gone] of Object.entries(TRIMMED_IN_THE_STAFF_APP)) {
-      const now = code(path.join(appDir, 'backend/paddock', name))
+      const now = code(asTheStaffAppHadIt(name))
       const frozen = code(path.join(COPY_CODE, name))
       for (const one of gone) {
         expect(new RegExp(`\\b${one}\\b`).test(now), `${name}: ${one}`).toBe(false)
@@ -144,7 +154,7 @@ describe('W27: the frozen copy of the old step E functions', () => {
     }
     expect([...SWITCHED_TO_THE_WORKER].sort()).toEqual([...LEGACY_REFUND_ACTIONS].map((action) => `${action}.ts`).sort())
     // The changed loader is still read-only, and still the old one plus what W30 added.
-    const loader = code(path.join(appDir, 'backend/paddock/shared/eventAttendeeList.ts'))
+    const loader = code(asTheStaffAppHadIt('shared/eventAttendeeList.ts'))
     expect(loader).not.toMatch(/\b(INSERT|UPDATE|DELETE)\b/)
     expect(loader).toContain('refund_owed_amount')
     // A switched function is a thin wrapper, not a drifted copy: it calls the Worker and no longer touches the database.
@@ -165,7 +175,9 @@ describe('W27: the frozen copy of the old step E functions', () => {
     expect(oldFunctionPath('shared/staffAccess.ts')).toBe(path.join(legacyBookingDir, 'shared/staffAccess.ts'))
     expect(oldFunctionPath('refundBooking')).toBe(path.join(legacyBookingDir, 'refundBooking.ts'))
     expect(oldFunctionPath('createOrder')).toBe(path.join(ORDER_COPY_DIR, 'backend/paddock/createOrder.ts'))
-    expect(oldFunctionPath('getOrders')).toBe(path.join(appDir, 'backend/paddock/getOrders.ts'))
+    // W48, a named difference: the functions step G moves run from their own frozen copy now (frozen-admin-code.test.ts),
+    // no longer from the staff app's checkout.
+    expect(oldFunctionPath('getOrders')).toBe(path.join(legacyAdminDir, 'getOrders.ts'))
   })
 
   it('audit row 1: the order copy takes the three once-aliased modules from here, and nothing from the staff app any more', () => {

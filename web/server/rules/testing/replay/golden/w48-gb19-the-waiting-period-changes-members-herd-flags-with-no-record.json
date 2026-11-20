@@ -1,0 +1,30 @@
+{
+  "scenario": "w48-gb19-the-waiting-period-changes-members-herd-flags-with-no-record",
+  "results": [
+    {
+      "addonCreditWaitMonths": 12,
+      "herdFlagsChanged": 1
+    },
+    {
+      "addonCreditWaitMonths": 0,
+      "herdFlagsChanged": 1
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "membership_settings": {
+      "added": [],
+      "changed": [
+        {
+          "id": "true",
+          "addon_credit_wait_months": [
+            6,
+            0
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

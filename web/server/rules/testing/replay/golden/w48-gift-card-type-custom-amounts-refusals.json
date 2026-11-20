@@ -1,0 +1,26 @@
+{
+  "scenario": "w48-gift-card-type-custom-amounts-refusals",
+  "results": [
+    {
+      "thrown": "giftCardTypeId is required"
+    },
+    {
+      "thrown": "customAmountMin must be a non-negative number when custom amounts are enabled"
+    },
+    {
+      "thrown": "customAmountMin must be a non-negative number when custom amounts are enabled"
+    },
+    {
+      "thrown": "customAmountMax must be a positive number when custom amounts are enabled"
+    },
+    {
+      "thrown": "customAmountMax must be a positive number when custom amounts are enabled"
+    },
+    {
+      "thrown": "customAmountMin cannot be greater than customAmountMax"
+    },
+    null
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

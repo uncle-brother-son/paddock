@@ -1960,3 +1960,194 @@ on the 11th still lapses. This pays the subscription's open invoice there and th
   at once on real Postgres: one record, one send, one charge; W47r-b: two listings of one invoice at once write one
   line; W47r-c: the same for a row ended here), `server/staff-app-retry-payment.test.ts` (the staff
   app's wrappers, words and screens), `server/stripe/fake.test.ts` (what the fake holds Stripe to do).
+
+## Step G foundations: the admin contracts and words, `plan_changes`, the three helpers (W48)
+
+Dark: no route, nothing switched, no screen changed. What W49 to W57 build on (G-plan 4.1, 4.2, 4.6, 4.9).
+
+- **`contracts/admin.ts`** (exported last from `contracts/index.ts`): a pair of contracts for each of the staff app's
+  82 functions that were not a thin call when step G began (`ADMIN_CONTRACTS`, by function name: lead call L11, one
+  staff app function per old function). Each answer is the old function's own, in its field names; each input is
+  loose where the old function answered for itself (a word from a set is any text, a number may be empty), so the
+  rule refuses in the old words. `adminRefusalDetailsSchema` is every step G refusal's `details` (the reason, the
+  words, the action); `ADMIN_ACTIONS` the 39 audit actions of G-plan 4.6. `replay/w48-contracts.test.ts` holds the
+  file to every call the 271 step G scenarios make of the old functions.
+- **Words**, moved word for word and unused yet: `staff/failure-messages.ts`, `catalog/failure-messages.ts` (with
+  the legacy routes' own refusals and the plan price move's), and `admin-failure-messages.ts` in `promo/`,
+  `pricing/`, `sessions/`, `bookings/`, `events/` and `orders/` (beside the words files those folders already have
+  for steps B to F). 144 sentences and the reasons of the eleven result types that name any.
+  `admin/words.test.ts` reads the old sentences from the frozen copy with the TypeScript parser and holds the files
+  to them both ways. Not moved, on purpose: the plumbing between Retool and the legacy routes, and "saved but could
+  not be read back".
+- **`plan_changes`** (`catalog/plan-switch.ts`, lead call L3): step G's one switch kind, for the plan actions that
+  touch Stripe (a plan made, a plan's price changed, a plan on or off sale). Off until the lead adds it to
+  ORDER_SWITCH when W57 goes live; off, it answers MEMBERSHIP_PATH_OFF in every switch's words, with
+  `kinds: ['plan_changes']`. Nothing asks it yet. Reconcile never will.
+- **`LOCK_ORDER` gains `admin_row`, first of all** (`orders/locks.ts`): a row a step G action edits (a staff member, a
+  catalogue item, a weekly slot, a band or its windows, a setting). An admin write locks its own row first and then
+  only rows after it; no money transaction locks one, so nothing can be waiting on it while holding a later row. A
+  row the list already names keeps its place: an admin action on a session takes `session` where an order and a
+  booking change take it. `admin/locks.ts` (`lockAdminRows`) takes them: a statement a table, tables in LOCK_ORDER,
+  ids in id order.
+
+### The three helpers (`server/rules/admin/`)
+
+| Helper | For | What it does |
+|---|---|---|
+| `adminWrite` (`write.ts`) | Level B: prices, tiers, bands and windows, member terms, postage, promo codes, pass and gift card type settings, event details, stock, variants, block and unblock, band override, start time, one-off session, weekly slots, staff | The press's key must be there; the permission from the signed-in staff member, in the old words, before anything is read; then one transaction: the locks, the row read in its own statement, the old checks and the change, and one audit row with who, the row before and after, and the key |
+| `flagWrite` (`flag.ts`) | Level C: check-in, waivers, add-on prepared, line fulfilled | The call's key; the permission; then one transaction: one guarded statement (the guard is the rule) and, when it changed a row, one audit row. No row means the guard refused: the reason is read in the same transaction and thrown, so nothing is kept |
+| `adminRead` (`read.ts`) | The 30 reads | An active staff member (the route's own check: GB14), the admin role for the staff list, in the old words; a statement that names its columns (one that reads `*` is thrown before it runs); each moment as ISO text. `ownStaffRow` is L10's one exception: a staff member's own row whether active or not |
+
+- **The press key is the route's.** Every step G write is run by an idempotent route (`idempotent: true`), which
+  answers a repeated key from the stored answer without running the rule again. The helpers take the key
+  (`pressKey`) so the audit row can carry it, and refuse to run without one, so a route can't be built without it.
+- **A refusal is a throw** (`adminRefusal`), inside the transaction or before it, so nothing of it is kept: no change
+  and no audit row. Its `details` carry the old reason and words; each thin wrapper puts the old result shape back.
+- **Level A (the plan actions, W57) does not use `adminWrite`**: it is step F's discipline (a record before any Stripe
+  call, keys from the record, held or left, reconcile).
+- Tests: `admin/helpers.test.ts` (PGlite, each helper through a route made as the app's are: the permission, the
+  audit row, a repeated key, a refused write) and `admin/helpers-postgres.test.ts` (real Postgres: two presses queue
+  on the row's lock, with a control that loses a press without it; the lock order; a check-in against a cancel).
+  The examples in them (a band's price, a booking checked in, the staff list) are not routes of the app.
+
+## Staff, Pricing and promo codes on the Worker (W49 + W54)
+
+The first step G screens to move: the Staff page (G-plan 1.8), the Pricing page's four setters (1.7) and the Promo
+Codes page (1.6). Fourteen of the staff app's functions are now thin calls. No Stripe, so no switch kind: each write
+is one transaction with nothing to stop part way (lead call L3). Level B throughout (G-plan 4.2).
+
+| Route (under `/api/v1/staff/`) | Staff app function | Rule |
+|---|---|---|
+| `GET staff/me` | `getCurrentStaff` | `staff/admin.ts` `getOwnStaffRow` |
+| `GET staff` | `getStaff` | `listStaff` (admins) |
+| `POST staff` | `createStaff` | `createStaff` (admins) |
+| `POST staff/:staffId/role` | `setStaffRole` | `setStaffRole` (admins) |
+| `POST staff/:staffId/permissions` | `setStaffPermission` (Issue refunds, active) and `setStaffCanManagePricing` | `setStaffPermission` (admins): one switch a press, named by its column |
+| `POST pricing/bands/:bandId/price` | `setBandPrice` | `pricing/admin.ts` `setBandPrice` (Manage pricing) |
+| `POST pricing/band-rules/:dayOfWeek` | `setBandRules` | `setBandRules` (Manage pricing) |
+| `POST pricing/member-band-terms` | `setMembershipBandTerm` | `setMembershipBandTerm` (Manage pricing) |
+| `POST postage/settings` | `setPostageSettings` | `setPostageSettings` (Manage pricing) |
+| `GET promo-codes` | `getPromoCodes` | `promo/admin.ts` `listPromoCodes` (any active staff) |
+| `GET promo-codes/:promoCodeId/redemptions` | `getPromoCodeRedemptions` | `listPromoCodeRedemptions` (any active staff) |
+| `POST promo-codes` | `createPromoCode` | `createPromoCode` (Manage pricing) |
+| `POST promo-codes/:promoCodeId` | `updatePromoCode` | `updatePromoCode` (Manage pricing) |
+
+Every write goes through `adminWrite`: the permission in the old words, one transaction under the lock, an audit row
+with the row before and after and the press's key (`staff.created`, `staff.role_set`, `staff.permission_set`,
+`pricing.band_price_set`, `pricing.band_rules_set`, `pricing.member_term_set`, `postage.set`, `promo.created`,
+`promo.updated`). A route's input is loose where the old function checked for itself (`contracts/admin.ts`, the
+route schemas at its end), so each refusal is the rule's, in the old words.
+
+**The sign-in email (GB16; W48 call 12).** `server/auth/staff.ts` `staffRowBySignInEmail` is the one way a sign-in
+finds its staff row: `lower(email) = lower($1)`, the row spelt exactly as the sign-in first. The staff check
+(`authenticateStaff`) and `GET staff/me` (`ownStaffRow`) both call it, so they can't disagree. The old functions
+compared exactly. The staff app's remaining old functions (W50 to W57) still do, through `shared/staffAccess.ts`,
+until each moves.
+
+**`GET staff/me` and the `staff_sign_in` mode (lead call L10).** The route factory (`server/http/route.ts`) has one
+more auth mode: the shared key and the signed-in email, with no staff row asked for. The handler gets the email and
+nothing else, and such a route can't be idempotent (a write). `staff/me` is its only user: it answers the sign-in's
+own row whether active or not (so the screen can say "inactive"), and null for a sign-in with no row. Every other
+staff route still refuses both.
+
+**The staff guard (GB16).** Every staff change locks every staff row, in id order, before it reads
+(`admin/locks.ts`, `EVERY_ROW`). "Keep one active admin" and "keep one active Manage pricing holder" are about the
+whole table, so a lock on the one row being changed would let two presses on two rows both pass; under the guard
+they take turns, and each rule is a count read after the lock. The pricing rule is applied to the switch itself (the
+old words) and to switching the last active holder off (the same words; the old functions let that through).
+
+**A day's band windows (GB8; W48 review L1).** `setBandRules` is one transaction: the band guard (every
+`session_bands` row: a day's windows may name any band, and the day's own rows are deleted and made again, so they
+are nothing two saves can queue on), the bands checked, the day's windows deleted and inserted, the sessions that
+will change band read and locked in id order (`lockAdminRows`), then re-banded by the database's own
+`reassign_session_bands(now())`, and the audit row. A reader sees the day's old windows until the commit, then the
+new ones: never none, never half. A failure anywhere rolls all of it back. **Any step G write that changes many
+sessions (or memberships) must lock those rows through `lockAdminRows` first**: a bare multi-row update takes its row
+locks in the order its scan meets them and can deadlock with another press that locks in id order
+(`pricing/admin-postgres.test.ts` shows both). Until W51 moves it, the staff app's old Block Day is such a bare
+update: against a band-window save on the same day's sessions it can still be stopped by a deadlock (a failed press,
+no money).
+
+**The settings rows (W48 review S1).** `postage_settings` and `membership_settings` are in `ADMIN_LOCK_TABLES`
+(`admin_row`) and are locked as `ids: SETTINGS_ROW`, by a statement that names the one row as `id = true`. Nothing is
+cast and no boolean goes in as a parameter: the Worker's driver sends the text `'true'` in a boolean array as false
+(which locked nothing, silently, on real Postgres) and a boolean array as a single boolean. Postage uses it; W57's
+membership settings will.
+
+**Promo codes (GB18).** An edit locks the code's row (`FOR NO KEY UPDATE`), which queues with the `FOR UPDATE` an
+order using the code takes before it writes its redemption (`orders/locks.ts`). So "the text can't change once
+used" is a count read while no order can be using the code. A code already there in another letter case is refused
+before the write (create and edit), and by the table's own index on `upper(code)` behind it, which is answered as
+the same refusal. A create has no row to lock: two creates of one code at once are settled by that index.
+
+**New words** (`pricing/admin-failure-messages.ts`, `PRICING_ADMIN_NEW_WORDS`, kept apart from the old sentences):
+"That band no longer exists. Reload the page and try again." (a band price or a member term for a band that isn't
+there: the old functions answered `updated: false` with no words, or showed the database's foreign key error) and
+"Membership level must be Core or All-Access." (the database's check error before).
+
+**The fake Stripe (W48 review S2).** A subscription's price switch refuses an archived price (`price_inactive`), as
+`subscriptions.create` does.
+
+Tests: `staff/admin.test.ts`, `pricing/admin.test.ts`, `promo/admin.test.ts` (the real routes on the live schema:
+every refusal, the audit rows, a repeated key, the lock statements in order); `staff/`, `pricing/` and `promo/`
+`admin-postgres.test.ts` (real Postgres, each race held until the second press is reported blocked by the first,
+each with a control); `testing/replay/admin-replay.test.ts` (the 49 golden scenarios through the staff app's thin
+functions). The staff app's side: `server/staff-app-helpers.test.ts` (the fourteen ask only the Worker).
+
+## An edit from a page loaded before someone else's change is refused (W54a)
+
+**The step G rule (the lead's call, 20 Nov; W49 + W54 review S1).** An edit that writes a whole row, or a whole day's
+rows, is refused when the row has changed since the screen read it. W55 to W57's catalogue edits follow it.
+
+Why: such a press sends every field as its page loaded it. The lock makes two presses take turns, but the second
+still writes its own page's values over the first's. The money case (the review's): WELCOME is 100% by mistake; B
+corrects it to 10%; A, whose page still shows 100%, switches it off and on again, and the switch sends
+`discountValue: 100`. The next £25 session booked with WELCOME is £0 instead of £22.50.
+
+**How (`server/rules/admin/stamp.ts`, `admin/write.ts`).**
+
+1. Each read answers a **stamp** beside what it shows, from the same statement as the rows it is for.
+2. The press sends it back (`stamp` on the route's input).
+3. `adminWrite` compares it under the locks the write already holds, after the row is read and before the change:
+   a different stamp, or none, is refused `changed_since` (409), "This was changed by someone else since the page
+   loaded. The page has been reloaded: check it and save again." Nothing is written and there is no audit row.
+4. The answer carries the row's new stamp, so the screen can save again without reading again.
+
+Every `adminWrite` must say which it is (`unchangedSince`, a required field, so a new write can't leave the
+question out): `{ seen, now }` for a whole-row edit, or `WRITES_ONLY_WHAT_WAS_PRESSED` for a new row or one value set.
+
+**What a stamp is.** `rowStampSql(alias)`: the row's `updated_at` to the microsecond in UTC, then `#` and the md5 of
+the whole row as text. Both, because the moment alone misses a change made in the same instant (the test
+database's clock ticks in milliseconds; the replay's is frozen) and a change that doesn't move `updated_at`
+(`promo_codes` and `postage_settings` have no `update_updated_at_column` trigger: a correction made by hand in SQL
+might not set it). A row put back exactly as it was has its old stamp again, which is right: it is what the screen
+shows. A set of rows (`rowsStamp`): each row's id and stamp, in id order; `'none'` (`NO_ROW_STAMP`) for no rows,
+and for a single row that isn't there yet.
+
+| Edit | Stamp | Read that answers it | Lock it is compared under |
+|---|---|---|---|
+| `updatePromoCode` (the dialog's save **and the list's on/off switch**) | the code's row | `GET promo-codes`: `stamp` on each row | the code's row |
+| `setPostageSettings` | the settings row | `GET postage/settings`: `stamp` | the settings row |
+| `setMembershipBandTerm` | the term's row (`'none'` before its first save) | `GET pricing/config`: `stamp` on each `membershipTerms` row | the band's row |
+| `setBandRules` | the day's windows, as one | `GET pricing/config`: `bandRulesStamps[day]` (0 = Sunday) | the band guard |
+
+**Left as it is, on purpose: `setBandPrice`**, and every staff write (role, a switch, a new member) and
+`createPromoCode`. Each writes only what was pressed (one value, or a new row), so a page loaded before someone
+else's change has nothing of theirs to put back.
+
+**Order of refusals.** The permission (before anything is read); then anything the rule checks before its
+transaction (a window that isn't valid, a figure that isn't a number); then the row not being there; then
+`changed_since`; then the rule's other checks under the lock (a promo code's text, its lock, its fields).
+
+**An older staff app** (a press with no stamp) is refused the same way. Nothing in these screens was live, so the
+Worker and the staff app that sends the stamp go out together.
+
+**The `staff_sign_in` mode can only be a read (review F3).** Its config must say `method: 'GET'`; anything else is
+thrown when the route is defined, and the route refuses a request that isn't a GET before the handler runs.
+
+Tests: `admin/helpers.test.ts` (the rule in the helper, and the stamp itself); `pricing/admin.test.ts` and
+`promo/admin.test.ts` (each of the four: a stale press refused with nothing written and no audit row, a fresh one
+saved, the reviewer's two examples, a press with no stamp); `pricing/` and `promo/` `admin-postgres.test.ts` (two
+presses at once from pages loaded before either: the second waits, then is refused; a control with the comparison
+made before the lock lets it through); `http/route.test.ts` (F3); `testing/replay/admin-replay.test.ts` (the golden
+files pressed as the screens press them); `server/staff-app-helpers.test.ts` (the staff app sends and keeps the stamp).

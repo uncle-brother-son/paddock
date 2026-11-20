@@ -1,0 +1,10 @@
+{
+  "scenario": "w48-staff-manage-pricing-refusals",
+  "results": [
+    {
+      "thrown": "Staff member not found."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

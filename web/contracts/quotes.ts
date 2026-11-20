@@ -294,9 +294,16 @@ export const pricingConfigOutputSchema = z.object({
       band_id: z.string(),
       credit_eligible: z.boolean(),
       discount_percent: z.string(),
+      /** W54a: the row's stamp. A save of this term sends it back, and is refused `changed_since` if the row has changed. */
+      stamp: z.string(),
     })
   ),
   membershipLevels: z.array(z.string()),
+  /**
+   * W54a: each day's band windows as one stamp, by day (index 0 = Sunday .. 6 = Saturday), from the same rows as
+   * `bandRules`. A save of a day's windows sends its day's back, and is refused `changed_since` if they have changed.
+   */
+  bandRulesStamps: z.array(z.string()),
   canManagePricing: z.boolean(),
 })
 export type PricingConfigOutput = z.infer<typeof pricingConfigOutputSchema>
@@ -307,5 +314,7 @@ export const postageSettingsOutputSchema = z.object({
   standardPrice: z.number(),
   expressPrice: z.number(),
   freeShippingThreshold: z.number(),
+  /** W54a: the settings row's stamp. A save sends it back, and is refused `changed_since` if the row has changed. */
+  stamp: z.string(),
 })
 export type PostageSettingsOutput = z.infer<typeof postageSettingsOutputSchema>

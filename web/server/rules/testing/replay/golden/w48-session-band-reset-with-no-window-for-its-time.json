@@ -1,0 +1,31 @@
+{
+  "scenario": "w48-session-band-reset-with-no-window-for-its-time",
+  "results": [
+    {
+      "confirmed": true,
+      "sessionsAffected": 1,
+      "bookingsAffected": 0
+    },
+    {
+      "reset": true,
+      "band": null
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "sessions": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000004",
+          "band_id": [
+            "10000000-0000-4000-8000-000000000003",
+            null
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

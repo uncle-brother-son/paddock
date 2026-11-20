@@ -1,0 +1,14 @@
+{
+  "scenario": "w48-booking-detail-read-with-a-card-payment-being-checked",
+  "results": [
+    {
+      "guests": [],
+      "addonLines": [],
+      "specialRequests": null,
+      "refundOwedAmount": "0.00",
+      "readerPaymentOpenMessage": "A card payment on this booking is still being checked. Don't take payment again: use Resolve now on the Orders page after 15 minutes."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

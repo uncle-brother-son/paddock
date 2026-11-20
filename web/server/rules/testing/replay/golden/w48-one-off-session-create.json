@@ -1,0 +1,71 @@
+{
+  "scenario": "w48-one-off-session-create",
+  "results": [
+    {
+      "created": true,
+      "session": {
+        "id": "sessions#1",
+        "service_type_id": "10000000-0000-4000-8000-000000000002",
+        "start_time": "2026-11-20T07:00:00.000Z",
+        "end_time": "2026-11-20T08:00:00.000Z",
+        "capacity": 10,
+        "type": "public"
+      }
+    },
+    {
+      "created": true,
+      "session": {
+        "id": "sessions#2",
+        "service_type_id": "10000000-0000-4000-8000-000000000002",
+        "start_time": "2026-11-01T19:00:00.000Z",
+        "end_time": "2026-11-01T20:00:00.000Z",
+        "capacity": 10,
+        "type": "public"
+      }
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "sessions": {
+      "added": [
+        {
+          "id": "sessions#1",
+          "resource_id": null,
+          "service_type_id": "10000000-0000-4000-8000-000000000002",
+          "start_time": "2026-11-20T07:00:00.000Z",
+          "end_time": "2026-11-20T08:00:00.000Z",
+          "type": "public",
+          "capacity": 10,
+          "total_booked": 0,
+          "status": "open",
+          "blocked_reason": null,
+          "blocked_by": null,
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "band_id": "10000000-0000-4000-8000-000000000003",
+          "band_overridden": false
+        },
+        {
+          "id": "sessions#2",
+          "resource_id": null,
+          "service_type_id": "10000000-0000-4000-8000-000000000002",
+          "start_time": "2026-11-01T19:00:00.000Z",
+          "end_time": "2026-11-01T20:00:00.000Z",
+          "type": "public",
+          "capacity": 10,
+          "total_booked": 0,
+          "status": "open",
+          "blocked_reason": null,
+          "blocked_by": null,
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "band_id": "10000000-0000-4000-8000-00000000000c",
+          "band_overridden": false
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

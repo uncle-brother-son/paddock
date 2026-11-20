@@ -1,0 +1,72 @@
+{
+  "scenario": "w48-variant-create-who-may",
+  "results": [
+    {
+      "thrown": "This staff account is inactive. Ask an admin to reactivate it."
+    },
+    {
+      "success": true,
+      "variant": {
+        "id": "product_variants#1",
+        "product_id": "10000000-0000-4000-8000-000000000007",
+        "size": "Large",
+        "sku": "SOAP-L",
+        "price_override": null,
+        "stock_quantity": 0,
+        "stripe_price_id": "price_fake_0001",
+        "created_at": "<time>",
+        "updated_at": "<time>"
+      },
+      "stripePriceId": "price_fake_0001"
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "prices.create",
+      "params": {
+        "product": "prod_soap",
+        "unit_amount": 1200,
+        "currency": "gbp",
+        "metadata": {
+          "size": "Large",
+          "sku": "SOAP-L"
+        }
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {
+    "product_variants": {
+      "added": [
+        {
+          "id": "product_variants#1",
+          "product_id": "10000000-0000-4000-8000-000000000007",
+          "size": "Large",
+          "sku": "SOAP-L",
+          "price_override": null,
+          "stock_quantity": 0,
+          "stripe_price_id": "price_fake_0001",
+          "created_at": "<set>",
+          "updated_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "staff": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "email": [
+            "jo@example.com",
+            "someone.else@example.com"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

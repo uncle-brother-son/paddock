@@ -1,0 +1,78 @@
+{
+  "scenario": "w48-gift-card-preset-create",
+  "results": [
+    {
+      "success": true,
+      "preset": {
+        "id": "gift_card_presets#1",
+        "gift_card_type_id": "10000000-0000-4000-8000-000000000019",
+        "amount": "25.00",
+        "active": true,
+        "stripe_price_id": "price_fake_0001",
+        "created_at": "<time>",
+        "updated_at": "<time>"
+      },
+      "stripePriceId": "price_fake_0001"
+    },
+    {
+      "success": true,
+      "preset": {
+        "id": "gift_card_presets#2",
+        "gift_card_type_id": "10000000-0000-4000-8000-000000000019",
+        "amount": "99.99",
+        "active": true,
+        "stripe_price_id": "price_fake_0002",
+        "created_at": "<time>",
+        "updated_at": "<time>"
+      },
+      "stripePriceId": "price_fake_0002"
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "prices.create",
+      "params": {
+        "product": "prod_gift",
+        "unit_amount": 2500,
+        "currency": "gbp"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "prices.create",
+      "params": {
+        "product": "prod_gift",
+        "unit_amount": 9999,
+        "currency": "gbp"
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {
+    "gift_card_presets": {
+      "added": [
+        {
+          "id": "gift_card_presets#1",
+          "gift_card_type_id": "10000000-0000-4000-8000-000000000019",
+          "amount": "25.00",
+          "active": true,
+          "stripe_price_id": "price_fake_0001",
+          "created_at": "<set>",
+          "updated_at": "<set>"
+        },
+        {
+          "id": "gift_card_presets#2",
+          "gift_card_type_id": "10000000-0000-4000-8000-000000000019",
+          "amount": "99.99",
+          "active": true,
+          "stripe_price_id": "price_fake_0002",
+          "created_at": "<set>",
+          "updated_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "scenario": "w48-service-type-active-off-and-on",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-000000000002",
+      "active": false
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000002",
+      "active": true
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "products.update",
+      "params": {
+        "id": "prod_sauna",
+        "active": false
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "products.update",
+      "params": {
+        "id": "prod_sauna",
+        "active": true
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {}
+}

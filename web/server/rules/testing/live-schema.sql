@@ -1008,6 +1008,12 @@ BEGIN
   IF m.subscription_status = 'cancelled' THEN
     RETURN jsonb_build_object('found', true, 'action', 'ignored_cancelled');
   END IF;
+  -- 031: the membership's last day has passed (London's date). Cancel was pressed here and the row keeps its status
+  -- until Stripe ends the subscription, so a payment Stripe takes after that day pays for time the member does not
+  -- have. Nothing is written for it; the Worker lists the payment for a refund (W47r-c, W47r-d).
+  IF m.cancel_effective_date < (now() AT TIME ZONE 'Europe/London')::date THEN
+    RETURN jsonb_build_object('found', true, 'action', 'ignored_cancelled', 'last_day', m.cancel_effective_date);
+  END IF; -- 031
   UPDATE customer_memberships
   SET subscription_status = 'active',
       next_renewal_date = COALESCE((p_period_end AT TIME ZONE 'Europe/London')::date, next_renewal_date),
@@ -1036,6 +1042,12 @@ BEGIN
   IF m.subscription_status = 'cancelled' THEN
     RETURN jsonb_build_object('found', true, 'action', 'ignored_cancelled');
   END IF;
+  -- 031: the membership's last day has passed (London's date). It has ended here, whatever Stripe's subscription
+  -- still does, so a payment that fails after that day does not mark it past due and flags no booking. Nothing is
+  -- written for it; the Worker lists a subscription still live in Stripe for a person (W47r-e).
+  IF m.cancel_effective_date < (now() AT TIME ZONE 'Europe/London')::date THEN
+    RETURN jsonb_build_object('found', true, 'action', 'ignored_cancelled', 'last_day', m.cancel_effective_date);
+  END IF; -- 031
   UPDATE customer_memberships SET subscription_status = 'past_due', updated_at = now() WHERE id = m.id;
   SELECT COALESCE(max(period_end), (now() AT TIME ZONE 'Europe/London')::date - 1) INTO covered
   FROM membership_credit_periods WHERE membership_id = m.id;

@@ -192,6 +192,28 @@ describe('subscriptions', () => {
     await stripe.subscriptions.cancel(sub.id)
     expect(stripe.liveSubscriptions).toEqual([])
   })
+
+  // W49 + W54 (W48 review S2): the fake's price switch took an archived price, where its own subscriptions.create
+  // refuses one. A plan price move onto an archived price would then have passed every test here and failed only in
+  // Stripe (W57's invariant: a plan never points at an archived price).
+  it('a price switch refuses an archived price, as starting a subscription does, and moves to a live one', async () => {
+    const sub = await stripe.subscriptions.create(subscription)
+    const item = `si_${sub.id}`
+    stripe.addPrice('price_new', 4500, 'month')
+    stripe.addPrice('price_archived', 4500, 'month', 'gbp', false)
+    const switchTo = (price: string) => stripe.subscriptions.update(sub.id, { items: [{ id: item, price }], proration_behavior: 'none' })
+
+    await expect(switchTo('price_archived')).rejects.toMatchObject({ code: 'price_inactive' })
+    await expect(stripe.subscriptions.create({ ...subscription, items: [{ price: 'price_archived' }] })).rejects.toMatchObject({ code: 'price_inactive' })
+    // The subscription is still on its first price.
+    expect((await stripe.subscriptions.retrieve(sub.id)).items.data[0]?.price.id).toBe('price_1')
+
+    // A price archived after it was made is refused the same way; a live one is taken.
+    await stripe.prices.update('price_new', { active: false })
+    await expect(switchTo('price_new')).rejects.toMatchObject({ code: 'price_inactive' })
+    await stripe.prices.update('price_new', { active: true })
+    expect((await switchTo('price_new')).items.data[0]?.price.id).toBe('price_new')
+  })
 })
 
 describe('calls', () => {

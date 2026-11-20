@@ -1,0 +1,15 @@
+{
+  "scenario": "w48-staff-permission-active-off-and-on",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-000000000a03",
+      "active": false
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000a03",
+      "active": true
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

@@ -1,0 +1,175 @@
+{
+  "scenario": "w48-gb1-the-legacy-route-answers-the-counts-the-plan-function-drops",
+  "results": [
+    {
+      "success": true,
+      "item": {
+        "id": "10000000-0000-4000-8000-00000000000a",
+        "sanity_plan_id": null,
+        "name": "Core",
+        "thumbnail_url": null,
+        "sessions_included": 4,
+        "addons_included": 0,
+        "stripe_product_id": "prod_seed",
+        "stripe_price_id": "price_fake_0004",
+        "active": true,
+        "created_at": "<time>",
+        "updated_at": "<time>",
+        "price_monthly": "45",
+        "price_yearly": "450",
+        "level": "core",
+        "is_unlimited": false,
+        "stripe_price_id_yearly": "price_fake_0005"
+      },
+      "pricesUpdated": {
+        "price_monthly": 45,
+        "price_yearly": 450
+      },
+      "subscriptionMigration": {
+        "migrated": 2,
+        "alreadyCurrent": 0,
+        "skipped": 0,
+        "failed": [
+          {
+            "membershipId": "10000000-0000-4000-8000-000000000010",
+            "subscriptionId": "sub_mo",
+            "error": "Stripe refused this change."
+          }
+        ]
+      }
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "prices.update",
+      "params": {
+        "id": "price_seed_monthly",
+        "active": false
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "prices.create",
+      "params": {
+        "product": "prod_seed",
+        "unit_amount": 4500,
+        "currency": "gbp",
+        "recurring": {
+          "interval": "month"
+        }
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "prices.update",
+      "params": {
+        "id": "price_seed_yearly",
+        "active": false
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "prices.create",
+      "params": {
+        "product": "prod_seed",
+        "unit_amount": 45000,
+        "currency": "gbp",
+        "recurring": {
+          "interval": "year"
+        }
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "subscriptions.retrieve",
+      "params": {
+        "id": "sub_mo"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "subscriptions.update",
+      "params": {
+        "id": "sub_mo",
+        "items": [
+          {
+            "id": "si_sub_mo",
+            "price": "price_fake_0004"
+          }
+        ],
+        "proration_behavior": "none"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "subscriptions.retrieve",
+      "params": {
+        "id": "sub_pat"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "subscriptions.update",
+      "params": {
+        "id": "sub_pat",
+        "items": [
+          {
+            "id": "si_sub_pat",
+            "price": "price_fake_0004"
+          }
+        ],
+        "proration_behavior": "none"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "subscriptions.retrieve",
+      "params": {
+        "id": "sub_yan"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "subscriptions.update",
+      "params": {
+        "id": "sub_yan",
+        "items": [
+          {
+            "id": "si_sub_yan",
+            "price": "price_fake_0005"
+          }
+        ],
+        "proration_behavior": "none"
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {
+    "membership_plans": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-00000000000a",
+          "stripe_price_id": [
+            "price_seed_monthly",
+            "price_fake_0004"
+          ],
+          "price_monthly": [
+            "40.00",
+            "45.00"
+          ],
+          "price_yearly": [
+            "400.00",
+            "450.00"
+          ],
+          "stripe_price_id_yearly": [
+            "price_seed_yearly",
+            "price_fake_0005"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

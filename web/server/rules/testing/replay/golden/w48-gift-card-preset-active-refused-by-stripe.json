@@ -1,0 +1,19 @@
+{
+  "scenario": "w48-gift-card-preset-active-refused-by-stripe",
+  "results": [
+    {
+      "thrown": "Failed to update Stripe price"
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "prices.update",
+      "params": {
+        "id": "price_preset_60",
+        "active": false
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {}
+}

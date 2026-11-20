@@ -246,7 +246,8 @@ describe('the staff app wrappers through the real routes', () => {
     )
 
     await t.db.query('INSERT INTO postage_settings (standard_price, express_price, free_shipping_threshold) VALUES ($1, $2, $3)', ['4.95', '9.95', '75.00'])
-    expect(await same('getPostageSettings')).toEqual({ standardPrice: 4.95, expressPrice: 9.95, freeShippingThreshold: 75 })
+    // W54a: with the settings row's stamp, which the Pricing page sends back with its save.
+    expect(await same('getPostageSettings')).toEqual({ standardPrice: 4.95, expressPrice: 9.95, freeShippingThreshold: 75, stamp: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z#[0-9a-f]{32}$/) })
   })
 
   it('messages in a field reach the screen as answers', async () => {

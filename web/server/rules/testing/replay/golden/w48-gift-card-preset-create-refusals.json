@@ -1,0 +1,22 @@
+{
+  "scenario": "w48-gift-card-preset-create-refusals",
+  "results": [
+    {
+      "thrown": "giftCardTypeId is required"
+    },
+    {
+      "thrown": "amount must be a positive number"
+    },
+    {
+      "thrown": "amount must be a positive number"
+    },
+    {
+      "thrown": "amount must be a positive number"
+    },
+    {
+      "thrown": "Gift card type not found"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

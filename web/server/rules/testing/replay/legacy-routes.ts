@@ -24,6 +24,15 @@ const ROUTES: Record<string, () => Promise<unknown>> = {
   '/api/memberships/cancel': () => import('../legacy-account/routes/memberships/cancel/route'),
   '/api/memberships/undo-cancel': () => import('../legacy-account/routes/memberships/undo-cancel/route'),
   '/api/memberships/change-payment-date': () => import('../legacy-account/routes/memberships/change-payment-date/route'),
+  // W48: the seven legacy catalogue routes the old step G functions call, from the frozen copy (legacy-admin/README.md),
+  // so step G's golden files keep replaying when W61 deletes the live ones from app/api/catalog.
+  '/api/catalog/toggle-active': () => import('../legacy-admin/routes/catalog/toggle-active/route'),
+  '/api/catalog/update-price': () => import('../legacy-admin/routes/catalog/update-price/route'),
+  '/api/catalog/update-tier-price': () => import('../legacy-admin/routes/catalog/update-tier-price/route'),
+  '/api/catalog/create-variant': () => import('../legacy-admin/routes/catalog/create-variant/route'),
+  '/api/catalog/sync-stripe': () => import('../legacy-admin/routes/catalog/sync-stripe/route'),
+  '/api/catalog/create-gift-card-preset': () => import('../legacy-admin/routes/catalog/create-gift-card-preset/route'),
+  '/api/catalog/update-gift-card-preset-price': () => import('../legacy-admin/routes/catalog/update-gift-card-preset-price/route'),
   // W16: deleted from app/; the test-only copy of the old order code still calls them (legacy-order/README.md).
   '/api/memberships/create-subscription': () => import('../legacy-order/routes/memberships/create-subscription/route'),
   '/api/terminal/resolve-saved-card': () => import('../legacy-order/routes/terminal/resolve-saved-card/route'),
@@ -53,6 +62,17 @@ const STAFF_ROUTES: Record<string, () => Promise<unknown>> = {
   '/api/v1/staff/customers': () => import('@/app/api/v1/staff/customers/route'),
   // W40: the staff app's thin getSubscriptions.
   '/api/v1/staff/memberships': () => import('@/app/api/v1/staff/memberships/route'),
+  // W49: the staff app's thin getCurrentStaff, getStaff and createStaff.
+  '/api/v1/staff/staff/me': () => import('@/app/api/v1/staff/staff/me/route'),
+  '/api/v1/staff/staff': () => import('@/app/api/v1/staff/staff/route'),
+  // W54: the staff app's thin getPromoCodes and createPromoCode, setMembershipBandTerm and setPostageSettings.
+  '/api/v1/staff/promo-codes': () => import('@/app/api/v1/staff/promo-codes/route'),
+  '/api/v1/staff/pricing/member-band-terms': () => import('@/app/api/v1/staff/pricing/member-band-terms/route'),
+  '/api/v1/staff/postage/settings': () => import('@/app/api/v1/staff/postage/settings/route'),
+  // W54a: the staff app's thin getPricingConfig, which the Pricing page reads its stamps from before a save.
+  '/api/v1/staff/pricing/config': () => import('@/app/api/v1/staff/pricing/config/route'),
+  // W54: New Order's basket quote (the staff app's thin quoteBasket), read before and after a pricing change.
+  '/api/v1/staff/quotes/basket': () => import('@/app/api/v1/staff/quotes/basket/route'),
 }
 
 /** W14: the staff routes with an id in the path, and the path's parameters. */
@@ -118,6 +138,15 @@ const STAFF_PATTERNS: Array<{ pattern: RegExp; load: () => Promise<unknown>; par
   { pattern: /^\/api\/v1\/staff\/customers\/([^/]+)$/, load: () => import('@/app/api/v1/staff/customers/[customerId]/route'), params: (m) => ({ customerId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/reader-flows\/([^/]+)\/finalise$/, load: () => import('@/app/api/v1/staff/reader-flows/[pendingId]/finalise/route'), params: (m) => ({ pendingId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/reader-flows\/([^/]+)\/cancel$/, load: () => import('@/app/api/v1/staff/reader-flows/[pendingId]/cancel/route'), params: (m) => ({ pendingId: decodeURIComponent(m[1] ?? '') }) },
+  // W49: the staff app's thin setStaffRole, and setStaffPermission and setStaffCanManagePricing (one route).
+  { pattern: /^\/api\/v1\/staff\/staff\/([^/]+)\/role$/, load: () => import('@/app/api/v1/staff/staff/[staffId]/role/route'), params: (m) => ({ staffId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/staff\/([^/]+)\/permissions$/, load: () => import('@/app/api/v1/staff/staff/[staffId]/permissions/route'), params: (m) => ({ staffId: decodeURIComponent(m[1] ?? '') }) },
+  // W54: the staff app's thin setBandPrice and setBandRules, getPromoCodeRedemptions and updatePromoCode (never
+  // `promo-codes/validate`, which is step B's own route).
+  { pattern: /^\/api\/v1\/staff\/pricing\/bands\/([^/]+)\/price$/, load: () => import('@/app/api/v1/staff/pricing/bands/[bandId]/price/route'), params: (m) => ({ bandId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/pricing\/band-rules\/([^/]+)$/, load: () => import('@/app/api/v1/staff/pricing/band-rules/[dayOfWeek]/route'), params: (m) => ({ dayOfWeek: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/promo-codes\/([^/]+)\/redemptions$/, load: () => import('@/app/api/v1/staff/promo-codes/[promoCodeId]/redemptions/route'), params: (m) => ({ promoCodeId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/promo-codes\/(?!validate$)([^/]+)$/, load: () => import('@/app/api/v1/staff/promo-codes/[promoCodeId]/route'), params: (m) => ({ promoCodeId: decodeURIComponent(m[1] ?? '') }) },
 ]
 
 function staffRoute(path: string): { load: () => Promise<unknown>; params: Record<string, string> } | null {
@@ -132,9 +161,14 @@ function staffRoute(path: string): { load: () => Promise<unknown>; params: Recor
 
 const active: { stripe: FakeStripe | null; db: Db | null } = { stripe: null, db: null }
 
-/** The parts of supabase-js the legacy routes use: select, update and insert, by equal columns. */
+/**
+ * The parts of supabase-js the legacy routes use: select, update and insert, by equal columns. W48: and what the
+ * legacy update-price route's member look-up adds: `.in(column, values)` and `.not(column, 'is', null)`.
+ */
 class SupabaseQuery {
   private filters: Array<[string, unknown]> = []
+  /** W48: conditions that aren't "equals": each a SQL fragment and the values it binds, in order. */
+  private conditions: Array<{ sql: (bind: (value: unknown) => string) => string }> = []
   private columns = '*'
   private write: { kind: 'update' | 'insert'; row: Record<string, unknown> } | null = null
 
@@ -148,12 +182,21 @@ class SupabaseQuery {
     this.filters.push([column, value])
     return this
   }
+  in(column: string, values: unknown[]) {
+    this.conditions.push({ sql: (bind) => `${column} IN (${values.map(bind).join(', ')})` })
+    return this
+  }
+  not(column: string, operator: string, value: unknown) {
+    if (operator !== 'is' || value !== null) throw new Error("The supabase stand-in has only modelled .not(column, 'is', null).")
+    this.conditions.push({ sql: () => `${column} IS NOT NULL` })
+    return this
+  }
   update(row: Record<string, unknown>) {
-    this.write = { kind: 'update', row }
+    this.write = { kind: 'update', row: withoutUndefined(row) }
     return this
   }
   insert(row: Record<string, unknown>) {
-    this.write = { kind: 'insert', row }
+    this.write = { kind: 'insert', row: withoutUndefined(row) }
     return this
   }
 
@@ -175,7 +218,7 @@ class SupabaseQuery {
       const where = this.filters.map(([name, value]) => `${name} = ${bind(value)}`)
       sql = `UPDATE ${this.table} SET ${sets.join(', ')} WHERE ${where.join(' AND ')} RETURNING *`
     } else {
-      const where = this.filters.map(([name, value]) => `${name} = ${bind(value)}`)
+      const where = [...this.filters.map(([name, value]) => `${name} = ${bind(value)}`), ...this.conditions.map((condition) => condition.sql(bind))]
       sql = `SELECT ${this.columns} FROM ${this.table} WHERE ${where.join(' AND ')}`
     }
     return db.query(sql, params)
@@ -196,6 +239,9 @@ class SupabaseQuery {
       .then(resolve, reject)
   }
 }
+
+/** W48: a field set to `undefined` is not sent, as supabase-js's JSON body leaves it out (create-variant's `price_override`). */
+const withoutUndefined = (row: Record<string, unknown>): Record<string, unknown> => Object.fromEntries(Object.entries(row).filter(([, value]) => value !== undefined))
 
 let installed = false
 

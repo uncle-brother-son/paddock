@@ -1,0 +1,68 @@
+{
+  "scenario": "w48-band-rules-set",
+  "results": [
+    {
+      "saved": true,
+      "rebandedSessions": 1,
+      "rules": [
+        {
+          "id": "band_rules#1",
+          "band_id": "10000000-0000-4000-8000-000000000003",
+          "from_time": "00:00:00",
+          "to_time": "12:00:00"
+        },
+        {
+          "id": "band_rules#2",
+          "band_id": "10000000-0000-4000-8000-00000000000c",
+          "from_time": "12:00:00",
+          "to_time": "24:00:00"
+        }
+      ]
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "band_rules": {
+      "added": [
+        {
+          "id": "band_rules#1",
+          "band_id": "10000000-0000-4000-8000-000000000003",
+          "day_of_week": 6,
+          "from_time": "00:00:00",
+          "to_time": "12:00:00",
+          "created_at": "<set>",
+          "updated_at": "<set>"
+        },
+        {
+          "id": "band_rules#2",
+          "band_id": "10000000-0000-4000-8000-00000000000c",
+          "day_of_week": 6,
+          "from_time": "12:00:00",
+          "to_time": "24:00:00",
+          "created_at": "<set>",
+          "updated_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [
+        "10000000-0000-4000-8000-000000000b60",
+        "10000000-0000-4000-8000-000000000b61"
+      ],
+      "tied": 0
+    },
+    "sessions": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000a31",
+          "band_id": [
+            "10000000-0000-4000-8000-000000000003",
+            "10000000-0000-4000-8000-00000000000c"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

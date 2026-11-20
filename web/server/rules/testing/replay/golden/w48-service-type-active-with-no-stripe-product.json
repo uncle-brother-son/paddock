@@ -1,0 +1,26 @@
+{
+  "scenario": "w48-service-type-active-with-no-stripe-product",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-000000000002",
+      "active": false
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "service_types": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000002",
+          "active": [
+            true,
+            false
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

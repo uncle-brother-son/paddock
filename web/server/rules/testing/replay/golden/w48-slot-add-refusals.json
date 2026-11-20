@@ -1,0 +1,25 @@
+{
+  "scenario": "w48-slot-add-refusals",
+  "results": [
+    {
+      "thrown": "serviceTypeId is required"
+    },
+    {
+      "thrown": "dayOfWeek must be an integer 0-6 (0 = Sunday); received 7"
+    },
+    {
+      "thrown": "dayOfWeek must be an integer 0-6 (0 = Sunday); received 1.5"
+    },
+    {
+      "thrown": "startTime must be in HH:MM or HH:MM:SS format"
+    },
+    {
+      "thrown": "This service type already has a slot on Tuesday at 07:00."
+    },
+    {
+      "thrown": "insert or update on table \"service_type_schedule_slots\" violates foreign key constraint \"service_type_schedule_slots_service_type_id_fkey\""
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

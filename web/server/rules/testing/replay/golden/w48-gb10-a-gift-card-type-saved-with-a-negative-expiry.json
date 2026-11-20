@@ -1,0 +1,33 @@
+{
+  "scenario": "w48-gb10-a-gift-card-type-saved-with-a-negative-expiry",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-000000000019",
+      "expiry_months": -1
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000019",
+      "expiry_months": 0
+    },
+    {
+      "thrown": "invalid input syntax for type integer: \"1.5\""
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "gift_card_types": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000019",
+          "expiry_months": [
+            12,
+            0
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "scenario": "w48-staff-permission-last-active-admin-refused",
+  "results": [
+    {
+      "thrown": "There must always be at least one active admin. Make someone else an active admin first."
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000a01",
+      "role": "admin"
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000001",
+      "active": false
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "staff": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "active": [
+            true,
+            false
+          ]
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000a01",
+          "role": [
+            "manager",
+            "admin"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

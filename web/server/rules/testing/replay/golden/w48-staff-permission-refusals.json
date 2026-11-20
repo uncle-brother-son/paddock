@@ -1,0 +1,13 @@
+{
+  "scenario": "w48-staff-permission-refusals",
+  "results": [
+    {
+      "thrown": "Invalid field: can_manage_pricing"
+    },
+    null,
+    null,
+    null
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

@@ -1,0 +1,37 @@
+{
+  "scenario": "w48-pass-level-who-may",
+  "results": [
+    {
+      "updated": false,
+      "reason": "no_pricing_permission"
+    },
+    {
+      "thrown": "This staff account is inactive. Ask an admin to reactivate it."
+    },
+    {
+      "updated": false,
+      "reason": "no_pricing_permission"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "staff": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "email": [
+            "jo@example.com",
+            "someone.else@example.com"
+          ],
+          "can_manage_pricing": [
+            true,
+            false
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

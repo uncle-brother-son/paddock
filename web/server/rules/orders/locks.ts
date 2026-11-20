@@ -25,8 +25,20 @@ import type { Tx } from '@/server/db'
  * cancel of an event booking's places (step E) locks the order first, then the rows after it that its lines need, and
  * the event booking's row only once its event is held (server/rules/refunds/locks.ts). T2 and the undo, which also
  * write an order's event booking, hold that order first, so they queue behind the same lock.
+ *
+ * W48 (G-plan 4.2 item 2): a row a step G admin action edits comes first of all: a staff member, a catalogue item (a
+ * service type, a tier, a product, an add-on, a pass type, a gift card type or preset, a membership plan), a weekly
+ * slot, a band or its windows, a member band term, the postage or membership settings. An admin write locks its own
+ * row first (server/rules/admin/locks.ts), as T2 locks its order, and then only rows after it: the sessions a
+ * timetable or band change reaches, a plan's memberships. No money transaction locks one of these rows (an order
+ * reads prices, it never locks them), so nothing here can be waiting for it while holding a later row. An admin
+ * action on a row this list already names (a session blocked or moved, an event's details, a promo code, a
+ * variant's stock) takes that row's own place: 'session' stays where it is, after the booking and the customer,
+ * which is where an order's capacity claim and a booking change take it. W51 proves that place with a race test (a
+ * block against a new order on the same session).
  */
 export const LOCK_ORDER = [
+  'admin_row',
   'order',
   'booking',
   'customer',

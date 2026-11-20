@@ -41,6 +41,7 @@
     "server/rules/testing/legacy-order/backend",
     "server/rules/testing/legacy-booking/backend",
     "server/rules/testing/legacy-refund/backend",
-    "server/rules/testing/legacy-account/backend"
+    "server/rules/testing/legacy-account/backend",
+    "server/rules/testing/legacy-admin/backend"
   ]
 }

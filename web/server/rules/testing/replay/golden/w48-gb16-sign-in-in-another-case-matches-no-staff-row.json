@@ -1,0 +1,11 @@
+{
+  "scenario": "w48-gb16-sign-in-in-another-case-matches-no-staff-row",
+  "results": [
+    null,
+    {
+      "thrown": "No staff record matches the logged-in user's email (jo@example.com). Ask an admin to add you as staff before performing this action."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

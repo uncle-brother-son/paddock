@@ -1,0 +1,43 @@
+{
+  "scenario": "w48-gb12-the-initial-stock-ledger-row-fails-on-its-own",
+  "results": [
+    {
+      "thrown": "connection lost"
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "prices.create",
+      "params": {
+        "product": "prod_soap",
+        "unit_amount": 1200,
+        "currency": "gbp",
+        "metadata": {
+          "size": "Large",
+          "sku": "SOAP-L"
+        }
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {
+    "product_variants": {
+      "added": [
+        {
+          "id": "product_variants#1",
+          "product_id": "10000000-0000-4000-8000-000000000007",
+          "size": "Large",
+          "sku": "SOAP-L",
+          "price_override": null,
+          "stock_quantity": 10,
+          "stripe_price_id": "price_fake_0001",
+          "created_at": "<set>",
+          "updated_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

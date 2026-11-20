@@ -1,0 +1,19 @@
+{
+  "scenario": "w48-staff-manage-pricing-on-and-off",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-000000000a03",
+      "can_manage_pricing": true
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000a03",
+      "can_manage_pricing": false
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000a03",
+      "can_manage_pricing": false
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

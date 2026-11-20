@@ -1,0 +1,28 @@
+{
+  "scenario": "w48-gb2-preset-price-old-stripe-price-archived-then-the-new-one-fails",
+  "results": [
+    {
+      "thrown": "Internal server error: Stripe refused this change."
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "prices.update",
+      "params": {
+        "id": "price_preset_60",
+        "active": false
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "prices.create",
+      "params": {
+        "product": "prod_gift",
+        "unit_amount": 7500,
+        "currency": "gbp"
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {}
+}

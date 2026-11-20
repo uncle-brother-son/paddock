@@ -1,0 +1,70 @@
+{
+  "scenario": "w48-gb12-a-variant-made-without-manage-pricing",
+  "results": [
+    {
+      "success": true,
+      "variant": {
+        "id": "product_variants#1",
+        "product_id": "10000000-0000-4000-8000-000000000007",
+        "size": "Large",
+        "sku": "SOAP-L",
+        "price_override": null,
+        "stock_quantity": 3,
+        "stripe_price_id": "price_fake_0001",
+        "created_at": "<time>",
+        "updated_at": "<time>"
+      },
+      "stripePriceId": "price_fake_0001"
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "prices.create",
+      "params": {
+        "product": "prod_soap",
+        "unit_amount": 1200,
+        "currency": "gbp",
+        "metadata": {
+          "size": "Large",
+          "sku": "SOAP-L"
+        }
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {
+    "product_variants": {
+      "added": [
+        {
+          "id": "product_variants#1",
+          "product_id": "10000000-0000-4000-8000-000000000007",
+          "size": "Large",
+          "sku": "SOAP-L",
+          "price_override": null,
+          "stock_quantity": 3,
+          "stripe_price_id": "price_fake_0001",
+          "created_at": "<set>",
+          "updated_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "stock_adjustments": {
+      "added": [
+        {
+          "id": "stock_adjustments#1",
+          "variant_id": "product_variants#1",
+          "change_amount": 3,
+          "reason": "Initial stock",
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

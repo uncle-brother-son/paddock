@@ -1,0 +1,30 @@
+{
+  "scenario": "w48-product-fulfilment-set",
+  "results": [
+    {
+      "thrown": "Invalid fulfillment method: courier"
+    },
+    null,
+    {
+      "id": "10000000-0000-4000-8000-000000000007",
+      "fulfillment_method": "shipping"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "products": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000007",
+          "fulfillment_method": [
+            "pickup",
+            "shipping"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

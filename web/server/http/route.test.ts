@@ -249,3 +249,105 @@ describe('defineRoute: errors', () => {
     expect((await route(staffRequest('/x'))).status).toBe(200)
   })
 })
+
+// W49 (lead call L10; W48 "Noticed" 4): the one mode that asks for no staff row, for `GET staff/me`.
+describe("defineRoute: the 'staff_sign_in' mode", () => {
+  it('hands the handler the signed-in email and nothing else, whether the email has an active row, an inactive one or none: it never reads the staff table', async () => {
+    for (const staff of [[staffRow], [{ ...staffRow, active: false }], []]) {
+      const { db, query } = fakeDb({ staff })
+      const { defineRoute, logs } = testRouteFactory(db)
+      const seen: unknown[] = []
+      const route = defineRoute({ auth: 'staff_sign_in', method: 'GET', input: noInput, output }, async (context) => {
+        seen.push(Object.keys(context).sort())
+        return { value: context.signIn.email }
+      })
+
+      const response = await route(staffRequest('/api/v1/staff/staff/me', { headers: { 'x-staff-email': '  Jo@Example.com ' } }))
+
+      expect(response.status).toBe(200)
+      // The email as sent, trimmed: the rule matches it to a row.
+      expect(await response.json()).toMatchObject({ ok: true, data: { value: 'Jo@Example.com' } })
+      expect(seen).toEqual([['db', 'idempotencyKey', 'input', 'request', 'requestId', 'signIn', 'startedAt']])
+      expect(query).not.toHaveBeenCalled()
+      // The log names no one: there may be no staff row to name.
+      expect(logs[0]).toMatchObject({ actor: 'staff_sign_in', status: 200 })
+    }
+  })
+
+  it('is still behind the shared key and the email: a wrong key, no key and no email are refused before the handler runs', async () => {
+    const { db } = fakeDb()
+    const { defineRoute } = testRouteFactory(db)
+    const handler = vi.fn()
+    const route = defineRoute({ auth: 'staff_sign_in', method: 'GET', input: noInput, output }, handler)
+
+    const refusedHeaders: Array<Record<string, string>> = [{ authorization: 'Bearer wrong' }, { authorization: '' }, { 'x-staff-email': '' }, { 'x-staff-email': '   ' }]
+    for (const headers of refusedHeaders) {
+      const response = await route(staffRequest('/x', { headers }))
+      expect(response.status).toBe(401)
+      expect(await response.json()).toMatchObject({ ok: false, error: { code: 'UNAUTHORISED' } })
+    }
+    const { defineRoute: unset } = testRouteFactory(db, { staffApiKey: () => undefined })
+    expect((await unset({ auth: 'staff_sign_in', method: 'GET', input: noInput, output }, handler)(staffRequest('/x'))).status).toBe(401)
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  // W54a (W49 + W54 review F3): the type stopped such a route being idempotent, but not being a plain POST, which
+  // would run for an inactive member. Now it is refused when the route is defined, and again when it is called.
+  it('can only be a read: a config that does not say GET, or that is idempotent, is thrown when the route is defined, before any request', () => {
+    const { defineRoute } = testRouteFactory(fakeDb().db)
+    const handler = vi.fn()
+    const words = "A 'staff_sign_in' route answers an inactive or unknown sign-in, so it can only be a read"
+    // What the type refuses, sent past it as a later route copied from `staff/me` might be.
+    const define = defineRoute as unknown as (config: Record<string, unknown>, handler: unknown) => unknown
+    expect(() => define({ auth: 'staff_sign_in', input: noInput, output }, handler)).toThrow(words)
+    expect(() => define({ auth: 'staff_sign_in', method: 'POST', input: noInput, output }, handler)).toThrow(words)
+    expect(() => define({ auth: 'staff_sign_in', method: 'get', input: noInput, output }, handler)).toThrow(words)
+    expect(() => define({ auth: 'staff_sign_in', method: 'GET', idempotent: true, input: noInput, output }, handler)).toThrow(words)
+    // The one right config, and every other mode, are defined as before.
+    expect(() => define({ auth: 'staff_sign_in', method: 'GET', input: noInput, output }, handler)).not.toThrow()
+    for (const auth of ['staff', 'customer', 'public']) expect(() => define({ auth, input: noInput, output, idempotent: true }, handler)).not.toThrow()
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('refuses a request that is not a GET before the handler runs, whatever verb the route was exported under, and whoever the sign-in is', async () => {
+    for (const staff of [[staffRow], [{ ...staffRow, active: false }], []]) {
+      const { db, query } = fakeDb({ staff })
+      const { defineRoute, logs } = testRouteFactory(db)
+      const handler = vi.fn(async () => ({ value: 'ran' }))
+      const route = defineRoute({ auth: 'staff_sign_in', method: 'GET', input: noInput, output }, handler)
+      for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+        const response = await route(staffRequest('/api/v1/staff/staff/me', { method, body: {}, headers: { 'idempotency-key': crypto.randomUUID() } }))
+        expect(response.status, method).toBe(403)
+        expect(await response.json(), method).toMatchObject({ ok: false, error: { code: 'FORBIDDEN', message: 'This route only reads: it answers a GET and nothing else.' } })
+      }
+      expect(handler).not.toHaveBeenCalled()
+      expect(query).not.toHaveBeenCalled()
+      expect(logs.every((entry) => entry.status === 403 && entry.actor === 'staff_sign_in')).toBe(true)
+      // The same route still answers a GET.
+      expect((await route(staffRequest('/api/v1/staff/staff/me'))).status).toBe(200)
+    }
+  })
+
+  it("the mode has one user in the whole Worker: `staff/me`'s GET", async () => {
+    const { readdirSync, readFileSync } = await import('node:fs')
+    const path = await import('node:path')
+    const appDir = path.resolve(__dirname, '../../app')
+    const routeFiles = (readdirSync(appDir, { recursive: true }) as string[]).filter((file) => /(^|[\\/])route\.ts$/.test(file))
+    expect(routeFiles.length).toBeGreaterThan(50)
+    const users = routeFiles.filter((file) => readFileSync(path.join(appDir, file), 'utf8').includes("'staff_sign_in'"))
+    expect(users.map((file) => file.split(path.sep).join('/'))).toEqual(['api/v1/staff/staff/me/route.ts'])
+    const source = readFileSync(path.join(appDir, users[0] as string), 'utf8')
+    // Exported as GET, and as nothing else.
+    expect(source.match(/^export const (\w+) = defineRoute\(/gm)).toEqual(['export const GET = defineRoute('])
+    expect(source).toContain("auth: 'staff_sign_in', method: 'GET'")
+  })
+
+  it("the 'staff' mode is unchanged by it: an inactive account and a sign-in with no staff row are still refused", async () => {
+    const handler = vi.fn()
+    const inactive = testRouteFactory(fakeDb({ staff: [{ ...staffRow, active: false }] }).db).defineRoute({ auth: 'staff', input: noInput, output }, handler)
+    expect((await inactive(staffRequest('/x'))).status).toBe(403)
+    const unknown = testRouteFactory(fakeDb({ staff: [] }).db).defineRoute({ auth: 'staff', input: noInput, output }, handler)
+    expect((await unknown(staffRequest('/x'))).status).toBe(401)
+    expect(handler).not.toHaveBeenCalled()
+  })
+})

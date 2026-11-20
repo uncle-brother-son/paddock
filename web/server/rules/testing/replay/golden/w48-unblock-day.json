@@ -1,0 +1,44 @@
+{
+  "scenario": "w48-unblock-day",
+  "results": [
+    {
+      "confirmed": false,
+      "blockedSessions": 1
+    },
+    {
+      "confirmed": true,
+      "blockedSessions": 1,
+      "unblocked": 1
+    },
+    {
+      "confirmed": true,
+      "blockedSessions": 0,
+      "unblocked": 0
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "sessions": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000a31",
+          "status": [
+            "blocked",
+            "open"
+          ],
+          "blocked_reason": [
+            "Boiler repair",
+            null
+          ],
+          "blocked_by": [
+            "10000000-0000-4000-8000-000000000001",
+            null
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

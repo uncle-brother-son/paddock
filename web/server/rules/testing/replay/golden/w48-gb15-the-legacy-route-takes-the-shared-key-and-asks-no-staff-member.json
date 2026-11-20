@@ -1,0 +1,59 @@
+{
+  "scenario": "w48-gb15-the-legacy-route-takes-the-shared-key-and-asks-no-staff-member",
+  "results": [
+    {
+      "thrown": "This staff account is inactive. Ask an admin to reactivate it."
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "products.update",
+      "params": {
+        "id": "prod_soap",
+        "active": false
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "prices.update",
+      "params": {
+        "id": "price_soap_base",
+        "active": false
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "prices.create",
+      "params": {
+        "product": "prod_soap",
+        "unit_amount": 100,
+        "currency": "gbp"
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {
+    "products": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000007",
+          "base_price": [
+            "12.00",
+            "1.00"
+          ],
+          "stripe_price_id_base": [
+            "price_soap_base",
+            "price_fake_0001"
+          ],
+          "active": [
+            true,
+            false
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

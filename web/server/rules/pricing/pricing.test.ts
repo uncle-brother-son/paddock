@@ -150,6 +150,37 @@ describe('getPricingConfig', () => {
     expect(allowed.membershipTerms[0]?.discount_percent).toEqual(expect.any(String))
     expect(allowed.membershipLevels).toEqual(['all_access', 'core'])
   })
+
+  // W54a (the step G rule, admin/stamp.ts): what the Pricing page sends back with a save of a term or of a day's windows.
+  it("answers each member term with its row's stamp, and one stamp for each day's windows made from that day's own rows", async () => {
+    const wednesday = await insert(t.db, 'band_rules', { band_id: peak, day_of_week: 3, from_time: '17:00:00', to_time: '20:00:00' })
+    const thursday = await insert(t.db, 'band_rules', { band_id: core, day_of_week: 4, from_time: '09:00', to_time: '12:00' })
+    const config = await getPricingConfig(t.db, true)
+
+    expect(config.membershipTerms.length).toBeGreaterThan(0)
+    for (const term of config.membershipTerms) expect(term.stamp).toMatch(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z#[0-9a-f]{32}$/)
+    expect(new Set(config.membershipTerms.map((term) => term.stamp)).size).toBe(config.membershipTerms.length)
+
+    // Seven days, Sunday first. A day's stamp holds the ids of its own windows and no other day's; a day with none is 'none'.
+    expect(config.bandRulesStamps).toHaveLength(7)
+    for (let day = 0; day <= 6; day++) {
+      const own = config.bandRules.filter((rule) => rule.day_of_week === day)
+      if (own.length === 0) expect(config.bandRulesStamps[day], String(day)).toBe('none')
+      for (const rule of config.bandRules) expect(config.bandRulesStamps[day]?.includes(rule.id), `${day} ${rule.id}`).toBe(rule.day_of_week === day)
+    }
+    expect(config.bandRulesStamps[3]).toContain(wednesday)
+    expect(config.bandRulesStamps[4]).toContain(thursday)
+    expect(config.bandRulesStamps[0]).toBe('none')
+    // A window is not sent with a stamp of its own.
+    expect(Object.keys(config.bandRules[0] ?? {}).sort()).toEqual(['band_id', 'day_of_week', 'from_time', 'id', 'to_time'])
+
+    // The same on the next read; a change to Thursday's window changes Thursday's stamp and no other day's.
+    expect((await getPricingConfig(t.db, true)).bandRulesStamps).toEqual(config.bandRulesStamps)
+    await t.db.query("UPDATE band_rules SET to_time = '13:00' WHERE id = $1", [thursday])
+    const after = (await getPricingConfig(t.db, true)).bandRulesStamps
+    expect(after[4]).not.toBe(config.bandRulesStamps[4])
+    expect(after.filter((_, day) => day !== 4)).toEqual(config.bandRulesStamps.filter((_, day) => day !== 4))
+  })
 })
 
 describe('getPricingConfig order', () => {
@@ -194,7 +225,13 @@ describe('getPostageSettings', () => {
   it('parses the row into numbers', async () => {
     await t.db.query('INSERT INTO postage_settings (standard_price, express_price, free_shipping_threshold) VALUES ($1, $2, $3)', ['4.95', '9.95', '75.00'])
 
-    expect(await getPostageSettings(t.db)).toEqual({ standardPrice: 4.95, expressPrice: 9.95, freeShippingThreshold: 75 })
+    // W54a: with the settings row's stamp, read in the same statement as the figures.
+    const settings = await getPostageSettings(t.db)
+    expect(settings).toEqual({ standardPrice: 4.95, expressPrice: 9.95, freeShippingThreshold: 75, stamp: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z#[0-9a-f]{32}$/) })
+    // The same on every read until the row changes.
+    expect((await getPostageSettings(t.db)).stamp).toBe(settings.stamp)
+    await t.db.query("UPDATE postage_settings SET express_price = '10.95'")
+    expect((await getPostageSettings(t.db)).stamp).not.toBe(settings.stamp)
   })
 
   it('fails as INTERNAL with the old text when the table is missing', async () => {

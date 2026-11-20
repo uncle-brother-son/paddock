@@ -35,8 +35,8 @@ describe("step F's switch kind (brief W36 item 2)", () => {
   it('ORDER_SWITCH knows the kind, and only by its exact name', () => {
     expect(MEMBERSHIP_KINDS).toEqual(['membership_changes'])
     expect(ORDER_KINDS).toContain('membership_changes')
-    // Added at the end: the nine kinds before it are as they were, in their order. W41a: the payment date's own kind after it. W42: the replaced card's after that. W43: the lapse sweep's. W47r: the payment retry's last.
-    expect(ORDER_KINDS).toEqual(['no_stripe', 'saved_card', 'reader', 'membership', 'reader_flows', 'booking_changes', 'order_refunds', 'event_cancels', 'customer_cancels', 'membership_changes', 'payment_date_changes', 'card_moves', 'lapse_sweep', 'payment_retries'])
+    // Added at the end: the nine kinds before it are as they were, in their order. W41a: the payment date's own kind after it. W42: the replaced card's after that. W43: the lapse sweep's. W47r: the payment retry's. W48: step G's plan actions last.
+    expect(ORDER_KINDS).toEqual(['no_stripe', 'saved_card', 'reader', 'membership', 'reader_flows', 'booking_changes', 'order_refunds', 'event_cancels', 'customer_cancels', 'membership_changes', 'payment_date_changes', 'card_moves', 'lapse_sweep', 'payment_retries', 'plan_changes'])
     expect([...kindsOn('membership_changes')]).toEqual(['membership_changes'])
     expect([...kindsOn(' Membership_Changes ,')]).toEqual(['membership_changes'])
     for (const typo of ['membership_change', 'memberships_changes', 'membership-changes', 'membershipchanges', 'changes', 'membership']) expect(kindsOn(typo).has('membership_changes'), typo).toBe(false)
@@ -199,15 +199,16 @@ describe("the payment retry's own kind (brief W47r item 1)", () => {
   it('ORDER_SWITCH knows the kind, and only by its exact name; it is the last in the list', () => {
     expect(PAYMENT_RETRY_KINDS).toEqual(['payment_retries'])
     expect(ORDER_KINDS.indexOf('payment_retries')).toBe(13)
-    expect(ORDER_KINDS.at(-1)).toBe('payment_retries')
+    // W48, a named difference: one kind after it now (`plan_changes`, step G's plan actions; catalog/plan-switch.test.ts). It was the last when it was added.
+    expect(ORDER_KINDS.slice(14)).toEqual(['plan_changes'])
     expect([...kindsOn(' Payment_Retries ,')]).toEqual(['payment_retries'])
     for (const typo of ['payment_retry', 'payments_retries', 'payment-retries', 'paymentretries', 'retries', 'retry_payment', 'payment_date_changes', 'membership_changes']) expect(kindsOn(typo).has('payment_retries'), typo).toBe(false)
   })
 
   it('off by default: unset, empty, the value live runs today, and every other kind on. Deploying this Worker starts no retry', () => {
     const everyOtherKind = ORDER_KINDS.filter((kind) => kind !== 'payment_retries').join(',')
-    // Every other kind: the ones on live, and the website's own cancels (off on live).
-    expect(everyOtherKind.split(',').sort()).toEqual([...LIVE_SINCE_W43.split(','), 'customer_cancels'].sort())
+    // Every other kind: the ones on live, the website's own cancels (off on live) and, since W48, step G's plan actions (off on live).
+    expect(everyOtherKind.split(',').sort()).toEqual([...LIVE_SINCE_W43.split(','), 'customer_cancels', 'plan_changes'].sort())
     for (const value of [undefined, null, '', '   ', LIVE_TODAY, LIVE_SINCE_W43, everyOtherKind]) {
       expect(paymentRetriesOn(value), String(value)).toBe(false)
       expect(paymentRetryPathOff(value), String(value)).toMatchObject({

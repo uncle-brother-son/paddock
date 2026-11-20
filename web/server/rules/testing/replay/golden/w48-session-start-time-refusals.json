@@ -1,0 +1,35 @@
+{
+  "scenario": "w48-session-start-time-refusals",
+  "results": [
+    {
+      "updated": false,
+      "reason": "invalid_start_time",
+      "message": "Enter a valid date and time."
+    },
+    {
+      "updated": false,
+      "reason": "invalid_start_time",
+      "message": "Enter a valid date and time."
+    },
+    {
+      "updated": false,
+      "reason": "invalid_start_time",
+      "message": "Enter a valid date and time."
+    },
+    {
+      "updated": false,
+      "reason": "invalid_start_time",
+      "message": "Enter a valid date and time."
+    },
+    {
+      "updated": false,
+      "reason": "session_not_found"
+    },
+    {
+      "updated": false,
+      "reason": "slot_already_exists"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

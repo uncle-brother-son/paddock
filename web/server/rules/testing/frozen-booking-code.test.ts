@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { LEGACY_BOOKING_ACTIONS, legacyBookingDir, legacyOrderDir, legacyRefundDir, oldFunctionPath } from './replay/harness'
+import { LEGACY_BOOKING_ACTIONS, legacyAdminDir, legacyBookingDir, legacyOrderDir, legacyRefundDir, oldFunctionPath } from './replay/harness'
 import { staffAppDir } from './staff-app-dir'
 
 // Brief W17 item 5 (D-plan 4.11 item 1): a frozen test-only copy of the old step D functions, beside W16's
@@ -85,9 +85,10 @@ describe('W17: the frozen copy of the old step D functions', () => {
     expect(oldFunctionPath('shared/bookingMoneyClaim.ts')).toBe(path.join(COPY_CODE, 'shared/bookingMoneyClaim.ts'))
     expect(oldFunctionPath('createOrder')).toBe(path.join(ORDER_COPY_DIR, 'backend/paddock/createOrder.ts'))
     // W27: refundOrder and the event cancellations run from their own frozen copy now (frozen-refund-code.test.ts);
-    // what steps F and G move still comes from the staff app's checkout.
+    // what step F moves from its own too (W36).
     expect(oldFunctionPath('refundOrder')).toBe(path.join(legacyRefundDir, 'refundOrder.ts'))
-    expect(oldFunctionPath('getOrders')).toBe(path.join(appDir, 'backend/paddock/getOrders.ts'))
+    // W48, a named difference: what step G moves runs from its own frozen copy now (frozen-admin-code.test.ts).
+    expect(oldFunctionPath('getOrders')).toBe(path.join(legacyAdminDir, 'getOrders.ts'))
   })
 
   it("the order copy takes the modules step D deletes from it, not from the staff app's checkout", () => {

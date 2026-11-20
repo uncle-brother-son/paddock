@@ -1,0 +1,13 @@
+{
+  "scenario": "w48-slot-remove-refusals",
+  "results": [
+    {
+      "thrown": "slotId is required"
+    },
+    {
+      "deleted": false
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

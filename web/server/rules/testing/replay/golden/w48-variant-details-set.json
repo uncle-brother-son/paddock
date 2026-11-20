@@ -1,0 +1,32 @@
+{
+  "scenario": "w48-variant-details-set",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-000000000008",
+      "size": "Small",
+      "sku": "SOAP-S"
+    },
+    null
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "product_variants": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000008",
+          "size": [
+            null,
+            "Small"
+          ],
+          "sku": [
+            "SOAP-1",
+            "SOAP-S"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -401,6 +401,116 @@ call recorded). The fake models `subscriptions.update` for exactly what the memb
 or `''` to clear), `trial_end` with `proration_behavior: 'none'`, and `default_payment_method`; a cancelled
 subscription refuses any of them.
 
+### Step G's side (W48)
+
+`legacy-admin/` is a fifth frozen test-only copy (its README): the staff app's 82 old step G functions (every
+function that was not a thin call when step G began: the staff list, the catalogue, pricing, promo codes, sessions
+and the timetable, the booking and order screens' reads and flags, event check-in) and the 17 modules they import,
+byte for byte at staff app `7a4aede`, and the seven legacy `/api/catalog` routes they call with
+`lib/membership-price-migration.ts`, copied from the app at Worker `a88c8c8` while they are still live there.
+`oldFunctionPath` loads the 82 from it (`LEGACY_ADMIN_ACTIONS`), `legacy-routes.ts` binds the seven routes to it, and
+`frozen-admin-code.test.ts` keeps it as frozen and out of reach of app code. From W48 no old function is loaded from
+the staff app's own checkout: only its thin wrappers are.
+
+**The frozen-copy tests no longer read the staff app's shared modules** (G-plan 2.5, W45 row 4). The refund and
+account guards used to hold their copies' shared modules to the staff app's live files, so an edit there failed the
+Worker suite. They now hold them to `legacy-admin/`'s files (the staff app's as at W48), and `legacy-admin/` itself
+is held by its manifest. A step G slice can trim or delete `shared/staffAccess.ts`, `shared/londonTime.ts` and the
+rest without touching a Worker test. Still read live: the 82 functions (each the copy's own, a thin call, or gone:
+no list to keep), and the older copies' switched functions (each a thin call). `server/staff-app-helpers.test.ts`
+is not a frozen-copy test: it tests the staff app's live helpers, and a slice that deletes one deletes its tests
+there, as W24a did.
+
+The `w48-*` scenarios (271, `w48Scenarios()` in `replay/w48-scenarios.ts`) are step G's golden files, recorded from
+the old code while it exists (G-plan 4.9 item 1): for each of the 82 functions, who may (one scenario makes the same
+call without the permission, as an inactive account and with no staff row, `whoMay`), every refusal (`each`: the
+ones that change nothing, tried in turn), each success, each read's shape against a seeded database, and today's
+outcome for every bug the plan names, GB1 to GB24 (`w48-gbN-…`). They are their own list, not part of `scenarios`:
+`w48.test.ts` replays each twice (the same every time; it matches its file). The older sweeps over `scenarios`
+(`w05c`, `w05d`, `booking-replay`) check money and step D's routes, nothing here moves a customer's money, and
+`w05c` already sits near its time limit. `w48.test.ts` also says what each one proves, a line a step
+(`w48-what-each-proves.ts`, written from the golden files with `W48_OUTCOMES_OUT=<file>` and read through), that
+the list covers every function, every reason and every bug named, and that a deliberate difference is caught and an
+allowance nobody needs fails. `w48-contracts.test.ts` runs them all once more and holds `contracts/admin.ts` to what
+the old functions take and give (774 calls).
+
+Four things are new in the harness for them, each for step G's recordings only:
+
+- **Staff-set times are recorded as the moments they hold** (`STAFF_SET_TIMES` in `compare.ts`: an event's date,
+  end, cut-off and public release; a session's start and end). Every other recording shows a timestamp only as set
+  or not, which would hide exactly what GB6 and GB11 are about. The 991 recordings before W48 are read as they were.
+- **The fake Stripe makes and archives prices and products** (`prices.create`, `prices.update`, `products.create`,
+  `products.update`) and switches a subscription's price (`subscriptions.update` with `items` and
+  `proration_behavior: 'none'`), which is what the legacy routes send. They are on the fake only, not on the
+  Worker's `StripeClient`: no app code calls them. `FakeStripe.addProduct` seeds a product a synced item has.
+- **The supabase-js stand-in** (`legacy-routes.ts`) knows `.in()` and `.not(column, 'is', null)` (the update-price
+  route's member look-up), and leaves out a field set to `undefined`, as supabase-js's JSON body does.
+- `onceAfter` (another tab's work between two of a function's statements) and `failingOnce` (one statement lost) in
+  `w48-scenarios.ts`, as W36's.
+
+What can't be recorded, and the W48 report says why: seven sentences no call can reach (the events table's own
+capacity check, behind the function's; "Expected one subscription item"; the variant route's "No price available";
+the sync route's "already has a Stripe product" and "must have a name"; the two "Parent … not found" refusals, which
+foreign keys forbid), and the plumbing words between Retool and the routes. A legacy route's "not found" carries the
+stand-in's own detail ("Expected one row."), not supabase-js's.
+
+#### Step G's replay through the Worker (W49 + W54 on)
+
+`replay/admin-side.ts` is step G's new side: the old step G functions a slice has moved (`STEP_G_ACTIONS_MOVED`:
+W49's six staff functions and W54's eight pricing and promo code functions so far) go to the staff app's thin
+functions and the Worker's routes; every other call still runs through the frozen copies, so the seed state is
+exactly what each golden file recorded. The two functions that add something (`createStaff`, `createPromoCode`) are
+pressed as their dialogs press them (a key kept after no answer; a refusal answered as data read as the old thrown
+words). **A later slice adds its functions to `STEP_G_ACTIONS_MOVED`, its audit actions to `STEP_G_AUDIT_ROWS` and
+its write routes to `STEP_G_WRITE_ROUTES`**, and replays its own families through `newAdminSide`.
+
+`replay/admin-differences.ts` holds the named differences. Shared by every slice: `pinned` (each allowed path
+pinned to the one value the new routes give there), **S3** (`s3UnknownStaffOnManagePricing(golden)`: on a Manage
+pricing action a sign-in with no staff row is told "…before performing this action." by the staff check, where the
+old function said "…before managing pricing."; built from the golden file itself, 34 golden files hold it), and
+GB14's recording (the reads moved so far refuse an inactive account and an unknown sign-in; a slice that moves a read
+adds its steps there). Two differences are on every recording and are set aside before the comparison and checked
+on their own: the Worker's audit rows (one for each press answered with a success: `adminRowProblems`) and the
+stored answers holding each press's key (`adminStoredAnswerProblems`).
+
+`replay/admin-replay.test.ts` replays W49's and W54's 49 scenarios: 32 match their golden files exactly, 17 have
+named differences (GB8, GB14, GB16, GB18, the two refusals that had no words, S3). Five recordings hold what
+happened when one press landed in the middle of another, or when a failure fell between the old function's separate
+statements (`onceAfter`, `failingOnce`: both hook the old function's own statements). A route that is one
+transaction has no such seam, so those five are **told again** (`TOLD_AGAIN`): the two presses one after the other,
+and a write failing inside the transaction (`whileFailing`, a database trigger). The races themselves are run for
+real in `staff/`, `pricing/` and `promo/` `admin-postgres.test.ts`. The same file checks that New Order's basket
+quote before and after each pricing change is the one the old function's change gives.
+
+`admin-routes.ts` (how a route test presses a real route) and `admin-race.ts` (`holdingAfter`: a real rule stopped
+inside its transaction after a chosen statement, so a race can be held until Postgres reports the second press
+blocked by the first) are for step G's tests.
+
+#### The stamp in the replay (W54a)
+
+An edit that writes a whole row carries the stamp its screen loaded, and is refused `changed_since` when the row has
+changed since (`server/rules/README.md`, W54a). A golden file's params have no stamp: the old functions took none.
+So `newAdminSide` presses each of the four stamped edits (`STAMPED_EDITS`) **as its screen presses it**: the screen's
+own read first, by the same sign-in, through the staff app's thin read (`getPromoCodes`, `getPricingConfig`,
+`getPostageSettings`), then the press with the stamp that read gave. A read the Worker refuses gives no stamp, and
+the press is then refused by the staff check, as the recording has it. A recording therefore never meets
+`changed_since`: its page is always up to date. Params that bring a stamp of their own (a test's older page) keep it,
+and `pressWithoutReading` presses exactly as the golden file has it (every stamped edit is then refused).
+
+The stamps in the answers (a saved edit's new stamp; `stamp` on each row of the promo code list) are a third thing
+set aside before the comparison and checked on their own: `answeredStampProblems`, and one stamp for each press of a
+stamped edit answered with a success. **A later slice whose edit sends a whole row adds its function to
+`STAMP_THE_SCREEN_LOADED`, with the read its screen gets the stamp from.**
+
+The replay's clock is frozen, so a change there leaves `updated_at` where it was: it is the stamp's fingerprint of
+the row that tells an older page it is out of date. `admin-replay.test.ts` shows this on `promo-update`'s seed.
+
+**The `created_by` difference** (`createdByIsTheStoredEmail`, shared): a new row is `created_by` the staff member's
+email as their staff row holds it, where the old function wrote the sign-in as typed. They differ only for a sign-in
+in another letter case than its staff row, which the old function refused before it wrote anything, so no golden
+file shows it and no scenario lists it. `admin-replay.test.ts` shows it on `promo-create`'s steps with the staff row
+in capitals.
+
 ### Migration 023 and the saved schema (W27)
 
 `supabase/migrations/023_orders_refund_owed_and_cash_refunds.sql` is written but **not applied to live**: the lead

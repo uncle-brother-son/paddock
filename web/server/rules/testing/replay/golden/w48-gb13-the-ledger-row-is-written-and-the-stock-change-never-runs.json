@@ -1,0 +1,26 @@
+{
+  "scenario": "w48-gb13-the-ledger-row-is-written-and-the-stock-change-never-runs",
+  "results": [
+    {
+      "thrown": "the function was cut off"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "stock_adjustments": {
+      "added": [
+        {
+          "id": "stock_adjustments#1",
+          "variant_id": "10000000-0000-4000-8000-000000000008",
+          "change_amount": 10,
+          "reason": "Delivery",
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

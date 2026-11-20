@@ -1,0 +1,26 @@
+{
+  "scenario": "w48-event-active-off-and-on",
+  "results": [
+    {
+      "updated": true,
+      "event": {
+        "id": "10000000-0000-4000-8000-000000000018",
+        "active": false
+      }
+    },
+    {
+      "updated": true,
+      "event": {
+        "id": "10000000-0000-4000-8000-000000000018",
+        "active": true
+      }
+    },
+    {
+      "updated": false,
+      "reason": "event_not_found",
+      "message": "That event no longer exists."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

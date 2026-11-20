@@ -1,0 +1,22 @@
+{
+  "scenario": "w48-tier-create-refusals",
+  "results": [
+    {
+      "thrown": "serviceTypeId is required"
+    },
+    {
+      "thrown": "Min people must be a positive whole number"
+    },
+    {
+      "thrown": "Min people must be a positive whole number"
+    },
+    {
+      "thrown": "Max people must be a positive whole number"
+    },
+    {
+      "thrown": "Min people cannot be greater than max people"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

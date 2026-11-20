@@ -1,0 +1,20 @@
+{
+  "scenario": "w48-gift-card-preset-create-refused-by-stripe",
+  "results": [
+    {
+      "thrown": "Failed to create Stripe price: Stripe refused this change."
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "prices.create",
+      "params": {
+        "product": "prod_gift",
+        "unit_amount": 2500,
+        "currency": "gbp"
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {}
+}

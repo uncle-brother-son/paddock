@@ -226,6 +226,8 @@ const MINIMUM_CHARGE: Readonly<Record<string, number>> = { gbp: 30 }
 
 const clone = <T>(value: T): T => (value === undefined ? value : (JSON.parse(JSON.stringify(value)) as T))
 const seconds = () => Math.floor(Date.now() / 1000)
+/** W48: the id of a subscription's one item, as the fake shows it. */
+const subscriptionItemId = (subscriptionId: string) => `si_${subscriptionId}`
 const list = <T>(data: T[]) => ({ object: 'list' as const, data, has_more: false, url: '/fake' })
 const newestFirst = <T>(rows: T[]) => [...rows].reverse()
 
@@ -273,6 +275,8 @@ export class FakeStripe implements StripeClient {
   private readonly couponsById = new Map<string, Stripe.Coupon>()
   private readonly customersById = new Map<string, Record<string, unknown>>()
   private readonly pricesById = new Map<string, Record<string, unknown>>()
+  /** W48: catalogue products, by id (what the legacy /api/catalog routes make and switch on and off). */
+  private readonly productsById = new Map<string, Record<string, unknown>>()
   private sequence = 0
 
   /**
@@ -303,6 +307,23 @@ export class FakeStripe implements StripeClient {
       currency,
       recurring: interval ? { interval } : null,
     })
+  }
+
+  /** W48: a product that already exists in Stripe, as a catalogue item synced earlier has. */
+  addProduct(id: string, fields: Record<string, unknown> = {}): void {
+    this.productsById.set(id, { id, object: 'product', active: true, metadata: {}, ...fields })
+  }
+
+  /** W48: a product as Stripe holds it now, for tests. */
+  product(id: string): Record<string, unknown> | null {
+    const product = this.productsById.get(id)
+    return product ? clone(product) : null
+  }
+
+  /** W48: a price as Stripe holds it now, for tests (whether it is archived, say). */
+  price(id: string): Record<string, unknown> | null {
+    const price = this.pricesById.get(id)
+    return price ? clone(price) : null
   }
 
   /** W13: a subscription as Stripe holds it now, for tests (its status after a cancel, say). */
@@ -951,6 +972,8 @@ export class FakeStripe implements StripeClient {
         const price = this.pricesById.get(item.price.id)
         const recurring = price?.['recurring'] as { interval: string } | null | undefined
         return {
+          // W48: the item's id, which a price switch names (`items: [{ id, price }]`). One item, so one id, from the subscription's.
+          id: subscriptionItemId(sub.id),
           ...item,
           quantity: 1,
           price: { id: item.price.id, unit_amount: price ? Number(price['unit_amount']) : null, recurring: recurring ? { interval: recurring.interval, interval_count: 1 } : null },
@@ -1047,7 +1070,9 @@ export class FakeStripe implements StripeClient {
     update: (id, params, options) =>
       this.run('subscriptions.update', { id, ...params }, options, () => {
         const sub = this.sub(id)
-        const known = new Set(['cancel_at', 'trial_end', 'proration_behavior', 'default_payment_method'])
+        // W48: and `items: [{ id, price }]` with `proration_behavior: 'none'`, which is what the legacy update-price
+        // route sends to move a member to a plan's new price from their next renewal (G-plan GB1).
+        const known = new Set(['cancel_at', 'trial_end', 'proration_behavior', 'default_payment_method', 'items'])
         const unknown = Object.keys(params ?? {}).filter((name) => !known.has(name))
         if (unknown.length > 0) throw new Error(`The fake has not modelled updating a subscription's ${unknown.join(', ')}.`)
         if (sub.status === 'canceled') {
@@ -1068,6 +1093,17 @@ export class FakeStripe implements StripeClient {
             item.current_period_start = seconds()
             item.current_period_end = params.trial_end
           }
+        }
+        if (params?.items !== undefined) {
+          const [item, ...more] = params.items
+          if (!item || more.length > 0) throw new Error('The fake has only modelled switching the price of a subscription with one item.')
+          if (params.proration_behavior !== 'none') throw new Error('The fake has only modelled a price switch with proration_behavior none.')
+          if (item.id !== subscriptionItemId(sub.id)) throw fakeStripeErrors.missing(`subscription_item: '${String(item.id)}'`)
+          if (typeof item.price !== 'string' || !this.pricesById.has(item.price)) throw fakeStripeErrors.missing(`price: '${String(item.price)}'`)
+          // W49 + W54 (W48 review S2): as Stripe, and as subscriptions.create above, an archived price can't be
+          // switched to. Without this a move onto a plan's old, archived price would pass every test here.
+          if (this.pricesById.get(item.price)?.['active'] === false) throw fakeStripeErrors.invalid('price_inactive', `The price ${item.price} is not active.`)
+          for (const one of sub.items.data) one.price = { id: item.price }
         }
         if (params?.default_payment_method !== undefined) {
           if (typeof params.default_payment_method !== 'string') throw new Error('The fake has only modelled default_payment_method as a card id.')
@@ -1260,12 +1296,73 @@ export class FakeStripe implements StripeClient {
       }) as unknown as Promise<Stripe.ApiList<Stripe.CustomerBalanceTransaction>>,
   }
 
-  readonly prices: StripeClient['prices'] = {
+  // W48 (brief item 4): `create` and `update` are what the seven legacy /api/catalog routes send, so step G's golden
+  // files can be recorded through them with this fake. They are not on the Worker's StripeClient: no app code makes
+  // or archives a price (G-plan L2; W57 adds what the membership plans need, with keys). A new price is live, takes
+  // its amount, currency, product, metadata and (for a plan) how often; an update sets `active` (archiving) only.
+  readonly prices: StripeClient['prices'] & {
+    create(params: Stripe.PriceCreateParams, options?: Stripe.RequestOptions): Promise<Stripe.Price>
+    update(id: string, params: Stripe.PriceUpdateParams, options?: Stripe.RequestOptions): Promise<Stripe.Price>
+  } = {
     retrieve: (id, _params, options) =>
       this.run('prices.retrieve', { id }, options?.idempotencyKey ? options : undefined, () => {
         const price = this.pricesById.get(id)
         if (!price) throw fakeStripeErrors.missing(`price: '${id}'`)
         return price
       }) as unknown as Promise<Stripe.Price>,
+
+    create: (params, options) =>
+      this.run('prices.create', params, options, () => {
+        if (typeof params.product !== 'string' || !this.productsById.has(params.product)) throw fakeStripeErrors.missing(`product: '${String(params.product)}'`)
+        if (!Number.isInteger(params.unit_amount) || Number(params.unit_amount) < 0) throw fakeStripeErrors.invalid('parameter_invalid_integer', 'Invalid integer: unit_amount must be a non-negative whole number of pence.')
+        const id = this.nextId('price')
+        const price = {
+          id,
+          object: 'price',
+          active: true,
+          product: params.product,
+          unit_amount: params.unit_amount,
+          currency: params.currency,
+          recurring: params.recurring ? { interval: params.recurring.interval } : null,
+          metadata: { ...(params.metadata ?? {}) },
+        }
+        this.pricesById.set(id, price)
+        return clone(price)
+      }) as unknown as Promise<Stripe.Price>,
+
+    update: (id, params, options) =>
+      this.run('prices.update', { id, ...params }, options, () => {
+        const price = this.pricesById.get(id)
+        if (!price) throw fakeStripeErrors.missing(`price: '${id}'`)
+        const unknown = Object.keys(params ?? {}).filter((name) => name !== 'active')
+        if (unknown.length > 0) throw new Error(`The fake has not modelled updating a price's ${unknown.join(', ')}.`)
+        if (params.active !== undefined) price['active'] = params.active
+        return clone(price)
+      }) as unknown as Promise<Stripe.Price>,
+  }
+
+  // W48: as `prices.create` above, for the legacy routes only. A new product takes what sync-stripe sends (name,
+  // description, images, active, metadata); an update sets `active` only, which is all toggle-active sends.
+  readonly products: {
+    create(params: Stripe.ProductCreateParams, options?: Stripe.RequestOptions): Promise<Stripe.Product>
+    update(id: string, params: Stripe.ProductUpdateParams, options?: Stripe.RequestOptions): Promise<Stripe.Product>
+  } = {
+    create: (params, options) =>
+      this.run('products.create', params, options, () => {
+        const id = this.nextId('prod')
+        const product = { id, object: 'product', name: params.name, description: params.description ?? null, images: params.images ?? [], active: params.active ?? true, metadata: { ...(params.metadata ?? {}) } }
+        this.productsById.set(id, product)
+        return clone(product)
+      }) as unknown as Promise<Stripe.Product>,
+
+    update: (id, params, options) =>
+      this.run('products.update', { id, ...params }, options, () => {
+        const product = this.productsById.get(id)
+        if (!product) throw fakeStripeErrors.missing(`product: '${id}'`)
+        const unknown = Object.keys(params ?? {}).filter((name) => name !== 'active')
+        if (unknown.length > 0) throw new Error(`The fake has not modelled updating a product's ${unknown.join(', ')}.`)
+        if (params.active !== undefined) product['active'] = params.active
+        return clone(product)
+      }) as unknown as Promise<Stripe.Product>,
   }
 }

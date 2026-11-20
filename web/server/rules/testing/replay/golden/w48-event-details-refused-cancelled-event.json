@@ -1,0 +1,12 @@
+{
+  "scenario": "w48-event-details-refused-cancelled-event",
+  "results": [
+    {
+      "updated": false,
+      "reason": "event_cancelled",
+      "message": "This event has been cancelled, so it can't be edited."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

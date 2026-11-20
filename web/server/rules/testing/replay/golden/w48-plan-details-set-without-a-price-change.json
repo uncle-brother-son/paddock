@@ -1,0 +1,66 @@
+{
+  "scenario": "w48-plan-details-set-without-a-price-change",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-00000000000a",
+      "sanity_plan_id": null,
+      "name": "Core Plus",
+      "thumbnail_url": null,
+      "sessions_included": 6,
+      "addons_included": 2,
+      "stripe_product_id": "prod_seed",
+      "stripe_price_id": "price_seed_monthly",
+      "active": true,
+      "created_at": "<time>",
+      "updated_at": "<time>",
+      "price_monthly": "40.00",
+      "price_yearly": "400.00",
+      "level": "all_access",
+      "is_unlimited": false,
+      "stripe_price_id_yearly": "price_seed_yearly"
+    },
+    {
+      "id": "10000000-0000-4000-8000-00000000000a",
+      "sanity_plan_id": null,
+      "name": "Core Plus",
+      "thumbnail_url": null,
+      "sessions_included": 0,
+      "addons_included": 0,
+      "stripe_product_id": "prod_seed",
+      "stripe_price_id": "price_seed_monthly",
+      "active": true,
+      "created_at": "<time>",
+      "updated_at": "<time>",
+      "price_monthly": "40.00",
+      "price_yearly": "400.00",
+      "level": "core",
+      "is_unlimited": true,
+      "stripe_price_id_yearly": "price_seed_yearly"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "membership_plans": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-00000000000a",
+          "name": [
+            "Core",
+            "Core Plus"
+          ],
+          "sessions_included": [
+            4,
+            0
+          ],
+          "is_unlimited": [
+            false,
+            true
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

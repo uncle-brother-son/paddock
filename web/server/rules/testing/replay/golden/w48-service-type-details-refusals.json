@@ -1,0 +1,23 @@
+{
+  "scenario": "w48-service-type-details-refusals",
+  "results": [
+    {
+      "thrown": "Duration must be a positive whole number of minutes"
+    },
+    {
+      "thrown": "Duration must be a positive whole number of minutes"
+    },
+    {
+      "thrown": "Capacity must be a positive whole number"
+    },
+    {
+      "thrown": "Capacity must be a positive whole number"
+    },
+    {
+      "thrown": "Invalid booking type: members"
+    },
+    null
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

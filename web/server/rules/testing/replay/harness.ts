@@ -88,11 +88,119 @@ export const LEGACY_ACCOUNT_ACTIONS: ReadonlySet<string> = new Set([
 export const legacyAccountDir = path.join(__dirname, '../legacy-account/backend/paddock')
 
 /**
+ * W48 (G-plan 4.9 items 1 and 2, lead call L5): step G moves the staff app's last 82 functions that are not a thin
+ * call (the staff list, the catalogue, pricing, promo codes, sessions and the timetable, the booking and order
+ * screens' reads and flags, event check-in) to the Worker slice by slice, and each slice deletes that function's old
+ * body. Its golden files were recorded through them and through the seven legacy /api/catalog routes, so those 82
+ * functions and every module they import run from a fifth frozen test-only copy (legacy-admin/README.md), which also
+ * holds the seven routes (bound in legacy-routes.ts). The recorded side and setup only; it goes at step H. From here
+ * on no old function is loaded from the staff app's own checkout: only its thin wrappers are.
+ */
+export const LEGACY_ADMIN_ACTIONS: ReadonlySet<string> = new Set([
+  // Staff
+  'getCurrentStaff',
+  'getStaff',
+  'createStaff',
+  'setStaffRole',
+  'setStaffPermission',
+  'setStaffCanManagePricing',
+  // Catalog: service types
+  'getServiceTypes',
+  'setServiceTypeActive',
+  'setServiceTypeCapacityInfo',
+  'createServiceTypePriceTier',
+  'setServiceTypePriceTierRange',
+  'updateTierPrice',
+  'addServiceTypeScheduleSlot',
+  'deleteServiceTypeScheduleSlot',
+  // Catalog: products and add-ons
+  'getProducts',
+  'setProductActive',
+  'setProductFulfillmentMethod',
+  'setProductVariantDetails',
+  'createProductVariant',
+  'adjustVariantStock',
+  'getStockAdjustments',
+  'updateCatalogItemPrice',
+  'getAddons',
+  'setAddonActive',
+  'setAddonSku',
+  // Catalog: session passes and gift card types
+  'getSessionPassTypes',
+  'setSessionPassActive',
+  'setSessionPassExpiry',
+  'setSessionPassSessionsIncluded',
+  'setSessionPassLevel',
+  'getGiftCardTypes',
+  'setGiftCardTypeActive',
+  'setGiftCardPresetActive',
+  'createGiftCardPreset',
+  'updateGiftCardPresetPrice',
+  'setGiftCardTypeCustomAmountSettings',
+  'setGiftCardTypeExpiry',
+  // Catalog: membership plans
+  'getMembershipPlans',
+  'createMembershipPlan',
+  'setMembershipPlanActive',
+  'setMembershipPlanDetails',
+  'getMembershipSettings',
+  'setMembershipSettings',
+  // Catalog: events, and the attendee list
+  'getEvents',
+  'setEventActive',
+  'setEventDetails',
+  'getEventAttendees',
+  'setEventAttendeeCheckIn',
+  'setEventAttendeesCheckIn',
+  'setEventAttendeeWaiver',
+  // Promo codes
+  'getPromoCodes',
+  'getPromoCodeRedemptions',
+  'createPromoCode',
+  'updatePromoCode',
+  // Pricing
+  'setBandPrice',
+  'setBandRules',
+  'setMembershipBandTerm',
+  'setPostageSettings',
+  // Sessions and the timetable
+  'getSessionsForRange',
+  'getServiceTypesForSlot',
+  'blockSession',
+  'blockDay',
+  'unblockSession',
+  'unblockDay',
+  'setSessionBand',
+  'resetSessionBand',
+  'setSessionStartTime',
+  'createOneOffSession',
+  'generateUpcomingSessions',
+  // Bookings
+  'getBookings',
+  'getBookingById',
+  'getBookingDetail',
+  'getAddonPrepChecklistForRange',
+  'setBookingCheckedIn',
+  'setGuestWaiverStatus',
+  'setAddonLinePrepared',
+  // Orders
+  'getOrders',
+  'getOrderLineItems',
+  'setOrderLineItemFulfilled',
+  // Overview
+  'getPaymentAttentionItems',
+  'getWaiverGapsForRange',
+  'getTodaysEvents',
+])
+export const legacyAdminDir = path.join(__dirname, '../legacy-admin/backend/paddock')
+
+/**
  * Where the old side loads a staff app file from (`moveBooking.ts`, `shared/bookingMoneyClaim.ts`): the frozen
  * booking copy for anything it holds (step D), the frozen refund copy for the five old step E actions and the
  * modules only it holds (W27), the frozen order copy for the three old order actions, the frozen account copy for
- * the sixteen old step F functions and the modules only it holds (W36), else the staff app's own checkout (the
- * functions step G moves: the catalogue, the Orders page, the reads). A module both the booking
+ * the sixteen old step F functions and the modules only it holds (W36), the frozen admin copy for the 82 old step G
+ * functions and the modules only it holds (W48: the catalogue, the Orders page, the reads), else the staff app's own
+ * checkout (its thin wrappers: no old function is left to load from there). A module both the booking
  * and the refund copy hold (`shared/staffAccess.ts`) is named from the booking copy, as before W27; each copy's own
  * functions import their own, relatively, whatever this answers.
  */
@@ -103,6 +211,8 @@ export function oldFunctionPath(file: string): string {
   if (LEGACY_ORDER_ACTIONS.has(name)) return path.join(legacyOrderDir, `${name}.ts`)
   // W36: the sixteen old step F functions, and the modules only that copy holds (`shared/membershipPaymentDate.ts`).
   if (LEGACY_ACCOUNT_ACTIONS.has(name) || existsSync(path.join(legacyAccountDir, `${name}.ts`))) return path.join(legacyAccountDir, `${name}.ts`)
+  // W48: the 82 old step G functions, and the modules only that copy holds (`shared/pricingStaff.ts`).
+  if (LEGACY_ADMIN_ACTIONS.has(name) || existsSync(path.join(legacyAdminDir, `${name}.ts`))) return path.join(legacyAdminDir, `${name}.ts`)
   return path.join(backendDir, `${name}.ts`)
 }
 const goldenDir = path.join(__dirname, 'golden')

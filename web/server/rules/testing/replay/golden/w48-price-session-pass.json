@@ -1,0 +1,65 @@
+{
+  "scenario": "w48-price-session-pass",
+  "results": [
+    {
+      "success": true,
+      "item": {
+        "id": "10000000-0000-4000-8000-000000000016",
+        "sanity_pass_type_id": null,
+        "name": "Five Sessions",
+        "thumbnail_url": null,
+        "price": "55.00",
+        "sessions_included": 5,
+        "expiry_months": 12,
+        "stripe_product_id": "prod_pass",
+        "stripe_price_id": "price_fake_0001",
+        "active": true,
+        "created_at": "<time>",
+        "updated_at": "<time>",
+        "level": "all_access"
+      },
+      "pricesUpdated": {
+        "price": 55
+      }
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "prices.update",
+      "params": {
+        "id": "price_pass",
+        "active": false
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "prices.create",
+      "params": {
+        "product": "prod_pass",
+        "unit_amount": 5500,
+        "currency": "gbp"
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {
+    "session_pass_types": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000016",
+          "price": [
+            "50.00",
+            "55.00"
+          ],
+          "stripe_price_id": [
+            "price_pass",
+            "price_fake_0001"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

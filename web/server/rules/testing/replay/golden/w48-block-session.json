@@ -1,0 +1,58 @@
+{
+  "scenario": "w48-block-session",
+  "results": [
+    {
+      "blocked": true,
+      "conflict": false,
+      "conflictingBookings": [],
+      "session": {
+        "id": "10000000-0000-4000-8000-000000000004",
+        "resource_id": null,
+        "service_type_id": "10000000-0000-4000-8000-000000000002",
+        "start_time": "2026-11-12T10:00:00.000Z",
+        "end_time": "2026-11-12T11:00:00.000Z",
+        "type": "public",
+        "capacity": 10,
+        "total_booked": 0,
+        "status": "blocked",
+        "blocked_reason": "Staff training",
+        "blocked_by": "10000000-0000-4000-8000-000000000001",
+        "created_at": "<time>",
+        "updated_at": "<time>",
+        "band_id": "10000000-0000-4000-8000-000000000003",
+        "band_overridden": false
+      }
+    },
+    {
+      "blocked": true,
+      "conflict": false,
+      "conflictingBookings": [],
+      "session": null
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "sessions": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000004",
+          "status": [
+            "open",
+            "blocked"
+          ],
+          "blocked_reason": [
+            null,
+            "Staff training"
+          ],
+          "blocked_by": [
+            null,
+            "10000000-0000-4000-8000-000000000001"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

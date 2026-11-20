@@ -1,0 +1,53 @@
+{
+  "scenario": "w48-gb13-a-stock-press-made-twice-counts-twice",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-000000000008",
+      "stock_quantity": 15
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000008",
+      "stock_quantity": 25
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "product_variants": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000008",
+          "stock_quantity": [
+            5,
+            25
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    },
+    "stock_adjustments": {
+      "added": [
+        {
+          "id": "stock_adjustments#1",
+          "variant_id": "10000000-0000-4000-8000-000000000008",
+          "change_amount": 10,
+          "reason": "Delivery",
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "created_at": "<set>"
+        },
+        {
+          "id": "stock_adjustments#2",
+          "variant_id": "10000000-0000-4000-8000-000000000008",
+          "change_amount": 10,
+          "reason": "Delivery",
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "scenario": "w48-postage-refusals",
+  "results": [
+    {
+      "thrown": "Standard price must be a non-negative number."
+    },
+    {
+      "thrown": "Express price must be a non-negative number."
+    },
+    {
+      "thrown": "Free-shipping threshold must be a non-negative number (0 = no free shipping)."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

@@ -1,0 +1,15 @@
+{
+  "scenario": "w48-pass-level-refusals",
+  "results": [
+    {
+      "updated": false,
+      "reason": "invalid_level"
+    },
+    {
+      "updated": false,
+      "reason": "pass_type_not_found"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

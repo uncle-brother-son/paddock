@@ -1,0 +1,31 @@
+{
+  "scenario": "w48-variant-create-refusals",
+  "results": [
+    {
+      "thrown": "productId, size, and sku are required"
+    },
+    {
+      "thrown": "productId, size, and sku are required"
+    },
+    {
+      "thrown": "productId, size, and sku are required"
+    },
+    {
+      "thrown": "stockQuantity must be a non-negative whole number"
+    },
+    {
+      "thrown": "stockQuantity must be a non-negative whole number"
+    },
+    {
+      "thrown": "Product not found"
+    },
+    {
+      "thrown": "SKU already exists"
+    },
+    {
+      "thrown": "Product has no Stripe product. Sync from Sanity first."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

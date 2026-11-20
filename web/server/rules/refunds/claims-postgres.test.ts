@@ -146,7 +146,9 @@ async function isLocked(table: string, id: string): Promise<boolean> {
 
 describe('LOCK_ORDER for a step E refund (E-plan 4.2)', () => {
   it('LOCK_ORDER has the event booking straight after its event, and the rest as it was', () => {
-    expect(LOCK_ORDER).toEqual(['order', 'booking', 'customer', 'promo_code', 'session', 'credit_period', 'session_pass', 'membership', 'product_variants', 'event', 'event_booking', 'gift_card'])
+    // W48, a named difference: step G's own rows come first of all ('admin_row': a staff member, a catalogue item, a
+    // setting; server/rules/admin/locks.ts). The twelve after it are as they were, in their order.
+    expect(LOCK_ORDER).toEqual(['admin_row', 'order', 'booking', 'customer', 'promo_code', 'session', 'credit_period', 'session_pass', 'membership', 'product_variants', 'event', 'event_booking', 'gift_card'])
   })
 
   it('the statement itself: each lock waits for the one before it, because every lateral names the one before', () => {

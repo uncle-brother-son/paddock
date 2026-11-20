@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { LEGACY_ACCOUNT_ACTIONS, legacyAccountDir, legacyBookingDir, legacyOrderDir, legacyRefundDir, oldFunctionPath } from './replay/harness'
+import { LEGACY_ACCOUNT_ACTIONS, legacyAccountDir, legacyAdminDir, legacyBookingDir, legacyOrderDir, legacyRefundDir, oldFunctionPath } from './replay/harness'
 import { staffAppDir } from './staff-app-dir'
 
 // Brief W36 item 4 (F-plan 4.12 item 2, lead call L5): a frozen test-only copy of the old step F functions and the
@@ -72,6 +72,14 @@ const TRIMMED_IN_THE_STAFF_APP: Record<string, string[]> = {
   'shared/londonTime.ts': ['startsWithinRealHours', 'addMonthsToIsoDate'],
   'shared/eventAttendance.ts': ['loadEventAttendeeState'],
 }
+/**
+ * W48 (G-plan 2.5, W45 row 4): where a shared module of this copy is compared with "the staff app's own". Step G
+ * trims and deletes the staff app's shared modules slice by slice, so from W48 that is the step G copy's file
+ * (legacy-admin: the staff app's as at `7a4aede`, held by its own manifest), not the staff app's live one. A module
+ * the step G copy doesn't hold (`shared/guestValidation.ts`, `shared/storeCredit.ts`...) is held by this copy's
+ * manifest alone. Only the sixteen switched functions are still read in the staff app: each must be a thin call there.
+ */
+const asTheStaffAppHadIt = (name: string): string => path.join(legacyAdminDir, name)
 /** W38: the two flag functions are one thin call, kept in a module they share; each names it, and it calls the Worker. */
 const THIN_THROUGH: Record<string, string> = { 'setGiftCardPickedUp.ts': 'shared/giftCardFlag.ts', 'setGiftCardShipped.ts': 'shared/giftCardFlag.ts' }
 
@@ -181,25 +189,26 @@ describe('W36: the frozen copy of the old step F functions and the three legacy 
     expect(existsSync(path.join(workerDir, 'lib/london-time.ts'))).toBe(true)
   })
 
-  it("every old function and module is the staff app's own, byte for byte, while the staff app still has it", () => {
-    // Step F deletes or thins these in the staff app slice by slice; a file still there must not have drifted from the copy.
+  it("every module the step G copy also holds is the staff app's own as frozen there (W48), byte for byte, unless named as trimmed; every function is a thin call in the staff app", () => {
+    // Until W48 this read the staff app's live modules, so a step G edit to one failed it (W45 row 4). It now reads the
+    // step G copy, which is the staff app's as at W48 and never changes.
     const compared: string[] = []
     for (const file of backendFiles) {
       const name = inBackend(file)
-      const original = path.join(appDir, 'backend/paddock', name)
+      const original = asTheStaffAppHadIt(name)
       if (SWITCHED_TO_THE_WORKER.has(name) || name in TRIMMED_IN_THE_STAFF_APP || !existsSync(original)) continue
       expect(sha256(readFileSync(file)), name).toBe(sha256(readFileSync(original)))
       compared.push(name)
     }
-    // At W36 every one of the 28 was still in the staff app. The number only falls as slices switch or delete their old
-    // bodies: W37 switched four functions, W38 five, W39 three and W40 two, and the 12 modules beside them (and the
-    // other 2 functions) are untouched.
-    expect(compared.length).toBeLessThanOrEqual(28)
-    const trimmed = Object.keys(TRIMMED_IN_THE_STAFF_APP).filter((name) => existsSync(path.join(appDir, 'backend/paddock', name)))
-    expect(compared.length).toBe(28 - SWITCHED_TO_THE_WORKER.size - trimmed.length - backendFiles.filter((file) => !existsSync(path.join(appDir, 'backend/paddock', inBackend(file)))).length)
+    // At W36 every one of the 28 was still in the staff app; W37 to W41 switched all sixteen functions. W48: exactly
+    // these five modules, for good: the ones the step G copy holds too, less the three trimmed at W44 that it holds.
+    expect(compared.sort()).toEqual(['globals.ts', 'shared/extractApiErrorMessage.ts', 'shared/extractStructuredApiError.ts', 'shared/isHtmlErrorPage.ts', 'shared/resolveStaffId.ts'])
+    expect([...SWITCHED_TO_THE_WORKER].sort()).toEqual([...LEGACY_ACCOUNT_ACTIONS].map((action) => `${action}.ts`).sort())
+    const trimmed = Object.keys(TRIMMED_IN_THE_STAFF_APP).filter((name) => existsSync(asTheStaffAppHadIt(name)))
+    expect(trimmed.sort()).toEqual(['shared/eventAttendance.ts', 'shared/londonTime.ts', 'shared/staffAccess.ts'])
     // W44: a trimmed module is the copy's with those exports gone: the staff app no longer names them, the copy does.
     for (const name of trimmed) {
-      const now = code(path.join(appDir, 'backend/paddock', name))
+      const now = code(asTheStaffAppHadIt(name))
       const frozen = code(path.join(COPY_CODE, name))
       for (const one of TRIMMED_IN_THE_STAFF_APP[name] ?? []) {
         expect(new RegExp(`\\b${one}\\b`).test(now), `${name}: ${one}`).toBe(false)
@@ -239,9 +248,10 @@ describe('W36: the frozen copy of the old step F functions and the three legacy 
     expect(oldFunctionPath('refundBooking')).toBe(path.join(legacyBookingDir, 'refundBooking.ts'))
     expect(oldFunctionPath('refundOrder')).toBe(path.join(legacyRefundDir, 'refundOrder.ts'))
     expect(oldFunctionPath('createOrder')).toBe(path.join(legacyOrderDir, 'createOrder.ts'))
-    // Not step F's: still the staff app's own (step G).
-    expect(oldFunctionPath('getOrders')).toBe(path.join(appDir, 'backend/paddock/getOrders.ts'))
-    expect(oldFunctionPath('getMembershipPlans')).toBe(path.join(appDir, 'backend/paddock/getMembershipPlans.ts'))
+    // Not step F's. W48, a named difference: step G's run from their own frozen copy now (frozen-admin-code.test.ts),
+    // no longer from the staff app's checkout.
+    expect(oldFunctionPath('getOrders')).toBe(path.join(legacyAdminDir, 'getOrders.ts'))
+    expect(oldFunctionPath('getMembershipPlans')).toBe(path.join(legacyAdminDir, 'getMembershipPlans.ts'))
   })
 
   it('the replay calls the three legacy membership routes from the copy, never from app/', () => {
@@ -259,8 +269,8 @@ describe('W36: the frozen copy of the old step F functions and the three legacy 
     // Only the harness and the legacy-routes binding name the folder itself.
     const naming = users.filter((file) => literals(code(file)).some((literal) => literal.includes(COPY_NAME)))
     expect(naming.map(shown).sort()).toEqual([shown(HARNESS), shown(LEGACY_ROUTES)].sort())
-    // The other three copies don't reach into it: each copy stands alone.
-    for (const other of [legacyOrderDir, legacyBookingDir, legacyRefundDir]) {
+    // The other four copies don't reach into it: each copy stands alone.
+    for (const other of [legacyOrderDir, legacyBookingDir, legacyRefundDir, legacyAdminDir]) {
       expect(sourceFiles(path.resolve(other, '../..'), ['backend', 'routes']).filter((file) => reachesCopy(code(file))).map(shown)).toEqual([])
     }
   })

@@ -63,6 +63,20 @@ const RANDOM_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   gift_cards: ['code'],
 }
 
+/**
+ * W48: the moments staff set themselves, not the clock: an event's date, end, refund cut-off and public release, and a
+ * session's start and end. Step G's functions edit them (G-plan GB6, GB11), so step G's recordings (`w48-…`) show
+ * the moment each holds, in a row and in an answer, where every other recording shows only that a time is set. The
+ * replay's clock is fixed, so they repeat exactly; times the clock stamps (created_at, checked_in_at…) stay hidden.
+ * Only step G's: the 991 recordings before it are read exactly as they were written.
+ */
+export const STAFF_SET_TIMES: ReadonlySet<string> = new Set(['starts_at', 'ends_at', 'refund_cutoff_at', 'public_release_at', 'start_time', 'end_time', 'session_start_time', 'session_end_time'])
+const showsStaffSetTimes = (scenario: string): boolean => scenario.startsWith('w48-')
+const moment = (value: unknown): string | null => {
+  const at = value instanceof Date ? value : new Date(String(value))
+  return Number.isNaN(at.getTime()) ? null : at.toISOString()
+}
+
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
 const ISO_TIME = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}(:\d{2})?)?$/
 /** A booking's updated_at inside a Stripe key, wherever the key is. The clock moves per statement, and
@@ -86,7 +100,11 @@ class Labeller {
   private readonly labels = new Map<string, string>()
   private unknown = 0
 
-  constructor(private readonly seedIds: ReadonlySet<string>) {}
+  constructor(
+    private readonly seedIds: ReadonlySet<string>,
+    /** W48: whether this recording shows the times staff set (STAFF_SET_TIMES) as the moments they hold. */
+    private readonly staffSetTimes = false
+  ) {}
 
   set(raw: string, label: string): void {
     if (!this.labels.has(raw)) this.labels.set(raw, label)
@@ -127,15 +145,22 @@ class Labeller {
       return Object.fromEntries(
         Object.entries(value)
           .filter(([, item]) => item !== undefined)
-          .map(([key, item]) => [key, this.value(item)])
+          .map(([key, item]) => [key, this.staffSetTime(key, item) ?? this.value(item)])
       )
     }
     return value
   }
 
-  column(type: string, value: unknown): unknown {
+  /** W48: a staff-set time under its own name, as the moment it holds; null for anything else (and outside step G's recordings). */
+  private staffSetTime(name: string, value: unknown): string | null {
+    if (!this.staffSetTimes || !STAFF_SET_TIMES.has(name)) return null
+    if (!(value instanceof Date) && !(typeof value === 'string' && ISO_TIME.test(value))) return null
+    return moment(value)
+  }
+
+  column(type: string, value: unknown, name = ''): unknown {
     if (value === null || value === undefined) return null
-    if (type.startsWith('timestamp')) return '<set>'
+    if (type.startsWith('timestamp')) return (this.staffSetTimes && STAFF_SET_TIMES.has(name) ? moment(value) : null) ?? '<set>'
     if (type.startsWith('numeric')) return Number(value).toFixed(2)
     return this.value(value)
   }
@@ -148,7 +173,7 @@ function keyOf(row: Row, primaryKey: readonly string[]): string {
 function normaliseRow(table: string, row: Row, labeller: Labeller): Row {
   const info = TABLES.get(table)
   if (!info) throw new Error(`The catalog has no table ${table}.`)
-  return Object.fromEntries(Object.entries(row).map(([column, value]) => [column, labeller.column(info.columns.get(column) ?? 'text', value)]))
+  return Object.fromEntries(Object.entries(row).map(([column, value]) => [column, labeller.column(info.columns.get(column) ?? 'text', value, column)]))
 }
 
 /** Rows with the same created_at have no real order, so they are put in a fixed one. */
@@ -190,7 +215,7 @@ export function buildRecording(run: RawRun): Recording {
 
   // Label every new row before normalising any, so a foreign key finds its label whichever table
   // comes first.
-  const labeller = new Labeller(seedIds)
+  const labeller = new Labeller(seedIds, showsStaffSetTimes(run.scenario))
   for (const [table, rows] of newRows) {
     const info = TABLES.get(table)
     rows.forEach((row, index) => {

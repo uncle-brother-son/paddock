@@ -219,55 +219,221 @@ describe('staff app helpers', () => {
     })
   })
 
-  describe('at least one active admin', () => {
-    const MESSAGE = 'There must always be at least one active admin. Make someone else an active admin first.'
-    const admin = { user: { email: 'admin@example.com' } }
+  // W49 + W54 (brief item 12; W48 "Noticed" 3). The four tests that stood here ("at least one active admin") ran the
+  // old setStaffPermission and setStaffRole against a stubbed database. Both are thin calls now, so:
+  //  - "refuses when the guarded update changed nothing and the staff member exists" and "answers null, as before,
+  //    for a staff member who does not exist" are MOVED here as what the thin functions make of the Worker's two
+  //    refusals (the old words thrown; null);
+  //  - "counts and locks inside the one statement that makes the change" and "adding an admin or switching someone on
+  //    needs no guard" are DROPPED: they read the old SQL. The rule is the Worker's, held by
+  //    server/rules/staff/admin.test.ts ("the last active admin keeps the role", "the last active admin stays active",
+  //    "switching on … needs no guard", "every staff change holds the staff guard before it reads") and, as races on
+  //    real Postgres, by server/rules/staff/admin-postgres.test.ts.
+  describe('W49 + W54: the staff, pricing and promo code functions are thin calls to the Worker', () => {
+    const INACTIVE = 'This staff account is inactive. Ask an admin to reactivate it.'
+    const LAST_ADMIN = 'There must always be at least one active admin. Make someone else an active admin first.'
+    const NO_ANSWER = "That didn't get an answer, so it may or may not have been saved. The screen has been reloaded: check it, and press again if it hasn't changed."
+    const STAFF_ID = '11111111-1111-4111-8111-111111111111'
+    const fn = async (name: string) => (await import(/* @vite-ignore */ path.join(appDir, `backend/paddock/${name}`))).default as (req: { params: Record<string, unknown>; user: typeof user }) => Promise<unknown>
+    /** A refusal as the Worker's admin rules answer it: the reason and the words in `details`. */
+    const refused = (code: string, reason: string, message: string) => ({ data: { ok: false, error: { code, message, details: { reason, message, action: 'x' } }, requestId: 'worker-request' } })
+    const promo = { code: 'ALLTEN', discountType: 'percentage', discountValue: 10, appliesTo: ['booking'], appliesOnMemberPrices: false, expiresOn: null, maxTotalUses: null, oneUsePerCustomer: false, minSpend: null, restrictedCustomerId: null }
+    const sent = () => rawRequest.mock.calls[0]?.[0] as { path: string; method: string; body?: unknown; headers: Record<string, string> }
 
-    /** The caller is an active admin; the guarded UPDATE answers with `updated`. */
-    function stubDb(updated: unknown[], targetExists = true) {
-      const query = vi.fn(async (sql: string) => {
-        if (sql.includes('FROM staff WHERE email')) return { data: [{ id: 'a', role: 'admin', active: true }] }
-        if (sql.includes('UPDATE staff')) return { data: updated }
-        return { data: targetExists ? [{ id: 't' }] : [] }
-      })
+    /** Each function with params a screen sends, and the route it must call. */
+    const thin: Array<[string, Record<string, unknown>, string, string]> = [
+      ['getCurrentStaff', {}, 'GET', '/api/v1/staff/staff/me'],
+      ['getStaff', {}, 'GET', '/api/v1/staff/staff'],
+      ['createStaff', { firstName: 'Nia', lastName: 'New', email: 'nia@example.com', role: 'staff' }, 'POST', '/api/v1/staff/staff'],
+      ['setStaffRole', { staffId: STAFF_ID, role: 'manager' }, 'POST', `/api/v1/staff/staff/${STAFF_ID}/role`],
+      ['setStaffPermission', { staffId: STAFF_ID, field: 'active', value: false }, 'POST', `/api/v1/staff/staff/${STAFF_ID}/permissions`],
+      ['setStaffCanManagePricing', { staffId: STAFF_ID, canManagePricing: false }, 'POST', `/api/v1/staff/staff/${STAFF_ID}/permissions`],
+      ['setBandPrice', { bandId: STAFF_ID, price: 22 }, 'POST', `/api/v1/staff/pricing/bands/${STAFF_ID}/price`],
+      ['setBandRules', { dayOfWeek: 6, rules: [{ bandId: STAFF_ID, fromTime: '00:00', toTime: '24:00' }] }, 'POST', '/api/v1/staff/pricing/band-rules/6'],
+      ['setMembershipBandTerm', { membershipLevel: 'core', bandId: STAFF_ID, creditEligible: false, discountPercent: 20 }, 'POST', '/api/v1/staff/pricing/member-band-terms'],
+      ['setPostageSettings', { standardPrice: 5.5, expressPrice: 11, freeShippingThreshold: 60 }, 'POST', '/api/v1/staff/postage/settings'],
+      ['getPromoCodes', {}, 'GET', '/api/v1/staff/promo-codes'],
+      ['getPromoCodeRedemptions', { promoCodeId: STAFF_ID }, 'GET', `/api/v1/staff/promo-codes/${STAFF_ID}/redemptions`],
+      ['createPromoCode', promo, 'POST', '/api/v1/staff/promo-codes'],
+      ['updatePromoCode', { ...promo, id: STAFF_ID, active: true }, 'POST', `/api/v1/staff/promo-codes/${STAFF_ID}`],
+    ]
+
+    it.each(thin)('%s asks only the Worker, on its own route, and an inactive account is refused in the same words as before', async (name, params, method, route) => {
+      const query = vi.fn()
+      const legacy = vi.fn()
       vi.stubGlobal('paddockData', { query })
-      return query
-    }
+      vi.stubGlobal('paddockBackendApi2', { rawRequest: legacy })
+      rawRequest.mockResolvedValue(refusal('FORBIDDEN', INACTIVE))
+      const call = (await fn(name))({ params, user })
 
-    const setStaffPermission = async () => (await load('../setStaffPermission')).default
-    const setStaffRole = async () => (await load('../setStaffRole')).default
+      // The two that add something answer a refusal as data (their dialogs keep a press key); every other one throws
+      // the words alone, as the old functions did: no code and no request id after them.
+      if (name === 'createStaff' || name === 'createPromoCode') expect(await call).toEqual({ created: false, reason: 'permission_denied', message: INACTIVE })
+      else await expect(call).rejects.toThrow(new Error(INACTIVE))
 
-    it('refuses when the guarded update changed nothing and the staff member exists', async () => {
-      stubDb([])
-      await expect((await setStaffPermission())({ params: { staffId: 't', field: 'active', value: false }, ...admin })).rejects.toThrow(MESSAGE)
-      await expect((await setStaffRole())({ params: { staffId: 't', role: 'staff' }, ...admin })).rejects.toThrow(MESSAGE)
+      expect(rawRequest).toHaveBeenCalledTimes(1)
+      expect(sent()).toMatchObject({ method, path: route, headers: { 'X-Staff-Email': user.email } })
+      // A write goes under a press key (the screen's, or one made for the call); a read has none.
+      expect(typeof sent().headers['Idempotency-Key']).toBe(method === 'POST' ? 'string' : 'undefined')
+      expect(legacy).not.toHaveBeenCalled()
+      expect(query).not.toHaveBeenCalled()
     })
 
-    it('answers null, as before, for a staff member who does not exist', async () => {
-      stubDb([], false)
-      expect(await (await setStaffPermission())({ params: { staffId: 't', field: 'active', value: false }, ...admin })).toBeNull()
-      expect(await (await setStaffRole())({ params: { staffId: 't', role: 'staff' }, ...admin })).toBeNull()
+    it("a press's key is the screen's own when it sends one, and is never part of what is sent as the change", async () => {
+      rawRequest.mockResolvedValue(success({ id: STAFF_ID, role: 'manager' }))
+      await (await fn('setStaffRole'))({ params: { staffId: STAFF_ID, role: 'manager', idempotencyKey: 'key-from-the-screen-1234' }, user })
+      expect(sent().headers['Idempotency-Key']).toBe('key-from-the-screen-1234')
+      expect(sent().body).toEqual({ role: 'manager' })
+
+      rawRequest.mockClear()
+      rawRequest.mockResolvedValue(success({ id: 'p1' }))
+      await (await fn('createPromoCode'))({ params: { ...promo, idempotencyKey: 'key-from-the-dialog-12345' }, user })
+      expect(sent().headers['Idempotency-Key']).toBe('key-from-the-dialog-12345')
+      expect(sent().body).toEqual(promo)
     })
 
-    it('counts and locks inside the one statement that makes the change', async () => {
-      const query = stubDb([{ id: 't', active: false }])
-      await (await setStaffPermission())({ params: { staffId: 't', field: 'active', value: false }, ...admin })
-      await (await setStaffRole())({ params: { staffId: 't', role: 'manager' }, ...admin })
+    // Moved from "at least one active admin": the old guarded update that changed nothing for a staff member who exists.
+    it('setStaffRole and setStaffPermission throw the last-active-admin refusal in the old words, exactly', async () => {
+      rawRequest.mockResolvedValue(refused('CONFLICT', 'last_active_admin', LAST_ADMIN))
+      await expect((await fn('setStaffPermission'))({ params: { staffId: STAFF_ID, field: 'active', value: false }, user })).rejects.toThrow(new Error(LAST_ADMIN))
+      await expect((await fn('setStaffRole'))({ params: { staffId: STAFF_ID, role: 'staff' }, user })).rejects.toThrow(new Error(LAST_ADMIN))
+    })
 
-      const updates = query.mock.calls.map(([sql]) => sql).filter((sql) => sql.includes('UPDATE staff'))
-      expect(updates).toHaveLength(2)
-      for (const sql of updates) {
-        expect(sql).toContain('FOR UPDATE')
-        expect(sql).toContain('other_admins')
+    // Moved from "at least one active admin".
+    it('setStaffRole and setStaffPermission answer null, as before, for a staff member who does not exist; setStaffCanManagePricing throws, as before', async () => {
+      rawRequest.mockResolvedValue(refused('NOT_FOUND', 'staff_not_found', 'Staff member not found.'))
+      expect(await (await fn('setStaffPermission'))({ params: { staffId: STAFF_ID, field: 'active', value: false }, user })).toBeNull()
+      expect(await (await fn('setStaffRole'))({ params: { staffId: STAFF_ID, role: 'staff' }, user })).toBeNull()
+      await expect((await fn('setStaffCanManagePricing'))({ params: { staffId: STAFF_ID, canManagePricing: true }, user })).rejects.toThrow(new Error('Staff member not found.'))
+    })
+
+    it('the three switches share one route: setStaffPermission sends its own two and refuses any other itself, in the old words; setStaffCanManagePricing sends the third', async () => {
+      await expect((await fn('setStaffPermission'))({ params: { staffId: STAFF_ID, field: 'can_manage_pricing', value: true }, user })).rejects.toThrow(new Error('Invalid field: can_manage_pricing'))
+      expect(rawRequest).not.toHaveBeenCalled()
+
+      rawRequest.mockResolvedValue(success({ id: STAFF_ID, can_issue_refunds: true }))
+      expect(await (await fn('setStaffPermission'))({ params: { staffId: STAFF_ID, field: 'can_issue_refunds', value: true }, user })).toEqual({ id: STAFF_ID, can_issue_refunds: true })
+      expect(sent().body).toEqual({ field: 'can_issue_refunds', value: true })
+
+      rawRequest.mockClear()
+      rawRequest.mockResolvedValue(success({ id: STAFF_ID, can_manage_pricing: false }))
+      expect(await (await fn('setStaffCanManagePricing'))({ params: { staffId: STAFF_ID, canManagePricing: false }, user })).toEqual({ id: STAFF_ID, can_manage_pricing: false })
+      expect(sent().body).toEqual({ field: 'can_manage_pricing', value: false })
+    })
+
+    it('a refusal the old function answered as data still is: a promo code not there or locked, a band not there (now with words)', async () => {
+      const update = await fn('updatePromoCode')
+      rawRequest.mockResolvedValue(refused('NOT_FOUND', 'not_found', 'That promo code no longer exists.'))
+      expect(await update({ params: { ...promo, id: STAFF_ID, active: true }, user })).toEqual({ updated: false, reason: 'not_found', message: 'That promo code no longer exists.' })
+      rawRequest.mockResolvedValue(refused('CONFLICT', 'code_locked', 'Locked.'))
+      expect(await update({ params: { ...promo, id: STAFF_ID, active: true }, user })).toEqual({ updated: false, reason: 'code_locked', message: 'Locked.' })
+      // Any other refusal is thrown in its words, as before.
+      rawRequest.mockResolvedValue(refused('CONFLICT', 'duplicate_code', 'A promo code "FIVER" already exists (codes are unique, case-insensitive).'))
+      await expect(update({ params: { ...promo, id: STAFF_ID, active: true }, user })).rejects.toThrow(new Error('A promo code "FIVER" already exists (codes are unique, case-insensitive).'))
+
+      rawRequest.mockResolvedValue(refused('NOT_FOUND', 'band_not_found', 'That band no longer exists. Reload the page and try again.'))
+      expect(await (await fn('setBandPrice'))({ params: { bandId: STAFF_ID, price: 22 }, user })).toEqual({ updated: false, reason: 'band_not_found', message: 'That band no longer exists. Reload the page and try again.' })
+      rawRequest.mockResolvedValue(success({ updated: true, band: { id: STAFF_ID, code: 'core', name: 'Core', price: '22.00' } }))
+      expect(await (await fn('setBandPrice'))({ params: { bandId: STAFF_ID, price: 22 }, user })).toEqual({ updated: true, band: { id: STAFF_ID, code: 'core', name: 'Core', price: '22.00' } })
+    })
+
+    it('no answer: a setting says the change may or may not have been saved; a create says so as data, so its dialog keeps its key; a read keeps the "didn\'t answer" error', async () => {
+      rawRequest.mockRejectedValue(new Error('socket hang up'))
+      for (const [name, params] of [['setStaffRole', { staffId: STAFF_ID, role: 'manager' }], ['setBandRules', { dayOfWeek: 6, rules: [] }], ['setPostageSettings', {}], ['updatePromoCode', { ...promo, id: STAFF_ID, active: true }]] as const) {
+        await expect((await fn(name))({ params, user }), name).rejects.toThrow(new Error(NO_ANSWER))
       }
+      // The Worker's own fault (a 500) and a press still running under the same key (409 with no reason) are no answer too.
+      rawRequest.mockResolvedValue(refusal('INTERNAL', 'Something went wrong and the action may not have finished. Check before trying again.'))
+      await expect((await fn('setBandPrice'))({ params: { bandId: STAFF_ID, price: 22 }, user })).rejects.toThrow(new Error(NO_ANSWER))
+      rawRequest.mockResolvedValue(refusal('CONFLICT', 'A request with this key is still in progress.'))
+      expect(await (await fn('createStaff'))({ params: { firstName: 'Nia', lastName: 'New', email: 'nia@example.com', role: 'staff' }, user })).toMatchObject({ created: false, reason: 'no_answer', noAnswer: true, message: expect.stringContaining("didn't get an answer") })
+      expect(await (await fn('createPromoCode'))({ params: promo, user })).toMatchObject({ created: false, reason: 'no_answer', noAnswer: true, message: expect.stringContaining('Press Create promo code again here') })
+      // A changed press under the key of one that got no answer.
+      rawRequest.mockResolvedValue(refusal('IDEMPOTENCY_MISMATCH', 'This key was used for a different request.'))
+      expect(await (await fn('createStaff'))({ params: { firstName: 'Nia', lastName: 'Other', email: 'nia@example.com', role: 'staff' }, user })).toMatchObject({ created: false, reason: 'pressed_after_no_answer', noAnswer: true })
+
+      rawRequest.mockRejectedValue(new Error('socket hang up'))
+      await expect((await fn('getStaff'))({ params: {}, user })).rejects.toThrow(/Could not reach the Worker: socket hang up \(WORKER_UNREACHABLE, request /)
     })
 
-    it('adding an admin or switching someone on needs no guard', async () => {
-      const query = stubDb([{ id: 't' }])
-      await (await setStaffPermission())({ params: { staffId: 't', field: 'active', value: true }, ...admin })
-      await (await setStaffRole())({ params: { staffId: 't', role: 'admin' }, ...admin })
+    it('the old result shapes come back unchanged from a success', async () => {
+      const row = { id: STAFF_ID, email: 'jo@example.com', role: 'admin', can_issue_refunds: true, can_manage_pricing: true, active: false }
+      rawRequest.mockResolvedValue(success(row))
+      expect(await (await fn('getCurrentStaff'))({ params: {}, user })).toEqual(row)
+      rawRequest.mockResolvedValue(success(null))
+      expect(await (await fn('getCurrentStaff'))({ params: {}, user })).toBeNull()
+      // W54a: with the row's new stamp beside the old shape, for the screen's next save.
+      rawRequest.mockResolvedValue(success({ saved: true, rebandedSessions: 3, rules: [], stamp: 'day-2' }))
+      expect(await (await fn('setBandRules'))({ params: { dayOfWeek: 6, rules: [] }, user })).toStrictEqual({ saved: true, rebandedSessions: 3, rules: [], stamp: 'day-2' })
+      rawRequest.mockResolvedValue(success({ updated: true, promo: { id: STAFF_ID, code: 'ALLTEN' }, stamp: 'code-2' }))
+      expect(await (await fn('updatePromoCode'))({ params: { ...promo, id: STAFF_ID, active: true }, user })).toStrictEqual({ updated: true, promo: { id: STAFF_ID, code: 'ALLTEN' }, stamp: 'code-2' })
+      const term = { id: 't1', membership_level: 'core', band_id: STAFF_ID, credit_eligible: false, discount_percent: '20.00' }
+      rawRequest.mockResolvedValue(success({ saved: true, term, stamp: 'term-2' }))
+      expect(await (await fn('setMembershipBandTerm'))({ params: { membershipLevel: 'core', bandId: STAFF_ID, creditEligible: false, discountPercent: 20 }, user })).toStrictEqual({ saved: true, term, stamp: 'term-2' })
+      rawRequest.mockResolvedValue(success({ standardPrice: 5.5, expressPrice: 11, freeShippingThreshold: 60, stamp: 'postage-2' }))
+      expect(await (await fn('setPostageSettings'))({ params: { standardPrice: 5.5, expressPrice: 11, freeShippingThreshold: 60 }, user })).toStrictEqual({ standardPrice: 5.5, expressPrice: 11, freeShippingThreshold: 60, stamp: 'postage-2' })
+    })
 
-      expect(query.mock.calls.some(([sql]) => sql.includes('FOR UPDATE'))).toBe(false)
+    // W54a (W49 + W54 review S1; the lead's call: one step G rule): an edit that writes a whole row carries the stamp
+    // the screen loaded, and the Worker refuses it when the row has changed since.
+    describe('W54a: an edit made from a page loaded before someone else\'s change', () => {
+      const CHANGED_SINCE = 'This was changed by someone else since the page loaded. The page has been reloaded: check it and save again.'
+      const stamped: Array<[string, Record<string, unknown>, Record<string, unknown>]> = [
+        ['updatePromoCode', { ...promo, id: STAFF_ID, active: false, stamp: 'code-1' }, { ...promo, active: false, stamp: 'code-1' }],
+        ['setBandRules', { dayOfWeek: 6, rules: [{ bandId: STAFF_ID, fromTime: '00:00', toTime: '24:00' }], stamp: 'day-1' }, { rules: [{ bandId: STAFF_ID, fromTime: '00:00', toTime: '24:00' }], stamp: 'day-1' }],
+        ['setMembershipBandTerm', { membershipLevel: 'core', bandId: STAFF_ID, creditEligible: false, discountPercent: 20, stamp: 'term-1' }, { membershipLevel: 'core', bandId: STAFF_ID, creditEligible: false, discountPercent: 20, stamp: 'term-1' }],
+        ['setPostageSettings', { standardPrice: 5.5, expressPrice: 11, freeShippingThreshold: 60, stamp: 'postage-1' }, { standardPrice: 5.5, expressPrice: 11, freeShippingThreshold: 60, stamp: 'postage-1' }],
+      ]
+
+      it.each(stamped)('%s sends the stamp its screen loaded, as part of the change', async (name, params, body) => {
+        rawRequest.mockResolvedValue(success({ updated: true, promo: {}, saved: true, rebandedSessions: 0, standardPrice: 0, expressPrice: 0, freeShippingThreshold: 0, stamp: 'next' }))
+        await (await fn(name))({ params, user })
+        expect(sent().body).toEqual(body)
+        // The stamp is part of what the key covers: the same press again sends the same stamp.
+        expect(JSON.parse(JSON.stringify(sent().body))).toHaveProperty('stamp')
+      })
+
+      it('a band price sends none: the press writes only the price typed', async () => {
+        rawRequest.mockResolvedValue(success({ updated: true, band: { id: STAFF_ID, code: 'core', name: 'Core', price: '22.00' } }))
+        await (await fn('setBandPrice'))({ params: { bandId: STAFF_ID, price: 22 }, user })
+        expect(sent().body).toEqual({ price: 22 })
+      })
+
+      it('the refusal: a promo code edit answers it as data, so the page and the dialog can tell it apart and read the list again; the three Pricing saves throw the words, and the page reloads', async () => {
+        rawRequest.mockResolvedValue(refused('CONFLICT', 'changed_since', CHANGED_SINCE))
+        expect(await (await fn('updatePromoCode'))({ params: stamped[0]?.[1] as Record<string, unknown>, user })).toEqual({ updated: false, reason: 'changed_since', message: CHANGED_SINCE })
+        for (const [name, params] of stamped.slice(1)) await expect((await fn(name))({ params, user }), name).rejects.toThrow(new Error(CHANGED_SINCE))
+      })
+
+      it("the words are the Worker's own, and each screen sends the stamp it loaded", async () => {
+        const { CHANGED_SINCE_WORDS } = await import('@/server/rules/admin/stamp')
+        expect(CHANGED_SINCE_WORDS).toBe(CHANGED_SINCE)
+        const source = (file: string) => readFileSync(path.join(appDir, 'frontend', file), 'utf8')
+        const promoPage = source('pages/PromoCodesPage.tsx')
+        const promoDialog = source('components/PromoCodeDialog.tsx')
+        const pricingPage = source('pages/PricingAdminPage.tsx')
+        // The list's switch and the edit dialog: the stamp of the row as the list loaded it.
+        expect(promoPage).toContain('stamp: row.stamp,')
+        expect(promoDialog).toContain('stamp: existing!.stamp }')
+        // A refused switch reads the list again; a refused dialog save closes, and the list is read again.
+        const branch = (text: string, opens: string) => text.slice(text.indexOf(opens)).split('} else')[0] ?? ''
+        expect(promoPage).toContain('if (!result?.updated) {')
+        expect(branch(promoPage, 'if (!result?.updated) {')).toContain('trigger({}, { skipCache: true })')
+        expect(promoDialog).toContain("} else if (result?.reason === 'changed_since') {")
+        const refusedSave = branch(promoDialog, "if (result?.reason === 'changed_since') {")
+        expect(refusedSave).toContain('onSaved()')
+        expect(refusedSave).toContain('onOpenChange(false)')
+        // The day's windows, a member term and postage: each its own stamp from the load.
+        expect(pricingPage).toContain('const dayStamp = config?.bandRulesStamps?.[day]')
+        expect(pricingPage).toContain('stamp: dayStamp,')
+        expect(pricingPage).toContain('onSave(term.membership_level, term.band_id, creditEligible, Number(discount), term.stamp)')
+        expect(pricingPage).toContain('setTerm({ membershipLevel: level, bandId, creditEligible, discountPercent, stamp }')
+        expect(pricingPage).toContain('{ stamp: shownStamp.current }')
+        // What is on screen follows a reload that finds the row changed: the day's rows, a term's row, the three boxes.
+        expect(pricingPage).toContain('}, [day, dayStamp])')
+        expect(pricingPage).toContain('key={`${term.id}:${term.stamp}`}')
+        expect(pricingPage).toContain('if (data && data.stamp !== shownStamp.current) show(data)')
+      })
     })
   })
 

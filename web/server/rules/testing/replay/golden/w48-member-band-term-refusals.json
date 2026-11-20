@@ -1,0 +1,22 @@
+{
+  "scenario": "w48-member-band-term-refusals",
+  "results": [
+    {
+      "thrown": "Membership level is required."
+    },
+    {
+      "thrown": "Discount percent must be between 0 and 100."
+    },
+    {
+      "thrown": "Discount percent must be between 0 and 100."
+    },
+    {
+      "thrown": "Discount percent must be between 0 and 100."
+    },
+    {
+      "thrown": "insert or update on table \"membership_band_terms\" violates foreign key constraint \"membership_band_terms_band_id_fkey\""
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

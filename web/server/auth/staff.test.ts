@@ -38,7 +38,9 @@ describe('keysMatch', () => {
 })
 
 describe('authenticateStaff', () => {
-  it('builds the StaffContext from the staff row, matching on the exact email', async () => {
+  // W49 (GB16): the match was `email = $1`, exactly. It is now in lower case on both sides (what that finds on the
+  // live schema is in server/rules/staff/admin.test.ts).
+  it('builds the StaffContext from the staff row, matching the email in lower case', async () => {
     const db = fakeDb()
 
     const staff = await authenticateStaff(headers(), db, KEY)
@@ -51,7 +53,7 @@ describe('authenticateStaff', () => {
       canManagePricing: false,
     })
     expect(db.query).toHaveBeenCalledWith(
-      'SELECT id, email, role, can_issue_refunds, can_manage_pricing, active FROM staff WHERE email = $1 LIMIT 1',
+      'SELECT id, email, role, can_issue_refunds, can_manage_pricing, active FROM staff WHERE lower(email) = lower($1) ORDER BY (email = $1) DESC, id LIMIT 1',
       ['jo@example.com']
     )
   })

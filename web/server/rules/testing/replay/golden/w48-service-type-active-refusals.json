@@ -1,0 +1,13 @@
+{
+  "scenario": "w48-service-type-active-refusals",
+  "results": [
+    {
+      "thrown": "itemId is required"
+    },
+    {
+      "thrown": "Item not found"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

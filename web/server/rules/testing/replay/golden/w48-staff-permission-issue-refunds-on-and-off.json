@@ -1,0 +1,15 @@
+{
+  "scenario": "w48-staff-permission-issue-refunds-on-and-off",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-000000000a03",
+      "can_issue_refunds": true
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000a03",
+      "can_issue_refunds": false
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

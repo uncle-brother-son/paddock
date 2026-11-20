@@ -1,0 +1,35 @@
+{
+  "scenario": "w48-gift-card-preset-active-off-and-on",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-00000000001a",
+      "active": false
+    },
+    {
+      "id": "10000000-0000-4000-8000-00000000001a",
+      "active": true
+    },
+    {
+      "thrown": "Item not found"
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "prices.update",
+      "params": {
+        "id": "price_preset_60",
+        "active": false
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "prices.update",
+      "params": {
+        "id": "price_preset_60",
+        "active": true
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {}
+}

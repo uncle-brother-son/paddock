@@ -1,0 +1,20 @@
+{
+  "scenario": "w48-gb8-band-windows-deleted-and-the-put-back-fails-too",
+  "results": [
+    {
+      "thrown": "connection lost"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "band_rules": {
+      "added": [],
+      "changed": [],
+      "removed": [
+        "10000000-0000-4000-8000-000000000b60",
+        "10000000-0000-4000-8000-000000000b61"
+      ],
+      "tied": 0
+    }
+  }
+}

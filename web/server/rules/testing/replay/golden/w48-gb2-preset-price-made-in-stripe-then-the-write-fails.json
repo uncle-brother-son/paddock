@@ -1,0 +1,28 @@
+{
+  "scenario": "w48-gb2-preset-price-made-in-stripe-then-the-write-fails",
+  "results": [
+    {
+      "thrown": "Failed to update preset"
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "prices.update",
+      "params": {
+        "id": "price_preset_60",
+        "active": false
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "prices.create",
+      "params": {
+        "product": "prod_gift",
+        "unit_amount": 7500,
+        "currency": "gbp"
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {}
+}

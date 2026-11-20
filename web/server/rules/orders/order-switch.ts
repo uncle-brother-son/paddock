@@ -50,8 +50,16 @@ import { ApiError } from '@/server/http/errors'
  * invoice paid from the desk on their saved card (server/rules/memberships/retry-payment.ts). Asked by its press and
  * its quote, and by nothing else. Off until the lead adds it to the secret; it turns nothing else on, and no other
  * kind turns it on. Reconcile never asks: a retry held when the kind is switched off is still settled.
+ *
+ * W48 (G-plan 4.6, lead call L3): `plan_changes` is step G's one kind, for its three actions that touch Stripe and
+ * the members already on a plan: a membership plan made, a plan's price changed (which moves its live members to the
+ * new price), and a plan put on or taken off sale (server/rules/catalog/plan-switch.ts). No route asks for it until
+ * W57 builds them. Off until the lead adds it to the secret; it turns nothing else on, and no other kind turns it on.
+ * Step G's other actions (prices of everything else, bands, promo codes, stock, sessions, staff, check-in and the
+ * reads) are one transaction with nothing to stop part way, and need no kind. Reconcile never asks: a price change
+ * that is held, and a member's move that was left, are still finished.
  */
-export const ORDER_KINDS = ['no_stripe', 'saved_card', 'reader', 'membership', 'reader_flows', 'booking_changes', 'order_refunds', 'event_cancels', 'customer_cancels', 'membership_changes', 'payment_date_changes', 'card_moves', 'lapse_sweep', 'payment_retries'] as const
+export const ORDER_KINDS = ['no_stripe', 'saved_card', 'reader', 'membership', 'reader_flows', 'booking_changes', 'order_refunds', 'event_cancels', 'customer_cancels', 'membership_changes', 'payment_date_changes', 'card_moves', 'lapse_sweep', 'payment_retries', 'plan_changes'] as const
 export type OrderKind = (typeof ORDER_KINDS)[number]
 
 /**
@@ -62,7 +70,7 @@ export type OrderKind = (typeof ORDER_KINDS)[number]
  *   to take (the order then refuses with its own reason, as placeOrder needs Stripe for either);
  * - anything else is `no_stripe`: cash, gift card or store credit alone, nothing owed, or no method.
  */
-export function orderKind(input: Pick<PlaceOrderInput, 'membershipPlanId' | 'payment'>): Exclude<OrderKind, 'reader_flows' | 'booking_changes' | 'order_refunds' | 'event_cancels' | 'customer_cancels' | 'membership_changes' | 'payment_date_changes' | 'card_moves' | 'lapse_sweep' | 'payment_retries'> {
+export function orderKind(input: Pick<PlaceOrderInput, 'membershipPlanId' | 'payment'>): Exclude<OrderKind, 'reader_flows' | 'booking_changes' | 'order_refunds' | 'event_cancels' | 'customer_cancels' | 'membership_changes' | 'payment_date_changes' | 'card_moves' | 'lapse_sweep' | 'payment_retries' | 'plan_changes'> {
   if (input.membershipPlanId) return 'membership'
   const method = input.payment?.method
   if (method === 'reader') return 'reader'

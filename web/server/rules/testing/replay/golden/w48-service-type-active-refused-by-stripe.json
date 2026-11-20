@@ -1,0 +1,19 @@
+{
+  "scenario": "w48-service-type-active-refused-by-stripe",
+  "results": [
+    {
+      "thrown": "Failed to update Stripe product"
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "products.update",
+      "params": {
+        "id": "prod_sauna",
+        "active": false
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {}
+}

@@ -1,0 +1,35 @@
+{
+  "scenario": "w48-addon-active-off-and-on",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-000000000006",
+      "active": false
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000006",
+      "active": true
+    },
+    {
+      "thrown": "Item not found"
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "products.update",
+      "params": {
+        "id": "prod_towel",
+        "active": false
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "products.update",
+      "params": {
+        "id": "prod_towel",
+        "active": true
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {}
+}

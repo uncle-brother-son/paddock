@@ -1,0 +1,34 @@
+{
+  "scenario": "w48-gb16-a-permission-change-leaves-no-record",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-000000000a03",
+      "can_issue_refunds": true
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000a03",
+      "can_manage_pricing": true
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "staff": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000a03",
+          "can_issue_refunds": [
+            false,
+            true
+          ],
+          "can_manage_pricing": [
+            false,
+            true
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

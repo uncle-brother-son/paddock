@@ -1,0 +1,35 @@
+{
+  "scenario": "w48-staff-list-who-may",
+  "results": [
+    {
+      "thrown": "Admins only — this action requires the admin role."
+    },
+    {
+      "thrown": "This staff account is inactive. Ask an admin to reactivate it."
+    },
+    {
+      "thrown": "No staff record matches the logged-in user's email (jo@example.com). Ask an admin to add you as staff before performing this action."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "staff": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "role": [
+            "admin",
+            "manager"
+          ],
+          "email": [
+            "jo@example.com",
+            "someone.else@example.com"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

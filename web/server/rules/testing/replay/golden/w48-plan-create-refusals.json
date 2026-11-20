@@ -1,0 +1,40 @@
+{
+  "scenario": "w48-plan-create-refusals",
+  "results": [
+    {
+      "thrown": "Name is required"
+    },
+    {
+      "thrown": "Level must be either \"core\" or \"all_access\""
+    },
+    {
+      "thrown": "Sessions included must be a non-negative whole number"
+    },
+    {
+      "thrown": "Sessions included must be a non-negative whole number"
+    },
+    {
+      "thrown": "Sessions included must be a positive whole number for non-unlimited plans"
+    },
+    {
+      "thrown": "Add-ons included must be a non-negative whole number"
+    },
+    {
+      "thrown": "Add-ons included must be a non-negative whole number"
+    },
+    {
+      "thrown": "isUnlimited must be true or false"
+    },
+    {
+      "thrown": "At least one price must be provided"
+    },
+    {
+      "thrown": "Monthly price must be a non-negative number"
+    },
+    {
+      "thrown": "Yearly price must be a non-negative number"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

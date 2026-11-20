@@ -1,0 +1,63 @@
+{
+  "scenario": "w48-staff-create",
+  "results": [
+    {
+      "id": "staff#1",
+      "first_name": "Nia",
+      "last_name": "New",
+      "email": "nia.new@example.com",
+      "role": "staff",
+      "can_issue_refunds": false,
+      "can_manage_pricing": false,
+      "active": true,
+      "created_at": "<time>",
+      "updated_at": "<time>"
+    },
+    {
+      "id": "staff#2",
+      "first_name": "Rae",
+      "last_name": "Refunds",
+      "email": "rae@example.com",
+      "role": "manager",
+      "can_issue_refunds": true,
+      "can_manage_pricing": false,
+      "active": true,
+      "created_at": "<time>",
+      "updated_at": "<time>"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "staff": {
+      "added": [
+        {
+          "id": "staff#1",
+          "role": "staff",
+          "can_issue_refunds": false,
+          "active": true,
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "first_name": "Nia",
+          "last_name": "New",
+          "email": "nia.new@example.com",
+          "can_manage_pricing": false
+        },
+        {
+          "id": "staff#2",
+          "role": "manager",
+          "can_issue_refunds": true,
+          "active": true,
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "first_name": "Rae",
+          "last_name": "Refunds",
+          "email": "rae@example.com",
+          "can_manage_pricing": false
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -18,3 +18,5 @@ export * from './customer-cancels'
 export * from './account'
 export * from './money-owed'
 export * from './payment-retry'
+// W48: step G's admin contracts, last, so the staff app's generated types keep the order of every earlier union.
+export * from './admin'

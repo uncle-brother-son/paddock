@@ -1,0 +1,163 @@
+{
+  "scenario": "w48-stock-adjust-each-reason",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-000000000008",
+      "stock_quantity": 15
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000008",
+      "stock_quantity": 13
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000008",
+      "stock_quantity": 12
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000008",
+      "stock_quantity": 11
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000008",
+      "stock_quantity": 12
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000008",
+      "stock_quantity": 0
+    },
+    [
+      {
+        "id": "stock_adjustments#6",
+        "variant_id": "10000000-0000-4000-8000-000000000008",
+        "change_amount": -12,
+        "reason": "Other: Given to the raffle",
+        "staff_id": "10000000-0000-4000-8000-000000000001",
+        "staff_first_name": "Jo",
+        "staff_last_name": "Staff",
+        "created_at": "<time>"
+      },
+      {
+        "id": "stock_adjustments#5",
+        "variant_id": "10000000-0000-4000-8000-000000000008",
+        "change_amount": 1,
+        "reason": "Refund Restock",
+        "staff_id": "10000000-0000-4000-8000-000000000001",
+        "staff_first_name": "Jo",
+        "staff_last_name": "Staff",
+        "created_at": "<time>"
+      },
+      {
+        "id": "stock_adjustments#4",
+        "variant_id": "10000000-0000-4000-8000-000000000008",
+        "change_amount": -1,
+        "reason": "Sale",
+        "staff_id": "10000000-0000-4000-8000-000000000001",
+        "staff_first_name": "Jo",
+        "staff_last_name": "Staff",
+        "created_at": "<time>"
+      },
+      {
+        "id": "stock_adjustments#3",
+        "variant_id": "10000000-0000-4000-8000-000000000008",
+        "change_amount": -1,
+        "reason": "Recount",
+        "staff_id": "10000000-0000-4000-8000-000000000001",
+        "staff_first_name": "Jo",
+        "staff_last_name": "Staff",
+        "created_at": "<time>"
+      },
+      {
+        "id": "stock_adjustments#2",
+        "variant_id": "10000000-0000-4000-8000-000000000008",
+        "change_amount": -2,
+        "reason": "Damage",
+        "staff_id": "10000000-0000-4000-8000-000000000001",
+        "staff_first_name": "Jo",
+        "staff_last_name": "Staff",
+        "created_at": "<time>"
+      },
+      {
+        "id": "stock_adjustments#1",
+        "variant_id": "10000000-0000-4000-8000-000000000008",
+        "change_amount": 10,
+        "reason": "Delivery",
+        "staff_id": "10000000-0000-4000-8000-000000000001",
+        "staff_first_name": "Jo",
+        "staff_last_name": "Staff",
+        "created_at": "<time>"
+      }
+    ]
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "product_variants": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000008",
+          "stock_quantity": [
+            5,
+            0
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    },
+    "stock_adjustments": {
+      "added": [
+        {
+          "id": "stock_adjustments#1",
+          "variant_id": "10000000-0000-4000-8000-000000000008",
+          "change_amount": 10,
+          "reason": "Delivery",
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "created_at": "<set>"
+        },
+        {
+          "id": "stock_adjustments#2",
+          "variant_id": "10000000-0000-4000-8000-000000000008",
+          "change_amount": -2,
+          "reason": "Damage",
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "created_at": "<set>"
+        },
+        {
+          "id": "stock_adjustments#3",
+          "variant_id": "10000000-0000-4000-8000-000000000008",
+          "change_amount": -1,
+          "reason": "Recount",
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "created_at": "<set>"
+        },
+        {
+          "id": "stock_adjustments#4",
+          "variant_id": "10000000-0000-4000-8000-000000000008",
+          "change_amount": -1,
+          "reason": "Sale",
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "created_at": "<set>"
+        },
+        {
+          "id": "stock_adjustments#5",
+          "variant_id": "10000000-0000-4000-8000-000000000008",
+          "change_amount": 1,
+          "reason": "Refund Restock",
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "created_at": "<set>"
+        },
+        {
+          "id": "stock_adjustments#6",
+          "variant_id": "10000000-0000-4000-8000-000000000008",
+          "change_amount": -12,
+          "reason": "Other: Given to the raffle",
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

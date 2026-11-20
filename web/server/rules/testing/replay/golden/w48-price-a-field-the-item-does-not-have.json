@@ -1,0 +1,10 @@
+{
+  "scenario": "w48-price-a-field-the-item-does-not-have",
+  "results": [
+    {
+      "thrown": "Failed to update item"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

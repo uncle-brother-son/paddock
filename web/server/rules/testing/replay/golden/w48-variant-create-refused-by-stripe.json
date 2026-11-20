@@ -1,0 +1,24 @@
+{
+  "scenario": "w48-variant-create-refused-by-stripe",
+  "results": [
+    {
+      "thrown": "Failed to create Stripe price: Stripe refused this change."
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "prices.create",
+      "params": {
+        "product": "prod_soap",
+        "unit_amount": 1200,
+        "currency": "gbp",
+        "metadata": {
+          "size": "Large",
+          "sku": "SOAP-L"
+        }
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {}
+}

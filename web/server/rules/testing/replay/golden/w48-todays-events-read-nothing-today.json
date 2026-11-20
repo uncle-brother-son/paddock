@@ -1,0 +1,50 @@
+{
+  "scenario": "w48-todays-events-read-nothing-today",
+  "results": [
+    {
+      "events": [],
+      "waiverGaps": []
+    },
+    {
+      "events": [],
+      "waiverGaps": []
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "events": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000018",
+          "starts_at": [
+            "2026-12-01T19:00:00.000Z",
+            "2026-11-10T19:00:00.000Z"
+          ],
+          "ends_at": [
+            "2026-12-01T21:00:00.000Z",
+            "2026-11-10T21:00:00.000Z"
+          ],
+          "refund_cutoff_at": [
+            "2026-11-30T19:00:00.000Z",
+            "2026-11-09T19:00:00.000Z"
+          ],
+          "active": [
+            true,
+            false
+          ],
+          "cancelled_at": [
+            null,
+            "<set>"
+          ],
+          "cancel_reason": [
+            null,
+            "Storm"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "scenario": "w48-tier-price-refusals",
+  "results": [
+    {
+      "thrown": "tierId is required"
+    },
+    {
+      "thrown": "price must be a non-negative number"
+    },
+    {
+      "thrown": "price must be a non-negative number"
+    },
+    {
+      "thrown": "Tier not found: Expected one row."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

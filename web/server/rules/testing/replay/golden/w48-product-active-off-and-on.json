@@ -1,0 +1,35 @@
+{
+  "scenario": "w48-product-active-off-and-on",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-000000000007",
+      "active": false
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000007",
+      "active": true
+    },
+    {
+      "thrown": "Item not found"
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "products.update",
+      "params": {
+        "id": "prod_soap",
+        "active": false
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "products.update",
+      "params": {
+        "id": "prod_soap",
+        "active": true
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {}
+}

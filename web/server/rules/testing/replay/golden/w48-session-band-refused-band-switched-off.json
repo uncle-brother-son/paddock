@@ -1,0 +1,10 @@
+{
+  "scenario": "w48-session-band-refused-band-switched-off",
+  "results": [
+    {
+      "thrown": "That band no longer exists."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

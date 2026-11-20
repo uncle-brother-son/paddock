@@ -1,0 +1,21 @@
+{
+  "scenario": "w48-session-band-refusals",
+  "results": [
+    {
+      "thrown": "Provide either a sessionId or a date."
+    },
+    {
+      "thrown": "Provide either a sessionId or a date, not both."
+    },
+    {
+      "thrown": "That band no longer exists."
+    },
+    {
+      "confirmed": false,
+      "sessionsAffected": 1,
+      "bookingsAffected": 0
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

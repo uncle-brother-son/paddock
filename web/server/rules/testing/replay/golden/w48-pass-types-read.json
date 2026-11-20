@@ -1,0 +1,107 @@
+{
+  "scenario": "w48-pass-types-read",
+  "results": [
+    [
+      {
+        "id": "10000000-0000-4000-8000-000000000028",
+        "sanity_pass_type_id": null,
+        "name": "Core Five",
+        "thumbnail_url": null,
+        "price": "40.00",
+        "sessions_included": 5,
+        "expiry_months": 12,
+        "stripe_product_id": null,
+        "stripe_price_id": null,
+        "active": true,
+        "created_at": "<time>",
+        "updated_at": "<time>",
+        "level": "core"
+      },
+      {
+        "id": "10000000-0000-4000-8000-000000000016",
+        "sanity_pass_type_id": null,
+        "name": "Five Sessions",
+        "thumbnail_url": null,
+        "price": "50.00",
+        "sessions_included": 5,
+        "expiry_months": 12,
+        "stripe_product_id": "prod_pass",
+        "stripe_price_id": "price_pass",
+        "active": true,
+        "created_at": "<time>",
+        "updated_at": "<time>",
+        "level": "all_access"
+      }
+    ],
+    [
+      {
+        "id": "10000000-0000-4000-8000-000000000028",
+        "sanity_pass_type_id": null,
+        "name": "Core Five",
+        "thumbnail_url": null,
+        "price": "40.00",
+        "sessions_included": 5,
+        "expiry_months": 12,
+        "stripe_product_id": null,
+        "stripe_price_id": null,
+        "active": true,
+        "created_at": "<time>",
+        "updated_at": "<time>",
+        "level": "core",
+        "covers_session": true
+      },
+      {
+        "id": "10000000-0000-4000-8000-000000000016",
+        "sanity_pass_type_id": null,
+        "name": "Five Sessions",
+        "thumbnail_url": null,
+        "price": "50.00",
+        "sessions_included": 5,
+        "expiry_months": 12,
+        "stripe_product_id": "prod_pass",
+        "stripe_price_id": "price_pass",
+        "active": true,
+        "created_at": "<time>",
+        "updated_at": "<time>",
+        "level": "all_access",
+        "covers_session": true
+      }
+    ],
+    [
+      {
+        "id": "10000000-0000-4000-8000-000000000028",
+        "sanity_pass_type_id": null,
+        "name": "Core Five",
+        "thumbnail_url": null,
+        "price": "40.00",
+        "sessions_included": 5,
+        "expiry_months": 12,
+        "stripe_product_id": null,
+        "stripe_price_id": null,
+        "active": true,
+        "created_at": "<time>",
+        "updated_at": "<time>",
+        "level": "core",
+        "covers_session": false
+      },
+      {
+        "id": "10000000-0000-4000-8000-000000000016",
+        "sanity_pass_type_id": null,
+        "name": "Five Sessions",
+        "thumbnail_url": null,
+        "price": "50.00",
+        "sessions_included": 5,
+        "expiry_months": 12,
+        "stripe_product_id": "prod_pass",
+        "stripe_price_id": "price_pass",
+        "active": true,
+        "created_at": "<time>",
+        "updated_at": "<time>",
+        "level": "all_access",
+        "covers_session": true
+      }
+    ]
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}
