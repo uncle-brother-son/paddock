@@ -17,6 +17,7 @@ import {
   FAILED_BEFORE_030,
   migration030,
 } from './migration-030'
+import { FAILED_AFTER_031, FAILED_BEFORE_031, PAID } from './migration-031'
 import { startRealPostgres, type RealPostgres } from './real-postgres'
 
 // Brief W46a item 1 (W46 report "Noticed" 1 and 2): migration 030 is written but NOT applied to live, and the saved
@@ -180,8 +181,16 @@ describe('migration 030 (brief W46a item 1; W46 "Noticed" 1 and 2): a failed ren
     expect(without(applied)).toEqual(without(before))
     expect(definitions(applied)).toEqual(AFTER)
     // Before the lead applies it and the snapshot is refreshed, the saved schema has the old functions; after, these.
-    expect([BEFORE, AFTER]).toContainEqual(definitions(saved))
-    if (definitions(saved)[FAILED] !== FAILED_BEFORE_030) expect(applied).toEqual(saved)
+    // W47r-e, a named difference (found by the full run on a copy with 031 in its saved schema): or these with
+    // migration 031's lines, which go on top of 030's in membership_mark_payment_failed (031 starts from the function
+    // exactly as 030 leaves it; migration-031.test.ts holds its diff). Once 031 is in the snapshot, the rest of the
+    // catalogue is compared without the functions 031 replaces: that one and membership_mark_paid.
+    expect(FAILED_BEFORE_031).toBe(FAILED_AFTER_030)
+    const with031 = { ...AFTER, [FAILED]: FAILED_AFTER_031 }
+    expect([BEFORE, AFTER, with031]).toContainEqual(definitions(saved))
+    const leaving031Out = (from: Catalog): Catalog => ({ ...from, functions: from.functions.filter((fn) => fn.name !== FAILED && fn.name !== PAID) })
+    if (definitions(saved)[FAILED] === FAILED_AFTER_031) expect(leaving031Out(applied)).toEqual(leaving031Out(saved))
+    else if (definitions(saved)[FAILED] !== FAILED_BEFORE_030) expect(applied).toEqual(saved)
     expect(await grants()).toEqual(grantsBefore)
 
     await pg.admin.unsafe(migration030())

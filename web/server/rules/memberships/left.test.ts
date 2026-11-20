@@ -1303,7 +1303,8 @@ describe('W46: steps and checks are taken by when they were last tried, and step
       expect(idsOf(first.items)).toEqual(stepIds.slice(0, 10))
       expect(first.items.every((item) => item.outcome === 'left' && item.reason === 'step_left')).toBe(true)
       expect(first.deferred).toBe(2)
-      expect(await triedRows()).toEqual([{ steps: stepIds.slice(0, 10), checks: [] }])
+      // W47r-e, a named difference: the row also names the memberships past their last day the run read (`live`): none here.
+      expect(await triedRows()).toEqual([{ steps: stepIds.slice(0, 10), checks: [], live: [] }])
       // Five minutes on: the two never tried go first, then the eight tried longest ago (all at once: oldest first).
       nextRun()
       const second = await reconcileNow(silent)
@@ -1337,7 +1338,7 @@ describe('W46: steps and checks are taken by when they were last tried, and step
       pastTheCheck()
       expect((await reconcileNow(silent)).items).toEqual([])
       expect(await checkRows()).toEqual([])
-      expect(await triedRows()).toEqual([{ steps: [], checks: ids.slice(0, 5).map((id) => `${ID.membership}|${id}|cancel_at`) }])
+      expect(await triedRows()).toEqual([{ steps: [], checks: ids.slice(0, 5).map((id) => `${ID.membership}|${id}|cancel_at`), live: [] }])
       nextRun()
       expect((await reconcileNow(silent)).items).toEqual([])
       expect((await checkRows()).map((row) => [row['subscriptionId'], row['outcome']])).toEqual([[ids[5], 'checked'], [ids[6], 'checked']])
@@ -1422,7 +1423,7 @@ describe('W46: steps and checks are taken by when they were last tried, and step
       expect(run.items).toEqual([{ kind: 'step', id: open.id, outcome: 'finalised', detail: `cancel_at on subscription ${MO_SUBSCRIPTION}: sent` }])
       expect(stripe.calls.slice(from).map((call) => call.method)).toEqual(['subscriptions.retrieve', 'subscriptions.update'])
       expect(await checkRows()).toEqual([])
-      expect(await triedRows()).toEqual([{ steps: [open.id], checks: [] }])
+      expect(await triedRows()).toEqual([{ steps: [open.id], checks: [], live: [] }])
     })
   })
 })

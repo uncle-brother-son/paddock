@@ -1836,6 +1836,102 @@ on the 11th still lapses. This pays the subscription's open invoice there and th
     Stripe, then press Mark refunded." `unpaid` straight after the pay is said as `past_due` is.
   - **The fake:** a subscription's `ended_at` and `canceled_at` (set when it ends; `setSubscription` takes
     `endedAt`, `canceledAt`), and an invoice's `status_transitions.paid_at` (`setInvoicePaidAt`).
+- **W47r-c (W47r-b "Noticed" 1 and 2): the last two gaps.** The second is not behind the kind: the webhook's half is
+  live as soon as the Worker is.
+  - **1. A retry's own hold goes by the same time rule as the line** (`retry-payment.ts`, `paidAfterEnd`). Until
+    W47r-c a retry's record was held for a refund whenever its invoice was paid and the subscription had ended,
+    whenever the money was taken. Example: Mo's press takes £40 at 16:00:00; a manager cancels at 16:00:01; the
+    press's write reads the subscription at 16:00:02. That £40 was owed, and it was held "Refund it in Stripe". Now
+    the hold reads what the paid write already found (`detail.paid_after_end.why`): `paid_before_end` (taken before
+    Stripe ended the subscription) ends the record `paid`, at the press (answered 200: "…it paid for time the member
+    had. Nothing needs refunding.") and in reconcile (`finalised`). Taken at or after the end, in the same second, or
+    with a time Stripe didn't give: held `paid_after_end` with Mark refunded, as before.
+  - **A record once held stays held.** A record with its `paid_after_end` row is never ended `paid` by a later read
+    (`settlePaymentRetry`): only Mark refunded ends it. Example: held because the row had ended here (Stripe's
+    subscription still live); a manager then cancels the subscription in Stripe, as the line's words ask; Stripe now
+    shows the payment "before the end", but it was still taken after the membership ended here.
+  - **2. A renewal Stripe takes on a live subscription whose membership's row has ended here is listed** (Wayne's
+    rule: a cancelled member is never charged with nothing listed). The paid write gets as far as the row and
+    `membership_mark_paid` answers `ignored_cancelled`; until W47r-c the notice ended there. Now (`dispatch.ts`,
+    `recordInvoicePaid`) the invoice is read (one more read, on this answer only) and, `paid` with money taken, is
+    listed by the same line (`listPaidAfterEnd`: `membership.invoice_paid_after_end`, once for an invoice, under the
+    membership's lock, never beside a retry's own hold), with `cancelledHere` and the row's `lastDay` on the audit
+    row. Example: Mo's row is ended here with its last day on 9 January and the cancel never reaches Stripe; on 10
+    January Stripe takes £40. Listed: "£40.00 was taken by Stripe after this membership had ended here. Refund it in
+    Stripe (tell a manager) and check the subscription is cancelled in Stripe, then press Mark refunded." The close
+    is the same Mark refunded.
+  - **Not listed: paid before the row's last day.** Stripe shows no end for a live subscription, so the time is the
+    row's own: `cancel_effective_date`, read under the lock, against London's date of the invoice's `paid_at`. Paid
+    before that day was for a month the member had (a late or re-sent notice): `paid_before_last_day`, nothing
+    written. Paid on the last day itself or after it, a row with no last day (a refunded membership's row has none),
+    or no `paid_at`: listed (it can't be shown the payment came first). A retry's record whose write answers
+    `paid_before_last_day` ends `paid`, by the same rule as 1.
+  - **The press's words** for a row ended here go by what the write found (`PAYMENT_RETRY_WORDS.notUpdated
+    .ignored_cancelled`): listed ("…then press Mark refunded on the Orders page"), paid before the last day ("…it
+    paid for time the member had. Nothing needs refunding. Tell a manager to check the subscription is cancelled in
+    Stripe."), else W47r-a's.
+  - What was found is on the notice's row (`detail.paid_after_end`, with `cancelled_here: true`): `listed`,
+    `already_listed`, `retry_holds`, `paid_before_last_day`, `nothing_taken`, `no_membership`, `invoice_missing`.
+    The notice's outcome stays `processed` with `action: 'ignored_cancelled'`, as before.
+- **W47r-d (W47r-c "Noticed" 1 to 3): a renewal Stripe takes after Cancel was pressed here is listed.** Not behind
+  the kind either.
+  - **1. Migration 031** (`supabase/migrations/031_a_payment_after_the_last_day_is_not_recorded.sql`; written, NOT
+    applied: the lead applies it). Cancel pressed here writes the last day and leaves the status `active`; the row is
+    marked cancelled only when Stripe ends the subscription. So when the cancel never reaches Stripe and Stripe
+    renews, `membership_mark_paid` answered `reactivated`: marked paid, next payment a month on, nothing listed.
+    With 031 it answers `ignored_cancelled` (with `last_day`) for a row whose `cancel_effective_date` is before
+    today in London, and writes nothing; W47r-c's listing above then lists the payment. Example: Mo's last day is
+    9 January; on 10 January Stripe takes £40: nothing written, one line. A payment on 8 January, or on the 9th
+    itself, is recorded as before. **Without 031** the Worker does what it did (recorded, not listed): it works on
+    live before and after. Order: this Worker first, then 031 (the migration's header says why).
+  - **Every caller reads the answer.** `invoice.paid` (`recordInvoicePaid`): listed, as W47r-c. The read after a
+    failed-payment notice's write (L8, `dispatchStripeEvent`): when the payment went through meanwhile and the paid
+    write answers `ignored_cancelled`, it is listed there too (once for an invoice; the invoice's own notice then
+    finds it listed). "Try the payment again now", at the press and in reconcile: held `paid_after_end` for a
+    person (the press itself refuses a membership past its last day, so this is a last day that passes mid-press).
+  - **2. A notice handled after the subscription was cancelled in Stripe** (`dispatch.ts`, `paidAfterEnd`,
+    `beforeStripeEnd`). Stripe then shows the payment "before the end", which until W47r-d was never listed. Now the
+    listing is still asked, reads the row's last day under the lock, and lists when the row has one and the
+    payment was on or after it (London's date), with `pastLastDay` and `lastDay` on the audit row and words that
+    name the day. Example: last day 9 January; £40 taken on 10 January at 14:00, the notice fails; a manager
+    cancels in Stripe at 15:00; the notice at 15:05 lists it. No last day on the row, a payment before it, or no
+    membership with the subscription: `paid_before_end`, nothing written, as before. A retry's record goes by the
+    same answer (held, not ended `paid`).
+  - **3. Mark as owed** (`close-stuck.ts`, kind `paid_after_end_owed`; `closeOwed` on the line beside `close`): the
+    second close of a paid-after-end line, for a payment that was for a period the member had. Issue refunds and a
+    reason (the route checks both); the reason goes on the line's `owed` row and on the `order.close` row. No
+    Stripe client is made and nothing is sent. A listed invoice (`markInvoiceOwed`) or a retry's own record
+    (`markRetryOwed`, closing state `owed`); either way the invoice is never listed again.
+- **W47r-e (W47r-d "Noticed" 1 to 3): a cancel pressed here is never undone by Stripe, and a live subscription
+  past its last day is listed.** Not behind the kind either.
+  - **1. Stripe's update notice never clears a last day a cancel here still wants** (`dispatch.ts`,
+    `customer.subscription.updated`; `memberships/cancel-kept.ts`). Stripe sends that notice at every renewal, about
+    an hour before it takes the money. For a cancel that had not reached Stripe it showed a subscription with no
+    end, the sync function cleared the last day, and the payment was then recorded as any member's (031 goes by the
+    last day and found none). Now a notice for a subscription with NO end is written on the Worker's own
+    connection, in one transaction under the membership's row lock: when the row has a last day, has not ended, and
+    a cancel step wanting an end is still open (left, being sent, or refused and listed), nothing is written and
+    the notice is answered `ignored`, reason `cancel_wanted_here`, with the step and the day kept on its row; the
+    step settles it. Anything else calls `membership_sync_cancel_at_period_end` in that transaction, as the webhook
+    always did: an Undo pressed here (its step wants no end), a cancel that finished (`done`), one put back
+    (`undone`), one a person marked sorted, and a membership with no step. A notice that sets or moves an end is
+    written through Supabase's client as before. Example: Mo's last day is 9 January and Stripe refused the cancel;
+    on 10 January the update is handled first: last day kept; then the £40: listed once (with 031).
+  - **2. 031 gains the same lines in `membership_mark_payment_failed`**: a failed payment for a row past its last
+    day answers `ignored_cancelled` (with `last_day`) and writes nothing: not marked past due, no booking flagged.
+    Still not applied; the Worker works before and after.
+  - **3. A membership past its last day whose subscription is still live in Stripe is listed**
+    (`memberships/still-live.ts`; `reconcile.ts`, with the step checks). Each run reads Stripe for at most 5
+    memberships that have not ended here (status `active` or `past_due`), have a subscription, and whose last day
+    ended at least 20 minutes ago in London; the ones read longest ago first (`reconcile.steps_tried`, `live`).
+    Stripe shows it live: one `membership.still_live_in_stripe` row (`listed`), once for a membership and
+    subscription, under the membership's lock and only while it is still past its last day; the stuck list shows it
+    in `steps` as `what: 'still_live'`, state `refused`, with no close: "Mo Member's membership ended here on 9
+    January, but Stripe's subscription is still live and will keep charging. Tell a manager: cancel it in Stripe."
+    Not listed while Stripe's own end for it has already fallen due (Stripe is ending it). Stripe shows it ended:
+    one `ended` row, which takes the line off and stops the reads; the membership's row is left alone. The line
+    also goes as soon as the row is no longer past its last day (Stripe's notice marked it cancelled). Read only:
+    nothing is sent and the membership is never changed here.
 - **The fake** (`server/stripe/fake.ts`): renewal invoices as objects (`startRenewal` makes the draft, `renewalFails`
   finalises it with its payment declined), `invoices.retrieve` (with `payments` when asked) and `invoices.pay` (the
   card named, declines, already paid, `processing`, `requires_action`), and `stripeRetryPays` for one of Stripe's own
@@ -1847,7 +1943,20 @@ on the 11th still lapses. This pays the subscription's open invoice there and th
   in reconcile, Mark refunded before and after the refund, the sweep and the hour, the card the window showed;
   W47r-b: paid before and after the end through the notice and through the press, the notice sent again, a retry's own
   hold never listed twice, Mark refunded on a listed invoice, an end-of-term cancel, the times Stripe gives, what
-  can't be read or written), `memberships/retry-payment-postgres.test.ts` (two presses
+  can't be read or written; W47r-c: a press's money taken a second before and a second after the end, at the press
+  and in reconcile, a record once held staying held, a renewal taken for a row ended here listed once and December's
+  notice not, the last day by London's date, Mark refunded refused then allowed; W47r-d: the press and reconcile
+  reading 031's answer, a retry held by the last day after a cancel in Stripe, Mark as owed on a held retry),
+  `memberships/cancelled-here.test.ts` (W47r-d: Mo's last day 9 January and £40 taken on 10 January, before 031 and
+  with it; 8 January recorded; the edges of the day; L8; the notice after a cancel in Stripe; Mark as owed refused
+  without a reason or Issue refunds, then recorded), `testing/migration-031.test.ts` (031 on real Postgres: the
+  diff of each function, twice, its Down, its header's SQL, ten memberships for a payment and ten for a failed one),
+  `memberships/cancel-wins.test.ts` (W47r-e: the update handled first with a real Cancel Stripe refused, then the
+  payment, before 031 and with it; a step still left; Undo then the update; a cancel that landed; sorted, put back,
+  no step; the read after the write; a failed renewal past the last day; the still-live line listed once, cleared
+  by Stripe's ending, never for an ended subscription, the 20 minutes, five a run by last read, the staff app's
+  heading), `memberships/cancel-kept-postgres.test.ts` (the notice's write and Cancel at once on real Postgres,
+  each way round), `memberships/retry-payment-postgres.test.ts` (two presses
   at once on real Postgres: one record, one send, one charge; W47r-b: two listings of one invoice at once write one
-  line), `server/staff-app-retry-payment.test.ts` (the staff
+  line; W47r-c: the same for a row ended here), `server/staff-app-retry-payment.test.ts` (the staff
   app's wrappers, words and screens), `server/stripe/fake.test.ts` (what the fake holds Stripe to do).

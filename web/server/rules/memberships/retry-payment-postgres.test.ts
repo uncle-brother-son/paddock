@@ -198,4 +198,38 @@ describe('W47r-b: two listings of one invoice at once write one line', () => {
       expect(rows).toEqual([{ request_id: `evt_first_${round}`, state: 'listed' }])
     }
   })
+
+  // Brief W47r-c: the same line for a renewal taken on a live subscription whose row has ended here. The last day is
+  // read after the lock, so the second still waits on the membership's row, and then finds the first's line.
+  it("W47r-c: two listings at once of a renewal taken for a row ended here write one line, with its last day; a payment before the last day writes none", async () => {
+    for (let round = 0; round < 3; round += 1) {
+      const stripe = new FakeStripe({ idTag: `w47rc${round}` })
+      const m = await pastDueMember(stripe)
+      await third.query("UPDATE customer_memberships SET subscription_status = 'cancelled', cancel_effective_date = '2026-12-09' WHERE stripe_subscription_id = $1", [m.subscription])
+      // 10 December 2026, 14:00: the day after the row's last day.
+      const paidAt = Date.UTC(2026, 11, 10, 14) / 1000
+      const found = { subscriptionId: m.subscription, invoiceId: m.invoice, status: 'active', amountPaid: 4000, paidAt, endedAt: null, livemode: false, cancelledHere: true as const }
+      const by = (requestId: string) => ({ actor: { type: 'system' as const, id: null }, requestId })
+      // Paid on 8 December, before the last day: owed. Nothing is written, so nothing is there for the two below to find.
+      expect(await listPaidAfterEnd(third, by(`evt_before_${round}`), 'webhook')({ ...found, paidAt: Date.UTC(2026, 11, 8, 14) / 1000 })).toEqual({ listed: false, why: 'paid_before_last_day', last_day: '2026-12-09' })
+      const holding = heldOpen(first)
+      const heldWork = listPaidAfterEnd(holding.db, by(`evt_first_${round}`), 'webhook')(found)
+      const holder = await Promise.race([holding.pid, heldWork.then(() => Promise.reject(new Error('The first ended before it could be held.')))])
+      let settled = false
+      const waiting = listPaidAfterEnd(second, by(`evt_second_${round}`), 'retry')(found).finally(() => {
+        settled = true
+      })
+      const blocked = await blockedBy(holder)
+      expect(settled).toBe(false)
+      expect(await waitingOn(pg, blocked)).toEqual(['customer_memberships'])
+      holding.finish()
+      expect(await heldWork).toMatchObject({ listed: true, why: 'listed', last_day: '2026-12-09' })
+      expect(await waiting).toEqual({ listed: false, why: 'already_listed' })
+      const rows = await third.query<{ request_id: string; state: string; last_day: string | null }>(
+        `SELECT request_id, details->>'state' AS state, details->>'lastDay' AS last_day FROM audit_log WHERE action = $1 AND entity_id = $2`,
+        [INVOICE_PAID_AFTER_END_ACTION, m.invoice]
+      )
+      expect(rows).toEqual([{ request_id: `evt_first_${round}`, state: 'listed', last_day: '2026-12-09' }])
+    }
+  })
 })

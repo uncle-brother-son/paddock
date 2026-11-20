@@ -211,6 +211,34 @@ describe("the window's own words and the Orders page's line (brief W47r item 5)"
     expect(line).toContain('{closeButton(item.close, `${paymentRetryLabel(item)} (${formatCurrency(item.amount)})`, item.words)}')
     expect(banner).toContain('const closeButton = (target: StuckCloseTarget | undefined, title: string, words: string) =>\n    target ? (')
   })
+
+  it("W47r-d: a payment taken after the membership ended has a second button, Mark as owed, only where the Worker offers it; its dialog says when to use it, in the brief's words, and asks why the payment was owed", async () => {
+    const list = await frontend('utils/stuckList.ts')
+    expect(list.closeButtonLabel('paid_after_end_owed')).toBe('Mark as owed')
+    expect(list.closeDialogText('paid_after_end_owed')).toBe(
+      'Only use this if the payment was for a period the member had. If in doubt, refund it in Stripe and press Mark refunded. Marks this payment as owed, with your reason, so it is no longer listed. Nothing is refunded or changed in Stripe.'
+    )
+    // The first close is as it was.
+    expect(list.closeButtonLabel('retry_paid_after_end')).toBe('Mark refunded')
+    const banner = source('frontend/components/StuckPaymentsBanner.tsx')
+    const line = banner.slice(banner.indexOf('data?.paymentRetries?.map'), banner.indexOf('{/* Brief W40: a membership\'s cancel date'))
+    // Both buttons, Mark refunded first. `closeButton` shows nothing without a target, so an older Worker's line (no `closeOwed`) has one button.
+    expect(line).toMatch(
+      /\{closeButton\(item\.close, `\$\{paymentRetryLabel\(item\)\} \(\$\{formatCurrency\(item\.amount\)\}\)`, item\.words\)\}\s+\{closeButton\(item\.closeOwed, `\$\{paymentRetryLabel\(item\)\} \(\$\{formatCurrency\(item\.amount\)\}\)`, item\.words\)\}/
+    )
+    expect(line.match(/closeButton\(/g)).toHaveLength(2)
+    // Each button needs Issue refunds (the Worker checks it too), and the dialog needs a reason of five characters before it can be pressed.
+    expect(banner).toContain('disabled={!canIssueRefunds}')
+    expect(banner).toContain('const reasonOk = reason.trim().length >= 5')
+    expect(banner).toContain('<Button onClick={confirm} disabled={busy || !reasonOk}>')
+    expect(banner).toContain("{target.kind === 'paid_after_end_owed' ? 'Why was this payment owed?' : 'Why are you closing it?'}")
+    // The press sends the kind the Worker gave, with the reason.
+    expect(banner).toContain('kind: target.kind,')
+    expect(banner).toContain('reason: reason.trim(),')
+    const types = source('frontend/types/paddock.ts')
+    expect(types).toContain("  | 'paid_after_end_owed'")
+    expect(types).toContain('  closeOwed?: StuckCloseTarget')
+  })
 })
 
 describe('the screens, read as source (brief W47r item 5)', () => {

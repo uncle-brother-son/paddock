@@ -18,11 +18,13 @@ import { MEMBERSHIP_REFUND_WORDS } from '@/server/rules/refunds/failure-messages
 import { LEFT_BY_REFUND } from './refund-subscription'
 import { LATE_REFUND_STEP, WATCH_DAYS, WATCHES_LISTED_SQL, type WatchDetails } from '@/server/rules/refunds/refund-watch'
 import { notLeftAgain, openSteps, stepWhat, stepWords, type StepKind } from '@/server/rules/memberships/left'
+import { stillLiveListed } from '@/server/rules/memberships/still-live'
 import { LEFT_STEP_WORDS, PAYMENT_DATE_STUCK_WORDS, PAYMENT_RETRY_STUCK_WORDS, PAYMENT_RETRY_WORDS, WEBHOOK_NOTICE_WORDS } from '@/server/rules/memberships/failure-messages'
 import { WATCHED_PAYMENT_WORDS, WATCHED_PAYMENTS_LISTED_SQL, type ListedWatchedPayment } from './payment-watch'
 import { PAYMENT_DATE_CHANGES_LISTED_SQL, PAYMENT_DATE_CLOSE_REASONS, PAYMENT_DATE_REFUND_WATCH_STEP, paymentDateListedReason, type ListedPaymentDateChange } from '@/server/rules/memberships/payment-date'
 import { INVOICES_PAID_AFTER_END_LISTED_SQL, type ListedInvoicePaidAfterEnd } from '@/server/rules/memberships/paid-after-end'
-import { PAID_AFTER_END, PAID_AFTER_END_CLOSE_KIND, PAYMENT_RETRIES_LISTED_SQL, paymentRetryListedReason, type ListedPaymentRetry } from '@/server/rules/memberships/retry-payment'
+import { formatIsoDate } from '@/server/rules/memberships/payment-date-status'
+import { PAID_AFTER_END, PAID_AFTER_END_CLOSE_KIND, PAID_AFTER_END_OWED_KIND, PAYMENT_RETRIES_LISTED_SQL, paymentRetryListedReason, type ListedPaymentRetry } from '@/server/rules/memberships/retry-payment'
 
 /**
  * Words for each reason an item is listed (W12's, W14b: every reason reconcile can leave an order or flow with has
@@ -334,8 +336,13 @@ export interface StuckStep {
   membershipId: string
   subscriptionId: string
   step: StepKind
-  /** W40: what it is: a cancel date to set (with `lastDay`), a cancel date to clear, or the card to charge. */
-  what: 'cancel_date' | 'clear_cancel_date' | 'card'
+  /**
+   * W40: what it is: a cancel date to set (with `lastDay`), a cancel date to clear, or the card to charge.
+   * W47r-e: or `still_live`: not a step at all, but a membership whose last day here (`lastDay`) has passed while
+   * Stripe's subscription is still live (memberships/still-live.ts). `stepId` is then the line's own id, `step` is
+   * `cancel_at`, `state` is `refused` (it is for a person) and it has no close: it goes when Stripe ends the subscription.
+   */
+  what: 'cancel_date' | 'clear_cancel_date' | 'card' | 'still_live'
   lastDay?: string
   customerId: string | null
   customerName: string | null
@@ -370,6 +377,8 @@ export interface StuckPaymentDate {
  * W47r-b: an invoice Stripe took a payment for after its subscription had ended, found by Stripe's notice or by a
  * press that charged nothing (memberships/paid-after-end.ts), is listed here too, the same way: reason
  * `paid_after_end`, the same close. `retryId` is then the line's own id, and no card is named.
+ * W47r-c: so is a renewal Stripe took on a live subscription for a membership whose row had ended here, with words
+ * that add checking the subscription.
  */
 export interface StuckPaymentRetry {
   retryId: string
@@ -386,6 +395,8 @@ export interface StuckPaymentRetry {
   reason: string
   words: string
   close?: StuckCloseTarget
+  /** W47r-d: Mark as owed, beside Mark refunded (only a line listed as `paid_after_end` has either). */
+  closeOwed?: StuckCloseTarget
 }
 
 /** W47 (W25 review L1, L2): a payment watched after its booking change was undone by hand (payment-watch.ts). */
@@ -983,6 +994,22 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
           at: step.at,
           words: LEFT_STEP_WORDS.notLeftAgain(step.subscriptionId),
         })),
+      // W47r-e (W47r-d "Noticed" 3): memberships past their last day here whose subscription the automatic check found
+      // still live in Stripe. For a person (a manager cancels it in Stripe), with no close: the line goes when Stripe
+      // has ended the subscription.
+      ...(await stillLiveListed(db)).map((line) => ({
+        stepId: line.listingId,
+        membershipId: line.membershipId,
+        subscriptionId: line.subscriptionId,
+        step: 'cancel_at' as const,
+        what: 'still_live' as const,
+        lastDay: line.lastDay,
+        customerId: line.customerId,
+        customerName: line.customerName,
+        state: 'refused' as const,
+        at: line.at,
+        words: LEFT_STEP_WORDS.stillLive(line.customerName, line.lastDay),
+      })),
     ],
     watchedPayments: watchedPayments.map((row): StuckWatchedPayment => {
       const expired = row.expired !== null
@@ -1026,6 +1053,8 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
             reason,
             words: PAYMENT_RETRY_WORDS.paidAfterEnd(amount, row.card_last4, row.cancelled_here === true),
             close: { kind: PAID_AFTER_END_CLOSE_KIND, orderId: row.id },
+            // W47r-d: and Mark as owed, for a payment that was for a period the member had.
+            closeOwed: { kind: PAID_AFTER_END_OWED_KIND, orderId: row.id },
           }
         }
         return {
@@ -1058,8 +1087,11 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
           createdAt,
           ageMinutes: ageMinutes(createdAt),
           reason: PAID_AFTER_END,
-          words: PAYMENT_RETRY_WORDS.invoicePaidAfterEnd(amount),
+          // W47r-c: a row ended here with Stripe's subscription still live says so, and adds checking it.
+          // W47r-d: one listed by the row's last day after Stripe had ended the subscription names that day.
+          words: row.past_last_day ? PAYMENT_RETRY_WORDS.invoicePaidAfterLastDay(amount, formatIsoDate(row.past_last_day)) : PAYMENT_RETRY_WORDS.invoicePaidAfterEnd(amount, row.cancelled_here === true),
           close: { kind: PAID_AFTER_END_CLOSE_KIND, orderId: row.id },
+          closeOwed: { kind: PAID_AFTER_END_OWED_KIND, orderId: row.id },
         }
       }),
     ],

@@ -913,7 +913,7 @@ type StripeSeen =
  * its `cancel_at`; else, when it ends with its period, the period's end; else null. Undefined when it ends with a
  * period whose end Stripe didn't give: nothing to set the membership's row against.
  */
-function stripeEnds(subscription: Stripe.Subscription): number | null | undefined {
+export function stripeEnds(subscription: Stripe.Subscription): number | null | undefined {
   if (typeof subscription.cancel_at === 'number') return subscription.cancel_at
   if (subscription.cancel_at_period_end !== true) return null
   const periodEnd = subscription.items?.data?.[0]?.current_period_end

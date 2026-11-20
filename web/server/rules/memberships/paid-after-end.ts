@@ -22,16 +22,34 @@
 //
 // No new table (lead call L6, as the retry's record): the line is its audit rows. No membership here has the
 // subscription: nothing is written (there is nobody to list it against), and the answer says so.
+//
+// W47r-c (W47r-b "Noticed" 2; Wayne's rule: a cancelled member is never charged with nothing listed): the same line
+// for a renewal Stripe takes on a subscription that is still live there, when the membership's row has ended here
+// (the paid write answered `ignored_cancelled`: a cancel that never reached Stripe). Stripe shows no end for it, so
+// the rule's time is the row's own: its last day (`cancel_effective_date`), read here under the lock. Paid before
+// that day, by London's date, was for a month the member had (a late or re-sent notice): owed, not listed
+// (`paid_before_last_day`). Paid on the last day or after it, or a row with no last day, or no time for the payment:
+// listed, with `cancelledHere` on the row, and words that add checking the subscription is cancelled in Stripe.
+//
+// W47r-d (W47r-c "Noticed" 2 and 3; W47r-b "Noticed" 4).
+// - A payment taken before the subscription ended in Stripe was never listed. But that end can be a manager
+//   cancelling in Stripe after a renewal was taken for a membership whose last day here had already passed. So for
+//   such a payment (`beforeStripeEnd`) the row's last day is read here too, and it is listed when the row has one
+//   and the payment was on or after it (London's date), with `pastLastDay` on the row. With no last day on the row,
+//   or a payment before it, the answer is `paid_before_end` as it always was, and nothing is written.
+// - A line whose money was in fact owed could only be cleared by refunding it. Mark as owed (markInvoiceOwed) ends it
+//   with an `owed` row carrying the person's reason: Issue refunds and a reason (the close route checks both), no
+//   Stripe call, nothing sent. An invoice with any row is never listed again, so it stays cleared.
 import 'server-only'
 import type { ListPaidAfterEnd, PaidAfterEndFound, PaidAfterEndListed } from '@/app/api/stripe/webhook/dispatch'
 import { audit, type AuditEntry } from '@/server/audit'
 import type { Db, Queryable } from '@/server/db'
 import type { StripeClient } from '@/server/stripe/client'
 import { sendOptions, type StripeTiming } from '@/server/stripe/deadline'
-import { PAYMENT_RETRY_CLOSE_WORDS } from './failure-messages'
+import { PAYMENT_RETRY_CLOSE_WORDS, PAYMENT_RETRY_OWED_WORDS } from './failure-messages'
 import { PAYMENT_RETRY_ACTION, PAYMENT_RETRY_ENTITY } from './retry-record'
 
-/** Every row about a listed invoice: `listed`, then `refunded`. Written against the invoice's id, so an invoice has one line. */
+/** Every row about a listed invoice: `listed`, then `refunded` or (W47r-d) `owed`. Written against the invoice's id, so an invoice has one line. */
 export const INVOICE_PAID_AFTER_END_ACTION = 'membership.invoice_paid_after_end'
 export const INVOICE_PAID_AFTER_END_ENTITY = 'membership_invoice'
 
@@ -44,7 +62,21 @@ export interface PaidAfterEndBy {
 const MEMBERSHIP_OF_SUBSCRIPTION_SQL = 'SELECT id, customer_id FROM customer_memberships WHERE stripe_subscription_id = $1::text'
 const LOCK_MEMBERSHIP_SQL = 'SELECT id FROM customer_memberships WHERE id = $1::uuid FOR NO KEY UPDATE'
 
-/** Whether an invoice (`$1`) has a row already: listed, or listed and since marked refunded. Either way it is never listed again. */
+/**
+ * W47r-c: the last day of a membership (`$2`) and whether a payment taken at `$1` (Stripe's seconds) was before it, by
+ * London's date. `paid_before` is null, not true, when the row has no last day or the payment no time.
+ */
+const LAST_DAY_SQL = `
+SELECT cancel_effective_date::text AS last_day,
+       (to_timestamp($1::double precision) AT TIME ZONE 'Europe/London')::date < cancel_effective_date AS paid_before
+FROM customer_memberships WHERE id = $2::uuid`
+
+/** W47r-d: the rows that end a line. */
+export const INVOICE_LINE_CLOSING_STATES = ['refunded', 'owed'] as const
+export type InvoiceLineClosingState = (typeof INVOICE_LINE_CLOSING_STATES)[number]
+const INVOICE_LINE_CLOSING_SQL = INVOICE_LINE_CLOSING_STATES.map((state) => `'${state}'`).join(', ')
+
+/** Whether an invoice (`$1`) has a row already: listed, or listed and since marked refunded or (W47r-d) as owed. Either way it is never listed again. */
 const INVOICE_ROW_SQL = `
 SELECT 1 FROM audit_log
 WHERE action = '${INVOICE_PAID_AFTER_END_ACTION}' AND entity_type = '${INVOICE_PAID_AFTER_END_ENTITY}' AND entity_id = $1::text
@@ -78,9 +110,21 @@ export function listPaidAfterEnd(db: Db, by: PaidAfterEndBy, how: 'webhook' | 'r
   return (found: PaidAfterEndFound): Promise<PaidAfterEndListed> =>
     db.transaction(async (tx) => {
       const membership = (await tx.query<{ id: string; customer_id: string }>(MEMBERSHIP_OF_SUBSCRIPTION_SQL, [found.subscriptionId]))[0]
-      if (!membership) return { listed: false, why: 'no_membership' }
+      // W47r-d: with no membership there is no last day to set a payment taken before Stripe's end against: owed, as before.
+      if (!membership) return { listed: false, why: found.beforeStripeEnd && !found.cancelledHere ? 'paid_before_end' : 'no_membership' }
       await tx.query(LOCK_MEMBERSHIP_SQL, [membership.id])
       // Read in their own statements, after the lock (server/rules/README.md, "Locks before reads").
+      // W47r-c: a row ended here with Stripe's subscription still live. Asked first, so a retry's record that holds
+      // the invoice is told the payment was owed too (retry-payment.ts, paidAfterEnd).
+      let lastDay: string | null = null
+      if (found.cancelledHere || found.beforeStripeEnd) {
+        const row = (await tx.query<{ last_day: string | null; paid_before: boolean | null }>(LAST_DAY_SQL, [found.paidAt, membership.id]))[0]
+        lastDay = row?.last_day ?? null
+        if (found.cancelledHere && row?.paid_before === true) return { listed: false, why: 'paid_before_last_day', last_day: lastDay }
+        // W47r-d: paid before Stripe ended the subscription. Owed, as before, unless the row has a last day and the
+        // payment was on or after it (`paid_before` is null with no last day: it can't be shown the payment came after).
+        if (!found.cancelledHere && row?.paid_before !== false) return { listed: false, why: 'paid_before_end', ...(lastDay ? { last_day: lastDay } : {}) }
+      }
       if ((await tx.query(INVOICE_ROW_SQL, [found.invoiceId])).length > 0) return { listed: false, why: 'already_listed' }
       if ((await tx.query(RETRY_HOLDS_SQL, [membership.id, found.invoiceId])).length > 0) return { listed: false, why: 'retry_holds' }
       const listingId = crypto.randomUUID()
@@ -104,22 +148,26 @@ export function listPaidAfterEnd(db: Db, by: PaidAfterEndBy, how: 'webhook' | 'r
           paidAt: isoOfSeconds(found.paidAt),
           endedAt: isoOfSeconds(found.endedAt),
           livemode: found.livemode,
+          ...(found.cancelledHere ? { cancelledHere: true, lastDay } : found.beforeStripeEnd ? { pastLastDay: true, lastDay } : {}),
         },
       })
-      return { listed: true, why: 'listed', listing: listingId }
+      return { listed: true, why: 'listed', listing: listingId, ...(found.cancelledHere || found.beforeStripeEnd ? { last_day: lastDay } : {}) }
     })
 }
 
 // --- The stuck list
 
 /**
- * The invoices listed and not yet marked refunded, oldest first, in the columns the list reads a retry by
- * (retry-payment.ts, ListedPaymentRetry): `id` is the line's own id, and no card is known (Stripe took the payment).
+ * The invoices listed and not yet marked refunded (or, W47r-d, as owed), oldest first, in the columns the list reads a
+ * retry by (retry-payment.ts, ListedPaymentRetry): `id` is the line's own id, and no card is known (Stripe took the
+ * payment). W47r-d: `last_day`, for a line listed by the row's last day after Stripe had ended the subscription.
  */
 export const INVOICES_PAID_AFTER_END_LISTED_SQL = `
 SELECT l.details->>'listingId' AS id, l.details->>'membershipId' AS membership_id, l.entity_id AS invoice_id,
        (l.details->>'amount')::numeric::text AS amount, l.at AS created_at,
-       c.id AS customer_id, c.first_name, c.last_name
+       c.id AS customer_id, c.first_name, c.last_name,
+       COALESCE(l.details->>'cancelledHere', '') = 'true' AS cancelled_here,
+       CASE WHEN COALESCE(l.details->>'pastLastDay', '') = 'true' THEN l.details->>'lastDay' END AS past_last_day
 FROM audit_log l
 JOIN customer_memberships cm ON cm.id::text = l.details->>'membershipId'
 JOIN customers c ON c.id = cm.customer_id
@@ -127,7 +175,7 @@ WHERE l.action = '${INVOICE_PAID_AFTER_END_ACTION}' AND l.entity_type = '${INVOI
   AND NOT EXISTS (
     SELECT 1 FROM audit_log e
     WHERE e.action = '${INVOICE_PAID_AFTER_END_ACTION}' AND e.entity_type = '${INVOICE_PAID_AFTER_END_ENTITY}' AND e.entity_id = l.entity_id
-      AND e.details->>'state' = 'refunded'
+      AND e.details->>'state' IN (${INVOICE_LINE_CLOSING_SQL})
   )
 ORDER BY l.at, l.entity_id`
 
@@ -140,6 +188,10 @@ export interface ListedInvoicePaidAfterEnd {
   customer_id: string
   first_name: string
   last_name: string
+  /** W47r-c: the membership's row had ended here while Stripe's subscription was still live. */
+  cancelled_here: boolean
+  /** W47r-d: the row's last day, when the line was listed by it (paid before Stripe's end, on or after that day); else null. */
+  past_last_day: string | null
 }
 
 // --- What Stripe shows refunded (W47r-a's read, moved here so a retry's close and a listed invoice's are one read)
@@ -194,14 +246,13 @@ export async function readRefunds(stripe: StripeClient, invoiceId: string, timin
 
 // --- Mark refunded, for a listed invoice
 
-/** One line by its own id (`$1`): its `listed` row, and whether the invoice has since been marked refunded. */
+/** One line by its own id (`$1`): its `listed` row, and the state of the row that has since ended it (`refunded`, or W47r-d's `owed`), if any. */
 const LISTING_SQL = `
 SELECT l.entity_id AS invoice_id, l.details->>'membershipId' AS membership_id, (l.details->>'amount')::numeric::text AS amount,
-       EXISTS (
-         SELECT 1 FROM audit_log e
-         WHERE e.action = '${INVOICE_PAID_AFTER_END_ACTION}' AND e.entity_type = '${INVOICE_PAID_AFTER_END_ENTITY}' AND e.entity_id = l.entity_id
-           AND e.details->>'state' = 'refunded'
-       ) AS refunded
+       (SELECT e.details->>'state' FROM audit_log e
+        WHERE e.action = '${INVOICE_PAID_AFTER_END_ACTION}' AND e.entity_type = '${INVOICE_PAID_AFTER_END_ENTITY}' AND e.entity_id = l.entity_id
+          AND e.details->>'state' IN (${INVOICE_LINE_CLOSING_SQL})
+        ORDER BY e.at LIMIT 1) AS closed_as
 FROM audit_log l
 WHERE l.action = '${INVOICE_PAID_AFTER_END_ACTION}' AND l.entity_type = '${INVOICE_PAID_AFTER_END_ENTITY}' AND l.details->>'state' = 'listed'
   AND l.details->>'listingId' = $1::text
@@ -214,13 +265,18 @@ export interface InvoicePaidAfterEnd {
   membershipId: string
   /** Pounds taken for the invoice when it was listed. */
   amount: number
+  /** It has been marked refunded (and so is no longer listed). */
   refunded: boolean
+  /** W47r-d: the state of the row that ended it: `refunded`, `owed`, or null while it is listed. */
+  closedAs: InvoiceLineClosingState | null
 }
 
 /** One listed invoice by its line's id: null when there is no such line (the id is a retry's, or nothing's). */
 export async function readInvoicePaidAfterEnd(db: Queryable, listingId: string): Promise<InvoicePaidAfterEnd | null> {
-  const row = (await db.query<{ invoice_id: string; membership_id: string; amount: string; refunded: boolean }>(LISTING_SQL, [listingId]))[0]
-  return row ? { id: listingId, invoiceId: row.invoice_id, membershipId: row.membership_id, amount: Number.parseFloat(row.amount), refunded: row.refunded === true } : null
+  const row = (await db.query<{ invoice_id: string; membership_id: string; amount: string; closed_as: string | null }>(LISTING_SQL, [listingId]))[0]
+  if (!row) return null
+  const closedAs = (INVOICE_LINE_CLOSING_STATES as readonly string[]).includes(row.closed_as ?? '') ? (row.closed_as as InvoiceLineClosingState) : null
+  return { id: listingId, invoiceId: row.invoice_id, membershipId: row.membership_id, amount: Number.parseFloat(row.amount), refunded: closedAs === 'refunded', closedAs }
 }
 
 export type InvoiceRefundedAnswer = { closed: true; alreadyClosed?: boolean; message: string } | { closed: false; reason: string; message: string }
@@ -244,6 +300,8 @@ export async function markInvoiceRefunded(
   const words = PAYMENT_RETRY_CLOSE_WORDS
   const refused = (reason: string, message: string): InvoiceRefundedAnswer => ({ closed: false, reason, message })
   if (listing.refunded) return { closed: true, alreadyClosed: true, message: words.already }
+  // W47r-d: marked as owed since the list was read. Nothing to check in Stripe: it is no longer listed.
+  if (listing.closedAs !== null) return refused('not_listed', words.notListed)
   const seen = await readRefunds(stripe(), listing.invoiceId, timing)
   if (!seen) return refused('refunds_not_read', words.notRead)
   if (seen.payments.length === 0) return refused('payment_not_found', words.noPayment)
@@ -255,6 +313,7 @@ export async function markInvoiceRefunded(
     const now = await readInvoicePaidAfterEnd(tx, listing.id)
     if (!now) return refused('not_listed', words.notListed)
     if (now.refunded) return { closed: true, alreadyClosed: true, message: words.already }
+    if (now.closedAs !== null) return refused('not_listed', words.notListed)
     await audit.recordAll(tx, [
       {
         actorType: by.actor.type,
@@ -268,5 +327,43 @@ export async function markInvoiceRefunded(
       closeEntry(listing, found),
     ])
     return { closed: true, message: words.refunded(seen.taken / 100) }
+  })
+}
+
+// --- Mark as owed, for a listed invoice (W47r-d)
+
+export type InvoiceOwedAnswer = { closed: true; alreadyClosed?: boolean; message: string } | { closed: false; reason: string; message: string }
+
+/**
+ * W47r-d (W47r-c "Noticed" 3; W47r-b "Noticed" 4): Mark as owed for a listed invoice (Issue refunds and a reason; the
+ * close route checks both). For a line whose money was in fact owed: a payment for a period the member had, listed
+ * because the row had no last day to set it against, or because it was taken on the last day itself. Stripe is never
+ * called and nothing is sent: under the membership's lock, and only while the line is still open, its `owed` row with
+ * the person's reason, and the close's own row (`closeEntry`), which carries the reason too.
+ */
+export async function markInvoiceOwed(db: Db, listing: InvoicePaidAfterEnd, why: string, by: PaidAfterEndBy, closeEntry: (listing: InvoicePaidAfterEnd, found: Record<string, unknown>) => AuditEntry): Promise<InvoiceOwedAnswer> {
+  const words = PAYMENT_RETRY_OWED_WORDS
+  const refused = (reason: string, message: string): InvoiceOwedAnswer => ({ closed: false, reason, message })
+  return db.transaction(async (tx) => {
+    await tx.query(LOCK_MEMBERSHIP_SQL, [listing.membershipId])
+    // Read under the lock: two presses queue, and the second finds the first's row.
+    const now = await readInvoicePaidAfterEnd(tx, listing.id)
+    if (!now) return refused('not_listed', words.notListed)
+    if (now.closedAs === 'owed') return { closed: true, alreadyClosed: true, message: words.already }
+    if (now.closedAs !== null) return refused('not_listed', words.notListed)
+    const found = { invoiceId: listing.invoiceId, amount: listing.amount }
+    await audit.recordAll(tx, [
+      {
+        actorType: by.actor.type,
+        actorId: by.actor.id,
+        action: INVOICE_PAID_AFTER_END_ACTION,
+        entityType: INVOICE_PAID_AFTER_END_ENTITY,
+        entityId: listing.invoiceId,
+        requestId: by.requestId,
+        details: { listingId: listing.id, state: 'owed', how: 'close', why, membershipId: listing.membershipId, ...found },
+      },
+      closeEntry(listing, found),
+    ])
+    return { closed: true, message: words.owed(listing.amount) }
   })
 }

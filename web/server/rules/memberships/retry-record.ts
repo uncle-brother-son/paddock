@@ -12,8 +12,10 @@ export const PAYMENT_RETRY_ENTITY = 'membership'
  * The rows that end a retry. `started` opens it; `held` is a note on one still open.
  * `refunded` (W47r-a, W47r review S1): the payment was taken after the subscription had ended, a person refunded it in
  * Stripe, and Mark refunded found it refunded there in full.
+ * `owed` (W47r-d): the payment was held as taken after the end, and a person with Issue refunds recorded, with a
+ * reason, that it was for a period the member had (Mark as owed). Nothing was refunded.
  */
-export const PAYMENT_RETRY_CLOSING_STATES = ['paid', 'declined', 'not_taken', 'not_sent', 'refunded'] as const
+export const PAYMENT_RETRY_CLOSING_STATES = ['paid', 'declined', 'not_taken', 'not_sent', 'refunded', 'owed'] as const
 export type PaymentRetryClosingState = (typeof PAYMENT_RETRY_CLOSING_STATES)[number]
 export const PAYMENT_RETRY_CLOSING_SQL = PAYMENT_RETRY_CLOSING_STATES.map((state) => `'${state}'`).join(', ')
 

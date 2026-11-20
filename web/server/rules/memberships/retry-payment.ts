@@ -62,6 +62,13 @@
 //   is unchanged). A row cancelled here while Stripe's subscription is still live says so on its `held` row
 //   (`cancelledHere`), and its words add checking the subscription in Stripe.
 //
+// W47r-c (W47r-b "Noticed" 1 and 2): S1's hold goes by the same time rule as the line. The paid write says when the
+//   payment was taken against the end (`detail.paid_after_end.why`): `paid_before_end` (before Stripe ended the
+//   subscription) or `paid_before_last_day` (before the last day of a row ended here) is money that was owed, so the
+//   record ends `paid` and nothing is listed. Paid at or after the end, or a time missing, is held as before. A
+//   record once held for a person stays held whatever a later read shows: only Mark refunded ends it. And a renewal
+//   Stripe takes for a row ended here is listed by the paid write itself (paid-after-end.ts), with no retry at all.
+//
 // No new table (lead call L6, as left.ts): the record is its `membership.payment_retried` audit rows, each naming the
 // retry (`retryId`). `started` opens it; `held` is a note on an open one; `paid`, `declined`, `not_taken`, `not_sent`
 // and `refunded` close it. A row is written under the membership's lock, and a closing row only while none is there.
@@ -81,7 +88,7 @@ import type { StripeClient } from '@/server/stripe/client'
 import { NoTimeLeft, sendOptions, stripeTiming, type StripeTiming } from '@/server/stripe/deadline'
 import { readStripeFailure } from '@/server/stripe/outcome'
 import { PROCESSING_MINUTES } from '@/server/rules/orders/pending-order'
-import { PAYMENT_RETRY_CLOSE_WORDS, PAYMENT_RETRY_REFUSALS, PAYMENT_RETRY_WORDS } from './failure-messages'
+import { PAYMENT_RETRY_CLOSE_WORDS, PAYMENT_RETRY_OWED_WORDS, PAYMENT_RETRY_REFUSALS, PAYMENT_RETRY_WORDS } from './failure-messages'
 import { openSteps } from './left'
 import { listPaidAfterEnd, readRefunds } from './paid-after-end'
 import { londonDateOfSeconds, NOTHING_TAKEN, paymentStillGoingReason } from './payment-date'
@@ -107,6 +114,11 @@ const CLOSING_SQL = PAYMENT_RETRY_CLOSING_SQL
 export const PAID_AFTER_END = 'paid_after_end'
 /** What Mark refunded's close is called on the stuck list and at the close route. `orderId` there is the retry's id. */
 export const PAID_AFTER_END_CLOSE_KIND = 'retry_paid_after_end'
+/**
+ * W47r-d: what Mark as owed's close is called on the stuck list (`closeOwed`) and at the close route: the second close
+ * of the same line, for a payment that was for a period the member had. `orderId` is the retry's id, or the line's.
+ */
+export const PAID_AFTER_END_OWED_KIND = 'paid_after_end_owed'
 
 /** A subscription whose newest invoice is still owed: what Stripe must show for a retry to be sent. */
 const BEHIND: readonly Stripe.Subscription.Status[] = ['past_due', 'unpaid']
@@ -602,7 +614,7 @@ function written(result: DispatchResult): { updated: boolean; restored: number; 
   if (reason === 'no_period_end') return { updated, restored: 0, why: words.no_period_end }
   if (reason === 'subscription_missing') return { updated, restored: 0, why: words.subscription_missing }
   if (detail['found'] === false) return { updated, restored: 0, why: words.not_found }
-  if (detail['action'] === 'ignored_cancelled') return { updated, restored: 0, why: words.ignored_cancelled }
+  if (detail['action'] === 'ignored_cancelled') return { updated, restored: 0, why: words.ignored_cancelled(listingOf(detail)) }
   return { updated, restored: 0, why: words.other }
 }
 
@@ -616,11 +628,18 @@ function written(result: DispatchResult): { updated: boolean; restored: number; 
  * W47r-b (W47r-a "Noticed" 2): `cancelledHere` is the second of those, and only it. The write got as far as the
  * membership's row, so Stripe showed the subscription paid up a moment before: it is still live there and would bill
  * again next month, and the line's words add checking it.
+ * W47r-c (W47r-b "Noticed" 1): the hold goes by the time rule the line goes by, which the write has already asked
+ * (`detail.paid_after_end.why`). Taken before Stripe ended the subscription (`paid_before_end`), or before the last
+ * day of a row ended here (`paid_before_last_day`): the money was owed, so null, and the record ends `paid`. Taken at
+ * or after the end, or with a time missing (the write then answers anything else): held, as before.
  */
 export function paidAfterEnd(result: DispatchResult): { found: string; cancelledHere: boolean } | null {
   const detail = result.detail ?? {}
-  if (detail['reason'] === 'subscription_not_paid_up' && (ENDED_IN_STRIPE as readonly string[]).includes(String(detail['status']))) return { found: `Stripe shows the subscription as ${String(detail['status'])}`, cancelledHere: false }
-  if (detail['action'] === 'ignored_cancelled') return { found: 'the membership here has ended', cancelledHere: true }
+  const timeRule = listingOf(detail)
+  if (detail['reason'] === 'subscription_not_paid_up' && (ENDED_IN_STRIPE as readonly string[]).includes(String(detail['status']))) {
+    return timeRule === 'paid_before_end' ? null : { found: `Stripe shows the subscription as ${String(detail['status'])}`, cancelledHere: false }
+  }
+  if (detail['action'] === 'ignored_cancelled') return timeRule === 'paid_before_last_day' ? null : { found: 'the membership here has ended', cancelledHere: true }
   if (detail['found'] === false) return { found: 'no membership here has the subscription any more', cancelledHere: false }
   return null
 }
@@ -671,6 +690,8 @@ const heldFor = (state: InvoiceState & { kind: 'moving' }): Outcome =>
  * The invoice is paid: the write, then the record's `paid` row. A write that fails holds the record for reconcile.
  * W47r-a (S1): a write that finds the membership ended holds it too, for a person: the record is never ended `paid`
  * for money that paid for nothing.
+ * W47r-c: unless the write found the money was taken before the end (`paidAfterEnd` answers null): it was owed, and
+ * the record ends `paid` with the write's answer on its row.
  */
 async function settlePaid(db: Db, stripe: StripeClient, retry: PaymentRetry, by: RetryBy, timing: StripeTiming | undefined, how: 'press' | 'reconcile', alreadyPaid: boolean): Promise<Outcome> {
   const s = retry.started
@@ -918,6 +939,9 @@ export type RetrySettled =
  * than the window (`windowMinutes`; a run has it early because the press wrote its `held` row) is never ended as not
  * taken: a send that got no clear answer may still land, and "nothing taken" a minute after it proves nothing. It is
  * left (`waiting`) until it is past the window, as every record was before a run could have it early.
+ *
+ * W47r-c: paid, and the write found the money was taken before the end: the record ends `paid` (it was owed). Not a
+ * record that already has its `paid_after_end` row: that one stays for a person.
  */
 export async function settlePaymentRetry(db: Db, stripe: StripeClient, retryId: string, by: RetryBy, timing: StripeTiming | undefined, windowMinutes: number = PROCESSING_MINUTES): Promise<RetrySettled> {
   const retry = await readPaymentRetry(db, retryId, windowMinutes)
@@ -938,6 +962,10 @@ export async function settlePaymentRetry(db: Db, stripe: StripeClient, retryId: 
       return { kind: 'left', reason: 'paid_not_recorded', detail: `invoice ${s.invoiceId} is paid; the membership's write failed: ${explain(err)}` }
     }
     const after = paidAfterEnd(result)
+    // W47r-c: a record already held for a person stays held, whatever this read shows. Held because the row had ended
+    // here, its subscription is then cancelled in Stripe (as the line's words ask), and the payment now reads as taken
+    // "before the end" in Stripe: it was still taken after the membership ended here. Only Mark refunded ends it.
+    if (!after && retry.paidAfterEnd) return { kind: 'left', reason: PAID_AFTER_END, detail: `invoice ${s.invoiceId} is paid; held for a refund since an earlier look, and only Mark refunded ends it` }
     if (after) {
       // S1: open, and held for a person. The note goes on the record once; if it can't be written the next run writes it.
       const detail = `invoice ${s.invoiceId} is paid; ${after.found}`
@@ -1009,5 +1037,39 @@ export async function markRetryRefunded(
     if (!now || now.closed) return now?.closedAs === 'refunded' ? { closed: true, alreadyClosed: true, message: words.already } : refused('not_listed', words.notListed)
     await audit.recordAll(tx, [entry(retry, by, 'refunded', { how: 'close', why, ...found }), closeEntry(retry, found)])
     return { closed: true, message: words.refunded(seen.taken / 100) }
+  })
+}
+
+// --- Mark as owed (W47r-d): the second close of a retry held as paid after the end
+
+export type RetryOwedAnswer = { closed: true; alreadyClosed?: boolean; message: string } | { closed: false; reason: string; message: string }
+
+/**
+ * W47r-d (W47r-c "Noticed" 3; W47r-b "Noticed" 4): Mark as owed (Issue refunds and a reason; the close route checks
+ * both): ends a retry held as paid after the end when the payment was in fact for a period the member had. Stripe is
+ * never called and nothing is sent. Under the membership's lock and only while the record is still open and held as
+ * `paid_after_end`: its `owed` row, with the person's reason, and the close's own row (`closeEntry`). A record ended
+ * `owed` still holds its invoice (paid-after-end.ts, RETRY_HOLDS_SQL), so the invoice is never listed again by a
+ * notice sent later.
+ */
+export async function markRetryOwed(db: Db, retryId: string, why: string, by: RetryBy, closeEntry: (retry: PaymentRetry, found: Record<string, unknown>) => AuditEntry): Promise<RetryOwedAnswer> {
+  const words = PAYMENT_RETRY_OWED_WORDS
+  const refused = (reason: string, message: string): RetryOwedAnswer => ({ closed: false, reason, message })
+  const ended = (retry: ReadPaymentRetry): RetryOwedAnswer => (retry.closedAs === 'owed' ? { closed: true, alreadyClosed: true, message: words.already } : refused('not_listed', words.notListed))
+  const retry = await readPaymentRetry(db, retryId)
+  if (!retry) return refused('not_listed', words.notListed)
+  if (retry.closed) return ended(retry)
+  if (!retry.paidAfterEnd) return refused('not_paid_after_end', words.notForAPerson)
+  const s = retry.started
+  const found = { invoiceId: s.invoiceId, amount: s.amount }
+  return db.transaction(async (tx) => {
+    await tx.query(LOCK_MEMBERSHIP_SQL, [retry.membershipId])
+    // Read again under the lock: two presses queue, and the second finds the first's row.
+    const now = await readPaymentRetry(tx, retryId)
+    if (!now) return refused('not_listed', words.notListed)
+    if (now.closed) return ended(now)
+    if (!now.paidAfterEnd) return refused('not_paid_after_end', words.notForAPerson)
+    await audit.recordAll(tx, [entry(retry, by, 'owed', { how: 'close', why, ...found }), closeEntry(retry, found)])
+    return { closed: true, message: words.owed(s.amount) }
   })
 }

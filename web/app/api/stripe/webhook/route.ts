@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import Stripe from 'stripe'
 import { closeRequestDb, openRequestDb } from '@/server/db/connection'
+import { syncCancelDateUnlessWanted } from '@/server/rules/memberships/cancel-kept'
 import { listPaidAfterEnd } from '@/server/rules/memberships/paid-after-end'
 import { createStripeClient, READ_STRIPE_LIMITS } from '@/server/stripe/client'
-import type { ListPaidAfterEnd } from './dispatch'
+import type { ListPaidAfterEnd, SyncCancelDate } from './dispatch'
 import { processWebhookEvent, type WebhookEventsClient } from './idempotency'
 
 function getStripe() {
@@ -69,6 +70,19 @@ export async function POST(request: NextRequest) {
       await closeRequestDb(db)
     }
   }
-  const result = await processWebhookEvent(event, supabase as unknown as WebhookEventsClient, createStripeClient(process.env.STRIPE_SECRET_KEY, READ_STRIPE_LIMITS), list)
+  // W47r-e (W47r-d "Noticed" 1): a `customer.subscription.updated` for a subscription Stripe shows with no end is
+  // written on the Worker's own connection too, in one transaction under the membership's lock: the sync function is
+  // called there only when no cancel pressed here still wants the last day (cancel-kept.ts). Opened only for such a
+  // notice; a notice that sets or moves an end is written through Supabase's client as before. A failure to open it
+  // or to write throws, the notice is an error, and Stripe sends it again.
+  const syncCancelDate: SyncCancelDate = async (params) => {
+    const db = openRequestDb()
+    try {
+      return await syncCancelDateUnlessWanted(db, params)
+    } finally {
+      await closeRequestDb(db)
+    }
+  }
+  const result = await processWebhookEvent(event, supabase as unknown as WebhookEventsClient, createStripeClient(process.env.STRIPE_SECRET_KEY, READ_STRIPE_LIMITS), list, syncCancelDate)
   return NextResponse.json(result.body, { status: result.status })
 }

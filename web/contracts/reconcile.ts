@@ -135,9 +135,26 @@ export type ReconcileRunOutput = z.infer<typeof reconcileRunOutputSchema>
  *   refused unless Stripe shows the payment refunded in full. Nothing is sent. `orderId` is the retry's id.
  *   W47r-b: also the close of an invoice Stripe took a payment for after its subscription had ended, found by
  *   Stripe's notice or by a press that charged nothing (listed in `paymentRetries` the same way). `orderId` is then
- *   that line's `retryId`.
+ *   that line's `retryId`. W47r-c: and of a renewal Stripe took on a subscription still live there for a membership
+ *   that had ended here (the same line).
+ * - `paid_after_end_owed` (W47r-d): the second close of that same line (`closeOwed` on it), Mark as owed: the payment
+ *   was for a period the member had, so there is nothing to refund. Recorded with the reason given. Stripe is not
+ *   called and nothing is sent. `orderId` is the line's `retryId`.
  */
-export const stuckCloseKindSchema = z.enum(['held_order', 'changed_elsewhere', 'subscription_left', 'late_refund', 'held_flow', 'held_claim', 'refund_watch', 'left_step', 'held_payment_date', 'payment_watch', 'retry_paid_after_end'])
+export const stuckCloseKindSchema = z.enum([
+  'held_order',
+  'changed_elsewhere',
+  'subscription_left',
+  'late_refund',
+  'held_flow',
+  'held_claim',
+  'refund_watch',
+  'left_step',
+  'held_payment_date',
+  'payment_watch',
+  'retry_paid_after_end',
+  'paid_after_end_owed',
+])
 export type StuckCloseKind = z.infer<typeof stuckCloseKindSchema>
 
 export const stuckCloseTargetSchema = z.object({
@@ -270,9 +287,13 @@ export const stuckStepSchema = z.object({
   /**
    * W40: what it is, for the screen: a cancel date to set (`cancel_date`, with `lastDay`), a cancel date to clear
    * (`clear_cancel_date`: an undo), or the card to charge (`card`).
+   * W47r-e: or `still_live`: a membership whose last day here (`lastDay`) has passed while its subscription is still
+   * live in Stripe, found by the automatic check. Not a step: `stepId` is the line's own id, `state` is `refused`
+   * (for a person: a manager cancels the subscription in Stripe) and there is no `close`; it goes once Stripe has
+   * ended the subscription. Last in the list, so the older values keep their order.
    */
-  what: z.enum(['cancel_date', 'clear_cancel_date', 'card']),
-  /** `cancel_date`: the membership's last day of access the step sets (YYYY-MM-DD, London). */
+  what: z.enum(['cancel_date', 'clear_cancel_date', 'card', 'still_live']),
+  /** `cancel_date`: the membership's last day of access the step sets (YYYY-MM-DD, London). `still_live`: the last day that has passed. */
   lastDay: z.string().optional(),
   customerId: z.string().nullable(),
   customerName: z.string().nullable(),
@@ -316,6 +337,14 @@ export type StuckPaymentDateOutput = z.infer<typeof stuckPaymentDateSchema>
  * `paid_after_end`, the same `close`), whether or not a press at the desk took the payment: one Stripe's own retry
  * took, or one the customer approved late, is found by Stripe's notice. For those `retryId` is the line's own id,
  * `amount` is what Stripe took for the invoice, and no card is named (`cardBrand` and `cardLast4` are null).
+ * W47r-c: a renewal Stripe takes on a subscription that is still live there, for a membership that has ended here (a
+ * cancel that never reached Stripe), is listed the same way, on or after the membership's last day; its `words` add
+ * checking that the subscription is cancelled in Stripe. And a retry's own money taken BEFORE the end is not held
+ * (it was owed): only money taken at or after the end is listed with `paid_after_end`.
+ * W47r-d: with migration 031 that covers a membership whose last day has passed after Cancel was pressed here (its
+ * row keeps `active` until Stripe ends the subscription). An invoice paid before its subscription ended in Stripe is
+ * listed too when the membership's last day here shows the payment was on or after it. And the line has a second
+ * close, `closeOwed` (kind `paid_after_end_owed`): Mark as owed, for a payment that was for a period the member had.
  */
 export const stuckPaymentRetrySchema = z.object({
   retryId: z.string(),
@@ -333,6 +362,11 @@ export const stuckPaymentRetrySchema = z.object({
   words: z.string(),
   /** W47r-a: Mark refunded, only for the reason `paid_after_end`. */
   close: stuckCloseTargetSchema.optional(),
+  /**
+   * W47r-d: Mark as owed, beside Mark refunded and only where it is. A field of its own and optional: a staff app
+   * from before W47r-d reads the line exactly as before, and one with W47r-d's types still reads an older Worker's.
+   */
+  closeOwed: stuckCloseTargetSchema.optional(),
 })
 export type StuckPaymentRetryOutput = z.infer<typeof stuckPaymentRetrySchema>
 

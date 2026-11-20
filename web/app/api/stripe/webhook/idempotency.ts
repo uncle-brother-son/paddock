@@ -1,5 +1,5 @@
 import Stripe from 'stripe'
-import { dispatchStripeEvent, type ListPaidAfterEnd, type RpcClient, type SubscriptionReader } from './dispatch'
+import { dispatchStripeEvent, type ListPaidAfterEnd, type RpcClient, type SubscriptionReader, type SyncCancelDate } from './dispatch'
 
 export interface ProcessResult {
   status: number
@@ -36,7 +36,8 @@ export interface WebhookEventsClient extends RpcClient {
 // lands in the catch below: outcome 'error' and a 500, never 'processed', so Stripe sends the event again.
 // W47r-b: `list` writes the line for an invoice paid after its subscription had ended (dispatch.ts, recordInvoicePaid).
 // A listing that fails throws like a failed read: the event is an error, and Stripe sends it again.
-export async function processWebhookEvent(event: Stripe.Event, supabase: WebhookEventsClient, stripe: SubscriptionReader, list?: ListPaidAfterEnd): Promise<ProcessResult> {
+// W47r-e: `syncCancelDate` makes an update notice's write when Stripe shows no end (dispatch.ts): it throws the same way.
+export async function processWebhookEvent(event: Stripe.Event, supabase: WebhookEventsClient, stripe: SubscriptionReader, list?: ListPaidAfterEnd, syncCancelDate?: SyncCancelDate): Promise<ProcessResult> {
   // Step 1: claim this event id. ON CONFLICT DO NOTHING via ignoreDuplicates — a conflict just
   // means we've seen this event before, which the lookup below distinguishes from a fresh claim.
   const { error: upsertError } = await supabase
@@ -67,7 +68,7 @@ export async function processWebhookEvent(event: Stripe.Event, supabase: Webhook
   }
 
   try {
-    const result = await dispatchStripeEvent(event, supabase, stripe, list)
+    const result = await dispatchStripeEvent(event, supabase, stripe, list, syncCancelDate)
 
     const { error: updateError } = await supabase
       .from('stripe_webhook_events')

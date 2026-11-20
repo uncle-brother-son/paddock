@@ -28,6 +28,14 @@ export const MEMBERSHIP_PATH_OFF_MESSAGE = 'This is switched off in the booking 
  */
 export const PAYMENT_DATE_HELD_MESSAGE = CHANGE_PAYMENT_UNCONFIRMED_MESSAGE
 
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+/** "2027-01-09" as "9 January", on the digits. Anything else comes back unchanged. */
+const dayAndMonth = (isoDate: string): string => {
+  const match = /^\d{4}-(\d{2})-(\d{2})$/.exec(isoDate)
+  const month = match ? MONTHS[Number(match[1]) - 1] : undefined
+  return match && month ? `${Number(match[2])} ${month}` : isoDate
+}
+
 /**
  * A Stripe step left after the database change (memberships/left.ts, F-plan 4.10): the stuck list's line while the
  * automatic check is still sending it, and once Stripe has refused it for good (lead call L7). W40 (W36 review S2):
@@ -65,6 +73,13 @@ export const LEFT_STEP_WORDS = {
    */
   notLeftAgain: (subscriptionId: string): string =>
     `A membership's change may not have reached its subscription (${subscriptionId}) in Stripe, and the automatic check couldn't record it to try again. It tries again every 5 minutes, and this goes once it has. If this is still here after an hour, tell a manager.`,
+  /**
+   * W47r-e (W47r-d "Noticed" 3): a membership whose last day here has passed while Stripe's subscription is still
+   * live (the automatic check read it, still-live.ts). `name`: the customer's, null when it isn't known. `lastDay`:
+   * YYYY-MM-DD. No button: the line goes once Stripe has ended the subscription.
+   */
+  stillLive: (name: string | null, lastDay: string): string =>
+    `${name ? `${name}'s membership` : 'A membership'} ended here on ${dayAndMonth(lastDay)}, but Stripe's subscription is still live and will keep charging. Tell a manager: cancel it in Stripe.`,
   /** The manual close's answer. */
   sorted: 'Marked as sorted. It is no longer listed.',
   notListed: 'This is no longer on the list (it was sorted in the meantime). Nothing was changed.',
@@ -353,6 +368,23 @@ function subscriptionEnded(listing: string | null): string {
 }
 
 /**
+ * W47r-c: what the press says when the write found the membership's row ended here (`ignored_cancelled`: Stripe's
+ * subscription is still live), by what the write's listing answered, as `subscriptionEnded` does for an ended
+ * subscription. Listed (or held on a retry's own record): where the button is. Paid before the row's last day: the
+ * money was owed. Anything else (no listing asked, the invoice gone in test mode): W47r-a's words.
+ */
+function endedHere(listing: string | null): string {
+  if (listing === 'listed' || listing === 'already_listed' || listing === 'retry_holds') {
+    return 'it has ended here, so the payment Stripe took for it has nothing to pay for. Refund it in Stripe (tell a manager) and check the subscription is cancelled in Stripe, then press Mark refunded on the Orders page.'
+  }
+  if (listing === 'paid_before_last_day') {
+    return 'it has ended here, and the payment was taken before its last day, so it paid for time the member had. Nothing needs refunding. Tell a manager to check the subscription is cancelled in Stripe.'
+  }
+  if (listing === 'nothing_taken') return 'it has ended here, and nothing was taken for this invoice. Nothing needs refunding. Tell a manager to check the subscription is cancelled in Stripe.'
+  return 'it has ended here. Tell a manager: the payment may need refunding in Stripe.'
+}
+
+/**
  * What the window and the press say (brief items 4 and 5).
  * - `ifPaid`, `ifAlreadyPaid`: the quote's line about the membership's bookings waiting for payment.
  * - `paid`: the payment went through and the membership was marked paid here (the webhook's own write).
@@ -406,7 +438,8 @@ export const PAYMENT_RETRY_WORDS = {
     no_period_end: 'Stripe gave no date for its next payment. Tell a manager.',
     subscription_missing: "Stripe can't find its subscription with the club's payment account details. Tell a manager.",
     not_found: 'no membership here has that subscription any more. Tell a manager.',
-    ignored_cancelled: 'it has ended here. Tell a manager: the payment may need refunding in Stripe.',
+    /** W47r-c: by what the write's listing answered (`listing`: dispatch.ts, `detail.paid_after_end.why`): see `endedHere`. */
+    ignored_cancelled: (listing: string | null = null): string => endedHere(listing),
     other: 'the booking system could not tell why. Tell a manager.',
   },
   /**
@@ -438,8 +471,20 @@ export const PAYMENT_RETRY_WORDS = {
   /**
    * W47r-b: the stuck list's line for an invoice Stripe's notice (or a press that charged nothing) found paid after
    * its subscription had ended: W47r-a's sentence, without a card, since the Worker didn't make the payment.
+   * W47r-c (W47r-b "Noticed" 2): `cancelledHere`: a renewal Stripe took on a subscription still live there, for a
+   * membership whose row had ended here. It would bill again next month, so the words add checking it.
    */
-  invoicePaidAfterEnd: (amount: number): string => `${money(amount)} was taken by Stripe after this membership's subscription had ended. Refund it in Stripe (tell a manager), then press Mark refunded.`,
+  invoicePaidAfterEnd: (amount: number, cancelledHere = false): string =>
+    cancelledHere
+      ? `${money(amount)} was taken by Stripe after this membership had ended here. Refund it in Stripe (tell a manager) and check the subscription is cancelled in Stripe, then press Mark refunded.`
+      : `${money(amount)} was taken by Stripe after this membership's subscription had ended. Refund it in Stripe (tell a manager), then press Mark refunded.`,
+  /**
+   * W47r-d (W47r-c "Noticed" 2): the line for an invoice paid before Stripe ended the subscription and on or after
+   * the membership's last day here (`lastDay`, worded): a renewal taken for a membership that had ended here, with the
+   * subscription cancelled in Stripe afterwards.
+   */
+  invoicePaidAfterLastDay: (amount: number, lastDay: string): string =>
+    `${money(amount)} was taken by Stripe on or after this membership's last day here (${lastDay}), before its subscription was cancelled in Stripe. Refund it in Stripe (tell a manager), then press Mark refunded.`,
 } as const
 
 /**
@@ -459,6 +504,18 @@ export const PAYMENT_RETRY_CLOSE_WORDS = {
     `Stripe shows ${refunded > 0 ? `only ${money(refunded)} of the ${money(taken)}` : `none of the ${money(taken)}`} refunded${onTheWay > 0 ? `, with a refund of ${money(onTheWay)} still on its way` : ''}. Nothing was changed. ${
       onTheWay > 0 && refunded + onTheWay >= taken ? 'Press Mark refunded again once Stripe shows the refund as succeeded.' : `Refund ${refunded > 0 || onTheWay > 0 ? 'the rest' : 'it'} in Stripe, then press Mark refunded again.`
     }`,
+} as const
+
+/**
+ * W47r-d (W47r-c "Noticed" 3; W47r-b "Noticed" 4): Mark as owed's answers, for a retry held as paid after the end
+ * (retry-payment.ts, markRetryOwed) and for a listed invoice (paid-after-end.ts, markInvoiceOwed). It never calls
+ * Stripe and sends nothing.
+ */
+export const PAYMENT_RETRY_OWED_WORDS = {
+  owed: (amount: number): string => `Marked as owed: the ${money(amount)} is recorded, with your reason, as a payment for a period the member had. Nothing was refunded. It is no longer listed.`,
+  already: 'This was already marked as owed (an earlier press went through). Nothing more was done.',
+  notListed: 'This payment is no longer on the list (it was settled in the meantime). Nothing was changed.',
+  notForAPerson: "This payment isn't one taken after its membership had ended, so it can't be marked as owed: the automatic check finishes it from what Stripe shows. Nothing was changed.",
 } as const
 
 /**
