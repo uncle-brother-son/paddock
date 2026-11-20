@@ -143,6 +143,48 @@ describe('getAvailableSessions', () => {
     expect((await getAvailableSessions(t.db, { date: '2030-06-20' })).map((r) => r.id)).toEqual([id])
     expect(await getAvailableSessions(t.db, { date: '2030-06-21' })).toEqual([])
   })
+
+  // W51 (W50 review L4): the day is the session's London day, read from the stored digits (time/london-day-sql.ts),
+  // not `start_time::date`, which is the date in the connection's time zone.
+  describe("the day never depends on the connection's time zone (W50 review L4)", () => {
+    const lateNight = { start_time: '2033-07-01 23:30:00+00', end_time: '2033-07-01 23:59:00+00' }
+    const afterMidnight = { start_time: '2033-07-02 00:30:00+00', end_time: '2033-07-02 01:30:00+00' }
+    let late = ''
+    let early = ''
+    beforeAll(async () => {
+      late = await fixtures.session(t.db, { service_type_id: sauna, ...lateNight })
+      early = await fixtures.session(t.db, { service_type_id: sauna, ...afterMidnight })
+    })
+
+    it.each(['UTC', 'America/New_York', 'Europe/London', 'Asia/Tokyo'])('with it set to %s: 23:30 in summer is on its own day and 00:30 on the next', async (zone) => {
+      const [first, second] = await t.db.transaction(async (tx) => {
+        // The transaction's own time zone (as SET LOCAL), as a connection set to it would have.
+        await tx.query("SELECT set_config('TimeZone', $1, true)", [zone])
+        return [await getAvailableSessions(tx, { date: '2033-07-01' }), await getAvailableSessions(tx, { date: '2033-07-02' })]
+      })
+      expect(first.map((r) => r.id)).toEqual([late])
+      expect(second.map((r) => r.id)).toEqual([early])
+    })
+
+    it('what the old `start_time::date` got wrong: on a connection set to London, 23:30 in summer is read as the next day; set to New York, 00:30 as the day before', async () => {
+      const OLD = 'SELECT s.id FROM sessions s WHERE s.start_time::date = $1::date AND s.id = ANY($2::uuid[]) ORDER BY s.start_time'
+      const under = (zone: string, date: string) =>
+        t.db.transaction(async (tx) => {
+          await tx.query("SELECT set_config('TimeZone', $1, true)", [zone])
+          return (await tx.query<{ id: string }>(OLD, [date, [late, early]])).map((r) => r.id)
+        })
+      expect(await under('UTC', '2033-07-01')).toEqual([late])
+      expect(await under('Europe/London', '2033-07-01')).toEqual([])
+      expect(await under('Europe/London', '2033-07-02')).toEqual([late, early])
+      expect(await under('America/New_York', '2033-07-01')).toEqual([late, early])
+    })
+
+    it('the statement names the day by the stored digits, and never casts the start to a date', async () => {
+      const { AVAILABLE_SESSIONS_SQL } = await import('./available-sessions')
+      expect(AVAILABLE_SESSIONS_SQL).toContain("s.start_time >= ($1::date::timestamp AT TIME ZONE 'UTC') AND s.start_time < (($1::date + 1)::timestamp AT TIME ZONE 'UTC')")
+      expect(AVAILABLE_SESSIONS_SQL).not.toContain('start_time::date')
+    })
+  })
 })
 
 describe('the connection time zone', () => {

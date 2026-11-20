@@ -26,21 +26,43 @@ export const W54_ACTIONS: ReadonlySet<string> = new Set(['setBandPrice', 'setBan
 export const W50_READS: ReadonlySet<string> = new Set(['getBookings', 'getBookingById', 'getBookingDetail', 'getAddonPrepChecklistForRange', 'getWaiverGapsForRange', 'getPaymentAttentionItems'])
 export const W50_FLAGS: ReadonlySet<string> = new Set(['setBookingCheckedIn', 'setGuestWaiverStatus', 'setAddonLinePrepared'])
 export const W50_ACTIONS: ReadonlySet<string> = new Set([...W50_READS, ...W50_FLAGS])
+/** W51: the two calendar reads and the ten session and timetable writes. (generateUpcomingSessions is deleted, not moved: GB24.) */
+export const W51_READS: ReadonlySet<string> = new Set(['getSessionsForRange', 'getServiceTypesForSlot'])
+export const W51_WRITES: ReadonlySet<string> = new Set([
+  'blockSession',
+  'blockDay',
+  'unblockSession',
+  'unblockDay',
+  'setSessionBand',
+  'resetSessionBand',
+  'setSessionStartTime',
+  'createOneOffSession',
+  'addServiceTypeScheduleSlot',
+  'deleteServiceTypeScheduleSlot',
+])
+export const W51_ACTIONS: ReadonlySet<string> = new Set([...W51_READS, ...W51_WRITES])
 /** Every old step G function now a thin call to the Worker. */
-export const STEP_G_ACTIONS_MOVED: ReadonlySet<string> = new Set([...W49_ACTIONS, ...W54_ACTIONS, ...W50_ACTIONS])
+export const STEP_G_ACTIONS_MOVED: ReadonlySet<string> = new Set([...W49_ACTIONS, ...W54_ACTIONS, ...W50_ACTIONS, ...W51_ACTIONS])
 
-/** The two that add something: their dialogs keep a press key, and their wrappers answer a refusal as data. */
-const CREATES: ReadonlySet<string> = new Set(['createStaff', 'createPromoCode'])
+/** The ones that add something: their dialogs keep a press key, and their wrappers answer a refusal as data. */
+const CREATES: ReadonlySet<string> = new Set(['createStaff', 'createPromoCode', 'createOneOffSession', 'addServiceTypeScheduleSlot'])
+/**
+ * W51: the refusals createOneOffSession answered as data before it was a thin call, with these reasons and no words
+ * (its dialog has the words). They still come back so, and the replay reads them as answers, as recorded.
+ */
+const ONE_OFF_REASONS_ANSWERED: ReadonlySet<string> = new Set(['service_type_not_found', 'service_type_incomplete', 'slot_already_exists'])
 /** The moved reads GB14's recording makes with `call`, which stops at the first throw. */
-const READS: ReadonlySet<string> = new Set(['getStaff', 'getPromoCodes', 'getPromoCodeRedemptions', ...W50_READS])
+const READS: ReadonlySet<string> = new Set(['getStaff', 'getPromoCodes', 'getPromoCodeRedemptions', ...W50_READS, ...W51_READS])
 
-type CreateAnswer = { created?: boolean; message?: string; noAnswer?: boolean } | null
+type CreateAnswer = { created?: boolean; reason?: string; message?: string; noAnswer?: boolean } | null
 
 /**
- * A create as its dialog presses it (NewStaffDialog, PromoCodeDialog): each press has a key; a press that got no
- * answer keeps it for the next press; any other answer starts a new one. The wrapper answers a refusal as data
- * (`created: false`, so the dialog can tell it from no answer); the dialog shows its words where it showed the old
- * function's thrown error, so the replay reads it as that throw.
+ * A create as its dialog presses it (NewStaffDialog, PromoCodeDialog; W51: CreateOneOffSessionDialog,
+ * NewScheduleSlotDialog): each press has a key; a press that got no answer keeps it for the next press; any other
+ * answer starts a new one. The wrapper answers a refusal as data (`created: false`, so the dialog can tell it from
+ * no answer); the dialog shows its words where it showed the old function's thrown error, so the replay reads it as
+ * that throw. W51: a refusal the old function itself answered as data (createOneOffSession's three reasons) stays
+ * an answer.
  */
 export function createAsTheDialogPresses(action: string): (db: Db, params: unknown) => Promise<unknown> {
   let held: string | null = null
@@ -48,9 +70,57 @@ export function createAsTheDialogPresses(action: string): (db: Db, params: unkno
     const idempotencyKey = held ?? crypto.randomUUID()
     const answer = (await throughStaffApp(action)(db, { ...(params as object), idempotencyKey })) as CreateAnswer
     held = answer?.noAnswer ? idempotencyKey : null
-    if (answer && answer.created === false) throw new Error(String(answer.message))
+    const answeredAsData = action === 'createOneOffSession' && typeof answer?.reason === 'string' && ONE_OFF_REASONS_ANSWERED.has(answer.reason)
+    if (answer && answer.created === false && !answeredAsData) throw new Error(String(answer.message))
     return answer
   }
+}
+
+// --- W51: the figures a two-step press confirms (Q18's rule for counts). The old functions took none.
+
+/**
+ * W51. Block Day, Unblock Day and a band change send the figures their dialog showed (`seen`), and the Worker
+ * refuses a press whose figures are no longer right. A golden file's params have none (the old functions counted
+ * again for themselves), so each press is made as its dialog makes it: the quote first, by the same sign-in, then
+ * the press with the figures the quote gave. A quote the Worker refuses (an inactive account, no Manage pricing)
+ * gives no figures; the press is then refused the same way, before any figure is looked at, as the recording has
+ * it. So a recording never meets `changed_since`: its dialog is always up to date. The rule itself is tested where
+ * it can be shown (sessions/admin.test.ts).
+ */
+const FIGURES_THE_DIALOG_SHOWED: Readonly<Record<string, (db: Db, params: Record<string, unknown>) => Promise<unknown>>> = {
+  // BlockDayDialog: the quote when it opens.
+  async blockDay(db, params) {
+    const shown = (await throughStaffApp('blockDay')(db, { date: params['date'], quote: true })) as { toBlock?: unknown; alreadyBlocked?: unknown }
+    return { toBlock: shown.toBlock, alreadyBlocked: shown.alreadyBlocked }
+  },
+  // UnblockDayDialog: the count when it opens. Only the confirmed call is a press.
+  async unblockDay(db, params) {
+    if (params['confirmed'] !== true) return undefined
+    const shown = (await throughStaffApp('unblockDay')(db, { date: params['date'] })) as { blockedSessions?: unknown; blockedBefore?: unknown; closedDates?: unknown }
+    // W51a: whether a closed date goes with the day's block is one of the figures the dialog shows and sends.
+    return { blockedSessions: shown.blockedSessions, blockedBefore: shown.blockedBefore, closedDates: shown.closedDates }
+  },
+  // ChangeSessionBandDialog: "Check Affected", then "Confirm Change". Only the confirmed call is a press.
+  async setSessionBand(db, params) {
+    if (params['confirmed'] !== true) return undefined
+    const first = Object.fromEntries(Object.entries(params).filter(([name]) => name !== 'confirmed'))
+    const shown = (await throughStaffApp('setSessionBand')(db, first)) as { sessionsAffected?: unknown; bookingsAffected?: unknown }
+    return { sessionsAffected: shown.sessionsAffected, bookingsAffected: shown.bookingsAffected }
+  },
+}
+
+/** `params` with the figures the dialog would hold, read just before the press. Params that bring their own keep them. */
+async function withTheFiguresShown(action: string, db: Db, params: unknown): Promise<unknown> {
+  const read = FIGURES_THE_DIALOG_SHOWED[action]
+  if (!read || (isRecord(params) && 'seen' in params)) return params
+  let seen: unknown
+  try {
+    seen = await read(db, (params ?? {}) as Record<string, unknown>)
+  } catch {
+    // The dialog's quote was refused, or failed: it has no figures to send.
+    seen = undefined
+  }
+  return seen === undefined ? params : { ...(params as object), seen }
 }
 
 // --- W54a: the stamp (admin/stamp.ts). The old functions had none, so the replay drives it as the screens do.
@@ -158,6 +228,32 @@ export interface AdminSideOptions {
    * Worker now refuses answer `{ thrown }` instead, so the scenario runs on to the reads later slices still move.
    */
   refusedReadsAsAnswers?: boolean
+  /** W51: every `madeUpTo` the calendar read answered beside its sessions, set aside for the test to check on its own. */
+  madeUpTo?: unknown[]
+  /** W51: a press exactly as the golden file has it, with no quote read first: how a test shows what the figures are for. */
+  pressWithoutFigures?: boolean
+}
+
+/**
+ * W51: the calendar read answers the sessions and the date sessions are made up to; the old function answered the
+ * sessions alone. The list is what is compared with the recording; the date is set aside (noted in `found`).
+ */
+function sessionsOf(action: string, answer: unknown, found: unknown[] | undefined): unknown {
+  if (action !== 'getSessionsForRange' || !isRecord(answer) || !('sessions' in answer)) return answer
+  found?.push(answer['madeUpTo'])
+  return answer['sessions']
+}
+
+/** The database's nightly job as the saved schema has it (migration 032), run as the job runs it: the tables' owner. */
+async function runNightlyJobAsNow(db: Db): Promise<void> {
+  // The clock moves, as it does between presses: what the job makes comes after what was made before it.
+  vi.setSystemTime(Date.now() + 1)
+  await db.query('RESET ROLE')
+  try {
+    await db.query('SELECT public.generate_upcoming_sessions()')
+  } finally {
+    await db.query('SET ROLE paddock_worker')
+  }
 }
 
 /**
@@ -167,12 +263,14 @@ export interface AdminSideOptions {
  * pressed with the stamp its screen's read gave just before (asTheScreenPresses), and the stamps in the answers are
  * set aside (withoutStamps).
  */
-export function newAdminSide({ adjust, calls, refusedReadsAsAnswers, stamps, pressWithoutReading }: AdminSideOptions = {}): (db: Db, stripe: FakeStripe) => ReplaySide {
+export function newAdminSide({ adjust, calls, refusedReadsAsAnswers, stamps, pressWithoutReading, madeUpTo, pressWithoutFigures }: AdminSideOptions = {}): (db: Db, stripe: FakeStripe) => ReplaySide {
   return (db, stripe) => {
     const old = oldSide(db, stripe)
     const creates = new Map([...CREATES].map((action) => [action, createAsTheDialogPresses(action)] as const))
     return {
       name: 'new',
+      // W51 (migration 032): where a scenario recorded the database's nightly job, this side runs the job as it is now.
+      nightlyJob: runNightlyJobAsNow,
       async call(action, params) {
         if (!STEP_G_ACTIONS_MOVED.has(action)) {
           calls?.push({ action, side: 'old' })
@@ -183,13 +281,14 @@ export function newAdminSide({ adjust, calls, refusedReadsAsAnswers, stamps, pre
         vi.setSystemTime(Date.now() + 1)
         let answer: unknown
         try {
-          const sent = pressWithoutReading ? params : await asTheScreenPresses(action, db, params)
+          const stamped = pressWithoutReading ? params : await asTheScreenPresses(action, db, params)
+          const sent = pressWithoutFigures ? stamped : await withTheFiguresShown(action, db, stamped)
           answer = await (creates.get(action) ?? throughStaffApp(action))(db, sent)
         } catch (err) {
           if (!refusedReadsAsAnswers || !READS.has(action)) throw err
           answer = { thrown: err instanceof Error ? err.message : String(err) }
         }
-        answer = withoutStamps(action, answer, stamps)
+        answer = sessionsOf(action, withoutStamps(action, answer, stamps), madeUpTo)
         return adjust ? adjust(action, answer) : answer
       },
     }
@@ -216,6 +315,15 @@ export const STEP_G_AUDIT_ROWS: ReadonlySet<string> = new Set([
   'booking.check_in_undone',
   'booking.guest_waiver_set',
   'booking.addon_prepared_set',
+  // W51: sessions and the timetable.
+  'session.blocked',
+  'session.unblocked',
+  'session.band_set',
+  'session.band_reset',
+  'session.start_time_set',
+  'session.created',
+  'timetable.slot_added',
+  'timetable.slot_removed',
 ])
 
 /**
@@ -227,6 +335,8 @@ export const STEP_G_FLAG_ROWS: ReadonlySet<string> = new Set(['booking.checked_i
 /**
  * Each moved write route, and the one audit action a press of it answered with a success writes. W50: `also` names a
  * second action the same route writes instead (Check In's undo), so the route's presses are counted against both.
+ * W51: two routes may write one action for different things (a block of one session, and of a day), so a route's
+ * rows are the ones with its action AND its entity type.
  */
 export const STEP_G_WRITE_ROUTES: ReadonlyArray<{ route: RegExp; action: string; entityType: string; also?: readonly string[] }> = [
   { route: /^POST \/api\/v1\/staff\/bookings\/[^/]+\/check-in$/, action: 'booking.checked_in', entityType: 'booking', also: ['booking.check_in_undone'] },
@@ -241,6 +351,18 @@ export const STEP_G_WRITE_ROUTES: ReadonlyArray<{ route: RegExp; action: string;
   { route: /^POST \/api\/v1\/staff\/postage\/settings$/, action: 'postage.set', entityType: 'postage_settings' },
   { route: /^POST \/api\/v1\/staff\/promo-codes$/, action: 'promo.created', entityType: 'promo_code' },
   { route: /^POST \/api\/v1\/staff\/promo-codes\/[^/]+$/, action: 'promo.updated', entityType: 'promo_code' },
+  // W51: one session, then a day (`sessions/days/:date/...`), then the timetable.
+  { route: /^POST \/api\/v1\/staff\/sessions\/(?!days\/)[^/]+\/block$/, action: 'session.blocked', entityType: 'session' },
+  { route: /^POST \/api\/v1\/staff\/sessions\/(?!days\/)[^/]+\/unblock$/, action: 'session.unblocked', entityType: 'session' },
+  { route: /^POST \/api\/v1\/staff\/sessions\/(?!days\/)[^/]+\/band$/, action: 'session.band_set', entityType: 'session' },
+  { route: /^POST \/api\/v1\/staff\/sessions\/(?!days\/)[^/]+\/band\/reset$/, action: 'session.band_reset', entityType: 'session' },
+  { route: /^POST \/api\/v1\/staff\/sessions\/(?!days\/)[^/]+\/start-time$/, action: 'session.start_time_set', entityType: 'session' },
+  { route: /^POST \/api\/v1\/staff\/sessions$/, action: 'session.created', entityType: 'session' },
+  { route: /^POST \/api\/v1\/staff\/sessions\/days\/[^/]+\/block$/, action: 'session.blocked', entityType: 'session_day' },
+  { route: /^POST \/api\/v1\/staff\/sessions\/days\/[^/]+\/unblock$/, action: 'session.unblocked', entityType: 'session_day' },
+  { route: /^POST \/api\/v1\/staff\/sessions\/days\/[^/]+\/band$/, action: 'session.band_set', entityType: 'session_day' },
+  { route: /^POST \/api\/v1\/staff\/catalog\/service-types\/[^/]+\/schedule-slots$/, action: 'timetable.slot_added', entityType: 'schedule_slot' },
+  { route: /^POST \/api\/v1\/staff\/catalog\/schedule-slots\/[^/]+\/remove$/, action: 'timetable.slot_removed', entityType: 'schedule_slot' },
 ]
 
 const auditRows = (recording: Recording): AuditRow[] => (recording.tables['audit_log']?.added ?? []) as AuditRow[]
@@ -288,8 +410,9 @@ export function adminRowProblems(recording: Recording): string[] {
     const wrong = (why: string) => problems.push(`${String(row.action)}: ${why} (${JSON.stringify(d)})`)
     const byStaff = row['actor_type'] === 'staff' && typeof row['actor_id'] === 'string' && row['actor_id'] !== '' && typeof row['request_id'] === 'string' && row['request_id'] !== ''
     if (!byStaff) wrong('actor or request id')
-    const expected = STEP_G_WRITE_ROUTES.find((one) => one.action === row.action || (one.also ?? []).includes(String(row.action)))
-    if (row['entity_type'] !== expected?.entityType || typeof row['entity_id'] !== 'string' || row['entity_id'] === '') wrong('entity')
+    // W51: one of the routes that write this action, for this kind of thing (a session, or a day).
+    const expected = STEP_G_WRITE_ROUTES.find((one) => (one.action === row.action || (one.also ?? []).includes(String(row.action))) && one.entityType === row['entity_type'])
+    if (!expected || typeof row['entity_id'] !== 'string' || row['entity_id'] === '') wrong('entity')
     if (typeof d['key'] !== 'string' || d['key'] === '') wrong('the key')
     if (STEP_G_FLAG_ROWS.has(String(row.action))) {
       // W50: a flag's row. The flag as set, and nothing about the customer: never a name, an email or a date of birth.
@@ -307,10 +430,22 @@ export function adminRowProblems(recording: Recording): string[] {
       continue
     }
     if (!('before' in d) || !('after' in d)) wrong('before and after')
-    const created = row.action === 'staff.created' || row.action === 'promo.created'
+    const created = row.action === 'staff.created' || row.action === 'promo.created' || row.action === 'session.created' || row.action === 'timetable.slot_added'
     // A create has nothing before it; an edit has the row as it was. A member term's first save has nothing before it either.
     if (created ? d['before'] !== null : row.action !== 'pricing.member_term_set' && d['before'] === null) wrong('what was there before')
-    if (d['after'] === null || d['after'] === undefined) wrong('what is there after')
+    // W51: a weekly slot removed has nothing after it (its row is kept in `before`); everything else has.
+    if (row.action === 'timetable.slot_removed' ? d['after'] !== null : d['after'] === null || d['after'] === undefined) wrong('what is there after')
+    // W51: a day's row (Block Day, Unblock Day, a day's band) keeps each session before and after, and names the day.
+    if (row['entity_type'] === 'session_day' && (!Array.isArray(d['before']) || !Array.isArray(d['after']) || !/^\d{4}-\d{2}-\d{2}$/.test(String(row['entity_id'])))) wrong('the day and its sessions')
+    if ((row.action === 'session.blocked' || row.action === 'session.unblocked') && row['entity_type'] === 'session_day' && !Array.isArray(d['sessionIds'])) wrong('which sessions the day press changed')
+    // W51a (W51 review L1): every block keeps the clock it read under the session's lock (a recording shows a time
+    // as "<time>"; its exact form is held in sessions/admin.test.ts).
+    if (row.action === 'session.blocked' && (typeof d['lockedAt'] !== 'string' || d['lockedAt'] === '')) wrong('when the block took its lock')
+    // W51a (closed dates): a day's block says whether it recorded the date as closed, and a day's unblock whether it removed one.
+    if (row.action === 'session.blocked' && row['entity_type'] === 'session_day' && typeof d['closedDate'] !== 'boolean') wrong('whether the day press closed the date')
+    if (row.action === 'session.unblocked' && row['entity_type'] === 'session_day' && typeof d['closedDateRemoved'] !== 'boolean') wrong('whether the day press removed a closed date')
+    // A session's row keeps the session's own state, and never a customer's name (the bookings in the way are a refusal's, not a row's).
+    if (String(row.action).startsWith('session.') && /first_name|last_name|email/.test(JSON.stringify(d))) wrong('a name in a session row')
     if (row.action === 'staff.permission_set' && !['can_issue_refunds', 'can_manage_pricing', 'active'].includes(String(d['field']))) wrong('which switch')
     if (row.action === 'pricing.band_rules_set' && (!Number.isInteger(d['dayOfWeek']) || !Number.isInteger(d['rebandedSessions']) || !Array.isArray(d['before']) || !Array.isArray(d['after']))) wrong('the day, the count and the windows')
     // A staff row keeps the role and the three switches, and never a name or an email.
@@ -320,9 +455,9 @@ export function adminRowProblems(recording: Recording): string[] {
       }
     }
   }
-  for (const { route, action, also } of STEP_G_WRITE_ROUTES) {
+  for (const { route, action, also, entityType } of STEP_G_WRITE_ROUTES) {
     const presses = stored.filter((row) => route.test(String(row['endpoint'])) && row['http_status'] === 200).length
-    const written = rows.filter((row) => row.action === action || (also ?? []).includes(String(row.action))).length
+    const written = rows.filter((row) => (row.action === action || (also ?? []).includes(String(row.action))) && row['entity_type'] === entityType).length
     if (written !== presses) problems.push(`${action}: ${written} rows for ${presses} presses answered with a success`)
   }
   return problems

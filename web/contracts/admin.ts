@@ -823,3 +823,171 @@ export const addonPreparedRouteOutputSchema = z.object({
   refund_method: z.enum(['card', 'credit', 'none', 'credit_returned']).nullable(),
 })
 export type AddonPreparedRouteOutput = z.infer<typeof addonPreparedRouteOutputSchema>
+
+// ---------------------------------------------------------------------------------------------------------------------
+// W51 (G-plan 4.3, the "Bookings calendar" row and the weekly slots of "Service Types"; 4.5; bugs GB3 to GB7; Wayne's
+// Q50): sessions and the timetable. The two reads answer the old functions' rows (W48's contracts above); the
+// calendar read also answers the date the nightly job has made sessions up to (migration 032), for Q50's words. Each
+// write answers its success in the old function's shape; a refusal's `details` (sessionRefusalDetailsSchema) carry
+// what the old function answered as data: the bookings in the way of a block, the figures as they now are. Every
+// field the old function checked for itself is loose, so the rule answers in the old words. Kept last, so the staff
+// app's generated types keep their order.
+
+/** A session's row, by named columns: every column the old `RETURNING *` gave. */
+export const sessionRowSchema = z.object({
+  id: z.string(),
+  resource_id: z.string().nullable(),
+  service_type_id: z.string(),
+  start_time: z.string(),
+  end_time: z.string(),
+  type: z.string().nullable(),
+  capacity: z.number(),
+  total_booked: z.number(),
+  status: z.string(),
+  blocked_reason: z.string().nullable(),
+  blocked_by: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  band_id: z.string().nullable(),
+  band_overridden: z.boolean(),
+})
+export type SessionRow = z.infer<typeof sessionRowSchema>
+
+/**
+ * `GET sessions`: getSessionsForRange, the calendar's read. Both days inclusive, by the session's London day. Answers
+ * the sessions and `madeUpTo`: the last date the nightly job has made sessions for (null on a database with no such
+ * row). A weekly slot added or removed, or a capacity or length change, reaches only dates after it (Q50).
+ * W51a: and `closedDates`, the closed dates in the range (migration 032), each with its reason: the nightly job
+ * makes no session on one, so the calendar shows it as closed whether or not it has sessions.
+ */
+export const sessionsRouteInputSchema = z.object({ startDate: londonDay, endDate: londonDay })
+export type SessionsRouteInput = z.infer<typeof sessionsRouteInputSchema>
+export const closedDateSchema = z.object({ date: londonDay, reason: z.string().nullable() })
+export const sessionsRouteOutputSchema = z.object({ sessions: adminGetSessionsForRangeOutputSchema, madeUpTo: londonDay.nullable(), closedDates: z.array(closedDateSchema) })
+export type SessionsRouteOutput = z.infer<typeof sessionsRouteOutputSchema>
+
+/** `GET sessions/for-slot`: getServiceTypesForSlot. Answers adminGetServiceTypesForSlotOutputSchema. */
+export const sessionsForSlotRouteInputSchema = z.object({ startTime: z.string() })
+export type SessionsForSlotRouteInput = z.infer<typeof sessionsForSlotRouteInputSchema>
+
+/**
+ * A booking in the way of a block, as the Block dialogs list it. The day's list names each booking's session too.
+ * W51a (W51 review S1): `movingOff` is there, and true, only on a booking being moved off the slot whose card or
+ * reader payment isn't finished: it can't be moved or cancelled from the list, only waited for. On the day's list
+ * such a row names the slot it is being moved off.
+ */
+export const blockConflictSchema = adminBlockSessionOutputSchema.shape.conflictingBookings.element.extend({ movingOff: z.literal(true).optional() })
+export const dayBlockConflictSchema = adminBlockDayOutputSchema.shape.conflictingBookings.element.extend({ movingOff: z.literal(true).optional() })
+
+/**
+ * `details` on a W51 refusal: adminRefusalDetailsSchema, with what the old functions answered as data. `reason`
+ * `bookings_in_the_way` carries the bookings; `changed_since` (the figures a press sent are no longer right) carries
+ * the figures as they now are, under the names the quote gave them. W51a: `move_in_flight` (only bookings being
+ * moved off are in the way) carries them in the same list.
+ */
+export const sessionRefusalDetailsSchema = adminRefusalDetailsSchema.extend({
+  conflictingBookings: z.array(z.union([dayBlockConflictSchema, blockConflictSchema])).optional(),
+  counts: z.record(z.string(), z.number()).optional(),
+})
+export type SessionRefusalDetails = z.infer<typeof sessionRefusalDetailsSchema>
+
+/** `POST sessions/:sessionId/block`: blockSession. A success is the old answer for one: blocked, no conflict, the session. */
+export const sessionBlockRouteInputSchema = z.object({ sessionId: z.string(), reason: loose })
+export type SessionBlockRouteInput = z.infer<typeof sessionBlockRouteInputSchema>
+export const sessionBlockRouteOutputSchema = z.object({ blocked: z.literal(true), conflict: z.literal(false), conflictingBookings: z.array(blockConflictSchema), session: sessionRowSchema })
+export type SessionBlockRouteOutput = z.infer<typeof sessionBlockRouteOutputSchema>
+
+/** `POST sessions/:sessionId/unblock`: unblockSession. Answers the session's row as it now is. */
+export const sessionByIdRouteInputSchema = z.object({ sessionId: z.string() })
+export type SessionByIdRouteInput = z.infer<typeof sessionByIdRouteInputSchema>
+
+/** A day's routes take the day from the path. */
+export const sessionDayRouteInputSchema = z.object({ date: londonDay })
+export type SessionDayRouteInput = z.infer<typeof sessionDayRouteInputSchema>
+
+/**
+ * `GET sessions/days/:date/block/quote`: what Block Day would do, shown before the press. `toBlock`: the day's open
+ * sessions; `alreadyBlocked`: the ones blocked before, which keep their own reason (GB7); the bookings in the way.
+ * W51a: `closed`: the date is already a closed date; `afterMadeUpTo`: the date is after the last date the nightly
+ * job has made, so it has no weekly sessions yet and the press closes it ahead of them.
+ */
+export const blockDayQuoteRouteOutputSchema = z.object({
+  sessions: z.number(),
+  toBlock: z.number(),
+  alreadyBlocked: z.number(),
+  conflictingBookings: z.array(dayBlockConflictSchema),
+  closed: z.boolean(),
+  afterMadeUpTo: z.boolean(),
+})
+export type BlockDayQuoteRouteOutput = z.infer<typeof blockDayQuoteRouteOutputSchema>
+/** `POST sessions/days/:date/block`: blockDay. `seen` is the quote's `toBlock` and `alreadyBlocked`, as staff saw them. */
+export const blockDayRouteInputSchema = z.object({ date: londonDay, reason: loose, seen: loose })
+export type BlockDayRouteInput = z.infer<typeof blockDayRouteInputSchema>
+/** W51a: `closedDate`: this press recorded the date as closed (false when it already was). */
+export const blockDayRouteOutputSchema = z.object({
+  blocked: z.literal(true),
+  conflict: z.literal(false),
+  conflictingBookings: z.array(dayBlockConflictSchema),
+  blockedCount: z.number(),
+  alreadyBlocked: z.number(),
+  closedDate: z.boolean(),
+})
+export type BlockDayRouteOutput = z.infer<typeof blockDayRouteOutputSchema>
+
+/**
+ * `GET sessions/days/:date/unblock/quote`: what Unblock Day would do. `blockedSessions`: the sessions a Block Day
+ * blocked, which the press reopens; `blockedBefore`: the ones blocked on their own, which stay blocked (GB7).
+ * W51a: `closedDates`: 1 when the date is a closed date, which the press removes, or 0; `closedReason`: its reason.
+ */
+export const unblockDayQuoteRouteOutputSchema = z.object({ blockedSessions: z.number(), blockedBefore: z.number(), closedDates: z.number(), closedReason: z.string().nullable() })
+export type UnblockDayQuoteRouteOutput = z.infer<typeof unblockDayQuoteRouteOutputSchema>
+/** `POST sessions/days/:date/unblock`: unblockDay. `seen` is the quote's three figures, as staff saw them. */
+export const unblockDayRouteInputSchema = z.object({ date: londonDay, seen: loose })
+export type UnblockDayRouteInput = z.infer<typeof unblockDayRouteInputSchema>
+/** W51a: `closedDateRemoved`: the date was a closed date and no longer is. */
+export const unblockDayRouteOutputSchema = z.object({ confirmed: z.literal(true), blockedSessions: z.number(), blockedBefore: z.number(), unblocked: z.number(), closedDateRemoved: z.boolean() })
+export type UnblockDayRouteOutput = z.infer<typeof unblockDayRouteOutputSchema>
+
+/** `GET sessions/:sessionId/band/quote` and `GET sessions/days/:date/band/quote`: setSessionBand's count. Answers adminSetSessionBandOutputSchema with `confirmed: false`. */
+export const sessionBandQuoteRouteInputSchema = z.object({ sessionId: z.string(), bandId: loose })
+export type SessionBandQuoteRouteInput = z.infer<typeof sessionBandQuoteRouteInputSchema>
+export const dayBandQuoteRouteInputSchema = z.object({ date: londonDay, bandId: loose })
+export type DayBandQuoteRouteInput = z.infer<typeof dayBandQuoteRouteInputSchema>
+/** `POST sessions/:sessionId/band` and `POST sessions/days/:date/band`: setSessionBand's press. `seen` is the quote's two counts. Answers adminSetSessionBandOutputSchema with `confirmed: true`. */
+export const sessionBandRouteInputSchema = z.object({ sessionId: z.string(), bandId: loose, seen: loose })
+export type SessionBandRouteInput = z.infer<typeof sessionBandRouteInputSchema>
+export const dayBandRouteInputSchema = z.object({ date: londonDay, bandId: loose, seen: loose })
+export type DayBandRouteInput = z.infer<typeof dayBandRouteInputSchema>
+
+/** `POST sessions/:sessionId/band/reset`: resetSessionBand. A success is `reset: true` and the band the rule gives (null when no window covers the time). */
+export const sessionBandResetRouteOutputSchema = z.object({ reset: z.literal(true), band: z.object({ code: z.string(), name: z.string() }).nullable() })
+export type SessionBandResetRouteOutput = z.infer<typeof sessionBandResetRouteOutputSchema>
+
+/** `POST sessions/:sessionId/start-time`: setSessionStartTime. A success is `updated: true`, the session's new times and its band. */
+export const sessionStartTimeRouteInputSchema = z.object({ sessionId: z.string(), startTime: loose })
+export type SessionStartTimeRouteInput = z.infer<typeof sessionStartTimeRouteInputSchema>
+export const sessionStartTimeRouteOutputSchema = z.object({
+  updated: z.literal(true),
+  session: z.object({ id: z.string(), start_time: z.string(), end_time: z.string() }),
+  band: z.object({ code: z.string(), name: z.string(), overridden: z.boolean() }).nullable(),
+})
+export type SessionStartTimeRouteOutput = z.infer<typeof sessionStartTimeRouteOutputSchema>
+
+/** `POST sessions`: createOneOffSession. A success is `created: true` and the new session. */
+export const oneOffSessionRouteInputSchema = z.object({ serviceTypeId: loose, startTime: loose })
+export type OneOffSessionRouteInput = z.infer<typeof oneOffSessionRouteInputSchema>
+export const oneOffSessionRouteOutputSchema = z.object({
+  created: z.literal(true),
+  session: z.object({ id: z.string(), service_type_id: z.string(), start_time: z.string(), end_time: z.string(), capacity: z.number(), type: z.string() }),
+})
+export type OneOffSessionRouteOutput = z.infer<typeof oneOffSessionRouteOutputSchema>
+
+/** `POST catalog/service-types/:serviceTypeId/schedule-slots`: addServiceTypeScheduleSlot (Manage pricing: Q50 part 2). Answers the new slot's row. */
+export const scheduleSlotAddRouteInputSchema = z.object({ serviceTypeId: z.string(), dayOfWeek: loose, startTime: loose })
+export type ScheduleSlotAddRouteInput = z.infer<typeof scheduleSlotAddRouteInputSchema>
+export const scheduleSlotRowSchema = z.object({ id: z.string(), service_type_id: z.string(), day_of_week: z.number(), start_time: z.string(), created_at: z.string(), updated_at: z.string() })
+export type ScheduleSlotRow = z.infer<typeof scheduleSlotRowSchema>
+
+/** `POST catalog/schedule-slots/:slotId/remove`: deleteServiceTypeScheduleSlot (Manage pricing: Q50 part 2). Answers adminDeleteServiceTypeScheduleSlotOutputSchema. */
+export const scheduleSlotRemoveRouteInputSchema = z.object({ slotId: z.string() })
+export type ScheduleSlotRemoveRouteInput = z.infer<typeof scheduleSlotRemoveRouteInputSchema>

@@ -1299,7 +1299,8 @@ export async function finishClaim(db: Db, claim: Claim, outcome: ClaimOutcome, b
 /**
  * W25 (W22 review later 2, W23 review later 2, W24 review L1): the undo can't put the booking back because what R1
  * gave back has been taken since: the session's places (another booking), the pass session (spent), or (W37a) the
- * membership session credit (spent on another booking, or taken off the period by an adjustment). Thrown inside
+ * membership session credit (spent on another booking, or taken off the period by an adjustment); or (W51a, W51
+ * review S1) because the session itself has been blocked, or its start time moved, since. Thrown inside
  * the undo's transaction, so nothing of the undo is kept: the change stands, and the press finishes the claim there and
  * then with every card part owed on the booking (W25a; `finishRefusedNotPutBack`).
  */
@@ -1319,6 +1320,23 @@ async function takePlacesBack(tx: Tx, sessionId: string, places: number): Promis
   )
   if (taken.length !== 1) throw new PutBackBlocked(`session ${sessionId} no longer has ${places} free place${places === 1 ? '' : 's'}`)
 }
+
+/**
+ * W51a (W51 review S1; GB5, GB6): a booking goes back onto a session only while that session is still open and
+ * still at the time the booking has. Between R1 and this undo the booking wasn't on the session (a cheaper Move) or
+ * was cancelled (a cancel), so a block or a start-time change saw no booking in the way and went ahead. Put back
+ * regardless, the customer would hold a confirmed booking on a blocked session, or one whose times aren't the
+ * session's. The caller holds the session's lock (lockForBooking), which a block and a start-time change take, so
+ * what is read here is how the session stays until the undo commits. Otherwise PutBackBlocked: the change stands
+ * and the refund ends as money still to refund (W25).
+ */
+const SESSION_TAKES_BOOKING_BACK_SQL = "SELECT id FROM sessions WHERE id = $1::uuid AND status = 'open' AND start_time = $2::timestamptz"
+async function requireSessionAsItWas(tx: Tx, sessionId: string, startTime: string): Promise<void> {
+  const asItWas = await tx.query(SESSION_TAKES_BOOKING_BACK_SQL, [sessionId, startTime])
+  if (asItWas.length !== 1) throw new PutBackBlocked(`session ${sessionId} has been blocked or its start time changed since`)
+}
+/** A cancelled booking's own start time: a cancel doesn't change it, so it is the time its session had. */
+const BOOKING_START_SQL = 'SELECT start_time FROM bookings WHERE id = $1::uuid'
 
 /** The pass gives back the session it was handed only while it still has one: never below 0. */
 async function takePassSessionBack(tx: Tx, passId: string): Promise<void> {
@@ -1423,6 +1441,10 @@ async function undoClaim(db: Db, claim: Claim, by: FinishedBy): Promise<boolean>
  * taken back from their membership; the add-on lines back on the booking with their stamps as they were.
  */
 async function undoCancel(tx: Tx, bookingId: string, cancel: CancelClaim): Promise<void> {
+  // W51a (S1): only onto a session still open and still at the booking's time (PutBackBlocked otherwise).
+  const start = (await tx.query<{ start_time: Date | string }>(BOOKING_START_SQL, [bookingId]))[0]?.start_time
+  if (start === undefined) throw new Error(`Booking ${bookingId} no longer exists.`)
+  await requireSessionAsItWas(tx, cancel.sessionId, start instanceof Date ? start.toISOString() : start)
   await tx.query('UPDATE bookings SET status = $1::text, cancelled_at = $2::timestamptz, refund_owed_amount = $3::numeric, updated_at = now() WHERE id = $4::uuid', [
     cancel.status,
     cancel.cancelledAt,
@@ -1456,6 +1478,8 @@ async function undoCancel(tx: Tx, bookingId: string, cancel: CancelClaim): Promi
 async function undoMoveClaim(tx: Tx, bookingId: string, amount: number, move: MoveClaim): Promise<void> {
   const creditPeriod = creditPeriodReleased(move)
   if (creditPeriod) await takeCreditBack(tx, creditPeriod)
+  // W51a (S1): only onto an old session still open and still at the booking's old start time (PutBackBlocked otherwise).
+  await requireSessionAsItWas(tx, move.oldSessionId, move.oldStartTime)
   await tx.query(
     `UPDATE bookings
      SET session_id = $1::uuid, start_time = $2::timestamptz, end_time = $3::timestamptz, price_paid = price_paid + $4::numeric,

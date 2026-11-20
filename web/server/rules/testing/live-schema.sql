@@ -126,6 +126,13 @@ CREATE TABLE public.bookings (
   refund_owed_amount numeric(10,2) DEFAULT 0 NOT NULL
 );
 
+CREATE TABLE public.closed_dates (
+  closed_on date NOT NULL,
+  reason text,
+  closed_by uuid,
+  closed_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
 CREATE TABLE public.customer_memberships (
   id uuid DEFAULT uuid_generate_v4() NOT NULL,
   customer_id uuid NOT NULL,
@@ -604,6 +611,13 @@ CREATE TABLE public.sessions (
   band_overridden boolean DEFAULT false NOT NULL
 );
 
+CREATE TABLE public.sessions_made_up_to (
+  id boolean DEFAULT true NOT NULL,
+  made_up_to date NOT NULL,
+  updated_at timestamp with time zone DEFAULT now() NOT NULL,
+  closed_days_skipped date[] DEFAULT '{}'::date[] NOT NULL
+);
+
 CREATE TABLE public.staff (
   id uuid DEFAULT uuid_generate_v4() NOT NULL,
   role text NOT NULL,
@@ -921,18 +935,36 @@ CREATE OR REPLACE FUNCTION public.generate_upcoming_sessions(horizon_days intege
  SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
-declare v_edge date; v_target date; v_inserted int;
+declare v_edge date; v_target date; v_inserted int; v_skipped date[]; v_days date[]; v_open date[]; v_closed date[];
 begin
+  -- 032 (W51-1): the band guard, shared, before anything is written. A band-window save holds these rows, so a
+  -- session made here is banded by the windows the save leaves, and a save that starts later waits for this run.
+  perform 1 from session_bands order by id for share;
   v_target := (now() at time zone 'Europe/London')::date + horizon_days;
-  select coalesce(max(start_time)::date, (now() at time zone 'Europe/London')::date - 1)
-    into v_edge from sessions;
-  if v_edge >= v_target then return 0; end if;
+  -- 032 (GB3): the job's own date, not the furthest session. Locked, so two runs at once take turns. With no row
+  -- (a database never set up) it starts from today, and writes the row below.
+  select made_up_to, closed_days_skipped into v_edge, v_skipped from sessions_made_up_to where id for update;
+  if not found then v_edge := (now() at time zone 'Europe/London')::date - 1; v_skipped := '{}'; end if;
+  -- 032 (closed dates): the days this run is for. Each day after the job's date up to the target, and each closed
+  -- day an earlier run left out that hasn't passed. Then one lock for each, in date order: the lock Block Day,
+  -- Unblock Day and a one-off session take for their date, so no date is closed or reopened while this run makes it.
+  -- Then which of them are closed, read after the locks (a new statement sees what a press that held one committed).
+  select coalesce(array_agg(q.day order by q.day), '{}') into v_days
+    from (select g.day_ts::date as day from generate_series((v_edge + 1)::timestamp, v_target::timestamp, interval '1 day') as g(day_ts)
+          union
+          select s.day from unnest(v_skipped) as s(day) where s.day >= (now() at time zone 'Europe/London')::date) q;
+  if v_days = '{}' then return 0; end if;
+  perform pg_advisory_xact_lock(hashtextextended('session_day:' || to_char(l.day, 'YYYY-MM-DD'), 0)) from unnest(v_days) as l(day);
+  select coalesce(array_agg(q.day order by q.day) filter (where c.closed_on is null), '{}'),
+         coalesce(array_agg(q.day order by q.day) filter (where c.closed_on is not null), '{}')
+    into v_open, v_closed
+    from unnest(v_days) as q(day) left join closed_dates c on c.closed_on = q.day;
 
   insert into sessions (service_type_id, start_time, end_time, type, capacity, status)
   select svc.id, (d.day + sl.start_time),
          (d.day + sl.start_time) + (svc.duration || ' minutes')::interval,
          svc.booking_type, svc.capacity, 'open'
-  from generate_series((v_edge + 1)::timestamp, v_target::timestamp, interval '1 day') as g(day_ts)
+  from unnest(v_open) as g(day_ts)
   cross join lateral (select g.day_ts::date as day) d
   join service_type_schedule_slots sl on sl.day_of_week = extract(dow from d.day)::smallint
   join service_types svc on svc.id = sl.service_type_id
@@ -940,6 +972,10 @@ begin
   on conflict (service_type_id, start_time) do nothing;
 
   get diagnostics v_inserted = row_count;
+  -- 032 (GB3): made up to the target, whether or not any slot fell on those days (never moved back by a run with a
+  -- shorter horizon). The closed days this run left out are kept, so a later run makes one that has been reopened.
+  insert into sessions_made_up_to (id, made_up_to, closed_days_skipped) values (true, greatest(v_edge, v_target), v_closed)
+  on conflict (id) do update set made_up_to = excluded.made_up_to, closed_days_skipped = excluded.closed_days_skipped, updated_at = now();
   return v_inserted;
 end $function$;
 
@@ -1272,7 +1308,7 @@ BEGIN
   FROM generate_series(1, p_places) AS g;
 END; $function$;
 
-CREATE OR REPLACE FUNCTION public.reassign_session_bands(p_from timestamp with time zone DEFAULT now())
+CREATE OR REPLACE FUNCTION public.reassign_session_bands(p_from timestamp with time zone DEFAULT ((now() AT TIME ZONE 'Europe/London'::text) AT TIME ZONE 'UTC'::text))
  RETURNS integer
  LANGUAGE plpgsql
 AS $function$
@@ -1450,6 +1486,7 @@ ALTER TABLE public.bookings ADD CONSTRAINT bookings_pkey PRIMARY KEY (id);
 ALTER TABLE public.bookings ADD CONSTRAINT bookings_redemption_source_check CHECK ((redemption_source = ANY (ARRAY['paid'::text, 'membership_credit'::text, 'session_pass_credit'::text])));
 ALTER TABLE public.bookings ADD CONSTRAINT bookings_refund_owed_amount_check CHECK ((refund_owed_amount >= (0)::numeric));
 ALTER TABLE public.bookings ADD CONSTRAINT bookings_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'confirmed'::text, 'payment_needed'::text, 'cancelled'::text, 'completed'::text, 'no-show'::text])));
+ALTER TABLE public.closed_dates ADD CONSTRAINT closed_dates_pkey PRIMARY KEY (closed_on);
 ALTER TABLE public.customer_memberships ADD CONSTRAINT customer_memberships_addon_credits_remaining_check CHECK ((addon_credits_remaining >= 0));
 ALTER TABLE public.customer_memberships ADD CONSTRAINT customer_memberships_pkey PRIMARY KEY (id);
 ALTER TABLE public.customer_memberships ADD CONSTRAINT customer_memberships_stripe_subscription_id_key UNIQUE (stripe_subscription_id);
@@ -1582,6 +1619,8 @@ ALTER TABLE public.sessions ADD CONSTRAINT sessions_pkey PRIMARY KEY (id);
 ALTER TABLE public.sessions ADD CONSTRAINT sessions_service_type_start_time_key UNIQUE (service_type_id, start_time);
 ALTER TABLE public.sessions ADD CONSTRAINT sessions_status_check CHECK ((status = ANY (ARRAY['open'::text, 'blocked'::text])));
 ALTER TABLE public.sessions ADD CONSTRAINT sessions_type_check CHECK ((type = ANY (ARRAY['public'::text, 'private'::text])));
+ALTER TABLE public.sessions_made_up_to ADD CONSTRAINT sessions_made_up_to_id_check CHECK (id);
+ALTER TABLE public.sessions_made_up_to ADD CONSTRAINT sessions_made_up_to_pkey PRIMARY KEY (id);
 ALTER TABLE public.staff ADD CONSTRAINT staff_email_key UNIQUE (email);
 ALTER TABLE public.staff ADD CONSTRAINT staff_pkey PRIMARY KEY (id);
 ALTER TABLE public.staff ADD CONSTRAINT staff_role_check CHECK ((role = ANY (ARRAY['admin'::text, 'manager'::text, 'staff'::text])));
@@ -1642,6 +1681,7 @@ ALTER TABLE public.bookings ADD CONSTRAINT bookings_customer_id_fkey FOREIGN KEY
 ALTER TABLE public.bookings ADD CONSTRAINT bookings_redeemed_membership_id_fkey FOREIGN KEY (redeemed_membership_id) REFERENCES customer_memberships(id);
 ALTER TABLE public.bookings ADD CONSTRAINT bookings_redeemed_session_pass_id_fkey FOREIGN KEY (redeemed_session_pass_id) REFERENCES customer_session_passes(id);
 ALTER TABLE public.bookings ADD CONSTRAINT bookings_session_id_fkey FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE;
+ALTER TABLE public.closed_dates ADD CONSTRAINT closed_dates_closed_by_fkey FOREIGN KEY (closed_by) REFERENCES staff(id);
 ALTER TABLE public.customer_memberships ADD CONSTRAINT customer_memberships_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE;
 ALTER TABLE public.customer_memberships ADD CONSTRAINT customer_memberships_order_line_item_id_fkey FOREIGN KEY (order_line_item_id) REFERENCES order_line_items(id);
 ALTER TABLE public.customer_memberships ADD CONSTRAINT customer_memberships_plan_id_fkey FOREIGN KEY (plan_id) REFERENCES membership_plans(id);

@@ -11,6 +11,7 @@ import { EVERY_ROW, isUuid, lockAdminRows, SETTINGS_ROW } from '@/server/rules/a
 import { adminRefusal, requireAdminPermission } from '@/server/rules/admin/refusal'
 import { NO_ROW_STAMP, rowsStamp, rowStampSql, type StampedRow } from '@/server/rules/admin/stamp'
 import { adminWrite, WRITES_ONLY_WHAT_WAS_PRESSED, type AdminWriteOptions } from '@/server/rules/admin/write'
+import { LONDON_WALL_CLOCK_NOW_SQL } from '@/server/rules/time/london-day-sql'
 import { PRICING_ADMIN_NEW_WORDS, PRICING_ADMIN_WORDS } from './admin-failure-messages'
 import { DAY_WINDOW_STAMPS_SQL, MEMBER_TERM_STAMP_SQL, POSTAGE_STAMP_SQL } from './stamps'
 
@@ -133,15 +134,25 @@ INSERT INTO band_rules (band_id, day_of_week, from_time, to_time)
 VALUES ($1::uuid, $2, $3::time, $4::time)
 RETURNING id, band_id, from_time::text AS from_time, to_time::text AS to_time, ${rowStampSql('band_rules')} AS stamp`
 
-/** The sessions reassign_session_bands would give another band, by its own conditions, under the windows as they now are. */
-const SESSIONS_TO_REBAND_SQL = `
+/**
+ * The sessions reassign_session_bands would give another band, by its own conditions, under the windows as they now are.
+ *
+ * W51 (W50 review L3): "from now" is London's wall clock now, in the stored form. A session's start is London
+ * wall-clock digits labelled UTC, so it is compared with the same kind of moment, never with the real now(): in
+ * summer the real now() is an hour behind the wall, and a save at 10:30 on the wall would re-band a session that
+ * started at 10:00. The database function's own default is the same moment since migration 032, and the Worker
+ * passes it as well (REBAND_SQL), so the two agree whichever the database has.
+ */
+export const SESSIONS_TO_REBAND_SQL = `
 SELECT s.id
   FROM sessions s
  WHERE s.type = 'public'
    AND s.band_overridden = false
-   AND s.start_time >= now()
+   AND s.start_time >= ${LONDON_WALL_CLOCK_NOW_SQL}
    AND s.band_id IS DISTINCT FROM band_for_session_start(s.start_time)
  ORDER BY s.id`
+/** The database's own re-band, from London's wall clock now (W51: it was `reassign_session_bands(now())`). */
+export const REBAND_SQL = `SELECT reassign_session_bands(${LONDON_WALL_CLOCK_NOW_SQL}) AS n`
 
 /**
  * setBandRules (`POST pricing/band-rules/:dayOfWeek`): one day's band windows replaced. Manage pricing; the old
@@ -209,7 +220,7 @@ export async function setBandRules(db: Db, dayOfWeek: unknown, rules: unknown, s
 async function rebandSessions(tx: Tx): Promise<number> {
   const toChange = await tx.query<{ id: string }>(SESSIONS_TO_REBAND_SQL)
   await lockAdminRows(tx, [{ table: 'sessions', ids: toChange.map((row) => row.id) }])
-  const [row] = await tx.query<{ n: number | string | null }>('SELECT reassign_session_bands(now()) AS n')
+  const [row] = await tx.query<{ n: number | string | null }>(REBAND_SQL)
   return Number(row?.n ?? 0)
 }
 

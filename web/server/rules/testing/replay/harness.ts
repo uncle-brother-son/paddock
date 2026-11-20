@@ -4,6 +4,7 @@ import { vi } from 'vitest'
 import type { Db, SqlParam } from '@/server/db'
 import { FakeStripe } from '@/server/stripe/fake'
 import { startTestDatabase, type TestDatabase } from '../database'
+import { generatorBefore032UnderItsOwnNameSql } from '../migration-032'
 import { staffAppDir } from '../staff-app-dir'
 import { buildRecording, TABLES, type Recording, type Row, type TableDump } from './compare'
 import { bindLegacyRoutes, bindStaffRoutes } from './legacy-routes'
@@ -230,6 +231,12 @@ export interface ReplaySide {
    * Left out (the old side, and every side before W43): the database's lapse_sweep_expired_bookings, as recorded.
    */
   lapseSweep?(db: Db): Promise<void>
+  /**
+   * W51 (migration 032): the nightly job this side runs where a scenario recorded the database's own
+   * (w48-scenarios.ts, runNightlyJob). Left out (the old side, and every side before W51): the job as it was before
+   * 032, which is what the golden files recorded (GENERATOR_BEFORE_032_NAME, startReplay below).
+   */
+  nightlyJob?(db: Db): Promise<void>
 }
 
 export interface ScenarioContext {
@@ -283,6 +290,10 @@ export async function startReplay(): Promise<ReplayEnvironment> {
   // Started on the real clock: Postgres's own start-up waits on time passing.
   const database = await startTestDatabase({ schema: 'live' })
   await database.pg.exec(`RESET ROLE; ${eventQuoteBefore024Sql()}; GRANT EXECUTE ON FUNCTION public.${EVENT_QUOTE_BEFORE_024}(uuid, uuid[]) TO paddock_worker; SET ROLE paddock_worker;`)
+  // W51 (migration 032): the nightly job as it was before 032, under its own name. W48's recordings of the job (the
+  // control, and GB3's "one far-future session stops it") were made against it, so the recorded side runs this one;
+  // the Worker's side runs the real one (ReplaySide.nightlyJob). Run by the tables' owner, as the job is.
+  await database.pg.exec(`RESET ROLE; ${generatorBefore032UnderItsOwnNameSql()} SET ROLE paddock_worker;`)
   vi.useFakeTimers({ toFake: ['Date'], now: new Date(REPLAY_NOW) })
   return {
     database,

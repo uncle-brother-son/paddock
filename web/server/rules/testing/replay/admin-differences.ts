@@ -1,6 +1,7 @@
 import { BOOKING_ADMIN_NEW_WORDS } from '@/server/rules/bookings/admin-failure-messages'
 import { PRICING_ADMIN_NEW_WORDS } from '@/server/rules/pricing/admin-failure-messages'
 import { PROMO_ADMIN_WORDS } from '@/server/rules/promo/admin-failure-messages'
+import { SESSION_ADMIN_NEW_WORDS } from '@/server/rules/sessions/admin-failure-messages'
 import { STAFF_ADMIN_WORDS } from '@/server/rules/staff/failure-messages'
 import type { AllowedDifference, Recording } from './compare'
 
@@ -133,6 +134,9 @@ const GB14_READS_MOVED: ReadonlyArray<readonly [index: number, read: string]> = 
   [4, 'getAddonPrepChecklistForRange'],
   [5, 'getWaiverGapsForRange'],
   [8, 'getPaymentAttentionItems'],
+  // W51.
+  [9, 'getSessionsForRange'],
+  [10, 'getServiceTypesForSlot'],
   // W54.
   [11, 'getPromoCodes'],
   [12, 'getPromoCodeRedemptions'],
@@ -145,8 +149,8 @@ const GB14_PASSES: ReadonlyArray<readonly [offset: number, words: string]> = [
 
 const gb14TheMovedReadsRefuse = (golden: Recording): AllowedDifference =>
   pinned(
-    "Bug GB14 is closed for the reads moved so far: an inactive account, and a sign-in with no staff row, are refused the promo code list and a code's uses (W54), and the booking list, one booking, its detail (with its guests' dates of birth), the add-on prep list, the waiver gaps and the payments needing attention (W50), each in the words every staff route gives. (The old code answered them all. The reads W51 to W57 move still do.)",
-    'Bug GB14 (G-plan section 3); G-plan 4.2 (reads: an active staff member); briefs W49 + W54 and W50 "Parity and tests" (the staff check on reads)',
+    "Bug GB14 is closed for the reads moved so far: an inactive account, and a sign-in with no staff row, are refused the promo code list and a code's uses (W54), and the booking list, one booking, its detail (with its guests' dates of birth), the add-on prep list, the waiver gaps and the payments needing attention (W50), and the calendar's sessions and the service types for a slot (W51), each in the words every staff route gives. (The old code answered them all. The reads W52 to W57 move still do.)",
+    'Bug GB14 (G-plan section 3); G-plan 4.2 (reads: an active staff member); briefs W49 + W54, W50 and W51 "Parity and tests" (the staff check on reads)',
     GB14_PASSES.flatMap(([offset, words]) =>
       GB14_READS_MOVED.flatMap(([index]): Array<readonly [string, Pin]> => {
         const at = index + offset
@@ -428,3 +432,331 @@ export const W50_DIFFERING: readonly string[] = Object.keys(W50_NAMED)
 
 /** The named differences of a W50 recording: none for the ten that match their golden files exactly. */
 export const w50Differences = (name: string, golden: Recording): readonly AllowedDifference[] => W50_NAMED[name]?.(golden) ?? []
+
+// ---------------------------------------------------------------------------------------------------------------------
+// W51: sessions and the timetable (GB3 to GB7, GB14, Wayne's Q50, W51-1)
+
+/**
+ * The 43 recordings of the calendar's two reads and the session and timetable writes. Not here: GB24's two
+ * (`generateUpcomingSessions`: the function is deleted, not moved, so there is nothing to replay them through) and
+ * GB4's capacity recording (W55's function).
+ */
+export const isW51Scenario = (name: string): boolean =>
+  /^w48-(sessions-read$|sessions-for-slot-read$|block-session|block-day|unblock-session|unblock-day|session-band-|session-start-time-|one-off-session-|slot-add|slot-remove|nightly-job-|gb3-|gb4-a-new-weekly-slot-|gb4-a-removed-weekly-slot-|gb5-|gb6-|gb7-)/.test(name)
+
+/** The two recordings of a function W51 deletes (GB24). */
+export const W51_DELETED_FUNCTION_SCENARIOS = ['w48-gb24-generate-upcoming-sessions-is-dead-code-that-still-runs', 'w48-generate-upcoming-sessions-who-may'] as const
+
+/*
+ * What W51's replay shows (briefs/W51-logs/12-replay-differences-first-pass-run2.jsonl, staff app repo): 22 of the 43
+ * match their golden files exactly, field for field: both reads; a block, an unblock, a band change (one session and
+ * a day), a reset, a start-time change, a one-off session and a weekly slot made by an active staff member with
+ * nothing in the way; every old refusal in its old words; and the two recordings of a slot added or removed reaching
+ * no date already made (Wayne's Q50 part 1: left as today). Named columns in place of `RETURNING *` change nothing:
+ * every column the old answers carried is named.
+ *
+ * On every recording and set aside before the comparison, as for W49 to W50: the Worker's audit rows (one for each
+ * write, with who) and the stored answers that hold each press's key. Also set aside: the date sessions are made up
+ * to, which the calendar read now answers beside its sessions (checked on its own in the replay test).
+ *
+ * 21 differ, each by a decision, named below. A refused answer and the row left unchanged are separate allowances,
+ * so a press refused in the right words that still changed the row leaves the row's allowance unseen, which fails.
+ */
+
+const NEW_SESSION_WORDS = SESSION_ADMIN_NEW_WORDS
+const W51_LEVEL_B = 'G-plan 4.2 (level B: one transaction under the lock, an audit row, a press key)'
+export const W51_DECISIONS = {
+  NO_STAFF_ROW: `W48 report "For the Worker step" 1 (the old functions called resolveStaffId and ignored a sign-in with no staff row); bug GB14's fix (G-plan 4.2: every /api/v1/staff route refuses an unknown sign-in before its rule runs)`,
+  Q50_PART_2: `Wayne's Q50 part 2 (20 Nov 2026: adding and removing a weekly slot need Manage pricing); W48 report "For the Worker step" 1; ${W51_LEVEL_B}`,
+  GB14_COUNT: `Bug GB14 (G-plan section 3: "unblockDay's count" checked nobody); G-plan 4.2 (every /api/v1/staff route refuses an unknown or inactive staff member)`,
+  GB3: `Bug GB3 (G-plan section 3 and 4.5); brief W51 item 1 (migration 032: the nightly job keeps its own "sessions made up to" date)`,
+  GB5: `Bug GB5 (G-plan section 3 and 4.5); W50 review L1; brief W51 item 5; ${W51_LEVEL_B}`,
+  GB6: `Bug GB6 (G-plan section 3 and 4.5); brief W51 item 6; ${W51_LEVEL_B}`,
+  GB7: `Bug GB7 (G-plan section 3 and 4.5); brief W51 item 7; ${W51_LEVEL_B}`,
+  WORDS: `W48 report "For the Worker step" 8 and call 9 (plain words where there were none, or where the database's own error showed); G-plan 4.5 (a one-off session checks its date as a start-time change does); ${W51_LEVEL_B}`,
+  CLOSED_DATES: `Brief W51a item 2 (closed dates: W51 review L3; Wayne, 20 Nov 2026: "remember closed dates"); migration 032 (the closed_dates table, which the nightly job leaves out)`,
+} as const
+
+const SAUNA = '10000000-0000-4000-8000-000000000002'
+const MANAGER = '10000000-0000-4000-8000-000000000a01'
+const THURSDAY_MORNING = ['2026-11-12T10:00:00.000Z', '2026-11-12T11:00:00.000Z'] as const
+/** The Thursdays the nightly job makes at 10:00 in the two job recordings: 19 November 2026 to 11 February 2027. */
+const THURSDAYS_MADE = ['2026-11-19', '2026-11-26', '2026-12-03', '2026-12-10', '2026-12-17', '2026-12-24', '2026-12-31', '2027-01-07', '2027-01-14', '2027-01-21', '2027-01-28', '2027-02-04', '2027-02-11'] as const
+
+/** A Sauna session made by the job on a day: open, 10 places, 10:00 to 11:00. */
+const sessionMadeOn =
+  (day: string): Matcher =>
+  (value) =>
+    isObject(value) && value['service_type_id'] === SAUNA && value['start_time'] === `${day}T10:00:00.000Z` && value['end_time'] === `${day}T11:00:00.000Z` && value['status'] === 'open' && value['capacity'] === 10 && value['total_booked'] === 0
+/** The job's own date, written once: made up to 16 February 2027 (the replay's today, 10 November 2026, plus 98). */
+const madeUpToRowAdded: Matcher = (value) =>
+  isObject(value) &&
+  Array.isArray(value['added']) &&
+  value['added'].length === 1 &&
+  isObject(value['added'][0]) &&
+  value['added'][0]['id'] === true &&
+  value['added'][0]['made_up_to'] === '2027-02-16' &&
+  Array.isArray(value['changed']) &&
+  value['changed'].length === 0 &&
+  Array.isArray(value['removed']) &&
+  value['removed'].length === 0
+/** W51a: the closed dates a recording's Block Day presses recorded, each with the press's reason and the staff member, and nothing else. */
+const closedDatesAdded =
+  (dates: readonly string[], reason: string): Matcher =>
+  (value) =>
+    isObject(value) &&
+    Array.isArray(value['added']) &&
+    value['added'].length === dates.length &&
+    value['added'].every((row, index) => isObject(row) && row['closed_on'] === dates[index] && row['reason'] === reason && typeof row['closed_by'] === 'string' && row['closed_at'] === '<set>') &&
+    Array.isArray(value['changed']) &&
+    value['changed'].length === 0 &&
+    Array.isArray(value['removed']) &&
+    value['removed'].length === 0
+/** Sam's booking as a block's conflict list names it, with the status it has. */
+const samsBooking =
+  (status: string, onTheDay = false): Matcher =>
+  (value) =>
+    isObject(value) &&
+    value['customer_first_name'] === 'Sam' &&
+    value['customer_last_name'] === 'Test' &&
+    value['party_size'] === 1 &&
+    value['price_paid'] === '20.00' &&
+    value['redemption_source'] === 'paid' &&
+    value['status'] === status &&
+    (!onTheDay || (value['service_type_name'] === 'Sauna' && value['session_start_time'] === THURSDAY_MORNING[0] && value['session_end_time'] === THURSDAY_MORNING[1]))
+
+const SESSION_NOT_BLOCKED: ReadonlyArray<readonly [string, Pin]> = [
+  ['.tables.sessions.changed[0].status', GONE],
+  ['.tables.sessions.changed[0].blocked_reason', GONE],
+  ['.tables.sessions.changed[0].blocked_by', GONE],
+]
+/** A block answered as a conflict, as the old function answered one: not blocked, the booking listed, no session. */
+const blockRefusedAsConflict = (index: number, status: string): Array<readonly [string, Pin]> => [
+  [`.results[${index}].blocked`, false],
+  [`.results[${index}].conflict`, true],
+  [`.results[${index}].conflictingBookings[0]`, samsBooking(status)],
+  [`.results[${index}].session`, GONE],
+]
+
+/** A "who may" recording's step by a sign-in with no staff row, which the old function let through. */
+const w51NoStaffRow = (golden: Recording, index: number, what: string, decision: string, unchanged: ReadonlyArray<readonly [string, Pin]>, row: string): AllowedDifference[] => [
+  pinned(
+    `${what}, pressed by a sign-in with no staff row, is refused in the words every staff route gives ("No staff record matches the logged-in user's email…"). (The old function looked the staff member up, found none, and went ahead: nobody who is staff had done it.)`,
+    decision,
+    answerRefused(golden, index, NO_STAFF_RECORD_WORDS)
+  ),
+  pinned(`…and ${row} (The old function changed it.)`, decision, unchanged),
+]
+
+const W51_NAMED: Readonly<Record<string, (golden: Recording) => AllowedDifference[]>> = {
+  // --- Who may
+  'w48-slot-add-who-may': (golden) => w51NoStaffRow(golden, 1, 'Adding a weekly slot', W51_DECISIONS.Q50_PART_2, [['.tables.service_type_schedule_slots', GONE]], 'no weekly slot is added.'),
+  'w48-slot-remove-who-may': (golden) => w51NoStaffRow(golden, 1, 'Removing a weekly slot', W51_DECISIONS.Q50_PART_2, [['.tables.service_type_schedule_slots', GONE]], 'the weekly slot is still there.'),
+  'w48-unblock-session-who-may': (golden) => w51NoStaffRow(golden, 1, 'Unblocking a session', W51_DECISIONS.NO_STAFF_ROW, [['.tables.sessions', GONE]], 'the session is still blocked, with its reason.'),
+  'w48-session-start-time-who-may': (golden) => w51NoStaffRow(golden, 1, 'Changing a session\'s start time', W51_DECISIONS.NO_STAFF_ROW, [['.tables.sessions', GONE]], 'the session keeps its time and its band.'),
+  'w48-one-off-session-who-may': (golden) => w51NoStaffRow(golden, 1, 'Creating a one-off session', W51_DECISIONS.NO_STAFF_ROW, [['.tables.sessions', GONE]], 'no session is made.'),
+  'w48-unblock-day-who-may': (golden) => [
+    pinned(
+      "Bug GB14 is closed for Unblock Day's count: an inactive account, and a sign-in with no staff row, are refused it in the words every staff route gives. (The old count asked nobody who they were and answered how many sessions were blocked.)",
+      W51_DECISIONS.GB14_COUNT,
+      [...answerRefused(golden, 0, INACTIVE_WORDS), ...answerRefused(golden, 1, NO_STAFF_RECORD_WORDS)]
+    ),
+  ],
+  'w48-session-band-who-may': (golden) => [s3UnknownStaffOnManagePricing(golden)],
+  'w48-session-band-reset-who-may': (golden) => [s3UnknownStaffOnManagePricing(golden)],
+
+  // --- Words where there were none, or where the database's own showed
+  'w48-slot-add-refusals': () => [
+    pinned(
+      'A weekly slot added for a service type that isn\'t there is refused in plain words, "That service type no longer exists. Reload the page and try again." (The old code showed the database\'s own error: insert or update on table "service_type_schedule_slots" violates foreign key constraint….)',
+      W51_DECISIONS.WORDS,
+      [['.results[5].thrown', NEW_SESSION_WORDS.serviceTypeGone]]
+    ),
+  ],
+  'w48-one-off-session-refusals': () => [
+    pinned(
+      'A one-off session with a start that isn\'t a date and time is refused as a start-time change refuses it, "Enter a valid date and time." (The old code showed the database\'s own error: invalid input syntax for type timestamp with time zone: "next Friday".)',
+      W51_DECISIONS.WORDS,
+      [['.results[3].thrown', 'Enter a valid date and time.']]
+    ),
+  ],
+  'w48-session-band-reset': () => [
+    pinned(
+      'A band reset that changes nothing is still answered `reset: false` with its old reason, now with why: "This session no longer exists. Reload the page and try again." and "This session\'s band is already set automatically." (The old code gave the reason and no words.)',
+      W51_DECISIONS.WORDS,
+      [
+        ['.results[0].message', NEW_SESSION_WORDS.sessionGone],
+        ['.results[1].message', NEW_SESSION_WORDS.notOverridden],
+      ]
+    ),
+  ],
+  'w48-block-session': (golden) => [
+    pinned(
+      'A block of a session that isn\'t there is refused, "This session no longer exists. Reload the page and try again." (The old code answered `blocked: true` with no session, and the dialog said "Session blocked".)',
+      W51_DECISIONS.WORDS,
+      answerRefused(golden, 1, NEW_SESSION_WORDS.sessionGone)
+    ),
+  ],
+  'w48-session-band-set-for-one-session': (golden) => [
+    pinned(
+      'A band set for a session that isn\'t there is refused, "This session no longer exists. Reload the page and try again." (The old code answered `confirmed: true` for 0 sessions, and the dialog said the band was set.)',
+      W51_DECISIONS.WORDS,
+      answerRefused(golden, 3, NEW_SESSION_WORDS.sessionGone)
+    ),
+  ],
+
+  // --- W51a: Block Day records the date as closed, and Unblock Day removes it
+  'w48-block-day': () => [
+    pinned(
+      'Closed dates (W51a): each Block Day also records its date as closed, with the reason and the staff member: here Wednesday 11 and Thursday 12 November 2026, "Staff day". The sessions it blocks, its count and its answer are exactly as recorded. (The old code kept no closed dates: a date further ahead than sessions were made could not be closed, and the nightly job later made it open.)',
+      W51_DECISIONS.CLOSED_DATES,
+      [['.tables.closed_dates', closedDatesAdded(['2026-11-11', '2026-11-12'], 'Staff day')]]
+    ),
+  ],
+
+  // --- GB5: every booking that isn't cancelled stops a block
+  'w48-gb5-a-payment-needed-booking-does-not-stop-a-block': () => [
+    pinned(
+      'Bug GB5 is closed for a booking at Payment needed: it stops the block, and is listed for staff to move or cancel, as a confirmed one always was. (The old code looked only at confirmed bookings and blocked the session with the booking on it: the member pays for a session that is closed.)',
+      W51_DECISIONS.GB5,
+      blockRefusedAsConflict(1, 'payment_needed')
+    ),
+    pinned('…and the session is not blocked. (The old code blocked it.)', W51_DECISIONS.GB5, SESSION_NOT_BLOCKED),
+  ],
+  'w48-gb5-a-pending-booking-does-not-stop-a-block': () => [
+    pinned(
+      'Bug GB5 is closed for a booking whose payment is still being taken (pending): it stops Block Slot and Block Day alike, and is listed. (The old code blocked the session, and then the day, with the booking on it.)',
+      W51_DECISIONS.GB5,
+      [
+        ...blockRefusedAsConflict(1, 'pending'),
+        ['.results[2].blocked', false],
+        ['.results[2].conflict', true],
+        ['.results[2].conflictingBookings[0]', samsBooking('pending', true)],
+        ['.results[2].blockedCount', 0],
+      ]
+    ),
+    pinned('…and the session is not blocked, by the slot press or the day press. (The old code blocked it.)', W51_DECISIONS.GB5, SESSION_NOT_BLOCKED),
+  ],
+  'w48-gb5-a-booking-placed-between-the-check-and-the-block': () => [
+    pinned(
+      "Bug GB5 is closed for a booking placed while the block is pressed: the block reads the bookings under the session's lock, which the order holds until it commits, so the block waits, then finds the booking and is refused with it listed. (The old code read the bookings, then blocked in a second statement: a booking placed in between landed on a blocked session.)",
+      W51_DECISIONS.GB5,
+      blockRefusedAsConflict(1, 'confirmed')
+    ),
+    pinned('…and the session is not blocked. (The old code blocked it.)', W51_DECISIONS.GB5, SESSION_NOT_BLOCKED),
+  ],
+
+  // --- GB6: any booking that isn't cancelled refuses a start-time change
+  'w48-gb6-a-session-with-a-payment-needed-booking-is-moved-into-peak': () => [
+    pinned(
+      'Bug GB6 is closed: a start-time change on a session with a Payment needed booking is refused, with the reason the dialog already has words for (since W51a: "This slot has a booking, so its start time can\'t be changed."). (The old code counted pending and confirmed bookings only and moved the session.)',
+      W51_DECISIONS.GB6,
+      [
+        ['.results[1].updated', false],
+        ['.results[1].session', GONE],
+        ['.results[1].band', GONE],
+        ['.results[1].reason', 'session_has_bookings'],
+      ]
+    ),
+    pinned(
+      '…and the booking, read again, is still at 10:00 to 11:00. (The old code moved it to 18:00 with its session, unseen: the member is charged the Peak price at Settle, for a time they didn\'t book.)',
+      W51_DECISIONS.GB6,
+      [
+        ['.results[2].start_time', THURSDAY_MORNING[0]],
+        ['.results[2].end_time', THURSDAY_MORNING[1]],
+      ]
+    ),
+    pinned('…and the session keeps its 10:00 start, its 11:00 end and its Core band. (The old code moved it to 18:00, into Peak.)', W51_DECISIONS.GB6, [
+      ['.tables.sessions.changed[0].start_time', GONE],
+      ['.tables.sessions.changed[0].end_time', GONE],
+      ['.tables.sessions.changed[0].band_id', GONE],
+    ]),
+  ],
+
+  // --- GB7: unblock opens only what is blocked; a day block leaves earlier blocks; Unblock Day leaves them too
+  'w48-unblock-day': () => [
+    pinned(
+      "Bug GB7 is closed for Unblock Day: it reopens the sessions a Block Day blocked and leaves a session blocked on its own. Here the one blocked session (a boiler repair) was blocked on its own, so the count says 0 to reopen and 1 blocked on its own, the press reopens none, and the answer carries that second figure (`blockedBefore`). (The old code counted and reopened every blocked session on the date.)",
+      W51_DECISIONS.GB7,
+      [
+        ['.results[0].blockedSessions', 0],
+        ['.results[0].blockedBefore', 1],
+        ['.results[1].blockedSessions', 0],
+        ['.results[1].unblocked', 0],
+        ['.results[1].blockedBefore', 1],
+        ['.results[2].blockedBefore', 1],
+      ]
+    ),
+    pinned('…and the repair block is still there, with its reason and who. (The old code reopened the session.)', W51_DECISIONS.GB7, [['.tables.sessions', GONE]]),
+    pinned(
+      'Closed dates (W51a): the count also says whether the date is recorded as closed (here it is not: 0), and each press says whether it removed a closed date (it did not). (The old code kept no closed dates.)',
+      W51_DECISIONS.CLOSED_DATES,
+      [
+        ['.results[0].closedDates', 0],
+        ['.results[1].closedDateRemoved', false],
+        ['.results[2].closedDateRemoved', false],
+      ]
+    ),
+  ],
+  'w48-gb7-a-day-block-and-unblock-loses-an-earlier-block': (golden) => [
+    pinned(
+      'Bug GB7 is closed (unblock): Unblock on a session that isn\'t blocked is refused, "This session isn\'t blocked, so there is nothing to unblock.", and the session is left exactly as it is. (The old code set it open again and answered its row.)',
+      W51_DECISIONS.GB7,
+      answerRefused(golden, 0, NEW_SESSION_WORDS.notBlocked)
+    ),
+    pinned(
+      "Bug GB7 is closed (Block Day): the day block blocks the one open session and leaves the session already blocked for the boiler repair as it is: the count is 1, and the calendar still shows the repair's reason and the manager who blocked it. (The old code overwrote the reason and who on both: count 2.)",
+      W51_DECISIONS.GB7,
+      [
+        ['.results[1].blockedCount', 1],
+        ['.results[2][1].blocked_reason', 'Boiler repair'],
+        ['.results[2][1].blocked_by', MANAGER],
+      ]
+    ),
+    pinned(
+      "Bug GB7 is closed (Unblock Day): it reopens the one session the day block blocked, says one was blocked on its own, and leaves that one blocked: the calendar still shows the repair block. (The old code reopened both, and the repair block was gone.)",
+      W51_DECISIONS.GB7,
+      [
+        ['.results[3].blockedSessions', 1],
+        ['.results[3].unblocked', 1],
+        ['.results[3].blockedBefore', 1],
+        ['.results[4][1].status', 'blocked'],
+        ['.results[4][1].blocked_reason', 'Boiler repair'],
+        ['.results[4][1].blocked_by', MANAGER],
+      ]
+    ),
+    pinned('…and at the end no session has changed: the morning one is open again and the repair block is as it was. (The old code left the repair session open.)', W51_DECISIONS.GB7, [['.tables.sessions', GONE]]),
+    pinned(
+      'Closed dates (W51a): the Block Day recorded the date as closed, and the Unblock Day removed it again, and says so (`closedDateRemoved`); no closed date is left at the end. (The old code kept no closed dates.)',
+      W51_DECISIONS.CLOSED_DATES,
+      [['.results[3].closedDateRemoved', true]]
+    ),
+  ],
+
+  // --- GB3: the nightly job keeps its own date
+  'w48-nightly-job-makes-sessions-98-days-ahead': () => [
+    pinned(
+      'Migration 032: the nightly job writes the date it has made sessions up to (16 February 2027: today plus 98), in its own one-row table. The 13 sessions it makes are exactly the ones recorded. (The old job kept no date: it read the furthest session.)',
+      W51_DECISIONS.GB3,
+      [['.tables.sessions_made_up_to', madeUpToRowAdded]]
+    ),
+  ],
+  'w48-gb3-one-far-future-session-stops-the-nightly-job': () => [
+    pinned(
+      'Bug GB3 is closed: with a one-off session made for 1 June 2027, the nightly job still makes its sessions: the 13 Thursdays at 10:00 from 19 November 2026 to 11 February 2027, in one statement, and the calendar for 15 November to 10 December shows four of them. (The old job saw a session past its 98-day target and made nothing: no session to book from 15 November until June.)',
+      W51_DECISIONS.GB3,
+      [
+        ...THURSDAYS_MADE.slice(0, 4).map((day, i) => [`.results[1][${i}]`, sessionMadeOn(day)] as const),
+        ...THURSDAYS_MADE.map((day, i) => [`.tables.sessions.added[${i + 1}]`, sessionMadeOn(day)] as const),
+        ['.tables.sessions.tied', 13],
+      ]
+    ),
+    pinned('…and the job writes the date it has made sessions up to (16 February 2027), which the one-off session for June does not move.', W51_DECISIONS.GB3, [['.tables.sessions_made_up_to', madeUpToRowAdded]]),
+  ],
+}
+
+/** The W51 recordings that have a named difference. */
+export const W51_DIFFERING: readonly string[] = Object.keys(W51_NAMED)
+
+/** The named differences of a W51 recording: none for the ones that match their golden files exactly. */
+export const w51Differences = (name: string, golden: Recording): readonly AllowedDifference[] => W51_NAMED[name]?.(golden) ?? []

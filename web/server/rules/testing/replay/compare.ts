@@ -69,9 +69,15 @@ const RANDOM_COLUMNS: Readonly<Record<string, readonly string[]>> = {
  * the moment each holds, in a row and in an answer, where every other recording shows only that a time is set. The
  * replay's clock is fixed, so they repeat exactly; times the clock stamps (created_at, checked_in_at…) stay hidden.
  * Only step G's: the 991 recordings before it are read exactly as they were written.
+ *
+ * W51 (W48 review L6): a later slice's own recordings move these times too, and would hide them again under their
+ * own prefix. So the prefixes are a list: step G's golden files (`w48-`) and W51's (`w51-`: a session's start moved,
+ * a one-off session, the sessions the nightly job makes). A slice that records scenarios which move a time (W52's
+ * events) adds its prefix here.
  */
 export const STAFF_SET_TIMES: ReadonlySet<string> = new Set(['starts_at', 'ends_at', 'refund_cutoff_at', 'public_release_at', 'start_time', 'end_time', 'session_start_time', 'session_end_time'])
-const showsStaffSetTimes = (scenario: string): boolean => scenario.startsWith('w48-')
+export const STAFF_SET_TIME_PREFIXES: readonly string[] = ['w48-', 'w51-']
+export const showsStaffSetTimes = (scenario: string): boolean => STAFF_SET_TIME_PREFIXES.some((prefix) => scenario.startsWith(prefix))
 const moment = (value: unknown): string | null => {
   const at = value instanceof Date ? value : new Date(String(value))
   return Number.isNaN(at.getTime()) ? null : at.toISOString()

@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { availableSessionsInputSchema, sessionTimeConflictInputSchema } from '@/contracts'
@@ -111,18 +111,10 @@ describe('staff app helpers', () => {
     // W50: setAddonLinePrepared, setBookingCheckedIn and setGuestWaiverStatus left this list. They are thin calls to
     // the Worker now, which refuses an inactive account before anything happens: held in "W50: the booking and
     // Overview functions are thin calls to the Worker" below, with the same words.
-    const guarded = [
-      'addServiceTypeScheduleSlot',
-      'createOneOffSession',
-      'deleteServiceTypeScheduleSlot',
-      'generateUpcomingSessions',
-      'setEventAttendeeCheckIn',
-      'setEventAttendeeWaiver',
-      'setEventAttendeesCheckIn',
-      'setOrderLineItemFulfilled',
-      'setSessionStartTime',
-      'unblockSession',
-    ]
+    // W51: addServiceTypeScheduleSlot, createOneOffSession, deleteServiceTypeScheduleSlot, setSessionStartTime and
+    // unblockSession left it the same way ("W51: the session and timetable functions are thin calls to the Worker"
+    // below), and generateUpcomingSessions is deleted (GB24).
+    const guarded = ['setEventAttendeeCheckIn', 'setEventAttendeeWaiver', 'setEventAttendeesCheckIn', 'setOrderLineItemFulfilled']
 
     it.each(guarded)('%s refuses before anything is written or charged', async (name) => {
       const query = stubStaffTable([row(false)])
@@ -759,6 +751,425 @@ describe('staff app helpers', () => {
     })
   })
 
+  // Brief W51 (item 11; lead calls L4 and L11): the two calendar reads and the ten session and timetable writes are
+  // thin calls to the Worker, one function for each old one, with the old bodies gone; generateUpcomingSessions is
+  // deleted (GB24). What each makes of the Worker's answers is held here, with the screens' own lines; the rules
+  // themselves in server/rules/sessions/admin.test.ts and its races.
+  describe('W51: the session and timetable functions are thin calls to the Worker', () => {
+    const INACTIVE = 'This staff account is inactive. Ask an admin to reactivate it.'
+    const NO_ANSWER = "That didn't get an answer, so it may or may not have been saved. The screen has been reloaded: check it, and press again if it hasn't changed."
+    const COUNTS_CHANGED = 'This has changed since the figures were shown. Check the new figures, then confirm again.'
+    const ID = '22222222-2222-4222-8222-222222222222'
+    const BAND = '33333333-3333-4333-8333-333333333333'
+    const DAY = '2026-11-21'
+    const fn = async (name: string) => (await import(/* @vite-ignore */ path.join(appDir, `backend/paddock/${name}`))).default as (req: { params: Record<string, unknown>; user: typeof user }) => Promise<unknown>
+    const refused = (code: string, reason: string, message: string, more: Record<string, unknown> = {}) => ({ data: { ok: false, error: { code, message, details: { reason, message, action: 'x', ...more } }, requestId: 'worker-request' } })
+    const sent = (call = 0) => rawRequest.mock.calls[call]?.[0] as { path: string; method: string; body?: unknown; queryParams?: Record<string, string>; headers: Record<string, string> }
+    const component = (file: string) => readFileSync(path.join(appDir, 'frontend/components', file), 'utf8')
+    const page = (file: string) => readFileSync(path.join(appDir, 'frontend/pages', file), 'utf8')
+
+    /** Each function with params a screen sends, the route it must call, and what it sends there. */
+    const thin: Array<[string, Record<string, unknown>, string, string, { queryParams?: Record<string, string>; body?: unknown }]> = [
+      ['getSessionsForRange', { startDate: DAY, endDate: '2026-11-27' }, 'GET', '/api/v1/staff/sessions', { queryParams: { startDate: DAY, endDate: '2026-11-27' } }],
+      ['getServiceTypesForSlot', { startTime: '2026-11-21T10:00:00.000Z' }, 'GET', '/api/v1/staff/sessions/for-slot', { queryParams: { startTime: '2026-11-21T10:00:00.000Z' } }],
+      ['blockSession', { sessionId: ID, reason: 'Staff training' }, 'POST', `/api/v1/staff/sessions/${ID}/block`, { body: { reason: 'Staff training' } }],
+      ['blockDay', { date: DAY, quote: true }, 'GET', `/api/v1/staff/sessions/days/${DAY}/block/quote`, {}],
+      ['blockDay', { date: DAY, reason: 'Staff day', seen: { toBlock: 3, alreadyBlocked: 1 } }, 'POST', `/api/v1/staff/sessions/days/${DAY}/block`, { body: { reason: 'Staff day', seen: { toBlock: 3, alreadyBlocked: 1 } } }],
+      ['unblockSession', { sessionId: ID }, 'POST', `/api/v1/staff/sessions/${ID}/unblock`, { body: {} }],
+      ['unblockDay', { date: DAY }, 'GET', `/api/v1/staff/sessions/days/${DAY}/unblock/quote`, {}],
+      ['unblockDay', { date: DAY, confirmed: true, seen: { blockedSessions: 3, blockedBefore: 1 } }, 'POST', `/api/v1/staff/sessions/days/${DAY}/unblock`, { body: { seen: { blockedSessions: 3, blockedBefore: 1 } } }],
+      ['setSessionBand', { sessionId: ID, bandId: BAND }, 'GET', `/api/v1/staff/sessions/${ID}/band/quote`, { queryParams: { bandId: BAND } }],
+      ['setSessionBand', { sessionId: ID, bandId: BAND, confirmed: true, seen: { sessionsAffected: 1, bookingsAffected: 2 } }, 'POST', `/api/v1/staff/sessions/${ID}/band`, { body: { bandId: BAND, seen: { sessionsAffected: 1, bookingsAffected: 2 } } }],
+      ['setSessionBand', { date: DAY, bandId: BAND }, 'GET', `/api/v1/staff/sessions/days/${DAY}/band/quote`, { queryParams: { bandId: BAND } }],
+      ['setSessionBand', { date: DAY, bandId: BAND, confirmed: true, seen: { sessionsAffected: 4, bookingsAffected: 0 } }, 'POST', `/api/v1/staff/sessions/days/${DAY}/band`, { body: { bandId: BAND, seen: { sessionsAffected: 4, bookingsAffected: 0 } } }],
+      ['resetSessionBand', { sessionId: ID }, 'POST', `/api/v1/staff/sessions/${ID}/band/reset`, { body: {} }],
+      ['setSessionStartTime', { sessionId: ID, startTime: '2026-11-21T18:00:00.000Z' }, 'POST', `/api/v1/staff/sessions/${ID}/start-time`, { body: { startTime: '2026-11-21T18:00:00.000Z' } }],
+      ['deleteServiceTypeScheduleSlot', { slotId: ID }, 'POST', `/api/v1/staff/catalog/schedule-slots/${ID}/remove`, { body: {} }],
+    ]
+    /** The two that add something: a refusal comes back as data, so the dialog can tell it from no answer. */
+    const creates: Array<[string, Record<string, unknown>, string, unknown]> = [
+      ['createOneOffSession', { serviceTypeId: ID, startTime: '2026-11-21T07:00:00.000Z' }, '/api/v1/staff/sessions', { serviceTypeId: ID, startTime: '2026-11-21T07:00:00.000Z' }],
+      ['addServiceTypeScheduleSlot', { serviceTypeId: ID, dayOfWeek: 2, startTime: '07:00' }, `/api/v1/staff/catalog/service-types/${ID}/schedule-slots`, { dayOfWeek: 2, startTime: '07:00' }],
+    ]
+    const NAMES = [...new Set([...thin.map(([name]) => name), ...creates.map(([name]) => name)])]
+
+    it.each(thin)('%s %o asks only the Worker, on its own route, and an inactive account is refused in the same words as before', async (name, params, method, route, sends) => {
+      const query = vi.fn()
+      const legacy = vi.fn()
+      vi.stubGlobal('paddockData', { query })
+      vi.stubGlobal('paddockBackendApi2', { rawRequest: legacy })
+      rawRequest.mockResolvedValue(refusal('FORBIDDEN', INACTIVE))
+
+      // Thrown as the words alone, as the old functions threw them: no code and no request id after them.
+      await expect((await fn(name))({ params, user })).rejects.toThrow(new Error(INACTIVE))
+
+      expect(rawRequest).toHaveBeenCalledTimes(1)
+      expect(sent()).toMatchObject({ method, path: route, headers: { 'X-Staff-Email': user.email } })
+      if (sends.queryParams) expect(sent().queryParams).toEqual(sends.queryParams)
+      if (sends.body) expect(sent().body).toEqual(sends.body)
+      // A press goes under a key made for the call; a read or a quote has none.
+      expect(typeof sent().headers['Idempotency-Key']).toBe(method === 'POST' ? 'string' : 'undefined')
+      expect(legacy).not.toHaveBeenCalled()
+      expect(query).not.toHaveBeenCalled()
+    })
+
+    it.each(creates)('%s asks only the Worker, under the key its dialog sends, and an inactive account comes back as data with the same words', async (name, params, route, body) => {
+      const query = vi.fn()
+      vi.stubGlobal('paddockData', { query })
+      rawRequest.mockResolvedValue(refusal('FORBIDDEN', INACTIVE))
+      expect(await (await fn(name))({ params: { ...params, idempotencyKey: 'press-key-0123456789' }, user })).toEqual({ created: false, reason: 'permission_denied', message: INACTIVE })
+      expect(sent()).toMatchObject({ method: 'POST', path: route, body, headers: { 'X-Staff-Email': user.email, 'Idempotency-Key': 'press-key-0123456789' } })
+      expect(query).not.toHaveBeenCalled()
+    })
+
+    it('there are twelve, none reads the database, the legacy resource or the old staff lookups any more, and generateUpcomingSessions is gone (GB24)', () => {
+      expect(NAMES).toHaveLength(12)
+      for (const name of NAMES) {
+        const source = readFileSync(path.join(appDir, `backend/paddock/${name}.ts`), 'utf8')
+        expect(source, name).not.toMatch(/paddockData|paddockBackendApi2|resolveStaffId|requireStaffId|requireCanManagePricing/)
+        expect(source, name).not.toMatch(/from '\.\/shared\/(staffAccess|pricingStaff|resolveStaffId|isoDateTime)'/)
+        expect(source, name).toMatch(/from '\.\/shared\/adminWorker'/)
+      }
+      expect(existsSync(path.join(appDir, 'backend/paddock/generateUpcomingSessions.ts'))).toBe(false)
+      expect(readFileSync(path.join(appDir, 'backend/paddock/typecheckAll.ts'), 'utf8')).not.toContain('generateUpcomingSessions')
+    })
+
+    it('the calendar read answers the sessions and the date sessions are made up to; the slot read its list', async () => {
+      const row = { id: ID, status: 'open', band_price: '20.00' }
+      rawRequest.mockResolvedValue(success({ sessions: [row], madeUpTo: '2027-02-26' }))
+      expect(await (await fn('getSessionsForRange'))({ params: { startDate: DAY, endDate: DAY }, user })).toEqual({ sessions: [row], madeUpTo: '2027-02-26' })
+      rawRequest.mockResolvedValue(success([row]))
+      expect(await (await fn('getServiceTypesForSlot'))({ params: { startTime: '2026-11-21T10:00:00.000Z' }, user })).toEqual([row])
+    })
+
+    it('a block: the bookings in the way come back in the old shape (blockSession and blockDay); any other refusal is thrown in the Worker\'s words; no answer in words that say it may or may not have been saved', async () => {
+      const booking = { id: 'b1', customer_first_name: 'Sam', customer_last_name: 'Test', party_size: 1, price_paid: '20.00', redemption_source: 'paid', status: 'payment_needed' }
+      rawRequest.mockResolvedValue(refused('CONFLICT', 'bookings_in_the_way', 'This slot has 1 booking.', { conflictingBookings: [booking] }))
+      expect(await (await fn('blockSession'))({ params: { sessionId: ID, reason: 'x' }, user })).toEqual({ blocked: false, conflict: true, conflictingBookings: [booking], session: null })
+      expect(await (await fn('blockDay'))({ params: { date: DAY, reason: 'x', seen: { toBlock: 1, alreadyBlocked: 0 } }, user })).toEqual({ blocked: false, conflict: true, conflictingBookings: [booking], blockedCount: 0 })
+      // A success: the old four fields for a day; the session for one.
+      rawRequest.mockResolvedValue(success({ blocked: true, conflict: false, conflictingBookings: [], blockedCount: 3, alreadyBlocked: 1 }))
+      expect(await (await fn('blockDay'))({ params: { date: DAY, reason: 'x', seen: { toBlock: 3, alreadyBlocked: 1 } }, user })).toEqual({ blocked: true, conflict: false, conflictingBookings: [], blockedCount: 3 })
+      rawRequest.mockResolvedValue(success({ blocked: true, conflict: false, conflictingBookings: [], session: { id: ID, status: 'blocked' } }))
+      expect(await (await fn('blockSession'))({ params: { sessionId: ID, reason: 'x' }, user })).toEqual({ blocked: true, conflict: false, conflictingBookings: [], session: { id: ID, status: 'blocked' } })
+      rawRequest.mockResolvedValue(refused('CONFLICT', 'already_blocked', 'This session is already blocked. Its reason has been left as it was.'))
+      await expect((await fn('blockSession'))({ params: { sessionId: ID, reason: 'x' }, user })).rejects.toThrow(new Error('This session is already blocked. Its reason has been left as it was.'))
+      rawRequest.mockRejectedValue(new Error('fetch failed'))
+      await expect((await fn('blockSession'))({ params: { sessionId: ID, reason: 'x' }, user })).rejects.toThrow(new Error(NO_ANSWER))
+      await expect((await fn('blockDay'))({ params: { date: DAY, reason: 'x', seen: { toBlock: 1, alreadyBlocked: 0 } }, user })).rejects.toThrow(new Error(NO_ANSWER))
+    })
+
+    it('the quotes: Block Day says what it would do and lists the bookings in the way; Unblock Day says how many reopen and how many stay blocked', async () => {
+      const booking = { id: 'b1', session_id: ID, status: 'pending' }
+      rawRequest.mockResolvedValue(success({ sessions: 4, toBlock: 3, alreadyBlocked: 1, conflictingBookings: [booking] }))
+      expect(await (await fn('blockDay'))({ params: { date: DAY, quote: true }, user })).toEqual({ blocked: false, conflict: true, conflictingBookings: [booking], blockedCount: 0, toBlock: 3, alreadyBlocked: 1 })
+      rawRequest.mockResolvedValue(success({ sessions: 4, toBlock: 3, alreadyBlocked: 1, conflictingBookings: [] }))
+      expect(await (await fn('blockDay'))({ params: { date: DAY, quote: true }, user })).toMatchObject({ blocked: false, conflict: false, toBlock: 3, alreadyBlocked: 1 })
+      rawRequest.mockResolvedValue(success({ blockedSessions: 3, blockedBefore: 1 }))
+      expect(await (await fn('unblockDay'))({ params: { date: DAY }, user })).toEqual({ confirmed: false, blockedSessions: 3, blockedBefore: 1 })
+      rawRequest.mockResolvedValue(success({ confirmed: true, blockedSessions: 3, blockedBefore: 1, unblocked: 3 }))
+      expect(await (await fn('unblockDay'))({ params: { date: DAY, confirmed: true, seen: { blockedSessions: 3, blockedBefore: 1 } }, user })).toEqual({ confirmed: true, blockedSessions: 3, blockedBefore: 1, unblocked: 3 })
+    })
+
+    it("Q18's rule: figures that are no longer right come back as `changed: true` with the new ones, for Block Day, Unblock Day and a band change", async () => {
+      rawRequest.mockResolvedValue(refused('CONFLICT', 'changed_since', COUNTS_CHANGED, { counts: { toBlock: 2, alreadyBlocked: 2 } }))
+      expect(await (await fn('blockDay'))({ params: { date: DAY, reason: 'x', seen: { toBlock: 3, alreadyBlocked: 1 } }, user })).toEqual({ blocked: false, conflict: false, conflictingBookings: [], blockedCount: 0, toBlock: 2, alreadyBlocked: 2, changed: true, message: COUNTS_CHANGED })
+      // W51a: whether a closed date goes is one of Unblock Day's figures.
+      rawRequest.mockResolvedValue(refused('CONFLICT', 'changed_since', COUNTS_CHANGED, { counts: { blockedSessions: 2, blockedBefore: 2, closedDates: 1 } }))
+      expect(await (await fn('unblockDay'))({ params: { date: DAY, confirmed: true, seen: { blockedSessions: 3, blockedBefore: 1, closedDates: 0 } }, user })).toEqual({ confirmed: false, blockedSessions: 2, blockedBefore: 2, closedDates: 1, changed: true, message: COUNTS_CHANGED })
+      rawRequest.mockResolvedValue(refused('CONFLICT', 'changed_since', COUNTS_CHANGED, { counts: { sessionsAffected: 1, bookingsAffected: 3 } }))
+      expect(await (await fn('setSessionBand'))({ params: { sessionId: ID, bandId: BAND, confirmed: true, seen: { sessionsAffected: 1, bookingsAffected: 2 } }, user })).toEqual({ confirmed: false, sessionsAffected: 1, bookingsAffected: 3, changed: true, message: COUNTS_CHANGED })
+    })
+
+    it('setSessionBand: which of a session or a day is asked for is its own check, in the old words, before the Worker is asked', async () => {
+      await expect((await fn('setSessionBand'))({ params: { bandId: BAND }, user })).rejects.toThrow(new Error('Provide either a sessionId or a date.'))
+      await expect((await fn('setSessionBand'))({ params: { sessionId: ID, date: DAY, bandId: BAND }, user })).rejects.toThrow(new Error('Provide either a sessionId or a date, not both.'))
+      expect(rawRequest).not.toHaveBeenCalled()
+      rawRequest.mockResolvedValue(refused('NOT_FOUND', 'band_not_found', 'That band no longer exists.'))
+      await expect((await fn('setSessionBand'))({ params: { sessionId: ID, bandId: BAND }, user })).rejects.toThrow(new Error('That band no longer exists.'))
+    })
+
+    it('the refusals the old functions answered as data still are: unblock (null), reset, a start time, a one-off session, a slot removed', async () => {
+      rawRequest.mockResolvedValue(refused('NOT_FOUND', 'session_not_found', 'This session no longer exists. Reload the page and try again.'))
+      expect(await (await fn('unblockSession'))({ params: { sessionId: ID }, user })).toBeNull()
+      expect(await (await fn('resetSessionBand'))({ params: { sessionId: ID }, user })).toEqual({ reset: false, reason: 'session_not_found', message: 'This session no longer exists. Reload the page and try again.' })
+      expect(await (await fn('setSessionStartTime'))({ params: { sessionId: ID, startTime: '2026-11-21T18:00:00.000Z' }, user })).toEqual({ updated: false, reason: 'session_not_found' })
+      rawRequest.mockResolvedValue(refused('CONFLICT', 'not_blocked', "This session isn't blocked, so there is nothing to unblock."))
+      await expect((await fn('unblockSession'))({ params: { sessionId: ID }, user })).rejects.toThrow(new Error("This session isn't blocked, so there is nothing to unblock."))
+      rawRequest.mockResolvedValue(refused('CONFLICT', 'session_has_bookings', "This slot has a booking, so its start time can't be changed."))
+      expect(await (await fn('setSessionStartTime'))({ params: { sessionId: ID, startTime: '2026-11-21T18:00:00.000Z' }, user })).toEqual({ updated: false, reason: 'session_has_bookings' })
+      rawRequest.mockResolvedValue(refused('CONFLICT', 'slot_already_exists', 'A session already exists for that service type at that exact time.'))
+      expect(await (await fn('createOneOffSession'))({ params: { serviceTypeId: ID, startTime: '2026-11-21T07:00:00.000Z' }, user })).toEqual({ created: false, reason: 'slot_already_exists' })
+      rawRequest.mockResolvedValue(refused('VALIDATION', 'invalid_start_time', 'Enter a valid date and time.'))
+      expect(await (await fn('createOneOffSession'))({ params: { serviceTypeId: ID, startTime: 'next Friday' }, user })).toEqual({ created: false, reason: 'invalid_start_time', message: 'Enter a valid date and time.' })
+      rawRequest.mockResolvedValue(refused('NOT_FOUND', 'slot_not_found', 'That weekly slot no longer exists. Reload the page and try again.'))
+      expect(await (await fn('deleteServiceTypeScheduleSlot'))({ params: { slotId: ID }, user })).toEqual({ deleted: false })
+    })
+
+    it('the two creates: no answer keeps the dialog\'s key (`noAnswer`), with words that say pressing again is safe; a missing id is the function\'s own check, in the old words', async () => {
+      rawRequest.mockRejectedValue(new Error('fetch failed'))
+      expect(await (await fn('createOneOffSession'))({ params: { serviceTypeId: ID, startTime: '2026-11-21T07:00:00.000Z', idempotencyKey: 'press-key-0123456789' }, user })).toEqual({
+        created: false,
+        reason: 'no_answer',
+        message: "Creating the session didn't get an answer, so it may or may not have been created. Press Create Session again here (it won't create it twice), or close this and check the calendar first.",
+        noAnswer: true,
+      })
+      expect(await (await fn('addServiceTypeScheduleSlot'))({ params: { serviceTypeId: ID, dayOfWeek: 2, startTime: '07:00', idempotencyKey: 'press-key-0123456789' }, user })).toEqual({
+        created: false,
+        reason: 'no_answer',
+        message: "Adding the slot didn't get an answer, so it may or may not have been added. Press Add Slot again here (it won't add it twice), or close this and check the service type's weekly schedule first.",
+        noAnswer: true,
+      })
+      rawRequest.mockReset()
+      await expect((await fn('addServiceTypeScheduleSlot'))({ params: { serviceTypeId: '', dayOfWeek: 2, startTime: '07:00' }, user })).rejects.toThrow(new Error('serviceTypeId is required'))
+      await expect((await fn('deleteServiceTypeScheduleSlot'))({ params: { slotId: '' }, user })).rejects.toThrow(new Error('slotId is required'))
+      expect(rawRequest).not.toHaveBeenCalled()
+      // The dialogs hold the same no-answer words (the frontend can't import backend files).
+      expect(component('CreateOneOffSessionDialog.tsx')).toContain("\"Creating the session didn't get an answer, so it may or may not have been created. Press Create Session again here (it won't create it twice), or close this and check the calendar first.\"")
+      expect(component('NewScheduleSlotDialog.tsx')).toContain("\"Adding the slot didn't get an answer, so it may or may not have been added. Press Add Slot again here (it won't add it twice), or close this and check the service type's weekly schedule first.\"")
+    })
+
+    describe("Wayne's Q50 (20 Nov 2026): the Service Types page says what a timetable change reaches", () => {
+      const words = () => import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/timetableWords')) as Promise<{
+        firstDateForSlot(madeUpTo: string | null, dayOfWeek: number): Date | null
+        slotAddedWords(madeUpTo: string | null, dayOfWeek: number): string
+        slotRemovedWords(madeUpTo: string | null): string
+        capacityChangeWords(madeUpTo: string | null): string
+        timetableDate(isoDate: string): string
+      }>
+
+      it('the three sentences are the lead\'s, word for word, with the date sessions are made up to', async () => {
+        const { slotAddedWords, slotRemovedWords, capacityChangeWords } = await words()
+        // 26 February 2027 is a Friday: a Tuesday slot starts on Tuesday 2 March.
+        expect(slotAddedWords('2027-02-26', 2)).toBe('This slot starts on Tue 2 Mar 2027. Sessions up to 26 Feb 2027 are already on the calendar: add a one-off session for any date before then.')
+        expect(slotRemovedWords('2027-02-26')).toBe("Sessions already on the calendar up to 26 Feb 2027 stay bookable: block any you don't want.")
+        expect(capacityChangeWords('2027-02-26')).toBe('This applies to sessions made after 26 Feb 2027. Sessions already on the calendar keep their current capacity and length.')
+      })
+
+      it('the first date is the first day after the date made up to that falls on the slot\'s weekday: never that day itself, at most a week on', async () => {
+        const { firstDateForSlot } = await words()
+        const first = (madeUpTo: string, dayOfWeek: number) => firstDateForSlot(madeUpTo, dayOfWeek)?.toISOString().slice(0, 10)
+        // Made up to Friday 26 February 2027.
+        expect([0, 1, 2, 3, 4, 5, 6].map((day) => first('2027-02-26', day))).toEqual(['2027-02-28', '2027-03-01', '2027-03-02', '2027-03-03', '2027-03-04', '2027-03-05', '2027-02-27'])
+        // Across a year's end, and a leap day.
+        expect(first('2027-12-31', 5)).toBe('2028-01-07')
+        expect(first('2028-02-28', 2)).toBe('2028-02-29')
+        expect(firstDateForSlot(null, 2)).toBeNull()
+        expect(firstDateForSlot('2027-02-26', 7)).toBeNull()
+        expect(firstDateForSlot('26 Feb', 2)).toBeNull()
+      })
+
+      it('with no date (the read failed) each still says the same, without one', async () => {
+        const { slotAddedWords, slotRemovedWords, capacityChangeWords } = await words()
+        expect(slotAddedWords(null, 2)).toBe('This slot starts on the next date the nightly job makes. Sessions already on the calendar are not added to: add a one-off session for any date before then.')
+        expect(slotRemovedWords(null)).toBe("Sessions already on the calendar stay bookable: block any you don't want.")
+        expect(capacityChangeWords(null)).toBe('This applies to sessions made from now on. Sessions already on the calendar keep their current capacity and length.')
+      })
+
+      it('the page reads the date from the calendar read and hands it to the slot dialog and the capacity dialog; removing a slot says its words', () => {
+        const source = page('ServiceTypesPage.tsx')
+        expect(source).toContain('const { data: calendar, trigger: loadCalendar } = useGetSessionsForRange()')
+        expect(source).toContain('const madeUpTo = calendar?.madeUpTo ?? null')
+        expect(source).toContain('loadCalendar({ startDate: today, endDate: today }, { skipCache: true })')
+        expect(source.match(/madeUpTo=\{madeUpTo\}/g)).toHaveLength(2)
+        expect(source).toContain('toast.success(`Schedule slot removed. ${slotRemovedWords(madeUpTo)}`, { duration: 12000 })')
+        expect(component('NewScheduleSlotDialog.tsx')).toContain('<div>{slotAddedWords(madeUpTo, Number.parseInt(dayOfWeek, 10))}</div>')
+        expect(component('EditServiceTypeDialog.tsx')).toContain('<p className="text-xs text-muted-foreground">{capacityChangeWords(madeUpTo)}</p>')
+      })
+
+      it('part 2: the slot buttons are greyed without Manage pricing, and say why', () => {
+        const source = page('ServiceTypesPage.tsx')
+        expect(source).toContain('canManagePricing={canManagePricing}')
+        expect(source).toMatch(/aria-label="Remove schedule slot"\s+disabled=\{!canManagePricing\}/)
+        expect(source).toContain('if (!canManagePricing) return')
+        const dialog = component('NewScheduleSlotDialog.tsx')
+        expect(dialog).toContain('<Button variant="outline" size="sm" onClick={() => setOpen(true)} disabled={!canManagePricing}>')
+        expect(dialog).toContain("<span title={!canManagePricing ? 'Needs the Manage pricing permission' : undefined}>")
+        expect(dialog).toContain('<Button onClick={handleSubmit} disabled={submitting || !canManagePricing}>')
+      })
+    })
+
+    describe('W51a: a Move in flight, closed dates, and the words', () => {
+      const moving = { id: 'b9', customer_first_name: 'Sam', customer_last_name: 'Test', party_size: 1, price_paid: '20.00', redemption_source: 'paid', status: 'confirmed', movingOff: true }
+      const MOVING = "A booking is being moved off this slot and its payment isn't finished. Try again when it is."
+      const DAY_MOVING = "A booking is being moved off a slot on this day and its payment isn't finished. Try again when it is."
+
+      it('S1: a block refused because a booking is being moved off the slot comes back as a conflict, with the booking listed (marked) and the Worker\'s words; a start-time change so refused is thrown in them', async () => {
+        rawRequest.mockResolvedValue(refused('CONFLICT', 'move_in_flight', MOVING, { conflictingBookings: [moving] }))
+        expect(await (await fn('blockSession'))({ params: { sessionId: ID, reason: 'x' }, user })).toEqual({ blocked: false, conflict: true, conflictingBookings: [moving], session: null, message: MOVING })
+        rawRequest.mockResolvedValue(refused('CONFLICT', 'move_in_flight', DAY_MOVING, { conflictingBookings: [moving] }))
+        expect(await (await fn('blockDay'))({ params: { date: DAY, reason: 'x', seen: { toBlock: 1, alreadyBlocked: 0 } }, user })).toEqual({ blocked: false, conflict: true, conflictingBookings: [moving], blockedCount: 0, message: DAY_MOVING })
+        rawRequest.mockResolvedValue(refused('CONFLICT', 'move_in_flight', MOVING))
+        await expect((await fn('setSessionStartTime'))({ params: { sessionId: ID, startTime: '2026-11-21T18:00:00.000Z' }, user })).rejects.toThrow(new Error(MOVING))
+      })
+
+      it('closed dates: the calendar read answers them; Block Day\'s quote says whether the date is closed and whether it is after "made up to"; Unblock Day\'s count says whether a closed date goes, its press sends that figure and answers whether one went', async () => {
+        const closed = [{ date: '2026-12-25', reason: 'Closed for Christmas' }]
+        rawRequest.mockResolvedValue(success({ sessions: [], madeUpTo: '2027-02-26', closedDates: closed }))
+        expect(await (await fn('getSessionsForRange'))({ params: { startDate: '2026-12-25', endDate: '2026-12-25' }, user })).toEqual({ sessions: [], madeUpTo: '2027-02-26', closedDates: closed })
+        rawRequest.mockResolvedValue(success({ sessions: 0, toBlock: 0, alreadyBlocked: 0, conflictingBookings: [], closed: false, afterMadeUpTo: true }))
+        expect(await (await fn('blockDay'))({ params: { date: '2027-12-25', quote: true }, user })).toEqual({ blocked: false, conflict: false, conflictingBookings: [], blockedCount: 0, toBlock: 0, alreadyBlocked: 0, closed: false, afterMadeUpTo: true })
+        // The press's success is still the old four fields (the Worker's `closedDate` is not passed on: the dialog knows from its quote).
+        rawRequest.mockResolvedValue(success({ blocked: true, conflict: false, conflictingBookings: [], blockedCount: 0, alreadyBlocked: 0, closedDate: true }))
+        expect(await (await fn('blockDay'))({ params: { date: '2027-12-25', reason: 'Closed for Christmas', seen: { toBlock: 0, alreadyBlocked: 0 } }, user })).toEqual({ blocked: true, conflict: false, conflictingBookings: [], blockedCount: 0 })
+        rawRequest.mockResolvedValue(success({ blockedSessions: 0, blockedBefore: 0, closedDates: 1, closedReason: 'Closed for Christmas' }))
+        expect(await (await fn('unblockDay'))({ params: { date: '2027-12-25' }, user })).toEqual({ confirmed: false, blockedSessions: 0, blockedBefore: 0, closedDates: 1 })
+        rawRequest.mockClear()
+        rawRequest.mockResolvedValue(success({ confirmed: true, blockedSessions: 0, blockedBefore: 0, unblocked: 0, closedDateRemoved: true }))
+        expect(await (await fn('unblockDay'))({ params: { date: '2027-12-25', confirmed: true, seen: { blockedSessions: 0, blockedBefore: 0, closedDates: 1 } }, user })).toEqual({ confirmed: true, blockedSessions: 0, blockedBefore: 0, unblocked: 0, closedDateRemoved: true })
+        expect(sent().body).toEqual({ seen: { blockedSessions: 0, blockedBefore: 0, closedDates: 1 } })
+      })
+
+      it('a one-off session on a closed date comes back as data with the Worker\'s words (the dialog shows them and starts a new press); a start-time change onto one is thrown in them', async () => {
+        rawRequest.mockResolvedValue(refused('CONFLICT', 'date_closed', 'This date is closed. Unblock the day first if you want to add a session.'))
+        expect(await (await fn('createOneOffSession'))({ params: { serviceTypeId: ID, startTime: '2027-12-25T10:00:00.000Z' }, user })).toEqual({ created: false, reason: 'date_closed', message: 'This date is closed. Unblock the day first if you want to add a session.' })
+        rawRequest.mockResolvedValue(refused('CONFLICT', 'date_closed', 'That date is closed. Unblock the day first if you want to move a session onto it.'))
+        await expect((await fn('setSessionStartTime'))({ params: { sessionId: ID, startTime: '2027-12-25T10:00:00.000Z' }, user })).rejects.toThrow(new Error('That date is closed. Unblock the day first if you want to move a session onto it.'))
+      })
+
+      it('the Block dialogs list a booking being moved off the slot with no Move or cancel button and say why, in the lead\'s words; the sentence about bookings counts only the ones on the slot', () => {
+        const slot = component('BlockSessionDialog.tsx')
+        const day = component('BlockDayDialog.tsx')
+        expect(slot).toContain('const onTheSlot = (conflicts ?? []).filter((b) => !b.movingOff)')
+        expect(day).toContain('const onTheDay = (conflicts ?? []).filter((b) => !b.movingOff)')
+        expect(slot).toContain(`? "${MOVING}"`)
+        expect(day).toContain(`? "${DAY_MOVING}"`)
+        for (const source of [slot, day]) {
+          expect(source).toContain('const movingOff = (conflicts ?? []).filter((b) => b.movingOff)')
+          expect(source).toMatch(/\{b\.movingOff \? \(\s+<span className="text-xs text-muted-foreground">Being moved: payment not finished<\/span>\s+\) : \(\s+<div className="flex items-center justify-end gap-1\.5">\s+<MoveBookingDialog/)
+        }
+      })
+
+      it('Block Day says the date will be closed (or already is), names a day with no sessions made yet, and its press is greyed only when there is nothing to block and the date is closed already', () => {
+        const day = component('BlockDayDialog.tsx')
+        expect(day).toContain("setClosed(shown?.closed === true)")
+        expect(day).toContain("setAfterMadeUpTo(shown?.afterMadeUpTo === true)")
+        expect(day).toContain("afterMadeUpTo && counts.alreadyBlocked === 0 ? 'No sessions have been made for this day yet.' : 'No open slots on this day to block.'")
+        expect(day).toContain("? 'This date is already closed: no sessions are added to it until the day is unblocked.'")
+        expect(day).toContain(": 'The date will be closed: the nightly job makes no sessions on it, and no one-off session can be added, until the day is unblocked.'}")
+        expect(day).toContain('<Button onClick={attemptBlock} disabled={submitting || counts === null || (counts.toBlock === 0 && closed)}>')
+        expect(day).toContain("? 'Date closed: no sessions will be made on it until the day is unblocked'")
+      })
+
+      it('Unblock Day: "blocked on its own and stays blocked" (W51 review L2); it says a closed date goes, sends that figure, and can be pressed for a closed date alone', () => {
+        const day = component('UnblockDayDialog.tsx')
+        // The old sentence is gone from what staff read (a comment in the file still names it).
+        expect(day).not.toMatch(/blocked before the day\s+was and/)
+        expect(day).toContain("{blockedBefore === 1 ? 'was blocked on its own and stays blocked.' : 'were blocked on their own and stay blocked.'}")
+        expect(day).toContain('const result = await unblockDay({ date: dateKey, confirmed: true, seen: { blockedSessions: count, blockedBefore, closedDates } }, { skipCache: true })')
+        expect(day).toContain('setClosedDates(result?.closedDates ?? 0)')
+        expect(day).toContain('<Button onClick={handleConfirm} disabled={submitting || count === null || (count === 0 && closedDates === 0)}>')
+        expect(day).toContain('The date is recorded as closed: unblocking the day reopens it')
+      })
+
+      it("Unblock Day's button shows only when its own count has something to reopen or a closed date to remove (W51 report Noticed 3): the page asks the count after every load of the day", () => {
+        const bookings = page('BookingsPage.tsx')
+        expect(bookings).toContain('{canUnblockDay ? (\n                <UnblockDayDialog')
+        expect(bookings).not.toContain('blockedDayCount')
+        expect(bookings).toContain("if (granularity !== 'day' || !dayState || (dayState.blockedCount === 0 && !dayState.closed)) {")
+        expect(bookings).toContain('unblockDayCount({ date: dayState.dateKey }, { skipCache: true })')
+        expect(bookings).toContain('setCanUnblockDay((count?.blockedSessions ?? 0) > 0 || (count?.closedDates ?? 0) > 0)')
+        expect(bookings).toContain('onDayStateChange={handleDayStateChange}')
+        const agenda = component('BookingSessionAgendaView.tsx')
+        expect(agenda).toContain("onDayStateChange?.({ dateKey, blockedCount: sessions.filter((s) => s.status === 'blocked' && s.booking_type === visibleType).length, closed: closedDate !== null })")
+      })
+
+      it('the calendar shows a closed date in all three views: the reason in the Day view, and on hover in the Week and Month views, whether or not the date has sessions', () => {
+        const agenda = component('BookingSessionAgendaView.tsx')
+        expect(agenda).toContain('setClosedDate((answer?.closedDates ?? []).find((closed) => closed.date === forDateKey) ?? null)')
+        expect(agenda).toContain("This date is closed{closedDate.reason ? `: ${closedDate.reason}` : ''}.")
+        expect(agenda).toContain("{closedDate ? 'No sessions on this day: the date is closed.' : 'No sessions scheduled for this day.'}")
+        expect(agenda.match(/\{closedBanner\}/g)).toHaveLength(2)
+        for (const view of [component('BookingWeekView.tsx'), component('BookingMonthView.tsx')]) {
+          expect(view).toContain('setClosedDates(data.closedDates ?? [])')
+          expect(view).toContain('const closedByDate = new Map(closedDates.map((closed) => [closed.date, closed] as const))')
+        }
+        expect(component('BookingWeekView.tsx')).toContain("title={closedByDate.get(day.dateKey)?.reason ? `Closed: ${closedByDate.get(day.dateKey)?.reason}` : 'Closed'}")
+        expect(component('BookingMonthView.tsx')).toContain("title={closed.reason ? `Closed: ${closed.reason}` : 'Closed'}")
+        // A closed date in the month grid is marked whether or not it has sessions: the pill isn't inside `summary.hasSessions`.
+        expect(component('BookingMonthView.tsx')).toMatch(/\{closed \? \(\s+<span\s+title=\{closed\.reason[\s\S]{0,400}?\) : null\}\s+\{summary\.hasSessions \? \(/)
+      })
+
+      it('the words: the start-time refusal, and a weekly slot that was already removed (W51 review L6)', () => {
+        expect(component('EditSessionStartTimeDialog.tsx')).toContain("session_has_bookings: 'This slot has a booking, so its start time can\\'t be changed.',")
+        expect(component('EditSessionStartTimeDialog.tsx')).not.toContain('A booking was just made')
+        const types = page('ServiceTypesPage.tsx')
+        expect(types).toContain("if (removed?.deleted === false) {\n        toast.info('That weekly slot was already removed.')\n        return\n      }")
+        expect(types.indexOf("toast.info('That weekly slot was already removed.')")).toBeLessThan(types.indexOf('toast.success(`Schedule slot removed.'))
+      })
+    })
+
+    describe('the screens', () => {
+      it('the four calendar callers show the sessions of the new answer', () => {
+        // W51a: the Month and Week views keep the closed dates beside the sessions.
+        expect(component('BookingMonthView.tsx')).toContain('setSessions(data.sessions)')
+        expect(component('BookingWeekView.tsx')).toContain('setSessions(data.sessions)')
+        expect(component('BookingSessionAgendaView.tsx')).toContain('setSessions(answer?.sessions ?? [])')
+        expect(page('OverviewPage.tsx')).toContain('if (sessionsData) setSessions(sessionsData.sessions)')
+      })
+
+      it('the Block dialogs no longer say "confirmed" (GB5: every booking that isn\'t cancelled is in the way), and show the Worker\'s words for any other refusal', () => {
+        const slot = component('BlockSessionDialog.tsx')
+        const day = component('BlockDayDialog.tsx')
+        expect(slot).not.toContain('confirmed booking')
+        expect(day).not.toContain('confirmed booking')
+        // W51a: the sentence counts the bookings on the slot (or day); one being moved off it has its own line.
+        expect(slot).toMatch(/This slot has <span className="font-medium">\{onTheSlot\.length\}<\/span> booking\s+\{onTheSlot\.length === 1 \? '' : 's'\}\. Move each one to a different session or cancel it before this\s+slot can be blocked\./)
+        expect(day).toMatch(/\{onTheDay\.length\} booking\{onTheDay\.length === 1 \? ' exists' : 's exist'\} on this day\. Move each\s+one to a different session or cancel it before the day can be blocked\./)
+        expect(slot).toContain("toast.error(err instanceof Error && err.message ? err.message : 'Failed to block session')")
+        expect(day).toContain("toast.error(err instanceof Error && err.message ? err.message : 'Failed to block day')")
+        // Move and the club's cancel are still offered on each booking listed (W23a).
+        for (const source of [slot, day]) {
+          expect(source).toContain('<MoveBookingDialog')
+          expect(source.match(/clubCancelled/g)).toHaveLength(2)
+        }
+      })
+
+      it('Block Day shows what it will do before the press and sends the figures it showed; a changed day shows the new ones and blocks nothing', () => {
+        const day = component('BlockDayDialog.tsx')
+        expect(day).toContain('const shown = await blockDay({ date: dateKey, quote: true }, { skipCache: true })')
+        expect(day).toContain('const result = await blockDay({ date: dateKey, reason: reason.trim(), seen: counts }, { skipCache: true })')
+        expect(day).toContain('if (result?.changed) {')
+        // W51a: greyed too when there is nothing to block and the date is closed already.
+        expect(day).toContain('<Button onClick={attemptBlock} disabled={submitting || counts === null || (counts.toBlock === 0 && closed)}>')
+        expect(day).toMatch(/already\s+blocked and \{counts\.alreadyBlocked === 1 \? 'keeps its' : 'keep their'\} own reason\./)
+      })
+
+      it('Unblock Day says how many were blocked on their own and stay blocked (GB7; W51a: the words of W51 review L2), and sends the figures it showed', () => {
+        const day = component('UnblockDayDialog.tsx')
+        expect(day).toContain('const result = await unblockDay({ date: dateKey, confirmed: true, seen: { blockedSessions: count, blockedBefore, closedDates } }, { skipCache: true })')
+        expect(day).toContain("'No sessions on this day were blocked by Block Day.'")
+        expect(day).toContain("'was blocked on its own and stays blocked.'")
+        expect(day).toContain('if (result?.changed) {')
+      })
+
+      it('Change Band sends the counts it showed, and a changed count shows the new ones; a reset that changes nothing says why', () => {
+        const band = component('ChangeSessionBandDialog.tsx')
+        expect(band).toContain('seen: { sessionsAffected: counts.sessions, bookingsAffected: counts.bookings },')
+        expect(band).toContain('setCounts({ sessions: result.sessionsAffected ?? 0, bookings: result.bookingsAffected ?? 0 })')
+        expect(band).toContain("setErrorMessage(result?.message ?? 'This session is not band-overridden.')")
+      })
+
+      it('the two create dialogs keep one key for a press, and the same again after no answer or a throw, until they close', () => {
+        for (const file of ['CreateOneOffSessionDialog.tsx', 'NewScheduleSlotDialog.tsx']) {
+          const source = component(file)
+          expect(source, file).toContain('const pressKey = useRef<string | null>(null)')
+          expect(source, file).toContain('pressKey.current ??= crypto.randomUUID()')
+          expect(source, file).toContain('idempotencyKey: pressKey.current')
+          expect(source, file).toContain('if (!result.noAnswer) pressKey.current = null')
+          // Closing while a press runs is refused, and closing clears the key.
+          expect(source, file).toMatch(/function resetAndClose\(\) \{\s+\/\/ Brief W51: never while a press runs \(the footer button is disabled too\)\.\s+if \(inFlight\.current\) return\s+pressKey\.current = null/)
+        }
+      })
+
+      it('the start time, unblock and slot screens show the Worker\'s words where they showed "Failed to…"', () => {
+        expect(component('EditSessionStartTimeDialog.tsx')).toContain("toast.error(err instanceof Error && err.message ? err.message : 'Failed to change start time')")
+        expect(component('SessionDetailDialog.tsx')).toContain("toast.error(err instanceof Error && err.message ? err.message : 'Failed to unblock slot')")
+        expect(page('ServiceTypesPage.tsx')).toContain("toast.error(err instanceof Error && err.message ? err.message : 'Failed to remove schedule slot')")
+      })
+    })
+  })
+
   describe('callWorker', () => {
     it('adds who is acting and a request id, and returns data', async () => {
       const { callWorker } = await load('callWorker')
@@ -1139,22 +1550,12 @@ describe('staff app helpers', () => {
     })
   })
 
+  // W51: setSessionStartTime is a thin call now. The check on the time is the Worker's (server/rules/sessions/admin.ts,
+  // isValidIsoDateTime, moved from the staff app's shared/isoDateTime.ts); the rule's own refusals, for each of the
+  // values below, are held in server/rules/sessions/admin.test.ts. What the function makes of them is held here.
   describe('setSessionStartTime', () => {
-    const save = async (startTime: unknown) => {
-      const query = vi.fn(async (sql: string) => {
-        if (sql.includes('staff')) {
-          return { data: [{ id: 'staff-1', email: user.email, role: 'admin', can_issue_refunds: true, can_manage_pricing: true, active: true }] }
-        }
-        if (sql.includes('COUNT(*)')) return { data: [{ count: '0' }] }
-        if (sql.includes('UPDATE sessions')) return { data: [{ id: 'session-1', start_time: startTime, end_time: startTime }] }
-        if (sql.includes('session_bands')) return { data: [] }
-        return { data: [{ id: 'session-1', duration: 60 }] }
-      })
-      vi.stubGlobal('paddockData', { query })
-      const fn = (await import(/* @vite-ignore */ path.join(appDir, 'backend/paddock/setSessionStartTime'))).default
-      const result = await fn({ params: { sessionId: 'session-1', startTime }, user })
-      return { result, sql: query.mock.calls.map(([sql]) => sql as string) }
-    }
+    const fn = async () => (await import(/* @vite-ignore */ path.join(appDir, 'backend/paddock/setSessionStartTime'))).default as (req: { params: Record<string, unknown>; user: typeof user }) => Promise<unknown>
+    const invalid = { data: { ok: false, error: { code: 'VALIDATION', message: 'Enter a valid date and time.', field: 'startTime', details: { reason: 'invalid_start_time', message: 'Enter a valid date and time.', action: 'session.start_time_set' } }, requestId: 'worker-request' } }
 
     it.each([
       ['a 5 digit year, which Postgres would store', '12026-11-05T14:30:00.000Z'],
@@ -1163,17 +1564,20 @@ describe('staff app helpers', () => {
       ['an empty value', ''],
       ['no timezone', '2026-11-05T14:30'],
       ['not a string', 20261105],
-    ])('refuses %s with the same words, and writes nothing', async (_label, startTime) => {
-      const { result, sql } = await save(startTime)
-      expect(result).toEqual({ updated: false, reason: 'invalid_start_time', message: 'Enter a valid date and time.' })
-      expect(sql.some((text) => text.includes('UPDATE sessions'))).toBe(false)
-      expect(sql.some((text) => text.includes('FROM sessions'))).toBe(false)
+    ])('%s is sent to the Worker as it is, and its refusal comes back with the same reason and words as before; the database is never touched', async (_label, startTime) => {
+      const query = vi.fn()
+      vi.stubGlobal('paddockData', { query })
+      rawRequest.mockResolvedValue(invalid)
+      expect(await (await fn())({ params: { sessionId: 'session-1', startTime }, user })).toEqual({ updated: false, reason: 'invalid_start_time', message: 'Enter a valid date and time.' })
+      const sent = rawRequest.mock.calls[0]?.[0] as { path: string; method: string; body?: unknown }
+      expect(sent).toMatchObject({ method: 'POST', path: '/api/v1/staff/sessions/session-1/start-time', body: { startTime } })
+      expect(query).not.toHaveBeenCalled()
     })
 
-    it('saves a real time', async () => {
-      const { result, sql } = await save('2026-11-05T14:30:00.000Z')
-      expect(result.updated).toBe(true)
-      expect(sql.some((text) => text.includes('UPDATE sessions'))).toBe(true)
+    it('saves a real time: the Worker\'s answer comes back as it is', async () => {
+      const saved = { updated: true, session: { id: 'session-1', start_time: '2026-11-05T14:30:00.000Z', end_time: '2026-11-05T15:30:00.000Z' }, band: { code: 'core', name: 'Core', overridden: false } }
+      rawRequest.mockResolvedValue(success(saved))
+      expect(await (await fn())({ params: { sessionId: 'session-1', startTime: '2026-11-05T14:30:00.000Z' }, user })).toEqual(saved)
     })
 
     it('the screen shows the refusal in the same words', () => {
@@ -1181,11 +1585,11 @@ describe('staff app helpers', () => {
       expect(source).toContain("invalid_start_time: 'Enter a valid date and time.'")
     })
 
-    it('agrees with the screen on what is valid', async () => {
+    it('the Worker agrees with the screen on what is valid', async () => {
       const { isValidIsoDateTime: onScreen } = await import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/dateInput'))
-      const { isValidIsoDateTime: onServer } = await load('isoDateTime')
+      const { isValidIsoDateTime: onWorker } = await import('@/server/rules/sessions/admin')
       for (const value of ['2026-11-05T14:30:00.000Z', '2028-02-29T00:00:00.000Z', '0001-01-01T00:00:00.000Z', '12026-11-05T14:30:00.000Z', '2026-02-30T10:00:00.000Z', '2026-11-05T25:00:00.000Z', '0000-01-01T00:00:00.000Z', '']) {
-        expect(onServer(value), value).toBe(onScreen(value))
+        expect(onWorker(value), value).toBe(onScreen(value))
       }
     })
   })

@@ -78,6 +78,9 @@ const STAFF_ROUTES: Record<string, () => Promise<unknown>> = {
   '/api/v1/staff/bookings/addon-prep': () => import('@/app/api/v1/staff/bookings/addon-prep/route'),
   '/api/v1/staff/bookings/waiver-gaps': () => import('@/app/api/v1/staff/bookings/waiver-gaps/route'),
   '/api/v1/staff/overview/payment-attention': () => import('@/app/api/v1/staff/overview/payment-attention/route'),
+  // W51: the staff app's thin getSessionsForRange and createOneOffSession (one path, GET and POST), and getServiceTypesForSlot.
+  '/api/v1/staff/sessions': () => import('@/app/api/v1/staff/sessions/route'),
+  '/api/v1/staff/sessions/for-slot': () => import('@/app/api/v1/staff/sessions/for-slot/route'),
 }
 
 /** W14: the staff routes with an id in the path, and the path's parameters. */
@@ -159,6 +162,23 @@ const STAFF_PATTERNS: Array<{ pattern: RegExp; load: () => Promise<unknown>; par
   { pattern: /^\/api\/v1\/staff\/bookings\/guests\/([^/]+)\/waiver$/, load: () => import('@/app/api/v1/staff/bookings/guests/[guestId]/waiver/route'), params: (m) => ({ guestId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/bookings\/addon-lines\/([^/]+)\/prepared$/, load: () => import('@/app/api/v1/staff/bookings/addon-lines/[lineId]/prepared/route'), params: (m) => ({ lineId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/bookings\/(?!addon-prep$|waiver-gaps$|day-conflict$)([^/]+)$/, load: () => import('@/app/api/v1/staff/bookings/[bookingId]/route'), params: (m) => ({ bookingId: decodeURIComponent(m[1] ?? '') }) },
+  // W51: the staff app's thin blockDay, unblockDay and setSessionBand for a day (each with its quote); blockSession,
+  // unblockSession, setSessionBand for one session (with its quote), resetSessionBand and setSessionStartTime; and
+  // the two weekly slot functions. A day's paths are `sessions/days/:date/...`, so they are listed before a session's.
+  { pattern: /^\/api\/v1\/staff\/sessions\/days\/([^/]+)\/block\/quote$/, load: () => import('@/app/api/v1/staff/sessions/days/[date]/block/quote/route'), params: (m) => ({ date: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/sessions\/days\/([^/]+)\/block$/, load: () => import('@/app/api/v1/staff/sessions/days/[date]/block/route'), params: (m) => ({ date: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/sessions\/days\/([^/]+)\/unblock\/quote$/, load: () => import('@/app/api/v1/staff/sessions/days/[date]/unblock/quote/route'), params: (m) => ({ date: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/sessions\/days\/([^/]+)\/unblock$/, load: () => import('@/app/api/v1/staff/sessions/days/[date]/unblock/route'), params: (m) => ({ date: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/sessions\/days\/([^/]+)\/band\/quote$/, load: () => import('@/app/api/v1/staff/sessions/days/[date]/band/quote/route'), params: (m) => ({ date: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/sessions\/days\/([^/]+)\/band$/, load: () => import('@/app/api/v1/staff/sessions/days/[date]/band/route'), params: (m) => ({ date: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/sessions\/(?!days\/)([^/]+)\/block$/, load: () => import('@/app/api/v1/staff/sessions/[sessionId]/block/route'), params: (m) => ({ sessionId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/sessions\/(?!days\/)([^/]+)\/unblock$/, load: () => import('@/app/api/v1/staff/sessions/[sessionId]/unblock/route'), params: (m) => ({ sessionId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/sessions\/(?!days\/)([^/]+)\/band\/quote$/, load: () => import('@/app/api/v1/staff/sessions/[sessionId]/band/quote/route'), params: (m) => ({ sessionId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/sessions\/(?!days\/)([^/]+)\/band\/reset$/, load: () => import('@/app/api/v1/staff/sessions/[sessionId]/band/reset/route'), params: (m) => ({ sessionId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/sessions\/(?!days\/)([^/]+)\/band$/, load: () => import('@/app/api/v1/staff/sessions/[sessionId]/band/route'), params: (m) => ({ sessionId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/sessions\/(?!days\/)([^/]+)\/start-time$/, load: () => import('@/app/api/v1/staff/sessions/[sessionId]/start-time/route'), params: (m) => ({ sessionId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/catalog\/service-types\/([^/]+)\/schedule-slots$/, load: () => import('@/app/api/v1/staff/catalog/service-types/[serviceTypeId]/schedule-slots/route'), params: (m) => ({ serviceTypeId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/catalog\/schedule-slots\/([^/]+)\/remove$/, load: () => import('@/app/api/v1/staff/catalog/schedule-slots/[slotId]/remove/route'), params: (m) => ({ slotId: decodeURIComponent(m[1] ?? '') }) },
 ]
 
 function staffRoute(path: string): { load: () => Promise<unknown>; params: Record<string, string> } | null {

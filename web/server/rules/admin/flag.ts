@@ -1,7 +1,8 @@
 // New in W48 (G-plan 4.2, level C; brief W48 item 3): a flag on a customer's record (checked in, a waiver signed, an
 // add-on prepared, a line fulfilled). One guarded statement, where the guard is the rule, and an audit row, in one
-// transaction. Each call has its own key: setting a flag that is already set changes nothing more. W50 is its first
-// user (server/rules/bookings/admin.ts).
+// transaction. Each call has its own key: setting a flag that is already set keeps the flag and who set it, though a
+// repeat press still moves the booking's `updated_at` on Check In and writes another audit row (W50 review, "Claims"
+// 1; W51 item 13). W50 is its first user (server/rules/bookings/admin.ts).
 //
 // W50 (W48 review L2): what the guard can be trusted with. Postgres re-checks only the row a statement updates after
 // it has waited for that row's lock. A guard that reads ANOTHER table (a guest's waiver guarded by its booking's

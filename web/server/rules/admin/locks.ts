@@ -131,3 +131,43 @@ export async function lockAdminRows(tx: Tx, locks: readonly AdminLock[]): Promis
   }
   return held
 }
+
+/**
+ * W51 (W49 + W54 review, W51-1): the band guard, SHARED. Every band's row, in id order, FOR SHARE.
+ *
+ * A session's band comes from the day's band windows whenever it is made, its start time moves, or its band is reset
+ * to automatic. A band-window save (pricing/admin.ts) holds every band's row FOR NO KEY UPDATE while it replaces a
+ * day's windows and re-bands the sessions it can see. A session written during the save reads the OLD windows (the
+ * save isn't committed) and the save can't see that session (it isn't committed either): both commit, and the session
+ * keeps the old band, and its old price, until that day's windows are saved again.
+ *
+ * FOR SHARE conflicts with the save's FOR NO KEY UPDATE, so a session write that takes this first waits for a save
+ * in progress and reads the windows it leaves, and a save that starts later waits for the write and re-bands what it
+ * wrote. Shared, so two session writes never wait for each other here. It is 'admin_row', LOCK_ORDER's first place:
+ * taken BEFORE the session's own row, which is the order a save takes them in (the guard, then the sessions it
+ * re-bands), so the two can't deadlock. The nightly job takes the same lock in the database (migration 032).
+ */
+export const BAND_GUARD_SHARED_SQL = 'SELECT 1 FROM session_bands ORDER BY id FOR SHARE'
+export async function holdBandGuardShared(tx: Tx): Promise<void> {
+  await tx.query(BAND_GUARD_SHARED_SQL)
+}
+
+/**
+ * W51a (closed dates; W51 review L3): one lock for a London calendar date, held to the end of the transaction.
+ *
+ * A date can be closed before any session exists on it, so there is no row to lock: this is a transaction advisory
+ * lock on the text 'session_day:YYYY-MM-DD'. The nightly job takes the same lock, with the same text, for every day
+ * it makes (migration 032, generate_upcoming_sessions), before it reads which dates are closed. Block Day, Unblock
+ * Day, a one-off session and a start-time change take it for their date before they read the date's closed row or
+ * its sessions. So the job never makes a day's sessions while the day is being closed (they would be left open on
+ * a closed date), and a date is never closed or reopened half-way through the job making it.
+ *
+ * Its place: after the band guard (admin_row) and BEFORE any session's row, in every press that takes it and in the
+ * job (the guard, its own date row, then the days). Nothing takes a date's lock while holding a session, so it adds
+ * no cycle. `to_char`, not a cast to text: a cast follows the connection's DateStyle, and both sides must make the
+ * same text.
+ */
+export const SESSION_DAY_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtextextended('session_day:' || to_char($1::date, 'YYYY-MM-DD'), 0))"
+export async function holdSessionDay(tx: Tx, date: string): Promise<void> {
+  await tx.query(SESSION_DAY_LOCK_SQL, [date])
+}

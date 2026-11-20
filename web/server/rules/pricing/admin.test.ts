@@ -318,7 +318,8 @@ describe('POST pricing/band-rules/:dayOfWeek (setBandRules, GB8)', () => {
     expect(stamped).toBeGreaterThan(0)
     expect(stamped).toBeLessThan(deleted)
     const locked = at('SELECT id FROM sessions WHERE id = ANY($1::uuid[]) ORDER BY id FOR NO KEY UPDATE')
-    const rebanded = at('SELECT reassign_session_bands(now())')
+    // W51 (W50 review L3): the re-band is from London's wall clock now, never the real now() (reband-london-now.test.ts).
+    const rebanded = at("SELECT reassign_session_bands(((now() AT TIME ZONE 'Europe/London') AT TIME ZONE 'UTC'))")
     expect(deleted).toBeGreaterThan(0)
     expect(locked).toBeGreaterThan(deleted)
     expect(rebanded).toBeGreaterThan(locked)

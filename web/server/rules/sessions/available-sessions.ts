@@ -2,16 +2,14 @@
 import 'server-only'
 import type { AvailableSessionRow, AvailableSessionsInput } from '@/contracts'
 import type { Queryable } from '@/server/db'
+import { withinLondonDaysSql } from '@/server/rules/time/london-day-sql'
 
 /**
- * `started` compares start_time (London wall-clock labelled UTC) like for like against London
- * wall-clock now, never against raw now().
+ * W51 (W50 review L4): the day is the session's London day, read from the stored digits whatever the connection's
+ * time zone (time/london-day-sql.ts). The old `s.start_time::date = $1::date` followed the connection's setting: the
+ * same day only while the connection is on UTC.
  */
-export async function getAvailableSessions(db: Queryable, input: AvailableSessionsInput): Promise<AvailableSessionRow[]> {
-  const { date, serviceTypeId } = input
-
-  return db.query<AvailableSessionRow>(
-    `SELECT
+export const AVAILABLE_SESSIONS_SQL = `SELECT
        s.id,
        s.service_type_id,
        st.name AS service_type_name,
@@ -32,7 +30,7 @@ export async function getAvailableSessions(db: Queryable, input: AvailableSessio
      FROM sessions s
      JOIN service_types st ON st.id = s.service_type_id
      LEFT JOIN session_bands sb ON sb.id = s.band_id
-     WHERE s.start_time::date = $1::date
+     WHERE ${withinLondonDaysSql('s.start_time', '$1', '$1')}
        AND ($2::uuid IS NULL OR s.service_type_id = $3::uuid)
        AND NOT EXISTS (
          SELECT 1
@@ -42,7 +40,13 @@ export async function getAvailableSessions(db: Queryable, input: AvailableSessio
            AND s2.start_time < s.end_time
            AND s2.end_time > s.start_time
        )
-     ORDER BY s.start_time, st.name, s.id`,
-    [date, serviceTypeId ?? null, serviceTypeId ?? null]
-  )
+     ORDER BY s.start_time, st.name, s.id`
+
+/**
+ * `started` compares start_time (London wall-clock labelled UTC) like for like against London
+ * wall-clock now, never against raw now().
+ */
+export async function getAvailableSessions(db: Queryable, input: AvailableSessionsInput): Promise<AvailableSessionRow[]> {
+  const { date, serviceTypeId } = input
+  return db.query<AvailableSessionRow>(AVAILABLE_SESSIONS_SQL, [date, serviceTypeId ?? null, serviceTypeId ?? null])
 }

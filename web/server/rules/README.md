@@ -2196,7 +2196,7 @@ changes is that the day no longer depends on a setting: `time/london-day-sql.ts`
 day's two ends as UTC moments (`withinLondonDaysSql`), which also lets an index on `start_time` be used. It is NOT
 the stored moment turned into London time, which would add the summer hour twice and put a 23:30 session on the next
 day. "Today" is the screen's (the staff app's `londonTodayIso`), sent as the range. `getAvailableSessions` (step B)
-and the session reads W51 moves still write `start_time::date`: W51's to change with the same fragments.
+and the session reads use the same fragments since W51 (below).
 
 **The three flags** (level C: `admin/flag.ts`, one guarded statement and an audit row in one transaction, under the
 call's own key).
@@ -2314,3 +2314,167 @@ prepared unchanged; which words win; the hold and the guard's statement; and the
 the hold that checks the booking in; two Check Ins at once; and a customer's press on someone else's guest against
 a cancel, both ways round, with its control); `admin/helpers.test.ts` (the channel refusal, at the start);
 `server/staff-app-helpers.test.ts` (the Undo on the screen, the words, the line gone).
+
+## Sessions and the timetable on the Worker (W51)
+
+G-plan 1.1's slot rows, 1.9, 4.3 and 4.5; bugs GB3 to GB7, GB14 and GB24; Wayne's Q50 (20 Nov); W49 + W54 review
+W51-1; W48 review L1 and L6; W50 review L1, L3 and L4. `sessions/admin.ts`, its words in
+`sessions/admin-failure-messages.ts` (`SESSION_ADMIN_NEW_WORDS` for the refusals that are new), the shared band guard
+in `admin/locks.ts` (`holdBandGuardShared`), and migration 032 (`supabase/migrations/`, written by W51, applied by
+the lead before the Worker push).
+
+| Staff app function | Route | Who | What |
+|---|---|---|---|
+| `getSessionsForRange` | `GET sessions` | any active staff | The calendar: every session on a London day in the range, and `madeUpTo` |
+| `getServiceTypesForSlot` | `GET sessions/for-slot` | any active staff | The service types with a weekly slot and a session at one exact time |
+| `blockSession` | `POST sessions/:sessionId/block` | any active staff | Block Slot |
+| `unblockSession` | `POST sessions/:sessionId/unblock` | any active staff | Unblock |
+| `blockDay` | `GET sessions/days/:date/block/quote`, `POST sessions/days/:date/block` | any active staff | Block Day: what it would do, then the press |
+| `unblockDay` | `GET sessions/days/:date/unblock/quote`, `POST sessions/days/:date/unblock` | any active staff | Unblock Day: the count, then the press |
+| `setSessionBand` | `GET` and `POST sessions/:sessionId/band(/quote)`, `sessions/days/:date/band(/quote)` | Manage pricing | A band set by hand, for one session or a day |
+| `resetSessionBand` | `POST sessions/:sessionId/band/reset` | Manage pricing | Back to automatic |
+| `setSessionStartTime` | `POST sessions/:sessionId/start-time` | any active staff | One session's start moved once |
+| `createOneOffSession` | `POST sessions` | any active staff | One session outside the weekly timetable |
+| `addServiceTypeScheduleSlot` | `POST catalog/service-types/:serviceTypeId/schedule-slots` | **Manage pricing** (Q50 part 2) | A weekly slot added |
+| `deleteServiceTypeScheduleSlot` | `POST catalog/schedule-slots/:slotId/remove` | **Manage pricing** (Q50 part 2) | A weekly slot removed |
+
+`generateUpcomingSessions` is deleted, not moved (GB24): no screen called it, and the nightly job is the database's
+own function.
+
+**The reads.** An active staff member (GB14), named columns, the day by the stored digits
+(`withinLondonDaysSql`); the slot read takes the weekday and the time of day from the same digits
+(`AT TIME ZONE 'UTC'`), as `band_for_session_start` does. `getAvailableSessions` (step B) now uses
+`withinLondonDaysSql` too (W50 review L4). The calendar read also answers `madeUpTo`: migration 032's one row, the
+last date the nightly job has made sessions for (null on a database whose row was never written).
+
+**The writes** (level B: `adminWrite`, one transaction, an audit row with the row before and after, a press key).
+
+- **GB5 (and W50 review L1):** a block is refused while the session has ANY booking that isn't cancelled (pending,
+  confirmed, Payment needed, and one already attended), read under the session's lock. A new order, a Move ONTO
+  the session and Add Guest take the same lock (`FOR NO KEY UPDATE`) before they write a booking, so no new booking
+  can land between the check and the block. (A booking put BACK by a Move's or a cancel's undo is W51a's: below.) The refusal's reason is `bookings_in_the_way`, and its `details.conflictingBookings` are the
+  bookings as the Block dialogs list them (the staff app's function answers them in the old `conflict: true`
+  shape). The session's place in `LOCK_ORDER` is as it was (`session`, after the booking and the customer).
+- **GB6:** a start-time change is refused (`session_has_bookings`) while the session has any booking that isn't
+  cancelled. The old function counted pending and confirmed only.
+- **GB7:** a block never overwrites a block. A single block of a blocked session is refused (`already_blocked`);
+  Block Day blocks the day's open sessions and leaves the ones blocked before with their own reason and who. Unblock
+  opens only what is blocked (`not_blocked`). Unblock Day reopens the sessions a Block Day blocked and leaves the
+  ones blocked on their own, and says how many (`blockedBefore`). **How it knows:** each block writes its audit row
+  in its own transaction; a day's row is `entity_type` `session_day` and names the sessions it blocked
+  (`details.sessionIds`). A blocked session's latest `session.blocked` row is the one that blocked it: a day's row
+  means "blocked by Block Day"; its own row, or none (blocked before W51), means "blocked on its own".
+- **Q18's rule for counts.** Block Day, Unblock Day and a band change each have a quote (a GET) and a press. The
+  press sends the figures the quote showed (`seen`); if they are no longer right the press is refused
+  `changed_since` with the new figures in `details.counts`, and nothing is written. A press with no `seen` is
+  refused the same way.
+- **W51-1 (the band guard, shared).** A one-off session, a start-time change and a reset each take
+  `SELECT 1 FROM session_bands ORDER BY id FOR SHARE` first, before the session. A band-window save holds those
+  rows `FOR NO KEY UPDATE`, so a session written during a save waits and gets the band the save's windows give,
+  and a save that starts later waits for the write and re-bands it. The guard is `admin_row`, taken before
+  `session`: the order a save takes them in. A band set by hand reads no windows and takes no guard. The nightly
+  job takes the same guard in the database (migration 032).
+- **W48 review L1.** Block Day, Unblock Day and a day's band change lock the day's sessions through
+  `lockAdminRows` (id order) before their multi-row write, so none can deadlock with a save re-banding the same day.
+- **W54a's stale-page rule applies to none of them:** each writes only what was pressed, never a row as a page
+  read it. The figures a press confirms are held by Q18's rule.
+- **Q50 part 1 (Wayne, 20 Nov): a timetable change reaches only the dates the nightly job makes from now on.** A
+  slot added makes no session; a slot removed leaves its sessions bookable; a capacity or length change (W55's
+  function) leaves sessions already made as they are. The staff app's Service Types page says so, with `madeUpTo`.
+
+**Migration 032** (`032_sessions_made_up_to_and_the_band_guard.sql`).
+
+- `sessions_made_up_to`: one row, the last date the nightly job has made. `generate_upcoming_sessions()` makes from
+  the day after it to London's today + 98 and then moves it, so a one-off session far ahead no longer stops the job
+  (GB3). With no row it starts from today and writes the row.
+- The job takes the band guard shared before it writes (W51-1).
+- `reassign_session_bands()`'s default "from" is London's wall clock now in the stored form (W50 review L3). The
+  Worker passes the same moment itself (`pricing/admin.ts`, `REBAND_SQL`), and `SESSIONS_TO_REBAND_SQL` compares
+  with it too, so a save at 10:30 on a summer wall no longer re-bands a session that started at 10:00.
+- W51a added closed dates to the file before it was applied: the `closed_dates` table, the job leaving closed
+  dates out and remembering them, and the date's lock (the W51a section below).
+- The saved schema carries 032 (as W27 did for 023). The replay's recorded side runs the job as it was before 032,
+  under its own name (`replay/harness.ts`, `ReplaySide.nightlyJob`), so W48's recordings of it still replay.
+
+**Small items.** `replay/compare.ts`: the times staff set are shown for the prefixes in `STAFF_SET_TIME_PREFIXES`
+(`w48-`, `w51-`: W48 review L6). `admin/flag.ts`'s header says what a repeat press still does (W50a's correction).
+
+Tests: `sessions/admin.test.ts` (every route: the reads field for field and by the London day; each refusal in its
+words; GB5 with a pending, a Payment needed and an attended booking; GB6; GB7's four cases; Q18's rule; Q50 parts 1
+and 2; the order of the locks; the audit rows); `sessions/admin-postgres.test.ts` (W51-1 for a one-off, a
+start-time change and a reset, with a control that keeps the old band; the three day presses against a save, each
+way round; a block and a start-time change against a new booking, with a control that blocks over it);
+`testing/migration-032.test.ts` (the file against the saved schema; its row; GB3 with a one-off a year out and its
+control; the job's guard, with a control; its Down); `pricing/reband-london-now.test.ts` (L3, on a summer clock);
+`sessions/sessions.test.ts` (L4, on four connection time zones); `replay/session-admin-replay.test.ts` (the 43
+recordings: 22 exact, 21 with named differences; since W51a 21 and 22); `server/staff-app-helpers.test.ts` (the twelve thin functions,
+Q50's words, the screens).
+
+## W51's review fixes: a booking in the middle of a Move, closed dates (W51a)
+
+Brief W51a (W51 review S1, L1 to L4, L6, L9, point 1; Wayne, 20 Nov 2026: "remember closed dates"). Released with
+W51: the lead applies migration 032 (W51a changed the file; it was not applied), then the Worker, then the staff app.
+
+**S1 (GB5, GB6): a booking can come BACK onto a session.** W51's checks read the bookings on a session under its
+lock, which stops a NEW booking landing under a block. Two undos put an existing booking back:
+
+- **A dearer Move on a saved card or the reader** (`bookings/move.ts`) moves the booking at once and waits for the
+  payment. If the payment is cancelled, the flow's undo (`orders/reader-flow.ts`, `undoFlow`) puts the booking back
+  on its old session without that session's lock. So Block Slot, Block Day and a start-time change are also
+  refused (`move_in_flight`) while a pending Move flow names the session as its old session
+  (`pending_reader_payments`: `status = 'pending'`, `flow = 'move'`, `snapshot->>'old_session_id'`), read under
+  the session's lock. Move's C1 writes that row while it holds the old session's lock (`lockAndLoadBooking`,
+  `ownSession`), so there is no gap: the block either sees the row or commits before C1 reads the session. The
+  refusal's `conflictingBookings` list the booking with `movingOff: true`; the Block dialogs show it with no Move or
+  cancel button. With bookings on the slot too, the reason stays `bookings_in_the_way` and the list has both.
+- **A refund's undo** (`bookings/refunds.ts`: a cheaper Move, or a cancel, whose first card part Stripe refuses)
+  holds the session's lock. `requireSessionAsItWas` now lets the booking back only onto a session that is still
+  `open` and still at the booking's start time (a Move: `move.oldStartTime`; a cancel: the booking's own).
+  Otherwise `PutBackBlocked`, which already ends as money still to refund (W25). The brief asked for the time
+  check on a Move; the cancel has it too (the same hole: a start-time change while the booking was cancelled).
+
+**Closed dates** (migration 032: `closed_dates`, one row a date: `closed_on`, `reason`, `closed_by`, `closed_at`;
+the Worker reads, inserts and deletes).
+
+- **Block Day** records its date as closed, with its reason and who, whatever the day holds: a date after "made
+  up to" has no session to block and is closed ahead of them; a date with sessions is blocked as before and
+  recorded too. A date already closed keeps its first reason and who. **Unblock Day** removes the closed date as
+  well as reopening what a Block Day blocked; whether a closed date goes is one of its figures (`closedDates`, 1 or
+  0), so a press that didn't see it is refused `changed_since`. Both rows in `audit_log` say so (`closedDate`,
+  `closedDateRemoved`).
+- **The nightly job** makes no session on a closed date, and remembers the closed dates it left out
+  (`sessions_made_up_to.closed_days_skipped`), so the first run after one is reopened makes that day's sessions,
+  and no other day already made is touched (Q50).
+- **One lock for the date** (`admin/locks.ts`, `holdSessionDay`: a transaction advisory lock on
+  `'session_day:YYYY-MM-DD'`). Block Day, Unblock Day, a one-off session and a start-time change take it for their
+  date, after the band guard and before any session; the job takes it for every day it makes, before it reads the
+  closed dates. So a date is never closed with the job's open sessions on it, whichever gets there first.
+- **Where else the date is honoured:** a one-off session on a closed date is refused (`date_closed`), and so is a
+  start-time change that would move a session onto one from another date (a session already on it may change its
+  time). New Order and the website can't offer a session that doesn't exist, so nothing else needs it. A session
+  unblocked on its own card on a closed date opens, and the date stays closed: the calendar shows both.
+- **The calendar read** (`GET sessions`) answers `closedDates` for its range; the Block Day quote answers `closed`
+  and `afterMadeUpTo`; the Unblock Day quote `closedDates` and `closedReason`.
+
+**L1.** A block's audit row keeps `lockedAt`: the clock (`clock_timestamp()`, UTC, to the microsecond) read after
+the block has the session's lock. Unblock Day's "latest block" orders by it, not by the row's own time (the
+transaction's start, which a block that waited for the lock has earlier than the block it waited for).
+
+**L4.** A band set by hand reads its band inside the transaction, `FOR SHARE`, before the sessions (it was checked
+before the transaction, unlocked). `FOR SHARE`, not the review's `FOR KEY SHARE`: switching a band off updates
+`active`, which takes `FOR NO KEY UPDATE`, and `KEY SHARE` lets that through.
+
+**Words.** `SESSION_ADMIN_NEW_WORDS`: `moveInFlight`, `dayMoveInFlight`, `dateClosed`, `dateClosedForMove`. The
+start-time refusal (`SESSION_ADMIN_DIALOG_WORDS`, with the dialog): "This slot has a booking, so its start time
+can't be changed."
+
+Tests: `sessions/admin.test.ts` (S1's three presses and each condition of the read; closed dates through Block Day,
+Unblock Day, a one-off, a start-time change and the calendar read; L1's order with the rows' own times reversed, and
+its control; L4's order of statements); `sessions/move-in-flight-postgres.test.ts` (a real reader Move against a
+block, a Block Day and a start-time change, then its cancel; the control that lands on a blocked session; the race
+with C1; the refund undo for a Move and a cancel, blocked and re-timed, each with its control);
+`sessions/admin-postgres.test.ts` (L4 against a switch-off, with its control; Block Day against the job each way
+round, with a control without the lock; a one-off against Block Day); `testing/migration-032.test.ts` (the file
+against the saved schema; the closed dates table; the job leaving a closed date out and making a reopened one; the
+date's lock; the header's checks, run); `replay/session-admin-replay.test.ts` (21 exact, 22 with named differences:
+Block Day's own recording now records its dates); `server/staff-app-helpers.test.ts` (the functions and screens).

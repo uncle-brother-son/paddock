@@ -851,6 +851,43 @@
    ]
   },
   {
+   "name": "closed_dates",
+   "columns": [
+    {
+     "name": "closed_on",
+     "type": "date",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "reason",
+     "type": "text",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "closed_by",
+     "type": "uuid",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "closed_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
    "name": "customer_memberships",
    "columns": [
     {
@@ -4086,6 +4123,43 @@
    ]
   },
   {
+   "name": "sessions_made_up_to",
+   "columns": [
+    {
+     "name": "id",
+     "type": "boolean",
+     "notNull": true,
+     "default": "true",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "made_up_to",
+     "type": "date",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "closed_days_skipped",
+     "type": "date[]",
+     "notNull": true,
+     "default": "'{}'::date[]",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
    "name": "staff",
    "columns": [
     {
@@ -4668,6 +4742,18 @@
    "name": "bookings_status_check",
    "type": "c",
    "definition": "CHECK ((status = ANY (ARRAY['pending'::text, 'confirmed'::text, 'payment_needed'::text, 'cancelled'::text, 'completed'::text, 'no-show'::text])))"
+  },
+  {
+   "table": "closed_dates",
+   "name": "closed_dates_closed_by_fkey",
+   "type": "f",
+   "definition": "FOREIGN KEY (closed_by) REFERENCES staff(id)"
+  },
+  {
+   "table": "closed_dates",
+   "name": "closed_dates_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (closed_on)"
   },
   {
    "table": "customer_memberships",
@@ -5756,6 +5842,18 @@
    "definition": "CHECK ((type = ANY (ARRAY['public'::text, 'private'::text])))"
   },
   {
+   "table": "sessions_made_up_to",
+   "name": "sessions_made_up_to_id_check",
+   "type": "c",
+   "definition": "CHECK (id)"
+  },
+  {
+   "table": "sessions_made_up_to",
+   "name": "sessions_made_up_to_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (id)"
+  },
+  {
    "table": "staff",
    "name": "staff_email_key",
    "type": "u",
@@ -6176,7 +6274,7 @@
   {
    "name": "generate_upcoming_sessions",
    "identity": "horizon_days integer",
-   "definition": "CREATE OR REPLACE FUNCTION public.generate_upcoming_sessions(horizon_days integer DEFAULT 98)\n RETURNS integer\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\ndeclare v_edge date; v_target date; v_inserted int;\nbegin\n  v_target := (now() at time zone 'Europe/London')::date + horizon_days;\n  select coalesce(max(start_time)::date, (now() at time zone 'Europe/London')::date - 1)\n    into v_edge from sessions;\n  if v_edge >= v_target then return 0; end if;\n\n  insert into sessions (service_type_id, start_time, end_time, type, capacity, status)\n  select svc.id, (d.day + sl.start_time),\n         (d.day + sl.start_time) + (svc.duration || ' minutes')::interval,\n         svc.booking_type, svc.capacity, 'open'\n  from generate_series((v_edge + 1)::timestamp, v_target::timestamp, interval '1 day') as g(day_ts)\n  cross join lateral (select g.day_ts::date as day) d\n  join service_type_schedule_slots sl on sl.day_of_week = extract(dow from d.day)::smallint\n  join service_types svc on svc.id = sl.service_type_id\n  where svc.active and svc.duration is not null and svc.duration > 0 and svc.booking_type is not null\n  on conflict (service_type_id, start_time) do nothing;\n\n  get diagnostics v_inserted = row_count;\n  return v_inserted;\nend $function$\n"
+   "definition": "CREATE OR REPLACE FUNCTION public.generate_upcoming_sessions(horizon_days integer DEFAULT 98)\n RETURNS integer\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\ndeclare v_edge date; v_target date; v_inserted int; v_skipped date[]; v_days date[]; v_open date[]; v_closed date[];\nbegin\n  -- 032 (W51-1): the band guard, shared, before anything is written. A band-window save holds these rows, so a\n  -- session made here is banded by the windows the save leaves, and a save that starts later waits for this run.\n  perform 1 from session_bands order by id for share;\n  v_target := (now() at time zone 'Europe/London')::date + horizon_days;\n  -- 032 (GB3): the job's own date, not the furthest session. Locked, so two runs at once take turns. With no row\n  -- (a database never set up) it starts from today, and writes the row below.\n  select made_up_to, closed_days_skipped into v_edge, v_skipped from sessions_made_up_to where id for update;\n  if not found then v_edge := (now() at time zone 'Europe/London')::date - 1; v_skipped := '{}'; end if;\n  -- 032 (closed dates): the days this run is for. Each day after the job's date up to the target, and each closed\n  -- day an earlier run left out that hasn't passed. Then one lock for each, in date order: the lock Block Day,\n  -- Unblock Day and a one-off session take for their date, so no date is closed or reopened while this run makes it.\n  -- Then which of them are closed, read after the locks (a new statement sees what a press that held one committed).\n  select coalesce(array_agg(q.day order by q.day), '{}') into v_days\n    from (select g.day_ts::date as day from generate_series((v_edge + 1)::timestamp, v_target::timestamp, interval '1 day') as g(day_ts)\n          union\n          select s.day from unnest(v_skipped) as s(day) where s.day >= (now() at time zone 'Europe/London')::date) q;\n  if v_days = '{}' then return 0; end if;\n  perform pg_advisory_xact_lock(hashtextextended('session_day:' || to_char(l.day, 'YYYY-MM-DD'), 0)) from unnest(v_days) as l(day);\n  select coalesce(array_agg(q.day order by q.day) filter (where c.closed_on is null), '{}'),\n         coalesce(array_agg(q.day order by q.day) filter (where c.closed_on is not null), '{}')\n    into v_open, v_closed\n    from unnest(v_days) as q(day) left join closed_dates c on c.closed_on = q.day;\n\n  insert into sessions (service_type_id, start_time, end_time, type, capacity, status)\n  select svc.id, (d.day + sl.start_time),\n         (d.day + sl.start_time) + (svc.duration || ' minutes')::interval,\n         svc.booking_type, svc.capacity, 'open'\n  from unnest(v_open) as g(day_ts)\n  cross join lateral (select g.day_ts::date as day) d\n  join service_type_schedule_slots sl on sl.day_of_week = extract(dow from d.day)::smallint\n  join service_types svc on svc.id = sl.service_type_id\n  where svc.active and svc.duration is not null and svc.duration > 0 and svc.booking_type is not null\n  on conflict (service_type_id, start_time) do nothing;\n\n  get diagnostics v_inserted = row_count;\n  -- 032 (GB3): made up to the target, whether or not any slot fell on those days (never moved back by a run with a\n  -- shorter horizon). The closed days this run left out are kept, so a later run makes one that has been reopened.\n  insert into sessions_made_up_to (id, made_up_to, closed_days_skipped) values (true, greatest(v_edge, v_target), v_closed)\n  on conflict (id) do update set made_up_to = excluded.made_up_to, closed_days_skipped = excluded.closed_days_skipped, updated_at = now();\n  return v_inserted;\nend $function$\n"
   },
   {
    "name": "lapse_sweep_expired_bookings",
@@ -6241,7 +6339,7 @@
   {
    "name": "reassign_session_bands",
    "identity": "p_from timestamp with time zone",
-   "definition": "CREATE OR REPLACE FUNCTION public.reassign_session_bands(p_from timestamp with time zone DEFAULT now())\n RETURNS integer\n LANGUAGE plpgsql\nAS $function$\nDECLARE\n  v_count INTEGER;\nBEGIN\n  UPDATE sessions s\n  SET band_id = band_for_session_start(s.start_time)\n  WHERE s.type = 'public'\n    AND s.band_overridden = false\n    AND s.start_time >= p_from\n    AND s.band_id IS DISTINCT FROM band_for_session_start(s.start_time);\n\n  GET DIAGNOSTICS v_count = ROW_COUNT;\n  RETURN v_count;\nEND;\n$function$\n"
+   "definition": "CREATE OR REPLACE FUNCTION public.reassign_session_bands(p_from timestamp with time zone DEFAULT ((now() AT TIME ZONE 'Europe/London'::text) AT TIME ZONE 'UTC'::text))\n RETURNS integer\n LANGUAGE plpgsql\nAS $function$\nDECLARE\n  v_count INTEGER;\nBEGIN\n  UPDATE sessions s\n  SET band_id = band_for_session_start(s.start_time)\n  WHERE s.type = 'public'\n    AND s.band_overridden = false\n    AND s.start_time >= p_from\n    AND s.band_id IS DISTINCT FROM band_for_session_start(s.start_time);\n\n  GET DIAGNOSTICS v_count = ROW_COUNT;\n  RETURN v_count;\nEND;\n$function$\n"
   },
   {
    "name": "refresh_herd_flags",

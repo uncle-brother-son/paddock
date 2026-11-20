@@ -2,6 +2,7 @@ import { vi } from 'vitest'
 import type { Db, SqlParam } from '@/server/db'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
 import { insert } from '../database'
+import { GENERATOR_BEFORE_032_NAME } from '../migration-032'
 import type { Scenario, ScenarioContext } from './harness'
 import { ID, paidSeat, sam, seed, whileFailing } from './scenarios'
 
@@ -1408,11 +1409,17 @@ async function samBooked({ call }: Pick<ScenarioContext, 'call'>, more: Record<s
   return placed.bookingId
 }
 
-/** The database's nightly job, run as the job runs it (the table owner, not the Worker's role). */
-async function runNightlyJob(db: Db): Promise<void> {
+/**
+ * The database's nightly job, run as the job runs it (the table owner, not the Worker's role). W51 (migration 032):
+ * the side's own when it has one (the Worker's side: the job as the saved schema has it), else the job as it was
+ * before 032, which is what the golden files recorded (harness.ts, startReplay).
+ */
+async function runNightlyJob({ db, side }: Pick<ScenarioContext, 'db' | 'side'>): Promise<void> {
+  if (side.nightlyJob) return side.nightlyJob(db)
   await db.query('RESET ROLE')
   try {
-    await db.query('SELECT public.generate_upcoming_sessions()')
+    // eslint-disable-next-line no-restricted-syntax -- test data only: the function's name is a literal in migration-032.ts
+    await db.query(`SELECT public.${GENERATOR_BEFORE_032_NAME}()`)
   } finally {
     await db.query('SET ROLE paddock_worker')
   }
@@ -1603,15 +1610,15 @@ function sessionScenarios(): Scenario[] {
     }, saunaHour, weekOfBandRules),
     // The control for GB3: the nightly job with nothing far ahead makes the Thursday 10:00 sessions from the day
     // after the last session (14 Nov) up to 98 days from today (16 Feb 2027): 13 Thursdays.
-    g('nightly-job-makes-sessions-98-days-ahead', async ({ call, db }) => {
-      await runNightlyJob(db)
+    g('nightly-job-makes-sessions-98-days-ahead', async ({ call, db, side }) => {
+      await runNightlyJob({ db, side })
       await call('getSessionsForRange', { startDate: '2026-11-15', endDate: '2026-12-10' })
     }, saunaHour, thursdaySlot, weekOfBandRules),
     // GB3: one one-off session on 1 June 2027. That night the job sees a session past its 98-day target and makes
     // nothing: there is no session to book between 15 November and June.
-    g('gb3-one-far-future-session-stops-the-nightly-job', async ({ call, db }) => {
+    g('gb3-one-far-future-session-stops-the-nightly-job', async ({ call, db, side }) => {
       await call('createOneOffSession', { serviceTypeId: ID.serviceType, startTime: '2027-06-01T10:00:00.000Z' })
-      await runNightlyJob(db)
+      await runNightlyJob({ db, side })
       await call('getSessionsForRange', { startDate: '2026-11-15', endDate: '2026-12-10' })
     }, saunaHour, thursdaySlot, weekOfBandRules),
     // GB24: no screen calls it. Run by hand it makes 98 days of sessions after the furthest one (not up to today + 98).
