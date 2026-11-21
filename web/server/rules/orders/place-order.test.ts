@@ -7,7 +7,14 @@ import type { Recording } from '@/server/rules/testing/replay/compare'
 import { oldSide, replay, startReplay, type ReplayEnvironment, type Scenario } from '@/server/rules/testing/replay/harness'
 import { newOrderSide, oldResult, orderInput, postOrder, type OrderAnswer } from '@/server/rules/testing/replay/order-side'
 import { ID, liftOnSaleCheck, mo, memberCredit, paidSeat, restoreOnSaleCheck, sam, seed, seedCorePass, whileFailing, type WriteFailure } from '@/server/rules/testing/replay/scenarios'
-import { herdWaitMessage } from './failure-messages'
+import {
+  ADDON_MEMBER_PRICE_ONLY_MESSAGE,
+  ADDON_PRICE_NOT_SET_MESSAGE,
+  herdWaitMessage,
+  PASS_TYPE_NOT_SET_UP_MESSAGE,
+  PRODUCT_MEMBER_PRICE_ONLY_MESSAGE,
+  PRODUCT_PRICE_NOT_SET_MESSAGE,
+} from './failure-messages'
 import { GIFT_CARD_CODE_FORMAT } from './gift-card-code'
 import type { BasketFacts } from './load-basket'
 import { refusalCode, refusalDetails } from './order-refusal'
@@ -1452,6 +1459,57 @@ describe('what T1 writes for a promo code, store credit and a gift card (W09)', 
   it("W13: a promo code beside a membership bought in the basket is T1's now: in cash it is refused there, before anything is kept", async () => {
     const { recording, answer } = await placeThrough({ ...promoBooking, membershipPlanId: ID.plan, membershipBillingFrequency: 'monthly', payment: cash(54) })
     expect(answer.body).toMatchObject({ ok: false, error: { code: 'VALIDATION', details: { reason: 'membership_cash_not_accepted' } } })
+    expect(tablesTouched(recording)).toEqual(['api_idempotency'])
+  })
+})
+
+describe('W55a (W55 + W56 review S4): the order refuses an item on sale with nothing to charge for it, and keeps nothing', () => {
+  const unpriced = (table: string, id: string, columns: string) => async (seedDb: Db) => {
+    // Test data only: the table and columns are this block's fixed strings.
+    const sql = `UPDATE ${table} SET ${columns} WHERE id = $1`
+    await seedDb.query(sql, [id])
+  }
+  const noPrices = 'base_price = NULL, member_price = NULL, sale_price = NULL'
+
+  it.each([
+    ['a product with no price set at all', productsInCash, unpriced('products', ID.product, noPrices), 'product_price_not_set', PRODUCT_PRICE_NOT_SET_MESSAGE],
+    ['an add-on on its own', { customerId: ID.customer, standaloneAddons: [towel], payment: cash(5) }, unpriced('addons', ID.addon, noPrices), 'addon_price_not_set', ADDON_PRICE_NOT_SET_MESSAGE],
+    ['an add-on on a booking', cashBooking, unpriced('addons', ID.addon, noPrices), 'addon_price_not_set', ADDON_PRICE_NOT_SET_MESSAGE],
+    ['a pass with no price', passAlone, unpriced('session_pass_types', ID.passType, 'price = NULL'), 'session_pass_type_not_set_up', PASS_TYPE_NOT_SET_UP_MESSAGE],
+    ['a pass with no sessions', passAlone, unpriced('session_pass_types', ID.passType, 'sessions_included = NULL'), 'session_pass_type_not_set_up', PASS_TYPE_NOT_SET_UP_MESSAGE],
+    ['a pass bought for a booking with no price', buyNewPass, unpriced('session_pass_types', ID.passType, 'price = NULL'), 'session_pass_type_not_set_up', PASS_TYPE_NOT_SET_UP_MESSAGE],
+  ] as const)('%s', async (_label, basket, prepare, reason, words) => {
+    const { recording, answer } = await placeThrough(basket, prepare)
+    expect(answer.body).toMatchObject({ ok: false, error: { code: 'VALIDATION', message: words, details: { stage: 'validation', reason, message: words } } })
+    expect(tablesTouched(recording)).toEqual(['api_idempotency'])
+  })
+})
+
+describe('W55b (W55a noticed 1): the order sells a member-price-only item to a member at that price, and refuses it to a non-member', () => {
+  const memberOnly = (table: string, id: string, price: number) => async (seedDb: Db) => {
+    // Test data only: the table is this block's fixed string.
+    const sql = `UPDATE ${table} SET base_price = NULL, sale_price = NULL, member_price = $2 WHERE id = $1`
+    await seedDb.query(sql, [id, price])
+  }
+  const soapOnlyForMembers = memberOnly('products', ID.product, 9)
+  const towelOnlyForMembers = memberOnly('addons', ID.addon, 4)
+
+  it.each([
+    ['a product', { customerId: ID.member, products: [{ ...soap, unitPrice: 9 }], payment: cash(18) }, soapOnlyForMembers, 'product', '9.00'],
+    ['an add-on', { customerId: ID.member, standaloneAddons: [{ ...towel, unitPrice: 4 }], payment: cash(4) }, towelOnlyForMembers, 'addon', '4.00'],
+  ] as const)('%s: a member buys it at the member price', async (_label, basket, prepare, itemType, unitPrice) => {
+    const { recording, answer } = await placeThrough(basket, prepare)
+    expect(answer.body).toMatchObject({ ok: true })
+    expect(recording.tables['order_line_items']?.added).toMatchObject([{ item_type: itemType, unit_price: unitPrice }])
+  })
+
+  it.each([
+    ['a product', productsInCash, soapOnlyForMembers, 'product_price_not_set', PRODUCT_MEMBER_PRICE_ONLY_MESSAGE],
+    ['an add-on on its own', { customerId: ID.customer, standaloneAddons: [towel], payment: cash(5) }, towelOnlyForMembers, 'addon_price_not_set', ADDON_MEMBER_PRICE_ONLY_MESSAGE],
+    ['an add-on on a booking', cashBooking, towelOnlyForMembers, 'addon_price_not_set', ADDON_MEMBER_PRICE_ONLY_MESSAGE],
+  ] as const)('%s: a non-member is refused in its words, and nothing is kept', async (_label, basket, prepare, reason, words) => {
+    const { recording, answer } = await placeThrough(basket, prepare)
+    expect(answer.body).toMatchObject({ ok: false, error: { code: 'VALIDATION', message: words, details: { stage: 'validation', reason, message: words } } })
     expect(tablesTouched(recording)).toEqual(['api_idempotency'])
   })
 })

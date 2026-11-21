@@ -1,7 +1,7 @@
 import { appendFileSync } from 'node:fs'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Db } from '@/server/db'
-import { READER_INTENT_UNCONFIRMED_MESSAGE, staffSees } from '@/server/rules/orders/failure-messages'
+import { PASS_TYPE_NOT_SET_UP_MESSAGE, READER_INTENT_UNCONFIRMED_MESSAGE, staffSees } from '@/server/rules/orders/failure-messages'
 import { ORDER_NOT_SAVED_MESSAGE } from '@/server/rules/orders/place-order'
 import { SUB_PENNY_PAYMENT_MESSAGE } from '@/server/rules/orders/price-basket'
 import { compareRecordings, withCanonicalGoneNumbers, withCanonicalStripeIds, type AllowedDifference, type Recording } from './compare'
@@ -120,6 +120,18 @@ describe('the order route against the old createOrder', () => {
       expect(answers[0]?.status).toBe(500)
       // W14a (W6-6, W7-9): a definite rollback, said plainly, so the screen's next press gets a new key.
       expect(answers[0]?.body).toMatchObject({ ok: false, error: { code: 'INTERNAL', message: ORDER_NOT_SAVED_MESSAGE, details: { stage: 'validation', reason: 'order_not_saved' } } })
+      expect(Object.keys(recording.tables)).toEqual(['api_idempotency'])
+    })
+  })
+
+  describe('W55a (W55 + W56 review S4): an item with nothing to charge for it is refused', () => {
+    it('a pass with no price: the old order sold it for £0 with its five sessions; the new one is refused in words, with nothing kept', async () => {
+      const golden = readGolden('w07-a-pass-with-no-price') as Recording
+      expect(golden.results[0]).toMatchObject({ success: true, cardAmount: 0 })
+      expect(golden.tables['customer_session_passes']?.added).toMatchObject([{ sessions_remaining: 5 }])
+      expect(golden.tables['order_line_items']?.added).toMatchObject([{ item_type: 'session_pass', unit_price: '0.00' }])
+      const { recording, answers } = await runNew('w07-a-pass-with-no-price')
+      expect(answers[0]?.body).toMatchObject({ ok: false, error: { code: 'VALIDATION', message: PASS_TYPE_NOT_SET_UP_MESSAGE, details: { stage: 'validation', reason: 'session_pass_type_not_set_up' } } })
       expect(Object.keys(recording.tables)).toEqual(['api_idempotency'])
     })
   })

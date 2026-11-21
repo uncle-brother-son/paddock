@@ -324,9 +324,10 @@ describe("step G's side of the replay: staff, pricing and promo codes (W49 + W54
   // functions took none), so the replay presses each stamped edit as its screen does: the screen's read, then the
   // press with the stamp that read gave. These show the stamp is doing something, on the recordings' own seeds.
   describe('W54a: the stamp an edit carries', () => {
-    it("there are four stamped edits here, each one of the moved writes; every recording that saves one is replayed above with its stamps checked. (W52 added a fifth, the event's details edit, replayed with its stamps in event-admin-replay.test.ts.)", () => {
-      expect([...STAMPED_EDITS].sort()).toEqual(['setBandRules', 'setEventDetails', 'setMembershipBandTerm', 'setPostageSettings', 'updatePromoCode'])
-      for (const action of STAMPED_EDITS) expect(W54_ACTIONS.has(action) || action === 'setEventDetails', action).toBe(true)
+    it("there are four stamped edits here, each one of the moved writes; every recording that saves one is replayed above with its stamps checked. (W52 added a fifth, the event's details edit, replayed with its stamps in event-admin-replay.test.ts; W55 + W56 four more, replayed in catalog-admin-replay.test.ts.)", () => {
+      const catalog = ['setGiftCardTypeCustomAmountSettings', 'setProductVariantDetails', 'setServiceTypeCapacityInfo', 'setServiceTypePriceTierRange']
+      expect([...STAMPED_EDITS].sort()).toEqual(['setBandRules', 'setEventDetails', 'setMembershipBandTerm', 'setPostageSettings', 'updatePromoCode', ...catalog].sort())
+      for (const action of STAMPED_EDITS) expect(W54_ACTIONS.has(action) || action === 'setEventDetails' || catalog.includes(action), action).toBe(true)
       expect(STAMPED_ROUTES.map((one) => one.action).sort()).toEqual([...STAMPED_ACTIONS].sort())
     })
 

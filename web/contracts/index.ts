@@ -20,3 +20,5 @@ export * from './money-owed'
 export * from './payment-retry'
 // W48: step G's admin contracts, last, so the staff app's generated types keep the order of every earlier union.
 export * from './admin'
+// W55 + W56: the catalogue's routes' own inputs and answers, after admin's, so every earlier union keeps its order.
+export * from './catalog-admin'

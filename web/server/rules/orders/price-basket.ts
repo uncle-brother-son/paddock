@@ -21,6 +21,14 @@ import { applyPromoCode } from '@/server/rules/promo/promo-codes'
 import { amountLeftToPay, exceedsAmount, round2 } from './amounts'
 import { bookingProblem, GIFT_CARD_SOURCE_REMOVED_MESSAGE, priceBooking, type PricedBooking } from './basket-booking'
 import { checkEvent, eventFullProblem, eventPromoLines } from './basket-event'
+import { addonPriceFor, addonPriceGap, variantPriceFor, variantPriceGap } from './catalog-price'
+import {
+  ADDON_MEMBER_PRICE_ONLY_MESSAGE,
+  ADDON_PRICE_NOT_SET_MESSAGE,
+  PASS_TYPE_NOT_SET_UP_MESSAGE,
+  PRODUCT_MEMBER_PRICE_ONLY_MESSAGE,
+  PRODUCT_PRICE_NOT_SET_MESSAGE,
+} from './failure-messages'
 import { loadBasketFacts, type BasketAddonFacts, type BasketFacts, type BasketVariantFacts } from './load-basket'
 
 /**
@@ -61,19 +69,14 @@ export function wholePennies(amount: number): boolean {
 export const SUB_PENNY_GIFT_CARD_MESSAGE = 'Enter the gift card amount in pounds and pence, with no more than two decimal places.'
 export const SUB_PENNY_PAYMENT_MESSAGE = 'Enter the gift card and store credit amounts in pounds and pence, with no more than two decimal places.'
 
-/** The first set price, in order. Nothing set is free. */
-function firstPrice(...candidates: (string | null | undefined)[]): number {
-  for (const candidate of candidates) {
-    if (candidate !== null && candidate !== undefined) return money(candidate)
-  }
-  return 0
-}
+/**
+ * The system prices (catalog-price.ts). An item with no price for this customer is refused below (W55a: none set at
+ * all; W55b: a member price only, for a non-member), in the quote, the order and the website alike. The 0 here only
+ * fills in the figures of a basket that is refused, so it is never charged.
+ */
+const addonSystemPrice = (addon: BasketAddonFacts, member: boolean): number => money(addonPriceFor(addon, member) ?? '0')
 
-const addonSystemPrice = (addon: BasketAddonFacts, member: boolean): number =>
-  firstPrice(member ? addon.member_price : null, addon.sale_price, addon.base_price)
-
-const variantSystemPrice = (variant: BasketVariantFacts, member: boolean): number =>
-  firstPrice(member ? variant.member_price : null, variant.price_override, variant.sale_price, variant.base_price)
+const variantSystemPrice = (variant: BasketVariantFacts, member: boolean): number => money(variantPriceFor(variant, member) ?? '0')
 
 const STANDALONE_CREDIT_MESSAGE = 'An add-on credit can only pay for an add-on on a booking. Charge this add-on, or add it to the booking.'
 
@@ -265,7 +268,11 @@ export function priceFromFacts(input: BasketQuoteInput, facts: BasketFacts, opti
   if (passTypeId) {
     if (!facts.pass_type) refuse('validation', 'session_pass_type_not_found')
     else if (facts.pass_type.active === false) refuse('validation', 'session_pass_type_inactive')
-    else passType = facts.pass_type
+    // W55a (review S4): no price would sell it free, and a pass bought on its own with no sessions would give none.
+    // A pass bought for a booking keeps its own older refusal for no sessions (booking_session_pass_type_grants_no_sessions).
+    else if (facts.pass_type.price === null || (!buysNewPass && (facts.pass_type.sessions_included ?? 0) < 1)) {
+      refuse('validation', 'session_pass_type_not_set_up', PASS_TYPE_NOT_SET_UP_MESSAGE)
+    } else passType = facts.pass_type
   }
   const passPrice = passType ? money(passType.price ?? '0') : 0
   if (buysNewPass) {
@@ -292,9 +299,11 @@ export function priceFromFacts(input: BasketQuoteInput, facts: BasketFacts, opti
   if (products.some((line) => !Number.isInteger(line.quantity) || line.quantity < 1)) refuse('validation', 'invalid_product_quantity')
   for (const line of products) {
     const variant = variants.get(line.productVariantId)
-    const reason = !variant ? 'product_variant_not_found' : variant.product_active === false ? 'product_inactive' : null
+    const gap = variant ? variantPriceGap(variant, member) : null
+    const reason = !variant ? 'product_variant_not_found' : variant.product_active === false ? 'product_inactive' : gap ? 'product_price_not_set' : null
     if (reason) {
-      problems.push({ stage: 'validation', reason, productVariantId: line.productVariantId })
+      const words = reason !== 'product_price_not_set' ? null : gap === 'member_only' ? PRODUCT_MEMBER_PRICE_ONLY_MESSAGE : PRODUCT_PRICE_NOT_SET_MESSAGE
+      problems.push({ stage: 'validation', reason, productVariantId: line.productVariantId, ...(words ? { message: words } : {}) })
       break
     }
   }
@@ -361,9 +370,11 @@ export function priceFromFacts(input: BasketQuoteInput, facts: BasketFacts, opti
   }
   for (const line of allAddons) {
     const addon = addons.get(line.addonId)
-    const reason = !addon ? 'addon_not_found' : addon.active === false ? 'addon_inactive' : null
+    const gap = addon ? addonPriceGap(addon, member) : null
+    const reason = !addon ? 'addon_not_found' : addon.active === false ? 'addon_inactive' : gap ? 'addon_price_not_set' : null
     if (reason) {
-      refuse('validation', reason)
+      const words = reason !== 'addon_price_not_set' ? undefined : gap === 'member_only' ? ADDON_MEMBER_PRICE_ONLY_MESSAGE : ADDON_PRICE_NOT_SET_MESSAGE
+      refuse('validation', reason, words)
       break
     }
   }

@@ -575,6 +575,8 @@ const SUB_PENNY: AllowedDifference = {
   path: /^\.results\[0\](\.|$)|^\.tables\./,
 }
 const Q9 = 'W03-decisions Q9'
+/** W55a: an item on sale with nothing to charge for it is refused by the basket (the lead's call on review S4). */
+const S4_NOTHING_TO_CHARGE = 'W55 + W56 review S4; brief W55a item 2 (the lead\'s call: the basket refuses a product, add-on or pass with no price, and a pass with no sessions)'
 
 /** Q9: what orders.payment_method records, where createOrder recorded something else. */
 function q9Method(was: string, now: string): AllowedDifference[] {
@@ -612,6 +614,14 @@ export const W07_DIFFERENCES: Readonly<Record<string, readonly AllowedDifference
   'w07a-q33-pass-and-gift-card-bought-on-29-february': [
     { name: "A pass bought on 29 Feb ends on the next year's 28 Feb, not 1 Mar", decision: Q33, path: /^\.tables\.customer_session_passes\.added\[0\]\.expiry_date$/ },
     { name: "A gift card bought on 29 Feb ends on the next year's 28 Feb, not 1 Mar", decision: Q33, path: /^\.tables\.gift_cards\.added\[0\]\.expiry_date$/ },
+  ],
+  // W55a (W55 + W56 review S4): createOrder sold a pass type with no price for £0, five sessions and all.
+  'w07-a-pass-with-no-price': [
+    {
+      name: 'A pass with no price set is refused (session_pass_type_not_set_up), with nothing kept, where createOrder sold it for £0',
+      decision: S4_NOTHING_TO_CHARGE,
+      path: /^\.results\[0\](\.|$)|^\.tables\.(orders|order_line_items|customer_session_passes)$/,
+    },
   ],
   'w07-address-save-fails': [
     {
@@ -749,6 +759,7 @@ export const NEW_SIDE_CONFIRMS: Readonly<Record<string, { toCollect: number; dec
 /** Scenarios whose outcome itself differs by decision: the new side's answer is checked by its own test. */
 export const OUTCOME_DIFFERS: readonly string[] = [
   'w07-address-save-fails',
+  'w07-a-pass-with-no-price',
   'w09-half-penny-store-credit',
   'w09-half-penny-store-credit-covers-it',
   'w10-unclear-answer',

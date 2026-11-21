@@ -85,7 +85,48 @@ const STAFF_ROUTES: Record<string, () => Promise<unknown>> = {
   '/api/v1/staff/catalog/events': () => import('@/app/api/v1/staff/catalog/events/route'),
   '/api/v1/staff/events/today': () => import('@/app/api/v1/staff/events/today/route'),
   '/api/v1/staff/events/attendees/check-in': () => import('@/app/api/v1/staff/events/attendees/check-in/route'),
+  // W55 + W56: the staff app's thin getProducts, getAddons, getServiceTypes, getSessionPassTypes and
+  // getGiftCardTypes, and setServiceTypePriceTierRange (one route for a size group, by the tier in its body).
+  '/api/v1/staff/catalog/products': () => import('@/app/api/v1/staff/catalog/products/route'),
+  '/api/v1/staff/catalog/addons': () => import('@/app/api/v1/staff/catalog/addons/route'),
+  '/api/v1/staff/catalog/service-types': () => import('@/app/api/v1/staff/catalog/service-types/route'),
+  '/api/v1/staff/catalog/session-pass-types': () => import('@/app/api/v1/staff/catalog/session-pass-types/route'),
+  '/api/v1/staff/catalog/gift-card-types': () => import('@/app/api/v1/staff/catalog/gift-card-types/route'),
+  '/api/v1/staff/catalog/tier-groups/range': () => import('@/app/api/v1/staff/catalog/tier-groups/range/route'),
 }
+
+/** W55 + W56: `catalog/<folder>/:id/<leaf>`, each loading its own route file, the id under the route's own name. */
+const catalogRoute = (folder: string, param: string, leaf: string, load: () => Promise<unknown>) => ({
+  pattern: new RegExp(`^/api/v1/staff/catalog/${folder}/([^/]+)/${leaf}$`),
+  load,
+  params: (m: RegExpMatchArray) => ({ [param]: decodeURIComponent(m[1] ?? '') }),
+})
+const CATALOG_PATTERNS = [
+  catalogRoute('products', 'productId', 'active', () => import('@/app/api/v1/staff/catalog/products/[productId]/active/route')),
+  catalogRoute('products', 'productId', 'price', () => import('@/app/api/v1/staff/catalog/products/[productId]/price/route')),
+  catalogRoute('products', 'productId', 'fulfilment', () => import('@/app/api/v1/staff/catalog/products/[productId]/fulfilment/route')),
+  catalogRoute('products', 'productId', 'variants', () => import('@/app/api/v1/staff/catalog/products/[productId]/variants/route')),
+  catalogRoute('variants', 'variantId', 'details', () => import('@/app/api/v1/staff/catalog/variants/[variantId]/details/route')),
+  catalogRoute('variants', 'variantId', 'stock', () => import('@/app/api/v1/staff/catalog/variants/[variantId]/stock/route')),
+  catalogRoute('variants', 'variantId', 'stock-adjustments', () => import('@/app/api/v1/staff/catalog/variants/[variantId]/stock-adjustments/route')),
+  catalogRoute('addons', 'addonId', 'active', () => import('@/app/api/v1/staff/catalog/addons/[addonId]/active/route')),
+  catalogRoute('addons', 'addonId', 'price', () => import('@/app/api/v1/staff/catalog/addons/[addonId]/price/route')),
+  catalogRoute('addons', 'addonId', 'sku', () => import('@/app/api/v1/staff/catalog/addons/[addonId]/sku/route')),
+  catalogRoute('service-types', 'serviceTypeId', 'active', () => import('@/app/api/v1/staff/catalog/service-types/[serviceTypeId]/active/route')),
+  catalogRoute('service-types', 'serviceTypeId', 'price', () => import('@/app/api/v1/staff/catalog/service-types/[serviceTypeId]/price/route')),
+  catalogRoute('service-types', 'serviceTypeId', 'details', () => import('@/app/api/v1/staff/catalog/service-types/[serviceTypeId]/details/route')),
+  catalogRoute('service-types', 'serviceTypeId', 'tiers', () => import('@/app/api/v1/staff/catalog/service-types/[serviceTypeId]/tiers/route')),
+  catalogRoute('tiers', 'tierId', 'price', () => import('@/app/api/v1/staff/catalog/tiers/[tierId]/price/route')),
+  catalogRoute('session-pass-types', 'passTypeId', 'active', () => import('@/app/api/v1/staff/catalog/session-pass-types/[passTypeId]/active/route')),
+  catalogRoute('session-pass-types', 'passTypeId', 'price', () => import('@/app/api/v1/staff/catalog/session-pass-types/[passTypeId]/price/route')),
+  catalogRoute('session-pass-types', 'passTypeId', 'details', () => import('@/app/api/v1/staff/catalog/session-pass-types/[passTypeId]/details/route')),
+  catalogRoute('session-pass-types', 'passTypeId', 'level-quote', () => import('@/app/api/v1/staff/catalog/session-pass-types/[passTypeId]/level-quote/route')),
+  catalogRoute('gift-card-types', 'giftCardTypeId', 'active', () => import('@/app/api/v1/staff/catalog/gift-card-types/[giftCardTypeId]/active/route')),
+  catalogRoute('gift-card-types', 'giftCardTypeId', 'details', () => import('@/app/api/v1/staff/catalog/gift-card-types/[giftCardTypeId]/details/route')),
+  catalogRoute('gift-card-types', 'giftCardTypeId', 'presets', () => import('@/app/api/v1/staff/catalog/gift-card-types/[giftCardTypeId]/presets/route')),
+  catalogRoute('gift-card-presets', 'presetId', 'active', () => import('@/app/api/v1/staff/catalog/gift-card-presets/[presetId]/active/route')),
+  catalogRoute('gift-card-presets', 'presetId', 'price', () => import('@/app/api/v1/staff/catalog/gift-card-presets/[presetId]/price/route')),
+]
 
 /** W14: the staff routes with an id in the path, and the path's parameters. */
 const STAFF_PATTERNS: Array<{ pattern: RegExp; load: () => Promise<unknown>; params: (match: RegExpMatchArray) => Record<string, string> }> = [
@@ -194,6 +235,9 @@ const STAFF_PATTERNS: Array<{ pattern: RegExp; load: () => Promise<unknown>; par
   // order's own paths are `orders/:orderId/...`, never `orders/lines`). getOrders is the exact path above.
   { pattern: /^\/api\/v1\/staff\/orders\/lines\/([^/]+)\/fulfilled$/, load: () => import('@/app/api/v1/staff/orders/lines/[lineItemId]/fulfilled/route'), params: (m) => ({ lineItemId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/orders\/([^/]+)\/lines$/, load: () => import('@/app/api/v1/staff/orders/[orderId]/lines/route'), params: (m) => ({ orderId: decodeURIComponent(m[1] ?? '') }) },
+  // W55 + W56: the catalogue's writes and the two reads with an id (a variant's stock history, a pass type's level
+  // quote). A service type's paths beside W51's schedule slots (`catalog/service-types/:id/schedule-slots`, above).
+  ...CATALOG_PATTERNS,
 ]
 
 function staffRoute(path: string): { load: () => Promise<unknown>; params: Record<string, string> } | null {

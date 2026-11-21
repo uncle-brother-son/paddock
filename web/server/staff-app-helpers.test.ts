@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { availableSessionsInputSchema, sessionTimeConflictInputSchema } from '@/contracts'
 import type { Queryable } from '@/server/db'
 import { authenticateStaff } from './auth/staff'
+import { CATALOG_ITEM_NEW_WORDS } from './rules/catalog/item-failure-messages'
+import { ADDON_PRICE_NOT_SET_MESSAGE } from './rules/orders/failure-messages'
 import { staffAppDir } from './rules/testing/staff-app-dir'
 
 // The staff app has no test runner, so its Worker helpers are tested here, from its checkout
@@ -1674,6 +1676,254 @@ describe('staff app helpers', () => {
     })
   })
 
+  describe('W55 + W56: the catalogue functions are thin calls to the Worker', () => {
+    const INACTIVE = 'This staff account is inactive. Ask an admin to reactivate it.'
+    const NO_ANSWER = "That didn't get an answer, so it may or may not have been saved. The screen has been reloaded: check it, and press again if it hasn't changed."
+    const ID = '55555555-5555-4555-8555-555555555555'
+    const fn = async (name: string) => (await import(/* @vite-ignore */ path.join(appDir, `backend/paddock/${name}`))).default as (req: { params: Record<string, unknown>; user: typeof user }) => Promise<unknown>
+    const refused = (code: string, reason: string, message: string) => ({ data: { ok: false, error: { code, message, details: { reason, message, action: 'catalog.details_set' } }, requestId: 'worker-request' } })
+    const sent = () => rawRequest.mock.calls[0]?.[0] as { path: string; method: string; body?: unknown; queryParams?: Record<string, string>; headers: Record<string, string> }
+    const C = '/api/v1/staff/catalog'
+
+    /** Each function with params a screen sends, the route it must call, and what it sends there. */
+    const thin: Array<[string, Record<string, unknown>, string, string, { queryParams?: Record<string, string>; body?: unknown }]> = [
+      ['getProducts', {}, 'GET', `${C}/products`, {}],
+      ['getAddons', {}, 'GET', `${C}/addons`, {}],
+      ['getStockAdjustments', { variantId: ID, limit: 10 }, 'GET', `${C}/variants/${ID}/stock-adjustments`, { queryParams: { limit: '10' } }],
+      ['getServiceTypes', {}, 'GET', `${C}/service-types`, {}],
+      ['getSessionPassTypes', { sessionId: ID }, 'GET', `${C}/session-pass-types`, { queryParams: { sessionId: ID } }],
+      ['getGiftCardTypes', {}, 'GET', `${C}/gift-card-types`, {}],
+      ['getSessionPassLevelQuote', { passTypeId: ID }, 'GET', `${C}/session-pass-types/${ID}/level-quote`, {}],
+      ['setProductActive', { productId: ID, active: false }, 'POST', `${C}/products/${ID}/active`, { body: { active: false } }],
+      ['setAddonActive', { addonId: ID, active: false }, 'POST', `${C}/addons/${ID}/active`, { body: { active: false } }],
+      ['setServiceTypeActive', { serviceTypeId: ID, active: true }, 'POST', `${C}/service-types/${ID}/active`, { body: { active: true } }],
+      ['setSessionPassActive', { passTypeId: ID, active: true }, 'POST', `${C}/session-pass-types/${ID}/active`, { body: { active: true } }],
+      ['setGiftCardTypeActive', { giftCardTypeId: ID, active: true }, 'POST', `${C}/gift-card-types/${ID}/active`, { body: { active: true } }],
+      ['setGiftCardPresetActive', { presetId: ID, active: true }, 'POST', `${C}/gift-card-presets/${ID}/active`, { body: { active: true } }],
+      ['setProductFulfillmentMethod', { productId: ID, fulfillmentMethod: 'pickup' }, 'POST', `${C}/products/${ID}/fulfilment`, { body: { fulfillmentMethod: 'pickup' } }],
+      ['setProductVariantDetails', { variantId: ID, size: 'M', sku: 'TEE-M', stamp: 'fields#1' }, 'POST', `${C}/variants/${ID}/details`, { body: { size: 'M', sku: 'TEE-M', stamp: 'fields#1' } }],
+      ['setAddonSku', { addonId: ID, sku: 'T2' }, 'POST', `${C}/addons/${ID}/sku`, { body: { sku: 'T2' } }],
+      ['updateCatalogItemPrice', { itemType: 'product', itemId: ID, basePrice: 14 }, 'POST', `${C}/products/${ID}/price`, { body: { basePrice: 14 } }],
+      ['setServiceTypeCapacityInfo', { serviceTypeId: ID, duration: 60, capacity: 8, bookingType: 'public', stamp: 'fields#2' }, 'POST', `${C}/service-types/${ID}/details`, { body: { duration: 60, capacity: 8, bookingType: 'public', stamp: 'fields#2' } }],
+      ['setServiceTypePriceTierRange', { tierId: ID, minPeople: 1, maxPeople: 3, stamp: 'g' }, 'POST', `${C}/tier-groups/range`, { body: { tierId: ID, minPeople: 1, maxPeople: 3, stamp: 'g' } }],
+      ['updateTierPrice', { tierId: ID, price: 120 }, 'POST', `${C}/tiers/${ID}/price`, { body: { price: 120 } }],
+      ['setSessionPassExpiry', { passTypeId: ID, expiryMonths: 6 }, 'POST', `${C}/session-pass-types/${ID}/details`, { body: { field: 'expiry_months', value: 6 } }],
+      ['setSessionPassSessionsIncluded', { passTypeId: ID, sessionsIncluded: 10 }, 'POST', `${C}/session-pass-types/${ID}/details`, { body: { field: 'sessions_included', value: 10 } }],
+      ['updateGiftCardPresetPrice', { presetId: ID, amount: 75 }, 'POST', `${C}/gift-card-presets/${ID}/price`, { body: { amount: 75 } }],
+      ['setGiftCardTypeCustomAmountSettings', { giftCardTypeId: ID, customAmountEnabled: true, customAmountMin: 5, customAmountMax: 250, stamp: 's' }, 'POST', `${C}/gift-card-types/${ID}/details`, { body: { field: 'custom_amounts', customAmountEnabled: true, customAmountMin: 5, customAmountMax: 250, stamp: 's' } }],
+      ['setGiftCardTypeExpiry', { giftCardTypeId: ID, expiryMonths: 6 }, 'POST', `${C}/gift-card-types/${ID}/details`, { body: { field: 'expiry_months', value: 6 } }],
+    ]
+
+    it.each(thin)('%s asks only the Worker, on its own route, and an inactive account is refused in the same words as before', async (name, params, method, route, sends) => {
+      const query = vi.fn()
+      const legacy = vi.fn()
+      vi.stubGlobal('paddockData', { query })
+      vi.stubGlobal('paddockBackendApi2', { rawRequest: legacy })
+      rawRequest.mockResolvedValue(refusal('FORBIDDEN', INACTIVE))
+      await expect((await fn(name))({ params, user })).rejects.toThrow(new Error(INACTIVE))
+      expect(rawRequest).toHaveBeenCalledTimes(1)
+      expect(sent()).toMatchObject({ method, path: route, headers: { 'X-Staff-Email': user.email } })
+      if (sends.queryParams) expect(sent().queryParams).toEqual(sends.queryParams)
+      if (sends.body) expect(sent().body).toEqual(sends.body)
+      expect(typeof sent().headers['Idempotency-Key']).toBe(method === 'POST' ? 'string' : 'undefined')
+      expect(legacy).not.toHaveBeenCalled()
+      expect(query).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['createProductVariant', { productId: ID, size: 'L', sku: 'TEE-L', stockQuantity: 3 }, `${C}/products/${ID}/variants`, { size: 'L', sku: 'TEE-L', stockQuantity: 3 }, 'created'],
+      ['createServiceTypePriceTier', { serviceTypeId: ID, minPeople: 9, maxPeople: 12 }, `${C}/service-types/${ID}/tiers`, { minPeople: 9, maxPeople: 12 }, 'created'],
+      ['createGiftCardPreset', { giftCardTypeId: ID, amount: 25 }, `${C}/gift-card-types/${ID}/presets`, { amount: 25 }, 'created'],
+      ['adjustVariantStock', { variantId: ID, changeAmount: 10, reasonCategory: 'delivery' }, `${C}/variants/${ID}/stock`, { changeAmount: 10, reasonCategory: 'delivery' }, 'adjusted'],
+    ] as const)("%s presses under the screen's key, answers a refusal as data in its words, and no answer as data with `noAnswer` (the screen keeps its key)", async (name, params, route, body, flag) => {
+      rawRequest.mockResolvedValue(refused('CONFLICT', 'sku_taken', 'Taken.'))
+      expect(await (await fn(name))({ params: { ...params, idempotencyKey: 'key-from-the-screen-5555' }, user })).toEqual({ [flag]: false, reason: 'sku_taken', message: 'Taken.' })
+      expect(sent()).toMatchObject({ method: 'POST', path: route, body, headers: { 'Idempotency-Key': 'key-from-the-screen-5555' } })
+      rawRequest.mockReset()
+      rawRequest.mockRejectedValue(new Error('socket hang up'))
+      const answer = (await (await fn(name))({ params, user })) as { noAnswer?: boolean; message?: string }
+      expect(answer.noAnswer).toBe(true)
+      expect(answer.message).toMatch(/didn't get an answer, so it may or may not have been (added|saved|created)\./)
+    })
+
+    it('a variant, a size group, a preset or a stock change with no item named is answered in the old words before anything is sent', async () => {
+      expect(await (await fn('createProductVariant'))({ params: { productId: '', size: 'L', sku: 'X' }, user })).toEqual({ created: false, reason: 'invalid_params', message: 'productId, size, and sku are required' })
+      expect(await (await fn('adjustVariantStock'))({ params: { variantId: '', changeAmount: 1, reasonCategory: 'delivery' }, user })).toEqual({ adjusted: false, reason: 'invalid_params', message: 'variantId is required' })
+      await expect((await fn('setProductActive'))({ params: { productId: '', active: true }, user })).rejects.toThrow(new Error('itemId is required'))
+      expect(rawRequest).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['setProductFulfillmentMethod', { productId: ID, fulfillmentMethod: 'pickup' }, 'product_not_found'],
+      ['setProductVariantDetails', { variantId: ID, size: 'M', sku: 'X', stamp: 's' }, 'variant_not_found'],
+      ['setAddonSku', { addonId: ID, sku: 'X' }, 'addon_not_found'],
+      ['setServiceTypeCapacityInfo', { serviceTypeId: ID, duration: 60, capacity: 8, bookingType: 'public', stamp: 's' }, 'service_type_not_found'],
+      ['setServiceTypePriceTierRange', { tierId: ID, minPeople: 1, maxPeople: 2, stamp: 's' }, 'tier_not_found'],
+      ['setSessionPassExpiry', { passTypeId: ID, expiryMonths: 6 }, 'pass_type_not_found'],
+      ['setSessionPassSessionsIncluded', { passTypeId: ID, sessionsIncluded: 6 }, 'pass_type_not_found'],
+      ['setGiftCardTypeCustomAmountSettings', { giftCardTypeId: ID, customAmountEnabled: false, stamp: 's' }, 'gift_card_type_not_found'],
+      ['setGiftCardTypeExpiry', { giftCardTypeId: ID, expiryMonths: 6 }, 'gift_card_type_not_found'],
+    ] as const)('%s answers null for an item that isn\'t there (%s), as the old function did', async (name, params, reason) => {
+      rawRequest.mockResolvedValue(refused('NOT_FOUND', reason, 'Gone.'))
+      expect(await (await fn(name))({ params, user })).toBeNull()
+    })
+
+    it("the pass level keeps its old shape: `updated: true` with the level, or `updated: false` with the old reason; any other refusal thrown in its words; no answer in the no-answer words", async () => {
+      rawRequest.mockResolvedValue(success({ id: ID, level: 'core', holders: 2 }))
+      expect(await (await fn('setSessionPassLevel'))({ params: { passTypeId: ID, level: 'core' }, user })).toEqual({ updated: true, passType: { id: ID, level: 'core' } })
+      expect(sent().body).toEqual({ field: 'level', value: 'core' })
+      for (const reason of ['no_pricing_permission', 'invalid_level', 'pass_type_not_found']) {
+        rawRequest.mockResolvedValue(refused('CONFLICT', reason, 'Words.'))
+        expect(await (await fn('setSessionPassLevel'))({ params: { passTypeId: ID, level: 'core' }, user })).toEqual({ updated: false, reason })
+      }
+      rawRequest.mockRejectedValue(new Error('socket hang up'))
+      await expect((await fn('setSessionPassLevel'))({ params: { passTypeId: ID, level: 'core' }, user })).rejects.toThrow(new Error(NO_ANSWER))
+    })
+
+    it("updateCatalogItemPrice: the four kinds go to the Worker; a membership plan still goes to the legacy route, as before (W57)", async () => {
+      for (const [itemType, folder] of [['addon', 'addons'], ['service_type', 'service-types'], ['session_pass_type', 'session-pass-types']] as const) {
+        rawRequest.mockReset()
+        rawRequest.mockResolvedValue(success({ success: true, item: { id: ID }, pricesUpdated: {} }))
+        await (await fn('updateCatalogItemPrice'))({ params: { itemType, itemId: ID, basePrice: 5 }, user })
+        expect(sent().path).toBe(`${C}/${folder}/${ID}/price`)
+      }
+      const legacy = vi.fn().mockResolvedValue({ data: { success: true, item: { id: ID }, pricesUpdated: {} } })
+      vi.stubGlobal('paddockBackendApi2', { rawRequest: legacy })
+      vi.stubGlobal('paddockData', { query: vi.fn().mockResolvedValue({ data: [{ id: 'staff', can_manage_pricing: true, active: true }] }) })
+      rawRequest.mockReset()
+      await (await fn('updateCatalogItemPrice'))({ params: { itemType: 'membership_plan', itemId: ID, monthlyPrice: 45 }, user })
+      expect(legacy).toHaveBeenCalledWith(expect.objectContaining({ path: '/api/catalog/update-price', body: { itemType: 'membership_plan', itemId: ID, monthlyPrice: 45 } }))
+      expect(rawRequest).not.toHaveBeenCalled()
+    })
+
+    it('a price of Infinity is sent (as null) so the Worker refuses it in the old words, never dropped as no price at all', async () => {
+      rawRequest.mockResolvedValue(refused('VALIDATION', 'invalid_params', 'salePrice must be a non-negative number'))
+      await expect((await fn('updateCatalogItemPrice'))({ params: { itemType: 'product', itemId: ID, salePrice: Number.POSITIVE_INFINITY }, user })).rejects.toThrow(new Error('salePrice must be a non-negative number'))
+      expect(JSON.parse(JSON.stringify(sent().body))).toEqual({ salePrice: null })
+    })
+
+    it('none of the thirty reads the database, or the legacy resource (but for the plan branch), or the old staff lookups', () => {
+      for (const [name] of thin) {
+        const source = readFileSync(path.join(appDir, `backend/paddock/${name}.ts`), 'utf8')
+        expect(source, name).not.toMatch(/paddockData|resolveStaffId|requireStaffId|stockAdjustments|toggleItemActive/)
+        if (name !== 'updateCatalogItemPrice') expect(source, name).not.toMatch(/paddockBackendApi2/)
+      }
+    })
+
+    // The screens' own code, read from the staff app's checkout (it has no test runner of its own).
+    describe('the screens', () => {
+      const component = (name: string) => readFileSync(path.join(appDir, 'frontend/components', name), 'utf8')
+      const util = (name: string) => readFileSync(path.join(appDir, 'frontend/utils', name), 'utf8')
+
+      it('L7: every price box checks pounds and pence before sending, in the Worker\'s words', () => {
+        expect(util('priceEntry.ts')).toContain('must be pounds and pence: no more than two decimal places, and less than £100,000,000.')
+        for (const dialog of ['EditProductDialog.tsx', 'EditAddonDialog.tsx', 'EditServiceTypeTierDialog.tsx', 'EditSessionPassTypeDialog.tsx', 'EditGiftCardTypeDialog.tsx', 'GiftCardPresetsManager.tsx']) {
+          expect(component(dialog), dialog).toContain('poundsAndPenceError(')
+        }
+      })
+
+      it('the presses that add or move stock keep their key after no answer, and start a new one otherwise', () => {
+        for (const [dialog, flag] of [['ProductVariantsManager.tsx', 'created'], ['VariantRow.tsx', 'adjusted'], ['NewTierDialog.tsx', 'noAnswer'], ['GiftCardPresetsManager.tsx', 'created']] as const) {
+          const source = component(dialog)
+          expect(source, dialog).toMatch(/\?\? newPressKey\(\)/)
+          expect(source, dialog).toMatch(/noAnswer \? idempotencyKey : null/)
+          expect(source, dialog).toContain(flag)
+        }
+      })
+
+      it("the stale-page rule: each whole-row edit sends the stamp its page loaded", () => {
+        expect(component('VariantRow.tsx')).toContain('stamp: variant.stamp')
+        expect(component('EditServiceTypeDialog.tsx')).toContain('...(stamp ? { stamp } : {})')
+        expect(component('EditGiftCardTypeDialog.tsx')).toContain('...(stamp ? { stamp } : {})')
+        expect(component('EditServiceTypeTierDialog.tsx')).toContain('...(rangeStamp ? { stamp: rangeStamp } : {})')
+      })
+
+      it('GB21: the size group dialog sends ONE range press for the whole group, not one per band', () => {
+        const tier = component('EditServiceTypeTierDialog.tsx')
+        expect(tier).not.toContain('Promise.allSettled')
+        expect(tier.match(/await setRange\(/g)).toHaveLength(1)
+      })
+
+      it("Q52: the level dialog reads the holder count when the level is changed, and shows the Worker's words before saving", () => {
+        const dialog = component('EditSessionPassTypeDialog.tsx')
+        expect(dialog).toContain('loadLevelQuote({ passTypeId }')
+        expect(dialog).toContain('{holderWords ? <div')
+        expect(dialog).toContain('if (!open || level === currentLevel)')
+      })
+
+      it('GB10: the pass and gift card dialogs refuse a number of 0, a negative or a fraction, in the Worker\'s words', () => {
+        expect(component('EditSessionPassTypeDialog.tsx')).toContain("'Sessions included must be a whole number, 1 or more.'")
+        expect(component('EditSessionPassTypeDialog.tsx')).toContain("'Expiry must be a whole number of months, from 1 to 120.'")
+        expect(component('EditGiftCardTypeDialog.tsx')).toContain("'Expiry must be a whole number of months, from 1 to 120.'")
+      })
+
+      it('GB12: Add Variant is greyed without Manage pricing', () => {
+        expect(component('ProductVariantsManager.tsx')).toContain('disabled={submitting || !canManagePricing}')
+      })
+
+      // W55a: the W55 + W56 review's fixes on the screens.
+      const PRICE_DIALOGS = ['EditProductDialog.tsx', 'EditAddonDialog.tsx', 'EditSessionPassTypeDialog.tsx', 'EditServiceTypeTierDialog.tsx', 'EditGiftCardTypeDialog.tsx']
+
+      it('W55a S1: every price dialog decides "changed" with samePrice (in pence), never by comparing text ("20" and "20.00")', () => {
+        for (const dialog of PRICE_DIALOGS) {
+          const source = component(dialog)
+          expect(source, dialog).toMatch(/import \{[^}]*\bsamePrice\b[^}]*\} from '\.\.\/utils\/priceEntry'/)
+          expect(source, dialog).toMatch(/!?samePrice\(/)
+          expect(source, dialog).not.toMatch(/String\([a-zA-Z.]*\) (!==|===) String\(current/)
+        }
+        expect(component('EditProductDialog.tsx').match(/!samePrice\([a-z]+Result\.value, current[A-Za-z]+Price\)/g)).toHaveLength(3)
+        expect(component('EditAddonDialog.tsx').match(/!samePrice\([a-z]+Result\.value, current[A-Za-z]+Price\)/g)).toHaveLength(3)
+        expect(component('EditSessionPassTypeDialog.tsx')).toContain('const priceChanged = parsedPrice !== null && !samePrice(parsedPrice, currentPrice)')
+        expect(component('EditServiceTypeTierDialog.tsx')).toContain('const priceChanged = !samePrice(parsedPrice, currentPrice)')
+        expect(component('EditGiftCardTypeDialog.tsx')).toContain('samePrice(parsedMin, currentCustomAmountMin) &&')
+        expect(component('EditGiftCardTypeDialog.tsx')).toContain('samePrice(parsedMax, currentCustomAmountMax)))')
+      })
+
+      it('W55a S1: samePrice compares in pence; an empty or missing current price is not set', async () => {
+        const { samePrice } = (await import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/priceEntry.ts'))) as { samePrice: (parsed: number, current: string | number | null | undefined) => boolean }
+        expect([samePrice(20, '20.00'), samePrice(18.5, '18.50'), samePrice(0, '0.00'), samePrice(0.1 + 0.2, '0.30'), samePrice(20, 20)]).toEqual([true, true, true, true, true])
+        expect([samePrice(18, '20.00'), samePrice(20.01, '20.00'), samePrice(0, null), samePrice(5, undefined), samePrice(5, ''), samePrice(5, '  '), samePrice(5, 'abc')]).toEqual([false, false, false, false, false, false, false])
+      })
+
+      it("W55a S3: the four presses that keep their key after no answer keep it when the call throws too (W20a's rule), with the backend's no-answer words", async () => {
+        const words = (await load('adminWorker')) as Record<string, string>
+        for (const [file, constant, held, backend] of [
+          ['VariantRow.tsx', 'STOCK_NO_ANSWER_WORDS', 'setHeldStockKey', 'STOCK_NO_ANSWER_MESSAGE'],
+          ['ProductVariantsManager.tsx', 'CREATE_VARIANT_NO_ANSWER_WORDS', 'setHeldKey', 'CREATE_VARIANT_NO_ANSWER_MESSAGE'],
+          ['NewTierDialog.tsx', 'CREATE_TIER_NO_ANSWER_WORDS', 'setHeldKey', 'CREATE_TIER_NO_ANSWER_MESSAGE'],
+          ['GiftCardPresetsManager.tsx', 'CREATE_PRESET_NO_ANSWER_WORDS', 'setHeldKey', 'CREATE_PRESET_NO_ANSWER_MESSAGE'],
+        ] as const) {
+          const source = component(file)
+          expect(source, file).toContain(`const ${constant} =\n  ${JSON.stringify(words[backend])}`)
+          const caught = source.slice(source.lastIndexOf('} catch (err) {'))
+          expect(caught.slice(0, caught.indexOf('} finally {')), file).toMatch(new RegExp(`${held}\\(idempotencyKey\\)[\\s\\S]*thrownPressWords\\(${constant}, err\\)`))
+        }
+        const { thrownPressWords } = (await import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/priceEntry.ts'))) as { thrownPressWords: (words: string, err: unknown) => string }
+        expect(thrownPressWords('No answer.', new Error('socket hang up'))).toBe('No answer. (socket hang up)')
+        expect(thrownPressWords('No answer.', 'not an error')).toBe('No answer.')
+      })
+
+      it("W55a N3: the tier dialog says the Worker's tier_not_found words when the range press finds no tier, never \"Tier updated\"", () => {
+        const tier = component('EditServiceTypeTierDialog.tsx')
+        expect(tier).toContain(`const TIER_GONE_WORDS = ${JSON.stringify(CATALOG_ITEM_NEW_WORDS.tierNotFound).replace(/^"|"$/g, "'")}`)
+        expect(tier).toMatch(/\} else \{[\s\S]{0,300}errors\.push\(TIER_GONE_WORDS\)\s*onStale\?\.\(\)/)
+      })
+    })
+
+    it('W55a N1: updateCatalogItemPrice refuses a kind that is neither one of the four nor a membership plan, before anything is sent', async () => {
+      const query = vi.fn()
+      const legacy = vi.fn()
+      vi.stubGlobal('paddockData', { query })
+      vi.stubGlobal('paddockBackendApi2', { rawRequest: legacy })
+      for (const itemType of ['gift_card_type', 'membership', '']) {
+        await expect((await fn('updateCatalogItemPrice'))({ params: { itemType, itemId: ID, basePrice: 5 }, user })).rejects.toThrow(new Error('Invalid itemType'))
+      }
+      expect(legacy).not.toHaveBeenCalled()
+      expect(query).not.toHaveBeenCalled()
+      expect(rawRequest).not.toHaveBeenCalled()
+    })
+  })
+
   describe('callWorker', () => {
     it('adds who is acting and a request id, and returns data', async () => {
       const { callWorker } = await load('callWorker')
@@ -2734,6 +2984,13 @@ describe('staff app helpers', () => {
       it('a refusal the old function sent no words for leaves them out (the dialog has the same), as the old answer did', async () => {
         rawRequest.mockResolvedValue(refused('CONFLICT', { reason: 'booking_cancelled', message: 'This booking has been cancelled and can no longer take guests.', screenWords: true }))
         expect(await (await add(guest)).result()).toEqual({ added: false, reason: 'booking_cancelled' })
+      })
+
+      it("W55b: an add-on with no price for this customer comes back with the Worker's words, which the dialog shows first", async () => {
+        rawRequest.mockResolvedValue(refused('VALIDATION', { reason: 'addon_price_not_set', message: ADDON_PRICE_NOT_SET_MESSAGE }))
+        expect(await (await add({ ...guest, addons: [{ addonId: 'a', quantity: 1 }] })).result()).toEqual({ added: false, reason: 'addon_price_not_set', message: ADDON_PRICE_NOT_SET_MESSAGE })
+        const dialog = readFileSync(path.join(appDir, 'frontend/components/AddGuestDialog.tsx'), 'utf8')
+        expect(dialog).toContain('return result?.message ?? (result?.reason ? messages[result.reason] ?? result.reason : failedMessage)')
       })
 
       it('no name and no add-ons is thrown with its words, as the old function threw', async () => {

@@ -5,6 +5,13 @@ import { insert } from '@/server/rules/testing/database'
 import { startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
 import { ID, lastDayIs, PROMO, seed, seedCorePass, seedExhaustedMembership, seedOverlappingBooking } from '@/server/rules/testing/replay/scenarios'
 import { FakeStripe } from '@/server/stripe/fake'
+import {
+  ADDON_MEMBER_PRICE_ONLY_MESSAGE,
+  ADDON_PRICE_NOT_SET_MESSAGE,
+  PASS_TYPE_NOT_SET_UP_MESSAGE,
+  PRODUCT_MEMBER_PRICE_ONLY_MESSAGE,
+  PRODUCT_PRICE_NOT_SET_MESSAGE,
+} from './failure-messages'
 import { priceBasket } from './price-basket'
 
 // Prices on the shared replay seed, at its fixed date: seat £20 (Peak £25.50), towel £5, robe £10
@@ -930,5 +937,128 @@ describe('round trips', () => {
     const result = await priceBasket(db, everything as BasketQuoteInput)
     expect(result.lines.map((l) => l.kind)).toEqual(['membership', 'session_pass', 'booking', 'event', 'addon', 'addon', 'product', 'product', 'product', 'gift_card', 'postage'])
     expect(result.totals.promoDiscount).toBeGreaterThan(0)
+  })
+})
+
+describe('W55a (W55 + W56 review S4): an item on sale with nothing to charge for it is refused, never sold free', () => {
+  const unpriceProduct = () => db.query('UPDATE products SET base_price = NULL, member_price = NULL, sale_price = NULL WHERE id = $1', [ID.product])
+  const unpriceTowel = () => db.query('UPDATE addons SET base_price = NULL, member_price = NULL, sale_price = NULL WHERE id = $1', [ID.addon])
+  // Test data only: `set` is one of this block's fixed strings.
+  const passType = (set: string) => () => {
+    const sql = `UPDATE session_pass_types SET ${set} WHERE id = $1`
+    return db.query(sql, [ID.passType])
+  }
+
+  it('a product with no price set at all, in its words, naming the variant', async () => {
+    const result = await during(unpriceProduct, () => quote({ products: [soap] }))
+    expect(result.problems).toEqual([{ stage: 'validation', reason: 'product_price_not_set', productVariantId: ID.variant, message: PRODUCT_PRICE_NOT_SET_MESSAGE }])
+  })
+
+  it('a product with any one price set is sold at it, as before', async () => {
+    const saleOnly = await during(
+      () => db.query('UPDATE products SET base_price = NULL, member_price = NULL, sale_price = 9 WHERE id = $1', [ID.product]),
+      () => quote({ products: [soap] })
+    )
+    expect(saleOnly.problems).toEqual([])
+    expect(saleOnly.lines[0]).toMatchObject({ kind: 'product', unitPrice: 9 })
+    // A variant's own price override is a price too (nothing sets one any more; New Order charges it first).
+    const override = await during(
+      async () => {
+        await unpriceProduct()
+        await db.query('UPDATE product_variants SET price_override = 7 WHERE id = $1', [ID.variant])
+      },
+      () => quote({ products: [soap] })
+    )
+    expect(override.problems).toEqual([])
+    expect(override.lines[0]).toMatchObject({ kind: 'product', unitPrice: 7 })
+  })
+
+  it('an add-on with no price set at all: on its own, on a booking, and on a booking paid with an add-on credit', async () => {
+    for (const input of [{ standaloneAddons: [towel] }, { booking: seat({ addons: [towel] }) }, { customerId: ID.member, booking: seat({ addons: [{ ...towel, redemptionSource: 'membership_credit', membershipId: ID.membership }] }) }]) {
+      const result = await during(unpriceTowel, () => quote(input))
+      expect(result.problems.find((problem) => problem.reason === 'addon_price_not_set'), JSON.stringify(input)).toEqual({ stage: 'validation', reason: 'addon_price_not_set', message: ADDON_PRICE_NOT_SET_MESSAGE })
+    }
+  })
+
+  it.each([
+    ['no price', 'price = NULL'],
+    ['no sessions', 'sessions_included = NULL'],
+    ['0 sessions', 'sessions_included = 0'],
+  ])('a pass bought on its own with %s', async (_label, set) => {
+    const result = await during(passType(set), () => quote({ sessionPassTypeId: ID.passType }))
+    expect(result.problems).toEqual([{ stage: 'validation', reason: 'session_pass_type_not_set_up', message: PASS_TYPE_NOT_SET_UP_MESSAGE }])
+    expect(result.lines).toEqual([])
+  })
+
+  it('a pass bought for a booking: no price refused in the new words; no sessions keeps its older refusal', async () => {
+    const buyNewPass = { booking: seat({ redemptionSource: 'buy_new_session_pass' }), sessionPassTypeId: ID.passType }
+    expect(reasons(await during(passType('price = NULL'), () => quote(buyNewPass)))).toContain('session_pass_type_not_set_up')
+    const noSessions = reasons(await during(passType('sessions_included = 0'), () => quote(buyNewPass)))
+    expect(noSessions).toContain('booking_session_pass_type_grants_no_sessions')
+    expect(noSessions).not.toContain('session_pass_type_not_set_up')
+  })
+
+  it('a pass at £0 with sessions is a price set, and sold as before', async () => {
+    const result = await during(passType('price = 0'), () => quote({ sessionPassTypeId: ID.passType }))
+    expect(result.problems).toEqual([])
+    expect(result.lines).toEqual([expect.objectContaining({ kind: 'session_pass', unitPrice: 0 })])
+  })
+})
+
+describe('W55b (W55a noticed 1): a member price only is not a free price for a non-member', () => {
+  const soapMemberOnly = () => db.query('UPDATE products SET base_price = NULL, sale_price = NULL, member_price = 9 WHERE id = $1', [ID.product])
+  const towelMemberOnly = () => db.query('UPDATE addons SET base_price = NULL, sale_price = NULL, member_price = 4 WHERE id = $1', [ID.addon])
+
+  it('a product: a member buys it at the member price; a non-member and a walk-in are refused in its words, naming the variant', async () => {
+    const member = await during(soapMemberOnly, () => quote({ customerId: ID.member, products: [soap] }))
+    expect(member.problems).toEqual([])
+    expect(member.lines[0]).toMatchObject({ kind: 'product', unitPrice: 9 })
+    for (const customerId of [ID.customer, undefined]) {
+      const result = await during(soapMemberOnly, () => quote({ customerId, products: [soap] }))
+      expect(result.problems, String(customerId)).toEqual([
+        { stage: 'validation', reason: 'product_price_not_set', productVariantId: ID.variant, message: PRODUCT_MEMBER_PRICE_ONLY_MESSAGE },
+      ])
+    }
+  })
+
+  it("a product's variant override still sells to a non-member; no price at all keeps W55a's words", async () => {
+    const override = await during(
+      async () => {
+        await soapMemberOnly()
+        await db.query('UPDATE product_variants SET price_override = 7 WHERE id = $1', [ID.variant])
+      },
+      () => quote({ products: [soap] })
+    )
+    expect(override.problems).toEqual([])
+    expect(override.lines[0]).toMatchObject({ kind: 'product', unitPrice: 7 })
+    const none = await during(
+      () => db.query('UPDATE products SET base_price = NULL, sale_price = NULL, member_price = NULL WHERE id = $1', [ID.product]),
+      () => quote({ products: [soap] })
+    )
+    expect(none.problems[0]?.message).toBe(PRODUCT_PRICE_NOT_SET_MESSAGE)
+  })
+
+  it('an add-on, on its own and on a booking: a member buys it at the member price; a non-member is refused in its words', async () => {
+    for (const lines of [{ standaloneAddons: [towel] }, { booking: seat({ addons: [towel] }) }]) {
+      const member = await during(towelMemberOnly, () => quote({ customerId: ID.member, ...lines }))
+      expect(member.problems, JSON.stringify(lines)).toEqual([])
+      // An add-on on a booking is priced on the booking's quote; one on its own is its own line.
+      const sold = 'booking' in lines ? member.booking?.addons[0] : member.lines.find((line) => line.kind === 'addon')
+      expect(sold, JSON.stringify(lines)).toMatchObject({ unitPrice: 4 })
+      const result = await during(towelMemberOnly, () => quote(lines))
+      expect(
+        result.problems.find((problem) => problem.reason === 'addon_price_not_set'),
+        JSON.stringify(lines)
+      ).toEqual({ stage: 'validation', reason: 'addon_price_not_set', message: ADDON_MEMBER_PRICE_ONLY_MESSAGE })
+    }
+  })
+
+  it('a sale price alone is a price for a non-member, as before', async () => {
+    const result = await during(
+      () => db.query('UPDATE addons SET base_price = NULL, sale_price = 3, member_price = 4 WHERE id = $1', [ID.addon]),
+      () => quote({ standaloneAddons: [towel] })
+    )
+    expect(result.problems).toEqual([])
+    expect(result.lines[0]).toMatchObject({ kind: 'addon', unitPrice: 3 })
   })
 })

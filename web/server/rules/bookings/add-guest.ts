@@ -31,7 +31,8 @@ import type { StripeClient } from '@/server/stripe/client'
 import { stripeTiming } from '@/server/stripe/deadline'
 import { amountChangedRefusal, cashDifferenceRefusal, exceedsAmount } from '@/server/rules/orders/amounts'
 import { COLLECT_DEADLINE_MS } from '@/server/rules/orders/collect-saved-card'
-import { FAILURE_MESSAGES as ORDER_WORDS, NO_SAVED_CARD_MESSAGE } from '@/server/rules/orders/failure-messages'
+import { addonPriceFor } from '@/server/rules/orders/catalog-price'
+import { ADDON_PRICE_NOT_SET_MESSAGE, FAILURE_MESSAGES as ORDER_WORDS, NO_SAVED_CARD_MESSAGE } from '@/server/rules/orders/failure-messages'
 import { GUESTS_OVER_18_NOT_CONFIRMED_MESSAGE, MAX_GUESTS_PER_PRIVATE_BOOKING, MAX_GUESTS_PER_PUBLIC_BOOKING } from '@/server/rules/orders/guest-validation'
 import { FLOW_INTENT_UNCONFIRMED_MESSAGE, readFlow, undoFlowInTransaction } from '@/server/rules/orders/reader-flow'
 import { bookingPathOff } from './booking-switch'
@@ -159,9 +160,12 @@ async function priceAddons(
     const addon = catalog.get(input.addonId)
     if (!addon) throw refuse('VALIDATION', 'addon_not_found', undefined)
     if (addon.active === false) throw refuse('VALIDATION', 'addon_inactive', undefined)
-    const candidates = [member ? addon.member_price : null, addon.sale_price, addon.base_price]
-    const set = candidates.find((price) => price !== null && price !== undefined)
-    const system = set === undefined || set === null ? 0 : Number.parseFloat(set)
+    // W55b (W55a noticed 2): New Order's rule (catalog-price.ts). No price for this customer (none set, or a member
+    // price only for a non-member) is refused before anything is claimed or written, never priced at £0. Checked before
+    // a sent price, and for a line on an add-on credit too, as the basket does.
+    const set = addonPriceFor(addon, member)
+    if (set === null) throw refuse('VALIDATION', 'addon_price_not_set', ADDON_PRICE_NOT_SET_MESSAGE)
+    const system = Number.parseFloat(set)
     let unitPrice = system
     if (canManagePricing && typeof input.unitPrice === 'number' && Number.isFinite(input.unitPrice)) {
       if (input.unitPrice < 0) throw refuse('VALIDATION', 'invalid_addon_price', undefined)

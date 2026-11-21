@@ -20,6 +20,19 @@ export const PRIVATE_PRICE_NOT_SET_MESSAGE =
 export const MEMBERSHIP_PRICE_NOT_SET_MESSAGE =
   'That membership plan does not have a price set for the chosen billing frequency yet.'
 
+/*
+ * W55a (W55 + W56 review S4, the lead's call): an item on sale with nothing to charge for it is refused by the
+ * basket, so the staff app and the website share one rule (the Sanity webhook makes new rows on sale with no price,
+ * and pass types with no sessions). Each travels as its refusal's own message, as W10's words below do.
+ */
+export const PRODUCT_PRICE_NOT_SET_MESSAGE = 'This product has no price set yet. Set its price on the Products page before selling it.'
+export const ADDON_PRICE_NOT_SET_MESSAGE = 'This add-on has no price set yet. Set its price on the Add-ons page before selling it.'
+export const PASS_TYPE_NOT_SET_UP_MESSAGE = 'This pass has no price or sessions set yet. Set them on the Session Passes page before selling it.'
+/* W55b: a member price and nothing else, sold to a non-member (the same reasons, product_ and addon_price_not_set). */
+export const PRODUCT_MEMBER_PRICE_ONLY_MESSAGE =
+  'This product has a member price only. Set its base price on the Products page before selling it to a non-member.'
+export const ADDON_MEMBER_PRICE_ONLY_MESSAGE = 'This add-on has a member price only. Set its base price on the Add-ons page before selling it to a non-member.'
+
 /** When nothing else has words for it. Eight createBooking reasons have only this (W03-plan 1.1). */
 export const FALLBACK_MESSAGE = 'Failed to complete the order.'
 

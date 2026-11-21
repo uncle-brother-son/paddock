@@ -50,20 +50,54 @@ export const W52_ACTIONS: ReadonlySet<string> = new Set([...W52_READS, ...W52_WR
 export const W53_READS: ReadonlySet<string> = new Set(['getOrders', 'getOrderLineItems'])
 export const W53_FLAGS: ReadonlySet<string> = new Set(['setOrderLineItemFulfilled'])
 export const W53_ACTIONS: ReadonlySet<string> = new Set([...W53_READS, ...W53_FLAGS])
+/** W55: products, add-ons and stock: the three reads and eight writes. (updateCatalogItemPrice's membership plan branch stays on the legacy route until W57.) */
+export const W55_READS: ReadonlySet<string> = new Set(['getProducts', 'getAddons', 'getStockAdjustments'])
+export const W55_WRITES: ReadonlySet<string> = new Set(['setProductActive', 'setProductFulfillmentMethod', 'setProductVariantDetails', 'createProductVariant', 'adjustVariantStock', 'updateCatalogItemPrice', 'setAddonActive', 'setAddonSku'])
+export const W55_ACTIONS: ReadonlySet<string> = new Set([...W55_READS, ...W55_WRITES])
+/** W56: service types, tiers, passes and gift card types: the three reads and fifteen writes. */
+export const W56_READS: ReadonlySet<string> = new Set(['getServiceTypes', 'getSessionPassTypes', 'getGiftCardTypes'])
+export const W56_WRITES: ReadonlySet<string> = new Set([
+  'setServiceTypeActive',
+  'setServiceTypeCapacityInfo',
+  'createServiceTypePriceTier',
+  'setServiceTypePriceTierRange',
+  'updateTierPrice',
+  'setSessionPassActive',
+  'setSessionPassExpiry',
+  'setSessionPassSessionsIncluded',
+  'setSessionPassLevel',
+  'setGiftCardTypeActive',
+  'setGiftCardPresetActive',
+  'createGiftCardPreset',
+  'updateGiftCardPresetPrice',
+  'setGiftCardTypeCustomAmountSettings',
+  'setGiftCardTypeExpiry',
+])
+export const W56_ACTIONS: ReadonlySet<string> = new Set([...W56_READS, ...W56_WRITES])
 /** Every old step G function now a thin call to the Worker. */
-export const STEP_G_ACTIONS_MOVED: ReadonlySet<string> = new Set([...W49_ACTIONS, ...W54_ACTIONS, ...W50_ACTIONS, ...W51_ACTIONS, ...W52_ACTIONS, ...W53_ACTIONS])
+export const STEP_G_ACTIONS_MOVED: ReadonlySet<string> = new Set([...W49_ACTIONS, ...W54_ACTIONS, ...W50_ACTIONS, ...W51_ACTIONS, ...W52_ACTIONS, ...W53_ACTIONS, ...W55_ACTIONS, ...W56_ACTIONS])
 
 /** The ones that add something: their dialogs keep a press key, and their wrappers answer a refusal as data. */
-const CREATES: ReadonlySet<string> = new Set(['createStaff', 'createPromoCode', 'createOneOffSession', 'addServiceTypeScheduleSlot'])
+const CREATES: ReadonlySet<string> = new Set([
+  'createStaff',
+  'createPromoCode',
+  'createOneOffSession',
+  'addServiceTypeScheduleSlot',
+  // W55 + W56: and a stock change (GB13), which its row presses the same way (`adjusted: false`).
+  'createProductVariant',
+  'adjustVariantStock',
+  'createServiceTypePriceTier',
+  'createGiftCardPreset',
+])
 /**
  * W51: the refusals createOneOffSession answered as data before it was a thin call, with these reasons and no words
  * (its dialog has the words). They still come back so, and the replay reads them as answers, as recorded.
  */
 const ONE_OFF_REASONS_ANSWERED: ReadonlySet<string> = new Set(['service_type_not_found', 'service_type_incomplete', 'slot_already_exists'])
 /** The moved reads GB14's recording makes with `call`, which stops at the first throw. */
-const READS: ReadonlySet<string> = new Set(['getStaff', 'getPromoCodes', 'getPromoCodeRedemptions', ...W50_READS, ...W51_READS, ...W52_READS, ...W53_READS])
+const READS: ReadonlySet<string> = new Set(['getStaff', 'getPromoCodes', 'getPromoCodeRedemptions', ...W50_READS, ...W51_READS, ...W52_READS, ...W53_READS, ...W55_READS, ...W56_READS])
 
-type CreateAnswer = { created?: boolean; reason?: string; message?: string; noAnswer?: boolean } | null
+type CreateAnswer = { created?: boolean; adjusted?: boolean; reason?: string; message?: string; noAnswer?: boolean } | null
 
 /**
  * A create as its dialog presses it (NewStaffDialog, PromoCodeDialog; W51: CreateOneOffSessionDialog,
@@ -80,7 +114,7 @@ export function createAsTheDialogPresses(action: string): (db: Db, params: unkno
     const answer = (await throughStaffApp(action)(db, { ...(params as object), idempotencyKey })) as CreateAnswer
     held = answer?.noAnswer ? idempotencyKey : null
     const answeredAsData = action === 'createOneOffSession' && typeof answer?.reason === 'string' && ONE_OFF_REASONS_ANSWERED.has(answer.reason)
-    if (answer && answer.created === false && !answeredAsData) throw new Error(String(answer.message))
+    if (answer && (answer.created === false || answer.adjusted === false) && !answeredAsData) throw new Error(String(answer.message))
     return answer
   }
 }
@@ -171,6 +205,25 @@ const STAMP_THE_SCREEN_LOADED: Readonly<Record<string, (db: Db, params: Record<s
     const rows = (await throughStaffApp('getEvents')(db, {})) as Array<{ id?: unknown; stamp?: unknown }>
     return rows.find((row) => row.id === params['eventId'])?.stamp
   },
+  // W55. Catalog → Products: the variant row's stamp from the products list.
+  async setProductVariantDetails(db, params) {
+    const products = (await throughStaffApp('getProducts')(db, {})) as Array<{ variants?: Array<{ id?: unknown; stamp?: unknown }> }>
+    return products.flatMap((product) => product.variants ?? []).find((variant) => variant.id === params['variantId'])?.stamp
+  },
+  // W56. Catalog → Service Types: the type's stamp, and a tier's size group's.
+  async setServiceTypeCapacityInfo(db, params) {
+    const types = (await throughStaffApp('getServiceTypes')(db, {})) as Array<{ id?: unknown; stamp?: unknown }>
+    return types.find((type) => type.id === params['serviceTypeId'])?.stamp
+  },
+  async setServiceTypePriceTierRange(db, params) {
+    const types = (await throughStaffApp('getServiceTypes')(db, {})) as Array<{ price_tiers?: Array<{ id?: unknown; range_stamp?: unknown }> }>
+    return types.flatMap((type) => type.price_tiers ?? []).find((tier) => tier.id === params['tierId'])?.range_stamp
+  },
+  // W56. Catalog → Gift Card Types: the type's custom amounts' stamp.
+  async setGiftCardTypeCustomAmountSettings(db, params) {
+    const types = (await throughStaffApp('getGiftCardTypes')(db, {})) as Array<{ id?: unknown; stamp?: unknown }>
+    return types.find((type) => type.id === params['giftCardTypeId'])?.stamp
+  },
 }
 /** The edits that carry a stamp. */
 export const STAMPED_EDITS: ReadonlySet<string> = new Set(Object.keys(STAMP_THE_SCREEN_LOADED))
@@ -218,6 +271,26 @@ function withoutStamps(action: string, answer: unknown, found: AnsweredStamp[] |
       return rest
     })
   }
+  // W55 + W56: the catalogue reads' stamps: each variant's, each service type's and each tier's group's, each gift card type's.
+  if (action === 'getProducts' && Array.isArray(answer)) {
+    return answer.map((product: unknown, i) =>
+      isRecord(product) && Array.isArray(product['variants'])
+        ? { ...product, variants: (product['variants'] as unknown[]).map((variant, j) => (isRecord(variant) && 'stamp' in variant ? asideStamp(variant, 'stamp', action, `[${i}].variants[${j}].stamp`, found) : variant)) }
+        : product
+    )
+  }
+  if (action === 'getServiceTypes' && Array.isArray(answer)) {
+    return answer.map((type: unknown, i) => {
+      if (!isRecord(type)) return type
+      const typeAside = 'stamp' in type ? asideStamp(type, 'stamp', action, `[${i}].stamp`, found) : type
+      const tiers = Array.isArray(typeAside['price_tiers']) ? (typeAside['price_tiers'] as unknown[]).map((tier, j) => (isRecord(tier) && 'range_stamp' in tier ? asideStamp(tier, 'range_stamp', action, `[${i}].price_tiers[${j}].range_stamp`, found) : tier)) : typeAside['price_tiers']
+      return { ...typeAside, price_tiers: tiers }
+    })
+  }
+  if (action === 'getGiftCardTypes' && Array.isArray(answer)) {
+    return answer.map((type: unknown, i) => (isRecord(type) && 'stamp' in type ? asideStamp(type, 'stamp', action, `[${i}].stamp`, found) : type))
+  }
+  if (action === 'setServiceTypePriceTierRange' && isRecord(answer) && 'range_stamp' in answer) return asideStamp(answer, 'range_stamp', action, 'range_stamp', found)
   // W52: a saved event edit answers the event's row with its new stamp on it (the page puts the row back in its list).
   if (action === 'setEventDetails' && isRecord(answer) && isRecord(answer['event']) && 'stamp' in answer['event']) {
     const { stamp, ...event } = answer['event']
@@ -225,6 +298,13 @@ function withoutStamps(action: string, answer: unknown, found: AnsweredStamp[] |
     return { ...answer, event }
   }
   return answer
+}
+
+/** W55 + W56: a row with its stamp field set aside and noted in `found`. */
+function asideStamp(row: Record<string, unknown>, field: string, action: string, where: string, found: AnsweredStamp[] | undefined): Record<string, unknown> {
+  const { [field]: stamp, ...rest } = row
+  found?.push({ action, where, stamp })
+  return rest
 }
 
 /** W52: whether a refund on a booking's order is still being checked, as the attendee list now says beside each booking: which call, which booking, and what it said. */
@@ -276,7 +356,9 @@ export function answeredStampProblems(found: readonly AnsweredStamp[]): string[]
   // A row's stamp, or a set of rows' (each row's id and stamp, in id order). W52: or the stamp of the columns one
   // edit writes (admin/stamp.ts, fieldsStampSql), which has no moment in front.
   const one = '\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{6}Z#[0-9a-f]{32}'
-  const form = new RegExp(`^(${one}|[0-9a-f-]{36}@${one}(,[0-9a-f-]{36}@${one})*|fields#[0-9a-f]{32})$`)
+  // W56: a size group's stamp is a set of rows' whose own stamps are of the columns written (each tier's range).
+  const fields = 'fields#[0-9a-f]{32}'
+  const form = new RegExp(`^(${one}|[0-9a-f-]{36}@${one}(,[0-9a-f-]{36}@${one})*|${fields}|[0-9a-f-]{36}@${fields}(,[0-9a-f-]{36}@${fields})*)$`)
   return found.filter(({ stamp }) => typeof stamp !== 'string' || !form.test(stamp)).map(({ action, where, stamp }) => `${action} ${where}: ${JSON.stringify(stamp)}`)
 }
 
@@ -294,6 +376,12 @@ export interface AdminSideOptions {
    * Worker now refuses answer `{ thrown }` instead, so the scenario runs on to the reads later slices still move.
    */
   refusedReadsAsAnswers?: boolean
+  /**
+   * W55 + W56: a recording whose press the old code let through and the Worker now refuses (GB10, GB12, GB21, GB23),
+   * made with `call`, which stops at the first throw. The refusal answers `{ thrown }`, as `attempt` keeps one (what
+   * staff are shown), so the recording runs on and each refusal is pinned to its words.
+   */
+  refusedPressesAsAnswers?: boolean
   /** W51: every `madeUpTo` the calendar read answered beside its sessions, set aside for the test to check on its own. */
   madeUpTo?: unknown[]
   /** W51: a press exactly as the golden file has it, with no quote read first: how a test shows what the figures are for. */
@@ -333,7 +421,7 @@ async function runNightlyJobAsNow(db: Db): Promise<void> {
  * pressed with the stamp its screen's read gave just before (asTheScreenPresses), and the stamps in the answers are
  * set aside (withoutStamps).
  */
-export function newAdminSide({ adjust, calls, refusedReadsAsAnswers, stamps, pressWithoutReading, madeUpTo, pressWithoutFigures, refundOpen, paidBy }: AdminSideOptions = {}): (db: Db, stripe: FakeStripe) => ReplaySide {
+export function newAdminSide({ adjust, calls, refusedReadsAsAnswers, refusedPressesAsAnswers, stamps, pressWithoutReading, madeUpTo, pressWithoutFigures, refundOpen, paidBy }: AdminSideOptions = {}): (db: Db, stripe: FakeStripe) => ReplaySide {
   return (db, stripe) => {
     const old = oldSide(db, stripe)
     const creates = new Map([...CREATES].map((action) => [action, createAsTheDialogPresses(action)] as const))
@@ -355,7 +443,7 @@ export function newAdminSide({ adjust, calls, refusedReadsAsAnswers, stamps, pre
           const sent = pressWithoutFigures ? stamped : await withTheFiguresShown(action, db, stamped)
           answer = await (creates.get(action) ?? throughStaffApp(action))(db, sent)
         } catch (err) {
-          if (!refusedReadsAsAnswers || !READS.has(action)) throw err
+          if (!(refusedReadsAsAnswers && READS.has(action)) && !(refusedPressesAsAnswers && !READS.has(action))) throw err
           answer = { thrown: err instanceof Error ? err.message : String(err) }
         }
         answer = withoutPaidByLabel(action, withoutRefundOpen(action, sessionsOf(action, withoutStamps(action, answer, stamps), madeUpTo), refundOpen), paidBy)
@@ -402,6 +490,15 @@ export const STEP_G_AUDIT_ROWS: ReadonlySet<string> = new Set([
   'event_attendee.waiver_set',
   // W53: the fulfilled tick.
   'order_line.fulfilled_set',
+  // W55 + W56: the catalogue.
+  'catalog.active_set',
+  'catalog.price_set',
+  'catalog.details_set',
+  'catalog.tier_created',
+  'catalog.tier_range_set',
+  'catalog.variant_created',
+  'catalog.preset_created',
+  'stock.adjusted',
 ])
 
 /** W52: the three event-day flags' rows. */
@@ -412,6 +509,17 @@ export const W52_FLAG_ROWS: ReadonlySet<string> = new Set(['event_attendee.check
  * one guarded statement, so it reads no row first and keeps no `before`.
  */
 export const STEP_G_FLAG_ROWS: ReadonlySet<string> = new Set(['booking.checked_in', 'booking.check_in_undone', 'booking.guest_waiver_set', 'booking.addon_prepared_set', ...W52_FLAG_ROWS, 'order_line.fulfilled_set'])
+
+/** W55 + W56: each item kind's folder and its audit rows' entity type; the folders whose items have a price route. */
+const CATALOG_KINDS: ReadonlyArray<readonly [string, string]> = [
+  ['products', 'product'],
+  ['addons', 'addon'],
+  ['service-types', 'service_type'],
+  ['session-pass-types', 'session_pass_type'],
+  ['gift-card-types', 'gift_card_type'],
+  ['gift-card-presets', 'gift_card_preset'],
+]
+const PRICED_FOLDERS: ReadonlySet<string> = new Set(['products', 'addons', 'service-types', 'session-pass-types'])
 
 /**
  * Each moved write route, and the one audit action a press of it answered with a success writes. W50: `also` names a
@@ -453,6 +561,24 @@ export const STEP_G_WRITE_ROUTES: ReadonlyArray<{ route: RegExp; action: string;
   { route: /^POST \/api\/v1\/staff\/sessions\/days\/[^/]+\/band$/, action: 'session.band_set', entityType: 'session_day' },
   { route: /^POST \/api\/v1\/staff\/catalog\/service-types\/[^/]+\/schedule-slots$/, action: 'timetable.slot_added', entityType: 'schedule_slot' },
   { route: /^POST \/api\/v1\/staff\/catalog\/schedule-slots\/[^/]+\/remove$/, action: 'timetable.slot_removed', entityType: 'schedule_slot' },
+  // W55 + W56: the catalogue. On and off sale and a price are one action for every kind, told apart by entity type.
+  ...CATALOG_KINDS.flatMap(([folder, entityType]) => [
+    { route: new RegExp(`^POST /api/v1/staff/catalog/${folder}/[^/]+/active$`), action: 'catalog.active_set', entityType },
+    ...(PRICED_FOLDERS.has(folder) ? [{ route: new RegExp(`^POST /api/v1/staff/catalog/${folder}/[^/]+/price$`), action: 'catalog.price_set', entityType }] : []),
+  ]),
+  { route: /^POST \/api\/v1\/staff\/catalog\/tiers\/[^/]+\/price$/, action: 'catalog.price_set', entityType: 'price_tier' },
+  { route: /^POST \/api\/v1\/staff\/catalog\/products\/[^/]+\/fulfilment$/, action: 'catalog.details_set', entityType: 'product' },
+  { route: /^POST \/api\/v1\/staff\/catalog\/products\/[^/]+\/variants$/, action: 'catalog.variant_created', entityType: 'product_variant' },
+  { route: /^POST \/api\/v1\/staff\/catalog\/variants\/[^/]+\/details$/, action: 'catalog.details_set', entityType: 'product_variant' },
+  { route: /^POST \/api\/v1\/staff\/catalog\/variants\/[^/]+\/stock$/, action: 'stock.adjusted', entityType: 'product_variant' },
+  { route: /^POST \/api\/v1\/staff\/catalog\/addons\/[^/]+\/sku$/, action: 'catalog.details_set', entityType: 'addon' },
+  { route: /^POST \/api\/v1\/staff\/catalog\/service-types\/[^/]+\/details$/, action: 'catalog.details_set', entityType: 'service_type' },
+  { route: /^POST \/api\/v1\/staff\/catalog\/service-types\/[^/]+\/tiers$/, action: 'catalog.tier_created', entityType: 'service_type' },
+  { route: /^POST \/api\/v1\/staff\/catalog\/tier-groups\/range$/, action: 'catalog.tier_range_set', entityType: 'price_tier' },
+  { route: /^POST \/api\/v1\/staff\/catalog\/session-pass-types\/[^/]+\/details$/, action: 'catalog.details_set', entityType: 'session_pass_type' },
+  { route: /^POST \/api\/v1\/staff\/catalog\/gift-card-types\/[^/]+\/details$/, action: 'catalog.details_set', entityType: 'gift_card_type' },
+  { route: /^POST \/api\/v1\/staff\/catalog\/gift-card-types\/[^/]+\/presets$/, action: 'catalog.preset_created', entityType: 'gift_card_preset' },
+  { route: /^POST \/api\/v1\/staff\/catalog\/gift-card-presets\/[^/]+\/price$/, action: 'catalog.price_set', entityType: 'gift_card_preset' },
 ]
 
 const auditRows = (recording: Recording): AuditRow[] => (recording.tables['audit_log']?.added ?? []) as AuditRow[]
@@ -532,7 +658,15 @@ export function adminRowProblems(recording: Recording): string[] {
       continue
     }
     if (!('before' in d) || !('after' in d)) wrong('before and after')
-    const created = row.action === 'staff.created' || row.action === 'promo.created' || row.action === 'session.created' || row.action === 'timetable.slot_added'
+    const created =
+      row.action === 'staff.created' ||
+      row.action === 'promo.created' ||
+      row.action === 'session.created' ||
+      row.action === 'timetable.slot_added' ||
+      // W55 + W56: a new variant, size group or preset has nothing before it.
+      row.action === 'catalog.variant_created' ||
+      row.action === 'catalog.tier_created' ||
+      row.action === 'catalog.preset_created'
     // A create has nothing before it; an edit has the row as it was. A member term's first save has nothing before it either.
     if (created ? d['before'] !== null : row.action !== 'pricing.member_term_set' && d['before'] === null) wrong('what was there before')
     // W51: a weekly slot removed has nothing after it (its row is kept in `before`); everything else has.

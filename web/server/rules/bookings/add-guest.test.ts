@@ -5,7 +5,7 @@ import { POST as finaliseFlowRoute } from '@/app/api/v1/staff/reader-flows/[pend
 import { POST as guestsRoute } from '@/app/api/v1/staff/bookings/[bookingId]/guests/route'
 import type { Db } from '@/server/db'
 import { CLIENT_SECRET_WINDOW_MINUTES, pruneClientSecrets } from '@/server/http/idempotency'
-import { FAILURE_MESSAGES as ORDER_WORDS, NO_SAVED_CARD_MESSAGE } from '@/server/rules/orders/failure-messages'
+import { ADDON_PRICE_NOT_SET_MESSAGE, FAILURE_MESSAGES as ORDER_WORDS, NO_SAVED_CARD_MESSAGE } from '@/server/rules/orders/failure-messages'
 import { GUESTS_OVER_18_NOT_CONFIRMED_MESSAGE } from '@/server/rules/orders/guest-validation'
 import { FLOW_INTENT_UNCONFIRMED_MESSAGE, flowCustomerMismatchMessage, readFlow } from '@/server/rules/orders/reader-flow'
 import { reconcile } from '@/server/rules/orders/reconcile'
@@ -491,6 +491,56 @@ describe('refusals, in the old order, with nothing written', () => {
       expect(refused(await post(bookingId, { addons: [towel(1)] }))).toMatchObject({ reason: 'addon_inactive' })
       await untouched(bookingId)
     })
+  })
+
+  // W55b (W55a noticed 2): Add Guest priced an add-on with no price for this customer at £0. New Order's rule now.
+  const noPrice = { status: 400, reason: 'addon_price_not_set', message: ADDON_PRICE_NOT_SET_MESSAGE }
+
+  it('W55b: an add-on with no price set is refused with a guest, on its own, on the press with a payment, and with a sent price; nothing is written', async () => {
+    await onABooking(publicBooking, async ({ bookingId }) => {
+      await db.query('UPDATE addons SET base_price = NULL, sale_price = NULL, member_price = NULL WHERE id = $1', [ID.addon])
+      expect(refused(await post(bookingId, { ...bea, addons: [towel(1)] }))).toMatchObject(noPrice)
+      expect(refused(await post(bookingId, { addons: [towel(2)] }))).toMatchObject(noPrice)
+      expect(refused(await post(bookingId, { ...bea, addons: [towel(1)], payment: { method: 'cash', confirmedCashAmount: 20 }, ...figures(20, 20) }))).toMatchObject(noPrice)
+      expect(refused(await post(bookingId, { addons: [towel(1, { unitPrice: 4, priceOverrideReason: 'Damaged' })], payment: { method: 'cash', confirmedCashAmount: 4 }, ...figures(4, 4) }))).toMatchObject(noPrice)
+      // No guest row, no add-on line, no order, no booking.guest_add row; the place, store credit and gift card as they were.
+      await untouched(bookingId)
+    })
+  })
+
+  it('W55b: a member price only: a non-member is refused (nothing written); a member is charged the member price', async () => {
+    const memberOnly = () => db.query('UPDATE addons SET base_price = NULL, sale_price = NULL, member_price = 4 WHERE id = $1', [ID.addon])
+    await onABooking(publicBooking, async ({ bookingId }) => {
+      await memberOnly()
+      expect(refused(await post(bookingId, { ...bea, addons: [towel(1)] }))).toMatchObject(noPrice)
+      expect(refused(await post(bookingId, { addons: [towel(1)], payment: { method: 'cash', confirmedCashAmount: 4 }, ...figures(4, 4) }))).toMatchObject(noPrice)
+      await untouched(bookingId)
+    })
+    await onABooking(
+      { booking: paidSeat([sam]), payment: { method: 'cash', confirmedCashAmount: 20 } },
+      async ({ bookingId }) => {
+        await memberOnly()
+        expect((await post(bookingId, { addons: [towel(1)] })).body.data).toEqual({ added: false, priceImpact: impact(4, 0, 4) })
+        const added = await post(bookingId, { addons: [towel(1)], payment: { method: 'cash', confirmedCashAmount: 4 }, ...figures(4, 4) })
+        expect(added.body.data).toMatchObject({ added: true, guest: null })
+        expect(await addonLines(bookingId)).toEqual([expect.objectContaining({ quantity: 1, price_at_purchase: '4.00', redemption_source: 'paid' })])
+      },
+      { customerId: ID.member }
+    )
+  })
+
+  it('W55b: a line on an add-on credit is refused too when the add-on has no price, as New Order refuses it; the credit is not taken', async () => {
+    await onABooking(
+      { booking: paidSeat([sam]), payment: { method: 'cash', confirmedCashAmount: 20 } },
+      async ({ bookingId }) => {
+        await db.query('UPDATE addons SET base_price = NULL, sale_price = NULL, member_price = NULL WHERE id = $1', [ID.addon])
+        expect(refused(await post(bookingId, { addons: [towel(1, { redemptionSource: 'membership_credit', membershipId: ID.membership })] }))).toMatchObject(noPrice)
+        expect(await addonCredits()).toBe(2)
+        expect(await addonLines(bookingId)).toEqual([])
+        expect(await audits(bookingId)).toEqual([])
+      },
+      { customerId: ID.member }
+    )
   })
 
   it('Q18: the cash figure, the card figure and the amount due, each refused over half a penny with the new figures (Q11 words); half a penny passes', async () => {
