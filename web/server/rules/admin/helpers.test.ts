@@ -673,12 +673,12 @@ describe('the read helper (an active staff member; admin for the staff list; nam
 describe("step G's audit actions (G-plan 4.6)", () => {
   // W50 (the brief's names): 40. Undoing a check-in is its own action (`booking.check_in_undone`), and the prepared
   // tick is the booking's (`booking.addon_prepared_set`, in place of W48's `addon_line.prepared_set`, which no route
-  // had written).
-  it('names the 40 actions a step G write records, each once, as noun.verb', () => {
-    expect(ADMIN_ACTIONS).toHaveLength(40)
-    expect(new Set(ADMIN_ACTIONS).size).toBe(40)
+  // had written). W52: 41. Undoing an event attendee's check-in is its own action too (`event_attendee.check_in_undone`).
+  it('names the 41 actions a step G write records, each once, as noun.verb', () => {
+    expect(ADMIN_ACTIONS).toHaveLength(41)
+    expect(new Set(ADMIN_ACTIONS).size).toBe(41)
     for (const action of ADMIN_ACTIONS) expect(action).toMatch(/^[a-z_]+\.[a-z_]+$/)
-    expect(ADMIN_ACTIONS).toEqual(expect.arrayContaining(['staff.created', 'catalog.price_set', 'stock.adjusted', 'plan.price_change', 'membership.price_moved', 'session.blocked', 'timetable.slot_added', 'booking.checked_in', 'booking.check_in_undone', 'booking.guest_waiver_set', 'booking.addon_prepared_set', 'order_line.fulfilled_set']))
+    expect(ADMIN_ACTIONS).toEqual(expect.arrayContaining(['staff.created', 'catalog.price_set', 'stock.adjusted', 'plan.price_change', 'membership.price_moved', 'session.blocked', 'timetable.slot_added', 'booking.checked_in', 'booking.check_in_undone', 'booking.guest_waiver_set', 'booking.addon_prepared_set', 'event_attendee.checked_in', 'event_attendee.check_in_undone', 'event_attendee.waiver_set', 'order_line.fulfilled_set']))
     expect(ADMIN_ACTIONS as readonly string[]).not.toContain('addon_line.prepared_set')
   })
 })

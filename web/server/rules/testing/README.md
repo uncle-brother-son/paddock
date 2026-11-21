@@ -546,6 +546,44 @@ in capitals.
 booking with a paid add-on, then counts the cancel quote's reads and how many it waits for one after another, with
 a fixed wait added to each round trip.
 
+#### Events in the replay (W52)
+
+`event-admin-replay.test.ts` replays W48's 25 recordings of the three event reads, the two catalogue writes and the
+three event-day flags (`isW52Scenario`) through the staff app's eight thin functions and the Worker's routes.
+`W52_ACTIONS` joined `STEP_G_ACTIONS_MOVED`; the routes are in `legacy-routes.ts`'s staff tables. W52 adds no
+recording of its own, so `STAFF_SET_TIME_PREFIXES` is unchanged (W48 review L6: the event recordings are W48's).
+
+- **Seventeen match their golden files exactly**, field for field.
+- **Eight have named differences** (`w52Differences`, built from each golden file): Q51 on GB11's recording (both
+  edits refused, the event unchanged; the cut-off's own row is an allowance of its own, so a cut-off that moved
+  anyway fails); the undo's new guards; the three "who may" recordings of the flags (a sign-in with no staff row);
+  S3 on the two Manage pricing "who may" recordings; and one price that is not a number, which JSON carries as no
+  price (`W52_DECISIONS.NOT_A_NUMBER`).
+- **Every pin bites.** `pinned()` keeps the paths it names (`pathsPinnedBy`, in `admin-differences.ts`), and each of
+  the 25 recordings' raw differences (nothing allowed) must be exactly the paths its named differences pin. A pin
+  is only looked at where the new side differs from the golden file, and an allowance with several paths is still
+  "seen" when one of them has gone back to what the old code recorded; the comparison alone lets that through (a
+  test here shows it on one recording). W50's and W51's replay tests could take the same check.
+- **The edit is pressed as its dialog presses it** (`STAMP_THE_SCREEN_LOADED`): the events list first, then the
+  press with that row's stamp. The stamps in the answers are set aside (`withoutStamps`: each row of the list, and
+  a saved edit's `event.stamp`) and checked for their form (`fields#` and a fingerprint).
+- **`refund_open`** on each booking of the attendee list is set aside too (`withoutRefundOpen`) and checked: no
+  recording has a refund still being checked, so each is `false`.
+- **Check-in writes one audit row for each attendee it checked in**, not one a press (`oneRowFor` in
+  `STEP_G_WRITE_ROUTES`): `adminRowProblems` counts them against the presses' stored answers.
+- **GB14's recording stays in `admin-replay.test.ts`**; its one named difference now pins W52's three reads too.
+- **The whole-event model** (`whole-event-side.ts`) follows the Cancel event dialog's two changes: the overview is
+  read again after every press, and a held press that comes back refused is pressed again in the same run. No
+  recording reaches the second.
+- **What no recording can show**, held in `events/admin.test.ts`: London days (the replay's clock is in November),
+  the stale page (a recording's page is always up to date), a later cut-off and a price or date change with places
+  sold, and the customer channel.
+- **W52a changes no recording's answer and no named difference.** GB11's second edit moves the date LATER (1 to 2
+  December) with the cut-off box set earlier (10 November), so it is still refused in Q51's words with the cut-off
+  in force as the earliest (30 November, a whole minute: the rounding changes nothing). No recording brings an
+  event forward to before its cut-off (Q-a), has a cut-off with seconds (S1), signs on the customer channel, or has
+  a refund still being checked, so those are held in `events/admin.test.ts`.
+
 ### Migration 023 and the saved schema (W27)
 
 `supabase/migrations/023_orders_refund_owed_and_cash_refunds.sql` is written but **not applied to live**: the lead

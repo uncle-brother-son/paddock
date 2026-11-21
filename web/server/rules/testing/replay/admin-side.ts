@@ -41,8 +41,13 @@ export const W51_WRITES: ReadonlySet<string> = new Set([
   'deleteServiceTypeScheduleSlot',
 ])
 export const W51_ACTIONS: ReadonlySet<string> = new Set([...W51_READS, ...W51_WRITES])
+/** W52: the three event reads, the two catalogue writes and the three event-day flags. */
+export const W52_READS: ReadonlySet<string> = new Set(['getEvents', 'getEventAttendees', 'getTodaysEvents'])
+export const W52_WRITES: ReadonlySet<string> = new Set(['setEventActive', 'setEventDetails'])
+export const W52_FLAGS: ReadonlySet<string> = new Set(['setEventAttendeeCheckIn', 'setEventAttendeesCheckIn', 'setEventAttendeeWaiver'])
+export const W52_ACTIONS: ReadonlySet<string> = new Set([...W52_READS, ...W52_WRITES, ...W52_FLAGS])
 /** Every old step G function now a thin call to the Worker. */
-export const STEP_G_ACTIONS_MOVED: ReadonlySet<string> = new Set([...W49_ACTIONS, ...W54_ACTIONS, ...W50_ACTIONS, ...W51_ACTIONS])
+export const STEP_G_ACTIONS_MOVED: ReadonlySet<string> = new Set([...W49_ACTIONS, ...W54_ACTIONS, ...W50_ACTIONS, ...W51_ACTIONS, ...W52_ACTIONS])
 
 /** The ones that add something: their dialogs keep a press key, and their wrappers answer a refusal as data. */
 const CREATES: ReadonlySet<string> = new Set(['createStaff', 'createPromoCode', 'createOneOffSession', 'addServiceTypeScheduleSlot'])
@@ -52,7 +57,7 @@ const CREATES: ReadonlySet<string> = new Set(['createStaff', 'createPromoCode', 
  */
 const ONE_OFF_REASONS_ANSWERED: ReadonlySet<string> = new Set(['service_type_not_found', 'service_type_incomplete', 'slot_already_exists'])
 /** The moved reads GB14's recording makes with `call`, which stops at the first throw. */
-const READS: ReadonlySet<string> = new Set(['getStaff', 'getPromoCodes', 'getPromoCodeRedemptions', ...W50_READS, ...W51_READS])
+const READS: ReadonlySet<string> = new Set(['getStaff', 'getPromoCodes', 'getPromoCodeRedemptions', ...W50_READS, ...W51_READS, ...W52_READS])
 
 type CreateAnswer = { created?: boolean; reason?: string; message?: string; noAnswer?: boolean } | null
 
@@ -157,6 +162,11 @@ const STAMP_THE_SCREEN_LOADED: Readonly<Record<string, (db: Db, params: Record<s
   async setPostageSettings(db) {
     return ((await throughStaffApp('getPostageSettings')(db, {})) as { stamp?: unknown }).stamp
   },
+  // W52. Catalog → Events: the event's stamp from the list (the edit dialog opens on a row of it).
+  async setEventDetails(db, params) {
+    const rows = (await throughStaffApp('getEvents')(db, {})) as Array<{ id?: unknown; stamp?: unknown }>
+    return rows.find((row) => row.id === params['eventId'])?.stamp
+  },
 }
 /** The edits that carry a stamp. */
 export const STAMPED_EDITS: ReadonlySet<string> = new Set(Object.keys(STAMP_THE_SCREEN_LOADED))
@@ -195,7 +205,8 @@ function withoutStamps(action: string, answer: unknown, found: AnsweredStamp[] |
     found?.push({ action, where: 'stamp', stamp })
     return rest
   }
-  if (action === 'getPromoCodes' && Array.isArray(answer)) {
+  // W52: the events list carries a stamp on each row, as the promo code list does.
+  if ((action === 'getPromoCodes' || action === 'getEvents') && Array.isArray(answer)) {
     return answer.map((row: unknown, i) => {
       if (!isRecord(row) || !('stamp' in row)) return row
       const { stamp, ...rest } = row
@@ -203,14 +214,44 @@ function withoutStamps(action: string, answer: unknown, found: AnsweredStamp[] |
       return rest
     })
   }
+  // W52: a saved event edit answers the event's row with its new stamp on it (the page puts the row back in its list).
+  if (action === 'setEventDetails' && isRecord(answer) && isRecord(answer['event']) && 'stamp' in answer['event']) {
+    const { stamp, ...event } = answer['event']
+    found?.push({ action, where: 'event.stamp', stamp })
+    return { ...answer, event }
+  }
   return answer
+}
+
+/** W52: whether a refund on a booking's order is still being checked, as the attendee list now says beside each booking: which call, which booking, and what it said. */
+export interface AnsweredRefundOpen {
+  eventBookingId: unknown
+  refundOpen: unknown
+}
+
+/**
+ * W52: the attendee list answers `refund_open` on each booking (W35 audit row 18), which the old read never did. It
+ * is set aside, so the bookings compare with the recording's, and noted in `found` for the test to check on its own.
+ */
+function withoutRefundOpen(action: string, answer: unknown, found: AnsweredRefundOpen[] | undefined): unknown {
+  if (action !== 'getEventAttendees' || !isRecord(answer) || !Array.isArray(answer['bookings'])) return answer
+  return {
+    ...answer,
+    bookings: (answer['bookings'] as unknown[]).map((booking) => {
+      if (!isRecord(booking) || !('refund_open' in booking)) return booking
+      const { refund_open, ...rest } = booking
+      found?.push({ eventBookingId: booking['id'], refundOpen: refund_open })
+      return rest
+    }),
+  }
 }
 
 /** What each stamp set aside must be: text that isn't empty, in the stamp's own form. Answers the problems found. */
 export function answeredStampProblems(found: readonly AnsweredStamp[]): string[] {
-  // A row's stamp, or a set of rows' (each row's id and stamp, in id order).
+  // A row's stamp, or a set of rows' (each row's id and stamp, in id order). W52: or the stamp of the columns one
+  // edit writes (admin/stamp.ts, fieldsStampSql), which has no moment in front.
   const one = '\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{6}Z#[0-9a-f]{32}'
-  const form = new RegExp(`^(${one}|[0-9a-f-]{36}@${one}(,[0-9a-f-]{36}@${one})*)$`)
+  const form = new RegExp(`^(${one}|[0-9a-f-]{36}@${one}(,[0-9a-f-]{36}@${one})*|fields#[0-9a-f]{32})$`)
   return found.filter(({ stamp }) => typeof stamp !== 'string' || !form.test(stamp)).map(({ action, where, stamp }) => `${action} ${where}: ${JSON.stringify(stamp)}`)
 }
 
@@ -232,6 +273,8 @@ export interface AdminSideOptions {
   madeUpTo?: unknown[]
   /** W51: a press exactly as the golden file has it, with no quote read first: how a test shows what the figures are for. */
   pressWithoutFigures?: boolean
+  /** W52: every `refund_open` the attendee list answered beside a booking, set aside for the test to check on its own. */
+  refundOpen?: AnsweredRefundOpen[]
 }
 
 /**
@@ -263,7 +306,7 @@ async function runNightlyJobAsNow(db: Db): Promise<void> {
  * pressed with the stamp its screen's read gave just before (asTheScreenPresses), and the stamps in the answers are
  * set aside (withoutStamps).
  */
-export function newAdminSide({ adjust, calls, refusedReadsAsAnswers, stamps, pressWithoutReading, madeUpTo, pressWithoutFigures }: AdminSideOptions = {}): (db: Db, stripe: FakeStripe) => ReplaySide {
+export function newAdminSide({ adjust, calls, refusedReadsAsAnswers, stamps, pressWithoutReading, madeUpTo, pressWithoutFigures, refundOpen }: AdminSideOptions = {}): (db: Db, stripe: FakeStripe) => ReplaySide {
   return (db, stripe) => {
     const old = oldSide(db, stripe)
     const creates = new Map([...CREATES].map((action) => [action, createAsTheDialogPresses(action)] as const))
@@ -288,7 +331,7 @@ export function newAdminSide({ adjust, calls, refusedReadsAsAnswers, stamps, pre
           if (!refusedReadsAsAnswers || !READS.has(action)) throw err
           answer = { thrown: err instanceof Error ? err.message : String(err) }
         }
-        answer = sessionsOf(action, withoutStamps(action, answer, stamps), madeUpTo)
+        answer = withoutRefundOpen(action, sessionsOf(action, withoutStamps(action, answer, stamps), madeUpTo), refundOpen)
         return adjust ? adjust(action, answer) : answer
       },
     }
@@ -324,13 +367,22 @@ export const STEP_G_AUDIT_ROWS: ReadonlySet<string> = new Set([
   'session.created',
   'timetable.slot_added',
   'timetable.slot_removed',
+  // W52: events (the two catalogue writes, and the three event-day flags).
+  'event.details_set',
+  'event.active_set',
+  'event_attendee.checked_in',
+  'event_attendee.check_in_undone',
+  'event_attendee.waiver_set',
 ])
+
+/** W52: the three event-day flags' rows. */
+export const W52_FLAG_ROWS: ReadonlySet<string> = new Set(['event_attendee.checked_in', 'event_attendee.check_in_undone', 'event_attendee.waiver_set'])
 
 /**
  * W50: the audit rows of a flag (admin/flag.ts): who, the flag as it now is (`after`) and the call's key. A flag is
  * one guarded statement, so it reads no row first and keeps no `before`.
  */
-export const STEP_G_FLAG_ROWS: ReadonlySet<string> = new Set(['booking.checked_in', 'booking.check_in_undone', 'booking.guest_waiver_set', 'booking.addon_prepared_set'])
+export const STEP_G_FLAG_ROWS: ReadonlySet<string> = new Set(['booking.checked_in', 'booking.check_in_undone', 'booking.guest_waiver_set', 'booking.addon_prepared_set', ...W52_FLAG_ROWS])
 
 /**
  * Each moved write route, and the one audit action a press of it answered with a success writes. W50: `also` names a
@@ -338,7 +390,14 @@ export const STEP_G_FLAG_ROWS: ReadonlySet<string> = new Set(['booking.checked_i
  * W51: two routes may write one action for different things (a block of one session, and of a day), so a route's
  * rows are the ones with its action AND its entity type.
  */
-export const STEP_G_WRITE_ROUTES: ReadonlyArray<{ route: RegExp; action: string; entityType: string; also?: readonly string[] }> = [
+export const STEP_G_WRITE_ROUTES: ReadonlyArray<{ route: RegExp; action: string; entityType: string; also?: readonly string[]; oneRowFor?: 'each_attendee_checked_in' }> = [
+  // W52: events. Check-in is one press for one attendee or many: it writes one row for EACH attendee it checked in
+  // (`oneRowFor`), and none for an attendee it refused.
+  { route: /^POST \/api\/v1\/staff\/catalog\/events\/[^/]+\/details$/, action: 'event.details_set', entityType: 'event' },
+  { route: /^POST \/api\/v1\/staff\/catalog\/events\/[^/]+\/active$/, action: 'event.active_set', entityType: 'event' },
+  { route: /^POST \/api\/v1\/staff\/events\/attendees\/check-in$/, action: 'event_attendee.checked_in', entityType: 'event_attendee', oneRowFor: 'each_attendee_checked_in' },
+  { route: /^POST \/api\/v1\/staff\/events\/attendees\/[^/]+\/check-in\/undo$/, action: 'event_attendee.check_in_undone', entityType: 'event_attendee' },
+  { route: /^POST \/api\/v1\/staff\/events\/attendees\/[^/]+\/waiver$/, action: 'event_attendee.waiver_set', entityType: 'event_attendee' },
   { route: /^POST \/api\/v1\/staff\/bookings\/[^/]+\/check-in$/, action: 'booking.checked_in', entityType: 'booking', also: ['booking.check_in_undone'] },
   { route: /^POST \/api\/v1\/staff\/bookings\/guests\/[^/]+\/waiver$/, action: 'booking.guest_waiver_set', entityType: 'booking_guest' },
   { route: /^POST \/api\/v1\/staff\/bookings\/addon-lines\/[^/]+\/prepared$/, action: 'booking.addon_prepared_set', entityType: 'addon_order_line' },
@@ -418,15 +477,24 @@ export function adminRowProblems(recording: Recording): string[] {
       // W50: a flag's row. The flag as set, and nothing about the customer: never a name, an email or a date of birth.
       if (!isObject(d['after']) || 'before' in d) wrong('a flag keeps `after` and no `before`')
       const kept = isObject(d['after']) ? Object.keys(d['after']).sort().join() : ''
+      // W52: an event attendee's row keeps their waivers and check-in as set, with the versions signed.
+      const attendeeKept = 'checked_in_at,event_waiver_accepted_at,event_waiver_method,event_waiver_version,extra_waiver_state,waiver_accepted,waiver_accepted_at,waiver_method,waiver_version'
       const expectedKeys: Record<string, string> = {
         'booking.checked_in': 'checked_in_at',
         'booking.check_in_undone': 'checked_in_at',
         'booking.guest_waiver_set': 'booking_id,waiver_accepted,waiver_accepted_at,waiver_method,waiver_version',
         'booking.addon_prepared_set': 'booking_id,prepared,prepared_at,prepared_by',
+        'event_attendee.checked_in': attendeeKept,
+        'event_attendee.check_in_undone': attendeeKept,
+        'event_attendee.waiver_set': attendeeKept,
       }
       if (kept !== expectedKeys[String(row.action)]) wrong('what is kept of the flag')
       if (row.action === 'booking.guest_waiver_set' && typeof d['accepted'] !== 'boolean') wrong('which way the waiver was pressed')
       if (row.action === 'booking.addon_prepared_set' && typeof d['prepared'] !== 'boolean') wrong('which way the tick was pressed')
+      if (row.action === 'event_attendee.waiver_set' && (typeof d['accepted'] !== 'boolean' || !['standard', 'extra', 'both'].includes(String(d['which'])))) wrong('which waiver, and which way it was pressed')
+      if (row.action === 'event_attendee.checked_in' && typeof d['markWaiversSignedInPerson'] !== 'boolean') wrong('whether the waivers were marked signed at the desk')
+      // Never a name or an email: an attendee is named by id only.
+      if (W52_FLAG_ROWS.has(String(row.action)) && /"(name|email|date_of_birth)"/.test(JSON.stringify(d))) wrong('a name in an attendee row')
       continue
     }
     if (!('before' in d) || !('after' in d)) wrong('before and after')
@@ -455,12 +523,27 @@ export function adminRowProblems(recording: Recording): string[] {
       }
     }
   }
-  for (const { route, action, also, entityType } of STEP_G_WRITE_ROUTES) {
-    const presses = stored.filter((row) => route.test(String(row['endpoint'])) && row['http_status'] === 200).length
+  for (const { route, action, also, entityType, oneRowFor } of STEP_G_WRITE_ROUTES) {
+    const answered = stored.filter((row) => route.test(String(row['endpoint'])) && row['http_status'] === 200)
     const written = rows.filter((row) => (row.action === action || (also ?? []).includes(String(row.action))) && row['entity_type'] === entityType).length
+    if (oneRowFor === 'each_attendee_checked_in') {
+      // W52: one row for each attendee a check-in press checked in, counted from the presses' stored answers.
+      const checkedIn = answered.reduce((total, row) => total + attendeesCheckedIn(row['response']), 0)
+      if (written !== checkedIn) problems.push(`${action}: ${written} rows for ${checkedIn} attendees checked in`)
+      continue
+    }
+    const presses = answered.length
     if (written !== presses) problems.push(`${action}: ${written} rows for ${presses} presses answered with a success`)
   }
   return problems
+}
+
+/** W52: how many attendees a check-in press's stored answer says it checked in (its `results` that are `updated: true`). */
+function attendeesCheckedIn(response: unknown): number {
+  const body = typeof response === 'string' ? (JSON.parse(response) as unknown) : response
+  const data = isObject(body) && isObject(body['data']) ? body['data'] : body
+  const results = isObject(data) && Array.isArray(data['results']) ? (data['results'] as unknown[]) : []
+  return results.filter((outcome) => isObject(outcome) && outcome['updated'] === true).length
 }
 
 /** The stored answers the new side wrote: each a finished press of one of the moved write routes. */

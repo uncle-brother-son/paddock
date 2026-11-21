@@ -181,20 +181,54 @@ export type ClaimBy = { actor: ClaimActor; requestId: string }
  * order paid for, or (step D) one on a booking with a card part on this order's payment. `$1` the order (as text).
  * Fixed text: the action names are constants.
  */
-const OPEN_CLAIM_HOLDING_ORDER_SQL = `
-SELECT c.id, c.entity_type FROM audit_log c
-WHERE c.details->>'worker' = 'true'
+/**
+ * The claim `c` (an audit_log row) is a Worker claim that holds the order whose id, as text, is the SQL expression
+ * `order`, and has no finished row. (W52 built the attendee list's `refund_open` from this text too; since W52a
+ * that reads the booking's own claims, eventBookingRefundOpenSql below, and this is the look's alone.)
+ */
+const openClaimOnOrderSql = (order: string): string => `c.details->>'worker' = 'true'
   AND (
-    (c.action = '${ORDER_CLAIMS.claimed}' AND c.entity_type = '${ORDER_CLAIMS.entityType}' AND c.entity_id = $1::text)
-    OR (c.action = '${EVENT_BOOKING_CLAIMS.claimed}' AND c.entity_type = '${EVENT_BOOKING_CLAIMS.entityType}' AND c.details->>'orderId' = $1::text)
+    (c.action = '${ORDER_CLAIMS.claimed}' AND c.entity_type = '${ORDER_CLAIMS.entityType}' AND c.entity_id = ${order})
+    OR (c.action = '${EVENT_BOOKING_CLAIMS.claimed}' AND c.entity_type = '${EVENT_BOOKING_CLAIMS.entityType}' AND c.details->>'orderId' = ${order})
     OR (c.action = '${BOOKING_CLAIMS.claimed}' AND c.entity_type = '${BOOKING_CLAIMS.entityType}'
-        AND EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(c.details->'plan'->'card', '[]'::jsonb)) part WHERE part->>'orderId' = $1::text))
+        AND EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(c.details->'plan'->'card', '[]'::jsonb)) part WHERE part->>'orderId' = ${order}))
   )
   AND NOT EXISTS (
     SELECT 1 FROM audit_log f
     WHERE f.action = replace(c.action, '.refund_claimed', '.refund_finished') AND f.entity_type = c.entity_type AND f.entity_id = c.entity_id
       AND f.details->>'claimId' = c.id::text
-  )
+  )`
+
+/**
+ * W52a (W52 review "For later" 3; W35 audit row 18): whether a refund of THIS event booking's own money is still
+ * being checked, for the attendee list's words on a cancelled place. `eventBooking` and `order` are SQL expressions
+ * giving the booking's id and its order's id as text (a null order names none). Narrower than "a claim holds the
+ * order" (the look below), which is the rule for refusing a second refund and is unchanged. It counts:
+ *  - an open claim on the event booking itself (its own place cancel), by the claim's subject;
+ *  - an open Refund the rest on its order (an order claim of kind `refund_owed`): the money owed on an order is one
+ *    figure, so a booking's shortfall that became owed is being sent by that claim, and R1 has already taken the
+ *    owed figure down. Without this a place would read "settled later" while its refund is still being checked.
+ * It doesn't count what isn't this booking's money: another event booking's claim on the same order (two events
+ * bought together), a refund of the order's other lines, or a session booking's card part on the order's payment.
+ * Read-only.
+ */
+export const eventBookingRefundOpenSql = (eventBooking: string, order: string): string => `EXISTS (
+  SELECT 1 FROM audit_log c
+  WHERE c.details->>'worker' = 'true'
+    AND (
+      (c.action = '${EVENT_BOOKING_CLAIMS.claimed}' AND c.entity_type = '${EVENT_BOOKING_CLAIMS.entityType}' AND c.entity_id = ${eventBooking})
+      OR (c.action = '${ORDER_CLAIMS.claimed}' AND c.entity_type = '${ORDER_CLAIMS.entityType}' AND c.entity_id = ${order} AND c.details->>'kind' = 'refund_owed')
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM audit_log f
+      WHERE f.action = replace(c.action, '.refund_claimed', '.refund_finished') AND f.entity_type = c.entity_type AND f.entity_id = c.entity_id
+        AND f.details->>'claimId' = c.id::text
+    )
+)`
+
+const OPEN_CLAIM_HOLDING_ORDER_SQL = `
+SELECT c.id, c.entity_type FROM audit_log c
+WHERE ${openClaimOnOrderSql('$1::text')}
 ORDER BY c.at, c.id
 LIMIT 1`
 

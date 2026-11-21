@@ -40,6 +40,19 @@ export const NO_ROW_STAMP = 'none'
  */
 export const rowStampSql = (alias: string): string => `(to_char(${alias}.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') || '#' || md5(${alias}::text))`
 
+/**
+ * W52 (W54a "Noticed" 2: stamp what the screen sends back, not what changes by itself): SQL for the stamp of the
+ * columns one edit writes, for a row that other things change too. An event's details edit writes its date, places,
+ * access, prices and cut-off; a place sold or cancelled moves the same row's `places_booked` and `updated_at`, and
+ * must not refuse an edit that puts none of that back. So this stamp is a fingerprint of the named columns only, in
+ * the order given, with no moment in front (the row's `updated_at` moves with every sale).
+ *
+ * `alias` and `columns` are literals in the rule's own file. The text of each column is the same on every connection
+ * the Worker opens (all UTC, as for rowStampSql); if that ever stopped being so, a stamped save would be refused,
+ * never let through.
+ */
+export const fieldsStampSql = (alias: string, columns: readonly string[]): string => `('fields#' || md5(ROW(${columns.map((column) => `${alias}.${column}`).join(', ')})::text))`
+
 /** A row as a set's stamp needs it: its id and its own stamp (rowStampSql). */
 export interface StampedRow {
   id: string

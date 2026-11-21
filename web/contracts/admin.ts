@@ -647,6 +647,8 @@ export const ADMIN_ACTIONS = [
   'booking.guest_waiver_set',
   'booking.addon_prepared_set',
   'event_attendee.checked_in',
+  // W52: undoing an attendee's check-in is its own action, as a booking's is (W50).
+  'event_attendee.check_in_undone',
   'event_attendee.waiver_set',
   'order_line.fulfilled_set',
 ] as const
@@ -991,3 +993,90 @@ export type ScheduleSlotRow = z.infer<typeof scheduleSlotRowSchema>
 /** `POST catalog/schedule-slots/:slotId/remove`: deleteServiceTypeScheduleSlot (Manage pricing: Q50 part 2). Answers adminDeleteServiceTypeScheduleSlotOutputSchema. */
 export const scheduleSlotRemoveRouteInputSchema = z.object({ slotId: z.string() })
 export type ScheduleSlotRemoveRouteInput = z.infer<typeof scheduleSlotRemoveRouteInputSchema>
+
+// ---------------------------------------------------------------------------------------------------------------------
+// W52 (G-plan 4.3, the "Events" and "Event attendees" rows; bug GB11; Wayne's Q51; W35 audit rows 15 and 18, F1):
+// Events. The reads answer the old functions' rows (W48's contracts above). The events list also answers each
+// event's stamp (W54a: the details edit writes the whole row back), and the attendee list says, for each booking,
+// whether a refund of its own money is still being checked. Each write answers its success; a refusal is an error whose
+// `details` carry the old reason and words (adminRefusalDetailsSchema). Check-in is the one exception: it answers
+// each attendee's outcome as data, as the old functions did, because one press may check some in and refuse others.
+// Every field the old function checked for itself is loose, so the rule answers in the old words. Kept last, so the
+// staff app's generated types keep their order.
+
+/** `GET catalog/events`: getEvents' rows, each with its stamp, which the edit dialog sends back with a save. */
+export const eventListRouteOutputSchema = z.array(adminGetEventsOutputSchema.element.extend({ stamp: z.string() }))
+export type EventListRouteOutput = z.infer<typeof eventListRouteOutputSchema>
+
+/**
+ * `POST catalog/events/:eventId/details`: setEventDetails (Manage pricing). `stamp` is the event's stamp as the list
+ * read it: an event whose date, places, access, prices or cut-off changed since is refused `changed_since`. Once a
+ * place is booked the refund cut-off can move later but not earlier (Q51: `cutoff_earlier`), except that it follows
+ * an event brought forward to before it, as far as the new start (W52a, Wayne's Q-a). Answers the event's row and
+ * its new stamp.
+ */
+export const eventDetailsRouteInputSchema = z.object({
+  eventId: z.string(),
+  startsAt: loose,
+  endsAt: loose,
+  capacity: loose,
+  access: loose,
+  publicReleaseAt: loose,
+  pricePublic: loose,
+  pricePreHerd: loose,
+  priceHerd: loose,
+  refundCutoffAt: loose,
+  stamp: loose,
+})
+export type EventDetailsRouteInput = z.infer<typeof eventDetailsRouteInputSchema>
+export const eventDetailsRouteOutputSchema = z.object({ updated: z.literal(true), event: adminGetEventsOutputSchema.element, stamp: z.string() })
+export type EventDetailsRouteOutput = z.infer<typeof eventDetailsRouteOutputSchema>
+
+/** `POST catalog/events/:eventId/active`: setEventActive, on and off sale (Manage pricing). Answers the event's id and the switch as it now is. */
+export const eventActiveRouteInputSchema = z.object({ eventId: z.string(), active: loose })
+export type EventActiveRouteInput = z.infer<typeof eventActiveRouteInputSchema>
+export const eventActiveRouteOutputSchema = z.object({ updated: z.literal(true), event: z.object({ id: z.string(), active: z.boolean() }) })
+export type EventActiveRouteOutput = z.infer<typeof eventActiveRouteOutputSchema>
+
+/**
+ * `GET events/:eventId/attendees`: getEventAttendees. The old answer, and on each booking `refund_open`: a refund of
+ * its own money is still being checked (W35 audit row 18; W52a: its own place cancel, or a Refund the rest on its
+ * order). An id that names no event answers `event: null`, as before.
+ */
+export const eventAttendeesRouteInputSchema = z.object({ eventId: z.string() })
+export type EventAttendeesRouteInput = z.infer<typeof eventAttendeesRouteInputSchema>
+export const eventAttendeesRouteOutputSchema = adminGetEventAttendeesOutputSchema.extend({
+  bookings: z.array(adminGetEventAttendeesOutputSchema.shape.bookings.element.extend({ refund_open: z.boolean() })),
+})
+export type EventAttendeesRouteOutput = z.infer<typeof eventAttendeesRouteOutputSchema>
+
+/** One attendee's waivers and check-in as they now are: what a check-in, its undo and a waiver answer (the old EventAttendeeState). */
+export const eventAttendeeStateSchema = z.object({
+  id: z.string(),
+  waiver_accepted: z.boolean(),
+  waiver_method: z.enum(['email_link', 'in_person', 'checkout']).nullable(),
+  waiver_accepted_at: z.string().nullable(),
+  extra_waiver_state: z.enum(['not_needed', 'accepted', 'older_version', 'pending']),
+  event_waiver_method: z.enum(['email_link', 'in_person', 'checkout']).nullable(),
+  event_waiver_accepted_at: z.string().nullable(),
+  checked_in_at: z.string().nullable(),
+})
+export type EventAttendeeState = z.infer<typeof eventAttendeeStateSchema>
+
+/**
+ * `POST events/attendees/check-in`: setEventAttendeeCheckIn (one) and setEventAttendeesCheckIn (many). Answers one
+ * outcome for each attendee asked for (a repeated id once), in the order asked: the attendee as they now are, or why
+ * they were refused. Attendees that pass are checked in even when others in the same press are refused.
+ */
+export const eventCheckInRouteInputSchema = z.object({ attendeeIds: loose, markWaiversSignedInPerson: loose })
+export type EventCheckInRouteInput = z.infer<typeof eventCheckInRouteInputSchema>
+export const eventCheckInRouteOutputSchema = adminSetEventAttendeesCheckInOutputSchema
+export type EventCheckInRouteOutput = z.infer<typeof eventCheckInRouteOutputSchema>
+
+/** `POST events/attendees/:attendeeId/check-in/undo`: setEventAttendeeCheckIn with `checkedIn: false`. Answers the attendee as they now are. */
+export const eventAttendeeRouteInputSchema = z.object({ attendeeId: z.string() })
+export type EventAttendeeRouteInput = z.infer<typeof eventAttendeeRouteInputSchema>
+
+/** `POST events/attendees/:attendeeId/waiver`: setEventAttendeeWaiver, sign (the standard, the extra or both) and revoke (one). Answers the attendee as they now are. */
+export const eventWaiverRouteInputSchema = z.object({ attendeeId: z.string(), which: loose, accepted: loose, method: loose })
+export type EventWaiverRouteInput = z.infer<typeof eventWaiverRouteInputSchema>

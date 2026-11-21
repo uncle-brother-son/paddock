@@ -24,9 +24,11 @@
 //   the refunds on the payment, matches `metadata.claim_id`, and runs R2 (found) or leaves the money owed on the order
 //   (not found). While a claim holds the order, every other cancel on the booking is refused (`refund_open`).
 //
-// Check-in stays the staff app's until step G and takes none of these locks. R1's own guard (each chosen place still
-// not cancelled and not checked in, in the same statement that stamps it) refuses a place checked in at the same
-// moment, as the old statement did; the staff app's check-in refuses a place once it is cancelled.
+// Check-in (W52: on the Worker, server/rules/events/attendance.ts) holds the event's row FOR SHARE before its own
+// statement, so it and R1, which holds the same row FOR NO KEY UPDATE, take turns: a check-in pressed while a cancel
+// is in progress waits and is decided on what the cancel committed, and a cancel that starts during a check-in waits
+// and reads the place as checked in. R1's own guard (each chosen place still not cancelled and not checked in, in the
+// same statement that stamps it) stays as the second line.
 //
 // W31: `wholeEvent` (the booking is cancelled because its event was; the event's own cancel is cancel-event.ts) is
 // honoured only when the event is cancelled in the database, read under the event's lock in R1: every place the
@@ -81,7 +83,6 @@ import {
   EVENT_CANCEL_NEW_WORDS as NEW_WORDS,
   EVENT_CANCEL_WORDS as WORDS,
   EVENT_NAME_FALLBACK,
-  EVENT_PERMISSION_WORDS,
   EVENT_QUOTE_REFUSALS,
   EVENT_STORE_CREDIT_AFTER_CASH_NOTE,
   EVENT_WHOLE_CANCEL_NEW_WORDS as WHOLE_NEW_WORDS,
@@ -410,8 +411,9 @@ async function cancelR1(tx: Tx, eventBookingId: string, input: CancelEventPlaces
   // W35a (W35 audit F5, Wayne 15 Nov): on an event the club has cancelled, No refund needs Issue refunds too. The
   // place would be stamped with its value and the whole-event run would pass it by, so the customer would get nothing
   // for an event the club called off. On a live event No refund stays open to every active staff member. Read under
-  // the event's lock, which the event's own cancel takes. The route's own permission answer.
-  if (!online && eventCancelled && refund === 'none' && !options.canIssueRefunds) throw new ApiError('FORBIDDEN', EVENT_PERMISSION_WORDS.needsIssueRefunds)
+  // the event's lock, which the event's own cancel takes. The route's own permission answer (FORBIDDEN, no reason of
+  // its own). W52: in words of its own, which say why a No refund needs the permission here.
+  if (!online && eventCancelled && refund === 'none' && !options.canIssueRefunds) throw new ApiError('FORBIDDEN', WHOLE_NEW_WORDS.noRefundNeedsIssueRefunds)
   // No cut-off rule for a whole event: nobody chose to cancel late.
   const afterCutoff = !whole && !quote.beforeCutoff
   // W33 (Q44): online, not on a cancelled event and only before the cut-off (staff can refund later, with a reason).
@@ -462,8 +464,9 @@ async function cancelR1(tx: Tx, eventBookingId: string, input: CancelEventPlaces
   const placeMethod: RefundChoice = value <= 0 ? 'none' : cardAmount > 0 ? 'card' : cash > 0 ? 'cash' : 'credit'
   const refundAfterCutoff = refund !== 'none' && afterCutoff
 
-  // The places stamped. Each must still be there to cancel: one cancelled or checked in at the same moment (the
-  // staff app's check-in takes none of these locks) fails the whole cancel, as the old statement did.
+  // The places stamped. Each must still be there to cancel, as the old statement required: not cancelled and not
+  // checked in. Since W52 a check-in holds the event's row FOR SHARE (events/attendance.ts) and this cancel holds it
+  // FOR NO KEY UPDATE, so neither can land during the other; this guard is the second line (the header, above).
   const stamped = await tx.query(
     `UPDATE event_attendees ea
      SET cancelled_at = now(), cancelled_by = $1::uuid, cancel_reason = $2::text, cancelled_value = s.val,

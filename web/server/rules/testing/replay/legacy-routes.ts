@@ -81,6 +81,10 @@ const STAFF_ROUTES: Record<string, () => Promise<unknown>> = {
   // W51: the staff app's thin getSessionsForRange and createOneOffSession (one path, GET and POST), and getServiceTypesForSlot.
   '/api/v1/staff/sessions': () => import('@/app/api/v1/staff/sessions/route'),
   '/api/v1/staff/sessions/for-slot': () => import('@/app/api/v1/staff/sessions/for-slot/route'),
+  // W52: the staff app's thin getEvents and getTodaysEvents, and the check-in press (setEventAttendeeCheckIn checking in, and setEventAttendeesCheckIn).
+  '/api/v1/staff/catalog/events': () => import('@/app/api/v1/staff/catalog/events/route'),
+  '/api/v1/staff/events/today': () => import('@/app/api/v1/staff/events/today/route'),
+  '/api/v1/staff/events/attendees/check-in': () => import('@/app/api/v1/staff/events/attendees/check-in/route'),
 }
 
 /** W14: the staff routes with an id in the path, and the path's parameters. */
@@ -179,6 +183,13 @@ const STAFF_PATTERNS: Array<{ pattern: RegExp; load: () => Promise<unknown>; par
   { pattern: /^\/api\/v1\/staff\/sessions\/(?!days\/)([^/]+)\/start-time$/, load: () => import('@/app/api/v1/staff/sessions/[sessionId]/start-time/route'), params: (m) => ({ sessionId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/catalog\/service-types\/([^/]+)\/schedule-slots$/, load: () => import('@/app/api/v1/staff/catalog/service-types/[serviceTypeId]/schedule-slots/route'), params: (m) => ({ serviceTypeId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/catalog\/schedule-slots\/([^/]+)\/remove$/, load: () => import('@/app/api/v1/staff/catalog/schedule-slots/[slotId]/remove/route'), params: (m) => ({ slotId: decodeURIComponent(m[1] ?? '') }) },
+  // W52: the staff app's thin setEventDetails and setEventActive; getEventAttendees; and an attendee's undo and waiver
+  // (`events/attendees/:attendeeId/...`: an event's own paths are `events/:eventId/...`, never `events/attendees`).
+  { pattern: /^\/api\/v1\/staff\/catalog\/events\/([^/]+)\/details$/, load: () => import('@/app/api/v1/staff/catalog/events/[eventId]/details/route'), params: (m) => ({ eventId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/catalog\/events\/([^/]+)\/active$/, load: () => import('@/app/api/v1/staff/catalog/events/[eventId]/active/route'), params: (m) => ({ eventId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/events\/attendees\/([^/]+)\/check-in\/undo$/, load: () => import('@/app/api/v1/staff/events/attendees/[attendeeId]/check-in/undo/route'), params: (m) => ({ attendeeId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/events\/attendees\/([^/]+)\/waiver$/, load: () => import('@/app/api/v1/staff/events/attendees/[attendeeId]/waiver/route'), params: (m) => ({ attendeeId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/events\/([^/]+)\/attendees$/, load: () => import('@/app/api/v1/staff/events/[eventId]/attendees/route'), params: (m) => ({ eventId: decodeURIComponent(m[1] ?? '') }) },
 ]
 
 function staffRoute(path: string): { load: () => Promise<unknown>; params: Record<string, string> } | null {

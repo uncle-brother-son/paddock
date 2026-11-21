@@ -81,6 +81,57 @@ export interface FlagWrite<Row> {
 }
 
 /**
+ * W52: one press that sets the same flag on several rows (an event's "Check in all"). Still ONE guarded statement,
+ * which decides each row for itself: the rows that pass are changed and the rest are answered with why, as data,
+ * because one press may check some attendees in and refuse others. So a refusal of a row is not a throw here, and
+ * nothing is rolled back for it; anything thrown still rolls the whole press back.
+ */
+export interface FlagsWrite<Answer> {
+  action: AdminAction
+  needs: AdminNeeds
+  /** As FlagWrite's: an actor of any other channel is refused before anything else. */
+  channels: readonly FlagChannel[]
+  /** As FlagWrite's: the rows of other tables the guard reads, locked in a statement of their own first. May lock several (in id order). */
+  holdFirst?: { sql: string; params: readonly SqlParam[] }
+  /**
+   * Runs the one guarded statement and, for a row it passed over, reads why. Answers every row it changed, each with
+   * what its audit row is about and keeps, and what the press is answered.
+   */
+  run(tx: Tx): Promise<{ changed: ReadonlyArray<{ entity: { type: string; id: string }; recorded: Readonly<Record<string, unknown>> }>; answer: Answer }>
+  /** What else each audit row says beside `after` and the key. */
+  details?: Readonly<Record<string, unknown>>
+}
+
+/**
+ * Sets one flag on several rows: the channel, the key and the permission as flagWrite; then one transaction: the
+ * other tables' rows held when the guard reads them, the statement, and one audit row for EACH row changed (who, the
+ * flag as set, the press's key). A row refused writes none.
+ */
+export async function flagWriteMany<Answer>(db: Db, write: FlagsWrite<Answer>, options: FlagWriteOptions): Promise<Answer> {
+  if (!write.channels.includes(options.actor.type)) throw adminRefusal('FORBIDDEN', write.action, 'channel_not_accepted', FLAG_CHANNEL_NOT_ACCEPTED_MESSAGE)
+  if (!options.pressKey) throw new Error(`The flag write ${write.action} was run without a key: its route must be idempotent.`)
+  const pressKey = options.pressKey
+  if (options.actor.type === 'staff') requireAdminPermission(options.actor, write.needs, write.action)
+
+  return db.transaction(async (tx) => {
+    if (write.holdFirst) await tx.query(write.holdFirst.sql, write.holdFirst.params)
+    const { changed, answer } = await write.run(tx)
+    for (const row of changed) {
+      await audit.record(tx, {
+        actorType: options.actor.type,
+        actorId: options.actor.id,
+        action: write.action,
+        entityType: row.entity.type,
+        entityId: row.entity.id,
+        requestId: options.requestId,
+        details: { ...write.details, after: row.recorded, key: pressKey },
+      })
+    }
+    return answer
+  })
+}
+
+/**
  * Sets or clears one flag:
  *  0. the channel must be one the flag accepts (W50a): a customer on a staff-only flag is refused here;
  *  1. the call's key must be there (an idempotent route);

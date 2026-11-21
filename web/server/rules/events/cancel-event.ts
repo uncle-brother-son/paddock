@@ -31,9 +31,10 @@ const iso = (value: unknown): string | null => (value === null || value === unde
 
 /**
  * Ended, as the old function worked it out: after ends_at, or the end of its London date when there is no ends_at
- * (event times are London wall-clock digits labelled UTC). An event with no start can't have ended.
+ * (event times are London wall-clock digits labelled UTC). An event with no start can't have ended. Alias `e`.
+ * W52: exported; the website's waiver rule asks the same question (events/attendance.ts).
  */
-const ENDED_SQL = `(e.starts_at IS NOT NULL AND (now() AT TIME ZONE 'Europe/London') >= COALESCE(
+export const ENDED_SQL =`(e.starts_at IS NOT NULL AND (now() AT TIME ZONE 'Europe/London') >= COALESCE(
   e.ends_at AT TIME ZONE 'UTC', ((e.starts_at AT TIME ZONE 'UTC')::date + 1)::timestamp))`
 
 interface EventRow {

@@ -11,8 +11,9 @@
 // the digits as UTC whatever the connection is set to, so the day a read picks never depends on a setting. They
 // compare the column itself against the day's two ends, so an index on the column can still be used.
 //
-// "Today" is never worked out here: the screens send London's today (the staff app's utils/londonDate.ts, as
-// londonToday in london-time.ts), and a read takes the days it is given.
+// "Today" is not worked out for a read that takes a range: the screens send London's today (the staff app's
+// utils/londonDate.ts, as londonToday in london-time.ts), and the read takes the days it is given. W52: the one read
+// with no range, today's events, reads London's today from the database's clock (LONDON_NOW_SQL below).
 
 /** `column` is on or after the London day in `param` (a `$n` placeholder holding `YYYY-MM-DD`). */
 export const onOrAfterLondonDaySql = (column: string, param: string): string => `${column} >= (${param}::date::timestamp AT TIME ZONE 'UTC')`
@@ -22,6 +23,14 @@ export const onOrBeforeLondonDaySql = (column: string, param: string): string =>
 
 /** `column` is on a London day from `fromParam` to `toParam`, both included. */
 export const withinLondonDaysSql = (column: string, fromParam: string, toParam: string): string => `${onOrAfterLondonDaySql(column, fromParam)} AND ${onOrBeforeLondonDaySql(column, toParam)}`
+
+/**
+ * W52: London's wall clock now, as a timestamp with no zone. Its date is London's today. For the one read that is
+ * about "today" and takes no day from the screen (Overview's today's events, as the old read worked it out), used as
+ * the `param` of the fragments above: `withinLondonDaysSql('e.starts_at', LONDON_NOW_SQL, LONDON_NOW_SQL)`. It reads
+ * the database's clock in London's zone by name, so it doesn't depend on the connection's setting either.
+ */
+export const LONDON_NOW_SQL = "(now() AT TIME ZONE 'Europe/London')"
 
 /** The moment London's wall clock shows now, in the stored form: for "has this session's time passed" against a stored time. */
 export const LONDON_WALL_CLOCK_NOW_SQL = "((now() AT TIME ZONE 'Europe/London') AT TIME ZONE 'UTC')"

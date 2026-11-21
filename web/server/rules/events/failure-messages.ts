@@ -192,6 +192,12 @@ export const EVENT_WHOLE_CANCEL_NEW_WORDS = {
   eventNotCancelled: "This event hasn't been cancelled, so its bookings can't be cancelled as a whole event. Close this, reload and try again.",
   /** The event's cancel failed in the database and was rolled back: the event is as it was. */
   notSaved: "The event's cancellation couldn't be saved (the system was busy, or one of its records couldn't be written), so the event wasn't cancelled. Try again.",
+  /**
+   * W52 (W35 audit F5; W35a "Where I was unsure" 3): No refund on an event the club has cancelled, pressed without
+   * Issue refunds. W35a answered the permission's general words ("…this action moves money back to the customer"),
+   * which a No refund doesn't do. The place cancel dialog greys the choice with the same sentence.
+   */
+  noRefundNeedsIssueRefunds: 'The club has cancelled this event, so cancelling a place on it with no refund needs the Issue refunds permission.',
 } as const
 
 /** The reasons W31 adds: `event_not_cancelled` on a booking's cancel, `cancel_not_saved` on the event's. */

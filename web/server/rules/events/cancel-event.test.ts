@@ -389,14 +389,15 @@ describe('`wholeEvent` on the place cancel (brief W31 item 3; W30 "For the Worke
     })
   })
 
-  it('W35a (W35 audit F5, Wayne 15 Nov): No refund on a place, places or a booking is open to all staff on a live event; once the club has cancelled the event it needs Issue refunds, in the existing permission words, and nothing is cancelled without it', async () => {
+  it('W35a (W35 audit F5, Wayne 15 Nov): No refund on a place, places or a booking is open to all staff on a live event; once the club has cancelled the event it needs Issue refunds, in words that say why (W52), and nothing is cancelled without it', async () => {
     await onTheEvent(async ({ samOnCard, moInCash, stripe }) => {
       const sam = await samOnCard()
       const mo = await moInCash()
       const [first, second] = (await placeRows(sam.eventBookingId)).map((place) => place.id)
       const none = { refund: 'none', confirmed: { refund: 0 } }
       const withIssueRefunds = (on: boolean) => db.query('UPDATE staff SET can_issue_refunds = $1 WHERE id = $2', [on, ID.staff])
-      const needsIssueRefunds = [403, 'FORBIDDEN', 'Needs Issue refunds permission — this action moves money back to the customer.']
+      // W52: the refusal's own sentence (W35a answered the permission's general words, which speak of money going back).
+      const needsIssueRefunds = [403, 'FORBIDDEN', 'The club has cancelled this event, so cancelling a place on it with no refund needs the Issue refunds permission.']
 
       // A live event: No refund is open to every active staff member, as before.
       await withIssueRefunds(false)

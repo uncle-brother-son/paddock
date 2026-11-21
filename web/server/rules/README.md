@@ -2478,3 +2478,115 @@ round, with a control without the lock; a one-off against Block Day); `testing/m
 against the saved schema; the closed dates table; the job leaving a closed date out and making a reopened one; the
 date's lock; the header's checks, run); `replay/session-admin-replay.test.ts` (21 exact, 22 with named differences:
 Block Day's own recording now records its dates); `server/staff-app-helpers.test.ts` (the functions and screens).
+
+## Events on the Worker: the catalogue page and the attendee list (W52)
+
+Brief W52 (G-plan 1.5, 4.1, 4.3; bugs GB11 and GB14; Wayne's Q51, 20 Nov 2026; W35 audit rows 15, 18, 23, 25, F1 and
+F5; W48 review L2, L5 and L6; W48 report "For the Worker step" 5). No migration. Eight staff app functions are thin
+calls: `getEvents`, `setEventActive`, `setEventDetails`, `getEventAttendees`, `getTodaysEvents`,
+`setEventAttendeeCheckIn`, `setEventAttendeesCheckIn`, `setEventAttendeeWaiver`.
+
+**The catalogue** (`catalog/events.ts`; level B; Manage pricing, in the old words).
+
+- `GET catalog/events`: every event, named columns, each with its `stamp`. Any active staff member (GB14).
+- `POST catalog/events/:eventId/active` and `.../details`: one transaction each under the EVENT's own row lock
+  (`admin/locks.ts`, `events` → LOCK_ORDER's `event`), the lock a sale of its places, a place cancel and the whole
+  event's cancel take. An audit row each (`event.active_set`, `event.details_set`) with the event before and after.
+- The table's constraints stay the rules. A violation is answered in the old words (`constraint`,
+  `event_incomplete`), never as a database error.
+- **Q51 (GB11).** With a place booked (`places_booked > 0`, read under the lock), the refund cut-off IN FORCE can
+  move later, never earlier: refused `cutoff_earlier`, with the earliest allowed in the words. The cut-off in force
+  is the cut-off, or the event's start when none is set (Q43, as `event_cancellation_quote` reads it), so clearing
+  the cut-off or bringing an uncut event's date forward is the same refusal. A price change is allowed and reaches
+  new bookings only (a place keeps its own `unit_price`). A date change is allowed (the dialog reminds staff to tell
+  the attendees). (Until W52a a date before the cut-off the places were sold under was refused by the table's own
+  rule, and an uncut event's date brought forward by Q51: see W52a below.)
+- **W54a's rule on the edit.** The dialog sends nine columns as the page loaded them, so the press carries their
+  stamp and is refused `changed_since` when one has changed. The stamp is of those nine columns only
+  (`admin/stamp.ts`, `fieldsStampSql`): a place sold or cancelled meanwhile moves `places_booked` and `updated_at`
+  on the same row and must not refuse the edit (W54a "Noticed" 2). On and off sale writes one switch: no stamp.
+
+**The attendee list and the day** (`events/attendance.ts`, `events/attendee-list.ts`; level C; any active staff).
+
+- `GET events/:eventId/attendees`: the old answer, and on each booking `refund_open` (row 18): a refund of the
+  booking's own money is still being checked (W52a: `refunds/claims.ts`, `eventBookingRefundOpenSql`; as first built
+  it was any claim that held the order). With `refund_owed_amount` the screen says what a cancelled place's shortfall is now. Cancelled
+  bookings were always in the answer; the SCREEN now keeps one with money owed in view (F1).
+- `GET events/today`: by the London day the event's stored digits show (`time/london-day-sql.ts`), with London's
+  today from the database's clock (`LONDON_NOW_SQL`). `starts_at` is London wall-clock digits labelled UTC, as a
+  session's times are; the old read already took the digits as UTC, so no answer changes. What is closed is the
+  dependence on anything but the stored digits and London's clock (tested on three connection time zones).
+- **The three flags hold the event first (row 15; W48 review L2).** Check-in, its undo and a waiver each lock their
+  attendee's event `FOR SHARE` in a statement of their own before their guarded statement
+  (`HOLD_EVENTS_OF_ATTENDEES_SQL`). Their guards read the event (cancelled, its date, its extra waiver's version)
+  and the event booking, which are other tables' rows. A place cancel, the whole event's cancel, a sale and an edit
+  all hold the same row `FOR NO KEY UPDATE`, so each takes turns with a flag. Shared, so two flags on one event
+  never wait for each other. On the customer channel the hold names the customer (W50a's rule).
+- **Check-in, one or many** (`POST events/attendees/check-in`): the old single statement, which decides each
+  attendee for itself; each outcome is answered as data, in the old words (the one step G write whose refusals are
+  not thrown, because one press may check some in and refuse others). `admin/flag.ts` has `flagWriteMany` for it:
+  the channel, the key and the permission as `flagWrite`, the hold, and one audit row for EACH attendee checked in.
+  The attendees' rows are locked in id order first (W48 review L1). An attendee already checked in keeps their time.
+- **Undo** (`POST events/attendees/:attendeeId/check-in/undo`; action `event_attendee.check_in_undone`, new): the
+  place isn't cancelled and its booking is confirmed (the old undo checked only the place). Allowed on a cancelled
+  event and after the window closes: the whole-event cancel refuses a booking with a checked-in place until it is
+  undone.
+- **Waivers** (`POST events/attendees/:attendeeId/waiver`): the methods from `waivers/methods.ts`; the extra waiver
+  is signed against the event's current version, and a signature on an older version is not "signed" (it reads
+  `older_version`, counts as outstanding and refuses a check-in). A waiver already signed (the extra one at the
+  current version) keeps how and when. **The customer channel** (the rule only, no route): the signed-in customer
+  signs, by `email_link`, the waivers of an attendee on one of their own event bookings, until the event has ended
+  (`cancel-event.ts`, `ENDED_SQL`); never revokes. Someone else's attendee is answered as one that isn't there
+  (W52a).
+- A flag writes only what was pressed, so W54a's rule doesn't apply to these three.
+
+**W35a's F5 in words of its own.** No refund on an event the club has cancelled, without Issue refunds, is refused
+"The club has cancelled this event, so cancelling a place on it with no refund needs the Issue refunds permission."
+(`EVENT_WHOLE_CANCEL_NEW_WORDS.noRefundNeedsIssueRefunds`; still a plain `FORBIDDEN`). The place cancel dialog greys
+the choice with the same sentence.
+
+**Words.** `EVENT_ADMIN_NEW_WORDS` (`events/admin-failure-messages.ts`): `cutoffEarlier`, `cutoffCleared`,
+`attendeeChanged`, and the customer channel's three (four until W52a). Reasons: `EVENT_ADMIN_NEW_REASONS`.
+
+Tests: `events/admin.test.ts` (every route: each refusal and constraint in its words; Q51's cases; the stale page;
+the window's three states; London days on three time zones; an older extra waiver version; F1's and row 18's data;
+the customer channel; the audit rows); `events/attendance-postgres.test.ts` (check-in, undo and a waiver against
+step E's place cancel, the whole event's cancel and an edit, each way round, each with a control);
+`replay/event-admin-replay.test.ts` (the 25 recordings: 17 exact, 8 with named differences);
+`server/staff-app-helpers.test.ts` (the eight thin functions and the screens: F1, rows 18, 23 and 25, F5, Q51's
+dialog, the stale page).
+
+### W52a: the review's fixes, and Wayne's Q-a and Q-b (21 Nov 2026)
+
+Brief W52a (W52 review S1, S2 and "For later" 1, 3, 4 and 8). No migration, no new route, no contract change.
+
+- **Q-a: an event brought forward to before its cut-off, and the cut-off follows** (`catalog/events.ts`,
+  `cutoffToKeep`, decided under the event's lock as Q51 is). With a place booked, an edit whose new start is earlier
+  than the cut-off in force saves, and the row's cut-off becomes the new start: never earlier than it, and only in
+  that case. Example: places sold under a cut-off of 14 June 18:00 on an event on 15 June 18:00; the event is moved
+  to 14 June 09:00; the cut-off is 14 June 09:00. The cut-off box left as it was, or set anywhere from the new start
+  on, is written as the new start (the table allows none after the start); an empty box stays empty (the start is
+  the cut-off: Q43). A box set EARLIER than the new start is refused `cutoff_earlier`, with the new start as the
+  earliest. Everything else in Q51 stands: the cut-off box can't be moved earlier, and a later date never moves the
+  cut-off (Q-b: the dialog reminds staff). With no place booked nothing follows: the table's own rule, as before.
+  The audit row's `before` and `after` show the cut-off both sides.
+- **S1: the earliest time in the words can be typed in.** The refusal names the earliest cut-off rounded UP to the
+  next whole minute when the moment has seconds (`upToTheMinute`), because the dialog's box holds whole minutes: a
+  cut-off of 18:00:30 reads "6:01 pm", and 18:01 is accepted. The rule compares the moments as they are.
+- **S2: the words follow what changed.** The cut-off box set earlier than it may be: Q51's words (`cutoffEarlier`).
+  The event left with no cut-off and no date: the cleared words (`cutoffCleared`). A date brought forward on its
+  own is no longer refused (Q-a).
+- **The customer's waiver: someone else's attendee is answered exactly as one that isn't there**
+  (`events/attendance.ts`): `NOT_FOUND`, `attendee_not_found`, "This attendee no longer exists.", whatever state
+  that attendee is in, as W33 answers someone else's booking. `not_their_attendee` and its words are gone.
+- **`refund_open` on the attendee list is the booking's own** (`refunds/claims.ts`, `eventBookingRefundOpenSql`):
+  an open claim on the event booking itself, or an open Refund the rest on its order (an order claim of kind
+  `refund_owed`: the money owed on an order is one figure, and R1 has already taken it down, so without this a
+  place would read "settled later" while its refund is still being checked). Not another event booking's claim on
+  the same order, a refund of the order's other lines, or a session booking's card part on the order's payment.
+  The look that refuses a second refund (`openClaimHolding`) is unchanged: any of those still holds the order.
+
+Tests: `events/admin.test.ts` (Q-a's cases through the route and `cutoffToKeep` on its own; a cut-off and a start
+with seconds; someone else's attendee compared whole with a missing one; two event bookings on one order);
+`events/attendance-postgres.test.ts` (the customer's answer in the race); `server/staff-app-helpers.test.ts` (the
+dialog's two lines).

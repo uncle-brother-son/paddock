@@ -1,4 +1,5 @@
 import { BOOKING_ADMIN_NEW_WORDS } from '@/server/rules/bookings/admin-failure-messages'
+import { EVENT_ADMIN_NEW_WORDS, EVENT_ADMIN_WORDS } from '@/server/rules/events/admin-failure-messages'
 import { PRICING_ADMIN_NEW_WORDS } from '@/server/rules/pricing/admin-failure-messages'
 import { PROMO_ADMIN_WORDS } from '@/server/rules/promo/admin-failure-messages'
 import { SESSION_ADMIN_NEW_WORDS } from '@/server/rules/sessions/admin-failure-messages'
@@ -30,10 +31,13 @@ type Pin = string | number | boolean | Matcher
 
 const escaped = (path: string): string => path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
+/** W52: the paths each difference made by `pinned` names, kept beside it (see pathsPinnedBy). */
+const PINNED_PATHS = new WeakMap<AllowedDifference, readonly string[]>()
+
 /** One named difference whose every path is pinned to the value the new routes give there. A path that isn't listed is not allowed. */
 export function pinned(name: string, decision: string, pins: ReadonlyArray<readonly [string, Pin]>): AllowedDifference {
   const byPath = new Map(pins)
-  return {
+  const difference: AllowedDifference = {
     name,
     decision,
     path: new RegExp(`^(${pins.map(([path]) => escaped(path)).join('|')})$`),
@@ -43,7 +47,18 @@ export function pinned(name: string, decision: string, pins: ReadonlyArray<reado
       return typeof pin === 'function' ? pin(value) : value === pin
     },
   }
+  PINNED_PATHS.set(difference, pins.map(([path]) => path))
+  return difference
 }
+
+/**
+ * W52: the paths a difference made by `pinned` names. A pin is only looked at where the new side differs from the
+ * golden file, and an allowance with several paths is still "seen" when one of them has gone back to the golden
+ * value. So a replay that wants every pin to bite holds a recording's raw differences (no allowance) to exactly the
+ * paths its named differences pin: a path put back to what the old code recorded is then one path short
+ * (event-admin-replay.test.ts does).
+ */
+export const pathsPinnedBy = (difference: AllowedDifference): readonly string[] => PINNED_PATHS.get(difference) ?? []
 
 const SIGN_IN = 'jo@example.com'
 /** What every staff route answers a sign-in with no staff row (server/auth/staff.ts), and an inactive account. */
@@ -140,6 +155,10 @@ const GB14_READS_MOVED: ReadonlyArray<readonly [index: number, read: string]> = 
   // W54.
   [11, 'getPromoCodes'],
   [12, 'getPromoCodeRedemptions'],
+  // W52.
+  [13, 'getEvents'],
+  [14, 'getEventAttendees'],
+  [15, 'getTodaysEvents'],
 ]
 /** The recording's two passes: an inactive account, then (24 results further on) a sign-in with no staff row. */
 const GB14_PASSES: ReadonlyArray<readonly [offset: number, words: string]> = [
@@ -149,8 +168,8 @@ const GB14_PASSES: ReadonlyArray<readonly [offset: number, words: string]> = [
 
 const gb14TheMovedReadsRefuse = (golden: Recording): AllowedDifference =>
   pinned(
-    "Bug GB14 is closed for the reads moved so far: an inactive account, and a sign-in with no staff row, are refused the promo code list and a code's uses (W54), and the booking list, one booking, its detail (with its guests' dates of birth), the add-on prep list, the waiver gaps and the payments needing attention (W50), and the calendar's sessions and the service types for a slot (W51), each in the words every staff route gives. (The old code answered them all. The reads W52 to W57 move still do.)",
-    'Bug GB14 (G-plan section 3); G-plan 4.2 (reads: an active staff member); briefs W49 + W54, W50 and W51 "Parity and tests" (the staff check on reads)',
+    "Bug GB14 is closed for the reads moved so far: an inactive account, and a sign-in with no staff row, are refused the promo code list and a code's uses (W54), and the booking list, one booking, its detail (with its guests' dates of birth), the add-on prep list, the waiver gaps and the payments needing attention (W50), and the calendar's sessions and the service types for a slot (W51), and the events list, an event's attendee list and today's events (W52), each in the words every staff route gives. (The old code answered them all. The reads W53 to W57 move still do.)",
+    'Bug GB14 (G-plan section 3); G-plan 4.2 (reads: an active staff member); briefs W49 + W54, W50, W51 and W52 "Parity and tests" (the staff check on reads)',
     GB14_PASSES.flatMap(([offset, words]) =>
       GB14_READS_MOVED.flatMap(([index]): Array<readonly [string, Pin]> => {
         const at = index + offset
@@ -760,3 +779,135 @@ export const W51_DIFFERING: readonly string[] = Object.keys(W51_NAMED)
 
 /** The named differences of a W51 recording: none for the ones that match their golden files exactly. */
 export const w51Differences = (name: string, golden: Recording): readonly AllowedDifference[] => W51_NAMED[name]?.(golden) ?? []
+
+// ---------------------------------------------------------------------------------------------------------------------
+// W52: Events (GB11, GB14, Wayne's Q51, W48 report "For the Worker step" 5)
+
+/** The 25 recordings of the event reads, the two catalogue writes and the three event-day flags (GB14's own recording is in W49 + W54's family above). */
+export const isW52Scenario = (name: string): boolean => /^w48-(events-read$|event-|gb11-|todays-events-read)/.test(name)
+
+/*
+ * What W52's replay shows (briefs/W52-logs/04-replay-differences-first-pass-run1.jsonl, staff app repo): 17 of the 25
+ * match their golden files exactly, field for field: the events list; on and off sale, with the table's own refusal;
+ * the edit's refusals of a cancelled event and of a capacity below the places booked; a saved edit and a cleared one;
+ * the attendee list; every check-in refusal, check-in at the desk and its undo, and check-in for many; every waiver
+ * refusal, the standard and the extra waiver signed and revoked, and an older extra version read as outstanding; and
+ * both recordings of today's events. Named columns change nothing: every column the old answers carried is named.
+ * The check-in time is the database's clock where it was already the database's.
+ *
+ * On every recording and set aside before the comparison, as for W49 to W51: the Worker's audit rows (one for each
+ * catalogue write and each waiver or undo; one for EACH attendee a check-in press checked in) and the stored answers
+ * that hold each call's key. Set aside from the answers and checked on their own (admin-side.ts): the stamp on each
+ * row of the events list and on a saved edit's event (W54a's rule), and `refund_open` on each booking of the attendee
+ * list (W35 audit row 18).
+ *
+ * Eight differ, each by a decision, named below. Where a press is now refused, the refused answer and the row left
+ * unchanged are separate allowances: a press refused in the right words that still changed the row would leave the
+ * row's allowance unseen, which fails.
+ */
+
+const W52_LEVEL_B = 'G-plan 4.2 (level B: one transaction under the lock, an audit row, a press key)'
+const W52_LEVEL_C = 'G-plan 4.2 (level C: one guarded statement, where the guard is the rule, and an audit row)'
+export const W52_DECISIONS = {
+  NO_STAFF_ROW: `W48 report "For the Worker step" 1 and W48 review point 7 (the old event-day functions ignored a sign-in with no staff row); bug GB14's fix (G-plan 4.2: every /api/v1/staff route refuses an unknown sign-in before its rule runs)`,
+  Q51: `Wayne's Q51 (20 Nov 2026: once a place is sold the refund cut-off can move later but not earlier, so a customer keeps at least the cut-off they bought under; a price change applies to new bookings only; a date change is allowed); bug GB11 (G-plan section 3); brief W52 item 2; ${W52_LEVEL_B}`,
+  UNDO: `W48 report "For the Worker step" 5 (undo: the same guards as check-in, less the window); brief W52 item 4; ${W52_LEVEL_C}`,
+  NOT_A_NUMBER: `G-plan 4.10 (the staff app's functions are thin calls: what a dialog sends reaches the Worker's rule as JSON, which can't carry a number that isn't one); brief W52 item 1 (the table's own constraints keep their words)`,
+} as const
+
+/** The cut-off GB11's recording sold its two places under: 30 November 2026 at 19:00, as the refusal words it. */
+const GB11_CUTOFF_IN_FORCE = 'Mon 30 Nov 2026, 7:00 pm'
+
+/** A step the old function answered `updated: true` with a row, which the Worker now answers `updated: false` with a reason and words (as data: the thin function puts the old shape back). */
+const answeredRefusal = (index: number, was: 'event' | 'attendee', reason: string, message: string): Array<readonly [string, Pin]> => [
+  [`.results[${index}].updated`, false],
+  [`.results[${index}].${was}`, GONE],
+  [`.results[${index}].reason`, reason],
+  [`.results[${index}].message`, message],
+]
+
+const ATTENDEE_NOT_CHECKED_IN: ReadonlyArray<readonly [string, Pin]> = [['.tables.event_attendees.added[0].checked_in_at', GONE]]
+const ATTENDEE_WAIVER_NOT_SIGNED: ReadonlyArray<readonly [string, Pin]> = [
+  ['.tables.event_attendees.added[0].waiver_accepted', false],
+  ['.tables.event_attendees.added[0].waiver_version', GONE],
+  ['.tables.event_attendees.added[0].waiver_accepted_at', GONE],
+  ['.tables.event_attendees.added[0].waiver_method', GONE],
+]
+
+/** A "who may" recording's step by a sign-in with no staff row (its third), which the old function let through. */
+const w52NoStaffRow = (golden: Recording, what: string, unchanged: ReadonlyArray<readonly [string, Pin]>, row: string): AllowedDifference[] => [
+  pinned(
+    `${what}, pressed by a sign-in with no staff row, is refused in the words every staff route gives ("No staff record matches the logged-in user's email…"). (The old function ignored that the sign-in had no staff row and went ahead: nobody who is staff had done it.)`,
+    W52_DECISIONS.NO_STAFF_ROW,
+    answerRefused(golden, 2, NO_STAFF_RECORD_WORDS)
+  ),
+  pinned(`…and ${row} (The old function changed it.)`, W52_DECISIONS.NO_STAFF_ROW, unchanged),
+]
+
+/** The named differences of each W52 recording that has any, built from its own golden file. Seventeen have none. */
+const W52_NAMED: Readonly<Record<string, (golden: Recording) => AllowedDifference[]>> = {
+  // S3 (one decision for every step G slice): the staff check's own words for a sign-in with no staff row.
+  'w48-event-active-who-may': (golden) => [s3UnknownStaffOnManagePricing(golden)],
+  'w48-event-details-who-may': (golden) => [s3UnknownStaffOnManagePricing(golden)],
+  'w48-event-details-refusals': () => [
+    pinned(
+      'A price that is not a number can\'t be sent to the Worker at all: the dialog\'s press travels as JSON, which carries it as no price. So the recording\'s fifth press (the Herd price as "not a number") is read as the Herd price cleared, and on an event that is on sale the table\'s own rule refuses that, in its old words ("This event is on sale, so it needs a date, capacity, all three prices…"). Nothing is changed either way. (The old function, called directly, said "Prices can\'t be negative.". The edit dialog never sends such a price: it checks the box first.)',
+      W52_DECISIONS.NOT_A_NUMBER,
+      [
+        ['.results[4].reason', 'constraint'],
+        ['.results[4].message', EVENT_ADMIN_WORDS.setEventDetails.eventOnSaleSoItNeeds],
+      ]
+    ),
+  ],
+  'w48-gb11-cut-off-date-and-prices-change-after-places-are-sold': () => [
+    pinned(
+      'Q51 (bug GB11 is closed): with two places sold under a cut-off of 30 November, moving the cut-off to 10 November is refused, "Places are already booked on this event, so the refund cut-off can\'t be made earlier: customers keep at least the cut-off they booked under. The earliest it can be is Mon 30 Nov 2026, 7:00 pm." (The old code saved it with no warning: a customer cancelling on 26 November then got nothing.)',
+      W52_DECISIONS.Q51,
+      answeredRefusal(1, 'event', 'cutoff_earlier', EVENT_ADMIN_NEW_WORDS.cutoffEarlier(GB11_CUTOFF_IN_FORCE))
+    ),
+    pinned(
+      '…and the second edit, which sends the same earlier cut-off together with a new price and a new date, is refused the same way, whole: an edit is one save. (The price and the date could each be changed on their own: brief W52\'s tests show both. The old code saved all three.)',
+      W52_DECISIONS.Q51,
+      answeredRefusal(2, 'event', 'cutoff_earlier', EVENT_ADMIN_NEW_WORDS.cutoffEarlier(GB11_CUTOFF_IN_FORCE))
+    ),
+    // On its own, so a cut-off that moved anyway (as the golden file has it) leaves this allowance unseen, which fails.
+    pinned('…so the cut-off is where the customers booked under it: the event\'s row keeps 30 November. (The old code wrote 10 November.)', W52_DECISIONS.Q51, [['.tables.events.changed[0].refund_cutoff_at', GONE]]),
+    pinned(
+      '…and the rest of the event is as it was too: no change to its date or its public price (which the old code wrote with the cut-off), and the attendee list reads the event on 1 December with its cut-off on 30 November.',
+      W52_DECISIONS.Q51,
+      [
+        ['.tables.events.changed[0].starts_at', GONE],
+        ['.tables.events.changed[0].ends_at', GONE],
+        ['.tables.events.changed[0].price_public', GONE],
+        ['.results[3].event.starts_at', '2026-12-01T19:00:00.000Z'],
+        ['.results[3].event.ends_at', '2026-12-01T21:00:00.000Z'],
+        ['.results[3].event.refund_cutoff_at', '2026-11-30T19:00:00.000Z'],
+      ]
+    ),
+  ],
+  'w48-event-check-in-who-may': (golden) => w52NoStaffRow(golden, 'Checking an event attendee in', ATTENDEE_NOT_CHECKED_IN, 'the attendee is not checked in.'),
+  'w48-event-check-in-many-who-may': (golden) => w52NoStaffRow(golden, 'Checking several event attendees in, with their waivers marked signed at the desk', [...ATTENDEE_WAIVER_NOT_SIGNED, ...ATTENDEE_NOT_CHECKED_IN], "the attendee is not checked in and their waiver is still not signed."),
+  'w48-event-waiver-who-may': (golden) => w52NoStaffRow(golden, "Marking an event attendee's waiver signed", ATTENDEE_WAIVER_NOT_SIGNED, "the attendee's waiver is still not signed."),
+  'w48-event-check-in-undo-has-no-checks': () => [
+    pinned(
+      'Undo check-in now has check-in\'s guards, less the window: on an attendee whose booking is cancelled it is refused, "This event booking isn\'t confirmed." (The old undo checked only the place, and un-checked an attendee of a cancelled booking.)',
+      W52_DECISIONS.UNDO,
+      answeredRefusal(1, 'attendee', 'booking_not_confirmed', EVENT_ADMIN_WORDS.eventCheckIn.booking_not_confirmed)
+    ),
+    pinned('…and that attendee is still checked in. (The old code cleared it.)', W52_DECISIONS.UNDO, [['.tables.event_attendees.added[0].checked_in_at', '<set>']]),
+    pinned(
+      '…and undo on a place that has been cancelled says so, "This place has been cancelled.", with its own reason. (The old undo was refused too, but as "This attendee no longer exists.": its one statement couldn\'t tell a cancelled place from one that isn\'t there.)',
+      W52_DECISIONS.UNDO,
+      [
+        ['.results[2].reason', 'attendee_cancelled'],
+        ['.results[2].message', EVENT_ADMIN_WORDS.eventCheckIn.attendee_cancelled],
+      ]
+    ),
+  ],
+}
+
+/** The W52 recordings that have a named difference. */
+export const W52_DIFFERING: readonly string[] = Object.keys(W52_NAMED)
+
+/** The named differences of a W52 recording: none for the ones that match their golden files exactly. */
+export const w52Differences = (name: string, golden: Recording): readonly AllowedDifference[] => W52_NAMED[name]?.(golden) ?? []

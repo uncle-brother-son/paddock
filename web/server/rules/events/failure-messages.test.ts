@@ -181,6 +181,9 @@ describe("the event cancellations' reasons and words, moved (brief W27 item 5)",
     const added = words.EVENT_WHOLE_CANCEL_NEW_WORDS
     expect(added.eventNotCancelled).toBe("This event hasn't been cancelled, so its bookings can't be cancelled as a whole event. Close this, reload and try again.")
     expect(added.notSaved).toBe("The event's cancellation couldn't be saved (the system was busy, or one of its records couldn't be written), so the event wasn't cancelled. Try again.")
+    // W52 (W35 audit F5): No refund on an event the club has cancelled, without Issue refunds, in words of its own.
+    expect(added.noRefundNeedsIssueRefunds).toBe('The club has cancelled this event, so cancelling a place on it with no refund needs the Issue refunds permission.')
+    expect(added.noRefundNeedsIssueRefunds).not.toContain('moves money back')
     expect([...words.EVENT_WHOLE_CANCEL_NEW_REASONS]).toEqual(['event_not_cancelled', 'cancel_not_saved'])
     // The old reasons are all still there, and none is also a new one.
     expect([...words.EVENT_WHOLE_CANCEL_REASONS]).toEqual(['invalid_params', 'event_not_found', 'event_ended', 'bookings_pending'])

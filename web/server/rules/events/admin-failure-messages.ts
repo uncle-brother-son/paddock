@@ -57,6 +57,43 @@ export const EVENT_ADMIN_WORDS = {
   },
 } as const
 
+/**
+ * W52: the words the Worker adds for events (none is moved from an old function: each is for something the old code
+ * didn't check, or for the website's customer, who has no route yet).
+ */
+export const EVENT_ADMIN_NEW_WORDS = {
+  /**
+   * Q51 (Wayne, 20 Nov; bug GB11): once a place is booked, the refund cut-off can move later but not earlier. Said
+   * when the cut-off box was set earlier than it may be (W52a, review S2). `earliest` is the earliest the box can
+   * hold, as staff read a time ("Tue 1 Dec 2026, 6:00 pm"): the cut-off customers booked under, rounded up to a whole
+   * minute (review S1), or the event's new start when the event is being brought forward to before it (Q-a).
+   */
+  cutoffEarlier: (earliest: string): string =>
+    `Places are already booked on this event, so the refund cut-off can't be made earlier: customers keep at least the cut-off they booked under. The earliest it can be is ${earliest}.`,
+  /**
+   * The same when the edit would leave the event with no cut-off at all: no cut-off set and no date either (with no
+   * cut-off the event's start is the cut-off: Q43). W52a: a cut-off cleared while the date stays, or a date brought
+   * forward, is no longer answered with these (the first was always allowed while the start was no earlier; the
+   * second is Q-a's, and the cut-off follows).
+   */
+  cutoffCleared: (earliest: string): string =>
+    `Places are already booked on this event, so its refund cut-off can't be cleared or brought forward: customers keep at least the cut-off they booked under. Set a refund cut-off of ${earliest} or later.`,
+  /** An attendee whose row changed between the press's statements (someone else's press landed first). */
+  attendeeChanged: 'This attendee changed while this was being saved, so nothing was changed. Reload the page and try again.',
+  // W52a (W52 review "For later" 1): the website's customer is told nothing about an attendee who isn't on one of
+  // their own event bookings: it is answered exactly as one that isn't there (`attendee_not_found`, the old words),
+  // as W33 answers someone else's booking. So there are no words and no reason of its own for it.
+  /** The website's customer: the event has ended. */
+  customerEventPassed: 'This event has already taken place, so the waiver can no longer be signed online. Please speak to the team at the club.',
+  /** The website's customer: a waiver is never withdrawn online. */
+  customerCannotRevoke: 'A signed waiver can only be withdrawn by the team at the club.',
+  /** The website's customer: a method the website may not record (waivers/methods.ts). */
+  customerWaiverMethod: "That isn't a way a waiver can be signed online.",
+} as const
+
+/** The reasons W52 adds to the old functions'. */
+export const EVENT_ADMIN_NEW_REASONS = ['cutoff_earlier', 'changed_since', 'attendee_changed', 'event_passed', 'customer_cannot_revoke', 'waiver_method_not_allowed'] as const
+
 /** The reasons each old function's own result type names, in its order. */
 export const EVENT_ADMIN_REASONS = {
   setEventActive: ['event_not_found', 'event_incomplete'],

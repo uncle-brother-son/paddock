@@ -114,7 +114,10 @@ describe('staff app helpers', () => {
     // W51: addServiceTypeScheduleSlot, createOneOffSession, deleteServiceTypeScheduleSlot, setSessionStartTime and
     // unblockSession left it the same way ("W51: the session and timetable functions are thin calls to the Worker"
     // below), and generateUpcomingSessions is deleted (GB24).
-    const guarded = ['setEventAttendeeCheckIn', 'setEventAttendeeWaiver', 'setEventAttendeesCheckIn', 'setOrderLineItemFulfilled']
+    // W52: setEventAttendeeCheckIn, setEventAttendeeWaiver and setEventAttendeesCheckIn left it the same way ("W52: the
+    // event functions are thin calls to the Worker" below: each asks only the Worker, which refuses an inactive
+    // account, in the same words).
+    const guarded = ['setOrderLineItemFulfilled']
 
     it.each(guarded)('%s refuses before anything is written or charged', async (name) => {
       const query = stubStaffTable([row(false)])
@@ -1166,6 +1169,382 @@ describe('staff app helpers', () => {
         expect(component('EditSessionStartTimeDialog.tsx')).toContain("toast.error(err instanceof Error && err.message ? err.message : 'Failed to change start time')")
         expect(component('SessionDetailDialog.tsx')).toContain("toast.error(err instanceof Error && err.message ? err.message : 'Failed to unblock slot')")
         expect(page('ServiceTypesPage.tsx')).toContain("toast.error(err instanceof Error && err.message ? err.message : 'Failed to remove schedule slot')")
+      })
+    })
+  })
+
+  // Brief W52 (item 3 and item 12; lead calls L4 and L11): the three event reads, the two catalogue writes and the
+  // three event-day flags are thin calls to the Worker, one function for each old one, with the old bodies gone. What
+  // each makes of the Worker's answers is held here, with the screens; the rules themselves in
+  // server/rules/events/admin.test.ts and its races.
+  describe('W52: the event functions are thin calls to the Worker', () => {
+    const INACTIVE = 'This staff account is inactive. Ask an admin to reactivate it.'
+    const NO_ANSWER = "That didn't get an answer, so it may or may not have been saved. The screen has been reloaded: check it, and press again if it hasn't changed."
+    const CHANGED_SINCE = 'This was changed by someone else since the page loaded. The page has been reloaded: check it and save again.'
+    const ID = '22222222-2222-4222-8222-222222222222'
+    const OTHER = '33333333-3333-4333-8333-333333333333'
+    const fn = async (name: string) => (await import(/* @vite-ignore */ path.join(appDir, `backend/paddock/${name}`))).default as (req: { params: Record<string, unknown>; user: typeof user }) => Promise<unknown>
+    const refused = (code: string, reason: string, message: string) => ({ data: { ok: false, error: { code, message, details: { reason, message, action: 'x' } }, requestId: 'worker-request' } })
+    const sent = (call = 0) => rawRequest.mock.calls[call]?.[0] as { path: string; method: string; body?: unknown; queryParams?: Record<string, string>; headers: Record<string, string> }
+    const details = { startsAt: '2026-12-01T19:00:00.000Z', endsAt: '2026-12-01T21:00:00.000Z', capacity: 10, access: 'public', publicReleaseAt: null, pricePublic: 40, pricePreHerd: 30, priceHerd: 20, refundCutoffAt: '2026-11-30T19:00:00.000Z' }
+    const state = { id: ID, waiver_accepted: true, waiver_method: 'in_person', waiver_accepted_at: '2026-12-01T18:00:00.000Z', extra_waiver_state: 'not_needed', event_waiver_method: null, event_waiver_accepted_at: null, checked_in_at: null }
+
+    /** Each function with params a screen sends, the route it must call, and what it sends there. */
+    const thin: Array<[string, Record<string, unknown>, string, string, { body?: unknown }]> = [
+      ['getEvents', {}, 'GET', '/api/v1/staff/catalog/events', {}],
+      ['getEventAttendees', { eventId: ID }, 'GET', `/api/v1/staff/events/${ID}/attendees`, {}],
+      ['getTodaysEvents', {}, 'GET', '/api/v1/staff/events/today', {}],
+      ['setEventActive', { eventId: ID, active: true }, 'POST', `/api/v1/staff/catalog/events/${ID}/active`, { body: { active: true } }],
+      ['setEventDetails', { eventId: ID, ...details, stamp: 'fields#0123456789abcdef0123456789abcdef' }, 'POST', `/api/v1/staff/catalog/events/${ID}/details`, { body: { ...details, stamp: 'fields#0123456789abcdef0123456789abcdef' } }],
+      ['setEventAttendeeCheckIn', { attendeeId: ID, checkedIn: true }, 'POST', '/api/v1/staff/events/attendees/check-in', { body: { attendeeIds: [ID] } }],
+      ['setEventAttendeeCheckIn', { attendeeId: ID, checkedIn: false }, 'POST', `/api/v1/staff/events/attendees/${ID}/check-in/undo`, { body: {} }],
+      ['setEventAttendeesCheckIn', { attendeeIds: [ID, OTHER], markWaiversSignedInPerson: true }, 'POST', '/api/v1/staff/events/attendees/check-in', { body: { attendeeIds: [ID, OTHER], markWaiversSignedInPerson: true } }],
+      ['setEventAttendeeWaiver', { attendeeId: ID, which: 'both', accepted: true, method: 'email_link' }, 'POST', `/api/v1/staff/events/attendees/${ID}/waiver`, { body: { which: 'both', accepted: true, method: 'email_link' } }],
+    ]
+
+    it.each(thin)('%s (%j) asks only the Worker, on its own route, and an inactive account is refused in the same words as before', async (name, params, method, route, sends) => {
+      const query = vi.fn()
+      const legacy = vi.fn()
+      vi.stubGlobal('paddockData', { query })
+      vi.stubGlobal('paddockBackendApi2', { rawRequest: legacy })
+      rawRequest.mockResolvedValue(refusal('FORBIDDEN', INACTIVE))
+
+      // Thrown as the words alone, as the old functions threw them: no code and no request id after them.
+      await expect((await fn(name))({ params, user })).rejects.toThrow(new Error(INACTIVE))
+
+      expect(rawRequest).toHaveBeenCalledTimes(1)
+      expect(sent()).toMatchObject({ method, path: route, headers: { 'X-Staff-Email': user.email } })
+      if (sends.body) expect(sent().body).toEqual(sends.body)
+      // A write goes under a key made for the call; a read has none.
+      expect(typeof sent().headers['Idempotency-Key']).toBe(method === 'POST' ? 'string' : 'undefined')
+      // The database and the legacy resource are never touched.
+      expect(legacy).not.toHaveBeenCalled()
+      expect(query).not.toHaveBeenCalled()
+    })
+
+    it('none of the eight reads the database, the legacy resource, the old staff checks or the old shared event modules any more', () => {
+      const names = [...new Set(thin.map(([name]) => name))]
+      expect(names).toHaveLength(8)
+      for (const name of names) {
+        const source = readFileSync(path.join(appDir, `backend/paddock/${name}.ts`), 'utf8')
+        expect(source, name).not.toMatch(/paddockData|paddockBackendApi2|resolveStaffId|requireStaffId|requireCanManagePricing/)
+        expect(source, name).not.toMatch(/from '\.\/shared\/(staffAccess|pricingStaff|eventAttendance|eventCheckIn|eventAttendeeList)'/)
+        expect(source, name).toMatch(/from '\.\/shared\/adminWorker'/)
+      }
+      // The place cancel's answer takes its booking type from the thin read now, so the three shared event modules
+      // have no caller left (they stay until W61, which removes them).
+      const cancel = readFileSync(path.join(appDir, 'backend/paddock/cancelEventPlaces.ts'), 'utf8')
+      expect(cancel).toContain("import type { EventAttendeeBooking } from './getEventAttendees'")
+      expect(cancel).not.toMatch(/shared\/eventAttendeeList/)
+      for (const leftover of ['eventAttendance', 'eventCheckIn', 'eventAttendeeList']) expect(existsSync(path.join(shared, `${leftover}.ts`)), leftover).toBe(true)
+    })
+
+    it("W35a's comment on the place cancel is brought up to date (brief item 11): No refund is open to active staff except on an event the club has cancelled", () => {
+      const cancel = readFileSync(path.join(appDir, 'backend/paddock/cancelEventPlaces.ts'), 'utf8')
+      expect(cancel).toMatch(/No refund is open to active staff, except on an event the club has cancelled, where it\s+\* needs Issue refunds too: W35a\)/)
+    })
+
+    it('the old result shapes come back from a success: the list with its stamps, a saved edit with the new stamp on its event, the switch, the attendee list, today\'s events', async () => {
+      const event = { id: ID, name: 'Full Moon Sauna', places_booked: 2, stamp: 'fields#aaaa' }
+      rawRequest.mockResolvedValue(success([event]))
+      expect(await (await fn('getEvents'))({ params: {}, user })).toEqual([event])
+      rawRequest.mockResolvedValue(success({ updated: true, event: { id: ID, name: 'Full Moon Sauna', places_booked: 2 }, stamp: 'fields#bbbb' }))
+      expect(await (await fn('setEventDetails'))({ params: { eventId: ID, ...details, stamp: 'fields#aaaa' }, user })).toEqual({ updated: true, event: { id: ID, name: 'Full Moon Sauna', places_booked: 2, stamp: 'fields#bbbb' } })
+      rawRequest.mockResolvedValue(success({ updated: true, event: { id: ID, active: false } }))
+      expect(await (await fn('setEventActive'))({ params: { eventId: ID, active: false }, user })).toEqual({ updated: true, event: { id: ID, active: false } })
+      const list = { event: null, checkInWindow: 'not_open', bookings: [] }
+      rawRequest.mockResolvedValue(success(list))
+      expect(await (await fn('getEventAttendees'))({ params: { eventId: ID }, user })).toEqual(list)
+      rawRequest.mockResolvedValue(success({ events: [], waiverGaps: [] }))
+      expect(await (await fn('getTodaysEvents'))({ params: {}, user })).toEqual({ events: [], waiverGaps: [] })
+    })
+
+    it("the edit's refusals come back as data with the Worker's words: the old four, Q51's `cutoff_earlier` and the stale page's `changed_since`; anything else is thrown", async () => {
+      const q51 = "Places are already booked on this event, so the refund cut-off can't be made earlier: customers keep at least the cut-off they booked under. The earliest it can be is Mon 30 Nov 2026, 7:00 pm."
+      for (const [code, reason, message] of [
+        ['VALIDATION', 'invalid_params', 'Capacity must be a whole number of at least 1.'],
+        ['NOT_FOUND', 'event_not_found', 'That event no longer exists.'],
+        ['CONFLICT', 'event_cancelled', "This event has been cancelled, so it can't be edited."],
+        ['CONFLICT', 'constraint', 'The end time must be after the start time.'],
+        ['CONFLICT', 'cutoff_earlier', q51],
+        ['CONFLICT', 'changed_since', CHANGED_SINCE],
+      ] as const) {
+        rawRequest.mockResolvedValue(refused(code, reason, message))
+        expect(await (await fn('setEventDetails'))({ params: { eventId: ID, ...details }, user }), reason).toEqual({ updated: false, reason, message })
+      }
+      const noPricing = 'You do not have permission to manage pricing (staff.can_manage_pricing is off for your account).'
+      rawRequest.mockResolvedValue(refused('FORBIDDEN', 'no_pricing_permission', noPricing))
+      await expect((await fn('setEventDetails'))({ params: { eventId: ID, ...details }, user })).rejects.toThrow(new Error(noPricing))
+      await expect((await fn('setEventActive'))({ params: { eventId: ID, active: true }, user })).rejects.toThrow(new Error(noPricing))
+      rawRequest.mockRejectedValue(new Error('socket hang up'))
+      await expect((await fn('setEventDetails'))({ params: { eventId: ID, ...details }, user })).rejects.toThrow(new Error(NO_ANSWER))
+      await expect((await fn('setEventActive'))({ params: { eventId: ID, active: true }, user })).rejects.toThrow(new Error(NO_ANSWER))
+    })
+
+    it("on and off sale: the old two refusals come back as data, with the Worker's words", async () => {
+      const incomplete = 'Set the date, capacity, prices and refund cut-off before putting this event on sale (and the public release time for Members first). A cancelled event cannot go on sale.'
+      rawRequest.mockResolvedValue(refused('CONFLICT', 'event_incomplete', incomplete))
+      expect(await (await fn('setEventActive'))({ params: { eventId: ID, active: true }, user })).toEqual({ updated: false, reason: 'event_incomplete', message: incomplete })
+      rawRequest.mockResolvedValue(refused('NOT_FOUND', 'event_not_found', 'That event no longer exists.'))
+      expect(await (await fn('setEventActive'))({ params: { eventId: ID, active: true }, user })).toEqual({ updated: false, reason: 'event_not_found', message: 'That event no longer exists.' })
+    })
+
+    it('check-in for one answers the old shape from the one outcome; for many, every outcome in order; undo and a waiver answer the attendee, and their refusals as data', async () => {
+      const refusedOutcome = { attendeeId: ID, updated: false, reason: 'waivers_outstanding', message: 'Mark the waiver(s) signed before checking in.' }
+      rawRequest.mockResolvedValue(success({ results: [{ attendeeId: ID, updated: true, attendee: state }] }))
+      expect(await (await fn('setEventAttendeeCheckIn'))({ params: { attendeeId: ID, checkedIn: true, markWaiversSignedInPerson: true }, user })).toEqual({ updated: true, attendee: state })
+      expect(sent().body).toEqual({ attendeeIds: [ID], markWaiversSignedInPerson: true })
+      rawRequest.mockResolvedValue(success({ results: [refusedOutcome] }))
+      expect(await (await fn('setEventAttendeeCheckIn'))({ params: { attendeeId: ID, checkedIn: true }, user })).toEqual({ updated: false, reason: 'waivers_outstanding', message: 'Mark the waiver(s) signed before checking in.' })
+      const both = { results: [{ attendeeId: ID, updated: true, attendee: state }, { ...refusedOutcome, attendeeId: OTHER }] }
+      rawRequest.mockResolvedValue(success(both))
+      expect(await (await fn('setEventAttendeesCheckIn'))({ params: { attendeeIds: [ID, OTHER] }, user })).toEqual(both)
+
+      rawRequest.mockResolvedValue(success({ ...state, checked_in_at: null }))
+      expect(await (await fn('setEventAttendeeCheckIn'))({ params: { attendeeId: ID, checkedIn: false }, user })).toEqual({ updated: true, attendee: { ...state, checked_in_at: null } })
+      rawRequest.mockResolvedValue(refused('CONFLICT', 'booking_not_confirmed', "This event booking isn't confirmed."))
+      expect(await (await fn('setEventAttendeeCheckIn'))({ params: { attendeeId: ID, checkedIn: false }, user })).toEqual({ updated: false, reason: 'booking_not_confirmed', message: "This event booking isn't confirmed." })
+
+      rawRequest.mockResolvedValue(success(state))
+      expect(await (await fn('setEventAttendeeWaiver'))({ params: { attendeeId: ID, which: 'standard', accepted: true, method: 'in_person' }, user })).toEqual({ updated: true, attendee: state })
+      for (const [code, reason, message] of [
+        ['VALIDATION', 'invalid_params', 'Choose how the waiver was signed.'],
+        ['NOT_FOUND', 'attendee_not_found', 'This attendee no longer exists.'],
+        ['CONFLICT', 'attendee_cancelled', 'This place has been cancelled.'],
+        ['CONFLICT', 'no_extra_waiver', "This event doesn't have an extra waiver."],
+        ['CONFLICT', 'extra_waiver_version_missing', "The extra waiver text hasn't synced from Sanity yet, so it can't be marked signed."],
+      ] as const) {
+        rawRequest.mockResolvedValue(refused(code, reason, message))
+        expect(await (await fn('setEventAttendeeWaiver'))({ params: { attendeeId: ID, which: 'extra', accepted: true }, user }), reason).toEqual({ updated: false, reason, message })
+      }
+      // Accepting with no method sends none: the Worker says the old words.
+      expect((rawRequest.mock.calls.at(-1)?.[0] as { body: unknown }).body).toEqual({ which: 'extra', accepted: true })
+    })
+
+    it('with no attendee there is nowhere to send a press: the old words, without asking', async () => {
+      expect(await (await fn('setEventAttendeeCheckIn'))({ params: { attendeeId: '', checkedIn: false }, user })).toEqual({ updated: false, reason: 'attendee_not_found', message: 'This attendee no longer exists.' })
+      expect(await (await fn('setEventAttendeeWaiver'))({ params: { attendeeId: '', which: 'standard', accepted: false }, user })).toEqual({ updated: false, reason: 'attendee_not_found', message: 'This attendee no longer exists.' })
+      expect(rawRequest).not.toHaveBeenCalled()
+    })
+
+    it("a press's key is the screen's own when it sends one, and is never part of what is sent as the change; no answer says the change may or may not have been saved", async () => {
+      rawRequest.mockResolvedValue(success({ updated: true, event: { id: ID, active: true } }))
+      await (await fn('setEventActive'))({ params: { eventId: ID, active: true, idempotencyKey: 'key-from-the-screen-1234' }, user })
+      expect(sent().headers['Idempotency-Key']).toBe('key-from-the-screen-1234')
+      expect(sent().body).toEqual({ active: true })
+      rawRequest.mockRejectedValue(new Error('socket hang up'))
+      for (const [name, params] of [
+        ['setEventAttendeeCheckIn', { attendeeId: ID, checkedIn: true }],
+        ['setEventAttendeeCheckIn', { attendeeId: ID, checkedIn: false }],
+        ['setEventAttendeesCheckIn', { attendeeIds: [ID] }],
+        ['setEventAttendeeWaiver', { attendeeId: ID, which: 'standard', accepted: false }],
+      ] as const) {
+        await expect((await fn(name))({ params, user }), name).rejects.toThrow(new Error(NO_ANSWER))
+      }
+      await expect((await fn('getEventAttendees'))({ params: { eventId: ID }, user })).rejects.toThrow(/Could not reach the Worker: socket hang up \(WORKER_UNREACHABLE, request /)
+    })
+
+    // The screens' own code and their small helpers, from the staff app's checkout (it has no test runner of its own).
+    describe('the screens', () => {
+      const component = (name: string) => readFileSync(path.join(appDir, 'frontend/components', name), 'utf8')
+      const page = (name: string) => readFileSync(path.join(appDir, 'frontend/pages', name), 'utf8')
+      const util = (name: string) => import(/* @vite-ignore */ path.join(appDir, 'frontend/utils', name))
+
+      const attendee = (row: Record<string, unknown> = {}) => ({ id: 'a1', event_booking_id: 'b1', attendee_type: 'account_holder', name: 'Sam Test', email: null, price_level: 'public', unit_price: '40.00', waiver_accepted: true, waiver_method: 'in_person', waiver_accepted_at: null, extra_waiver_state: 'not_needed', event_waiver_method: null, event_waiver_accepted_at: null, checked_in_at: null, cancelled_at: null, cancel_reason: null, cancelled_by_name: null, cancelled_value: '0', refunded_amount: '0', card_refunded_amount: '0', refund_method: null, refund_after_cutoff: false, ...row })
+      const booking = (row: Record<string, unknown> = {}, attendees: Array<Record<string, unknown>> = [attendee()]) => ({ id: 'b1', customer_id: 'c1', customer_first_name: 'Sam', customer_last_name: 'Test', customer_email: null, customer_phone: null, status: 'confirmed', places: attendees.length, price_paid: '40.00', ordered_at: '2026-11-01T10:00:00.000Z', cancelled_at: null, cancel_reason: null, order_id: 'o1', refund_owed_amount: '0.00', refund_open: false, attendees, ...row })
+      const cancelledPlace = (row: Record<string, unknown> = {}) => attendee({ cancelled_at: '2026-11-20T10:00:00.000Z', cancelled_value: '40', refunded_amount: '0', card_refunded_amount: '0', refund_method: 'card', ...row })
+      const cancelledBooking = (row: Record<string, unknown> = {}) => booking({ id: 'b2', status: 'cancelled', places: 0, customer_first_name: 'Mo', customer_last_name: 'Member', ...row }, [cancelledPlace({ id: 'a2', name: 'Mo Member' })])
+
+      it('F1 (item 8): a cancelled booking that still has money owed is on the list whatever the switch and the filter, with its cancelled places under "All"; one with nothing owed stays hidden until "Show cancelled" is on', async () => {
+        const { visibleAttendeeBookings } = await util('eventAttendance.ts')
+        const live = booking()
+        const owed = cancelledBooking({ refund_owed_amount: '40.00' })
+        const settled = cancelledBooking({ id: 'b3', refund_owed_amount: '0.00' })
+        const shown = (options: { search?: string; filter?: string; showCancelled?: boolean }) =>
+          (visibleAttendeeBookings([live, owed, settled], { search: '', filter: 'all', showCancelled: false, ...options }) as Array<{ id: string; attendees: unknown[] }>).map((one) => [one.id, one.attendees.length])
+        // The default view: the live booking, and the cancelled one with £40 owed, with its cancelled place.
+        expect(shown({})).toEqual([['b1', 1], ['b2', 1]])
+        expect(shown({ showCancelled: true })).toEqual([['b1', 1], ['b2', 1], ['b3', 1]])
+        // Under another filter the owed booking stays (its owed bar is what matters), with no place rows.
+        expect(shown({ filter: 'not_checked_in' })).toEqual([['b1', 1], ['b2', 0]])
+        expect(shown({ filter: 'waiver_outstanding' })).toEqual([['b2', 0]])
+        // A search for someone else leaves it out; a search for its booker keeps it.
+        expect(shown({ search: 'sam' })).toEqual([['b1', 1]])
+        expect(shown({ search: 'mo mem' })).toEqual([['b2', 1]])
+        // The page uses the helper, and the booking group shows the order's owed bar with the figure.
+        const list = page('EventAttendeesPage.tsx')
+        expect(list).toContain('const visibleBookings = useMemo(() => visibleAttendeeBookings(result?.bookings ?? [], { search, filter, showCancelled }), [result, search, filter, showCancelled])')
+        expect(list).toContain('const refundOwed = refundOwedOn(b)')
+        expect(list).toMatch(/\{refundOwed > 0 && b\.order_id \? \(\s+<div className="px-4 py-3 border-b border-border">\s+<OrderOwedBar orderId=\{b\.order_id\} owed=\{refundOwed\} onChanged=\{onOwedChanged\} where="on this booking's order" \/>/)
+      })
+
+      it('row 18 (item 9): a cancelled place\'s "didn\'t go through" figure says what it is now: still being checked, still to refund, or settled later on the order, when the words go', async () => {
+        const { placeShortfallText } = await util('eventAttendance.ts')
+        const place = cancelledPlace()
+        expect(placeShortfallText(place, { refund_owed_amount: '0.00', refund_open: true })).toBe('£40.00 of its card refund is still being checked')
+        expect(placeShortfallText(place, { refund_owed_amount: '40.00', refund_open: false })).toBe("£40.00 of its card refund didn't go through: still to refund on the order")
+        // Settled on the order since (Refund the rest, It already arrived): no "didn't go through" any more.
+        const settled = placeShortfallText(place, { refund_owed_amount: '0.00', refund_open: false })
+        expect(settled).toBe('£40.00 settled later on the order')
+        expect(settled).not.toMatch(/didn't go through/)
+        // The booking a place cancel answers carries no `refund_open` until the list is read again: the old sentence.
+        expect(placeShortfallText(place, { refund_owed_amount: '0.00' })).toBe("£40.00 of its card refund didn't go through with the cancellation (still being checked, or settled later on the order)")
+        // A place whose refund all went, one cancelled with no refund, and a part that went: nothing, nothing, the rest.
+        expect(placeShortfallText(cancelledPlace({ refunded_amount: '40', card_refunded_amount: '40' }), { refund_owed_amount: '0.00', refund_open: false })).toBeNull()
+        expect(placeShortfallText(cancelledPlace({ refund_method: 'none' }), { refund_owed_amount: '40.00', refund_open: true })).toBeNull()
+        expect(placeShortfallText(cancelledPlace({ refunded_amount: '15', card_refunded_amount: '0', refund_method: 'card' }), { refund_owed_amount: '25.00', refund_open: false })).toBe("£25.00 of its card refund didn't go through: still to refund on the order")
+        const list = page('EventAttendeesPage.tsx')
+        expect(list).toContain('const shortText = placeShortfallText(a, b)')
+        expect(list).toContain("{a.cancelled_at ? cancellationText(a, b) : 'Cancelled with the booking'}")
+      })
+
+      it('rows 23 and 25 (item 10): the Cancel event dialog reads the overview again after every press; a row whose booking is no longer listed says "settled since"; a held press says "on hold"; and a held press that comes back refused is pressed again in the same run', async () => {
+        const { outcomeMessage, outcomeText, pressAgainAfterHeldPress, withSettledSince } = await util('eventCancelRun.ts')
+        const row = (more: Record<string, unknown>) => ({ eventBookingId: 'b1', customerName: 'Sam Test', places: 2, ok: false, cardRefundedAmount: 0, storeCreditRefundedAmount: 0, ...more })
+        // Row 25.
+        expect(pressAgainAfterHeldPress({ ok: false }, true, { problem: null })).toBe(true)
+        expect(pressAgainAfterHeldPress({ ok: false }, false, { problem: null })).toBe(false)
+        expect(pressAgainAfterHeldPress({ ok: true }, true, { problem: null })).toBe(false)
+        expect(pressAgainAfterHeldPress({ ok: false, noAnswer: true }, true, { problem: null })).toBe(false)
+        expect(pressAgainAfterHeldPress({ ok: false }, true, undefined)).toBe(false)
+        expect(pressAgainAfterHeldPress({ ok: false }, true, { problem: 'A place is checked in. Undo check-in first.' })).toBe(false)
+        // Row 23.
+        const refusedRow = row({ message: 'A refund on this booking is still being checked.' })
+        const waiting = row({ eventBookingId: 'b2', noAnswer: true })
+        const done = row({ eventBookingId: 'b3', ok: true, cardRefundedAmount: 40 })
+        const after = withSettledSince([refusedRow, waiting, done], { bookings: [] }) as Array<Record<string, unknown>>
+        expect(after.map((one) => one['settledSince'])).toEqual([true, undefined, undefined])
+        expect(outcomeText(after[0])).toBe('settled since: see the attendee list')
+        expect(outcomeMessage(after[0])).toBeNull()
+        expect(outcomeText(after[1])).toBe('no answer')
+        // Still listed: it says what it said, and the mark goes again if the booking comes back.
+        const still = withSettledSince(after, { bookings: [{ eventBookingId: 'b1' }] }) as Array<Record<string, unknown>>
+        expect(still[0]?.['settledSince']).toBeUndefined()
+        expect(outcomeText(still[0])).toBe('not cancelled')
+        expect(outcomeMessage(still[0])).toBe('A refund on this booking is still being checked.')
+        expect(withSettledSince([refusedRow], null)).toEqual([refusedRow])
+        // A held press: "on hold", never £0.00 figures.
+        expect(outcomeText(row({ ok: true, held: true, message: 'may or may not have gone' }))).toBe('on hold')
+        expect(outcomeText(done)).toBe('£40.00 card, £0.00 store credit')
+        expect(outcomeText(row({ ok: true, cardRefundedAmount: 0, storeCreditRefundedAmount: 10, refundOwed: 30 }))).toBe('£0.00 card, £10.00 store credit, £30.00 still to refund')
+
+        const dialog = component('CancelEventDialog.tsx')
+        // After every press, and again after the second press of a held one.
+        expect(dialog.match(/latest = \(await readOverview\(\)\) \?\? latest\s+setOverview\(latest\)/g)).toHaveLength(2)
+        expect(dialog).toContain("const data: GetEventCancellationOverviewResult | null = await loadOverview({ eventId }, { skipCache: true }).result")
+        expect(dialog).toContain('const wasHeld = heldPresses.current.has(eventBookingId)')
+        expect(dialog).toMatch(/if \(pressAgainAfterHeldPress\(outcome, wasHeld, listedNow\) && listedNow\) \{\s+outcome = await cancelBooking\(eventBookingId, \{ key: crypto\.randomUUID\(\), refund, reason: reason\.trim\(\), confirmed: listedNow\.value,/)
+        expect(dialog).toContain('const show = () => setResults(withSettledSince([...rows.values()], latest))')
+        expect(dialog).toContain('{r.customerName} · {r.places} place{r.places === 1 ? \'\' : \'s\'} · {outcomeText(r)}')
+        expect(dialog).toContain('...(result.held ? { held: true } : {}),')
+      })
+
+      it("F5 (item 11): No refund on an event the club has cancelled is greyed without Issue refunds, with the Worker's own sentence, and the button with it", async () => {
+        const { NO_REFUND_ON_CANCELLED_EVENT_MESSAGE, noRefundNeedsIssueRefunds } = await util('eventAttendance.ts')
+        const { EVENT_WHOLE_CANCEL_NEW_WORDS } = await import('./rules/events/failure-messages')
+        expect(NO_REFUND_ON_CANCELLED_EVENT_MESSAGE).toBe(EVENT_WHOLE_CANCEL_NEW_WORDS.noRefundNeedsIssueRefunds)
+        expect([noRefundNeedsIssueRefunds(true, false), noRefundNeedsIssueRefunds(true, true), noRefundNeedsIssueRefunds(false, false), noRefundNeedsIssueRefunds(false, true)]).toEqual([true, false, false, false])
+        const dialog = component('CancelEventPlacesDialog.tsx')
+        expect(dialog).toContain('const noRefundBlocked = noRefundNeedsIssueRefunds(eventCancelled === true, canIssueRefunds)')
+        expect(dialog).toContain('<RadioGroupItem value="none" id="cancel-refund-none" disabled={noRefundBlocked} />')
+        expect(dialog).toContain("{noRefundBlocked ? ' — needs the Issue refunds permission on an event the club has cancelled' : ''}")
+        expect(dialog).toContain('{noRefundBlocked ? <div className="text-sm text-muted-foreground">{NO_REFUND_ON_CANCELLED_EVENT_MESSAGE}</div> : null}')
+        expect(dialog).toContain("disabled={saving || !ok || (reasonRequired && !reason.trim()) || (refund === 'none' && noRefundBlocked)}")
+        // The attendee list tells both of its cancel dialogs whether the event is cancelled.
+        const list = page('EventAttendeesPage.tsx')
+        expect(list).toContain('eventCancelled={event.cancelled_at !== null}')
+        expect(list.match(/eventCancelled=\{eventCancelled\}/g)).toHaveLength(2)
+      })
+
+      it("Q51 (item 3): the edit dialog says how many places are booked, what that means for the price and the cut-off, and reminds staff to tell the attendees when the date changes", async () => {
+        const { eventEditNotices } = await util('eventEdit.ts')
+        const event = { places_booked: 2, starts_at: '2026-12-01T19:00:00.000Z', ends_at: '2026-12-01T21:00:00.000Z', refund_cutoff_at: '2026-11-30T19:00:00.000Z' }
+        const same = { startsAt: '2026-12-01T19:00', endsAt: '2026-12-01T21:00', refundCutoffAt: '2026-11-30T19:00' }
+        expect(eventEditNotices(event, same)).toEqual({
+          booked: '2 places are booked on this event. A price change applies to new bookings only. The refund cut-off can be moved later, but not earlier: customers keep the cut-off they booked under.',
+          dateChanged: null,
+        })
+        // The start an hour earlier, still after the cut-off: the plain reminder.
+        expect(eventEditNotices(event, { ...same, startsAt: '2026-12-01T18:00' }).dateChanged).toBe("The date or time is changing and 2 places are booked. Saving doesn't tell the attendees: let them know yourself (no email is sent).")
+        expect(eventEditNotices(event, { ...same, endsAt: '' }).dateChanged).not.toBeNull()
+        expect(eventEditNotices({ ...event, places_booked: 1 }, { ...same, endsAt: '2026-12-01T22:00' })).toEqual({
+          booked: '1 place is booked on this event. A price change applies to new bookings only. The refund cut-off can be moved later, but not earlier: customers keep the cut-off they booked under.',
+          dateChanged: "The date or time is changing and 1 place is booked. Saving doesn't tell the attendees: let them know yourself (no email is sent).",
+        })
+        // Nobody booked: nothing to tell anyone.
+        expect(eventEditNotices({ ...event, places_booked: 0 }, { ...same, startsAt: '2026-12-09T19:00' })).toEqual({ booked: 'No places are booked on this event yet.', dateChanged: null })
+        const dialog = component('EditEventDialog.tsx')
+        expect(dialog).toContain('const notices = eventEditNotices(event, { startsAt, endsAt, refundCutoffAt })')
+        expect(dialog).toContain('{notices.booked}')
+        expect(dialog).toContain('<div>{notices.dateChanged}</div>')
+        expect(dialog).toContain('Places are booked, so this can be moved later but not earlier.')
+      })
+
+      it("W52a (Wayne's Q-a and Q-b, 21 Nov 2026): the date line says the cut-off will follow an event brought forward to before it, and that it stays put on a postponement", async () => {
+        const { eventEditNotices, EVENT_MOVING_BEFORE_CUTOFF_NOTICE, CUTOFF_STAYS_NOTICE } = await util('eventEdit.ts')
+        const event = { places_booked: 2, starts_at: '2026-12-01T19:00:00.000Z', ends_at: '2026-12-01T21:00:00.000Z', refund_cutoff_at: '2026-11-30T19:00:00.000Z' }
+        const same = { startsAt: '2026-12-01T19:00', endsAt: '2026-12-01T21:00', refundCutoffAt: '2026-11-30T19:00' }
+        const line = (ev: Record<string, unknown>, form: Record<string, string>) => eventEditNotices(ev, form).dateChanged
+        const reminder = "The date or time is changing and 2 places are booked. Saving doesn't tell the attendees: let them know yourself (no email is sent)."
+        const QA = "The event is moving earlier than its refund cut-off, so the cut-off moves to the new start. Tell the attendees, and refund anyone who can't come."
+        const QB = "The refund cut-off doesn't move with the date: move it later if attendees should keep the same notice."
+        expect([EVENT_MOVING_BEFORE_CUTOFF_NOTICE, CUTOFF_STAYS_NOTICE]).toEqual([QA, QB])
+
+        // Q-a: brought forward to before the cut-off (30 Nov 19:00), by a day or by a minute. Wayne's words, alone.
+        expect(line(event, { ...same, startsAt: '2026-11-30T10:00', endsAt: '2026-11-30T12:00' })).toBe(QA)
+        expect(line(event, { ...same, startsAt: '2026-11-30T18:59' })).toBe(QA)
+        // …whatever the cut-off box holds (the Worker refuses a box earlier than the new start, in its own words).
+        expect(line(event, { ...same, startsAt: '2026-11-30T10:00', refundCutoffAt: '2026-11-29T10:00' })).toBe(QA)
+        // To the cut-off's own minute, or anywhere after it: nothing follows, so the plain reminder.
+        expect(line(event, { ...same, startsAt: '2026-11-30T19:00' })).toBe(reminder)
+        expect(line(event, { ...same, startsAt: '2026-12-01T09:00' })).toBe(reminder)
+        // With no cut-off set the start is the cut-off (Q43): any earlier start moves it.
+        expect(line({ ...event, refund_cutoff_at: null }, { ...same, refundCutoffAt: '', startsAt: '2026-12-01T18:00' })).toBe(QA)
+        // A cut-off or start with seconds, the start box untouched: the box only looks earlier, so no Q-a line.
+        expect(line({ ...event, refund_cutoff_at: null, starts_at: '2026-12-01T19:00:30.000Z' }, { ...same, refundCutoffAt: '', endsAt: '2026-12-01T22:00' })).toBe(reminder)
+
+        // Q-b: postponed, the cut-off box left as it was: the reminder with the added sentence.
+        expect(line(event, { ...same, startsAt: '2026-12-15T19:00', endsAt: '2026-12-15T21:00' })).toBe(`${reminder} ${QB}`)
+        expect(line({ ...event, places_booked: 1 }, { ...same, startsAt: '2026-12-01T19:30' })).toBe(`The date or time is changing and 1 place is booked. Saving doesn't tell the attendees: let them know yourself (no email is sent). ${QB}`)
+        // …not once staff have moved the cut-off box in the same edit, and not when the event has no cut-off of its
+        // own (its start is the cut-off, which does move with the date).
+        expect(line(event, { ...same, startsAt: '2026-12-15T19:00', refundCutoffAt: '2026-12-14T19:00' })).toBe(reminder)
+        expect(line({ ...event, refund_cutoff_at: null }, { ...same, refundCutoffAt: '', startsAt: '2026-12-15T19:00' })).toBe(reminder)
+        // Only the end changed, or the start cleared: the plain reminder.
+        expect(line(event, { ...same, endsAt: '2026-12-01T22:00' })).toBe(reminder)
+        expect(line(event, { ...same, startsAt: '' })).toBe(reminder)
+        // Nobody booked: no line at all, whichever way the date moves.
+        expect(line({ ...event, places_booked: 0 }, { ...same, startsAt: '2026-11-30T10:00' })).toBeNull()
+        expect(line({ ...event, places_booked: 0 }, { ...same, startsAt: '2026-12-15T19:00' })).toBeNull()
+      })
+
+      it("the stale-page rule on the edit dialog: it sends the stamp of the event its boxes were filled from; on `changed_since` the page reads its list again and the dialog closes; the boxes are filled afresh each time it opens", () => {
+        const dialog = component('EditEventDialog.tsx')
+        expect(dialog).toContain('const [stamp, setStamp] = useState(event.stamp)')
+        expect(dialog).toMatch(/setRefundCutoffAt\(toInput\(event\.refund_cutoff_at\)\)\s+setStamp\(event\.stamp\)\s+setErrorMessage\(null\)/)
+        expect(dialog).toMatch(/refundCutoffAt: toIso\(refundCutoffAt\),\s+\/\/ Brief W52 \(W54a's rule\): the event as the page's list read it when the boxes were filled\.\s+stamp,/)
+        expect(dialog).toMatch(/if \(result\.reason === 'changed_since'\) \{[^}]*toast\.error\(result\.message\)\s+onStale\(\)\s+setOpen\(false\)\s+return\s+\}/)
+        expect(dialog).toMatch(/function openDialog\(\) \{\s+resetToCurrent\(\)\s+setOpen\(true\)\s+\}/)
+        expect(dialog).toContain('<Button variant="outline" size="sm" onClick={openDialog}>')
+        // A thrown press (a refusal of the whole press, or no answer) shows the Worker's words and the page reads again.
+        expect(dialog).toMatch(/setErrorMessage\(err instanceof Error && err\.message \? err\.message : 'Failed to update the event\.'\)\s+onStale\(\)/)
+        const events = page('EventsPage.tsx')
+        expect(events).toContain('<EditEventDialog event={ev} onUpdated={handleEventUpdated} onStale={reloadEvents} />')
+        expect(events).toMatch(/function reloadEvents\(\) \{\s+trigger\(\{\}, \{ skipCache: true \}\)\s+\}/)
+        expect(events).toMatch(/toast\.error\(err instanceof Error && err\.message \? err\.message : 'Failed to update on-sale status'\)\s+trigger\(\{\}, \{ skipCache: true \}\)/)
+      })
+
+      it("a failed read is never shown as nothing there: New Order's event picker and Overview's events card say the read failed, with Try again; the attendee list's presses show the Worker's words", () => {
+        const picker = readFileSync(path.join(appDir, 'frontend/components/checkout/EventSection.tsx'), 'utf8')
+        expect(picker).toContain('const { data: events, loading: eventsLoading, error: eventsError, trigger: loadEvents } = useGetEvents()')
+        expect(picker).toMatch(/\) : eventsError && !events \? \(\s+<div className="text-sm text-destructive">\s+The events couldn't be read: \{eventsError\}/)
+        expect(picker.indexOf('eventsError && !events ?')).toBeLessThan(picker.indexOf('No events are on sale right now.'))
+        const overview = page('OverviewPage.tsx')
+        expect(overview).toContain('const { data: todaysEventsData, error: todaysEventsError, trigger: loadTodaysEvents } = useGetTodaysEvents()')
+        expect(overview).toMatch(/\{todaysEventsError && !todaysEvents \? \([\s\S]{0,400}Today's events couldn't be read: \{todaysEventsError\}/)
+        const list = page('EventAttendeesPage.tsx')
+        for (const fallback of ['Failed to check in', 'Failed to undo check-in', 'Failed to revoke waiver']) expect(list).toContain(`toast.error(failureWords(err, '${fallback}'))`)
+        expect(component('MarkEventWaiverDialog.tsx')).toContain("toast.error(err instanceof Error && err.message ? err.message : 'Failed to update waiver status')")
       })
     })
   })
@@ -2807,9 +3186,11 @@ describe('staff app helpers', () => {
           expect(source).toContain("setRefund(choice === 'cash' && cashLeft <= 0 ? 'credit' : choice)")
           expect(source).toContain("setRefund(v === 'card' || v === 'credit' || v === 'cash' ? v : 'none')")
           expect(source).toContain("No refund cut-off set, so the event's start is the cut-off")
-          // Card and store credit still need Issue refunds on the screen, and No refund is open to all.
+          // Card and store credit still need Issue refunds on the screen, and No refund is open to all. W52 (W35 audit
+          // F5): except on an event the club has cancelled, where it is greyed without Issue refunds (held in "W52: …
+          // the screens" above).
           expect(source).toContain('<RadioGroupItem value={choice} id={`cancel-refund-${choice}`} disabled={!canIssueRefunds} />')
-          expect(source).toContain('<RadioGroupItem value="none" id="cancel-refund-none" />')
+          expect(source).toContain('<RadioGroupItem value="none" id="cancel-refund-none" disabled={noRefundBlocked} />')
         })
 
         it("the dialog's no-answer words are the wrapper's", async () => {
@@ -2836,7 +3217,9 @@ describe('staff app helpers', () => {
 
         it('a booking with money owed shows the order\'s owed bar (Refund the rest, It already arrived), and the list is read again when it changes', () => {
           const source = page()
-          expect(source).toContain("const refundOwed = Number.parseFloat(b.refund_owed_amount ?? '0') || 0")
+          // W52: the figure is read by the list's own helper (utils/eventAttendance.ts), which the F1 rule shares.
+          expect(source).toContain('const refundOwed = refundOwedOn(b)')
+          expect(readFileSync(path.join(appDir, 'frontend/utils/eventAttendance.ts'), 'utf8')).toContain("return Number.parseFloat(booking.refund_owed_amount ?? '0') || 0")
           expect(source).toMatch(/\{refundOwed > 0 && b\.order_id \? \(\s+<div className="px-4 py-3 border-b border-border">\s+<OrderOwedBar orderId=\{b\.order_id\} owed=\{refundOwed\} onChanged=\{onOwedChanged\} where="on this booking's order" \/>/)
           expect(source).toContain('onOwedChanged={reload}')
           // The bar is W28's own: its buttons need Issue refunds, checked again by the Worker.
@@ -2850,8 +3233,12 @@ describe('staff app helpers', () => {
           const source = page()
           expect(source).toContain("a.refund_method === 'cash'")
           expect(source).toContain('`${formatCurrency(refunded)} refunded in cash`')
-          expect(source).toContain("const refundAsked = a.refund_method === 'card' || a.refund_method === 'credit' || a.refund_method === 'cash'")
-          expect(source).toContain('const short = refundAsked ? Math.round((Number.parseFloat(a.cancelled_value) - refunded) * 100) / 100 : 0')
+          // W52 (W35 audit row 18): the shortfall and its words moved to the list's helper, which also says what the
+          // shortfall is now (held in "W52: … the screens" above).
+          const helper = readFileSync(path.join(appDir, 'frontend/utils/eventAttendance.ts'), 'utf8')
+          expect(helper).toContain("const refundAsked = attendee.refund_method === 'card' || attendee.refund_method === 'credit' || attendee.refund_method === 'cash'")
+          expect(helper).toContain('const short = Math.round((Number.parseFloat(attendee.cancelled_value) - Number.parseFloat(attendee.refunded_amount)) * 100) / 100')
+          expect(source).toContain('const shortText = placeShortfallText(a, b)')
         })
       })
     })
@@ -2986,8 +3373,10 @@ describe('staff app helpers', () => {
           expect(source).toContain('waiting.set(b.eventBookingId, { key: crypto.randomUUID(), refund, reason: reason.trim(), confirmed: b.value, customerName: b.customerName, places: b.places })')
           // The bookings come from the event cancel's own answer, not from what the dialog loaded earlier.
           expect(source).toContain('for (const b of cancelled.overview.bookings) {')
-          // One at a time: each press is awaited inside the loop, and the list is shown as it grows.
-          expect(source).toMatch(/for \(const \[eventBookingId, press\] of waiting\) \{\s+rows\.set\(eventBookingId, await cancelBooking\(eventBookingId, press\)\)\s+done \+= 1\s+setProgress\(\{ done, total \}\)\s+setResults\(\[\.\.\.rows\.values\(\)\]\)\s+\}/)
+          // One at a time: each press is awaited inside the loop, and the list is shown as it grows. W52 (W35 audit
+          // rows 23 and 25): the overview is read again after each press (held in "W52: … the screens" above).
+          expect(source).toMatch(/for \(const \[eventBookingId, press\] of waiting\) \{\s+const wasHeld = heldPresses\.current\.has\(eventBookingId\)\s+let outcome = await cancelBooking\(eventBookingId, press\)\s+rows\.set\(eventBookingId, outcome\)\s+latest = \(await readOverview\(\)\) \?\? latest\s+setOverview\(latest\)/)
+          expect(source).toMatch(/done \+= 1\s+setProgress\(\{ done, total \}\)\s+show\(\)\s+\}\s+const failed = /)
           // The event's own call must come before any booking is pressed.
           expect(source.indexOf('await cancelEvent(')).toBeLessThan(source.indexOf('await cancelBooking('))
           // Nothing is pressed when the event's cancel was refused or got no answer.
@@ -3031,7 +3420,9 @@ describe('staff app helpers', () => {
           const source = dialog()
           expect(source).not.toContain('toast.error')
           expect(source).toContain("{saving ? 'Cancelling…' : results || alreadyCancelled ? 'Retry' : 'Cancel event and refund'}")
-          expect(source).toContain("r.noAnswer\n                            ? 'no answer'\n                            : 'not cancelled'")
+          // W52: a row's words come from the run's helper (utils/eventCancelRun.ts, outcomeText), which keeps these two.
+          expect(readFileSync(path.join(appDir, 'frontend/utils/eventCancelRun.ts'), 'utf8')).toContain("return row.noAnswer ? 'no answer' : 'not cancelled'")
+          expect(source).toContain('{outcomeText(r)}')
           expect(source).toContain('still to refund on its order')
         })
 
