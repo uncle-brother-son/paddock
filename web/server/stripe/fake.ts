@@ -1003,6 +1003,12 @@ export class FakeStripe implements StripeClient {
 
         // W13: as Stripe, an archived price can't start a subscription.
         if (price['active'] === false) throw fakeStripeErrors.invalid('price_inactive', `The price ${String(priceId)} is not active.`)
+        // W57 (brief item 5): nor can an active price whose product is off sale (archived). Stripe's documents say an
+        // archived product's existing subscriptions keep running and its payment links stop; they don't say what a new
+        // subscription on its price does. The fake refuses it, the cautious reading, so the Worker keeps a plan's row
+        // and its Stripe product in step whichever way Stripe answers. The lead checks it in test mode at preview.
+        const product = typeof price['product'] === 'string' ? this.productsById.get(price['product']) : undefined
+        if (product && product['active'] === false) throw fakeStripeErrors.invalid('product_inactive', `The product ${String(price['product'])} of price ${String(priceId)} is not active.`)
         const discount = params.discounts?.[0]
         const coupon = typeof discount === 'object' ? discount.coupon : undefined
         const amountOff = coupon ? (this.couponsById.get(coupon)?.amount_off ?? null) : 0
@@ -1103,6 +1109,14 @@ export class FakeStripe implements StripeClient {
           // W49 + W54 (W48 review S2): as Stripe, and as subscriptions.create above, an archived price can't be
           // switched to. Without this a move onto a plan's old, archived price would pass every test here.
           if (this.pricesById.get(item.price)?.['active'] === false) throw fakeStripeErrors.invalid('price_inactive', `The price ${item.price} is not active.`)
+          // W57a (W57 review S1): Stripe takes a switch to a price with another interval, but restarts the billing period
+          // and charges the new price at once, which a move "from the next renewal" must never do. The fake has not
+          // modelled that charge: it fails loudly, so a send without the Worker's interval guard can't pass a test.
+          const intervalOf = (priceId: string): string => (this.pricesById.get(priceId)?.['recurring'] as { interval: string } | null | undefined)?.interval ?? 'month'
+          const from = sub.items.data[0]?.price.id
+          if (from !== undefined && intervalOf(from) !== intervalOf(item.price)) {
+            throw new Error(`The fake has not modelled a price switch across intervals (${intervalOf(from)} to ${intervalOf(item.price)}): Stripe would restart the period and charge at once.`)
+          }
           for (const one of sub.items.data) one.price = { id: item.price }
         }
         if (params?.default_payment_method !== undefined) {
@@ -1297,13 +1311,12 @@ export class FakeStripe implements StripeClient {
   }
 
   // W48 (brief item 4): `create` and `update` are what the seven legacy /api/catalog routes send, so step G's golden
-  // files can be recorded through them with this fake. They are not on the Worker's StripeClient: no app code makes
-  // or archives a price (G-plan L2; W57 adds what the membership plans need, with keys). A new price is live, takes
-  // its amount, currency, product, metadata and (for a plan) how often; an update sets `active` (archiving) only.
-  readonly prices: StripeClient['prices'] & {
-    create(params: Stripe.PriceCreateParams, options?: Stripe.RequestOptions): Promise<Stripe.Price>
-    update(id: string, params: Stripe.PriceUpdateParams, options?: Stripe.RequestOptions): Promise<Stripe.Price>
-  } = {
+  // files can be recorded through them with this fake. W57: they are on the Worker's StripeClient for membership plans
+  // only (G-plan L2), with keys, and `list` finds a price by its product (and `metadata`, which the caller reads). A
+  // new price is live, takes its amount, currency, product, metadata and (for a plan) how often; an update sets
+  // `active` (archiving) only. A list is newest first, a page at a time (10 unless `limit` says, at most 100;
+  // `starting_after` the last one seen), every price of the product unless `active` says which.
+  readonly prices: StripeClient['prices'] = {
     retrieve: (id, _params, options) =>
       this.run('prices.retrieve', { id }, options?.idempotencyKey ? options : undefined, () => {
         const price = this.pricesById.get(id)
@@ -1339,14 +1352,21 @@ export class FakeStripe implements StripeClient {
         if (params.active !== undefined) price['active'] = params.active
         return clone(price)
       }) as unknown as Promise<Stripe.Price>,
+
+    list: (params) =>
+      this.run('prices.list', params, undefined, () => {
+        const all = newestFirst([...this.pricesById.values()]).filter(
+          (price) => (params.product === undefined || price['product'] === params.product) && (params.active === undefined || price['active'] === params.active)
+        )
+        return pageOf(all, params.limit, params.starting_after)
+      }) as unknown as Promise<Stripe.ApiList<Stripe.Price>>,
   }
 
   // W48: as `prices.create` above, for the legacy routes only. A new product takes what sync-stripe sends (name,
-  // description, images, active, metadata); an update sets `active` only, which is all toggle-active sends.
-  readonly products: {
-    create(params: Stripe.ProductCreateParams, options?: Stripe.RequestOptions): Promise<Stripe.Product>
-    update(id: string, params: Stripe.ProductUpdateParams, options?: Stripe.RequestOptions): Promise<Stripe.Product>
-  } = {
+  // description, images, active, metadata); an update sets `active` only, which is all toggle-active sends. W57: on
+  // the Worker's StripeClient for membership plans, with `retrieve` and a `list` (newest first, a page at a time, as
+  // `prices.list`).
+  readonly products: StripeClient['products'] = {
     create: (params, options) =>
       this.run('products.create', params, options, () => {
         const id = this.nextId('prod')
@@ -1364,5 +1384,26 @@ export class FakeStripe implements StripeClient {
         if (params.active !== undefined) product['active'] = params.active
         return clone(product)
       }) as unknown as Promise<Stripe.Product>,
+
+    retrieve: (id) =>
+      this.run('products.retrieve', { id }, undefined, () => {
+        const product = this.productsById.get(id)
+        if (!product) throw fakeStripeErrors.missing(`product: '${id}'`)
+        return clone(product)
+      }) as unknown as Promise<Stripe.Product>,
+
+    list: (params) =>
+      this.run('products.list', params, undefined, () => {
+        const all = newestFirst([...this.productsById.values()]).filter((product) => params.active === undefined || product['active'] === params.active)
+        return pageOf(all, params.limit, params.starting_after)
+      }) as unknown as Promise<Stripe.ApiList<Stripe.Product>>,
   }
+}
+
+/** W57: one page of a list, as Stripe gives it: `limit` (10 unless said, at most 100) after `startingAfter`, and whether more follow. */
+function pageOf<T extends Record<string, unknown>>(all: T[], limit: number | undefined, startingAfter: string | undefined) {
+  const from = startingAfter === undefined ? 0 : all.findIndex((row) => row['id'] === startingAfter) + 1
+  const size = Math.min(Math.max(limit ?? 10, 1), 100)
+  const page = all.slice(from, from + size)
+  return { object: 'list' as const, data: page.map((row) => clone(row)), has_more: from + size < all.length, url: '/fake' }
 }

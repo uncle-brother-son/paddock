@@ -99,24 +99,10 @@ function kindOf(source: string): 'old' | 'thin' | 'mixed' {
   return old && !thin ? 'old' : thin && !old ? 'thin' : 'mixed'
 }
 
-/**
- * Briefs W55 + W56: the one old function moved in part, by decision. updateCatalogItemPrice prices products, add-ons,
- * public service types and session passes through the Worker (thin), and a membership plan still through the legacy
- * update-price route, its old branch unchanged, until W57 rebuilds plan prices (level A: G-plan 4.4). Held here to
- * exactly that: the Worker for the four kinds, and the legacy route called once, for a plan only. W57 removes this.
- * W55a (review N1): the legacy branch is reached by a plan only: any other kind is refused ("Invalid itemType")
- * straight before it.
- */
-const PARTLY_MOVED: Readonly<Record<string, (source: string) => boolean>> = {
-  updateCatalogItemPrice: (source) =>
-    /\bsetCatalogItemPrice\b/.test(source) &&
-    /product: 'products',\s*addon: 'addons',\s*service_type: 'service-types',\s*session_pass_type: 'session-pass-types'/.test(source) &&
-    (source.match(/paddockBackendApi2\.rawRequest/g) ?? []).length === 1 &&
-    (source.match(/path: '\/api\/catalog\/[a-z-]+'/g) ?? []).join() === "path: '/api/catalog/update-price'" &&
-    /if \(itemType !== 'membership_plan'\) throw new Error\('Invalid itemType'\)\s*return membershipPlanPrice\(/.test(source) &&
-    (source.match(/membershipPlanPrice\(/g) ?? []).length === 2 &&
-    !/\bpaddockData\b/.test(source),
-}
+// Briefs W55 + W56 held updateCatalogItemPrice here as the one old function moved in part (its membership plan branch
+// still on the legacy update-price route). Brief W57 moved that branch to the plan's own route
+// (/api/v1/staff/catalog/membership-plans/:id/details), so the exception is gone: every one of the 82 is the copy's
+// own, a thin call, or gone, with none moved in part.
 
 const workerFiles = sourceFiles(workerDir, ['app', 'server', 'lib', 'contracts', 'scripts', 'components', 'features']).concat(
   ['custom-worker.ts', 'middleware.ts'].map((file) => path.join(workerDir, file)).filter((file) => existsSync(file))
@@ -206,7 +192,6 @@ describe('W48: the frozen copy of the 82 old step G functions and the seven lega
       const source = readFileSync(original)
       if (sha256(source) === sha256(readFileSync(path.join(COPY_CODE, `${action}.ts`)))) state.same += 1
       else if (kindOf(withoutComments(source.toString('utf8'))) === 'thin') state.thin += 1
-      else if (PARTLY_MOVED[action]?.(withoutComments(source.toString('utf8')))) state.thin += 1
       else wrong.push(action)
     }
     // A changed old body would mean the golden files no longer say what the staff app does: decide then which they hold to.

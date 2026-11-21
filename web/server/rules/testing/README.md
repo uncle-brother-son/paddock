@@ -782,3 +782,48 @@ test plants each. The rule's own tests are `memberships/cancel.test.ts` (PGlite:
 refusing, no answer and reconcile both ways, the webhook between M1 and Stripe, the turns) and
 `memberships/cancel-postgres.test.ts` (real Postgres: two presses at once, and reconcile's row waiting for a press).
 `left.test.ts` runs reconcile "past the window" (`pastTheWindow`), because a step inside it is its press's.
+
+### W57: membership plans and settings (`replay/plan-admin-replay.test.ts`)
+
+The 26 plan and settings recordings W48 made (the list, create, details and price, on and off sale, GB1, GB2's plan,
+GB20, the settings and GB19), through the staff app's thin functions and the Worker's routes, as the screens press
+them (`admin-side.ts`): the edit dialog reads the list first for the row's stamp and its live members, and sends the
+count of members on the prices that change (`membersToMove`); the waiting period reads the Herd count first
+(`getMembershipSettingsQuote`) and sends it (`herdFlagsToChange`); the plan writes run with `plan_changes` on and
+the fake Stripe bound. What the plan answers carry beside the old rows (stamps, counts, a price change's outcome) is
+set aside (`withoutPlanExtras`), and the Worker's own rows (`plan.*`, `membership.price_moved`, the steps,
+`membership_settings.set`) are set aside and checked on their own (`ownRowProblems`).
+
+The named differences (`plan-differences.ts`) are grouped from `plan-difference-pins.ts`, the new side's value at
+every differing path, written from the replay's dump by `briefs/W57-logs/write-pins.py` (staff app repo; W57a wrote
+them again with `briefs/W57a-logs/write-pins.py`, when the old price left the press). Each
+recording's paths are claimed by exactly one named group (a path no group claims, or a group that claims none,
+throws), and each recording's raw differences are held to exactly the paths pinned. 8 match their golden files
+exactly; 18 have named differences: S3's staff check words, GB20's set-up (a product made on sale under the plan's
+key, no separate on-sale call; refused said plainly; a write failing is no answer; anything made is tidied), on and
+off sale (read first, keyed), GB1 and GB2 (the new price first under the record's key, only the members on the
+changed price moved, each keyed; W57a: the old price not archived by the press at all, but by reconcile once no
+pending order names it), Q53 (updateCatalogItemPrice for a plan with no count refused: no
+screen presses it), GB2's refusal (the price unchanged, the details D1 saved), and GB19 (one transaction: the fault
+the recording planted in the old function's second statement can't happen; `plans.test.ts` fails the refresh itself
+and the period goes back with it). Two recordings whose `call` is now refused replay with the refusal as an answer
+(`REFUSED_NOW`). A deliberate difference is caught: a price a penny out in an answer, and a member moved who
+shouldn't be.
+
+The rule's own tests: `catalog/plans.test.ts` (PGlite, through the routes: every refusal, the price change end to end
+with G-plan 4.9 item 5's three invariants on every price scenario, held both ways, a crash at each step then
+reconcile, the switch, Manage pricing, create, on and off sale, the T2 hook) and `catalog/plans-postgres.test.ts`
+(real Postgres: D2 against a cancel both ways, a payment date change and a card move; two price presses at once; T2
+against D2; the settings saved twice).
+
+**W57a (the W57 review's fixes).** `plans.test.ts` adds: S1, a subscription renewing yearly in Stripe on a row that
+says monthly (and the reverse) is refused for good with nothing sent and listed in words with Mark sorted, and the
+20-minute check does the same; S2, through the real order route with the archive in, on a saved card (the whole press
+inside the subscription call) and on the reader (the press between T1 and the tap): the order completes on the old
+price, T2 leaves the member's move, and the old price is archived only after (a run past the archive step's window
+while the order is pending leaves it, and lists nothing); L3, an off press made while an on press is at Stripe stands;
+L11, an empty waiting period on the quote is refused. `plans-postgres.test.ts` adds L6's T2-first half. The fake
+refuses a subscription price switch across intervals (it has not modelled Stripe's charge at once).
+S3: the staff app's kept press (`frontend/utils/membershipPlans.ts`, `pressToSend` and `keptAfter`) through the real
+details route in `plans.test.ts`: no answer, a reload with a new stamp, and the same key and body accepted (the form
+read again under that key is refused); `staff-app-helpers.test.ts` pins the dialogs to the helper.

@@ -432,8 +432,9 @@ describe("the stuck list's contract stays readable by the staff app published be
     // still reads an older Worker's list.
     // W47r, a named difference: `paymentRetries` (a membership payment tried again from the desk, on hold:
     // memberships/retry-payment.test.ts), a field of its own and optional in the contract, as those two.
-    expect(Object.keys(listed).sort()).toEqual(['alert', 'checkout', 'claims', 'flows', 'paymentDates', 'paymentRetries', 'refunds', 'steps', 'warnings', 'watched', 'watchedPayments', 'webhook'])
-    expect(listed).toMatchObject({ watchedPayments: [], webhook: null, paymentRetries: [] })
+    // W57, a named difference: `plans` (a membership plan's own lines: catalog/plans.test.ts), the same way.
+    expect(Object.keys(listed).sort()).toEqual(['alert', 'checkout', 'claims', 'flows', 'paymentDates', 'paymentRetries', 'plans', 'refunds', 'steps', 'warnings', 'watched', 'watchedPayments', 'webhook'])
+    expect(listed).toMatchObject({ watchedPayments: [], webhook: null, paymentRetries: [], plans: [] })
     const beforeW47 = { ...listed } as Partial<typeof listed>
     delete beforeW47.watchedPayments
     delete beforeW47.webhook

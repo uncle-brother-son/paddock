@@ -37,6 +37,26 @@ const dayAndMonth = (isoDate: string): string => {
 }
 
 /**
+ * W57a (W57 review S1): a member's move to their plan's new price, refused for good because the subscription in Stripe
+ * renews at another interval than the membership says. Switching the one item across intervals would make Stripe
+ * restart the billing period and charge the new price at once, so nothing is sent: a person decides which is right.
+ * `stripe` is the interval Stripe shows (null: Stripe didn't say), `membership` the one the step was left for.
+ */
+const EVERY: Readonly<Record<string, string>> = { month: 'every month', year: 'every year' }
+const SAYS: Readonly<Record<string, string>> = { month: 'monthly', year: 'yearly' }
+const stripeRenews = (stripe: string | null): string => (stripe && EVERY[stripe] ? `renews ${EVERY[stripe]} in Stripe` : "doesn't say in Stripe how often it renews")
+/** `membership` null: a move with no interval recorded, which the Worker never leaves (memberships/left.ts, checkWant). */
+const membershipSays = (membership: 'month' | 'year' | null): string => (membership ? `their membership says ${SAYS[membership] ?? membership}` : "the move doesn't say how often their membership renews")
+export const PRICE_MOVE_INTERVAL_WORDS = {
+  /** The refusal itself (the step's `refused` row, and what reconcile reports). */
+  refusal: (stripe: string | null, membership: 'month' | 'year' | null): string =>
+    `This member's subscription ${stripeRenews(stripe)} but ${membershipSays(membership)}, so it was not moved. Check which is right, move it in Stripe by hand, then press Mark sorted.`,
+  /** The stuck list's line. */
+  stuck: (subscriptionId: string, stripe: string | null, membership: 'month' | 'year' | null): string =>
+    `A membership plan's price was changed, but a member's subscription (${subscriptionId}) ${stripeRenews(stripe)} while ${membershipSays(membership)}, so it was not moved (moving it across would make Stripe charge the new price at once). Check which is right, move the subscription to the plan's new price in Stripe by hand, with no proration (or tell a manager), then press Mark sorted (needs the Issue refunds permission).`,
+} as const
+
+/**
  * A Stripe step left after the database change (memberships/left.ts, F-plan 4.10): the stuck list's line while the
  * automatic check is still sending it, and once Stripe has refused it for good (lead call L7). W40 (W36 review S2):
  * the `left` words say what to do if it stays (set it in Stripe by hand: the step is read first, so the next check
@@ -59,6 +79,15 @@ export const LEFT_STEP_WORDS = {
       `A customer's card was replaced, but Stripe refused to move a membership's subscription (${subscriptionId}) to the new card, so the automatic check has stopped trying and its next payment could still go to the old card. Set the subscription's payment method in Stripe by hand (or tell a manager), then press Mark sorted (needs the Issue refunds permission).`,
     missing: (subscriptionId: string): string =>
       `A customer's card was replaced, but Stripe can't find a membership's subscription (${subscriptionId}) with the club's payment account details, so the automatic check has stopped trying. Tell a manager: the subscription may have been deleted in Stripe, or belong to the other mode. Once the membership and Stripe agree, press Mark sorted (needs the Issue refunds permission).`,
+  },
+  /** W57 (Q53): a member's move to their plan's new price, from their next renewal (catalog/plans.ts). */
+  price: {
+    left: (subscriptionId: string): string =>
+      `A membership plan's price was changed, but a member's subscription (${subscriptionId}) couldn't be confirmed moved to the new price in Stripe yet, so their next renewal could still be at the old price. The automatic check tries again every 5 minutes. If this is still here after an hour, move the subscription to the plan's new price in Stripe by hand, with no proration (or tell a manager): the next check then sees it and takes it off the list.`,
+    refused: (subscriptionId: string): string =>
+      `A membership plan's price was changed, but Stripe refused to move a member's subscription (${subscriptionId}) to the new price, so the automatic check has stopped trying and they will keep renewing at the old price. Move the subscription to the plan's new price in Stripe by hand, with no proration (or tell a manager), then press Mark sorted (needs the Issue refunds permission).`,
+    missing: (subscriptionId: string): string =>
+      `A membership plan's price was changed, but Stripe can't find a member's subscription (${subscriptionId}) with the club's payment account details, so the automatic check has stopped trying. Tell a manager: the subscription may have been deleted in Stripe, or belong to the other mode. Once the membership and Stripe agree, press Mark sorted (needs the Issue refunds permission).`,
   },
   /**
    * W46: the check found the membership's own last day and the one Stripe's subscription gives are not the same

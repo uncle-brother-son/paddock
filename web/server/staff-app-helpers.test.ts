@@ -1676,6 +1676,102 @@ describe('staff app helpers', () => {
     })
   })
 
+  describe('W57: the membership plan and settings functions are thin calls to the Worker; the screens show the counts first and keep their press keys', () => {
+    const ID = '57575757-5757-4757-8757-575757575757'
+    const C = '/api/v1/staff/catalog'
+    const fn = async (name: string) => (await import(/* @vite-ignore */ path.join(appDir, `backend/paddock/${name}`))).default as (req: { params: Record<string, unknown>; user: typeof user }) => Promise<unknown>
+    const sent = () => rawRequest.mock.calls[0]?.[0] as { path: string; method: string; body?: unknown; queryParams?: Record<string, string>; headers: Record<string, string> }
+    const refused = (code: string, reason: string, message: string) => ({ data: { ok: false, error: { code, message, details: { reason, message, action: 'plan.details_set' } }, requestId: 'worker-request' } })
+    const source = (file: string) => readFileSync(path.join(appDir, file), 'utf8')
+
+    it.each([
+      ['getMembershipPlans', {}, 'GET', `${C}/membership-plans`],
+      ['getMembershipSettings', {}, 'GET', '/api/v1/staff/membership-settings'],
+      ['getMembershipSettingsQuote', { addonCreditWaitMonths: 6 }, 'GET', '/api/v1/staff/membership-settings/quote'],
+      ['setMembershipPlanActive', { planId: ID, active: false }, 'POST', `${C}/membership-plans/${ID}/active`],
+      ['setMembershipSettings', { addonCreditWaitMonths: 6, herdFlagsToChange: 2 }, 'POST', '/api/v1/staff/membership-settings'],
+    ] as const)('%s asks only the Worker, on its own route; nothing reads the database or the legacy routes', async (name, params, method, route) => {
+      const query = vi.fn()
+      const legacy = vi.fn()
+      vi.stubGlobal('paddockData', { query })
+      vi.stubGlobal('paddockBackendApi2', { rawRequest: legacy })
+      rawRequest.mockResolvedValue(success(name === 'getMembershipPlans' ? [] : { id: ID, active: false, addonCreditWaitMonths: 6, herdFlagsChanged: 0, herdFlagsToChange: 0, becomeHerd: 0, leaveHerd: 0, message: '' }))
+      await (await fn(name))({ params, user })
+      expect(sent()).toMatchObject({ method, path: route })
+      if (name === 'getMembershipSettingsQuote') expect(sent().queryParams).toEqual({ addonCreditWaitMonths: '6' })
+      if (name === 'setMembershipSettings') expect(sent().body).toEqual({ addonCreditWaitMonths: 6, herdFlagsToChange: 2 })
+      expect(legacy).not.toHaveBeenCalled()
+      expect(query).not.toHaveBeenCalled()
+    })
+
+    it("createMembershipPlan and setMembershipPlanDetails press under the dialog's key, answer a refusal as data in its words and no answer with `noAnswer`; the details send the stamp and the member count", async () => {
+      rawRequest.mockResolvedValue(refused('CONFLICT', 'changed_since', 'Changed.'))
+      expect(await (await fn('setMembershipPlanDetails'))({ params: { planId: ID, level: 'core', isUnlimited: false, sessionsIncluded: 4, addonsIncluded: 0, priceMonthly: 45, priceYearly: 400, membersToMove: 3, stamp: 'fields#s', idempotencyKey: 'dialog-key-5757-5757' }, user })).toEqual({ updated: false, reason: 'changed_since', message: 'Changed.' })
+      expect(sent()).toMatchObject({ path: `${C}/membership-plans/${ID}/details`, body: { membersToMove: 3, stamp: 'fields#s', priceMonthly: 45 }, headers: { 'Idempotency-Key': 'dialog-key-5757-5757' } })
+      expect((sent().body as Record<string, unknown>)['planId']).toBeUndefined()
+      rawRequest.mockReset()
+      rawRequest.mockRejectedValue(new Error('socket hang up'))
+      expect(await (await fn('setMembershipPlanDetails'))({ params: { planId: ID, level: 'core', isUnlimited: false, sessionsIncluded: 4, addonsIncluded: 0, priceMonthly: 45, priceYearly: 400 }, user })).toMatchObject({ updated: false, noAnswer: true })
+      expect(await (await fn('createMembershipPlan'))({ params: { name: 'X', level: 'core', sessionsIncluded: 1, addonsIncluded: 0, isUnlimited: false, priceMonthly: 10, priceYearly: null }, user })).toMatchObject({ created: false, noAnswer: true })
+      rawRequest.mockReset()
+      rawRequest.mockResolvedValue(success({ plan: { id: ID, name: 'Core' }, stamp: 'fields#t', priceChange: { changeId: 'c', state: 'done', membersToMove: 3, moved: 3, toMove: 0, message: '3 moved, 0 still to move.' } }))
+      expect(await (await fn('setMembershipPlanDetails'))({ params: { planId: ID, level: 'core', isUnlimited: false, sessionsIncluded: 4, addonsIncluded: 0, priceMonthly: 45, priceYearly: 400 }, user })).toEqual({ id: ID, name: 'Core', stamp: 'fields#t', priceChange: { changeId: 'c', state: 'done', membersToMove: 3, moved: 3, toMove: 0, message: '3 moved, 0 still to move.' } })
+    })
+
+    it("createMembershipPlan sends a price that is a number but not a real one as its text, so the Worker refuses it in the old words (JSON would make it null: no price)", async () => {
+      rawRequest.mockResolvedValue(refused('VALIDATION', 'invalid_params', 'Yearly price must be a non-negative number'))
+      await (await fn('createMembershipPlan'))({ params: { name: 'X', level: 'core', sessionsIncluded: 1, addonsIncluded: 0, isUnlimited: false, priceMonthly: 10, priceYearly: Number.NaN }, user })
+      expect(sent().body).toMatchObject({ priceMonthly: 10, priceYearly: 'NaN' })
+      rawRequest.mockReset()
+      rawRequest.mockResolvedValue(success({ id: ID }))
+      await (await fn('createMembershipPlan'))({ params: { name: 'X', level: 'core', sessionsIncluded: 1, addonsIncluded: 0, isUnlimited: false, priceMonthly: 10, priceYearly: null }, user })
+      expect(sent().body).toMatchObject({ priceYearly: null })
+    })
+
+    it('the screens: the edit dialog shows Q53\'s words first and sends the count and the stamp, keeps its key after no answer and can\'t be closed while a press runs; the create dialog likewise; the waiting period shows the Herd count before Confirm and sends it; New Order offers only plans set up in Stripe', () => {
+      const edit = source('frontend/components/EditMembershipPlanDialog.tsx')
+      expect(edit).toContain('planMoveWords(figures)')
+      expect(edit).toContain('membersToMove: confirming.membersToMove')
+      expect(edit).toContain('stamp: plan.stamp')
+      expect(edit).toContain('if (!next && submitting) return')
+      // W57a (W57 review S3): the press kept after no answer is its key and its exact body, sent again as it was
+      // (plans.test.ts presses the helper through the real route); the fields are locked while it is kept.
+      expect(edit).toContain('const press = pressToSend(kept, () => fresh as DetailsBody, () => crypto.randomUUID())')
+      expect(edit).toContain('setKept(keptAfter(press, result.noAnswer === true))')
+      expect(edit).toContain('setDetails({ ...press.body, idempotencyKey: press.key }')
+      expect(edit).toContain('const locked = submitting || kept !== null')
+      expect(edit).not.toContain('keyRef')
+      // W57a (L4): a Stripe refusal reloads the page too (D1 moved the stamp).
+      expect(edit).toContain("if (result.noAnswer || result.reason === 'stripe_refused') onReload()")
+      const create = source('frontend/components/CreateMembershipPlanDialog.tsx')
+      expect(create).toContain('const press = pressToSend(kept, () => fresh as CreateBody, () => crypto.randomUUID())')
+      expect(create).toContain('setKept(keptAfter(press, created.noAnswer === true))')
+      expect(create).toContain('createPlan({ ...press.body, idempotencyKey: press.key }')
+      expect(create).not.toContain('keyRef')
+      expect(create).toContain('if (submitting) return')
+      const page = source('frontend/pages/MembershipPlansPage.tsx')
+      expect(page).toContain('herdFlagsToChange: herdQuote.herdFlagsToChange')
+      expect(page).toContain('quoteSettings(')
+      expect(source('frontend/components/checkout/PlanSections.tsx')).toContain("p.setup === 'ready'")
+      expect(source('frontend/components/checkout/BookingSection.tsx')).toContain("p.setup === 'ready'")
+      // The dialog's words are the Worker's (the same sentence for the same figures).
+      expect(source('frontend/utils/membershipPlans.ts')).toContain("`${month}, and ${year}, from their next renewal.`")
+    })
+
+    it("the dialog's words and which prices it counts are the Worker's own, for every case", async () => {
+      const screen = (await import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/membershipPlans.ts'))) as { planMoveWords: (f: unknown) => string; planPricesToChange: (p: unknown, t: unknown) => { monthly: boolean; yearly: boolean } }
+      const { planMoveWords } = await import('@/server/rules/catalog/plan-failure-messages')
+      for (const figures of [{}, { monthly: { members: 3, price: 50 } }, { yearly: { members: 1, price: 500 } }, { monthly: { members: 1, price: 45 }, yearly: { members: 2, price: 450 } }, { monthly: { members: 0, price: 45 } }]) {
+        expect(screen.planMoveWords(figures), JSON.stringify(figures)).toBe(planMoveWords(figures))
+      }
+      expect(planMoveWords({ monthly: { members: 3, price: 50 } })).toBe('3 members on this plan will pay £50.00 a month from their next renewal.')
+      const plan = { price_monthly: '40.00', price_yearly: '400.00', stripe_price_id: 'p', stripe_price_id_yearly: null }
+      // "40" is £40.00: not a change. The yearly price has no Stripe price yet while one above £0 is stored: it is made.
+      expect(screen.planPricesToChange(plan, { monthly: 40, yearly: 400 })).toEqual({ monthly: false, yearly: true })
+      expect(screen.planPricesToChange({ ...plan, stripe_price_id_yearly: 'y' }, { monthly: 40.01, yearly: 400 })).toEqual({ monthly: true, yearly: false })
+    })
+  })
+
   describe('W55 + W56: the catalogue functions are thin calls to the Worker', () => {
     const INACTIVE = 'This staff account is inactive. Ask an admin to reactivate it.'
     const NO_ANSWER = "That didn't get an answer, so it may or may not have been saved. The screen has been reloaded: check it, and press again if it hasn't changed."
@@ -1780,20 +1876,21 @@ describe('staff app helpers', () => {
       await expect((await fn('setSessionPassLevel'))({ params: { passTypeId: ID, level: 'core' }, user })).rejects.toThrow(new Error(NO_ANSWER))
     })
 
-    it("updateCatalogItemPrice: the four kinds go to the Worker; a membership plan still goes to the legacy route, as before (W57)", async () => {
+    it("updateCatalogItemPrice: the four kinds go to the Worker's price routes; W57, a named difference: a membership plan goes to the plan's own details route (no longer the legacy one), with its member count", async () => {
       for (const [itemType, folder] of [['addon', 'addons'], ['service_type', 'service-types'], ['session_pass_type', 'session-pass-types']] as const) {
         rawRequest.mockReset()
         rawRequest.mockResolvedValue(success({ success: true, item: { id: ID }, pricesUpdated: {} }))
         await (await fn('updateCatalogItemPrice'))({ params: { itemType, itemId: ID, basePrice: 5 }, user })
         expect(sent().path).toBe(`${C}/${folder}/${ID}/price`)
       }
-      const legacy = vi.fn().mockResolvedValue({ data: { success: true, item: { id: ID }, pricesUpdated: {} } })
+      const legacy = vi.fn()
       vi.stubGlobal('paddockBackendApi2', { rawRequest: legacy })
-      vi.stubGlobal('paddockData', { query: vi.fn().mockResolvedValue({ data: [{ id: 'staff', can_manage_pricing: true, active: true }] }) })
+      vi.stubGlobal('paddockData', { query: vi.fn() })
       rawRequest.mockReset()
-      await (await fn('updateCatalogItemPrice'))({ params: { itemType: 'membership_plan', itemId: ID, monthlyPrice: 45 }, user })
-      expect(legacy).toHaveBeenCalledWith(expect.objectContaining({ path: '/api/catalog/update-price', body: { itemType: 'membership_plan', itemId: ID, monthlyPrice: 45 } }))
-      expect(rawRequest).not.toHaveBeenCalled()
+      rawRequest.mockResolvedValue(success({ plan: { id: ID }, stamp: 'fields#1', priceChange: null, pricesUpdated: { price_monthly: 45 } }))
+      expect(await (await fn('updateCatalogItemPrice'))({ params: { itemType: 'membership_plan', itemId: ID, monthlyPrice: 45, membersToMove: 3 }, user })).toEqual({ success: true, item: { id: ID }, pricesUpdated: { price_monthly: 45 }, priceChange: null })
+      expect(sent()).toMatchObject({ method: 'POST', path: `${C}/membership-plans/${ID}/details`, body: { monthlyPrice: 45, membersToMove: 3 } })
+      expect(legacy).not.toHaveBeenCalled()
     })
 
     it('a price of Infinity is sent (as null) so the Worker refuses it in the old words, never dropped as no price at all', async () => {

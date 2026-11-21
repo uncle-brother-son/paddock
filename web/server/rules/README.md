@@ -2731,3 +2731,76 @@ Tests: `bookings/w53-labels.test.ts` (the review's example, the older of two, a 
 payment short of the seat, the card portion in the words, a pending and a failed order left alone);
 `replay/remove-guest-payment-first-differences.ts` names the three booking replay scenarios whose refund now goes to a
 different payment (`testing/README.md`).
+
+## Membership plans and settings on the Worker (W57): the only level A work in step G
+
+`catalog/plans.ts` (the presses and reads), `catalog/plan-stripe.ts` (the Stripe side: the records, S1, D2, S2, the
+moves, a plan's own Stripe steps, reconcile's turns and the stuck list's lines), `catalog/plan-failure-messages.ts`
+(the new words). Routes under `/api/v1/staff/`: `GET`/`POST catalog/membership-plans`,
+`POST catalog/membership-plans/:planId/details` (also updateCatalogItemPrice's plan branch, as a price-only press),
+`POST catalog/membership-plans/:planId/active`, `GET`/`POST membership-settings`, `GET membership-settings/quote`.
+The three plan writes are gated by `plan_changes` (`plan-switch.ts`) before anything is read; the reads and the
+settings are not.
+
+**A price change (G-plan 4.4; GB1, GB2; Wayne's Q53: members move, shown first).**
+- **D1** (one transaction under the plan's lock): Manage pricing; the old checks and words (and W53 L7's pounds and
+  pence); the plan found; its stamp, for a details press (W54a: the seven columns the dialog sends back,
+  `fieldsStampSql`, so an on/off press or a Sanity thumbnail doesn't refuse an edit; W57a: a Sanity republish does,
+  as the webhook rewrites `name`, which is safe); not still being set up in Stripe;
+  the details written (`plan.details_set`, before and after). When a price changes (as the old function decided: a
+  price typed that differs in pence, or a stored price above £0 with no Stripe price yet): refused while another
+  change on the plan is open (its record not done or failed, or its moves still inside their press's window); refused
+  without the member count the dialog showed, or when it has changed (live = active or past_due with a subscription,
+  on the changing frequency; no frequency counts as monthly, as the legacy route had it); then the record
+  (`plan.price_change`, `started`, with the old and new prices, the product, and the count).
+- **S1**: for a plan never set up, the product first (key `<changeId>:product`); then each new price (keys
+  `<changeId>:monthly`, `:yearly`; `metadata.change_id`, `plan_id`, `frequency`). Refused: the record `failed`, the
+  plan's price unchanged, Stripe's reason in words (anything made is archived as a plan step). Unclear: `held`.
+- **D2** (one transaction): the plan's price and its new id together (the plan never names an archived price); each
+  live member on a changed price locked (plan, then membership: LOCK_ORDER) and given a `price` step
+  (`memberships/left.ts`, with W57a's `interval`: `month` or `year` from the member's frequency) with a
+  `membership.price_moved` row; a plan step to archive each old price; `done`.
+- **The moves** (the press): each member's step sent (read first; the one item switched with
+  `proration_behavior: 'none'`; a membership that has ended here closes with no Stripe call; W57a, the W57 review's
+  S1: a subscription Stripe shows renewing at another interval than the step's is never sent, since Stripe would
+  restart its period and charge at once: refused for good, listed with Mark sorted, in words; the 20-minute check
+  does the same). Answers "N moved, M still to move."
+- **S2** (W57a, the W57 review's S2: not in the press). Reconcile archives each old price (read first) only past its
+  step's window and only while no pending order names it (`orders.reader_payment.membership.stripe_price_id`;
+  `planStepDue`). A sale that read the old price before D2 (saved card: T1 to the subscription; reader: T1 to the
+  finalise after the tap) makes its subscription on it, still active, and its T2 then leaves that member's own move.
+  Waiting for an order, the archive step isn't listed. Before W57a the press archived it at once and a reader sale
+  tapped in between was refused at finalise and its tap refunded. (`failPriceChange` and `failPlanCreate` archive
+  only prices nothing names.)
+- **Reconcile** (after F's steps): a change held, or past its window with no `done`: the product's prices listed by
+  `metadata.change_id`; all found: D2 and the sends; none or only some: `failed` (it never makes a price). Left moves
+  are F's steps (sent past the window, refused for good listed with Mark sorted, checked 20 minutes after closing).
+- **An order's T2** (`orders/finalise-order.ts`): a membership order takes its plan's row FOR SHARE first (before the
+  order's lock: admin_row before order), so T2 and D2 take turns; a subscription made on a price D2 has since replaced
+  gets its own `price` step (`followPlanPrice`). So every live member is moved once or listed.
+
+**A new plan (GB20).** The row off sale and its record (`plan.created`) in one transaction; the product (made on sale)
+and prices under keys from the plan's id; the ids written and the plan put on sale in one transaction. Refused for
+good: `failed`; the row stays off sale with no Stripe ids and is left off every list (the Worker has no right to
+delete a plan row); anything made is archived or taken off sale as plan steps. Unclear: `held`; reconcile finds what
+was made (products and prices listed by `metadata.plan_id`) and makes what wasn't, under the same keys, then finishes.
+
+**On and off sale.** On: refused while being set up, with no product, or while an off step's press may still be
+sending it; Stripe's product put on sale first (read first), then the row, with a product step recorded `done`.
+Off: the row first, then a product step left and sent. Live members are never touched. Every product step that closes
+is checked 20 minutes later against the row (`checkProduct`): a late send that undid it is put right by a new step.
+The fake refuses a subscription on an off-sale product's active price (Stripe's documents don't say; the lead checks
+it in test mode).
+
+**Membership settings (GB19, level B).** `GET membership-settings/quote` counts who becomes or stops being a Herd
+member (the same rule as `refresh_herd_flags()`: every membership with no override, ended ones included). The press
+confirms that count under the settings row's lock, sets the period and runs the refresh in one transaction, with a
+`membership_settings.set` row.
+
+**The stuck list** gains `plans` (a change held, a plan half made, a plan step left past its window or refused: that
+one with Mark sorted, close kind `plan_step`) and a membership step kind `price` (`what: 'plan_price'`).
+
+Tests: `catalog/plans.test.ts` (reads, settings, details, every refusal, the price change end to end with the three
+invariants, held both ways, refused, a crash at each step, a move refused or unclear, the switch, Manage pricing,
+create, on/off, the T2 hook); `catalog/plans-postgres.test.ts` (7 races on real Postgres);
+`replay/plan-admin-replay.test.ts` with `plan-differences.ts` (`testing/README.md`).

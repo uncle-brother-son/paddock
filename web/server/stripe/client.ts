@@ -79,8 +79,26 @@ export interface StripeClient {
     createBalanceTransaction(id: string, params: Stripe.CustomerCreateBalanceTransactionParams, options?: Stripe.RequestOptions): Promise<Stripe.CustomerBalanceTransaction>
     listBalanceTransactions(id: string, params?: Stripe.CustomerListBalanceTransactionsParams, options?: Stripe.RequestOptions): Promise<Stripe.ApiList<Stripe.CustomerBalanceTransaction>>
   }
+  /**
+   * W57 (G-plan 4.4): a membership plan's prices, and nothing else's (lead call L2). `create` under a key from the
+   * plan's record (its price change, or the plan itself); `update` archives an old price (`active: false` only);
+   * `list` finds a price a press made but never heard back about, by its product and `metadata`.
+   */
   prices: {
     retrieve(id: string, params?: Stripe.PriceRetrieveParams, options?: Stripe.RequestOptions): Promise<Stripe.Price>
+    create(params: Stripe.PriceCreateParams, options?: Stripe.RequestOptions): Promise<Stripe.Price>
+    update(id: string, params: Stripe.PriceUpdateParams, options?: Stripe.RequestOptions): Promise<Stripe.Price>
+    list(params: Stripe.PriceListParams, options?: Stripe.RequestOptions): Promise<Stripe.ApiList<Stripe.Price>>
+  }
+  /**
+   * W57: a membership plan's Stripe product: made under a key from the plan, put on or off sale (`active` only), read,
+   * and listed to find one a press made but never heard back about (`metadata.plan_id`).
+   */
+  products: {
+    create(params: Stripe.ProductCreateParams, options?: Stripe.RequestOptions): Promise<Stripe.Product>
+    update(id: string, params: Stripe.ProductUpdateParams, options?: Stripe.RequestOptions): Promise<Stripe.Product>
+    retrieve(id: string, params?: Stripe.ProductRetrieveParams, options?: Stripe.RequestOptions): Promise<Stripe.Product>
+    list(params: Stripe.ProductListParams, options?: Stripe.RequestOptions): Promise<Stripe.ApiList<Stripe.Product>>
   }
 }
 

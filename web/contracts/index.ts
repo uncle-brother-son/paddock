@@ -22,3 +22,5 @@ export * from './payment-retry'
 export * from './admin'
 // W55 + W56: the catalogue's routes' own inputs and answers, after admin's, so every earlier union keeps its order.
 export * from './catalog-admin'
+// W57: membership plans' and settings' routes' own inputs and answers, last, for the same reason.
+export * from './plans-admin'

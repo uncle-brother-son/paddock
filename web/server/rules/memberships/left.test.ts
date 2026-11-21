@@ -148,12 +148,20 @@ describe('a step is written with its database change (leaveStep)', () => {
       await expect(leave('cancel_at', { cancelAt: 1796860800.5 })).rejects.toThrow('needs cancelAt')
       await expect(leave('payment_method', {})).rejects.toThrow('needs paymentMethod')
       await expect(leave('payment_method', { paymentMethod: '  ' })).rejects.toThrow('needs paymentMethod')
+      // W57: a member's move to a plan's new price must name the price.
+      await expect(leave('price', {})).rejects.toThrow('needs price')
+      await expect(leave('price', { price: ' ' })).rejects.toThrow('needs price')
+      // W57a (W57 review S1): and how often it renews, so a send never moves a subscription across intervals.
+      await expect(leave('price', { price: 'price_new' })).rejects.toThrow('needs interval')
+      await expect(leave('price', { price: 'price_new', interval: 'week' as 'month' })).rejects.toThrow('needs interval')
       await expect(leave('cancel_at', { cancelAt: ENDS }, '')).rejects.toThrow('needs its membership and its subscription')
       expect(await rows()).toEqual([])
       // An undo's want is "no end": null is a want, not a missing one. Only what the kind wants is kept.
       expect((await leave('cancel_at', { cancelAt: null, paymentMethod: 'pm_stray' })).want).toEqual({ cancelAt: null })
       expect((await leave('payment_method', { paymentMethod: 'pm_new', cancelAt: ENDS })).want).toEqual({ paymentMethod: 'pm_new' })
-      expect(STEP_KINDS).toEqual(['cancel_at', 'payment_method'])
+      expect((await leave('price', { price: 'price_new', interval: 'year', cancelAt: ENDS })).want).toEqual({ price: 'price_new', interval: 'year' })
+      // W57, a named difference: `price`, a member moved to their plan's new price (catalog/plans.ts, Q53).
+      expect(STEP_KINDS).toEqual(['cancel_at', 'payment_method', 'price'])
     })
   })
 
@@ -600,8 +608,9 @@ describe('what the list reads', () => {
       // W41: and `paymentDates`, a field of its own too.
       // W47, a named difference: and `watchedPayments` and `webhook`, each a field of its own, which that app drops too.
       // W47r, a named difference: and `paymentRetries` (a payment tried again from the desk, on hold), the same way.
-      expect(Object.keys(list).sort()).toEqual(['alert', 'checkout', 'claims', 'flows', 'paymentDates', 'paymentRetries', 'refunds', 'steps', 'warnings', 'watched', 'watchedPayments', 'webhook'])
-      expect(list).toMatchObject({ checkout: [], flows: [], claims: [], refunds: [], warnings: [], watched: [], paymentDates: [], watchedPayments: [], webhook: null, paymentRetries: [], alert: null })
+      // W57, a named difference: and `plans` (a membership plan's own lines), the same way.
+      expect(Object.keys(list).sort()).toEqual(['alert', 'checkout', 'claims', 'flows', 'paymentDates', 'paymentRetries', 'plans', 'refunds', 'steps', 'warnings', 'watched', 'watchedPayments', 'webhook'])
+      expect(list).toMatchObject({ checkout: [], flows: [], claims: [], refunds: [], warnings: [], watched: [], paymentDates: [], watchedPayments: [], webhook: null, paymentRetries: [], plans: [], alert: null })
       expect(list.steps.map((step) => [step.stepId, step.state]).sort()).toEqual([[left.id, 'left'], [refused.id, 'refused']].sort())
       // The route's own output check takes it.
       const parsed = stuckListOutputSchema.parse(list)

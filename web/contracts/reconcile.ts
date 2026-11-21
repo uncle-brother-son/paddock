@@ -64,8 +64,10 @@ export const reconcileItemSchema = z.object({
    * W41: `date_change` is a membership's payment date change still pending (server/rules/memberships/payment-date.ts).
    * W47r: `payment_retry` is a past-due membership's payment tried again from the desk, with no clear answer yet
    * (server/rules/memberships/retry-payment.ts). The run only reads Stripe for it.
+   * W57: `plan` is a membership plan's Stripe side (server/rules/catalog/plan-stripe.ts): a price change held, a plan
+   * half made, an old price to archive or the product on or off sale. Last, so the older values keep their order.
    */
-  kind: z.enum(['order', 'flow', 'refund', 'claim', 'step', 'date_change', 'payment_retry']),
+  kind: z.enum(['order', 'flow', 'refund', 'claim', 'step', 'date_change', 'payment_retry', 'plan']),
   id: z.string(),
   outcome: z.enum(['finalised', 'undone', 'settled_elsewhere', 'refund_pending', 'refund_confirmed', 'refund_failed', 'left']),
   reason: z.string().optional(),
@@ -154,6 +156,12 @@ export const stuckCloseKindSchema = z.enum([
   'payment_watch',
   'retry_paid_after_end',
   'paid_after_end_owed',
+  /**
+   * W57: a membership plan's Stripe step that Stripe refused for good (`plans` on the list: an old price to archive,
+   * or the plan's product on or off sale), once a person has put Stripe right by hand: recorded as sorted. Nothing is
+   * sent. `orderId` is the step's id. Last, so the older values keep their order.
+   */
+  'plan_step',
 ])
 export type StuckCloseKind = z.infer<typeof stuckCloseKindSchema>
 
@@ -282,8 +290,8 @@ export const stuckStepSchema = z.object({
   stepId: z.string(),
   membershipId: z.string(),
   subscriptionId: z.string(),
-  /** What the step sets on the subscription. */
-  step: z.enum(['cancel_at', 'payment_method']),
+  /** What the step sets on the subscription. W57: `price`, a member moved to their plan's new price (last, so the older values keep their order). */
+  step: z.enum(['cancel_at', 'payment_method', 'price']),
   /**
    * W40: what it is, for the screen: a cancel date to set (`cancel_date`, with `lastDay`), a cancel date to clear
    * (`clear_cancel_date`: an undo), or the card to charge (`card`).
@@ -291,8 +299,9 @@ export const stuckStepSchema = z.object({
    * live in Stripe, found by the automatic check. Not a step: `stepId` is the line's own id, `state` is `refused`
    * (for a person: a manager cancels the subscription in Stripe) and there is no `close`; it goes once Stripe has
    * ended the subscription. Last in the list, so the older values keep their order.
+   * W57: or `plan_price`, a member's move to their plan's new price from their next renewal (step `price`).
    */
-  what: z.enum(['cancel_date', 'clear_cancel_date', 'card', 'still_live']),
+  what: z.enum(['cancel_date', 'clear_cancel_date', 'card', 'still_live', 'plan_price']),
   /** `cancel_date`: the membership's last day of access the step sets (YYYY-MM-DD, London). `still_live`: the last day that has passed. */
   lastDay: z.string().optional(),
   customerId: z.string().nullable(),
@@ -404,6 +413,24 @@ export const stuckWebhookNoticeSchema = z.object({
 })
 export type StuckWebhookNoticeOutput = z.infer<typeof stuckWebhookNoticeSchema>
 
+/**
+ * W57 (G-plan 4.7): a membership plan's own line: a price change held for the automatic check (`price_change`), a
+ * plan whose Stripe set-up didn't finish (`plan_create`), or a plan step (the product on or off sale, an old price to
+ * archive) left past its window or refused by Stripe for good (that one with `close`, kind `plan_step`). A member's
+ * move to a new price is a membership step (`steps`, `plan_price`).
+ */
+export const stuckPlanSchema = z.object({
+  lineId: z.string(),
+  planId: z.string(),
+  planName: z.string().nullable(),
+  what: z.enum(['price_change', 'plan_create', 'product_on', 'product_off', 'archive_price']),
+  state: z.enum(['left', 'refused']),
+  at: z.string(),
+  words: z.string(),
+  close: stuckCloseTargetSchema.optional(),
+})
+export type StuckPlanOutput = z.infer<typeof stuckPlanSchema>
+
 export const stuckListOutputSchema = z.object({
   checkout: z.array(stuckOrderSchema),
   flows: z.array(stuckFlowSchema),
@@ -439,6 +466,11 @@ export const stuckListOutputSchema = z.object({
    * this one as before.
    */
   paymentRetries: z.array(stuckPaymentRetrySchema).optional(),
+  /**
+   * W57: membership plans' own lines. A field of its own and optional, as `paymentRetries`: a staff app with W57's
+   * types still reads an older Worker's list, and an older staff app reads this one as before.
+   */
+  plans: z.array(stuckPlanSchema).optional(),
   alert: z.object({ at: z.string(), words: z.string() }).nullable(),
 })
 export type StuckListOutput = z.infer<typeof stuckListOutputSchema>

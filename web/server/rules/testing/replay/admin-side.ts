@@ -1,7 +1,8 @@
 import { vi } from 'vitest'
 import type { Db } from '@/server/db'
 import type { FakeStripe } from '@/server/stripe/fake'
-import { throughStaffApp } from './booking-side'
+import { throughStaffApp, withSwitch } from './booking-side'
+import { replayStripe } from './stripe-binding'
 import { withCanonicalGoneNumbers, type Recording, type Row } from './compare'
 import { oldSide, type ReplaySide } from './harness'
 
@@ -74,8 +75,18 @@ export const W56_WRITES: ReadonlySet<string> = new Set([
   'setGiftCardTypeExpiry',
 ])
 export const W56_ACTIONS: ReadonlySet<string> = new Set([...W56_READS, ...W56_WRITES])
+/**
+ * W57: membership plans and settings: the two reads and four writes (updateCatalogItemPrice's plan branch moved with
+ * them, on W55's function). The plan writes touch Stripe and are gated by `plan_changes`: this side presses them with
+ * the kind on and the fake Stripe bound.
+ */
+export const W57_READS: ReadonlySet<string> = new Set(['getMembershipPlans', 'getMembershipSettings'])
+export const W57_WRITES: ReadonlySet<string> = new Set(['createMembershipPlan', 'setMembershipPlanActive', 'setMembershipPlanDetails', 'setMembershipSettings'])
+export const W57_ACTIONS: ReadonlySet<string> = new Set([...W57_READS, ...W57_WRITES])
 /** Every old step G function now a thin call to the Worker. */
-export const STEP_G_ACTIONS_MOVED: ReadonlySet<string> = new Set([...W49_ACTIONS, ...W54_ACTIONS, ...W50_ACTIONS, ...W51_ACTIONS, ...W52_ACTIONS, ...W53_ACTIONS, ...W55_ACTIONS, ...W56_ACTIONS])
+export const STEP_G_ACTIONS_MOVED: ReadonlySet<string> = new Set([...W49_ACTIONS, ...W54_ACTIONS, ...W50_ACTIONS, ...W51_ACTIONS, ...W52_ACTIONS, ...W53_ACTIONS, ...W55_ACTIONS, ...W56_ACTIONS, ...W57_ACTIONS])
+/** W57: the switch kind the plan writes need (and updateCatalogItemPrice for a plan). */
+const PLAN_KIND_ON = 'plan_changes'
 
 /** The ones that add something: their dialogs keep a press key, and their wrappers answer a refusal as data. */
 const CREATES: ReadonlySet<string> = new Set([
@@ -88,6 +99,9 @@ const CREATES: ReadonlySet<string> = new Set([
   'adjustVariantStock',
   'createServiceTypePriceTier',
   'createGiftCardPreset',
+  // W57: a new plan, and a plan's details (a price change in it): their dialogs keep the key after no answer.
+  'createMembershipPlan',
+  'setMembershipPlanDetails',
 ])
 /**
  * W51: the refusals createOneOffSession answered as data before it was a thin call, with these reasons and no words
@@ -95,9 +109,9 @@ const CREATES: ReadonlySet<string> = new Set([
  */
 const ONE_OFF_REASONS_ANSWERED: ReadonlySet<string> = new Set(['service_type_not_found', 'service_type_incomplete', 'slot_already_exists'])
 /** The moved reads GB14's recording makes with `call`, which stops at the first throw. */
-const READS: ReadonlySet<string> = new Set(['getStaff', 'getPromoCodes', 'getPromoCodeRedemptions', ...W50_READS, ...W51_READS, ...W52_READS, ...W53_READS, ...W55_READS, ...W56_READS])
+const READS: ReadonlySet<string> = new Set(['getStaff', 'getPromoCodes', 'getPromoCodeRedemptions', ...W50_READS, ...W51_READS, ...W52_READS, ...W53_READS, ...W55_READS, ...W56_READS, ...W57_READS])
 
-type CreateAnswer = { created?: boolean; adjusted?: boolean; reason?: string; message?: string; noAnswer?: boolean } | null
+type CreateAnswer = { created?: boolean; adjusted?: boolean; updated?: boolean; reason?: string; message?: string; noAnswer?: boolean } | null
 
 /**
  * A create as its dialog presses it (NewStaffDialog, PromoCodeDialog; W51: CreateOneOffSessionDialog,
@@ -114,7 +128,8 @@ export function createAsTheDialogPresses(action: string): (db: Db, params: unkno
     const answer = (await throughStaffApp(action)(db, { ...(params as object), idempotencyKey })) as CreateAnswer
     held = answer?.noAnswer ? idempotencyKey : null
     const answeredAsData = action === 'createOneOffSession' && typeof answer?.reason === 'string' && ONE_OFF_REASONS_ANSWERED.has(answer.reason)
-    if (answer && (answer.created === false || answer.adjusted === false) && !answeredAsData) throw new Error(String(answer.message))
+    // W57: a plan's details answer a refusal as `updated: false`, as a create answers `created: false`.
+    if (answer && (answer.created === false || answer.adjusted === false || answer.updated === false) && !answeredAsData) throw new Error(String(answer.message))
     return answer
   }
 }
@@ -224,6 +239,79 @@ const STAMP_THE_SCREEN_LOADED: Readonly<Record<string, (db: Db, params: Record<s
     const types = (await throughStaffApp('getGiftCardTypes')(db, {})) as Array<{ id?: unknown; stamp?: unknown }>
     return types.find((type) => type.id === params['giftCardTypeId'])?.stamp
   },
+  // W57. Catalog → Membership Plans: the plan's row's stamp (the edit dialog opens on a row of the list).
+  async setMembershipPlanDetails(db, params) {
+    const plans = (await throughStaffApp('getMembershipPlans')(db, {})) as Array<{ id?: unknown; stamp?: unknown }>
+    return plans.find((plan) => plan.id === params['planId'])?.stamp
+  },
+}
+
+// --- W57: the counts a plan's price change and the waiting period confirm (Q53, GB19). The old functions took none.
+
+type PlanListed = { id?: unknown; price_monthly?: unknown; price_yearly?: unknown; stripe_price_id?: unknown; stripe_price_id_yearly?: unknown; members_monthly?: unknown; members_yearly?: unknown }
+const pennyOf = (value: unknown): number | null => (value === null || value === undefined || value === '' ? null : Math.round(Number(value) * 100))
+/** Whether a typed price changes the plan's (as the dialog and the Worker decide it: frontend/utils/membershipPlans.ts). */
+const priceChanges = (stored: unknown, priceId: unknown, typed: unknown): boolean =>
+  typed !== undefined && (stored === null || pennyOf(stored) !== pennyOf(typed) || (priceId === null && stored !== null && Number(stored) > 0))
+
+/**
+ * W57. The edit dialog says how many members will move to a changed price before the press, from the row it opened on,
+ * and sends that count (`membersToMove`); the waiting period control reads the Herd count for the period typed and
+ * sends it (`herdFlagsToChange`). A golden file's params have neither (the old functions counted nothing), so each is
+ * read just before the press, as the screens read it. A read the Worker refuses gives none; the press is then refused
+ * before any count is looked at, as the recording has it. updateCatalogItemPrice for a plan is pressed by no screen,
+ * so it is sent as recorded, with no count.
+ */
+async function withTheCountsShown(action: string, db: Db, params: unknown): Promise<unknown> {
+  if (!isRecord(params)) return params
+  try {
+    if (action === 'setMembershipPlanDetails' && !('membersToMove' in params)) {
+      const plans = (await throughStaffApp('getMembershipPlans')(db, {})) as PlanListed[]
+      const row = plans.find((plan) => plan.id === params['planId'])
+      if (!row) return params
+      const monthly = priceChanges(row.price_monthly ?? null, row.stripe_price_id ?? null, params['priceMonthly'])
+      const yearly = priceChanges(row.price_yearly ?? null, row.stripe_price_id_yearly ?? null, params['priceYearly'])
+      if (!monthly && !yearly) return params
+      return { ...params, membersToMove: (monthly ? Number(row.members_monthly ?? 0) : 0) + (yearly ? Number(row.members_yearly ?? 0) : 0) }
+    }
+    if (action === 'setMembershipSettings' && !('herdFlagsToChange' in params)) {
+      const quote = (await throughStaffApp('getMembershipSettingsQuote')(db, { addonCreditWaitMonths: params['addonCreditWaitMonths'] })) as { herdFlagsToChange?: unknown }
+      return typeof quote.herdFlagsToChange === 'number' ? { ...params, herdFlagsToChange: quote.herdFlagsToChange } : params
+    }
+  } catch {
+    // The screen's read was refused, or failed: it has no count to send.
+  }
+  return params
+}
+
+/** W57: what the plan list, a plan's saved details and a new plan answer beside the old function's row, set aside and noted. */
+export interface AnsweredPlanExtra {
+  action: string
+  where: string
+  value: unknown
+}
+
+/**
+ * W57. Set aside before the answers compare: each plan row's stamp, live member counts, set-up state and open change
+ * (the list); a saved plan's new stamp and its price change (setMembershipPlanDetails); a new plan's held set-up
+ * (createMembershipPlan); a plan price's change (updateCatalogItemPrice). Each is noted in `found` for the test.
+ */
+function withoutPlanExtras(action: string, answer: unknown, found: AnsweredPlanExtra[] | undefined): unknown {
+  const aside = (row: Record<string, unknown>, fields: readonly string[], where: string): Record<string, unknown> => {
+    const rest: Record<string, unknown> = { ...row }
+    for (const field of fields) {
+      if (field in rest) {
+        found?.push({ action, where: `${where}${field}`, value: rest[field] })
+        delete rest[field]
+      }
+    }
+    return rest
+  }
+  if (action === 'getMembershipPlans' && Array.isArray(answer)) return answer.map((row: unknown, i) => (isRecord(row) ? aside(row, ['stamp', 'members_monthly', 'members_yearly', 'setup', 'price_change_open'], `[${i}].`) : row))
+  if (action === 'setMembershipPlanDetails' && isRecord(answer)) return aside(answer, ['stamp', 'priceChange'], '')
+  if (action === 'createMembershipPlan' && isRecord(answer)) return aside(answer, ['create'], '')
+  if (action === 'updateCatalogItemPrice' && isRecord(answer)) return aside(answer, ['priceChange'], '')
+  return answer
 }
 /** The edits that carry a stamp. */
 export const STAMPED_EDITS: ReadonlySet<string> = new Set(Object.keys(STAMP_THE_SCREEN_LOADED))
@@ -390,6 +478,10 @@ export interface AdminSideOptions {
   refundOpen?: AnsweredRefundOpen[]
   /** W53: every `payment_method_label` the order list answered beside an order, set aside for the test to check on its own. */
   paidBy?: AnsweredPaidBy[]
+  /** W57: what the plan answers carry beside the old rows (stamps, counts, a price change's outcome), set aside for the test. */
+  planExtras?: AnsweredPlanExtra[]
+  /** W57: a press exactly as the golden file has it, with no count read first: how a test shows what the count is for. */
+  pressWithoutCounts?: boolean
 }
 
 /**
@@ -421,9 +513,11 @@ async function runNightlyJobAsNow(db: Db): Promise<void> {
  * pressed with the stamp its screen's read gave just before (asTheScreenPresses), and the stamps in the answers are
  * set aside (withoutStamps).
  */
-export function newAdminSide({ adjust, calls, refusedReadsAsAnswers, refusedPressesAsAnswers, stamps, pressWithoutReading, madeUpTo, pressWithoutFigures, refundOpen, paidBy }: AdminSideOptions = {}): (db: Db, stripe: FakeStripe) => ReplaySide {
+export function newAdminSide({ adjust, calls, refusedReadsAsAnswers, refusedPressesAsAnswers, stamps, pressWithoutReading, madeUpTo, pressWithoutFigures, refundOpen, paidBy, planExtras, pressWithoutCounts }: AdminSideOptions = {}): (db: Db, stripe: FakeStripe) => ReplaySide {
   return (db, stripe) => {
     const old = oldSide(db, stripe)
+    // W57: the plan writes reach Stripe: through this replay's fake.
+    replayStripe.current = stripe
     const creates = new Map([...CREATES].map((action) => [action, createAsTheDialogPresses(action)] as const))
     return {
       name: 'new',
@@ -440,13 +534,16 @@ export function newAdminSide({ adjust, calls, refusedReadsAsAnswers, refusedPres
         let answer: unknown
         try {
           const stamped = pressWithoutReading ? params : await asTheScreenPresses(action, db, params)
-          const sent = pressWithoutFigures ? stamped : await withTheFiguresShown(action, db, stamped)
-          answer = await (creates.get(action) ?? throughStaffApp(action))(db, sent)
+          const figured = pressWithoutFigures ? stamped : await withTheFiguresShown(action, db, stamped)
+          const sent = pressWithoutCounts ? figured : await withTheCountsShown(action, db, figured)
+          const press = () => (creates.get(action) ?? throughStaffApp(action))(db, sent)
+          // W57: a plan write (and updateCatalogItemPrice, whose plan branch is one) with `plan_changes` on, as live.
+          answer = W57_WRITES.has(action) || action === 'updateCatalogItemPrice' ? await withSwitch(PLAN_KIND_ON, press) : await press()
         } catch (err) {
           if (!(refusedReadsAsAnswers && READS.has(action)) && !(refusedPressesAsAnswers && !READS.has(action))) throw err
           answer = { thrown: err instanceof Error ? err.message : String(err) }
         }
-        answer = withoutPaidByLabel(action, withoutRefundOpen(action, sessionsOf(action, withoutStamps(action, answer, stamps), madeUpTo), refundOpen), paidBy)
+        answer = withoutPlanExtras(action, withoutPaidByLabel(action, withoutRefundOpen(action, sessionsOf(action, withoutStamps(action, answer, stamps), madeUpTo), refundOpen), paidBy), planExtras)
         return adjust ? adjust(action, answer) : answer
       },
     }
@@ -717,5 +814,17 @@ function attendeesCheckedIn(response: unknown): number {
 /** The stored answers the new side wrote: each a finished press of one of the moved write routes. */
 export function adminStoredAnswerProblems(recording: Recording): string[] {
   const rows = (recording.tables['api_idempotency']?.added ?? []) as Row[]
-  return rows.filter((row) => row['status'] !== 'done' || !STEP_G_WRITE_ROUTES.some(({ route }) => route.test(String(row['endpoint'])))).map((row) => `${String(row['endpoint'])}: ${String(row['status'])}`)
+  const known = (endpoint: string) => STEP_G_WRITE_ROUTES.some(({ route }) => route.test(endpoint)) || W57_WRITE_ROUTES.some((route) => route.test(endpoint))
+  return rows.filter((row) => row['status'] !== 'done' || !known(String(row['endpoint']))).map((row) => `${String(row['endpoint'])}: ${String(row['status'])}`)
 }
+
+/**
+ * W57: the plan and settings write routes. A level A press writes several rows of its own (the record, the steps), so
+ * they are not in STEP_G_WRITE_ROUTES' one-row-per-press count: plan-admin-replay.test.ts checks those rows. A stored
+ * answer from one (updateCatalogItemPrice's plan branch in the catalogue's recordings) is one of the moved writes'.
+ */
+export const W57_WRITE_ROUTES: readonly RegExp[] = [
+  /^POST \/api\/v1\/staff\/catalog\/membership-plans$/,
+  /^POST \/api\/v1\/staff\/catalog\/membership-plans\/[^/]+\/(details|active)$/,
+  /^POST \/api\/v1\/staff\/membership-settings$/,
+]

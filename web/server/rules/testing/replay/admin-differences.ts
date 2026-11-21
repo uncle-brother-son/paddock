@@ -170,6 +170,9 @@ const GB14_READS_MOVED: ReadonlyArray<readonly [index: number, read: string]> = 
   [19, 'getAddons'],
   [20, 'getSessionPassTypes'],
   [21, 'getGiftCardTypes'],
+  // W57.
+  [22, 'getMembershipPlans'],
+  [23, 'getMembershipSettings'],
 ]
 /** The recording's two passes: an inactive account, then (24 results further on) a sign-in with no staff row. */
 const GB14_PASSES: ReadonlyArray<readonly [offset: number, words: string]> = [
@@ -179,8 +182,8 @@ const GB14_PASSES: ReadonlyArray<readonly [offset: number, words: string]> = [
 
 const gb14TheMovedReadsRefuse = (golden: Recording): AllowedDifference =>
   pinned(
-    "Bug GB14 is closed for the reads moved so far: an inactive account, and a sign-in with no staff row, are refused the promo code list and a code's uses (W54), and the booking list, one booking, its detail (with its guests' dates of birth), the add-on prep list, the waiver gaps and the payments needing attention (W50), and the calendar's sessions and the service types for a slot (W51), and the events list, an event's attendee list and today's events (W52), and the order list and an order's lines (W53), and the service types, the products, a variant's stock history, the add-ons, the session pass types and the gift card types (W55 + W56), each in the words every staff route gives. (The old code answered them all. The two reads W57 moves still do.)",
-    'Bug GB14 (G-plan section 3); G-plan 4.2 (reads: an active staff member); briefs W49 + W54, W50, W51, W52, W53 and W55 + W56 "Parity and tests" (the staff check on reads)',
+    "Bug GB14 is closed for the reads moved so far: an inactive account, and a sign-in with no staff row, are refused the promo code list and a code's uses (W54), and the booking list, one booking, its detail (with its guests' dates of birth), the add-on prep list, the waiver gaps and the payments needing attention (W50), and the calendar's sessions and the service types for a slot (W51), and the events list, an event's attendee list and today's events (W52), and the order list and an order's lines (W53), and the service types, the products, a variant's stock history, the add-ons, the session pass types and the gift card types (W55 + W56), and the membership plans and the membership settings (W57), each in the words every staff route gives. (The old code answered them all.)",
+    'Bug GB14 (G-plan section 3); G-plan 4.2 (reads: an active staff member); briefs W49 + W54, W50, W51, W52, W53, W55 + W56 and W57 "Parity and tests" (the staff check on reads)',
     GB14_PASSES.flatMap(([offset, words]) =>
       GB14_READS_MOVED.flatMap(([index]): Array<readonly [string, Pin]> => {
         const at = index + offset

@@ -12,7 +12,8 @@ import type { Db } from '@/server/db'
 import { CHANGED_ELSEWHERE, CHANGED_ELSEWHERE_DAYS, CHANGED_ELSEWHERE_WHERE, changedElsewhereWords, FINAL_FINDINGS, type ChangedElsewhereFinding } from './changed-elsewhere'
 import { CHANGED_SINCE_MESSAGE } from './failure-messages'
 import { isWorkerCardFlow, isWorkerFlow, type FlowSnapshot } from './reader-flow'
-import type { StuckCloseTarget } from '@/contracts'
+import type { StuckCloseTarget, StuckPlanOutput } from '@/contracts'
+import { planStuckLines } from '@/server/rules/catalog/plan-stripe'
 import { PROCESSING_MINUTES as RECONCILE_WINDOW_MINUTES } from './pending-order'
 import { MEMBERSHIP_REFUND_WORDS } from '@/server/rules/refunds/failure-messages'
 import { LEFT_BY_REFUND } from './refund-subscription'
@@ -342,7 +343,7 @@ export interface StuckStep {
    * Stripe's subscription is still live (memberships/still-live.ts). `stepId` is then the line's own id, `step` is
    * `cancel_at`, `state` is `refused` (it is for a person) and it has no close: it goes when Stripe ends the subscription.
    */
-  what: 'cancel_date' | 'clear_cancel_date' | 'card' | 'still_live'
+  what: 'cancel_date' | 'clear_cancel_date' | 'card' | 'still_live' | 'plan_price'
   lastDay?: string
   customerId: string | null
   customerName: string | null
@@ -434,6 +435,8 @@ export interface StuckListOutput {
   webhook: StuckWebhookNotice | null
   /** W47r: payments tried again from the desk, held for the automatic check. */
   paymentRetries: StuckPaymentRetry[]
+  /** W57: membership plans' own lines (catalog/plan-stripe.ts, planStuckLines). */
+  plans: StuckPlanOutput[]
   alert: { at: string; words: string } | null
 }
 
@@ -1095,6 +1098,17 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
         }
       }),
     ],
+    // W57 (G-plan 4.7): membership plans' own lines. A plan step Stripe refused for good can be marked sorted by hand.
+    plans: (await planStuckLines(db)).map((line) => ({
+      lineId: line.lineId,
+      planId: line.planId,
+      planName: line.planName,
+      what: line.what,
+      state: line.state,
+      at: line.at,
+      words: line.words,
+      ...(line.stepId ? { close: { kind: 'plan_step' as const, orderId: line.stepId } } : {}),
+    })),
     alert: alert ? { at: iso(alert.at), words: STRIPE_REFUSED_WORDS } : null,
   }
 }

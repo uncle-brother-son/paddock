@@ -116,23 +116,47 @@ import { stripeIdempotencyKey } from '@/server/http/idempotency'
 import type { StripeClient } from '@/server/stripe/client'
 import { NoTimeLeft, sendOptions, type StripeTiming } from '@/server/stripe/deadline'
 import { readStripeFailure } from '@/server/stripe/outcome'
+import { PLAN_PRICE_MOVE_WORDS } from '@/server/rules/catalog/failure-messages'
 import { PROCESSING_MINUTES } from '@/server/rules/orders/pending-order'
-import { LEFT_STEP_WORDS } from './failure-messages'
+import { LEFT_STEP_WORDS, PRICE_MOVE_INTERVAL_WORDS } from './failure-messages'
 
 export const STEP_LEFT_ACTION = 'membership.step_left'
 export const STEP_LEFT_ENTITY = 'membership'
 
-/** What a step sets on the subscription: when it ends (`cancel_at`, set or cleared), or the card it charges. */
-export const STEP_KINDS = ['cancel_at', 'payment_method'] as const
+/**
+ * What a step sets on the subscription: when it ends (`cancel_at`, set or cleared), or the card it charges.
+ * W57 (G-plan 4.4; Wayne's Q53): or the price its one item renews at (`price`): a member moved to their plan's new
+ * price from their next renewal, with no proration. Each plan price change leaves one per live subscription on the
+ * plan (catalog/plans.ts, D2), and an order's T2 one for a subscription made on a price D2 had just replaced.
+ */
+export const STEP_KINDS = ['cancel_at', 'payment_method', 'price'] as const
 export type StepKind = (typeof STEP_KINDS)[number]
 
 /**
  * What Stripe should show once the step is done. `cancel_at`: `cancelAt`, the moment it ends in seconds, or null for
- * no end (an undo). `payment_method`: `paymentMethod`, the card's id.
+ * no end (an undo). `payment_method`: `paymentMethod`, the card's id. W57: `price`: `price`, the Stripe price its one
+ * item should be on. W57a (W57 review S1): and `interval`, how often that price renews (`month` or `year`, from the
+ * membership's frequency): a subscription Stripe shows renewing at another interval is never moved (trySendStep).
  */
 export interface StepWant {
   cancelAt?: number | null
   paymentMethod?: string
+  price?: string
+  interval?: PriceInterval
+}
+
+/** W57a: how often a price step's price renews. */
+export type PriceInterval = 'month' | 'year'
+const isPriceInterval = (value: unknown): value is PriceInterval => value === 'month' || value === 'year'
+
+/**
+ * W57a (W57 review S1): a price step Stripe refused for good because the subscription renews at another interval than
+ * the step's (`stripe`: Stripe's interval, null when Stripe didn't say; `membership`: the step's). On the `refused` row.
+ */
+export interface WrongInterval {
+  stripe: string | null
+  /** Null only for a step with no interval recorded, which checkWant never leaves. */
+  membership: PriceInterval | null
 }
 
 /**
@@ -165,6 +189,8 @@ export interface OpenStep extends LeftStep {
   inWindow: boolean
   /** W46: it is listed because the membership's last day and the one Stripe gives differ (the check found it): both days. */
   mismatch: RowMismatch | null
+  /** W57a (W57 review S1): it was refused because Stripe renews the subscription at another interval. Only then present. */
+  wrongInterval?: WrongInterval
   customerId: string | null
   customerName: string | null
 }
@@ -193,6 +219,12 @@ function checkWant(kind: StepKind, want: StepWant): StepWant {
       throw new Error('A cancel_at step needs cancelAt: the moment the subscription ends, in whole seconds, or null for no end.')
     }
     return { cancelAt: want.cancelAt ?? null }
+  }
+  if (kind === 'price') {
+    if (typeof want.price !== 'string' || want.price.trim() === '') throw new Error('A price step needs price: the Stripe price the subscription is to renew at.')
+    // W57a (S1): and how often it renews, so a send never switches a subscription across intervals.
+    if (!isPriceInterval(want.interval)) throw new Error("A price step needs interval: 'month' or 'year', how often the membership renews.")
+    return { price: want.price, interval: want.interval }
   }
   if (typeof want.paymentMethod !== 'string' || want.paymentMethod.trim() === '') throw new Error('A payment_method step needs paymentMethod: the card to charge.')
   return { paymentMethod: want.paymentMethod }
@@ -230,12 +262,13 @@ export function stepEndEntry(step: LeftStep, state: Extract<StepState, 'done' | 
 export const OPEN_STEPS_SQL = `
 SELECT s.entity_id AS membership_id, s.details->>'stepId' AS step_id, s.details->>'kind' AS kind,
        s.details->>'subscriptionId' AS subscription_id, s.details->'want' AS want, s.at,
-       r.detail IS NOT NULL AS refused, r.detail AS refusal, COALESCE(r.missing, false) AS missing, r.mismatch,
+       r.detail IS NOT NULL AS refused, r.detail AS refusal, COALESCE(r.missing, false) AS missing, r.mismatch, r.wrong_interval,
        s.at > now() - interval '${PROCESSING_MINUTES} minutes' AS in_window,
        c.id AS customer_id, NULLIF(trim(concat_ws(' ', c.first_name, c.last_name)), '') AS customer_name
 FROM audit_log s
 LEFT JOIN LATERAL (
-  SELECT COALESCE(f.details->>'detail', '') AS detail, (f.details->>'missing') = 'true' AS missing, f.details->'mismatch' AS mismatch
+  SELECT COALESCE(f.details->>'detail', '') AS detail, (f.details->>'missing') = 'true' AS missing, f.details->'mismatch' AS mismatch,
+         f.details->'wrongInterval' AS wrong_interval
   FROM audit_log f
   WHERE f.action = '${STEP_LEFT_ACTION}' AND f.entity_type = '${STEP_LEFT_ENTITY}' AND f.entity_id = s.entity_id
     AND f.details->>'stepId' = s.details->>'stepId' AND f.details->>'state' = 'refused'
@@ -273,6 +306,7 @@ interface OpenStepRow {
   refusal: string | null
   missing: boolean
   mismatch: Partial<RowMismatch> | null
+  wrong_interval?: Partial<WrongInterval> | null
   in_window: boolean
   customer_id: string | null
   customer_name: string | null
@@ -295,6 +329,7 @@ function openStep(row: OpenStepRow): OpenStep | null {
     missing: row.refused && row.missing === true,
     inWindow: row.in_window === true,
     mismatch: row.refused && row.mismatch ? { row: row.mismatch.row ?? null, stripe: row.mismatch.stripe ?? null } : null,
+    ...(row.refused && row.wrong_interval ? { wrongInterval: { stripe: row.wrong_interval.stripe ?? null, membership: isPriceInterval(row.wrong_interval.membership) ? row.wrong_interval.membership : null } } : {}),
     customerId: row.customer_id,
     customerName: row.customer_name,
   }
@@ -329,9 +364,11 @@ async function openStepById(db: Queryable, stepId: string): Promise<OpenStep | n
 }
 
 /** What the stuck list says for an open step. W40 (L2): a subscription Stripe can't find has its own words. */
-export function stepWords(step: Pick<OpenStep, 'kind' | 'subscriptionId' | 'refused'> & { missing?: boolean; mismatch?: RowMismatch | null }): string {
+export function stepWords(step: Pick<OpenStep, 'kind' | 'subscriptionId' | 'refused'> & { missing?: boolean; mismatch?: RowMismatch | null; wrongInterval?: WrongInterval }): string {
   // W46: listed by the check because the membership's last day and Stripe's differ. Stripe refused nothing.
   if (step.refused && step.mismatch) return LEFT_STEP_WORDS.rowDiffers(step.subscriptionId, step.mismatch.row, step.mismatch.stripe)
+  // W57a (W57 review S1): a member's move never sent because Stripe renews the subscription at another interval.
+  if (step.refused && step.wrongInterval) return PRICE_MOVE_INTERVAL_WORDS.stuck(step.subscriptionId, step.wrongInterval.stripe, step.wrongInterval.membership)
   return LEFT_STEP_WORDS[step.kind][step.refused ? (step.missing ? 'missing' : 'refused') : 'left'](step.subscriptionId)
 }
 
@@ -339,8 +376,10 @@ export function stepWords(step: Pick<OpenStep, 'kind' | 'subscriptionId' | 'refu
  * W40: what an open step is, for the stuck list: a cancel date to set, with the membership's last day of access it
  * sets (the London date of `cancelAt`, less a day: the cancel's own sum backwards); a cancel date to clear; or a card.
  */
-export function stepWhat(step: Pick<OpenStep, 'kind' | 'want'>): { what: 'cancel_date' | 'clear_cancel_date' | 'card'; lastDay?: string } {
+export function stepWhat(step: Pick<OpenStep, 'kind' | 'want'>): { what: 'cancel_date' | 'clear_cancel_date' | 'card' | 'plan_price'; lastDay?: string } {
   if (step.kind === 'payment_method') return { what: 'card' }
+  // W57: a member's move to their plan's new price.
+  if (step.kind === 'price') return { what: 'plan_price' }
   const cancelAt = step.want.cancelAt
   if (typeof cancelAt !== 'number') return { what: 'clear_cancel_date' }
   // London's date a day before the end: the day before midnight is the same London date as a second before it.
@@ -401,23 +440,65 @@ export async function leaveStepReplacing(
 export type StepAnswer =
   /** Stripe shows what was asked. `sent` is false when it already did (or the subscription has ended, which settles it). */
   | { kind: 'done'; sent: boolean; detail: string }
-  /** Stripe answered and said no: sending again can't help. `missing` (W40, L2): it can't find the subscription. */
-  | { kind: 'refused'; message: string; missing?: true }
+  /**
+   * Stripe answered and said no: sending again can't help. `missing` (W40, L2): it can't find the subscription.
+   * W57a (S1): `wrongInterval`, a price move not sent because the subscription renews at another interval.
+   */
+  | { kind: 'refused'; message: string; missing?: true; wrongInterval?: WrongInterval }
   /** No clear answer (or no time left to ask): safe to send again. */
   | { kind: 'unclear'; message: string }
 
 const idOf = (value: string | { id: string } | null | undefined): string | null => (typeof value === 'string' ? value : (value?.id ?? null))
 
-/** Whether the subscription already shows what the step wants. */
-export function stepIsDone(subscription: Pick<Stripe.Subscription, 'cancel_at' | 'default_payment_method'>, step: Pick<LeftStep, 'kind' | 'want'>): boolean {
+/**
+ * W57: the subscription's items as a price step reads them: each item's id and the price it is on. W57a (S1): and how
+ * often that price renews (`recurring.interval`), null when Stripe didn't say.
+ */
+function itemsOf(subscription: Pick<Stripe.Subscription, 'items'>): Array<{ id: string; price: string | null; interval: string | null }> {
+  const data = subscription.items?.data ?? []
+  return data.map((item) => ({
+    id: item.id,
+    price: typeof item.price === 'string' ? item.price : (item.price?.id ?? null),
+    interval: typeof item.price === 'string' ? null : (item.price?.recurring?.interval ?? null),
+  }))
+}
+
+/**
+ * W57a (W57 review S1): a price move whose subscription renews at another interval than the step's (or doesn't say)
+ * is never sent: Stripe restarts the period and charges the new price at once when an item's interval changes, so a
+ * membership row whose frequency is wrong would turn a renewal price change into a charge today. Refused for good,
+ * listed for a person with Mark sorted. Null when the one item's interval is the step's.
+ */
+function wrongIntervalOf(step: Pick<LeftStep, 'kind' | 'want'>, items: ReadonlyArray<{ interval: string | null }>): WrongInterval | null {
+  if (step.kind !== 'price' || items.length !== 1) return null
+  const stripe = items[0]?.interval ?? null
+  // Every price step is left with its interval (checkWant), and W57 is released with W57a, so a step without one
+  // can't exist: if one ever did, it could not be held to an interval, so it is refused too, never sent.
+  const membership = isPriceInterval(step.want.interval) ? step.want.interval : null
+  return membership !== null && stripe === membership ? null : { stripe, membership }
+}
+
+/** Whether the subscription already shows what the step wants. W57: a price step, its one item on the wanted price. */
+export function stepIsDone(subscription: Pick<Stripe.Subscription, 'cancel_at' | 'default_payment_method'> & Partial<Pick<Stripe.Subscription, 'items'>>, step: Pick<LeftStep, 'kind' | 'want'>): boolean {
   if (step.kind === 'cancel_at') return (subscription.cancel_at ?? null) === (step.want.cancelAt ?? null)
+  if (step.kind === 'price') {
+    const items = itemsOf({ items: subscription.items as Stripe.Subscription['items'] })
+    return items.length === 1 && items[0]?.price === step.want.price
+  }
   return idOf(subscription.default_payment_method) === step.want.paymentMethod
 }
 
 /**
+ * W57: a subscription that has ended can't renew, so a price move for it is moot. As the legacy route
+ * (lib/membership-price-migration.ts, ENDED_STATUSES), an `incomplete_expired` one counts as ended too.
+ */
+const hasEnded = (status: string, kind: StepKind): boolean => status === 'canceled' || (kind === 'price' && status === 'incomplete_expired')
+
+/**
  * A subscription Stripe has already ended can't be changed. Whether that settles the step: an end date or a card
  * for a subscription that will never renew is moot (done); clearing the end date of one that has ended can't be done
- * at all (refused: a person decides what the membership should now say).
+ * at all (refused: a person decides what the membership should now say). W57: a price for one that will never renew
+ * is moot too (done).
  */
 function endedAnswer(step: Pick<LeftStep, 'kind' | 'want' | 'subscriptionId'>): StepAnswer {
   if (step.kind === 'cancel_at' && step.want.cancelAt === null) {
@@ -428,10 +509,15 @@ function endedAnswer(step: Pick<LeftStep, 'kind' | 'want' | 'subscriptionId'>): 
 
 /**
  * What is sent. W40 (W36 review L1): a cancel date goes with `proration_behavior: 'none'`, so setting or clearing an
- * end that falls inside a paid period never makes Stripe bill or credit a part period.
+ * end that falls inside a paid period never makes Stripe bill or credit a part period. W57 (Q53): a price move is the
+ * subscription's one item switched to the new price with `proration_behavior: 'none'`, as the legacy update-price
+ * route sent it: the period already paid stays as paid, and the new price is first charged at the next renewal.
  */
-const stepParams = (step: Pick<LeftStep, 'kind' | 'want'>): Stripe.SubscriptionUpdateParams =>
-  step.kind === 'cancel_at' ? { cancel_at: step.want.cancelAt ?? '', proration_behavior: 'none' } : { default_payment_method: step.want.paymentMethod as string }
+const stepParams = (step: Pick<LeftStep, 'kind' | 'want'>, itemId: string | null): Stripe.SubscriptionUpdateParams => {
+  if (step.kind === 'cancel_at') return { cancel_at: step.want.cancelAt ?? '', proration_behavior: 'none' }
+  if (step.kind === 'price') return { items: [{ id: itemId ?? '', price: step.want.price as string }], proration_behavior: 'none' }
+  return { default_payment_method: step.want.paymentMethod as string }
+}
 
 /**
  * The key a send carries: from the step's id (F-plan 4.2 item 4). `attempt` (reconcile's run) makes a later send a
@@ -460,10 +546,17 @@ export async function trySendStep(stripe: StripeClient, step: Pick<LeftStep, 'id
     if (failure.code === 'resource_missing') return { kind: 'refused', missing: true, message: `Stripe can't find subscription ${step.subscriptionId} with the key in use.` }
     return { kind: 'unclear', message: `not read (${failure.message})` }
   }
-  if (now.status === 'canceled') return endedAnswer(step)
+  if (hasEnded(now.status, step.kind)) return endedAnswer(step)
   if (stepIsDone(now, step)) return { kind: 'done', sent: false, detail: 'Stripe already showed it' }
+  // W57: a price move switches the subscription's one item. With none or more than one, the legacy route's own
+  // failure (lib/membership-price-migration.ts): Stripe can't be told which item to move, so it is for a person.
+  const items = step.kind === 'price' ? itemsOf(now) : []
+  if (step.kind === 'price' && items.length !== 1) return { kind: 'refused', message: PLAN_PRICE_MOVE_WORDS.expectedOneSubscriptionItem(items.length) }
+  // W57a (W57 review S1): never across intervals (Stripe would charge at once). Nothing is sent.
+  const wrongInterval = wrongIntervalOf(step, items)
+  if (wrongInterval) return { kind: 'refused', message: PRICE_MOVE_INTERVAL_WORDS.refusal(wrongInterval.stripe, wrongInterval.membership), wrongInterval }
   try {
-    await stripe.subscriptions.update(step.subscriptionId, stepParams(step), sendOptions(timing, { idempotencyKey: stepKey(step, attempt) }))
+    await stripe.subscriptions.update(step.subscriptionId, stepParams(step, items[0]?.id ?? null), sendOptions(timing, { idempotencyKey: stepKey(step, attempt) }))
     return { kind: 'done', sent: true, detail: 'sent' }
   } catch (err) {
     if (err instanceof NoTimeLeft) return { kind: 'unclear', message: err.message }
@@ -486,6 +579,19 @@ export type SettledStep =
    * the database failed. An error for the run to report; the next run tries again (`leaveAgainLater`).
    */
   | { kind: 'not_left_again'; stepId: string; message: string }
+
+/**
+ * W57 (brief item 3): whether a membership has ended here (no longer active or failing, or no longer on a
+ * subscription): a price move for it is moot, and closes with no Stripe call.
+ */
+const MEMBERSHIP_ENDED_SQL = `SELECT (subscription_status IS NULL OR subscription_status NOT IN ('active', 'past_due') OR stripe_subscription_id IS NULL) AS ended FROM customer_memberships WHERE id::text = $1`
+export async function membershipHasEnded(db: Queryable, membershipId: string): Promise<boolean> {
+  const [row] = await db.query<{ ended: boolean }>(MEMBERSHIP_ENDED_SQL, [membershipId])
+  return !row || row.ended === true
+}
+/** W57: a price move's answer when its membership has ended here: done, nothing sent, and Stripe not asked. */
+export const ENDED_HERE_DETAIL = 'the membership has ended here: nothing sent, and Stripe not asked'
+const ENDED_HERE_ANSWER: StepAnswer = { kind: 'done', sent: false, detail: ENDED_HERE_DETAIL }
 
 /** The membership's row lock, which every action that leaves a step holds: an ending is written under it. */
 async function lockMembership(tx: Tx, membershipId: string): Promise<void> {
@@ -564,7 +670,9 @@ async function recordAnswer(db: Db, step: LeftStep, answer: Exclude<StepAnswer, 
     if (newest !== step.id) return { kind: 'superseded' as const, by: newest }
     if (!(await openStepById(tx, step.id))) return { kind: 'closed' as const }
     await audit.recordAll(tx, [
-      answer.kind === 'done' ? entry(step, 'done', by, { detail: answer.detail, sent: answer.sent }) : entry(step, 'refused', by, { detail: answer.message, ...(answer.missing ? { missing: true } : {}) }),
+      answer.kind === 'done'
+        ? entry(step, 'done', by, { detail: answer.detail, sent: answer.sent })
+        : entry(step, 'refused', by, { detail: answer.message, ...(answer.missing ? { missing: true } : {}), ...(answer.wrongInterval ? { wrongInterval: answer.wrongInterval } : {}) }),
     ])
     return { kind: 'written' as const }
   })
@@ -716,7 +824,8 @@ export async function settleLeftStep(db: Db, stripe: StripeClient, stepId: strin
   if (!step) return { kind: 'closed' }
   if (step.refused) return { kind: 'refused', message: step.refusal ?? '' }
   if (step.inWindow) return { kind: 'left', message: `recorded less than ${PROCESSING_MINUTES} minutes ago: its press may still be sending it` }
-  const answer = await trySendStep(stripe, step, timing, by.requestId)
+  // W57 (brief item 3): a member's price move whose membership has ended here since is closed with no Stripe call.
+  const answer = step.kind === 'price' && (await membershipHasEnded(db, step.membershipId)) ? ENDED_HERE_ANSWER : await trySendStep(stripe, step, timing, by.requestId)
   // Replaced while this was at Stripe: whatever Stripe said about the old wish, the newest is the one to settle.
   const newest = await newestOf(db, step.id)
   if (newest !== step.id) return settledFor(await settleNewest(db, stripe, newest, by, timing, answer.kind === 'unclear', step.id))
@@ -903,8 +1012,11 @@ type StripeSeen =
   | { kind: 'agrees'; detail: string; ends?: number | null }
   /** Stripe shows something else. */
   | { kind: 'differs'; detail: string }
-  /** Stripe can't find the subscription, or it has ended and the wish can't be met: for a person, never sent. */
-  | { kind: 'person'; message: string; missing?: true }
+  /**
+   * Stripe can't find the subscription, or it has ended and the wish can't be met: for a person, never sent. W57a
+   * (S1): or a price move whose subscription renews at another interval (`wrongInterval`).
+   */
+  | { kind: 'person'; message: string; missing?: true; wrongInterval?: WrongInterval }
   /** No clear answer. */
   | { kind: 'unread'; message: string }
 
@@ -955,7 +1067,7 @@ async function readForCheck(stripe: StripeClient, wish: Pick<LeftStep, 'kind' | 
     if (failure.code === 'resource_missing') return { kind: 'person', missing: true, message: `Stripe can't find subscription ${wish.subscriptionId} with the key in use.` }
     return { kind: 'unread', message: `not read (${failure.message})` }
   }
-  if (now.status === 'canceled') {
+  if (hasEnded(now.status, wish.kind)) {
     const ended = endedAnswer(wish)
     return ended.kind === 'refused' ? { kind: 'person', message: ended.message } : { kind: 'agrees', detail: 'the subscription has already ended in Stripe' }
   }
@@ -963,7 +1075,18 @@ async function readForCheck(stripe: StripeClient, wish: Pick<LeftStep, 'kind' | 
     const ends = stripeEnds(now)
     return { kind: 'agrees', detail: 'Stripe shows it', ...(ends === undefined ? {} : { ends }) }
   }
-  return { kind: 'differs', detail: wish.kind === 'cancel_at' ? `Stripe shows cancel_at ${now.cancel_at ?? 'none'}` : `Stripe shows the card ${idOf(now.default_payment_method) ?? 'none'}` }
+  // W57: a subscription whose items Stripe can't be told how to move is for a person, as at the send.
+  if (wish.kind === 'price' && itemsOf(now).length !== 1) return { kind: 'person', message: PLAN_PRICE_MOVE_WORDS.expectedOneSubscriptionItem(itemsOf(now).length) }
+  // W57a (W57 review S1): nor one renewing at another interval: left again refused, for a person, never sent.
+  const wrongInterval = wrongIntervalOf(wish, itemsOf(now))
+  if (wrongInterval) return { kind: 'person', message: PRICE_MOVE_INTERVAL_WORDS.refusal(wrongInterval.stripe, wrongInterval.membership), wrongInterval }
+  const differs =
+    wish.kind === 'cancel_at'
+      ? `Stripe shows cancel_at ${now.cancel_at ?? 'none'}`
+      : wish.kind === 'price'
+        ? `Stripe shows the price ${itemsOf(now)[0]?.price ?? 'none'}`
+        : `Stripe shows the card ${idOf(now.default_payment_method) ?? 'none'}`
+  return { kind: 'differs', detail: differs }
 }
 
 /** What a check row says it found. */
@@ -996,7 +1119,7 @@ export type StepChecked =
   | { kind: 'wait'; detail: string }
 
 /** What a check leaves with its row: the newest wish again, to send (`send`) or as refused for a person (W46: `mismatch`, the two last days). */
-type CheckLeaves = { how: 'send' } | { how: 'refused'; message: string; missing?: true; mismatch?: RowMismatch }
+type CheckLeaves = { how: 'send' } | { how: 'refused'; message: string; missing?: true; mismatch?: RowMismatch; wrongInterval?: WrongInterval }
 
 /** One `membership.step_check` row. */
 function checkEntry(by: StepBy, membershipId: string, details: { subscriptionId: string; kind: StepKind; steps: string[]; outcome: CheckOutcome; wish: string | null; leftAgain?: string; detail: string }): AuditEntry {
@@ -1033,7 +1156,14 @@ async function endCheck(
     const again = wish && leaves ? (await leaveStepReplacing(tx, { membershipId: wish.membershipId, subscriptionId: wish.subscriptionId, kind: wish.kind, want: wish.want }, by, { leftAgainFor: wish.id })).step : null
     await audit.recordAll(tx, [
       ...(again && leaves?.how === 'refused'
-        ? [entry(again, 'refused', by, { detail: leaves.message, ...(leaves.missing ? { missing: true } : {}), ...(leaves.mismatch ? { mismatch: leaves.mismatch } : {}) })]
+        ? [
+            entry(again, 'refused', by, {
+              detail: leaves.message,
+              ...(leaves.missing ? { missing: true } : {}),
+              ...(leaves.mismatch ? { mismatch: leaves.mismatch } : {}),
+              ...(leaves.wrongInterval ? { wrongInterval: leaves.wrongInterval } : {}),
+            }),
+          ]
         : []),
       checkEntry(by, due.membershipId, { subscriptionId: due.subscriptionId, kind: due.kind, steps, outcome, wish: wish?.id ?? null, ...(again ? { leftAgain: again.id } : {}), detail }),
     ])
@@ -1083,6 +1213,8 @@ export async function checkAfterClosing(db: Db, stripe: StripeClient, due: Check
   if (wish.closedRecently) return { kind: 'wait', detail: `the newest step ${wish.id} closed less than ${CHECK_AFTER_MINUTES} minutes ago: checked with it` }
   // W40d (S1): a sorted wish is a person's. Not read, not held to Stripe, never sent again.
   if (wish.closedAs === 'sorted') return endCheck(db, due, wish, by, 'checked', `step ${wish.id} was marked sorted by a person: not held to Stripe`)
+  // W57 (brief item 3): a price move for a membership that has ended here is moot: not read.
+  if (wish.kind === 'price' && (await membershipHasEnded(db, wish.membershipId))) return endCheck(db, due, wish, by, 'checked', `step ${wish.id}: ${ENDED_HERE_DETAIL}`)
   const seen = await readForCheck(stripe, wish, timing)
   if (seen.kind === 'agrees') {
     // W46 (W45a "Noticed" 8; the W45 audit's S1 fix 3): Stripe shows the wish. The membership's own row is set against
@@ -1110,7 +1242,12 @@ export async function checkAfterClosing(db: Db, stripe: StripeClient, due: Check
     return endCheck(db, due, wish, by, 'left_again', `step ${wish.id}: ${seen.detail}, not its wish: left again`, { how: 'send' })
   }
   if (seen.kind === 'person') {
-    return endCheck(db, due, wish, by, 'for_a_person', `step ${wish.id}: ${seen.message} Left for a person`, { how: 'refused', message: seen.message, ...(seen.missing ? { missing: true as const } : {}) })
+    return endCheck(db, due, wish, by, 'for_a_person', `step ${wish.id}: ${seen.message} Left for a person`, {
+      how: 'refused',
+      message: seen.message,
+      ...(seen.missing ? { missing: true as const } : {}),
+      ...(seen.wrongInterval ? { wrongInterval: seen.wrongInterval } : {}),
+    })
   }
   if (!due.unreadTooLong) return { kind: 'wait', detail: `step ${wish.id}: ${seen.message}` }
   return endCheck(db, due, wish, by, 'unread', `step ${wish.id}: no clear read of Stripe in ${CHECK_UNREAD_HOURS} hours (${seen.message}): left again`, { how: 'send' })

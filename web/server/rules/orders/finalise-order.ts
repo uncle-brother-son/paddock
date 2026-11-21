@@ -20,6 +20,8 @@ import 'server-only'
 import type Stripe from 'stripe'
 import { audit, type AuditEntry } from '@/server/audit'
 import type { Db, Tx } from '@/server/db'
+import { isUuid } from '@/server/rules/admin/locks'
+import { followPlanPrice, ORDER_PLAN_SQL, PLAN_PRICES_FOR_SHARE_SQL, type PlanPrices } from '@/server/rules/catalog/plan-stripe'
 import { followSavedCard, lockCustomerForCardSteps, type CardStepsLeft } from '@/server/rules/customers/card-steps'
 import { cardMovesOn } from '@/server/rules/memberships/membership-switch'
 import type { ResolvedCard } from '@/server/stripe/saved-card'
@@ -351,6 +353,10 @@ const londonDateOf = (seconds: number): string => londonToday(new Date(seconds *
  */
 export async function finaliseOrder(db: Db, orderId: string, paymentIntent: Stripe.PaymentIntent | null, options: FinaliseOptions): Promise<FinaliseOutcome> {
   return db.transaction(async (tx: Tx) => {
+    // W57 (brief item 3): a membership order takes its plan's lock FOR SHARE first, so a plan price change's D2 and
+    // this T2 take turns (plan-stripe.ts, followPlanPrice). Before the order's lock: LOCK_ORDER's admin_row first.
+    const [ordered] = options.subscription ? await tx.query<{ plan_id: string | null }>(ORDER_PLAN_SQL, [orderId]) : []
+    const planPrices = ordered?.plan_id && isUuid(ordered.plan_id) ? ((await tx.query<PlanPrices>(PLAN_PRICES_FOR_SHARE_SQL, [ordered.plan_id]))[0] ?? null) : null
     const order = (
       await tx.query<LockedOrder>(LOCK_ORDER_SQL, [orderId])
     )[0]
@@ -480,6 +486,17 @@ export async function finaliseOrder(db: Db, orderId: string, paymentIntent: Stri
     if (replaced && written.memberships_replaced !== 1) throw new Error('The exhausted membership was not marked cancelled.')
     // createOrder and finaliseReaderOrder allocated the new membership's first credit period at once.
     if (membershipWrite.length > 0) await tx.query('SELECT public.allocate_membership_credit_periods()')
+    // W57 (brief item 3; invariant 11): a subscription made on a price a plan price change has since replaced (its
+    // order read the plan before the change's D2) is moved to the plan's price from its next renewal, as every other
+    // member on the plan is: a `price` step, which reconcile sends past its window.
+    if (membership && subscription && written.membership_id && planPrices) {
+      await followPlanPrice(
+        tx,
+        { planId: membership.plan_id, membershipId: written.membership_id, subscriptionId: subscription.id, frequency: membership.billing_frequency, madeOn: subscription.priceId, orderId },
+        planPrices,
+        { actor: options.actor, requestId: options.requestId }
+      )
+    }
     await audit.recordAll(tx, [
       {
         ...entry,

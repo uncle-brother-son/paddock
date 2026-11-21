@@ -313,6 +313,8 @@ describe("the banner's words (frontend/utils/stuckList.ts)", () => {
     // W47, named differences: the count by kind and the first line's words (`stuckCounts`, `stuckHeadline`,
     // `stuckAnythingToShow`), the two quiet lines, and a watched payment's heading.
     // W47r, a named difference: `paymentRetryLabel`, the heading of a membership payment tried again from the desk and on hold.
+    // W57, a named difference: `planLineLabel`, the heading of a membership plan's own line (a price change or a new
+    // plan still being finished in Stripe, a plan's product or old price not confirmed).
     expect(Object.keys(helpers).sort()).toEqual([
       'NOTHING_STUCK_LINE',
       'STUCK_LIST_NOT_READ_LINE',
@@ -322,6 +324,7 @@ describe("the banner's words (frontend/utils/stuckList.ts)", () => {
       'oldestAgeMinutes',
       'paymentDateLabel',
       'paymentRetryLabel',
+      'planLineLabel',
       'reconcileLine',
       'stepLabel',
       'stuckAnythingToShow',

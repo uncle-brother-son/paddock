@@ -654,7 +654,8 @@ describe('item 3: Mark as owed, the second close of a paid-after-end line', () =
 
   it('the kind is one the close route takes, and the states that end a line are refunded and owed', () => {
     expect(stuckCloseKindSchema.options).toContain('paid_after_end_owed')
-    expect(stuckCloseKindSchema.options.at(-1)).toBe('paid_after_end_owed')
+    // W57, a named difference: `plan_step` (a plan's Stripe step marked sorted) comes after it, last.
+    expect(stuckCloseKindSchema.options.slice(-2)).toEqual(['paid_after_end_owed', 'plan_step'])
     expect([...INVOICE_LINE_CLOSING_STATES]).toEqual(['refunded', 'owed'])
   })
 

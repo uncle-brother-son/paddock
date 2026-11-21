@@ -368,18 +368,21 @@ describe("step F's new inputs, the saved card's addition, and the left step on t
     // desk that was taken after the membership's subscription had ended; the W47r review's S1).
     // W47r-d, a named difference: and `paid_after_end_owed` last (Mark as owed, the second close of that same line: a
     // payment that was for a period the member had; W47r-c "Noticed" 3).
-    expect(stuckCloseKindSchema.options.slice(7)).toEqual(['left_step', 'held_payment_date', 'payment_watch', 'retry_paid_after_end', 'paid_after_end_owed'])
+    // W57, a named difference: and `plan_step` last (Mark sorted on a membership plan's Stripe step refused for good).
+    expect(stuckCloseKindSchema.options.slice(7)).toEqual(['left_step', 'held_payment_date', 'payment_watch', 'retry_paid_after_end', 'paid_after_end_owed', 'plan_step'])
     // The seven kinds before it are as they were, in their order.
     expect(stuckCloseKindSchema.options.slice(0, 7)).toEqual(['held_order', 'changed_elsewhere', 'subscription_left', 'late_refund', 'held_flow', 'held_claim', 'refund_watch'])
     expect(reconcileItemSchema.parse({ kind: 'step', id: 's', outcome: 'left', reason: 'step_refused' })).toMatchObject({ kind: 'step' })
     // W41: and `date_change`, a payment date change still pending, after it.
     // W47r, a named difference: and `payment_retry`, a membership payment tried again from the desk and still open, after that.
-    expect(reconcileItemSchema.shape.kind.options).toEqual(['order', 'flow', 'refund', 'claim', 'step', 'date_change', 'payment_retry'])
+    // W57, a named difference: and `plan`, a membership plan's Stripe side (a change held, a plan half made, a plan step), last.
+    expect(reconcileItemSchema.shape.kind.options).toEqual(['order', 'flow', 'refund', 'claim', 'step', 'date_change', 'payment_retry', 'plan'])
     expect(reconcileItemSchema.parse({ kind: 'date_change', id: 'c', outcome: 'left', reason: 'payment_processing' })).toMatchObject({ kind: 'date_change' })
     expect(reconcileItemSchema.parse({ kind: 'payment_retry', id: 'r', outcome: 'left', reason: 'payment_processing' })).toMatchObject({ kind: 'payment_retry' })
     // A held retry has no close of its own (W47r), but for one paid after its subscription ended (W47r-a): eleven kinds.
     // W47r-d, a named difference: twelve, with Mark as owed.
-    expect(stuckCloseKindSchema.options).toHaveLength(12)
+    // W57, a named difference: thirteen, with Mark sorted on a plan's Stripe step (`plan_step`).
+    expect(stuckCloseKindSchema.options).toHaveLength(13)
     // An older Worker's list has no `paymentDates`: the contract still reads it.
     expect(stuckListOutputSchema.parse(list).paymentDates).toBeUndefined()
   })

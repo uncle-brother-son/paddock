@@ -93,6 +93,11 @@ const STAFF_ROUTES: Record<string, () => Promise<unknown>> = {
   '/api/v1/staff/catalog/session-pass-types': () => import('@/app/api/v1/staff/catalog/session-pass-types/route'),
   '/api/v1/staff/catalog/gift-card-types': () => import('@/app/api/v1/staff/catalog/gift-card-types/route'),
   '/api/v1/staff/catalog/tier-groups/range': () => import('@/app/api/v1/staff/catalog/tier-groups/range/route'),
+  // W57: the staff app's thin getMembershipPlans and createMembershipPlan (one path, GET and POST), getMembershipSettings
+  // and setMembershipSettings (likewise), and getMembershipSettingsQuote.
+  '/api/v1/staff/catalog/membership-plans': () => import('@/app/api/v1/staff/catalog/membership-plans/route'),
+  '/api/v1/staff/membership-settings': () => import('@/app/api/v1/staff/membership-settings/route'),
+  '/api/v1/staff/membership-settings/quote': () => import('@/app/api/v1/staff/membership-settings/quote/route'),
 }
 
 /** W55 + W56: `catalog/<folder>/:id/<leaf>`, each loading its own route file, the id under the route's own name. */
@@ -126,6 +131,9 @@ const CATALOG_PATTERNS = [
   catalogRoute('gift-card-types', 'giftCardTypeId', 'presets', () => import('@/app/api/v1/staff/catalog/gift-card-types/[giftCardTypeId]/presets/route')),
   catalogRoute('gift-card-presets', 'presetId', 'active', () => import('@/app/api/v1/staff/catalog/gift-card-presets/[presetId]/active/route')),
   catalogRoute('gift-card-presets', 'presetId', 'price', () => import('@/app/api/v1/staff/catalog/gift-card-presets/[presetId]/price/route')),
+  // W57: a plan's details and price (setMembershipPlanDetails, and updateCatalogItemPrice for a plan), and on or off sale.
+  catalogRoute('membership-plans', 'planId', 'details', () => import('@/app/api/v1/staff/catalog/membership-plans/[planId]/details/route')),
+  catalogRoute('membership-plans', 'planId', 'active', () => import('@/app/api/v1/staff/catalog/membership-plans/[planId]/active/route')),
 ]
 
 /** W14: the staff routes with an id in the path, and the path's parameters. */

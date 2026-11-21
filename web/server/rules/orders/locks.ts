@@ -30,8 +30,11 @@ import type { Tx } from '@/server/db'
  * service type, a tier, a product, an add-on, a pass type, a gift card type or preset, a membership plan), a weekly
  * slot, a band or its windows, a member band term, the postage or membership settings. An admin write locks its own
  * row first (server/rules/admin/locks.ts), as T2 locks its order, and then only rows after it: the sessions a
- * timetable or band change reaches, a plan's memberships. No money transaction locks one of these rows (an order
- * reads prices, it never locks them), so nothing here can be waiting for it while holding a later row. An admin
+ * timetable or band change reaches, a plan's memberships. Only one money transaction locks one of these rows, and it
+ * takes it first: W57 (W57a: L5 of the W57 review), a membership order's T2 takes its plan's row FOR SHARE before its
+ * order (orders/finalise-order.ts; catalog/plan-stripe.ts, PLAN_PRICES_FOR_SHARE_SQL), so it and a price change's D2
+ * (the plan FOR NO KEY UPDATE, then its memberships) take turns. Every other order reads prices and never locks them.
+ * So nothing here can be waiting for an admin row while holding a later row. An admin
  * action on a row this list already names (a session blocked or moved, an event's details, a promo code, a
  * variant's stock) takes that row's own place: 'session' stays where it is, after the booking and the customer,
  * which is where an order's capacity claim and a booking change take it. W51 proves that place with a race test (a

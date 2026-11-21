@@ -86,6 +86,8 @@ import { CLOSED_ON_A_CANCELLED_BOOKING_WORDS } from '@/server/rules/bookings/fai
 import { flowClosable, HELD_CLAIM_CLOSE_REASONS } from './stuck-list'
 import { WATCHED_PAYMENTS_LISTED_SQL, type ListedWatchedPayment } from './payment-watch'
 import { sortLeftStep } from '@/server/rules/memberships/left'
+import { LEFT_STEP_WORDS } from '@/server/rules/memberships/failure-messages'
+import { sortPlanStep } from '@/server/rules/catalog/plan-stripe'
 import { INVOICE_PAID_AFTER_END_ENTITY, markInvoiceOwed, markInvoiceRefunded, readInvoicePaidAfterEnd } from '@/server/rules/memberships/paid-after-end'
 import { closePaymentDateChange, PAYMENT_DATE_RECONCILE_ENTITY } from '@/server/rules/memberships/payment-date'
 import { markRetryOwed, markRetryRefunded, PAID_AFTER_END_CLOSE_KIND, PAID_AFTER_END_OWED_KIND, PAYMENT_RETRY_RECONCILE_ENTITY } from '@/server/rules/memberships/retry-payment'
@@ -882,6 +884,21 @@ export async function closeStuckItem(db: Db, input: CloseStuckInput, options: Cl
       details: { kind: 'left_step', why, membershipId: step.membershipId, subscriptionId: step.subscriptionId, step: step.kind, want: step.want, refusal: step.refusal },
     }))
     return answer('left_step', input.orderId, sorted.closed ? { closed: true, ...(sorted.alreadyClosed ? { alreadyClosed: true } : {}), message: sorted.message } : { closed: false, reason: sorted.reason, message: sorted.message })
+  }
+  // W57 (G-plan 4.7): a membership plan's Stripe step that Stripe refused for good (an old price to archive, the
+  // product on or off sale), once a person has put Stripe right by hand: recorded as sorted. Nothing is sent.
+  if (input.kind === 'plan_step') {
+    const sorted = await sortPlanStep(db, input.orderId, why, { actor: options.actor, requestId: options.requestId }, (step) => ({
+      actorType: options.actor.type,
+      actorId: options.actor.id,
+      action: CLOSE_ACTION,
+      entityType: 'plan_step',
+      entityId: step.id,
+      requestId: options.requestId,
+      details: { kind: 'plan_step', why, planId: step.planId, step: step.kind, want: step.want, refusal: step.refusal },
+    }))
+    const words = sorted.closed ? LEFT_STEP_WORDS.sorted : sorted.reason === 'still_trying' ? LEFT_STEP_WORDS.stillTrying : LEFT_STEP_WORDS.notListed
+    return answer('plan_step', input.orderId, sorted.closed ? { closed: true, ...(sorted.alreadyClosed ? { alreadyClosed: true } : {}), message: words } : { closed: false, reason: sorted.reason ?? 'not_listed', message: words })
   }
   // W41 (F-plan 4.10): a membership's payment date change the automatic check left for a person: recorded as not
   // finished with what Stripe last showed (reconcile's own last row), so the membership can be changed again. Never a

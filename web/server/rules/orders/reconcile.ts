@@ -122,6 +122,21 @@ import { checkWatchedRefund } from '@/server/rules/refunds/refund-watch-settle'
 import { PAYMENT_WATCH_DAYS, WATCHED_PAYMENTS_COUNT_SQL, WATCHED_PAYMENTS_DUE_SQL } from './payment-watch'
 import { cancelRefundedSubscription, cancelSubscriptionsAfterRefund, LEFT_BY_REFUND, refundCancelsDue, type RefundCancelDue } from './refund-subscription'
 import { checkAfterClosing, checksDue, LEAVE_AGAIN_DUE_SQL, leaveAgainLater, settleLeftStep, STEP_NOT_LEFT_AGAIN, stepsDue, type CheckDue, type OpenStep } from '@/server/rules/memberships/left'
+import {
+  checkProduct,
+  openChanges,
+  openCreates,
+  openPlanSteps,
+  planStepDue,
+  productChecksDue,
+  settleOpenChange,
+  settleOpenCreate,
+  settlePlanStep,
+  type OpenChange,
+  type OpenCreate,
+  type OpenPlanStep,
+  type ProductCheckDue,
+} from '@/server/rules/catalog/plan-stripe'
 import { endMembershipWithoutSubscription, membershipsToEnd } from '@/server/rules/memberships/no-subscription'
 import { checkStillLive, MAX_STILL_LIVE_READS_PER_RUN, MEMBERSHIP_STILL_LIVE, stillLiveDue, stillLiveKey, type StillLiveDue } from '@/server/rules/memberships/still-live'
 import {
@@ -280,7 +295,7 @@ export interface ReconcileItem {
    * W41: `date_change` is a membership's payment date change still pending (memberships/payment-date.ts).
    * W47r: `payment_retry` is a membership payment tried again from the desk, still open (memberships/retry-payment.ts).
    */
-  kind: 'order' | 'flow' | 'refund' | 'claim' | 'step' | 'date_change' | 'payment_retry'
+  kind: 'order' | 'flow' | 'refund' | 'claim' | 'step' | 'date_change' | 'payment_retry' | 'plan'
   id: string
   outcome: ItemOutcome
   reason?: string
@@ -453,7 +468,7 @@ const sameMode = (recorded: boolean | undefined, key: boolean | null): boolean =
 // --- The run
 
 /** What a non-refund item's `order.reconcile` rows are written against. */
-type ReconcileEntity = 'order' | 'reader_payment' | 'refund_claim' | 'membership_step' | typeof PAYMENT_DATE_RECONCILE_ENTITY | typeof PAYMENT_RETRY_RECONCILE_ENTITY
+type ReconcileEntity = 'order' | 'reader_payment' | 'refund_claim' | 'membership_step' | 'plan_change' | typeof PAYMENT_DATE_RECONCILE_ENTITY | typeof PAYMENT_RETRY_RECONCILE_ENTITY
 
 interface Run {
   db: Db
@@ -1599,6 +1614,46 @@ async function retryLeaveAgain(run: Run, stepId: string): Promise<ReconcileItem>
   }
 }
 
+// --- A membership plan's Stripe side (W57, G-plan 4.7): never a charge or a refund
+
+/**
+ * W57: a plan price change held (or left past its window with no answer): its new price looked for in Stripe by the
+ * record's id. Found: D2, then the old price archived and the members' moves sent (`finalised`). None: failed, the
+ * plan keeps its price (`undone`: what the press started is put back as it was). No clear read: left.
+ */
+async function settlePlanChange(run: Run, open: OpenChange): Promise<ReconcileItem> {
+  const settled = await settleOpenChange(run.db, run.stripe, open, { actor: run.options.actor, requestId: run.options.requestId }, run.timing)
+  if (settled.kind === 'done') return { kind: 'plan', id: open.change.changeId, outcome: 'finalised', detail: settled.detail }
+  if (settled.kind === 'failed') return { kind: 'plan', id: open.change.changeId, outcome: 'undone', detail: settled.detail }
+  if (settled.kind === 'closed') return { kind: 'plan', id: open.change.changeId, outcome: 'settled_elsewhere', detail: 'closed' }
+  return left('plan', open.change.changeId, 'plan_change_held', settled.detail)
+}
+
+/** W57 (GB20): a plan left half made: what is missing found or made under the same keys, then finished; refused for good: failed. */
+async function settlePlanCreate(run: Run, open: OpenCreate): Promise<ReconcileItem> {
+  const settled = await settleOpenCreate(run.db, run.stripe, open, { actor: run.options.actor, requestId: run.options.requestId }, run.timing)
+  if (settled.kind === 'done') return { kind: 'plan', id: open.plan.planId, outcome: 'finalised', detail: settled.detail }
+  if (settled.kind === 'failed') return { kind: 'plan', id: open.plan.planId, outcome: 'undone', detail: settled.detail }
+  if (settled.kind === 'closed') return { kind: 'plan', id: open.plan.planId, outcome: 'settled_elsewhere', detail: 'closed' }
+  return left('plan', open.plan.planId, 'plan_create_held', settled.detail)
+}
+
+/** W57: a plan step (an old price to archive, the product on or off sale) past its press's window. */
+async function sendPlanStepNow(run: Run, step: OpenPlanStep): Promise<ReconcileItem> {
+  const settled = await settlePlanStep(run.db, run.stripe, step.id, { actor: run.options.actor, requestId: run.options.requestId }, run.timing)
+  if (settled.kind === 'done') return { kind: 'plan', id: step.id, outcome: 'finalised', detail: `${step.kind} for plan ${step.planId}: ${settled.detail}` }
+  if (settled.kind === 'closed') return { kind: 'plan', id: step.id, outcome: 'settled_elsewhere', detail: settled.detail }
+  if (settled.kind === 'refused') return left('plan', step.id, 'plan_step_refused', `${step.kind} for plan ${step.planId}: ${settled.detail}`)
+  return left('plan', step.id, 'plan_step_left', `${step.kind} for plan ${step.planId}: ${settled.detail}`)
+}
+
+/** W57: a plan's product checked once more after its product steps closed: no item unless it leaves a step again. */
+async function checkPlanProduct(run: Run, due: ProductCheckDue): Promise<ReconcileItem | null> {
+  const checked = await checkProduct(run.db, run.stripe, due, { actor: run.options.actor, requestId: run.options.requestId }, run.timing)
+  if (checked.kind !== 'left_again') return null
+  return left('plan', due.planId, 'plan_product_differs', checked.detail)
+}
+
 // --- A closed step, checked once more (W40c)
 
 /** W40c: the reasons on a run's row for a wish a check left again: Stripe showed something else, or could not be read for 2 hours (W40d; a day before). */
@@ -1776,7 +1831,9 @@ const entityTypeOf = (kind: ReconcileItem['kind']): ReconcileEntity =>
           ? PAYMENT_DATE_RECONCILE_ENTITY
           : kind === 'payment_retry'
             ? PAYMENT_RETRY_RECONCILE_ENTITY
-            : 'reader_payment'
+            : kind === 'plan'
+              ? 'plan_change'
+              : 'reader_payment'
 
 /** W25: what a left row carries for the close (a claim's `parts`, a card flow's `payments`), as one comparable string. */
 function recordKey(record: { parts?: unknown; payments?: unknown } | undefined): string {
@@ -1879,6 +1936,13 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
   // MAX_STILL_LIVE_READS_PER_RUN a run, by when they were last read, as the checks. A read each, never a send.
   const liveWaiting = byLastTried(await stillLiveDue(db), stillLiveKey, tried.live)
   const live = liveWaiting.slice(0, MAX_STILL_LIVE_READS_PER_RUN)
+  // W57 (G-plan 4.7): a plan's Stripe side past its press's window: price changes held, plans half made, plan steps
+  // (an old price to archive, the product on or off sale) not refused, and products due their check.
+  const planChanges = (await openChanges(db)).filter((open) => !open.inWindow)
+  const planCreates = (await openCreates(db)).filter((open) => !open.inWindow)
+  // W57a (W57 review S2): an old price is archived only once no pending order names it (planStepDue).
+  const planSteps = (await openPlanSteps(db)).filter(planStepDue)
+  const productChecks = await productChecksDue(db)
   /** W46: the steps and checks this run got to, for the row that orders the next runs. W47r-e: and the memberships read (`live`). */
   const triedNow = { steps: [] as string[], checks: [] as string[], live: [] as string[] }
   // W32a (W32 review S1): the list itself picks the watches due a read, the one read longest ago first, and no more than
@@ -1992,6 +2056,12 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
       },
     })),
     ...(options.actor.type === 'staff' ? [...checkWork(), ...liveWork()] : []),
+    // W57 (G-plan 4.7): after F's steps, a plan's Stripe side: a held change first (members wait on it), then a plan
+    // half made, then the plan steps, then the product checks (a read each, an item only when one leaves a step).
+    ...planChanges.map((open) => ({ kind: 'plan' as const, id: open.change.changeId, go: () => settlePlanChange(run, open) })),
+    ...planCreates.map((open) => ({ kind: 'plan' as const, id: open.plan.planId, go: () => settlePlanCreate(run, open) })),
+    ...planSteps.map((step) => ({ kind: 'plan' as const, id: step.id, go: () => sendPlanStepNow(run, step) })),
+    ...productChecks.map((due) => ({ kind: 'plan' as const, id: due.planId, watch: true as const, go: () => checkPlanProduct(run, due) })),
     // W32: watched card refunds, read until they end. Last of all: a refund is watched for weeks, and must never keep
     // a run from anything that is waiting to be settled.
     ...watches.map((due) => ({ kind: 'refund' as const, id: due.details.refundId, watch: true as const, go: () => checkWatch(run, due) })),
