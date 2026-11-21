@@ -180,7 +180,8 @@ const storeCredit = async () =>
   )
 const bookingLines = async (bookingId: string) =>
   db.query<{ order_id: string; card_refunded_amount: string; created_at: Date }>(
-    "SELECT order_id, card_refunded_amount::text AS card_refunded_amount, created_at FROM order_line_items WHERE booking_id = $1 AND item_type = 'booking' ORDER BY created_at",
+    // W53 (migration 033): trim_scale, so a figure reads the same (`30`) whether the column is plain numeric or numeric(10,2).
+    "SELECT order_id, trim_scale(card_refunded_amount)::text AS card_refunded_amount, created_at FROM order_line_items WHERE booking_id = $1 AND item_type = 'booking' ORDER BY created_at",
     [bookingId]
   )
 const refundCalls = (stripe: FakeStripe) => stripe.calls.filter((call) => call.method === 'refunds.create')

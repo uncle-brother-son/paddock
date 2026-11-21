@@ -234,13 +234,18 @@ const money = (value: string | number | null | undefined): number | null => {
 
 /**
  * The order the payment is recorded on when no card money is due, as the old function chose its method: gift card
- * with something else 'split', gift card alone 'gift_card', cash 'cash', otherwise (store credit alone) none.
+ * with something else 'split', gift card alone 'gift_card', cash 'cash'.
+ *
+ * W53 (lead call L9; W20 review 3; the W26 audit's row 7; Q9's table): store credit alone records `store_credit`. The
+ * old function recorded none, and so did the Worker until now (Q36, "keep exactly"), so the order said nothing about
+ * how it was paid. Orders written before W53 keep their empty method: the order list reads them as store credit by
+ * what paid for them (orders/admin.ts, ORDER_PAID_BY_SQL). Exported for its test.
  */
-function ownOrderMethod(giftCard: number, rest: number, method: string | undefined): string | null {
+export function ownOrderMethod(giftCard: number, rest: number, method: string | undefined, storeCredit: number): string | null {
   if (giftCard > 0 && rest > NOTHING_LEFT) return 'split'
   if (giftCard > 0) return 'gift_card'
   if (rest > NOTHING_LEFT && method === 'cash') return 'cash'
-  return null
+  return storeCredit > NOTHING_LEFT ? 'store_credit' : null
 }
 
 /** What the change costs, worked out from the booking as C1 has it locked (or as the replay reads it). */
@@ -476,7 +481,7 @@ async function c1(tx: Tx, bookingId: string, input: AddBookingGuestInput, option
           `INSERT INTO orders (customer_id, order_total, payment_status, order_source, payment_method, created_at)
            VALUES ($1::uuid, $2::numeric, 'paid', 'staff_created', $3::text, clock_timestamp())
            RETURNING id`,
-          [booking.customerId, amountDue, ownOrderMethod(giftCardPart, remainder, method)]
+          [booking.customerId, amountDue, ownOrderMethod(giftCardPart, remainder, method, storeCreditAmount)]
         )
       )[0]?.id ?? null)
     : null

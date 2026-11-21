@@ -190,6 +190,10 @@ const STAFF_PATTERNS: Array<{ pattern: RegExp; load: () => Promise<unknown>; par
   { pattern: /^\/api\/v1\/staff\/events\/attendees\/([^/]+)\/check-in\/undo$/, load: () => import('@/app/api/v1/staff/events/attendees/[attendeeId]/check-in/undo/route'), params: (m) => ({ attendeeId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/events\/attendees\/([^/]+)\/waiver$/, load: () => import('@/app/api/v1/staff/events/attendees/[attendeeId]/waiver/route'), params: (m) => ({ attendeeId: decodeURIComponent(m[1] ?? '') }) },
   { pattern: /^\/api\/v1\/staff\/events\/([^/]+)\/attendees$/, load: () => import('@/app/api/v1/staff/events/[eventId]/attendees/route'), params: (m) => ({ eventId: decodeURIComponent(m[1] ?? '') }) },
+  // W53: the staff app's thin getOrderLineItems and setOrderLineItemFulfilled (`orders/lines/:lineItemId/...`: an
+  // order's own paths are `orders/:orderId/...`, never `orders/lines`). getOrders is the exact path above.
+  { pattern: /^\/api\/v1\/staff\/orders\/lines\/([^/]+)\/fulfilled$/, load: () => import('@/app/api/v1/staff/orders/lines/[lineItemId]/fulfilled/route'), params: (m) => ({ lineItemId: decodeURIComponent(m[1] ?? '') }) },
+  { pattern: /^\/api\/v1\/staff\/orders\/([^/]+)\/lines$/, load: () => import('@/app/api/v1/staff/orders/[orderId]/lines/route'), params: (m) => ({ orderId: decodeURIComponent(m[1] ?? '') }) },
 ]
 
 function staffRoute(path: string): { load: () => Promise<unknown>; params: Record<string, string> } | null {

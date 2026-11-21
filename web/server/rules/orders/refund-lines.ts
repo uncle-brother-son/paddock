@@ -373,13 +373,15 @@ interface CardLeft {
  * payment). `membership` (W29, Wayne's Q40): the membership's own payment, when it had one beside the order's (a
  * saved-card membership order with a remainder charge), else null: a Card refund of the membership line goes there.
  */
-async function orderCardLeft(db: Queryable, orderId: string): Promise<{ order: CardLeft; membership: CardLeft | null } | null> {
+async function orderCardLeft(db: Queryable, orderId: string): Promise<{ order: CardLeft; membership: CardLeft | null; tookMembership: boolean } | null> {
   const portion = await loadOrderCardPortion(db, orderId)
   if (!portion) return null
   const own = portion.membershipPayment
   return {
     order: { left: portion.paymentIntentId ? portion.cardPortionRemaining : 0, paymentIntentId: portion.paymentIntentId, remaining: portion.cardPortionRemaining },
     membership: own ? { left: own.paymentIntentId ? own.remaining : 0, paymentIntentId: own.paymentIntentId, remaining: own.remaining } : null,
+    // W53 (Q40): the order's one card payment was its membership's own first invoice.
+    tookMembership: portion.cardTookMembership,
   }
 }
 
@@ -605,7 +607,13 @@ async function refundR1(tx: Tx, orderId: string, input: RefundOrderInput, option
   const cashLeft = method === 'cash' ? await orderCashLeft(tx, orderId) : 0
   // Q42: cash only for cash paid on the order. With none left there is nothing to hand over: store credit instead.
   if (method === 'cash' && !(cashLeft > 0)) throw orderRefundRefusal('CONFLICT', 'no_cash_left', NEW_WORDS.noCashLeft, 'refund', { figures: await figuresFrom(tx, order, await tx.query<LineRow>(ORDER_LINES_SQL, [orderId])) })
-  const plan = planFor(orderId, method, amounts, { left: card?.left ?? 0, paymentIntentId: card?.paymentIntentId ?? null }, cashLeft)
+  // W53 (Wayne's Q40; the W28 QA's step G note): card money is recorded on the line its payment took. Where the
+  // order's one card payment was its membership's own first invoice (store credit and a gift card covered the rest of
+  // the basket first), the card part goes on the membership's line before the others, where it went on the lines in
+  // line order: a T-shirt £45 and a membership £45 paid with £50 store credit and £40 on the membership's invoice read
+  // £40 back to the card on the T-shirt and store credit on the membership. The amounts and the totals are the same.
+  const cardOrder = cards?.tookMembership ? [...amounts.filter((line) => memberships.has(line.id)), ...amounts.filter((line) => !memberships.has(line.id))] : amounts
+  const plan = planFor(orderId, method, cardOrder, { left: card?.left ?? 0, paymentIntentId: card?.paymentIntentId ?? null }, cashLeft)
 
   // Each line's stamp: `card` while the card part lasts (line order), `cash` while the cash lasts, then `credit`. A
   // line that had card money back on an earlier try stays `card`, as before.
@@ -1294,6 +1302,10 @@ export async function orderOwedArrived(db: Db, orderId: string, input: OrderOwed
       }
       const lowered = await lowerMoneyOwed(tx, orderId, take)
       if (!lowered.ok) throw new Error(`The money owed on order ${orderId} changed under its lock.`)
+      // W53 (W32 "Noticed" 4; W47 review point 1): the order's status is worked out again, as the booking's path does.
+      // While money was owed the order read `partially_refunded` however its lines were stamped; with none left it
+      // reads what its lines say.
+      await recordOrderPaymentStatus(tx, orderId)
       await audit.recordAll(tx, [
         { actorType: 'staff', actorId: options.actor.id, action: ORDER_OWED_ARRIVED, entityType: 'order', entityId: orderId, requestId: options.requestId, details: { amount: take, reason, owedBefore: owed, owedAfter: lowered.owed, ...(onCard ? { arrivedOn: 'card', card, lines } : {}) } },
       ])

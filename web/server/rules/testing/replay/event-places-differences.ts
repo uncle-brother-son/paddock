@@ -1,4 +1,4 @@
-import type { AllowedDifference } from './compare'
+import { PENNY_TEXT_FIELDS, samePence, type AllowedDifference } from './compare'
 
 /*
  * W30 (brief item 7; E-plan 4.13 items 3 and 4): the event place golden families (W27's `w27-event-cancel-*`, the E8
@@ -57,7 +57,9 @@ function pinned(name: string, decision: string, pins: ReadonlyArray<readonly [st
     actual: (value, _expected, path) => {
       const pin = byPath.get(path)
       if (pin === undefined) return false
-      return typeof pin === 'function' ? pin(value) : value === pin
+      if (typeof pin === 'function') return pin(value)
+      // W53 (migration 033): a place's three figures are text to the penny now (`40.00`); the pins say `40`.
+      return value === pin || (PENNY_TEXT_FIELDS.has(path.slice(path.lastIndexOf('.') + 1)) && samePence(value, pin))
     },
   }
 }

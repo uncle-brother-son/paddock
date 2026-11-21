@@ -30,7 +30,7 @@ import type { Db, Tx } from '@/server/db'
 import type { StripeClient } from '@/server/stripe/client'
 import type { StripeTiming } from '@/server/stripe/deadline'
 import { lockForBooking } from '@/server/rules/bookings/locks'
-import { recordOrderPaymentStatus } from '@/server/rules/bookings/money-left'
+import { recordBookingOrdersPaymentStatus, recordOrderPaymentStatus } from '@/server/rules/bookings/money-left'
 import { openRefundClaimOn, readClaim } from '@/server/rules/bookings/refunds'
 import { splitByUnitPrice } from '@/server/rules/events/cancel-places'
 import { raiseMoneyOwed } from '@/server/rules/orders/money-owed'
@@ -146,6 +146,9 @@ async function failBookingWatch(db: Db, watch: WatchDetails, status: string, by:
     )
     const part = claim.details.plan.card.find((one) => one.paymentIntentId === watch.paymentIntentId)
     if (part) await recordOrderPaymentStatus(tx, part.orderId)
+    // W53 (W32 "Noticed" 4): the money is owed on the booking again, so none of its orders may read `refunded`: each
+    // is worked out again (money-left.ts), the ones this refund never touched included.
+    await recordBookingOrdersPaymentStatus(tx, watch.subjectId)
     await audit.recordAll(tx, failedRows(by, watch, owed, status))
     return { outcome: 'failed', owed, status }
   })

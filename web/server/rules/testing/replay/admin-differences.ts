@@ -1,5 +1,6 @@
 import { BOOKING_ADMIN_NEW_WORDS } from '@/server/rules/bookings/admin-failure-messages'
 import { EVENT_ADMIN_NEW_WORDS, EVENT_ADMIN_WORDS } from '@/server/rules/events/admin-failure-messages'
+import { ORDER_ADMIN_NEW_WORDS } from '@/server/rules/orders/admin-failure-messages'
 import { PRICING_ADMIN_NEW_WORDS } from '@/server/rules/pricing/admin-failure-messages'
 import { PROMO_ADMIN_WORDS } from '@/server/rules/promo/admin-failure-messages'
 import { SESSION_ADMIN_NEW_WORDS } from '@/server/rules/sessions/admin-failure-messages'
@@ -148,6 +149,9 @@ const GB14_READS_MOVED: ReadonlyArray<readonly [index: number, read: string]> = 
   [3, 'getBookingDetail'],
   [4, 'getAddonPrepChecklistForRange'],
   [5, 'getWaiverGapsForRange'],
+  // W53.
+  [6, 'getOrders'],
+  [7, 'getOrderLineItems'],
   [8, 'getPaymentAttentionItems'],
   // W51.
   [9, 'getSessionsForRange'],
@@ -168,8 +172,8 @@ const GB14_PASSES: ReadonlyArray<readonly [offset: number, words: string]> = [
 
 const gb14TheMovedReadsRefuse = (golden: Recording): AllowedDifference =>
   pinned(
-    "Bug GB14 is closed for the reads moved so far: an inactive account, and a sign-in with no staff row, are refused the promo code list and a code's uses (W54), and the booking list, one booking, its detail (with its guests' dates of birth), the add-on prep list, the waiver gaps and the payments needing attention (W50), and the calendar's sessions and the service types for a slot (W51), and the events list, an event's attendee list and today's events (W52), each in the words every staff route gives. (The old code answered them all. The reads W53 to W57 move still do.)",
-    'Bug GB14 (G-plan section 3); G-plan 4.2 (reads: an active staff member); briefs W49 + W54, W50, W51 and W52 "Parity and tests" (the staff check on reads)',
+    "Bug GB14 is closed for the reads moved so far: an inactive account, and a sign-in with no staff row, are refused the promo code list and a code's uses (W54), and the booking list, one booking, its detail (with its guests' dates of birth), the add-on prep list, the waiver gaps and the payments needing attention (W50), and the calendar's sessions and the service types for a slot (W51), and the events list, an event's attendee list and today's events (W52), and the order list and an order's lines (W53), each in the words every staff route gives. (The old code answered them all. The reads W55 to W57 move still do.)",
+    'Bug GB14 (G-plan section 3); G-plan 4.2 (reads: an active staff member); briefs W49 + W54, W50, W51, W52 and W53 "Parity and tests" (the staff check on reads)',
     GB14_PASSES.flatMap(([offset, words]) =>
       GB14_READS_MOVED.flatMap(([index]): Array<readonly [string, Pin]> => {
         const at = index + offset
@@ -911,3 +915,87 @@ export const W52_DIFFERING: readonly string[] = Object.keys(W52_NAMED)
 
 /** The named differences of a W52 recording: none for the ones that match their golden files exactly. */
 export const w52Differences = (name: string, golden: Recording): readonly AllowedDifference[] => W52_NAMED[name]?.(golden) ?? []
+
+// ---------------------------------------------------------------------------------------------------------------------
+// W53: Orders and fulfilment (GB14, GB22, the fulfilled tick's refusals, named columns)
+
+/** The six recordings of the two order reads and the fulfilled tick (GB14's own recording is in W49 + W54's family above). */
+export const isW53Scenario = (name: string): boolean => /^w48-(orders-read$|order-lines-read$|order-line-fulfilled-|gb22-)/.test(name)
+
+/*
+ * What W53's replay shows (briefs/W53-logs/08-replay-differences-first-pass.jsonl, staff app repo): two of the six
+ * match their golden files exactly, field for field: the order list read ten ways (each view, the search, the
+ * payment status, the source, the dates), and GB22's second half (an order with money owed is Needs action, as it has
+ * been since W47). Named columns in place of `o.*` change nothing there: every column the old answer carried is
+ * named. The line read's names and its two summary sentences are the old function's, word for word.
+ *
+ * On every recording and set aside before the comparison, as for W49 to W52: the Worker's audit rows (one for each
+ * tick set, with who) and the stored answers that hold each call's key. Also set aside: how each order was paid, in
+ * words, which the order list now answers beside each order (lead call L9; checked on its own in the replay test).
+ *
+ * Four differ, each by a decision, named below. A refused answer and the row left unchanged are separate allowances,
+ * so a press refused in the right words that still changed the row leaves the row's allowance unseen, which fails.
+ */
+
+const W53_FLAG = 'G-plan 4.2 (level C: one guarded statement, where the guard is the rule, and an audit row)'
+export const W53_DECISIONS = {
+  NAMED_COLUMNS: "G-plan 4.2 (reads: named columns, never `*`); W48's contracts (w48-contracts.test.ts, LEFT_OUT: getOrderLineItems' four working columns, which no screen's type has); brief W53 item 1",
+  NO_STAFF_ROW: `W48 report "For the Worker step" 1 and W48 review point 7 (the old tick called resolveStaffId and ignored a sign-in with no staff row); bug GB14's fix (G-plan 4.2: every /api/v1/staff route refuses an unknown sign-in before its rule runs)`,
+  WORDS: `Brief W53 item 3 (the tick says why it refused); W48 report "Where I was unsure" 9 (words for refusals that had none); ${W53_FLAG}`,
+  GB22: 'Bug GB22 (G-plan section 3: an order whose booking is at Payment needed reads Complete); brief W53 item 2',
+} as const
+
+/** The four columns the old line read worked its add-on sentence out from, and spread into its answer beside it. */
+const LINE_WORKING_COLUMNS = ['addon_removed_count', 'addon_refunded', 'addon_card_refunded', 'addon_credits_returned'] as const
+
+/** Where a golden recording of the line read holds those columns: each line of each answer that is a list of lines. */
+const lineWorkingColumnPaths = (golden: Recording): Array<readonly [string, Pin]> =>
+  golden.results.flatMap((result, i) =>
+    Array.isArray(result) ? result.flatMap((line: unknown, j) => (isObject(line) ? LINE_WORKING_COLUMNS.filter((column) => column in line).map((column) => [`.results[${i}][${j}].${column}`, GONE] as const) : [])) : []
+  )
+
+/** An order the list answers as Needs action: the recording's one order, paid, with its booking line's booking at Payment needed. */
+const needsActionOrder: Matcher = (value) => isObject(value) && value['id'] === 'orders#1' && value['computed_status'] === 'needs_action' && value['payment_status'] === 'paid' && value['order_total'] === '20.00'
+
+/** The named differences of each W53 recording that has any, built from its own golden file. Two have none. */
+const W53_NAMED: Readonly<Record<string, (golden: Recording) => AllowedDifference[]>> = {
+  'w48-order-lines-read': (golden) => [
+    pinned(
+      "An order's lines no longer carry the four working columns the old function spread into its answer beside the add-on sentence it built from them (`addon_removed_count`, `addon_refunded`, `addon_card_refunded`, `addon_credits_returned`). No screen reads them: the sentence itself (`addon_refund_summary`) is answered, word for word as before.",
+      W53_DECISIONS.NAMED_COLUMNS,
+      lineWorkingColumnPaths(golden)
+    ),
+  ],
+  'w48-order-line-fulfilled-who-may': (golden) => [
+    pinned(
+      'Marking a product line fulfilled, pressed by a sign-in with no staff row, is refused in the words every staff route gives ("No staff record matches the logged-in user\'s email…"). (The old function ignored that the sign-in had no staff row and went ahead: nobody who is staff had done it.)',
+      W53_DECISIONS.NO_STAFF_ROW,
+      answerRefused(golden, 2, NO_STAFF_RECORD_WORDS)
+    ),
+    pinned('…and the line is still to be fulfilled. (The old function marked it fulfilled.)', W53_DECISIONS.NO_STAFF_ROW, [['.tables.order_line_items.added[0].fulfillment_status', 'pending']]),
+  ],
+  'w48-order-line-fulfilled-and-undo': () => [
+    pinned(
+      'The tick refused on a line that isn\'t a product, and on a line that isn\'t there, is still answered `updated: false` with the old reason, now with why in words: "Only a product can be marked fulfilled. This line isn\'t one." and "That line is no longer on the order. Reload the page and try again." (The old function gave the reason alone, and the screen said "Failed to update fulfillment status" for both.)',
+      W53_DECISIONS.WORDS,
+      [
+        ['.results[5].message', ORDER_ADMIN_NEW_WORDS.notAProductLine],
+        ['.results[6].message', ORDER_ADMIN_NEW_WORDS.lineNotFound],
+      ]
+    ),
+  ],
+  'w48-gb22-an-order-whose-booking-needs-payment-reads-complete': () => [
+    pinned(
+      "Bug GB22 is closed: an order whose booking is at Payment needed is listed under Needs action, the Orders page's first view, reading Needs action. (The old read left it out of that view: a member whose payment had failed, with a booking to pay for, was only under Complete or All.)",
+      W53_DECISIONS.GB22,
+      [['.results[1][0]', needsActionOrder]]
+    ),
+    pinned('…and it is no longer listed under Complete. (The old read listed it there, reading Complete.)', W53_DECISIONS.GB22, [['.results[2][0]', GONE]]),
+  ],
+}
+
+/** The W53 recordings that have a named difference. */
+export const W53_DIFFERING: readonly string[] = Object.keys(W53_NAMED)
+
+/** The named differences of a W53 recording: none for the ones that match their golden files exactly. */
+export const w53Differences = (name: string, golden: Recording): readonly AllowedDifference[] => W53_NAMED[name]?.(golden) ?? []

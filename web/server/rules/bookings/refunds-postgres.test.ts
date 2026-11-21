@@ -183,7 +183,7 @@ describe("the press's R2 racing reconcile's on one held claim", () => {
     const answers = (await Promise.all([a, b])) as Array<{ answered?: unknown }>
     expect(answers.filter((answer) => answer.answered !== null && answer.answered !== undefined)).toHaveLength(1)
     expect(answers.filter((answer) => answer.answered === null)).toHaveLength(1)
-    const line = (await first.query<{ card: string }>('SELECT card_refunded_amount::text AS card FROM order_line_items WHERE id = $1', [lineId]))[0]
+    const line = (await first.query<{ card: string }>('SELECT trim_scale(card_refunded_amount)::text AS card FROM order_line_items WHERE id = $1', [lineId]))[0]
     expect(line?.card).toBe('25')
     expect(await finishedRows(bookingId)).toBe(1)
   })

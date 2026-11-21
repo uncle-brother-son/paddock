@@ -388,6 +388,31 @@ export function seatLineLessPaidAddOns(value: unknown, expected: unknown, path: 
   return pennies(value) === Math.max(0, pennies(expected) - addOns)
 }
 
+/**
+ * W53 (migration 033): the fields of an answer that hold one of the fourteen money columns 033 makes numeric(10,2).
+ * A plain `numeric` column printed its figure as it was written (`0`, `12`, `4.5`); `numeric(10,2)` prints it to the
+ * penny (`0.00`, `12.00`, `4.50`). The golden files were recorded before 033 and the saved schema now carries it, so
+ * in an ANSWER these fields are compared as money, to the penny, as a table's numeric columns always were
+ * (Labeller.column). Only for these names, and only when both sides are plain decimal text: a figure that differs by
+ * a penny, or that rounding changed, is still a difference.
+ */
+export const PENNY_TEXT_FIELDS: ReadonlySet<string> = new Set([
+  'card_refunded_amount',
+  'refunded_amount',
+  'cancelled_value',
+  'amount_charged',
+  'price_monthly',
+  'price_yearly',
+  'discount_amount',
+  'system_unit_price',
+  'expected_amount',
+  'min_spend',
+])
+const DECIMAL_TEXT = /^-?\d+(\.\d+)?$/
+/** True when both are decimal text for the same number of pence. */
+export const samePence = (a: unknown, b: unknown): boolean =>
+  typeof a === 'string' && typeof b === 'string' && DECIMAL_TEXT.test(a) && DECIMAL_TEXT.test(b) && Number(a).toFixed(2) === Number(b).toFixed(2)
+
 function walk(path: string, expected: unknown, actual: unknown, out: Difference[]): void {
   if (Array.isArray(expected) && Array.isArray(actual)) {
     const length = Math.max(expected.length, actual.length)
@@ -406,6 +431,8 @@ function walk(path: string, expected: unknown, actual: unknown, out: Difference[
     for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
       if (!(key in a)) out.push({ path: `${path}.${key}`, expected: undefined, actual: b[key] })
       else if (!(key in b)) out.push({ path: `${path}.${key}`, expected: a[key], actual: undefined })
+      // W53 (migration 033): one of the fourteen columns' text, the same to the penny (`0` and `0.00`).
+      else if (PENNY_TEXT_FIELDS.has(key) && a[key] !== b[key] && samePence(a[key], b[key])) continue
       else walk(`${path}.${key}`, a[key], b[key], out)
     }
     return

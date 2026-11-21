@@ -20,7 +20,8 @@ import { ADMIN_TEST_KEY, auditRowsOf, pressRoute, type AdminAnswer, type AdminRo
 import { fixtures, insert, startTestDatabase, type TestDatabase } from '@/server/rules/testing/database'
 import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
 import { WAIVER_METHODS } from '@/server/rules/waivers/methods'
-import { addonLinesOfBookings, getBookingDetail, getBookingRow, guestsOfBookings, listAddonPrep, listBookings, listPaymentAttention, listWaiverGaps, setGuestWaiver, type BookingReader } from './admin'
+import { listPaymentAttention } from '@/server/rules/orders/admin'
+import { addonLinesOfBookings, getBookingDetail, getBookingRow, guestsOfBookings, listAddonPrep, listBookings, listWaiverGaps, setGuestWaiver, type BookingReader } from './admin'
 import { BOOKING_ADMIN_NEW_WORDS, BOOKING_ADMIN_WORDS, BOOKING_FLAG_REASONS } from './admin-failure-messages'
 import { CARD_PAYMENT_OPEN_MESSAGE, READER_PAYMENT_OPEN_MESSAGE } from './failure-messages'
 
@@ -250,8 +251,8 @@ describe("the booking detail (GET bookings/:bookingId/detail), with the open-pay
     expect(detail?.guests[0]).toMatchObject({ booking_id: id, guest_email: 'sam@example.com', date_of_birth: '1990-01-01', waiver_accepted: false, waiver_method: null, unit_price: '20.00', pay_by: 'paid' })
     expect(detail?.addonLines.map((line) => line['id'])).toEqual([kept, removed])
     expect(Object.keys(detail?.addonLines[0] ?? {}).sort()).toEqual(Object.keys(adminGetBookingDetailOutputSchema.shape.addonLines.element.shape).sort())
-    expect(detail?.addonLines[0]).toMatchObject({ addon_id: towel, addon_name: 'Towel', quantity: 1, price_at_purchase: '5.00', sku_at_purchase: 'TOWEL', prepared: false, removed_at: null, removed_by_name: null, refunded_amount: '0', order_has_card: true })
-    expect(detail?.addonLines[1]).toMatchObject({ removed_at: '2027-06-02T09:00:00.000Z', removed_by_name: 'Tia Team', refunded_amount: '5', refund_method: 'credit', order_has_card: false })
+    expect(detail?.addonLines[0]).toMatchObject({ addon_id: towel, addon_name: 'Towel', quantity: 1, price_at_purchase: '5.00', sku_at_purchase: 'TOWEL', prepared: false, removed_at: null, removed_by_name: null, refunded_amount: '0.00', order_has_card: true })
+    expect(detail?.addonLines[1]).toMatchObject({ removed_at: '2027-06-02T09:00:00.000Z', removed_by_name: 'Tia Team', refunded_amount: '5.00', refund_method: 'credit', order_has_card: false })
     expect(detail).toMatchObject({ specialRequests: 'No milk', refundOwedAmount: '12.50', readerPaymentOpenMessage: null })
   })
 
@@ -862,7 +863,7 @@ describe('an add-on marked prepared (POST bookings/addon-lines/:lineId/prepared;
     const on = await prepared(line, true, TIA, key)
     expect(on.status).toBe(200)
     expect(Object.keys(on.data ?? {}).sort()).toEqual(LINE_FIELDS)
-    expect(on.data).toMatchObject({ id: line, booking_id: id, addon_id: towel, quantity: 1, price_at_purchase: '5.00', sku_at_purchase: 'TOWEL', prepared: true, prepared_by: tia, refunded_amount: '0', card_refunded_amount: '0', removed_at: null })
+    expect(on.data).toMatchObject({ id: line, booking_id: id, addon_id: towel, quantity: 1, price_at_purchase: '5.00', sku_at_purchase: 'TOWEL', prepared: true, prepared_by: tia, refunded_amount: '0.00', card_refunded_amount: '0.00', removed_at: null })
     expect(typeof on.data?.['prepared_at']).toBe('string')
 
     const off = await prepared(line, false)

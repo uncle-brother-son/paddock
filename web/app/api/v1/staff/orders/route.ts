@@ -1,8 +1,21 @@
-import { placeOrderInputSchema, placeOrderOutputSchema } from '@/contracts'
+import { orderListRouteInputSchema, orderListRouteOutputSchema, placeOrderInputSchema, placeOrderOutputSchema } from '@/contracts'
 import { defineRoute } from '@/server/http/define-route'
+import { adminActor } from '@/server/rules/admin/refusal'
+import { listOrders } from '@/server/rules/orders/admin'
 import { placeOrder } from '@/server/rules/orders/place-order'
 import { orderPathOff } from '@/server/rules/orders/order-switch'
 import { createStripeClient, ORDER_STRIPE_LIMITS } from '@/server/stripe/client'
+
+/**
+ * W53 (G-plan 4.3; bugs GB14 and GB22; lead call L9): getOrders, the Orders page's list and Overview's orders card:
+ * the orders in the date range, with the payment status, source and search asked for, under the view asked for
+ * (Needs action when none is), each with its customer, its worked-out status and how it was paid, in words. An order
+ * whose booking is at Payment needed, and one with money owed, count as Needs action. Named fields. Any active staff
+ * member (the old read checked nobody).
+ */
+export const GET = defineRoute({ auth: 'staff', input: orderListRouteInputSchema, output: orderListRouteOutputSchema }, async ({ db, input, staff }) =>
+  listOrders(db, input, { channel: 'staff', actor: adminActor(staff) })
+)
 
 /**
  * Places an order (W06: cash, or nothing owed; W10: the saved card). Idempotent: a retry with the

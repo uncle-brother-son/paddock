@@ -34,13 +34,16 @@ import {
 } from './failure-messages'
 import { startsWithinRealHours } from '@/server/rules/time/london-time'
 import { loadBooking, lockAndLoadBooking, paymentOpen, sessionStartWallClock, type LoadedBooking } from './load-booking'
+import { loadBookingLines } from './money-left'
 import { paymentOpenRefusal } from './money-in'
 import {
   finishClaimInTransaction,
   GUEST_REMOVED,
+  guestLine,
   guestRemovedDetails,
   planRefund,
   refundClaimOpen,
+  removedGuestLine,
   run,
   stampRemovedGuestLine,
   writeClaim,
@@ -216,7 +219,17 @@ async function removeR1(
   if (full.refundable && confirmed > 0 && !method) throw removeGuestRefusal('VALIDATION', 'refund_method_required', undefined, { quote })
 
   const give = quote.refundAmount
-  const plan = give > 0 && method ? await planRefund(tx, bookingId, give, method) : null
+  // W53 (W05h items 2 to 5): the order line the guest's own Add Guest wrote, if it wrote one: the line R2 stamps and
+  // the order their refund's store credit is linked to. Null for a guest with no line of their own.
+  const ownLine = await guestLine(tx, bookingId, guestId)
+  // W53a (W53 review S1; Wayne's Q40): the seat's money goes back first to the payment that took it: the order of the
+  // line R2 stamps as the guest's (removedGuestLine: their own line; else, for a guest with no `booking.guest_add`
+  // row, W53's price guess, which finds the own order of a guest the old Add Guest added: Wayne, 21 Nov), else the
+  // booking's own order (one of the original party: its oldest booking line's, as planRefund's `ownOrderId`). Then
+  // the other payments newest first, then store credit, as before.
+  const seatLine = give > 0 && method === 'card' && full.seatPrice !== null ? await removedGuestLine(tx, bookingId, { id: guestId, seatPrice: full.seatPrice, line: ownLine }) : null
+  const seatOrder = give > 0 && method === 'card' ? (seatLine?.orderId ?? (await loadBookingLines(tx, bookingId)).at(-1)?.orderId ?? null) : null
+  const plan = give > 0 && method ? await planRefund(tx, bookingId, give, method, [], false, seatOrder) : null
   // With card parts the guest's row is kept in the claim, so the undo after a refused first part puts it back as it was.
   const restore =
     plan && plan.card.length > 0
@@ -234,7 +247,7 @@ async function removeR1(
     // claim, as before. A paid seat's line is still stamped when its money had all gone back already
     // (stampRemovedGuestLine); when the 24-hour rule kept its money on the booking, its line is not stamped.
     const insideRule = full.withheldInside24Hours > 0
-    if (full.refundable && !insideRule && full.seatPrice !== null) await stampRemovedGuestLine(tx, bookingId, full.seatPrice)
+    if (full.refundable && !insideRule && full.seatPrice !== null) await stampRemovedGuestLine(tx, bookingId, { id: guestId, seatPrice: full.seatPrice, line: ownLine })
     await audit.recordAll(tx, [
       {
         actorType: 'staff',
@@ -258,6 +271,7 @@ async function removeR1(
     seatPrice: full.seatPrice ?? give,
     placeReleased,
     ...(restore ? { restore } : {}),
+    line: ownLine,
   }
   const details: ClaimDetails = {
     kind: 'remove_guest',

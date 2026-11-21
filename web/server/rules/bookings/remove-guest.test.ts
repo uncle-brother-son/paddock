@@ -140,7 +140,8 @@ async function booking(bookingId: string) {
 const guestRow = async (guestId: string) => (await db.query<Record<string, unknown>>('SELECT to_jsonb(g) AS row FROM booking_guests g WHERE id = $1', [guestId]))[0]?.['row']
 const bookingLines = async (bookingId: string) =>
   db.query<{ order_id: string; card_refunded_amount: string; refunded_at: unknown; refund_method: string | null }>(
-    "SELECT order_id, card_refunded_amount::text AS card_refunded_amount, refunded_at, refund_method FROM order_line_items WHERE booking_id = $1 AND item_type = 'booking' ORDER BY created_at",
+    // W53 (migration 033): trim_scale, so a figure reads the same (`20`) whether the column is plain numeric or numeric(10,2).
+    "SELECT order_id, trim_scale(card_refunded_amount)::text AS card_refunded_amount, refunded_at, refund_method FROM order_line_items WHERE booking_id = $1 AND item_type = 'booking' ORDER BY created_at",
     [bookingId]
   )
 const creditRefunds = async () => db.query<{ amount: string; note: string; order_id: string | null }>("SELECT amount::text AS amount, note, order_id FROM store_credit_transactions WHERE reason = 'refund' ORDER BY created_at")
@@ -199,7 +200,9 @@ describe('Remove Guest: the removal (W22)', () => {
     })
   })
 
-  it("to store credit: one transaction, nothing sent to Stripe, the old note and the booking's own order", async () => {
+  // W53 (W05h item 2), a named difference: the store credit is linked to the order that paid for the GUEST's seat
+  // (the line R2 stamps), where it was linked to the booking's own order, which then read `partially_refunded`.
+  it("to store credit: one transaction, nothing sent to Stripe, the old note, linked to the guest's own order (W53)", async () => {
     await withAGuest(async ({ bookingId, guestId, stripe }) => {
       const answer = await remove(guestId, { confirmedRefundAmount: 20, refundMethod: 'credit' })
       expect(answer.body.data).toMatchObject({ removed: true, cardRefundedAmount: 0, storeCreditRefundedAmount: 20 })
@@ -208,7 +211,16 @@ describe('Remove Guest: the removal (W22)', () => {
       const credit = (await creditRefunds())[0]
       expect(credit?.amount).toBe('20.00')
       expect(credit?.note).toMatch(/^Refund for a guest removed from the booking \(Bea Guest\)\. \[ref /)
-      expect(credit?.order_id).toBe((await bookingLines(bookingId))[0]?.order_id)
+      const [ownLine, guestLine] = await bookingLines(bookingId)
+      expect(credit?.order_id).toBe(guestLine?.order_id)
+      expect(credit?.order_id).not.toBe(ownLine?.order_id)
+      // The guest's order reads refunded; the booking's own order, which gave nothing back, still reads paid.
+      expect((await db.query<{ id: string; payment_status: string }>('SELECT id, payment_status FROM orders WHERE id = ANY($1::uuid[])', [[ownLine?.order_id, guestLine?.order_id]])).map((row) => [row.id, row.payment_status]).sort()).toEqual(
+        [
+          [ownLine?.order_id, 'paid'],
+          [guestLine?.order_id, 'refunded'],
+        ].sort()
+      )
       expect((await auditRows('booking.refund_claimed'))[0]?.details).not.toHaveProperty('guest.restore')
     })
   })

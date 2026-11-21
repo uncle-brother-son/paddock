@@ -677,7 +677,7 @@ describe('the attendee list (GET events/:eventId/attendees)', () => {
     await db.query('UPDATE orders SET refund_owed_amount = 40 WHERE id = $1', [gone.orderId])
     const [booking] = (await listOf(eventId)).data?.bookings ?? []
     expect(booking).toMatchObject({ id: gone.bookingId, status: 'cancelled', places: 0, order_id: gone.orderId, refund_owed_amount: '40.00', refund_open: false })
-    expect(booking?.attendees.map((attendee) => [attendee.cancelled_value, attendee.refunded_amount, attendee.refund_method])).toEqual([['40', '0', 'card']])
+    expect(booking?.attendees.map((attendee) => [attendee.cancelled_value, attendee.refunded_amount, attendee.refund_method])).toEqual([['40.00', '0.00', 'card']])
   })
 
   it('row 18: `refund_open` is true while a refund on the booking\'s order is still being checked, and false once its claim has finished or when the booking has no order', async () => {

@@ -1080,3 +1080,59 @@ export type EventAttendeeRouteInput = z.infer<typeof eventAttendeeRouteInputSche
 /** `POST events/attendees/:attendeeId/waiver`: setEventAttendeeWaiver, sign (the standard, the extra or both) and revoke (one). Answers the attendee as they now are. */
 export const eventWaiverRouteInputSchema = z.object({ attendeeId: z.string(), which: loose, accepted: loose, method: loose })
 export type EventWaiverRouteInput = z.infer<typeof eventWaiverRouteInputSchema>
+
+// ---------------------------------------------------------------------------------------------------------------------
+// W53 (G-plan 4.3, the "Orders" row; bug GB22; lead call L9): Orders and fulfilment. The two reads answer the old
+// functions' own shapes (W48's contracts above); the list also answers how each order was paid, in words (L9). The
+// fulfilled tick answers the line as it now is, by named columns (every column the old `RETURNING *` gave). Kept
+// last, so the staff app's generated types keep their order.
+
+/**
+ * `GET orders`: getOrders. Each filter is optional, as before. `view` is `upcoming`, `complete` or `all`; anything
+ * else, or nothing, is Needs action (the page's first view), as the old function read it.
+ */
+export const orderListRouteInputSchema = z.object({
+  startDate: londonDay.optional(),
+  endDate: londonDay.optional(),
+  paymentStatus: z.string().optional(),
+  orderSource: z.string().optional(),
+  search: z.string().optional(),
+  view: z.string().optional(),
+})
+export type OrderListRouteInput = z.infer<typeof orderListRouteInputSchema>
+/** An order as the list answers it: the old row, and (L9) how it was paid, in words: null when nothing says. */
+export const orderListRouteOutputSchema = z.array(adminGetOrdersOutputSchema.element.extend({ payment_method_label: z.string().nullable() }))
+export type OrderListRouteOutput = z.infer<typeof orderListRouteOutputSchema>
+
+/** `GET orders/:orderId/lines`: getOrderLineItems. An id that names no order answers no lines, as before. Answers adminGetOrderLineItemsOutputSchema. */
+export const orderLinesRouteInputSchema = z.object({ orderId: z.string() })
+export type OrderLinesRouteInput = z.infer<typeof orderLinesRouteInputSchema>
+
+/** `POST orders/lines/:lineItemId/fulfilled`: setOrderLineItemFulfilled, on and off. Answers the line's row. */
+export const orderLineFulfilledRouteInputSchema = z.object({ lineItemId: z.string(), fulfilled: z.boolean() })
+export type OrderLineFulfilledRouteInput = z.infer<typeof orderLineFulfilledRouteInputSchema>
+export const orderLineFulfilledRouteOutputSchema = z.object({
+  id: z.string(),
+  order_id: z.string(),
+  booking_id: z.string().nullable(),
+  product_variant_id: z.string().nullable(),
+  membership_plan_id: z.string().nullable(),
+  session_pass_type_id: z.string().nullable(),
+  gift_card_id: z.string().nullable(),
+  item_type: z.string(),
+  quantity: z.number(),
+  unit_price: z.string(),
+  line_total: z.string(),
+  created_at: z.string(),
+  addon_id: z.string().nullable(),
+  refunded_at: z.string().nullable(),
+  refund_method: z.string().nullable(),
+  restocked: z.boolean().nullable(),
+  fulfillment_status: z.enum(['pending', 'fulfilled']).nullable(),
+  card_refunded_amount: z.string(),
+  system_unit_price: z.string().nullable(),
+  price_override_reason: z.string().nullable(),
+  discount_amount: z.string(),
+  event_booking_id: z.string().nullable(),
+})
+export type OrderLineFulfilledRouteOutput = z.infer<typeof orderLineFulfilledRouteOutputSchema>

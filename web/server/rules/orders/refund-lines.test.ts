@@ -705,7 +705,9 @@ describe('the card: refused, undone, blocked, unclear', () => {
       const run = await runReconcile()
       expect(run.items).toEqual([expect.objectContaining({ kind: 'claim', outcome: 'finalised' })])
       // The plan's own £10 store credit is given; the £14 the card never got is owed, not given another way.
-      expect(await order(orderId)).toEqual({ payment_status: 'refunded', owed: '14.00' })
+      // W53 (W32 "Noticed" 4), a named difference: while money is owed the order reads `partially_refunded`, however
+      // its lines are stamped (it read `refunded` with £14 still to refund).
+      expect(await order(orderId)).toEqual({ payment_status: 'partially_refunded', owed: '14.00' })
       expect((await creditRefunds()).map((row) => row.amount)).toEqual(['10.00'])
       expect((await creditRefunds())[0]?.note.startsWith('Refund to store credit — order line items refunded by staff. [ref ')).toBe(true)
       expect((await auditRows('order.refund_finished'))[0]?.details).toMatchObject({ outcome: 'owed', cardRefunded: 0, storeCreditRefunded: 10, owed: 14, by: { how: 'reconcile' } })
@@ -713,6 +715,10 @@ describe('the card: refused, undone, blocked, unclear', () => {
       expect(refundsSent(stripe)).toHaveLength(2)
       expect((await runReconcile()).items).toEqual([])
       expect(refundsSent(stripe)).toHaveLength(2)
+      // W53 (W32 "Noticed" 4): once the £14 has been recorded as arrived, nothing is owed and the order reads refunded
+      // again (It already arrived on an order now works its status out again, as a booking's does).
+      expect((await post('refunds/owed-arrived', orderId, { amount: 14, reason: 'Seen in Stripe', arrivedOn: 'card' })).body.data).toMatchObject({ refundOwed: 0 })
+      expect(await order(orderId)).toEqual({ payment_status: 'refunded', owed: '0.00' })
     })
   })
 
@@ -856,7 +862,8 @@ describe('a crash at each step: nothing is paid twice and nothing is hidden', ()
       expect((await refund(orderId, ids, 'card', { confirmed: 24 })).body.error?.details?.reason).toBe('refund_open')
       pastTheWindow()
       await runReconcile()
-      expect(await order(orderId)).toEqual({ payment_status: 'refunded', owed: '24.00' })
+      // W53: `partially_refunded` while the £24 is owed (it read `refunded`).
+      expect(await order(orderId)).toEqual({ payment_status: 'partially_refunded', owed: '24.00' })
       expect(moneyBack(stripe)).toBe(0)
       // Refund the rest sends it, once, under a new claim's key.
       expect((await post('refunds/owed', orderId, { amount: 24, refundMethod: 'card' })).body.data).toMatchObject({ cardRefundedAmount: 24, refundOwed: 0 })
@@ -875,7 +882,8 @@ describe('a crash at each step: nothing is paid twice and nothing is hidden', ()
       pastTheWindow()
       expect((await runReconcile()).items).toEqual([expect.objectContaining({ kind: 'claim', outcome: 'finalised' })])
       // The £14 the card refused is owed; only the plan's own £10 went to store credit.
-      expect(await order(orderId)).toEqual({ payment_status: 'refunded', owed: '14.00' })
+      // W53: `partially_refunded` while the £14 is owed (it read `refunded`).
+      expect(await order(orderId)).toEqual({ payment_status: 'partially_refunded', owed: '14.00' })
       expect((await creditRefunds()).map((row) => row.amount)).toEqual(['10.00'])
       expect(refundsSent(stripe)).toHaveLength(1)
       expect(moneyBack(stripe)).toBe(0)
@@ -892,7 +900,8 @@ describe('a crash at each step: nothing is paid twice and nothing is hidden', ()
       expect(await auditRows('order.refund_refused')).toHaveLength(1)
       pastTheWindow()
       await runReconcile()
-      expect(await order(orderId)).toEqual({ payment_status: 'refunded', owed: '24.00' })
+      // W53: `partially_refunded` while the £24 is owed (it read `refunded`).
+      expect(await order(orderId)).toEqual({ payment_status: 'partially_refunded', owed: '24.00' })
       expect((await auditRows('order.refund_finished'))[0]?.details).toMatchObject({ outcome: 'owed', owed: 24, refused: 'Failed to refund payment: Your card was declined.', by: { how: 'reconcile' } })
       expect(await creditRefunds()).toHaveLength(0)
     })

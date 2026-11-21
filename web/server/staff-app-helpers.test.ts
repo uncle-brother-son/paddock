@@ -117,18 +117,21 @@ describe('staff app helpers', () => {
     // W52: setEventAttendeeCheckIn, setEventAttendeeWaiver and setEventAttendeesCheckIn left it the same way ("W52: the
     // event functions are thin calls to the Worker" below: each asks only the Worker, which refuses an inactive
     // account, in the same words).
-    const guarded = ['setOrderLineItemFulfilled']
-
-    it.each(guarded)('%s refuses before anything is written or charged', async (name) => {
+    // W53: setOrderLineItemFulfilled, the last of them, left it the same way ("W53: the order functions are thin calls
+    // to the Worker" below). No function checks the staff member for itself any more: the list is empty, and this
+    // holds that the last one asks only the Worker.
+    it('setOrderLineItemFulfilled, the last function that checked the staff member itself, asks only the Worker, which refuses an inactive account', async () => {
       const query = stubStaffTable([row(false)])
-      const worker = vi.fn()
-      vi.stubGlobal('paddockBackendApi2', { rawRequest: worker })
-      const { default: fn } = await import(/* @vite-ignore */ path.join(appDir, `backend/paddock/${name}`))
+      const legacy = vi.fn()
+      vi.stubGlobal('paddockBackendApi2', { rawRequest: legacy })
+      rawRequest.mockResolvedValue(refusal('FORBIDDEN', INACTIVE))
+      const { default: fn } = await import(/* @vite-ignore */ path.join(appDir, 'backend/paddock/setOrderLineItemFulfilled'))
 
-      await expect(fn({ params: {}, user })).rejects.toThrow(INACTIVE)
+      await expect(fn({ params: { lineItemId: '11111111-1111-4111-8111-111111111111', fulfilled: true }, user })).rejects.toThrow(INACTIVE)
 
-      expect(worker).not.toHaveBeenCalled()
-      expect(query.mock.calls.every(([sql]) => /^\s*SELECT/i.test(sql))).toBe(true)
+      expect(rawRequest).toHaveBeenCalledTimes(1)
+      expect(legacy).not.toHaveBeenCalled()
+      expect(query).not.toHaveBeenCalled()
     })
 
     // Brief W14a: these three are thin calls to the Worker now, whose defineRoute refuses an inactive account
@@ -1545,6 +1548,128 @@ describe('staff app helpers', () => {
         const list = page('EventAttendeesPage.tsx')
         for (const fallback of ['Failed to check in', 'Failed to undo check-in', 'Failed to revoke waiver']) expect(list).toContain(`toast.error(failureWords(err, '${fallback}'))`)
         expect(component('MarkEventWaiverDialog.tsx')).toContain("toast.error(err instanceof Error && err.message ? err.message : 'Failed to update waiver status')")
+      })
+    })
+  })
+
+  describe('W53: the order functions are thin calls to the Worker', () => {
+    const INACTIVE = 'This staff account is inactive. Ask an admin to reactivate it.'
+    const NO_ANSWER = "That didn't get an answer, so it may or may not have been saved. The screen has been reloaded: check it, and press again if it hasn't changed."
+    const ID = '33333333-3333-4333-8333-333333333333'
+    const fn = async (name: string) => (await import(/* @vite-ignore */ path.join(appDir, `backend/paddock/${name}`))).default as (req: { params: Record<string, unknown>; user: typeof user }) => Promise<unknown>
+    const refused = (code: string, reason: string, message: string) => ({ data: { ok: false, error: { code, message, details: { reason, message, action: 'order_line.fulfilled_set' } }, requestId: 'worker-request' } })
+    const sent = () => rawRequest.mock.calls[0]?.[0] as { path: string; method: string; body?: unknown; queryParams?: Record<string, string>; headers: Record<string, string> }
+
+    /** Each function with params a screen sends, the route it must call, and what it sends there. */
+    const thin: Array<[string, Record<string, unknown>, string, string, { queryParams?: Record<string, string>; body?: unknown }]> = [
+      [
+        'getOrders',
+        { startDate: '2026-11-20', endDate: '2026-11-26', paymentStatus: 'paid', orderSource: 'online', search: 'sam', view: 'all' },
+        'GET',
+        '/api/v1/staff/orders',
+        { queryParams: { startDate: '2026-11-20', endDate: '2026-11-26', paymentStatus: 'paid', orderSource: 'online', search: 'sam', view: 'all' } },
+      ],
+      ['getOrderLineItems', { orderId: ID }, 'GET', `/api/v1/staff/orders/${ID}/lines`, {}],
+      ['setOrderLineItemFulfilled', { lineItemId: ID, fulfilled: true }, 'POST', `/api/v1/staff/orders/lines/${ID}/fulfilled`, { body: { fulfilled: true } }],
+    ]
+
+    it.each(thin)('%s asks only the Worker, on its own route, and an inactive account is refused in the same words as before', async (name, params, method, route, sends) => {
+      const query = vi.fn()
+      const legacy = vi.fn()
+      vi.stubGlobal('paddockData', { query })
+      vi.stubGlobal('paddockBackendApi2', { rawRequest: legacy })
+      rawRequest.mockResolvedValue(refusal('FORBIDDEN', INACTIVE))
+
+      // Thrown as the words alone, as the old functions threw them: no code and no request id after them.
+      await expect((await fn(name))({ params, user })).rejects.toThrow(new Error(INACTIVE))
+
+      expect(rawRequest).toHaveBeenCalledTimes(1)
+      expect(sent()).toMatchObject({ method, path: route, headers: { 'X-Staff-Email': user.email } })
+      if (sends.queryParams) expect(sent().queryParams).toEqual(sends.queryParams)
+      if (sends.body) expect(sent().body).toEqual(sends.body)
+      // The tick goes under a key made for the call; a read has none.
+      expect(typeof sent().headers['Idempotency-Key']).toBe(method === 'POST' ? 'string' : 'undefined')
+      expect(legacy).not.toHaveBeenCalled()
+      expect(query).not.toHaveBeenCalled()
+    })
+
+    it('none of the three reads the database, the legacy resource or the old staff lookups any more, and getPaymentAttentionItems still calls its own route', () => {
+      for (const [name] of thin) {
+        const source = readFileSync(path.join(appDir, `backend/paddock/${name}.ts`), 'utf8')
+        expect(source, name).not.toMatch(/paddockData|paddockBackendApi2|resolveStaffId|requireStaffId/)
+        expect(source, name).not.toMatch(/from '\.\/shared\/(staffAccess|resolveStaffId)'/)
+        expect(source, name).toMatch(/from '\.\/shared\/adminWorker'/)
+      }
+      // W53 moved that read's rule to another file in the Worker; its route, and so this function, are unchanged.
+      expect(readFileSync(path.join(appDir, 'backend/paddock/getPaymentAttentionItems.ts'), 'utf8')).toContain("path: '/api/v1/staff/overview/payment-attention'")
+    })
+
+    it('the order list asks for the first view when the page sends none (no filter is sent, as before), and its answer comes back as it is, with how each order was paid', async () => {
+      const row = { id: ID, payment_status: 'paid', payment_method: null, payment_method_label: 'Store credit', computed_status: 'needs_action', refund_owed_amount: '0.00' }
+      rawRequest.mockResolvedValue(success([row]))
+      expect(await (await fn('getOrders'))({ params: {}, user })).toEqual([row])
+      expect(sent().queryParams).toEqual({})
+      rawRequest.mockResolvedValue(success([{ id: 'line', item_name: 'Soap (Large)' }]))
+      expect(await (await fn('getOrderLineItems'))({ params: { orderId: ID }, user })).toEqual([{ id: 'line', item_name: 'Soap (Large)' }])
+    })
+
+    it('the tick answers `updated: true` with the line, as before', async () => {
+      const line = { id: ID, item_type: 'product', fulfillment_status: 'fulfilled' }
+      rawRequest.mockResolvedValue(success(line))
+      expect(await (await fn('setOrderLineItemFulfilled'))({ params: { lineItemId: ID, fulfilled: true }, user })).toEqual({ updated: true, lineItem: line })
+    })
+
+    it.each([
+      ['NOT_FOUND', 'not_found', 'That line is no longer on the order. Reload the page and try again.'],
+      ['VALIDATION', 'not_a_product_line', "Only a product can be marked fulfilled. This line isn't one."],
+      ['CONFLICT', 'nothing_to_fulfil', "This line has nothing to hand over, so it can't be marked fulfilled or not fulfilled."],
+      ['CONFLICT', 'line_refunded', "This line has been refunded, so it can't be marked fulfilled or not fulfilled."],
+      ['CONFLICT', 'order_cancelled', "This order's payment failed, so its items can't be marked fulfilled or not fulfilled."],
+      ['CONFLICT', 'line_changed', 'The order changed while this was being saved, so nothing was changed. Reload the page and try again.'],
+    ])('the tick refused (%s %s) answers `updated: false` with the reason, as the old function answered its two, and now the Worker\'s words', async (code, reason, message) => {
+      rawRequest.mockResolvedValue(refused(code, reason, message))
+      expect(await (await fn('setOrderLineItemFulfilled'))({ params: { lineItemId: ID, fulfilled: false }, user })).toEqual({ updated: false, reason, message })
+    })
+
+    it("any other refusal is thrown in the Worker's words, and no answer in words that say the tick may or may not have been saved; a read keeps the \"didn't answer\" error", async () => {
+      rawRequest.mockResolvedValue(refused('FORBIDDEN', 'channel_not_accepted', "This can't be changed from here."))
+      await expect((await fn('setOrderLineItemFulfilled'))({ params: { lineItemId: ID, fulfilled: true }, user })).rejects.toThrow(new Error("This can't be changed from here."))
+      rawRequest.mockRejectedValue(new Error('socket hang up'))
+      await expect((await fn('setOrderLineItemFulfilled'))({ params: { lineItemId: ID, fulfilled: true }, user })).rejects.toThrow(new Error(NO_ANSWER))
+      await expect((await fn('getOrders'))({ params: {}, user })).rejects.toThrow(/Could not reach the Worker: socket hang up \(WORKER_UNREACHABLE, request /)
+    })
+
+    it("a press's key is the screen's own when it sends one, and is never part of what is sent as the change", async () => {
+      rawRequest.mockResolvedValue(success({ id: ID, fulfillment_status: 'pending' }))
+      await (await fn('setOrderLineItemFulfilled'))({ params: { lineItemId: ID, fulfilled: false, idempotencyKey: 'key-from-the-screen-1234' }, user })
+      expect(sent().headers['Idempotency-Key']).toBe('key-from-the-screen-1234')
+      expect(sent().body).toEqual({ fulfilled: false })
+    })
+
+    // The screens' own code, read from the staff app's checkout (it has no test runner of its own).
+    describe('the screens', () => {
+      const component = (name: string) => readFileSync(path.join(appDir, 'frontend/components', name), 'utf8')
+      const page = (name: string) => readFileSync(path.join(appDir, 'frontend/pages', name), 'utf8')
+
+      it('the Orders page has a Paid By column that shows the Worker\'s words for how each order was paid, and every full-width row spans the nine columns', () => {
+        const orders = page('OrdersPage.tsx')
+        expect(orders).toContain('<TableHead>Paid By</TableHead>')
+        expect(orders).toContain("{order.payment_method_label ?? '—'}")
+        expect(orders.split('colSpan={9}')).toHaveLength(4)
+        expect(orders).not.toContain('colSpan={8}')
+      })
+
+      it("the line table shows the Worker's words when the tick is refused or throws, reads the list again either way, and has a way back from Fulfilled", () => {
+        const table = component('OrderLineItemsTable.tsx')
+        expect(table).toContain("toast.error(result?.message ?? 'Failed to update fulfillment status')")
+        expect(table).toContain("toast.error(err instanceof Error && err.message ? err.message : 'Failed to update fulfillment status')")
+        // The way back: an Undo beside the Fulfilled badge, pressing the same tick the other way.
+        expect(table).toMatch(/<Badge variant="success">Fulfilled<\/Badge>[^]*?onClick=\{\(\) => handleToggleProductFulfilled\(line, false\)\}>\s*Undo\s*<\/Button>/)
+        expect(table).toContain('onClick={() => handleToggleProductFulfilled(line, true)}')
+      })
+
+      it("Overview's orders tile says what now counts as needing action: a booking that needs payment too (GB22)", () => {
+        expect(page('OverviewPage.tsx')).toContain('action: fulfilment, gift card pickup or shipment, a booking that needs payment, or money still to refund`')
       })
     })
   })

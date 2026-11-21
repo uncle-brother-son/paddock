@@ -252,6 +252,23 @@ export const ORDER_OWED_NOTES = {
   storeCreditAfterCard: 'Refund the rest of a failed order refund (the rest went back to the card).',
 } as const
 
+/**
+ * W53 (W47 review L3; the builder's call: name the choice made, where the review's other way was to ask staff). It
+ * already arrived "on the card" on a booking with more than one card payment: the money is recorded against the
+ * payments the rule picks (the owed add-on lines first, then the booking's lines newest first), which on a part of
+ * what is owed may not be the payment it came back to. The answer names where it was recorded, so staff can see the
+ * choice. `parts`: what was recorded against each payment, with what that payment took on the card (W53a, W53 review
+ * L1: the order's card portion, not its total) and the day it was made (London's). A wrong guess can't send money
+ * twice: Stripe refuses a whole refund that asks a payment for more than it has left (W53a, W53 review L2: it doesn't
+ * cap it), so a later card refund to that payment would be refused and show as money still to refund.
+ */
+export const arrivedRecordedOnWords = (parts: ReadonlyArray<{ amount: number; cardPayment: number; orderedAt: string }>, cardPayments: number): string => {
+  const day = (iso: string): string => new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', day: 'numeric', month: 'long', year: 'numeric' }).format(new Date(iso))
+  const list = parts.map((part) => `${money(part.amount)} against the ${money(part.cardPayment)} card payment of ${day(part.orderedAt)}`)
+  const last = list.pop() ?? ''
+  return `This booking has ${cardPayments} card payments. Recorded as back on the card: ${list.length > 0 ? `${list.join(', ')} and ${last}` : last}. If the money came back to a different one of them, a later card refund to that payment may be refused by Stripe and will then show as money still to refund.`
+}
+
 // --- W47a (W47 review L2): It already arrived "on the card", when the card can't account for all of it
 
 /**

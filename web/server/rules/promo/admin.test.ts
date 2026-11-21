@@ -121,7 +121,8 @@ describe('GET promo-codes and GET promo-codes/:promoCodeId/redemptions (the read
     const redemption = await samUsesAllTen()
     const answer = await uses(allTen, TIA)
     expect(answer.data).toHaveLength(1)
-    expect(answer.data?.[0]).toMatchObject({ id: redemption, customer_id: sam, customer_first_name: 'Sam', customer_last_name: 'Test', discount_amount: '2' })
+    // W53 (migration 033, carried by the saved schema): discount_amount is numeric(10,2), so its text is to the penny.
+    expect(answer.data?.[0]).toMatchObject({ id: redemption, customer_id: sam, customer_first_name: 'Sam', customer_last_name: 'Test', discount_amount: '2.00' })
     expect(Object.keys(answer.data?.[0] ?? {}).sort()).toEqual(['created_at', 'customer_first_name', 'customer_id', 'customer_last_name', 'discount_amount', 'id', 'order_created_at', 'order_id'])
     expect((await uses(fiver)).data).toEqual([])
     expect((await uses(UNKNOWN_ID)).data).toEqual([])
@@ -143,7 +144,8 @@ describe('POST promo-codes (createPromoCode)', () => {
     expect(answer.status).toBe(200)
     expect(answer.data).toMatchObject({ code: 'WINTER25', description: 'Winter offer', discount_type: 'percentage', discount_value: '25', applies_to: ['booking', 'addon'], applies_on_member_prices: false, expires_on: null, max_total_uses: null, one_use_per_customer: false, min_spend: null, restricted_customer_id: null, active: true, created_by: JO })
     const second = await create({ code: 'MO-FIVER', discountType: 'fixed', discountValue: 5, appliesTo: EVERY_KIND, appliesOnMemberPrices: true, expiresOn: '2026-12-31', maxTotalUses: 3, oneUsePerCustomer: true, minSpend: 20, restrictedCustomerId: mo })
-    expect(second.data).toMatchObject({ code: 'MO-FIVER', description: null, discount_value: '5', expires_on: '2026-12-31', max_total_uses: 3, one_use_per_customer: true, min_spend: '20', restricted_customer_id: mo })
+    // W53 (migration 033): min_spend is numeric(10,2) (`20.00`); discount_value is left plain numeric (`5`).
+    expect(second.data).toMatchObject({ code: 'MO-FIVER', description: null, discount_value: '5', expires_on: '2026-12-31', max_total_uses: 3, one_use_per_customer: true, min_spend: '20.00', restricted_customer_id: mo })
     const rows = await auditRowsOf(db)
     expect(rows.map((row) => [row.action, row.actor_id, row.entity_type, row.entity_id])).toEqual([['promo.created', jo, 'promo_code', answer.data?.['id']], ['promo.created', jo, 'promo_code', second.data?.['id']]])
     expect(rows[0]?.details.before).toBeNull()
@@ -209,7 +211,7 @@ describe('POST promo-codes/:promoCodeId (updatePromoCode)', () => {
   it('changes every field in one press, then is switched off by the page\'s switch; each edit is recorded with the code before and after', async () => {
     const edited = await update(allTen, { ...asItIs, code: 'all-fifteen', description: ' Now 15% ', discountValue: 15, appliesTo: ['booking'], appliesOnMemberPrices: true, expiresOn: '2027-01-31', maxTotalUses: 100, oneUsePerCustomer: true, minSpend: 10, restrictedCustomerId: sam })
     expect(edited.data?.updated).toBe(true)
-    expect(edited.data?.promo).toMatchObject({ id: allTen, code: 'ALL-FIFTEEN', description: 'Now 15%', discount_value: '15', applies_to: ['booking'], applies_on_member_prices: true, expires_on: '2027-01-31', max_total_uses: 100, one_use_per_customer: true, min_spend: '10', restricted_customer_id: sam, active: true })
+    expect(edited.data?.promo).toMatchObject({ id: allTen, code: 'ALL-FIFTEEN', description: 'Now 15%', discount_value: '15', applies_to: ['booking'], applies_on_member_prices: true, expires_on: '2027-01-31', max_total_uses: 100, one_use_per_customer: true, min_spend: '10.00', restricted_customer_id: sam, active: true })
     expect(Object.keys(edited.data?.promo ?? {}).sort()).toEqual([
       'active', 'applies_on_member_prices', 'applies_to', 'code', 'created_at', 'created_by', 'description', 'discount_type', 'discount_value', 'expires_on', 'id',
       'max_total_uses', 'min_spend', 'one_use_per_customer', 'restricted_customer_id', 'updated_at',

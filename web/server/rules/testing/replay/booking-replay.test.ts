@@ -26,6 +26,8 @@ import {
   SETTLE_DIFFERENCES,
   storedAnswerProblems,
 } from './booking-side'
+import { W53_LABEL_DIFFERENCES, W53_STATUS_AT_THE_END } from './booking-label-differences'
+import { W53A_PAYMENT_FIRST_DIFFERENCES } from './remove-guest-payment-first-differences'
 import { W12_FLOW_SCENARIOS } from './flow-side'
 import { LEGACY_BOOKING_ACTIONS, oldFunctionPath, oldSide, readGolden, replay, startReplay, type ReplayEnvironment } from './harness'
 import { sweepInvariants } from './invariants'
@@ -149,11 +151,15 @@ describe("step D's side of the replay (W17)", () => {
   const addGuestScenarios = new Set<string>()
   const refundScenarios = new Set<string>()
   const removeScenarios = new Set<string>()
+  /** W53: the scenarios with a label difference that ran. */
+  const labelScenarios = new Set<string>()
+  /** W53a: the scenarios whose Remove Guest refund goes to a different payment that ran. */
+  const paymentFirstScenarios = new Set<string>()
   const cancelScenarios = new Set<string>()
   const moveScenarios = new Set<string>()
   const moveSetupScenarios = new Set<string>()
   const shifted: string[] = []
-  const counts = { bookings: 0, orders: 0, figuresCompared: 0, guardsCompared: 0, statusesCompared: 0, giftCardShifted: 0 }
+  const counts = { bookings: 0, orders: 0, figuresCompared: 0, guardsCompared: 0, statusesCompared: 0, statusesNamed: 0, giftCardShifted: 0 }
 
   beforeAll(async () => {
     environment = await startReplay()
@@ -209,7 +215,13 @@ describe("step D's side of the replay (W17)", () => {
         ...(REMOVE_GUEST_24_HOURS_DIFFERENCES.get(name) ?? []),
         ...(CANCEL_DIFFERENCES.get(name) ?? []),
         ...(MOVE_DIFFERENCES.get(name) ?? []),
+        // W53 (items 4 and 5): the labels after a refund, and L9's payment method. One allowance for one path.
+        ...(W53_LABEL_DIFFERENCES.get(name) ?? []),
+        // W53a (item 1; Wayne's Q40): Remove Guest refunds the payment that took the guest's seat first. Money.
+        ...(W53A_PAYMENT_FIRST_DIFFERENCES.get(name) ?? []),
       ]
+      if (W53_LABEL_DIFFERENCES.has(name)) labelScenarios.add(name)
+      if (W53A_PAYMENT_FIRST_DIFFERENCES.has(name)) paymentFirstScenarios.add(name)
       // W21: the refund amount actions and the figures, through the Worker.
       if (calls.some((call) => call.side === 'new' && (call.action === 'refundBooking' || call.action === 'getBookingRefundFigures'))) refundScenarios.add(name)
       if (calls.some((call) => call.action === 'settleLapsedBooking')) settleScenarios.add(name)
@@ -289,7 +301,13 @@ describe("step D's side of the replay (W17)", () => {
       for (const orderId of state.orders) {
         const worker = await orderPaymentStatusAfterRefunds(db, orderId)
         // The old one writes what it works out; this is the end of the run, so nothing reads the rows after it.
-        expect(worker, `${name}: order ${orderId}`).toBe(await oldStatus.recomputeOrderPaymentStatus(orderId))
+        const old = await oldStatus.recomputeOrderPaymentStatus(orderId)
+        // W53 (W47 review L5): the one scenario where the two rules read the same rows differently, both values exact.
+        const named = W53_STATUS_AT_THE_END.get(name)
+        if (named) {
+          expect({ worker, old }, `${name}: order ${orderId}`).toEqual(named)
+          counts.statusesNamed += 1
+        } else expect(worker, `${name}: order ${orderId}`).toBe(old)
         counts.statusesCompared += 1
       }
     })
@@ -787,6 +805,8 @@ describe("step D's side of the replay (W17)", () => {
     expect(counts.giftCardShifted).toBeGreaterThan(0)
     expect(counts.figuresCompared).toBe(counts.bookings)
     expect(counts.statusesCompared).toBe(counts.orders)
+    // W53: one order of them all is read differently by the Worker's rule, and it is named (W53_STATUS_AT_THE_END).
+    expect(counts.statusesNamed).toBe(1)
     // W18: the scenarios that call special requests or status are exactly N3's three (none sets special requests).
     expect([...w18Scenarios].sort()).toEqual([...N3_DIFFERENCES.keys()].sort())
     // W19: every scenario that calls Settle is named (with its differences), and nothing named goes unrun; N3's
@@ -815,6 +835,14 @@ describe("step D's side of the replay (W17)", () => {
         `W23: ${cancelScenarios.size} call Cancel & Refund or Cancel & return credit on the Worker, ${CANCEL_DIFFERENCES.size} with W23's named differences, ${[...cancelScenarios].filter((name) => !CANCEL_DIFFERENCES.has(name) && !earlier(name)).length} exact, ${[...cancelScenarios].filter((name) => !CANCEL_DIFFERENCES.has(name) && earlier(name)).length} with earlier slices' only\n`
       )
     }
+    // W53: every scenario named for a label ran, and there are 14 of them with 30 labels between them (each label
+    // its own allowance on one path with both values exact, so each must still be seen: an unused allowance fails in
+    // compareRecordings).
+    expect([...W53_LABEL_DIFFERENCES.keys()].filter((name) => !labelScenarios.has(name))).toEqual([])
+    expect([W53_LABEL_DIFFERENCES.size, [...W53_LABEL_DIFFERENCES.values()].flat().length]).toEqual([14, 30])
+    // W53a: the three scenarios whose Remove Guest refund goes to the payment that took the seat (Q40), 11 values.
+    expect([...W53A_PAYMENT_FIRST_DIFFERENCES.keys()].filter((name) => !paymentFirstScenarios.has(name))).toEqual([])
+    expect([W53A_PAYMENT_FIRST_DIFFERENCES.size, [...W53A_PAYMENT_FIRST_DIFFERENCES.values()].flat().length]).toEqual([3, 11])
     // W22a: every scenario named for the 24-hour rule calls Remove Guest on the Worker (an unused allowance fails in
     // compareRecordings as well).
     expect([...REMOVE_GUEST_24_HOURS_DIFFERENCES.keys()].filter((name) => !removeScenarios.has(name))).toEqual([])

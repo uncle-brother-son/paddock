@@ -365,6 +365,20 @@ describe("the banner's words (frontend/utils/stuckList.ts)", () => {
     expect(reconcileLine(run({ checked: 1, finalised: 1, refundsWaiting: 0 }))).toBe('The automatic check looked at 1 payment: 1 finished, 0 cancelled.')
     expect(reconcileLine(run({ checked: 1, finalised: 1 }))).toBe('The automatic check looked at 1 payment: 1 finished, 0 cancelled.')
     expect(reconcileLine({ ok: false, workerCode: 'WORKER_UNREACHABLE', message: 'No answer.' })).toBe('No answer.')
+    // W53 (W47r review L3; W47r "Noticed" 5): a membership payment tried again that ended as not taken is counted by
+    // the Worker as `undone`. It read "1 cancelled", though nothing was cancelled; it is now said in its own words,
+    // and left out of "cancelled". A run with no items (an older Worker) reads as it did.
+    const retry = { kind: 'payment_retry', outcome: 'undone' }
+    expect(reconcileLine(run({ checked: 1, undone: 1, items: [retry] }))).toBe(
+      'The automatic check looked at 1 payment: 0 finished, 0 cancelled, 1 membership payment tried again ended as not taken (nothing was charged).'
+    )
+    expect(reconcileLine(run({ checked: 3, finalised: 1, undone: 2, items: [retry, { kind: 'flow', outcome: 'undone' }, { kind: 'order', outcome: 'finalised' }] }))).toBe(
+      'The automatic check looked at 3 payments: 1 finished, 1 cancelled, 1 membership payment tried again ended as not taken (nothing was charged).'
+    )
+    expect(reconcileLine(run({ checked: 2, undone: 2, items: [retry, retry] }))).toContain('0 cancelled, 2 membership payments tried again ended as not taken (nothing was charged)')
+    // A retry that finished (paid), or was left, is not one of these.
+    expect(reconcileLine(run({ checked: 1, finalised: 1, items: [{ kind: 'payment_retry', outcome: 'finalised' }] }))).toBe('The automatic check looked at 1 payment: 1 finished, 0 cancelled.')
+    expect(reconcileLine(run({ checked: 1, undone: 1 }))).toBe('The automatic check looked at 1 payment: 0 finished, 1 cancelled.')
     expect(closeButtonLabel('held_order')).toBe('Close order')
     expect(closeButtonLabel('changed_elsewhere')).toBe('Mark sorted')
     expect(closeButtonLabel('subscription_left')).toBe('Mark sorted')

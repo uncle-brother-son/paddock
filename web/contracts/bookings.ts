@@ -486,6 +486,11 @@ export const refundBookingOutputSchema = z.object({
    * (as "another way"). `warning` then says so in words. In no other answer.
    */
   arrivedOnCard: z.object({ recorded: z.number(), other: z.number() }).optional(),
+  /**
+   * W53 (W47 review L3): It already arrived "on the card" on a booking with more than one card payment: which of them
+   * the money was recorded against, in words (the choice the rule made). In no other answer.
+   */
+  arrivedRecordedOn: z.string().optional(),
 })
 export type RefundBookingOutput = z.infer<typeof refundBookingOutputSchema>
 

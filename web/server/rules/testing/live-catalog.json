@@ -164,7 +164,7 @@
     },
     {
      "name": "refunded_amount",
-     "type": "numeric",
+     "type": "numeric(10,2)",
      "notNull": true,
      "default": "0",
      "generated": "",
@@ -172,7 +172,7 @@
     },
     {
      "name": "card_refunded_amount",
-     "type": "numeric",
+     "type": "numeric(10,2)",
      "notNull": true,
      "default": "0",
      "generated": "",
@@ -1467,7 +1467,7 @@
     },
     {
      "name": "cancelled_value",
-     "type": "numeric",
+     "type": "numeric(10,2)",
      "notNull": true,
      "default": "0",
      "generated": "",
@@ -1475,7 +1475,7 @@
     },
     {
      "name": "refunded_amount",
-     "type": "numeric",
+     "type": "numeric(10,2)",
      "notNull": true,
      "default": "0",
      "generated": "",
@@ -1483,7 +1483,7 @@
     },
     {
      "name": "card_refunded_amount",
-     "type": "numeric",
+     "type": "numeric(10,2)",
      "notNull": true,
      "default": "0",
      "generated": "",
@@ -2445,7 +2445,7 @@
     },
     {
      "name": "amount_charged",
-     "type": "numeric",
+     "type": "numeric(10,2)",
      "notNull": true,
      "default": null,
      "generated": "",
@@ -2602,7 +2602,7 @@
     },
     {
      "name": "price_monthly",
-     "type": "numeric",
+     "type": "numeric(10,2)",
      "notNull": false,
      "default": null,
      "generated": "",
@@ -2610,7 +2610,7 @@
     },
     {
      "name": "price_yearly",
-     "type": "numeric",
+     "type": "numeric(10,2)",
      "notNull": false,
      "default": null,
      "generated": "",
@@ -2812,7 +2812,7 @@
     },
     {
      "name": "card_refunded_amount",
-     "type": "numeric",
+     "type": "numeric(10,2)",
      "notNull": true,
      "default": "0",
      "generated": "",
@@ -2820,7 +2820,7 @@
     },
     {
      "name": "system_unit_price",
-     "type": "numeric",
+     "type": "numeric(10,2)",
      "notNull": false,
      "default": null,
      "generated": "",
@@ -2836,7 +2836,7 @@
     },
     {
      "name": "discount_amount",
-     "type": "numeric",
+     "type": "numeric(10,2)",
      "notNull": true,
      "default": "0",
      "generated": "",
@@ -3099,7 +3099,7 @@
     },
     {
      "name": "expected_amount",
-     "type": "numeric",
+     "type": "numeric(10,2)",
      "notNull": true,
      "default": null,
      "generated": "",
@@ -3431,7 +3431,7 @@
     },
     {
      "name": "discount_amount",
-     "type": "numeric",
+     "type": "numeric(10,2)",
      "notNull": true,
      "default": null,
      "generated": "",
@@ -3532,7 +3532,7 @@
     },
     {
      "name": "min_spend",
-     "type": "numeric",
+     "type": "numeric(10,2)",
      "notNull": false,
      "default": null,
      "generated": "",
@@ -4481,6 +4481,12 @@
   },
   {
    "table": "addon_order_lines",
+   "name": "addon_order_lines_card_within_refunded_check",
+   "type": "c",
+   "definition": "CHECK ((card_refunded_amount <= refunded_amount))"
+  },
+  {
+   "table": "addon_order_lines",
    "name": "addon_order_lines_order_id_fkey",
    "type": "f",
    "definition": "FOREIGN KEY (order_id) REFERENCES orders(id)"
@@ -4520,6 +4526,12 @@
    "name": "addon_order_lines_refunded_amount_check",
    "type": "c",
    "definition": "CHECK ((refunded_amount >= (0)::numeric))"
+  },
+  {
+   "table": "addon_order_lines",
+   "name": "addon_order_lines_refunded_within_line_check",
+   "type": "c",
+   "definition": "CHECK ((refunded_amount <= (price_at_purchase * (quantity)::numeric)))"
   },
   {
    "table": "addon_order_lines",
@@ -5321,6 +5333,18 @@
   },
   {
    "table": "membership_plans",
+   "name": "membership_plans_price_monthly_check",
+   "type": "c",
+   "definition": "CHECK (((price_monthly IS NULL) OR (price_monthly >= (0)::numeric)))"
+  },
+  {
+   "table": "membership_plans",
+   "name": "membership_plans_price_yearly_check",
+   "type": "c",
+   "definition": "CHECK (((price_yearly IS NULL) OR (price_yearly >= (0)::numeric)))"
+  },
+  {
+   "table": "membership_plans",
    "name": "membership_plans_sanity_plan_id_key",
    "type": "u",
    "definition": "UNIQUE (sanity_plan_id)"
@@ -5372,6 +5396,18 @@
    "name": "order_line_items_booking_id_fkey",
    "type": "f",
    "definition": "FOREIGN KEY (booking_id) REFERENCES bookings(id)"
+  },
+  {
+   "table": "order_line_items",
+   "name": "order_line_items_card_refunded_amount_check",
+   "type": "c",
+   "definition": "CHECK ((card_refunded_amount >= (0)::numeric))"
+  },
+  {
+   "table": "order_line_items",
+   "name": "order_line_items_discount_amount_check",
+   "type": "c",
+   "definition": "CHECK (((discount_amount >= (0)::numeric) AND (discount_amount <= line_total)))"
   },
   {
    "table": "order_line_items",
@@ -5434,6 +5470,12 @@
    "definition": "FOREIGN KEY (session_pass_type_id) REFERENCES session_pass_types(id)"
   },
   {
+   "table": "order_line_items",
+   "name": "order_line_items_system_unit_price_check",
+   "type": "c",
+   "definition": "CHECK (((system_unit_price IS NULL) OR (system_unit_price >= (0)::numeric)))"
+  },
+  {
    "table": "orders",
    "name": "orders_customer_id_fkey",
    "type": "f",
@@ -5480,6 +5522,12 @@
    "name": "parity_log_pkey",
    "type": "p",
    "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "pending_reader_payments",
+   "name": "pending_reader_payments_expected_amount_check",
+   "type": "c",
+   "definition": "CHECK ((expected_amount >= (0)::numeric))"
   },
   {
    "table": "pending_reader_payments",

@@ -817,7 +817,9 @@ describe('no clear answer (brief item 4, review point 3): held, listed, never cl
       expect(await membership()).toMatchObject({ status: 'past_due' })
       expect((await booking(failed.eleventh))?.status).toBe('payment_needed')
       pastTheWindow()
-      expect((await listed())[0]).toMatchObject({ reason: 'waiting' })
+      // W53 (W47r review L3), a named difference: before any run has looked, the line gives the press's own reason
+      // (it saw the payment go through). Until W53 it read `waiting` ("may or may not have been charged").
+      expect((await listed())[0]).toMatchObject({ reason: 'paid_not_recorded' })
       expect(await retryItems(stripe)).toMatchObject([{ outcome: 'finalised' }])
       expect(await states()).toEqual(['started', 'held', 'paid'])
       expect(await membership()).toEqual({ status: 'active', renews: '2027-01-10' })
@@ -2125,8 +2127,9 @@ describe('W47r-b: an invoice paid after its subscription had ended is always lis
       expect(await eventRow(event)).toMatchObject({ detail: { paid_after_end: { listed: false, why: 'retry_holds' } } })
       expect(await invoiceRows()).toEqual([])
       // One line throughout: the retry's, which the run then holds as paid after the end, with its close.
-      // (No run has looked since the press, so the list still gives it as waiting on the automatic check.)
-      expect(await listed()).toMatchObject([{ retryId, reason: 'waiting' }])
+      // (No run has looked since the press. W53, W47r review L3: the list gives the press's own reason, that the
+      // payment is waiting on the customer; until W53 it read `waiting`.)
+      expect(await listed()).toMatchObject([{ retryId, reason: 'payment_needs_action' }])
       expect(await retryItems(stripe)).toMatchObject([{ id: retryId, outcome: 'left', reason: 'paid_after_end' }])
       expect(await listed()).toMatchObject([{ retryId, reason: 'paid_after_end', close: { kind: 'retry_paid_after_end', orderId: retryId } }])
       expect(await invoiceRows()).toEqual([])
@@ -3116,8 +3119,9 @@ describe("W47r-d: the retry reads 031's answer, and Mark as owed ends a held ret
         stripe.nextPayEnds(failed.invoice, 'requires_action')
         const retryId = (await pressShown(failed.invoice)).error?.details?.held?.retryId as string
         const line = (await listed())[0]
-        // Not yet read by a run: listed as waiting, with no close of either kind.
-        expect(line).toMatchObject({ retryId, reason: 'waiting' })
+        // Not yet read by a run: listed with the press's own reason (W53, W47r review L3; `waiting` until then),
+        // with no close of either kind.
+        expect(line).toMatchObject({ retryId, reason: 'payment_needs_action' })
         expect(line).not.toHaveProperty('close')
         expect(line).not.toHaveProperty('closeOwed')
         expect((await markOwed(retryId)).data).toEqual({

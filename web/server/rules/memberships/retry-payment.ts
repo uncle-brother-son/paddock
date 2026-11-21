@@ -875,6 +875,10 @@ SELECT s.details->>'retryId' AS id, s.entity_id AS membership_id, s.details->>'i
        (SELECT r.details FROM audit_log r
         WHERE r.entity_type = '${PAYMENT_RETRY_RECONCILE_ENTITY}' AND r.entity_id = s.details->>'retryId' AND r.action = 'order.reconcile'
         ORDER BY r.at DESC LIMIT 1) AS last,
+       (SELECT h.details->>'reason' FROM audit_log h
+        WHERE h.action = '${PAYMENT_RETRY_ACTION}' AND h.entity_type = '${PAYMENT_RETRY_ENTITY}' AND h.entity_id = s.entity_id
+          AND h.details->>'retryId' = s.details->>'retryId' AND h.details->>'state' = 'held'
+        ORDER BY h.at DESC, h.id DESC LIMIT 1) AS held_reason,
        ${heldRowSql(` AND h.details->>'reason' = '${PAID_AFTER_END}'`)} AS paid_after_end,
        ${heldRowSql(` AND h.details->>'reason' = '${PAID_AFTER_END}' AND h.details->>'cancelledHere' = 'true'`)} AS cancelled_here
 FROM audit_log s
@@ -901,6 +905,8 @@ export interface ListedPaymentRetry {
   first_name: string
   last_name: string
   last: { outcome?: string; reason?: string; detail?: string | null } | null
+  /** W53 (W47r review L3): why the press itself held the record (its newest `held` row's reason), or null when it wrote none. */
+  held_reason?: string | null
   /** W47r-a (S1): its record has a `held` row saying the payment was taken after the subscription ended. */
   paid_after_end: boolean
   /** W47r-b: that row says the membership's row had ended here while Stripe's subscription was still live. */
@@ -912,10 +918,17 @@ export interface ListedPaymentRetry {
  * line is right before any run has looked, and stays right on a run that couldn't read Stripe). Otherwise what
  * reconcile last left it with, or that it hasn't looked yet.
  */
-export function paymentRetryListedReason(row: Pick<ListedPaymentRetry, 'last' | 'paid_after_end'>): string {
+export function paymentRetryListedReason(row: Pick<ListedPaymentRetry, 'last' | 'paid_after_end' | 'held_reason'>): string {
   if (row.paid_after_end === true) return PAID_AFTER_END
-  return row.last?.outcome === 'left' && row.last.reason ? row.last.reason : 'waiting'
+  if (row.last?.outcome === 'left' && row.last.reason) return row.last.reason
+  // W53 (W47r review L3; W47r "Noticed" 3): before any run has looked, the press's own reason when the press knew what
+  // it was waiting on. Until W53 the line said "may or may not have been charged" for up to 5 minutes about a payment
+  // the press had seen go through (`paid_not_recorded`), or seen waiting at the bank or on the customer.
+  return row.held_reason && PRESS_KNEW.has(row.held_reason) ? row.held_reason : 'waiting'
 }
+
+/** The reasons a press holds a retry with when it knows what the payment is waiting on (each has its own stuck words). */
+const PRESS_KNEW: ReadonlySet<string> = new Set(['paid_not_recorded', 'payment_processing', 'payment_needs_action'])
 
 export type RetrySettled =
   /** The invoice is paid: the paid write was made and the record ended. */

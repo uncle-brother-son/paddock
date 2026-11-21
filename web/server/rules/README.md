@@ -2590,3 +2590,144 @@ Tests: `events/admin.test.ts` (Q-a's cases through the route and `cutoffToKeep` 
 with seconds; someone else's attendee compared whole with a missing one; two event bookings on one order);
 `events/attendance-postgres.test.ts` (the customer's answer in the race); `server/staff-app-helpers.test.ts` (the
 dialog's two lines).
+
+## Orders and fulfilment on the Worker; the labels; card money on the line its payment took (W53)
+
+Brief W53 (G-plan 1.11, 1.12, 4.3; bugs GB14 and GB22; lead call L9; Wayne's Q40; the W35 audit's rows 4 and 26; the
+W26 audit's rows 7 and 10; the W47 review's L1, L3 and L5; the W47r review's L3). Migration 033 is written, not
+applied (below).
+
+### The Orders page (`server/rules/orders/admin.ts`)
+
+| Staff app function | Route | Level |
+|---|---|---|
+| `getOrders` | `GET orders` | Read |
+| `getOrderLineItems` | `GET orders/:orderId/lines` | Read |
+| `setOrderLineItemFulfilled` | `POST orders/lines/:lineItemId/fulfilled` | C |
+| `getPaymentAttentionItems` | `GET overview/payment-attention` (unchanged; its read moved here from `bookings/admin.ts`) | Read |
+
+- **GB14:** both reads need an active staff member. Named columns: every column the old `o.*` gave is answered. The
+  line read no longer answers the four working columns the old function spread into its answer beside its add-on
+  sentence (no screen's type had them).
+- **GB22:** an order whose booking line's booking is at Payment needed is Needs action (the old read called it
+  Complete), as is an order with money owed (since W47). Needs action wins over Upcoming.
+  `ORDER_NEEDS_ACTION_SQL` is the one condition the status and the views both use.
+- **The date range** is the old one: the order's `created_at` against the day's two ends read as UTC, now whatever
+  the connection's time zone.
+- **How it was paid, in words (L9):** the list answers `payment_method_label` beside `payment_method`. One label
+  for each method the database allows (`ORDER_PAYMENT_METHOD_LABELS`). With no method recorded: "Store credit" when
+  store credit paid for it (redemptions less reversals above £0), "Nothing to pay" when it cost nothing, else null.
+- **The names and the two sentences** (`orderLineName`, `addonRefundSummary`, `eventCancellationSummary`) are the
+  staff app's, word for word.
+- **The fulfilled tick** is a level C flag (`admin/flag.ts`): the line's order held FOR SHARE first (the guard reads
+  the order, another table's row: W48 review L2), then one guarded statement and its audit row
+  (`order_line.fulfilled_set`: who, the line, its order, the state as set, which way, the key). Refused, either way,
+  on a line that isn't a product (`not_a_product_line`), one with no fulfilment state (`nothing_to_fulfil`), a
+  refunded one (`line_refunded`) and one whose order's payment failed (`order_cancelled`). An order still being paid
+  can be ticked. The words are `ORDER_ADMIN_NEW_WORDS`.
+
+### L9: a store-credit-only order records `store_credit`
+
+`bookings/add-guest.ts`, `ownOrderMethod`: Add Guest's own order (a guest, or add-ons alone, with no card money)
+paid by store credit alone records `payment_method = 'store_credit'`, where it recorded none. Orders written before
+W53 keep their empty method and read "Store credit" by the label above. (A gift card with store credit still
+records `gift_card`, as before; Q9's table says `split`: not changed here.)
+
+### Q40: card money on the line its payment took
+
+- **An order whose one card payment was its membership's own** (`money-left.ts`, `cardTookMembership`; a saved-card
+  membership order with no remainder charge: store credit and a gift card covered the rest of the basket first, and
+  the subscription's first invoice took what was left of the membership). A refund's card part is recorded on the
+  membership's line first (`orders/refund-lines.ts`, `refundR1`), where it went on the lines in line order. Example
+  (the W28 QA): a T-shirt and a membership with £50 store credit and £40 on the invoice read £40 back to the card on
+  the T-shirt. Amounts and totals are unchanged. Every other order keeps line order.
+- **A live booking's owed add-on lines go first** (`bookings/refunds.ts`), as a cancelled booking's did since W47:
+  It already arrived "on the card" (`stampArrivedCard`) and Refund the rest to the card (`planOwedRefund`: the
+  claim's card part names the add-on line with `addon: true`, and R2 records it there). The review's example: a seat
+  £20 and a towel £5 on one £25 card payment; the towel is removed and its refund never arrives. Before, the £5 was
+  recorded on the seat's line, and a later Cancel & Refund sent £15 to the card and £5 to store credit; now it is
+  on the towel's line and the cancel sends £20 to the card. When nothing is owed any more the line is stamped
+  (`stampWhenOwedSettled`, which now runs on a live booking too), also after Refund the rest to store credit.
+- **Two card payments, a part arriving (W47 review L3): the choice is named, not asked for.** It already arrived
+  "on the card" on a booking with more than one card payment answers `arrivedRecordedOn`: which payments the money
+  was recorded against, in words (`arrivedRecordedOnWords`). The same words are in the answer's `warning` (after
+  the short-of-card words when both apply), which the dialog already shows under the result, so the staff app
+  needed no change. The rule's order decides (the owed add-on lines first,
+  then the booking's lines newest first). A wrong guess can't send money twice: Stripe doesn't cap a refund, it
+  refuses the whole request when it asks a payment for more than it has left, so that later card refund is refused
+  and shows as money still to refund (W53a, W53 review L2). Each payment is named by what it took on the card, its
+  order's card portion, not the order's total (W53a, W53 review L1).
+
+### The labels (brief item 4): each case, before and after
+
+An order's `payment_status` and a booking line's stamp are labels: no refund sum reads them. Each case below is in
+`bookings/w53-labels.test.ts` unless another file is named.
+
+| Case | Before W53 | After |
+|---|---|---|
+| W05h 2: Remove Guest to store credit | The credit was linked to the booking's own order, which read `partially_refunded`; the guest's order `refunded` | Linked to the guest's order; the booking's own order stays `paid` |
+| W05h 3: a guest whose seat got cheaper (a cheaper Move) | Their line held more than the seat's price, so it was never found: their order stayed `partially_refunded` with all its money back | The line is the one their Add Guest wrote (`guestLine`, from `booking.guest_add`): stamped, order `refunded` |
+| W05h 4: a dearer Move's own charge line | The newest small line on the booking, so it could be stamped in the guest's place | Never picked: a guest's own line is known; the price guess (kept for a guest with no `booking.guest_add` row) leaves out other guests' lines and a Move's or Settle's charge line |
+| W05h 5: a cash guest refunded from another order's card | Their line read `credit`, though no store credit was given | `card` when the removal sent card money back |
+| W05h 6: a shortfall settled later | The guest's line stayed unstamped, and their order `partially_refunded`, for ever | Stamped when Refund the rest or It already arrived leaves nothing owed; a store credit Refund the rest for one such guest is linked to their order |
+| W26 audit 10: a cash part refund | The order stayed `paid` | `partially_refunded` (`CASH_HANDED_BACK_ON_LINE_SQL`: a cash order's booking line whose booking has a cash refund claim) |
+| W47 review L5: a lapse keeps the guest's £20 and refunds the towels' £20 on the same order | `refunded` | `partially_refunded`: a cancelled booking's unstamped line that still holds seat money is counted (`bookings/lapse-sweep.test.ts`) |
+| W32 "Noticed" 4: money owed after a refund failed, was refused or never arrived | An order read `refunded` with money still to refund | Never `refunded` while money is owed on the order, or on a booking with a line on it (`ORDER_MONEY_OWED_SQL`); every order of the booking is worked out again when what is owed changes (`recordBookingOrdersPaymentStatus`), and reads `refunded` once it is settled |
+
+Not changed: Remove Guest's card refund still goes to the booking's newest card payment first, whichever order the
+guest's seat was paid on (the plan's order, as it always was); only the labels above changed.
+
+The status rule in one place: `money-left.ts`, `orderPaymentStatusAfterRefunds`. Whenever what is owed on a booking
+changes, or cash is handed back, every order with a line for the booking is worked out again
+(`recordBookingOrdersPaymentStatus`: R2, It already arrived, and a watched refund that fails later in
+`refunds/refund-watch-settle.ts`); It already arrived on an order works that order out again
+(`orders/refund-lines.ts`). The booking replay's golden files hold the old labels: each of the 30 that differ is
+named in `testing/replay/booking-label-differences.ts` (`testing/README.md`, "The labels in the booking replay").
+
+### The W47r review's words (item 7)
+
+- **L1 and L6 were already done in W47r-a** (the held `payment_needs_action` line says a manager voids the invoice in
+  Stripe; the README's line on the lone `paid` row). Checked, nothing to add.
+- **L3:** a held retry's line gives the press's own reason before any run has looked
+  (`memberships/retry-payment.ts`, `paymentRetryListedReason`: `paid_not_recorded`, `payment_processing`,
+  `payment_needs_action`), where it read `waiting` ("may or may not have been charged") for up to 5 minutes. And the
+  staff app's Resolve now line says "1 membership payment tried again ended as not taken (nothing was charged)"
+  for a retry that ended not taken, where it counted it under "cancelled" (`frontend/utils/stuckList.ts`).
+
+### Migration 033 (written, not applied)
+
+`supabase/migrations/033_money_columns_numeric_10_2.sql`: fourteen of the fifteen plain `numeric` columns become
+`numeric(10,2)`, with eight new checks; `promo_codes.discount_value` is left (a percentage for a percentage code).
+The file stops, changing nothing, on any row that isn't pounds and pence or would fail a new check. Its header has
+the lead's pre-check and after-checks. The saved schema carries it (`testing/README.md`, "Migration 033").
+
+Tests: `orders/admin.test.ts` (the four views with money owed and a Payment needed booking; the filters; the
+labels; every line kind's name and both sentences; GB14; the customer channel; every refusal of the tick, on and
+off, and its audit rows); `orders/admin-postgres.test.ts` (the tick against a line refund, each way round, with a
+control); `bookings/w53-labels.test.ts` (Q40 on a live booking, the two-payment arrival, every label case);
+`orders/membership-refund.test.ts` (Q40 on an order); `testing/migration-033.test.ts`;
+`replay/order-admin-replay.test.ts` (the six recordings: two exact, four with named differences);
+`server/staff-app-helpers.test.ts` (the three thin functions and the screens).
+
+### W53a: the review's fixes (21 Nov 2026)
+
+- **Remove Guest refunds the payment that took the guest's seat first (W53 review S1; Wayne's Q40).** `planRefund`
+  takes an optional `firstOrderId` (beside `addonsFirst`): that order's booking lines take its card money first, then
+  the other lines newest first as before, then store credit. `removeR1` passes the order of the line R2 stamps as the
+  guest's (`removedGuestLine`: their own Add Guest line; else W53's price guess, which finds the own order of a guest
+  the old Add Guest added, Wayne 21 Nov), else the booking's own order (one of the original party). Every other caller
+  passes nothing and plans as before. Alex and Sam on Alex's card, Bea on her own: Sam removed, £20 back to Alex's
+  payment (it went to Bea's, the newest); Bea removed, £20 back to hers. The quote is only an amount, so it is
+  unchanged; the card total the cards can take is the same whichever payment goes first.
+- **The named choice (W53 review L1, L2):** each payment is named by its card portion (`loadOrderCardPortion`), not
+  its order's total, and the last sentence reads "…a later card refund to that payment may be refused by Stripe and
+  will then show as money still to refund." Stripe refuses a whole refund that asks for more than a payment has
+  left; it doesn't cap it.
+- **L3:** `arrivedRecordedOnWords`'s comment now sits on it, and `arrivedCardShortWords`'s on that.
+- **L5:** `recordOrderPaymentStatus` and `recordBookingOrdersPaymentStatus` write only to an order reading `paid`,
+  `partially_refunded` or `refunded` (`RECOUNTABLE_ORDER_SQL`); a pending or failed order is left alone.
+
+Tests: `bookings/w53-labels.test.ts` (the review's example, the older of two, a guest added the old way, a guest's own
+payment short of the seat, the card portion in the words, a pending and a failed order left alone);
+`replay/remove-guest-payment-first-differences.ts` names the three booking replay scenarios whose refund now goes to a
+different payment (`testing/README.md`).

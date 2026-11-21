@@ -46,8 +46,12 @@ export const W52_READS: ReadonlySet<string> = new Set(['getEvents', 'getEventAtt
 export const W52_WRITES: ReadonlySet<string> = new Set(['setEventActive', 'setEventDetails'])
 export const W52_FLAGS: ReadonlySet<string> = new Set(['setEventAttendeeCheckIn', 'setEventAttendeesCheckIn', 'setEventAttendeeWaiver'])
 export const W52_ACTIONS: ReadonlySet<string> = new Set([...W52_READS, ...W52_WRITES, ...W52_FLAGS])
+/** W53: the two order reads and the fulfilled tick. (getPaymentAttentionItems moved with W50; its read only changed files.) */
+export const W53_READS: ReadonlySet<string> = new Set(['getOrders', 'getOrderLineItems'])
+export const W53_FLAGS: ReadonlySet<string> = new Set(['setOrderLineItemFulfilled'])
+export const W53_ACTIONS: ReadonlySet<string> = new Set([...W53_READS, ...W53_FLAGS])
 /** Every old step G function now a thin call to the Worker. */
-export const STEP_G_ACTIONS_MOVED: ReadonlySet<string> = new Set([...W49_ACTIONS, ...W54_ACTIONS, ...W50_ACTIONS, ...W51_ACTIONS, ...W52_ACTIONS])
+export const STEP_G_ACTIONS_MOVED: ReadonlySet<string> = new Set([...W49_ACTIONS, ...W54_ACTIONS, ...W50_ACTIONS, ...W51_ACTIONS, ...W52_ACTIONS, ...W53_ACTIONS])
 
 /** The ones that add something: their dialogs keep a press key, and their wrappers answer a refusal as data. */
 const CREATES: ReadonlySet<string> = new Set(['createStaff', 'createPromoCode', 'createOneOffSession', 'addServiceTypeScheduleSlot'])
@@ -57,7 +61,7 @@ const CREATES: ReadonlySet<string> = new Set(['createStaff', 'createPromoCode', 
  */
 const ONE_OFF_REASONS_ANSWERED: ReadonlySet<string> = new Set(['service_type_not_found', 'service_type_incomplete', 'slot_already_exists'])
 /** The moved reads GB14's recording makes with `call`, which stops at the first throw. */
-const READS: ReadonlySet<string> = new Set(['getStaff', 'getPromoCodes', 'getPromoCodeRedemptions', ...W50_READS, ...W51_READS, ...W52_READS])
+const READS: ReadonlySet<string> = new Set(['getStaff', 'getPromoCodes', 'getPromoCodeRedemptions', ...W50_READS, ...W51_READS, ...W52_READS, ...W53_READS])
 
 type CreateAnswer = { created?: boolean; reason?: string; message?: string; noAnswer?: boolean } | null
 
@@ -246,6 +250,27 @@ function withoutRefundOpen(action: string, answer: unknown, found: AnsweredRefun
   }
 }
 
+/** W53: how an order was paid, in words, as the order list now says beside each order: which order, what its row records, and the words. */
+export interface AnsweredPaidBy {
+  orderId: unknown
+  paymentMethod: unknown
+  label: unknown
+}
+
+/**
+ * W53 (lead call L9): the order list answers `payment_method_label` on each order, which the old read never did. It is
+ * set aside, so the orders compare with the recording's, and noted in `found` for the test to check on its own.
+ */
+function withoutPaidByLabel(action: string, answer: unknown, found: AnsweredPaidBy[] | undefined): unknown {
+  if (action !== 'getOrders' || !Array.isArray(answer)) return answer
+  return answer.map((order: unknown) => {
+    if (!isRecord(order) || !('payment_method_label' in order)) return order
+    const { payment_method_label, ...rest } = order
+    found?.push({ orderId: order['id'], paymentMethod: order['payment_method'], label: payment_method_label })
+    return rest
+  })
+}
+
 /** What each stamp set aside must be: text that isn't empty, in the stamp's own form. Answers the problems found. */
 export function answeredStampProblems(found: readonly AnsweredStamp[]): string[] {
   // A row's stamp, or a set of rows' (each row's id and stamp, in id order). W52: or the stamp of the columns one
@@ -275,6 +300,8 @@ export interface AdminSideOptions {
   pressWithoutFigures?: boolean
   /** W52: every `refund_open` the attendee list answered beside a booking, set aside for the test to check on its own. */
   refundOpen?: AnsweredRefundOpen[]
+  /** W53: every `payment_method_label` the order list answered beside an order, set aside for the test to check on its own. */
+  paidBy?: AnsweredPaidBy[]
 }
 
 /**
@@ -306,7 +333,7 @@ async function runNightlyJobAsNow(db: Db): Promise<void> {
  * pressed with the stamp its screen's read gave just before (asTheScreenPresses), and the stamps in the answers are
  * set aside (withoutStamps).
  */
-export function newAdminSide({ adjust, calls, refusedReadsAsAnswers, stamps, pressWithoutReading, madeUpTo, pressWithoutFigures, refundOpen }: AdminSideOptions = {}): (db: Db, stripe: FakeStripe) => ReplaySide {
+export function newAdminSide({ adjust, calls, refusedReadsAsAnswers, stamps, pressWithoutReading, madeUpTo, pressWithoutFigures, refundOpen, paidBy }: AdminSideOptions = {}): (db: Db, stripe: FakeStripe) => ReplaySide {
   return (db, stripe) => {
     const old = oldSide(db, stripe)
     const creates = new Map([...CREATES].map((action) => [action, createAsTheDialogPresses(action)] as const))
@@ -331,7 +358,7 @@ export function newAdminSide({ adjust, calls, refusedReadsAsAnswers, stamps, pre
           if (!refusedReadsAsAnswers || !READS.has(action)) throw err
           answer = { thrown: err instanceof Error ? err.message : String(err) }
         }
-        answer = withoutRefundOpen(action, sessionsOf(action, withoutStamps(action, answer, stamps), madeUpTo), refundOpen)
+        answer = withoutPaidByLabel(action, withoutRefundOpen(action, sessionsOf(action, withoutStamps(action, answer, stamps), madeUpTo), refundOpen), paidBy)
         return adjust ? adjust(action, answer) : answer
       },
     }
@@ -373,6 +400,8 @@ export const STEP_G_AUDIT_ROWS: ReadonlySet<string> = new Set([
   'event_attendee.checked_in',
   'event_attendee.check_in_undone',
   'event_attendee.waiver_set',
+  // W53: the fulfilled tick.
+  'order_line.fulfilled_set',
 ])
 
 /** W52: the three event-day flags' rows. */
@@ -382,7 +411,7 @@ export const W52_FLAG_ROWS: ReadonlySet<string> = new Set(['event_attendee.check
  * W50: the audit rows of a flag (admin/flag.ts): who, the flag as it now is (`after`) and the call's key. A flag is
  * one guarded statement, so it reads no row first and keeps no `before`.
  */
-export const STEP_G_FLAG_ROWS: ReadonlySet<string> = new Set(['booking.checked_in', 'booking.check_in_undone', 'booking.guest_waiver_set', 'booking.addon_prepared_set', ...W52_FLAG_ROWS])
+export const STEP_G_FLAG_ROWS: ReadonlySet<string> = new Set(['booking.checked_in', 'booking.check_in_undone', 'booking.guest_waiver_set', 'booking.addon_prepared_set', ...W52_FLAG_ROWS, 'order_line.fulfilled_set'])
 
 /**
  * Each moved write route, and the one audit action a press of it answered with a success writes. W50: `also` names a
@@ -398,6 +427,8 @@ export const STEP_G_WRITE_ROUTES: ReadonlyArray<{ route: RegExp; action: string;
   { route: /^POST \/api\/v1\/staff\/events\/attendees\/check-in$/, action: 'event_attendee.checked_in', entityType: 'event_attendee', oneRowFor: 'each_attendee_checked_in' },
   { route: /^POST \/api\/v1\/staff\/events\/attendees\/[^/]+\/check-in\/undo$/, action: 'event_attendee.check_in_undone', entityType: 'event_attendee' },
   { route: /^POST \/api\/v1\/staff\/events\/attendees\/[^/]+\/waiver$/, action: 'event_attendee.waiver_set', entityType: 'event_attendee' },
+  // W53: the fulfilled tick, on and off.
+  { route: /^POST \/api\/v1\/staff\/orders\/lines\/[^/]+\/fulfilled$/, action: 'order_line.fulfilled_set', entityType: 'order_line_item' },
   { route: /^POST \/api\/v1\/staff\/bookings\/[^/]+\/check-in$/, action: 'booking.checked_in', entityType: 'booking', also: ['booking.check_in_undone'] },
   { route: /^POST \/api\/v1\/staff\/bookings\/guests\/[^/]+\/waiver$/, action: 'booking.guest_waiver_set', entityType: 'booking_guest' },
   { route: /^POST \/api\/v1\/staff\/bookings\/addon-lines\/[^/]+\/prepared$/, action: 'booking.addon_prepared_set', entityType: 'addon_order_line' },
@@ -487,10 +518,13 @@ export function adminRowProblems(recording: Recording): string[] {
         'event_attendee.checked_in': attendeeKept,
         'event_attendee.check_in_undone': attendeeKept,
         'event_attendee.waiver_set': attendeeKept,
+        // W53: the line's order and its fulfilment state as set.
+        'order_line.fulfilled_set': 'fulfillment_status,order_id',
       }
       if (kept !== expectedKeys[String(row.action)]) wrong('what is kept of the flag')
       if (row.action === 'booking.guest_waiver_set' && typeof d['accepted'] !== 'boolean') wrong('which way the waiver was pressed')
       if (row.action === 'booking.addon_prepared_set' && typeof d['prepared'] !== 'boolean') wrong('which way the tick was pressed')
+      if (row.action === 'order_line.fulfilled_set' && typeof d['fulfilled'] !== 'boolean') wrong('which way the tick was pressed')
       if (row.action === 'event_attendee.waiver_set' && (typeof d['accepted'] !== 'boolean' || !['standard', 'extra', 'both'].includes(String(d['which'])))) wrong('which waiver, and which way it was pressed')
       if (row.action === 'event_attendee.checked_in' && typeof d['markWaiversSignedInPerson'] !== 'boolean') wrong('whether the waivers were marked signed at the desk')
       // Never a name or an email: an attendee is named by id only.

@@ -24,8 +24,8 @@ CREATE TABLE public.addon_order_lines (
   order_id uuid,
   removed_at timestamp with time zone,
   removed_by uuid,
-  refunded_amount numeric DEFAULT 0 NOT NULL,
-  card_refunded_amount numeric DEFAULT 0 NOT NULL,
+  refunded_amount numeric(10,2) DEFAULT 0 NOT NULL,
+  card_refunded_amount numeric(10,2) DEFAULT 0 NOT NULL,
   refund_method text
 );
 
@@ -213,9 +213,9 @@ CREATE TABLE public.event_attendees (
   cancelled_at timestamp with time zone,
   cancelled_by uuid,
   cancel_reason text,
-  cancelled_value numeric DEFAULT 0 NOT NULL,
-  refunded_amount numeric DEFAULT 0 NOT NULL,
-  card_refunded_amount numeric DEFAULT 0 NOT NULL,
+  cancelled_value numeric(10,2) DEFAULT 0 NOT NULL,
+  refunded_amount numeric(10,2) DEFAULT 0 NOT NULL,
+  card_refunded_amount numeric(10,2) DEFAULT 0 NOT NULL,
   refund_method text,
   refund_after_cutoff boolean DEFAULT false NOT NULL
 );
@@ -359,7 +359,7 @@ CREATE TABLE public.membership_payment_date_changes (
   old_renewal_date date NOT NULL,
   new_renewal_date date NOT NULL,
   extra_days integer NOT NULL,
-  amount_charged numeric NOT NULL,
+  amount_charged numeric(10,2) NOT NULL,
   stripe_payment_intent_id text,
   order_id uuid,
   staff_id uuid,
@@ -381,8 +381,8 @@ CREATE TABLE public.membership_plans (
   active boolean DEFAULT true,
   created_at timestamp with time zone DEFAULT now() NOT NULL,
   updated_at timestamp with time zone DEFAULT now() NOT NULL,
-  price_monthly numeric,
-  price_yearly numeric,
+  price_monthly numeric(10,2),
+  price_yearly numeric(10,2),
   level text,
   is_unlimited boolean DEFAULT false NOT NULL,
   stripe_price_id_yearly text
@@ -412,10 +412,10 @@ CREATE TABLE public.order_line_items (
   refund_method text,
   restocked boolean,
   fulfillment_status text,
-  card_refunded_amount numeric DEFAULT 0 NOT NULL,
-  system_unit_price numeric,
+  card_refunded_amount numeric(10,2) DEFAULT 0 NOT NULL,
+  system_unit_price numeric(10,2),
   price_override_reason text,
-  discount_amount numeric DEFAULT 0 NOT NULL,
+  discount_amount numeric(10,2) DEFAULT 0 NOT NULL,
   event_booking_id uuid
 );
 
@@ -455,7 +455,7 @@ CREATE TABLE public.pending_reader_payments (
   record_id uuid NOT NULL,
   order_id uuid,
   payment_intent_id text,
-  expected_amount numeric NOT NULL,
+  expected_amount numeric(10,2) NOT NULL,
   snapshot jsonb DEFAULT '{}'::jsonb NOT NULL,
   status text DEFAULT 'pending'::text NOT NULL,
   created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -506,7 +506,7 @@ CREATE TABLE public.promo_code_redemptions (
   promo_code_id uuid NOT NULL,
   order_id uuid NOT NULL,
   customer_id uuid,
-  discount_amount numeric NOT NULL,
+  discount_amount numeric(10,2) NOT NULL,
   created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
@@ -521,7 +521,7 @@ CREATE TABLE public.promo_codes (
   expires_on date,
   max_total_uses integer,
   one_use_per_customer boolean DEFAULT false NOT NULL,
-  min_spend numeric,
+  min_spend numeric(10,2),
   restricted_customer_id uuid,
   active boolean DEFAULT true NOT NULL,
   created_by text,
@@ -1454,10 +1454,12 @@ $function$;
 
 -- Primary keys, unique, check and exclusion constraints (a view's GROUP BY can rely on a primary key)
 ALTER TABLE public.addon_order_lines ADD CONSTRAINT addon_order_lines_card_refunded_amount_check CHECK ((card_refunded_amount >= (0)::numeric));
+ALTER TABLE public.addon_order_lines ADD CONSTRAINT addon_order_lines_card_within_refunded_check CHECK ((card_refunded_amount <= refunded_amount));
 ALTER TABLE public.addon_order_lines ADD CONSTRAINT addon_order_lines_pkey PRIMARY KEY (id);
 ALTER TABLE public.addon_order_lines ADD CONSTRAINT addon_order_lines_redemption_source_check CHECK ((redemption_source = ANY (ARRAY['paid'::text, 'membership_credit'::text])));
 ALTER TABLE public.addon_order_lines ADD CONSTRAINT addon_order_lines_refund_method_check CHECK ((refund_method = ANY (ARRAY['card'::text, 'credit'::text, 'none'::text, 'credit_returned'::text])));
 ALTER TABLE public.addon_order_lines ADD CONSTRAINT addon_order_lines_refunded_amount_check CHECK ((refunded_amount >= (0)::numeric));
+ALTER TABLE public.addon_order_lines ADD CONSTRAINT addon_order_lines_refunded_within_line_check CHECK ((refunded_amount <= (price_at_purchase * (quantity)::numeric)));
 ALTER TABLE public.addons ADD CONSTRAINT addons_pkey PRIMARY KEY (id);
 ALTER TABLE public.addons ADD CONSTRAINT addons_sanity_addon_id_key UNIQUE (sanity_addon_id);
 ALTER TABLE public.addons ADD CONSTRAINT addons_sku_key UNIQUE (sku);
@@ -1552,6 +1554,8 @@ ALTER TABLE public.membership_payment_date_changes ADD CONSTRAINT membership_pay
 ALTER TABLE public.membership_payment_date_changes ADD CONSTRAINT membership_payment_date_changes_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'done'::text, 'failed'::text])));
 ALTER TABLE public.membership_plans ADD CONSTRAINT membership_plans_level_check CHECK ((level = ANY (ARRAY['core'::text, 'all_access'::text])));
 ALTER TABLE public.membership_plans ADD CONSTRAINT membership_plans_pkey PRIMARY KEY (id);
+ALTER TABLE public.membership_plans ADD CONSTRAINT membership_plans_price_monthly_check CHECK (((price_monthly IS NULL) OR (price_monthly >= (0)::numeric)));
+ALTER TABLE public.membership_plans ADD CONSTRAINT membership_plans_price_yearly_check CHECK (((price_yearly IS NULL) OR (price_yearly >= (0)::numeric)));
 ALTER TABLE public.membership_plans ADD CONSTRAINT membership_plans_sanity_plan_id_key UNIQUE (sanity_plan_id);
 ALTER TABLE public.membership_plans ADD CONSTRAINT membership_plans_stripe_price_id_key UNIQUE (stripe_price_id);
 ALTER TABLE public.membership_plans ADD CONSTRAINT membership_plans_stripe_price_id_yearly_key UNIQUE (stripe_price_id_yearly);
@@ -1559,10 +1563,13 @@ ALTER TABLE public.membership_plans ADD CONSTRAINT membership_plans_stripe_produ
 ALTER TABLE public.membership_settings ADD CONSTRAINT membership_settings_addon_credit_wait_months_check CHECK (((addon_credit_wait_months >= 0) AND (addon_credit_wait_months <= 60)));
 ALTER TABLE public.membership_settings ADD CONSTRAINT membership_settings_id_check CHECK (id);
 ALTER TABLE public.membership_settings ADD CONSTRAINT membership_settings_pkey PRIMARY KEY (id);
+ALTER TABLE public.order_line_items ADD CONSTRAINT order_line_items_card_refunded_amount_check CHECK ((card_refunded_amount >= (0)::numeric));
+ALTER TABLE public.order_line_items ADD CONSTRAINT order_line_items_discount_amount_check CHECK (((discount_amount >= (0)::numeric) AND (discount_amount <= line_total)));
 ALTER TABLE public.order_line_items ADD CONSTRAINT order_line_items_fulfillment_status_check CHECK ((fulfillment_status = ANY (ARRAY['pending'::text, 'fulfilled'::text])));
 ALTER TABLE public.order_line_items ADD CONSTRAINT order_line_items_item_type_check CHECK ((item_type = ANY (ARRAY['booking'::text, 'product'::text, 'membership'::text, 'session_pass'::text, 'gift_card'::text, 'addon'::text, 'postage'::text, 'event'::text])));
 ALTER TABLE public.order_line_items ADD CONSTRAINT order_line_items_pkey PRIMARY KEY (id);
 ALTER TABLE public.order_line_items ADD CONSTRAINT order_line_items_refund_method_check CHECK ((refund_method = ANY (ARRAY['card'::text, 'credit'::text, 'cash'::text])));
+ALTER TABLE public.order_line_items ADD CONSTRAINT order_line_items_system_unit_price_check CHECK (((system_unit_price IS NULL) OR (system_unit_price >= (0)::numeric)));
 ALTER TABLE public.orders ADD CONSTRAINT orders_order_source_check CHECK ((order_source = ANY (ARRAY['online'::text, 'staff_created'::text])));
 ALTER TABLE public.orders ADD CONSTRAINT orders_payment_method_check CHECK ((payment_method = ANY (ARRAY['card'::text, 'reader'::text, 'cash'::text, 'gift_card'::text, 'split'::text, 'store_credit'::text])));
 ALTER TABLE public.orders ADD CONSTRAINT orders_payment_status_check CHECK ((payment_status = ANY (ARRAY['pending'::text, 'paid'::text, 'failed'::text, 'refunded'::text, 'partially_refunded'::text])));
@@ -1570,6 +1577,7 @@ ALTER TABLE public.orders ADD CONSTRAINT orders_pkey PRIMARY KEY (id);
 ALTER TABLE public.orders ADD CONSTRAINT orders_refund_owed_amount_check CHECK ((refund_owed_amount >= (0)::numeric));
 ALTER TABLE public.orders ADD CONSTRAINT orders_shipping_status_check CHECK ((shipping_status = ANY (ARRAY['pending'::text, 'shipped'::text, 'delivered'::text])));
 ALTER TABLE public.parity_log ADD CONSTRAINT parity_log_pkey PRIMARY KEY (id);
+ALTER TABLE public.pending_reader_payments ADD CONSTRAINT pending_reader_payments_expected_amount_check CHECK ((expected_amount >= (0)::numeric));
 ALTER TABLE public.pending_reader_payments ADD CONSTRAINT pending_reader_payments_flow_check CHECK ((flow = ANY (ARRAY['checkout'::text, 'move'::text, 'settle'::text, 'add_guest'::text])));
 ALTER TABLE public.pending_reader_payments ADD CONSTRAINT pending_reader_payments_pkey PRIMARY KEY (id);
 ALTER TABLE public.pending_reader_payments ADD CONSTRAINT pending_reader_payments_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'finalised'::text, 'cancelled'::text])));

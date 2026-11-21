@@ -185,12 +185,13 @@ const bookingRow = async (bookingId: string) =>
 const totalBooked = async (sessionId = ID.session) => (await db.query<{ total_booked: number }>('SELECT total_booked FROM sessions WHERE id = $1', [sessionId]))[0]?.total_booked
 const addonLines = (bookingId: string) =>
   db.query<{ id: string; order_id: string; removed_at: unknown; refunded_amount: string; card_refunded_amount: string; refund_method: string | null; redemption_source: string | null }>(
-    'SELECT id, order_id, removed_at, refunded_amount::text, card_refunded_amount::text, refund_method, redemption_source FROM addon_order_lines WHERE booking_id = $1 ORDER BY created_at',
+    // W53 (migration 033): trim_scale, so a figure reads the same (`5`) whether the column is plain numeric or numeric(10,2).
+    'SELECT id, order_id, removed_at, trim_scale(refunded_amount)::text AS refunded_amount, trim_scale(card_refunded_amount)::text AS card_refunded_amount, refund_method, redemption_source FROM addon_order_lines WHERE booking_id = $1 ORDER BY created_at',
     [bookingId]
   )
 const bookingLines = (bookingId: string) =>
   db.query<{ id: string; order_id: string; card_refunded_amount: string; refunded_at: unknown; refund_method: string | null }>(
-    "SELECT id, order_id, card_refunded_amount::text, refunded_at, refund_method FROM order_line_items WHERE booking_id = $1 AND item_type = 'booking' ORDER BY created_at",
+    "SELECT id, order_id, trim_scale(card_refunded_amount)::text AS card_refunded_amount, refunded_at, refund_method FROM order_line_items WHERE booking_id = $1 AND item_type = 'booking' ORDER BY created_at",
     [bookingId]
   )
 const refunds = (stripe: FakeStripe) => stripe.calls.filter((call) => call.method === 'refunds.create')

@@ -155,7 +155,8 @@ export async function sweepInvariants(
         )
         const stripeBack = context.stripe.refundedPence / 100
         if (Math.abs(stripeBack - Number.parseFloat(recorded?.card ?? '0')) > 0.005 && !allowed(STRIPE_REFUNDS_NOT_ON_ROWS, scenario.name)) {
-          wrong.push(`${scenario.name}: Stripe refunded £${stripeBack.toFixed(2)}, the rows say £${recorded?.card}`)
+          // W53 (migration 033): the sum's text is to the penny now (`15.00`); said as it always was (`15`).
+          wrong.push(`${scenario.name}: Stripe refunded £${stripeBack.toFixed(2)}, the rows say £${String(Number.parseFloat(recorded?.card ?? '0'))}`)
         }
 
         // Every gift card that was seeded lost exactly what its redemptions record (W05k): a part

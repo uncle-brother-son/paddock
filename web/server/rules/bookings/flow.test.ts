@@ -298,7 +298,7 @@ describe('a card flow: charge, C2 and undo (W17)', () => {
         livemode: false,
       }
       const pendingId = await db.transaction((tx) => writeFlowRecord(tx, { flow: 'settle', recordId: bookingId, expectedAmount: 15, snapshot }))
-      expect(await readFlow(db, pendingId)).toMatchObject({ flow: 'settle', record_id: bookingId, payment_intent_id: null, expected_amount: '15', status: 'pending', snapshot })
+      expect(await readFlow(db, pendingId)).toMatchObject({ flow: 'settle', record_id: bookingId, payment_intent_id: null, expected_amount: '15.00', status: 'pending', snapshot })
     })
   })
 })

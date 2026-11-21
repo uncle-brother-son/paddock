@@ -967,7 +967,12 @@ export function newAuditRowProblems(recording: Recording): string[] {
         const guest = (d['guest'] ?? {}) as Record<string, unknown>
         const card = ((d['plan'] as { card?: unknown[] } | undefined)?.card ?? []).length > 0
         // The guest's row is kept exactly when a card part could be refused and the guest put back.
-        if (!sameKeys(guest, ['id', 'name', 'seatPrice', 'placeReleased', ...(card ? ['restore'] : [])])) wrong('the guest')
+        // W53 (W05h items 3 and 4): the guest's own order line, found before the guest is deleted so R2 and reconcile
+        // stamp that line and no other: the line their Add Guest's audit row names, or null for a guest with no such
+        // row (one of the original party).
+        const line = guest['line'] as { id?: unknown; orderId?: unknown } | null | undefined
+        if (!sameKeys(guest, ['id', 'name', 'seatPrice', 'placeReleased', 'line', ...(card ? ['restore'] : [])])) wrong('the guest')
+        if (line !== null && !(line !== undefined && sameKeys(line as Record<string, unknown>, ['id', 'orderId']) && /^order_line_items#\d+$/.test(String(line.id)) && /^orders#\d+$/.test(String(line.orderId)))) wrong("the guest's line")
         if (!(Number(guest['seatPrice']) >= n('amount')) || d['reason'] !== null || !['card', 'credit'].includes(String(d['method']))) wrong('a guest claim')
       }
       if (d['kind'] === 'remove_addon') {

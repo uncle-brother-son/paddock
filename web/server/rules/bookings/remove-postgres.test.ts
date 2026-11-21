@@ -182,7 +182,7 @@ describe('two tabs removing the same add-on', () => {
     expect(answers.filter((answer) => 'answered' in answer)).toHaveLength(1)
     expect(answers.filter((answer) => 'refused' in answer)).toEqual([{ refused: 'already_removed' }])
     expect(stripe.calls.filter((call) => call.method === 'refunds.create').map((call) => (call.params as { amount: number }).amount)).toEqual([500])
-    const line = (await first.query<{ card: string; method: string }>('SELECT card_refunded_amount::text AS card, refund_method AS method FROM addon_order_lines WHERE id = $1', [addonLineId]))[0]
+    const line = (await first.query<{ card: string; method: string }>('SELECT trim_scale(card_refunded_amount)::text AS card, refund_method AS method FROM addon_order_lines WHERE id = $1', [addonLineId]))[0]
     expect(line).toEqual({ card: '5', method: 'card' })
   })
 

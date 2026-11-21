@@ -139,7 +139,8 @@ const insideTwentyFourHours = () => vi.setSystemTime(new Date('2026-11-11T12:00:
 const line = async (lineId: string) =>
   (
     await db.query<{ removed_at: unknown; refunded_amount: string; card_refunded_amount: string; refund_method: string | null; order_id: string | null }>(
-      'SELECT removed_at, refunded_amount::text AS refunded_amount, card_refunded_amount::text AS card_refunded_amount, refund_method, order_id FROM addon_order_lines WHERE id = $1',
+      // W53 (migration 033): trim_scale, so a figure reads the same (`5`) whether the column is plain numeric or numeric(10,2).
+      'SELECT removed_at, trim_scale(refunded_amount)::text AS refunded_amount, trim_scale(card_refunded_amount)::text AS card_refunded_amount, refund_method, order_id FROM addon_order_lines WHERE id = $1',
       [lineId]
     )
   )[0]
@@ -232,8 +233,9 @@ describe('Remove add-on: the removal (W22)', () => {
 
   it("card first, capped at what the paying order's card can still take back; the rest to store credit on that order", async () => {
     await withAnAddon('own order', async ({ lineId, stripe }) => {
-      // £3 of the add-on's own £5 card payment already went back (recorded on its line, as a Worker refund would).
-      await db.query('UPDATE addon_order_lines SET card_refunded_amount = 3 WHERE id = $1', [lineId])
+      // £3 of the add-on's own £5 card payment already went back (recorded on its line, as a Worker refund would:
+      // both figures. W53: migration 033's check refuses a line with more back to the card than was refunded).
+      await db.query('UPDATE addon_order_lines SET card_refunded_amount = 3, refunded_amount = 3 WHERE id = $1', [lineId])
       const answer = await remove(lineId, 'card', 5)
       expect(answer.body.data).toMatchObject({ summary: '1 add-on cancelled: £2.00 to the card, £3.00 to store credit', cardRefundedAmount: 2, storeCreditRefundedAmount: 3 })
       expect(refundCalls(stripe).map((call) => (call.params as { amount: number }).amount)).toEqual([200])

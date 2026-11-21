@@ -1,12 +1,13 @@
 import { adminGetPaymentAttentionItemsOutputSchema, emptyInputSchema } from '@/contracts'
 import { defineRoute } from '@/server/http/define-route'
 import { adminActor } from '@/server/rules/admin/refusal'
-import { listPaymentAttention } from '@/server/rules/bookings/admin'
+import { listPaymentAttention } from '@/server/rules/orders/admin'
 
 /**
  * W50 (G-plan 4.3; bug GB14): getPaymentAttentionItems, Overview's "Needs attention: payments": bookings at Payment
  * needed (soonest deadline first, each a whole booking row) and memberships whose payment is overdue. Named fields.
- * Any active staff member (the old read checked nobody).
+ * Any active staff member (the old read checked nobody). W53: the read lives in server/rules/orders/admin.ts now
+ * (moved from bookings/admin.ts, unchanged); the route and its answer are the same.
  */
 export const GET = defineRoute({ auth: 'staff', input: emptyInputSchema, output: adminGetPaymentAttentionItemsOutputSchema }, async ({ db, staff }) =>
   listPaymentAttention(db, { channel: 'staff', actor: adminActor(staff) })

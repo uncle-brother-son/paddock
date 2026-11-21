@@ -584,6 +584,87 @@ recording of its own, so `STAFF_SET_TIME_PREFIXES` is unchanged (W48 review L6: 
   event forward to before its cut-off (Q-a), has a cut-off with seconds (S1), signs on the customer channel, or has
   a refund still being checked, so those are held in `events/admin.test.ts`.
 
+#### Orders in the replay (W53)
+
+`order-admin-replay.test.ts` replays W48's six recordings of the two order reads and the fulfilled tick
+(`isW53Scenario`) through the staff app's three thin functions and the Worker's routes. `W53_ACTIONS` joined
+`STEP_G_ACTIONS_MOVED`; the two new routes are in `legacy-routes.ts`'s staff patterns.
+
+- **Two match exactly:** the order list read ten ways, and GB22's second half (money owed is Needs action, as since
+  W47). **Four have named differences** (`W53_NAMED`, each pinned): the line read's four working columns gone
+  (`NAMED_COLUMNS`); the tick refused for a sign-in with no staff row, the line left as it was (`NO_STAFF_ROW`); the
+  tick's two old refusals now carrying words (`WORDS`); GB22's first half (`GB22`: listed under Needs action, and no
+  longer under Complete).
+- **Set aside and checked on their own:** the tick's audit rows (`order_line.fulfilled_set`, one for each press
+  answered with a success) and the stored answers, as every step G flag; and `payment_method_label`, which the order
+  list now answers beside each order (`withoutPaidByLabel`; the test holds each to its order's recorded method).
+- **Each recording's raw paths are held to `pathsPinnedBy`**, as W52's, so a pin can't go unseen.
+- **GB14's recording stays in `admin-replay.test.ts`**; its one named difference now pins W53's two reads too.
+- **What no recording can show**, held in `orders/admin.test.ts`: a refunded line, a line with no fulfilment state,
+  an order whose payment failed, the store-credit label for an order with no method, and the customer channel.
+
+#### The labels in the booking replay (W53)
+
+W53 changed what an order and a booking line READ after a refund (brief items 4 and 5), and the booking replay's
+golden files hold the old labels. `booking-label-differences.ts` names every one:
+
+- **`W53_LABEL_DIFFERENCES`: 14 scenarios, 30 labels.** Each label is its own allowance on one path with the golden
+  file's value and the Worker's both exact (`label(...)`), so none can hide another value and each must still be seen
+  (`compareRecordings` fails an allowance nothing used; the replay test also holds the 14 and the 30). They are:
+  Remove Guest's store credit linked to the guest's own order, with the booking's own order left `paid` (W05h item 2:
+  6 scenarios); the guest's own line stamped in place of the newest line that fitted (W05h items 3 and 4: 4
+  scenarios); a cancel that kept £5 reading part refunded (W47 review L5: 1); an order worked out again when It
+  already arrived settles what was owed (W32 "Noticed" 4: 2); and `payment_method` `store_credit` on Add Guest's own
+  order paid by store credit alone (L9: 1).
+- **No money differs in any of them**: every amount, every Stripe call and every store credit row's amount is still
+  compared exactly. (W53a changed one of them: in `remove-guest-the-older-of-two` the other guest's order now stays
+  `paid`, where W53 read `partially_refunded` and the golden file `refunded`, because its payment no longer gives
+  Bea's £20 back.)
+- **W53a: `W53A_PAYMENT_FIRST_DIFFERENCES` (`remove-guest-payment-first-differences.ts`): 3 scenarios, 11 values,
+  and these ARE money.** Remove Guest now refunds the payment that took the guest's seat first (the order of the line
+  R2 stamps as theirs, or the booking's own order for one of the original party), then the other payments newest
+  first, then store credit (W53 review S1; Wayne's Q40: each line's money goes back to the payment that took it). The
+  old code went newest payment first. The customer gets the same total back; only which card payment gives it (or how
+  it splits between two) differs: `remove-guest-the-older-of-two` (Bea's £20 from her own payment, not Cy's newer
+  one), `remove-guest-both-of-two` (each guest's £20 from their own payment, so the two refunds swap payments) and
+  `reader-move-finished-then-remove-guest` (Bea's £25.50: £20 from her own payment and £5.50 from the Move's reader
+  charge, where it was £16.50 and £9). Each value is its own allowance with both values exact; the replay test holds
+  the 3 and the 11.
+- **`W53_STATUS_AT_THE_END`: 1 order of 831.** The replay asks the Worker's status rule and the frozen old one of
+  every order at the end of every scenario, from the same rows. They agree on 830; the one named is the W47 review
+  L5 case (both values exact, and the count of named ones is held at 1).
+- **Remove Guest's claim** (`booking.refund_claimed`, set aside and checked on its own) now carries the guest's
+  `line`: `{ id, orderId }`, or null for a guest with no `booking.guest_add` row. `newAuditRowProblems` holds its shape.
+- **033's text elsewhere in the replay:** the invariants' sentence prints the rows' card figure as it always did
+  (`£15`, not `£15.00`), and the event places' pins on a place's three figures match to the penny
+  (`event-places-differences.ts`, `pinned`).
+
+### Migration 033 and the saved schema (W53)
+
+`supabase/migrations/033_money_columns_numeric_10_2.sql` is written but **not applied to live**: the lead applies it
+after W53's review, before the Worker push. `live-catalog.json` and `live-schema.sql` already carry it (fourteen
+columns `numeric(10,2)`, eight new checks), taken from a real Postgres 17.6 with the file applied
+(`W53_CATALOG_OUT=<path>` on `migration-033.test.ts`, then `npm run schema:test -- --from <path>`; the three
+live-only extensions put back by hand), so `npm run schema:test -- --check` passes and every test runs against the
+schema live will have. `migration-033.test.ts` holds the two to each other on real Postgres (the saved schema with
+033's Down applied, then 033 applied, is the saved schema again) and holds the stop: a row with more than two
+decimal places in any of the fourteen columns, one too large, or one that would fail a new check stops the file
+with the column named, and nothing at all is changed.
+
+**What changes for a test:** a plain `numeric` column printed a figure as it was written (`0`, `12`);
+`numeric(10,2)` prints `0.00`, `12.00`.
+
+- **The golden files are not re-recorded.** `compare.ts` compares the fourteen columns' text in an ANSWER to the
+  penny (`PENNY_TEXT_FIELDS`, `samePence`), as it always compared a table's numeric columns. A figure a penny out, or
+  one rounding changed, is still a difference.
+- **Tests that read one of these columns as text** use `trim_scale(...)::text` in their own read (so `5` reads `5`
+  before and after 033), or expect the route's answer to the penny (`'0.00'`).
+- A fixture that writes `card_refunded_amount` on an add-on line must write `refunded_amount` with it: 033's check
+  refuses more back to the card than was refunded.
+
+**After the lead applies 033:** refresh as for 023 ("Refreshing the live schema"). `git diff` on the two saved files
+should then show **nothing**.
+
 ### Migration 023 and the saved schema (W27)
 
 `supabase/migrations/023_orders_refund_owed_and_cash_refunds.sql` is written but **not applied to live**: the lead

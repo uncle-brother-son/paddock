@@ -468,6 +468,55 @@ describe('the membership line (brief W29 items 1, 2 and 4)', () => {
   })
 })
 
+describe("W53 (Wayne's Q40; the W28 QA's step G note): card money is recorded on the line its payment took", () => {
+  it("store credit covered the soap and the membership's first invoice took the £40: one card payment. A refund of both lines to the card sends £40 and records it on the MEMBERSHIP's line; the soap's £24 goes back as store credit (before W53 the £40 was recorded on the lines in line order, whichever came first)", async () => {
+    await onASeed(async (stripe) => {
+      await db.query('UPDATE customers SET store_credit_balance = 24 WHERE id = $1', [ID.customer])
+      const orderId = await placed({ ...monthly, products: [soap], payment: { ...card, storeCredit: { amount: 24 } } })
+      const [membershipLine] = await linesOf(orderId, 'membership')
+      const [soapLine] = await linesOf(orderId, 'product')
+      // One card payment, and it was the membership's own: no remainder charge beside it.
+      expect(await loadOrderCardPortion(db, orderId)).toMatchObject({ cardPortion: 40, membershipPayment: null, cardTookMembership: true })
+
+      // Chosen soap first, as the lines are listed: the card part still goes on the membership's line.
+      const answer = await refund(orderId, [soapLine as string, membershipLine as string], 'card')
+      expect(answer.body.data).toMatchObject({ refundedAmount: 64, refundMethod: 'card', cardRefundedAmount: 40, storeCreditRefundedAmount: 24, orderPaymentStatus: 'refunded' })
+      expect(refundsSent(stripe).map((sent) => sent.amount)).toEqual([4000])
+      const claim = (await auditRows('order.refund_claimed'))[0]?.details as { plan: { card: Array<{ amount: number; lines: Array<{ lineId: string; amount: number }> }>; storeCredit: number } }
+      expect(claim.plan).toMatchObject({ card: [{ amount: 40, lines: [{ lineId: membershipLine, amount: 40 }] }], storeCredit: 24 })
+      const rows = await lineRows(orderId)
+      expect(rows.find((row) => row.item_type === 'membership')).toEqual({ item_type: 'membership', refunded: true, refund_method: 'card', card: '40.00' })
+      expect(rows.find((row) => row.item_type === 'product')).toEqual({ item_type: 'product', refunded: true, refund_method: 'credit', card: '0.00' })
+    })
+  })
+
+  it("store credit covered more than the soap, so the invoice took only part of the membership: the card's £30 is on the membership's line with £10 of store credit, and the soap's £24 is all store credit", async () => {
+    await onASeed(async (stripe) => {
+      await db.query('UPDATE customers SET store_credit_balance = 34 WHERE id = $1', [ID.customer])
+      const orderId = await placed({ ...monthly, products: [soap], payment: { ...card, storeCredit: { amount: 34 } } })
+      const [membershipLine] = await linesOf(orderId, 'membership')
+      const [soapLine] = await linesOf(orderId, 'product')
+      expect(await loadOrderCardPortion(db, orderId)).toMatchObject({ cardPortion: 30, membershipPayment: null, cardTookMembership: true })
+      const answer = await refund(orderId, [soapLine as string, membershipLine as string], 'card')
+      expect(answer.body.data).toMatchObject({ refundedAmount: 64, cardRefundedAmount: 30, storeCreditRefundedAmount: 34 })
+      expect(refundsSent(stripe).map((sent) => sent.amount)).toEqual([3000])
+      const rows = await lineRows(orderId)
+      expect(rows.find((row) => row.item_type === 'membership')).toMatchObject({ refund_method: 'card', card: '30.00' })
+      expect(rows.find((row) => row.item_type === 'product')).toMatchObject({ refund_method: 'credit', card: '0.00' })
+    })
+  })
+
+  it("every other order keeps line order: two card payments (a remainder charge) and a reader order's one tap are not the membership's own payment", async () => {
+    await onASeed(async () => {
+      const twoPayments = await placed({ ...monthly, products: [soap], payment: card })
+      expect(await loadOrderCardPortion(db, twoPayments)).toMatchObject({ cardPortion: 24, cardTookMembership: false })
+      expect((await loadOrderCardPortion(db, twoPayments))?.membershipPayment).not.toBeNull()
+      const soapOnly = await placed({ products: [soap], payment: card })
+      expect(await loadOrderCardPortion(db, soapOnly)).toMatchObject({ cardPortion: 24, membershipPayment: null, cardTookMembership: false })
+    })
+  })
+})
+
 describe('the payment date change charge (brief W29 item 3)', () => {
   it('refunds as a plain line: £6.50 back to its own charge, no cancel, the membership and its new date untouched', async () => {
     await onASeed(async (stripe) => {

@@ -89,12 +89,12 @@ import {
   putBackFailedMessage,
   putBackFailedNotRecordedMessage,
 } from './failure-messages'
-import { arrivedCardShortWords } from '@/server/rules/refunds/failure-messages'
+import { arrivedCardShortWords, arrivedRecordedOnWords } from '@/server/rules/refunds/failure-messages'
 import { claimWatchEntries, refundSeen, refundsForRow, type RefundSeen } from '@/server/rules/refunds/refund-watch'
 import { lockAndLoadBooking, paymentOpen, type LoadedBooking } from './load-booking'
 import { lockForBooking } from './locks'
 import { inC1, paymentOpenRefusal } from './money-in'
-import { ADDONS_INSIDE_LINE, loadBookingLines, loadOrderCardPortion, recordOrderPaymentStatus, withCashAndLine, type RefundFigures } from './money-left'
+import { ADDONS_INSIDE_LINE, loadBookingLines, loadOrderCardPortion, recordBookingOrdersPaymentStatus, recordOrderPaymentStatus, withCashAndLine, type RefundFigures } from './money-left'
 
 // W27: lifted to the shared core, and still exported from here under their old names.
 export { cardPartRequest, claimRefundKey, findCardPart } from '@/server/rules/refunds/pipeline'
@@ -129,6 +129,13 @@ export interface GuestClaim {
   placeReleased: boolean
   /** With card parts only: the guest's row as it was (to_jsonb), for the undo. */
   restore?: Record<string, unknown>
+  /**
+   * W53 (W05h items 2 to 5): the order line the guest's own Add Guest wrote (guestLine), found in R1. R2 links the
+   * refund's store credit to its order and stamps it, where the old rule guessed the line by its price. Null for a
+   * guest with no line of their own (one of the party the booking was made with, whose seat is in the booking's first
+   * line): then the old rule picks. Absent on a claim made before W53: R2 looks the line up itself.
+   */
+  line?: { id: string; orderId: string } | null
 }
 
 /** W22: Remove add-on's claim: the add-on line R1 marked removed, and what it paid (price × quantity). */
@@ -431,10 +438,33 @@ export async function writeClaim(tx: Tx, bookingId: string, details: ClaimDetail
  * amount; what the cards can't take goes to store credit with the rest. So an order's seat and add-on money make ONE
  * part, under one key (order £45 on the card, seat £40 and towel £5: one £45 refund). With no add-on lines the plan is
  * exactly W21's.
+ *
+ * W53 (W47 review L1; Wayne's Q40): `addonsFirst` turns the two round: the add-on lines take their order's card money
+ * before its booking lines do. For money owed (planOwedRefund), where an add-on line's share is the money that never
+ * reached the card.
+ *
+ * W53a (W53 review S1; Wayne's Q40: each line's money goes back to the payment that took it): `firstOrderId`, when
+ * given, is planned first: that order's booking lines take its card money before the other lines, which then follow
+ * newest first as before. Remove Guest passes the order that paid for the guest's seat (the order of the line R2
+ * stamps as theirs, or the booking's own order for one of the original party), so the seat's money goes back to that payment
+ * and not to whichever card payment on the booking is newest. What that payment can't take still comes from the
+ * others, then store credit. Null (every other caller): exactly the plan before W53a.
  */
-export async function planRefund(db: Queryable, bookingId: string, amount: number, method: RefundMethod, addonLines: readonly AddonRefundLine[] = []): Promise<RefundPlan> {
-  const lines = await loadBookingLines(db, bookingId)
-  const ownOrderId = lines.length > 0 ? (lines[lines.length - 1]?.orderId ?? null) : null
+export async function planRefund(
+  db: Queryable,
+  bookingId: string,
+  amount: number,
+  method: RefundMethod,
+  addonLines: readonly AddonRefundLine[] = [],
+  addonsFirst = false,
+  firstOrderId: string | null = null
+): Promise<RefundPlan> {
+  const newestFirst = await loadBookingLines(db, bookingId)
+  const ownOrderId = newestFirst.length > 0 ? (newestFirst[newestFirst.length - 1]?.orderId ?? null) : null
+  // W53a: the given order's lines first, each group still newest first (filter keeps the order).
+  const lines = firstOrderId
+    ? [...newestFirst.filter((line) => line.orderId === firstOrderId), ...newestFirst.filter((line) => line.orderId !== firstOrderId)]
+    : newestFirst
   const give = round2(amount)
   const addonTotal = sum(addonLines.map((line) => line.amount))
   if (method === 'cash') return { card: [], storeCredit: 0, cash: give, ownOrderId }
@@ -457,26 +487,38 @@ export async function planRefund(db: Queryable, bookingId: string, amount: numbe
     parts.set(orderId, part)
   }
   let left = give
-  for (const line of lines) {
-    if (left <= 0.005) break
-    const portion = await portionOf(line.orderId)
-    if (!portion.paymentIntentId) continue
-    const take = round2(Math.min(left, portion.left, line.netRemaining))
-    if (take <= 0) continue
-    portion.left = round2(portion.left - take)
-    addToPart(line.orderId, portion.paymentIntentId, { lineId: line.id, amount: take })
-    left = round2(left - take)
-  }
-  // W23: the add-ons, booking lines first: each order's card money left after its seat money.
-  let addonsLeft = 0
-  for (const line of addonLines) {
-    const portion = line.orderId ? await portionOf(line.orderId) : null
-    const take = line.orderId && portion?.paymentIntentId ? round2(Math.min(line.amount, portion.left)) : 0
-    if (take > 0 && line.orderId && portion?.paymentIntentId) {
+  const takeSeats = async (): Promise<void> => {
+    for (const line of lines) {
+      if (left <= 0.005) break
+      const portion = await portionOf(line.orderId)
+      if (!portion.paymentIntentId) continue
+      const take = round2(Math.min(left, portion.left, line.netRemaining))
+      if (take <= 0) continue
       portion.left = round2(portion.left - take)
-      addToPart(line.orderId, portion.paymentIntentId, { lineId: line.id, amount: take, addon: true })
+      addToPart(line.orderId, portion.paymentIntentId, { lineId: line.id, amount: take })
+      left = round2(left - take)
     }
-    addonsLeft = round2(addonsLeft + line.amount - take)
+  }
+  let addonsLeft = 0
+  const takeAddons = async (): Promise<void> => {
+    for (const line of addonLines) {
+      const portion = line.orderId ? await portionOf(line.orderId) : null
+      const take = line.orderId && portion?.paymentIntentId ? round2(Math.min(line.amount, portion.left)) : 0
+      if (take > 0 && line.orderId && portion?.paymentIntentId) {
+        portion.left = round2(portion.left - take)
+        addToPart(line.orderId, portion.paymentIntentId, { lineId: line.id, amount: take, addon: true })
+      }
+      addonsLeft = round2(addonsLeft + line.amount - take)
+    }
+  }
+  // W23: the add-ons, booking lines first: each order's card money left after its seat money. W53: money owed the
+  // other way round (`addonsFirst`).
+  if (addonsFirst) {
+    await takeAddons()
+    await takeSeats()
+  } else {
+    await takeSeats()
+    await takeAddons()
   }
   const seatToStoreCredit = left > 0.005 ? left : 0
   return { card: [...parts.values()], storeCredit: addonLines.length > 0 ? round2(seatToStoreCredit + addonsLeft) : seatToStoreCredit, cash: 0, ownOrderId }
@@ -511,6 +553,32 @@ export async function planAddonRefund(db: Queryable, orderId: string | null, lin
   }
   const storeCredit = round2(total - card)
   return { card: parts, storeCredit: storeCredit > 0.005 ? storeCredit : 0, cash: 0, ownOrderId: orderId }
+}
+
+/**
+ * W53 (W47 review L1; Wayne's Q40: money goes back on the line its payment took): where money owed goes when Refund
+ * the rest sends it to the card. First the booking's removed add-on lines whose card refund is part of what is owed
+ * (OWED_ADDON_LINES_SQL), in a fixed order, each up to what it is short of and what its order's card can still take;
+ * then the booking's lines as planRefund plans them; what the cards can't take, to store credit.
+ *
+ * Until W53 the whole of it was planned on the booking's lines. Example (the review's): a seat £20 and a towel £5 on
+ * one £25 card payment; the towel is removed and its £5 refund refused, so £5 is owed. Refund the rest to the card
+ * sent the £5 and recorded it on the SEAT's line, which then read £15 of seat money left; a later Cancel & Refund sent
+ * £15 to the card and £5 to store credit, though the payment still had £20. Now the £5 is recorded on the towel's
+ * line, and the cancel sends £20 to the card. To store credit, the plan is as before (nothing is recorded on a line).
+ */
+export async function planOwedRefund(db: Queryable, bookingId: string, owed: number, method: RefundMethod): Promise<RefundPlan> {
+  if (method !== 'card') return planRefund(db, bookingId, owed, method)
+  let left = round2(owed)
+  const addonLines: AddonRefundLine[] = []
+  for (const row of await db.query<{ id: string; order_id: string | null; amount: string; refunded_amount: string }>(OWED_ADDON_LINES_IN_ORDER_SQL, [bookingId])) {
+    if (left <= 0.005) break
+    const take = round2(Math.min(left, Number.parseFloat(row.amount) - Number.parseFloat(row.refunded_amount)))
+    if (take <= 0) continue
+    addonLines.push({ id: row.id, orderId: row.order_id, amount: take })
+    left = round2(left - take)
+  }
+  return planRefund(db, bookingId, left, 'card', addonLines, true)
 }
 
 // --- R1
@@ -617,7 +685,8 @@ async function owedR1(tx: Tx, bookingId: string, input: RefundOwedInput, options
   if (cancelled && method !== 'credit') throw refundRefusal('CONFLICT', 'cancelled_store_credit_only', OWED_ON_CANCELLED_STORE_CREDIT_ONLY_MESSAGE, { figures })
   // Exactly what is owed: staff confirmed it. Never a part refund: this money was never paid toward the booking.
   const owed = figures.refundOwed
-  const plan = await planRefund(tx, bookingId, owed, method)
+  // W53 (W47 review L1): to the card, the owed add-on lines first, on a live booking as on a cancelled one.
+  const plan = await planOwedRefund(tx, bookingId, owed, method)
   await tx.query(cancelled ? OWED_OFF_SQL.cancelled : OWED_OFF_SQL.live, [owed, bookingId])
   const claim = await writeClaim(
     tx,
@@ -676,41 +745,140 @@ function storeCreditNote(claim: Claim, cardRefunded: number): string {
   return `${base}${cardRefunded > 0 ? ' (the rest went back to the card).' : '.'} [ref ${crypto.randomUUID()}]`
 }
 
+// --- W53: a removed guest's own line (W05h's step E items 2 to 5; the W35 audit's row 26)
+//
+// Nothing in the database links a guest to the order line that paid for their seat, so until W53 Remove Guest guessed
+// the line by its price (W05f): the newest unstamped booking line holding no more than the seat. That guess went
+// wrong four ways, none of which moved money (the stamp is a label, read only by the order's payment status):
+//  - item 2: the refund's store credit was linked to the booking's OWN order, so that order read
+//    `partially_refunded` while the guest's order read `refunded`;
+//  - item 3: a guest whose seat had been moved to a cheaper session held more on their line than the seat's price,
+//    so the line wasn't found, and their order stayed `partially_refunded` with all of its money back;
+//  - item 4: a dearer Move's own charge line could be the newest small line, and was stamped in the guest's place;
+//  - item 5: a guest who paid cash and was refunded from another order's card read `credit`, with no store credit given.
+// Since W20 every Add Guest writes `booking.guest_add` with the guest's id and either the order it wrote (no card
+// money) or the flow whose finished payment wrote the order (card, reader). That row is the link:
+//  - the guest's line is the booking line of that order (guestLine); the price guess is kept only for a guest with no
+//    such row (one of the party the booking was made with, or a guest added before W20), and then never picks a line
+//    that is another guest's own, or a Move's or Settle's own charge line;
+//  - the refund's store credit is linked to the guest's order when they have a line;
+//  - the stamp says `card` when this removal sent card money back, whichever order's card it came from.
+
 /**
- * W22: the line that held a removed guest's seat, stamped refunded, as the old stampRemovedGuestLine (Remove Guest):
- * the newest booking line not yet stamped whose seat money is above £0 and no more than the seat's price, and which
- * isn't the booking's first line (unless nothing is left on the booking). Answers the stamped line's order, if any.
- * Fixed text: ADDONS_INSIDE_LINE is a constant; the booking and the price come in as $1 and $2.
+ * The order line a guest's own Add Guest wrote: the booking line of the order `booking.guest_add` names, or of the
+ * order its card or reader flow's finished payment wrote. `$1` the booking (text), `$2` the guest, `$3` the booking.
+ */
+const GUEST_LINE_SQL = `
+WITH added AS (
+  SELECT a.details->>'orderId' AS order_id, a.details->>'pendingId' AS pending_id
+  FROM audit_log a
+  WHERE a.action = 'booking.guest_add' AND a.entity_type = 'booking' AND a.entity_id = $1::text AND a.details->>'guestId' = $2::text
+  ORDER BY a.at DESC, a.id DESC
+  LIMIT 1
+),
+paid_on AS (
+  SELECT o.id
+  FROM added
+  JOIN orders o ON o.id::text = added.order_id
+  UNION ALL
+  SELECT o.id
+  FROM added
+  JOIN pending_reader_payments p ON p.id::text = added.pending_id AND p.status = 'finalised' AND p.payment_intent_id IS NOT NULL
+  JOIN orders o ON o.stripe_payment_intent_id = p.payment_intent_id
+)
+SELECT oli.id, oli.order_id
+FROM paid_on
+JOIN order_line_items oli ON oli.order_id = paid_on.id AND oli.booking_id = $3::uuid AND oli.item_type = 'booking'
+ORDER BY oli.created_at, oli.id
+LIMIT 1`
+
+/** W53: the order line a guest's own Add Guest wrote (GUEST_LINE_SQL), or null when nothing names one. */
+export async function guestLine(db: Queryable, bookingId: string, guestId: string): Promise<{ id: string; orderId: string } | null> {
+  const row = (await db.query<{ id: string; order_id: string }>(GUEST_LINE_SQL, [bookingId, guestId, bookingId]))[0]
+  return row ? { id: row.id, orderId: row.order_id } : null
+}
+
+/**
+ * W53: true for a booking line `oli` (of order `o`) that is some guest's own (an Add Guest's order, or the order its
+ * flow's payment wrote) or a Move's or Settle's own charge line (the order its flow's payment wrote). The price guess
+ * below never picks one: it is used only for a guest with no line of their own.
+ */
+const LINE_IS_ANOTHER_PAYMENTS_SQL = `(EXISTS (
+      SELECT 1 FROM audit_log a
+      WHERE a.action = 'booking.guest_add' AND a.entity_type = 'booking' AND a.entity_id = oli.booking_id::text
+        AND a.details->>'guestId' IS NOT NULL
+        AND (a.details->>'orderId' = oli.order_id::text
+             OR EXISTS (SELECT 1 FROM pending_reader_payments p
+                        WHERE p.id::text = a.details->>'pendingId' AND p.payment_intent_id IS NOT NULL
+                          AND p.payment_intent_id = o.stripe_payment_intent_id)))
+    OR EXISTS (
+      SELECT 1 FROM pending_reader_payments p
+      WHERE p.record_id = oli.booking_id AND p.flow IN ('move', 'settle') AND p.payment_intent_id IS NOT NULL
+        AND p.payment_intent_id = o.stripe_payment_intent_id))`
+
+/**
+ * W22's rule (the old stampRemovedGuestLine), for a guest with no line of their own: the newest booking line not yet
+ * stamped whose seat money is above £0 and no more than the seat's price, and which isn't the booking's first line
+ * (unless nothing is left on the booking). W53: and which isn't another guest's own line, or a Move's or Settle's
+ * charge line. Fixed text: ADDONS_INSIDE_LINE is a constant; the booking and the price come in as $1 and $2.
+ */
+const GUESSED_GUEST_LINE_SQL = `
+SELECT oli.id, oli.order_id
+FROM order_line_items oli
+${ADDONS_INSIDE_LINE}
+WHERE oli.booking_id = $1::uuid AND oli.item_type = 'booking' AND oli.refunded_at IS NULL
+  AND oli.line_total - COALESCE(oli.discount_amount, 0) - inside.addons > 0
+  AND oli.line_total - COALESCE(oli.discount_amount, 0) - inside.addons <= $2::numeric
+  AND (
+    EXISTS (
+      SELECT 1 FROM order_line_items earlier
+      WHERE earlier.booking_id = oli.booking_id AND earlier.item_type = 'booking'
+        AND (earlier.created_at, earlier.id) < (oli.created_at, oli.id)
+    )
+    OR (SELECT COALESCE(b.price_paid, 0) FROM bookings b WHERE b.id = oli.booking_id) <= 0
+  )
+  AND NOT ${LINE_IS_ANOTHER_PAYMENTS_SQL}
+ORDER BY oli.created_at DESC, oli.id DESC
+LIMIT 1`
+
+/** The removed guest, as a claim holds them: enough to find their line. */
+export type RemovedGuest = Pick<GuestClaim, 'id' | 'seatPrice' | 'line'>
+
+/**
+ * W53: the line a removed guest's seat was on. Their own (the claim's, or looked up for a claim made before W53);
+ * else the price guess, for a guest who has none.
+ */
+export async function removedGuestLine(db: Queryable, bookingId: string, guest: RemovedGuest): Promise<{ id: string; orderId: string } | null> {
+  const own = guest.line === undefined ? await guestLine(db, bookingId, guest.id) : guest.line
+  if (own) return own
+  const row = (await db.query<{ id: string; order_id: string }>(GUESSED_GUEST_LINE_SQL, [bookingId, guest.seatPrice]))[0]
+  return row ? { id: row.id, orderId: row.order_id } : null
+}
+
+/**
+ * A removed guest's line stamped refunded, once: `card` when card money is on the line or (`$2`, W53: W05h item 5)
+ * the removal sent card money back from any of the booking's orders, else `credit`. Answers its order.
  */
 const STAMP_GUEST_LINE_SQL = `
-WITH seat AS (
-  SELECT oli.id
-  FROM order_line_items oli
-  ${ADDONS_INSIDE_LINE}
-  WHERE oli.booking_id = $1::uuid AND oli.item_type = 'booking' AND oli.refunded_at IS NULL
-    AND oli.line_total - COALESCE(oli.discount_amount, 0) - inside.addons > 0
-    AND oli.line_total - COALESCE(oli.discount_amount, 0) - inside.addons <= $2::numeric
-    AND (
-      EXISTS (
-        SELECT 1 FROM order_line_items earlier
-        WHERE earlier.booking_id = oli.booking_id AND earlier.item_type = 'booking'
-          AND (earlier.created_at, earlier.id) < (oli.created_at, oli.id)
-      )
-      OR (SELECT COALESCE(b.price_paid, 0) FROM bookings b WHERE b.id = oli.booking_id) <= 0
-    )
-  ORDER BY oli.created_at DESC, oli.id DESC
-  LIMIT 1
-)
 UPDATE order_line_items
-SET refunded_at = now(), refund_method = CASE WHEN card_refunded_amount > 0 THEN 'card' ELSE 'credit' END
-WHERE id IN (SELECT id FROM seat)
+SET refunded_at = now(), refund_method = CASE WHEN card_refunded_amount > 0 OR $2::boolean THEN 'card' ELSE 'credit' END
+WHERE id = $1::uuid AND refunded_at IS NULL
 RETURNING order_id`
 
-/** W22: stamps a removed guest's line (STAMP_GUEST_LINE_SQL) and works out its order's status again. */
-export async function stampRemovedGuestLine(tx: Tx, bookingId: string, seatPrice: number): Promise<string | null> {
-  const orderId = (await tx.query<{ order_id: string }>(STAMP_GUEST_LINE_SQL, [bookingId, seatPrice]))[0]?.order_id ?? null
+/** Stamps one line as a removed guest's (STAMP_GUEST_LINE_SQL) and works out its order's status again. */
+async function stampGuestLine(tx: Tx, lineId: string, byCard: boolean): Promise<string | null> {
+  const orderId = (await tx.query<{ order_id: string }>(STAMP_GUEST_LINE_SQL, [lineId, byCard]))[0]?.order_id ?? null
   if (orderId) await recordOrderPaymentStatus(tx, orderId)
   return orderId
+}
+
+/**
+ * W22: stamps a removed guest's line and works out its order's status again. W53: the guest's own line when they
+ * have one (removedGuestLine); `byCard` when the removal sent card money back.
+ */
+export async function stampRemovedGuestLine(tx: Tx, bookingId: string, guest: RemovedGuest, byCard = false): Promise<string | null> {
+  const line = await removedGuestLine(tx, bookingId, guest)
+  return line ? stampGuestLine(tx, line.id, byCard) : null
 }
 
 /** W22: how a removed add-on line is stamped: what went back to it, how much of that to the card, and how. */
@@ -866,11 +1034,16 @@ export async function finishClaimInTransaction(tx: Tx, claim: Claim, outcome: Cl
   const { plan } = details
 
   // W22: a removed add-on's card refund is recorded on its add-on line (stamped below), not on a booking line. W23: so is
-  // a cancel's add-on line's share of its order's part (`addon`).
+  // a cancel's add-on line's share of its order's part (`addon`). W53 (W47 review L1): and Refund the rest's share for
+  // an add-on line whose card refund was part of what was owed (planOwedRefund), recorded on that line here, as It
+  // already arrived "on the card" records it.
   if (details.kind !== 'remove_addon') {
     for (const part of outcome.went) {
       for (const line of part.lines) {
-        if (line.addon) continue
+        if (line.addon) {
+          if (details.kind === 'refund_owed') await tx.query(ARRIVED_ON_ADDON_LINE_SQL, [line.amount, line.lineId])
+          continue
+        }
         await tx.query('UPDATE order_line_items SET card_refunded_amount = card_refunded_amount + $1::numeric WHERE id = $2::uuid', [line.amount, line.lineId])
       }
     }
@@ -908,10 +1081,17 @@ export async function finishClaimInTransaction(tx: Tx, claim: Claim, outcome: Cl
     creditRows += 1
     return applied.balance !== undefined && applied.balance !== null ? Number(applied.balance) : undefined
   }
+  // W53 (W05h items 2 to 5): a removed guest's own line, found before anything is given, so their refund's store credit
+  // is linked to the order that paid for their seat and that line is the one stamped below.
+  const removedLine = details.kind === 'remove_guest' && details.guest ? await removedGuestLine(tx, claim.bookingId, details.guest) : null
+  // W53 (W05h items 2 and 6): Refund the rest, as store credit, of money owed for ONE removed guest's seat (their
+  // refund ended owed, and their line is still waiting for it) is linked to that guest's order too. With none, or more
+  // than one, it is linked to the booking's own order, as before.
+  const owedGuestOrder = details.kind === 'refund_owed' && status !== 'cancelled' && seatStoreCredit > 0 ? await orderOfTheOneGuestOwed(tx, claim.bookingId) : null
   let balance: number | undefined
   let addonsBalance: number | undefined
   if (seatStoreCredit > 0) {
-    balance = await giveStoreCredit(seatStoreCredit, plan.ownOrderId, cancel ? cancelSeatNote(seatCard) : storeCreditNote(claim, cardRefunded))
+    balance = await giveStoreCredit(seatStoreCredit, removedLine?.orderId ?? owedGuestOrder ?? plan.ownOrderId, cancel ? cancelSeatNote(seatCard) : storeCreditNote(claim, cardRefunded))
   }
   // W23: the add-ons' store credit, one row per paying order, linked to it, after the seat's (as before).
   for (const group of shares?.creditByOrder ?? []) {
@@ -941,18 +1121,23 @@ export async function finishClaimInTransaction(tx: Tx, claim: Claim, outcome: Cl
     if (details.kind === 'cancel') await stampCancelledBookingLines(tx, claim.bookingId, seatCard + seatStoreCredit > 0 || cancel.allBackAlready)
     for (const orderId of await cancelOrdersToRecount(tx, claim.bookingId, details.kind, cancel, plan, outcome, shares, stamped)) await recordOrderPaymentStatus(tx, orderId)
   } else if (cardRefunded + storeCredit > 0) {
-    for (const orderId of new Set([...outcome.went.map((part) => part.orderId), ...(plan.ownOrderId ? [plan.ownOrderId] : [])])) {
+    for (const orderId of new Set([...outcome.went.map((part) => part.orderId), ...(plan.ownOrderId ? [plan.ownOrderId] : []), ...(removedLine ? [removedLine.orderId] : [])])) {
       await recordOrderPaymentStatus(tx, orderId)
     }
   }
   // W22: the removed guest's line, once all of their seat's money went back (the old function didn't stamp it while
-  // some was still to refund).
-  if (details.kind === 'remove_guest' && details.guest && owed <= 0) await stampRemovedGuestLine(tx, claim.bookingId, details.guest.seatPrice)
+  // some was still to refund). W53: their own line (removedLine), stamped `card` when this removal sent card money back.
+  if (details.kind === 'remove_guest' && details.guest && owed <= 0 && removedLine) await stampGuestLine(tx, removedLine.id, cardRefunded > 0)
   // W46 (W43a "Noticed" 3; W26 audit row 22): Refund the rest on a cancelled booking gave what was owed. Its lines
   // are stamped once all of their money is back, after the status above, and their orders' status worked out again.
-  if (details.kind === 'refund_owed' && status === 'cancelled' && owed <= 0) {
-    for (const orderId of await stampWhenOwedSettled(tx, claim.bookingId)) await recordOrderPaymentStatus(tx, orderId)
+  // W53: on a live booking too, for its owed add-on lines and its removed guests' lines (stampWhenOwedSettled).
+  if (details.kind === 'refund_owed' && owed <= 0) {
+    for (const orderId of await stampWhenOwedSettled(tx, claim.bookingId, cardRefunded > 0)) await recordOrderPaymentStatus(tx, orderId)
   }
+  // W53 (brief item 4): what is owed on the booking has changed (it rose, or Refund the rest took it off), or cash was
+  // handed back: every order of the booking is worked out again, the ones this refund never touched included. While
+  // anything is owed none of them reads `refunded` (money-left.ts), and a cash part refund's order reads part refunded.
+  if (owed > 0 || details.kind === 'refund_owed' || plan.cash > 0) await recordBookingOrdersPaymentStatus(tx, claim.bookingId)
 
   const cash = plan.cash
   // W33: a customer's own cancel is written as the customer's. W43: the lapse sweep's as the system's.
@@ -1238,20 +1423,61 @@ SELECT EXISTS (SELECT 1 FROM p) AND seats.money > 0
 FROM seats, credit, addons, elsewhere, owed_addons`
 
 /**
- * W46: after Refund the rest or It already arrived on a cancelled booking, under its lock. Nothing is stamped while
- * anything is still owed. Answers the orders of the lines it stamped, whose status the caller works out again.
- * W47: It already arrived stamps the add-on lines too (it stamped only the booking lines).
+ * W53 (W05h item 6): the guests of the booking (`$1`) whose removal's refund ended with money owed (a Remove Guest
+ * claim whose finished row says `owed`): their lines were left unstamped then, because not all of the seat's money had
+ * gone back. Oldest first. Only claims that name the guest's own line (W53 on) are answered.
  */
-export async function stampWhenOwedSettled(tx: Tx, bookingId: string): Promise<string[]> {
-  const settled = (await tx.query<{ settled: boolean }>("SELECT (status = 'cancelled' AND refund_owed_amount <= 0) AS settled FROM bookings WHERE id = $1::uuid", [bookingId]))[0]?.settled === true
-  if (!settled) return []
+const GUESTS_REMOVED_OWED_SQL = `
+SELECT c.details->'guest'->>'id' AS id, c.details->'guest'->'line'->>'id' AS line_id
+FROM audit_log c
+WHERE c.action = '${REFUND_CLAIMED}' AND c.entity_type = 'booking' AND c.entity_id = $1::text
+  AND c.details->>'kind' = 'remove_guest' AND c.details->'guest'->'line'->>'id' IS NOT NULL
+  AND EXISTS (
+    SELECT 1 FROM audit_log f
+    WHERE f.action = '${REFUND_FINISHED}' AND f.entity_type = 'booking' AND f.entity_id = c.entity_id
+      AND f.details->>'claimId' = c.id::text AND f.details->>'outcome' = 'owed'
+  )
+ORDER BY c.at, c.id`
+
+/**
+ * W53 (W05h items 2 and 6): the order of the one removed guest whose line is still waiting for money owed (their
+ * refund ended owed and their line isn't stamped yet), or null when there is none, or more than one.
+ */
+const GUEST_LINES_WAITING_SQL = `SELECT oli.order_id FROM (${GUESTS_REMOVED_OWED_SQL}) g JOIN order_line_items oli ON oli.id::text = g.line_id WHERE oli.refunded_at IS NULL`
+async function orderOfTheOneGuestOwed(tx: Tx, bookingId: string): Promise<string | null> {
+  const waiting = await tx.query<{ order_id: string }>(GUEST_LINES_WAITING_SQL, [bookingId])
+  return waiting.length === 1 ? (waiting[0]?.order_id ?? null) : null
+}
+
+/**
+ * W46: after Refund the rest or It already arrived, under the booking's lock. Nothing is stamped while anything is
+ * still owed. Answers the orders of the lines it stamped, whose status the caller works out again.
+ * W47: It already arrived stamps the add-on lines too (it stamped only the booking lines).
+ * W53: on a live booking too (until W53 only a cancelled one):
+ *  - W47 review L1: its removed add-on lines whose refund was part of what was owed are stamped with their money, as
+ *    on a cancelled booking (before, such a line read "£0 back" for ever on a live booking);
+ *  - W05h item 6: the line of a guest whose removal's refund had ended owed is stamped now that the rest has been
+ *    given or has arrived (`byCard`: it went to the card), so the guest's order can read `refunded`.
+ * The booking lines themselves are stamped only on a cancelled booking, as before: a live one still holds its seats.
+ */
+export async function stampWhenOwedSettled(tx: Tx, bookingId: string, byCard = false): Promise<string[]> {
+  const booking = (await tx.query<{ cancelled: boolean; settled: boolean }>("SELECT (status = 'cancelled') AS cancelled, (refund_owed_amount <= 0) AS settled FROM bookings WHERE id = $1::uuid", [bookingId]))[0]
+  if (booking?.settled !== true) return []
   const orders = new Set<string>()
   // Everything owed has been given, or has arrived: the add-on lines whose refund was part of it now have their money.
   for (const row of await tx.query<{ order_id: string | null }>(STAMP_OWED_ADDON_LINES_SQL, [bookingId])) if (row.order_id) orders.add(row.order_id)
   // W47: and the ones It already arrived had already filled with card money.
   for (const row of await tx.query<{ order_id: string | null }>(STAMP_ARRIVED_ADDON_LINES_SQL, [bookingId])) if (row.order_id) orders.add(row.order_id)
-  if ((await tx.query<{ all_back: boolean }>(SEAT_MONEY_SETTLED_SQL, [bookingId]))[0]?.all_back === true) {
-    for (const row of await tx.query<{ order_id: string }>(STAMP_ALL_BACK_SQL, [bookingId])) orders.add(row.order_id)
+  if (booking.cancelled === true) {
+    if ((await tx.query<{ all_back: boolean }>(SEAT_MONEY_SETTLED_SQL, [bookingId]))[0]?.all_back === true) {
+      for (const row of await tx.query<{ order_id: string }>(STAMP_ALL_BACK_SQL, [bookingId])) orders.add(row.order_id)
+    }
+    return [...orders]
+  }
+  // W53 (W05h item 6): a live booking's removed guests whose refund had ended owed.
+  for (const guest of await tx.query<{ id: string; line_id: string }>(GUESTS_REMOVED_OWED_SQL, [bookingId])) {
+    const orderId = await stampGuestLine(tx, guest.line_id, byCard)
+    if (orderId) orders.add(orderId)
   }
   return [...orders]
 }
@@ -1692,6 +1918,12 @@ export interface ArrivedLine {
  *   card can still take and what the line still holds in seat money.
  * What the cards can't account for is on no line (`card` on the row is then less than the amount): it reached the
  * customer some other way, and SEAT_MONEY_SETTLED_SQL counts that part from the row (`elsewhere`).
+ *
+ * W53 (W47 review L1; Wayne's Q40): the add-on lines go first on a LIVE booking too. Until W53 a live booking's
+ * arrived money all went on its booking lines, so the towel's £5 (the review's example: a seat £20 and a towel £5 on
+ * one £25 card payment, the towel removed and its refund refused) was recorded on the seat's line; a later Cancel &
+ * Refund then sent £15 to the card and £5 to store credit, though the payment still had £20. Now it is on the towel's
+ * line and the cancel sends £20 to the card.
  */
 /**
  * W47: card money that arrived, on a removed add-on's line (`$1` pounds, `$2` the line): its card figure and its
@@ -1717,22 +1949,21 @@ WHERE booking_id = $1::uuid AND removed_at IS NOT NULL AND refund_method = 'none
   AND card_refunded_amount > 0 AND refunded_amount >= price_at_purchase * quantity
 RETURNING order_id`
 
-async function stampArrivedCard(tx: Tx, bookingId: string, arrived: number, cancelled: boolean): Promise<{ card: number; lines: ArrivedLine[] }> {
+async function stampArrivedCard(tx: Tx, bookingId: string, arrived: number): Promise<{ card: number; lines: ArrivedLine[] }> {
   const lines: ArrivedLine[] = []
   let left = round2(arrived)
-  if (cancelled) {
-    const owedAddons = await tx.query<{ id: string; order_id: string | null; amount: string; refunded_amount: string }>(OWED_ADDON_LINES_IN_ORDER_SQL, [bookingId])
-    for (const row of owedAddons) {
-      if (left <= 0.005 || !row.order_id) continue
-      // Read for each line: the line before it may have used the same order's card money.
-      const portion = await loadOrderCardPortion(tx, row.order_id)
-      const cardLeft = portion?.paymentIntentId ? portion.cardPortionRemaining : 0
-      const take = round2(Math.min(left, Number.parseFloat(row.amount) - Number.parseFloat(row.refunded_amount), cardLeft))
-      if (take <= 0) continue
-      await tx.query(ARRIVED_ON_ADDON_LINE_SQL, [take, row.id])
-      lines.push({ lineId: row.id, orderId: row.order_id, amount: take, addon: true })
-      left = round2(left - take)
-    }
+  // W53 (W47 review L1): the owed add-on lines first on a live booking too (until W53: `if (cancelled)`).
+  const owedAddons = await tx.query<{ id: string; order_id: string | null; amount: string; refunded_amount: string }>(OWED_ADDON_LINES_IN_ORDER_SQL, [bookingId])
+  for (const row of owedAddons) {
+    if (left <= 0.005 || !row.order_id) continue
+    // Read for each line: the line before it may have used the same order's card money.
+    const portion = await loadOrderCardPortion(tx, row.order_id)
+    const cardLeft = portion?.paymentIntentId ? portion.cardPortionRemaining : 0
+    const take = round2(Math.min(left, Number.parseFloat(row.amount) - Number.parseFloat(row.refunded_amount), cardLeft))
+    if (take <= 0) continue
+    await tx.query(ARRIVED_ON_ADDON_LINE_SQL, [take, row.id])
+    lines.push({ lineId: row.id, orderId: row.order_id, amount: take, addon: true })
+    left = round2(left - take)
   }
   if (left > 0.005) {
     const plan = await planRefund(tx, bookingId, left, 'card')
@@ -1744,6 +1975,37 @@ async function stampArrivedCard(tx: Tx, bookingId: string, arrived: number, canc
     }
   }
   return { card: sum(lines.map((line) => line.amount)), lines }
+}
+
+/**
+ * W53 (W47 review L3; the builder's call: name the choice made): the booking's card payments and what the arrived
+ * money was recorded against each, in words, when the booking has more than one card payment to choose between
+ * (orders with a card payment that hold one of its booking lines or add-on lines). Null with one card payment or
+ * none: there was no choice. The rule's own order decided (the owed add-on lines first, then the booking's lines
+ * newest first), so on a partial arrival the money may be recorded against a different payment than the one it came
+ * back to. Nothing can go twice: Stripe refuses a whole refund that asks a payment for more than it has left (it
+ * doesn't cap it; W53a, W53 review L2), and the refused card part is then money still to refund. W53a (W53 review L1):
+ * each payment is named by what it took on the card (loadOrderCardPortion's `cardPortion`), not the order's total.
+ */
+const BOOKING_CARD_ORDERS_SQL = `
+SELECT o.id, o.created_at
+FROM orders o
+WHERE o.stripe_payment_intent_id IS NOT NULL
+  AND (EXISTS (SELECT 1 FROM order_line_items x WHERE x.order_id = o.id AND x.booking_id = $1::uuid AND x.item_type = 'booking')
+       OR EXISTS (SELECT 1 FROM addon_order_lines a WHERE a.order_id = o.id AND a.booking_id = $2::uuid))
+ORDER BY o.created_at, o.id`
+
+async function arrivedRecordedOn(tx: Tx, bookingId: string, lines: readonly ArrivedLine[]): Promise<string | null> {
+  const orders = await tx.query<{ id: string; created_at: Date | string }>(BOOKING_CARD_ORDERS_SQL, [bookingId, bookingId])
+  if (orders.length < 2) return null
+  const parts: Array<{ amount: number; cardPayment: number; orderedAt: string }> = []
+  for (const order of orders) {
+    const amount = sum(lines.filter((line) => line.orderId === order.id).map((line) => line.amount))
+    if (amount <= 0) continue
+    const cardPayment = (await loadOrderCardPortion(tx, order.id))?.cardPortion ?? 0
+    parts.push({ amount, cardPayment, orderedAt: order.created_at instanceof Date ? order.created_at.toISOString() : String(order.created_at) })
+  }
+  return parts.length > 0 ? arrivedRecordedOnWords(parts, orders.length) : null
 }
 
 /**
@@ -1769,7 +2031,7 @@ export async function owedArrived(db: Db, bookingId: string, input: OwedArrivedI
       // choice sent (a staff app from before W47): nothing on the lines and the row as it was before W47. Money found
       // on their balance is already in the store credit rows: recorded as card money too it would be counted twice.
       const onCard = input.arrivedOn === 'card'
-      const stamped = onCard ? await stampArrivedCard(tx, bookingId, arrived, cancelled) : { card: 0, lines: [] as ArrivedLine[] }
+      const stamped = onCard ? await stampArrivedCard(tx, bookingId, arrived) : { card: 0, lines: [] as ArrivedLine[] }
       await tx.query(cancelled ? OWED_OFF_SQL.cancelled : OWED_OFF_SQL.live, [arrived, bookingId])
       await audit.recordAll(tx, [
         {
@@ -1785,14 +2047,31 @@ export async function owedArrived(db: Db, bookingId: string, input: OwedArrivedI
       // W46: on a cancelled booking, once nothing is owed any more, its lines are stamped if all of their seat money is
       // then back, and their orders' status worked out again. W47: so is the status of every order whose lines the
       // arrived money was just recorded on, as R2 does for a card part that went.
+      // W53: on a live booking too (its owed add-on lines, and a removed guest's line whose refund had ended owed:
+      // stampWhenOwedSettled), and then every order of the booking, because what is owed on it has changed.
       const orders = new Set(stamped.lines.map((line) => line.orderId))
-      if (cancelled) for (const orderId of await stampWhenOwedSettled(tx, bookingId)) orders.add(orderId)
+      for (const orderId of await stampWhenOwedSettled(tx, bookingId, onCard && stamped.card > 0)) orders.add(orderId)
       for (const orderId of orders) await recordOrderPaymentStatus(tx, orderId)
+      await recordBookingOrdersPaymentStatus(tx, bookingId)
+      // W53 (W47 review L3): where the booking has more than one card payment, the answer names the ones the money
+      // was recorded against (the choice the rule made), so staff can see it.
+      const recordedOn = onCard && stamped.card > 0 ? await arrivedRecordedOn(tx, bookingId, stamped.lines) : null
       // W47a (W47 review L2): less than what arrived could be recorded as card money (the booking's lines had less
       // card money left). The cap stands; the answer now says so, with both figures.
       const other = round2(arrived - stamped.card)
-      const short = onCard && other > 0.005 ? { arrivedOnCard: { recorded: round2(stamped.card), other }, warning: arrivedCardShortWords('booking', round2(stamped.card), other) } : {}
-      return { cardRefundedAmount: 0, storeCreditRefundedAmount: 0, pricePaid: cancelled ? figures.pricePaid : round2(figures.pricePaid - arrived), ...short }
+      const short: { arrivedOnCard?: { recorded: number; other: number }; warning?: string } =
+        onCard && other > 0.005 ? { arrivedOnCard: { recorded: round2(stamped.card), other }, warning: arrivedCardShortWords('booking', round2(stamped.card), other) } : {}
+      // The screens show an answer's `warning` under the result, so the named choice is said there too (after the
+      // short-of-card words, when both apply).
+      const notes = [short.warning, recordedOn].filter((note): note is string => typeof note === 'string' && note !== '')
+      return {
+        cardRefundedAmount: 0,
+        storeCreditRefundedAmount: 0,
+        pricePaid: cancelled ? figures.pricePaid : round2(figures.pricePaid - arrived),
+        ...short,
+        ...(recordedOn ? { arrivedRecordedOn: recordedOn } : {}),
+        ...(notes.length > 0 ? { warning: notes.join(' ') } : {}),
+      }
     },
     notSaved
   )

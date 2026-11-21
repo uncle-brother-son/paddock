@@ -3,7 +3,8 @@
 // getBookingById.ts, getBookingDetail.ts (with shared/bookingPaymentOpenWords.ts and shared/readerPaymentOpen.ts),
 // getAddonPrepChecklistForRange.ts, getWaiverGapsForRange.ts, getPaymentAttentionItems.ts, setBookingCheckedIn.ts,
 // setGuestWaiverStatus.ts and setAddonLinePrepared.ts (frozen at W48 in testing/legacy-admin), with their words
-// (./admin-failure-messages.ts).
+// (./admin-failure-messages.ts). W53: getPaymentAttentionItems' read (listPaymentAttention) moved to
+// server/rules/orders/admin.ts, unchanged, where G-plan 4.1 places it; it still reads a booking by BOOKING_ROW_SQL.
 //
 // The six reads
 //  - GB14: an active staff member, through the admin read helper (the old reads checked nobody). Named columns: every
@@ -48,7 +49,6 @@ import type {
   AdminGetBookingByIdOutput,
   AdminGetBookingDetailOutput,
   AdminGetBookingsOutput,
-  AdminGetPaymentAttentionItemsOutput,
   AdminGetWaiverGapsForRangeOutput,
   BookingCheckInRouteOutput,
   BookingDayRangeRouteInput,
@@ -103,14 +103,15 @@ function channelRead<Row extends Record<string, unknown>>(db: Queryable, reader:
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// The booking list, one booking, payments needing attention
+// The booking list, one booking
 
 /**
  * A booking as the lists show it: every column of the booking by name (the old reads took `b.*`), its session's
  * times and service type, its customer, and how its OWN order was paid: the earliest booking line whose order
- * recorded a payment method, else the earliest. A later guest's or add-on's order never decides it.
+ * recorded a payment method, else the earliest. A later guest's or add-on's order never decides it. Exported (W53)
+ * for Overview's payments needing attention, which answers whole booking rows (server/rules/orders/admin.ts).
  */
-const BOOKING_ROW_SQL = `
+export const BOOKING_ROW_SQL = `
 SELECT b.id, b.session_id, b.customer_id, b.party_size, b.status, b.price_paid::text AS price_paid, b.stripe_payment_id,
        b.redemption_source, b.created_at, b.cancelled_at, b.checked_in_at, b.updated_at, b.redeemed_membership_id,
        b.redeemed_session_pass_id, b.band_id, b.credit_period_id, b.payment_due_by, b.cancel_reason, b.special_requests,
@@ -131,7 +132,7 @@ SELECT b.id, b.session_id, b.customer_id, b.party_size, b.status, b.price_paid::
      ORDER BY (o.payment_method IS NULL), oli.created_at ASC
      LIMIT 1
   ) ord ON true`
-const BOOKING_ROW_TIMES = ['created_at', 'cancelled_at', 'checked_in_at', 'updated_at', 'payment_due_by', 'guests_over_18_confirmed_at', 'start_time', 'end_time'] as const
+export const BOOKING_ROW_TIMES = ['created_at', 'cancelled_at', 'checked_in_at', 'updated_at', 'payment_due_by', 'guests_over_18_confirmed_at', 'start_time', 'end_time'] as const
 
 type BookingRow = AdminGetBookingsOutput[number]
 
@@ -161,36 +162,6 @@ export async function getBookingRow(db: Queryable, bookingId: string, reader: Bo
  LIMIT 1`
   const rows = await channelRead<BookingRow>(db, reader, { name: 'bookings.one', sql, params: params.values, times: BOOKING_ROW_TIMES })
   return rows[0] ?? null
-}
-
-/**
- * getPaymentAttentionItems (`GET overview/payment-attention`): Overview's "Needs attention: payments". Bookings at
- * Payment needed, soonest deadline first, each a whole booking row (the booking window opens on it), and memberships
- * whose payment is overdue.
- */
-export async function listPaymentAttention(db: Queryable, reader: BookingReader): Promise<AdminGetPaymentAttentionItemsOutput> {
-  const bookingParams = new Params()
-  const bookings = await channelRead<BookingRow>(db, reader, {
-    name: 'overview.payment_attention',
-    sql: `${BOOKING_ROW_SQL}
- WHERE b.status = 'payment_needed'${ownOnly(reader, bookingParams)}
- ORDER BY b.payment_due_by ASC NULLS LAST, b.start_time ASC, b.id`,
-    params: bookingParams.values,
-    times: BOOKING_ROW_TIMES,
-  })
-  const membershipParams = new Params()
-  const memberships = await channelRead<AdminGetPaymentAttentionItemsOutput['memberships'][number]>(db, reader, {
-    name: 'overview.payment_attention',
-    sql: `
-SELECT cm.id AS membership_id, cm.customer_id, mp.name AS plan_name, c.first_name, c.last_name, c.email
-  FROM customer_memberships cm
-  JOIN membership_plans mp ON mp.id = cm.plan_id
-  JOIN customers c ON c.id = cm.customer_id
- WHERE cm.subscription_status = 'past_due'${reader.channel === 'customer' ? ` AND cm.customer_id = ${membershipParams.add(reader.customerId)}::uuid` : ''}
- ORDER BY c.last_name ASC, c.first_name ASC, cm.id`,
-    params: membershipParams.values,
-  })
-  return { bookings, memberships }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

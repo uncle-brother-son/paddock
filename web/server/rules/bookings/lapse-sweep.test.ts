@@ -549,9 +549,11 @@ describe('the lapse sweep: money on the booking (Q48; bug FB18)', () => {
       // and its line would be stamped refunded.
       expect((await db.query<{ card: string }>('SELECT card_refunded_amount::numeric(10,2)::text AS card FROM order_line_items WHERE id = $1', [guest?.id]))[0]?.card).toBe('0.00')
       expect((await guestLine(bookingId))[0]).toMatchObject({ stamped: false, at: null, method: null })
-      // The order's own status is the older rule's (orderPaymentStatusAfterRefunds): a cancelled booking's line with
-      // nothing back isn't counted, so with the towels' line refunded the order reads `refunded`. Unchanged by W47.
-      expect((await guestLine(bookingId))[0]?.order_status).toBe('refunded')
+      // W53 (W47 review L5), a named difference: the guest's £20 was kept (the lapse was inside 24 hours), so its
+      // unstamped line still holds seat money and is counted: with the towels' line refunded the order reads
+      // `partially_refunded`. (Before W53 a cancelled booking's unstamped line was never counted, and the order read
+      // `refunded`, though £20 of its £40 was kept.)
+      expect((await guestLine(bookingId))[0]?.order_status).toBe('partially_refunded')
       expect(await balance()).toBe(0)
     })
   })
