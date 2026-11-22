@@ -27,11 +27,11 @@ const WORKFLOWS = 'workflows'
 
 /**
  * package.json's `retool.app.resourceReferencesByFile` is Retool's own record of which file used which resource. The
- * CLI only checks its shape (it never writes it) and it was last written on 25 Oct 2026, by Retool's in-app editor:
- * it still names the two old resources the code used then, and not the Worker resource. It may name nothing else.
- * W63's second commit (after Wayne deletes the old resources in Retool) clears those two and empties this list.
+ * CLI only checks its shape (it never writes it) and it was last written on 25 Oct 2026, by Retool's in-app editor,
+ * naming the two old resources the code used then. W63's second commit (22 Nov, after Wayne deleted the three old
+ * resources in Retool) removed the key and emptied this list, so the map, if it comes back, may name only the Worker.
  */
-const PACKAGE_JSON_OLD_UNTIL_SECOND_COMMIT = ['Paddock Data', 'Paddock Backend API']
+const PACKAGE_JSON_OLD_UNTIL_SECOND_COMMIT: readonly string[] = []
 const WORKER_DISPLAY_NAME = 'Paddock Worker v1'
 
 function sourceFiles(dir: string): string[] {
@@ -89,7 +89,7 @@ function violations(sources: readonly Source[], resourceNames: readonly string[]
   return refused
 }
 
-/** The resources package.json's map names that it may not: anything but the Worker resource and the two listed above. */
+/** The resources package.json's map names that it may not: anything but the Worker resource (and the list above, now empty). */
 function packageJsonRefused(map: Record<string, ReadonlyArray<{ displayName: string }>> | undefined): string[] {
   const allowed = new Set([WORKER_DISPLAY_NAME, ...PACKAGE_JSON_OLD_UNTIL_SECOND_COMMIT])
   return Object.entries(map ?? {}).flatMap(([file, refs]) =>
@@ -106,7 +106,7 @@ describe('the staff app reaches only the Worker, through callWorker.ts (H-plan 4
     expect(violations(sources, resourceNames)).toEqual([])
   })
 
-  it("package.json's resourceReferencesByFile names no resource but the Worker (and, until W63's second commit, the two old ones it still lists)", () => {
+  it("package.json's resourceReferencesByFile, if there, names no resource but the Worker", () => {
     const pkg = JSON.parse(readFileSync(path.join(appDir, 'package.json'), 'utf8')) as {
       retool?: { app?: { resourceReferencesByFile?: Record<string, Array<{ displayName: string }>> } }
     }
@@ -134,6 +134,9 @@ describe('the staff app reaches only the Worker, through callWorker.ts (H-plan 4
     expect(resourceNames).toContain(ALLOWED)
     for (const name of ['retoolDb', 'retoolStorage', 'retoolEmail']) expect(resourceNames).toContain(name)
     expect(resourceNames).not.toContain('allocateMembershipCredits')
+    // W63's second commit: the three old resources are deleted in Retool, so their types are gone (OLD_RESOURCES
+    // still catches them by name).
+    for (const name of OLD_RESOURCES) expect(resourceNames).not.toContain(name)
     // The one call is real code, not a comment.
     expect(sources.find((source) => source.file === CALL_WORKER)?.code).toMatch(/\bpaddockWorkerV1\.rawRequest\b/)
   })
@@ -212,15 +215,21 @@ describe('the staff app reaches only the Worker, through callWorker.ts (H-plan 4
       expect(violations(app({ 'backend/paddock/getV.ts': planted }), resourceNames)).toEqual([])
     })
 
-    it("package.json's map: a resource other than the Worker and the two old ones listed is refused", () => {
+    it("package.json's map: any resource but the Worker is refused, the old ones included (the key itself may be absent)", () => {
       expect(packageJsonRefused(undefined)).toEqual([])
+      expect(PACKAGE_JSON_OLD_UNTIL_SECOND_COMMIT).toEqual([])
       expect(
         packageJsonRefused({
           '/backend/paddock/shared/callWorker.ts': [{ displayName: 'Paddock Worker v1' }],
           '/backend/paddock/getX.ts': [{ displayName: 'Paddock Data' }, { displayName: 'Paddock Supabase' }],
-          '/backend/paddock/getY.ts': [{ displayName: 'Retool Database' }],
+          '/backend/paddock/getY.ts': [{ displayName: 'Paddock Backend API' }, { displayName: 'Retool Database' }],
         })
-      ).toEqual(['/backend/paddock/getX.ts: Paddock Supabase', '/backend/paddock/getY.ts: Retool Database'])
+      ).toEqual([
+        '/backend/paddock/getX.ts: Paddock Data',
+        '/backend/paddock/getX.ts: Paddock Supabase',
+        '/backend/paddock/getY.ts: Paddock Backend API',
+        '/backend/paddock/getY.ts: Retool Database',
+      ])
     })
   })
 })
