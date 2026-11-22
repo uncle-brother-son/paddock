@@ -2,7 +2,7 @@ import { appendFileSync } from 'node:fs'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Db } from '@/server/db'
 import { BOOKING_ADMIN_NEW_WORDS } from '@/server/rules/bookings/admin-failure-messages'
-import { isW50Scenario, W50_DECISIONS, W50_DIFFERING, w50Differences } from './admin-differences'
+import { isW50Scenario, pathsPinnedBy, W50_DECISIONS, W50_DIFFERING, w50Differences } from './admin-differences'
 import { adminRowProblems, adminStoredAnswerProblems, comparableAdmin, newAdminSide, STEP_G_ACTIONS_MOVED, STEP_G_AUDIT_ROWS, STEP_G_FLAG_ROWS, W50_ACTIONS, W50_FLAGS, W50_READS } from './admin-side'
 import { compareRecordings, type AllowedDifference, type Recording, type Row } from './compare'
 import { readGolden, replay, startReplay, type ReplayEnvironment, type Scenario } from './harness'
@@ -74,6 +74,8 @@ describe("step G's side of the replay: Bookings admin and Overview (W50)", () =>
       expect(adminRowProblems(recording), `${name}: the Worker's audit rows`).toEqual([])
       expect(adminStoredAnswerProblems(recording), `${name}: the stored answers`).toEqual([])
       expect(compareSides(golden(name), recording, named(name))).toEqual([])
+      // W58b (W52 "For later" 6): every pin bites (as event-admin-replay.test.ts): exactly the pinned paths differ.
+      expect(left(name, recording, []).sort(), `${name}: the raw paths`).toEqual(named(name).flatMap((difference) => [...pathsPinnedBy(difference)]).sort())
     })
   })
 

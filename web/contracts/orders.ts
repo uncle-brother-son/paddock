@@ -96,6 +96,14 @@ export const basketPaymentSchema = z.object({
   /** Redeeming an existing gift card. The basket's own `giftCard` is buying a new one. */
   giftCard: z.object({ giftCardId: id, amount: z.number() }).optional(),
   storeCredit: z.object({ amount: z.number() }).optional(),
+  /**
+   * W58 (Wayne's Q55): the customer's store credit choice, the one input New Order's ticked line ("Use £22.50 store
+   * credit") and the website's checkout both send. `true`: the Worker uses as much of the customer's balance as the
+   * amount due leaves after the gift card (store credit first, whole pennies), and answers it as
+   * `totals.storeCreditApplied`; `false`: none. Sent with `storeCredit` as well, it is refused
+   * (`store_credit_choice_conflict`). Missing: `storeCredit.amount` as sent, as before W58 (older screens, dialogs).
+   */
+  useStoreCredit: z.boolean().optional(),
   /** A string, so an unknown method gets the old reason. Empty means none chosen yet. */
   method: z.string().nullish(),
   readerSaveCard: z.boolean().optional(),
@@ -309,6 +317,12 @@ export const orderConfirmedSchema = z.object({
   /** What the chosen method takes now: on cash, the figure on the tick. */
   toCollect: z.number().optional(),
   firstInvoice: z.number().optional(),
+  /**
+   * W58 (Q55; W35 audit row 20, the confirmed split): the store credit the confirm line named. When sent, the order
+   * is refused (`store_credit_changed`) if the store credit it would take now differs by more than half a penny, so a
+   * balance that changed between the quote and the press is never taken silently. Missing: not checked (as before).
+   */
+  storeCredit: z.number().optional(),
 })
 export type OrderConfirmed = z.infer<typeof orderConfirmedSchema>
 

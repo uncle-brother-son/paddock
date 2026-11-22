@@ -20,7 +20,7 @@ import { LEFT_BY_REFUND } from './refund-subscription'
 import { LATE_REFUND_STEP, WATCH_DAYS, WATCHES_LISTED_SQL, type WatchDetails } from '@/server/rules/refunds/refund-watch'
 import { notLeftAgain, openSteps, stepWhat, stepWords, type StepKind } from '@/server/rules/memberships/left'
 import { stillLiveListed } from '@/server/rules/memberships/still-live'
-import { LEFT_STEP_WORDS, PAYMENT_DATE_STUCK_WORDS, PAYMENT_RETRY_STUCK_WORDS, PAYMENT_RETRY_WORDS, WEBHOOK_NOTICE_WORDS } from '@/server/rules/memberships/failure-messages'
+import { LEFT_STEP_WORDS, paymentDateStuckWords, PAYMENT_RETRY_STUCK_WORDS, PAYMENT_RETRY_WORDS, WEBHOOK_NOTICE_WORDS } from '@/server/rules/memberships/failure-messages'
 import { WATCHED_PAYMENT_WORDS, WATCHED_PAYMENTS_LISTED_SQL, type ListedWatchedPayment } from './payment-watch'
 import { PAYMENT_DATE_CHANGES_LISTED_SQL, PAYMENT_DATE_CLOSE_REASONS, PAYMENT_DATE_REFUND_WATCH_STEP, paymentDateListedReason, type ListedPaymentDateChange } from '@/server/rules/memberships/payment-date'
 import { INVOICES_PAID_AFTER_END_LISTED_SQL, type ListedInvoicePaidAfterEnd } from '@/server/rules/memberships/paid-after-end'
@@ -192,11 +192,11 @@ const MARK_SORTED = 'Then press Mark sorted (needs the Issue refunds permission)
 const pounds = (amount: number): string => `£${amount.toFixed(2)}`
 export const WATCH_WORDS = {
   bookingFailed: (amount: number, refundId: string): string =>
-    `A card refund of ${pounds(amount)} on this booking (${refundId}) was accepted by Stripe and then failed, so the money never reached the customer. It is back on the booking as money still to refund: open the booking and use Refund the rest. ${MARK_SORTED}`,
+    `A card refund of ${pounds(amount)} on this booking (${refundId}) was accepted by Stripe and then failed, so the money never reached the customer. It is back on the booking as money still to refund: open the booking and use Refund the rest (choose store credit if the card can't take a refund). ${MARK_SORTED}`,
   orderFailed: (amount: number, refundId: string): string =>
-    `A card refund of ${pounds(amount)} on this order (${refundId}) was accepted by Stripe and then failed, so the money never reached the customer. It is back on the order as money still to refund: find the order on the Orders page and use Refund the rest. ${MARK_SORTED}`,
+    `A card refund of ${pounds(amount)} on this order (${refundId}) was accepted by Stripe and then failed, so the money never reached the customer. It is back on the order as money still to refund: find the order on the Orders page and use Refund the rest (choose store credit if the card can't take a refund). ${MARK_SORTED}`,
   eventFailed: (amount: number, refundId: string): string =>
-    `A card refund of ${pounds(amount)} for cancelled event places (${refundId}) was accepted by Stripe and then failed, so the money never reached the customer. The places stay cancelled, and the money is back on the event booking as money still to refund: open the event's attendee list and use Refund the rest. ${MARK_SORTED}`,
+    `A card refund of ${pounds(amount)} for cancelled event places (${refundId}) was accepted by Stripe and then failed, so the money never reached the customer. The places stay cancelled, and the money is back on the event booking as money still to refund: open the event's attendee list and use Refund the rest (choose store credit if the card can't take a refund). ${MARK_SORTED}`,
   /** W41 (FB3): the refund of a payment date change's part-month charge, after Stripe refused to move the date. */
   paymentDateFailed: (amount: number, paymentIntentId: string): string =>
     `An automatic refund of ${pounds(amount)} (payment ${paymentIntentId}) for a payment date change that Stripe refused was accepted by Stripe and then failed, so the customer has paid for a change that didn't happen and has not had the money back. Refund that payment in Stripe by hand (or tell a manager if Stripe won't). ${MARK_SORTED}`,
@@ -592,7 +592,8 @@ ORDER BY at DESC`
 export const SUBSCRIPTIONS_LEFT_SQL = `
 SELECT s.entity_id, s.at, s.details->>'subscriptionId' AS subscription_id,
        s.details->>'invoicePaymentIntentId' AS invoice_payment_intent_id, (s.details->>'amountPaid')::int AS amount_paid,
-       s.details->>'state' AS state, s.details->>'found' AS found, s.details->>'claimId' AS claim_id
+       s.details->>'state' AS state, s.details->>'found' AS found, s.details->>'claimId' AS claim_id,
+       COALESCE(s.details->>'missing', '') = 'true' AS missing
 FROM (
   SELECT DISTINCT ON (entity_id, details->>'subscriptionId') entity_id, at, details
   FROM audit_log
@@ -742,7 +743,7 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
   const refunds = await db.query<{ entity_type: string; entity_id: string; payment_intent_id: string; pence: number; state: string }>(REFUNDS_SQL)
   const warnings = await db.query<{ entity_type: string; entity_id: string; at: unknown; warning: string }>(WARNINGS_SQL, [WARNINGS_FOR_HOURS])
   const alert = (await db.query<{ at: unknown }>(ALERT_SQL, [ALERT_FOR_MINUTES]))[0]
-  const subscriptionsLeft = await db.query<{ entity_id: string; at: unknown; subscription_id: string; state: string; found: string | null }>(SUBSCRIPTIONS_LEFT_SQL)
+  const subscriptionsLeft = await db.query<{ entity_id: string; at: unknown; subscription_id: string; state: string; found: string | null; missing?: boolean | null }>(SUBSCRIPTIONS_LEFT_SQL)
   // W41: payment date changes still pending past the window.
   const paymentDates = await db.query<ListedPaymentDateChange>(PAYMENT_DATE_CHANGES_LISTED_SQL, [olderThanMinutes, null])
   // W47r: payments tried again from the desk, still open. W47r-a: the ones a run reads (held by the press, or past the window).
@@ -934,7 +935,9 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
           warning:
             row.found === LEFT_BY_REFUND
               ? row.state === 'refused'
-                ? MEMBERSHIP_REFUND_WORDS.cancelRefusedListed(row.subscription_id)
+                ? row.missing === true
+                  ? MEMBERSHIP_REFUND_WORDS.cancelMissingListed(row.subscription_id)
+                  : MEMBERSHIP_REFUND_WORDS.cancelRefusedListed(row.subscription_id)
                 : MEMBERSHIP_REFUND_WORDS.cancelLeftListed(row.subscription_id)
               : row.state === 'refused'
                 ? SUBSCRIPTION_REFUSED_WORDS(row.subscription_id)
@@ -960,7 +963,8 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
         createdAt,
         ageMinutes: ageMinutes(createdAt),
         reason,
-        words: PAYMENT_DATE_STUCK_WORDS[reason] ?? wordsFor(reason),
+        // W58b (the W45 audit's row 42): a move never sent (the check found the subscription no longer allowed it).
+        words: paymentDateStuckWords(reason, row.not_sent === true) ?? wordsFor(reason),
         ...(PAYMENT_DATE_CLOSE_REASONS.has(reason) ? { close: { kind: 'held_payment_date' as const, orderId: row.id } } : {}),
       }
     }),

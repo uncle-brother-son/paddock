@@ -166,6 +166,90 @@ describe('Move races (brief W24 Tests; D-plan 4.11 item 5)', () => {
     expect([await places(sessionA), await places(sessionB)].sort()).toEqual([0, 2])
   })
 
+  // W58 (Wayne's Q54): a rejoined member's old credit booking moving onto the new membership's last credit, while
+  // another booking takes that credit. The period is locked (LOCK_ORDER, after the sessions) before the move counts,
+  // so whichever commits first has it: never both. `take` says whether the other booking takes it.
+  async function racedForTheLastCredit(take: boolean) {
+    const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
+    const onDay = nextDay()
+    const fromSlot = slot(onDay + 500, 10)
+    // The same day, later (two calls' days are one apart, so a day after would clash with the next call's first slot).
+    const toSlot = slot(onDay + 500, 14)
+    const from = await fixtures.session(first, { service_type_id: publicType, band_id: core, capacity: 10, total_booked: 1, ...fromSlot })
+    const to = await fixtures.session(first, { service_type_id: publicType, band_id: core, capacity: 10, ...toSlot })
+    const plan = await fixtures.plan(first, { level: 'core' })
+    await first.query(
+      'INSERT INTO membership_band_terms (membership_level, band_id, credit_eligible) SELECT $1::text, $2::uuid, true WHERE NOT EXISTS (SELECT 1 FROM membership_band_terms WHERE membership_level = $1::text AND band_id = $2::uuid)',
+      ['core', core]
+    )
+    const customerId = await fixtures.customer(first)
+    const old = await fixtures.membership(first, { customer_id: customerId, plan_id: plan, subscription_status: 'cancelled', cancel_effective_date: '2026-01-31', created_at: '2026-01-01T00:00:00Z' })
+    const oldPeriod = await insert(first, 'membership_credit_periods', { membership_id: old, period_start: '2026-01-01', period_end: '2026-01-31', credits_allocated: 4 })
+    const current = await fixtures.membership(first, { customer_id: customerId, plan_id: plan, created_at: '2026-02-01T00:00:00Z' })
+    const periodRows = await first.query<{ id: string }>(
+      `INSERT INTO membership_credit_periods (membership_id, period_start, period_end, credits_allocated)
+       VALUES ($1::uuid, (now() AT TIME ZONE 'Europe/London')::date - 1, (now() AT TIME ZONE 'Europe/London')::date + 20, 1) RETURNING id`,
+      [current]
+    )
+    const period = periodRows[0]?.id as string
+    const bookingId = await fixtures.booking(first, {
+      session_id: from,
+      customer_id: customerId,
+      party_size: 1,
+      band_id: core,
+      redemption_source: 'membership_credit',
+      credit_period_id: oldPeriod,
+      redeemed_membership_id: old,
+      ...fromSlot,
+    })
+    await insert(first, 'booking_guests', { booking_id: bookingId, guest_type: 'account_holder', guest_name: 'Sam Test', unit_price: '20.00', pay_by: 'membership_credit' })
+
+    // The other booking's transaction holds the period, takes its last credit (or not) and commits after the move waits.
+    const otherCustomer = await fixtures.customer(first)
+    const release = deferred()
+    let announce: (pid: number) => void = () => {}
+    const ready = new Promise<number>((resolve) => {
+      announce = resolve
+    })
+    const holder = third.transaction(async (tx: Tx) => {
+      await tx.query('SELECT id FROM membership_credit_periods WHERE id = $1::uuid FOR NO KEY UPDATE', [period])
+      if (take) {
+        await tx.query(
+          "INSERT INTO bookings (session_id, customer_id, party_size, price_paid, status, redemption_source, credit_period_id, start_time, end_time) VALUES ($1::uuid, $2::uuid, 1, 0, 'completed', 'membership_credit', $3::uuid, $4::timestamptz, $5::timestamptz)",
+          [to, otherCustomer, period, toSlot.start_time, toSlot.end_time]
+        )
+      }
+      announce((await tx.query<{ pid: number }>('SELECT pg_backend_pid() AS pid'))[0]?.pid as number)
+      await release.promise
+    })
+    const holderPid = await ready
+    const press = outcome(moveBooking(first, bookingId, { newSessionId: to, confirmed: true, figures: { amountDue: 0, toCollect: 0 } }, options(stripe)))
+    await allBlockedBy(holderPid, 1)
+    release.resolve()
+    await holder
+    const used = async (periodId: string) =>
+      Number(
+        (await first.query<{ n: string }>("SELECT count(*)::text AS n FROM bookings WHERE credit_period_id = $1::uuid AND redemption_source = 'membership_credit' AND status <> 'cancelled'", [periodId]))[0]?.n
+      )
+    return { answer: await press, bookingId, from, to, period, oldPeriod, current, used }
+  }
+
+  it("Q54: another booking takes the new membership's last credit while the move waits on the period: the move is refused (it would now cost £20), nothing moved, the credit used once", async () => {
+    const raced = await racedForTheLastCredit(true)
+    expect(raced.answer).toEqual({ refused: 'payment_method_required' })
+    expect(await sessionOf(raced.bookingId)).toBe(raced.from)
+    expect([await raced.used(raced.period), await raced.used(raced.oldPeriod)]).toEqual([1, 1])
+  })
+
+  it('Q54: the other side lets go without taking it: the move waits on the period, then takes the credit (nothing charged)', async () => {
+    const raced = await racedForTheLastCredit(false)
+    expect(raced.answer).toMatchObject({ answered: { moved: true } })
+    expect(await sessionOf(raced.bookingId)).toBe(raced.to)
+    expect([await raced.used(raced.period), await raced.used(raced.oldPeriod)]).toEqual([1, 0])
+    const row = (await first.query<{ redeemed_membership_id: string }>('SELECT redeemed_membership_id FROM bookings WHERE id = $1::uuid', [raced.bookingId]))[0]
+    expect(row?.redeemed_membership_id).toBe(raced.current)
+  })
+
   it('two bookings swapping sessions at once: both move (the two sessions locked in id order, so no deadlock)', async () => {
     const stripe = new FakeStripe({ idTag: crypto.randomUUID().slice(0, 8) })
     const onDay = nextDay()

@@ -49,6 +49,27 @@ describe('the scheduled handler', () => {
     expect(worker.fetch).toBe(fetch)
   })
 
+  it("W59 (W35 audit row 33): the run's log names every item by its outcome, a refund that failed later too, and keeps the count of those left", async () => {
+    const stripe = new FakeStripe()
+    const seen = depsFor(stripe)
+    const answer = {
+      refundsWaiting: 0, paymentsWatched: 0, checked: 2, finalised: 0, undone: 0, refunds: 1, left: 1, deferred: 0, stripeRefused: false,
+      items: [
+        { kind: 'refund_watch', id: 'claim-1', outcome: 'refund_failed', reason: 'failed_later' },
+        { kind: 'order', id: 'order-1', outcome: 'left', reason: 'several_payments' },
+      ],
+    } as unknown as Awaited<ReturnType<typeof reconcile>>
+    const worker = withScheduled({ fetch: async () => new Response('') }, { ...seen.deps, reconcile: async () => answer })
+    const waited: Array<Promise<unknown>> = []
+    await worker.scheduled({ scheduledTime: Date.parse('2026-11-10T12:05:00Z'), cron: '*/5 * * * *' }, env, { waitUntil: (promise) => waited.push(promise) })
+    await waited[0]
+    expect(seen.logged.find((entry) => entry['event'] === 'reconcile.run')).toMatchObject({
+      leftCount: 1,
+      left: [{ kind: 'order', id: 'order-1', reason: 'several_payments' }],
+      handled: { refund_failed: [{ kind: 'refund_watch', id: 'claim-1', reason: 'failed_later' }] },
+    })
+  })
+
   it('hands one reconcile run to ctx.waitUntil, as the system, from the env bindings; logs its counts; closes the database', async () => {
     const stripe = new FakeStripe()
     const seen = depsFor(stripe)
@@ -65,7 +86,7 @@ describe('the scheduled handler', () => {
     expect(seen.logged).toEqual([
       // W32a: the log line carries how many watched refunds are still on their way at Stripe.
       // W47, a named difference: and how many payments are still watched.
-      { event: 'reconcile.run', requestId: 'reconcile-2026-11-10T12:05:00.000Z', checked: 0, finalised: 0, undone: 0, refunds: 0, left: [], deferred: 0, stripeRefused: false, refundsWaiting: 0, paymentsWatched: 0 },
+      { event: 'reconcile.run', requestId: 'reconcile-2026-11-10T12:05:00.000Z', checked: 0, finalised: 0, undone: 0, refunds: 0, leftCount: 0, left: [], handled: {}, deferred: 0, stripeRefused: false, refundsWaiting: 0, paymentsWatched: 0 },
     ])
     // Found nothing: no Stripe call at all.
     expect(stripe.calls).toEqual([])

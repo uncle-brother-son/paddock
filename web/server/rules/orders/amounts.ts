@@ -72,7 +72,14 @@ export interface OrderFigures {
   toCollect: number
 }
 
-const differs = (ours: number, theirs: number): boolean => Math.round(Math.abs(ours - theirs) * 1e6) / 1e6 > TOLERANCE
+/**
+ * W58 (W45 audit row 40, W41 review L5): Q18's half penny, written once. `overHalfPenny`: `amount` is more than
+ * `limit` by over half a penny (the noise of pounds taken from pounds rounded away first). `differsByMoreThanHalfAPenny`:
+ * either way.
+ */
+export const overHalfPenny = (amount: number, limit: number): boolean => Math.round((amount - limit) * 1e6) / 1e6 > TOLERANCE
+export const differsByMoreThanHalfAPenny = (a: number, b: number): boolean => Math.round(Math.abs(a - b) * 1e6) / 1e6 > TOLERANCE
+const differs = differsByMoreThanHalfAPenny
 
 /**
  * W03-plan 2.7's last check, after the cash figure, the over-the-total reasons and

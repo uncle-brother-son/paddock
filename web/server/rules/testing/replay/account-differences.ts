@@ -224,7 +224,7 @@ const FB10_NEVER_BELOW_ZERO = pinned(
     ['.results[0].adjusted', false],
     ['.results[0].addon_credits_remaining', GONE],
     ['.results[0].reason', 'addon_below_zero'],
-    ['.results[0].message', 'Adjustment rejected: the membership would be left with -3 add-on credit(s), below zero.'],
+    ['.results[0].message', 'Adjustment rejected: the membership would be left with minus 3 add-on credit(s), below zero.'],
     ['.tables.customer_memberships', GONE],
     ['.tables.membership_credit_adjustments', GONE],
   ]

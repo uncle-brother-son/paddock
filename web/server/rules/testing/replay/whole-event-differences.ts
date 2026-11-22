@@ -152,7 +152,6 @@ const E6_ONE_PRESS_PER_BOOKING_ANSWER_LOST = pinned(
 
 /** The scenarios that differ only in the refund's key (each booking's card refund is keyed from its own claim). */
 const KEYS_ONLY = [
-  'w27-event-whole-cancel-refused-while-a-reader-payment-is-open',
   'w27-event-whole-cancel-card-and-cash-bookings-to-card',
   'w27-event-whole-cancel-one-booking-fails-then-retry',
   'w27-event-whole-cancel-a-card-refund-refused-by-stripe',
@@ -167,4 +166,15 @@ export const WHOLE_EVENT_DIFFERENCES: ReadonlyMap<string, readonly AllowedDiffer
   ...KEYS_ONLY.map((name) => [name, [EVENT_CLAIM_KEYS]] as [string, readonly AllowedDifference[]]),
   [E7_SCENARIO, [E7_NO_ORDER_AFTER_THE_CANCEL]],
   [E6_SCENARIO, [EVENT_CLAIM_KEYS, E6_ONE_PRESS_PER_BOOKING_ANSWER_LOST]],
+  [
+    'w27-event-whole-cancel-refused-while-a-reader-payment-is-open',
+    [
+      EVENT_CLAIM_KEYS,
+      pinned(
+        'W58: the in-progress words say "A payment is still in progress for …": a saved-card payment is held the same way as a reader one (the old words said "A card reader payment")',
+        'Brief W58 (W35 audit row 22; W31 "Noticed" 3)',
+        [['.results[3].message', 'A payment is still in progress for Sam Test. Finish or cancel it first.']]
+      ),
+    ],
+  ],
 ])

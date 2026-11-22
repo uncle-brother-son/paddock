@@ -81,7 +81,7 @@ describe("the staff app's step F wrappers (brief W37 item 5)", () => {
         ['VALIDATION', 'reason_required', 'A reason is required for the audit trail'],
         ['NOT_FOUND', 'membership_not_found', 'Membership not found.'],
         ['CONFLICT', 'below_used', 'Adjustment rejected: the period would be left with 0 allocated credit(s), below the 1 already used.'],
-        ['CONFLICT', 'addon_below_zero', 'Adjustment rejected: the membership would be left with -3 add-on credit(s), below zero.'],
+        ['CONFLICT', 'addon_below_zero', 'Adjustment rejected: the membership would be left with minus 3 add-on credit(s), below zero.'],
       ] as const) {
         rawRequest.mockResolvedValue(refused(code, 'credits', reason, message))
         expect(await call(), reason).toEqual({ adjusted: false, reason, message })

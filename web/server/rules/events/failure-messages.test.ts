@@ -52,7 +52,17 @@ describe("the event cancellations' reasons and words, moved (brief W27 item 5)",
   it('each fixed word of a place cancel is a string of the old code, word for word', () => {
     const fixed = Object.entries(words.EVENT_CANCEL_WORDS).filter(([, value]) => typeof value === 'string') as Array<[string, string]>
     expect(fixed.length).toBe(9)
-    for (const [name, text] of fixed) expect(strings.has(text), name).toBe(true)
+    // W58 (W35 audit row 22): one sentence reworded on purpose; the old code's is still there, and the new one is named.
+    const reworded: Record<string, [string, string]> = {
+      bookingPending: ['A card reader payment is still in progress for this booking. Finish or cancel it first.', 'A payment is still in progress for this booking. Finish or cancel it first.'],
+    }
+    for (const [name, text] of fixed) {
+      const named = reworded[name]
+      if (named) {
+        expect(strings.has(named[0]), `${name}: the old code's sentence`).toBe(true)
+        expect(text, name).toBe(named[1])
+      } else expect(strings.has(text), name).toBe(true)
+    }
   })
 
   it('each word built from values fills a template of the old code, with the values in place', () => {
@@ -101,8 +111,9 @@ describe("the event cancellations' reasons and words, moved (brief W27 item 5)",
     expect(fixed.length).toBe(5)
     for (const [name, text] of fixed) expect(strings.has(text), name).toBe(true)
     const pending = words.EVENT_WHOLE_CANCEL_WORDS.bookingsPending(['Sam Test', 'Mo Member'])
-    expect(pending).toBe('A card reader payment is still in progress for Sam Test, Mo Member. Finish or cancel it first.')
-    expect(fills(pending)).toBe(true)
+    // W58 (W35 audit row 22): "a payment", not "a card reader payment"; the old template is still the old code's.
+    expect(pending).toBe('A payment is still in progress for Sam Test, Mo Member. Finish or cancel it first.')
+    expect(fills(pending.replace('A payment', 'A card reader payment'))).toBe(true)
   })
 
   it("the overview's words for a booking that can't be cancelled", () => {

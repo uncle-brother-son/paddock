@@ -164,6 +164,11 @@ interface FakeSubscription {
   created: number
   /** W36: when it is set to end (a scheduled cancellation), in seconds; null when none is set. */
   cancel_at: number | null
+  /**
+   * W59 (W45a "Noticed" 7): whether it ends at the end of its period, as set (Stripe keeps it; the fake answered
+   * false always). Set true, `cancel_at` becomes the period's end; a `cancel_at` set by itself sets it false.
+   */
+  cancel_at_period_end: boolean
   /** W36: the end of a no-charge period set on it (a payment date change), in seconds; null when none. */
   trial_end: number | null
   /** W36: the moment its billing periods are counted from. */
@@ -369,6 +374,7 @@ export class FakeStripe implements StripeClient {
       livemode: this.keyLivemode === true,
       created: start,
       cancel_at: null,
+      cancel_at_period_end: false,
       trial_end: null,
       billing_cycle_anchor: start,
       default_payment_method: null,
@@ -982,7 +988,7 @@ export class FakeStripe implements StripeClient {
     }
     // W46b: the newest invoice by id. Expanded, only the invoice it was made with is modelled (what the order flows read).
     if (expanded && sub.latest_invoice !== invoice.id) throw new Error('The fake has only modelled expanding the invoice a subscription was made with, not a later one.')
-    return { ...rest, items, cancel_at_period_end: false, latest_invoice: expanded ? invoice : sub.latest_invoice }
+    return { ...rest, items, latest_invoice: expanded ? invoice : sub.latest_invoice }
   }
 
   /** As Stripe: a subscription made in the other mode is answered as missing (W13, as an intent, W11a). */
@@ -1053,6 +1059,7 @@ export class FakeStripe implements StripeClient {
           livemode: this.keyLivemode === true,
           created: start,
           cancel_at: null,
+          cancel_at_period_end: false,
           trial_end: null,
           billing_cycle_anchor: start,
           default_payment_method: typeof params.default_payment_method === 'string' ? params.default_payment_method : null,
@@ -1078,7 +1085,7 @@ export class FakeStripe implements StripeClient {
         const sub = this.sub(id)
         // W48: and `items: [{ id, price }]` with `proration_behavior: 'none'`, which is what the legacy update-price
         // route sends to move a member to a plan's new price from their next renewal (G-plan GB1).
-        const known = new Set(['cancel_at', 'trial_end', 'proration_behavior', 'default_payment_method', 'items'])
+        const known = new Set(['cancel_at', 'cancel_at_period_end', 'trial_end', 'proration_behavior', 'default_payment_method', 'items'])
         const unknown = Object.keys(params ?? {}).filter((name) => !known.has(name))
         if (unknown.length > 0) throw new Error(`The fake has not modelled updating a subscription's ${unknown.join(', ')}.`)
         if (sub.status === 'canceled') {
@@ -1087,6 +1094,13 @@ export class FakeStripe implements StripeClient {
         if (params?.cancel_at !== undefined) {
           if (params.cancel_at !== '' && typeof params.cancel_at !== 'number') throw new Error('The fake has only modelled cancel_at as a timestamp or an empty string.')
           sub.cancel_at = typeof params.cancel_at === 'number' ? params.cancel_at : null
+          sub.cancel_at_period_end = false
+        }
+        // W59 (W45a "Noticed" 7): kept as set, as Stripe keeps it; true ends it at the period's end.
+        if (params?.cancel_at_period_end !== undefined) {
+          if (typeof params.cancel_at_period_end !== 'boolean') throw new Error('The fake has only modelled cancel_at_period_end as true or false.')
+          sub.cancel_at_period_end = params.cancel_at_period_end
+          sub.cancel_at = params.cancel_at_period_end ? (sub.items.data[0]?.current_period_end ?? null) : null
         }
         if (params?.trial_end !== undefined) {
           if (typeof params.trial_end !== 'number') throw new Error('The fake has only modelled trial_end as a timestamp.')

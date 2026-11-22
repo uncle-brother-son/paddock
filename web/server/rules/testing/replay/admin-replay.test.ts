@@ -3,7 +3,7 @@ import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Db } from '@/server/db'
 import { staffAppDir } from '../staff-app-dir'
-import { ADMIN_NO_ANSWER_WORDS, createdByIsTheStoredEmail, createdByPaths, DECISION_SCENARIOS, GB14_SCENARIO, isW49W54Scenario, NOW_RECORDED_SCENARIOS, S3_OLD_WORDS, s3Paths, W49_W54_DIFFERENCES, w49W54Differences } from './admin-differences'
+import { ADMIN_NO_ANSWER_WORDS, createdByIsTheStoredEmail, createdByPaths, DECISION_SCENARIOS, GB14_SCENARIO, isW49W54Scenario, NOW_RECORDED_SCENARIOS, pathsPinnedBy, S3_OLD_WORDS, s3Paths, W49_W54_DIFFERENCES, w49W54Differences } from './admin-differences'
 import { adminRowProblems, adminStoredAnswerProblems, answeredStampProblems, comparableAdmin, newAdminSide, STAMPED_EDITS, STEP_G_ACTIONS_MOVED, STEP_G_AUDIT_ROWS, STEP_G_WRITE_ROUTES, W49_ACTIONS, W54_ACTIONS, type AnsweredStamp } from './admin-side'
 import { throughStaffApp } from './booking-side'
 import { compareRecordings, type AllowedDifference, type Recording, type Row } from './compare'
@@ -114,6 +114,10 @@ describe("step G's side of the replay: staff, pricing and promo codes (W49 + W54
       expect(answeredStampProblems(stamps), `${name}: the stamps`).toEqual([])
       expect(stamps.filter((one) => STAMPED_EDITS.has(one.action)).length, `${name}: a stamp for each saved edit`).toBe(stampedSaves(recording))
       expect(compareSides(golden(name), recording, named(name))).toEqual([])
+      // W58b (W52 "For later" 6): every pin bites. What differs from the golden file is exactly the paths its named
+      // differences pin, as event-admin-replay.test.ts holds it: an allowance with several paths is still "seen" when
+      // one of them has gone back to what the old code recorded.
+      expect(left(name, recording, []).sort(), `${name}: the raw paths`).toEqual(named(name).flatMap((difference) => [...pathsPinnedBy(difference)]).sort())
     })
   })
 

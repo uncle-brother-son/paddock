@@ -209,7 +209,8 @@ describe("the window's own words and the Orders page's line (brief W47r item 5)"
     expect(line).toContain('{item.words}')
     // The button is the Worker's to give: `closeButton` shows nothing without a `close` (every other held retry).
     expect(line).toContain('{closeButton(item.close, `${paymentRetryLabel(item)} (${formatCurrency(item.amount)})`, item.words)}')
-    expect(banner).toContain('const closeButton = (target: StuckCloseTarget | undefined, title: string, words: string) =>\n    target ? (')
+    // W58b (the lead's item 2): and a step's kind, so Mark sorted says what to set in Stripe first.
+    expect(banner).toContain("const closeButton = (target: StuckCloseTarget | undefined, title: string, words: string, what?: StuckStep['what']) =>\n    target ? (")
   })
 
   it("W47r-d: a payment taken after the membership ended has a second button, Mark as owed, only where the Worker offers it; its dialog says when to use it, in the brief's words, and asks why the payment was owed", async () => {

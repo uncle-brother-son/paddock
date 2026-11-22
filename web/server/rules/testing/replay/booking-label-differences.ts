@@ -18,6 +18,7 @@ const W05H_3 = "Brief W53 item 4 (W05h step E items 3 and 4, E-plan 2.2): the li
 const W47_L5 = "Brief W53 item 4 (W47 review L5): a cancelled booking's line that still holds seat money counts, so an order that kept some of its money reads part refunded, not refunded"
 const W32_N4 = "Brief W53 item 4 (W32 \"Noticed\" 4): It already arrived works the booking's orders out again (as Refund the rest does), so an order reads what its rows say once what was owed is settled"
 const L9 = "Brief W53 item 5 (lead call L9; W03-decisions Q9's table): an order paid by store credit alone records payment_method 'store_credit'"
+const W58B_SPLIT = "Brief W58b (W53 'For later' 2; W03-decisions Q9's table): Add Guest's own order paid by a gift card and store credit records 'split', as New Order does (recordedPaymentMethod)"
 
 /** One label: its path, the golden file's value and the Worker's. */
 function label(name: string, decision: string, path: string, golden: unknown, now: unknown): AllowedDifference {
@@ -169,4 +170,8 @@ export const W53_LABEL_DIFFERENCES: ReadonlyMap<string, readonly AllowedDifferen
       ),
     ],
   ],
+  // --- W58b (W53 "For later" 2): a gift card with store credit is `split`
+  ...['w17-r1c-add-guest-store-credit-and-gift-card-statement-lands-late', 'w17-r4a-add-guest-store-credit-claim-answer-lost-then-pressed-again'].map(
+    (name): [string, AllowedDifference[]] => [name, [label("Add Guest paid by a gift card and store credit: the guest's own order records `split` (it recorded `gift_card`)", W58B_SPLIT, '.tables.orders.added[1].payment_method', 'gift_card', 'split')]]
+  ),
 ])

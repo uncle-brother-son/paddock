@@ -576,15 +576,20 @@ function undoFlow(db: Db, pendingId: string, options: Pick<ReaderRouteOptions, '
 
     // reversePendingMoneyParts: the store credit and gift card parts claimed while the payment was pending.
     if (snapshot.store_credit_amount && snapshot.store_credit_amount > 0) {
+      // W58 (W26 audit row 6, A2): the row names the staff member whose press or close undid it (none for the automatic
+      // check), and a saved-card flow's words say "card payment", not "reader payment".
+      const staffId = options.actor.type === 'staff' ? options.actor.id : null
+      const what = snapshot.method === 'card' ? 'the saved-card payment was declined or cancelled' : 'the reader payment was cancelled'
       const given = (
         await tx.query<{ result: { ok?: boolean } | null }>(
-          'SELECT public.store_credit_apply($1::uuid, $2::numeric, $3::text, NULL::uuid, $4::uuid, NULL::uuid, $5::text, NULL::uuid) AS result',
+          'SELECT public.store_credit_apply($1::uuid, $2::numeric, $3::text, NULL::uuid, $4::uuid, $5::uuid, $6::text, NULL::uuid) AS result',
           [
             snapshot.customer_id,
             snapshot.store_credit_amount,
             'redemption_reversal',
             row.record_id,
-            `Automatic reversal — the reader payment was cancelled or its finalisation failed. [ref ${crypto.randomUUID()}]`,
+            staffId,
+            `Automatic reversal — ${what} or its finalisation failed. [ref ${crypto.randomUUID()}]`,
           ]
         )
       )[0]?.result

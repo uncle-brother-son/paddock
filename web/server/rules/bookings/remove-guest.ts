@@ -36,6 +36,7 @@ import { startsWithinRealHours } from '@/server/rules/time/london-time'
 import { loadBooking, lockAndLoadBooking, paymentOpen, sessionStartWallClock, type LoadedBooking } from './load-booking'
 import { loadBookingLines } from './money-left'
 import { paymentOpenRefusal } from './money-in'
+import { differsByMoreThanHalfAPenny } from '@/server/rules/orders/amounts'
 import {
   finishClaimInTransaction,
   GUEST_REMOVED,
@@ -55,7 +56,6 @@ import {
 
 const round2 = (n: number): number => Math.round(n * 100) / 100
 /** Q18 (W02 finding 12): half a penny either way passes; the old code allowed a penny. */
-const differsByMoreThanHalfAPenny = (a: number, b: number): boolean => Math.round(Math.abs(a - b) * 1e6) / 1e6 > 0.005
 
 export interface RemoveGuestOptions extends RefundOptions {
   /** The signed-in staff member's Issue refunds switch (checked only when money goes back, as before). */
@@ -128,14 +128,18 @@ function quoteFor(
   return { bookingId: booking.id, bookingType, refundAmount, refundable, insideTwentyFourHours, partySize: booking.partySize, seatPrice, withheldInside24Hours }
 }
 
-/** The quote as the dialog has it (the seat's price and what the 24-hour rule kept back stay inside the rule). */
-const publicQuote = (quote: RemoveGuestQuote): RemoveGuestQuote => ({
+/**
+ * The quote as the dialog has it (the seat's price stays inside the rule). W58b (the W26 audit's row 17): what the
+ * 24-hour rule kept back, only when it kept something, so the dialog words the two £0 cases apart.
+ */
+const publicQuote = (quote: RemoveGuestQuote & { withheldInside24Hours?: number }): RemoveGuestQuote => ({
   bookingId: quote.bookingId,
   bookingType: quote.bookingType,
   refundAmount: quote.refundAmount,
   refundable: quote.refundable,
   insideTwentyFourHours: quote.insideTwentyFourHours,
   partySize: quote.partySize,
+  ...((quote.withheldInside24Hours ?? 0) > 0 ? { withheld: quote.withheldInside24Hours as number } : {}),
 })
 
 /** The old function's first checks after the account holder's (answered as data): the guest, the booking. */

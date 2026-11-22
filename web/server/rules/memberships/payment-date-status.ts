@@ -71,8 +71,8 @@ export function formatIsoDatesIn(text: string): string {
 
 /**
  * The first rule that refuses a payment date change, in the old order, or null. The 6-month rule is separate: it can be overridden.
- * `renewalDay` (W41a; Wayne, 17 Nov 2026), for the quote and the press only: a renewal due today is refused too, and
- * today or earlier is worded as W40a's cancel is. The lists and the profile don't pass it and answer as before.
+ * `renewalDay` (W41a; Wayne, 17 Nov 2026): a renewal due today is refused too, and today or earlier is worded as
+ * W40a's cancel is. W58 (W45 row 41): the lists and the profile pass it as well, so the button says so before a press.
  */
 export function paymentDateRefusal(f: PaymentDateFacts, renewalDay = false): string | null {
   if (f.billing_frequency !== 'monthly') return PAYMENT_DATE_REFUSALS.yearly
@@ -96,7 +96,9 @@ export function paymentDateStatus(f: PaymentDateFacts): PaymentDateStatus {
   const changedAt = f.pdc_last_done_at
   return {
     payment_date_changed_at: changedAt === null ? null : changedAt instanceof Date ? changedAt.toISOString() : String(changedAt),
-    payment_date_change_blocked: paymentDateRefusal(f),
+    // W58 (W45 audit row 41, W41a short 3): the lists carry the renewal-day refusal too, so their button is greyed
+    // with the reason on the renewal day instead of being refused only after the press.
+    payment_date_change_blocked: paymentDateRefusal(f, true),
     payment_date_change_needs_override: f.pdc_within_six_months,
   }
 }

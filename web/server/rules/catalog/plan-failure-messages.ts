@@ -73,6 +73,19 @@ export const PLAN_NEW_WORDS = {
    * stands (the row stays off, and its Stripe step is sent or checked); nothing is written for this one.
    */
   offPressedMeanwhile: 'Someone took this plan off sale while this was putting it back on sale, so it stays off sale. Reload the page, and press the switch again if it should be on sale.',
+  /**
+   * W58 item 0 (Wayne, 21 Nov; found on the W57 preview): Stripe won't move a subscription onto a price of an
+   * off-sale (inactive) product, so a price change on an off-sale plan with members on the changing price is refused
+   * before anything is made. Nothing changed.
+   */
+  offSaleWithMembers: (count: number): string =>
+    `This plan is off sale, and Stripe won't move ${members(count)} onto a new price while it is. Nothing was changed. Put the plan back on sale first, then change the price; or leave the price as it is.`,
+  /**
+   * W58c (W58 review FL4): off sale while a price change on the plan is still open. Stripe won't move the members still
+   * to move onto the new price once the plan is off sale, so it stays on sale until they have moved. Nothing changed.
+   */
+  offWhileChangeOpen:
+    "A price change on this plan is still moving its members to the new price, and Stripe won't move them once the plan is off sale. Nothing was changed: the plan is still on sale. Wait a few minutes for the members to move, reload the page, then take it off sale. If it is still refused after 20 minutes, check the Orders page's list of things that need attention.",
   /** A plan's details or price, sent with isUnlimited that isn't true or false (the details edit never checked it). */
   isUnlimitedTrueOrFalse: 'isUnlimited must be true or false',
 } as const

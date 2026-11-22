@@ -680,6 +680,125 @@ describe('Q34 (N2): a credit stays only if it covers the new date', () => {
   })
 })
 
+// W58 (Wayne's Q54, 21 Nov): Mo booked on a credit from his old membership, which has since ended (cancelled); he has
+// rejoined on a new plan, "Core Again" (core level), whose period covers today. Moved to 20 Nov (Core band, credit
+// eligible): the credit comes from the new membership when it covers the date and has one left; only then is the seat
+// charged. The old membership's credit goes back as today (the booking leaves its period).
+const REJOINED = { plan: '10000000-0000-4000-8000-0000000000a0', membership: '10000000-0000-4000-8000-0000000000a1', period: '10000000-0000-4000-8000-0000000000a2' }
+async function rejoined(options: { lastDay?: string; creditsAllocated?: number } = {}) {
+  await db.query("UPDATE customer_memberships SET subscription_status = 'cancelled', cancel_effective_date = '2026-11-09' WHERE id = $1", [ID.membership])
+  await insert(db, 'membership_plans', { id: REJOINED.plan, name: 'Core Again', level: 'core', sessions_included: 4, price_monthly: '40.00', price_yearly: '400.00', stripe_product_id: 'prod_rejoined' })
+  await insert(db, 'customer_memberships', {
+    id: REJOINED.membership,
+    customer_id: ID.member,
+    plan_id: REJOINED.plan,
+    start_date: '2026-11-10',
+    subscription_status: 'active',
+    billing_frequency: 'monthly',
+    created_at: '2026-11-10T08:00:00Z',
+    ...(options.lastDay ? { cancel_effective_date: options.lastDay } : {}),
+  })
+  await insert(db, 'membership_credit_periods', { id: REJOINED.period, membership_id: REJOINED.membership, period_start: '2026-11-10', period_end: '2026-12-09', credits_allocated: options.creditsAllocated ?? 4 })
+}
+const creditsUsed = async (periodId: string) =>
+  Number((await db.query<{ n: string }>("SELECT count(*)::text AS n FROM bookings WHERE credit_period_id = $1 AND redemption_source = 'membership_credit' AND status <> 'cancelled'", [periodId]))[0]?.n)
+
+describe('W58 (Q54): a member who left and rejoined, moving an old credit booking', () => {
+  it('the new membership covers the date: its credit is used and nothing is charged; the old credit goes back; the quote names the membership', async () => {
+    await withBooking(
+      { booking: { ...paidSeat([mo]), ...memberCredit }, payment: {} },
+      async ({ bookingId, stripe }) => {
+        await rejoined()
+        expect(await creditsUsed(ID.creditPeriod)).toBe(1)
+        const q = await quote(bookingId, ID.laterPublicSession)
+        expect(q.priceImpact.amountDue).toBe(0)
+        expect(q.priceImpact.seatDeltas[0]).toMatchObject({ payBy: 'membership_credit', creditReleased: false, delta: 0, creditFrom: 'Core Again' })
+        expect((await move(bookingId, ID.laterPublicSession)).body.data).toMatchObject({ moved: true, booking: { price_paid: 0 } })
+        expect(await bookingRow(bookingId)).toMatchObject({ session_id: ID.laterPublicSession, redemption_source: 'membership_credit', credit_period_id: REJOINED.period, redeemed_membership_id: REJOINED.membership })
+        expect([await creditsUsed(ID.creditPeriod), await creditsUsed(REJOINED.period)]).toEqual([0, 1])
+        const [row] = await auditRows(bookingId, 'booking.move')
+        expect(row?.details).toMatchObject({ amountDue: 0, creditReleased: false, creditMovedTo: { membershipId: REJOINED.membership, creditPeriodId: REJOINED.period } })
+        expect(charges(stripe)).toHaveLength(0)
+      },
+      undefined,
+      ID.member
+    )
+  })
+
+  it("the new membership's last day is before the date: charged as today (the credit released, £20 in cash)", async () => {
+    await withBooking(
+      { booking: { ...paidSeat([mo]), ...memberCredit }, payment: {} },
+      async ({ bookingId }) => {
+        await rejoined({ lastDay: '2026-11-15' })
+        const q = await quote(bookingId, ID.laterPublicSession)
+        expect(q.priceImpact.amountDue).toBe(20)
+        expect(q.priceImpact.seatDeltas[0]).toMatchObject({ payBy: 'paid', creditReleased: true, delta: 20 })
+        expect(q.priceImpact.seatDeltas[0]).not.toHaveProperty('creditFrom')
+        expect((await move(bookingId, ID.laterPublicSession, { payment: { method: 'cash', confirmedCashAmount: 20 } })).body.data).toMatchObject({ moved: true, booking: { price_paid: 20 } })
+        expect(await bookingRow(bookingId)).toMatchObject({ redemption_source: 'paid', credit_period_id: null, redeemed_membership_id: null })
+        expect([await creditsUsed(ID.creditPeriod), await creditsUsed(REJOINED.period)]).toEqual([0, 0])
+      },
+      undefined,
+      ID.member
+    )
+  })
+
+  it('the new membership has no credit left: charged as today', async () => {
+    await withBooking(
+      { booking: { ...paidSeat([mo]), ...memberCredit }, payment: {} },
+      async ({ bookingId }) => {
+        await rejoined({ creditsAllocated: 0 })
+        const q = await quote(bookingId, ID.laterPublicSession)
+        expect(q.priceImpact.amountDue).toBe(20)
+        expect(q.priceImpact.seatDeltas[0]).toMatchObject({ payBy: 'paid', creditReleased: true })
+        expect((await move(bookingId, ID.laterPublicSession, { payment: { method: 'cash', confirmedCashAmount: 20 } })).body.data).toMatchObject({ moved: true })
+        expect(await bookingRow(bookingId)).toMatchObject({ redemption_source: 'paid', credit_period_id: null })
+      },
+      undefined,
+      ID.member
+    )
+  })
+
+  it("the booking's own membership still active (its last day before the date): no other membership is looked at, charged as Q34 says", async () => {
+    await withBooking(
+      { booking: { ...paidSeat([mo]), ...memberCredit }, payment: {} },
+      async ({ bookingId }) => {
+        await rejoined()
+        // Mo's old membership back to active with a last day of 15 Nov: it is still his, so Q34 stands as it was, even
+        // though "Core Again" is newer, covers the date and has credits (made older here, so the new one is current).
+        await db.query("UPDATE customer_memberships SET subscription_status = 'active', cancel_effective_date = '2026-11-15', created_at = '2026-01-10T00:00:00Z' WHERE id = $1", [ID.membership])
+        const q = await quote(bookingId, ID.laterPublicSession)
+        expect(q.priceImpact.amountDue).toBe(20)
+        expect(q.priceImpact.seatDeltas[0]).toMatchObject({ payBy: 'paid', creditReleased: true })
+      },
+      undefined,
+      ID.member
+    )
+  })
+
+  it('the quote said the new credit, then a booking took its last one before the press: refused with the new figures, nothing moved', async () => {
+    await withBooking(
+      { booking: { ...paidSeat([mo]), ...memberCredit }, payment: {} },
+      async ({ bookingId }) => {
+        await rejoined({ creditsAllocated: 1 })
+        const q = await quote(bookingId, ID.laterPublicSession)
+        expect(q.priceImpact.amountDue).toBe(0)
+        // The period's last credit taken by another booking (the count is by period, whoever's booking it is), on the
+        // 'completed' so the live schema's overlap rule (live statuses only) has nothing to refuse; it still counts.
+        await insert(db, 'bookings', { session_id: ID.laterPublicSession, customer_id: ID.customer, party_size: 1, price_paid: '0', status: 'completed', redemption_source: 'membership_credit', credit_period_id: REJOINED.period, redeemed_membership_id: REJOINED.membership })
+        const before = await snapshot(bookingId)
+        const answer = await move(bookingId, ID.laterPublicSession, { figures: { amountDue: 0 } })
+        // The press sent no payment (the quote said £0), so today's first check refuses it, with the new figures.
+        expect(answer.body.error).toMatchObject({ code: 'CONFLICT', details: { reason: 'payment_method_required' } })
+        expect(answer.body.error?.details?.priceImpact).toMatchObject({ amountDue: 20 })
+        expect(await snapshot(bookingId)).toEqual(before)
+      },
+      undefined,
+      ID.member
+    )
+  })
+})
+
 describe('refusals before any money moves', () => {
   // W24a (W24 review S1). A member's £20 seat on a credit; the renewal fails, so the booking awaits payment with the
   // credit still on it. Moved, Q34 would release the credit and take £20, the booking would still await payment, and

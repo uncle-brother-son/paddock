@@ -319,6 +319,23 @@ const GUEST_AND_ADDON_ON_THE_READER: ReadonlySet<string> = new Set([
  * the seat on its own booking line, in the scenarios that paid a guest and an add-on together on the reader.
  */
 export function flowDifferences(scenario?: string): AllowedDifference[] {
-  return [WORKER_FLOW_RECORD, ...(scenario && GUEST_AND_ADDON_ON_THE_READER.has(scenario) ? [SEAT_ON_THE_BOOKING_LINE] : [])]
+  return [
+    WORKER_FLOW_RECORD,
+    ...(scenario && GUEST_AND_ADDON_ON_THE_READER.has(scenario) ? [SEAT_ON_THE_BOOKING_LINE] : []),
+    ...(scenario && STAFF_UNDOES_WITH_STORE_CREDIT.has(scenario) ? [W58_FLOW_UNDO_NAMES_THE_STAFF] : []),
+  ]
+}
+
+/** W58 (W26 audit row 6): the flow scenarios a staff member's Cancel undoes, with store credit to give back. */
+const STAFF_UNDOES_WITH_STORE_CREDIT: ReadonlySet<string> = new Set([
+  'q25-reader-cancelled-puts-it-all-back',
+  'w12-move-store-credit-and-reader-cancelled',
+  'w12-settle-store-credit-and-reader-cancelled',
+])
+const W58_FLOW_UNDO_NAMES_THE_STAFF: AllowedDifference = {
+  name: "A card flow undone by a staff member's press names them on its store credit reversal (the old undo named nobody)",
+  decision: 'Brief W58 (W26 audit row 6, A2)',
+  path: /^\.tables\.store_credit_transactions\.added\[\d+\]\.staff_id$/,
+  actual: (value, expected) => expected === null && value === ID.staff,
 }
 

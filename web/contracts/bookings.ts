@@ -68,6 +68,11 @@ export const moveSeatDeltaSchema = z.object({
   newUnitPrice: z.number(),
   delta: z.number(),
   creditReleased: z.boolean(),
+  /**
+   * W58 (Wayne's Q54): only on a credit seat whose own membership has ended and which takes a credit from the
+   * customer's current membership instead: that membership's plan name, for the dialog's words.
+   */
+  creditFrom: z.string().optional(),
 })
 
 /** moveBooking's priceImpact. */
@@ -151,6 +156,11 @@ export const removeGuestQuoteSchema = z.object({
   /** W22a (Wayne's decision, 13 Nov): the session starts within 24 real hours, so the refund is £0 (Part refund instead). */
   insideTwentyFourHours: z.boolean(),
   partySize: z.number(),
+  /**
+   * W58b (the W26 audit's row 17; W22a "noticed" 1): what the 24-hour rule kept back on this seat. Sent only when it
+   * kept something, so a £0 quote inside 24 hours whose seat money had all gone back already reads "nothing left".
+   */
+  withheld: z.number().optional(),
 })
 export type RemoveGuestQuote = z.infer<typeof removeGuestQuoteSchema>
 

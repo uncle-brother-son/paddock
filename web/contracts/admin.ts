@@ -774,7 +774,17 @@ export type PostageSettingsRouteOutput = z.infer<typeof postageSettingsRouteOutp
 // a screen could read is gone). Kept last, so the staff app's generated types keep their order.
 
 /** A calendar day, as the screens send it: `YYYY-MM-DD`, a London date (session times are London wall-clock digits). */
-const londonDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be a date in the form YYYY-MM-DD')
+/**
+ * W59 (W50 review L7): a day the calendar has, too. The pattern alone let 2026-02-30 through to Postgres, whose own
+ * error was a 500; now it is a 400 with these words. The date's own UTC midnight is read back and compared.
+ */
+const londonDay = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be a date in the form YYYY-MM-DD')
+  .refine((value) => {
+    const read = new Date(`${value}T00:00:00Z`)
+    return !Number.isNaN(read.getTime()) && read.toISOString().slice(0, 10) === value
+  }, 'Must be a date the calendar has')
 
 /** `GET bookings`: getBookings. Each of the three is optional, as before: none of them lists every booking. Answers adminGetBookingsOutputSchema. */
 export const bookingListRouteInputSchema = z.object({ startDate: londonDay.optional(), endDate: londonDay.optional(), status: z.string().optional() })
@@ -1029,7 +1039,11 @@ export const eventDetailsRouteInputSchema = z.object({
   stamp: loose,
 })
 export type EventDetailsRouteInput = z.infer<typeof eventDetailsRouteInputSchema>
-export const eventDetailsRouteOutputSchema = z.object({ updated: z.literal(true), event: adminGetEventsOutputSchema.element, stamp: z.string() })
+/**
+ * W58b (W52a "Noticed" 1, 2): `cutoffFollowed`, only when the event was brought forward to before its refund cut-off
+ * with places booked and the cut-off moved to the new start (Q-a), so the dialog can say so.
+ */
+export const eventDetailsRouteOutputSchema = z.object({ updated: z.literal(true), event: adminGetEventsOutputSchema.element, stamp: z.string(), cutoffFollowed: z.literal(true).optional() })
 export type EventDetailsRouteOutput = z.infer<typeof eventDetailsRouteOutputSchema>
 
 /** `POST catalog/events/:eventId/active`: setEventActive, on and off sale (Manage pricing). Answers the event's id and the switch as it now is. */

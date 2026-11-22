@@ -466,16 +466,22 @@ describe('picked up and shipped', () => {
     })
   })
 
-  it('any active staff member may, Issue refunds or not, and the flag records which one; setting it again records the later press', async () => {
+  it('any active staff member may, Issue refunds or not, and the flag records which one; W58 (W45 audit row 14): setting it again keeps the first who and when (the later press is still recorded)', async () => {
     await seeded(async () => {
       expect((await pickedUp(W36_ID.pickupCard, true, { email: NO_REFUNDS })).status).toBe(200)
-      expect(await cardNow(W36_ID.pickupCard)).toMatchObject({ picked_up: true, picked_up_by: frontDeskId })
+      const first = await cardNow(W36_ID.pickupCard)
+      expect(first).toMatchObject({ picked_up: true, picked_up_by: frontDeskId })
       expect((await pickedUp(W36_ID.pickupCard, true)).status).toBe(200)
-      expect(await cardNow(W36_ID.pickupCard)).toMatchObject({ picked_up: true, picked_up_by: ID.staff })
+      expect(await cardNow(W36_ID.pickupCard)).toEqual(first)
+      const at = async () => (await db.query<{ at: string }>('SELECT picked_up_at::text AS at FROM gift_cards WHERE id = $1', [W36_ID.pickupCard]))[0]?.at
+      const firstAt = await at()
+      expect((await pickedUp(W36_ID.pickupCard, true)).status).toBe(200)
+      expect(await at()).toBe(firstAt)
       expect((await shipped(W36_ID.shippedCard, true, { email: NO_REFUNDS })).status).toBe(200)
       expect(await cardNow(W36_ID.shippedCard)).toMatchObject({ shipped_by: frontDeskId })
       expect((await audit()).map((row) => [row.action, row.actor_id])).toEqual([
         ['gift_card.picked_up', frontDeskId],
+        ['gift_card.picked_up', ID.staff],
         ['gift_card.picked_up', ID.staff],
         ['gift_card.shipped', frontDeskId],
       ])
@@ -547,7 +553,7 @@ describe('the list and the history', () => {
       const columns = await db.query<{ column_name: string }>("SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'gift_cards' ORDER BY ordinal_position")
       expect([...GIFT_CARD_COLUMNS]).toEqual(columns.map((row) => row.column_name))
       const rows = (await list()).body.data as Array<Record<string, unknown>>
-      expect(Object.keys(rows[0] ?? {}).sort()).toEqual([...GIFT_CARD_COLUMNS, 'purchaser_first_name', 'purchaser_last_name', 'purchaser_email'].sort())
+      expect(Object.keys(rows[0] ?? {}).sort()).toEqual([...GIFT_CARD_COLUMNS, 'purchaser_first_name', 'purchaser_last_name', 'purchaser_email', 'reactivate_refused'].sort())
     })
   })
 
@@ -562,7 +568,7 @@ describe('the list and the history', () => {
         // The rules themselves, not the routes: nothing between the SQL and the answer.
         const listed = await listGiftCards(db, undefined)
         expect(listed).toHaveLength(3)
-        for (const row of listed) expect(Object.keys(row).sort()).toEqual([...GIFT_CARD_COLUMNS, 'purchaser_first_name', 'purchaser_last_name', 'purchaser_email'].sort())
+        for (const row of listed) expect(Object.keys(row).sort()).toEqual([...GIFT_CARD_COLUMNS, 'purchaser_first_name', 'purchaser_last_name', 'purchaser_email', 'reactivate_refused'].sort())
         const history = await listGiftCardRedemptions(db, ID.giftCard)
         expect(history.map((row) => Object.keys(row).sort())).toEqual([['amount_used', 'booking_id', 'event_booking_id', 'gift_card_id', 'id', 'order_id', 'redeemed_at']])
         const flagged = await setGiftCardPickedUp(db, W36_ID.pickupCard, true, { actor: { type: 'staff', id: ID.staff, canIssueRefunds: false }, requestId: 'w38-test' })
@@ -574,6 +580,18 @@ describe('the list and the history', () => {
         await db.query('ALTER TABLE public.gift_card_redemptions DROP COLUMN w38_private_note')
         await db.query('SET ROLE paddock_worker')
       }
+    })
+  })
+
+  it('W58 (W45 audit row 15): `%` and `_` in a search match themselves; a code with them is still found', async () => {
+    await seeded(async () => {
+      await insert(db, 'gift_cards', { type: 'monetary', code: 'HALF_50%', original_value: '10.00', remaining_balance: '10.00', origin: 'issued_as_credit', expiry_date: '2027-06-30', fulfillment_method: 'digital' })
+      const codes = async (search: string) => ((await list(search)).body.data as Array<{ code: string }>).map((card) => card.code)
+      // The old read took `%` for any text, so a search of "%" listed every card.
+      expect(await codes('%')).toEqual(['HALF_50%'])
+      expect(await codes('_5')).toEqual(['HALF_50%'])
+      expect(await codes('F_5')).toEqual(['HALF_50%'])
+      expect(await codes('F.5')).toEqual([])
     })
   })
 

@@ -14,6 +14,7 @@ import type {
 } from '@/contracts'
 import type { Queryable } from '@/server/db'
 import { CUSTOMER_MEMBERSHIP_COLUMNS, customerMemberships } from '@/server/rules/memberships/list'
+import { likeContaining } from '@/server/rules/admin/like'
 
 // W40: the profile's membership rows are read by memberships/list.ts, with the Subscriptions list. The column list is
 // still named here for the tests that hold it to the saved schema.
@@ -66,7 +67,7 @@ const LIST_SELECT = `SELECT ${CUSTOMER_LIST_FIELDS.map((field) => LIST_AS[field]
 const LIST_ORDER = 'ORDER BY created_at DESC, id LIMIT 200'
 const LIST_BY_ID_SQL = `${LIST_SELECT} WHERE id = $1::uuid`
 const LIST_NEWEST_SQL = `${LIST_SELECT} ${LIST_ORDER}`
-const WORD_MATCHES = (n: number): string => `(first_name ILIKE $${n} OR last_name ILIKE $${n} OR email ILIKE $${n} OR phone ILIKE $${n})`
+const WORD_MATCHES = (n: number): string => `(first_name ILIKE $${n} ESCAPE '\\' OR last_name ILIKE $${n} ESCAPE '\\' OR email ILIKE $${n} ESCAPE '\\' OR phone ILIKE $${n} ESCAPE '\\')`
 
 const LIST_TIMES = ['created_at', 'updated_at'] as const
 
@@ -85,10 +86,11 @@ export async function listCustomers(db: Queryable, input: CustomerListInput): Pr
     rows = UUID.test(customerId) ? await db.query<CustomerListRow>(LIST_BY_ID_SQL, [customerId]) : []
   } else if (search) {
     const words = search.split(/\s+/).filter((word) => word.length > 0)
-    const params = [...words.map((word) => `%${word}%`), `%${search}%`]
+    // W58: `%` and `_` typed in a search match themselves (likeContaining).
+    const params = [...words.map((word) => likeContaining(word)), likeContaining(search)]
     const everyWord = words.map((_, index) => WORD_MATCHES(index + 1)).join(' AND ')
     // Only placeholders are built here: every typed value is bound.
-    const statement = `${LIST_SELECT} WHERE (${everyWord} OR ((first_name || ' ' || last_name) ILIKE $${params.length})) ${LIST_ORDER}`
+    const statement = `${LIST_SELECT} WHERE (${everyWord} OR ((first_name || ' ' || last_name) ILIKE $${params.length} ESCAPE '\\')) ${LIST_ORDER}`
     rows = await db.query<CustomerListRow>(statement, params)
   } else {
     rows = await db.query<CustomerListRow>(LIST_NEWEST_SQL)

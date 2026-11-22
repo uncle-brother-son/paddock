@@ -21,6 +21,9 @@ const refusal = (code: string, message: string) => ({
   data: { ok: false, error: { code, message }, requestId: 'worker-request' },
 })
 
+/** W58b (W50 "For later" 3): a flag's own no-answer words (the admin functions' FLAG_NO_ANSWER_MESSAGE). */
+const FLAG_NO_ANSWER = "That didn't get an answer, so it may or may not have been recorded. What it shows has been read again: if it still shows as before, press again (pressing twice changes nothing)."
+
 describe('staff app helpers', () => {
   const rawRequest = vi.fn()
 
@@ -442,7 +445,7 @@ describe('staff app helpers', () => {
   // is held here; the rules themselves in server/rules/bookings/admin.test.ts and its races.
   describe('W50: the booking and Overview functions are thin calls to the Worker', () => {
     const INACTIVE = 'This staff account is inactive. Ask an admin to reactivate it.'
-    const NO_ANSWER = "That didn't get an answer, so it may or may not have been saved. The screen has been reloaded: check it, and press again if it hasn't changed."
+    // W58b: every no answer here is a flag's (FLAG_NO_ANSWER, above), so the general words are no longer held here.
     // W50a item 1: Wayne's words now name the button on the booking window.
     const Q49 = 'This booking needs payment first. Use Take Payment.'
     // W50a item 3: Check In while a payment is still being taken on the booking.
@@ -563,11 +566,13 @@ describe('staff app helpers', () => {
 
     it('no answer: a flag says the change may or may not have been saved; a read keeps the "didn\'t answer" error', async () => {
       rawRequest.mockRejectedValue(new Error('socket hang up'))
+      // W58b (W50 "For later" 3, W50a "Noticed" 4; a named difference): a flag's own no-answer words.
       for (const [name, params] of [['setBookingCheckedIn', { bookingId: ID, checkedIn: true }], ['setGuestWaiverStatus', { guestId: ID, accepted: false }], ['setAddonLinePrepared', { lineId: ID, prepared: true }]] as const) {
-        await expect((await fn(name))({ params, user }), name).rejects.toThrow(new Error(NO_ANSWER))
+        await expect((await fn(name))({ params, user }), name).rejects.toThrow(new Error(FLAG_NO_ANSWER))
       }
       rawRequest.mockResolvedValue(refusal('INTERNAL', 'Something went wrong and the action may not have finished. Check before trying again.'))
-      await expect((await fn('setAddonLinePrepared'))({ params: { lineId: ID, prepared: true }, user })).rejects.toThrow(new Error(NO_ANSWER))
+      await expect((await fn('setAddonLinePrepared'))({ params: { lineId: ID, prepared: true }, user })).rejects.toThrow(new Error(FLAG_NO_ANSWER))
+      expect(FLAG_NO_ANSWER).not.toContain('The screen has been reloaded')
       rawRequest.mockRejectedValue(new Error('socket hang up'))
       await expect((await fn('getBookingDetail'))({ params: { bookingId: ID }, user })).rejects.toThrow(/Could not reach the Worker: socket hang up \(WORKER_UNREACHABLE, request /)
     })
@@ -1344,7 +1349,8 @@ describe('staff app helpers', () => {
         ['setEventAttendeesCheckIn', { attendeeIds: [ID] }],
         ['setEventAttendeeWaiver', { attendeeId: ID, which: 'standard', accepted: false }],
       ] as const) {
-        await expect((await fn(name))({ params, user }), name).rejects.toThrow(new Error(NO_ANSWER))
+        // W58b (a named difference): a flag's own no-answer words.
+        await expect((await fn(name))({ params, user }), name).rejects.toThrow(new Error(FLAG_NO_ANSWER))
       }
       await expect((await fn('getEventAttendees'))({ params: { eventId: ID }, user })).rejects.toThrow(/Could not reach the Worker: socket hang up \(WORKER_UNREACHABLE, request /)
     })
@@ -1461,6 +1467,34 @@ describe('staff app helpers', () => {
         expect(list.match(/eventCancelled=\{eventCancelled\}/g)).toHaveLength(2)
       })
 
+      it('W58b (W52 "For later" 5, W52a "Noticed" 1 and 2): the cut-off box\'s minimum is the earliest the Worker allows, and a save whose cut-off followed says so', async () => {
+        const { earliestCutoffBox, CUTOFF_FOLLOWED_TOAST, EVENT_MOVING_BEFORE_CUTOFF_NOTICE } = await util('eventEdit.ts')
+        const event = { places_booked: 2, starts_at: '2026-12-01T19:00:00.000Z', refund_cutoff_at: '2026-11-30T19:00:30.000Z' }
+        // Nothing booked: no minimum.
+        expect(earliestCutoffBox({ ...event, places_booked: 0 }, { startsAt: '2026-12-01T19:00' })).toBeUndefined()
+        // The cut-off in force, rounded up to the minute (W52a S1: 19:00:30 reads 19:01).
+        expect(earliestCutoffBox(event, { startsAt: '2026-12-01T19:00' })).toBe('2026-11-30T19:01')
+        // No cut-off set: the start is the cut-off (Q43).
+        expect(earliestCutoffBox({ ...event, refund_cutoff_at: null }, { startsAt: '2026-12-01T19:00' })).toBe('2026-12-01T19:00')
+        // Brought forward to before the cut-off (Q-a): the new start.
+        expect(earliestCutoffBox(event, { startsAt: '2026-11-30T09:00' })).toBe('2026-11-30T09:00')
+        expect(CUTOFF_FOLLOWED_TOAST).toBe(`Event updated. ${EVENT_MOVING_BEFORE_CUTOFF_NOTICE}`)
+        const dialog = readFileSync(path.join(appDir, 'frontend/components/EditEventDialog.tsx'), 'utf8')
+        expect(dialog).toContain('min={earliestCutoffBox(event, { startsAt })}')
+        expect(dialog).toContain('if (result.cutoffFollowed) toast.success(CUTOFF_FOLLOWED_TOAST)')
+      })
+
+      it('W58b (W52 "For later" 4): the Overview page names every read that failed, with the first one\'s words', async () => {
+        const { overviewReadsFailed } = await util('overviewReads.ts')
+        expect(overviewReadsFailed([['today\'s bookings', undefined], ['missing waivers', null]])).toBeNull()
+        expect(overviewReadsFailed([['today\'s bookings', 'The Worker didn\'t answer in time.'], ['missing waivers', undefined]])).toBe(
+          "Some of this page couldn't be read: today's bookings (The Worker didn't answer in time). What those cards show may be out of date or empty."
+        )
+        expect(overviewReadsFailed([['a', new Error('No.')], ['b', 'x'], ['c', 'y']])).toBe("Some of this page couldn't be read: a, b and c (No). What those cards show may be out of date or empty.")
+        const page = readFileSync(path.join(appDir, 'frontend/pages/OverviewPage.tsx'), 'utf8')
+        for (const name of ['sessionsError', 'bookingsError', 'needsActionError', 'pendingError', 'prepError', 'waiverError', 'paymentAttentionError', 'moneyOwedError']) expect(page.match(new RegExp(`\\b${name}\\b`, 'g'))).toHaveLength(2)
+      })
+
       it("Q51 (item 3): the edit dialog says how many places are booked, what that means for the price and the cut-off, and reminds staff to tell the attendees when the date changes", async () => {
         const { eventEditNotices } = await util('eventEdit.ts')
         const event = { places_booked: 2, starts_at: '2026-12-01T19:00:00.000Z', ends_at: '2026-12-01T21:00:00.000Z', refund_cutoff_at: '2026-11-30T19:00:00.000Z' }
@@ -1556,7 +1590,7 @@ describe('staff app helpers', () => {
 
   describe('W53: the order functions are thin calls to the Worker', () => {
     const INACTIVE = 'This staff account is inactive. Ask an admin to reactivate it.'
-    const NO_ANSWER = "That didn't get an answer, so it may or may not have been saved. The screen has been reloaded: check it, and press again if it hasn't changed."
+    // W58b: the fulfilled tick's no answer is a flag's (FLAG_NO_ANSWER, above).
     const ID = '33333333-3333-4333-8333-333333333333'
     const fn = async (name: string) => (await import(/* @vite-ignore */ path.join(appDir, `backend/paddock/${name}`))).default as (req: { params: Record<string, unknown>; user: typeof user }) => Promise<unknown>
     const refused = (code: string, reason: string, message: string) => ({ data: { ok: false, error: { code, message, details: { reason, message, action: 'order_line.fulfilled_set' } }, requestId: 'worker-request' } })
@@ -1637,7 +1671,8 @@ describe('staff app helpers', () => {
       rawRequest.mockResolvedValue(refused('FORBIDDEN', 'channel_not_accepted', "This can't be changed from here."))
       await expect((await fn('setOrderLineItemFulfilled'))({ params: { lineItemId: ID, fulfilled: true }, user })).rejects.toThrow(new Error("This can't be changed from here."))
       rawRequest.mockRejectedValue(new Error('socket hang up'))
-      await expect((await fn('setOrderLineItemFulfilled'))({ params: { lineItemId: ID, fulfilled: true }, user })).rejects.toThrow(new Error(NO_ANSWER))
+      // W58b (a named difference): the fulfilled tick is a flag, with a flag's no-answer words.
+      await expect((await fn('setOrderLineItemFulfilled'))({ params: { lineItemId: ID, fulfilled: true }, user })).rejects.toThrow(new Error(FLAG_NO_ANSWER))
       await expect((await fn('getOrders'))({ params: {}, user })).rejects.toThrow(/Could not reach the Worker: socket hang up \(WORKER_UNREACHABLE, request /)
     })
 
@@ -2953,7 +2988,8 @@ describe('staff app helpers', () => {
         const source = readFileSync(path.join(appDir, 'frontend/components/checkout/PaymentStep.tsx'), 'utf8')
         expect(source).toContain('giftCardAmount: toPennies(Math.max(0, defaultAmount))')
         expect(source).toContain('? toPennies(Math.max(0, Math.min(parsed, balance, totalDueNow - storeCreditAppliedAmount)))')
-        expect(source).toContain('toPennies(Math.max(0, Math.min(parsed, max)))')
+        // W58 (Q55): the store credit box became a ticked line; what it uses is still pennies.
+        expect(source).toContain('toPennies(Math.max(0, Math.min(storeCreditBalance, totalDueNow - giftCardAppliedAmount)))')
         // W14a: Add Guest, Move and Settle keep this sum (legacyPaymentFigures); New Order takes the quote's.
         const helpers = readFileSync(path.join(appDir, 'frontend/utils/basketQuote.ts'), 'utf8')
         expect(helpers).toContain('const remainder = amountLeftToPay(amountDueNow, giftCardApplied, storeCreditApplied)')
@@ -2963,6 +2999,45 @@ describe('staff app helpers', () => {
         const source = readFileSync(path.join(appDir, `frontend/components/${name}.tsx`), 'utf8')
         expect(source).toMatch(/exceedsAmount\(giftCardAmount \+ storeCreditAmount, /)
         expect(source).not.toMatch(/giftCardAmount \+ storeCreditAmount > /)
+      })
+    })
+
+    describe("W58 (Wayne's Q55): New Order's store credit line and confirm line", () => {
+      const basket = () => import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/basketQuote'))
+      const totals = (overrides: Record<string, unknown> = {}) => ({
+        orderTotal: 24, promoDiscount: 0, nonMembershipDue: 24, membershipFirstPayment: 0, amountDue: 24, giftCardApplied: 0, storeCreditApplied: 10,
+        spillToMembership: 0, spillFromStoreCredit: 0, spillFromGiftCard: 0, membershipToPay: 0, toCollect: { card: 14, reader: 14, cash: 14 }, firstInvoice: 0, ...overrides,
+      })
+
+      it('the choice is sent, never an amount, and only for a customer with a balance', async () => {
+        const { storeCreditChoice } = await basket()
+        expect(storeCreditChoice(true, true)).toEqual({ useStoreCredit: true })
+        expect(storeCreditChoice(false, true)).toEqual({ useStoreCredit: false })
+        expect(storeCreditChoice(true, false)).toEqual({})
+      })
+
+      it('the line names what it will use; the confirm line repeats each part, from the quote', async () => {
+        const { storeCreditLineWords, confirmLineWords, confirmedFigures } = await basket()
+        expect(storeCreditLineWords(22.5)).toBe('Use £22.50 store credit')
+        expect(confirmLineWords(totals({ storeCreditApplied: 10, toCollect: { card: 0, reader: 0, cash: 0 } }), 'card', false)).toBe('Takes £10.00 from store credit, £0.00 by card.')
+        expect(confirmLineWords(totals(), 'cash', false)).toBe('Takes £10.00 from store credit, £14.00 in cash.')
+        expect(confirmLineWords(totals({ storeCreditApplied: 0, toCollect: { card: 24, reader: 24, cash: 24 } }), null, false)).toBe('Takes £0.00 from store credit, £24.00 to pay.')
+        expect(confirmLineWords(totals({ giftCardApplied: 4, toCollect: { card: 10, reader: 10, cash: 10 } }), 'reader', false)).toBe('Takes £10.00 from store credit, £4.00 from the gift card, £10.00 on the card reader.')
+        expect(confirmLineWords(totals({ firstInvoice: 40 }), 'card', true)).toBe("Takes £10.00 from store credit, £14.00 by card. The membership's first payment of £40.00 is charged to the saved card.")
+        // The press confirms the store credit the line names (W35 row 20).
+        expect(confirmedFigures(totals(), 'card', null, false)).toEqual({ amountDue: 24, toCollect: 14, storeCredit: 10 })
+      })
+
+      it('PaymentStep: a ticked line staff can untick, on by default; unticked, none is used', () => {
+        const source = readFileSync(path.join(appDir, 'frontend/components/checkout/PaymentStep.tsx'), 'utf8')
+        expect(source).toContain('useStoreCredit: true,')
+        expect(source).toContain('const wanted = state.useStoreCredit ? storeCreditWouldUse : 0')
+        expect(source).toContain('checked={state.useStoreCredit}')
+        expect(source).not.toContain('Amount to apply</label>\n              <Input\n                type="number"\n                min={0}\n                step="0.01"\n                value={storeCreditAppliedAmount}')
+        const checkout = readFileSync(path.join(appDir, 'frontend/components/CheckoutDialog.tsx'), 'utf8')
+        expect(checkout).toContain('...storeCreditChoice(payment.useStoreCredit, customerHasStoreCredit),')
+        expect(checkout).not.toContain('storeCredit: { amount: payment.storeCreditAmount }')
+        expect(checkout).toContain('confirmLineWords(quote.totals, payment.method, Boolean(membershipPlanId))')
       })
     })
 
@@ -3249,10 +3324,12 @@ describe('staff app helpers', () => {
         expect(membershipUsedWords(0, 0)).toBeNull()
         // Shown under the line, from the Worker's two counts, before the press.
         expect(dialog).toContain('{membershipUsedWords(line.membership.creditSessionsTaken, line.membership.futureCreditBookings)}')
-        // Q40: the card money for the chosen lines: the membership's own payment when it is chosen alone; nothing to a card when it is chosen with other lines.
-        expect(dialog).toContain("const own = chosen.find((line) => line.ownCardLeft !== undefined)")
-        expect(dialog).toContain('if (!own) return { left: figures.cardLeft, mixed: false }')
-        expect(dialog).toContain('return chosen.length === 1 ? { left: own.ownCardLeft ?? 0, mixed: false } : { left: 0, mixed: true }')
+        // Q40: the card money for the chosen lines: the membership's own payment when it is chosen alone; nothing to a card
+        // when it is chosen with other lines. W58c (W58 review FL3): the helper moved to frontend/utils/orderRefundCard.ts
+        // and gives the Card option's words too, so it is run (the next test) rather than read here.
+        expect(dialog).toContain("import { cardFor } from '../utils/orderRefundCard'")
+        expect(dialog).not.toContain('function cardFor(')
+        expect(dialog).toContain('{card.note}')
         expect(dialog).toContain("const cardPart = figures && refundMethod === 'card' ? round2(Math.min(total, card.left)) : 0")
         expect(dialog).toContain('<RadioGroupItem value="card" id="refund-card" disabled={card.left <= 0} />')
         // The default method never lands on a card that can't take it.
@@ -3263,6 +3340,30 @@ describe('staff app helpers', () => {
         // After the press: how many bookings now need payment.
         expect(dialog).toContain("{successResult.bookingsFlagged} future credit {successResult.bookingsFlagged === 1 ? 'booking now needs' : 'bookings now need'} payment.")
         expect(dialog).toContain('bookingsFlagged: result.bookingsFlagged,')
+      })
+
+      it("W58c (W58 review FL3): the Card option's reach and words for each choice of lines; an old-shape membership chosen with lines that still have card money says to refund those on their own", async () => {
+        type Reach = { left: number; mixed: boolean; note: string }
+        const { cardFor } = (await import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/orderRefundCard.ts'))) as { cardFor: (figures: unknown, ids: ReadonlySet<string>) => Reach }
+        const product = { lineItemId: 'product', refundable: 20 }
+        const ownMembership = { lineItemId: 'membership', refundable: 40, ownCardLeft: 40 }
+        const oldShapeMembership = { lineItemId: 'membership', refundable: 40, ownCardLeft: 0 }
+        const figures = (cardLeft: number, membership: object) => ({ orderId: 'order', paymentStatus: 'paid', lines: [product, membership], cardLeft, cashLeft: 0, refundOwed: 0 })
+        const pick = (...ids: string[]) => new Set(ids)
+        const NO_CARD = ' (no card money left on this order)'
+        // No membership of its own chosen: the order's own card money.
+        expect(cardFor(figures(20, ownMembership), pick('product'))).toEqual({ left: 20, mixed: false, note: '' })
+        expect(cardFor(figures(0, ownMembership), pick('product'))).toEqual({ left: 0, mixed: false, note: NO_CARD })
+        // A membership paid by its own card payment: its own money alone; with other lines, refund it on its own.
+        expect(cardFor(figures(20, ownMembership), pick('membership'))).toEqual({ left: 40, mixed: false, note: '' })
+        expect(cardFor(figures(20, ownMembership), pick('product', 'membership'))).toEqual({ left: 0, mixed: true, note: ' (refund the membership on its own to send it to the card)' })
+        // An old-shape membership (no card money of its own): alone, no card money.
+        expect(cardFor(figures(20, oldShapeMembership), pick('membership'))).toEqual({ left: 0, mixed: false, note: NO_CARD })
+        // FL3's example: an old-shape membership and a £20 product paid by card, both ticked. The card is still off (one
+        // refund can't split them), but £20 of card money is left on the product: refund the other lines on their own.
+        expect(cardFor(figures(20, oldShapeMembership), pick('product', 'membership'))).toEqual({ left: 0, mixed: false, note: ' (refund the other lines on their own to send them to the card)' })
+        // With no card money left on the order either, the plain words are true.
+        expect(cardFor(figures(0, oldShapeMembership), pick('product', 'membership'))).toEqual({ left: 0, mixed: false, note: NO_CARD })
       })
 
       it('a refusal: `success: false` with the old reason and words; `order_not_found` with no words, as the old function', async () => {
@@ -3315,6 +3416,21 @@ describe('staff app helpers', () => {
         arrange()
         const { ORDER_REFUND_NO_ANSWER_MESSAGE } = await load('orderRefundWorker')
         expect(await refund()).toEqual({ success: false, reason: 'no_answer', message: ORDER_REFUND_NO_ANSWER_MESSAGE, noAnswer: true })
+      })
+
+      it('W58b (the W45 audit\'s row 7): a press whose key the Worker says is stuck (`key_stuck`): still `no_answer` (the key kept), in the Worker\'s words, never "press again here"', async () => {
+        const words = "This press started more than 5 minutes ago and never finished, so pressing again here won't get its answer. Don't do it another way yet: close this, reload the page and check what was done (and the Orders page), then tell a manager if it isn't clear."
+        rawRequest.mockResolvedValue({ data: { ok: false, error: { code: 'CONFLICT', message: words, details: { reason: 'key_stuck' } }, requestId: 'worker-request' } })
+        expect(await refund()).toEqual({ success: false, reason: 'no_answer', message: words, noAnswer: true })
+        const { keyStuckMessage, WorkerError } = await load('callWorker')
+        expect(keyStuckMessage(new WorkerError({ code: 'CONFLICT', message: words, details: { reason: 'key_stuck' } }, 'r1'))).toBe(words)
+        expect(keyStuckMessage(new WorkerError({ code: 'CONFLICT', message: 'This request is already being processed' }, 'r1'))).toBeNull()
+        expect(keyStuckMessage(new Error('socket hang up'))).toBeNull()
+        // Every no-answer path of the booking, account, order refund and event cancel functions offers the words.
+        for (const file of ['refundBooking', 'moveBooking', 'removeBookingAddon', 'addBookingGuest', 'cancelCreditBooking', 'removeBookingGuest', 'settleLapsedBooking', 'shared/accountWorker', 'shared/orderRefundWorker', 'shared/bookingWorker', 'shared/eventCancelWorker']) {
+          const source = readFileSync(path.join(appDir, 'backend/paddock', `${file}.ts`), 'utf8')
+          expect(source.match(/noAnswer\(err\)\) return/g)?.length, file).toBe(source.match(/keyStuckMessage\(err\) \?\? /g)?.length)
+        }
       })
 
       it("a changed press under a no-answer press's key: refused as `pressed_after_no_answer`, never sent as new", async () => {
@@ -3711,7 +3827,8 @@ describe('staff app helpers', () => {
         it('a cancelled place says cash when cash was handed back, and how much of its refund did not go with the cancel', () => {
           const source = page()
           expect(source).toContain("a.refund_method === 'cash'")
-          expect(source).toContain('`${formatCurrency(refunded)} refunded in cash`')
+          // W58 (W35 audit row 17): each place no longer says its whole refund was cash.
+          expect(source).toContain('`${formatCurrency(refunded)} refunded (cash first, any rest to store credit)`')
           // W52 (W35 audit row 18): the shortfall and its words moved to the list's helper, which also says what the
           // shortfall is now (held in "W52: … the screens" above).
           const helper = readFileSync(path.join(appDir, 'frontend/utils/eventAttendance.ts'), 'utf8')
@@ -3777,7 +3894,7 @@ describe('staff app helpers', () => {
         rawRequest.mockResolvedValue(refused('CONFLICT', { reason: 'event_ended', message: EVENT_WHOLE_CANCEL_WORDS.eventEnded }))
         expect(await cancel()).toEqual({ ok: false, reason: 'event_ended', message: "This event has already ended, so it can't be cancelled." })
         rawRequest.mockResolvedValue(refused('CONFLICT', { reason: 'bookings_pending', message: EVENT_WHOLE_CANCEL_WORDS.bookingsPending(['Sam Test']) }))
-        expect(await cancel()).toEqual({ ok: false, reason: 'bookings_pending', message: 'A card reader payment is still in progress for Sam Test. Finish or cancel it first.' })
+        expect(await cancel()).toEqual({ ok: false, reason: 'bookings_pending', message: 'A payment is still in progress for Sam Test. Finish or cancel it first.' })
         rawRequest.mockResolvedValue(refused('VALIDATION', { reason: 'invalid_params', message: EVENT_WHOLE_CANCEL_WORDS.chooseRefund }))
         expect(await cancel({ refund: 'cash' })).toEqual({ ok: false, reason: 'invalid_params', message: 'Choose Card or Store credit.' })
         rawRequest.mockResolvedValue(refused('NOT_FOUND', { reason: 'event_not_found', message: EVENT_WHOLE_CANCEL_WORDS.eventNotFound }))
@@ -4491,7 +4608,9 @@ describe('staff app helpers', () => {
         expect(guest).toContain(
           "'Inside 24 hours of the session, so nothing is refunded for this guest. Use Part refund if you want to give something back.'"
         )
-        expect(guest).toMatch(/\{quote\.refundable && quote\.insideTwentyFourHours\s+\? INSIDE_24_HOURS_MESSAGE/)
+        // W58b (the W26 audit's row 17; a named difference): only when the rule kept money back (the Worker's `withheld`).
+        expect(guest).toMatch(/\{quote\.refundable && quote\.insideTwentyFourHours && \(quote\.withheld \?\? 0\) > 0\s+\? INSIDE_24_HOURS_MESSAGE/)
+        expect(guest).toContain("quote.refundAmount > 0 ? `Remove Guest & Refund ${formatCurrency(quote.refundAmount.toFixed(2))}` : 'Remove Guest'")
         // The figure sent is the quote's (the Worker's £0 inside 24 hours), with no method when it is £0.
         expect(guest).toContain('confirmedRefundAmount: quote.refundAmount,')
         expect(guest).toContain('...(quote.refundAmount > 0 ? { refundMethod } : {}),')
@@ -5123,8 +5242,9 @@ describe('staff app helpers', () => {
 
     it('clears the money that belonged to the old customer', async () => {
       const { paymentForNewCustomer } = await change()
-      const payment = { selectedGiftCard: { id: 'card-1' }, giftCardAmount: 10, storeCreditAmount: 5, method: 'cash', confirmedCashAmount: 20 }
-      expect(paymentForNewCustomer(payment)).toEqual({ selectedGiftCard: null, giftCardAmount: 0, storeCreditAmount: 0, method: 'cash', confirmedCashAmount: null })
+      // W58 (Q55): an unticked store credit line starts ticked again for the new customer.
+      const payment = { selectedGiftCard: { id: 'card-1' }, giftCardAmount: 10, storeCreditAmount: 5, useStoreCredit: false, method: 'cash', confirmedCashAmount: 20 }
+      expect(paymentForNewCustomer(payment)).toEqual({ selectedGiftCard: null, giftCardAmount: 0, storeCreditAmount: 0, useStoreCredit: true, method: 'cash', confirmedCashAmount: null })
     })
 
     it('clears their membership and session pass', async () => {
@@ -5387,7 +5507,8 @@ describe('staff app helpers', () => {
       expect(section).toContain('<div className="text-muted-foreground">{data?.keptNote}</div>')
       expect(section).toContain('{item.customerName} · {formatCurrency(item.kept.toFixed(2))} kept')
       const overview = page('OverviewPage.tsx')
-      expect(overview).toContain('const { data: moneyOwedData, loading: moneyOwedLoading, trigger: loadMoneyOwed } = useGetMoneyOwed()')
+      // W58b (W52 "For later" 4): the read's error too, for the page's line.
+      expect(overview).toContain('const { data: moneyOwedData, loading: moneyOwedLoading, error: moneyOwedError, trigger: loadMoneyOwed } = useGetMoneyOwed()')
       expect(overview).toContain('value={moneyOwedCount(moneyOwedData as MoneyOwedResult | undefined)}')
       expect(overview).toContain('label={moneyOwedTileLabel(moneyOwedCount(moneyOwedData as MoneyOwedResult | undefined))}')
       expect(overview).toContain('    loadMoneyOwed({}, { skipCache: true })')

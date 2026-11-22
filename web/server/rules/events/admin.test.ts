@@ -86,7 +86,7 @@ async function nowIs(instant: string): Promise<void> {
   frozen = true
 }
 
-// The fixture event: Friday 15 June 2099, 18:00 to 20:00 (London wall-clock digits labelled UTC), cut-off the day
+// The fixture event: Monday 15 June 2099, 18:00 to 20:00 (London wall-clock digits labelled UTC), cut-off the day
 // before at 18:00, room for 10, on sale at £40 / £30 / £20. June is summer time: London's wall clock is UTC + 1.
 const START = '2099-06-15T18:00:00.000Z'
 const END = '2099-06-15T20:00:00.000Z'
@@ -439,6 +439,16 @@ describe('the edit (POST catalog/events/:eventId/details)', () => {
       expect((await eventAuditRows())[0]?.details).toMatchObject({ before: { price_public: '40.00', places_booked: 2 }, after: { price_public: '60.00', places_booked: 2 } })
     })
 
+    it('W58b (W52 "For later" 3): a capacity or a price past what the columns hold is refused in plain words, before anything is read', async () => {
+      const eventId = await fixtures.event(db)
+      expect(refusedWith(await edit(eventId, { capacity: 2_147_483_648 }))).toEqual({ status: 400, reason: 'invalid_params', words: NEW.capacityTooLarge })
+      expect(refusedWith(await edit(eventId, { pricePublic: 100_000_000 }))).toEqual({ status: 400, reason: 'invalid_params', words: NEW.priceTooLarge })
+      expect(refusedWith(await edit(eventId, { priceHerd: 99_999_999.995 }))).toEqual({ status: 400, reason: 'invalid_params', words: NEW.priceTooLarge })
+      // The largest each holds still saves.
+      expect((await edit(eventId, { capacity: 2_147_483_647, pricePublic: 99_999_999.99 })).status).toBe(200)
+      expect(await eventAuditRows()).toHaveLength(1)
+    })
+
     it('a date change is allowed, later or earlier, and while the event still starts after its cut-off the cut-off stays where it is (Q-b: a postponement never moves it)', async () => {
       const eventId = await fixtures.event(db)
       await booked(eventId, sam, ['Sam Test'])
@@ -465,6 +475,8 @@ describe('the edit (POST catalog/events/:eventId/details)', () => {
         expect(saved.status).toBe(200)
         expect(saved.data?.event).toMatchObject({ starts_at: EARLY, ends_at: '2099-06-14T11:00:00.000Z', refund_cutoff_at: EARLY, places_booked: 2 })
         expect(saved.data?.stamp).toBe(await stampOf(eventId))
+        // W58b (W52a "Noticed" 1, 2): the answer says the cut-off followed, so the dialog says so after the save.
+        expect(saved.data?.cutoffFollowed).toBe(true)
         expect(await eventRow(eventId)).toMatchObject({ starts: '2099-06-14T09:00', cutoff: '2099-06-14T09:00' })
         const rows = await eventAuditRows()
         expect(rows).toHaveLength(1)
@@ -502,7 +514,10 @@ describe('the edit (POST catalog/events/:eventId/details)', () => {
         const eventId = await fixtures.event(db)
         expect(refusedWith(await edit(eventId, forward))).toEqual({ status: 409, reason: 'constraint', words: "The refund cut-off can't be after the event starts." })
         expect(await eventRow(eventId)).toMatchObject({ starts: '2099-06-15T18:00', cutoff: '2099-06-14T18:00' })
-        expect((await edit(eventId, { ...forward, refundCutoffAt: '2099-06-13T18:00:00.000Z' })).data?.event).toMatchObject({ starts_at: EARLY, refund_cutoff_at: '2099-06-13T18:00:00.000Z' })
+        const moved = await edit(eventId, { ...forward, refundCutoffAt: '2099-06-13T18:00:00.000Z' })
+        expect(moved.data?.event).toMatchObject({ starts_at: EARLY, refund_cutoff_at: '2099-06-13T18:00:00.000Z' })
+        // W58b: nothing followed, so the answer doesn't say so.
+        expect(moved.data).not.toHaveProperty('cutoffFollowed')
       })
 
       it('an off-sale event with no cut-off set (its start is the cut-off: Q43) brought forward saves, and still has none: the new start is the cut-off', async () => {
@@ -1193,7 +1208,10 @@ describe("W52's new words and reasons", () => {
   it('each new sentence, word for word', () => {
     expect(NEW.attendeeChanged).toBe('This attendee changed while this was being saved, so nothing was changed. Reload the page and try again.')
     // W52a: no words of its own for someone else's attendee, which is answered as one that isn't there.
-    expect(Object.keys(NEW).sort()).toEqual(['attendeeChanged', 'customerCannotRevoke', 'customerEventPassed', 'customerWaiverMethod', 'cutoffCleared', 'cutoffEarlier'])
+    // W58b (W52 "For later" 3): the two overflow sentences.
+    expect(Object.keys(NEW).sort()).toEqual(['attendeeChanged', 'capacityTooLarge', 'customerCannotRevoke', 'customerEventPassed', 'customerWaiverMethod', 'cutoffCleared', 'cutoffEarlier', 'priceTooLarge'])
+    expect(NEW.capacityTooLarge).toBe('Capacity is too large: enter a number of places of 2,147,483,647 or fewer.')
+    expect(NEW.priceTooLarge).toBe('Prices can be at most £99,999,999.99.')
     expect(NEW.customerEventPassed).toBe('This event has already taken place, so the waiver can no longer be signed online. Please speak to the team at the club.')
     expect(NEW.customerCannotRevoke).toBe('A signed waiver can only be withdrawn by the team at the club.')
     expect(NEW.customerWaiverMethod).toBe("That isn't a way a waiver can be signed online.")

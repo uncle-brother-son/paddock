@@ -68,10 +68,10 @@ describe("step E's side of the replay: event places (W30)", () => {
     // The whole-event scenarios (cancelEvent, W31) and E7 are not event place scenarios.
     expect(families.some((scenario) => scenario.name.includes('whole-cancel') || scenario.name.startsWith('w27-e7-'))).toBe(false)
     expect([...EVENT_PLACES_DIFFERENCES.keys()].every((name) => families.some((scenario) => scenario.name === name))).toBe(true)
-    // 18 match their golden files exactly; 11 differ only in the refund's key; 29 have differences of their own.
-    expect(families.filter((scenario) => !EVENT_PLACES_DIFFERENCES.has(scenario.name)).length).toBe(18)
+    // 17 match their golden files exactly; 11 differ only in the refund's key; 30 have differences of their own (W58: one reworded).
+    expect(families.filter((scenario) => !EVENT_PLACES_DIFFERENCES.has(scenario.name)).length).toBe(17)
     expect([...EVENT_PLACES_DIFFERENCES.values()].filter((named) => named.length === 1 && named[0] === EVENT_CLAIM_KEYS).length).toBe(11)
-    expect([...EVENT_PLACES_DIFFERENCES.values()].filter((named) => named.some((one) => one !== EVENT_CLAIM_KEYS)).length).toBe(29)
+    expect([...EVENT_PLACES_DIFFERENCES.values()].filter((named) => named.some((one) => one !== EVENT_CLAIM_KEYS)).length).toBe(30)
     // The faults the brief names each have their scenario among the named ones.
     for (const name of [
       'p3-one-event-place-cancelled-twice-at-once',

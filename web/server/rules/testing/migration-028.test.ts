@@ -159,9 +159,13 @@ describe("migration 028 (brief W43 item 3): the hourly job stops calling the dat
   it("a booking past its deadline with nothing paid: before 028 the hourly job cancels it; with 028 the job leaves it (and still allocates), the database's sweep is still there to call, and the Worker's sweep lapses it", async () => {
     const db = pg.connect()
     const serviceType = await fixtures.serviceType(db)
+    // W59 (W47b "Noticed" 1): each booking a day after the last, counted up, never picked at random: two random picks
+    // could land on the same session time (unique per service type) and fail the run by chance.
+    let made = 0
     const due = async () => {
       const customerId = await fixtures.customer(db)
-      const start = new Date(Date.UTC(2032, 7, 1 + Math.floor(Math.random() * 20), 10, Math.floor(Math.random() * 50)))
+      made += 1
+      const start = new Date(Date.UTC(2032, 7, made, 10, 0))
       const slot = { start_time: start.toISOString(), end_time: new Date(start.getTime() + 3_600_000).toISOString() }
       const sessionId = await fixtures.session(db, { service_type_id: serviceType, total_booked: 1, ...slot })
       const bookingId = await fixtures.booking(db, { session_id: sessionId, customer_id: customerId, status: 'payment_needed', redemption_source: 'membership_credit', payment_due_by: new Date(Date.now() - 60_000).toISOString(), ...slot })

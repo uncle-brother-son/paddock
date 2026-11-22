@@ -68,6 +68,12 @@ export function wholePennies(amount: number): boolean {
 
 export const SUB_PENNY_GIFT_CARD_MESSAGE = 'Enter the gift card amount in pounds and pence, with no more than two decimal places.'
 export const SUB_PENNY_PAYMENT_MESSAGE = 'Enter the gift card and store credit amounts in pounds and pence, with no more than two decimal places.'
+/** W58 (Q55): a press or quote that sends both the store credit choice and an amount: one or the other. */
+export const STORE_CREDIT_CHOICE_CONFLICT_MESSAGE =
+  'Send either the store credit choice (use it or not) or a store credit amount, not both. Reload the page and try again.'
+/** W58 (Q55, W35 20): the store credit the order would take now isn't what the confirm line said. */
+export const storeCreditChangedMessage = (now: number): string =>
+  `The store credit this order uses has changed to £${now.toFixed(2)} (the customer's balance changed since the page loaded). Check it with the customer and confirm again.`
 
 /**
  * The system prices (catalog-price.ts). An item with no price for this customer is refused below (W55a: none set at
@@ -411,7 +417,11 @@ export function priceFromFacts(input: BasketQuoteInput, facts: BasketFacts, opti
   }
 
   let storeCreditApplied = 0
-  if (payment?.storeCredit) {
+  // W58 (Wayne's Q55): the choice, as New Order's ticked line and the website send it. With it, the Worker works out
+  // the amount (below, once the amount due is known), so an amount sent beside it is refused rather than guessed at.
+  const storeCreditChoice = payment?.useStoreCredit
+  if (storeCreditChoice !== undefined && payment?.storeCredit) refuse('validation', 'store_credit_choice_conflict', STORE_CREDIT_CHOICE_CONFLICT_MESSAGE)
+  else if (payment?.storeCredit) {
     const { amount } = payment.storeCredit
     if (!Number.isFinite(amount) || amount <= 0) refuse('validation', 'store_credit_amount_invalid')
     else if (!wholePennies(amount)) refuse('validation', 'store_credit_amount_invalid', SUB_PENNY_PAYMENT_MESSAGE)
@@ -529,6 +539,12 @@ export function priceFromFacts(input: BasketQuoteInput, facts: BasketFacts, opti
     postageAmount
   const firstPayment = plan ? Math.max(0, membershipPrice - membershipDiscount) : 0
   const totalDue = nonMembershipDue + firstPayment
+  // W58 (Q55): ticked, as much of the balance as the amount due leaves after the gift card staff chose (store credit
+  // is used first: the gift card is the part staff size around it), in whole pennies; unticked, none. A guest has none.
+  if (storeCreditChoice === true && facts.customer) {
+    const room = Math.max(0, Math.floor(round2(totalDue - giftCardApplied) * 100 + 1e-6) / 100)
+    storeCreditApplied = Math.min(Math.floor(money(facts.customer.store_credit_balance) * 100 + 1e-6) / 100, room)
+  }
   const credits = giftCardApplied + storeCreditApplied
   const spill = Math.max(0, Math.min(credits - nonMembershipDue, firstPayment))
   const spillFromStoreCredit = Math.min(storeCreditApplied, spill)

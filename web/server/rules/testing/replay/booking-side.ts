@@ -11,7 +11,7 @@ import type { FakeStripe } from '@/server/stripe/fake'
 import { staffAppDir } from '../staff-app-dir'
 import { seatLineLessPaidAddOns, withCanonicalGoneNumbers, type AllowedDifference, type Recording, type Row } from './compare'
 import { LEGACY_BOOKING_ACTIONS, oldSide, REPLAY_USER, type ReplaySide } from './harness'
-import { inOldSideSetup } from './scenarios'
+import { ID, inOldSideSetup } from './scenarios'
 import { replayStripe } from './stripe-binding'
 
 /*
@@ -625,6 +625,16 @@ const R2C: AllowedDifference = {
 
 const CARD = [SETTLE_FLOW_KEYS, SETTLE_CARD_ORDER_METHOD]
 const READER = [SETTLE_FLOW_KEYS, SETTLE_FLOW_RECORD]
+/**
+ * W58 (W26 audit row 6, A2): a flow undone by a staff member's press (Cancel on the reader) names them on the store
+ * credit it gives back; the old undo named nobody. The automatic check's undo still names nobody.
+ */
+export const W58_UNDO_NAMES_THE_STAFF: AllowedDifference = {
+  name: "A card flow undone by a staff member's press names them on its store credit reversal (the old undo named nobody)",
+  decision: 'Brief W58 (W26 audit row 6, A2)',
+  path: /^\.tables\.store_credit_transactions\.added\[\d+\]\.staff_id$/,
+  actual: (value, expected) => expected === null && value === ID.staff,
+}
 
 /**
  * W19: every golden scenario that calls Settle, and the only differences allowed in each. Every other path must match
@@ -646,7 +656,7 @@ export const SETTLE_DIFFERENCES: ReadonlyMap<string, readonly AllowedDifference[
   ['w17-r1a-control-settle-store-credit-and-card-statement-lands-late', [...CARD, R1A_CONTROL]],
   ['w17-r2c-settle-press-dies-after-a-decline-then-declined-again', [SETTLE_FLOW_KEYS, R2C]],
   ['w12-settle-store-credit-and-reader', READER],
-  ['w12-settle-store-credit-and-reader-cancelled', READER],
+  ['w12-settle-store-credit-and-reader-cancelled', [...READER, W58_UNDO_NAMES_THE_STAFF]],
 ])
 
 // --- W20 (W19 review later 4): the audit rows and stored answers, set aside exactly rather than allowed wholesale
@@ -1308,12 +1318,13 @@ export const ADD_GUEST_DIFFERENCES: ReadonlyMap<string, readonly AllowedDifferen
     'q27-part-to-credit-higher-tier-on-the-reader-then-to-the-card',
     'q27-part-to-credit-higher-tier-on-the-reader-then-to-store-credit',
     'q25-higher-tier-split-on-the-reader-then-refund',
-    'q25-reader-cancelled-puts-it-all-back',
     'cancel-while-a-guest-is-on-the-reader',
     'move-while-a-guest-is-on-the-reader',
     'q27-part-to-card-higher-tier-on-the-reader-then-to-the-card',
     'q27-reader-cancelled-after-a-part-refund',
   ].map((name): [string, readonly AllowedDifference[]] => [name, AG_READER_ONLY]),
+  // W58: a staff member's Cancel on the reader undoes the flow and is named on the store credit it gives back.
+  ['q25-reader-cancelled-puts-it-all-back', [...AG_READER_ONLY, W58_UNDO_NAMES_THE_STAFF]],
   ...[
     'addon-with-guest-private-reader-ticked',
     'addon-with-guest-private-reader-not-ticked',
@@ -1332,11 +1343,11 @@ export const ADD_GUEST_DIFFERENCES: ReadonlyMap<string, readonly AllowedDifferen
     [
       AG_KEYS,
       {
-        name: "A declined card is undone by W12's flow undo in one transaction: its store credit reversal has the undo's note and no staff member (the old put-back's had its own note and the staff member); the claim and the reversal share the press's moment",
-        decision: "W12's flow undo (W17's card flows; W19 report, unsure 7 and for later 1: the shared undo's words for a card flow at W25)",
-        path: /^\.tables\.store_credit_transactions\.(added\[1\]\.(note|staff_id)|tied)$/,
+        name: "A declined card is undone by W12's flow undo in one transaction: its store credit reversal has the undo's note (W58: a saved card's own words) and names the staff member who pressed, as the old put-back did (W58); the claim and the reversal share the press's moment",
+        decision: "W12's flow undo (W17's card flows; W19 report, unsure 7 and for later 1: the shared undo's words for a card flow at W25); brief W58 (W26 audit row 6, A2)",
+        path: /^\.tables\.store_credit_transactions\.(added\[1\]\.note|tied)$/,
         actual: (value, _expected, at) =>
-          at.endsWith('.note') ? String(value).startsWith('Automatic reversal — the reader payment was cancelled or its finalisation failed.') : at.endsWith('.staff_id') ? value === null : value === 2,
+          at.endsWith('.note') ? String(value).startsWith('Automatic reversal — the saved-card payment was declined or cancelled or its finalisation failed.') : value === 2,
       },
     ],
   ],
@@ -1813,9 +1824,11 @@ const GUEST_QUOTE_OUTSIDE_24_HOURS: AllowedDifference = {
 const REMOVE_GUEST_INSIDE_24_HOURS: AllowedDifference = {
   name: "Remove Guest a minute inside 24 hours of the session: the quote £0 (inside 24 hours), the guest removed with nothing back (no refund, line not stamped, order paid, £60 left on the booking)",
   decision: W22A,
-  path: /^\.results\[3\]\.quote\.(refundAmount|insideTwentyFourHours)$|^\.results\[4\]\.(refundedAmount|cardRefundedAmount)$|^\.stripeCalls\[2\]$|^\.tables\.bookings\.added\[0\]\.price_paid$|^\.tables\.order_line_items\.added\[1\]\.(refunded_at|refund_method|card_refunded_amount)$|^\.tables\.orders\.added\[1\]\.payment_status$/,
+  // W58b (the W26 audit's row 17): and the quote's `withheld`, what the rule kept back (£20), so the dialog's words fit.
+  path: /^\.results\[3\]\.quote\.(refundAmount|insideTwentyFourHours|withheld)$|^\.results\[4\]\.(refundedAmount|cardRefundedAmount)$|^\.stripeCalls\[2\]$|^\.tables\.bookings\.added\[0\]\.price_paid$|^\.tables\.order_line_items\.added\[1\]\.(refunded_at|refund_method|card_refunded_amount)$|^\.tables\.orders\.added\[1\]\.payment_status$/,
   actual: (value, expected, path) => {
     if (path.endsWith('.insideTwentyFourHours')) return expected === undefined && value === true
+    if (path.endsWith('.withheld')) return expected === undefined && value === 20
     if (path.startsWith('.results')) return expected === 20 && value === 0
     if (path === '.stripeCalls[2]') return (expected as { method?: string } | undefined)?.method === 'refunds.create' && value === undefined
     if (path.endsWith('.price_paid')) return expected === '40.00' && value === '60.00'

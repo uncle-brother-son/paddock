@@ -16,6 +16,7 @@ import { finaliseOrder } from '@/server/rules/orders/finalise-order'
 import { reconcile, SCHEDULED_LIMITS } from '@/server/rules/orders/reconcile'
 import { REFUND_FAILED_WORDS, STUCK_WORDS } from '@/server/rules/orders/stuck-list'
 import { undoOrder } from '@/server/rules/orders/undo-order'
+import { GET as ordersListRoute } from '@/app/api/v1/staff/orders/route'
 
 // Brief W14b: the Orders page's three wrappers, from the staff app's checkout, against the real Worker routes on
 // PGlite with the replay seed (the staff app has no test runner of its own). One actor per item: a Worker item goes
@@ -320,6 +321,7 @@ describe("the banner's words (frontend/utils/stuckList.ts)", () => {
       'STUCK_LIST_NOT_READ_LINE',
       'closeButtonLabel',
       'closeDialogText',
+      'closeReasonHint',
       'flowLabel',
       'oldestAgeMinutes',
       'paymentDateLabel',
@@ -353,6 +355,26 @@ describe("the banner's words (frontend/utils/stuckList.ts)", () => {
     expect(stuckCount({ ...empty, steps: [{ stepId: 's' }, { stepId: 't' }] })).toBe(2)
     expect(closeButtonLabel('left_step')).toBe('Mark sorted')
     expect(closeDialogText('left_step')).toContain('Nothing is changed in Stripe or on the membership here.')
+    // W58b (the lead's item 2, W57 cleanup): Mark sorted says what must be true in Stripe first, by the step's kind.
+    const sortedFirst = (what: string) => {
+      const text = closeDialogText('left_step', what)
+      return text.slice(text.indexOf('membership here: ') + 'membership here: '.length, text.indexOf('. Nothing is changed'))
+    }
+    expect(['cancel_date', 'clear_cancel_date', 'card', 'plan_price'].map(sortedFirst)).toEqual([
+      "the subscription's cancel date set to the membership's last day, by hand",
+      "the subscription's cancel date cleared, by hand",
+      "the subscription's payment method changed to the customer's new card, by hand",
+      "the subscription moved to the plan's new price (with no proration), by hand",
+    ])
+    expect(closeDialogText('left_step')).toContain('its cancel date set or cleared, or its card changed, by hand')
+    // W58b (the W35 audit's row 31): the held claim's close says a later-failed card refund waits on it.
+    expect(closeDialogText('held_claim')).toContain('that failed later waits while this is open')
+    // W58b (the W35 audit's row 27): a hint per close kind; the old one only where it fits.
+    const { closeReasonHint } = helpers
+    const kinds = ['held_order', 'changed_elsewhere', 'subscription_left', 'late_refund', 'held_flow', 'held_claim', 'refund_watch', 'left_step', 'held_payment_date', 'payment_watch', 'retry_paid_after_end', 'paid_after_end_owed', 'plan_step']
+    for (const kind of kinds) expect(closeReasonHint(kind), kind).toMatch(/^For example: /)
+    expect(kinds.filter((kind) => closeReasonHint(kind).includes('old screens'))).toEqual(['held_order', 'changed_elsewhere'])
+    expect(closeReasonHint('paid_after_end_owed')).toBe('For example: it paid for December, which the member had')
     const run = (fields: Record<string, unknown>) => ({ ok: true, run: { checked: 0, finalised: 0, undone: 0, refunds: 0, left: 0, deferred: 0, stripeRefused: false, ...fields } })
     expect(reconcileLine(run({}))).toBe('The automatic check found nothing to settle.')
     expect(reconcileLine(run({ checked: 3, finalised: 1, undone: 1, left: 1, deferred: 2 }))).toBe(
@@ -463,6 +485,21 @@ const moneyOwedHelpers = () => import(/* @vite-ignore */ path.join(appDir, 'fron
 describe('W47: money still to refund, Resolve now with nothing listed, the banner by kind', () => {
   type Owed = { owed: Array<Record<string, unknown>>; total: number; lapsedKept: unknown[]; keptDays: number; keptNote: string; workerProblem?: string }
   type Listed = Array<{ id: string; computed_status: string; refund_owed_amount: string }>
+  /**
+   * W59 (W53 "For later" 7): the Orders read the staff app makes now, the Worker's own (`GET /api/v1/staff/orders`,
+   * which the thin getOrders calls), not the frozen old function the replay's old side still answers with.
+   */
+  const workerOrders = async (view?: string): Promise<Listed> => {
+    const response = await ordersListRoute(
+      new Request(`https://worker.test/api/v1/staff/orders${view ? `?view=${view}` : ''}`, {
+        headers: { authorization: `Bearer ${process.env.STAFF_API_KEY ?? ''}`, 'x-staff-email': 'jo@example.com' },
+      }),
+      { params: Promise.resolve({}) }
+    )
+    const body = (await response.json()) as { ok: boolean; data?: Listed }
+    if (!body.ok || !body.data) throw new Error(`The Orders read failed: ${JSON.stringify(body)}`)
+    return body.data
+  }
 
   it('nothing owed and nothing stuck: the list is empty, the banner has nothing to show, and Resolve now still runs and says so', async () => {
     await onASeed(async (old) => {
@@ -494,16 +531,16 @@ describe('W47: money still to refund, Resolve now with nothing listed, the banne
       const orderId = placed.body.data.orderId
       // Collected at the desk: nothing left to fulfil, so nothing else makes it "needs action".
       await db.query("UPDATE order_line_items SET fulfillment_status = 'fulfilled' WHERE order_id = $1", [orderId])
-      const needsAction = async () => ((await old.call('getOrders', {})) as Listed).filter((order) => order.id === orderId)
+      const needsAction = async () => (await workerOrders()).filter((order) => order.id === orderId)
       expect(await needsAction()).toEqual([])
-      expect(((await old.call('getOrders', { view: 'complete' })) as Listed).filter((order) => order.id === orderId)).toMatchObject([{ computed_status: 'complete' }])
+      expect((await workerOrders('complete')).filter((order) => order.id === orderId)).toMatchObject([{ computed_status: 'complete' }])
 
       // £10 of card refund money never reached the customer.
       await db.query('UPDATE orders SET refund_owed_amount = 10 WHERE id = $1', [orderId])
       // W47 item 1 (the W35 audit's F1), a named difference: the order is in the default view. Before W47 it was only
       // under All or Complete, where nobody looks for money owed.
       expect(await needsAction()).toMatchObject([{ id: orderId, computed_status: 'needs_action', refund_owed_amount: '10.00' }])
-      expect(((await old.call('getOrders', { view: 'complete' })) as Listed).filter((order) => order.id === orderId)).toEqual([])
+      expect((await workerOrders('complete')).filter((order) => order.id === orderId)).toEqual([])
       const owed = (await old.call('getMoneyOwed', {})) as Owed
       expect(owed.owed).toMatchObject([{ on: 'order', orderId, bookingId: null, customerName: 'Mo Member', amount: 10 }])
       expect(owed.total).toBe(10)

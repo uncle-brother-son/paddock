@@ -185,12 +185,22 @@ export interface OpenStep extends LeftStep {
   refusal: string | null
   /** W40 (W36 review L2): the refusal was that Stripe can't find the subscription with the key in use. */
   missing: boolean
+  /**
+   * W58b (the W45 audit's row 30; W40c review L1): the refusal was that Stripe has already ended the subscription, so
+   * an undo of its cancellation can't be made there. Only then present.
+   */
+  ended?: true
   /** W40 (S1): recorded less than PROCESSING_MINUTES ago: its press may still be sending it, so reconcile leaves it. */
   inWindow: boolean
   /** W46: it is listed because the membership's last day and the one Stripe gives differ (the check found it): both days. */
   mismatch: RowMismatch | null
   /** W57a (W57 review S1): it was refused because Stripe renews the subscription at another interval. Only then present. */
   wrongInterval?: WrongInterval
+  /**
+   * W58b (item 3): a price move whose membership's plan is off sale now. Stripe won't move anyone onto an off-sale
+   * plan's price, so a move by hand needs the plan back on sale first. Only then present.
+   */
+  planOffSale?: true
   customerId: string | null
   customerName: string | null
 }
@@ -262,12 +272,13 @@ export function stepEndEntry(step: LeftStep, state: Extract<StepState, 'done' | 
 export const OPEN_STEPS_SQL = `
 SELECT s.entity_id AS membership_id, s.details->>'stepId' AS step_id, s.details->>'kind' AS kind,
        s.details->>'subscriptionId' AS subscription_id, s.details->'want' AS want, s.at,
-       r.detail IS NOT NULL AS refused, r.detail AS refusal, COALESCE(r.missing, false) AS missing, r.mismatch, r.wrong_interval,
+       r.detail IS NOT NULL AS refused, r.detail AS refusal, COALESCE(r.missing, false) AS missing, COALESCE(r.ended, false) AS ended, r.mismatch, r.wrong_interval,
        s.at > now() - interval '${PROCESSING_MINUTES} minutes' AS in_window,
-       c.id AS customer_id, NULLIF(trim(concat_ws(' ', c.first_name, c.last_name)), '') AS customer_name
+       c.id AS customer_id, NULLIF(trim(concat_ws(' ', c.first_name, c.last_name)), '') AS customer_name,
+       (s.details->>'kind' = 'price' AND mp.active = false) AS plan_off_sale
 FROM audit_log s
 LEFT JOIN LATERAL (
-  SELECT COALESCE(f.details->>'detail', '') AS detail, (f.details->>'missing') = 'true' AS missing, f.details->'mismatch' AS mismatch,
+  SELECT COALESCE(f.details->>'detail', '') AS detail, (f.details->>'missing') = 'true' AS missing, (f.details->>'ended') = 'true' AS ended, f.details->'mismatch' AS mismatch,
          f.details->'wrongInterval' AS wrong_interval
   FROM audit_log f
   WHERE f.action = '${STEP_LEFT_ACTION}' AND f.entity_type = '${STEP_LEFT_ENTITY}' AND f.entity_id = s.entity_id
@@ -277,6 +288,7 @@ LEFT JOIN LATERAL (
 ) r ON true
 LEFT JOIN customer_memberships cm ON cm.id::text = s.entity_id
 LEFT JOIN customers c ON c.id = cm.customer_id
+LEFT JOIN membership_plans mp ON mp.id = cm.plan_id
 WHERE s.action = '${STEP_LEFT_ACTION}' AND s.entity_type = '${STEP_LEFT_ENTITY}' AND s.details->>'state' = 'left'
   AND NOT EXISTS (
     SELECT 1 FROM audit_log e
@@ -305,11 +317,13 @@ interface OpenStepRow {
   refused: boolean
   refusal: string | null
   missing: boolean
+  ended?: boolean | null
   mismatch: Partial<RowMismatch> | null
   wrong_interval?: Partial<WrongInterval> | null
   in_window: boolean
   customer_id: string | null
   customer_name: string | null
+  plan_off_sale?: boolean | null
 }
 
 const iso = (value: string | Date): string => (value instanceof Date ? value.toISOString() : new Date(value).toISOString())
@@ -327,9 +341,11 @@ function openStep(row: OpenStepRow): OpenStep | null {
     refused: row.refused,
     refusal: row.refused ? (row.refusal ?? '') : null,
     missing: row.refused && row.missing === true,
+    ...(row.refused && row.ended === true ? { ended: true as const } : {}),
     inWindow: row.in_window === true,
     mismatch: row.refused && row.mismatch ? { row: row.mismatch.row ?? null, stripe: row.mismatch.stripe ?? null } : null,
     ...(row.refused && row.wrong_interval ? { wrongInterval: { stripe: row.wrong_interval.stripe ?? null, membership: isPriceInterval(row.wrong_interval.membership) ? row.wrong_interval.membership : null } } : {}),
+    ...(row.plan_off_sale === true ? { planOffSale: true as const } : {}),
     customerId: row.customer_id,
     customerName: row.customer_name,
   }
@@ -364,11 +380,20 @@ async function openStepById(db: Queryable, stepId: string): Promise<OpenStep | n
 }
 
 /** What the stuck list says for an open step. W40 (L2): a subscription Stripe can't find has its own words. */
-export function stepWords(step: Pick<OpenStep, 'kind' | 'subscriptionId' | 'refused'> & { missing?: boolean; mismatch?: RowMismatch | null; wrongInterval?: WrongInterval }): string {
+export function stepWords(step: Pick<OpenStep, 'kind' | 'subscriptionId' | 'refused'> & { missing?: boolean; mismatch?: RowMismatch | null; wrongInterval?: WrongInterval; planOffSale?: true; ended?: true; want?: StepWant }): string {
   // W46: listed by the check because the membership's last day and Stripe's differ. Stripe refused nothing.
   if (step.refused && step.mismatch) return LEFT_STEP_WORDS.rowDiffers(step.subscriptionId, step.mismatch.row, step.mismatch.stripe)
   // W57a (W57 review S1): a member's move never sent because Stripe renews the subscription at another interval.
   if (step.refused && step.wrongInterval) return PRICE_MOVE_INTERVAL_WORDS.stuck(step.subscriptionId, step.wrongInterval.stripe, step.wrongInterval.membership)
+  // W58b (item 3; W58 item 0 refuses the press, this is the line for a move refused before): the plan is off sale.
+  if (step.refused && !step.missing && step.kind === 'price' && step.planOffSale) return LEFT_STEP_WORDS.price.refusedOffSale(step.subscriptionId)
+  // W58b (the W45 audit's row 30; W40c review L1): an undo of a cancellation (its cancel date cleared) has its own
+  // words: the risk is an end staff didn't want, not a renewal; and one Stripe can't make because it has ended the
+  // subscription says that. One Stripe can't find keeps the cancel's missing words, which fit either.
+  if (step.kind === 'cancel_at' && step.want !== undefined && step.want.cancelAt === null && !(step.refused && step.missing)) {
+    if (!step.refused) return LEFT_STEP_WORDS.undo.left(step.subscriptionId)
+    return step.ended ? LEFT_STEP_WORDS.undo.ended(step.subscriptionId) : LEFT_STEP_WORDS.undo.refused(step.subscriptionId)
+  }
   return LEFT_STEP_WORDS[step.kind][step.refused ? (step.missing ? 'missing' : 'refused') : 'left'](step.subscriptionId)
 }
 
@@ -444,7 +469,7 @@ export type StepAnswer =
    * Stripe answered and said no: sending again can't help. `missing` (W40, L2): it can't find the subscription.
    * W57a (S1): `wrongInterval`, a price move not sent because the subscription renews at another interval.
    */
-  | { kind: 'refused'; message: string; missing?: true; wrongInterval?: WrongInterval }
+  | { kind: 'refused'; message: string; missing?: true; wrongInterval?: WrongInterval; ended?: true }
   /** No clear answer (or no time left to ask): safe to send again. */
   | { kind: 'unclear'; message: string }
 
@@ -502,7 +527,7 @@ const hasEnded = (status: string, kind: StepKind): boolean => status === 'cancel
  */
 function endedAnswer(step: Pick<LeftStep, 'kind' | 'want' | 'subscriptionId'>): StepAnswer {
   if (step.kind === 'cancel_at' && step.want.cancelAt === null) {
-    return { kind: 'refused', message: `Subscription ${step.subscriptionId} has already ended in Stripe, so its cancellation can't be undone there.` }
+    return { kind: 'refused', message: `Subscription ${step.subscriptionId} has already ended in Stripe, so its cancellation can't be undone there.`, ended: true }
   }
   return { kind: 'done', sent: false, detail: 'the subscription has already ended in Stripe' }
 }
@@ -589,9 +614,50 @@ export async function membershipHasEnded(db: Queryable, membershipId: string): P
   const [row] = await db.query<{ ended: boolean }>(MEMBERSHIP_ENDED_SQL, [membershipId])
   return !row || row.ended === true
 }
+
+/**
+ * W58b (the W45 audit's row 30; W40c review L5): whether a membership's own order line has been refunded (the
+ * membership list's `refunded`, memberships/list.ts). A membership with no order line is never refunded.
+ */
+const MEMBERSHIP_REFUNDED_SQL = `SELECT 1 FROM customer_memberships cm JOIN order_line_items sold ON sold.id = cm.order_line_item_id WHERE cm.id::text = $1 AND sold.refunded_at IS NOT NULL`
+async function membershipRefunded(db: Queryable, membershipId: string): Promise<boolean> {
+  return (await db.query(MEMBERSHIP_REFUNDED_SQL, [membershipId])).length > 0
+}
 /** W57: a price move's answer when its membership has ended here: done, nothing sent, and Stripe not asked. */
 export const ENDED_HERE_DETAIL = 'the membership has ended here: nothing sent, and Stripe not asked'
 const ENDED_HERE_ANSWER: StepAnswer = { kind: 'done', sent: false, detail: ENDED_HERE_DETAIL }
+/** W58b (item 2): the same, for a move Stripe had refused for good before the membership ended. */
+export const ENDED_HERE_REFUSED_DETAIL = `refused by Stripe earlier, and ${ENDED_HERE_DETAIL}`
+
+/**
+ * W58b (the lead's item 2, from W57's cleanup): a member's price move Stripe refused for good, whose membership has
+ * ended here since. It is as moot as a left move whose membership has ended (the membership will never renew), so it
+ * closes itself the same way, `done` with nothing sent and Stripe not asked, instead of staying listed for a person.
+ * Reconcile closes each one every run (no Stripe call); the 20-minute check closes one it finds as the newest wish.
+ */
+export async function endedRefusedPriceMoves(db: Queryable): Promise<OpenStep[]> {
+  const ended: OpenStep[] = []
+  for (const step of (await openSteps(db)).filter((one) => one.kind === 'price' && one.refused)) {
+    if (await membershipHasEnded(db, step.membershipId)) ended.push(step)
+  }
+  return ended
+}
+
+/**
+ * Closes one of those, under the membership's lock after looking again: only while it is still open, still refused,
+ * still a price move and its membership still ended. Answers whether it was closed here.
+ */
+export async function closeEndedRefusedPriceMove(db: Db, stepId: string, by: StepBy): Promise<boolean> {
+  const first = await openStepById(db, stepId)
+  if (!first) return false
+  return db.transaction(async (tx) => {
+    await lockMembership(tx, first.membershipId)
+    const step = await openStepById(tx, stepId)
+    if (!step || step.kind !== 'price' || !step.refused || !(await membershipHasEnded(tx, step.membershipId))) return false
+    await audit.recordAll(tx, [entry(step, 'done', by, { detail: ENDED_HERE_REFUSED_DETAIL, sent: false })])
+    return true
+  })
+}
 
 /** The membership's row lock, which every action that leaves a step holds: an ending is written under it. */
 async function lockMembership(tx: Tx, membershipId: string): Promise<void> {
@@ -672,7 +738,7 @@ async function recordAnswer(db: Db, step: LeftStep, answer: Exclude<StepAnswer, 
     await audit.recordAll(tx, [
       answer.kind === 'done'
         ? entry(step, 'done', by, { detail: answer.detail, sent: answer.sent })
-        : entry(step, 'refused', by, { detail: answer.message, ...(answer.missing ? { missing: true } : {}), ...(answer.wrongInterval ? { wrongInterval: answer.wrongInterval } : {}) }),
+        : entry(step, 'refused', by, { detail: answer.message, ...(answer.missing ? { missing: true } : {}), ...(answer.ended ? { ended: true } : {}), ...(answer.wrongInterval ? { wrongInterval: answer.wrongInterval } : {}) }),
     ])
     return { kind: 'written' as const }
   })
@@ -1016,7 +1082,7 @@ type StripeSeen =
    * Stripe can't find the subscription, or it has ended and the wish can't be met: for a person, never sent. W57a
    * (S1): or a price move whose subscription renews at another interval (`wrongInterval`).
    */
-  | { kind: 'person'; message: string; missing?: true; wrongInterval?: WrongInterval }
+  | { kind: 'person'; message: string; missing?: true; wrongInterval?: WrongInterval; ended?: true }
   /** No clear answer. */
   | { kind: 'unread'; message: string }
 
@@ -1069,7 +1135,7 @@ async function readForCheck(stripe: StripeClient, wish: Pick<LeftStep, 'kind' | 
   }
   if (hasEnded(now.status, wish.kind)) {
     const ended = endedAnswer(wish)
-    return ended.kind === 'refused' ? { kind: 'person', message: ended.message } : { kind: 'agrees', detail: 'the subscription has already ended in Stripe' }
+    return ended.kind === 'refused' ? { kind: 'person', message: ended.message, ended: true } : { kind: 'agrees', detail: 'the subscription has already ended in Stripe' }
   }
   if (stepIsDone(now, wish)) {
     const ends = stripeEnds(now)
@@ -1119,7 +1185,7 @@ export type StepChecked =
   | { kind: 'wait'; detail: string }
 
 /** What a check leaves with its row: the newest wish again, to send (`send`) or as refused for a person (W46: `mismatch`, the two last days). */
-type CheckLeaves = { how: 'send' } | { how: 'refused'; message: string; missing?: true; mismatch?: RowMismatch; wrongInterval?: WrongInterval }
+type CheckLeaves = { how: 'send' } | { how: 'refused'; message: string; missing?: true; mismatch?: RowMismatch; wrongInterval?: WrongInterval; ended?: true }
 
 /** One `membership.step_check` row. */
 function checkEntry(by: StepBy, membershipId: string, details: { subscriptionId: string; kind: StepKind; steps: string[]; outcome: CheckOutcome; wish: string | null; leftAgain?: string; detail: string }): AuditEntry {
@@ -1160,6 +1226,7 @@ async function endCheck(
             entry(again, 'refused', by, {
               detail: leaves.message,
               ...(leaves.missing ? { missing: true } : {}),
+              ...(leaves.ended ? { ended: true } : {}),
               ...(leaves.mismatch ? { mismatch: leaves.mismatch } : {}),
               ...(leaves.wrongInterval ? { wrongInterval: leaves.wrongInterval } : {}),
             }),
@@ -1208,6 +1275,11 @@ export async function checkAfterClosing(db: Db, stripe: StripeClient, due: Check
   // Closed as replaced between the two reads above: a press is being made. The next run looks again.
   if (wish.closedAs === 'replaced') return { kind: 'wait', detail: `step ${wish.id} was replaced meanwhile: not checked yet` }
   if (wish.closedAs === null) {
+    // W58b (item 2): a refused price move whose membership has ended here since closes itself, as a left one does at
+    // the send. Its own closing is then due a check of its own, which covers these older closings with it.
+    if (wish.refused && wish.kind === 'price' && (await membershipHasEnded(db, wish.membershipId)) && (await closeEndedRefusedPriceMove(db, wish.id, by))) {
+      return { kind: 'wait', detail: `the newest step ${wish.id} was refused by Stripe and its membership has ended here: closed, nothing sent; checked with it` }
+    }
     return endCheck(db, due, wish, by, 'open', wish.refused ? `the newest step ${wish.id} is open and Stripe has refused it: listed for a person` : `the newest step ${wish.id} is still open: listed, and checked when it closes`)
   }
   if (wish.closedRecently) return { kind: 'wait', detail: `the newest step ${wish.id} closed less than ${CHECK_AFTER_MINUTES} minutes ago: checked with it` }
@@ -1242,10 +1314,16 @@ export async function checkAfterClosing(db: Db, stripe: StripeClient, due: Check
     return endCheck(db, due, wish, by, 'left_again', `step ${wish.id}: ${seen.detail}, not its wish: left again`, { how: 'send' })
   }
   if (seen.kind === 'person') {
+    // W58b (the W45 audit's row 30; W40c review L5, W40c "Noticed" 3): an undo whose subscription Stripe has ended
+    // because the membership was refunded meanwhile (the refund ends it): nobody needs a line for that.
+    if (seen.ended && wish.kind === 'cancel_at' && wish.want.cancelAt === null && (await membershipRefunded(db, wish.membershipId))) {
+      return endCheck(db, due, wish, by, 'checked', `step ${wish.id}: ${seen.message} The membership has been refunded, so the undo is moot`)
+    }
     return endCheck(db, due, wish, by, 'for_a_person', `step ${wish.id}: ${seen.message} Left for a person`, {
       how: 'refused',
       message: seen.message,
       ...(seen.missing ? { missing: true as const } : {}),
+      ...(seen.ended ? { ended: true as const } : {}),
       ...(seen.wrongInterval ? { wrongInterval: seen.wrongInterval } : {}),
     })
   }

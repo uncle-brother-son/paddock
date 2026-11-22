@@ -612,7 +612,10 @@ describe('W05j on the old functions', () => {
       (file) => {
         // W20 (W19 review later 2): Add Guest's and Move's reasons now sit in one list with the Worker's two mismatches;
         // W20a (W20 for later 1): Settle's too.
-        expect(frontend(file)).toMatch(/'refund_failed', 'refund_unsure', 'amount_mismatch', 'customer_mismatch', 'metadata_mismatch'/)
+        // W58b (the W26 audit's row 25; a named difference): `refund_failed` / `refund_unsure` left the list; only the
+        // old flow bodies answered them (gone at W25), and finaliseReaderPayment's reasons no longer name them.
+        expect(frontend(file)).toMatch(/\['amount_mismatch', 'customer_mismatch', 'metadata_mismatch'\]/)
+        expect(frontend(file)).not.toMatch(/'refund_unsure'/)
         if (file !== 'MoveBookingDialog.tsx') expect(frontend(file)).toContain("if (CHECK_STRIPE_FIRST.has(finalise?.reason ?? '')) {")
       }
     )

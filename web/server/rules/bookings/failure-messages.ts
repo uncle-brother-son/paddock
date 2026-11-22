@@ -420,6 +420,16 @@ export const refundGoneNotRecordedMessage = (cardGone: number): string =>
 /** What a person does about money Stripe refused to send: the two buttons, after checking Stripe (W25a's words). */
 const checkStripeFirstWords = (cancelled: boolean): string =>
   `Check Stripe first: if the money already reached the customer, use It already arrived; if not, use Refund the rest${cancelled ? ' (the booking is cancelled, so it goes to store credit)' : ''}.`
+/**
+ * W58 (W35 row 8, W31 "Noticed" 1, W26a review L3): a part the press had no time left to send never reached Stripe, so
+ * it is said as that, not as a refusal, and there is nothing in Stripe to check first (as W30a did for events and
+ * orders). A part Stripe refused keeps W26a's words (Wayne, 14 Nov: the refusal may mean the money arrived already).
+ */
+const cardRefundDidNotGo = (detail: string): string => (detail === REFUND_NOT_SENT_DETAIL ? "The card refund wasn't sent in time" : `The card refund was refused (${detail})`)
+const whatToDoAbout = (detail: string, cancelled: boolean): string =>
+  detail === REFUND_NOT_SENT_DETAIL
+    ? `Use Refund the rest to send it${cancelled ? ' (the booking is cancelled, so it goes to store credit)' : ' to the card'}.`
+    : checkStripeFirstWords(cancelled)
 
 /**
  * W31 (W30a "Noticed" 1, as W30a's review S1 for events and orders): the claim is finished with the plan's own store
@@ -434,10 +444,13 @@ const storeCreditGivenWords = (storeCredit: number): string => (storeCredit > 0 
  * on the booking, live or cancelled, with Stripe's reason.
  */
 export const putBackFailedMessage = (detail: string, owed: number, cancelled: boolean, storeCredit = 0): string =>
-  `The card refund was refused (${detail}), so it didn't go back to the card${storeCreditGivenWords(storeCredit)}, and the booking couldn't be put back as it was. The change stands, and ${money(owed)} shows on the booking as still to refund. ${checkStripeFirstWords(cancelled)}`
+  `${cardRefundDidNotGo(detail)}, so it didn't go back to the card${storeCreditGivenWords(storeCredit)}, and the booking couldn't be put back as it was. The change stands, and ${money(owed)} shows on the booking as still to refund. ${whatToDoAbout(detail, cancelled)}`
 /** W26a: the same when the money owed couldn't be written either. The claim stays open, marked refused, for the automatic check. */
 export const putBackFailedNotRecordedMessage = (detail: string): string =>
-  `The card refund was refused (${detail}), so nothing went back, and the booking couldn't be put back as it was. The change stands, but the money still to refund couldn't be recorded on the booking yet. Don't refund it again: check the Orders page in a few minutes.`
+  `${cardRefundDidNotGo(detail)}, so nothing went back, and the booking couldn't be put back as it was. The change stands, but the money still to refund couldn't be recorded on the booking yet. Don't refund it again: check the Orders page in a few minutes.`
+
+/** Why a put-back is blocked. W58 (W51a "Noticed" 1): since W51a a blocked or re-timed old slot stops it too. */
+const PUT_BACK_BLOCKED_WHY = 'its places, its pass session or its membership credit have been taken since, or its slot has been blocked or moved'
 
 /**
  * W25 (W22 review later 2, W23 later 2, W24 review L1): the first card part was refused, and the booking can't go back
@@ -447,14 +460,14 @@ export const putBackFailedNotRecordedMessage = (detail: string): string =>
  * two buttons a person decides with.
  */
 export const putBackBlockedMessage = (detail: string, owed: number, cancelled: boolean, storeCredit = 0): string =>
-  `The card refund was refused (${detail}), so it didn't go back to the card${storeCreditGivenWords(storeCredit)}, and the booking can't be put back as it was: its places, its pass session or its membership credit have been taken since. The change stands, and ${money(owed)} shows on the booking as still to refund. ${checkStripeFirstWords(cancelled)}`
+  `${cardRefundDidNotGo(detail)}, so it didn't go back to the card${storeCreditGivenWords(storeCredit)}, and the booking can't be put back as it was: ${PUT_BACK_BLOCKED_WHY}. The change stands, and ${money(owed)} shows on the booking as still to refund. ${whatToDoAbout(detail, cancelled)}`
 /**
  * W25a: the same refusal when the money owed couldn't be written on the booking yet (the database failed just then).
  * The claim stays open for the automatic check, so the words still carry Stripe's reason. W26a: the claim carries the
  * refusal's mark, so the automatic check ends it as money owed too.
  */
 export const putBackBlockedNotRecordedMessage = (detail: string): string =>
-  `The card refund was refused (${detail}), so nothing went back, and the booking can't be put back as it was: its places, its pass session or its membership credit have been taken since. The change stands, but the money still to refund couldn't be recorded on the booking yet. Don't refund it again: check the Orders page in a few minutes.`
+  `${cardRefundDidNotGo(detail)}, so nothing went back, and the booking can't be put back as it was: ${PUT_BACK_BLOCKED_WHY}. The change stands, but the money still to refund couldn't be recorded on the booking yet. Don't refund it again: check the Orders page in a few minutes.`
 /** W25 (W23 review later 1): Refund the rest to the card on a cancelled booking. */
 export const OWED_ON_CANCELLED_STORE_CREDIT_ONLY_MESSAGE =
   'This booking is cancelled, so what is still to refund can only go to store credit. Choose store credit and confirm again.'
@@ -462,7 +475,8 @@ export const OWED_ON_CANCELLED_STORE_CREDIT_ONLY_MESSAGE =
 /** Q26: more cash than the booking's orders recorded, or none to hand back. */
 export const onlyCashLeftMessage = (limit: number): string =>
   `Only ${money(limit)} of cash recorded on this booking's orders can be handed back. Check the amount and confirm again.`
-export const NO_CASH_LEFT_MESSAGE = "No cash recorded on this booking's orders can be handed back, so this can only go to store credit."
+/** W58 (W35 row 24, W31 review L3): a booking with card money can still refund to the card, so not "only store credit". */
+export const NO_CASH_LEFT_MESSAGE = "No cash recorded on this booking's orders can be handed back, so it can't be handed back in cash."
 /**
  * W21a (W21 review L6): a later card part the press had no time left to send. Stripe never refused it, so it stays
  * owed on the booking for Refund the rest to send to the card. W26b: on a cancelled booking it is owed too (it used

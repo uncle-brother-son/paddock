@@ -532,7 +532,8 @@ const CANCELLABLE: readonly string[] = ['requires_payment_method', 'requires_con
 
 /** The words for a 404 from a key of another mode than the intent's (W11a, review L1): nothing is changed. */
 export const otherModeMessage = (paymentIntentId: string): string =>
-  `Stripe can't find the reader payment (${paymentIntentId}) with the Stripe key in use, which may be for the other Stripe mode (live or test) than the payment. Nothing was changed: check the payment in Stripe before doing anything.`
+  // W58 (W47a "Noticed" 4): shown for saved-card payments too (held orders and flows left `other_mode`).
+  `Stripe can't find the card payment (${paymentIntentId}) with the Stripe key in use, which may be for the other Stripe mode (live or test) than the payment. Nothing was changed: check the payment in Stripe before doing anything.`
 
 /**
  * Ported from the legacy route's handlePaymentIntent ('cancel'): read it; succeeded is answered as such

@@ -106,6 +106,14 @@ describe("the payment date button's refusal on the profile (brief W39 item 2)", 
     expect(paymentDateStatus({ ...ALLOWED, pdc_last_done_at: '2026-09-01T10:00:00.000Z' }).payment_date_changed_at).toBe('2026-09-01T10:00:00.000Z')
   })
 
+  it('W58 (W45 audit row 41): on the renewal day the list and profile carry the refusal the quote and press give, so the button is greyed first', () => {
+    const renewalDay = { ...ALLOWED, pdc_next_renewal_date: '2026-11-10' }
+    expect(paymentDateStatus(renewalDay).payment_date_change_blocked).toBe(paymentDateRefusal(renewalDay, true))
+    expect(paymentDateStatus(renewalDay).payment_date_change_blocked).not.toBeNull()
+    // The day before, nothing refuses.
+    expect(paymentDateStatus({ ...ALLOWED, pdc_next_renewal_date: '2026-11-11' }).payment_date_change_blocked).toBeNull()
+  })
+
   it('dates are worded on their digits, as the old shared/formatIsoDate', () => {
     expect(formatIsoDate('2026-11-28')).toBe('28 Nov 2026')
     expect(formatIsoDate('2026-01-05')).toBe('5 Jan 2026')

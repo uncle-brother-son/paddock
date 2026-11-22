@@ -102,9 +102,9 @@ describe("step F's side of the replay: gift cards (W38)", () => {
     expect(families.filter((one) => /^w36-gift-card-(picked-up|shipped|flags)-/.test(one.name)).length).toBe(6)
     expect(families.filter((one) => /^w36-(gift-cards-list-and-search|gift-card-redemptions)$/.test(one.name)).length).toBe(2)
     expect([...W38_DIFFERENCES.keys()].every((name) => families.some((one) => one.name === name))).toBe(true)
-    // 12 match their golden files exactly; 8 have named differences (3 who-may, 5 for Q46, Q47, FB15 and FB24).
-    expect(families.filter((one) => !W38_DIFFERENCES.has(one.name)).length).toBe(12)
-    expect(W38_DIFFERENCES.size).toBe(8)
+    // 11 match their golden files exactly; 9 have named differences (3 who-may, 5 for Q46, Q47, FB15 and FB24, and W58's list field).
+    expect(families.filter((one) => !W38_DIFFERENCES.has(one.name)).length).toBe(11)
+    expect(W38_DIFFERENCES.size).toBe(9)
     // Every scenario that calls one of the five old functions is in these families, but for FB16's (held below).
     expect(scenarios.filter((one) => /^w36-/.test(one.name) && !isW38Scenario(one.name) && /gift-card/.test(one.name)).map((one) => one.name)).toEqual([])
   })

@@ -89,7 +89,12 @@ export async function runScheduledReconcile(env: ScheduledEnv, scheduledTime: nu
     }
     const result = await deps.reconcile(db, deps.stripe(secretKey), { actor: { type: 'system', id: null }, requestId, orderSwitch: env.ORDER_SWITCH ?? null, ...SCHEDULED_LIMITS })
     const { items, ...counts } = result
-    deps.log({ event: 'reconcile.run', requestId, ...counts, left: items.filter((item) => item.outcome === 'left').map((item) => ({ kind: item.kind, id: item.id, reason: item.reason })) })
+    // W59 (W35 audit row 33, W32a "Noticed" 3): every item the run handled is named by its outcome, not only those
+    // left for a person (a refund that failed later is on the stuck list, and now in the log too); `leftCount` keeps
+    // the count that the list of left items used to replace.
+    const named = (outcome: string) => items.filter((item) => item.outcome === outcome).map((item) => ({ kind: item.kind, id: item.id, reason: item.reason }))
+    const handled = Object.fromEntries([...new Set(items.map((item) => item.outcome))].filter((outcome) => outcome !== 'left').map((outcome) => [outcome, named(outcome)]))
+    deps.log({ event: 'reconcile.run', requestId, ...counts, leftCount: counts.left, left: named('left'), handled })
     return result
   } catch (err) {
     deps.log({ event: 'reconcile.failed', requestId, error: err instanceof Error ? `${err.name}: ${err.message}` : String(err) })

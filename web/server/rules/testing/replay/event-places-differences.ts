@@ -951,4 +951,17 @@ export const EVENT_PLACES_DIFFERENCES: ReadonlyMap<string, readonly AllowedDiffe
       ),
     ],
   ],
+  [
+    "w27-event-cancel-refused-while-its-reader-payment-is-open",
+    [
+      pinned(
+        'W58: the in-progress words say "A payment is still in progress…": a saved-card payment is held the same way as a reader one (the old words said "A card reader payment")',
+        'Brief W58 (W35 audit row 22; W31 "Noticed" 3)',
+        [
+          [".results[1].message", "A payment is still in progress for this booking. Finish or cancel it first."],
+          [".results[2].message", "A payment is still in progress for this booking. Finish or cancel it first."],
+        ]
+      ),
+    ],
+  ],
 ])

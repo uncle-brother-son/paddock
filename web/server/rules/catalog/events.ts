@@ -165,12 +165,18 @@ function momentOf(value: unknown): string | null | undefined {
 }
 
 /** The old field checks, in their order and words (`invalid_params`). Throws the first that fails. */
+/** W58b (W52 "For later" 3): what `events.capacity` (integer) and the price columns (numeric(10,2)) can hold. */
+const MAX_CAPACITY = 2_147_483_647
+const MAX_PRICE = 99_999_999.99
+
 function checkedDetails(action: AdminAction, input: EventDetailsRouteInput): EventDetails {
   const words = WORDS.setEventDetails
   const invalid = (message: string, field: string) => adminRefusal('VALIDATION', action, 'invalid_params', message, { field })
   const { access, capacity } = input
   if (typeof access !== 'string' || !ACCESS_VALUES.includes(access)) throw invalid(words.chooseWhoCanBookPublicMembers, 'access')
   if (capacity !== null && (typeof capacity !== 'number' || !Number.isInteger(capacity) || capacity < 1)) throw invalid(words.capacityMustWholeNumberAtLeast, 'capacity')
+  // W58b (W52 "For later" 3): past what the columns hold, the table's own error was shown; plain words instead.
+  if (capacity !== null && capacity > MAX_CAPACITY) throw invalid(EVENT_ADMIN_NEW_WORDS.capacityTooLarge, 'capacity')
   const prices: Array<[unknown, string]> = [
     [input.pricePublic, 'pricePublic'],
     [input.pricePreHerd, 'pricePreHerd'],
@@ -178,6 +184,7 @@ function checkedDetails(action: AdminAction, input: EventDetailsRouteInput): Eve
   ]
   for (const [price, field] of prices) {
     if (price !== null && (typeof price !== 'number' || !Number.isFinite(price) || price < 0)) throw invalid(words.pricesCantNegative, field)
+    if (price !== null && price > MAX_PRICE) throw invalid(EVENT_ADMIN_NEW_WORDS.priceTooLarge, field)
   }
   const moments: Array<[unknown, string]> = [
     [input.startsAt, 'startsAt'],
@@ -360,11 +367,15 @@ export async function setEventDetails(db: Db, input: EventDetailsRouteInput, opt
           // Q51: once a place is booked, the cut-off in force can move later, never earlier; W52a (Q-a): except that
           // it follows an event brought forward to before it, as far as the new start.
           let refundCutoffAt = fields.refundCutoffAt
+          // W58b (W52a "Noticed" 1, 2): whether the cut-off followed an event brought forward (Q-a), for the answer.
+          let cutoffFollowed = false
           const inForce = cutoffInForce(before.refund_cutoff_at, before.starts_at)
           if (before.places_booked > 0 && inForce !== null) {
             const kept = cutoffToKeep(inForce, fields)
             if ('refused' in kept) throw adminRefusal('CONFLICT', action, 'cutoff_earlier', kept.refused, { field: 'refundCutoffAt' })
             refundCutoffAt = kept.refundCutoffAt
+            const newStart = time(fields.startsAt)
+            cutoffFollowed = newStart !== null && newStart < inForce
           }
           const [row] = await tx.query<Record<string, unknown>>(UPDATE_EVENT_SQL, [
             fields.startsAt,
@@ -394,7 +405,7 @@ export async function setEventDetails(db: Db, input: EventDetailsRouteInput, opt
             refund_cutoff_at: answered.refund_cutoff_at,
             places_booked: answered.places_booked,
           }
-          return { after, answer: { updated: true, event: answered, stamp: String(stamp) } }
+          return { after, answer: { updated: true, event: answered, stamp: String(stamp), ...(cutoffFollowed ? { cutoffFollowed: true as const } : {}) } }
         },
       },
       options

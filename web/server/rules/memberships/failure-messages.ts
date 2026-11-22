@@ -72,6 +72,18 @@ export const LEFT_STEP_WORDS = {
     missing: (subscriptionId: string): string =>
       `A membership's cancellation was recorded, but Stripe can't find its subscription (${subscriptionId}) with the club's payment account details, so the automatic check has stopped trying. Tell a manager: the subscription may have been deleted in Stripe, or belong to the other mode. Once the membership and Stripe agree, press Mark sorted (needs the Issue refunds permission).`,
   },
+  /**
+   * W58b (the W45 audit's row 30; W40c review L1): a cancellation undone (its cancel date cleared). The risk is the
+   * membership ending when staff didn't want it, not a renewal; and Stripe can't undo one it has already ended.
+   */
+  undo: {
+    left: (subscriptionId: string): string =>
+      `A membership's cancellation was undone, but its subscription (${subscriptionId}) couldn't be confirmed changed in Stripe yet, so it could still end on the cancel date. The automatic check tries again every 5 minutes. If this is still here after an hour, clear its cancel date in Stripe by hand (or tell a manager): the next check then sees it and takes it off the list.`,
+    refused: (subscriptionId: string): string =>
+      `A membership's cancellation was undone, but Stripe refused to change its subscription (${subscriptionId}), so the automatic check has stopped trying and it could still end on the cancel date. Clear its cancel date in Stripe by hand (or tell a manager), then press Mark sorted (needs the Issue refunds permission).`,
+    ended: (subscriptionId: string): string =>
+      `A membership's cancellation was undone, but its subscription (${subscriptionId}) has already ended in Stripe, so the undo can't be made there and the membership won't carry on. Tell a manager: if the customer wants to carry on, sell them a new membership. Then press Mark sorted (needs the Issue refunds permission).`,
+  },
   payment_method: {
     left: (subscriptionId: string): string =>
       `A customer's card was replaced, but a membership's subscription (${subscriptionId}) couldn't be confirmed moved to the new card in Stripe yet, so its next payment could still go to the old card. The automatic check tries again every 5 minutes. If this is still here after an hour, set it in Stripe by hand (or tell a manager): the next check then sees it and takes it off the list.`,
@@ -86,6 +98,12 @@ export const LEFT_STEP_WORDS = {
       `A membership plan's price was changed, but a member's subscription (${subscriptionId}) couldn't be confirmed moved to the new price in Stripe yet, so their next renewal could still be at the old price. The automatic check tries again every 5 minutes. If this is still here after an hour, move the subscription to the plan's new price in Stripe by hand, with no proration (or tell a manager): the next check then sees it and takes it off the list.`,
     refused: (subscriptionId: string): string =>
       `A membership plan's price was changed, but Stripe refused to move a member's subscription (${subscriptionId}) to the new price, so the automatic check has stopped trying and they will keep renewing at the old price. Move the subscription to the plan's new price in Stripe by hand, with no proration (or tell a manager), then press Mark sorted (needs the Issue refunds permission).`,
+    /**
+     * W58b (item 3): the same, while the plan is off sale. Stripe won't move anyone onto an off-sale plan's price
+     * (W58 item 0 refuses such a price change before anything is made; this is the line for a move refused before).
+     */
+    refusedOffSale: (subscriptionId: string): string =>
+      `A membership plan's price was changed, but Stripe refused to move a member's subscription (${subscriptionId}) to the new price, and the plan is off sale: Stripe won't move anyone onto an off-sale plan's price. The automatic check has stopped trying and they will keep renewing at the old price. Put the plan back on sale first, then move the subscription to the plan's new price in Stripe by hand, with no proration (or tell a manager), then press Mark sorted (needs the Issue refunds permission).`,
     missing: (subscriptionId: string): string =>
       `A membership plan's price was changed, but Stripe can't find a member's subscription (${subscriptionId}) with the club's payment account details, so the automatic check has stopped trying. Tell a manager: the subscription may have been deleted in Stripe, or belong to the other mode. Once the membership and Stripe agree, press Mark sorted (needs the Issue refunds permission).`,
   },
@@ -238,6 +256,13 @@ const money = (pounds: number): string => `£${pounds.toFixed(2)}`
  */
 export const PAYMENT_DATE_NEW_WORDS = {
   orderStillProcessing: ORDER_STILL_PROCESSING_MESSAGE,
+  /**
+   * W58b (the W45 audit's row 42; W41a "Noticed" 2): the automatic check's own sentence when it looked again (W41a B1)
+   * and the subscription no longer allowed the move, so the move was not sent. `checkMessage` is the press's check's
+   * words, less their "Refresh and try again.", which is for a person at the dialog, not for this record.
+   */
+  recheckFailed: (checkMessage: string): string =>
+    `The payment date wasn't moved: when the automatic check looked again, the subscription no longer allowed it (${checkMessage.replace(/\s*Refresh and try again\.\s*$/, '').replace(/\.+\s*$/, '')})`,
   figureChanged: (shown: number, now: number): string =>
     `The part-month charge is now ${money(now)}, not the ${money(shown)} shown. Nothing was charged and the payment date has not changed. Check the new figure with the customer and press again.`,
   figureMissing: 'The part-month charge shown on screen was not sent, so nothing was charged and the payment date has not changed. Refresh the page and try again.',
@@ -275,7 +300,23 @@ export const PAYMENT_DATE_STUCK_WORDS: Readonly<Record<string, string>> = {
   // W47a (W47 review L7): the reason also covers a payment Stripe holds at `requires_confirmation` or
   // `requires_capture`, where nothing is waiting on the customer, so the words name the step as Stripe's.
   payment_needs_action: `A payment date change's part-month charge is waiting for a step Stripe needs (usually the customer's bank approval), which can't be done from here, so it won't finish on its own. Tell a manager: cancel that payment in Stripe. Once Stripe shows it cancelled, the automatic check ends the change within 5 minutes (nothing was taken) and the date can be changed again. It can't be closed by hand until then. ${DONT_CHARGE_AGAIN}`,
+  // W58b (the W45 audit's row 38; W41 review L3): a payment date row the Worker didn't start (the old screens'), with
+  // what to look for, in place of step D's general words.
+  not_started_here: `The booking system has no record of starting this payment date change (it was made on the old screens), so the automatic check can't settle it. Look in Stripe for a "Payment date change" charge on this customer and at the subscription's next payment date: if the charge was taken and the date didn't move, refund the charge in Stripe by hand (or tell a manager). ${CLOSE_DATE_CHANGE}`,
 }
+
+/**
+ * W58b (the W45 audit's row 42; W41a "Noticed" 1): the same two lines when the automatic check, looking again (W41a
+ * B1), found the subscription no longer allowed the move and never sent it. Stripe refused nothing.
+ */
+export const PAYMENT_DATE_NOT_SENT_STUCK_WORDS: Readonly<Record<string, string>> = {
+  refund_unconfirmed: `A payment date change wasn't made: when the automatic check looked again, the subscription no longer allowed it, so the date was never sent to Stripe. The refund of the part-month charge hasn't been confirmed yet. The automatic check tries again every 5 minutes. ${DONT_CHARGE_AGAIN}`,
+  refund_refused: `A payment date change wasn't made: when the automatic check looked again, the subscription no longer allowed it, so the date was never sent to Stripe. Stripe then refused the refund of the part-month charge, so the customer has paid for a change that didn't happen. Refund that payment in Stripe by hand (or tell a manager if Stripe won't). ${CLOSE_DATE_CHANGE}`,
+}
+
+/** W58b: a payment date line's words: the not-sent words when the check never sent the move, else the reason's own. */
+export const paymentDateStuckWords = (reason: string, notSent: boolean): string | undefined =>
+  (notSent ? PAYMENT_DATE_NOT_SENT_STUCK_WORDS[reason] : undefined) ?? PAYMENT_DATE_STUCK_WORDS[reason]
 
 // --- W47 (W46 review L2; W46b "Noticed" 2): Stripe's notices the Worker couldn't take in, on the Orders page's banner
 
@@ -591,7 +632,8 @@ export const MEMBERSHIP_CREDIT_DIALOG_WORDS = {
  */
 export const MEMBERSHIP_CREDIT_NEW_WORDS = {
   reasonRequired: MEMBERSHIP_CREDIT_DIALOG_WORDS.reasonRequired,
-  addonBelowZero: (left: number): string => `Adjustment rejected: the membership would be left with ${left} add-on credit(s), below zero.`,
+  // W58 (W37 QA): "minus 1", not "-1" with a hyphen.
+  addonBelowZero: (left: number): string => `Adjustment rejected: the membership would be left with ${left < 0 ? `minus ${-left}` : left} add-on credit(s), below zero.`,
   creditTypeInvalid: 'Credit type must be "session" or "addon".',
 } as const
 

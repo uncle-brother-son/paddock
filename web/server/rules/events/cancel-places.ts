@@ -79,6 +79,7 @@ import { lockForRefund } from '@/server/rules/refunds/locks'
 import { claimRowsActor, EVENT_BOOKING_CLAIMS, heldAnswer, sendCardPart, staffIdOf, type CardPart, type ClaimActor } from '@/server/rules/refunds/pipeline'
 import { claimWatchEntries, refundSeen, refundsForRow, type RefundSeen } from '@/server/rules/refunds/refund-watch'
 import { loadEventAttendeeBooking } from './attendee-list'
+import { overHalfPenny } from '@/server/rules/orders/amounts'
 import {
   EVENT_CANCEL_NEW_WORDS as NEW_WORDS,
   EVENT_CANCEL_WORDS as WORDS,
@@ -142,7 +143,6 @@ const round2 = (n: number): number => Math.round(n * 100) / 100
 const amountOf = (value: string | null | undefined): number => Number.parseFloat(value ?? '0')
 const sum = (amounts: readonly number[]): number => round2(amounts.reduce((total, n) => total + n, 0))
 /** Half a penny either way passes (Q18), rounded first: taking pounds from pounds leaves noise. */
-const overHalfPenny = (amount: number, limit: number): boolean => Math.round((amount - limit) * 1e6) / 1e6 > 0.005
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 // --- Refusals

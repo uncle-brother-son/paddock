@@ -112,6 +112,7 @@ import {
 import { loadBooking, lockAndLoadBooking, paymentOpen, sessionStartWallClock, type LoadedBooking } from './load-booking'
 import { inC1, paymentOpenRefusal } from './money-in'
 import { recordOrderPaymentStatus, withCashAndLine } from './money-left'
+import { differsByMoreThanHalfAPenny } from '@/server/rules/orders/amounts'
 import {
   cancelActionRow,
   finishClaimInTransaction,
@@ -138,7 +139,6 @@ export type CancelKind = 'cancel' | 'cancel_credit'
 const round2 = (n: number): number => Math.round(n * 100) / 100
 const sum = (amounts: readonly number[]): number => round2(amounts.reduce((total, n) => total + n, 0))
 /** Q18: half a penny either way passes. */
-const differsByMoreThanHalfAPenny = (a: number, b: number): boolean => Math.round(Math.abs(a - b) * 1e6) / 1e6 > 0.005
 const confirmedAmount = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) ? value : 0)
 
 export interface CancelOptions extends RefundOptions {
@@ -583,23 +583,29 @@ async function cancelR1(tx: Tx, input: R1Input, options: R1Options, livemode: bo
   // Read again under the booking's lock: a second tab that waited for it finds them removed (and the booking cancelled).
   const rows = await readAddonLines(tx, bookingId, lineIds, true)
   const paidTicked = rows.some((row) => !isCreditLine(row))
-  // Cancel & return credit: refunding paid add-ons moves money, so Issue refunds first, as the old function checked it.
-  if (kind === 'cancel_credit' && method && paidTicked && !options.canIssueRefunds) throw refuse('FORBIDDEN', 'no_refund_permission', ISSUE_REFUNDS_NEEDED_MESSAGE)
-  // W25: the club's cancel refunding paid guests moves money too, and needs to know where it goes.
+  // W25: the club's cancel refunding paid guests moves money, and needs to know where it goes.
   // W43 (Q48): and the lapse sweep's, 24 hours or more before the session.
   const everythingBack = input.clubCancelled || customer !== undefined || lapse?.back === true
   const guestsRefunded = clubRefundsPaidGuests(kind, booking, everythingBack)
-  if (guestsRefunded && !options.canIssueRefunds) throw refuse('FORBIDDEN', 'no_refund_permission', ISSUE_REFUNDS_NEEDED_MESSAGE)
-  // W26a (audit S6; Wayne, 14 Nov): inside 24 hours the club's cancel gives back what the rule would keep (the credit,
-  // the pass session, the add-ons), and the flag comes from the screen, so it needs Issue refunds. Outside 24 hours
-  // nothing changes, and a payment-needed booking (which the rule never covered) is as before.
-  if (input.clubCancelled && at.inside && booking.status !== 'payment_needed' && !options.canIssueRefunds) {
-    throw refuse('FORBIDDEN', 'no_refund_permission', ISSUE_REFUNDS_NEEDED_MESSAGE)
-  }
   // Inside 24 hours nothing comes back (only reachable on a payment-needed booking), unless the club is cancelling.
   const inside = at.ruleApplies
   const refused = (await refusalFor(kind, tx, booking, at)) ?? customerTooLate(kind, booking, rows, at)
   if (refused) throw refused
+  // W58c (W58 review FL2): the two Issue refunds checks below come after the booking's own refusals (as W26a L1's
+  // does), so a booking already cancelled in another tab says that, not "needs Issue refunds". Still before anything
+  // is written or sent.
+  // Cancel & return credit: refunding paid add-ons moves money, so Issue refunds first, as the old function checked it.
+  if (kind === 'cancel_credit' && method && paidTicked && !options.canIssueRefunds) throw refuse('FORBIDDEN', 'no_refund_permission', ISSUE_REFUNDS_NEEDED_MESSAGE)
+  // The club's cancel refunding paid guests (W25) moves money too.
+  if (guestsRefunded && !options.canIssueRefunds) throw refuse('FORBIDDEN', 'no_refund_permission', ISSUE_REFUNDS_NEEDED_MESSAGE)
+  // W26a (audit S6; Wayne, 14 Nov): inside 24 hours the club's cancel gives back what the rule would keep (the credit,
+  // the pass session, the add-ons), and the flag comes from the screen, so it needs Issue refunds. Outside 24 hours
+  // nothing changes, and a payment-needed booking (which the rule never covered) is as before. W58 (W26a review L1):
+  // after the booking's own refusals, so a booking already cancelled in another tab says that, not "needs Issue
+  // refunds". Still before anything is written or sent.
+  if (input.clubCancelled && at.inside && booking.status !== 'payment_needed' && !options.canIssueRefunds) {
+    throw refuse('FORBIDDEN', 'no_refund_permission', ISSUE_REFUNDS_NEEDED_MESSAGE)
+  }
   if (guestsRefunded && method === null) throw refuse('CONFLICT', 'refund_method_required', PAID_GUESTS_REFUND_METHOD_MESSAGE)
 
   // Cancel & return credit leaves the paid lines alone without a method (the old includePaidLines).

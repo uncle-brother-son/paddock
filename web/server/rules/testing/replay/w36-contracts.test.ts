@@ -318,7 +318,8 @@ describe("the step F contracts fit what the old functions take and give (brief W
     expect(dropped(cards.map(({ row }) => row), giftCardListRowSchema)).toEqual([])
     // Every column of the table is in the contract, and every field of the contract is a column or the purchaser's.
     const given = new Set(cards.flatMap(({ row }) => Object.keys(row)))
-    expect(Object.keys(shapeOf(giftCardListRowSchema)).filter((field) => !given.has(field))).toEqual([])
+    // W58 (W45 audit row 12): `reactivate_refused` is the Worker's own, a decision of W58's (the old rows don't have it).
+    expect(Object.keys(shapeOf(giftCardListRowSchema)).filter((field) => !given.has(field) && field !== 'reactivate_refused')).toEqual([])
 
     const used = listRows('getGiftCardRedemptions')
     expect(used.length).toBeGreaterThanOrEqual(1)

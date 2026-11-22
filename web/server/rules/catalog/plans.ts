@@ -354,7 +354,8 @@ const LOCK_PLAN_ROW_SQL = 'SELECT id, active, stripe_product_id, name FROM membe
  *       sent); Stripe's product put on sale first, then one transaction: the row on, any off step closed as
  *       replaced, a product step recorded `done` (so it is checked 20 minutes later), and `plan.active_set`. A Stripe
  *       refusal or no clear answer changes nothing here.
- *  Off: one transaction: the row off, any open product step replaced, a product step left (off), `plan.active_set`;
+ *  Off: refused while a price change on the plan is still open (W58c, FL4). Otherwise one transaction: the row off,
+ *       any open product step replaced, a product step left (off), `plan.active_set`;
  *       then the step sent. Stripe's answer never undoes the row: unclear or refused, the step is reconcile's (and a
  *       refusal is listed for a person).
  * A switch writes only what was pressed, so it carries no stamp (W54a).
@@ -407,6 +408,10 @@ export async function setPlanActive(db: Db, planId: string, active: unknown, opt
 
   const left = await db.transaction(async (tx) => {
     const before = await look(tx)
+    // W58c (W58 review FL4): Stripe won't move a subscription onto an off-sale product's price, so while a price change
+    // on the plan is still open (its record, or its members' moves inside their press's window) the plan stays on
+    // sale. Refused under the plan's lock, nothing written.
+    if (await changeStillOpen(tx, planId)) throw adminRefusal('CONFLICT', action, 'price_change_open', NEW.offWhileChangeOpen)
     await replaceProductSteps(tx, planId, by, null)
     const step = before.stripe_product_id ? newPlanStep(planId, 'product_active', { productId: before.stripe_product_id, active: false }) : null
     await tx.query('UPDATE membership_plans SET active = false, updated_at = now() WHERE id = $1::uuid', [planId])
@@ -596,6 +601,10 @@ export async function setPlanDetails(db: Db, planId: string, input: PlanDetailsI
       if (await changeStillOpen(tx, planId)) throw adminRefusal('CONFLICT', 'plan.price_change', 'price_change_open', NEW.changeStillOpen)
       const counts = await liveCounts(tx, planId)
       const toMove = frequencies.reduce((total, frequency) => total + counts[frequency], 0)
+      // W58 item 0: Stripe refuses a subscription onto an inactive product's price (the W57 preview), so an off-sale
+      // plan with members on the changing price is refused here, before any Stripe price is made. The details the
+      // same press carries aren't saved either (the refusal ends the transaction): staff are told nothing changed.
+      if (seen.active !== true && toMove > 0) throw adminRefusal('CONFLICT', 'plan.price_change', 'off_sale_with_members', NEW.offSaleWithMembers(toMove))
       if (typeof input.membersToMove !== 'number') throw adminRefusal('VALIDATION', 'plan.price_change', 'count_missing', NEW.confirmCountMissing, { field: 'membersToMove' })
       if (input.membersToMove !== toMove) throw adminRefusal('CONFLICT', 'plan.price_change', CHANGED_SINCE_REASON, NEW.countChanged(input.membersToMove, toMove))
       figures = Object.fromEntries(frequencies.map((frequency) => [frequency, { members: counts[frequency], price: Number((changing[frequency] as ChangedPrice).to) }]))

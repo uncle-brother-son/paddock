@@ -10,7 +10,7 @@ import { audit } from '@/server/audit'
 import type { Db } from '@/server/db'
 import { CHANGED_SINCE_WORDS } from '@/server/rules/admin/stamp'
 import { LEFT_STEP_WORDS, MEMBERSHIP_PATH_OFF_MESSAGE, PRICE_MOVE_INTERVAL_WORDS } from '@/server/rules/memberships/failure-messages'
-import { sortLeftStep, STEP_LEFT_ACTION } from '@/server/rules/memberships/left'
+import { checkAfterClosing, checksDue, ENDED_HERE_REFUSED_DETAIL, sortLeftStep, STEP_LEFT_ACTION, type CheckDue } from '@/server/rules/memberships/left'
 import { closeStuckItem } from '@/server/rules/orders/close-stuck'
 import { reconcile } from '@/server/rules/orders/reconcile'
 import { stuckList } from '@/server/rules/orders/stuck-list'
@@ -451,6 +451,27 @@ describe("a plan's price (G-plan 4.4; GB1, GB2; Q53)", () => {
     })
   })
 
+  it('W58 item 0: an off-sale plan with members on the changing price: refused before anything is made (Stripe would refuse every move); with nobody on it, allowed', async () => {
+    await onASeed(async (stripe) => {
+      await db.query('UPDATE membership_plans SET active = false WHERE id = $1', [ID.plan])
+      const before = await plan()
+      const refused = await saveCore({ priceMonthly: 45, membersToMove: 2, name: 'Core renamed' })
+      expect([refused.status, refused.reason, refused.error?.message]).toEqual([409, 'off_sale_with_members', NEW.offSaleWithMembers(2)])
+      expect(await plan()).toEqual(before)
+      expect(await changeStates()).toEqual([])
+      expect(await audited('plan.details_set')).toEqual([])
+      expect(stripe.calls).toEqual([])
+      // The price-only press too.
+      expect((await press(detailsRoute, { planId: ID.plan }, { monthlyPrice: 45, membersToMove: 2 })).reason).toBe('off_sale_with_members')
+      // Only the yearly price changes and Yan is the one yearly member: still refused, naming him.
+      expect((await saveCore({ priceYearly: 450, membersToMove: 1 })).error?.message).toBe(NEW.offSaleWithMembers(1))
+      // Nobody on the plan: the change goes ahead (new members pay it once it is back on sale).
+      await db.query("UPDATE customer_memberships SET subscription_status = 'cancelled' WHERE plan_id = $1", [ID.plan])
+      expect((await saveCore({ priceMonthly: 45, membersToMove: 0 })).ok).toBe(true)
+      expect((await plan()).price_monthly).toBe('45.00')
+    })
+  })
+
   it('updateCatalogItemPrice for a plan (a price-only press): its old checks and words, the count required, then the same change', async () => {
     await onASeed(async (stripe) => {
       const P = W.updateCatalogItemPrice
@@ -551,6 +572,75 @@ describe("a plan's price (G-plan 4.4; GB1, GB2; Q53)", () => {
       const sorted = await sortLeftStep(db, listed[0]?.stepId ?? '', 'moved by hand in Stripe', by)
       expect(sorted.closed).toBe(true)
       expect((await stuckList(db)).steps).toEqual([])
+    })
+  })
+
+  it("W58b items 2 and 3: moves refused for good; the plan taken off sale says to put it back on sale first; the member whose membership then ends has the move closed by the next run (done, nothing sent, Stripe not asked)", async () => {
+    await onASeed(async (stripe) => {
+      const priceLines = async () => (await stuckList(db)).steps.filter((step) => step.step === 'price')
+      for (let i = 0; i < 2; i += 1) stripe.failNext('subscriptions.update', refused())
+      expect((await saveCore({ priceMonthly: 45, membersToMove: 2 })).data).toMatchObject({ priceChange: { state: 'done', moved: 0, toMove: 2 } })
+      pastTheWindow()
+      for (let i = 0; i < 2; i += 1) stripe.failNext('subscriptions.update', refused())
+      await reconcileNow(stripe)
+      expect((await priceLines()).map((line) => [line.subscriptionId, line.state, line.words]).sort()).toEqual([
+        ['sub_mo', 'refused', LEFT_STEP_WORDS.price.refused('sub_mo')],
+        ['sub_pat', 'refused', LEFT_STEP_WORDS.price.refused('sub_pat')],
+      ])
+      // Item 3: the plan is taken off sale. A move by hand would be refused too, so the line says what to do first.
+      await db.query('UPDATE membership_plans SET active = false WHERE id = $1', [ID.plan])
+      expect((await priceLines()).map((line) => line.words).sort()).toEqual([LEFT_STEP_WORDS.price.refusedOffSale('sub_mo'), LEFT_STEP_WORDS.price.refusedOffSale('sub_pat')])
+      expect(LEFT_STEP_WORDS.price.refusedOffSale('sub_mo')).toContain('Put the plan back on sale first, then move the subscription')
+      // Item 2: Pat's membership ends here. The next run closes Pat's move itself, as a left move is closed; nothing is
+      // sent and Stripe isn't asked about Pat at all.
+      const patStep = (await priceLines()).find((line) => line.subscriptionId === 'sub_pat')?.stepId ?? ''
+      await db.query("UPDATE customer_memberships SET subscription_status = 'cancelled' WHERE id = $1", [PAT_MEMBERSHIP])
+      const before = stripe.calls.length
+      pastTheWindow()
+      const run = await reconcileNow(stripe)
+      expect(stripe.calls.slice(before).filter((call) => JSON.stringify(call.params ?? null).includes('sub_pat'))).toEqual([])
+      expect(run.items.filter((item) => item.id === patStep).map((item) => [item.kind, item.outcome])).toEqual([['step', 'finalised']])
+      expect((await priceLines()).map((line) => line.subscriptionId)).toEqual(['sub_mo'])
+      const patEnds = (await priceSteps()).filter((row) => row.details['stepId'] === patStep && row.details['state'] === 'done')
+      expect(patEnds.map((row) => [row.details['sent'], row.details['detail']])).toEqual([[false, ENDED_HERE_REFUSED_DETAIL]])
+      // A second run finds nothing more to close.
+      pastTheWindow()
+      expect((await reconcileNow(stripe)).items.filter((item) => item.id === patStep)).toEqual([])
+      // Back on sale: Mo's line in the plain refused words again.
+      await db.query('UPDATE membership_plans SET active = true WHERE id = $1', [ID.plan])
+      expect((await priceLines()).map((line) => line.words)).toEqual([LEFT_STEP_WORDS.price.refused('sub_mo')])
+    })
+  })
+
+  it('W58b item 2: the 20-minute check that finds a refused move as the newest wish, with the membership ended, closes it too (nothing read or sent), and the later check covers both', async () => {
+    await onASeed(async (stripe) => {
+      // Mo and Pat moved to £45; Mo's membership ends; Pat's move to £50 is refused for good.
+      await saveCore({ priceMonthly: 45, membersToMove: 2 })
+      await db.query("UPDATE customer_memberships SET subscription_status = 'cancelled' WHERE id = $1", [ID.membership])
+      stripe.failNext('subscriptions.update', refused())
+      expect((await saveCore({ priceMonthly: 50, membersToMove: 1 })).data).toMatchObject({ priceChange: { state: 'done', moved: 0, toMove: 1 } })
+      pastTheWindow()
+      stripe.failNext('subscriptions.update', refused())
+      await reconcileNow(stripe)
+      const refusedStep = (await stuckList(db)).steps.find((step) => step.subscriptionId === 'sub_pat')?.stepId ?? ''
+      expect(refusedStep).not.toBe('')
+      // Pat's membership ends; Pat's first (done) move is due its check, and the refused one is the newest wish.
+      await db.query("UPDATE customer_memberships SET subscription_status = 'cancelled' WHERE id = $1", [PAT_MEMBERSHIP])
+      vi.setSystemTime(Date.now() + 30 * 60_000)
+      const due = (await checksDue(db)).find((one) => one.subscriptionId === 'sub_pat' && one.kind === 'price')
+      expect(due).toBeDefined()
+      const before = stripe.calls.length
+      const checked = await checkAfterClosing(db, stripe, due as CheckDue, by, undefined)
+      expect(checked.kind).toBe('wait')
+      expect(stripe.calls.slice(before)).toEqual([])
+      const ends = (await priceSteps()).filter((row) => row.details['stepId'] === refusedStep && row.details['state'] === 'done')
+      expect(ends.map((row) => [row.details['sent'], row.details['detail']])).toEqual([[false, ENDED_HERE_REFUSED_DETAIL]])
+      expect((await stuckList(db)).steps.filter((step) => step.subscriptionId === 'sub_pat')).toEqual([])
+      // Past the new closing's own window, one check covers both closings: the membership has ended, so nothing is read.
+      vi.setSystemTime(Date.now() + 30 * 60_000)
+      await reconcileNow(stripe)
+      expect(stripe.calls.slice(before).filter((call) => JSON.stringify(call.params ?? null).includes('sub_pat'))).toEqual([])
+      expect(await checksDue(db).then((list) => list.filter((one) => one.subscriptionId === 'sub_pat'))).toEqual([])
     })
   })
 
@@ -870,6 +960,29 @@ describe('on and off sale', () => {
       pastTheWindow()
       await reconcileNow(stripe)
       expect(stripe.product('prod_seed')?.['active']).toBe(false)
+    })
+  })
+
+  it('W58c (W58 review FL4): off is refused while a price change on the plan is still moving its members; nothing written; allowed once they have moved', async () => {
+    await onASeed(async (stripe) => {
+      stripe.failNext('subscriptions.update', { kind: 'unreachable' })
+      expect((await saveCore({ priceMonthly: 45, membersToMove: 2 })).data).toMatchObject({ priceChange: { moved: 1, toMove: 1 } })
+      const auditedBefore = (await audited('plan.active_set')).length
+      const productCallsBefore = stripe.calls.filter((call) => call.method.startsWith('products.')).length
+      const refusedOff = await press(activeRoute, { planId: ID.plan }, { active: false })
+      expect([refusedOff.reason, refusedOff.error?.message]).toEqual(['price_change_open', NEW.offWhileChangeOpen])
+      expect((await plan()).active).toBe(true)
+      expect(stripe.product('prod_seed')?.['active']).toBe(true)
+      expect(await audited('plan.active_set')).toHaveLength(auditedBefore)
+      expect(stripe.calls.filter((call) => call.method.startsWith('products.'))).toHaveLength(productCallsBefore)
+      // The move goes out, then the plan comes off sale with every member on the new price.
+      pastTheWindow()
+      await reconcileNow(stripe)
+      const newPrice = String((await plan()).stripe_price_id)
+      expect([await priceOf(stripe, 'sub_mo'), await priceOf(stripe, 'sub_pat')]).toEqual([newPrice, newPrice])
+      expect((await press(activeRoute, { planId: ID.plan }, { active: false })).data).toEqual({ id: ID.plan, active: false })
+      expect(stripe.product('prod_seed')?.['active']).toBe(false)
+      await invariants(stripe)
     })
   })
 

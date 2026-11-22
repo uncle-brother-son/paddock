@@ -272,3 +272,23 @@ describe('the words W17 adds', () => {
     )
   })
 })
+
+describe('W58: the words items for bookings', () => {
+  it("a first part never sent says so, and Refund the rest, with nothing to check in Stripe (W35 row 8, W26a review L3); one Stripe refused keeps W26a's words", () => {
+    const notSent = words.REFUND_NOT_SENT_DETAIL
+    expect(words.putBackFailedMessage(notSent, 20, false)).toBe(
+      "The card refund wasn't sent in time, so it didn't go back to the card, and the booking couldn't be put back as it was. The change stands, and £20.00 shows on the booking as still to refund. Use Refund the rest to send it to the card."
+    )
+    expect(words.putBackBlockedMessage(notSent, 20, true)).toBe(
+      "The card refund wasn't sent in time, so it didn't go back to the card, and the booking can't be put back as it was: its places, its pass session or its membership credit have been taken since, or its slot has been blocked or moved. The change stands, and £20.00 shows on the booking as still to refund. Use Refund the rest to send it (the booking is cancelled, so it goes to store credit)."
+    )
+    const refused = words.putBackFailedMessage('Failed to refund payment: Your card was declined.', 20, false)
+    expect(refused.startsWith('The card refund was refused (Failed to refund payment: Your card was declined.)')).toBe(true)
+    expect(refused).toContain('Check Stripe first: if the money already reached the customer, use It already arrived')
+    expect(words.putBackFailedNotRecordedMessage(notSent).startsWith("The card refund wasn't sent in time, so nothing went back")).toBe(true)
+  })
+
+  it('no cash to hand back says so, not "only store credit" (W35 row 24)', () => {
+    expect(words.NO_CASH_LEFT_MESSAGE).toBe("No cash recorded on this booking's orders can be handed back, so it can't be handed back in cash.")
+  })
+})

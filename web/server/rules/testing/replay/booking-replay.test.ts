@@ -2,7 +2,64 @@ import { appendFileSync } from 'node:fs'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Db } from '@/server/db'
 import { loadBooking, paymentOpen } from '@/server/rules/bookings/load-booking'
-import { loadBookingMoneyLeft, orderPaymentStatusAfterRefunds, type BookingMoneyLeft } from '@/server/rules/bookings/money-left'
+import { loadBookingLines, loadBookingMoneyLeft, loadOrderCardPortion, orderPaymentStatusAfterRefunds, type BookingMoneyLeft } from '@/server/rules/bookings/money-left'
+import type { Queryable } from '@/server/db'
+
+/**
+ * W58b (W50 "For later" 4): loadBookingMoneyLeft as it was before W58b, four reads one after another (and one more
+ * per order), kept here to hold the one statement that replaced it to the same answers on every replayed end state.
+ */
+async function moneyLeftByReads(db: Queryable, bookingId: string): Promise<BookingMoneyLeft | null> {
+  const round2 = (n: number): number => Math.round(n * 100) / 100
+  const amount = (value: string | null | undefined): number => Number.parseFloat(value ?? '0')
+  const booking = (
+    await db.query<{ status: string; customer_id: string; price_paid: string | null; refund_owed_amount: string }>(
+      'SELECT status, customer_id, price_paid::text AS price_paid, refund_owed_amount::text AS refund_owed_amount FROM bookings WHERE id = $1::uuid',
+      [bookingId]
+    )
+  )[0]
+  if (!booking) return null
+  const lines = await loadBookingLines(db, bookingId)
+  const portionLeft = new Map<string, number>()
+  let cardLeft = 0
+  for (const line of lines) {
+    let portion = portionLeft.get(line.orderId)
+    if (portion === undefined) {
+      const loaded = await loadOrderCardPortion(db, line.orderId)
+      portion = loaded?.paymentIntentId ? loaded.cardPortionRemaining : 0
+    }
+    const take = round2(Math.min(portion, line.netRemaining))
+    portionLeft.set(line.orderId, round2(portion - Math.max(take, 0)))
+    if (take > 0) cardLeft = round2(cardLeft + take)
+  }
+  const orderIds = [...portionLeft.keys()]
+  const paidOtherWays = (
+    await db.query<{ gift_card: string; store_credit: string }>(
+      `SELECT COALESCE((SELECT SUM(gcr.amount_used) FROM gift_card_redemptions gcr
+                        WHERE gcr.order_id = ANY($1::uuid[]) OR (gcr.booking_id = $2::uuid AND gcr.order_id IS NULL)), 0)::text AS gift_card,
+              GREATEST(COALESCE((SELECT -SUM(sct.amount) FROM store_credit_transactions sct
+                                 WHERE sct.reason IN ('redemption', 'redemption_reversal')
+                                   AND (sct.order_id = ANY($3::uuid[]) OR sct.booking_id = $4::uuid)), 0), 0)::text AS store_credit`,
+      [orderIds, bookingId, orderIds, bookingId]
+    )
+  )[0]
+  const pricePaid = round2(amount(booking.price_paid))
+  const refundOwed = round2(amount(booking.refund_owed_amount))
+  const left = Math.max(round2(pricePaid - refundOwed), 0)
+  const card = Math.min(cardLeft, left)
+  const notCard = round2(left - card)
+  const giftCard = Math.min(notCard, round2(amount(paidOtherWays?.gift_card)))
+  const storeCredit = Math.min(round2(notCard - giftCard), round2(amount(paidOtherWays?.store_credit)))
+  return { status: booking.status, customerId: booking.customer_id, pricePaid, refundOwed, left, cardLeft, parts: { card, giftCard, storeCredit, cash: round2(notCard - giftCard - storeCredit) } }
+}
+
+/** How many statements `work` sends through `db`. */
+async function statementsFor(db: Queryable, work: (counted: Queryable) => Promise<unknown>): Promise<number> {
+  let statements = 0
+  const counted: Queryable = { query: (sql: string, params?: never) => ((statements += 1), db.query(sql, params)) } as unknown as Queryable
+  await work(counted)
+  return statements
+}
 import { compareRecordings, type Recording } from './compare'
 import { invalidStatusMessage, STATUS_PAYMENT_NEEDED_MESSAGE } from '@/server/rules/bookings/failure-messages'
 import { STAFF_STATUSES } from '@/server/rules/bookings/edits'
@@ -159,7 +216,7 @@ describe("step D's side of the replay (W17)", () => {
   const moveScenarios = new Set<string>()
   const moveSetupScenarios = new Set<string>()
   const shifted: string[] = []
-  const counts = { bookings: 0, orders: 0, figuresCompared: 0, guardsCompared: 0, statusesCompared: 0, statusesNamed: 0, giftCardShifted: 0 }
+  const counts = { bookings: 0, orders: 0, figuresCompared: 0, guardsCompared: 0, statusesCompared: 0, statusesNamed: 0, giftCardShifted: 0, oneStatement: 0 }
 
   beforeAll(async () => {
     environment = await startReplay()
@@ -270,6 +327,9 @@ describe("step D's side of the replay (W17)", () => {
         const before = (await oldFigures.default({ params: { bookingId }, user: { email: 'jo@example.com' } })) as Figures
         const after = await loadBookingMoneyLeft(db, bookingId)
         if (!after) throw new Error(`The Worker can't find ${bookingId}`)
+        // W58b (W50 "For later" 4): the one statement gives exactly what the four reads it replaced gave, and is one.
+        expect(after, `${name} ${bookingId}`).toEqual(await moneyLeftByReads(db, bookingId))
+        counts.oneStatement += (await statementsFor(db, (counted) => loadBookingMoneyLeft(counted, bookingId))) === 1 ? 1 : 0
         if (JSON.stringify(after) !== JSON.stringify(before)) {
           expect(sameButForGiftCardPart(before, after, await giftCardPartWithoutOrder(db, bookingId)), `${name} ${JSON.stringify({ before, after })}`).toBe(true)
           counts.giftCardShifted += 1
@@ -804,6 +864,8 @@ describe("step D's side of the replay (W17)", () => {
     // W05l later 1 is seen working on real end states, not only on the planted case.
     expect(counts.giftCardShifted).toBeGreaterThan(0)
     expect(counts.figuresCompared).toBe(counts.bookings)
+    // W58b (W50 "For later" 4): every end state's figures read in one statement.
+    expect(counts.oneStatement).toBe(counts.bookings)
     expect(counts.statusesCompared).toBe(counts.orders)
     // W53: one order of them all is read differently by the Worker's rule, and it is named (W53_STATUS_AT_THE_END).
     expect(counts.statusesNamed).toBe(1)
@@ -839,7 +901,8 @@ describe("step D's side of the replay (W17)", () => {
     // its own allowance on one path with both values exact, so each must still be seen: an unused allowance fails in
     // compareRecordings).
     expect([...W53_LABEL_DIFFERENCES.keys()].filter((name) => !labelScenarios.has(name))).toEqual([])
-    expect([W53_LABEL_DIFFERENCES.size, [...W53_LABEL_DIFFERENCES.values()].flat().length]).toEqual([14, 30])
+    // W58b (W53 "For later" 2): two more, the gift card with store credit recorded `split`.
+    expect([W53_LABEL_DIFFERENCES.size, [...W53_LABEL_DIFFERENCES.values()].flat().length]).toEqual([16, 32])
     // W53a: the three scenarios whose Remove Guest refund goes to the payment that took the seat (Q40), 11 values.
     expect([...W53A_PAYMENT_FIRST_DIFFERENCES.keys()].filter((name) => !paymentFirstScenarios.has(name))).toEqual([])
     expect([W53A_PAYMENT_FIRST_DIFFERENCES.size, [...W53A_PAYMENT_FIRST_DIFFERENCES.values()].flat().length]).toEqual([3, 11])

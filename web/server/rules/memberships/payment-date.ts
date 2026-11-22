@@ -716,12 +716,17 @@ export async function refundAndFail(
   by: ChangeBy,
   timing: StripeTiming | undefined,
   known?: { refundId: string; status: string | null; amountPence: number | null },
-  attempt?: string
+  attempt?: string,
+  /**
+   * W58b (the W45 audit's row 42): the move was never sent (reconcile's look again, W41a B1, found the subscription no
+   * longer allowed it). Kept on the `refunding` mark, so the Orders page's line doesn't say Stripe refused it.
+   */
+  notSent = false
 ): Promise<ChangeOutcome> {
   if (!change.refunding) {
     let marked: boolean
     try {
-      marked = await markChange(db, change, by, 'refunding', { paymentIntentId, stripeSaid })
+      marked = await markChange(db, change, by, 'refunding', { paymentIntentId, stripeSaid, ...(notSent ? { notSent: true } : {}) })
     } catch (err) {
       // No mark, so no refund: reconcile sends S3 again, which Stripe refuses again, and marks then.
       return held('move_unconfirmed', PAYMENT_DATE_NEW_WORDS.paidNotFinished, `S3 refused (${stripeSaid}); the refunding mark was not written: ${explain(err)}`)
@@ -882,6 +887,9 @@ SELECT p.id, p.membership_id, p.new_renewal_date::text AS new_renewal_date, p.am
        EXISTS (SELECT 1 FROM audit_log h
         WHERE h.action = '${PAYMENT_DATE_ACTION}' AND h.entity_type = '${PAYMENT_DATE_ENTITY}' AND h.entity_id = p.membership_id::text
           AND h.details->>'changeId' = p.id::text AND h.details->>'state' = 'held' AND h.details->>'reason' = 'refund_refused') AS refund_refused,
+       EXISTS (SELECT 1 FROM audit_log m
+        WHERE m.action = '${PAYMENT_DATE_ACTION}' AND m.entity_type = '${PAYMENT_DATE_ENTITY}' AND m.entity_id = p.membership_id::text
+          AND m.details->>'changeId' = p.id::text AND m.details->>'state' = 'refunding' AND m.details->>'notSent' = 'true') AS not_sent,
        (SELECT r.details FROM audit_log r
         WHERE r.entity_type = '${PAYMENT_DATE_RECONCILE_ENTITY}' AND r.entity_id = p.id::text AND r.action = 'order.reconcile'
         ORDER BY r.at DESC LIMIT 1) AS last
@@ -905,6 +913,8 @@ export interface ListedPaymentDateChange {
   started_here: boolean
   /** W47: the press marked the change as one whose refund Stripe refused (its own `held` row). */
   refund_refused?: boolean | null
+  /** W58b (the W45 audit's row 42): the move was never sent (the `refunding` mark says `notSent`). */
+  not_sent?: boolean | null
   last: { outcome?: string; reason?: string; detail?: string | null } | null
 }
 

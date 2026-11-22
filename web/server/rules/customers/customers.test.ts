@@ -133,6 +133,11 @@ describe('create: who may, and every refusal with the old words in the old order
         [{ ...DEE, dateOfBirth: '2026-11-11' }, 'date_of_birth_in_future', 'Date of birth cannot be in the future', 'dateOfBirth'],
         [{ ...DEE, dateOfBirth: '2026-11-10' }, 'under_18', 'Customers must be 18 or over.', 'dateOfBirth'],
         [{ ...DEE, dateOfBirth: '2008-11-11' }, 'under_18', 'Customers must be 18 or over.', 'dateOfBirth'],
+        // W58 (W45 audit row 18): the lengths, after the old checks and before the date of birth's.
+        [{ ...DEE, firstName: 'A'.repeat(101) }, 'too_long', 'First name can be at most 100 characters.', 'firstName'],
+        [{ ...DEE, lastName: 'B'.repeat(101) }, 'too_long', 'Last name can be at most 100 characters.', 'lastName'],
+        [{ ...DEE, email: `${'d'.repeat(250)}@example.com` }, 'too_long', 'Email can be at most 254 characters.', 'email'],
+        [{ ...DEE, phone: '0'.repeat(31) }, 'too_long', 'Phone can be at most 30 characters.', 'phone'],
         // The first thing wrong is the one given.
         [{ firstName: '', lastName: '', email: 'x', dateOfBirth: 'y' }, 'first_name_required', 'First name is required', 'firstName'],
         [{ ...DEE, lastName: '', email: 'x', dateOfBirth: 'y' }, 'last_name_required', 'Last name is required', 'lastName'],
@@ -146,7 +151,8 @@ describe('create: who may, and every refusal with the old words in the old order
         expect(answer.body.error?.field, JSON.stringify(fields)).toBe(field)
         expect(answer.body.error?.details).toEqual({ reason, message: words, action: 'create_customer' })
       }
-      expect(new Set(cases.map(([, reason]) => reason))).toEqual(new Set(CREATE_CUSTOMER_REASONS.filter((reason) => reason !== 'duplicate_email')))
+      // W58: too_long is the one reason the old function didn't have.
+      expect(new Set(cases.map(([, reason]) => reason))).toEqual(new Set([...CREATE_CUSTOMER_REASONS.filter((reason) => reason !== 'duplicate_email'), 'too_long']))
       expect(await emails()).toEqual(SEEDED)
       expect(await audit()).toEqual([])
       // 18 today is allowed.
@@ -380,11 +386,13 @@ describe('the list (getCustomers)', () => {
       expect(names(await list({ search: 'mary ann lee' }))).toEqual(['Mary Ann Lee'])
       expect(names(await list({ search: 'ann lee' }))).toEqual(['Mary Ann Lee'])
       expect(names(await list({ search: 'example.org' }))).toEqual(['Mary Ann Lee', 'Holly Wayne', 'Wayne Holland'])
-      // The whole search against "first last": it only decides when a `_` or `%` in the search stands for the space
-      // between the names, as in the old function (no single name holds "wayne_holland").
-      expect(names(await list({ search: 'wayne_holland' }))).toEqual(['Wayne Holland'])
-      expect(names(await list({ search: 'ann%lee' }))).toEqual(['Mary Ann Lee'])
+      // W58 (W45 audit row 15, W53 "For later" 4): `_` and `%` in a search are plain characters now. The old function
+      // let them stand for any text, so "wayne_holland" found Wayne Holland; now nothing holds that text.
+      expect(names(await list({ search: 'wayne_holland' }))).toEqual([])
+      expect(names(await list({ search: 'ann%lee' }))).toEqual([])
       expect(names(await list({ search: 'wayne_nobody' }))).toEqual([])
+      // The whole search against "first last" still decides for a search with the space in it.
+      expect(names(await list({ search: 'y ann l' }))).toEqual(['Mary Ann Lee'])
       // Whether a card is saved, and its digits, are each customer's own: Sam has one, Wayne has none.
       const cards = async (query: Record<string, string>) => ((await list(query)).body.data as Array<Record<string, unknown>>).map((row) => [row['first_name'], row['has_saved_card'], row['saved_card_last4'], row['saved_card_brand']])
       expect(await cards({ search: 'sam' })).toEqual([['Sam', true, '4242', 'visa']])

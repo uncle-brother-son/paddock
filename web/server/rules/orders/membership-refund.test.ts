@@ -869,7 +869,10 @@ describe('the subscription is cancelled last, and a cancel that fails is left, l
       stripe.failNext('subscriptions.cancel', { kind: 'error', error: fakeStripeErrors.server() })
       stripe.failNext('subscriptions.retrieve', { kind: 'error', error: fakeStripeErrors.missing(`subscription: '${subscription}'`) })
       expect((await runReconcile(stripe)).items).toEqual([expect.objectContaining({ kind: 'order', id: orderId, outcome: 'left', reason: 'subscription_cancel_refused' })])
-      expect((await leftWarnings()).map((warning) => warning.warning)).toEqual([MEMBERSHIP_REFUND_WORDS.cancelRefusedListed(subscription)])
+      // W58b (the W45 audit's row 26; W40 call 8): worded as Stripe not finding it, not as a refusal; the row says so.
+      expect((await leftWarnings()).map((warning) => warning.warning)).toEqual([MEMBERSHIP_REFUND_WORDS.cancelMissingListed(subscription)])
+      expect(MEMBERSHIP_REFUND_WORDS.cancelMissingListed(subscription)).not.toContain('refused')
+      expect((await auditRows('order.subscription_left')).find((row) => row.details['state'] === 'refused')?.details['missing']).toBe(true)
       expect((await runReconcile(stripe)).items).toEqual([])
     })
   })

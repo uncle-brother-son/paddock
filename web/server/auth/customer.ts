@@ -72,8 +72,9 @@ export async function authenticateCustomer(headers: Headers, db: Queryable, veri
 
   const { authUserId } = await verify(token)
 
-  // LIMIT 2: customers.auth_user_id isn't unique yet, and two customers on one login must never
-  // silently resolve to whichever row came first.
+  // LIMIT 2: customers.auth_user_id is unique (customers_auth_user_id_key, where it is set), so a second row can't
+  // exist; the check below stays as a guard: two customers on one login must never silently resolve to whichever
+  // row came first. (W58, W35 audit row 41: this used to say the column "isn't unique yet".)
   const rows = await db.query<CustomerRow>('SELECT id, email, auth_user_id FROM customers WHERE auth_user_id = $1 LIMIT 2', [
     authUserId,
   ])

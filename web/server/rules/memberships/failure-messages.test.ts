@@ -168,7 +168,7 @@ describe('the words W37 adds for a credit adjustment (brief W37 item 2; FB10)', 
   })
 
   it('below zero is worded as "below what is used" is, with the figure it would be left at; a credit type that is neither kind names the two', () => {
-    expect(words.MEMBERSHIP_CREDIT_NEW_WORDS.addonBelowZero(-3)).toBe('Adjustment rejected: the membership would be left with -3 add-on credit(s), below zero.')
+    expect(words.MEMBERSHIP_CREDIT_NEW_WORDS.addonBelowZero(-3)).toBe('Adjustment rejected: the membership would be left with minus 3 add-on credit(s), below zero.')
     expect(words.MEMBERSHIP_CREDIT_NEW_WORDS.addonBelowZero(-1).startsWith('Adjustment rejected: the ')).toBe(true)
     expect(words.MEMBERSHIP_CREDIT_WORDS.belowUsed(0, 1).startsWith('Adjustment rejected: the ')).toBe(true)
     expect(words.MEMBERSHIP_CREDIT_NEW_WORDS.creditTypeInvalid).toBe('Credit type must be "session" or "addon".')

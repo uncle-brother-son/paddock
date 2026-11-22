@@ -1132,7 +1132,8 @@ describe('W05i on the old functions', () => {
     })
 
     it('finding 10: Cancel & Refund says when some of it is money owed', () => {
-      expect(dialog('CancelAndRefundDialog')).toContain('of this is money a failed refund left owed. Check their balance first.')
+      // W58b (the W26 audit's row 19; W23 review 4; a named difference): the words say what to check.
+      expect(dialog('CancelAndRefundDialog')).toContain("of this is money a failed refund left owed. Check in Stripe that the earlier refund didn't reach them first.")
     })
 
     it.each(['PartRefundDialog', 'RefundTheRestDialog', 'CancelAndRefundDialog'])('%s stops at an unclear answer', (name) => {

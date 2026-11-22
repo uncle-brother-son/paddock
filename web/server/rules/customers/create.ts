@@ -9,7 +9,7 @@ import { postgresRefusal, type Db } from '@/server/db'
 import { accountRefusal } from '@/server/rules/account/refusal'
 import { isAtLeastMinimumAge } from '@/server/rules/orders/guest-validation'
 import { londonToday } from '@/server/rules/time/london-time'
-import { CREATE_CUSTOMER_WORDS, CUSTOMER_EMAIL_UNIQUE_RULES } from './failure-messages'
+import { CREATE_CUSTOMER_NEW_WORDS, CREATE_CUSTOMER_WORDS, CUSTOMER_EMAIL_UNIQUE_RULES, CUSTOMER_FIELD_LIMITS } from './failure-messages'
 
 /** Who is making the customer. `staff`: a signed-in staff member. `customer`: the website (nobody is signed in yet). */
 export type CustomerChannel = 'staff' | 'customer'
@@ -84,6 +84,16 @@ export async function createCustomer(db: Db, input: CreateCustomerInput, options
   // trim() takes off the ends are still taken off, as before).
   const emailAsSent = typeof input.email === 'string' ? input.email : ''
   if (INVISIBLE_PATTERN.test(email) || emailAsSent.includes(BYTE_ORDER_MARK)) throw invalid('email_invalid', CREATE_CUSTOMER_WORDS.emailInvalid, 'email')
+  // W58 (W45 audit row 18, W39 "Noticed" 7): lengths the screens can show and email can carry, checked after the old
+  // checks (so their words come first) and before anything is written.
+  for (const [value, limit, field] of [
+    [firstName, CUSTOMER_FIELD_LIMITS.name, 'firstName'],
+    [lastName, CUSTOMER_FIELD_LIMITS.name, 'lastName'],
+    [email, CUSTOMER_FIELD_LIMITS.email, 'email'],
+    [phone ?? '', CUSTOMER_FIELD_LIMITS.phone, 'phone'],
+  ] as const) {
+    if (value.length > limit) throw invalid('too_long', CREATE_CUSTOMER_NEW_WORDS.tooLong(field, limit), field)
+  }
   if (!isRealDate(dateOfBirth)) throw invalid('date_of_birth_invalid', CREATE_CUSTOMER_WORDS.dateOfBirthInvalid, 'dateOfBirth')
   const now = options.now?.() ?? Date.now()
   // As the old function: the date's own midnight (UTC) against this moment.

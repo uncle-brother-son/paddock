@@ -14,6 +14,16 @@ import { ApiError } from './errors'
  * the row is purged, on purpose: nothing can tell how far the handler got.
  */
 
+/**
+ * W58b (the W45 audit's row 7; W37 review L1, W49-W54 F1): a key still in progress this long after it was claimed
+ * belongs to a press whose Worker died part way: pressing again can never get its answer. The CONFLICT then says so
+ * (`reason: 'key_stuck'`), so the screen tells staff to close and check instead of "press again here". Longer than any
+ * press runs, so a press still at work is never called stuck.
+ */
+export const KEY_STUCK_MINUTES = 5
+export const KEY_STUCK_MESSAGE =
+  "This press started more than 5 minutes ago and never finished, so pressing again here won't get its answer. Don't do it another way yet: close this, reload the page and check what was done (and the Orders page), then tell a manager if it isn't clear."
+
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9_-]{16,128}$/
 const STRIPE_STEP = /^[A-Za-z0-9_.-]{1,64}$/
 
@@ -64,11 +74,16 @@ export async function hashRequest(input: unknown): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
+/** A claimed key's row, and (W58b) whether it has been in progress past KEY_STUCK_MINUTES. Fixed text. */
+const CLAIMED_KEY_SQL = `SELECT request_hash, status, response, http_status, created_at < now() - interval '${KEY_STUCK_MINUTES} minutes' AS stuck FROM api_idempotency
+     WHERE actor_type = $1 AND actor_id = $2 AND endpoint = $3 AND key = $4`
+
 interface IdempotencyRow {
   request_hash: string
   status: 'in_progress' | 'done'
   response: unknown
   http_status: number | null
+  stuck?: boolean | null
 }
 
 /**
@@ -90,11 +105,7 @@ export async function claimIdempotencyKey(
   )
   if (claimed.length > 0) return null
 
-  const rows = await db.query<IdempotencyRow>(
-    `SELECT request_hash, status, response, http_status FROM api_idempotency
-     WHERE actor_type = $1 AND actor_id = $2 AND endpoint = $3 AND key = $4`,
-    [scope.actorType, scope.actorId, scope.endpoint, scope.key]
-  )
+  const rows = await db.query<IdempotencyRow>(CLAIMED_KEY_SQL, [scope.actorType, scope.actorId, scope.endpoint, scope.key])
   const existing = rows[0]
   if (!existing) {
     throw new ApiError('CONFLICT', 'This request is already being processed')
@@ -103,6 +114,7 @@ export async function claimIdempotencyKey(
     throw new ApiError('IDEMPOTENCY_MISMATCH', 'This Idempotency-Key was already used for a different request.')
   }
   if (existing.status !== 'done' || existing.http_status === null) {
+    if (existing.stuck === true) throw new ApiError('CONFLICT', KEY_STUCK_MESSAGE, { details: { reason: 'key_stuck' } })
     throw new ApiError('CONFLICT', 'This request is already being processed')
   }
   return { status: existing.http_status, body: existing.response }

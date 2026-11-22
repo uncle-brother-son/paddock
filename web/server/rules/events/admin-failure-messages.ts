@@ -78,6 +78,10 @@ export const EVENT_ADMIN_NEW_WORDS = {
    */
   cutoffCleared: (earliest: string): string =>
     `Places are already booked on this event, so its refund cut-off can't be cleared or brought forward: customers keep at least the cut-off they booked under. Set a refund cut-off of ${earliest} or later.`,
+  /** W58b (W52 "For later" 3): a capacity past what the column holds (the table's own error was shown before). */
+  capacityTooLarge: 'Capacity is too large: enter a number of places of 2,147,483,647 or fewer.',
+  /** W58b (W52 "For later" 3): a price past what the price columns hold. */
+  priceTooLarge: 'Prices can be at most £99,999,999.99.',
   /** An attendee whose row changed between the press's statements (someone else's press landed first). */
   attendeeChanged: 'This attendee changed while this was being saved, so nothing was changed. Reload the page and try again.',
   // W52a (W52 review "For later" 1): the website's customer is told nothing about an attendee who isn't on one of

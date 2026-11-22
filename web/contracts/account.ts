@@ -491,6 +491,11 @@ export const giftCardListRowSchema = giftCardRowSchema.extend({
   purchaser_first_name: z.string().nullable(),
   purchaser_last_name: z.string().nullable(),
   purchaser_email: z.string().nullable(),
+  /**
+   * W58 (W45 audit row 12): why Reactivate would be refused (Q46: its order line was refunded, or its balance moved to
+   * store credit), in the extension's own words, so the screen greys the button with the reason. Null when it can be.
+   */
+  reactivate_refused: z.string().nullable().optional(),
 })
 export type GiftCardListRow = z.infer<typeof giftCardListRowSchema>
 export const giftCardListOutputSchema = z.array(giftCardListRowSchema)

@@ -39,6 +39,7 @@ import { adminRead, namedRead } from '@/server/rules/admin/read'
 import { adminRefusal, type AdminActor } from '@/server/rules/admin/refusal'
 import { BOOKING_ROW_SQL, BOOKING_ROW_TIMES, type BookingReader, type StaffFlagPress } from '@/server/rules/bookings/admin'
 import { LONDON_WALL_CLOCK_NOW_SQL, onOrAfterLondonDaySql, onOrBeforeLondonDaySql } from '@/server/rules/time/london-day-sql'
+import { likeContaining } from '@/server/rules/admin/like'
 import { ORDER_ADMIN_NEW_WORDS, ORDER_PAYMENT_METHOD_LABELS } from './admin-failure-messages'
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -177,8 +178,9 @@ export async function listOrders(db: Queryable, input: OrderListRouteInput, read
   if (input.orderSource) where.push(`o.order_source = ${params.add(input.orderSource)}`)
   if (input.search) {
     // One value each, as the staff app's driver bound them (a placeholder used twice bound the wrong value there).
-    const like = `%${input.search}%`
-    where.push(`(c.first_name ILIKE ${params.add(like)} OR c.last_name ILIKE ${params.add(like)} OR c.email ILIKE ${params.add(like)})`)
+    // W58 (W53 "For later" 4): `%` and `_` typed in a search match themselves.
+    const like = likeContaining(input.search)
+    where.push(`(c.first_name ILIKE ${params.add(like)} ESCAPE '\\' OR c.last_name ILIKE ${params.add(like)} ESCAPE '\\' OR c.email ILIKE ${params.add(like)} ESCAPE '\\')`)
   }
   if (input.view === 'upcoming') where.push(`NOT (${ORDER_NEEDS_ACTION_SQL}) AND (${ORDER_UPCOMING_SQL})`)
   else if (input.view === 'complete') where.push(`NOT (${ORDER_NEEDS_ACTION_SQL}) AND NOT (${ORDER_UPCOMING_SQL})`)

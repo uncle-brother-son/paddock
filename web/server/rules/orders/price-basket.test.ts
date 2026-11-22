@@ -12,7 +12,7 @@ import {
   PRODUCT_MEMBER_PRICE_ONLY_MESSAGE,
   PRODUCT_PRICE_NOT_SET_MESSAGE,
 } from './failure-messages'
-import { priceBasket } from './price-basket'
+import { priceBasket, STORE_CREDIT_CHOICE_CONFLICT_MESSAGE } from './price-basket'
 
 // Prices on the shared replay seed, at its fixed date: seat £20 (Peak £25.50), towel £5, robe £10
 // (member £8), soap £12, candle £20 shipped, mug £15, pass £50, membership £40 or £400, event £40,
@@ -268,6 +268,29 @@ describe('payment parts, in the agreed order', () => {
     const result = await quote({ products: [{ productVariantId: ID.variant, quantity: 1, unitPrice: 6.95 }], payment: { storeCredit: { amount: 2.9 }, giftCard: { giftCardId: ID.giftCard, amount: 4.05 } } }, { allowPriceOverrides: true })
     expect(result.totals.toCollect.card).toBe(0)
     expect(reasons(result)).toEqual(['price_override_reason_required'])
+  })
+
+  // W58 (Wayne's Q55): the store credit choice. Sam has £30.00 of store credit; the soap is £24.00, two seats and the
+  // soap £64.00.
+  it.each([
+    ['ticked, covering it all: £24.00 of the £30.00, nothing to collect', { products: [soap], payment: { useStoreCredit: true } }, 24, 0],
+    ['ticked, partly covering: all £30.00, £34.00 left for the card', { booking: twoSeats(), products: [soap], payment: { method: 'card', useStoreCredit: true } }, 30, 34],
+    ['ticked with a £40.00 gift card: the £24.00 the gift card leaves', { booking: twoSeats(), products: [soap], payment: { method: 'card', useStoreCredit: true, giftCard: { giftCardId: ID.giftCard, amount: 40 } } }, 24, 0],
+    ['unticked: none, the whole £24.00 to collect', { products: [soap], payment: { method: 'cash', useStoreCredit: false } }, 0, 24],
+  ] as const)('Q55 %s', async (_, input, applied, toCollect) => {
+    const result = await quote(input as unknown as Partial<BasketQuoteInput>)
+    expect(result.totals.storeCreditApplied).toBe(applied)
+    expect(result.totals.toCollect.card).toBe(toCollect)
+    expect(reasons(result).filter((reason) => reason !== 'payment_method_required')).toEqual([])
+  })
+
+  it('Q55: the choice and an amount sent together are refused, whichever way the choice goes; a website guest uses none', async () => {
+    for (const useStoreCredit of [true, false]) {
+      const both = await quote({ products: [soap], payment: { method: 'cash', useStoreCredit, storeCredit: { amount: 10 } } })
+      expect(both.problems).toContainEqual(expect.objectContaining({ stage: 'validation', reason: 'store_credit_choice_conflict', message: STORE_CREDIT_CHOICE_CONFLICT_MESSAGE }))
+    }
+    const guest = await priceBasket(db, { products: [soap], payment: { method: 'card', useStoreCredit: true } } as BasketQuoteInput, {})
+    expect(guest.totals.storeCreditApplied).toBe(0)
   })
 
   it('more credit than the customer has', async () => {

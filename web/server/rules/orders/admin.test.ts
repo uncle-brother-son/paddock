@@ -6,6 +6,7 @@ import { adminGetOrderLineItemsOutputSchema, orderLineFulfilledRouteOutputSchema
 import type { Db } from '@/server/db'
 import { ApiError } from '@/server/http/errors'
 import { ownOrderMethod } from '@/server/rules/bookings/add-guest'
+import { recordedPaymentMethod } from '@/server/rules/orders/place-order'
 import { STAFF_ADMIN_WORDS } from '@/server/rules/staff/failure-messages'
 import { ADMIN_TEST_KEY, auditRowsOf, pressRoute, type AdminAnswer, type AdminRouteHandler } from '@/server/rules/testing/admin-routes'
 import { fixtures, insert, startTestDatabase, type TestDatabase } from '@/server/rules/testing/database'
@@ -341,6 +342,9 @@ describe('how an order was paid, in words (lead call L9)', () => {
     expect(ownOrderMethod(0, 15, 'cash', 5)).toBe('cash')
     expect(ownOrderMethod(20, 0, undefined, 0)).toBe('gift_card')
     expect(ownOrderMethod(10, 10, 'cash', 0)).toBe('split')
+    // W58b (W53 "For later" 2; Q9): a gift card with store credit is `split`, as New Order records it (it was `gift_card`).
+    expect(ownOrderMethod(10, 0, undefined, 10)).toBe('split')
+    expect(ownOrderMethod(10, 0, undefined, 10)).toBe(recordedPaymentMethod(undefined, 0, 10, 10))
     // Nothing took anything: no method, as before.
     expect(ownOrderMethod(0, 0, undefined, 0)).toBeNull()
   })

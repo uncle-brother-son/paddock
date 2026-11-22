@@ -46,7 +46,7 @@ export const refundedSubscriptions = (claim: OrderClaim): string[] => [
  * by hand read are W13's (`state`, `subscriptionId`, `invoicePaymentIntentId`, `amountPaid`, `refunded`, `left`), with
  * no first invoice to refund: a refund's own claim gave the money back.
  */
-function entry(actor: Actor, requestId: string, orderId: string, claimId: string, subscriptionId: string, left: string[], refused = false): AuditEntry {
+function entry(actor: Actor, requestId: string, orderId: string, claimId: string, subscriptionId: string, left: string[], refused = false, missing = false): AuditEntry {
   return {
     actorType: actor.type,
     actorId: actor.id,
@@ -63,6 +63,8 @@ function entry(actor: Actor, requestId: string, orderId: string, claimId: string
       claimId,
       refunded: [],
       ...(left.length > 0 ? { left } : {}),
+      // W58b (the W45 audit's row 26): Stripe can't find the subscription, which the list words as that.
+      ...(refused && missing ? { missing: true } : {}),
     },
   }
 }
@@ -97,7 +99,7 @@ export async function cancelRefundedSubscription(
     const left = `${answer.kind} (${answer.message})`
     if (answer.kind !== 'refused' || !refusedIsForGood) return { subscriptionId: target.subscriptionId, cancelled: false, left }
     try {
-      await db.transaction((tx) => audit.recordAll(tx, [entry(by.actor, by.requestId, target.orderId, target.claimId, target.subscriptionId, [left], true)]))
+      await db.transaction((tx) => audit.recordAll(tx, [entry(by.actor, by.requestId, target.orderId, target.claimId, target.subscriptionId, [left], true, answer.missing === true)]))
     } catch (err) {
       return { subscriptionId: target.subscriptionId, cancelled: false, left: `${left}; not recorded as refused yet (${err instanceof Error ? err.message : String(err)})` }
     }

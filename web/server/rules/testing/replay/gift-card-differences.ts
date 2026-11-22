@@ -181,4 +181,15 @@ export const W38_DIFFERENCES: ReadonlyMap<string, readonly AllowedDifference[]> 
   [DECISION_SCENARIOS.Q47[1], [Q47_LONG_EXPIRED]],
   [DECISION_SCENARIOS.FB15[0], [FB15_ONE_PRESS_EXTENDS_ONCE]],
   [DECISION_SCENARIOS.FB24[0], [FB24_NO_STAFF_RECORD_CHANGES_NOTHING]],
+  [
+    'w36-gift-cards-list-and-search',
+    [
+      {
+        name: 'W58: each listed card says why Reactivate would be refused (`reactivate_refused`, Q46\'s words), null for every card here (none was voided by a refund or moved to store credit)',
+        decision: 'Brief W58 (W45 audit row 12, W38 call 3 and review L4)',
+        path: /^\.results\[\d+\]\[\d+\]\.reactivate_refused$/,
+        actual: (value) => value === null,
+      },
+    ],
+  ],
 ])

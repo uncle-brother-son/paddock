@@ -117,7 +117,7 @@ describe('migration 025 (brief W37 item 4): add-on credits never below zero', ()
     const by = () => ({ actor: { type: 'staff' as const, id: staff, canIssueRefunds: true }, requestId: crypto.randomUUID() })
     const below = await adjustMembershipCredits(db, membership, { creditType: 'addon', amount: -5, reason: 'Migration test' }, by()).catch((err: unknown) => err)
     expect(below).toBeInstanceOf(ApiError)
-    expect((below as ApiError).message).toBe('Adjustment rejected: the membership would be left with -3 add-on credit(s), below zero.')
+    expect((below as ApiError).message).toBe('Adjustment rejected: the membership would be left with minus 3 add-on credit(s), below zero.')
     expect(await adjustMembershipCredits(db, membership, { creditType: 'addon', amount: -2, reason: 'Migration test' }, by())).toEqual({ addon_credits_remaining: 0 })
   })
 

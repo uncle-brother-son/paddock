@@ -134,7 +134,11 @@ export const WATCHED_PAYMENT_WORDS = {
     `A card payment (${paymentIntentId}) was still at the bank when its booking change was undone by hand. The automatic check reads it every 5 minutes: if it goes through, it is refunded automatically and shows on this list until Stripe confirms the refund; if it takes nothing, this line goes. Nothing to do. Don't refund it by hand.`,
   // W47a (W47 review S2): a watch now runs out one way only (Stripe can't find the payment with the key in use), so
   // the line says that in its own words. Until W47a it quoted the last read's message, which for a payment still
-  // `processing` was the refused cancel's, under words saying Stripe couldn't say how it ended.
+  // `processing` was the refused cancel's, under words saying Stripe couldn't say how it ended. W58b (W47b "Noticed"
+  // 3): since W47b, Mark sorted hands a payment Stripe can see back to the automatic check, so the words say that
+  // first; a refund by hand is only needed while Stripe still can't find it. W58c (W58 review FL5): the look in Stripe
+  // comes before the press (a press on a payment Stripe still can't find closes the line), and a payment refunded by
+  // hand is never refunded again by the automatic check (CLOSE_WORDS.payment_handed_back).
   expired: (paymentIntentId: string): string =>
-    `A card payment (${paymentIntentId}) was still at the bank when its booking change was undone by hand, and after ${PAYMENT_WATCH_DAYS} days Stripe still can't say how it ended with the payment account the system is using: it can't find the payment there (the system's Stripe key may be for the other Stripe mode, live or test, than the payment). So the automatic check has stopped watching it. Look at the payment in Stripe: if it took money, refund it there by hand (or tell a manager). Then press Mark sorted (needs the Issue refunds permission).`,
+    `A card payment (${paymentIntentId}) was still at the bank when its booking change was undone by hand, and after ${PAYMENT_WATCH_DAYS} days Stripe still can't say how it ended with the payment account the system is using: it can't find the payment there (the system's Stripe key may be for the other Stripe mode, live or test, than the payment). So the automatic check has stopped watching it. Look at the payment in Stripe first and, if it took money, refund it there by hand (or tell a manager). Then press Mark sorted (needs the Issue refunds permission): if Stripe can see the payment now, the automatic check takes it back and refunds it if it took money (never again if it was refunded by hand); if not, the line is closed.`,
 } as const

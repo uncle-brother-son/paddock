@@ -7,6 +7,7 @@ import type { ExtendGiftCardInput, ExtendGiftCardOutput, GiftCardFlagOutput, Gif
 import { audit } from '@/server/audit'
 import type { Db, Queryable, Tx } from '@/server/db'
 import { accountRefusal, type AccountOptions } from '@/server/rules/account/refusal'
+import { likeContaining } from '@/server/rules/admin/like'
 import { GIFT_CARD_EXTEND_MAX_MONTHS, GIFT_CARD_EXTEND_NEW_WORDS, GIFT_CARD_EXTEND_WORDS, GIFT_CARD_FLAG_WORDS } from './failure-messages'
 
 /**
@@ -148,7 +149,8 @@ const FLAGS = {
     failedWords: GIFT_CARD_FLAG_WORDS.pickupFailed,
     audit: 'gift_card.picked_up',
     key: 'pickedUp',
-    on: 'UPDATE gift_cards SET picked_up = true, picked_up_at = now(), picked_up_by = $1::uuid, updated_at = now() WHERE id = $2::uuid RETURNING id',
+    // W58 (W45 audit row 14): a flag already set keeps its first who and when; pressing it again changes nothing there.
+    on: 'UPDATE gift_cards SET picked_up = true, picked_up_at = CASE WHEN picked_up IS TRUE THEN picked_up_at ELSE now() END, picked_up_by = CASE WHEN picked_up IS TRUE THEN picked_up_by ELSE $1::uuid END, updated_at = now() WHERE id = $2::uuid RETURNING id',
     off: 'UPDATE gift_cards SET picked_up = false, picked_up_at = NULL, picked_up_by = NULL, updated_at = now() WHERE id = $1::uuid RETURNING id',
   },
   shipped: {
@@ -159,7 +161,7 @@ const FLAGS = {
     failedWords: GIFT_CARD_FLAG_WORDS.shippingFailed,
     audit: 'gift_card.shipped',
     key: 'shipped',
-    on: 'UPDATE gift_cards SET shipped_at = now(), shipped_by = $1::uuid, updated_at = now() WHERE id = $2::uuid RETURNING id',
+    on: 'UPDATE gift_cards SET shipped_at = COALESCE(shipped_at, now()), shipped_by = CASE WHEN shipped_at IS NULL THEN $1::uuid ELSE shipped_by END, updated_at = now() WHERE id = $2::uuid RETURNING id',
     off: 'UPDATE gift_cards SET shipped_at = NULL, shipped_by = NULL, updated_at = now() WHERE id = $1::uuid RETURNING id',
   },
 } as const
@@ -207,27 +209,40 @@ async function setFlag(db: Db, flag: Flag, giftCardId: string, value: boolean, o
 export const setGiftCardPickedUp = (db: Db, giftCardId: string, pickedUp: boolean, options: AccountOptions): Promise<GiftCardFlagOutput> => setFlag(db, 'picked_up', giftCardId, pickedUp, options)
 export const setGiftCardShipped = (db: Db, giftCardId: string, shipped: boolean, options: AccountOptions): Promise<GiftCardFlagOutput> => setFlag(db, 'shipped', giftCardId, shipped, options)
 
+/**
+ * W58 (W45 audit row 12): why Reactivate (an extension of a voided card) would be refused, as extendGiftCard refuses it
+ * (Q46's two marks), so the list greys the button with the reason before the press. Null when nothing refuses.
+ */
 const LIST_SELECT = `
-SELECT ${cardColumns('gc')}, p.first_name AS purchaser_first_name, p.last_name AS purchaser_last_name, p.email AS purchaser_email
+SELECT ${cardColumns('gc')}, p.first_name AS purchaser_first_name, p.last_name AS purchaser_last_name, p.email AS purchaser_email,
+       gc.voided IS TRUE AND EXISTS (SELECT 1 FROM order_line_items oli WHERE oli.gift_card_id = gc.id AND oli.item_type = 'gift_card' AND oli.refunded_at IS NOT NULL) AS voided_by_refund,
+       gc.voided IS TRUE AND EXISTS (SELECT 1 FROM store_credit_transactions sct WHERE sct.gift_card_id = gc.id AND sct.reason = 'migrated_from_gift_card') AS voided_to_store_credit
 FROM gift_cards gc
 LEFT JOIN customers p ON p.id = gc.purchaser_id`
-const LIST_ORDER = 'ORDER BY gc.created_at DESC, gc.id'
+/** W58 (W45 audit row 15): the list is capped, newest first; the screen says "showing the newest N" when it is full. */
+export const GIFT_CARD_LIST_LIMIT = 500
+const LIST_ORDER = `ORDER BY gc.created_at DESC, gc.id LIMIT ${GIFT_CARD_LIST_LIMIT}`
 const LIST_ALL_SQL = `${LIST_SELECT}
 ${LIST_ORDER}`
 const LIST_SEARCH_SQL = `${LIST_SELECT}
-WHERE gc.code ILIKE $1 OR gc.recipient_name ILIKE $1 OR gc.recipient_email ILIKE $1
-   OR p.first_name ILIKE $1 OR p.last_name ILIKE $1 OR p.email ILIKE $1
+WHERE gc.code ILIKE $1 ESCAPE '\\' OR gc.recipient_name ILIKE $1 ESCAPE '\\' OR gc.recipient_email ILIKE $1 ESCAPE '\\'
+   OR p.first_name ILIKE $1 ESCAPE '\\' OR p.last_name ILIKE $1 ESCAPE '\\' OR p.email ILIKE $1 ESCAPE '\\'
 ${LIST_ORDER}`
 
 /**
- * getGiftCards: every card with its purchaser, newest first, no limit, as before. `search` (trimmed) matches the
- * code, the recipient's name or email, or the purchaser's first name, last name or email, anywhere in the text and in
- * any case. Cards made in the same moment come in id order, so the list doesn't shuffle between reads.
+ * getGiftCards: the cards with their purchaser, newest first. `search` (trimmed) matches the code, the recipient's
+ * name or email, or the purchaser's first name, last name or email, anywhere in the text and in any case. Cards made
+ * in the same moment come in id order, so the list doesn't shuffle between reads. W58: at most GIFT_CARD_LIST_LIMIT
+ * (the old read had no limit); `%` and `_` are plain characters; each row says why Reactivate would be refused.
  */
 export async function listGiftCards(db: Queryable, search: string | undefined): Promise<GiftCardListRow[]> {
   const wanted = search?.trim()
-  const rows = wanted ? await db.query<GiftCardListRow>(LIST_SEARCH_SQL, [`%${wanted}%`]) : await db.query<GiftCardListRow>(LIST_ALL_SQL)
-  return rows.map((row) => withTimes(row, TIMES))
+  type Read = GiftCardListRow & { voided_by_refund?: boolean; voided_to_store_credit?: boolean }
+  const rows = wanted ? await db.query<Read>(LIST_SEARCH_SQL, [likeContaining(wanted)]) : await db.query<Read>(LIST_ALL_SQL)
+  return rows.map(({ voided_by_refund: byRefund, voided_to_store_credit: toStoreCredit, ...row }) => ({
+    ...withTimes(row as GiftCardListRow, TIMES),
+    reactivate_refused: byRefund ? GIFT_CARD_EXTEND_NEW_WORDS.voidedByRefund : toStoreCredit ? GIFT_CARD_EXTEND_NEW_WORDS.voidedToStoreCredit : null,
+  }))
 }
 
 /** getGiftCardRedemptions: one card's uses, newest first. A card that doesn't exist has none, as before. */

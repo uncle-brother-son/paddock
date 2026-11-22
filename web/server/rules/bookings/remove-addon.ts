@@ -35,6 +35,7 @@ import {
 } from './failure-messages'
 import { lockAndLoadBooking, paymentOpen, sessionStartWallClock } from './load-booking'
 import { paymentOpenRefusal } from './money-in'
+import { differsByMoreThanHalfAPenny } from '@/server/rules/orders/amounts'
 import {
   ADDON_REMOVED,
   addonRemovedDetails,
@@ -52,7 +53,6 @@ import {
 
 const round2 = (n: number): number => Math.round(n * 100) / 100
 /** Q18: half a penny either way passes. */
-const differsByMoreThanHalfAPenny = (a: number, b: number): boolean => Math.round(Math.abs(a - b) * 1e6) / 1e6 > 0.005
 
 export interface RemoveAddonOptions extends RefundOptions {
   /** Issue refunds: needed for a paid add-on refunded to the card or store credit, as before. */

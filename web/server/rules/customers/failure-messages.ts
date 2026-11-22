@@ -62,6 +62,14 @@ export type CreateCustomerReason = (typeof CREATE_CUSTOMER_REASONS)[number]
  */
 export const CUSTOMER_EMAIL_UNIQUE_RULES = ['customers_email_key', 'customers_email_lower_key'] as const
 
+/** W58 (W45 audit row 18): the longest name, email and phone a customer can be made with. */
+export const CUSTOMER_FIELD_LIMITS = { name: 100, email: 254, phone: 30 } as const
+const FIELD_NAMES: Readonly<Record<string, string>> = { firstName: 'First name', lastName: 'Last name', email: 'Email', phone: 'Phone' }
+/** W58: the create rule's new words (the old function had no limits). */
+export const CREATE_CUSTOMER_NEW_WORDS = {
+  tooLong: (field: string, limit: number): string => `${FIELD_NAMES[field] ?? field} can be at most ${limit} characters.`,
+} as const
+
 /** NewCustomerDialog's own words, shown before the press (each ends with a full stop, which the function's don't). */
 export const CREATE_CUSTOMER_DIALOG_WORDS = {
   firstNameRequired: 'First name is required.',

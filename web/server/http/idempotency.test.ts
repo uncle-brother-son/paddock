@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { z } from 'zod'
 import { ApiError } from './errors'
-import { hashRequest, stableStringify, stripeIdempotencyKey } from './idempotency'
+import { hashRequest, KEY_STUCK_MESSAGE, KEY_STUCK_MINUTES, stableStringify, stripeIdempotencyKey } from './idempotency'
 import { fakeDb, staffRequest, testRouteFactory } from './test-helpers'
 
 const KEY = '11111111-2222-4333-8444-555555555555'
@@ -94,6 +94,24 @@ describe('idempotent routes', () => {
     finish()
     expect((await first).status).toBe(200)
     expect(handler).toHaveBeenCalledTimes(1)
+  })
+
+  it('W58b (the W45 audit\'s row 7): a key still in progress past KEY_STUCK_MINUTES (its Worker died part way): CONFLICT with reason key_stuck and words that say to close and check, never "press again"; the handler never runs again', async () => {
+    const fake = fakeDb()
+    const handler = vi.fn(() => new Promise<{ runs: number }>(() => {}))
+    const { defineRoute } = testRouteFactory(fake.db)
+    const route = defineRoute({ auth: 'staff', input, output, idempotent: true }, handler)
+    void route(post({ amount: 10 }))
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1))
+    // The real query works `stuck` out from created_at; the fake's row is marked by hand.
+    Object.assign([...fake.idempotency.values()][0] as object, { stuck: true })
+    const again = await route(post({ amount: 10 }))
+    expect(again.status).toBe(409)
+    expect(await again.json()).toMatchObject({ error: { code: 'CONFLICT', message: KEY_STUCK_MESSAGE, details: { reason: 'key_stuck' } } })
+    expect(KEY_STUCK_MESSAGE).toContain('close this')
+    expect(KEY_STUCK_MESSAGE).not.toContain('press again here (')
+    expect(handler).toHaveBeenCalledTimes(1)
+    expect(fake.query.mock.calls.find(([sql]) => sql.startsWith('SELECT request_hash'))?.[0]).toContain(`created_at < now() - interval '${KEY_STUCK_MINUTES} minutes' AS stuck`)
   })
 
   it('same key, different body: IDEMPOTENCY_MISMATCH, done or in progress', async () => {

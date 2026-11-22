@@ -5,6 +5,7 @@ import { byLastTried, MAX_STEP_CHECKS_PER_RUN, MAX_STEPS_PER_RUN, reconcile, STE
 import { stuckList } from '@/server/rules/orders/stuck-list'
 import { REPLAY_USER, replay, startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
 import { ID, MO_SUBSCRIPTION, seed, whileFailing } from '@/server/rules/testing/replay/scenarios'
+import { insert } from '@/server/rules/testing/database'
 import type { StripeClient } from '@/server/stripe/client'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
 import { LEFT_STEP_WORDS } from './failure-messages'
@@ -305,6 +306,8 @@ describe('a step is read first and sent only if still needed (trySendStep)', () 
       expect(await trySendStep(stripe, await leave('cancel_at', { cancelAt: null }), undefined)).toEqual({
         kind: 'refused',
         message: `Subscription ${MO_SUBSCRIPTION} has already ended in Stripe, so its cancellation can't be undone there.`,
+        // W58b (the W45 audit's row 30): marked, so the list says the subscription has ended.
+        ended: true,
       })
       expect(updates(stripe)).toEqual([])
     })
@@ -1012,10 +1015,30 @@ describe('W40c: a closed step is checked once more against Stripe', () => {
       const [line] = await listed()
       const again = String(line?.stepId)
       expect(run.items).toMatchObject([{ kind: 'step', id: again, outcome: 'left', reason: 'step_refused' }])
-      expect(line).toMatchObject({ state: 'refused', what: 'clear_cancel_date', words: LEFT_STEP_WORDS.cancel_at.refused(MO_SUBSCRIPTION), close: { kind: 'left_step', orderId: again } })
+      // W58b (the W45 audit's row 30; W40c review L1): the undo's own words for a subscription Stripe has ended.
+      expect(line).toMatchObject({ state: 'refused', what: 'clear_cancel_date', words: LEFT_STEP_WORDS.undo.ended(MO_SUBSCRIPTION), close: { kind: 'left_step', orderId: again } })
       expect((await checkRows())[0]).toMatchObject({ steps: [undo.id], outcome: 'for_a_person', wish: undo.id, leftAgain: again })
       const sent = updates(stripe).length
       expect((await runReconcile(stripe)).items).toEqual([])
+      expect(updates(stripe)).toHaveLength(sent)
+    })
+  })
+
+  it('W58b (the W45 audit\'s row 30; W40c review L5, W40c "Noticed" 3): an undo, then the membership refunded within the 20 minutes (the refund ends the subscription): the check settles it as checked, with nothing listed and nothing sent', async () => {
+    await onASeed(async (stripe) => {
+      const order = await insert(db, 'orders', { customer_id: ID.member, order_total: '40.00', payment_status: 'refunded', payment_method: 'card', order_source: 'staff_created' })
+      const line = await insert(db, 'order_line_items', { order_id: order, item_type: 'membership', membership_plan_id: ID.plan, quantity: 1, unit_price: '40.00', line_total: '40.00', refunded_at: new Date().toISOString() })
+      await db.query('UPDATE customer_memberships SET order_line_item_id = $1 WHERE id = $2', [line, ID.membership])
+      stripe.setSubscription(MO_SUBSCRIPTION, { cancelAt: ENDS })
+      const undo = await doneStep(stripe, 'cancel_at', { cancelAt: null })
+      stripe.setSubscription(MO_SUBSCRIPTION, { status: 'canceled' })
+      pastTheCheck()
+      const sent = updates(stripe).length
+      expect((await reconcileNow(stripe)).items).toEqual([])
+      expect(await listed()).toEqual([])
+      expect(await checkRows()).toEqual([
+        { subscriptionId: MO_SUBSCRIPTION, kind: 'cancel_at', steps: [undo.id], outcome: 'checked', wish: undo.id, detail: `step ${undo.id}: Subscription ${MO_SUBSCRIPTION} has already ended in Stripe, so its cancellation can't be undone there. The membership has been refunded, so the undo is moot` },
+      ])
       expect(updates(stripe)).toHaveLength(sent)
     })
   })

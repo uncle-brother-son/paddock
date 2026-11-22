@@ -5,6 +5,7 @@ import type { Recording } from './compare'
 import { oldSide, replay, startReplay, type ReplayEnvironment, type ReplaySide, type Scenario } from './harness'
 import { CANCELLED_WITHOUT_ALL_THE_MONEY, CHARGES_NOT_ON_ONE_ORDER, STRIPE_REFUNDS_NOT_ON_ROWS, sweepInvariants } from './invariants'
 import { ID, noPromoOnCard, scenarios, seed } from './scenarios'
+import { scenarioFamilies } from './families'
 
 // What the W05d scenarios prove the old functions now do, in pence. Each one's rows are also held to
 // its golden file in replay.test.ts. Private: £100 at Core, £140 at Peak. Public: two seats, £40 at
@@ -316,8 +317,23 @@ describe('W05d on the old functions', () => {
 
   // Seat money only: add-ons have their own lines and their own refunds. W18: the sweep is in invariants.ts, so the
   // new side runs it too (booking-replay.test.ts).
-  it('in every scenario, no booking gets back more than was paid, price_paid is paid less given back, and what is owed is never negative or more than that', async () => {
-    const { wrong, needed, bookingsChecked } = await sweepInvariants(environment, scenarios, oldSide)
+  // W59 (W35 audit row 14, W45 audit row 23): swept one family at a time (`families.ts`), each well inside its limit,
+  // the findings gathered, then held together below exactly as the single sweep held them.
+  const families = scenarioFamilies(scenarios)
+  const swept = { wrong: [] as string[], needed: new Set<string>(), bookingsChecked: 0, families: 0 }
+  it.each(families)('the invariants, swept: %s', async (_, family) => {
+    const found = await sweepInvariants(environment, family, oldSide)
+    swept.wrong.push(...found.wrong)
+    for (const name of found.needed) swept.needed.add(name)
+    swept.bookingsChecked += found.bookingsChecked
+    swept.families += 1
+  }, 120_000)
+
+  it('in every scenario, no booking gets back more than was paid, price_paid is paid less given back, and what is owed is never negative or more than that', () => {
+    // Every family was swept (the tests above run first, in order), and they hold every scenario once.
+    expect(swept.families).toBe(families.length)
+    expect(families.flatMap(([, family]) => family.map((scenario) => scenario.name)).sort()).toEqual(scenarios.map((scenario) => scenario.name).sort())
+    const { wrong, needed, bookingsChecked } = swept
     // W17 (L6): the golden gaps record the old functions' faults on purpose, and these invariants are what catch
     // them. Each must keep breaking them in exactly these ways, until the slice that moves its action names the
     // difference on the new side (D-plan 4.11 item 3: the invariants run on every new-side scenario too).
@@ -335,6 +351,6 @@ describe('W05d on the old functions', () => {
     )
     expect(stale).toEqual([])
     expect(bookingsChecked).toBeGreaterThan(100)
-    // W11 added 45 reader scenarios to this sweep (see w05c.test.ts's).
-  }, 300_000)
+    // W11 added 45 reader scenarios to this sweep (see w05c.test.ts's). W59: the sweeping is the families' above.
+  })
 })

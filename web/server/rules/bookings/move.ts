@@ -9,7 +9,9 @@
 // are refused. Wayne's Q34 (N2): a membership credit stays only while the new band is credit-eligible for the level and
 // the membership covers the new date (active, not past its last day); a pass seat only while the pass covers the new
 // session and hasn't expired on that date. Otherwise the seat is charged its full new price and the credit or pass
-// session is released. N1: the one-booking-a-day rule is checked before any money moves, with New Order's words (and
+// session is released. W58 (Wayne's Q54): a credit seat whose own membership has ended takes a credit from the
+// customer's current membership first, when it covers the new date and has one left (CURRENT_MEMBERSHIP_CREDIT_SQL);
+// only then is it charged, and the old membership's credit goes back as before. N1: the one-booking-a-day rule is checked before any money moves, with New Order's words (and
 // the trigger's own refusal, should another booking race past the check, gets the same words, never the raw text).
 //
 // The dialog's first call is the quote (a read). The press sends the figures staff saw (Q18: `figures.amountDue`,
@@ -38,7 +40,7 @@ import { postgresRefusal, type Db, type Queryable, type Tx } from '@/server/db'
 import { ApiError } from '@/server/http/errors'
 import type { StripeClient } from '@/server/stripe/client'
 import { stripeTiming } from '@/server/stripe/deadline'
-import { amountChangedRefusal, cashDifferenceRefusal, exceedsAmount } from '@/server/rules/orders/amounts'
+import { amountChangedRefusal, cashDifferenceRefusal, exceedsAmount, differsByMoreThanHalfAPenny as differs } from '@/server/rules/orders/amounts'
 import { COLLECT_DEADLINE_MS } from '@/server/rules/orders/collect-saved-card'
 import { FAILURE_MESSAGES as ORDER_WORDS, NO_SAVED_CARD_MESSAGE } from '@/server/rules/orders/failure-messages'
 import { FLOW_INTENT_UNCONFIRMED_MESSAGE, readFlow, undoFlowInTransaction } from '@/server/rules/orders/reader-flow'
@@ -113,7 +115,6 @@ const explain = (err: unknown): string => (err instanceof Error ? `${err.name}: 
 /** Pennies are the smallest amount: anything above a tenth of a penny moves (the old function's 0.001). */
 const MOVES = 0.001
 /** Half a penny either way (Q18). */
-const differs = (a: number, b: number): boolean => Math.round(Math.abs(a - b) * 1e6) / 1e6 > 0.005
 
 /** The session the booking would move to, as the old function read it. */
 interface NewSession {
@@ -165,6 +166,77 @@ interface Priced {
   creditReleased: boolean
   /** The pass a released pass seat gives its session back to (the old function's sessionPassToRelease). */
   passToRelease: string | null
+  /** W58 (Q54): the current membership's credit the credit seat moves to, when its own membership has ended. */
+  creditSwitch: CreditSwitch | null
+}
+
+/** W58 (Q54): a credit from the customer's current membership, as a new booking would take it. */
+interface CreditSwitch {
+  membershipId: string
+  creditPeriodId: string
+  planName: string
+}
+
+/**
+ * W58 (Wayne's Q54, 21 Nov): the credit a moved credit seat can take when its own membership has ended (a member who
+ * left and rejoined). The customer's current membership, as quote_booking picks it (the newest active one not past its
+ * last day today, with a level), when it covers the new date (no last day, or one on or after it) and its period
+ * covering today has a credit left (unlimited, or fewer used than allocated): a new booking's rules (write-booking.ts).
+ * Only while the booking's own membership has ended (not active, or past its last day today): nobody can spend an
+ * ended membership's credit, so an undo that puts the booking back on its old period never finds that credit gone
+ * (W37a's reason for holding a released credit). Null when there is none. In C1 the period is locked before this reads
+ * it (moveC1), so the count is current until commit.
+ */
+const CURRENT_MEMBERSHIP_CREDIT_SQL = `
+WITH london AS (SELECT (now() AT TIME ZONE 'Europe/London')::date AS today)
+SELECT cm.id AS membership_id, p.id AS period_id, mp.name AS plan_name,
+       (cm.cancel_effective_date IS NULL OR cm.cancel_effective_date >= $1::date) AS covers,
+       (p.is_unlimited OR (
+         SELECT count(*) FROM bookings b
+         WHERE b.credit_period_id = p.id AND b.redemption_source = 'membership_credit' AND b.status <> 'cancelled'
+       ) < p.credits_allocated) AS has_credit,
+       NOT EXISTS (
+         SELECT 1 FROM customer_memberships own
+         WHERE own.id = $2::uuid AND own.subscription_status = 'active'
+           AND (own.cancel_effective_date IS NULL OR own.cancel_effective_date >= (SELECT today FROM london))
+       ) AS own_ended
+FROM customer_memberships cm
+JOIN membership_plans mp ON mp.id = cm.plan_id
+LEFT JOIN membership_credit_periods p ON p.membership_id = cm.id AND (SELECT today FROM london) BETWEEN p.period_start AND p.period_end
+WHERE cm.customer_id = $3::uuid AND cm.subscription_status = 'active'
+  AND (cm.cancel_effective_date IS NULL OR cm.cancel_effective_date >= (SELECT today FROM london))
+  AND mp.level IS NOT NULL
+ORDER BY cm.created_at DESC
+LIMIT 1`
+
+interface CurrentMembershipCreditRow {
+  membership_id: string
+  period_id: string | null
+  plan_name: string | null
+  covers: boolean
+  has_credit: boolean | null
+  own_ended: boolean
+}
+
+/** The current membership's credit period (Q54), or null; `ownMembershipId` is the booking's own membership. */
+async function currentMembershipCredit(db: Queryable, customerId: string, newDay: string, ownMembershipId: string): Promise<CreditSwitch | null> {
+  const row = (await db.query<CurrentMembershipCreditRow>(CURRENT_MEMBERSHIP_CREDIT_SQL, [newDay, ownMembershipId, customerId]))[0]
+  if (!row || !row.own_ended || !row.covers || row.has_credit !== true || !row.period_id || row.membership_id === ownMembershipId) return null
+  return { membershipId: row.membership_id, creditPeriodId: row.period_id, planName: row.plan_name ?? 'their current membership' }
+}
+
+/** The credit period C1 locks for Q54 before it prices the move, read before the lock (as the pass is). */
+async function currentMembershipPeriod(db: Queryable, bookingId: string): Promise<string | null> {
+  const own = (
+    await db.query<{ customer_id: string; redeemed_membership_id: string | null; redemption_source: string | null }>(
+      'SELECT customer_id, redeemed_membership_id, redemption_source FROM bookings WHERE id = $1::uuid',
+      [bookingId]
+    )
+  )[0]
+  if (!own?.redeemed_membership_id || own.redemption_source !== 'membership_credit') return null
+  // Any date covers here: the lock is only a place to wait. The read under the lock decides.
+  const row = (await db.query<CurrentMembershipCreditRow>(CURRENT_MEMBERSHIP_CREDIT_SQL, ['1900-01-01', own.redeemed_membership_id, own.customer_id]))[0]
+  return row?.own_ended && row.period_id && row.membership_id !== own.redeemed_membership_id ? row.period_id : null
 }
 
 const refusalOf = (code: ApiErrorCode, reason: string, message?: string): ApiError => moveRefusal(code, reason, message)
@@ -175,7 +247,7 @@ const refusalOf = (code: ApiErrorCode, reason: string, message?: string): ApiErr
  * here, before anything costs money), the seat quote and the overlap check, then the price. Reads only; every refusal
  * throws. In C1 the booking is already locked.
  */
-async function priceTheMove(db: Queryable, booking: LoadedBooking | null, newSessionId: string): Promise<Priced> {
+async function priceTheMove(db: Queryable, booking: LoadedBooking | null, newSessionId: string, lockedPeriods?: readonly string[]): Promise<Priced> {
   if (!booking) throw refusalOf('NOT_FOUND', 'booking_not_found')
   // W24a (W24 review S1): a booking awaiting payment is refused. Its lapsed credit doesn't cover the new date (Q34), so
   // Move would charge seat 1 and leave the booking awaiting payment, and Settle would then charge seat 1 again.
@@ -257,6 +329,16 @@ async function priceTheMove(db: Queryable, booking: LoadedBooking | null, newSes
       )[0]
       membershipCovers = membership?.covers === true
     }
+    // W58 (Wayne's Q54): the credit seat's own membership doesn't cover the new date: a credit from the customer's
+    // current membership when it covers it (the band still credit-eligible for its level: quote_booking reads that
+    // membership). Only then is the seat charged. The old membership's credit goes back as today.
+    let creditSwitch: CreditSwitch | null = null
+    if (!membershipCovers && booking.redeemedMembershipId && seats[0]?.payBy === 'membership_credit' && quotes[0]?.credit_eligible === true) {
+      creditSwitch = await currentMembershipCredit(db, booking.customerId, newSession.day, booking.redeemedMembershipId)
+      if (creditSwitch && lockedPeriods && !lockedPeriods.includes(creditSwitch.creditPeriodId)) {
+        throw new Error(`Booking ${booking.id}'s current membership credit period changed while it was being locked.`)
+      }
+    }
     const seatDeltas: MovePriceImpact['seatDeltas'] = []
     let rawAmountDue = 0
     for (let i = 0; i < partySize; i += 1) {
@@ -266,7 +348,8 @@ async function priceTheMove(db: Queryable, booking: LoadedBooking | null, newSes
       let payBy: 'paid' | 'membership_credit' | 'session_pass_credit' =
         oldSeat.payBy === 'membership_credit' || oldSeat.payBy === 'session_pass_credit' ? oldSeat.payBy : 'paid'
       let creditReleased = false
-      if (payBy === 'membership_credit' && (!quote.credit_eligible || !membershipCovers)) {
+      const switched = i === 0 && creditSwitch !== null
+      if (payBy === 'membership_credit' && (!quote.credit_eligible || (!membershipCovers && !switched))) {
         payBy = 'paid'
         creditReleased = true
       }
@@ -280,7 +363,16 @@ async function priceTheMove(db: Queryable, booking: LoadedBooking | null, newSes
       // full new price; a seat already paid settles only the difference.
       const delta = payBy !== 'paid' || oldUnitPrice === null ? 0 : creditReleased ? newUnitPrice : newUnitPrice - oldUnitPrice
       if (payBy === 'paid') rawAmountDue += delta
-      seatDeltas.push({ seatNo: quote.seat_no, seatKind: quote.seat_kind, payBy, oldUnitPrice, newUnitPrice, delta, creditReleased })
+      seatDeltas.push({
+        seatNo: quote.seat_no,
+        seatKind: quote.seat_kind,
+        payBy,
+        oldUnitPrice,
+        newUnitPrice,
+        delta,
+        creditReleased,
+        ...(switched && payBy === 'membership_credit' && creditSwitch ? { creditFrom: creditSwitch.planName } : {}),
+      })
     }
     // Q28: what is due is never more than the new seats less what was paid toward them and the part refunds.
     if (rawAmountDue > 0) {
@@ -290,6 +382,7 @@ async function priceTheMove(db: Queryable, booking: LoadedBooking | null, newSes
     const amountDue = legacyPricing ? 0 : settled(rawAmountDue)
     const priceImpact: MovePriceImpact = { amountDue, refundDue: amountDue < -MOVES, seatDeltas, legacyPricing, customerId: booking.customerId }
     const creditReleased = !legacyPricing && seatDeltas.some((seat) => seat.creditReleased)
+    const switchUsed = !legacyPricing && seatDeltas[0]?.creditFrom !== undefined ? creditSwitch : null
     const seatChanges: Priced['seatChanges'] = []
     if (!legacyPricing) {
       for (let i = 0; i < seats.length; i += 1) {
@@ -310,6 +403,7 @@ async function priceTheMove(db: Queryable, booking: LoadedBooking | null, newSes
       seatChanges,
       creditReleased,
       passToRelease: creditReleased && !passCovers ? booking.redeemedSessionPassId : null,
+      creditSwitch: switchUsed,
     }
   }
 
@@ -332,6 +426,7 @@ async function priceTheMove(db: Queryable, booking: LoadedBooking | null, newSes
     seatChanges: [],
     creditReleased: false,
     passToRelease: null,
+    creditSwitch: null,
   }
 }
 
@@ -438,8 +533,18 @@ async function moveC1(tx: Tx, input: C1Input, options: MoveOptions, keyLivemode:
   // The pass a released pass seat would go back to, read before the lock (a booking's pass changes only under it, and
   // a different one is read again below), so it is locked in LOCK_ORDER with the rest.
   const passId = (await tx.query<{ id: string | null }>('SELECT redeemed_session_pass_id AS id FROM bookings WHERE id = $1::uuid', [bookingId]))[0]?.id ?? null
-  const loaded = await lockAndLoadBooking(tx, { bookingId, ownSession: true, sessionIds: [newSessionId], sessionPassId: passId, giftCardId })
-  const priced = await priceTheMove(tx, loaded?.booking ?? null, newSessionId)
+  // W58 (Q54): the current membership's credit period a credit seat may move to, the same way, locked in LOCK_ORDER
+  // (after the sessions) so its count is current until commit: a booking taking its last credit meanwhile waits.
+  const switchPeriodId = await currentMembershipPeriod(tx, bookingId)
+  const loaded = await lockAndLoadBooking(tx, {
+    bookingId,
+    ownSession: true,
+    sessionIds: [newSessionId],
+    creditPeriodIds: switchPeriodId ? [switchPeriodId] : [],
+    sessionPassId: passId,
+    giftCardId,
+  })
+  const priced = await priceTheMove(tx, loaded?.booking ?? null, newSessionId, loaded?.locks.creditPeriodIds ?? [])
   const { booking, newSession, partySize, priceImpact } = priced
   if (booking.redeemedSessionPassId !== passId) throw new Error(`Booking ${bookingId}'s pass changed while it was being locked.`)
   const amountDue = priceImpact.amountDue
@@ -539,20 +644,25 @@ async function moveC1(tx: Tx, input: C1Input, options: MoveOptions, keyLivemode:
   // and `membership_credit` stay on the booking, so the period still counts it used, and the flow's C2 clears them
   // (`release_credit_on_finalise`), as the pass session below is given back at C2: an undo never takes it back.
   const holdCredit = cardMoney !== null && priced.creditReleased && booking.creditPeriodId !== null && booking.redemptionSource === 'membership_credit'
+  // W58 (Q54): a credit seat moved to the current membership's credit: the booking draws on that period now, so the
+  // old period counts its credit unused again (given back as today). The flow's undo and the claim's put the old
+  // period and membership back from what C1 recorded (`old_credit_period_id`, `oldCreditPeriodId`).
+  const creditSwitch = priced.creditSwitch
   await tx.query(
     `UPDATE bookings b
      SET session_id = s.id, start_time = s.start_time, end_time = s.end_time,
          price_paid = COALESCE($2::numeric, b.price_paid),
          band_id = $3::uuid,
-         credit_period_id = CASE WHEN $4::boolean AND NOT $6::boolean THEN NULL ELSE b.credit_period_id END,
-         redemption_source = CASE WHEN $4::boolean AND NOT $6::boolean THEN 'paid' ELSE b.redemption_source END,
-         redeemed_membership_id = CASE WHEN $4::boolean THEN NULL ELSE b.redeemed_membership_id END,
+         credit_period_id = CASE WHEN $7::uuid IS NOT NULL THEN $7::uuid WHEN $4::boolean AND NOT $6::boolean THEN NULL ELSE b.credit_period_id END,
+         redemption_source = CASE WHEN $7::uuid IS NOT NULL THEN b.redemption_source WHEN $4::boolean AND NOT $6::boolean THEN 'paid' ELSE b.redemption_source END,
+         redeemed_membership_id = CASE WHEN $8::uuid IS NOT NULL THEN $8::uuid WHEN $4::boolean THEN NULL ELSE b.redeemed_membership_id END,
          redeemed_session_pass_id = CASE WHEN $4::boolean THEN NULL ELSE b.redeemed_session_pass_id END,
          updated_at = now()
      FROM sessions s
      WHERE b.id = $1::uuid AND s.id = $5::uuid`,
-    [bookingId, priced.newPricePaid, priced.newBandId, priced.creditReleased, newSessionId, holdCredit]
+    [bookingId, priced.newPricePaid, priced.newBandId, priced.creditReleased, newSessionId, holdCredit, creditSwitch?.creditPeriodId ?? null, creditSwitch?.membershipId ?? null]
   )
+  const creditMovedTo = creditSwitch ? { creditMovedTo: { membershipId: creditSwitch.membershipId, creditPeriodId: creditSwitch.creditPeriodId } } : {}
   if (priced.seatChanges.length > 0) {
     await tx.query(
       `UPDATE booking_guests g SET unit_price = x.unit_price, pay_by = x.pay_by
@@ -639,6 +749,7 @@ async function moveC1(tx: Tx, input: C1Input, options: MoveOptions, keyLivemode:
       placesReleased,
       passReturned,
       creditReleased: priced.creditReleased,
+      ...creditMovedTo,
     }
     const details: ClaimDetails = {
       kind: 'move',
@@ -681,6 +792,7 @@ async function moveC1(tx: Tx, input: C1Input, options: MoveOptions, keyLivemode:
       creditReleased: priced.creditReleased,
       passReleased: passReturned ?? (cardMoney ? priced.passToRelease : null),
       legacyPricing: priceImpact.legacyPricing,
+      ...creditMovedTo,
     }),
   })
   if (cardMoney && pendingId) return { kind: cardMoney, pendingId, remainder, pricePaid: priced.newPricePaid }

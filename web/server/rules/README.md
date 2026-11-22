@@ -2631,7 +2631,13 @@ applied (below).
 `bookings/add-guest.ts`, `ownOrderMethod`: Add Guest's own order (a guest, or add-ons alone, with no card money)
 paid by store credit alone records `payment_method = 'store_credit'`, where it recorded none. Orders written before
 W53 keep their empty method and read "Store credit" by the label above. (A gift card with store credit still
-records `gift_card`, as before; Q9's table says `split`: not changed here.)
+records `gift_card`, as before; Q9's table says `split`: not changed here. W58b: changed, see below.)
+
+### W58b: a gift card with store credit records `split` (W53 "For later" 2)
+
+`ownOrderMethod` words a gift card as New Order does (`recordedPaymentMethod`, orders/place-order.ts): with store
+credit or cash beside it, `split`; alone, `gift_card`. Add Guest's own order paid by a gift card and store credit
+recorded `gift_card` (the old function's word) until W58b. A named difference in the booking replay.
 
 ### Q40: card money on the line its payment took
 
@@ -2804,3 +2810,65 @@ Tests: `catalog/plans.test.ts` (reads, settings, details, every refusal, the pri
 invariants, held both ways, refused, a crash at each step, a move refused or unclear, the switch, Manage pricing,
 create, on/off, the T2 hook); `catalog/plans-postgres.test.ts` (7 races on real Postgres);
 `replay/plan-admin-replay.test.ts` with `plan-differences.ts` (`testing/README.md`).
+
+## Words and small fixes, Q54, Q55, item 0; tests and tidy-ups (W58 + W59)
+
+- **Q54 (Wayne, 21 Nov), `bookings/move.ts`:** a Move of a credit booking whose own membership has ended (not active,
+  or past its last day today) and doesn't cover the new date takes a credit from the customer's current membership
+  (quote_booking's pick) when that covers the new date, the band is credit-eligible for its level, and its period
+  covering today has one left. Only then is the seat charged. C1 locks that period (LOCK_ORDER, after the sessions)
+  before it counts. The booking moves to the new period and membership; the undo paths put back the old ones. Only an
+  ended membership: nobody can spend its credit meanwhile, so an undo never finds it gone. `booking.move` gains
+  `creditMovedTo`; the quote's seat gains `creditFrom` (the plan's name).
+- **Q55, `orders/price-basket.ts`, `place-order.ts`:** `payment.useStoreCredit` (New Order's ticked line and the
+  website's checkout): ticked, as much of the balance as the amount due leaves after the gift card, whole pennies;
+  unticked, none; with an amount too, refused. `confirmed.storeCredit` is checked first (`store_credit_changed`), and
+  the order's write always takes the quote's `storeCreditApplied`.
+- **Item 0, `catalog/plans.ts`:** a price change on an off-sale plan with members on the changing price is refused
+  (`off_sale_with_members`): Stripe won't move a subscription onto an inactive product's price.
+- **Audit rows.** `booking.settle`, `booking.guest_add` and `booking.move` rows are written by the press that started
+  the change, including presses later undone (a declined card, a refused first refund part, a reader cancel): pair a
+  row with the `reader_payment.cancel` or `booking.refund_finished` (`outcome: 'put_back'`) row of the same flow or
+  claim to tell an undone press from one that stands. A finished claim's row carries `refused` (Stripe's reason)
+  whenever Stripe refused a card part, the first one included (W26a review L4); a part never sent carries none.
+- **The flow undo's store credit** names the staff member whose press undid it (`staff_id`), none for reconcile.
+- **W59:** one half-penny helper (`orders/amounts.ts`); LIKE searches escape `%` and `_` (`admin/like.ts`); calendar
+  days checked in the step G reads; the gift card list capped at 500, with `reactivate_refused`; customers' field
+  lengths; the fake keeps `cancel_at_period_end`; the scheduled run's log names every outcome; `w05c` / `w05d` sweep one
+  family at a time (`testing/replay/families.ts`); PGlite's own timer warning kept out of the logs
+  (`testing/quiet-pglite-timer.ts`).
+
+## The rest of W58 + W59's list (W58b)
+
+- **A refused price move whose membership has ended (the lead's item 2), `memberships/left.ts`:** closes itself `done`,
+  nothing sent and Stripe not asked (`ENDED_HERE_REFUSED_DETAIL`), as a left one does: reconcile closes each every run
+  (`endedRefusedPriceMoves`, `closeEndedRefusedPriceMove`, under the membership's lock), and the 20-minute check closes
+  one it finds as the newest wish (its own closing then has its check).
+- **Off-sale words (item 3):** a refused price move on a plan off sale now reads `LEFT_STEP_WORDS.price.refusedOffSale`
+  ("Put the plan back on sale first…"). `OPEN_STEPS_SQL` reads `plan_off_sale`; `OpenStep.planOffSale` only when true.
+- **Undo words (the W45 audit's row 30):** a cleared cancel date's step has `LEFT_STEP_WORDS.undo` (left, refused, and
+  `ended` when Stripe has ended the subscription: the `refused` row carries `ended: true`). An undo whose membership
+  was refunded meanwhile is settled `checked` by its check (W40c review L5).
+- **A refunded membership's subscription Stripe can't find (row 26):** its `refused` row carries `missing: true`, and
+  the list says `MEMBERSHIP_REFUND_WORDS.cancelMissingListed`.
+- **Payment date changes (rows 38, 42):** `not_started_here` has its own words; a move the check never sent (W41a B1)
+  marks its `refunding` row `notSent`, the list words it so (`PAYMENT_DATE_NOT_SENT_STUCK_WORDS`), and the record says
+  the check's own sentence (`PAYMENT_DATE_NEW_WORDS.recheckFailed`).
+- **One failed refund counted once (the W35 audit's row 32), `orders/reconcile.ts`:** the late path that meets a
+  compensation's watched refund answers `settled_elsewhere`; the watch's item is the one "left for a person".
+- **A key stuck in progress (row 7), `server/http/idempotency.ts`:** a key still `in_progress` more than
+  `KEY_STUCK_MINUTES` (5) after it was claimed answers CONFLICT with `reason: 'key_stuck'` and `KEY_STUCK_MESSAGE`
+  (close and check), never "press again".
+- **The cancel undo's add-on credits (row 8), `bookings/refunds.ts`:** taken back only while the membership still has
+  them (`PutBackBlocked` otherwise): the blocked words, where migration 025's check made it fail.
+- **Remove Guest's quote** carries `withheld` (what the 24-hour rule kept back) only when it kept something.
+- **Events (W52 "For later" 3, W52a "Noticed" 1, 2):** a capacity or price past what the columns hold has plain words;
+  the details answer carries `cutoffFollowed: true` when the cut-off followed an event brought forward (Q-a).
+- **The money left on a booking (W50 "For later" 4), `bookings/money-left.ts`:** one statement
+  (`BOOKING_MONEY_LEFT_SQL`) with the same subqueries and the same sums; the booking replay holds it to the four reads
+  it replaced on every end state.
+- **A watched payment's `expired` row (W47b "Noticed" 2):** written under the payment's lock, only while still due.
+- **Named, left as they are (W53 review L4, L6):** the bookings list's "how it was paid" is the earliest booking line
+  whose order recorded a method, as the old reads chose it, so a credit booking whose guest paid by store credit reads
+  `store_credit` since W53 (as cash and gift card guests already did); Refund the rest as store credit with one
+  removed guest waiting links the whole credit row to that guest's order (one row for one press; labels only).

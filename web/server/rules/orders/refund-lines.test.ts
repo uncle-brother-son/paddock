@@ -1050,7 +1050,7 @@ describe('W32: the refund watch on an order', () => {
       const listed = (await stuckList(db)).watched
       expect(listed).toMatchObject([{ refundId: sent?.id, on: 'order', bookingId: null, orderId, amount: 15, owed: 15, state: 'failed', words: WATCH_WORDS.orderFailed(15, sent?.id as string) }])
       expect(listed[0]?.words).toBe(
-        `A card refund of £15.00 on this order (${sent?.id}) was accepted by Stripe and then failed, so the money never reached the customer. It is back on the order as money still to refund: find the order on the Orders page and use Refund the rest. Then press Mark sorted (needs the Issue refunds permission).`
+        `A card refund of £15.00 on this order (${sent?.id}) was accepted by Stripe and then failed, so the money never reached the customer. It is back on the order as money still to refund: find the order on the Orders page and use Refund the rest (choose store credit if the card can't take a refund). Then press Mark sorted (needs the Issue refunds permission).`
       )
 
       const rest = await post('refunds/owed', orderId, { amount: 15, refundMethod: 'card' })

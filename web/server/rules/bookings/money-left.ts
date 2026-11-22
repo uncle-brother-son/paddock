@@ -103,22 +103,15 @@ export interface OrderCardPortion {
  * money: no remainder charge, and no membership payment of its own.
  */
 export async function loadOrderCardPortion(db: Queryable, orderId: string): Promise<OrderCardPortion | null> {
-  const row = (
-    await db.query<{
-      customer_id: string
-      stripe_payment_intent_id: string | null
-      payment_method: string | null
-      order_total: string
-      order_discount_amount: string | null
-      gift_card_used: string
-      store_credit_used: string
-      membership_net: string
-      membership_card_refunded: string
-      membership_payment_intent_id: string | null
-      reader_record: boolean | null
-      already_card_refunded: string
-    }>(
-      `SELECT o.customer_id, o.stripe_payment_intent_id, o.payment_method, o.order_total::text AS order_total,
+  const row = (await db.query<OrderPortionRow>(ORDER_CARD_PORTION_SQL, [orderId]))[0]
+  return row ? cardPortionOf(orderId, row) : null
+}
+
+/**
+ * W58b (W50 "For later" 4): what an order's card figures are worked out from, one row per order `o`. Read alone by
+ * loadOrderCardPortion, and for every order of a booking at once by loadBookingMoneyLeft. Fixed text.
+ */
+const ORDER_PORTION_COLUMNS = `o.customer_id, o.stripe_payment_intent_id, o.payment_method, o.order_total::text AS order_total,
               o.discount_amount::text AS order_discount_amount,
               COALESCE((SELECT SUM(gcr.amount_used) FROM gift_card_redemptions gcr WHERE gcr.order_id = o.id), 0)::text AS gift_card_used,
               COALESCE((SELECT -SUM(sct.amount) FROM store_credit_transactions sct
@@ -131,12 +124,26 @@ export async function loadOrderCardPortion(db: Queryable, orderId: string): Prom
               (o.reader_payment->>'method' = 'reader' OR o.reader_payment ? 'payment_intent_id') AS reader_record,
               (COALESCE((SELECT SUM(oli.card_refunded_amount) FROM order_line_items oli WHERE oli.order_id = o.id), 0)
                 + COALESCE((SELECT SUM(aol.card_refunded_amount) FROM addon_order_lines aol WHERE aol.order_id = o.id), 0))::text
-                AS already_card_refunded
-       FROM orders o WHERE o.id = $1::uuid`,
-      [orderId]
-    )
-  )[0]
-  if (!row) return null
+                AS already_card_refunded`
+const ORDER_CARD_PORTION_SQL = `SELECT ${ORDER_PORTION_COLUMNS} FROM orders o WHERE o.id = $1::uuid`
+
+interface OrderPortionRow {
+  customer_id: string
+  stripe_payment_intent_id: string | null
+  payment_method: string | null
+  order_total: string
+  order_discount_amount: string | null
+  gift_card_used: string
+  store_credit_used: string
+  membership_net: string
+  membership_card_refunded: string
+  membership_payment_intent_id: string | null
+  reader_record: boolean | null
+  already_card_refunded: string
+}
+
+/** loadOrderCardPortion's sums, from its row. */
+function cardPortionOf(orderId: string, row: OrderPortionRow): OrderCardPortion {
   const paidByCards = round2(amount(row.order_total) - amount(row.order_discount_amount) - amount(row.gift_card_used) - amount(row.store_credit_used))
   let cardPortion = Math.max(0, paidByCards)
   let membershipPayment: OrderCardPortion['membershipPayment'] = null
@@ -185,19 +192,54 @@ export interface BookingMoneyLeft {
 }
 
 /**
+ * W58b (W50 "For later" 4): everything loadBookingMoneyLeft works from, in one statement: the booking; its booking
+ * lines (BOOKING_LINES_SQL's figures, newest first); each of their orders' card figures (ORDER_PORTION_COLUMNS); and
+ * what gift cards and store credit put in, on those orders or on the booking with no order (W05l later 1). The same
+ * subqueries as the four reads it replaces, so the same figures. No row when the booking doesn't exist. Fixed text.
+ */
+const BOOKING_MONEY_LEFT_SQL = `
+WITH lines AS (
+  SELECT oli.id, oli.order_id, oli.created_at,
+         GREATEST(oli.line_total - COALESCE(oli.discount_amount, 0) - oli.card_refunded_amount - inside.addons, 0)::text AS net_remaining,
+         oli.line_total - COALESCE(oli.discount_amount, 0) - inside.addons <= 0 AS no_seat_money
+  FROM order_line_items oli
+  ${ADDONS_INSIDE_LINE}
+  WHERE oli.booking_id = $1::uuid AND oli.item_type = 'booking'
+),
+order_ids AS (SELECT DISTINCT order_id FROM lines)
+SELECT b.status, b.customer_id, b.price_paid::text AS price_paid, b.refund_owed_amount::text AS refund_owed_amount,
+       (SELECT json_agg(json_build_object('id', l.id, 'order_id', l.order_id, 'net_remaining', l.net_remaining, 'no_seat_money', l.no_seat_money)
+                        ORDER BY l.created_at DESC, l.id DESC) FROM lines l) AS lines,
+       (SELECT json_agg(p) FROM (SELECT o.id AS order_id, ${ORDER_PORTION_COLUMNS} FROM orders o WHERE o.id IN (SELECT order_id FROM order_ids)) p) AS portions,
+       COALESCE((SELECT SUM(gcr.amount_used) FROM gift_card_redemptions gcr
+                 WHERE gcr.order_id IN (SELECT order_id FROM order_ids) OR (gcr.booking_id = $1::uuid AND gcr.order_id IS NULL)), 0)::text AS gift_card,
+       GREATEST(COALESCE((SELECT -SUM(sct.amount) FROM store_credit_transactions sct
+                          WHERE sct.reason IN ('redemption', 'redemption_reversal')
+                            AND (sct.order_id IN (SELECT order_id FROM order_ids) OR sct.booking_id = $1::uuid)), 0), 0)::text AS store_credit
+FROM bookings b WHERE b.id = $1::uuid`
+
+interface MoneyLeftRow {
+  status: string
+  customer_id: string
+  price_paid: string | null
+  refund_owed_amount: string
+  lines: Array<{ id: string; order_id: string; net_remaining: string; no_seat_money: boolean }> | null
+  portions: Array<OrderPortionRow & { order_id: string }> | null
+  gift_card: string
+  store_credit: string
+}
+
+/**
  * What is left on a booking to refund, and where it came from, as loadBookingMoneyLeft worked it out: card money
  * line by line (newest first, each order's card portion used once), then gift card and store credit up to what each
  * put in, the rest as cash. Null when the booking doesn't exist.
  */
 export async function loadBookingMoneyLeft(db: Queryable, bookingId: string): Promise<BookingMoneyLeft | null> {
-  const booking = (
-    await db.query<{ status: string; customer_id: string; price_paid: string | null; refund_owed_amount: string }>(
-      'SELECT status, customer_id, price_paid::text AS price_paid, refund_owed_amount::text AS refund_owed_amount FROM bookings WHERE id = $1::uuid',
-      [bookingId]
-    )
-  )[0]
+  // W58b (W50 "For later" 4): one statement, where it was four reads one after another (and one more per order).
+  const booking = (await db.query<MoneyLeftRow>(BOOKING_MONEY_LEFT_SQL, [bookingId]))[0]
   if (!booking) return null
-  const lines = await loadBookingLines(db, bookingId)
+  const lines = (booking.lines ?? []).map((row) => ({ id: row.id, orderId: row.order_id, netRemaining: amount(row.net_remaining), noSeatMoney: row.no_seat_money }))
+  const portions = new Map((booking.portions ?? []).map((row) => [row.order_id, cardPortionOf(row.order_id, row)]))
 
   // Two lines can share an order, and its card money can only go back once.
   const portionLeft = new Map<string, number>()
@@ -205,7 +247,7 @@ export async function loadBookingMoneyLeft(db: Queryable, bookingId: string): Pr
   for (const line of lines) {
     let portion = portionLeft.get(line.orderId)
     if (portion === undefined) {
-      const loaded = await loadOrderCardPortion(db, line.orderId)
+      const loaded = portions.get(line.orderId)
       portion = loaded?.paymentIntentId ? loaded.cardPortionRemaining : 0
     }
     const take = round2(Math.min(portion, line.netRemaining))
@@ -213,18 +255,7 @@ export async function loadBookingMoneyLeft(db: Queryable, bookingId: string): Pr
     if (take > 0) cardLeft = round2(cardLeft + take)
   }
 
-  const orderIds = [...portionLeft.keys()]
-  const paidOtherWays = (
-    await db.query<{ gift_card: string; store_credit: string }>(
-      // W05l later 1: a gift card part recorded against the booking with no order is gift card money too.
-      `SELECT COALESCE((SELECT SUM(gcr.amount_used) FROM gift_card_redemptions gcr
-                        WHERE gcr.order_id = ANY($1::uuid[]) OR (gcr.booking_id = $2::uuid AND gcr.order_id IS NULL)), 0)::text AS gift_card,
-              GREATEST(COALESCE((SELECT -SUM(sct.amount) FROM store_credit_transactions sct
-                                 WHERE sct.reason IN ('redemption', 'redemption_reversal')
-                                   AND (sct.order_id = ANY($3::uuid[]) OR sct.booking_id = $4::uuid)), 0), 0)::text AS store_credit`,
-      [orderIds, bookingId, orderIds, bookingId]
-    )
-  )[0]
+  const paidOtherWays = { gift_card: booking.gift_card, store_credit: booking.store_credit }
 
   const pricePaid = round2(amount(booking.price_paid))
   const refundOwed = round2(amount(booking.refund_owed_amount))

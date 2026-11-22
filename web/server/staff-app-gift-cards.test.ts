@@ -309,7 +309,7 @@ describe("the staff app's gift card screens (brief W38 item 4), read as source",
     // The check, its words and the return come before the press is sent.
     expect(dialog).toMatch(
       new RegExp(
-        String.raw`const parsedMonths = Number\.parseInt\(months, 10\)\s+//[^\n]+\s+if \(!Number\.isInteger\(parsedMonths\) \|\| parsedMonths <= 0 \|\| parsedMonths > ${GIFT_CARD_EXTEND_MAX_MONTHS}\) \{\s+setErrorMessage\('Enter a whole number of months from 1 to 120\.'\)\s+return\s+\}`
+        String.raw`const parsedMonths = /\^\\s\*\\d\+\\s\*\$/\.test\(months\) \? Number\(months\.trim\(\)\) : Number\.NaN\s+//[^\n]+\s+if \(!Number\.isInteger\(parsedMonths\) \|\| parsedMonths <= 0 \|\| parsedMonths > ${GIFT_CARD_EXTEND_MAX_MONTHS}\) \{\s+setErrorMessage\('Enter a whole number of months from 1 to 120\.'\)\s+return\s+\}`
       )
     )
     expect(dialog.indexOf('parsedMonths > 120')).toBeLessThan(dialog.indexOf('await extendExpiry('))

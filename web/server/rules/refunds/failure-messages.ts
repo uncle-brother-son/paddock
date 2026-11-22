@@ -214,6 +214,12 @@ export const MEMBERSHIP_REFUND_WORDS = {
    */
   cancelRefusedListed: (subscriptionId: string): string =>
     `A membership was refunded, but Stripe refused to cancel its subscription (${subscriptionId}), so the automatic check has stopped trying and it could still take its next payment. Cancel it in Stripe by hand (or tell a manager), then press Mark sorted (needs the Issue refunds permission).`,
+  /**
+   * W58b (the W45 audit's row 26; W40 call 8): the same when Stripe can't find the subscription with the key in use
+   * (deleted, or the other mode's), as W40's step words say it. Stripe refused nothing.
+   */
+  cancelMissingListed: (subscriptionId: string): string =>
+    `A membership was refunded, but Stripe can't find its subscription (${subscriptionId}) with the club's payment account details, so the automatic check has stopped trying. Tell a manager: the subscription may have been deleted in Stripe, or belong to the other mode. Once it is cancelled in Stripe (or shown not to exist), press Mark sorted (needs the Issue refunds permission).`,
   /** R2's own note on the row it writes before the cancel is tried (as W13c's LEFT_AT_T2). */
   notCancelledYet: 'not cancelled yet: its membership has just been refunded',
 } as const

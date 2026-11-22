@@ -314,8 +314,11 @@ export async function deleteCouponQuietly(stripe: StripeClient, orderId: string,
 
 export type CancelAnswer =
   | { kind: 'cancelled' }
-  /** Stripe said no, and it is still live (or can't be found with this key): a person must look. */
-  | { kind: 'refused'; message: string }
+  /**
+   * Stripe said no, and it is still live (or can't be found with this key): a person must look. W58b (the W45 audit's
+   * row 26): `missing` when it can't be found, so the list words it as that, not as a refusal.
+   */
+  | { kind: 'refused'; message: string; missing?: true }
   /** No clear answer, and reading it back didn't settle it: never assumed cancelled. */
   | { kind: 'unclear'; message: string }
 
@@ -341,7 +344,7 @@ export async function cancelSubscriptionChecked(stripe: StripeClient, subscripti
       : { kind: 'unclear', message: unclearOf(cancelError) }
   } catch (err) {
     const failure = readStripeFailure(err)
-    if (failure.code === 'resource_missing') return { kind: 'refused', message: `Stripe can't find subscription ${subscriptionId} with the key in use.` }
+    if (failure.code === 'resource_missing') return { kind: 'refused', message: `Stripe can't find subscription ${subscriptionId} with the key in use.`, missing: true }
     return { kind: 'unclear', message: unclearOf(cancelError) }
   }
 }

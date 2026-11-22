@@ -50,7 +50,8 @@ export const EVENT_CANCEL_WORDS = {
   choosePlace: 'Choose at least one place.',
   chooseRefund: 'Choose Card, Store credit or No refund.',
   // booking_pending
-  bookingPending: 'A card reader payment is still in progress for this booking. Finish or cancel it first.',
+  // W58 (W35 row 22, W31 "Noticed" 3): a saved-card payment is held the same way, so "a payment", not "a card reader payment".
+  bookingPending: 'A payment is still in progress for this booking. Finish or cancel it first.',
   // reason_required_after_cutoff
   reasonRequiredAfterCutoff: 'A reason is needed to refund after the refund cut-off.',
   // order_not_found (two texts)
@@ -95,7 +96,8 @@ export const EVENT_WHOLE_CANCEL_WORDS = {
   // event_ended
   eventEnded: "This event has already ended, so it can't be cancelled.",
   // bookings_pending
-  bookingsPending: (customerNames: readonly string[]): string => `A card reader payment is still in progress for ${customerNames.join(', ')}. Finish or cancel it first.`,
+  // W58 (W35 row 22): as bookingPending.
+  bookingsPending: (customerNames: readonly string[]): string => `A payment is still in progress for ${customerNames.join(', ')}. Finish or cancel it first.`,
 } as const
 
 /** The overview's words for a booking that can't be cancelled as things stand (getEventCancellationOverview). */

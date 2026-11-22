@@ -76,7 +76,7 @@ import {
   type Taken,
 } from './membership'
 import { chargeDescription, heldBooking, type CardSnapshot, type PendingMembership, type PendingSnapshot, type ReaderSnapshot } from './pending-order'
-import { priceFromFacts } from './price-basket'
+import { priceFromFacts, storeCreditChangedMessage } from './price-basket'
 import { createReaderIntent, recordReaderIntent, type PendingReader } from './reader-intent'
 import { undoOrder } from './undo-order'
 import { writeBooking, type BookingOrderPart, type BookingToWrite, type PayBy } from './write-booking'
@@ -161,6 +161,12 @@ function refuseIfNeeded(input: PlaceOrderInput, quote: BasketQuoteOutput): void 
   if (first && !AMOUNT_REASONS.has(first.reason)) throw orderRefusal(first)
   const method = input.payment?.method
   const { totals } = quote
+  // W58 (Q55; W35 row 20): the store credit the confirm line named, first, so a balance that changed since the quote
+  // is said as that, not as a changed card or cash figure.
+  const confirmedStoreCredit = input.confirmed?.storeCredit
+  if (typeof confirmedStoreCredit === 'number' && Number.isFinite(confirmedStoreCredit) && Math.round(Math.abs(confirmedStoreCredit - totals.storeCreditApplied) * 100) > 0) {
+    throw orderRefusal({ stage: 'payment', reason: 'store_credit_changed', message: storeCreditChangedMessage(totals.storeCreditApplied), amountDueTotal: totals.amountDue })
+  }
   const cash = cashDifferenceRefusal(method, totals.toCollect.cash, input.confirmed?.toCollect)
   if (cash) {
     throw orderRefusal({ stage: 'payment', reason: cash.reason, message: cash.message, amountDueTotal: totals.amountDue })
@@ -588,7 +594,10 @@ async function writeOrder(
   // nothing and within its balance and the total. store_credit_apply rounded the balance after, so
   // the claim below does too.
   const giftCardPaying = input.payment?.giftCard ?? null
-  const storeCredit = input.payment?.storeCredit?.amount ?? 0
+  // W58 (Q55): the quote's figure, which is the amount sent when one is sent (the checks refuse any other), and the
+  // Worker's own when staff (or the website) sent the choice instead. Never the sent field alone: with the choice
+  // ticked it is missing, and the order would take nothing for what the quote said store credit paid.
+  const storeCredit = totals.storeCreditApplied
   // What the card or the cash takes is the same remainder (price-basket.ts); recorded now, also on a
   // pending card order, so T2 only marks it paid. createOrder recorded 'card' or 'split' the same way.
   // W11: a reader order records none until T2, as createOrder's reader branch left it pending

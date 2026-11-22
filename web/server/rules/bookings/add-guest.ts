@@ -31,8 +31,8 @@ import type { StripeClient } from '@/server/stripe/client'
 import { stripeTiming } from '@/server/stripe/deadline'
 import { amountChangedRefusal, cashDifferenceRefusal, exceedsAmount } from '@/server/rules/orders/amounts'
 import { COLLECT_DEADLINE_MS } from '@/server/rules/orders/collect-saved-card'
-import { addonPriceFor } from '@/server/rules/orders/catalog-price'
-import { ADDON_PRICE_NOT_SET_MESSAGE, FAILURE_MESSAGES as ORDER_WORDS, NO_SAVED_CARD_MESSAGE } from '@/server/rules/orders/failure-messages'
+import { addonPriceFor, addonPriceGap } from '@/server/rules/orders/catalog-price'
+import { ADDON_MEMBER_PRICE_ONLY_MESSAGE, ADDON_PRICE_NOT_SET_MESSAGE, FAILURE_MESSAGES as ORDER_WORDS, NO_SAVED_CARD_MESSAGE } from '@/server/rules/orders/failure-messages'
 import { GUESTS_OVER_18_NOT_CONFIRMED_MESSAGE, MAX_GUESTS_PER_PRIVATE_BOOKING, MAX_GUESTS_PER_PUBLIC_BOOKING } from '@/server/rules/orders/guest-validation'
 import { FLOW_INTENT_UNCONFIRMED_MESSAGE, readFlow, undoFlowInTransaction } from '@/server/rules/orders/reader-flow'
 import { bookingPathOff } from './booking-switch'
@@ -51,6 +51,7 @@ import { createFlowReaderIntent, recordFlowIntent, settleCardFlow, writeFlowReco
 import { loadBooking, lockAndLoadBooking, paymentOpen, type LoadedBooking } from './load-booking'
 import { claimGiftCard, claimStoreCredit, inC1, partAmount, paymentOpenRefusal } from './money-in'
 import { refundClaimOpen } from './refunds'
+import { recordedPaymentMethod } from '@/server/rules/orders/place-order'
 
 export interface AddGuestOptions {
   actor: { type: 'staff'; id: string }
@@ -164,7 +165,8 @@ async function priceAddons(
     // price only for a non-member) is refused before anything is claimed or written, never priced at £0. Checked before
     // a sent price, and for a line on an add-on credit too, as the basket does.
     const set = addonPriceFor(addon, member)
-    if (set === null) throw refuse('VALIDATION', 'addon_price_not_set', ADDON_PRICE_NOT_SET_MESSAGE)
+    // W58 (W55b "Where I was unsure" 1): a member price only gets New Order's member-only words, the reason unchanged.
+    if (set === null) throw refuse('VALIDATION', 'addon_price_not_set', addonPriceGap(addon, member) === 'member_only' ? ADDON_MEMBER_PRICE_ONLY_MESSAGE : ADDON_PRICE_NOT_SET_MESSAGE)
     const system = Number.parseFloat(set)
     let unitPrice = system
     if (canManagePricing && typeof input.unitPrice === 'number' && Number.isFinite(input.unitPrice)) {
@@ -244,10 +246,12 @@ const money = (value: string | number | null | undefined): number | null => {
  * old function recorded none, and so did the Worker until now (Q36, "keep exactly"), so the order said nothing about
  * how it was paid. Orders written before W53 keep their empty method: the order list reads them as store credit by
  * what paid for them (orders/admin.ts, ORDER_PAID_BY_SQL). Exported for its test.
+ *
+ * W58b (W53 "For later" 2; Q9's table): a gift card is worded as New Order words it (recordedPaymentMethod), so a gift
+ * card with store credit records `split`, where it recorded `gift_card` as the old function did.
  */
 export function ownOrderMethod(giftCard: number, rest: number, method: string | undefined, storeCredit: number): string | null {
-  if (giftCard > 0 && rest > NOTHING_LEFT) return 'split'
-  if (giftCard > 0) return 'gift_card'
+  if (giftCard > 0) return recordedPaymentMethod(method, rest > NOTHING_LEFT ? rest : 0, giftCard, storeCredit > NOTHING_LEFT ? storeCredit : 0)
   if (rest > NOTHING_LEFT && method === 'cash') return 'cash'
   return storeCredit > NOTHING_LEFT ? 'store_credit' : null
 }

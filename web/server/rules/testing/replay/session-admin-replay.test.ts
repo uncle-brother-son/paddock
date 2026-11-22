@@ -5,7 +5,7 @@ import type { Db } from '@/server/db'
 import { SESSION_ADMIN_NEW_WORDS } from '@/server/rules/sessions/admin-failure-messages'
 import { GENERATOR_BEFORE_032_NAME } from '../migration-032'
 import { staffAppDir } from '../staff-app-dir'
-import { isW51Scenario, W51_DECISIONS, W51_DELETED_FUNCTION_SCENARIOS, W51_DIFFERING, w51Differences } from './admin-differences'
+import { isW51Scenario, pathsPinnedBy, W51_DECISIONS, W51_DELETED_FUNCTION_SCENARIOS, W51_DIFFERING, w51Differences } from './admin-differences'
 import { adminRowProblems, adminStoredAnswerProblems, comparableAdmin, newAdminSide, STEP_G_ACTIONS_MOVED, STEP_G_AUDIT_ROWS, W51_ACTIONS, W51_READS, W51_WRITES } from './admin-side'
 import { compareRecordings, showsStaffSetTimes, STAFF_SET_TIME_PREFIXES, type AllowedDifference, type Recording, type Row } from './compare'
 import { legacyAdminDir, oldSide, readGolden, replay, startReplay, type ReplayEnvironment, type Scenario } from './harness'
@@ -109,6 +109,8 @@ describe("step G's side of the replay: sessions and the timetable (W51)", () => 
       expect(adminStoredAnswerProblems(recording), `${name}: the stored answers`).toEqual([])
       expect(madeUpToProblems(madeUpTo), `${name}: the date sessions are made up to`).toEqual([])
       expect(compareSides(golden(name), recording, named(name))).toEqual([])
+      // W58b (W52 "For later" 6): every pin bites (as event-admin-replay.test.ts): exactly the pinned paths differ.
+      expect(left(name, recording, []).sort(), `${name}: the raw paths`).toEqual(named(name).flatMap((difference) => [...pathsPinnedBy(difference)]).sort())
     })
   })
 

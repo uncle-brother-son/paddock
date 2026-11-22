@@ -22,6 +22,7 @@ import { GIFT_CARD_CODE_TRIES, ORDER_NOT_SAVED_MESSAGE, placeOrder, recordedPaym
 import { amountChangedRefusal } from './amounts'
 import { orderRefusal } from './order-refusal'
 import { eventFullRefusal } from './basket-event'
+import { storeCreditChangedMessage } from './price-basket'
 import { writeBooking, type BookingToWrite, type SeatToWrite } from './write-booking'
 
 // T1 on PGlite with the live schema and the replay seed, through the real routes. The parity proof
@@ -1277,6 +1278,39 @@ describe('the confirmed amounts, for every method with no Stripe step (W03-plan 
     expect(refusalOf(owed.answer)).toMatchObject({ reason: 'payment_method_required', amountDueTotal: 24 })
     const stale = await placeInput({ ...coveredByGiftCard, payment: { storeCredit: { amount: 24 } }, confirmed: { amountDue: 24, toCollect: 5 } })
     expect(refusalOf(stale.answer)).toMatchObject({ reason: 'amount_changed', message: words('0.00') })
+  })
+
+  // W58 (Wayne's Q55; W35 row 20): the store credit choice at the press, and the store credit the confirm line named.
+  const balanceOf = async (target: Db) => (await target.query<{ b: string }>('SELECT store_credit_balance::text AS b FROM customers WHERE id = $1', [ID.customer]))[0]?.b
+  it('Q55 ticked: the order takes the £24.00 the confirm line named; the balance goes from £30.00 to £6.00', async () => {
+    const { answer, recording } = await placeInput({ customerId: ID.customer, products: [soap], payment: { useStoreCredit: true }, confirmed: { amountDue: 24, toCollect: 0, storeCredit: 24 } })
+    expect(answer.body.ok).toBe(true)
+    expect(recording.tables['customers']?.changed).toMatchObject([{ id: ID.customer, store_credit_balance: ['30.00', '6.00'] }])
+  })
+
+  it('Q55 unticked: none used, the £24.00 taken in cash; the balance untouched', async () => {
+    const { answer, recording } = await placeInput({ customerId: ID.customer, products: [soap], payment: { ...cash(24), useStoreCredit: false }, confirmed: { amountDue: 24, toCollect: 24, storeCredit: 0 } })
+    expect(answer.body.ok).toBe(true)
+    expect(recording.tables['customers']?.changed ?? []).toEqual([])
+    expect(tablesTouched(recording)).not.toContain('store_credit_transactions')
+  })
+
+  it('Q55 partly covering: £30.00 of store credit and £34.00 in cash, as the confirm line said', async () => {
+    const { answer, recording } = await placeInput({ customerId: ID.customer, booking: { ...paidSeat([sam, alex]) }, products: [soap], payment: { ...cash(34), useStoreCredit: true }, confirmed: { amountDue: 64, toCollect: 34, storeCredit: 30 } })
+    expect(answer.body.ok).toBe(true)
+    expect(recording.tables['customers']?.changed).toMatchObject([{ id: ID.customer, store_credit_balance: ['30.00', '0.00'] }])
+  })
+
+  it('Q55: the balance changed between the quote and the press (£30.00 to £20.00): refused in its own words before anything is taken', async () => {
+    const { answer, recording } = await placeInput(
+      { customerId: ID.customer, products: [soap], payment: { useStoreCredit: true }, confirmed: { amountDue: 24, toCollect: 0, storeCredit: 24 } },
+      async (seedDb) => {
+        await seedDb.query("UPDATE customers SET store_credit_balance = '20.00' WHERE id = $1", [ID.customer])
+        expect(await balanceOf(seedDb)).toBe('20.00')
+      }
+    )
+    expect(refusalOf(answer)).toMatchObject({ reason: 'store_credit_changed', message: storeCreditChangedMessage(20), amountDueTotal: 24 })
+    expect(tablesTouched(recording)).toEqual(['api_idempotency'])
   })
 
   it('the shadow and the replay send no amount due, as the old createOrder took none: not checked', async () => {

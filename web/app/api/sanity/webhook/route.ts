@@ -1,8 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import crypto from 'crypto'
 import Stripe from 'stripe'
 import { createImageUrlBuilder } from '@sanity/image-url'
+
+/** W59 (W45 audit row 3): an image field as this route reads it (the builder takes its asset reference). */
+interface SanityImage {
+  asset?: { _ref?: string }
+}
+/**
+ * W59 (W45 audit row 3): the fields of a Sanity document this route reads (no generated Sanity types here). Each
+ * handler destructures these; anything else on the document is never read.
+ */
+interface SanityDocument {
+  _id: string
+  _type?: string
+  _rev?: string
+  name: string
+  category?: string
+  images?: SanityImage[]
+  extraWaiver?: unknown
+}
 
 const imageBuilder = createImageUrlBuilder({
   projectId: process.env.NEXT_PUBLIC_SANITY_PROJECT_ID!,
@@ -54,7 +72,7 @@ function verifySignature(body: string, signature: string): boolean {
 // proportionally, no crop). Uses the actual @sanity/image-url builder rather than hand-parsing
 // the asset reference string \u2014 the builder correctly reads the real dimensions Sanity bakes
 // into the asset filename, which a manually constructed URL was missing entirely.
-function getThumbnailUrl(image: any): string | null {
+function getThumbnailUrl(image: SanityImage | null | undefined): string | null {
   if (!image || !image.asset || !image.asset._ref) return null
   return imageBuilder.image(image).width(80).url()
 }
@@ -64,7 +82,7 @@ function getThumbnailUrl(image: any): string | null {
 // document no longer exists — matching by id across all catalog tables avoids depending on
 // that. Per 07-write-architecture.md: Sanity-side deletion always means "deactivate", never a
 // raw table delete.
-async function deactivateBySanityId(sanityId: string, supabase: any) {
+async function deactivateBySanityId(sanityId: string, supabase: SupabaseClient) {
   const tables: Array<{ table: string; column: string }> = [
     { table: 'service_types', column: 'sanity_service_type_id' },
     { table: 'products', column: 'sanity_product_id' },
@@ -142,7 +160,7 @@ export async function POST(request: NextRequest) {
     }
 
     const payload = JSON.parse(body)
-    const { _type, _id, _rev } = payload
+    const { _type, _id } = payload
 
     // Only process published documents (drafts have _id starting with 'drafts.')
     if (_id.startsWith('drafts.')) {
@@ -189,7 +207,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-async function handleServiceType(payload: any, supabase: any) {
+async function handleServiceType(payload: SanityDocument, supabase: SupabaseClient) {
   const { _id, name, images } = payload
   
   const thumbnailUrl = images?.[0] ? getThumbnailUrl(images[0]) : null
@@ -288,7 +306,7 @@ async function handleServiceType(payload: any, supabase: any) {
   }
 }
 
-async function handleProduct(payload: any, supabase: any) {
+async function handleProduct(payload: SanityDocument, supabase: SupabaseClient) {
   const { _id, name, category, images } = payload
   
   const thumbnailUrl = images?.[0] ? getThumbnailUrl(images[0]) : null
@@ -381,7 +399,7 @@ async function handleProduct(payload: any, supabase: any) {
   }
 }
 
-async function handleAddon(payload: any, supabase: any) {
+async function handleAddon(payload: SanityDocument, supabase: SupabaseClient) {
   const { _id, name, category, images } = payload
   
   const thumbnailUrl = images?.[0] ? getThumbnailUrl(images[0]) : null
@@ -474,7 +492,7 @@ async function handleAddon(payload: any, supabase: any) {
   }
 }
 
-async function handleMembershipPlan(payload: any, supabase: any) {
+async function handleMembershipPlan(payload: SanityDocument, supabase: SupabaseClient) {
   const { _id, name, images } = payload
   
   const thumbnailUrl = images?.[0] ? getThumbnailUrl(images[0]) : null
@@ -564,7 +582,7 @@ async function handleMembershipPlan(payload: any, supabase: any) {
   }
 }
 
-async function handleSessionPassType(payload: any, supabase: any) {
+async function handleSessionPassType(payload: SanityDocument, supabase: SupabaseClient) {
   const { _id, name, images } = payload
   
   const thumbnailUrl = images?.[0] ? getThumbnailUrl(images[0]) : null
@@ -654,7 +672,7 @@ async function handleSessionPassType(payload: any, supabase: any) {
   }
 }
 
-async function handleGiftCardType(payload: any, supabase: any) {
+async function handleGiftCardType(payload: SanityDocument, supabase: SupabaseClient) {
   const { _id, name, images } = payload
 
   const thumbnailUrl = images?.[0] ? getThumbnailUrl(images[0]) : null
@@ -751,7 +769,7 @@ async function handleGiftCardType(payload: any, supabase: any) {
 // new version for attendees who accept it later). A new event arrives OFF sale with no date,
 // capacity or prices: staff set those in Retool (Catalog -> Events) before putting it on sale.
 // No Stripe product: event lines are charged as order amounts, like bookings.
-async function handleEvent(payload: any, supabase: any) {
+async function handleEvent(payload: SanityDocument, supabase: SupabaseClient) {
   const { _id, name, images, extraWaiver } = payload
 
   const thumbnailUrl = images?.[0] ? getThumbnailUrl(images[0]) : null

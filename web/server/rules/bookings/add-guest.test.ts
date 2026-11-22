@@ -5,7 +5,7 @@ import { POST as finaliseFlowRoute } from '@/app/api/v1/staff/reader-flows/[pend
 import { POST as guestsRoute } from '@/app/api/v1/staff/bookings/[bookingId]/guests/route'
 import type { Db } from '@/server/db'
 import { CLIENT_SECRET_WINDOW_MINUTES, pruneClientSecrets } from '@/server/http/idempotency'
-import { ADDON_PRICE_NOT_SET_MESSAGE, FAILURE_MESSAGES as ORDER_WORDS, NO_SAVED_CARD_MESSAGE } from '@/server/rules/orders/failure-messages'
+import { ADDON_MEMBER_PRICE_ONLY_MESSAGE, ADDON_PRICE_NOT_SET_MESSAGE, FAILURE_MESSAGES as ORDER_WORDS, NO_SAVED_CARD_MESSAGE } from '@/server/rules/orders/failure-messages'
 import { GUESTS_OVER_18_NOT_CONFIRMED_MESSAGE } from '@/server/rules/orders/guest-validation'
 import { FLOW_INTENT_UNCONFIRMED_MESSAGE, flowCustomerMismatchMessage, readFlow } from '@/server/rules/orders/reader-flow'
 import { reconcile } from '@/server/rules/orders/reconcile'
@@ -495,6 +495,8 @@ describe('refusals, in the old order, with nothing written', () => {
 
   // W55b (W55a noticed 2): Add Guest priced an add-on with no price for this customer at £0. New Order's rule now.
   const noPrice = { status: 400, reason: 'addon_price_not_set', message: ADDON_PRICE_NOT_SET_MESSAGE }
+  // W58 (W55b "Where I was unsure" 1): a member price only, for a non-member: New Order's member-only words, same reason.
+  const memberPriceOnly = { status: 400, reason: 'addon_price_not_set', message: ADDON_MEMBER_PRICE_ONLY_MESSAGE }
 
   it('W55b: an add-on with no price set is refused with a guest, on its own, on the press with a payment, and with a sent price; nothing is written', async () => {
     await onABooking(publicBooking, async ({ bookingId }) => {
@@ -512,8 +514,8 @@ describe('refusals, in the old order, with nothing written', () => {
     const memberOnly = () => db.query('UPDATE addons SET base_price = NULL, sale_price = NULL, member_price = 4 WHERE id = $1', [ID.addon])
     await onABooking(publicBooking, async ({ bookingId }) => {
       await memberOnly()
-      expect(refused(await post(bookingId, { ...bea, addons: [towel(1)] }))).toMatchObject(noPrice)
-      expect(refused(await post(bookingId, { addons: [towel(1)], payment: { method: 'cash', confirmedCashAmount: 4 }, ...figures(4, 4) }))).toMatchObject(noPrice)
+      expect(refused(await post(bookingId, { ...bea, addons: [towel(1)] }))).toMatchObject(memberPriceOnly)
+      expect(refused(await post(bookingId, { addons: [towel(1)], payment: { method: 'cash', confirmedCashAmount: 4 }, ...figures(4, 4) }))).toMatchObject(memberPriceOnly)
       await untouched(bookingId)
     })
     await onABooking(

@@ -95,6 +95,7 @@ import { lockAndLoadBooking, paymentOpen, type LoadedBooking } from './load-book
 import { lockForBooking } from './locks'
 import { inC1, paymentOpenRefusal } from './money-in'
 import { ADDONS_INSIDE_LINE, loadBookingLines, loadOrderCardPortion, recordBookingOrdersPaymentStatus, recordOrderPaymentStatus, withCashAndLine, type RefundFigures } from './money-left'
+import { overHalfPenny } from '@/server/rules/orders/amounts'
 
 // W27: lifted to the shared core, and still exported from here under their old names.
 export { cardPartRequest, claimRefundKey, findCardPart } from '@/server/rules/refunds/pipeline'
@@ -260,6 +261,17 @@ export interface MoveClaim {
   passReturned: string | null
   /** A membership or pass credit was released (its seat now paid), for the move's own row. */
   creditReleased: boolean
+  /**
+   * W58 (Wayne's Q54): the credit seat took a credit from the customer's current membership instead (its own had
+   * ended): which one, for the move's own row. The undo puts the booking back on its old period (`oldCreditPeriodId`).
+   */
+  creditMovedTo?: CreditMovedTo
+}
+
+/** W58 (Q54): the membership and credit period a moved credit seat now draws on. */
+export interface CreditMovedTo {
+  membershipId: string
+  creditPeriodId: string
 }
 
 /** W24: Move's own row (`booking.move`), whichever way it went: written by C1, or by R2 when money went back. */
@@ -284,6 +296,8 @@ export interface MoveRow {
   creditReleased: boolean
   passReleased: string | null
   legacyPricing: boolean
+  /** W58 (Q54): only when the credit seat moved to the current membership's credit. */
+  creditMovedTo?: CreditMovedTo
 }
 
 export const moveRowDetails = (row: MoveRow): Record<string, unknown> => ({ ...row })
@@ -366,7 +380,6 @@ export interface FinishedBy {
 
 const round2 = (n: number): number => Math.round(n * 100) / 100
 /** Rounded first, as the old cash rule: taking pounds from pounds leaves noise. Half a penny either way passes (Q18). */
-const overHalfPenny = (amount: number, limit: number): boolean => Math.round((amount - limit) * 1e6) / 1e6 > 0.005
 const sum = (amounts: readonly number[]): number => round2(amounts.reduce((total, n) => total + n, 0))
 
 // --- Refusals
@@ -959,6 +972,7 @@ function actionRow(details: ClaimDetails, parts: { cardRefunded: number; storeCr
           creditReleased: move?.creditReleased ?? false,
           passReleased: move?.passReturned ?? null,
           legacyPricing: false,
+          ...(move?.creditMovedTo ? { creditMovedTo: move.creditMovedTo } : {}),
         }),
       }
     }
@@ -1592,6 +1606,19 @@ async function takeCreditBack(tx: Tx, periodId: string): Promise<void> {
   if (free.length !== 1) throw new PutBackBlocked(`credit period ${periodId} has no credit left to take back`)
 }
 
+/**
+ * W58b (the W45 audit's row 8; W37 review S2): the membership takes back the add-on credits a cancel's R1 gave it
+ * only while it still has them: never below zero. Spent meanwhile (or taken off by staff), the undo is blocked, as a
+ * spent pass session is, and staff get the blocked words. Before this, migration 025's check refused the write and the
+ * undo failed with the "couldn't be put back" words; the money ended owed on the booking either way.
+ */
+const TAKE_ADDON_CREDITS_BACK_SQL = `UPDATE customer_memberships SET addon_credits_remaining = addon_credits_remaining - $1::int, updated_at = now()
+WHERE id = $2::uuid AND addon_credits_remaining >= $1::int RETURNING id`
+async function takeAddonCreditsBack(tx: Tx, membershipId: string, credits: number): Promise<void> {
+  const taken = await tx.query(TAKE_ADDON_CREDITS_BACK_SQL, [credits, membershipId])
+  if (taken.length !== 1) throw new PutBackBlocked(`membership ${membershipId} has no ${credits === 1 ? 'add-on credit' : `${credits} add-on credits`} left to take back`)
+}
+
 /** The credit period a cheaper Move's R1 released the booking's membership credit from, or null when it released none. */
 const creditPeriodReleased = (move: MoveClaim | undefined): string | null =>
   move?.creditReleased && move.oldRedemptionSource === 'membership_credit' ? move.oldCreditPeriodId : null
@@ -1599,9 +1626,20 @@ const creditPeriodReleased = (move: MoveClaim | undefined): string | null =>
 /**
  * The first card part was refused, so nothing went: R1 undone in one transaction, as the old put-backs did. A part
  * refund was never one (price_paid and part_refunded_amount back); Refund the rest's money is owed again. False when
- * the claim was finished already.
+ * the claim was finished already. W58 (W35 audit row 44, W26a review L2): run once more after a deadlock, as W29a's
+ * order undo is. Postgres rolled the whole of the first try back, and the undo checks the claim is still open, so the
+ * second try can't undo anything twice.
  */
 async function undoClaim(db: Db, claim: Claim, by: FinishedBy): Promise<boolean> {
+  try {
+    return await undoClaimOnce(db, claim, by)
+  } catch (err) {
+    if (!isDeadlock(err)) throw err
+    return undoClaimOnce(db, claim, by)
+  }
+}
+
+async function undoClaimOnce(db: Db, claim: Claim, by: FinishedBy): Promise<boolean> {
   return db.transaction(async (tx) => {
     // W22: a removed guest's place goes back to the booking's session, so it is locked too (LOCK_ORDER). W23: a cancel's
     // places too, with the memberships its add-on credits went back to and the pass it gave a session back to.
@@ -1681,12 +1719,7 @@ async function undoCancel(tx: Tx, bookingId: string, cancel: CancelClaim): Promi
   await takePlacesBack(tx, cancel.sessionId, cancel.placesReleased)
   if (cancel.passReturned) await takePassSessionBack(tx, cancel.passReturned)
   for (const line of cancel.addons) {
-    if (line.creditsReturned > 0 && line.membershipId) {
-      await tx.query('UPDATE customer_memberships SET addon_credits_remaining = addon_credits_remaining - $1::int, updated_at = now() WHERE id = $2::uuid', [
-        line.creditsReturned,
-        line.membershipId,
-      ])
-    }
+    if (line.creditsReturned > 0 && line.membershipId) await takeAddonCreditsBack(tx, line.membershipId, line.creditsReturned)
     await tx.query(
       'UPDATE addon_order_lines SET removed_at = NULL, removed_by = NULL, refunded_amount = $1::numeric, card_refunded_amount = $2::numeric, refund_method = $3::text WHERE id = $4::uuid',
       [line.was.refunded, line.was.card, line.was.method, line.id]
@@ -1775,7 +1808,10 @@ async function finishRefusedNotPutBack(db: Db, claim: Claim, options: RefundOpti
   const owed = sum(claim.details.plan.card.map((part) => part.amount))
   const cancelled = claim.details.cancel !== undefined
   try {
-    const output = await finishClaim(db, claim, { went: [], owed }, { actor: options.actor, requestId: options.requestId, how: blocked ? 'undo_blocked' : 'undo_failed', why: detail })
+    // W58 (W26a review L4): a first part Stripe refused carries `refused` on the finished row, as a later refusal's and
+    // reconcile's do, so a report counting refusals by `details.refused` finds it (a part never sent was refused by nobody).
+    const refusal = detail !== REFUND_NOT_SENT_DETAIL ? { refused: detail } : {}
+    const output = await finishClaim(db, claim, { went: [], owed, ...refusal }, { actor: options.actor, requestId: options.requestId, how: blocked ? 'undo_blocked' : 'undo_failed', why: detail })
     if (!output) return null
     // W31: the words name the store credit the finish gave (the plan's own), so nobody gives it again by hand.
     // W32 (W31 review S2): the add-ons' store credit with the seat's (a cancel answers the two apart).

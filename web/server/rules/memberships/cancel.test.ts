@@ -652,7 +652,7 @@ describe('no clear answer: the step is left, and reconcile reads first and sends
       pastTheWindow()
       stripe.failNext('subscriptions.update', no())
       expect((await reconcileNow(stripe)).items).toEqual([expect.objectContaining({ id: left.stepId, outcome: 'left', reason: 'step_refused' })])
-      expect((await listed()).map((line) => [line.what, line.state, line.words, line.close])).toEqual([['clear_cancel_date', 'refused', LEFT_STEP_WORDS.cancel_at.refused(MO_SUBSCRIPTION), { kind: 'left_step', orderId: left.stepId }]])
+      expect((await listed()).map((line) => [line.what, line.state, line.words, line.close])).toEqual([['clear_cancel_date', 'refused', LEFT_STEP_WORDS.undo.refused(MO_SUBSCRIPTION), { kind: 'left_step', orderId: left.stepId }]])
     })
   })
 
@@ -1320,7 +1320,8 @@ describe('W40a: a stale send is never the last word with nothing listed (W40 rev
         expect(await checkRows()).toHaveLength(1)
         // Listed, as the newest wish, naming the step it stands for.
         expect(await lines()).toEqual([[again, ...line]])
-        expect((await listed())[0]?.words).toBe(LEFT_STEP_WORDS.cancel_at.left(MO_SUBSCRIPTION))
+        // W58b (the W45 audit's row 30): an undo's line in the undo's own words.
+        expect((await listed())[0]?.words).toBe(wish === null ? LEFT_STEP_WORDS.undo.left(MO_SUBSCRIPTION) : LEFT_STEP_WORDS.cancel_at.left(MO_SUBSCRIPTION))
         expect(await leftRowOf(again)).toMatchObject({ actor_type: 'system', entity_id: ID.membership, details: { kind: 'cancel_at', subscriptionId: MO_SUBSCRIPTION, want: { cancelAt: wish }, leftAgainFor: newest } })
         // A new press waits, and a run inside the window leaves the step alone.
         expect(refusalOf(await press(wish === null ? 'undo-cancel' : 'cancel'))).toEqual([409, 'CONFLICT', 'still_sending', MEMBERSHIP_CANCEL_NEW_WORDS.stillSending])

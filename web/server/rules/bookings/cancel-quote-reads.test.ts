@@ -120,15 +120,17 @@ describe("Cancel & return credit's quote: its reads (brief W50 item 12)", () => 
         appendFileSync(process.env.W50_QUOTE_TIMINGS_OUT, `Cancel & return credit quote, ${ROUND_TRIP_MS} ms added to each round trip\n${lines.join('\n')}\n${JSON.stringify(summary)}\n\n`)
       }
       // The same reads as before the change, and no other (by the table each reads first), whatever order they were sent in.
-      expect([...summary.from].sort()).toEqual([...READS_BEFORE].sort())
-      expect(summary.reads).toBe(13)
-      // Before: 13 waits, one for each read. Now 6: the six reads that need only the booking's id go together; the
-      // money left's own reads follow each other (three more waits); then the refusal, the card plan's first read and
-      // the cash figure go together; then the card plan's second.
-      expect(summary.waves).toBe(6)
+      // W58b (W50 "For later" 4; a named difference): the money left's four reads are one statement now (READS_NOW).
+      expect([...summary.from].sort()).toEqual([...READS_NOW].sort())
+      expect(summary.reads).toBe(10)
+      expect(READS_BEFORE.length - READS_NOW.length).toBe(3)
+      // Before W50: 13 waits, one for each read. W50: 6, the money left's own reads following each other (three more
+      // waits). W58b: 3. The six reads that need only the booking's id go together (the money left is one of them); then
+      // the refusal, the card plan's first read and the cash figure go together; then the card plan's second.
+      expect(summary.waves).toBe(3)
       // The time is the waits', not the reads': with room for a slow machine, still well under one after another.
       expect(took).toBeLessThan(10 * ROUND_TRIP_MS)
-      expect(summary.ifOneAfterAnotherMs).toBe(13 * ROUND_TRIP_MS)
+      expect(summary.ifOneAfterAnotherMs).toBe(10 * ROUND_TRIP_MS)
     })
   })
 
@@ -163,4 +165,18 @@ const READS_BEFORE = [
   'order_line_items', // the card plan: the booking's lines
   'gift_card_redemptions', // the card plan: what the add-on's order's card can still take back
   'order_line_items', // the cash that can be handed back
+]
+
+/** W58b (W50 "For later" 4): the same, with the money left's four reads (bookings, its lines, two of gift cards) one statement. */
+const READS_NOW = [
+  'orders',
+  'booking_guests',
+  'pending_reader_payments',
+  'order_line_items', // the money left, one statement (its first FROM is its lines)
+  'addon_order_lines',
+  'bookings',
+  'audit_log',
+  'order_line_items',
+  'gift_card_redemptions',
+  'order_line_items',
 ]

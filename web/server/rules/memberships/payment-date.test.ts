@@ -31,6 +31,7 @@ import {
   PAYMENT_DATE_NEW_WORDS,
   PAYMENT_DATE_REFUSALS,
   PAYMENT_DATE_STUCK_WORDS,
+  PAYMENT_DATE_NOT_SENT_STUCK_WORDS,
   PAYMENT_DATE_WORDS,
 } from './failure-messages'
 import { checkSubscription, londonMidnightSeconds, ORDER_PROCESSING_SQL, PAYMENT_DATE_ACTION, PAYMENT_DATE_CLOSE_REASONS, PAYMENT_DATE_REFUND_WATCH_STEP, paymentStillGoingReason } from './payment-date'
@@ -1129,7 +1130,8 @@ describe('W41a: reconcile and a held change (W41 review B1, B2, B3)', () => {
       expect(refunds(stripe).map((call) => call.idempotencyKey)).toEqual([`${change?.id}:refund:${requestId}`])
       expect(await refundsInStripe(stripe, paid?.id as string)).toEqual([[2194, change?.id]])
       expect(stripe.refundedByIntent.get(paid?.id as string)).toBe(2194)
-      const words = "Stripe's next payment is on 10 Jan 2027, but the membership shows 10 Dec 2026. Refresh and try again. The part-month charge was refunded in full."
+      // W58b (the W45 audit's row 42; W41a "Noticed" 2): the record says the check's own sentence, without the dialog's "Refresh and try again".
+      const words = "The payment date wasn't moved: when the automatic check looked again, the subscription no longer allowed it (Stripe's next payment is on 10 Jan 2027, but the membership shows 10 Dec 2026). The part-month charge was refunded in full."
       expect((await changes()).map((row) => [row.status, row.failure_message, row.order_id])).toEqual([['failed', words, null]])
       expect(await states()).toEqual(['started', 'held', 'refunding', 'failed'])
       expect(await renewal()).toBe('2026-12-10')
@@ -1145,8 +1147,8 @@ describe('W41a: reconcile and a held change (W41 review B1, B2, B3)', () => {
   })
 
   it.each<[string, Parameters<FakeStripe['setSubscription']>[1], string]>([
-    ['no longer active (the renewal payment failing)', { status: 'past_due' }, 'The Stripe subscription is past_due, not active. The part-month charge was refunded in full.'],
-    ['a cancel scheduled meanwhile', { cancelAt: Date.UTC(2026, 11, 10) / 1000 }, 'The Stripe subscription has a cancellation scheduled. The part-month charge was refunded in full.'],
+    ['no longer active (the renewal payment failing)', { status: 'past_due' }, "The payment date wasn't moved: when the automatic check looked again, the subscription no longer allowed it (The Stripe subscription is past_due, not active). The part-month charge was refunded in full."],
+    ['a cancel scheduled meanwhile', { cancelAt: Date.UTC(2026, 11, 10) / 1000 }, "The payment date wasn't moved: when the automatic check looked again, the subscription no longer allowed it (The Stripe subscription has a cancellation scheduled). The part-month charge was refunded in full."],
   ])("B1: held at the move, and the subscription %s when reconcile looks: the change didn't happen, so the charge is refunded and the move never sent again", async (_name, fields, words) => {
     await onASeed(async (stripe) => {
       stripe.failNext('subscriptions.update', noAnswer())
@@ -1161,6 +1163,25 @@ describe('W41a: reconcile and a held change (W41 review B1, B2, B3)', () => {
       expect((await changes()).map((row) => [row.status, row.failure_message])).toEqual([['failed', words]])
       expect(await audited(REFUND_WATCH)).toHaveLength(1)
       expect(await listed()).toEqual([])
+    })
+  })
+
+  it('W58b (the W45 audit\'s row 42; W41a "Noticed" 1): B1, and the refund then gets no clear answer, or is refused: the Orders page\'s line says the date was never sent, not that Stripe refused it', async () => {
+    await onASeed(async (stripe) => {
+      stripe.failNext('subscriptions.update', noAnswer())
+      await press()
+      const [change] = await changes()
+      stripe.setSubscription(MO_SUBSCRIPTION, { status: 'past_due' })
+      pastTheWindow()
+      stripe.failNext('refunds.create', noAnswer())
+      expect(await dateItems(stripe)).toEqual([expect.objectContaining({ kind: 'date_change', id: change?.id, outcome: 'left', reason: 'refund_unconfirmed' })])
+      expect((await listed()).map((line) => [line.reason, line.words])).toEqual([['refund_unconfirmed', PAYMENT_DATE_NOT_SENT_STUCK_WORDS['refund_unconfirmed']]])
+      expect(PAYMENT_DATE_NOT_SENT_STUCK_WORDS['refund_unconfirmed']).not.toContain('Stripe refused')
+      // The next run's refund is refused for good: the line for a person, still in the not-sent words.
+      pastTheWindow()
+      stripe.failNext('refunds.create', { kind: 'error', error: fakeStripeErrors.invalid('charge_disputed', 'This charge is disputed.') })
+      expect((await dateItems(stripe)).map((item) => [item.outcome, item.reason])).toEqual([['left', 'refund_refused']])
+      expect((await listed()).map((line) => [line.reason, line.words, line.close?.kind])).toEqual([['refund_refused', PAYMENT_DATE_NOT_SENT_STUCK_WORDS['refund_refused'], 'held_payment_date']])
     })
   })
 
@@ -1385,6 +1406,9 @@ describe('a pending record holds the membership (brief W41 item 4)', () => {
         expect(await dateItems(stripe)).toEqual([{ kind: 'date_change', id: change?.id, outcome: 'left', reason: 'not_started_here' }])
         expect(stripe.calls).toEqual([])
         expect((await listed()).map((line) => [line.reason, line.close?.kind])).toEqual([['not_started_here', 'held_payment_date']])
+        // W58b (the W45 audit's row 38; W41 review L3): its own words, with what to look for in Stripe.
+        expect((await listed()).map((line) => line.words)).toEqual([PAYMENT_DATE_STUCK_WORDS['not_started_here']])
+        expect(PAYMENT_DATE_STUCK_WORDS['not_started_here']).toContain('"Payment date change" charge')
         expect((await closeStuckItem(db, { kind: 'held_payment_date', orderId: change?.id as string, reason: 'Checked Stripe: no charge' }, { actor: { type: 'staff', id: ID.staff }, requestId: crypto.randomUUID() })).closed).toBe(true)
         expect((await press()).status).toBe(200)
       },

@@ -256,7 +256,8 @@ describe("the staff app's customer screens (brief W39 item 4), read as source", 
     expect(page).toContain('trigger({})')
     expect(page).toContain('trigger({ search: trimmed }, { skipCache: true })')
     expect(page).toContain('{error ? <div className="text-destructive text-sm mb-4">Error: {error}</div> : null}')
-    expect(page).toContain('const { data, loading, trigger } = useGetCustomerDetail()')
+    // W58 (W45 audit row 17): the profile's read error is shown.
+    expect(page).toContain('const { data, loading, error: detailError, trigger } = useGetCustomerDetail()')
     expect(page).toContain('trigger({ customerId })')
     expect(page).toContain('fetchCard({ customerId }, { skipCache: true })')
     expect(page).toContain('<NewCustomerDialog onCreated={handleCustomerCreated} />')

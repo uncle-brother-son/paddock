@@ -2162,7 +2162,12 @@ describe("W13c L4: the W13a review's plants, caught", () => {
       const { orderId, intent, refundId } = await lateRefundAfterPendingCompensation(stripe)
       stripe.settleRefund(refundId, 'failed')
       later(16)
-      expect((await runReconcile(stripe)).items).toContainEqual(expect.objectContaining({ kind: 'refund', id: orderId, outcome: 'refund_failed' }))
+      const run = await runReconcile(stripe)
+      // W58b (W35 audit row 32; W32a "Noticed" 2): the late path meets the compensation's watched refund and answers
+      // "settled elsewhere"; the watch ends it failed in the same run. One failed refund is one "left for a person".
+      expect(run.items).toContainEqual(expect.objectContaining({ kind: 'refund', id: orderId, outcome: 'settled_elsewhere', detail: `the refund ${refundId} failed: its watch lists it` }))
+      expect(run.items.filter((item) => item.outcome === 'refund_failed' || item.outcome === 'left')).toEqual([expect.objectContaining({ kind: 'refund', outcome: 'refund_failed', reason: 'refund_failed_later' })])
+      expect(run.left).toBe(1)
       // W32a (W32 review S3; W32 "Noticed" 1): the compensation's refund is watched, so it is listed once, as the
       // watch's line (Mark sorted), not as the late refund's too.
       const listed = await stuckList(db)

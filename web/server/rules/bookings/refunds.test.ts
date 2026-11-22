@@ -1195,11 +1195,16 @@ describe('W25 item 9: the manual close shows per-part findings, and watches a pa
       const line = (await stuckList(db)).watchedPayments[0]
       expect(line).toMatchObject({ pendingId, paymentIntentId, state: 'expired', close: { kind: 'payment_watch', orderId: line?.watchId } })
       // What Stripe said is kept on the end row; the line says it in its own words, true for the one way a watch ends.
-      expect((await watchRows(pendingId))[1]?.details).toMatchObject({ state: 'expired', days: 30, detail: expect.stringContaining("Stripe can't find the reader payment") })
+      expect((await watchRows(pendingId))[1]?.details).toMatchObject({ state: 'expired', days: 30, detail: expect.stringContaining("Stripe can't find the card payment") })
       expect(line?.words).toBe(WATCHED_PAYMENT_WORDS.expired(paymentIntentId))
       expect(line?.words).toBe(
-        `A card payment (${paymentIntentId}) was still at the bank when its booking change was undone by hand, and after 30 days Stripe still can't say how it ended with the payment account the system is using: it can't find the payment there (the system's Stripe key may be for the other Stripe mode, live or test, than the payment). So the automatic check has stopped watching it. Look at the payment in Stripe: if it took money, refund it there by hand (or tell a manager). Then press Mark sorted (needs the Issue refunds permission).`
+        `A card payment (${paymentIntentId}) was still at the bank when its booking change was undone by hand, and after 30 days Stripe still can't say how it ended with the payment account the system is using: it can't find the payment there (the system's Stripe key may be for the other Stripe mode, live or test, than the payment). So the automatic check has stopped watching it. Look at the payment in Stripe first and, if it took money, refund it there by hand (or tell a manager). Then press Mark sorted (needs the Issue refunds permission): if Stripe can see the payment now, the automatic check takes it back and refunds it if it took money (never again if it was refunded by hand); if not, the line is closed.`
       )
+      // W58c (W58 review FL5): the look in Stripe (and any refund by hand) comes before the press, never after it.
+      const words = line?.words ?? ''
+      expect(words.indexOf('Look at the payment in Stripe first')).toBeGreaterThan(-1)
+      expect(words.indexOf('Look at the payment in Stripe first')).toBeLessThan(words.indexOf('press Mark sorted'))
+      expect(words).not.toContain('by hand first')
 
       // No later run reads it, or lists it again as an item.
       const readsAtEnd = reads()
@@ -1466,6 +1471,30 @@ describe('W25 item 9: the manual close shows per-part findings, and watches a pa
     })
   })
 
+  it('W58b (W47b "Noticed" 2): two runs reading a watch as it runs out write one `expired` row, not one each: the second run, which read the payment before the first wrote, writes nothing and has no item', async () => {
+    await inAReplay('w58b one expired row from two runs', async (context) => {
+      const { pendingId } = await watchedPayment(context)
+      context.stripe.keyLivemode = true
+      vi.setSystemTime(Date.now() + 31 * DAY_MS)
+      // While this run is at Stripe for the payment, another run reads it too and ends the watch first.
+      const retrieve = context.stripe.paymentIntents.retrieve
+      let raced = false
+      context.stripe.paymentIntents.retrieve = (async (...args: Parameters<typeof retrieve>) => {
+        if (!raced) {
+          raced = true
+          expect((await runReconcile()).items.filter((item) => item.kind === 'flow')).toMatchObject([{ id: pendingId, reason: 'payment_watch_expired' }])
+        }
+        return retrieve(...args)
+      }) as typeof retrieve
+      const slower = await runReconcile()
+      context.stripe.paymentIntents.retrieve = retrieve
+      expect(raced).toBe(true)
+      expect(slower.items.filter((item) => item.kind === 'flow')).toEqual([])
+      expect(await expiredIds(pendingId)).toHaveLength(1)
+      expect((await stuckList(db)).watchedPayments).toMatchObject([{ state: 'expired' }])
+    })
+  })
+
   it("W47b item 1: a hand-back ends every `expired` row standing (two runs at once can each write one), and only those: if the key stops finding the payment again, the watch runs out again at the next read, as a line for a person, and Mark sorted then sorts it (still not found)", async () => {
     await inAReplay('w47b handed back, then not found again', async (context) => {
       const { pendingId, paymentIntentId, watchId, reads, states } = await ranOutThenTheKeyPutRight(context)
@@ -1685,7 +1714,7 @@ describe('W32: the refund watch on a booking', () => {
         { refundId: sent?.id, on: 'booking', bookingId, orderId: null, customerName: 'Sam Test', amount: 30, owed: 30, state: 'failed', words: WATCH_WORDS.bookingFailed(30, sent?.id as string) },
       ])
       expect(listed[0]?.words).toBe(
-        `A card refund of £30.00 on this booking (${sent?.id}) was accepted by Stripe and then failed, so the money never reached the customer. It is back on the booking as money still to refund: open the booking and use Refund the rest. Then press Mark sorted (needs the Issue refunds permission).`
+        `A card refund of £30.00 on this booking (${sent?.id}) was accepted by Stripe and then failed, so the money never reached the customer. It is back on the booking as money still to refund: open the booking and use Refund the rest (choose store credit if the card can't take a refund). Then press Mark sorted (needs the Issue refunds permission).`
       )
       expect(listed[0]?.close).toEqual({ kind: 'refund_watch', orderId: listed[0]?.watchId })
 

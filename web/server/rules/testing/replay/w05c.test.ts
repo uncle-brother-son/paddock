@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { Recording } from './compare'
 import { oldSide, replay, startReplay, type ReplayEnvironment, type Scenario } from './harness'
 import { scenarios } from './scenarios'
+import { scenarioFamilies } from './families'
 
 // What the W05c scenarios prove the old functions now do, in pence. Each one's rows are also held to
 // its golden file in replay.test.ts. Q27: a £100 booking, 10% off, so £90 paid, a £30 part refund and
@@ -239,9 +240,14 @@ describe('W05c on the old functions', () => {
 
   // The rows a charge has already written need no repair, because this is worked out at refund time.
   // This holds the test for "the add-on is inside the line" to every order any scenario writes.
-  it('only a guest payment on a card or the reader ever counts as having add-ons inside its line', async () => {
+  // W59 (W35 audit row 14, W45 audit row 23): one test per family (`families.ts`), each well inside its limit.
+  const families = scenarioFamilies(scenarios)
+  it('the families hold every scenario once', () => {
+    expect(families.flatMap(([, family]) => family.map((scenario) => scenario.name)).sort()).toEqual(scenarios.map((scenario) => scenario.name).sort())
+  })
+  it.each(families)('only a guest payment on a card or the reader ever counts as having add-ons inside its line: %s', async (_, family) => {
     const inside: string[] = []
-    for (const scenario of scenarios) {
+    for (const scenario of family) {
       const watched: Scenario = {
         ...scenario,
         async run(context) {
@@ -264,6 +270,7 @@ describe('W05c on the old functions', () => {
       await replay(environment, watched, oldSide)
     }
     expect(inside).toEqual([])
-    // W11 added 45 reader scenarios to this sweep: 66 s alone, over 120 s under a full run's load.
-  }, 300_000)
+    // W11 added 45 reader scenarios to the old single sweep: 66 s alone, over 120 s under a full run's load. A family
+    // of at most 40 is a fraction of that.
+  }, 120_000)
 })

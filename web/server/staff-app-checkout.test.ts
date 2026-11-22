@@ -196,11 +196,13 @@ describe('New Order on the basket quote', () => {
 
   it('confirmed is what staff saw: the amount due, what the method takes now, and a membership\'s first invoice', async () => {
     const { confirmedFigures } = await quoteHelpers()
-    expect(confirmedFigures(totals, 'reader', null, true)).toEqual({ amountDue: 100, toCollect: 30, firstInvoice: 30 })
-    expect(confirmedFigures(totals, 'card', null, true)).toEqual({ amountDue: 100, toCollect: 0, firstInvoice: 30 })
-    expect(confirmedFigures({ ...totals, toCollect: { card: 12, reader: 12, cash: 12 } }, 'cash', 12, false)).toEqual({ amountDue: 100, toCollect: 12 })
+    // W58 (Q55; W35 audit row 20): and the store credit the confirm line names, which the order checks.
+    const storeCredit = totals.storeCreditApplied
+    expect(confirmedFigures(totals, 'reader', null, true)).toEqual({ amountDue: 100, toCollect: 30, firstInvoice: 30, storeCredit })
+    expect(confirmedFigures(totals, 'card', null, true)).toEqual({ amountDue: 100, toCollect: 0, firstInvoice: 30, storeCredit })
+    expect(confirmedFigures({ ...totals, toCollect: { card: 12, reader: 12, cash: 12 } }, 'cash', 12, false)).toEqual({ amountDue: 100, toCollect: 12, storeCredit })
     // An unticked cash figure confirms nothing (the order then refuses it).
-    expect(confirmedFigures(totals, 'cash', null, false)).toEqual({ amountDue: 100, toCollect: 0 })
+    expect(confirmedFigures(totals, 'cash', null, false)).toEqual({ amountDue: 100, toCollect: 0, storeCredit })
   })
 
   it('W9-8: the store credit follows the amount due down, never up', async () => {

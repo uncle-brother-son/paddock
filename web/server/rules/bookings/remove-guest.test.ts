@@ -461,7 +461,8 @@ describe('Remove Guest: the removal (W22)', () => {
       vi.setSystemTime(new Date('2026-11-11T10:00:00.000Z'))
       expect((await quote(guestId)).body.data?.quote).toMatchObject({ refundAmount: 20, insideTwentyFourHours: false })
       vi.setSystemTime(new Date('2026-11-11T10:01:00.000Z'))
-      expect((await quote(guestId)).body.data?.quote).toEqual({ bookingId, bookingType: 'public', refundAmount: 0, refundable: true, insideTwentyFourHours: true, partySize: 3 })
+      // W58b (the W26 audit's row 17): with what the 24-hour rule kept back (£20), so the dialog says the 24-hour words.
+      expect((await quote(guestId)).body.data?.quote).toEqual({ bookingId, bookingType: 'public', refundAmount: 0, refundable: true, insideTwentyFourHours: true, partySize: 3, withheld: 20 })
       // A press with the £20 shown before the 24 hours began is refused with the new £0 quote; nothing changes.
       const stale = await remove(guestId, { confirmedRefundAmount: 20, refundMethod: 'card' })
       expect(stale.body.error?.details).toMatchObject({ reason: 'refund_amount_mismatch', message: AMOUNT_CHANGED_MESSAGE, quote: { refundAmount: 0, insideTwentyFourHours: true } })
@@ -493,6 +494,8 @@ describe('Remove Guest: the removal (W22)', () => {
       await partRefund(bookingId, { amount: 60, refundMethod: 'credit', reason: 'Goodwill' })
       vi.setSystemTime(new Date('2026-11-11T10:01:00.000Z'))
       expect((await quote(guestId)).body.data?.quote).toMatchObject({ refundAmount: 0, refundable: true, insideTwentyFourHours: true })
+      // W58b (the W26 audit's row 17): nothing was kept back, so no `withheld`: the dialog says "Nothing left to refund".
+      expect((await quote(guestId)).body.data?.quote).not.toHaveProperty('withheld')
       expect((await remove(guestId, { confirmedRefundAmount: 0 })).body.data).toMatchObject({ removed: true, refundedAmount: 0 })
       expect((await auditRows('booking.guest_remove'))[0]?.details).toEqual({ guestId, refundAmount: 0, method: null, cardRefunded: 0, storeCreditRefunded: 0, owed: 0 })
       expect((await bookingLines(bookingId))[1]?.refunded_at).not.toBeNull()

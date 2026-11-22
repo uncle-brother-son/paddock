@@ -872,7 +872,8 @@ describe('item 3: a membership past its last day whose Stripe subscription is st
       expect(helpers.stepLabel({ what: 'cancel_date', lastDay: '2026-12-09', state: 'refused', customerName: 'Mo Member' }, day)).toBe('Membership cancellation (last day [2026-12-09]) refused by Stripe · Mo Member')
       expect(helpers.stuckCounts(list)).toMatchObject({ memberships: 1 })
       const banner = readFileSync(path.join(staffAppDir(), 'frontend/components/StuckPaymentsBanner.tsx'), 'utf8')
-      expect(banner).toContain('{closeButton(item.close, stepLabel(item, formatDate), item.words)}')
+      // W58b (the lead's item 2): with the step's kind, for Mark sorted's words.
+      expect(banner).toContain('{closeButton(item.close, stepLabel(item, formatDate), item.words, item.what)}')
     })
   })
 })

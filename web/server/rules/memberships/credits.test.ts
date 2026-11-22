@@ -244,7 +244,7 @@ describe('the credits route: every refusal, with its words, and nothing changed'
 
   it('add-on credits below zero (FB10): with 2, down to 0 goes through, and one more is refused', async () => {
     await seeded(async () => {
-      expect(refusal(await adjust({ ...GOOD, creditType: 'addon', amount: -5 }))).toBe('409 CONFLICT addon_below_zero: Adjustment rejected: the membership would be left with -3 add-on credit(s), below zero.')
+      expect(refusal(await adjust({ ...GOOD, creditType: 'addon', amount: -5 }))).toBe('409 CONFLICT addon_below_zero: Adjustment rejected: the membership would be left with minus 3 add-on credit(s), below zero.')
       expect(refusal(await adjust({ ...GOOD, creditType: 'addon', amount: -3 }))).toBe(`409 CONFLICT addon_below_zero: ${MEMBERSHIP_CREDIT_NEW_WORDS.addonBelowZero(-1)}`)
       expect(await state()).toEqual(UNTOUCHED)
       expect((await adjust({ ...GOOD, creditType: 'addon', amount: -2 })).body.data).toEqual({ addon_credits_remaining: 0 })

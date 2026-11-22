@@ -67,10 +67,10 @@ describe("step E's side of the replay: the whole event (W31)", () => {
     expect(families.some((scenario) => isEventPlacesScenario(scenario.name))).toBe(false)
     // Every scenario that calls the old cancelEvent or its overview is in this family or W30's (none is left on the old code).
     expect([...WHOLE_EVENT_DIFFERENCES.keys()].every((name) => families.some((scenario) => scenario.name === name))).toBe(true)
-    // 6 match their golden files exactly; 5 differ only in the refund's key; 3 have differences of their own.
+    // 6 match their golden files exactly; 4 differ only in the refund's key; 4 have differences of their own (W58: one reworded).
     expect(families.filter((scenario) => !WHOLE_EVENT_DIFFERENCES.has(scenario.name)).length).toBe(6)
-    expect([...WHOLE_EVENT_DIFFERENCES.values()].filter((named) => named.length === 1 && named[0] === EVENT_CLAIM_KEYS).length).toBe(5)
-    expect([...WHOLE_EVENT_DIFFERENCES.values()].filter((named) => named.some((one) => one !== EVENT_CLAIM_KEYS)).length).toBe(3)
+    expect([...WHOLE_EVENT_DIFFERENCES.values()].filter((named) => named.length === 1 && named[0] === EVENT_CLAIM_KEYS).length).toBe(4)
+    expect([...WHOLE_EVENT_DIFFERENCES.values()].filter((named) => named.some((one) => one !== EVENT_CLAIM_KEYS)).length).toBe(4)
   })
 
   it('bugs E6 and E7 are each named, with their decision, on their own scenario', () => {

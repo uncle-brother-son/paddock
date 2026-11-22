@@ -75,7 +75,7 @@
 import 'server-only'
 import Stripe from 'stripe'
 import { audit, type AuditEntry } from '@/server/audit'
-import type { Db } from '@/server/db'
+import type { Db, Queryable } from '@/server/db'
 import { stripeIdempotencyKey } from '@/server/http/idempotency'
 import type { StripeClient } from '@/server/stripe/client'
 import { sendOptions, STRIPE_DEADLINE_MS, stripeTiming, type StripeTiming } from '@/server/stripe/deadline'
@@ -121,7 +121,20 @@ import { refundSeen, WATCH_DAYS, WATCH_READ_HOURS, WATCHES_DUE_SQL, WATCHES_WAIT
 import { checkWatchedRefund } from '@/server/rules/refunds/refund-watch-settle'
 import { PAYMENT_WATCH_DAYS, WATCHED_PAYMENTS_COUNT_SQL, WATCHED_PAYMENTS_DUE_SQL } from './payment-watch'
 import { cancelRefundedSubscription, cancelSubscriptionsAfterRefund, LEFT_BY_REFUND, refundCancelsDue, type RefundCancelDue } from './refund-subscription'
-import { checkAfterClosing, checksDue, LEAVE_AGAIN_DUE_SQL, leaveAgainLater, settleLeftStep, STEP_NOT_LEFT_AGAIN, stepsDue, type CheckDue, type OpenStep } from '@/server/rules/memberships/left'
+import {
+  checkAfterClosing,
+  checksDue,
+  closeEndedRefusedPriceMove,
+  ENDED_HERE_REFUSED_DETAIL,
+  endedRefusedPriceMoves,
+  LEAVE_AGAIN_DUE_SQL,
+  leaveAgainLater,
+  settleLeftStep,
+  STEP_NOT_LEFT_AGAIN,
+  stepsDue,
+  type CheckDue,
+  type OpenStep,
+} from '@/server/rules/memberships/left'
 import {
   checkProduct,
   openChanges,
@@ -155,6 +168,7 @@ import {
   refundAndFail,
   type ChangeOutcome,
 } from '@/server/rules/memberships/payment-date'
+import { PAYMENT_DATE_NEW_WORDS } from '@/server/rules/memberships/failure-messages'
 import { PAYMENT_RETRIES_DUE_SQL, PAYMENT_RETRY_RECONCILE_ENTITY, settlePaymentRetry } from '@/server/rules/memberships/retry-payment'
 
 /** Q14: a pending order or flow younger than this may still have staff at the reader. */
@@ -1047,7 +1061,9 @@ async function reconcilePaymentDateChange(run: Run, changeId: string): Promise<R
   if (dateIsMoved(subscription, s)) return answer(await finishFound(run.db, started, paid.id, by), paid.id)
   // W41a B1: the press's checks again, on the subscription just read, before the move is sent again.
   const checked = checkSubscription(subscription, s)
-  if (!checked.ok) return answer(await refundAndFail(run.db, run.stripe, started, paid.id, checked.message.replace(/\.+$/, ''), by, run.timing, undefined, run.options.requestId), paid.id)
+  // W58b (the W45 audit's row 42; W41a "Noticed" 1, 2): the record says in the check's own sentence that the move was
+  // never sent, and the refunding mark says so, so the Orders page's line doesn't say Stripe refused it.
+  if (!checked.ok) return answer(await refundAndFail(run.db, run.stripe, started, paid.id, PAYMENT_DATE_NEW_WORDS.recheckFailed(checked.message), by, run.timing, undefined, run.options.requestId, true), paid.id)
   return answer(await moveAndFinish(run.db, run.stripe, started, paid.id, by, run.timing, 'reconcile', run.options.requestId), paid.id)
 }
 
@@ -1101,15 +1117,25 @@ interface WatchedPayment {
  * watched payment: gone through, recorded and refunded automatically; nothing taken, ended; still at the bank,
  * watched; not found again (it is past its days), `expired` again for a person.
  */
+/** W58b (W47b "Noticed" 2): the payment's watch (`$2`) as WATCHED_PAYMENTS_DUE_SQL has it (`$1`: the watch's days), read again under its lock. */
+const WATCHED_PAYMENT_STILL_DUE_SQL = `SELECT 1 FROM (${WATCHED_PAYMENTS_DUE_SQL}) d WHERE d.payment_intent_id = $2`
+
 async function checkWatchedPayment(run: Run, due: WatchedPayment): Promise<ReconcileItem | null> {
   const id = due.entity_id
   const settled = await settleIntent(run.stripe, { payment_intent_id: due.payment_intent_id, livemode: due.livemode ?? undefined }, run.timing)
   const entry = { actorType: run.options.actor.type, actorId: run.options.actor.id, entityType: 'reader_payment', entityId: id, requestId: run.options.requestId }
   if (settled.kind === 'unclear') {
     if (due.past_window !== true || settled.cause !== 'not_found') return null
-    await run.db.transaction((tx) =>
-      audit.recordAll(tx, [{ ...entry, action: FLOW_PAYMENT_WATCHED, details: { state: 'expired', paymentIntentId: due.payment_intent_id, days: run.options.paymentWatchDays ?? PAYMENT_WATCH_DAYS, detail: settled.message } }])
-    )
+    const days = run.options.paymentWatchDays ?? PAYMENT_WATCH_DAYS
+    // W58b (W47b "Noticed" 2): under the payment's own lock (the one Mark sorted takes), and only while the watch is
+    // still due, so two runs at once write one `expired` row, not one each. The second finds it ended: no item.
+    const wrote = await run.db.transaction(async (tx) => {
+      await tx.query('SELECT pg_advisory_xact_lock(hashtext($1::text))', [`payment-watch:${due.payment_intent_id}`])
+      if ((await tx.query(WATCHED_PAYMENT_STILL_DUE_SQL, [days, due.payment_intent_id])).length === 0) return false
+      await audit.recordAll(tx, [{ ...entry, action: FLOW_PAYMENT_WATCHED, details: { state: 'expired', paymentIntentId: due.payment_intent_id, days, detail: settled.message } }])
+      return true
+    })
+    if (!wrote) return null
     return left('flow', id, 'payment_watch_expired', `${due.payment_intent_id}: ${settled.message}`)
   }
   if (settled.kind === 'succeeded') {
@@ -1367,6 +1393,12 @@ ORDER BY c.first_at`
 /** What a late payment's refund says it is for, in its metadata. */
 const LATE_REFUND_REASON = 'paid_after_undone'
 
+/** W58b (W35 audit row 32): whether a refund (`$1`, Stripe's id) has a watch (refund-watch.ts). */
+const REFUND_WATCHED_SQL = `SELECT 1 FROM audit_log WHERE action = 'refund.watch' AND entity_type = 'refund_watch' AND entity_id = $1 LIMIT 1`
+async function refundIsWatched(db: Queryable, refundId: string): Promise<boolean> {
+  return (await db.query(REFUND_WATCHED_SQL, [refundId])).length > 0
+}
+
 /**
  * The refund's key: `<orderId>:refund-charge` (a saved card) or `:refund-reader`, or the flow's row id's.
  * W32 (W25 review L3, the W26 audit's row 30): a watched payment's refund is keyed by its own PaymentIntent
@@ -1449,6 +1481,10 @@ async function settleLateRefund(run: Run, due: LateRefundDue): Promise<Reconcile
     }
     if (earlier && (earlier.status === 'failed' || earlier.status === 'canceled')) {
       await run.recordRefund(due.entity_type, id, { outcome: 'refund_failed', refund: { ...base, state: 'failed', key, refundId: earlier.id, status: earlier.status } })
+      // W58b (W35 audit row 32; W32a "Noticed" 2): the compensation's own refund, which its watch already has. Its
+      // failure is the watch's line and the watch's item (the list leaves this row out for that refund), so counting
+      // it here too made one failed refund "2 left for a person" in one run.
+      if (await refundIsWatched(run.db, earlier.id)) return item('settled_elsewhere', undefined, `the refund ${earlier.id} ${earlier.status}: its watch lists it`)
       return item('refund_failed', 'refund_failed')
     }
     if (earlier) {
@@ -1612,6 +1648,16 @@ async function retryLeaveAgain(run: Run, stepId: string): Promise<ReconcileItem>
   } catch (err) {
     return left('step', stepId, STEP_NOT_LEFT_AGAIN, `step ${stepId}: not left again yet (${err instanceof Error ? err.message : String(err)})`, { leaveAgain: stepId })
   }
+}
+
+/**
+ * W58b (item 2): a member's price move Stripe refused for good, whose membership has ended here since: closed `done`
+ * with nothing sent and Stripe not asked, as a left one is (memberships/left.ts). `finalised` when this run closed it.
+ */
+async function closeEndedPriceMove(run: Run, step: OpenStep): Promise<ReconcileItem> {
+  const closed = await closeEndedRefusedPriceMove(run.db, step.id, { actor: run.options.actor, requestId: run.options.requestId })
+  if (!closed) return { kind: 'step', id: step.id, outcome: 'settled_elsewhere', detail: 'closed' }
+  return { kind: 'step', id: step.id, outcome: 'finalised', detail: `price on subscription ${step.subscriptionId}: ${ENDED_HERE_REFUSED_DETAIL}` }
 }
 
 // --- A membership plan's Stripe side (W57, G-plan 4.7): never a charge or a refund
@@ -1926,6 +1972,8 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
   const steps = stepsWaiting.slice(0, MAX_STEPS_PER_RUN)
   // W40b: wishes an earlier run could not leave again. No Stripe call, and there is one only after a database failure.
   const leaveAgains = await db.query<{ step_id: string }>(LEAVE_AGAIN_DUE_SQL)
+  // W58b (item 2): refused price moves whose membership has ended here since. No Stripe call.
+  const endedMoves = await endedRefusedPriceMoves(db)
   // W40c: closed steps due their one check against Stripe, oldest closing first, at most MAX_STEP_CHECKS_PER_RUN a run.
   // W46: by when they were last tried, as the steps.
   const checksWaiting = byLastTried(await checksDue(db), checkKey, tried.checks)
@@ -2047,6 +2095,7 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
     ...(options.actor.type === 'staff' ? [] : [...checkWork(), ...liveWork()]),
     // W40b: before the steps, so a wish left again here is in place before this run's own sends.
     ...leaveAgains.map((due) => ({ kind: 'step' as const, id: due.step_id, go: () => retryLeaveAgain(run, due.step_id) })),
+    ...endedMoves.map((step) => ({ kind: 'step' as const, id: step.id, go: () => closeEndedPriceMove(run, step) })),
     ...steps.map((due) => ({
       kind: 'step' as const,
       id: due.id,
