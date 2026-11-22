@@ -1,0 +1,206 @@
+{
+  "scenario": "w48-stock-adjust-refusals",
+  "results": [
+    {
+      "thrown": "variantId is required"
+    },
+    {
+      "thrown": "changeAmount must be a non-zero whole number"
+    },
+    {
+      "thrown": "changeAmount must be a non-zero whole number"
+    },
+    {
+      "thrown": "Invalid reason category: theft"
+    },
+    {
+      "thrown": "A note is required when the reason is \"Other\""
+    },
+    {
+      "thrown": "A note is required when the reason is \"Other\""
+    },
+    {
+      "thrown": "Variant not found"
+    },
+    {
+      "thrown": "This adjustment would bring stock below zero (current stock: 5, change: -6)."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/variants/10000000-0000-4000-8000-000000000008/stock",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "changeAmount",
+              "details": {
+                "action": "stock.adjusted",
+                "reason": "invalid_params",
+                "message": "changeAmount must be a non-zero whole number"
+              },
+              "message": "changeAmount must be a non-zero whole number"
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/variants/10000000-0000-4000-8000-000000000008/stock",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "changeAmount",
+              "details": {
+                "action": "stock.adjusted",
+                "reason": "invalid_params",
+                "message": "changeAmount must be a non-zero whole number"
+              },
+              "message": "changeAmount must be a non-zero whole number"
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/variants/10000000-0000-4000-8000-000000000008/stock",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "reasonCategory",
+              "details": {
+                "action": "stock.adjusted",
+                "reason": "invalid_params",
+                "message": "Invalid reason category: theft"
+              },
+              "message": "Invalid reason category: theft"
+            },
+            "requestId": "gone#6"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#7",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/variants/10000000-0000-4000-8000-000000000008/stock",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "note",
+              "details": {
+                "action": "stock.adjusted",
+                "reason": "invalid_params",
+                "message": "A note is required when the reason is \"Other\""
+              },
+              "message": "A note is required when the reason is \"Other\""
+            },
+            "requestId": "gone#8"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#9",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/variants/10000000-0000-4000-8000-000000000008/stock",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "note",
+              "details": {
+                "action": "stock.adjusted",
+                "reason": "invalid_params",
+                "message": "A note is required when the reason is \"Other\""
+              },
+              "message": "A note is required when the reason is \"Other\""
+            },
+            "requestId": "gone#10"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#11",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/variants/gone#12/stock",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "stock.adjusted",
+                "reason": "variant_not_found",
+                "message": "Variant not found"
+              },
+              "message": "Variant not found"
+            },
+            "requestId": "gone#13"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#14",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/variants/10000000-0000-4000-8000-000000000008/stock",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "field": "changeAmount",
+              "details": {
+                "action": "stock.adjusted",
+                "reason": "stock_below_zero",
+                "message": "This adjustment would bring stock below zero (current stock: 5, change: -6)."
+              },
+              "message": "This adjustment would bring stock below zero (current stock: 5, change: -6)."
+            },
+            "requestId": "gone#15"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

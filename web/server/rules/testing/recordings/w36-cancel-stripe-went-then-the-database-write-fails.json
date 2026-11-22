@@ -1,0 +1,39 @@
+{
+  "scenario": "w36-cancel-stripe-went-then-the-database-write-fails",
+  "results": [
+    {
+      "updated": false,
+      "reason": "no_answer",
+      "message": "The change didn't get an answer, so the membership may or may not have changed. Press again here (it won't apply twice), or close this and check the membership's status first.",
+      "noAnswer": true
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/cancel",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "INTERNAL",
+              "message": "Something went wrong and the action may not have finished. Check before trying again."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 500,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "scenario": "w09-refused-gift-card-over-the-total",
+  "results": [
+    {
+      "success": false,
+      "stage": "payment",
+      "reason": "gift_card_amount_exceeds_total",
+      "amountDueTotal": 24
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/orders",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "details": {
+                "stage": "payment",
+                "reason": "gift_card_amount_exceeds_total",
+                "amountDueTotal": 24
+              },
+              "message": "The gift card amount cannot exceed the amount due."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

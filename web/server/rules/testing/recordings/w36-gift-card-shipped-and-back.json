@@ -1,0 +1,192 @@
+{
+  "scenario": "w36-gift-card-shipped-and-back",
+  "results": [
+    {
+      "updated": true,
+      "giftCard": {
+        "id": "10000000-0000-4000-8000-000000000f32",
+        "code": "SHIPPED1",
+        "type": "monetary",
+        "original_value": "25.00",
+        "remaining_balance": "25.00",
+        "purchaser_id": "10000000-0000-4000-8000-000000000005",
+        "recipient_name": "Bo Shipped",
+        "recipient_email": null,
+        "gift_message": null,
+        "origin": "customer_purchase",
+        "issue_date": "2026-11-10",
+        "expiry_date": "2029-01-01",
+        "redeemed_at": null,
+        "created_at": "<time>",
+        "updated_at": "<time>",
+        "fulfillment_method": "shipping",
+        "picked_up": false,
+        "picked_up_at": null,
+        "picked_up_by": null,
+        "voided": false,
+        "shipped_at": "<time>",
+        "shipped_by": "10000000-0000-4000-8000-000000000001"
+      }
+    },
+    {
+      "updated": true,
+      "giftCard": {
+        "id": "10000000-0000-4000-8000-000000000f32",
+        "code": "SHIPPED1",
+        "type": "monetary",
+        "original_value": "25.00",
+        "remaining_balance": "25.00",
+        "purchaser_id": "10000000-0000-4000-8000-000000000005",
+        "recipient_name": "Bo Shipped",
+        "recipient_email": null,
+        "gift_message": null,
+        "origin": "customer_purchase",
+        "issue_date": "2026-11-10",
+        "expiry_date": "2029-01-01",
+        "redeemed_at": null,
+        "created_at": "<time>",
+        "updated_at": "<time>",
+        "fulfillment_method": "shipping",
+        "picked_up": false,
+        "picked_up_at": null,
+        "picked_up_by": null,
+        "voided": false,
+        "shipped_at": null,
+        "shipped_by": null
+      }
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/gift-cards/10000000-0000-4000-8000-000000000f32/shipped",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "giftCard": {
+                "id": "10000000-0000-4000-8000-000000000f32",
+                "code": "SHIPPED1",
+                "type": "monetary",
+                "origin": "customer_purchase",
+                "voided": false,
+                "picked_up": false,
+                "created_at": "<time>",
+                "issue_date": "2026-11-10",
+                "shipped_at": "<time>",
+                "shipped_by": "10000000-0000-4000-8000-000000000001",
+                "updated_at": "<time>",
+                "expiry_date": "2029-01-01",
+                "redeemed_at": null,
+                "gift_message": null,
+                "picked_up_at": null,
+                "picked_up_by": null,
+                "purchaser_id": "10000000-0000-4000-8000-000000000005",
+                "original_value": "25.00",
+                "recipient_name": "Bo Shipped",
+                "recipient_email": null,
+                "remaining_balance": "25.00",
+                "fulfillment_method": "shipping"
+              }
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/gift-cards/10000000-0000-4000-8000-000000000f32/shipped",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "giftCard": {
+                "id": "10000000-0000-4000-8000-000000000f32",
+                "code": "SHIPPED1",
+                "type": "monetary",
+                "origin": "customer_purchase",
+                "voided": false,
+                "picked_up": false,
+                "created_at": "<time>",
+                "issue_date": "2026-11-10",
+                "shipped_at": null,
+                "shipped_by": null,
+                "updated_at": "<time>",
+                "expiry_date": "2029-01-01",
+                "redeemed_at": null,
+                "gift_message": null,
+                "picked_up_at": null,
+                "picked_up_by": null,
+                "purchaser_id": "10000000-0000-4000-8000-000000000005",
+                "original_value": "25.00",
+                "recipient_name": "Bo Shipped",
+                "recipient_email": null,
+                "remaining_balance": "25.00",
+                "fulfillment_method": "shipping"
+              }
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "gift_card.shipped",
+          "entity_type": "gift_card",
+          "entity_id": "10000000-0000-4000-8000-000000000f32",
+          "request_id": "gone#2",
+          "details": {
+            "before": {
+              "at": null,
+              "by": null,
+              "shipped": false
+            },
+            "shipped": true
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "gift_card.shipped",
+          "entity_type": "gift_card",
+          "entity_id": "10000000-0000-4000-8000-000000000f32",
+          "request_id": "gone#4",
+          "details": {
+            "before": {
+              "at": "<time>",
+              "by": "10000000-0000-4000-8000-000000000001",
+              "shipped": true
+            },
+            "shipped": false
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

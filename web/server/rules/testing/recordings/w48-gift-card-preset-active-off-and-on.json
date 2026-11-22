@@ -1,0 +1,134 @@
+{
+  "scenario": "w48-gift-card-preset-active-off-and-on",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-00000000001a",
+      "active": false
+    },
+    {
+      "id": "10000000-0000-4000-8000-00000000001a",
+      "active": true
+    },
+    {
+      "thrown": "Item not found"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/gift-card-presets/10000000-0000-4000-8000-00000000001a/active",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "10000000-0000-4000-8000-00000000001a",
+              "active": false
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/gift-card-presets/10000000-0000-4000-8000-00000000001a/active",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "10000000-0000-4000-8000-00000000001a",
+              "active": true
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/gift-card-presets/gone#6/active",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "catalog.active_set",
+                "reason": "item_not_found",
+                "message": "Item not found"
+              },
+              "message": "Item not found"
+            },
+            "requestId": "gone#7"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "catalog.active_set",
+          "entity_type": "gift_card_preset",
+          "entity_id": "10000000-0000-4000-8000-00000000001a",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "id": "10000000-0000-4000-8000-00000000001a",
+              "active": false
+            },
+            "before": {
+              "id": "10000000-0000-4000-8000-00000000001a",
+              "active": true
+            }
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "catalog.active_set",
+          "entity_type": "gift_card_preset",
+          "entity_id": "10000000-0000-4000-8000-00000000001a",
+          "request_id": "gone#4",
+          "details": {
+            "key": "gone#3",
+            "after": {
+              "id": "10000000-0000-4000-8000-00000000001a",
+              "active": true
+            },
+            "before": {
+              "id": "10000000-0000-4000-8000-00000000001a",
+              "active": false
+            }
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -1,0 +1,169 @@
+{
+  "scenario": "w48-staff-create",
+  "results": [
+    {
+      "id": "staff#1",
+      "first_name": "Nia",
+      "last_name": "New",
+      "email": "nia.new@example.com",
+      "role": "staff",
+      "can_issue_refunds": false,
+      "can_manage_pricing": false,
+      "active": true,
+      "created_at": "<time>",
+      "updated_at": "<time>"
+    },
+    {
+      "id": "staff#2",
+      "first_name": "Rae",
+      "last_name": "Refunds",
+      "email": "rae@example.com",
+      "role": "manager",
+      "can_issue_refunds": true,
+      "can_manage_pricing": false,
+      "active": true,
+      "created_at": "<time>",
+      "updated_at": "<time>"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/staff",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "staff#1",
+              "role": "staff",
+              "email": "nia.new@example.com",
+              "active": true,
+              "last_name": "New",
+              "created_at": "<time>",
+              "first_name": "Nia",
+              "updated_at": "<time>",
+              "can_issue_refunds": false,
+              "can_manage_pricing": false
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/staff",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "staff#2",
+              "role": "manager",
+              "email": "rae@example.com",
+              "active": true,
+              "last_name": "Refunds",
+              "created_at": "<time>",
+              "first_name": "Rae",
+              "updated_at": "<time>",
+              "can_issue_refunds": true,
+              "can_manage_pricing": false
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "staff.created",
+          "entity_type": "staff",
+          "entity_id": "staff#1",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "role": "staff",
+              "active": true,
+              "can_issue_refunds": false,
+              "can_manage_pricing": false
+            },
+            "before": null
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "staff.created",
+          "entity_type": "staff",
+          "entity_id": "staff#2",
+          "request_id": "gone#4",
+          "details": {
+            "key": "gone#3",
+            "after": {
+              "role": "manager",
+              "active": true,
+              "can_issue_refunds": true,
+              "can_manage_pricing": false
+            },
+            "before": null
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "staff": {
+      "added": [
+        {
+          "id": "staff#1",
+          "role": "staff",
+          "can_issue_refunds": false,
+          "active": true,
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "first_name": "Nia",
+          "last_name": "New",
+          "email": "nia.new@example.com",
+          "can_manage_pricing": false
+        },
+        {
+          "id": "staff#2",
+          "role": "manager",
+          "can_issue_refunds": true,
+          "active": true,
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "first_name": "Rae",
+          "last_name": "Refunds",
+          "email": "rae@example.com",
+          "can_manage_pricing": false
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

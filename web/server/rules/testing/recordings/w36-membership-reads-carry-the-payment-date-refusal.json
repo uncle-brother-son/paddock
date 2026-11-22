@@ -1,0 +1,270 @@
+{
+  "scenario": "w36-membership-reads-carry-the-payment-date-refusal",
+  "results": [
+    [
+      {
+        "id": "10000000-0000-4000-8000-000000000010",
+        "customer_id": "10000000-0000-4000-8000-00000000000f",
+        "subscription_status": "active",
+        "cancel_effective_date": null,
+        "billing_frequency": "monthly",
+        "start_date": "2026-01-10",
+        "next_renewal_date": "2026-12-10",
+        "addon_credits_remaining": 2,
+        "is_herd": true,
+        "herd_override": null,
+        "created_at": "<time>",
+        "first_name": "Mo",
+        "last_name": "Member",
+        "email": "mo@example.com",
+        "plan_name": "Core",
+        "plan_is_unlimited": false,
+        "current_period_end": "2026-12-09",
+        "current_period_credits_allocated": 4,
+        "current_period_credits_remaining": 4,
+        "refunded": false,
+        "payment_date_changed_at": null,
+        "payment_date_change_blocked": null,
+        "payment_date_change_needs_override": false
+      }
+    ],
+    {
+      "memberships": [
+        {
+          "id": "10000000-0000-4000-8000-000000000010",
+          "customer_id": "10000000-0000-4000-8000-00000000000f",
+          "plan_id": "10000000-0000-4000-8000-00000000000a",
+          "stripe_subscription_id": "sub_mo",
+          "subscription_status": "active",
+          "start_date": "2026-01-10",
+          "next_renewal_date": "2026-12-10",
+          "addon_credits_remaining": 2,
+          "bonus_addon_credits": 0,
+          "created_at": "<time>",
+          "updated_at": "<time>",
+          "billing_frequency": "monthly",
+          "cancel_effective_date": null,
+          "is_herd": true,
+          "herd_override": null,
+          "plan_name": "Core",
+          "plan_is_unlimited": false,
+          "current_period_end": "2026-12-09",
+          "current_period_credits_allocated": 4,
+          "current_period_credits_remaining": 4,
+          "refunded": false,
+          "payment_date_changed_at": null,
+          "payment_date_change_blocked": null,
+          "payment_date_change_needs_override": false
+        }
+      ],
+      "sessionPasses": [],
+      "bookingHistory": [],
+      "storeCreditBalance": "0.00",
+      "storeCreditHistory": [],
+      "eventBookings": []
+    },
+    {
+      "updated": true,
+      "membership": {
+        "id": "10000000-0000-4000-8000-000000000010",
+        "cancel_effective_date": "2026-12-09",
+        "billing_frequency": "monthly"
+      },
+      "endDate": "2026-12-10",
+      "stripeUpdated": true
+    },
+    [
+      {
+        "id": "10000000-0000-4000-8000-000000000010",
+        "customer_id": "10000000-0000-4000-8000-00000000000f",
+        "subscription_status": "active",
+        "cancel_effective_date": "2026-12-09",
+        "billing_frequency": "monthly",
+        "start_date": "2026-01-10",
+        "next_renewal_date": "2026-12-10",
+        "addon_credits_remaining": 2,
+        "is_herd": true,
+        "herd_override": null,
+        "created_at": "<time>",
+        "first_name": "Mo",
+        "last_name": "Member",
+        "email": "mo@example.com",
+        "plan_name": "Core",
+        "plan_is_unlimited": false,
+        "current_period_end": "2026-12-09",
+        "current_period_credits_allocated": 4,
+        "current_period_credits_remaining": 4,
+        "refunded": false,
+        "payment_date_changed_at": null,
+        "payment_date_change_blocked": "A cancellation is scheduled on this membership",
+        "payment_date_change_needs_override": false
+      }
+    ],
+    {
+      "memberships": [
+        {
+          "id": "10000000-0000-4000-8000-000000000010",
+          "customer_id": "10000000-0000-4000-8000-00000000000f",
+          "plan_id": "10000000-0000-4000-8000-00000000000a",
+          "stripe_subscription_id": "sub_mo",
+          "subscription_status": "active",
+          "start_date": "2026-01-10",
+          "next_renewal_date": "2026-12-10",
+          "addon_credits_remaining": 2,
+          "bonus_addon_credits": 0,
+          "created_at": "<time>",
+          "updated_at": "<time>",
+          "billing_frequency": "monthly",
+          "cancel_effective_date": "2026-12-09",
+          "is_herd": true,
+          "herd_override": null,
+          "plan_name": "Core",
+          "plan_is_unlimited": false,
+          "current_period_end": "2026-12-09",
+          "current_period_credits_allocated": 4,
+          "current_period_credits_remaining": 4,
+          "refunded": false,
+          "payment_date_changed_at": null,
+          "payment_date_change_blocked": "A cancellation is scheduled on this membership",
+          "payment_date_change_needs_override": false
+        }
+      ],
+      "sessionPasses": [],
+      "bookingHistory": [],
+      "storeCreditBalance": "0.00",
+      "storeCreditHistory": [],
+      "eventBookings": []
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "subscriptions.retrieve",
+      "params": {
+        "id": "sub_mo"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "subscriptions.update",
+      "params": {
+        "id": "sub_mo",
+        "cancel_at": 1796860800,
+        "proration_behavior": "none"
+      },
+      "idempotencyKey": "gone#3:cancel-at"
+    }
+  ],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/cancel",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "endDate": "2026-12-10",
+              "membership": {
+                "id": "10000000-0000-4000-8000-000000000010",
+                "billing_frequency": "monthly",
+                "cancel_effective_date": "2026-12-09"
+              },
+              "stripeUpdated": true
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.cancel_scheduled",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#2",
+          "details": {
+            "stepId": "gone#3",
+            "channel": "staff",
+            "endDate": "2026-12-10",
+            "cancelAt": 1796860800,
+            "subscriptionId": "sub_mo",
+            "cancelEffectiveDate": {
+              "after": "2026-12-09",
+              "before": null
+            }
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.step_left",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#2",
+          "details": {
+            "kind": "cancel_at",
+            "want": {
+              "cancelAt": 1796860800
+            },
+            "state": "done",
+            "detail": "sent",
+            "stepId": "gone#3",
+            "subscriptionId": "sub_mo"
+          }
+        },
+        {
+          "id": "audit_log#3",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.step_left",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#2",
+          "details": {
+            "kind": "cancel_at",
+            "want": {
+              "cancelAt": 1796860800
+            },
+            "state": "left",
+            "stepId": "gone#3",
+            "subscriptionId": "sub_mo"
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 2
+    },
+    "customer_memberships": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000010",
+          "cancel_effective_date": [
+            null,
+            "2026-12-09"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

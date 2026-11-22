@@ -1,0 +1,94 @@
+{
+  "scenario": "w48-stock-adjust-stock-sold-between-the-check-and-the-write",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-000000000008",
+      "stock_quantity": 1
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/variants/10000000-0000-4000-8000-000000000008/stock",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "10000000-0000-4000-8000-000000000008",
+              "stock_quantity": 1
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "stock.adjusted",
+          "entity_type": "product_variant",
+          "entity_id": "10000000-0000-4000-8000-000000000008",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "stock_quantity": 1
+            },
+            "before": {
+              "stock_quantity": 5
+            },
+            "reason": "Damage",
+            "changeAmount": -4
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "product_variants": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000008",
+          "stock_quantity": [
+            5,
+            1
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    },
+    "stock_adjustments": {
+      "added": [
+        {
+          "id": "stock_adjustments#1",
+          "variant_id": "10000000-0000-4000-8000-000000000008",
+          "change_amount": -4,
+          "reason": "Damage",
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

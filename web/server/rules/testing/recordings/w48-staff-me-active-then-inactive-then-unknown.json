@@ -1,0 +1,43 @@
+{
+  "scenario": "w48-staff-me-active-then-inactive-then-unknown",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-000000000001",
+      "email": "jo@example.com",
+      "role": "admin",
+      "can_issue_refunds": true,
+      "can_manage_pricing": true,
+      "active": true
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000001",
+      "email": "jo@example.com",
+      "role": "admin",
+      "can_issue_refunds": true,
+      "can_manage_pricing": true,
+      "active": false
+    },
+    null
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "staff": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "active": [
+            true,
+            false
+          ],
+          "email": [
+            "jo@example.com",
+            "someone.else@example.com"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -13,8 +13,9 @@ import { MAX_STEP_CHECKS_PER_RUN, reconcile, STEPS_TRIED_ACTION } from '@/server
 import { stuckList } from '@/server/rules/orders/stuck-list'
 import { fixtures, insert } from '@/server/rules/testing/database'
 import { asOwner, BEFORE_031_SQL, migration031 } from '@/server/rules/testing/migration-031'
-import { throughStaffApp } from '@/server/rules/testing/replay/booking-side'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
+import { throughStaffApp } from '@/server/rules/testing/sweep/booking-presses'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
 import { ID, MO_SUBSCRIPTION, seed } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
@@ -120,7 +121,7 @@ async function onASeed(work: (stripe: FakeStripe) => Promise<void>, with031 = tr
           }
         },
       },
-      oldSide
+      workerSide()
     )
   } finally {
     await functions(true)

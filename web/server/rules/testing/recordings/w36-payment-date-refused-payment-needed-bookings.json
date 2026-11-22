@@ -1,0 +1,291 @@
+{
+  "scenario": "w36-payment-date-refused-payment-needed-bookings",
+  "results": [
+    {
+      "success": true,
+      "orderId": "orders#1",
+      "bookingId": "bookings#1",
+      "cardCharged": false,
+      "cardAmount": 0,
+      "paymentMethodUsed": null
+    },
+    {
+      "membershipId": "10000000-0000-4000-8000-000000000010",
+      "customerId": "10000000-0000-4000-8000-00000000000f",
+      "planId": "10000000-0000-4000-8000-00000000000a",
+      "stripeSubscriptionId": "sub_mo",
+      "refusal": "Bookings on this membership are waiting for payment (Payment needed)",
+      "needsOverride": false,
+      "lastChangedAt": null,
+      "currentRenewalDate": "2026-12-10",
+      "earliestDate": "2026-12-11",
+      "latestDate": "2027-01-09",
+      "daysInPeriod": 31,
+      "monthlyPrice": 40,
+      "cardLast4": "4444",
+      "cardBrand": "visa"
+    },
+    {
+      "membershipId": "10000000-0000-4000-8000-000000000010",
+      "customerId": "10000000-0000-4000-8000-00000000000f",
+      "planId": "10000000-0000-4000-8000-00000000000a",
+      "stripeSubscriptionId": "sub_mo",
+      "refusal": "Bookings on this membership are waiting for payment (Payment needed)",
+      "needsOverride": false,
+      "lastChangedAt": null,
+      "currentRenewalDate": "2026-12-10",
+      "earliestDate": "2026-12-11",
+      "latestDate": "2027-01-09",
+      "daysInPeriod": 31,
+      "monthlyPrice": 40,
+      "cardLast4": "4444",
+      "cardBrand": "visa",
+      "newRenewalDate": "2026-12-27",
+      "extraDays": 17,
+      "amount": 21.94
+    },
+    {
+      "changed": false,
+      "message": "Bookings on this membership are waiting for payment (Payment needed)"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/orders",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "status": "paid",
+              "orderId": "orders#1",
+              "payment": {
+                "method": null,
+                "collected": 0,
+                "cardCharged": false,
+                "giftCardApplied": 0,
+                "storeCreditApplied": 0
+              },
+              "bookingId": "bookings#1",
+              "giftCardId": null,
+              "giftCardCode": null,
+              "sessionPassId": null,
+              "eventBookingId": null
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/payment-date",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "payment_date",
+                "reason": "refused",
+                "message": "Bookings on this membership are waiting for payment (Payment needed)"
+              },
+              "message": "Bookings on this membership are waiting for payment (Payment needed)"
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.create",
+          "entity_type": "order",
+          "entity_id": "orders#1",
+          "request_id": "gone#2",
+          "details": {
+            "promo": null,
+            "method": null,
+            "postage": null,
+            "giftCard": null,
+            "amountDue": 0,
+            "bookingId": "bookings#1",
+            "confirmed": null,
+            "overrides": [],
+            "toCollect": 0,
+            "giftCardId": null,
+            "orderTotal": 0,
+            "storeCredit": 0,
+            "addressSaved": false,
+            "sessionPassId": null,
+            "eventBookingId": null
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.paid",
+          "entity_type": "order",
+          "entity_id": "orders#1",
+          "request_id": "gone#2",
+          "details": {
+            "method": null,
+            "giftCard": 0,
+            "collected": 0,
+            "storeCredit": 0
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "booking_guests": {
+      "added": [
+        {
+          "id": "booking_guests#1",
+          "booking_id": "bookings#1",
+          "guest_type": "account_holder",
+          "guest_name": "Mo Member",
+          "guest_email": "mo@example.com",
+          "waiver_accepted": false,
+          "waiver_version": null,
+          "waiver_accepted_at": null,
+          "waiver_method": null,
+          "reminder_sent_at": null,
+          "created_at": "<set>",
+          "date_of_birth": "1985-05-05",
+          "unit_price": "20.00",
+          "pay_by": "membership_credit"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "bookings": {
+      "added": [
+        {
+          "id": "bookings#1",
+          "session_id": "10000000-0000-4000-8000-000000000004",
+          "customer_id": "10000000-0000-4000-8000-00000000000f",
+          "party_size": 1,
+          "status": "payment_needed",
+          "price_paid": "0.00",
+          "stripe_payment_id": null,
+          "redemption_source": "membership_credit",
+          "created_at": "<set>",
+          "cancelled_at": null,
+          "checked_in_at": null,
+          "updated_at": "<set>",
+          "start_time": "<set>",
+          "end_time": "<set>",
+          "redeemed_membership_id": "10000000-0000-4000-8000-000000000010",
+          "redeemed_session_pass_id": null,
+          "band_id": "10000000-0000-4000-8000-000000000003",
+          "credit_period_id": "10000000-0000-4000-8000-000000000021",
+          "payment_due_by": "<set>",
+          "cancel_reason": null,
+          "special_requests": null,
+          "guests_over_18_confirmed_at": null,
+          "part_refunded_amount": "0.00",
+          "refund_owed_amount": "0.00"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "order_line_items": {
+      "added": [
+        {
+          "id": "order_line_items#1",
+          "order_id": "orders#1",
+          "booking_id": "bookings#1",
+          "product_variant_id": null,
+          "membership_plan_id": null,
+          "session_pass_type_id": null,
+          "gift_card_id": null,
+          "item_type": "booking",
+          "quantity": 1,
+          "unit_price": "0.00",
+          "line_total": "0.00",
+          "created_at": "<set>",
+          "addon_id": null,
+          "refunded_at": null,
+          "refund_method": null,
+          "restocked": null,
+          "fulfillment_status": null,
+          "card_refunded_amount": "0.00",
+          "system_unit_price": null,
+          "price_override_reason": null,
+          "discount_amount": "0.00",
+          "event_booking_id": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "orders": {
+      "added": [
+        {
+          "id": "orders#1",
+          "customer_id": "10000000-0000-4000-8000-00000000000f",
+          "order_total": "0.00",
+          "payment_status": "paid",
+          "stripe_payment_intent_id": null,
+          "promo_code": null,
+          "discount_amount": "0.00",
+          "shipping_address": null,
+          "shipping_status": null,
+          "tracking_number": null,
+          "order_source": "staff_created",
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "payment_method": null,
+          "reader_payment": null,
+          "refund_owed_amount": "0.00"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "sessions": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000004",
+          "total_booked": [
+            0,
+            1
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

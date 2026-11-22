@@ -5,10 +5,11 @@ import { POST as removeRoute } from '@/app/api/v1/staff/bookings/addon-lines/[li
 import { POST as removeGuestRoute } from '@/app/api/v1/staff/bookings/guests/[guestId]/remove/route'
 import type { Db } from '@/server/db'
 import { reconcile } from '@/server/rules/orders/reconcile'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/replay/harness'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
 import { bea, ID, mo, paidSeat, sam, seed } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
-import { BOOKING_KINDS_ON } from '@/server/rules/testing/replay/booking-side'
+import { BOOKING_KINDS_ON } from '@/server/rules/testing/sweep/booking-presses'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
 import {
   ADDON_INSIDE_24_HOURS_NOTE,
@@ -95,7 +96,7 @@ async function withAnAddon(paid: Paid, work: (context: Context) => Promise<void>
         }
       },
     },
-    oldSide
+    workerSide()
   )
 }
 

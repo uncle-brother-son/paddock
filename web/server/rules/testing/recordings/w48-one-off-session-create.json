@@ -1,0 +1,181 @@
+{
+  "scenario": "w48-one-off-session-create",
+  "results": [
+    {
+      "created": true,
+      "session": {
+        "id": "sessions#1",
+        "service_type_id": "10000000-0000-4000-8000-000000000002",
+        "start_time": "2026-11-20T07:00:00.000Z",
+        "end_time": "2026-11-20T08:00:00.000Z",
+        "capacity": 10,
+        "type": "public"
+      }
+    },
+    {
+      "created": true,
+      "session": {
+        "id": "sessions#2",
+        "service_type_id": "10000000-0000-4000-8000-000000000002",
+        "start_time": "2026-11-01T19:00:00.000Z",
+        "end_time": "2026-11-01T20:00:00.000Z",
+        "capacity": 10,
+        "type": "public"
+      }
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/sessions",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "created": true,
+              "session": {
+                "id": "sessions#1",
+                "type": "public",
+                "capacity": 10,
+                "end_time": "2026-11-20T08:00:00.000Z",
+                "start_time": "2026-11-20T07:00:00.000Z",
+                "service_type_id": "10000000-0000-4000-8000-000000000002"
+              }
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/sessions",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "created": true,
+              "session": {
+                "id": "sessions#2",
+                "type": "public",
+                "capacity": 10,
+                "end_time": "2026-11-01T20:00:00.000Z",
+                "start_time": "2026-11-01T19:00:00.000Z",
+                "service_type_id": "10000000-0000-4000-8000-000000000002"
+              }
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "session.created",
+          "entity_type": "session",
+          "entity_id": "sessions#1",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "id": "sessions#1",
+              "type": "public",
+              "band_id": "10000000-0000-4000-8000-000000000003",
+              "capacity": 10,
+              "end_time": "2026-11-20T08:00:00.000Z",
+              "start_time": "2026-11-20T07:00:00.000Z",
+              "service_type_id": "10000000-0000-4000-8000-000000000002"
+            },
+            "before": null
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "session.created",
+          "entity_type": "session",
+          "entity_id": "sessions#2",
+          "request_id": "gone#4",
+          "details": {
+            "key": "gone#3",
+            "after": {
+              "id": "sessions#2",
+              "type": "public",
+              "band_id": "10000000-0000-4000-8000-00000000000c",
+              "capacity": 10,
+              "end_time": "2026-11-01T20:00:00.000Z",
+              "start_time": "2026-11-01T19:00:00.000Z",
+              "service_type_id": "10000000-0000-4000-8000-000000000002"
+            },
+            "before": null
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "sessions": {
+      "added": [
+        {
+          "id": "sessions#1",
+          "resource_id": null,
+          "service_type_id": "10000000-0000-4000-8000-000000000002",
+          "start_time": "2026-11-20T07:00:00.000Z",
+          "end_time": "2026-11-20T08:00:00.000Z",
+          "type": "public",
+          "capacity": 10,
+          "total_booked": 0,
+          "status": "open",
+          "blocked_reason": null,
+          "blocked_by": null,
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "band_id": "10000000-0000-4000-8000-000000000003",
+          "band_overridden": false
+        },
+        {
+          "id": "sessions#2",
+          "resource_id": null,
+          "service_type_id": "10000000-0000-4000-8000-000000000002",
+          "start_time": "2026-11-01T19:00:00.000Z",
+          "end_time": "2026-11-01T20:00:00.000Z",
+          "type": "public",
+          "capacity": 10,
+          "total_booked": 0,
+          "status": "open",
+          "blocked_reason": null,
+          "blocked_by": null,
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "band_id": "10000000-0000-4000-8000-00000000000c",
+          "band_overridden": false
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "scenario": "w48-stock-adjust-the-stock-write-fails",
+  "results": [
+    {
+      "thrown": "The stock change didn't get an answer, so it may or may not have been saved. Press Apply again here (it won't count twice), or reload the page and check the stock first."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/variants/10000000-0000-4000-8000-000000000008/stock",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "INTERNAL",
+              "message": "Something went wrong and the action may not have finished. Check before trying again."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 500,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

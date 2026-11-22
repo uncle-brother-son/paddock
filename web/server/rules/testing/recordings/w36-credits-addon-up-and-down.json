@@ -1,0 +1,167 @@
+{
+  "scenario": "w36-credits-addon-up-and-down",
+  "results": [
+    {
+      "adjusted": true,
+      "addon_credits_remaining": 5
+    },
+    {
+      "adjusted": true,
+      "addon_credits_remaining": 4
+    },
+    [
+      {
+        "id": "membership_credit_adjustments#2",
+        "membership_id": "10000000-0000-4000-8000-000000000010",
+        "staff_id": "10000000-0000-4000-8000-000000000001",
+        "staff_first_name": "Jo",
+        "staff_last_name": "Staff",
+        "staff_email": "jo@example.com",
+        "staff_role": "admin",
+        "amount": -1,
+        "credit_type": "addon",
+        "reason": "Added one too many",
+        "created_at": "<time>"
+      },
+      {
+        "id": "membership_credit_adjustments#1",
+        "membership_id": "10000000-0000-4000-8000-000000000010",
+        "staff_id": "10000000-0000-4000-8000-000000000001",
+        "staff_first_name": "Jo",
+        "staff_last_name": "Staff",
+        "staff_email": "jo@example.com",
+        "staff_role": "admin",
+        "amount": 3,
+        "credit_type": "addon",
+        "reason": "Goodwill after a cold sauna",
+        "created_at": "<time>"
+      }
+    ]
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/credits",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "addon_credits_remaining": 5
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/credits",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "addon_credits_remaining": 4
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.credits_adjusted",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#2",
+          "details": {
+            "after": 5,
+            "amount": 3,
+            "before": 2,
+            "reason": "Goodwill after a cold sauna",
+            "creditType": "addon",
+            "adjustmentId": "membership_credit_adjustments#1"
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.credits_adjusted",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#4",
+          "details": {
+            "after": 4,
+            "amount": -1,
+            "before": 5,
+            "reason": "Added one too many",
+            "creditType": "addon",
+            "adjustmentId": "membership_credit_adjustments#2"
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "customer_memberships": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000010",
+          "addon_credits_remaining": [
+            2,
+            4
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    },
+    "membership_credit_adjustments": {
+      "added": [
+        {
+          "id": "membership_credit_adjustments#1",
+          "membership_id": "10000000-0000-4000-8000-000000000010",
+          "credit_type": "addon",
+          "amount": 3,
+          "reason": "Goodwill after a cold sauna",
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "created_at": "<set>"
+        },
+        {
+          "id": "membership_credit_adjustments#2",
+          "membership_id": "10000000-0000-4000-8000-000000000010",
+          "credit_type": "addon",
+          "amount": -1,
+          "reason": "Added one too many",
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

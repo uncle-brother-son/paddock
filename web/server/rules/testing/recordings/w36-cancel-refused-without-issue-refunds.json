@@ -1,0 +1,71 @@
+{
+  "scenario": "w36-cancel-refused-without-issue-refunds",
+  "results": [
+    {
+      "updated": false,
+      "reason": "permission_denied",
+      "message": "Needs the Issue refunds permission to cancel or re-activate a membership."
+    },
+    {
+      "updated": false,
+      "reason": "permission_denied",
+      "message": "Needs the Issue refunds permission to cancel or re-activate a membership."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/cancel",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "FORBIDDEN",
+              "details": {
+                "action": "cancel",
+                "reason": "permission_denied",
+                "message": "Needs the Issue refunds permission to cancel or re-activate a membership."
+              },
+              "message": "Needs the Issue refunds permission to cancel or re-activate a membership."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 403,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/undo-cancel",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "FORBIDDEN",
+              "details": {
+                "action": "undo_cancel",
+                "reason": "permission_denied",
+                "message": "Needs the Issue refunds permission to cancel or re-activate a membership."
+              },
+              "message": "Needs the Issue refunds permission to cancel or re-activate a membership."
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 403,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

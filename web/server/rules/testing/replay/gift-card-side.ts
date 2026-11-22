@@ -1,9 +1,9 @@
 import { vi } from 'vitest'
 import type { Db } from '@/server/db'
 import type { FakeStripe } from '@/server/stripe/fake'
-import { throughStaffApp } from './booking-side'
 import { withCanonicalGoneNumbers, type Recording, type Row } from './compare'
 import { oldSide, type ReplaySide } from './harness'
+import { type GiftCardPressOptions, W38_ACTIONS, giftCardsAsTheScreensPress } from '../sweep/gift-card-presses'
 
 /*
  * W38 (F-plan 4.12 item 3; brief W38 item 5): the gift card actions' side of the replay, beside account-side.ts
@@ -15,40 +15,8 @@ import { oldSide, type ReplaySide } from './harness'
  * account-side.ts's users do. None of the five touches Stripe or the switch.
  */
 
-/** The old gift card actions W38 gives to the Worker. */
-export const W38_ACTIONS: ReadonlySet<string> = new Set(['extendGiftCardExpiry', 'setGiftCardPickedUp', 'setGiftCardShipped', 'getGiftCards', 'getGiftCardRedemptions'])
-
-export interface GiftCardPressOptions {
-  /**
-   * A scenario that records the same press sent twice (FB15: the answer lost, pressed again). The old function had no
-   * key, so the recording is two plain calls; the dialog now sends the second under the first's key, which is what
-   * this models: a press exactly like the one before it, on the same card, goes under the same key.
-   */
-  repeatedPress?: boolean
-}
-
-/**
- * Extend as its dialog presses it (ExtendGiftCardDialog): each press has a key; a press that got no answer keeps it
- * for the same press made again on the same card; any other answer starts a new one. Picked up and shipped send no
- * key of their own (a flag is set to a value, not moved): each wrapper makes one for its call.
- */
-export function giftCardsAsTheScreensPress(options: GiftCardPressOptions = {}): (db: Db, action: string, params: unknown) => Promise<unknown> {
-  const heldKeys = new Map<string, { key: string; sent: string }>()
-  const lastPress = new Map<string, { key: string; sent: string }>()
-  return async (db, action, params) => {
-    if (action !== 'extendGiftCardExpiry') return throughStaffApp(action)(db, params)
-    const card = String((params as Record<string, unknown> | null)?.['giftCardId'])
-    const sent = JSON.stringify(params)
-    const held = heldKeys.get(card)
-    const last = lastPress.get(card)
-    const idempotencyKey = held?.sent === sent ? held.key : options.repeatedPress && last?.sent === sent ? last.key : crypto.randomUUID()
-    lastPress.set(card, { key: idempotencyKey, sent })
-    const answer = (await throughStaffApp(action)(db, { ...(params as object), idempotencyKey })) as { noAnswer?: boolean } | null
-    if (answer?.noAnswer) heldKeys.set(card, { key: idempotencyKey, sent })
-    else heldKeys.delete(card)
-    return answer
-  }
-}
+// W64: the presses moved to the sweep folder (H-plan 3.3 step 3); re-exported for the old replay's files.
+export * from '../sweep/gift-card-presses'
 
 export interface GiftCardSideOptions extends GiftCardPressOptions {
   /** Changes an answer after the Worker gives it: how a test plants a deliberate difference. */

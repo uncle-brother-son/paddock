@@ -1,0 +1,219 @@
+{
+  "scenario": "w48-price-addon-base-and-member",
+  "results": [
+    {
+      "success": true,
+      "item": {
+        "id": "10000000-0000-4000-8000-000000000011",
+        "sanity_addon_id": null,
+        "name": "Robe",
+        "thumbnail_url": null,
+        "category": null,
+        "sku": "ROBE",
+        "base_price": "12.00",
+        "member_price": "9.00",
+        "sale_price": null,
+        "stripe_product_id": "prod_robe",
+        "stripe_price_id_base": "price_robe_base",
+        "stripe_price_id_member": "price_robe_member",
+        "stripe_price_id_sale": null,
+        "active": true,
+        "created_at": "<time>",
+        "updated_at": "<time>"
+      },
+      "pricesUpdated": {
+        "base_price": 12,
+        "member_price": 9
+      }
+    },
+    {
+      "success": true,
+      "item": {
+        "id": "10000000-0000-4000-8000-000000000006",
+        "sanity_addon_id": null,
+        "name": "Towel",
+        "thumbnail_url": null,
+        "category": null,
+        "sku": "TOWEL",
+        "base_price": "0.00",
+        "member_price": null,
+        "sale_price": null,
+        "stripe_product_id": "prod_towel",
+        "stripe_price_id_base": "price_towel_base",
+        "stripe_price_id_member": null,
+        "stripe_price_id_sale": null,
+        "active": true,
+        "created_at": "<time>",
+        "updated_at": "<time>"
+      },
+      "pricesUpdated": {
+        "base_price": 0
+      }
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "addons": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000006",
+          "base_price": [
+            "5.00",
+            "0.00"
+          ]
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000011",
+          "base_price": [
+            "10.00",
+            "12.00"
+          ],
+          "member_price": [
+            "8.00",
+            "9.00"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    },
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/addons/10000000-0000-4000-8000-000000000011/price",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "item": {
+                "id": "10000000-0000-4000-8000-000000000011",
+                "sku": "ROBE",
+                "name": "Robe",
+                "active": true,
+                "category": null,
+                "base_price": "12.00",
+                "created_at": "<time>",
+                "sale_price": null,
+                "updated_at": "<time>",
+                "member_price": "9.00",
+                "thumbnail_url": null,
+                "sanity_addon_id": null,
+                "stripe_product_id": "prod_robe",
+                "stripe_price_id_base": "price_robe_base",
+                "stripe_price_id_sale": null,
+                "stripe_price_id_member": "price_robe_member"
+              },
+              "success": true,
+              "pricesUpdated": {
+                "base_price": 12,
+                "member_price": 9
+              }
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/addons/10000000-0000-4000-8000-000000000006/price",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "item": {
+                "id": "10000000-0000-4000-8000-000000000006",
+                "sku": "TOWEL",
+                "name": "Towel",
+                "active": true,
+                "category": null,
+                "base_price": "0.00",
+                "created_at": "<time>",
+                "sale_price": null,
+                "updated_at": "<time>",
+                "member_price": null,
+                "thumbnail_url": null,
+                "sanity_addon_id": null,
+                "stripe_product_id": "prod_towel",
+                "stripe_price_id_base": "price_towel_base",
+                "stripe_price_id_sale": null,
+                "stripe_price_id_member": null
+              },
+              "success": true,
+              "pricesUpdated": {
+                "base_price": 0
+              }
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "catalog.price_set",
+          "entity_type": "addon",
+          "entity_id": "10000000-0000-4000-8000-000000000011",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "base_price": "12.00",
+              "sale_price": null,
+              "member_price": "9.00"
+            },
+            "before": {
+              "base_price": "10.00",
+              "sale_price": null,
+              "member_price": "8.00"
+            }
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "catalog.price_set",
+          "entity_type": "addon",
+          "entity_id": "10000000-0000-4000-8000-000000000006",
+          "request_id": "gone#4",
+          "details": {
+            "key": "gone#3",
+            "after": {
+              "base_price": "0.00",
+              "sale_price": null,
+              "member_price": null
+            },
+            "before": {
+              "base_price": "5.00",
+              "sale_price": null,
+              "member_price": null
+            }
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

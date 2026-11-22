@@ -9,8 +9,9 @@ import { CHECK_AFTER_MINUTES, OPEN_STEPS_SQL, sortLeftStep, STEP_CHECK_ACTION, S
 import { reconcile } from '@/server/rules/orders/reconcile'
 import { stuckList } from '@/server/rules/orders/stuck-list'
 import { insert } from '@/server/rules/testing/database'
-import { orderInput, postOrder, postReaderStep, withQuotedCardFigure, type OrderAnswer } from '@/server/rules/testing/replay/order-side'
-import { backendDir, oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
+import { orderInput, postOrder, postReaderStep, withQuotedCardFigure, type OrderAnswer } from '@/server/rules/testing/sweep/order-presses'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
 import { ID, MO_SUBSCRIPTION, seed, whileFailing } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
@@ -91,7 +92,7 @@ async function onASeed(work: (stripe: FakeStripe) => Promise<void>, prepare?: Pr
         }
       },
     },
-    oldSide
+    workerSide()
   )
 }
 
@@ -1353,7 +1354,7 @@ describe("who writes a subscription's card (W40 review L5, W40c review L6)", () 
 
 describe('the staff app (brief W42 item 5): saveCustomerCardOnFile and the words on SaveCardOnReaderButton', () => {
   type Wrapper = (req: { params: { customerId: string; setupIntentId: string }; user: typeof REPLAY_USER }) => Promise<Record<string, unknown>>
-  const wrapper = async (): Promise<Wrapper> => ((await import(/* @vite-ignore */ path.join(backendDir, 'saveCustomerCardOnFile.ts'))) as { default: Wrapper }).default
+  const wrapper = async (): Promise<Wrapper> => ((await import(/* @vite-ignore */ path.join(staffAppDir(), 'backend/paddock/saveCustomerCardOnFile.ts'))) as { default: Wrapper }).default
 
   it('the thin wrapper answers the same five fields plus moved and toMove, and a refusal as data with nothing thrown', async () => {
     await onASeed(async (stripe) => {

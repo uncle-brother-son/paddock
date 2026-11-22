@@ -1,0 +1,177 @@
+{
+  "scenario": "w48-gift-card-type-custom-amounts-refusals",
+  "results": [
+    {
+      "thrown": "giftCardTypeId is required"
+    },
+    {
+      "thrown": "customAmountMin must be a non-negative number when custom amounts are enabled"
+    },
+    {
+      "thrown": "customAmountMin must be a non-negative number when custom amounts are enabled"
+    },
+    {
+      "thrown": "customAmountMax must be a positive number when custom amounts are enabled"
+    },
+    {
+      "thrown": "customAmountMax must be a positive number when custom amounts are enabled"
+    },
+    {
+      "thrown": "customAmountMin cannot be greater than customAmountMax"
+    },
+    null
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/gift-card-types/10000000-0000-4000-8000-000000000019/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "customAmountMin",
+              "details": {
+                "action": "catalog.details_set",
+                "reason": "invalid_params",
+                "message": "customAmountMin must be a non-negative number when custom amounts are enabled"
+              },
+              "message": "customAmountMin must be a non-negative number when custom amounts are enabled"
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/gift-card-types/10000000-0000-4000-8000-000000000019/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "customAmountMin",
+              "details": {
+                "action": "catalog.details_set",
+                "reason": "invalid_params",
+                "message": "customAmountMin must be a non-negative number when custom amounts are enabled"
+              },
+              "message": "customAmountMin must be a non-negative number when custom amounts are enabled"
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/gift-card-types/10000000-0000-4000-8000-000000000019/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "customAmountMax",
+              "details": {
+                "action": "catalog.details_set",
+                "reason": "invalid_params",
+                "message": "customAmountMax must be a positive number when custom amounts are enabled"
+              },
+              "message": "customAmountMax must be a positive number when custom amounts are enabled"
+            },
+            "requestId": "gone#6"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#7",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/gift-card-types/10000000-0000-4000-8000-000000000019/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "customAmountMax",
+              "details": {
+                "action": "catalog.details_set",
+                "reason": "invalid_params",
+                "message": "customAmountMax must be a positive number when custom amounts are enabled"
+              },
+              "message": "customAmountMax must be a positive number when custom amounts are enabled"
+            },
+            "requestId": "gone#8"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#9",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/gift-card-types/10000000-0000-4000-8000-000000000019/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "customAmountMin",
+              "details": {
+                "action": "catalog.details_set",
+                "reason": "invalid_params",
+                "message": "customAmountMin cannot be greater than customAmountMax"
+              },
+              "message": "customAmountMin cannot be greater than customAmountMax"
+            },
+            "requestId": "gone#10"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#11",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/gift-card-types/gone#12/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "catalog.details_set",
+                "reason": "gift_card_type_not_found",
+                "message": "That gift card type no longer exists. Reload the page and try again."
+              },
+              "message": "That gift card type no longer exists. Reload the page and try again."
+            },
+            "requestId": "gone#13"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

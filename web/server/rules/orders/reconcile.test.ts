@@ -4,9 +4,11 @@ import { GET as stuckRoute } from '@/app/api/v1/staff/orders/stuck/route'
 import { POST as reconcileRoute } from '@/app/api/v1/staff/orders/reconcile/route'
 import type { Db } from '@/server/db'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
-import { asWorkerFlow, postFlowStep } from '@/server/rules/testing/replay/flow-side'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
-import { orderInput, postOrder, postReaderStep, withQuotedCardFigure, type OrderAnswer } from '@/server/rules/testing/replay/order-side'
+import { asWorkerFlow, postFlowStep } from '@/server/rules/testing/sweep/flow-presses'
+import { asTheOldCheckoutStartedIt, asTheOldCodeStartedIt, theOldScreensCancelledItToStoreCredit } from '@/server/rules/testing/sweep/old-states'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
+import { orderInput, postOrder, postReaderStep, withQuotedCardFigure, type OrderAnswer } from '@/server/rules/testing/sweep/order-presses'
 import { ID, lapsedSeat, paidSeat, sam, seed, whileFailing } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { finaliseOrder } from './finalise-order'
@@ -251,7 +253,7 @@ describe('a Worker card order held pending (W10)', () => {
       const orderId = await pendingOrder()
       later(16)
       const bookingId = (await db.query<{ id: string }>('SELECT id FROM bookings WHERE customer_id = $1', [ID.customer]))[0]?.id
-      await oldSide(db, stripe).call('cancelCreditBooking', { bookingId })
+      await workerSide()(db, stripe).call('cancelCreditBooking', { bookingId })
       expect(await run(stripe)).toMatchObject({ undone: 0, left: 1 })
       expect(await reconcileRows(orderId)).toEqual([{ actor: 'system', outcome: 'left', reason: 'changed_since', detail: 'the booking is cancelled' }])
       expect((await stuckList(db)).checkout[0]).toMatchObject({ reason: 'changed_since' })
@@ -629,7 +631,7 @@ describe('a payment that succeeded on an order already undone (charged_without_o
   it('a flow: <pendingId>:refund-reader, from reader_payment.charge_without_record', async () => {
     await onASeed(
       async ({ stripe }) => {
-        const old = oldSide(db, stripe)
+        const old = workerSide()(db, stripe)
         const bookingId = await lapsedSeat((action, params) => old.call(action, params), db)
         const started = (await old.call('settleLapsedBooking', { bookingId, payment: { method: 'reader' } })) as { pendingReaderPayment: { pendingId: string; paymentIntentId: string } }
         const { pendingId, paymentIntentId } = started.pendingReaderPayment
@@ -719,10 +721,11 @@ describe('a payment that succeeded on an order already undone (charged_without_o
 
 describe('reader flows the Worker started (step D) and the old code started', () => {
   async function startSettle(stripe: FakeStripe, worker: boolean) {
-    const old = oldSide(db, stripe)
+    const old = workerSide()(db, stripe)
     const bookingId = await lapsedSeat((action, params) => old.call(action, params), db)
     const started = (await old.call('settleLapsedBooking', { bookingId, payment: { method: 'reader' } })) as { pendingReaderPayment: { pendingId: string; paymentIntentId: string } }
-    if (worker) await asWorkerFlow(db, started.pendingReaderPayment.pendingId)
+    // W64: the flow is the Worker's from its start; the old code's has the mark taken off (sweep/old-states.ts).
+    if (!worker) await asTheOldCodeStartedIt(db, started.pendingReaderPayment.pendingId)
     replayStripe.current = stripe
     return { ...started.pendingReaderPayment, bookingId }
   }
@@ -776,7 +779,9 @@ describe('reader flows the Worker started (step D) and the old code started', ()
 
   it("an order with no mark of the Worker's is left alone too, and listed for a person", async () => {
     await onASeed(async ({ stripe }) => {
-      await oldSide(db, stripe).call('createOrder', basket('reader'))
+      const placed = (await workerSide()(db, stripe).call('createOrder', basket('reader'))) as { orderId: string }
+      // W64: placed through the Worker, then the mark taken off: the order as the old checkout left it (sweep/old-states.ts).
+      await asTheOldCheckoutStartedIt(db, placed.orderId)
       later(16)
       expect(await run(stripe)).toMatchObject({ checked: 0 })
       expect((await stuckList(db)).checkout).toEqual([expect.objectContaining({ method: null, reason: 'not_started_here', words: STUCK_WORDS['not_started_here'] })])
@@ -858,7 +863,7 @@ describe("W13 (W12a N1): a reader order in a staff member's run keeps to the run
 describe("W14b (W12-6): a reader flow in a staff member's run keeps to the run's deadline, as its orders do", () => {
   it("19 s into the run (1 s left of its 20, though a press would have 11): the flow's intent isn't read, the flow left for the next run", async () => {
     await onASeed(async ({ stripe }) => {
-      const old = oldSide(db, stripe)
+      const old = workerSide()(db, stripe)
       const bookingId = await lapsedSeat((action, params) => old.call(action, params), db)
       const started = (await old.call('settleLapsedBooking', { bookingId, payment: { method: 'reader' } })) as { pendingReaderPayment: { pendingId: string } }
       const { pendingId } = started.pendingReaderPayment
@@ -977,7 +982,7 @@ describe('crash tests: the pipeline stopped at each step, then reconcile', () =>
 
   describe('flows', () => {
     async function startFlow(stripe: FakeStripe) {
-      const old = oldSide(db, stripe)
+      const old = workerSide()(db, stripe)
       const bookingId = await lapsedSeat((action, params) => old.call(action, params), db)
       const started = (await old.call('settleLapsedBooking', { bookingId, payment: { method: 'reader' } })) as { pendingReaderPayment: { pendingId: string; paymentIntentId: string } }
       await asWorkerFlow(db, started.pendingReaderPayment.pendingId)
@@ -1041,8 +1046,9 @@ describe('W12a S1: a Worker order the old screens moved out of pending (W12 revi
     expect((await place({ customerId: ID.customer, booking: seat, products: [{ ...soap, quantity: 1 }], payment: { method: 'card' } })).body).toMatchObject({ ok: false, error: { code: 'PAYMENT_UNCONFIRMED' } })
     const orderId = await pendingOrder()
     later(16)
-    const bookingId = (await db.query<{ id: string }>('SELECT id FROM bookings WHERE customer_id = $1', [ID.customer]))[0]?.id
-    expect(await oldSide(db, stripe).call('refundBooking', { bookingId, refundMethod: 'credit' })).toMatchObject({ storeCreditRefundedAmount: 20 })
+    const bookingId = (await db.query<{ id: string }>('SELECT id FROM bookings WHERE customer_id = $1', [ID.customer]))[0]?.id as string
+    // W64: the old screens' Cancel & Refund to store credit, as an SQL fixture (sweep/old-states.ts): only they could do it.
+    await theOldScreensCancelledItToStoreCredit(db, { bookingId, orderId, customerId: ID.customer, amount: 20 })
     expect(await orders()).toEqual([{ id: orderId, payment_status: 'partially_refunded', stripe_payment_intent_id: null }])
     return { orderId, paymentIntentId: [...stripe.chargedByIntent.keys()][0] }
   }
@@ -1144,7 +1150,7 @@ describe('W12a S1: a Worker order the old screens moved out of pending (W12 revi
       expect((await place({ customerId: ID.customer, booking: seat, payment: { method: 'card' } })).body).toMatchObject({ ok: true })
       later(16)
       const bookingId = (await db.query<{ id: string }>('SELECT id FROM bookings WHERE customer_id = $1', [ID.customer]))[0]?.id
-      await oldSide(db, stripe).call('refundBooking', { bookingId, refundMethod: 'credit' })
+      await workerSide()(db, stripe).call('refundBooking', { bookingId, refundMethod: 'credit' })
       expect((await orders())[0]?.payment_status).not.toBe('paid')
       expect(await run(stripe)).toMatchObject({ checked: 0 })
       expect((await stuckList(db)).checkout).toEqual([])
@@ -1215,13 +1221,17 @@ describe("W12a S2 (a): another intent of the same customer isn't this order's or
 
   it("a Worker flow held with no intent on its row: undone; its own old-style intent and another flow's are left as they are", async () => {
     await onASeed(async ({ stripe }) => {
-      const old = oldSide(db, stripe)
+      const old = workerSide()(db, stripe)
       const bookingId = await lapsedSeat((action, params) => old.call(action, params), db)
       const started = (await old.call('settleLapsedBooking', { bookingId, payment: { method: 'reader' } })) as { pendingReaderPayment: { pendingId: string; paymentIntentId: string } }
       const { pendingId, paymentIntentId } = started.pendingReaderPayment
-      await asWorkerFlow(db, pendingId)
       replayStripe.current = stripe
       await db.query('UPDATE pending_reader_payments SET payment_intent_id = NULL WHERE id = $1', [pendingId])
+      // W64: its intent as the old screens made it, with no pending_id in its metadata (the Worker always writes one):
+      // the fake's own record edited, as only the old code could make such an intent.
+      const intents = (stripe as unknown as { intents: Map<string, { metadata: Record<string, string> }> }).intents
+      const own = intents.get(paymentIntentId)
+      if (own) own.metadata = Object.fromEntries(Object.entries(own.metadata).filter(([field]) => field !== 'pending_id'))
       const untouched = await strangers(stripe, 2000, 'pending_id')
       later(16)
       expect(await run(stripe)).toMatchObject({ undone: 1, finalised: 0, left: 0 })

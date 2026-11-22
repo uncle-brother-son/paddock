@@ -1,0 +1,205 @@
+{
+  "scenario": "w48-block-day",
+  "results": [
+    {
+      "blocked": true,
+      "conflict": false,
+      "conflictingBookings": [],
+      "blockedCount": 2
+    },
+    {
+      "blocked": true,
+      "conflict": false,
+      "conflictingBookings": [],
+      "blockedCount": 0
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/sessions/days/2026-11-12/block",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "blocked": true,
+              "conflict": false,
+              "closedDate": true,
+              "blockedCount": 2,
+              "alreadyBlocked": 0,
+              "conflictingBookings": []
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/sessions/days/2026-11-11/block",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "blocked": true,
+              "conflict": false,
+              "closedDate": true,
+              "blockedCount": 0,
+              "alreadyBlocked": 0,
+              "conflictingBookings": []
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "session.blocked",
+          "entity_type": "session_day",
+          "entity_id": "2026-11-12",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "date": "2026-11-12",
+            "after": [
+              {
+                "id": "10000000-0000-4000-8000-000000000004",
+                "status": "blocked",
+                "blocked_by": "10000000-0000-4000-8000-000000000001",
+                "blocked_reason": "Staff day"
+              },
+              {
+                "id": "10000000-0000-4000-8000-000000000a31",
+                "status": "blocked",
+                "blocked_by": "10000000-0000-4000-8000-000000000001",
+                "blocked_reason": "Staff day"
+              }
+            ],
+            "before": [
+              {
+                "id": "10000000-0000-4000-8000-000000000004",
+                "status": "open",
+                "blocked_by": null,
+                "blocked_reason": null
+              },
+              {
+                "id": "10000000-0000-4000-8000-000000000a31",
+                "status": "open",
+                "blocked_by": null,
+                "blocked_reason": null
+              }
+            ],
+            "lockedAt": "<time>",
+            "closedDate": true,
+            "sessionIds": [
+              "10000000-0000-4000-8000-000000000004",
+              "10000000-0000-4000-8000-000000000a31"
+            ],
+            "blockedCount": 2,
+            "alreadyBlocked": 0
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "session.blocked",
+          "entity_type": "session_day",
+          "entity_id": "2026-11-11",
+          "request_id": "gone#4",
+          "details": {
+            "key": "gone#3",
+            "date": "2026-11-11",
+            "after": [],
+            "before": [],
+            "lockedAt": "<time>",
+            "closedDate": true,
+            "sessionIds": [],
+            "blockedCount": 0,
+            "alreadyBlocked": 0
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "closed_dates": {
+      "added": [
+        {
+          "closed_on": "2026-11-11",
+          "reason": "Staff day",
+          "closed_by": "10000000-0000-4000-8000-000000000001",
+          "closed_at": "<set>"
+        },
+        {
+          "closed_on": "2026-11-12",
+          "reason": "Staff day",
+          "closed_by": "10000000-0000-4000-8000-000000000001",
+          "closed_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "sessions": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000004",
+          "status": [
+            "open",
+            "blocked"
+          ],
+          "blocked_reason": [
+            null,
+            "Staff day"
+          ],
+          "blocked_by": [
+            null,
+            "10000000-0000-4000-8000-000000000001"
+          ]
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000a31",
+          "status": [
+            "open",
+            "blocked"
+          ],
+          "blocked_reason": [
+            null,
+            "Staff day"
+          ],
+          "blocked_by": [
+            null,
+            "10000000-0000-4000-8000-000000000001"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -1,0 +1,115 @@
+{
+  "scenario": "w48-gb4-a-new-weekly-slot-makes-no-session-on-dates-already-made",
+  "results": [
+    {
+      "id": "service_type_schedule_slots#1",
+      "service_type_id": "10000000-0000-4000-8000-000000000002",
+      "day_of_week": 4,
+      "start_time": "07:00:00",
+      "created_at": "<time>",
+      "updated_at": "<time>"
+    },
+    {
+      "sessions": [
+        {
+          "id": "10000000-0000-4000-8000-000000000004",
+          "service_type_id": "10000000-0000-4000-8000-000000000002",
+          "service_type_name": "Sauna",
+          "booking_type": "public",
+          "start_time": "2026-11-12T10:00:00.000Z",
+          "end_time": "2026-11-12T11:00:00.000Z",
+          "capacity": 10,
+          "total_booked": 0,
+          "status": "open",
+          "blocked_reason": null,
+          "blocked_by": null,
+          "started": false,
+          "band_id": "10000000-0000-4000-8000-000000000003",
+          "band_code": "core",
+          "band_name": "Core",
+          "band_price": "20.00",
+          "band_overridden": false,
+          "confirmed_booking_count": 0
+        }
+      ],
+      "madeUpTo": null,
+      "closedDates": []
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/service-types/10000000-0000-4000-8000-000000000002/schedule-slots",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "service_type_schedule_slots#1",
+              "created_at": "<time>",
+              "start_time": "07:00:00",
+              "updated_at": "<time>",
+              "day_of_week": 4,
+              "service_type_id": "10000000-0000-4000-8000-000000000002"
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "timetable.slot_added",
+          "entity_type": "schedule_slot",
+          "entity_id": "service_type_schedule_slots#1",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "id": "service_type_schedule_slots#1",
+              "created_at": "<time>",
+              "start_time": "07:00:00",
+              "updated_at": "<time>",
+              "day_of_week": 4,
+              "service_type_id": "10000000-0000-4000-8000-000000000002"
+            },
+            "before": null
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "service_type_schedule_slots": {
+      "added": [
+        {
+          "id": "service_type_schedule_slots#1",
+          "service_type_id": "10000000-0000-4000-8000-000000000002",
+          "day_of_week": 4,
+          "start_time": "07:00:00",
+          "created_at": "<set>",
+          "updated_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

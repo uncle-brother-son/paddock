@@ -2,8 +2,9 @@ import path from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { POST as quoteRoute } from '@/app/api/v1/staff/quotes/basket/route'
 import type { Db } from '@/server/db'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
-import { ALL_KINDS_ON, orderInput, postOrder } from '@/server/rules/testing/replay/order-side'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
+import { ALL_KINDS_ON, orderInput, postOrder } from '@/server/rules/testing/sweep/order-presses'
 import { ID, paidSeat, seed } from '@/server/rules/testing/replay/scenarios'
 import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
 import { kindsOn, ORDER_KINDS, orderKind, orderPathOff } from './order-switch'
@@ -69,7 +70,7 @@ describe('the order route and the switch', () => {
   afterAll(() => environment.stop())
 
   async function freshSeed(): Promise<void> {
-    await replay(environment, { name: 'seed only', seed, run: async () => {} }, oldSide)
+    await replay(environment, { name: 'seed only', seed, run: async () => {} }, workerSide())
   }
   const COUNTS = {
     orders: 'SELECT count(*) AS n FROM orders',
@@ -189,7 +190,7 @@ describe('the staff app createOrder wrapper', () => {
           await work(createOrder)
         },
       },
-      oldSide
+      workerSide()
     )
   }
   const count = async (sql: string) => Number((await db.query<{ n: string }>(sql))[0]?.n ?? 0)

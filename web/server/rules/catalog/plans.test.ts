@@ -17,9 +17,10 @@ import { stuckList } from '@/server/rules/orders/stuck-list'
 import { STAFF_ADMIN_WORDS } from '@/server/rules/staff/failure-messages'
 import { ADMIN_TEST_KEY, pressRoute, type AdminAnswer, type AdminRouteHandler } from '@/server/rules/testing/admin-routes'
 import { insert } from '@/server/rules/testing/database'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
 import { ID, seed, whileFailing } from '@/server/rules/testing/replay/scenarios'
-import { ALL_KINDS_ON, orderInput, postOrder, postReaderStep, withQuotedCardFigure } from '@/server/rules/testing/replay/order-side'
+import { ALL_KINDS_ON, orderInput, postOrder, postReaderStep, withQuotedCardFigure } from '@/server/rules/testing/sweep/order-presses'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
@@ -122,7 +123,7 @@ async function onASeed(work: (stripe: FakeStripe) => Promise<void>, prepare?: Pr
         }
       },
     },
-    oldSide
+    workerSide()
   )
 }
 

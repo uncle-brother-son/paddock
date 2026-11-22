@@ -1,0 +1,239 @@
+{
+  "scenario": "w48-band-price-set",
+  "results": [
+    {
+      "thrown": "Price must be a valid non-negative amount."
+    },
+    {
+      "thrown": "Price must be a valid non-negative amount."
+    },
+    {
+      "updated": false,
+      "reason": "band_not_found",
+      "message": "That band no longer exists. Reload the page and try again."
+    },
+    {
+      "updated": true,
+      "band": {
+        "id": "10000000-0000-4000-8000-000000000003",
+        "code": "core",
+        "name": "Core",
+        "price": "22.50"
+      }
+    },
+    {
+      "updated": true,
+      "band": {
+        "id": "10000000-0000-4000-8000-00000000000c",
+        "code": "peak",
+        "name": "Peak",
+        "price": "0.00"
+      }
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/pricing/bands/10000000-0000-4000-8000-000000000003/price",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "price",
+              "details": {
+                "action": "pricing.band_price_set",
+                "reason": "invalid_price",
+                "message": "Price must be a valid non-negative amount."
+              },
+              "message": "Price must be a valid non-negative amount."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/pricing/bands/10000000-0000-4000-8000-000000000003/price",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "price",
+              "details": {
+                "action": "pricing.band_price_set",
+                "reason": "invalid_price",
+                "message": "Price must be a valid non-negative amount."
+              },
+              "message": "Price must be a valid non-negative amount."
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/pricing/bands/gone#6/price",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "pricing.band_price_set",
+                "reason": "band_not_found",
+                "message": "That band no longer exists. Reload the page and try again."
+              },
+              "message": "That band no longer exists. Reload the page and try again."
+            },
+            "requestId": "gone#7"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#8",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/pricing/bands/10000000-0000-4000-8000-000000000003/price",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "band": {
+                "id": "10000000-0000-4000-8000-000000000003",
+                "code": "core",
+                "name": "Core",
+                "price": "22.50"
+              },
+              "updated": true
+            },
+            "requestId": "gone#9"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#10",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/pricing/bands/10000000-0000-4000-8000-00000000000c/price",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "band": {
+                "id": "10000000-0000-4000-8000-00000000000c",
+                "code": "peak",
+                "name": "Peak",
+                "price": "0.00"
+              },
+              "updated": true
+            },
+            "requestId": "gone#11"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "pricing.band_price_set",
+          "entity_type": "session_band",
+          "entity_id": "10000000-0000-4000-8000-000000000003",
+          "request_id": "gone#9",
+          "details": {
+            "key": "gone#8",
+            "after": {
+              "id": "10000000-0000-4000-8000-000000000003",
+              "code": "core",
+              "name": "Core",
+              "price": "22.50"
+            },
+            "before": {
+              "id": "10000000-0000-4000-8000-000000000003",
+              "code": "core",
+              "name": "Core",
+              "price": "20.00"
+            }
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "pricing.band_price_set",
+          "entity_type": "session_band",
+          "entity_id": "10000000-0000-4000-8000-00000000000c",
+          "request_id": "gone#11",
+          "details": {
+            "key": "gone#10",
+            "after": {
+              "id": "10000000-0000-4000-8000-00000000000c",
+              "code": "peak",
+              "name": "Peak",
+              "price": "0.00"
+            },
+            "before": {
+              "id": "10000000-0000-4000-8000-00000000000c",
+              "code": "peak",
+              "name": "Peak",
+              "price": "25.50"
+            }
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "session_bands": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000003",
+          "price": [
+            "20.00",
+            "22.50"
+          ]
+        },
+        {
+          "id": "10000000-0000-4000-8000-00000000000c",
+          "price": [
+            "25.50",
+            "0.00"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

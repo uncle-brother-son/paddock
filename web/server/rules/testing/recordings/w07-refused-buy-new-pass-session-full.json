@@ -1,0 +1,44 @@
+{
+  "scenario": "w07-refused-buy-new-pass-session-full",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "insufficient_capacity",
+      "bookingFailureReason": "insufficient_capacity"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/orders",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "SESSION_FULL",
+              "details": {
+                "stage": "booking",
+                "reason": "insufficient_capacity",
+                "bookingFailureReason": "insufficient_capacity"
+              },
+              "message": "That slot no longer has room for this many guests — it may have just been booked or is already full. Pick a different session type or reduce the guest count."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

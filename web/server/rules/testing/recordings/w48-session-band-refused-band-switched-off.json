@@ -1,0 +1,41 @@
+{
+  "scenario": "w48-session-band-refused-band-switched-off",
+  "results": [
+    {
+      "thrown": "That band no longer exists."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/sessions/10000000-0000-4000-8000-000000000004/band",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "session.band_set",
+                "reason": "band_not_found",
+                "message": "That band no longer exists."
+              },
+              "message": "That band no longer exists."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

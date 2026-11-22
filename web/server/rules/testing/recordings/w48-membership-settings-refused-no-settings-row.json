@@ -1,0 +1,41 @@
+{
+  "scenario": "w48-membership-settings-refused-no-settings-row",
+  "results": [
+    {
+      "thrown": "The membership_settings row is missing — insert it (id = true) before editing the setting."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/membership-settings",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "membership_settings.set",
+                "reason": "settings_missing",
+                "message": "The membership_settings row is missing — insert it (id = true) before editing the setting."
+              },
+              "message": "The membership_settings row is missing — insert it (id = true) before editing the setting."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

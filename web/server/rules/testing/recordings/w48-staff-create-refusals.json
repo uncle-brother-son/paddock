@@ -1,0 +1,177 @@
+{
+  "scenario": "w48-staff-create-refusals",
+  "results": [
+    {
+      "thrown": "First name is required"
+    },
+    {
+      "thrown": "Last name is required"
+    },
+    {
+      "thrown": "A valid email address is required"
+    },
+    {
+      "thrown": "A valid email address is required"
+    },
+    {
+      "thrown": "Invalid role: owner"
+    },
+    {
+      "thrown": "A staff member with this email address already exists"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/staff",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "firstName",
+              "details": {
+                "action": "staff.created",
+                "reason": "first_name_required",
+                "message": "First name is required"
+              },
+              "message": "First name is required"
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/staff",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "lastName",
+              "details": {
+                "action": "staff.created",
+                "reason": "last_name_required",
+                "message": "Last name is required"
+              },
+              "message": "Last name is required"
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/staff",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "email",
+              "details": {
+                "action": "staff.created",
+                "reason": "email_invalid",
+                "message": "A valid email address is required"
+              },
+              "message": "A valid email address is required"
+            },
+            "requestId": "gone#6"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#7",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/staff",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "email",
+              "details": {
+                "action": "staff.created",
+                "reason": "email_invalid",
+                "message": "A valid email address is required"
+              },
+              "message": "A valid email address is required"
+            },
+            "requestId": "gone#8"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#9",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/staff",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "role",
+              "details": {
+                "action": "staff.created",
+                "reason": "invalid_role",
+                "message": "Invalid role: owner"
+              },
+              "message": "Invalid role: owner"
+            },
+            "requestId": "gone#10"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#11",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/staff",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "field": "email",
+              "details": {
+                "action": "staff.created",
+                "reason": "duplicate_email",
+                "message": "A staff member with this email address already exists"
+              },
+              "message": "A staff member with this email address already exists"
+            },
+            "requestId": "gone#12"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

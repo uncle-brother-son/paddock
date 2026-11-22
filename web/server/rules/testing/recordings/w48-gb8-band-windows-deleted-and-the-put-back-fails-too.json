@@ -1,0 +1,36 @@
+{
+  "scenario": "w48-gb8-band-windows-deleted-and-the-put-back-fails-too",
+  "results": [
+    {
+      "thrown": "That didn't get an answer, so it may or may not have been saved. The screen has been reloaded: check it, and press again if it hasn't changed."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/pricing/band-rules/6",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "INTERNAL",
+              "message": "Something went wrong and the action may not have finished. Check before trying again."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 500,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

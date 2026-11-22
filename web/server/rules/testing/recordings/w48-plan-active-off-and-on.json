@@ -1,0 +1,245 @@
+{
+  "scenario": "w48-plan-active-off-and-on",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-00000000000a",
+      "active": false
+    },
+    {
+      "id": "10000000-0000-4000-8000-00000000000a",
+      "active": true
+    },
+    {
+      "thrown": "Item not found"
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "products.retrieve",
+      "params": {
+        "id": "prod_seed"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "products.update",
+      "params": {
+        "id": "prod_seed",
+        "active": false
+      },
+      "idempotencyKey": "gone#8:product-off"
+    },
+    {
+      "method": "products.retrieve",
+      "params": {
+        "id": "prod_seed"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "products.update",
+      "params": {
+        "id": "prod_seed",
+        "active": true
+      },
+      "idempotencyKey": "gone#9:product-on"
+    }
+  ],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/membership-plans/10000000-0000-4000-8000-00000000000a/active",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "10000000-0000-4000-8000-00000000000a",
+              "active": false
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/membership-plans/10000000-0000-4000-8000-00000000000a/active",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "10000000-0000-4000-8000-00000000000a",
+              "active": true
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/membership-plans/gone#6/active",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "plan.active_set",
+                "reason": "item_not_found",
+                "message": "Item not found"
+              },
+              "message": "Item not found"
+            },
+            "requestId": "gone#7"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "plan.stripe_step",
+          "entity_type": "membership_plan",
+          "entity_id": "10000000-0000-4000-8000-00000000000a",
+          "request_id": "gone#2",
+          "details": {
+            "kind": "product_active",
+            "want": {
+              "active": false,
+              "productId": "prod_seed"
+            },
+            "state": "done",
+            "detail": "sent",
+            "stepId": "gone#8"
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "plan.stripe_step",
+          "entity_type": "membership_plan",
+          "entity_id": "10000000-0000-4000-8000-00000000000a",
+          "request_id": "gone#2",
+          "details": {
+            "kind": "product_active",
+            "want": {
+              "active": false,
+              "productId": "prod_seed"
+            },
+            "state": "left",
+            "stepId": "gone#8",
+            "byPress": true
+          }
+        },
+        {
+          "id": "audit_log#3",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "plan.active_set",
+          "entity_type": "membership_plan",
+          "entity_id": "10000000-0000-4000-8000-00000000000a",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "id": "10000000-0000-4000-8000-00000000000a",
+              "active": false
+            },
+            "before": {
+              "id": "10000000-0000-4000-8000-00000000000a",
+              "active": true
+            }
+          }
+        },
+        {
+          "id": "audit_log#4",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "plan.stripe_step",
+          "entity_type": "membership_plan",
+          "entity_id": "10000000-0000-4000-8000-00000000000a",
+          "request_id": "gone#4",
+          "details": {
+            "kind": "product_active",
+            "want": {
+              "active": true,
+              "productId": "prod_seed"
+            },
+            "state": "left",
+            "stepId": "gone#9",
+            "byPress": true
+          }
+        },
+        {
+          "id": "audit_log#5",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "plan.stripe_step",
+          "entity_type": "membership_plan",
+          "entity_id": "10000000-0000-4000-8000-00000000000a",
+          "request_id": "gone#4",
+          "details": {
+            "kind": "product_active",
+            "want": {
+              "active": true,
+              "productId": "prod_seed"
+            },
+            "state": "done",
+            "detail": "sent",
+            "stepId": "gone#9"
+          }
+        },
+        {
+          "id": "audit_log#6",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "plan.active_set",
+          "entity_type": "membership_plan",
+          "entity_id": "10000000-0000-4000-8000-00000000000a",
+          "request_id": "gone#4",
+          "details": {
+            "key": "gone#3",
+            "after": {
+              "id": "10000000-0000-4000-8000-00000000000a",
+              "active": true
+            },
+            "before": {
+              "id": "10000000-0000-4000-8000-00000000000a",
+              "active": false
+            }
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 2
+    }
+  }
+}

@@ -1,0 +1,337 @@
+{
+  "scenario": "w48-price-refusals",
+  "results": [
+    {
+      "thrown": "itemId is required"
+    },
+    {
+      "thrown": "At least one price field must be provided"
+    },
+    {
+      "thrown": "basePrice must be a non-negative number"
+    },
+    {
+      "thrown": "memberPrice must be a non-negative number"
+    },
+    {
+      "thrown": "salePrice must be a non-negative number"
+    },
+    {
+      "thrown": "monthlyPrice must be a non-negative number"
+    },
+    {
+      "thrown": "yearlyPrice must be a non-negative number"
+    },
+    {
+      "thrown": "Item not found"
+    },
+    {
+      "success": true,
+      "item": {
+        "id": "10000000-0000-4000-8000-000000000012",
+        "sanity_product_id": null,
+        "name": "Candle",
+        "thumbnail_url": null,
+        "category": null,
+        "base_price": "14.00",
+        "member_price": null,
+        "sale_price": null,
+        "fulfillment_method": "shipping",
+        "stripe_product_id": null,
+        "stripe_price_id_base": null,
+        "stripe_price_id_member": null,
+        "stripe_price_id_sale": null,
+        "active": true,
+        "created_at": "<time>",
+        "updated_at": "<time>"
+      },
+      "pricesUpdated": {
+        "base_price": 14
+      }
+    },
+    {
+      "thrown": "Private service types are priced by their tiers: change the tier prices instead."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/products/10000000-0000-4000-8000-000000000007/price",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "details": {
+                "action": "catalog.price_set",
+                "reason": "invalid_params",
+                "message": "At least one price field must be provided"
+              },
+              "message": "At least one price field must be provided"
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/products/10000000-0000-4000-8000-000000000007/price",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "basePrice",
+              "details": {
+                "action": "catalog.price_set",
+                "reason": "invalid_params",
+                "message": "basePrice must be a non-negative number"
+              },
+              "message": "basePrice must be a non-negative number"
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/products/10000000-0000-4000-8000-000000000007/price",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "memberPrice",
+              "details": {
+                "action": "catalog.price_set",
+                "reason": "invalid_params",
+                "message": "memberPrice must be a non-negative number"
+              },
+              "message": "memberPrice must be a non-negative number"
+            },
+            "requestId": "gone#6"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#7",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/products/10000000-0000-4000-8000-000000000007/price",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "salePrice",
+              "details": {
+                "action": "catalog.price_set",
+                "reason": "invalid_params",
+                "message": "salePrice must be a non-negative number"
+              },
+              "message": "salePrice must be a non-negative number"
+            },
+            "requestId": "gone#8"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#9",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/membership-plans/10000000-0000-4000-8000-00000000000a/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "monthlyPrice",
+              "details": {
+                "action": "plan.price_change",
+                "reason": "invalid_params",
+                "message": "monthlyPrice must be a non-negative number"
+              },
+              "message": "monthlyPrice must be a non-negative number"
+            },
+            "requestId": "gone#10"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#11",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/membership-plans/10000000-0000-4000-8000-00000000000a/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "yearlyPrice",
+              "details": {
+                "action": "plan.price_change",
+                "reason": "invalid_params",
+                "message": "yearlyPrice must be a non-negative number"
+              },
+              "message": "yearlyPrice must be a non-negative number"
+            },
+            "requestId": "gone#12"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#13",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/products/gone#14/price",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "catalog.price_set",
+                "reason": "item_not_found",
+                "message": "Item not found"
+              },
+              "message": "Item not found"
+            },
+            "requestId": "gone#15"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#16",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/products/10000000-0000-4000-8000-000000000012/price",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "item": {
+                "id": "10000000-0000-4000-8000-000000000012",
+                "name": "Candle",
+                "active": true,
+                "category": null,
+                "base_price": "14.00",
+                "created_at": "<time>",
+                "sale_price": null,
+                "updated_at": "<time>",
+                "member_price": null,
+                "thumbnail_url": null,
+                "sanity_product_id": null,
+                "stripe_product_id": null,
+                "fulfillment_method": "shipping",
+                "stripe_price_id_base": null,
+                "stripe_price_id_sale": null,
+                "stripe_price_id_member": null
+              },
+              "success": true,
+              "pricesUpdated": {
+                "base_price": 14
+              }
+            },
+            "requestId": "gone#17"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#18",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/service-types/10000000-0000-4000-8000-00000000001b/price",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "catalog.price_set",
+                "reason": "private_service_type",
+                "message": "Private service types are priced by their tiers: change the tier prices instead."
+              },
+              "message": "Private service types are priced by their tiers: change the tier prices instead."
+            },
+            "requestId": "gone#19"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "catalog.price_set",
+          "entity_type": "product",
+          "entity_id": "10000000-0000-4000-8000-000000000012",
+          "request_id": "gone#17",
+          "details": {
+            "key": "gone#16",
+            "after": {
+              "base_price": "14.00",
+              "sale_price": null,
+              "member_price": null
+            },
+            "before": {
+              "base_price": "20.00",
+              "sale_price": null,
+              "member_price": null
+            }
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "products": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000012",
+          "base_price": [
+            "20.00",
+            "14.00"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -1,0 +1,231 @@
+{
+  "scenario": "w11-reader-cancelled-member-credit-and-addon-credit",
+  "results": [
+    {
+      "success": true,
+      "orderId": "gone#2",
+      "cardCharged": false,
+      "paymentMethodUsed": "reader",
+      "pendingReaderPayment": {
+        "orderId": "gone#2",
+        "paymentIntentId": "pi_fake_0001",
+        "clientSecret": "pi_fake_0001_secret",
+        "amount": 20
+      }
+    },
+    {
+      "cancelled": true,
+      "orderId": "gone#2",
+      "message": "The pending order was cancelled and everything it held was released."
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "paymentIntents.create",
+      "params": {
+        "amount": 2000,
+        "currency": "gbp",
+        "customer": "cus_member",
+        "payment_method_types": [
+          "card_present"
+        ],
+        "metadata": {
+          "supabase_customer_id": "10000000-0000-4000-8000-00000000000f",
+          "order_id": "gone#2",
+          "flow": "checkout"
+        },
+        "description": "Paddock order gone#2"
+      },
+      "idempotencyKey": "gone#2:reader-intent"
+    },
+    {
+      "method": "paymentIntents.retrieve",
+      "params": {
+        "id": "pi_fake_0001"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "paymentIntents.cancel",
+      "params": {
+        "id": "pi_fake_0001"
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/orders",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "status": "pending_reader",
+              "orderId": "gone#2",
+              "payment": {
+                "method": "reader",
+                "collected": 20,
+                "cardCharged": false,
+                "giftCardApplied": 0,
+                "storeCreditApplied": 0
+              },
+              "bookingId": "gone#3",
+              "giftCardId": null,
+              "giftCardCode": null,
+              "sessionPassId": null,
+              "eventBookingId": null,
+              "pendingReaderPayment": {
+                "amount": 20,
+                "orderId": "gone#2",
+                "clientSecret": "pi_fake_0001_secret",
+                "paymentIntentId": "pi_fake_0001"
+              }
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/orders/gone#2/cancel",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "message": "The pending order was cancelled and everything it held was released.",
+              "orderId": "gone#2",
+              "cancelled": true
+            },
+            "requestId": "gone#6"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.create",
+          "entity_type": "order",
+          "entity_id": "gone#2",
+          "request_id": "gone#4",
+          "details": {
+            "promo": null,
+            "method": "reader",
+            "postage": null,
+            "giftCard": null,
+            "amountDue": 20,
+            "bookingId": "gone#3",
+            "confirmed": {
+              "toCollect": 20
+            },
+            "overrides": [],
+            "toCollect": 20,
+            "giftCardId": null,
+            "orderTotal": 20,
+            "storeCredit": 0,
+            "addressSaved": false,
+            "awaitsReader": true,
+            "sessionPassId": null,
+            "eventBookingId": null
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.undo",
+          "entity_type": "order",
+          "entity_id": "gone#2",
+          "request_id": "gone#6",
+          "details": {
+            "why": "The card reader payment was cancelled (requires_payment_method).",
+            "parts": {
+              "event": null,
+              "stock": [],
+              "booking": {
+                "id": "gone#3",
+                "status": "confirmed",
+                "party_size": 2,
+                "session_id": "10000000-0000-4000-8000-000000000004",
+                "booking_type": "public",
+                "pass_to_give_back": null,
+                "redemption_source": "membership_credit"
+              },
+              "store_credit": "0",
+              "addon_credits": [
+                {
+                  "quantity": 1,
+                  "membership_id": "10000000-0000-4000-8000-000000000010"
+                }
+              ],
+              "passes_bought": [],
+              "gift_card_used": null,
+              "gift_card_bought": null,
+              "memberships_bought": []
+            },
+            "removed": {
+              "lines_removed": 1,
+              "orders_removed": 1,
+              "passes_removed": 0,
+              "bookings_removed": 1,
+              "events_given_back": 0,
+              "passes_given_back": 0,
+              "gift_cards_removed": 0,
+              "addon_lines_removed": 1,
+              "ledger_rows_removed": 0,
+              "memberships_removed": 0,
+              "sessions_given_back": 1,
+              "variants_given_back": 0,
+              "customers_given_back": 0,
+              "gift_cards_given_back": 0,
+              "event_bookings_removed": 0,
+              "gift_card_uses_removed": 0,
+              "memberships_given_back": 1,
+              "store_credit_rows_removed": 0
+            },
+            "snapshot": {
+              "flow": "checkout",
+              "method": "reader",
+              "channel": "staff",
+              "livemode": false,
+              "save_card": false,
+              "created_at": "<time>",
+              "request_id": "gone#4",
+              "held_booking": {
+                "party_size": 2,
+                "session_id": "10000000-0000-4000-8000-000000000004"
+              },
+              "expected_amount": 20,
+              "payment_intent_id": "pi_fake_0001",
+              "stripe_customer_id": "cus_member",
+              "save_address_to_customer": false
+            }
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

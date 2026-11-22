@@ -1,0 +1,123 @@
+{
+  "scenario": "w48-membership-settings-refusals",
+  "results": [
+    {
+      "thrown": "The waiting period must be a whole number of months between 0 and 60."
+    },
+    {
+      "thrown": "The waiting period must be a whole number of months between 0 and 60."
+    },
+    {
+      "thrown": "The waiting period must be a whole number of months between 0 and 60."
+    },
+    {
+      "thrown": "The waiting period must be a whole number of months between 0 and 60."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/membership-settings",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "addonCreditWaitMonths",
+              "details": {
+                "action": "membership_settings.set",
+                "reason": "invalid_params",
+                "message": "The waiting period must be a whole number of months between 0 and 60."
+              },
+              "message": "The waiting period must be a whole number of months between 0 and 60."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/membership-settings",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "addonCreditWaitMonths",
+              "details": {
+                "action": "membership_settings.set",
+                "reason": "invalid_params",
+                "message": "The waiting period must be a whole number of months between 0 and 60."
+              },
+              "message": "The waiting period must be a whole number of months between 0 and 60."
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/membership-settings",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "addonCreditWaitMonths",
+              "details": {
+                "action": "membership_settings.set",
+                "reason": "invalid_params",
+                "message": "The waiting period must be a whole number of months between 0 and 60."
+              },
+              "message": "The waiting period must be a whole number of months between 0 and 60."
+            },
+            "requestId": "gone#6"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#7",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/membership-settings",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "addonCreditWaitMonths",
+              "details": {
+                "action": "membership_settings.set",
+                "reason": "invalid_params",
+                "message": "The waiting period must be a whole number of months between 0 and 60."
+              },
+              "message": "The waiting period must be a whole number of months between 0 and 60."
+            },
+            "requestId": "gone#8"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

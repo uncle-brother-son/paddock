@@ -4,7 +4,8 @@ import { POST as requestsRoute } from '@/app/api/v1/staff/bookings/[bookingId]/s
 import { POST as statusRoute } from '@/app/api/v1/staff/bookings/[bookingId]/status/route'
 import type { Db } from '@/server/db'
 import { INTERNAL_MESSAGE } from '@/server/http/errors'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ReplaySide, type ScenarioContext } from '@/server/rules/testing/replay/harness'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ReplaySide, type ScenarioContext } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
 import { ID, lapsedSeat, publicOnCard, seed, whileFailing } from '@/server/rules/testing/replay/scenarios'
 import { insert } from '@/server/rules/testing/database'
 import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
@@ -65,7 +66,7 @@ async function onABooking(work: (bookingId: string, side: ReplaySide) => Promise
         await work(bookingId, side)
       },
     },
-    oldSide
+    workerSide()
   )
 }
 
@@ -189,8 +190,10 @@ describe('the status route (N3)', () => {
   })
 
   it('moves no money, so the switch never stops it (every kind off, as in the replay)', async () => {
-    expect(process.env.ORDER_SWITCH ?? '').toBe('')
     await onABooking(async (bookingId) => {
+      // W64: the booking is placed through the Worker (its order route sets its own switch); then every kind off.
+      vi.stubEnv('ORDER_SWITCH', '')
+      expect(process.env.ORDER_SWITCH).toBe('')
       expect((await post('status', bookingId, { status: 'completed' })).body.ok).toBe(true)
       expect((await post('special-requests', bookingId, { specialRequests: 'Quiet corner' })).body.ok).toBe(true)
     })
@@ -254,7 +257,7 @@ describe('the status route while a payment is still being taken (W18 review S1)'
     expect(answer.body, JSON.stringify(answer.body)).toMatchObject({ ok: true, data: { id: bookingId, status: to, cancelled_at: null } })
     expect(await bookingRow(bookingId)).toMatchObject({ status: to })
   }
-  const onTheOldSide = (name: string, run: (context: ScenarioContext) => Promise<void>) => replay(environment, { name, seed, run }, oldSide)
+  const onTheOldSide = (name: string, run: (context: ScenarioContext) => Promise<void>) => replay(environment, { name, seed, run }, workerSide())
 
   it('a held reader Settle (the booking already confirmed with £20 in price_paid): refused with the reader words; once finalised it goes through', async () => {
     await onTheOldSide('w18a settle finalised', async ({ call, stripe, db: runDb }) => {
@@ -474,7 +477,7 @@ describe("the staff app's thin wrappers, through the real routes", () => {
           await expect(setStatus({ params: { bookingId, status: 'confirmed' }, user: REPLAY_USER })).rejects.toThrow(new Error(STATUS_PAYMENT_NEEDED_MESSAGE))
         },
       },
-      oldSide
+      workerSide()
     )
   })
 
@@ -492,7 +495,7 @@ describe("the staff app's thin wrappers, through the real routes", () => {
           await expect(setStatus({ params: { bookingId, status: 'no-show' }, user: REPLAY_USER })).rejects.toThrow(new Error(READER_PAYMENT_OPEN_MESSAGE))
         },
       },
-      oldSide
+      workerSide()
     )
   })
 

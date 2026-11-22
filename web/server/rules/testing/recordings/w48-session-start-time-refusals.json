@@ -1,0 +1,185 @@
+{
+  "scenario": "w48-session-start-time-refusals",
+  "results": [
+    {
+      "updated": false,
+      "reason": "invalid_start_time",
+      "message": "Enter a valid date and time."
+    },
+    {
+      "updated": false,
+      "reason": "invalid_start_time",
+      "message": "Enter a valid date and time."
+    },
+    {
+      "updated": false,
+      "reason": "invalid_start_time",
+      "message": "Enter a valid date and time."
+    },
+    {
+      "updated": false,
+      "reason": "invalid_start_time",
+      "message": "Enter a valid date and time."
+    },
+    {
+      "updated": false,
+      "reason": "session_not_found"
+    },
+    {
+      "updated": false,
+      "reason": "slot_already_exists"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/sessions/10000000-0000-4000-8000-000000000004/start-time",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "startTime",
+              "details": {
+                "action": "session.start_time_set",
+                "reason": "invalid_start_time",
+                "message": "Enter a valid date and time."
+              },
+              "message": "Enter a valid date and time."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/sessions/10000000-0000-4000-8000-000000000004/start-time",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "startTime",
+              "details": {
+                "action": "session.start_time_set",
+                "reason": "invalid_start_time",
+                "message": "Enter a valid date and time."
+              },
+              "message": "Enter a valid date and time."
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/sessions/10000000-0000-4000-8000-000000000004/start-time",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "startTime",
+              "details": {
+                "action": "session.start_time_set",
+                "reason": "invalid_start_time",
+                "message": "Enter a valid date and time."
+              },
+              "message": "Enter a valid date and time."
+            },
+            "requestId": "gone#6"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#7",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/sessions/10000000-0000-4000-8000-000000000004/start-time",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "startTime",
+              "details": {
+                "action": "session.start_time_set",
+                "reason": "invalid_start_time",
+                "message": "Enter a valid date and time."
+              },
+              "message": "Enter a valid date and time."
+            },
+            "requestId": "gone#8"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#9",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/sessions/gone#10/start-time",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "session.start_time_set",
+                "reason": "session_not_found",
+                "message": "This session no longer exists."
+              },
+              "message": "This session no longer exists."
+            },
+            "requestId": "gone#11"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#12",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/sessions/10000000-0000-4000-8000-000000000004/start-time",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "session.start_time_set",
+                "reason": "slot_already_exists",
+                "message": "This service type already has a session at that time."
+              },
+              "message": "This service type already has a session at that time."
+            },
+            "requestId": "gone#13"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

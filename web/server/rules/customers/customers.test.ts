@@ -6,7 +6,8 @@ import { GET as listRoute, POST as createRoute } from '@/app/api/v1/staff/custom
 import { customerListRowSchema, customerMembershipRowSchema, customerSessionPassRowSchema } from '@/contracts'
 import type { Db } from '@/server/db'
 import { insert } from '@/server/rules/testing/database'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/replay/harness'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
 import { ID, scenarios, seed, W36_ID, whileFailing } from '@/server/rules/testing/replay/scenarios'
 import { createCustomer } from './create'
 import { CREATE_CUSTOMER_REASONS, CREATE_CUSTOMER_WORDS, CUSTOMER_EMAIL_UNIQUE_RULES } from './failure-messages'
@@ -58,7 +59,7 @@ async function seeded(work: (context: ScenarioContext) => Promise<void>, prepare
       },
       run: work,
     },
-    oldSide
+    workerSide()
   )
 }
 
@@ -504,7 +505,7 @@ describe('the detail (getCustomerDetail)', () => {
           expect(Number(mo['eventBookings']?.[0]?.['card_refunded_amount'])).toBe(0)
         },
       },
-      oldSide
+      workerSide()
     )
   })
 
@@ -593,7 +594,7 @@ describe('the detail (getCustomerDetail)', () => {
           expect(history).toHaveLength(2)
         },
       },
-      oldSide
+      workerSide()
     )
   })
 

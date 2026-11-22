@@ -1,0 +1,130 @@
+{
+  "scenario": "w48-product-fulfilment-set",
+  "results": [
+    {
+      "thrown": "Invalid fulfillment method: courier"
+    },
+    null,
+    {
+      "id": "10000000-0000-4000-8000-000000000007",
+      "fulfillment_method": "shipping"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/products/10000000-0000-4000-8000-000000000007/fulfilment",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "fulfillmentMethod",
+              "details": {
+                "action": "catalog.details_set",
+                "reason": "invalid_params",
+                "message": "Invalid fulfillment method: courier"
+              },
+              "message": "Invalid fulfillment method: courier"
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/products/gone#4/fulfilment",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "catalog.details_set",
+                "reason": "product_not_found",
+                "message": "Product not found"
+              },
+              "message": "Product not found"
+            },
+            "requestId": "gone#5"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#6",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/products/10000000-0000-4000-8000-000000000007/fulfilment",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "10000000-0000-4000-8000-000000000007",
+              "fulfillment_method": "shipping"
+            },
+            "requestId": "gone#7"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "catalog.details_set",
+          "entity_type": "product",
+          "entity_id": "10000000-0000-4000-8000-000000000007",
+          "request_id": "gone#7",
+          "details": {
+            "key": "gone#6",
+            "after": {
+              "id": "10000000-0000-4000-8000-000000000007",
+              "fulfillment_method": "shipping"
+            },
+            "before": {
+              "id": "10000000-0000-4000-8000-000000000007",
+              "fulfillment_method": "pickup"
+            }
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "products": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000007",
+          "fulfillment_method": [
+            "pickup",
+            "shipping"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

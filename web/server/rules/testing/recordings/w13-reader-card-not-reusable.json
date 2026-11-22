@@ -1,0 +1,315 @@
+{
+  "scenario": "w13-reader-card-not-reusable",
+  "results": [
+    {
+      "success": true,
+      "orderId": "gone#2",
+      "cardCharged": false,
+      "paymentMethodUsed": "reader",
+      "pendingReaderPayment": {
+        "orderId": "gone#2",
+        "paymentIntentId": "pi_fake_0001",
+        "clientSecret": "pi_fake_0001_secret",
+        "amount": 40
+      }
+    },
+    {
+      "finalised": false,
+      "orderId": "gone#2",
+      "reason": "card_not_reusable",
+      "message": "Saving the card for the membership failed: This card cannot be saved for future off-session charges — Stripe reports the captured payment method is not reusable (intent: pi_fake_0001, resolved payment method: pi_fake_0001_card_present). The customer's card has been refunded in full (payment pi_fake_0001) and the order was rolled back.",
+      "rolledBack": true
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "prices.retrieve",
+      "params": {
+        "id": "price_seed_monthly"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "paymentIntents.create",
+      "params": {
+        "amount": 4000,
+        "currency": "gbp",
+        "customer": "cus_seed",
+        "payment_method_types": [
+          "card_present"
+        ],
+        "setup_future_usage": "off_session",
+        "metadata": {
+          "supabase_customer_id": "10000000-0000-4000-8000-000000000005",
+          "order_id": "gone#2",
+          "flow": "checkout"
+        },
+        "description": "Paddock order gone#2"
+      },
+      "idempotencyKey": "gone#2:reader-intent"
+    },
+    {
+      "method": "paymentIntents.retrieve",
+      "params": {
+        "id": "pi_fake_0001"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "paymentIntents.retrieve",
+      "params": {
+        "id": "pi_fake_0001",
+        "expand": [
+          "latest_charge"
+        ]
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "refunds.create",
+      "params": {
+        "payment_intent": "pi_fake_0001",
+        "metadata": {
+          "order_id": "gone#2",
+          "refund_key": "gone#2:refund-reader",
+          "reason": "membership_not_set_up"
+        }
+      },
+      "idempotencyKey": "gone#2:refund-reader"
+    }
+  ],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/orders",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "status": "pending_reader",
+              "orderId": "gone#2",
+              "payment": {
+                "method": "reader",
+                "collected": 40,
+                "cardCharged": false,
+                "giftCardApplied": 0,
+                "storeCreditApplied": 0
+              },
+              "bookingId": null,
+              "giftCardId": null,
+              "giftCardCode": null,
+              "membershipId": null,
+              "sessionPassId": null,
+              "eventBookingId": null,
+              "pendingReaderPayment": {
+                "amount": 40,
+                "orderId": "gone#2",
+                "clientSecret": "pi_fake_0001_secret",
+                "paymentIntentId": "pi_fake_0001"
+              }
+            },
+            "requestId": "gone#3"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#4",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/orders/gone#2/finalise",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "reason": "card_not_reusable",
+              "message": "Saving the card for the membership failed: This card cannot be saved for future off-session charges — Stripe reports the captured payment method is not reusable (intent: pi_fake_0001, resolved payment method: pi_fake_0001_card_present). The customer's card has been refunded in full (payment pi_fake_0001) and the order was rolled back.",
+              "orderId": "gone#2",
+              "finalised": false,
+              "rolledBack": true
+            },
+            "requestId": "gone#5"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.create",
+          "entity_type": "order",
+          "entity_id": "gone#2",
+          "request_id": "gone#3",
+          "details": {
+            "promo": null,
+            "method": "reader",
+            "postage": null,
+            "giftCard": null,
+            "amountDue": 40,
+            "bookingId": null,
+            "confirmed": {
+              "toCollect": 40
+            },
+            "overrides": [],
+            "toCollect": 40,
+            "giftCardId": null,
+            "membership": {
+              "rowId": null,
+              "coupon": 40,
+              "planId": "10000000-0000-4000-8000-00000000000a",
+              "replaces": null,
+              "firstInvoice": 0,
+              "firstPayment": 40,
+              "billingFrequency": "monthly"
+            },
+            "orderTotal": 40,
+            "storeCredit": 0,
+            "addressSaved": false,
+            "awaitsReader": true,
+            "sessionPassId": null,
+            "eventBookingId": null
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "refund.watch",
+          "entity_type": "refund_watch",
+          "entity_id": "re_fake_0003",
+          "request_id": "gone#5",
+          "details": {
+            "on": "compensation",
+            "step": "refund-reader",
+            "lines": [],
+            "state": "watching",
+            "amount": 40,
+            "status": "succeeded",
+            "claimId": null,
+            "orderId": null,
+            "livemode": false,
+            "refundId": "re_fake_0003",
+            "subjectId": "gone#2",
+            "paymentIntentId": "pi_fake_0001"
+          }
+        },
+        {
+          "id": "audit_log#3",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.compensate",
+          "entity_type": "order",
+          "entity_id": "gone#2",
+          "request_id": "gone#5",
+          "details": {
+            "why": "The card couldn't be saved for the membership: This card cannot be saved for future off-session charges — Stripe reports the captured payment method is not reusable (intent: pi_fake_0001, resolved payment method: pi_fake_0001_card_present).",
+            "state": "done",
+            "refunded": [
+              {
+                "step": "refund-reader",
+                "amount": 4000,
+                "status": "succeeded",
+                "refundId": "re_fake_0003",
+                "paymentIntentId": "pi_fake_0001"
+              }
+            ],
+            "subscriptionId": null
+          }
+        },
+        {
+          "id": "audit_log#4",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.undo",
+          "entity_type": "order",
+          "entity_id": "gone#2",
+          "request_id": "gone#5",
+          "details": {
+            "why": "The card couldn't be saved for the membership: This card cannot be saved for future off-session charges — Stripe reports the captured payment method is not reusable (intent: pi_fake_0001, resolved payment method: pi_fake_0001_card_present).",
+            "parts": {
+              "event": null,
+              "stock": [],
+              "booking": null,
+              "store_credit": "0",
+              "addon_credits": [],
+              "passes_bought": [],
+              "gift_card_used": null,
+              "gift_card_bought": null,
+              "memberships_bought": []
+            },
+            "removed": {
+              "lines_removed": 1,
+              "orders_removed": 1,
+              "passes_removed": 0,
+              "bookings_removed": 0,
+              "events_given_back": 0,
+              "passes_given_back": 0,
+              "gift_cards_removed": 0,
+              "addon_lines_removed": 0,
+              "ledger_rows_removed": 0,
+              "memberships_removed": 0,
+              "sessions_given_back": 0,
+              "variants_given_back": 0,
+              "customers_given_back": 0,
+              "gift_cards_given_back": 0,
+              "event_bookings_removed": 0,
+              "gift_card_uses_removed": 0,
+              "memberships_given_back": 0,
+              "store_credit_rows_removed": 0
+            },
+            "snapshot": {
+              "flow": "checkout",
+              "method": "reader",
+              "channel": "staff",
+              "livemode": false,
+              "save_card": true,
+              "created_at": "<time>",
+              "membership": {
+                "price": 40,
+                "plan_id": "10000000-0000-4000-8000-00000000000a",
+                "plan_name": "Core",
+                "coupon_name": "Paid on card reader",
+                "coupon_amount": 40,
+                "first_invoice": 0,
+                "addons_included": 0,
+                "stripe_price_id": "price_seed_monthly",
+                "billing_frequency": "monthly",
+                "first_payment_amount": 40
+              },
+              "request_id": "gone#3",
+              "compensation": {
+                "why": "The card couldn't be saved for the membership: This card cannot be saved for future off-session charges — Stripe reports the captured payment method is not reusable (intent: pi_fake_0001, resolved payment method: pi_fake_0001_card_present).",
+                "started_at": "<time>"
+              },
+              "expected_amount": 40,
+              "payment_intent_id": "pi_fake_0001",
+              "stripe_customer_id": "cus_seed",
+              "save_address_to_customer": false
+            }
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -1,0 +1,148 @@
+{
+  "scenario": "w48-gift-card-type-custom-amounts-set-and-off",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-000000000019",
+      "custom_amount_enabled": true,
+      "custom_amount_min": "5.00",
+      "custom_amount_max": "250.00"
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000019",
+      "custom_amount_enabled": false,
+      "custom_amount_min": null,
+      "custom_amount_max": null
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/gift-card-types/10000000-0000-4000-8000-000000000019/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "10000000-0000-4000-8000-000000000019",
+              "stamp": "fields#<md5>",
+              "custom_amount_max": "250.00",
+              "custom_amount_min": "5.00",
+              "custom_amount_enabled": true
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/gift-card-types/10000000-0000-4000-8000-000000000019/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "10000000-0000-4000-8000-000000000019",
+              "stamp": "fields#<md5>",
+              "custom_amount_max": null,
+              "custom_amount_min": null,
+              "custom_amount_enabled": false
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "catalog.details_set",
+          "entity_type": "gift_card_type",
+          "entity_id": "10000000-0000-4000-8000-000000000019",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "id": "10000000-0000-4000-8000-000000000019",
+              "custom_amount_max": "250.00",
+              "custom_amount_min": "5.00",
+              "custom_amount_enabled": true
+            },
+            "before": {
+              "id": "10000000-0000-4000-8000-000000000019",
+              "custom_amount_max": "200.00",
+              "custom_amount_min": "10.00",
+              "custom_amount_enabled": true
+            }
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "catalog.details_set",
+          "entity_type": "gift_card_type",
+          "entity_id": "10000000-0000-4000-8000-000000000019",
+          "request_id": "gone#4",
+          "details": {
+            "key": "gone#3",
+            "after": {
+              "id": "10000000-0000-4000-8000-000000000019",
+              "custom_amount_max": null,
+              "custom_amount_min": null,
+              "custom_amount_enabled": false
+            },
+            "before": {
+              "id": "10000000-0000-4000-8000-000000000019",
+              "custom_amount_max": "250.00",
+              "custom_amount_min": "5.00",
+              "custom_amount_enabled": true
+            }
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "gift_card_types": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000019",
+          "custom_amount_enabled": [
+            true,
+            false
+          ],
+          "custom_amount_min": [
+            "10.00",
+            null
+          ],
+          "custom_amount_max": [
+            "200.00",
+            null
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

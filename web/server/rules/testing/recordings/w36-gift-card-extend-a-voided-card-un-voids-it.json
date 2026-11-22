@@ -1,0 +1,86 @@
+{
+  "scenario": "w36-gift-card-extend-a-voided-card-un-voids-it",
+  "results": [
+    {
+      "updated": true,
+      "giftCard": {
+        "id": "10000000-0000-4000-8000-000000000009",
+        "expiry_date": "2030-07-01",
+        "voided": false
+      }
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/gift-cards/10000000-0000-4000-8000-000000000009/extend",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "giftCard": {
+                "id": "10000000-0000-4000-8000-000000000009",
+                "voided": false,
+                "expiry_date": "2030-07-01"
+              }
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "gift_card.extended",
+          "entity_type": "gift_card",
+          "entity_id": "10000000-0000-4000-8000-000000000009",
+          "request_id": "gone#2",
+          "details": {
+            "months": 6,
+            "countedFrom": "expiry",
+            "expiryAfter": "2030-07-01",
+            "expiryBefore": "2030-01-01",
+            "voidedBefore": true
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "gift_cards": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000009",
+          "expiry_date": [
+            "2030-01-01",
+            "2030-07-01"
+          ],
+          "voided": [
+            true,
+            false
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

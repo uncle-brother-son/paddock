@@ -1,0 +1,144 @@
+{
+  "scenario": "w48-band-rules-set-leaves-a-band-set-by-hand",
+  "results": [
+    {
+      "saved": true,
+      "rebandedSessions": 0,
+      "rules": [
+        {
+          "id": "band_rules#1",
+          "band_id": "10000000-0000-4000-8000-000000000003",
+          "from_time": "00:00:00",
+          "to_time": "12:00:00"
+        },
+        {
+          "id": "band_rules#2",
+          "band_id": "10000000-0000-4000-8000-00000000000c",
+          "from_time": "12:00:00",
+          "to_time": "24:00:00"
+        }
+      ]
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/pricing/band-rules/6",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "rules": [
+                {
+                  "id": "band_rules#1",
+                  "band_id": "10000000-0000-4000-8000-000000000003",
+                  "to_time": "12:00:00",
+                  "from_time": "00:00:00"
+                },
+                {
+                  "id": "band_rules#2",
+                  "band_id": "10000000-0000-4000-8000-00000000000c",
+                  "to_time": "24:00:00",
+                  "from_time": "12:00:00"
+                }
+              ],
+              "saved": true,
+              "stamp": "band_rules#1@2026-11-10T09:00:00.050000Z#<md5>,band_rules#2@2026-11-10T09:00:00.050000Z#<md5>",
+              "rebandedSessions": 0
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "pricing.band_rules_set",
+          "entity_type": "band_rules_day",
+          "entity_id": "6",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": [
+              {
+                "id": "band_rules#1",
+                "band_id": "10000000-0000-4000-8000-000000000003",
+                "to_time": "12:00:00",
+                "from_time": "00:00:00"
+              },
+              {
+                "id": "band_rules#2",
+                "band_id": "10000000-0000-4000-8000-00000000000c",
+                "to_time": "24:00:00",
+                "from_time": "12:00:00"
+              }
+            ],
+            "before": [
+              {
+                "id": "10000000-0000-4000-8000-000000000b60",
+                "band_id": "10000000-0000-4000-8000-000000000003",
+                "to_time": "17:00:00",
+                "from_time": "00:00:00"
+              },
+              {
+                "id": "10000000-0000-4000-8000-000000000b61",
+                "band_id": "10000000-0000-4000-8000-00000000000c",
+                "to_time": "24:00:00",
+                "from_time": "17:00:00"
+              }
+            ],
+            "dayOfWeek": 6,
+            "rebandedSessions": 0
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "band_rules": {
+      "added": [
+        {
+          "id": "band_rules#1",
+          "band_id": "10000000-0000-4000-8000-000000000003",
+          "day_of_week": 6,
+          "from_time": "00:00:00",
+          "to_time": "12:00:00",
+          "created_at": "<set>",
+          "updated_at": "<set>"
+        },
+        {
+          "id": "band_rules#2",
+          "band_id": "10000000-0000-4000-8000-00000000000c",
+          "day_of_week": 6,
+          "from_time": "12:00:00",
+          "to_time": "24:00:00",
+          "created_at": "<set>",
+          "updated_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [
+        "10000000-0000-4000-8000-000000000b60",
+        "10000000-0000-4000-8000-000000000b61"
+      ],
+      "tied": 2
+    }
+  }
+}

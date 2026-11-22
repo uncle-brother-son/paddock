@@ -1,0 +1,149 @@
+{
+  "scenario": "w48-member-band-term-refusals",
+  "results": [
+    {
+      "thrown": "Membership level is required."
+    },
+    {
+      "thrown": "Discount percent must be between 0 and 100."
+    },
+    {
+      "thrown": "Discount percent must be between 0 and 100."
+    },
+    {
+      "thrown": "Discount percent must be between 0 and 100."
+    },
+    {
+      "thrown": "That band no longer exists. Reload the page and try again."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/pricing/member-band-terms",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "membershipLevel",
+              "details": {
+                "action": "pricing.member_term_set",
+                "reason": "level_required",
+                "message": "Membership level is required."
+              },
+              "message": "Membership level is required."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/pricing/member-band-terms",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "discountPercent",
+              "details": {
+                "action": "pricing.member_term_set",
+                "reason": "invalid_discount",
+                "message": "Discount percent must be between 0 and 100."
+              },
+              "message": "Discount percent must be between 0 and 100."
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/pricing/member-band-terms",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "discountPercent",
+              "details": {
+                "action": "pricing.member_term_set",
+                "reason": "invalid_discount",
+                "message": "Discount percent must be between 0 and 100."
+              },
+              "message": "Discount percent must be between 0 and 100."
+            },
+            "requestId": "gone#6"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#7",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/pricing/member-band-terms",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "discountPercent",
+              "details": {
+                "action": "pricing.member_term_set",
+                "reason": "invalid_discount",
+                "message": "Discount percent must be between 0 and 100."
+              },
+              "message": "Discount percent must be between 0 and 100."
+            },
+            "requestId": "gone#8"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#9",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/pricing/member-band-terms",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "pricing.member_term_set",
+                "reason": "band_not_found",
+                "message": "That band no longer exists. Reload the page and try again."
+              },
+              "message": "That band no longer exists. Reload the page and try again."
+            },
+            "requestId": "gone#10"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

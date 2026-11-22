@@ -1,0 +1,242 @@
+{
+  "scenario": "w36-undo-answer-lost-then-pressed-again",
+  "results": [
+    {
+      "updated": true,
+      "membership": {
+        "id": "10000000-0000-4000-8000-000000000010",
+        "cancel_effective_date": "2026-12-09",
+        "billing_frequency": "monthly"
+      },
+      "endDate": "2026-12-10",
+      "stripeUpdated": true
+    },
+    {
+      "updated": false,
+      "reason": "no_answer",
+      "message": "The change didn't get an answer, so the membership may or may not have changed. Press again here (it won't apply twice), or close this and check the membership's status first.",
+      "noAnswer": true
+    },
+    {
+      "updated": true,
+      "membership": {
+        "id": "10000000-0000-4000-8000-000000000010",
+        "billing_frequency": "monthly",
+        "cancel_effective_date": null
+      }
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "subscriptions.retrieve",
+      "params": {
+        "id": "sub_mo"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "subscriptions.update",
+      "params": {
+        "id": "sub_mo",
+        "cancel_at": 1796860800,
+        "proration_behavior": "none"
+      },
+      "idempotencyKey": "gone#5:cancel-at"
+    },
+    {
+      "method": "subscriptions.retrieve",
+      "params": {
+        "id": "sub_mo"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "subscriptions.update",
+      "params": {
+        "id": "sub_mo",
+        "cancel_at": "",
+        "proration_behavior": "none"
+      },
+      "idempotencyKey": "gone#6:cancel-at"
+    }
+  ],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/cancel",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "endDate": "2026-12-10",
+              "membership": {
+                "id": "10000000-0000-4000-8000-000000000010",
+                "billing_frequency": "monthly",
+                "cancel_effective_date": "2026-12-09"
+              },
+              "stripeUpdated": true
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/undo-cancel",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "membership": {
+                "id": "10000000-0000-4000-8000-000000000010",
+                "billing_frequency": "monthly",
+                "cancel_effective_date": null
+              }
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.cancel_scheduled",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#2",
+          "details": {
+            "stepId": "gone#5",
+            "channel": "staff",
+            "endDate": "2026-12-10",
+            "cancelAt": 1796860800,
+            "subscriptionId": "sub_mo",
+            "cancelEffectiveDate": {
+              "after": "2026-12-09",
+              "before": null
+            }
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.step_left",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#2",
+          "details": {
+            "kind": "cancel_at",
+            "want": {
+              "cancelAt": 1796860800
+            },
+            "state": "done",
+            "detail": "sent",
+            "stepId": "gone#5",
+            "subscriptionId": "sub_mo"
+          }
+        },
+        {
+          "id": "audit_log#3",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.step_left",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#2",
+          "details": {
+            "kind": "cancel_at",
+            "want": {
+              "cancelAt": 1796860800
+            },
+            "state": "left",
+            "stepId": "gone#5",
+            "subscriptionId": "sub_mo"
+          }
+        },
+        {
+          "id": "audit_log#4",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.cancel_undone",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#4",
+          "details": {
+            "stepId": "gone#6",
+            "channel": "staff",
+            "cancelAt": null,
+            "subscriptionId": "sub_mo",
+            "cancelEffectiveDate": {
+              "after": null,
+              "before": "2026-12-09"
+            }
+          }
+        },
+        {
+          "id": "audit_log#5",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.step_left",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#4",
+          "details": {
+            "kind": "cancel_at",
+            "want": {
+              "cancelAt": null
+            },
+            "state": "done",
+            "detail": "sent",
+            "stepId": "gone#6",
+            "subscriptionId": "sub_mo"
+          }
+        },
+        {
+          "id": "audit_log#6",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.step_left",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#4",
+          "details": {
+            "kind": "cancel_at",
+            "want": {
+              "cancelAt": null
+            },
+            "state": "left",
+            "stepId": "gone#6",
+            "subscriptionId": "sub_mo"
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 4
+    }
+  }
+}

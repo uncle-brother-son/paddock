@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { BasketQuoteInput, BasketQuoteOutput } from '@/contracts'
 import type { Db, Queryable, SqlParam } from '@/server/db'
 import { insert } from '@/server/rules/testing/database'
-import { startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
+import { startReplay, type ReplayEnvironment } from '@/server/rules/testing/sweep/run'
 import { ID, lastDayIs, PROMO, seed, seedCorePass, seedExhaustedMembership, seedOverlappingBooking } from '@/server/rules/testing/replay/scenarios'
 import { FakeStripe } from '@/server/stripe/fake'
 import {

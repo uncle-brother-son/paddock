@@ -1,0 +1,282 @@
+{
+  "scenario": "w48-gb18-a-code-edited-to-100-percent-and-back-leaves-no-trace",
+  "results": [
+    {
+      "updated": true,
+      "promo": {
+        "id": "10000000-0000-4000-8000-00000000001d",
+        "code": "ALLTEN",
+        "description": null,
+        "discount_type": "percentage",
+        "discount_value": "100",
+        "applies_to": [
+          "booking",
+          "addon",
+          "product",
+          "session_pass",
+          "membership",
+          "event"
+        ],
+        "applies_on_member_prices": false,
+        "expires_on": null,
+        "max_total_uses": null,
+        "one_use_per_customer": false,
+        "min_spend": null,
+        "restricted_customer_id": null,
+        "active": true,
+        "created_by": null,
+        "created_at": "<time>",
+        "updated_at": "<time>"
+      }
+    },
+    {
+      "updated": true,
+      "promo": {
+        "id": "10000000-0000-4000-8000-00000000001d",
+        "code": "ALLTEN",
+        "description": null,
+        "discount_type": "percentage",
+        "discount_value": "10",
+        "applies_to": [
+          "booking",
+          "addon",
+          "product",
+          "session_pass",
+          "membership",
+          "event"
+        ],
+        "applies_on_member_prices": false,
+        "expires_on": null,
+        "max_total_uses": null,
+        "one_use_per_customer": false,
+        "min_spend": null,
+        "restricted_customer_id": null,
+        "active": true,
+        "created_by": null,
+        "created_at": "<time>",
+        "updated_at": "<time>"
+      }
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/promo-codes/10000000-0000-4000-8000-00000000001d",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "promo": {
+                "id": "10000000-0000-4000-8000-00000000001d",
+                "code": "ALLTEN",
+                "active": true,
+                "min_spend": null,
+                "applies_to": [
+                  "booking",
+                  "addon",
+                  "product",
+                  "session_pass",
+                  "membership",
+                  "event"
+                ],
+                "created_at": "<time>",
+                "created_by": null,
+                "expires_on": null,
+                "updated_at": "<time>",
+                "description": null,
+                "discount_type": "percentage",
+                "discount_value": "100",
+                "max_total_uses": null,
+                "one_use_per_customer": false,
+                "restricted_customer_id": null,
+                "applies_on_member_prices": false
+              },
+              "stamp": "2026-11-10T09:00:00.050000Z#<md5>",
+              "updated": true
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/promo-codes/10000000-0000-4000-8000-00000000001d",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "promo": {
+                "id": "10000000-0000-4000-8000-00000000001d",
+                "code": "ALLTEN",
+                "active": true,
+                "min_spend": null,
+                "applies_to": [
+                  "booking",
+                  "addon",
+                  "product",
+                  "session_pass",
+                  "membership",
+                  "event"
+                ],
+                "created_at": "<time>",
+                "created_by": null,
+                "expires_on": null,
+                "updated_at": "<time>",
+                "description": null,
+                "discount_type": "percentage",
+                "discount_value": "10",
+                "max_total_uses": null,
+                "one_use_per_customer": false,
+                "restricted_customer_id": null,
+                "applies_on_member_prices": false
+              },
+              "stamp": "2026-11-10T09:00:00.100000Z#<md5>",
+              "updated": true
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "promo.updated",
+          "entity_type": "promo_code",
+          "entity_id": "10000000-0000-4000-8000-00000000001d",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "id": "10000000-0000-4000-8000-00000000001d",
+              "code": "ALLTEN",
+              "active": true,
+              "min_spend": null,
+              "applies_to": [
+                "booking",
+                "addon",
+                "product",
+                "session_pass",
+                "membership",
+                "event"
+              ],
+              "created_by": null,
+              "expires_on": null,
+              "description": null,
+              "discount_type": "percentage",
+              "discount_value": "100",
+              "max_total_uses": null,
+              "one_use_per_customer": false,
+              "restricted_customer_id": null,
+              "applies_on_member_prices": false
+            },
+            "before": {
+              "id": "10000000-0000-4000-8000-00000000001d",
+              "code": "ALLTEN",
+              "active": true,
+              "min_spend": null,
+              "applies_to": [
+                "booking",
+                "addon",
+                "product",
+                "session_pass",
+                "membership",
+                "event"
+              ],
+              "created_by": null,
+              "expires_on": null,
+              "description": null,
+              "discount_type": "percentage",
+              "discount_value": "10",
+              "max_total_uses": null,
+              "one_use_per_customer": false,
+              "restricted_customer_id": null,
+              "applies_on_member_prices": false
+            }
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "promo.updated",
+          "entity_type": "promo_code",
+          "entity_id": "10000000-0000-4000-8000-00000000001d",
+          "request_id": "gone#4",
+          "details": {
+            "key": "gone#3",
+            "after": {
+              "id": "10000000-0000-4000-8000-00000000001d",
+              "code": "ALLTEN",
+              "active": true,
+              "min_spend": null,
+              "applies_to": [
+                "booking",
+                "addon",
+                "product",
+                "session_pass",
+                "membership",
+                "event"
+              ],
+              "created_by": null,
+              "expires_on": null,
+              "description": null,
+              "discount_type": "percentage",
+              "discount_value": "10",
+              "max_total_uses": null,
+              "one_use_per_customer": false,
+              "restricted_customer_id": null,
+              "applies_on_member_prices": false
+            },
+            "before": {
+              "id": "10000000-0000-4000-8000-00000000001d",
+              "code": "ALLTEN",
+              "active": true,
+              "min_spend": null,
+              "applies_to": [
+                "booking",
+                "addon",
+                "product",
+                "session_pass",
+                "membership",
+                "event"
+              ],
+              "created_by": null,
+              "expires_on": null,
+              "description": null,
+              "discount_type": "percentage",
+              "discount_value": "100",
+              "max_total_uses": null,
+              "one_use_per_customer": false,
+              "restricted_customer_id": null,
+              "applies_on_member_prices": false
+            }
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -1,0 +1,97 @@
+{
+  "scenario": "w48-gb2-tier-price-old-stripe-price-archived-then-the-new-one-fails",
+  "results": [
+    {
+      "success": true,
+      "tier": {
+        "id": "10000000-0000-4000-8000-000000000020",
+        "service_type_id": "10000000-0000-4000-8000-00000000001b",
+        "min_people": 1,
+        "max_people": 10,
+        "price": "120.00",
+        "stripe_price_id": "price_tier_core",
+        "created_at": "<time>",
+        "updated_at": "<time>",
+        "band_id": "10000000-0000-4000-8000-000000000003"
+      }
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/tiers/10000000-0000-4000-8000-000000000020/price",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "tier": {
+                "id": "10000000-0000-4000-8000-000000000020",
+                "price": "120.00",
+                "band_id": "10000000-0000-4000-8000-000000000003",
+                "created_at": "<time>",
+                "max_people": 10,
+                "min_people": 1,
+                "updated_at": "<time>",
+                "service_type_id": "10000000-0000-4000-8000-00000000001b",
+                "stripe_price_id": "price_tier_core"
+              },
+              "success": true
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "catalog.price_set",
+          "entity_type": "price_tier",
+          "entity_id": "10000000-0000-4000-8000-000000000020",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "price": "120.00"
+            },
+            "before": {
+              "price": "100.00"
+            }
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "service_type_price_tiers": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000020",
+          "price": [
+            "100.00",
+            "120.00"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

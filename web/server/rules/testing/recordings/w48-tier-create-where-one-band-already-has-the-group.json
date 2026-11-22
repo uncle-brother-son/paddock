@@ -1,0 +1,69 @@
+{
+  "scenario": "w48-tier-create-where-one-band-already-has-the-group",
+  "results": [
+    {
+      "thrown": "That range overlaps the 1 to 10 people size group. Change that group first, or choose a range that doesn't overlap it."
+    },
+    {
+      "thrown": "That range overlaps the 1 to 10 people size group. Change that group first, or choose a range that doesn't overlap it."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/service-types/10000000-0000-4000-8000-00000000001b/tiers",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "field": "minPeople",
+              "details": {
+                "action": "catalog.tier_created",
+                "reason": "range_overlaps",
+                "message": "That range overlaps the 1 to 10 people size group. Change that group first, or choose a range that doesn't overlap it."
+              },
+              "message": "That range overlaps the 1 to 10 people size group. Change that group first, or choose a range that doesn't overlap it."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/service-types/10000000-0000-4000-8000-00000000001b/tiers",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "field": "minPeople",
+              "details": {
+                "action": "catalog.tier_created",
+                "reason": "range_overlaps",
+                "message": "That range overlaps the 1 to 10 people size group. Change that group first, or choose a range that doesn't overlap it."
+              },
+              "message": "That range overlaps the 1 to 10 people size group. Change that group first, or choose a range that doesn't overlap it."
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

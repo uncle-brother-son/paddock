@@ -1,0 +1,135 @@
+{
+  "scenario": "w48-session-band-reset-with-no-window-for-its-time",
+  "results": [
+    {
+      "confirmed": true,
+      "sessionsAffected": 1,
+      "bookingsAffected": 0
+    },
+    {
+      "reset": true,
+      "band": null
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/sessions/10000000-0000-4000-8000-000000000004/band",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "confirmed": true,
+              "bookingsAffected": 0,
+              "sessionsAffected": 1
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/sessions/10000000-0000-4000-8000-000000000004/band/reset",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "band": null,
+              "reset": true
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "session.band_set",
+          "entity_type": "session",
+          "entity_id": "10000000-0000-4000-8000-000000000004",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": [
+              {
+                "id": "10000000-0000-4000-8000-000000000004",
+                "band_id": "10000000-0000-4000-8000-00000000000c",
+                "band_overridden": true
+              }
+            ],
+            "bandId": "10000000-0000-4000-8000-00000000000c",
+            "before": [
+              {
+                "id": "10000000-0000-4000-8000-000000000004",
+                "band_id": "10000000-0000-4000-8000-000000000003",
+                "band_overridden": false
+              }
+            ],
+            "bookingsAffected": 0,
+            "sessionsAffected": 1
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "session.band_reset",
+          "entity_type": "session",
+          "entity_id": "10000000-0000-4000-8000-000000000004",
+          "request_id": "gone#4",
+          "details": {
+            "key": "gone#3",
+            "after": {
+              "id": "10000000-0000-4000-8000-000000000004",
+              "band_id": null,
+              "band_overridden": false
+            },
+            "before": {
+              "id": "10000000-0000-4000-8000-000000000004",
+              "band_id": "10000000-0000-4000-8000-00000000000c",
+              "band_overridden": true
+            }
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "sessions": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000004",
+          "band_id": [
+            "10000000-0000-4000-8000-000000000003",
+            null
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

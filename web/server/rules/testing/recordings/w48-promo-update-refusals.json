@@ -1,0 +1,178 @@
+{
+  "scenario": "w48-promo-update-refusals",
+  "results": [
+    {
+      "updated": false,
+      "reason": "not_found",
+      "message": "That promo code no longer exists."
+    },
+    {
+      "thrown": "The code must be 4–20 characters using only letters, numbers and dashes (stored upper-cased)."
+    },
+    {
+      "thrown": "A percentage discount cannot exceed 100%."
+    },
+    {
+      "thrown": "Choose at least one valid basket part this code applies to (booking, add-on, product, session pass, membership)."
+    },
+    {
+      "thrown": "The restricted customer does not exist."
+    },
+    {
+      "thrown": "A promo code \"FIVER\" already exists (codes are unique, case-insensitive)."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/promo-codes/gone#2",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "promo.updated",
+                "reason": "not_found",
+                "message": "That promo code no longer exists."
+              },
+              "message": "That promo code no longer exists."
+            },
+            "requestId": "gone#3"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#4",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/promo-codes/10000000-0000-4000-8000-00000000001d",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "code",
+              "details": {
+                "action": "promo.updated",
+                "reason": "invalid_code",
+                "message": "The code must be 4–20 characters using only letters, numbers and dashes (stored upper-cased)."
+              },
+              "message": "The code must be 4–20 characters using only letters, numbers and dashes (stored upper-cased)."
+            },
+            "requestId": "gone#5"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#6",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/promo-codes/10000000-0000-4000-8000-00000000001d",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "discountValue",
+              "details": {
+                "action": "promo.updated",
+                "reason": "percentage_over_100",
+                "message": "A percentage discount cannot exceed 100%."
+              },
+              "message": "A percentage discount cannot exceed 100%."
+            },
+            "requestId": "gone#7"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#8",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/promo-codes/10000000-0000-4000-8000-00000000001d",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "appliesTo",
+              "details": {
+                "action": "promo.updated",
+                "reason": "invalid_applies_to",
+                "message": "Choose at least one valid basket part this code applies to (booking, add-on, product, session pass, membership)."
+              },
+              "message": "Choose at least one valid basket part this code applies to (booking, add-on, product, session pass, membership)."
+            },
+            "requestId": "gone#9"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#10",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/promo-codes/10000000-0000-4000-8000-00000000001d",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "restrictedCustomerId",
+              "details": {
+                "action": "promo.updated",
+                "reason": "restricted_customer_not_found",
+                "message": "The restricted customer does not exist."
+              },
+              "message": "The restricted customer does not exist."
+            },
+            "requestId": "gone#11"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#12",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/promo-codes/10000000-0000-4000-8000-00000000001d",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "field": "code",
+              "details": {
+                "action": "promo.updated",
+                "reason": "duplicate_code",
+                "message": "A promo code \"FIVER\" already exists (codes are unique, case-insensitive)."
+              },
+              "message": "A promo code \"FIVER\" already exists (codes are unique, case-insensitive)."
+            },
+            "requestId": "gone#13"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -1,0 +1,204 @@
+{
+  "scenario": "w36-create-customer-refused-missing-or-bad-fields",
+  "results": [
+    {
+      "thrown": "First name is required"
+    },
+    {
+      "thrown": "Last name is required"
+    },
+    {
+      "thrown": "A valid email address is required"
+    },
+    {
+      "thrown": "A valid email address is required"
+    },
+    {
+      "thrown": "A valid date of birth is required"
+    },
+    {
+      "thrown": "A valid date of birth is required"
+    },
+    {
+      "thrown": "Date of birth cannot be in the future"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/customers",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "firstName",
+              "details": {
+                "action": "create_customer",
+                "reason": "first_name_required",
+                "message": "First name is required"
+              },
+              "message": "First name is required"
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/customers",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "lastName",
+              "details": {
+                "action": "create_customer",
+                "reason": "last_name_required",
+                "message": "Last name is required"
+              },
+              "message": "Last name is required"
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/customers",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "email",
+              "details": {
+                "action": "create_customer",
+                "reason": "email_invalid",
+                "message": "A valid email address is required"
+              },
+              "message": "A valid email address is required"
+            },
+            "requestId": "gone#6"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#7",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/customers",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "email",
+              "details": {
+                "action": "create_customer",
+                "reason": "email_invalid",
+                "message": "A valid email address is required"
+              },
+              "message": "A valid email address is required"
+            },
+            "requestId": "gone#8"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#9",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/customers",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "dateOfBirth",
+              "details": {
+                "action": "create_customer",
+                "reason": "date_of_birth_invalid",
+                "message": "A valid date of birth is required"
+              },
+              "message": "A valid date of birth is required"
+            },
+            "requestId": "gone#10"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#11",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/customers",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "dateOfBirth",
+              "details": {
+                "action": "create_customer",
+                "reason": "date_of_birth_invalid",
+                "message": "A valid date of birth is required"
+              },
+              "message": "A valid date of birth is required"
+            },
+            "requestId": "gone#12"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#13",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/customers",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "dateOfBirth",
+              "details": {
+                "action": "create_customer",
+                "reason": "date_of_birth_in_future",
+                "message": "Date of birth cannot be in the future"
+              },
+              "message": "Date of birth cannot be in the future"
+            },
+            "requestId": "gone#14"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

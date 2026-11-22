@@ -1,0 +1,65 @@
+{
+  "scenario": "w48-staff-role-who-may",
+  "results": [
+    {
+      "thrown": "Admins only — this action requires the admin role."
+    },
+    {
+      "thrown": "This staff account is inactive. Ask an admin to reactivate it."
+    },
+    {
+      "thrown": "No staff record matches the logged-in user's email (jo@example.com). Ask an admin to add you as staff before performing this action."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/staff/10000000-0000-4000-8000-000000000a03/role",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "FORBIDDEN",
+              "details": {
+                "action": "staff.role_set",
+                "reason": "admins_only",
+                "message": "Admins only — this action requires the admin role."
+              },
+              "message": "Admins only — this action requires the admin role."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 403,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "staff": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "role": [
+            "admin",
+            "manager"
+          ],
+          "email": [
+            "jo@example.com",
+            "someone.else@example.com"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

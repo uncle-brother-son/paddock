@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Db } from '@/server/db'
-import { replay, startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
+import { replay, startReplay, type ReplayEnvironment } from '@/server/rules/testing/sweep/run'
 import { ID, seed, seedExhaustedMembership } from '@/server/rules/testing/replay/scenarios'
 import type { FakeStripe } from '@/server/stripe/fake'
 import { saveCustomerCard } from './terminal'

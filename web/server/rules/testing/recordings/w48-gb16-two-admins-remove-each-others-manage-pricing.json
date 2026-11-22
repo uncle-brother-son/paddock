@@ -1,0 +1,55 @@
+{
+  "scenario": "w48-gb16-two-admins-remove-each-others-manage-pricing",
+  "results": [
+    {
+      "thrown": "Cannot remove pricing permission: this is the last staff member with can_manage_pricing enabled. Grant it to another staff member first."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/staff/10000000-0000-4000-8000-000000000a02/permissions",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "staff.permission_set",
+                "reason": "last_pricing_holder",
+                "message": "Cannot remove pricing permission: this is the last staff member with can_manage_pricing enabled. Grant it to another staff member first."
+              },
+              "message": "Cannot remove pricing permission: this is the last staff member with can_manage_pricing enabled. Grant it to another staff member first."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "staff": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "can_manage_pricing": [
+            true,
+            false
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

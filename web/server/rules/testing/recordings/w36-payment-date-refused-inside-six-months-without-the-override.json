@@ -1,0 +1,115 @@
+{
+  "scenario": "w36-payment-date-refused-inside-six-months-without-the-override",
+  "results": [
+    {
+      "membershipId": "10000000-0000-4000-8000-000000000010",
+      "customerId": "10000000-0000-4000-8000-00000000000f",
+      "planId": "10000000-0000-4000-8000-00000000000a",
+      "stripeSubscriptionId": "sub_mo",
+      "refusal": null,
+      "needsOverride": true,
+      "lastChangedAt": "<time>",
+      "currentRenewalDate": "2026-12-10",
+      "earliestDate": "2026-12-11",
+      "latestDate": "2027-01-09",
+      "daysInPeriod": 31,
+      "monthlyPrice": 40,
+      "cardLast4": "4444",
+      "cardBrand": "visa",
+      "newRenewalDate": "2026-12-27",
+      "extraDays": 17,
+      "amount": 21.94
+    },
+    {
+      "changed": false,
+      "message": "The payment date was changed in the last 6 months. Tick Override and give a reason to change it again."
+    },
+    {
+      "changed": false,
+      "message": "The payment date was changed in the last 6 months. Tick Override and give a reason to change it again."
+    },
+    {
+      "changed": false,
+      "message": "The payment date was changed in the last 6 months. Tick Override and give a reason to change it again."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/payment-date",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "payment_date",
+                "reason": "override_needed",
+                "message": "The payment date was changed in the last 6 months. Tick Override and give a reason to change it again."
+              },
+              "message": "The payment date was changed in the last 6 months. Tick Override and give a reason to change it again."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/payment-date",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "payment_date",
+                "reason": "override_needed",
+                "message": "The payment date was changed in the last 6 months. Tick Override and give a reason to change it again."
+              },
+              "message": "The payment date was changed in the last 6 months. Tick Override and give a reason to change it again."
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/payment-date",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "payment_date",
+                "reason": "override_needed",
+                "message": "The payment date was changed in the last 6 months. Tick Override and give a reason to change it again."
+              },
+              "message": "The payment date was changed in the last 6 months. Tick Override and give a reason to change it again."
+            },
+            "requestId": "gone#6"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -1,0 +1,112 @@
+{
+  "scenario": "w48-variant-details-set",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-000000000008",
+      "size": "Small",
+      "sku": "SOAP-S"
+    },
+    null
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/variants/10000000-0000-4000-8000-000000000008/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "10000000-0000-4000-8000-000000000008",
+              "sku": "SOAP-S",
+              "size": "Small",
+              "stamp": "fields#<md5>"
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/variants/gone#4/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "catalog.details_set",
+                "reason": "variant_not_found",
+                "message": "Variant not found"
+              },
+              "message": "Variant not found"
+            },
+            "requestId": "gone#5"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "catalog.details_set",
+          "entity_type": "product_variant",
+          "entity_id": "10000000-0000-4000-8000-000000000008",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "id": "10000000-0000-4000-8000-000000000008",
+              "sku": "SOAP-S",
+              "size": "Small"
+            },
+            "before": {
+              "id": "10000000-0000-4000-8000-000000000008",
+              "sku": "SOAP-1",
+              "size": null
+            }
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "product_variants": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000008",
+          "size": [
+            null,
+            "Small"
+          ],
+          "sku": [
+            "SOAP-1",
+            "SOAP-S"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

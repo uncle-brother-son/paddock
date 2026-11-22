@@ -8,10 +8,12 @@ import { DbTimeoutError, type Db, type Tx } from '@/server/db'
 import { reconcile } from '@/server/rules/orders/reconcile'
 import { stuckList } from '@/server/rules/orders/stuck-list'
 import { MEMBERSHIP_REFUND_WORDS, membershipUsedWords, ORDER_REFUND_NEW_WORDS as NEW_WORDS, ORDER_REFUND_WORDS as WORDS } from '@/server/rules/refunds/failure-messages'
-import { withSwitch } from '@/server/rules/testing/replay/booking-side'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
-import { ORDER_REFUND_KINDS_ON } from '@/server/rules/testing/replay/order-refund-side'
-import { orderInput, postOrder, postReaderStep, withQuotedCardFigure, type OrderAnswer } from '@/server/rules/testing/replay/order-side'
+import { withSwitch } from '@/server/rules/testing/sweep/booking-presses'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
+import { asTheOldCreateOrderRecordedIt } from '@/server/rules/testing/sweep/old-states'
+import { ORDER_REFUND_KINDS_ON } from '@/server/rules/testing/sweep/order-refund-presses'
+import { orderInput, postOrder, postReaderStep, withQuotedCardFigure, type OrderAnswer } from '@/server/rules/testing/sweep/order-presses'
 import { ID, laterPublicSession, paidSeat, sam, seed } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
@@ -427,6 +429,8 @@ describe('the membership line (brief W29 items 1, 2 and 4)', () => {
           try {
             const made = (await call('createOrder', { customerId: ID.customer, ...monthly, membershipIdempotencyKey: 'w29-old-shape', products: [soap], payment: card })) as { success: boolean; orderId: string }
             expect(made.success).toBe(true)
+            // W64: placed through the Worker, which names the membership's own payment; the order as the old createOrder recorded it.
+            await asTheOldCreateOrderRecordedIt(db, made.orderId)
             const [membershipLine] = await linesOf(made.orderId, 'membership')
             expect((await orderRow(made.orderId))?.own).toBeNull()
             const shown = await figures(made.orderId)
@@ -448,7 +452,7 @@ describe('the membership line (brief W29 items 1, 2 and 4)', () => {
           }
         },
       },
-      oldSide
+      workerSide()
     )
   })
 

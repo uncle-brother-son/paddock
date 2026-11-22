@@ -23,9 +23,10 @@ import {
   ORDER_REFUND_WORDS as WORDS,
   REFUND_PATH_OFF_MESSAGE,
 } from '@/server/rules/refunds/failure-messages'
-import { BOOKING_KINDS_ON, throughStaffApp, withSwitch } from '@/server/rules/testing/replay/booking-side'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/replay/harness'
-import { ORDER_REFUND_KINDS_ON } from '@/server/rules/testing/replay/order-refund-side'
+import { BOOKING_KINDS_ON, throughStaffApp, withSwitch } from '@/server/rules/testing/sweep/booking-presses'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
+import { ORDER_REFUND_KINDS_ON } from '@/server/rules/testing/sweep/order-refund-presses'
 import { ID, laterPublicSession, paidSeat, seed } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
@@ -98,7 +99,7 @@ async function onAnOrder(order: Record<string, unknown>, work: (context: Context
         }
       },
     },
-    oldSide
+    workerSide()
   )
 }
 
@@ -293,7 +294,7 @@ describe('refusals the old function kept, and the ones W28 adds', () => {
           }
         },
       },
-      oldSide
+      workerSide()
     )
   })
 

@@ -1,11 +1,11 @@
 import { vi } from 'vitest'
 import type { Db } from '@/server/db'
 import type { FakeStripe } from '@/server/stripe/fake'
-import { throughStaffApp, withSwitch } from './booking-side'
+import { withSwitch } from './booking-side'
 import { withCanonicalGoneNumbers, type Recording, type Row } from './compare'
 import { oldSide, type ReplaySide } from './harness'
-import { MEMBERSHIP_KINDS_ON } from './membership-side'
 import { replayStripe } from './stripe-binding'
+import { PAYMENT_DATE_KINDS_ON, W41_ACTIONS, paymentDatesAsTheDialogPresses } from '../sweep/payment-date-presses'
 
 /*
  * W41 (F-plan 4.12 item 3; brief W41 item 8): the payment date change's side of the replay, beside membership-side.ts
@@ -16,66 +16,8 @@ import { replayStripe } from './stripe-binding'
  * fake (stripe-binding.ts), and sets STAFF_API_KEY, as booking-side.ts's users do.
  */
 
-/** The old actions this side gives to the Worker. */
-export const W41_ACTIONS: ReadonlySet<string> = new Set(['changeMembershipPaymentDate', 'getMembershipPaymentDateQuote'])
-
-type Params = Record<string, unknown> | null | undefined
-
-/**
- * The press as ChangePaymentDateDialog makes it. The dialog always shows the figure for the picked date before the
- * button can be pressed, and sends that figure (Q18): so a press sends the amount of the last quote this run made for
- * that membership and date, and where a recorded scenario pressed without asking for one, the dialog's own read is
- * made first (it is a read, and is not one of the scenario's recorded answers). A quote with no figure (a refusal, a
- * date outside the window) sends none, as nothing was shown. Each press has a key; a press that got no answer keeps it
- * for the same press made again in the same dialog; any other answer starts a new one.
- */
-export function paymentDatesAsTheDialogPresses(): (db: Db, action: string, params: unknown) => Promise<unknown> {
-  const heldKeys = new Map<string, string>()
-  const shown = new Map<string, number | undefined>()
-  const dialogOf = (params: Params): string => `${String(params?.['membershipId'])}|${String(params?.['newRenewalDate'])}`
-  return async (db, action, params) => {
-    const given = params as Params
-    if (action === 'getMembershipPaymentDateQuote') {
-      let quote: { newRenewalDate?: string; amount?: number } | null
-      try {
-        quote = (await throughStaffApp(action)(db, params)) as { newRenewalDate?: string; amount?: number } | null
-      } catch (err) {
-        // The recorded scenarios read the quote with `call`, which stops at the first throw. A read the Worker now
-        // refuses (an inactive account, FB16) answers `{ thrown }` instead, so the scenario runs on to its press.
-        return { thrown: err instanceof Error ? err.message : String(err) }
-      }
-      if (given?.['newRenewalDate'] !== undefined) shown.set(dialogOf(given), quote?.amount)
-      return quote
-    }
-    if (action !== 'changeMembershipPaymentDate') return throughStaffApp(action)(db, params)
-    const dialog = dialogOf(given)
-    if (!shown.has(dialog) && given?.['membershipId'] && given['newRenewalDate']) {
-      const quote = (await throughStaffApp('getMembershipPaymentDateQuote')(db, { membershipId: given['membershipId'], newRenewalDate: given['newRenewalDate'] }).catch(() => null)) as { amount?: number } | null
-      shown.set(dialog, quote?.amount)
-    }
-    const confirmedAmount = shown.get(dialog)
-    const idempotencyKey = heldKeys.get(dialog) ?? crypto.randomUUID()
-    const answer = (await throughStaffApp(action)(db, { ...(given as object), ...(confirmedAmount !== undefined ? { confirmedAmount } : {}), idempotencyKey })) as { noAnswer?: boolean } | null
-    if (answer?.noAnswer) heldKeys.set(dialog, idempotencyKey)
-    else heldKeys.delete(dialog)
-    return asTheOldShape(answer)
-  }
-}
-
-/**
- * The press's answer mapped back to the old result's shape (F-plan 4.12 item 3): the old result had no `reason`, and
- * the dialog shows the words. What each refusal's reason is, is held by memberships/payment-date.test.ts. The fields
- * that change what staff see or may do (`held`, `amountNow`, `noAnswer`) stay, and are named differences.
- */
-function asTheOldShape(answer: unknown): unknown {
-  if (answer === null || typeof answer !== 'object' || !('reason' in answer)) return answer
-  const rest: Record<string, unknown> = { ...(answer as Record<string, unknown>) }
-  delete rest['reason']
-  return rest
-}
-
-/** ORDER_SWITCH as it will be live once the lead adds `payment_date_changes` (W41a: the payment date change's own kind). */
-export const PAYMENT_DATE_KINDS_ON = `${MEMBERSHIP_KINDS_ON},payment_date_changes`
+// W64: the presses moved to the sweep folder (H-plan 3.3 step 3); re-exported for the old replay's files.
+export * from '../sweep/payment-date-presses'
 
 export interface PaymentDateSideOptions {
   /** Changes an answer after the Worker gives it: how a test plants a deliberate difference. */

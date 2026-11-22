@@ -7,7 +7,8 @@ import { POST as herdRoute } from '@/app/api/v1/staff/memberships/[membershipId]
 import type { Db } from '@/server/db'
 import { ISSUE_REFUNDS_NEEDED_MESSAGE } from '@/server/rules/bookings/failure-messages'
 import { insert } from '@/server/rules/testing/database'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
 import { ID, seed, W36_ID, whileFailing } from '@/server/rules/testing/replay/scenarios'
 import { HERD_RULE_SQL } from './credits'
 import { HERD_NOT_FOUND_MESSAGE, MEMBERSHIP_CREDIT_DIALOG_WORDS, MEMBERSHIP_CREDIT_NEW_WORDS, MEMBERSHIP_CREDIT_WORDS } from './failure-messages'
@@ -53,7 +54,7 @@ async function seeded(work: () => Promise<void>, prepare?: (seedDb: Db) => Promi
       },
       run: work,
     },
-    oldSide
+    workerSide()
   )
 }
 

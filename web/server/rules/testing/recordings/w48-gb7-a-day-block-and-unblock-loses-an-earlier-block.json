@@ -1,0 +1,299 @@
+{
+  "scenario": "w48-gb7-a-day-block-and-unblock-loses-an-earlier-block",
+  "results": [
+    {
+      "thrown": "This session isn't blocked, so there is nothing to unblock."
+    },
+    {
+      "blocked": true,
+      "conflict": false,
+      "conflictingBookings": [],
+      "blockedCount": 1
+    },
+    {
+      "sessions": [
+        {
+          "id": "10000000-0000-4000-8000-000000000004",
+          "service_type_id": "10000000-0000-4000-8000-000000000002",
+          "service_type_name": "Sauna",
+          "booking_type": "public",
+          "start_time": "2026-11-12T10:00:00.000Z",
+          "end_time": "2026-11-12T11:00:00.000Z",
+          "capacity": 10,
+          "total_booked": 0,
+          "status": "blocked",
+          "blocked_reason": "Staff day",
+          "blocked_by": "10000000-0000-4000-8000-000000000001",
+          "started": false,
+          "band_id": "10000000-0000-4000-8000-000000000003",
+          "band_code": "core",
+          "band_name": "Core",
+          "band_price": "20.00",
+          "band_overridden": false,
+          "confirmed_booking_count": 0
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000a31",
+          "service_type_id": "10000000-0000-4000-8000-000000000002",
+          "service_type_name": "Sauna",
+          "booking_type": "public",
+          "start_time": "2026-11-12T15:00:00.000Z",
+          "end_time": "2026-11-12T16:00:00.000Z",
+          "capacity": 10,
+          "total_booked": 0,
+          "status": "blocked",
+          "blocked_reason": "Boiler repair",
+          "blocked_by": "10000000-0000-4000-8000-000000000a01",
+          "started": false,
+          "band_id": "10000000-0000-4000-8000-000000000003",
+          "band_code": "core",
+          "band_name": "Core",
+          "band_price": "20.00",
+          "band_overridden": false,
+          "confirmed_booking_count": 0
+        }
+      ],
+      "madeUpTo": null,
+      "closedDates": [
+        {
+          "date": "2026-11-12",
+          "reason": "Staff day"
+        }
+      ]
+    },
+    {
+      "confirmed": true,
+      "blockedSessions": 1,
+      "blockedBefore": 1,
+      "unblocked": 1,
+      "closedDateRemoved": true
+    },
+    {
+      "sessions": [
+        {
+          "id": "10000000-0000-4000-8000-000000000004",
+          "service_type_id": "10000000-0000-4000-8000-000000000002",
+          "service_type_name": "Sauna",
+          "booking_type": "public",
+          "start_time": "2026-11-12T10:00:00.000Z",
+          "end_time": "2026-11-12T11:00:00.000Z",
+          "capacity": 10,
+          "total_booked": 0,
+          "status": "open",
+          "blocked_reason": null,
+          "blocked_by": null,
+          "started": false,
+          "band_id": "10000000-0000-4000-8000-000000000003",
+          "band_code": "core",
+          "band_name": "Core",
+          "band_price": "20.00",
+          "band_overridden": false,
+          "confirmed_booking_count": 0
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000a31",
+          "service_type_id": "10000000-0000-4000-8000-000000000002",
+          "service_type_name": "Sauna",
+          "booking_type": "public",
+          "start_time": "2026-11-12T15:00:00.000Z",
+          "end_time": "2026-11-12T16:00:00.000Z",
+          "capacity": 10,
+          "total_booked": 0,
+          "status": "blocked",
+          "blocked_reason": "Boiler repair",
+          "blocked_by": "10000000-0000-4000-8000-000000000a01",
+          "started": false,
+          "band_id": "10000000-0000-4000-8000-000000000003",
+          "band_code": "core",
+          "band_name": "Core",
+          "band_price": "20.00",
+          "band_overridden": false,
+          "confirmed_booking_count": 0
+        }
+      ],
+      "madeUpTo": null,
+      "closedDates": []
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/sessions/10000000-0000-4000-8000-000000000004/unblock",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "session.unblocked",
+                "reason": "not_blocked",
+                "message": "This session isn't blocked, so there is nothing to unblock."
+              },
+              "message": "This session isn't blocked, so there is nothing to unblock."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/sessions/days/2026-11-12/block",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "blocked": true,
+              "conflict": false,
+              "closedDate": true,
+              "blockedCount": 1,
+              "alreadyBlocked": 1,
+              "conflictingBookings": []
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/sessions/days/2026-11-12/unblock",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "confirmed": true,
+              "unblocked": 1,
+              "blockedBefore": 1,
+              "blockedSessions": 1,
+              "closedDateRemoved": true
+            },
+            "requestId": "gone#6"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "session.blocked",
+          "entity_type": "session_day",
+          "entity_id": "2026-11-12",
+          "request_id": "gone#4",
+          "details": {
+            "key": "gone#3",
+            "date": "2026-11-12",
+            "after": [
+              {
+                "id": "10000000-0000-4000-8000-000000000004",
+                "status": "blocked",
+                "blocked_by": "10000000-0000-4000-8000-000000000001",
+                "blocked_reason": "Staff day"
+              },
+              {
+                "id": "10000000-0000-4000-8000-000000000a31",
+                "status": "blocked",
+                "blocked_by": "10000000-0000-4000-8000-000000000a01",
+                "blocked_reason": "Boiler repair"
+              }
+            ],
+            "before": [
+              {
+                "id": "10000000-0000-4000-8000-000000000004",
+                "status": "open",
+                "blocked_by": null,
+                "blocked_reason": null
+              },
+              {
+                "id": "10000000-0000-4000-8000-000000000a31",
+                "status": "blocked",
+                "blocked_by": "10000000-0000-4000-8000-000000000a01",
+                "blocked_reason": "Boiler repair"
+              }
+            ],
+            "lockedAt": "<time>",
+            "closedDate": true,
+            "sessionIds": [
+              "10000000-0000-4000-8000-000000000004"
+            ],
+            "blockedCount": 1,
+            "alreadyBlocked": 1
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "session.unblocked",
+          "entity_type": "session_day",
+          "entity_id": "2026-11-12",
+          "request_id": "gone#6",
+          "details": {
+            "key": "gone#5",
+            "date": "2026-11-12",
+            "after": [
+              {
+                "id": "10000000-0000-4000-8000-000000000004",
+                "status": "open",
+                "blocked_by": null,
+                "blocked_reason": null
+              },
+              {
+                "id": "10000000-0000-4000-8000-000000000a31",
+                "status": "blocked",
+                "blocked_by": "10000000-0000-4000-8000-000000000a01",
+                "blocked_reason": "Boiler repair"
+              }
+            ],
+            "before": [
+              {
+                "id": "10000000-0000-4000-8000-000000000004",
+                "status": "blocked",
+                "blocked_by": "10000000-0000-4000-8000-000000000001",
+                "blocked_reason": "Staff day"
+              },
+              {
+                "id": "10000000-0000-4000-8000-000000000a31",
+                "status": "blocked",
+                "blocked_by": "10000000-0000-4000-8000-000000000a01",
+                "blocked_reason": "Boiler repair"
+              }
+            ],
+            "unblocked": 1,
+            "sessionIds": [
+              "10000000-0000-4000-8000-000000000004"
+            ],
+            "leftBlocked": 1,
+            "closedReason": "Staff day",
+            "closedDateRemoved": true
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

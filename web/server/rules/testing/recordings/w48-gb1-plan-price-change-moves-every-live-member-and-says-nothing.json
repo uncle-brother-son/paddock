@@ -1,0 +1,382 @@
+{
+  "scenario": "w48-gb1-plan-price-change-moves-every-live-member-and-says-nothing",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-00000000000a",
+      "sanity_plan_id": null,
+      "name": "Core",
+      "thumbnail_url": null,
+      "sessions_included": 4,
+      "addons_included": 0,
+      "stripe_product_id": "prod_seed",
+      "stripe_price_id": "price_fake_0004",
+      "active": true,
+      "created_at": "<time>",
+      "updated_at": "<time>",
+      "price_monthly": "45.00",
+      "price_yearly": "400.00",
+      "level": "core",
+      "is_unlimited": false,
+      "stripe_price_id_yearly": "price_seed_yearly"
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "prices.create",
+      "params": {
+        "product": "prod_seed",
+        "unit_amount": 4500,
+        "currency": "gbp",
+        "recurring": {
+          "interval": "month"
+        },
+        "metadata": {
+          "plan_id": "10000000-0000-4000-8000-00000000000a",
+          "change_id": "gone#2",
+          "frequency": "monthly"
+        }
+      },
+      "idempotencyKey": "gone#2:monthly"
+    },
+    {
+      "method": "subscriptions.retrieve",
+      "params": {
+        "id": "sub_mo"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "subscriptions.update",
+      "params": {
+        "id": "sub_mo",
+        "items": [
+          {
+            "id": "si_sub_mo",
+            "price": "price_fake_0004"
+          }
+        ],
+        "proration_behavior": "none"
+      },
+      "idempotencyKey": "gone#4:price"
+    },
+    {
+      "method": "subscriptions.retrieve",
+      "params": {
+        "id": "sub_pat"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "subscriptions.update",
+      "params": {
+        "id": "sub_pat",
+        "items": [
+          {
+            "id": "si_sub_pat",
+            "price": "price_fake_0004"
+          }
+        ],
+        "proration_behavior": "none"
+      },
+      "idempotencyKey": "gone#5:price"
+    }
+  ],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/membership-plans/10000000-0000-4000-8000-00000000000a/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "plan": {
+                "id": "10000000-0000-4000-8000-00000000000a",
+                "name": "Core",
+                "level": "core",
+                "active": true,
+                "created_at": "<time>",
+                "updated_at": "<time>",
+                "is_unlimited": false,
+                "price_yearly": "400.00",
+                "price_monthly": "45.00",
+                "thumbnail_url": null,
+                "sanity_plan_id": null,
+                "addons_included": 0,
+                "stripe_price_id": "price_fake_0004",
+                "sessions_included": 4,
+                "stripe_product_id": "prod_seed",
+                "stripe_price_id_yearly": "price_seed_yearly"
+              },
+              "stamp": "fields#<md5>",
+              "priceChange": {
+                "moved": 2,
+                "state": "done",
+                "toMove": 0,
+                "message": "2 members on this plan will pay £45.00 a month from their next renewal. Price changed. 2 moved, 0 still to move.",
+                "changeId": "gone#2",
+                "membersToMove": 2
+              }
+            },
+            "requestId": "gone#3"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.price_moved",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#3",
+          "details": {
+            "planId": "10000000-0000-4000-8000-00000000000a",
+            "stepId": "gone#4",
+            "changeId": "gone#2",
+            "frequency": "monthly",
+            "toPriceId": "price_fake_0004",
+            "fromPriceId": "price_seed_monthly",
+            "subscriptionId": "sub_mo"
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.step_left",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#3",
+          "details": {
+            "kind": "price",
+            "want": {
+              "price": "price_fake_0004",
+              "interval": "month"
+            },
+            "state": "done",
+            "detail": "sent",
+            "stepId": "gone#4",
+            "subscriptionId": "sub_mo"
+          }
+        },
+        {
+          "id": "audit_log#3",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.step_left",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#3",
+          "details": {
+            "kind": "price",
+            "want": {
+              "price": "price_fake_0004",
+              "interval": "month"
+            },
+            "state": "left",
+            "planId": "10000000-0000-4000-8000-00000000000a",
+            "stepId": "gone#4",
+            "changeId": "gone#2",
+            "subscriptionId": "sub_mo"
+          }
+        },
+        {
+          "id": "audit_log#4",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.step_left",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000a51",
+          "request_id": "gone#3",
+          "details": {
+            "kind": "price",
+            "want": {
+              "price": "price_fake_0004",
+              "interval": "month"
+            },
+            "state": "done",
+            "detail": "sent",
+            "stepId": "gone#5",
+            "subscriptionId": "sub_pat"
+          }
+        },
+        {
+          "id": "audit_log#5",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.step_left",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000a51",
+          "request_id": "gone#3",
+          "details": {
+            "kind": "price",
+            "want": {
+              "price": "price_fake_0004",
+              "interval": "month"
+            },
+            "state": "left",
+            "planId": "10000000-0000-4000-8000-00000000000a",
+            "stepId": "gone#5",
+            "changeId": "gone#2",
+            "subscriptionId": "sub_pat"
+          }
+        },
+        {
+          "id": "audit_log#6",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "plan.details_set",
+          "entity_type": "membership_plan",
+          "entity_id": "10000000-0000-4000-8000-00000000000a",
+          "request_id": "gone#3",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "name": "Core",
+              "level": "core",
+              "is_unlimited": false,
+              "addons_included": 0,
+              "sessions_included": 4
+            },
+            "before": {
+              "name": "Core",
+              "level": "core",
+              "is_unlimited": false,
+              "addons_included": 0,
+              "sessions_included": 4
+            },
+            "changeId": "gone#2"
+          }
+        },
+        {
+          "id": "audit_log#7",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.price_moved",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000a51",
+          "request_id": "gone#3",
+          "details": {
+            "planId": "10000000-0000-4000-8000-00000000000a",
+            "stepId": "gone#5",
+            "changeId": "gone#2",
+            "frequency": "monthly",
+            "toPriceId": "price_fake_0004",
+            "fromPriceId": "price_seed_monthly",
+            "subscriptionId": "sub_pat"
+          }
+        },
+        {
+          "id": "audit_log#8",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "plan.price_change",
+          "entity_type": "membership_plan",
+          "entity_id": "10000000-0000-4000-8000-00000000000a",
+          "request_id": "gone#3",
+          "details": {
+            "key": "gone#1",
+            "state": "started",
+            "planId": "10000000-0000-4000-8000-00000000000a",
+            "prices": {
+              "monthly": {
+                "to": "45.00",
+                "from": "40.00",
+                "oldPriceId": "price_seed_monthly"
+              }
+            },
+            "changeId": "gone#2",
+            "productId": "prod_seed",
+            "productName": "Core",
+            "membersToMove": 2,
+            "productActive": true
+          }
+        },
+        {
+          "id": "audit_log#9",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "plan.stripe_step",
+          "entity_type": "membership_plan",
+          "entity_id": "10000000-0000-4000-8000-00000000000a",
+          "request_id": "gone#3",
+          "details": {
+            "kind": "archive_price",
+            "want": {
+              "priceId": "price_seed_monthly"
+            },
+            "state": "left",
+            "stepId": "gone#6",
+            "changeId": "gone#2"
+          }
+        },
+        {
+          "id": "audit_log#10",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "plan.price_change",
+          "entity_type": "membership_plan",
+          "entity_id": "10000000-0000-4000-8000-00000000000a",
+          "request_id": "gone#3",
+          "details": {
+            "state": "done",
+            "members": 2,
+            "stepIds": [
+              "gone#4",
+              "gone#5"
+            ],
+            "changeId": "gone#2",
+            "priceIds": {
+              "monthly": "price_fake_0004"
+            },
+            "productId": "prod_seed"
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 8
+    },
+    "membership_plans": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-00000000000a",
+          "stripe_price_id": [
+            "price_seed_monthly",
+            "price_fake_0004"
+          ],
+          "price_monthly": [
+            "40.00",
+            "45.00"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

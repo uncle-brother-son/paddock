@@ -14,8 +14,9 @@ import {
 import type { Db } from '@/server/db'
 import { ApiError } from '@/server/http/errors'
 import { CANCEL_CREDIT_WORDS } from '@/server/rules/bookings/failure-messages'
-import { BOOKING_KINDS_ON, withSwitch } from '@/server/rules/testing/replay/booking-side'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/replay/harness'
+import { BOOKING_KINDS_ON, withSwitch } from '@/server/rules/testing/sweep/booking-presses'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
 import { bea, ID, memberCredit, mo, paidSeat, sam, seed } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { startsWithinRealHours } from '@/server/rules/time/london-time'
@@ -164,7 +165,7 @@ async function withBooking(order: Record<string, unknown>, work: (context: Booki
         }
       },
     },
-    oldSide
+    workerSide()
   )
 }
 
@@ -734,7 +735,7 @@ async function onAnEventOrder(order: Record<string, unknown>, work: (context: Ev
         }
       },
     },
-    oldSide
+    workerSide()
   )
 }
 

@@ -1,0 +1,147 @@
+{
+  "scenario": "w48-tier-range-refusals",
+  "results": [
+    {
+      "thrown": "Min people must be a positive whole number"
+    },
+    {
+      "thrown": "Max people must be a positive whole number"
+    },
+    {
+      "thrown": "Max people must be a positive whole number"
+    },
+    {
+      "thrown": "Min people cannot be greater than max people"
+    },
+    null
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/tier-groups/range",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "minPeople",
+              "details": {
+                "action": "catalog.tier_range_set",
+                "reason": "invalid_params",
+                "message": "Min people must be a positive whole number"
+              },
+              "message": "Min people must be a positive whole number"
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/tier-groups/range",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "maxPeople",
+              "details": {
+                "action": "catalog.tier_range_set",
+                "reason": "invalid_params",
+                "message": "Max people must be a positive whole number"
+              },
+              "message": "Max people must be a positive whole number"
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/tier-groups/range",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "maxPeople",
+              "details": {
+                "action": "catalog.tier_range_set",
+                "reason": "invalid_params",
+                "message": "Max people must be a positive whole number"
+              },
+              "message": "Max people must be a positive whole number"
+            },
+            "requestId": "gone#6"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#7",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/tier-groups/range",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "minPeople",
+              "details": {
+                "action": "catalog.tier_range_set",
+                "reason": "invalid_params",
+                "message": "Min people cannot be greater than max people"
+              },
+              "message": "Min people cannot be greater than max people"
+            },
+            "requestId": "gone#8"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#9",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/tier-groups/range",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "catalog.tier_range_set",
+                "reason": "tier_not_found",
+                "message": "That size group no longer exists. Reload the page and try again."
+              },
+              "message": "That size group no longer exists. Reload the page and try again."
+            },
+            "requestId": "gone#10"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

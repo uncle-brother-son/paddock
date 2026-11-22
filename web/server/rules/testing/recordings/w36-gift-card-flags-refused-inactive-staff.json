@@ -1,0 +1,17 @@
+{
+  "scenario": "w36-gift-card-flags-refused-inactive-staff",
+  "results": [
+    {
+      "updated": false,
+      "reason": "permission_denied",
+      "message": "This staff account is inactive. Ask an admin to reactivate it."
+    },
+    {
+      "updated": false,
+      "reason": "permission_denied",
+      "message": "This staff account is inactive. Ask an admin to reactivate it."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

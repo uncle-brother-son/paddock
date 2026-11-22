@@ -1,0 +1,386 @@
+{
+  "scenario": "w27-order-refund-gift-card-unspent-is-voided",
+  "results": [
+    {
+      "success": true,
+      "orderId": "orders#1",
+      "giftCardId": "gift_cards#1",
+      "giftCardCode": "<code#1>",
+      "cardCharged": true,
+      "cardAmount": 60,
+      "paymentMethodUsed": "card"
+    },
+    {
+      "success": true,
+      "refundedAmount": 60,
+      "refundMethod": "card",
+      "cardRefundedAmount": 60,
+      "orderPaymentStatus": "refunded"
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "paymentIntents.create",
+      "params": {
+        "amount": 6000,
+        "currency": "gbp",
+        "customer": "cus_seed",
+        "payment_method": "pm_seed",
+        "off_session": true,
+        "confirm": true,
+        "description": "Staff-created order for gift card",
+        "metadata": {
+          "order_id": "orders#1"
+        }
+      },
+      "idempotencyKey": "orders#1:charge"
+    },
+    {
+      "method": "refunds.create",
+      "params": {
+        "payment_intent": "pi_fake_0002",
+        "amount": 6000,
+        "metadata": {
+          "refund_key": "audit_log#3:refund:orders#1",
+          "claim_id": "audit_log#3"
+        }
+      },
+      "idempotencyKey": "audit_log#3:refund:orders#1"
+    }
+  ],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/orders",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "status": "paid",
+              "orderId": "orders#1",
+              "payment": {
+                "method": "card",
+                "collected": 60,
+                "cardCharged": true,
+                "giftCardApplied": 0,
+                "storeCreditApplied": 0
+              },
+              "bookingId": null,
+              "giftCardId": "gift_cards#1",
+              "giftCardCode": "<code#1>",
+              "sessionPassId": null,
+              "eventBookingId": null
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/orders/orders#1/refunds",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "refundMethod": "card",
+              "refundedAmount": 60,
+              "cardRefundedAmount": 60,
+              "orderPaymentStatus": "refunded"
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.create",
+          "entity_type": "order",
+          "entity_id": "orders#1",
+          "request_id": "gone#2",
+          "details": {
+            "promo": null,
+            "method": "card",
+            "postage": null,
+            "giftCard": null,
+            "amountDue": 60,
+            "bookingId": null,
+            "confirmed": {
+              "toCollect": 60
+            },
+            "overrides": [],
+            "toCollect": 60,
+            "awaitsCard": true,
+            "giftCardId": "gift_cards#1",
+            "orderTotal": 60,
+            "storeCredit": 0,
+            "addressSaved": false,
+            "sessionPassId": null,
+            "eventBookingId": null
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.paid",
+          "entity_type": "order",
+          "entity_id": "orders#1",
+          "request_id": "gone#2",
+          "details": {
+            "method": "card",
+            "collected": 60,
+            "addressSaved": false,
+            "paymentIntentId": "pi_fake_0002",
+            "eventBookingConfirmed": false
+          }
+        },
+        {
+          "id": "audit_log#3",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.refund_claimed",
+          "entity_type": "order",
+          "entity_id": "orders#1",
+          "request_id": "gone#4",
+          "details": {
+            "kind": "refund",
+            "plan": {
+              "card": [
+                {
+                  "lines": [
+                    {
+                      "amount": 60,
+                      "lineId": "order_line_items#1"
+                    }
+                  ],
+                  "amount": 60,
+                  "orderId": "orders#1",
+                  "paymentIntentId": "pi_fake_0002"
+                }
+              ],
+              "cash": 0,
+              "ownOrderId": "orders#1",
+              "storeCredit": 0
+            },
+            "lines": [
+              {
+                "id": "order_line_items#1",
+                "amount": 60,
+                "method": "card",
+                "itemType": "gift_card",
+                "restocked": null,
+                "giftCardId": "gift_cards#1"
+              }
+            ],
+            "amount": 60,
+            "method": "card",
+            "reason": null,
+            "worker": true,
+            "livemode": false
+          }
+        },
+        {
+          "id": "audit_log#4",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.refund",
+          "entity_type": "order",
+          "entity_id": "orders#1",
+          "request_id": "gone#4",
+          "details": {
+            "owed": 0,
+            "amount": 60,
+            "method": "card",
+            "restocked": [],
+            "lineItemIds": [
+              "order_line_items#1"
+            ],
+            "cardRefunded": 60,
+            "storeCreditRefunded": 0
+          }
+        },
+        {
+          "id": "audit_log#5",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.refund_finished",
+          "entity_type": "order",
+          "entity_id": "orders#1",
+          "request_id": "gone#4",
+          "details": {
+            "owed": 0,
+            "claimId": "audit_log#3",
+            "outcome": "given",
+            "refunds": [
+              {
+                "amount": 60,
+                "status": "succeeded",
+                "orderId": "orders#1",
+                "refundId": "re_fake_0003",
+                "paymentIntentId": "pi_fake_0002"
+              }
+            ],
+            "cardRefunded": 60,
+            "storeCreditRefunded": 0
+          }
+        },
+        {
+          "id": "audit_log#6",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "refund.watch",
+          "entity_type": "refund_watch",
+          "entity_id": "re_fake_0003",
+          "request_id": "gone#4",
+          "details": {
+            "on": "order",
+            "lines": [
+              {
+                "amount": 60,
+                "lineId": "order_line_items#1"
+              }
+            ],
+            "state": "watching",
+            "amount": 60,
+            "status": "succeeded",
+            "claimId": "audit_log#3",
+            "orderId": "orders#1",
+            "livemode": false,
+            "refundId": "re_fake_0003",
+            "subjectId": "orders#1",
+            "paymentIntentId": "pi_fake_0002"
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "gift_cards": {
+      "added": [
+        {
+          "id": "gift_cards#1",
+          "code": "<code#1>",
+          "type": "monetary",
+          "original_value": "60.00",
+          "remaining_balance": "60.00",
+          "purchaser_id": "10000000-0000-4000-8000-000000000005",
+          "recipient_name": null,
+          "recipient_email": null,
+          "gift_message": null,
+          "origin": "customer_purchase",
+          "issue_date": "2026-11-10",
+          "expiry_date": "2027-11-10",
+          "redeemed_at": null,
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "fulfillment_method": "digital",
+          "picked_up": false,
+          "picked_up_at": null,
+          "picked_up_by": null,
+          "voided": true,
+          "shipped_at": null,
+          "shipped_by": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "order_line_items": {
+      "added": [
+        {
+          "id": "order_line_items#1",
+          "order_id": "orders#1",
+          "booking_id": null,
+          "product_variant_id": null,
+          "membership_plan_id": null,
+          "session_pass_type_id": null,
+          "gift_card_id": "gift_cards#1",
+          "item_type": "gift_card",
+          "quantity": 1,
+          "unit_price": "60.00",
+          "line_total": "60.00",
+          "created_at": "<set>",
+          "addon_id": null,
+          "refunded_at": "<set>",
+          "refund_method": "card",
+          "restocked": null,
+          "fulfillment_status": null,
+          "card_refunded_amount": "60.00",
+          "system_unit_price": null,
+          "price_override_reason": null,
+          "discount_amount": "0.00",
+          "event_booking_id": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "orders": {
+      "added": [
+        {
+          "id": "orders#1",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "order_total": "60.00",
+          "payment_status": "refunded",
+          "stripe_payment_intent_id": "pi_fake_0002",
+          "promo_code": null,
+          "discount_amount": "0.00",
+          "shipping_address": null,
+          "shipping_status": null,
+          "tracking_number": null,
+          "order_source": "staff_created",
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "payment_method": "card",
+          "reader_payment": {
+            "flow": "checkout",
+            "method": "card",
+            "channel": "staff",
+            "livemode": false,
+            "save_card": false,
+            "created_at": "<time>",
+            "request_id": "gone#2",
+            "expected_amount": 60,
+            "payment_method_id": "pm_seed",
+            "charge_description": "Staff-created order for gift card",
+            "stripe_customer_id": "cus_seed",
+            "charge_payment_intent_id": "pi_fake_0002",
+            "save_address_to_customer": false
+          },
+          "refund_owed_amount": "0.00"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

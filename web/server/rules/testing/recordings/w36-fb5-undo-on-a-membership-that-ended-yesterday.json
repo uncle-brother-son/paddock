@@ -1,0 +1,101 @@
+{
+  "scenario": "w36-fb5-undo-on-a-membership-that-ended-yesterday",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "membership_not_found",
+      "bookingFailureReason": "membership_not_found"
+    },
+    {
+      "updated": false,
+      "reason": "not_cancelling",
+      "message": "This membership has no pending cancellation to undo."
+    },
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "membership_not_found",
+      "bookingFailureReason": "membership_not_found"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/orders",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "stage": "booking",
+                "reason": "membership_not_found",
+                "bookingFailureReason": "membership_not_found"
+              },
+              "message": "Failed to complete the order."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/undo-cancel",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "undo_cancel",
+                "reason": "not_cancelling",
+                "message": "This membership has no pending cancellation to undo."
+              },
+              "message": "This membership has no pending cancellation to undo."
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/orders",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "stage": "booking",
+                "reason": "membership_not_found",
+                "bookingFailureReason": "membership_not_found"
+              },
+              "message": "Failed to complete the order."
+            },
+            "requestId": "gone#6"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

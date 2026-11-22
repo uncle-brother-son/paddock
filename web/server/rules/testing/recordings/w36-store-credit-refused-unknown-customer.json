@@ -1,0 +1,43 @@
+{
+  "scenario": "w36-store-credit-refused-unknown-customer",
+  "results": [
+    {
+      "ok": false,
+      "reason": "customer_not_found",
+      "message": "That customer no longer exists."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/customers/gone#2/store-credit",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "store_credit",
+                "reason": "customer_not_found",
+                "message": "That customer no longer exists."
+              },
+              "message": "That customer no longer exists."
+            },
+            "requestId": "gone#3"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

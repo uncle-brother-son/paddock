@@ -2,12 +2,13 @@ import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Db } from '@/server/db'
 import type { FakeStripe } from '@/server/stripe/fake'
-import { asWorkerFlow } from '@/server/rules/testing/replay/flow-side'
-import { oldSide, replay, startReplay, type ReplayEnvironment, type ReplaySide } from '@/server/rules/testing/replay/harness'
-import { orderInput, postOrder, withQuotedCardFigure } from '@/server/rules/testing/replay/order-side'
+import { asTheOldCheckoutStartedIt, asTheOldCodeStartedIt } from '@/server/rules/testing/sweep/old-states'
+import { replay, startReplay, type ReplayEnvironment, type ReplaySide } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
+import { orderInput, postOrder, withQuotedCardFigure } from '@/server/rules/testing/sweep/order-presses'
 import { ID, lapsedSeat, seed } from '@/server/rules/testing/replay/scenarios'
-import { withSwitch } from '@/server/rules/testing/replay/booking-side'
-import { ORDER_REFUND_KINDS_ON } from '@/server/rules/testing/replay/order-refund-side'
+import { withSwitch } from '@/server/rules/testing/sweep/booking-presses'
+import { ORDER_REFUND_KINDS_ON } from '@/server/rules/testing/sweep/order-refund-presses'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
 import type Stripe from 'stripe'
@@ -55,7 +56,7 @@ async function onASeed(work: (old: ReplaySide, stripe: FakeStripe) => Promise<vo
     environment,
     { name: 'orders page', seed, run: async ({ side, stripe }) => work(side, stripe) },
     (seedDb, stripe) => {
-      const side = oldSide(seedDb, stripe)
+      const side = workerSide()(seedDb, stripe)
       // The Worker's own routes (its order route, reconcile) charge this run's fake.
       replayStripe.current = stripe
       return side
@@ -68,11 +69,13 @@ const flowStatus = async (pendingId: string) => (await db.query<{ status: string
 
 /**
  * One reader order from each side, both untapped and over the window: the old checkout's (Sam) and the Worker's (Mo).
- * W16: no old checkout order can be made live any more (none was left, checked 11 Nov); the old one here comes from the
- * replay's test-only copy, to show nothing settles it twice and the old sweep no longer touches orders at all.
+ * W16: no old checkout order can be made live any more (none was left, checked 11 Nov); the old one shows nothing
+ * settles it twice and the old sweep no longer touches orders at all. W64: it is placed through the Worker and its
+ * mark taken off (an SQL fixture, sweep/old-states.ts), the state the old checkout left, as the frozen copy is going.
  */
 async function oneOfEach(old: ReplaySide, stripe: FakeStripe): Promise<{ oldOrder: string; oldIntent: string; workerOrder: string; workerIntent: string }> {
   const placed = (await old.call('createOrder', { customerId: ID.customer, products: [soaps], payment: { method: 'reader' } })) as { orderId: string; pendingReaderPayment: { paymentIntentId: string } }
+  await asTheOldCheckoutStartedIt(db, placed.orderId)
   replayStripe.current = stripe
   const worker = await postOrder(await withQuotedCardFigure(orderInput({ customerId: ID.member, products: [soaps], payment: { method: 'reader' } })))
   if (!worker.body.ok || !worker.body.data.pendingReaderPayment) throw new Error('the Worker reader order was not placed')
@@ -112,7 +115,8 @@ describe("Resolve now is the Worker's reconcile alone (W12-3, W13-3; W25: the ol
         const bookingId = await lapsedSeat((action, params) => old.call(action, params), db)
         const started = (await old.call('settleLapsedBooking', { bookingId, payment: { method: 'reader' } })) as { pendingReaderPayment: { pendingId: string } }
         const pendingId = started.pendingReaderPayment.pendingId
-        if (worker) await asWorkerFlow(db, pendingId)
+        // W64: the flow is the Worker's from its start; the other one has the mark taken off (sweep/old-states.ts).
+        if (!worker) await asTheOldCodeStartedIt(db, pendingId)
         replayStripe.current = stripe
         later(16)
         const calls = stripe.calls.length
@@ -129,6 +133,8 @@ describe("Resolve now is the Worker's reconcile alone (W12-3, W13-3; W25: the ol
       const bookingId = await lapsedSeat((action, params) => old.call(action, params), db)
       const started = (await old.call('settleLapsedBooking', { bookingId, payment: { method: 'reader' } })) as { pendingReaderPayment: { pendingId: string } }
       const pendingId = started.pendingReaderPayment.pendingId
+      // W64: a flow as the old code started it (sweep/old-states.ts).
+      await asTheOldCodeStartedIt(db, pendingId)
       replayStripe.current = stripe
       const calls = stripe.calls.length
       const user = { email: 'jo@example.com' }
@@ -170,7 +176,7 @@ describe("one stuck list, the Worker's (W12-5; W25: the staff app's own two quer
       await onASeed(async (old, stripe) => {
         const bookingId = await lapsedSeat((action, params) => old.call(action, params), db)
         const started = (await old.call('settleLapsedBooking', { bookingId, payment: { method: 'reader' } })) as { pendingReaderPayment: { pendingId: string } }
-        if (worker) await asWorkerFlow(db, started.pendingReaderPayment.pendingId)
+        if (!worker) await asTheOldCodeStartedIt(db, started.pendingReaderPayment.pendingId)
         replayStripe.current = stripe
         later(16)
         const listed = (await old.call('getStuckReaderPayments', {})) as { flows: Array<Record<string, unknown> & { pendingId: string }> }

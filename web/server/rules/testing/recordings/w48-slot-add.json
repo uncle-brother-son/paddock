@@ -1,0 +1,149 @@
+{
+  "scenario": "w48-slot-add",
+  "results": [
+    {
+      "id": "service_type_schedule_slots#1",
+      "service_type_id": "10000000-0000-4000-8000-000000000002",
+      "day_of_week": 2,
+      "start_time": "07:00:00",
+      "created_at": "<time>",
+      "updated_at": "<time>"
+    },
+    {
+      "id": "service_type_schedule_slots#2",
+      "service_type_id": "10000000-0000-4000-8000-000000000002",
+      "day_of_week": 6,
+      "start_time": "18:30:00",
+      "created_at": "<time>",
+      "updated_at": "<time>"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/service-types/10000000-0000-4000-8000-000000000002/schedule-slots",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "service_type_schedule_slots#1",
+              "created_at": "<time>",
+              "start_time": "07:00:00",
+              "updated_at": "<time>",
+              "day_of_week": 2,
+              "service_type_id": "10000000-0000-4000-8000-000000000002"
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/service-types/10000000-0000-4000-8000-000000000002/schedule-slots",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "service_type_schedule_slots#2",
+              "created_at": "<time>",
+              "start_time": "18:30:00",
+              "updated_at": "<time>",
+              "day_of_week": 6,
+              "service_type_id": "10000000-0000-4000-8000-000000000002"
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "timetable.slot_added",
+          "entity_type": "schedule_slot",
+          "entity_id": "service_type_schedule_slots#1",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "id": "service_type_schedule_slots#1",
+              "created_at": "<time>",
+              "start_time": "07:00:00",
+              "updated_at": "<time>",
+              "day_of_week": 2,
+              "service_type_id": "10000000-0000-4000-8000-000000000002"
+            },
+            "before": null
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "timetable.slot_added",
+          "entity_type": "schedule_slot",
+          "entity_id": "service_type_schedule_slots#2",
+          "request_id": "gone#4",
+          "details": {
+            "key": "gone#3",
+            "after": {
+              "id": "service_type_schedule_slots#2",
+              "created_at": "<time>",
+              "start_time": "18:30:00",
+              "updated_at": "<time>",
+              "day_of_week": 6,
+              "service_type_id": "10000000-0000-4000-8000-000000000002"
+            },
+            "before": null
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "service_type_schedule_slots": {
+      "added": [
+        {
+          "id": "service_type_schedule_slots#1",
+          "service_type_id": "10000000-0000-4000-8000-000000000002",
+          "day_of_week": 2,
+          "start_time": "07:00:00",
+          "created_at": "<set>",
+          "updated_at": "<set>"
+        },
+        {
+          "id": "service_type_schedule_slots#2",
+          "service_type_id": "10000000-0000-4000-8000-000000000002",
+          "day_of_week": 6,
+          "start_time": "18:30:00",
+          "created_at": "<set>",
+          "updated_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "scenario": "w36-gift-card-extend-refused-unknown-card",
+  "results": [
+    {
+      "updated": false,
+      "reason": "gift_card_not_found"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/gift-cards/gone#2/extend",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "gift_card_extend",
+                "reason": "gift_card_not_found",
+                "message": "Failed to extend gift card."
+              },
+              "message": "Failed to extend gift card."
+            },
+            "requestId": "gone#3"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

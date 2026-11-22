@@ -4,8 +4,9 @@ import { createDb, type Db, type DbDriver, type DriverSession } from '@/server/d
 import { createPostgresDriver } from '@/server/db/postgres-driver'
 import { insert } from '@/server/rules/testing/database'
 import type { Recording } from '@/server/rules/testing/replay/compare'
-import { oldSide, replay, startReplay, type ReplayEnvironment, type Scenario } from '@/server/rules/testing/replay/harness'
-import { newOrderSide, oldResult, orderInput, postOrder, type OrderAnswer } from '@/server/rules/testing/replay/order-side'
+import { replay, startReplay, type ReplayEnvironment, type Scenario } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
+import { newOrderSide, oldResult, orderInput, postOrder, type OrderAnswer } from '@/server/rules/testing/sweep/order-presses'
 import { ID, liftOnSaleCheck, mo, memberCredit, paidSeat, restoreOnSaleCheck, sam, seed, seedCorePass, whileFailing, type WriteFailure } from '@/server/rules/testing/replay/scenarios'
 import {
   ADDON_MEMBER_PRICE_ONLY_MESSAGE,
@@ -348,7 +349,7 @@ describe('before anything is touched', () => {
   }
 
   async function freshSeed(): Promise<void> {
-    await replay(environment, { name: 'seed only', seed, run: async () => {} }, oldSide)
+    await replay(environment, { name: 'seed only', seed, run: async () => {} }, workerSide())
   }
 
   it('W13: nothing answers NOT_BUILT any more: a membership basket opens T1, and a refusal there keeps nothing', async () => {
@@ -498,7 +499,7 @@ describe('request idempotency', () => {
           answers.push(await postOrder(orderInput(cashBooking), { key }))
         },
       },
-      oldSide
+      workerSide()
     )
     expect(answers[1]?.body).toEqual(answers[0]?.body)
     expect(recording.tables['orders']?.added).toHaveLength(1)
@@ -519,7 +520,7 @@ describe('request idempotency', () => {
           answers.push(await postOrder(orderInput(cashBooking), { key }))
         },
       },
-      oldSide
+      workerSide()
     )
     expect(answers[1]?.body).toEqual(answers[0]?.body)
     expect(answers[2]?.body).toMatchObject({ ok: false, error: { code: 'IDEMPOTENCY_MISMATCH' } })
@@ -685,7 +686,7 @@ describe('writeBooking refuses on its own, without the checks T1 runs first', ()
           }
         },
       },
-      oldSide
+      workerSide()
     )
     return { refusal, bookingId, recording }
   }
@@ -798,7 +799,7 @@ async function directly(params: Record<string, unknown>, codes: () => string, { 
         }
       },
     },
-    oldSide
+    workerSide()
   )
   return { recording, ...outcome }
 }
@@ -1117,7 +1118,7 @@ describe('what T1 writes for an event (W08)', () => {
           await placeOrder(db, orderInput(eventAlone), { actor: { type: 'customer', id: ID.customer }, requestId: 'customer-test' })
         },
       },
-      oldSide
+      workerSide()
     )
     expect(recording.tables['event_bookings']?.added).toMatchObject([{ created_by_staff_id: null, customer_id: ID.customer, places: 1 }])
   })
@@ -1159,7 +1160,7 @@ async function placeInput(input: unknown, prepare?: (db: Db) => Promise<void>) {
         answers.push(await postOrder(input))
       },
     },
-    oldSide
+    workerSide()
   )
   return { recording, answer: answers[0] as OrderAnswer }
 }
@@ -1485,7 +1486,7 @@ describe('what T1 writes for a promo code, store credit and a gift card (W09)', 
           await placeOrder(db, orderInput(storeCreditOnly), { actor: { type: 'customer', id: ID.customer }, requestId: 'customer-test' })
         },
       },
-      oldSide
+      workerSide()
     )
     expect(recording.tables['store_credit_transactions']?.added).toMatchObject([{ staff_id: null, amount: '-24.00', balance_after: '6.00' }])
   })

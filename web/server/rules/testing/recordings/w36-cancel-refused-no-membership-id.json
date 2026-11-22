@@ -1,0 +1,11 @@
+{
+  "scenario": "w36-cancel-refused-no-membership-id",
+  "results": [
+    {
+      "updated": false,
+      "message": "membershipId is required"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

@@ -1,0 +1,103 @@
+{
+  "scenario": "w48-gift-card-type-expiry-set",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-000000000019",
+      "expiry_months": 24
+    },
+    null
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/gift-card-types/10000000-0000-4000-8000-000000000019/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "10000000-0000-4000-8000-000000000019",
+              "expiry_months": 24
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/gift-card-types/gone#4/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "catalog.details_set",
+                "reason": "gift_card_type_not_found",
+                "message": "That gift card type no longer exists. Reload the page and try again."
+              },
+              "message": "That gift card type no longer exists. Reload the page and try again."
+            },
+            "requestId": "gone#5"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "catalog.details_set",
+          "entity_type": "gift_card_type",
+          "entity_id": "10000000-0000-4000-8000-000000000019",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "id": "10000000-0000-4000-8000-000000000019",
+              "expiry_months": 24
+            },
+            "before": {
+              "id": "10000000-0000-4000-8000-000000000019",
+              "expiry_months": 12
+            }
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "gift_card_types": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000019",
+          "expiry_months": [
+            12,
+            24
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

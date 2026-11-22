@@ -1,0 +1,43 @@
+{
+  "scenario": "w36-fb10-addon-credits-taken-below-zero",
+  "results": [
+    {
+      "adjusted": false,
+      "reason": "addon_below_zero",
+      "message": "Adjustment rejected: the membership would be left with minus 3 add-on credit(s), below zero."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/credits",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "credits",
+                "reason": "addon_below_zero",
+                "message": "Adjustment rejected: the membership would be left with minus 3 add-on credit(s), below zero."
+              },
+              "message": "Adjustment rejected: the membership would be left with minus 3 add-on credit(s), below zero."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

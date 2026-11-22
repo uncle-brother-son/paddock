@@ -1,0 +1,118 @@
+{
+  "scenario": "w48-gb9-a-level-change-reaches-passes-already-sold",
+  "results": [
+    [
+      {
+        "id": "10000000-0000-4000-8000-000000000016",
+        "sanity_pass_type_id": null,
+        "name": "Five Sessions",
+        "thumbnail_url": null,
+        "price": "50.00",
+        "sessions_included": 5,
+        "expiry_months": 12,
+        "stripe_product_id": null,
+        "stripe_price_id": null,
+        "active": true,
+        "created_at": "<time>",
+        "updated_at": "<time>",
+        "level": "all_access",
+        "covers_session": true
+      }
+    ],
+    {
+      "updated": true,
+      "passType": {
+        "id": "10000000-0000-4000-8000-000000000016",
+        "level": "core"
+      }
+    },
+    [
+      {
+        "id": "10000000-0000-4000-8000-000000000016",
+        "sanity_pass_type_id": null,
+        "name": "Five Sessions",
+        "thumbnail_url": null,
+        "price": "50.00",
+        "sessions_included": 5,
+        "expiry_months": 12,
+        "stripe_product_id": null,
+        "stripe_price_id": null,
+        "active": true,
+        "created_at": "<time>",
+        "updated_at": "<time>",
+        "level": "core",
+        "covers_session": false
+      }
+    ]
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/session-pass-types/10000000-0000-4000-8000-000000000016/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "10000000-0000-4000-8000-000000000016",
+              "level": "core",
+              "holders": 1
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "catalog.details_set",
+          "entity_type": "session_pass_type",
+          "entity_id": "10000000-0000-4000-8000-000000000016",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "level": "core"
+            },
+            "before": {
+              "level": "all_access"
+            },
+            "holders": 1
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "session_pass_types": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000016",
+          "level": [
+            "all_access",
+            "core"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

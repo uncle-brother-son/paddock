@@ -2,8 +2,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type Stripe from 'stripe'
 import type { Db } from '@/server/db'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
-import { asWorkerFlow, postFlowStep } from '@/server/rules/testing/replay/flow-side'
-import { oldSide, replay, startReplay, type ReplayEnvironment, type ReplaySide } from '@/server/rules/testing/replay/harness'
+import { asWorkerFlow, postFlowStep } from '@/server/rules/testing/sweep/flow-presses'
+import { asTheOldCodeStartedIt } from '@/server/rules/testing/sweep/old-states'
+import { replay, startReplay, type ReplayEnvironment, type ReplaySide } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
 import { ID, lapsedSeat, publicOnCard, seed, whileFailing } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import {
@@ -70,7 +72,7 @@ async function onASeed(work: (context: Context) => Promise<void>, prepare?: (see
       },
       async run({ stripe }) {
         replayStripe.current = stripe
-        await work({ stripe, old: oldSide(db, stripe) })
+        await work({ stripe, old: workerSide()(db, stripe) })
         replayStripe.current = stripe
       },
     },
@@ -87,7 +89,8 @@ async function startSettle({ old }: Context, { worker = true }: { worker?: boole
   const started = (await old.call('settleLapsedBooking', { bookingId, payment: { method: 'reader', storeCredit: { amount: 5 } } })) as {
     pendingReaderPayment: { pendingId: string; paymentIntentId: string }
   }
-  if (worker) await asWorkerFlow(db, started.pendingReaderPayment.pendingId)
+  // W64: started through the Worker, so it is the Worker's flow; the old code's has the mark taken off (sweep/old-states.ts).
+  if (!worker) await asTheOldCodeStartedIt(db, started.pendingReaderPayment.pendingId)
   return { ...started.pendingReaderPayment, bookingId }
 }
 

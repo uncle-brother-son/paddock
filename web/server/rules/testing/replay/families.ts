@@ -1,4 +1,4 @@
-import type { Scenario } from './harness'
+import type { Scenario } from '../sweep/run'
 
 /**
  * W59 (W35 audit row 14, W45 audit row 23): the every-scenario sweeps (w05c, w05d) run one test per family instead of

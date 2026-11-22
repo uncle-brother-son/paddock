@@ -1,0 +1,244 @@
+{
+  "scenario": "w48-gb20-plan-create-stripe-step-fails-and-leaves-a-row-each-press",
+  "results": [
+    {
+      "thrown": "Stripe refused to set up the plan, so it was not made: Stripe refused this change."
+    },
+    {
+      "thrown": "Stripe refused to set up the plan, so it was not made: Stripe refused this change."
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "products.create",
+      "params": {
+        "name": "Weekender",
+        "active": true,
+        "metadata": {
+          "supabase_id": "membership_plans#1",
+          "item_type": "membership_plan",
+          "plan_id": "membership_plans#1"
+        }
+      },
+      "idempotencyKey": "membership_plans#1:plan-product"
+    },
+    {
+      "method": "products.create",
+      "params": {
+        "name": "Weekender",
+        "active": true,
+        "metadata": {
+          "supabase_id": "membership_plans#2",
+          "item_type": "membership_plan",
+          "plan_id": "membership_plans#2"
+        }
+      },
+      "idempotencyKey": "membership_plans#2:plan-product"
+    }
+  ],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/membership-plans",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "plan.created",
+                "reason": "stripe_refused",
+                "message": "Stripe refused to set up the plan, so it was not made: Stripe refused this change."
+              },
+              "message": "Stripe refused to set up the plan, so it was not made: Stripe refused this change."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/membership-plans",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "plan.created",
+                "reason": "stripe_refused",
+                "message": "Stripe refused to set up the plan, so it was not made: Stripe refused this change."
+              },
+              "message": "Stripe refused to set up the plan, so it was not made: Stripe refused this change."
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "plan.created",
+          "entity_type": "membership_plan",
+          "entity_id": "membership_plans#1",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "id": "membership_plans#1",
+              "name": "Weekender",
+              "level": "core",
+              "active": false,
+              "created_at": "<time>",
+              "updated_at": "<time>",
+              "is_unlimited": false,
+              "price_yearly": "250.00",
+              "price_monthly": "25.00",
+              "thumbnail_url": null,
+              "sanity_plan_id": null,
+              "addons_included": 1,
+              "stripe_price_id": null,
+              "sessions_included": 2,
+              "stripe_product_id": null,
+              "stripe_price_id_yearly": null
+            },
+            "state": "started",
+            "before": null
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "plan.created",
+          "entity_type": "membership_plan",
+          "entity_id": "membership_plans#1",
+          "request_id": "gone#2",
+          "details": {
+            "made": {
+              "priceIds": {}
+            },
+            "state": "failed",
+            "reason": "Stripe refused this change."
+          }
+        },
+        {
+          "id": "audit_log#3",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "plan.created",
+          "entity_type": "membership_plan",
+          "entity_id": "membership_plans#2",
+          "request_id": "gone#4",
+          "details": {
+            "key": "gone#3",
+            "after": {
+              "id": "membership_plans#2",
+              "name": "Weekender",
+              "level": "core",
+              "active": false,
+              "created_at": "<time>",
+              "updated_at": "<time>",
+              "is_unlimited": false,
+              "price_yearly": "250.00",
+              "price_monthly": "25.00",
+              "thumbnail_url": null,
+              "sanity_plan_id": null,
+              "addons_included": 1,
+              "stripe_price_id": null,
+              "sessions_included": 2,
+              "stripe_product_id": null,
+              "stripe_price_id_yearly": null
+            },
+            "state": "started",
+            "before": null
+          }
+        },
+        {
+          "id": "audit_log#4",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "plan.created",
+          "entity_type": "membership_plan",
+          "entity_id": "membership_plans#2",
+          "request_id": "gone#4",
+          "details": {
+            "made": {
+              "priceIds": {}
+            },
+            "state": "failed",
+            "reason": "Stripe refused this change."
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "membership_plans": {
+      "added": [
+        {
+          "id": "membership_plans#1",
+          "sanity_plan_id": null,
+          "name": "Weekender",
+          "thumbnail_url": null,
+          "sessions_included": 2,
+          "addons_included": 1,
+          "stripe_product_id": null,
+          "stripe_price_id": null,
+          "active": false,
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "price_monthly": "25.00",
+          "price_yearly": "250.00",
+          "level": "core",
+          "is_unlimited": false,
+          "stripe_price_id_yearly": null
+        },
+        {
+          "id": "membership_plans#2",
+          "sanity_plan_id": null,
+          "name": "Weekender",
+          "thumbnail_url": null,
+          "sessions_included": 2,
+          "addons_included": 1,
+          "stripe_product_id": null,
+          "stripe_price_id": null,
+          "active": false,
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "price_monthly": "25.00",
+          "price_yearly": "250.00",
+          "level": "core",
+          "is_unlimited": false,
+          "stripe_price_id_yearly": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

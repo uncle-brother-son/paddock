@@ -1,0 +1,136 @@
+{
+  "scenario": "w48-postage-set",
+  "results": [
+    {
+      "standardPrice": 5.5,
+      "expressPrice": 11,
+      "freeShippingThreshold": 60
+    },
+    {
+      "standardPrice": 0,
+      "expressPrice": 9.95,
+      "freeShippingThreshold": 0
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/postage/settings",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "stamp": "2026-11-10T09:00:00.050000Z#<md5>",
+              "expressPrice": 11,
+              "standardPrice": 5.5,
+              "freeShippingThreshold": 60
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/postage/settings",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "stamp": "2026-11-10T09:00:00.100000Z#<md5>",
+              "expressPrice": 9.95,
+              "standardPrice": 0,
+              "freeShippingThreshold": 0
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "postage.set",
+          "entity_type": "postage_settings",
+          "entity_id": "postage_settings",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "express_price": "11.00",
+              "standard_price": "5.50",
+              "free_shipping_threshold": "60.00"
+            },
+            "before": {
+              "express_price": "9.95",
+              "standard_price": "4.95",
+              "free_shipping_threshold": "50.00"
+            }
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "postage.set",
+          "entity_type": "postage_settings",
+          "entity_id": "postage_settings",
+          "request_id": "gone#4",
+          "details": {
+            "key": "gone#3",
+            "after": {
+              "express_price": "9.95",
+              "standard_price": "0.00",
+              "free_shipping_threshold": "0.00"
+            },
+            "before": {
+              "express_price": "11.00",
+              "standard_price": "5.50",
+              "free_shipping_threshold": "60.00"
+            }
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "postage_settings": {
+      "added": [],
+      "changed": [
+        {
+          "id": "true",
+          "standard_price": [
+            "4.95",
+            "0.00"
+          ],
+          "free_shipping_threshold": [
+            "50.00",
+            "0.00"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

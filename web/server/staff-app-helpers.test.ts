@@ -3995,7 +3995,8 @@ describe('staff app helpers', () => {
           expect(source).toContain('if (!result) return noAnswer(BOOKING_NO_ANSWER_MESSAGE)')
           expect(source).toContain('if (!result.ok && result.noAnswer) return noAnswer(BOOKING_NO_ANSWER_MESSAGE)')
           // The row's words are this list's own, and the replay's model of the dialog uses the same sentence.
-          const model = readFileSync(path.join(appDir, '..', 'paddock/web/server/rules/testing/replay/whole-event-side.ts'), 'utf8')
+          // W64: the replay's model of the dialog moved to the sweep folder (whole-event-presses.ts), unchanged.
+          const model = readFileSync(path.join(appDir, '..', 'paddock/web/server/rules/testing/sweep/whole-event-presses.ts'), 'utf8')
           const words = /const BOOKING_NO_ANSWER_MESSAGE =\n  ("[^\n]+")/.exec(source)?.[1]
           expect(words).toBe(JSON.stringify("No answer came back, so this booking may or may not have been cancelled and refunded. Don't refund it by hand: press Retry (it won't cancel or refund twice)."))
           expect(model).toContain(`export const BOOKING_NO_ANSWER_MESSAGE =\n  ${String(words)}`)

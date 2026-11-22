@@ -1,0 +1,75 @@
+{
+  "scenario": "w36-fb8-the-record-fails-after-the-credits-moved-then-retried",
+  "results": [
+    {
+      "adjusted": false,
+      "reason": "no_answer",
+      "message": "The adjustment didn't get an answer, so the credits may or may not have changed. Don't adjust them another way: press Apply Adjustment again here (it won't apply twice), or close this and check the Adjustment History first.",
+      "noAnswer": true
+    },
+    {
+      "adjusted": false,
+      "reason": "no_answer",
+      "message": "The adjustment didn't get an answer, so the credits may or may not have changed. Don't adjust them another way: press Apply Adjustment again here (it won't apply twice), or close this and check the Adjustment History first.",
+      "noAnswer": true
+    },
+    {
+      "adjusted": false,
+      "reason": "no_answer",
+      "message": "The adjustment didn't get an answer, so the credits may or may not have changed. Don't adjust them another way: press Apply Adjustment again here (it won't apply twice), or close this and check the Adjustment History first.",
+      "noAnswer": true
+    },
+    {
+      "adjusted": false,
+      "reason": "no_answer",
+      "message": "The adjustment didn't get an answer, so the credits may or may not have changed. Don't adjust them another way: press Apply Adjustment again here (it won't apply twice), or close this and check the Adjustment History first.",
+      "noAnswer": true
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/credits",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "INTERNAL",
+              "message": "Something went wrong and the action may not have finished. Check before trying again."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 500,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/credits",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "INTERNAL",
+              "message": "Something went wrong and the action may not have finished. Check before trying again."
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 500,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

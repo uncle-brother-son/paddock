@@ -1,0 +1,175 @@
+{
+  "scenario": "w36-create-customer",
+  "results": [
+    {
+      "id": "customers#1",
+      "first_name": "Dee",
+      "last_name": "Dale",
+      "email": "dee.dale@example.com",
+      "phone": "07700 900123",
+      "date_of_birth": "1992-02-29",
+      "created_at": "<time>",
+      "updated_at": "<time>"
+    },
+    {
+      "id": "customers#2",
+      "first_name": "Dee",
+      "last_name": "Dale",
+      "email": "dee.two@example.com",
+      "phone": null,
+      "date_of_birth": "1992-02-29",
+      "created_at": "<time>",
+      "updated_at": "<time>"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/customers",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "customers#1",
+              "email": "dee.dale@example.com",
+              "phone": "07700 900123",
+              "last_name": "Dale",
+              "created_at": "<time>",
+              "first_name": "Dee",
+              "updated_at": "<time>",
+              "date_of_birth": "1992-02-29"
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/customers",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "customers#2",
+              "email": "dee.two@example.com",
+              "phone": null,
+              "last_name": "Dale",
+              "created_at": "<time>",
+              "first_name": "Dee",
+              "updated_at": "<time>",
+              "date_of_birth": "1992-02-29"
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "customer.created",
+          "entity_type": "customer",
+          "entity_id": "customers#1",
+          "request_id": "gone#2",
+          "details": {
+            "channel": "staff"
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "customer.created",
+          "entity_type": "customer",
+          "entity_id": "customers#2",
+          "request_id": "gone#4",
+          "details": {
+            "channel": "staff"
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "customers": {
+      "added": [
+        {
+          "id": "customers#1",
+          "auth_user_id": null,
+          "first_name": "Dee",
+          "last_name": "Dale",
+          "email": "dee.dale@example.com",
+          "phone": "07700 900123",
+          "stripe_customer_id": null,
+          "saved_payment_method_id": null,
+          "created_at": "<set>",
+          "marketing_consent": false,
+          "birthday_marketing_consent": false,
+          "address_line1": null,
+          "address_line2": null,
+          "city": null,
+          "postcode": null,
+          "country": "GB",
+          "waiver_accepted": false,
+          "waiver_version": null,
+          "waiver_accepted_at": null,
+          "date_of_birth": "1992-02-29",
+          "updated_at": "<set>",
+          "saved_card_last4": null,
+          "saved_card_brand": null,
+          "store_credit_balance": "0.00"
+        },
+        {
+          "id": "customers#2",
+          "auth_user_id": null,
+          "first_name": "Dee",
+          "last_name": "Dale",
+          "email": "dee.two@example.com",
+          "phone": null,
+          "stripe_customer_id": null,
+          "saved_payment_method_id": null,
+          "created_at": "<set>",
+          "marketing_consent": false,
+          "birthday_marketing_consent": false,
+          "address_line1": null,
+          "address_line2": null,
+          "city": null,
+          "postcode": null,
+          "country": "GB",
+          "waiver_accepted": false,
+          "waiver_version": null,
+          "waiver_accepted_at": null,
+          "date_of_birth": "1992-02-29",
+          "updated_at": "<set>",
+          "saved_card_last4": null,
+          "saved_card_brand": null,
+          "store_credit_balance": "0.00"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

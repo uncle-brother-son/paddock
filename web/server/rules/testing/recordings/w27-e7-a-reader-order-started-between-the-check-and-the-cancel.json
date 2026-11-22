@@ -1,0 +1,495 @@
+{
+  "scenario": "w27-e7-a-reader-order-started-between-the-check-and-the-cancel",
+  "results": [
+    {
+      "success": true,
+      "orderId": "orders#1",
+      "eventBookingId": "event_bookings#1",
+      "cardCharged": false,
+      "cardAmount": 20,
+      "paymentMethodUsed": "cash"
+    },
+    {
+      "ok": true,
+      "results": [
+        {
+          "eventBookingId": "event_bookings#1",
+          "customerName": "Mo Member",
+          "places": 1,
+          "cardRefundedAmount": 0,
+          "storeCreditRefundedAmount": 20,
+          "ok": true
+        }
+      ]
+    },
+    {
+      "success": false,
+      "stage": "event",
+      "reason": "event_cancelled",
+      "message": "That event has been cancelled."
+    },
+    {
+      "eventName": "Full Moon Sauna",
+      "ended": false,
+      "cancelledAt": "<time>",
+      "cancelReason": "Storm",
+      "pendingCustomers": [],
+      "bookings": [],
+      "totalPlaces": 0,
+      "totalValue": 0
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/orders",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "status": "paid",
+              "orderId": "orders#1",
+              "payment": {
+                "method": "cash",
+                "collected": 20,
+                "cardCharged": false,
+                "giftCardApplied": 0,
+                "storeCreditApplied": 0
+              },
+              "bookingId": null,
+              "giftCardId": null,
+              "giftCardCode": null,
+              "sessionPassId": null,
+              "eventBookingId": "event_bookings#1"
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/event-bookings/event_bookings#1/cancel",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "places": 1,
+              "booking": {
+                "id": "event_bookings#1",
+                "places": 0,
+                "status": "cancelled",
+                "order_id": "orders#1",
+                "attendees": [
+                  {
+                    "id": "event_attendees#1",
+                    "name": "Mo Member",
+                    "email": "mo@example.com",
+                    "unit_price": "20.00",
+                    "price_level": "herd",
+                    "cancelled_at": "<time>",
+                    "attendee_type": "account_holder",
+                    "cancel_reason": "Storm",
+                    "checked_in_at": null,
+                    "refund_method": "credit",
+                    "waiver_method": null,
+                    "cancelled_value": "20.00",
+                    "refunded_amount": "20.00",
+                    "waiver_accepted": false,
+                    "event_booking_id": "event_bookings#1",
+                    "cancelled_by_name": "Jo Staff",
+                    "extra_waiver_state": "not_needed",
+                    "waiver_accepted_at": null,
+                    "event_waiver_method": null,
+                    "refund_after_cutoff": false,
+                    "card_refunded_amount": "0.00",
+                    "event_waiver_accepted_at": null
+                  }
+                ],
+                "ordered_at": "<time>",
+                "price_paid": "20.00",
+                "customer_id": "10000000-0000-4000-8000-00000000000f",
+                "cancelled_at": "<time>",
+                "cancel_reason": "Storm",
+                "customer_email": "mo@example.com",
+                "customer_phone": null,
+                "customer_last_name": "Member",
+                "refund_owed_amount": "0.00",
+                "customer_first_name": "Mo"
+              },
+              "refundedAmount": 20,
+              "eventPlacesBooked": 0,
+              "cardRefundedAmount": 0,
+              "storeCreditBalance": 20,
+              "storeCreditRefundedAmount": 20
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/orders",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "EVENT_NOT_OPEN",
+              "details": {
+                "stage": "event",
+                "reason": "event_cancelled",
+                "message": "That event has been cancelled."
+              },
+              "message": "That event has been cancelled."
+            },
+            "requestId": "gone#6"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.create",
+          "entity_type": "order",
+          "entity_id": "orders#1",
+          "request_id": "gone#2",
+          "details": {
+            "promo": null,
+            "method": "cash",
+            "postage": null,
+            "giftCard": null,
+            "amountDue": 20,
+            "bookingId": null,
+            "confirmed": {
+              "toCollect": 20
+            },
+            "overrides": [],
+            "toCollect": 20,
+            "giftCardId": null,
+            "orderTotal": 20,
+            "storeCredit": 0,
+            "addressSaved": false,
+            "sessionPassId": null,
+            "eventBookingId": "event_bookings#1"
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.paid",
+          "entity_type": "order",
+          "entity_id": "orders#1",
+          "request_id": "gone#2",
+          "details": {
+            "method": "cash",
+            "giftCard": 0,
+            "collected": 20,
+            "storeCredit": 0
+          }
+        },
+        {
+          "id": "audit_log#3",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "event_booking.refund_claimed",
+          "entity_type": "event_booking",
+          "entity_id": "event_bookings#1",
+          "request_id": "gone#4",
+          "details": {
+            "kind": "cancel_places",
+            "plan": {
+              "card": [],
+              "cash": 0,
+              "ownOrderId": "orders#1",
+              "storeCredit": 20
+            },
+            "amount": 20,
+            "cancel": {
+              "lineId": "order_line_items#1",
+              "places": [
+                {
+                  "id": "event_attendees#1",
+                  "value": 20,
+                  "unitPrice": 20
+                }
+              ],
+              "eventId": "10000000-0000-4000-8000-000000000018",
+              "wholeEvent": true,
+              "afterCutoff": false,
+              "eventCancelled": true,
+              "bookingCancelled": true
+            },
+            "method": "card",
+            "reason": "Storm",
+            "worker": true,
+            "orderId": "orders#1",
+            "livemode": null
+          }
+        },
+        {
+          "id": "audit_log#4",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "event.cancel",
+          "entity_type": "event",
+          "entity_id": "10000000-0000-4000-8000-000000000018",
+          "request_id": "gone#7",
+          "details": {
+            "value": 20,
+            "places": 1,
+            "reason": "Storm",
+            "bookings": 1
+          }
+        },
+        {
+          "id": "audit_log#5",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "event_booking.cancel_places",
+          "entity_type": "event_booking",
+          "entity_id": "event_bookings#1",
+          "request_id": "gone#4",
+          "details": {
+            "owed": 0,
+            "value": 20,
+            "amount": 20,
+            "places": 1,
+            "reason": "Storm",
+            "refund": "card",
+            "wholeEvent": true,
+            "afterCutoff": false,
+            "attendeeIds": [
+              "event_attendees#1"
+            ],
+            "cardRefunded": 0,
+            "bookingCancelled": true,
+            "storeCreditRefunded": 20
+          }
+        },
+        {
+          "id": "audit_log#6",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "event_booking.refund_finished",
+          "entity_type": "event_booking",
+          "entity_id": "event_bookings#1",
+          "request_id": "gone#4",
+          "details": {
+            "owed": 0,
+            "claimId": "audit_log#3",
+            "outcome": "given",
+            "cardRefunded": 0,
+            "storeCreditRefunded": 20
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 2
+    },
+    "customers": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-00000000000f",
+          "store_credit_balance": [
+            "0.00",
+            "20.00"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    },
+    "event_attendees": {
+      "added": [
+        {
+          "id": "event_attendees#1",
+          "event_booking_id": "event_bookings#1",
+          "attendee_type": "account_holder",
+          "name": "Mo Member",
+          "email": "mo@example.com",
+          "date_of_birth": "1985-05-05",
+          "unit_price": "20.00",
+          "price_level": "herd",
+          "waiver_accepted": false,
+          "waiver_version": null,
+          "waiver_accepted_at": null,
+          "waiver_method": null,
+          "event_waiver_accepted": false,
+          "event_waiver_version": null,
+          "event_waiver_accepted_at": null,
+          "checked_in_at": null,
+          "created_at": "<set>",
+          "event_waiver_method": null,
+          "cancelled_at": "<set>",
+          "cancelled_by": "10000000-0000-4000-8000-000000000001",
+          "cancel_reason": "Storm",
+          "cancelled_value": "20.00",
+          "refunded_amount": "20.00",
+          "card_refunded_amount": "0.00",
+          "refund_method": "credit",
+          "refund_after_cutoff": false
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "event_bookings": {
+      "added": [
+        {
+          "id": "event_bookings#1",
+          "event_id": "10000000-0000-4000-8000-000000000018",
+          "customer_id": "10000000-0000-4000-8000-00000000000f",
+          "places": 0,
+          "status": "cancelled",
+          "account_holder_attending": true,
+          "price_paid": "20.00",
+          "created_by_staff_id": "10000000-0000-4000-8000-000000000001",
+          "cancelled_at": "<set>",
+          "cancel_reason": "Storm",
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "guests_over_18_confirmed_at": null,
+          "cancelled_by": "10000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "events": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000018",
+          "active": [
+            true,
+            false
+          ],
+          "cancelled_at": [
+            null,
+            "<set>"
+          ],
+          "cancelled_by": [
+            null,
+            "10000000-0000-4000-8000-000000000001"
+          ],
+          "cancel_reason": [
+            null,
+            "Storm"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    },
+    "order_line_items": {
+      "added": [
+        {
+          "id": "order_line_items#1",
+          "order_id": "orders#1",
+          "booking_id": null,
+          "product_variant_id": null,
+          "membership_plan_id": null,
+          "session_pass_type_id": null,
+          "gift_card_id": null,
+          "item_type": "event",
+          "quantity": 1,
+          "unit_price": "20.00",
+          "line_total": "20.00",
+          "created_at": "<set>",
+          "addon_id": null,
+          "refunded_at": "<set>",
+          "refund_method": "credit",
+          "restocked": null,
+          "fulfillment_status": null,
+          "card_refunded_amount": "0.00",
+          "system_unit_price": null,
+          "price_override_reason": null,
+          "discount_amount": "0.00",
+          "event_booking_id": "event_bookings#1"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "orders": {
+      "added": [
+        {
+          "id": "orders#1",
+          "customer_id": "10000000-0000-4000-8000-00000000000f",
+          "order_total": "20.00",
+          "payment_status": "refunded",
+          "stripe_payment_intent_id": null,
+          "promo_code": null,
+          "discount_amount": "0.00",
+          "shipping_address": null,
+          "shipping_status": null,
+          "tracking_number": null,
+          "order_source": "staff_created",
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "payment_method": "cash",
+          "reader_payment": null,
+          "refund_owed_amount": "0.00"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "store_credit_transactions": {
+      "added": [
+        {
+          "id": "store_credit_transactions#1",
+          "customer_id": "10000000-0000-4000-8000-00000000000f",
+          "amount": "20.00",
+          "balance_after": "20.00",
+          "reason": "refund",
+          "order_id": "orders#1",
+          "booking_id": null,
+          "gift_card_id": null,
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "note": "Event refund: Full Moon Sauna. [ref gone#8]",
+          "created_at": "<set>",
+          "event_booking_id": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

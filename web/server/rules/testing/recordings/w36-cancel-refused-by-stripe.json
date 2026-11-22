@@ -1,0 +1,147 @@
+{
+  "scenario": "w36-cancel-refused-by-stripe",
+  "results": [
+    {
+      "updated": false,
+      "reason": "stripe_refused",
+      "message": "This subscription cannot be updated right now."
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "subscriptions.retrieve",
+      "params": {
+        "id": "sub_mo"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "subscriptions.update",
+      "params": {
+        "id": "sub_mo",
+        "cancel_at": 1796860800,
+        "proration_behavior": "none"
+      },
+      "idempotencyKey": "gone#3:cancel-at"
+    }
+  ],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/cancel",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "cancel",
+                "reason": "stripe_refused",
+                "message": "This subscription cannot be updated right now."
+              },
+              "message": "This subscription cannot be updated right now."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.cancel_scheduled",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#2",
+          "details": {
+            "stepId": "gone#3",
+            "channel": "staff",
+            "endDate": "2026-12-10",
+            "cancelAt": 1796860800,
+            "subscriptionId": "sub_mo",
+            "cancelEffectiveDate": {
+              "after": "2026-12-09",
+              "before": null
+            }
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.step_left",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#2",
+          "details": {
+            "kind": "cancel_at",
+            "want": {
+              "cancelAt": 1796860800
+            },
+            "state": "left",
+            "stepId": "gone#3",
+            "subscriptionId": "sub_mo"
+          }
+        },
+        {
+          "id": "audit_log#3",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.step_left",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#2",
+          "details": {
+            "kind": "cancel_at",
+            "want": {
+              "cancelAt": 1796860800
+            },
+            "state": "undone",
+            "detail": "Stripe refused: This subscription cannot be updated right now.",
+            "stepId": "gone#3",
+            "subscriptionId": "sub_mo"
+          }
+        },
+        {
+          "id": "audit_log#4",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.cancel_put_back",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#2",
+          "details": {
+            "was": "cancel",
+            "stepId": "gone#3",
+            "restored": true,
+            "stripeSaid": "This subscription cannot be updated right now.",
+            "cancelEffectiveDate": {
+              "after": null,
+              "before": "2026-12-09"
+            }
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 2
+    }
+  }
+}

@@ -1,0 +1,98 @@
+{
+  "scenario": "w48-gift-card-preset-price-refusals",
+  "results": [
+    {
+      "thrown": "presetId is required"
+    },
+    {
+      "thrown": "amount must be a positive number"
+    },
+    {
+      "thrown": "amount must be a positive number"
+    },
+    {
+      "thrown": "Preset not found"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/gift-card-presets/10000000-0000-4000-8000-00000000001a/price",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "amount",
+              "details": {
+                "action": "catalog.price_set",
+                "reason": "invalid_params",
+                "message": "amount must be a positive number"
+              },
+              "message": "amount must be a positive number"
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/gift-card-presets/10000000-0000-4000-8000-00000000001a/price",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "amount",
+              "details": {
+                "action": "catalog.price_set",
+                "reason": "invalid_params",
+                "message": "amount must be a positive number"
+              },
+              "message": "amount must be a positive number"
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/gift-card-presets/gone#6/price",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "catalog.price_set",
+                "reason": "preset_not_found",
+                "message": "Preset not found"
+              },
+              "message": "Preset not found"
+            },
+            "requestId": "gone#7"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

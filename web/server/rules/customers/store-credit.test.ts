@@ -3,7 +3,8 @@ import { POST as storeCreditRoute } from '@/app/api/v1/staff/customers/[customer
 import type { Db } from '@/server/db'
 import { ISSUE_REFUNDS_NEEDED_MESSAGE } from '@/server/rules/bookings/failure-messages'
 import { insert } from '@/server/rules/testing/database'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
 import { ID, seed, W36_ID, whileFailing } from '@/server/rules/testing/replay/scenarios'
 import { STORE_CREDIT_WORDS } from './failure-messages'
 
@@ -46,7 +47,7 @@ async function seeded(work: () => Promise<void>): Promise<void> {
       },
       run: work,
     },
-    oldSide
+    workerSide()
   )
 }
 

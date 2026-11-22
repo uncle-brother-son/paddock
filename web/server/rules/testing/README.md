@@ -828,3 +828,35 @@ refuses a subscription price switch across intervals (it has not modelled Stripe
 S3: the staff app's kept press (`frontend/utils/membershipPlans.ts`, `pressToSend` and `keptAfter`) through the real
 details route in `plans.test.ts`: no answer, a reload with a new stamp, and the same key and body accepted (the form
 read again under that key is refused); `staff-app-helpers.test.ts` pins the dialogs to the helper.
+
+## The all-Worker sweep (W64, step H)
+
+`sweep/` is what stays when the old code goes (W65). Nothing in it loads the old code:
+
+- `sweep/run.ts`: runs a scenario and records it (moved unchanged out of `replay/harness.ts`, which re-exports it beside
+  the old side). `readRecording` and `writeRecording` read and write `testing/recordings/`.
+- `sweep/worker.ts`, `workerSide()`: every action a scenario or a rule test calls goes to the Worker as its screen
+  presses it, reusing each family's press (`sweep/*-presses.ts`, moved out of the replay's `*-side.ts` files, which
+  re-export them). The old Retool resources are stand-ins that refuse, so reaching old code fails. The clock moves 50 ms
+  before each press and after New Order (T1 stamps its rows a millisecond apart, so 1 ms let the next press tie with
+  them). Any other staff app function is loaded from the staff app's checkout, as the old side did.
+- `sweep/staff-routes.ts`: the `paddockWorkerV1` stand-in (moved out of `replay/legacy-routes.ts`).
+- `sweep/old-states.ts`: SQL fixtures for the states only the old code could make (an order or a flow with no mark of
+  the Worker's, the old screens' cancel of a held order, an old Add Guest's guest, an old membership order).
+- `sweep/sweep.ts` and `sweep-*.test.ts`: every scenario of `scenarios.ts` (W27's and W36's included), W12's flows
+  and W48's step G recordings, split by family. On each: the W05 invariants (`replay/invariants.ts`), G-plan 4.9
+  item 5's (`sweep/g-invariants.ts`; the staff one read around each staff press), the stamps' form, then a comparison
+  with its recording. A breach is allowed only as `sweep/named-breaches.ts` names it, exactly, with why. The forms a
+  family pressed a scenario in (told again, attempted, refused reads as answers, Q4's confirmed figure, the same press
+  twice) are in `sweep/press-forms.ts`. Scenarios only the old code can set up are `DROPPED`, each with its reason.
+  Request hashes, stamps' fingerprints, a set stamp's order and a gift card code no row labels are kept in place but
+  not in value (`steadied`). `coverage.test.ts` holds that every scenario is in one file or dropped, and that the
+  recordings are exactly the swept scenarios'.
+- Re-record after a deliberate change: `UPDATE_RECORDINGS=1 npx vitest run --config vitest.unit.config.ts
+  server/rules/testing/sweep`, then read the diff of `recordings/` before keeping it. `SWEEP_DUMP_DIR=<folder>` writes
+  every recording with its problems, whatever they are, for reading a failure.
+- `old-code-reach.test.ts`: nothing outside `replay/` and the frozen folders reaches the old code, and nothing W65
+  keeps reaches what W65 deletes (its groups), with the words tests W64 left named.
+- `replay/bridge.test.ts` (`BRIDGE_OUT=<folder>`, once): the sweep's recordings against the golden files, each
+  difference accepted by a family's allowance, put in a setup class, or listed (briefs/W64-report.md). It goes with
+  the replay at W65.

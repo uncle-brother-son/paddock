@@ -1,0 +1,160 @@
+{
+  "scenario": "w36-payment-date-refused-stripe-subscription-is-another-customers",
+  "results": [
+    {
+      "membershipId": "10000000-0000-4000-8000-000000000010",
+      "customerId": "10000000-0000-4000-8000-00000000000f",
+      "planId": "10000000-0000-4000-8000-00000000000a",
+      "stripeSubscriptionId": "sub_mo",
+      "refusal": null,
+      "needsOverride": false,
+      "lastChangedAt": null,
+      "currentRenewalDate": "2026-12-10",
+      "earliestDate": "2026-12-11",
+      "latestDate": "2027-01-09",
+      "daysInPeriod": 31,
+      "monthlyPrice": 40,
+      "cardLast4": "4444",
+      "cardBrand": "visa"
+    },
+    {
+      "membershipId": "10000000-0000-4000-8000-000000000010",
+      "customerId": "10000000-0000-4000-8000-00000000000f",
+      "planId": "10000000-0000-4000-8000-00000000000a",
+      "stripeSubscriptionId": "sub_mo",
+      "refusal": null,
+      "needsOverride": false,
+      "lastChangedAt": null,
+      "currentRenewalDate": "2026-12-10",
+      "earliestDate": "2026-12-11",
+      "latestDate": "2027-01-09",
+      "daysInPeriod": 31,
+      "monthlyPrice": 40,
+      "cardLast4": "4444",
+      "cardBrand": "visa",
+      "newRenewalDate": "2026-12-27",
+      "extraDays": 17,
+      "amount": 21.94
+    },
+    {
+      "changed": false,
+      "message": "The subscription doesn't belong to this customer's Stripe account"
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "subscriptions.retrieve",
+      "params": {
+        "id": "sub_mo"
+      },
+      "idempotencyKey": null
+    }
+  ],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/payment-date",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "payment_date",
+                "reason": "customer_mismatch",
+                "message": "The subscription doesn't belong to this customer's Stripe account"
+              },
+              "message": "The subscription doesn't belong to this customer's Stripe account"
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.payment_date_changed",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#2",
+          "details": {
+            "at": "subscription",
+            "state": "failed",
+            "message": "The subscription doesn't belong to this customer's Stripe account",
+            "changeId": "membership_payment_date_changes#1",
+            "paymentIntentId": null
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.payment_date_changed",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#2",
+          "details": {
+            "shown": 21.94,
+            "state": "started",
+            "amount": 21.94,
+            "planId": "10000000-0000-4000-8000-00000000000a",
+            "channel": "staff",
+            "changeId": "membership_payment_date_changes#1",
+            "livemode": false,
+            "override": null,
+            "trialEnd": 1798329600,
+            "extraDays": 17,
+            "customerId": "10000000-0000-4000-8000-00000000000f",
+            "description": "Payment date change: 17 extra days",
+            "newRenewalDate": "2026-12-27",
+            "oldRenewalDate": "2026-12-10",
+            "subscriptionId": "sub_mo",
+            "paymentMethodId": "pm_member",
+            "stripeCustomerId": "cus_member"
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 2
+    },
+    "membership_payment_date_changes": {
+      "added": [
+        {
+          "id": "membership_payment_date_changes#1",
+          "membership_id": "10000000-0000-4000-8000-000000000010",
+          "old_renewal_date": "2026-12-10",
+          "new_renewal_date": "2026-12-27",
+          "extra_days": 17,
+          "amount_charged": "21.94",
+          "stripe_payment_intent_id": null,
+          "order_id": null,
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "override_reason": null,
+          "status": "failed",
+          "failure_message": "The subscription doesn't belong to this customer's Stripe account",
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

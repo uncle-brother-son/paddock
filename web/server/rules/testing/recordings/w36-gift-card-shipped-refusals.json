@@ -1,0 +1,96 @@
+{
+  "scenario": "w36-gift-card-shipped-refusals",
+  "results": [
+    {
+      "updated": false,
+      "reason": "not_found"
+    },
+    {
+      "updated": false,
+      "reason": "not_shipping_fulfillment"
+    },
+    {
+      "updated": false,
+      "reason": "not_shipping_fulfillment"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/gift-cards/gone#2/shipped",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "gift_card_shipped",
+                "reason": "not_found",
+                "message": "Failed to update shipping status"
+              },
+              "message": "Failed to update shipping status"
+            },
+            "requestId": "gone#3"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#4",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/gift-cards/10000000-0000-4000-8000-000000000009/shipped",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "gift_card_shipped",
+                "reason": "not_shipping_fulfillment",
+                "message": "This gift card is not a shipping-fulfillment card"
+              },
+              "message": "This gift card is not a shipping-fulfillment card"
+            },
+            "requestId": "gone#5"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#6",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/gift-cards/10000000-0000-4000-8000-000000000f31/shipped",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "gift_card_shipped",
+                "reason": "not_shipping_fulfillment",
+                "message": "This gift card is not a shipping-fulfillment card"
+              },
+              "message": "This gift card is not a shipping-fulfillment card"
+            },
+            "requestId": "gone#7"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

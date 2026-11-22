@@ -1,0 +1,42 @@
+{
+  "scenario": "w48-price-a-field-the-item-does-not-have",
+  "results": [
+    {
+      "thrown": "monthlyPrice can't be set on a product."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/products/10000000-0000-4000-8000-000000000007/price",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "monthlyPrice",
+              "details": {
+                "action": "catalog.price_set",
+                "reason": "field_not_on_item",
+                "message": "monthlyPrice can't be set on a product."
+              },
+              "message": "monthlyPrice can't be set on a product."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

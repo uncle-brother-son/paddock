@@ -11,8 +11,9 @@ import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
 import { MIN_SEND_MS, STRIPE_DEADLINE_MS } from '@/server/stripe/deadline'
 import { ORDER_STRIPE_LIMITS, READ_STRIPE_LIMITS } from '@/server/stripe/client'
 import type { Recording } from '@/server/rules/testing/replay/compare'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
-import { orderInput, postOrder, postReaderStep, withQuotedCardFigure, type OrderAnswer } from '@/server/rules/testing/replay/order-side'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
+import { orderInput, postOrder, postReaderStep, withQuotedCardFigure, type OrderAnswer } from '@/server/rules/testing/sweep/order-presses'
 import { ID, paidSeat, sam, seed, whileFailing } from '@/server/rules/testing/replay/scenarios'
 import { chargesTakeASecond, replayStripe, stripeClientsMade } from '@/server/rules/testing/replay/stripe-binding'
 import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
@@ -1364,9 +1365,9 @@ describe('card saving (getTerminalConnectionToken, createTerminalSetupIntent, sa
 // test-only copy the replay's setup uses), through the Worker's routes: the path staff take on every reader order.
 describe("the staff app's finalise and cancel, through the Worker", () => {
   type StaffStep = (req: { params: Record<string, unknown>; user: typeof REPLAY_USER }) => Promise<Record<string, unknown>>
-  /** Binds the staff app's globals (oldSide) and loads its own file, as order-switch.test.ts does for createOrder. */
+  /** Binds the staff app's globals (workerSide()) and loads its own file, as order-switch.test.ts does for createOrder. */
   async function staffApp(action: 'finaliseReaderOrder' | 'cancelReaderOrder', stripe: FakeStripe): Promise<StaffStep> {
-    oldSide(db, stripe)
+    workerSide()(db, stripe)
     const file = path.join(staffAppDir(), 'backend/paddock', `${action}.ts`)
     return ((await import(/* @vite-ignore */ file)) as { default: StaffStep }).default
   }

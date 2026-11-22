@@ -1,0 +1,166 @@
+{
+  "scenario": "w48-staff-manage-pricing-on-and-off",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-000000000a03",
+      "can_manage_pricing": true
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000a03",
+      "can_manage_pricing": false
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000a03",
+      "can_manage_pricing": false
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/staff/10000000-0000-4000-8000-000000000a03/permissions",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "10000000-0000-4000-8000-000000000a03",
+              "can_manage_pricing": true
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/staff/10000000-0000-4000-8000-000000000a03/permissions",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "10000000-0000-4000-8000-000000000a03",
+              "can_manage_pricing": false
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/staff/10000000-0000-4000-8000-000000000a03/permissions",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "10000000-0000-4000-8000-000000000a03",
+              "can_manage_pricing": false
+            },
+            "requestId": "gone#6"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "staff.permission_set",
+          "entity_type": "staff",
+          "entity_id": "10000000-0000-4000-8000-000000000a03",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "role": "staff",
+              "active": true,
+              "can_issue_refunds": false,
+              "can_manage_pricing": true
+            },
+            "field": "can_manage_pricing",
+            "before": {
+              "role": "staff",
+              "active": true,
+              "can_issue_refunds": false,
+              "can_manage_pricing": false
+            }
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "staff.permission_set",
+          "entity_type": "staff",
+          "entity_id": "10000000-0000-4000-8000-000000000a03",
+          "request_id": "gone#4",
+          "details": {
+            "key": "gone#3",
+            "after": {
+              "role": "staff",
+              "active": true,
+              "can_issue_refunds": false,
+              "can_manage_pricing": false
+            },
+            "field": "can_manage_pricing",
+            "before": {
+              "role": "staff",
+              "active": true,
+              "can_issue_refunds": false,
+              "can_manage_pricing": true
+            }
+          }
+        },
+        {
+          "id": "audit_log#3",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "staff.permission_set",
+          "entity_type": "staff",
+          "entity_id": "10000000-0000-4000-8000-000000000a03",
+          "request_id": "gone#6",
+          "details": {
+            "key": "gone#5",
+            "after": {
+              "role": "staff",
+              "active": true,
+              "can_issue_refunds": false,
+              "can_manage_pricing": false
+            },
+            "field": "can_manage_pricing",
+            "before": {
+              "role": "staff",
+              "active": true,
+              "can_issue_refunds": false,
+              "can_manage_pricing": false
+            }
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

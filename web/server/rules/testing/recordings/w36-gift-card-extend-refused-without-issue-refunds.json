@@ -1,0 +1,43 @@
+{
+  "scenario": "w36-gift-card-extend-refused-without-issue-refunds",
+  "results": [
+    {
+      "updated": false,
+      "reason": "permission_denied",
+      "message": "Needs the Issue refunds permission to extend or re-activate a gift card."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/gift-cards/10000000-0000-4000-8000-000000000009/extend",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "FORBIDDEN",
+              "details": {
+                "action": "gift_card_extend",
+                "reason": "permission_denied",
+                "message": "Needs the Issue refunds permission to extend or re-activate a gift card."
+              },
+              "message": "Needs the Issue refunds permission to extend or re-activate a gift card."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 403,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

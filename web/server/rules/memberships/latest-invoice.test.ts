@@ -6,7 +6,8 @@ import type { Db } from '@/server/db'
 import { getCustomerCreditOptions } from '@/server/rules/credits/credit-options'
 import { insert } from '@/server/rules/testing/database'
 import { asOwner, migration030 } from '@/server/rules/testing/migration-030'
-import { oldSide, replay, startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
+import { replay, startReplay, type ReplayEnvironment } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
 import { ID, MO_SUBSCRIPTION, seed } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { invoiceEvent, subscriptionUpdatedEvent, webhookClient, webhookRpc } from '@/server/rules/testing/webhook'
@@ -87,7 +88,7 @@ async function onASeed(work: (stripe: FakeStripe) => Promise<void>): Promise<voi
         }
       },
     },
-    oldSide
+    workerSide()
   )
 }
 

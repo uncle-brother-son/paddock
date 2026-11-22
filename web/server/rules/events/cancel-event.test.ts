@@ -7,8 +7,9 @@ import { POST as orderOwedRoute } from '@/app/api/v1/staff/orders/[orderId]/refu
 import type { Db } from '@/server/db'
 import { EVENT_BOOKING_REFUND_OPEN_MESSAGE, REFUND_PATH_OFF_MESSAGE } from '@/server/rules/refunds/failure-messages'
 import { insert } from '@/server/rules/testing/database'
-import { BOOKING_KINDS_ON, withSwitch } from '@/server/rules/testing/replay/booking-side'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/replay/harness'
+import { BOOKING_KINDS_ON, withSwitch } from '@/server/rules/testing/sweep/booking-presses'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
 import { ID, later, seed } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
@@ -110,7 +111,7 @@ async function onTheEvent(work: (context: Context) => Promise<void>): Promise<vo
         }
       },
     },
-    oldSide
+    workerSide()
   )
 }
 

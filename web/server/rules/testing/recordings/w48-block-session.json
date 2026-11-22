@@ -1,0 +1,154 @@
+{
+  "scenario": "w48-block-session",
+  "results": [
+    {
+      "blocked": true,
+      "conflict": false,
+      "conflictingBookings": [],
+      "session": {
+        "id": "10000000-0000-4000-8000-000000000004",
+        "resource_id": null,
+        "service_type_id": "10000000-0000-4000-8000-000000000002",
+        "start_time": "2026-11-12T10:00:00.000Z",
+        "end_time": "2026-11-12T11:00:00.000Z",
+        "type": "public",
+        "capacity": 10,
+        "total_booked": 0,
+        "status": "blocked",
+        "blocked_reason": "Staff training",
+        "blocked_by": "10000000-0000-4000-8000-000000000001",
+        "created_at": "<time>",
+        "updated_at": "<time>",
+        "band_id": "10000000-0000-4000-8000-000000000003",
+        "band_overridden": false
+      }
+    },
+    {
+      "thrown": "This session no longer exists. Reload the page and try again."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/sessions/10000000-0000-4000-8000-000000000004/block",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "blocked": true,
+              "session": {
+                "id": "10000000-0000-4000-8000-000000000004",
+                "type": "public",
+                "status": "blocked",
+                "band_id": "10000000-0000-4000-8000-000000000003",
+                "capacity": 10,
+                "end_time": "2026-11-12T11:00:00.000Z",
+                "blocked_by": "10000000-0000-4000-8000-000000000001",
+                "created_at": "<time>",
+                "start_time": "2026-11-12T10:00:00.000Z",
+                "updated_at": "<time>",
+                "resource_id": null,
+                "total_booked": 0,
+                "blocked_reason": "Staff training",
+                "band_overridden": false,
+                "service_type_id": "10000000-0000-4000-8000-000000000002"
+              },
+              "conflict": false,
+              "conflictingBookings": []
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/sessions/gone#4/block",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "session.blocked",
+                "reason": "session_not_found",
+                "message": "This session no longer exists. Reload the page and try again."
+              },
+              "message": "This session no longer exists. Reload the page and try again."
+            },
+            "requestId": "gone#5"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "session.blocked",
+          "entity_type": "session",
+          "entity_id": "10000000-0000-4000-8000-000000000004",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "id": "10000000-0000-4000-8000-000000000004",
+              "status": "blocked",
+              "blocked_by": "10000000-0000-4000-8000-000000000001",
+              "blocked_reason": "Staff training"
+            },
+            "before": {
+              "id": "10000000-0000-4000-8000-000000000004",
+              "status": "open",
+              "blocked_by": null,
+              "blocked_reason": null
+            },
+            "lockedAt": "<time>"
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "sessions": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000004",
+          "status": [
+            "open",
+            "blocked"
+          ],
+          "blocked_reason": [
+            null,
+            "Staff training"
+          ],
+          "blocked_by": [
+            null,
+            "10000000-0000-4000-8000-000000000001"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

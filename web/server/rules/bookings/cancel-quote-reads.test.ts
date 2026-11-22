@@ -1,7 +1,8 @@
 import { appendFileSync } from 'node:fs'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Db, SqlParam } from '@/server/db'
-import { oldSide, replay, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/replay/harness'
+import { replay, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
 import { ID, mo, paidSeat, seed } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { quoteCancel } from './cancel'
@@ -14,6 +15,13 @@ import { quoteCancel } from './cancel'
 // how many round trips the quote waits for one after another, which is what its time on live is made of.
 vi.setConfig({ testTimeout: 120_000 })
 
+// W64: the booking is placed through the Worker's order route now, which opens the replay's database through this
+// (the old side's legacy routes bound it before).
+const holder = vi.hoisted(() => ({ db: null as unknown }))
+vi.mock('@/server/db/connection', () => ({
+  openRequestDb: () => holder.db as Db,
+  closeRequestDb: () => {},
+}))
 vi.mock('@/server/stripe/client', async (importOriginal) => {
   const { stripeClientMock } = await import('@/server/rules/testing/replay/stripe-binding')
   return stripeClientMock(await importOriginal<typeof import('@/server/stripe/client')>())
@@ -26,7 +34,9 @@ const passWithTwoTowels = { customerId: ID.member, booking: { ...paidSeat([mo]),
 
 let environment: ReplayEnvironment
 beforeAll(async () => {
+  process.env.STAFF_API_KEY = 'test-staff-api-key'
   environment = await startReplay()
+  holder.db = environment.database.db
 })
 afterAll(() => environment.stop())
 
@@ -98,7 +108,7 @@ async function onThePassBooking(work: (context: ScenarioContext & { bookingId: s
         }
       },
     },
-    oldSide
+    workerSide()
   )
 }
 

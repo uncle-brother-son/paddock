@@ -1,0 +1,165 @@
+{
+  "scenario": "w48-member-band-term-set",
+  "results": [
+    {
+      "saved": true,
+      "term": {
+        "id": "10000000-0000-4000-8000-00000000000d",
+        "membership_level": "core",
+        "band_id": "10000000-0000-4000-8000-00000000000c",
+        "credit_eligible": false,
+        "discount_percent": "20.00"
+      }
+    },
+    {
+      "saved": true,
+      "term": {
+        "id": "membership_band_terms#1",
+        "membership_level": "all_access",
+        "band_id": "10000000-0000-4000-8000-00000000000c",
+        "credit_eligible": true,
+        "discount_percent": "0.00"
+      }
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/pricing/member-band-terms",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "term": {
+                "id": "10000000-0000-4000-8000-00000000000d",
+                "band_id": "10000000-0000-4000-8000-00000000000c",
+                "credit_eligible": false,
+                "discount_percent": "20.00",
+                "membership_level": "core"
+              },
+              "saved": true,
+              "stamp": "2026-11-10T09:00:00.050000Z#<md5>"
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/pricing/member-band-terms",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "term": {
+                "id": "membership_band_terms#1",
+                "band_id": "10000000-0000-4000-8000-00000000000c",
+                "credit_eligible": true,
+                "discount_percent": "0.00",
+                "membership_level": "all_access"
+              },
+              "saved": true,
+              "stamp": "2026-11-10T09:00:00.100000Z#<md5>"
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "pricing.member_term_set",
+          "entity_type": "membership_band_term",
+          "entity_id": "10000000-0000-4000-8000-00000000000d",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "id": "10000000-0000-4000-8000-00000000000d",
+              "band_id": "10000000-0000-4000-8000-00000000000c",
+              "credit_eligible": false,
+              "discount_percent": "20.00",
+              "membership_level": "core"
+            },
+            "before": {
+              "id": "10000000-0000-4000-8000-00000000000d",
+              "band_id": "10000000-0000-4000-8000-00000000000c",
+              "credit_eligible": false,
+              "discount_percent": "15.00",
+              "membership_level": "core"
+            }
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "pricing.member_term_set",
+          "entity_type": "membership_band_term",
+          "entity_id": "membership_band_terms#1",
+          "request_id": "gone#4",
+          "details": {
+            "key": "gone#3",
+            "after": {
+              "id": "membership_band_terms#1",
+              "band_id": "10000000-0000-4000-8000-00000000000c",
+              "credit_eligible": true,
+              "discount_percent": "0.00",
+              "membership_level": "all_access"
+            },
+            "before": null
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "membership_band_terms": {
+      "added": [
+        {
+          "id": "membership_band_terms#1",
+          "membership_level": "all_access",
+          "band_id": "10000000-0000-4000-8000-00000000000c",
+          "credit_eligible": true,
+          "discount_percent": "0.00",
+          "updated_by": null,
+          "created_at": "<set>",
+          "updated_at": "<set>"
+        }
+      ],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-00000000000d",
+          "discount_percent": [
+            "15.00",
+            "20.00"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

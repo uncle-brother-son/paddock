@@ -1,0 +1,413 @@
+{
+  "scenario": "w48-event-details-refusals",
+  "results": [
+    {
+      "updated": false,
+      "reason": "invalid_params",
+      "message": "Choose who can book: Public, Members only or Members first."
+    },
+    {
+      "updated": false,
+      "reason": "invalid_params",
+      "message": "Capacity must be a whole number of at least 1."
+    },
+    {
+      "updated": false,
+      "reason": "invalid_params",
+      "message": "Capacity must be a whole number of at least 1."
+    },
+    {
+      "updated": false,
+      "reason": "invalid_params",
+      "message": "Prices can't be negative."
+    },
+    {
+      "updated": false,
+      "reason": "constraint",
+      "message": "This event is on sale, so it needs a date, capacity, all three prices and a refund cut-off (and a public release time for Members first). Take it off sale first to clear any of them."
+    },
+    {
+      "updated": false,
+      "reason": "invalid_params",
+      "message": "One of the dates is not valid."
+    },
+    {
+      "updated": false,
+      "reason": "invalid_params",
+      "message": "One of the dates is not valid."
+    },
+    {
+      "updated": false,
+      "reason": "event_not_found",
+      "message": "That event no longer exists."
+    },
+    {
+      "updated": false,
+      "reason": "constraint",
+      "message": "The end time must be after the start time."
+    },
+    {
+      "updated": false,
+      "reason": "constraint",
+      "message": "The refund cut-off can't be after the event starts."
+    },
+    {
+      "updated": false,
+      "reason": "constraint",
+      "message": "The public release must be before the event starts."
+    },
+    {
+      "updated": false,
+      "reason": "constraint",
+      "message": "This event is on sale, so it needs a date, capacity, all three prices and a refund cut-off (and a public release time for Members first). Take it off sale first to clear any of them."
+    },
+    {
+      "updated": false,
+      "reason": "constraint",
+      "message": "This event is on sale, so it needs a date, capacity, all three prices and a refund cut-off (and a public release time for Members first). Take it off sale first to clear any of them."
+    },
+    {
+      "updated": false,
+      "reason": "constraint",
+      "message": "This event is on sale, so it needs a date, capacity, all three prices and a refund cut-off (and a public release time for Members first). Take it off sale first to clear any of them."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/events/10000000-0000-4000-8000-000000000018/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "access",
+              "details": {
+                "action": "event.details_set",
+                "reason": "invalid_params",
+                "message": "Choose who can book: Public, Members only or Members first."
+              },
+              "message": "Choose who can book: Public, Members only or Members first."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/events/10000000-0000-4000-8000-000000000018/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "capacity",
+              "details": {
+                "action": "event.details_set",
+                "reason": "invalid_params",
+                "message": "Capacity must be a whole number of at least 1."
+              },
+              "message": "Capacity must be a whole number of at least 1."
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/events/10000000-0000-4000-8000-000000000018/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "capacity",
+              "details": {
+                "action": "event.details_set",
+                "reason": "invalid_params",
+                "message": "Capacity must be a whole number of at least 1."
+              },
+              "message": "Capacity must be a whole number of at least 1."
+            },
+            "requestId": "gone#6"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#7",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/events/10000000-0000-4000-8000-000000000018/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "pricePublic",
+              "details": {
+                "action": "event.details_set",
+                "reason": "invalid_params",
+                "message": "Prices can't be negative."
+              },
+              "message": "Prices can't be negative."
+            },
+            "requestId": "gone#8"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#9",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/events/10000000-0000-4000-8000-000000000018/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "event.details_set",
+                "reason": "constraint",
+                "message": "This event is on sale, so it needs a date, capacity, all three prices and a refund cut-off (and a public release time for Members first). Take it off sale first to clear any of them."
+              },
+              "message": "This event is on sale, so it needs a date, capacity, all three prices and a refund cut-off (and a public release time for Members first). Take it off sale first to clear any of them."
+            },
+            "requestId": "gone#10"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#11",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/events/10000000-0000-4000-8000-000000000018/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "startsAt",
+              "details": {
+                "action": "event.details_set",
+                "reason": "invalid_params",
+                "message": "One of the dates is not valid."
+              },
+              "message": "One of the dates is not valid."
+            },
+            "requestId": "gone#12"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#13",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/events/10000000-0000-4000-8000-000000000018/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "refundCutoffAt",
+              "details": {
+                "action": "event.details_set",
+                "reason": "invalid_params",
+                "message": "One of the dates is not valid."
+              },
+              "message": "One of the dates is not valid."
+            },
+            "requestId": "gone#14"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#15",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/events/gone#16/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "event.details_set",
+                "reason": "event_not_found",
+                "message": "That event no longer exists."
+              },
+              "message": "That event no longer exists."
+            },
+            "requestId": "gone#17"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#18",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/events/10000000-0000-4000-8000-000000000018/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "event.details_set",
+                "reason": "constraint",
+                "message": "The end time must be after the start time."
+              },
+              "message": "The end time must be after the start time."
+            },
+            "requestId": "gone#19"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#20",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/events/10000000-0000-4000-8000-000000000018/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "event.details_set",
+                "reason": "constraint",
+                "message": "The refund cut-off can't be after the event starts."
+              },
+              "message": "The refund cut-off can't be after the event starts."
+            },
+            "requestId": "gone#21"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#22",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/events/10000000-0000-4000-8000-000000000018/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "event.details_set",
+                "reason": "constraint",
+                "message": "The public release must be before the event starts."
+              },
+              "message": "The public release must be before the event starts."
+            },
+            "requestId": "gone#23"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#24",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/events/10000000-0000-4000-8000-000000000018/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "event.details_set",
+                "reason": "constraint",
+                "message": "This event is on sale, so it needs a date, capacity, all three prices and a refund cut-off (and a public release time for Members first). Take it off sale first to clear any of them."
+              },
+              "message": "This event is on sale, so it needs a date, capacity, all three prices and a refund cut-off (and a public release time for Members first). Take it off sale first to clear any of them."
+            },
+            "requestId": "gone#25"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#26",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/events/10000000-0000-4000-8000-000000000018/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "event.details_set",
+                "reason": "constraint",
+                "message": "This event is on sale, so it needs a date, capacity, all three prices and a refund cut-off (and a public release time for Members first). Take it off sale first to clear any of them."
+              },
+              "message": "This event is on sale, so it needs a date, capacity, all three prices and a refund cut-off (and a public release time for Members first). Take it off sale first to clear any of them."
+            },
+            "requestId": "gone#27"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#28",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/events/10000000-0000-4000-8000-000000000018/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "event.details_set",
+                "reason": "constraint",
+                "message": "This event is on sale, so it needs a date, capacity, all three prices and a refund cut-off (and a public release time for Members first). Take it off sale first to clear any of them."
+              },
+              "message": "This event is on sale, so it needs a date, capacity, all three prices and a refund cut-off (and a public release time for Members first). Take it off sale first to clear any of them."
+            },
+            "requestId": "gone#29"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -1,0 +1,352 @@
+{
+  "scenario": "w27-order-refund-standalone-addon",
+  "results": [
+    {
+      "success": true,
+      "orderId": "orders#1",
+      "cardCharged": true,
+      "cardAmount": 5,
+      "paymentMethodUsed": "card"
+    },
+    {
+      "success": true,
+      "refundedAmount": 5,
+      "refundMethod": "card",
+      "cardRefundedAmount": 5,
+      "orderPaymentStatus": "refunded"
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "paymentIntents.create",
+      "params": {
+        "amount": 500,
+        "currency": "gbp",
+        "customer": "cus_seed",
+        "payment_method": "pm_seed",
+        "off_session": true,
+        "confirm": true,
+        "description": "Staff-created order for add-ons",
+        "metadata": {
+          "order_id": "orders#1"
+        }
+      },
+      "idempotencyKey": "orders#1:charge"
+    },
+    {
+      "method": "refunds.create",
+      "params": {
+        "payment_intent": "pi_fake_0002",
+        "amount": 500,
+        "metadata": {
+          "refund_key": "audit_log#3:refund:orders#1",
+          "claim_id": "audit_log#3"
+        }
+      },
+      "idempotencyKey": "audit_log#3:refund:orders#1"
+    }
+  ],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/orders",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "status": "paid",
+              "orderId": "orders#1",
+              "payment": {
+                "method": "card",
+                "collected": 5,
+                "cardCharged": true,
+                "giftCardApplied": 0,
+                "storeCreditApplied": 0
+              },
+              "bookingId": null,
+              "giftCardId": null,
+              "giftCardCode": null,
+              "sessionPassId": null,
+              "eventBookingId": null
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/orders/orders#1/refunds",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "refundMethod": "card",
+              "refundedAmount": 5,
+              "cardRefundedAmount": 5,
+              "orderPaymentStatus": "refunded"
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.create",
+          "entity_type": "order",
+          "entity_id": "orders#1",
+          "request_id": "gone#2",
+          "details": {
+            "promo": null,
+            "method": "card",
+            "postage": null,
+            "giftCard": null,
+            "amountDue": 5,
+            "bookingId": null,
+            "confirmed": {
+              "toCollect": 5
+            },
+            "overrides": [],
+            "toCollect": 5,
+            "awaitsCard": true,
+            "giftCardId": null,
+            "orderTotal": 5,
+            "storeCredit": 0,
+            "addressSaved": false,
+            "sessionPassId": null,
+            "eventBookingId": null
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.paid",
+          "entity_type": "order",
+          "entity_id": "orders#1",
+          "request_id": "gone#2",
+          "details": {
+            "method": "card",
+            "collected": 5,
+            "addressSaved": false,
+            "paymentIntentId": "pi_fake_0002",
+            "eventBookingConfirmed": false
+          }
+        },
+        {
+          "id": "audit_log#3",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.refund_claimed",
+          "entity_type": "order",
+          "entity_id": "orders#1",
+          "request_id": "gone#4",
+          "details": {
+            "kind": "refund",
+            "plan": {
+              "card": [
+                {
+                  "lines": [
+                    {
+                      "amount": 5,
+                      "lineId": "order_line_items#1"
+                    }
+                  ],
+                  "amount": 5,
+                  "orderId": "orders#1",
+                  "paymentIntentId": "pi_fake_0002"
+                }
+              ],
+              "cash": 0,
+              "ownOrderId": "orders#1",
+              "storeCredit": 0
+            },
+            "lines": [
+              {
+                "id": "order_line_items#1",
+                "amount": 5,
+                "method": "card",
+                "itemType": "addon",
+                "restocked": null
+              }
+            ],
+            "amount": 5,
+            "method": "card",
+            "reason": null,
+            "worker": true,
+            "livemode": false
+          }
+        },
+        {
+          "id": "audit_log#4",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.refund",
+          "entity_type": "order",
+          "entity_id": "orders#1",
+          "request_id": "gone#4",
+          "details": {
+            "owed": 0,
+            "amount": 5,
+            "method": "card",
+            "restocked": [],
+            "lineItemIds": [
+              "order_line_items#1"
+            ],
+            "cardRefunded": 5,
+            "storeCreditRefunded": 0
+          }
+        },
+        {
+          "id": "audit_log#5",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.refund_finished",
+          "entity_type": "order",
+          "entity_id": "orders#1",
+          "request_id": "gone#4",
+          "details": {
+            "owed": 0,
+            "claimId": "audit_log#3",
+            "outcome": "given",
+            "refunds": [
+              {
+                "amount": 5,
+                "status": "succeeded",
+                "orderId": "orders#1",
+                "refundId": "re_fake_0003",
+                "paymentIntentId": "pi_fake_0002"
+              }
+            ],
+            "cardRefunded": 5,
+            "storeCreditRefunded": 0
+          }
+        },
+        {
+          "id": "audit_log#6",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "refund.watch",
+          "entity_type": "refund_watch",
+          "entity_id": "re_fake_0003",
+          "request_id": "gone#4",
+          "details": {
+            "on": "order",
+            "lines": [
+              {
+                "amount": 5,
+                "lineId": "order_line_items#1"
+              }
+            ],
+            "state": "watching",
+            "amount": 5,
+            "status": "succeeded",
+            "claimId": "audit_log#3",
+            "orderId": "orders#1",
+            "livemode": false,
+            "refundId": "re_fake_0003",
+            "subjectId": "orders#1",
+            "paymentIntentId": "pi_fake_0002"
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "order_line_items": {
+      "added": [
+        {
+          "id": "order_line_items#1",
+          "order_id": "orders#1",
+          "booking_id": null,
+          "product_variant_id": null,
+          "membership_plan_id": null,
+          "session_pass_type_id": null,
+          "gift_card_id": null,
+          "item_type": "addon",
+          "quantity": 1,
+          "unit_price": "5.00",
+          "line_total": "5.00",
+          "created_at": "<set>",
+          "addon_id": "10000000-0000-4000-8000-000000000006",
+          "refunded_at": "<set>",
+          "refund_method": "card",
+          "restocked": null,
+          "fulfillment_status": null,
+          "card_refunded_amount": "5.00",
+          "system_unit_price": "5.00",
+          "price_override_reason": null,
+          "discount_amount": "0.00",
+          "event_booking_id": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "orders": {
+      "added": [
+        {
+          "id": "orders#1",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "order_total": "5.00",
+          "payment_status": "refunded",
+          "stripe_payment_intent_id": "pi_fake_0002",
+          "promo_code": null,
+          "discount_amount": "0.00",
+          "shipping_address": null,
+          "shipping_status": null,
+          "tracking_number": null,
+          "order_source": "staff_created",
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "payment_method": "card",
+          "reader_payment": {
+            "flow": "checkout",
+            "method": "card",
+            "channel": "staff",
+            "livemode": false,
+            "save_card": false,
+            "created_at": "<time>",
+            "request_id": "gone#2",
+            "expected_amount": 5,
+            "payment_method_id": "pm_seed",
+            "charge_description": "Staff-created order for add-ons",
+            "stripe_customer_id": "cus_seed",
+            "charge_payment_intent_id": "pi_fake_0002",
+            "save_address_to_customer": false
+          },
+          "refund_owed_amount": "0.00"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -1,0 +1,108 @@
+{
+  "scenario": "w48-service-type-active-off-and-on",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-000000000002",
+      "active": false
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000002",
+      "active": true
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/service-types/10000000-0000-4000-8000-000000000002/active",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "10000000-0000-4000-8000-000000000002",
+              "active": false
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/service-types/10000000-0000-4000-8000-000000000002/active",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "10000000-0000-4000-8000-000000000002",
+              "active": true
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "catalog.active_set",
+          "entity_type": "service_type",
+          "entity_id": "10000000-0000-4000-8000-000000000002",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "id": "10000000-0000-4000-8000-000000000002",
+              "active": false
+            },
+            "before": {
+              "id": "10000000-0000-4000-8000-000000000002",
+              "active": true
+            }
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "catalog.active_set",
+          "entity_type": "service_type",
+          "entity_id": "10000000-0000-4000-8000-000000000002",
+          "request_id": "gone#4",
+          "details": {
+            "key": "gone#3",
+            "after": {
+              "id": "10000000-0000-4000-8000-000000000002",
+              "active": true
+            },
+            "before": {
+              "id": "10000000-0000-4000-8000-000000000002",
+              "active": false
+            }
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -1,0 +1,409 @@
+{
+  "scenario": "w36-fb19-lapse-sweep-cancels-a-credit-booking-and-keeps-its-paid-add-on",
+  "results": [
+    {
+      "success": true,
+      "orderId": "orders#1",
+      "bookingId": "bookings#1",
+      "cardCharged": false,
+      "cardAmount": 5,
+      "paymentMethodUsed": "cash"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "addon_order_lines": {
+      "added": [
+        {
+          "id": "addon_order_lines#1",
+          "booking_id": "bookings#1",
+          "addon_id": "10000000-0000-4000-8000-000000000006",
+          "quantity": 1,
+          "price_at_purchase": "5.00",
+          "sku_at_purchase": "TOWEL",
+          "redemption_source": "paid",
+          "stripe_price_id": null,
+          "created_at": "<set>",
+          "prepared": false,
+          "prepared_at": null,
+          "prepared_by": null,
+          "redeemed_membership_id": null,
+          "order_id": "orders#1",
+          "removed_at": "<set>",
+          "removed_by": null,
+          "refunded_amount": "5.00",
+          "card_refunded_amount": "0.00",
+          "refund_method": "credit"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/orders",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "status": "paid",
+              "orderId": "orders#1",
+              "payment": {
+                "method": "cash",
+                "collected": 5,
+                "cardCharged": false,
+                "giftCardApplied": 0,
+                "storeCreditApplied": 0
+              },
+              "bookingId": "bookings#1",
+              "giftCardId": null,
+              "giftCardCode": null,
+              "sessionPassId": null,
+              "eventBookingId": null
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.create",
+          "entity_type": "order",
+          "entity_id": "orders#1",
+          "request_id": "gone#2",
+          "details": {
+            "promo": null,
+            "method": "cash",
+            "postage": null,
+            "giftCard": null,
+            "amountDue": 5,
+            "bookingId": "bookings#1",
+            "confirmed": {
+              "toCollect": 5
+            },
+            "overrides": [],
+            "toCollect": 5,
+            "giftCardId": null,
+            "orderTotal": 5,
+            "storeCredit": 0,
+            "addressSaved": false,
+            "sessionPassId": null,
+            "eventBookingId": null
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.paid",
+          "entity_type": "order",
+          "entity_id": "orders#1",
+          "request_id": "gone#2",
+          "details": {
+            "method": "cash",
+            "giftCard": 0,
+            "collected": 5,
+            "storeCredit": 0
+          }
+        },
+        {
+          "id": "audit_log#3",
+          "at": "<set>",
+          "actor_type": "system",
+          "actor_id": null,
+          "action": "booking.refund_claimed",
+          "entity_type": "booking",
+          "entity_id": "bookings#1",
+          "request_id": "replay-lapse-sweep",
+          "details": {
+            "kind": "cancel_credit",
+            "plan": {
+              "card": [],
+              "cash": 0,
+              "ownOrderId": "orders#1",
+              "storeCredit": 5
+            },
+            "amount": 5,
+            "cancel": {
+              "lapse": {
+                "back": true,
+                "kept": null,
+                "paymentDueBy": "<time>"
+              },
+              "addons": [
+                {
+                  "id": "addon_order_lines#1",
+                  "was": {
+                    "card": "0.00",
+                    "method": null,
+                    "refunded": "0.00"
+                  },
+                  "name": "Towel",
+                  "paid": true,
+                  "stamp": null,
+                  "amount": 5,
+                  "orderId": "orders#1",
+                  "described": "1× Towel",
+                  "membershipId": null,
+                  "creditsReturned": 0
+                }
+              ],
+              "status": "payment_needed",
+              "channel": "system",
+              "sessionId": "10000000-0000-4000-8000-000000000004",
+              "refundOwed": 0,
+              "seatAmount": 0,
+              "addonRefund": "credit",
+              "cancelledAt": null,
+              "passReturned": null,
+              "allBackAlready": false,
+              "placesReleased": 1,
+              "creditUsableAgain": true
+            },
+            "method": "credit",
+            "reason": null,
+            "worker": true,
+            "channel": "system",
+            "livemode": null,
+            "pricePaidBefore": 0
+          }
+        },
+        {
+          "id": "audit_log#4",
+          "at": "<set>",
+          "actor_type": "system",
+          "actor_id": null,
+          "action": "booking.cancel_credit",
+          "entity_type": "booking",
+          "entity_id": "bookings#1",
+          "request_id": "replay-lapse-sweep",
+          "details": {
+            "owed": 0,
+            "lapse": {
+              "back": true,
+              "kept": null,
+              "paymentDueBy": "<time>"
+            },
+            "channel": "system",
+            "addonRefund": "credit",
+            "addonLineIds": [
+              "addon_order_lines#1"
+            ],
+            "addonsRefund": 5,
+            "cardRefunded": 0,
+            "passReturned": null,
+            "placesReleased": 1,
+            "creditsReturned": 0,
+            "creditUsableAgain": true,
+            "storeCreditRefunded": 5
+          }
+        },
+        {
+          "id": "audit_log#5",
+          "at": "<set>",
+          "actor_type": "system",
+          "actor_id": null,
+          "action": "booking.lapsed",
+          "entity_type": "booking",
+          "entity_id": "bookings#1",
+          "request_id": "replay-lapse-sweep",
+          "details": {
+            "back": true,
+            "kept": null,
+            "pricePaid": 0,
+            "addonsKept": 0,
+            "refundOwed": 0,
+            "paymentDueBy": "<time>",
+            "placesReleased": 1,
+            "storeCreditRefunded": 5
+          }
+        },
+        {
+          "id": "audit_log#6",
+          "at": "<set>",
+          "actor_type": "system",
+          "actor_id": null,
+          "action": "booking.refund_finished",
+          "entity_type": "booking",
+          "entity_id": "bookings#1",
+          "request_id": "replay-lapse-sweep",
+          "details": {
+            "owed": 0,
+            "claimId": "audit_log#3",
+            "outcome": "given",
+            "cardRefunded": 0,
+            "storeCreditRefunded": 5
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 2
+    },
+    "booking_guests": {
+      "added": [
+        {
+          "id": "booking_guests#1",
+          "booking_id": "bookings#1",
+          "guest_type": "account_holder",
+          "guest_name": "Mo Member",
+          "guest_email": "mo@example.com",
+          "waiver_accepted": false,
+          "waiver_version": null,
+          "waiver_accepted_at": null,
+          "waiver_method": null,
+          "reminder_sent_at": null,
+          "created_at": "<set>",
+          "date_of_birth": "1985-05-05",
+          "unit_price": "20.00",
+          "pay_by": "membership_credit"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "bookings": {
+      "added": [
+        {
+          "id": "bookings#1",
+          "session_id": "10000000-0000-4000-8000-000000000004",
+          "customer_id": "10000000-0000-4000-8000-00000000000f",
+          "party_size": 1,
+          "status": "cancelled",
+          "price_paid": "0.00",
+          "stripe_payment_id": null,
+          "redemption_source": "membership_credit",
+          "created_at": "<set>",
+          "cancelled_at": "<set>",
+          "checked_in_at": null,
+          "updated_at": "<set>",
+          "start_time": "<set>",
+          "end_time": "<set>",
+          "redeemed_membership_id": "10000000-0000-4000-8000-000000000010",
+          "redeemed_session_pass_id": null,
+          "band_id": "10000000-0000-4000-8000-000000000003",
+          "credit_period_id": "10000000-0000-4000-8000-000000000021",
+          "payment_due_by": "<set>",
+          "cancel_reason": "membership_lapsed",
+          "special_requests": null,
+          "guests_over_18_confirmed_at": null,
+          "part_refunded_amount": "0.00",
+          "refund_owed_amount": "0.00"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "customers": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-00000000000f",
+          "store_credit_balance": [
+            "0.00",
+            "5.00"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    },
+    "order_line_items": {
+      "added": [
+        {
+          "id": "order_line_items#1",
+          "order_id": "orders#1",
+          "booking_id": "bookings#1",
+          "product_variant_id": null,
+          "membership_plan_id": null,
+          "session_pass_type_id": null,
+          "gift_card_id": null,
+          "item_type": "booking",
+          "quantity": 1,
+          "unit_price": "0.00",
+          "line_total": "0.00",
+          "created_at": "<set>",
+          "addon_id": null,
+          "refunded_at": null,
+          "refund_method": null,
+          "restocked": null,
+          "fulfillment_status": null,
+          "card_refunded_amount": "0.00",
+          "system_unit_price": null,
+          "price_override_reason": null,
+          "discount_amount": "0.00",
+          "event_booking_id": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "orders": {
+      "added": [
+        {
+          "id": "orders#1",
+          "customer_id": "10000000-0000-4000-8000-00000000000f",
+          "order_total": "5.00",
+          "payment_status": "refunded",
+          "stripe_payment_intent_id": null,
+          "promo_code": null,
+          "discount_amount": "0.00",
+          "shipping_address": null,
+          "shipping_status": null,
+          "tracking_number": null,
+          "order_source": "staff_created",
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "payment_method": "cash",
+          "reader_payment": null,
+          "refund_owed_amount": "0.00"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "store_credit_transactions": {
+      "added": [
+        {
+          "id": "store_credit_transactions#1",
+          "customer_id": "10000000-0000-4000-8000-00000000000f",
+          "amount": "5.00",
+          "balance_after": "5.00",
+          "reason": "refund",
+          "order_id": "orders#1",
+          "booking_id": "bookings#1",
+          "gift_card_id": null,
+          "staff_id": null,
+          "note": "Add-on refund: 1× Towel. [ref gone#3]",
+          "created_at": "<set>",
+          "event_booking_id": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -1,0 +1,146 @@
+{
+  "scenario": "w36-cancel-monthly-inside-the-minimum-term",
+  "results": [
+    {
+      "updated": true,
+      "membership": {
+        "id": "10000000-0000-4000-8000-000000000010",
+        "cancel_effective_date": "2027-01-09",
+        "billing_frequency": "monthly"
+      },
+      "endDate": "2027-01-10",
+      "stripeUpdated": true
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "subscriptions.retrieve",
+      "params": {
+        "id": "sub_mo"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "subscriptions.update",
+      "params": {
+        "id": "sub_mo",
+        "cancel_at": 1799539200,
+        "proration_behavior": "none"
+      },
+      "idempotencyKey": "gone#3:cancel-at"
+    }
+  ],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/cancel",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "endDate": "2027-01-10",
+              "membership": {
+                "id": "10000000-0000-4000-8000-000000000010",
+                "billing_frequency": "monthly",
+                "cancel_effective_date": "2027-01-09"
+              },
+              "stripeUpdated": true
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.cancel_scheduled",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#2",
+          "details": {
+            "stepId": "gone#3",
+            "channel": "staff",
+            "endDate": "2027-01-10",
+            "cancelAt": 1799539200,
+            "subscriptionId": "sub_mo",
+            "cancelEffectiveDate": {
+              "after": "2027-01-09",
+              "before": null
+            }
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.step_left",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#2",
+          "details": {
+            "kind": "cancel_at",
+            "want": {
+              "cancelAt": 1799539200
+            },
+            "state": "done",
+            "detail": "sent",
+            "stepId": "gone#3",
+            "subscriptionId": "sub_mo"
+          }
+        },
+        {
+          "id": "audit_log#3",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.step_left",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#2",
+          "details": {
+            "kind": "cancel_at",
+            "want": {
+              "cancelAt": 1799539200
+            },
+            "state": "left",
+            "stepId": "gone#3",
+            "subscriptionId": "sub_mo"
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 2
+    },
+    "customer_memberships": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000010",
+          "cancel_effective_date": [
+            null,
+            "2027-01-09"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

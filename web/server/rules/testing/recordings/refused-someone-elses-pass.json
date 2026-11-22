@@ -1,0 +1,44 @@
+{
+  "scenario": "refused-someone-elses-pass",
+  "results": [
+    {
+      "success": false,
+      "stage": "booking",
+      "reason": "session_pass_not_found",
+      "bookingFailureReason": "session_pass_not_found"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/orders",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "stage": "booking",
+                "reason": "session_pass_not_found",
+                "bookingFailureReason": "session_pass_not_found"
+              },
+              "message": "Failed to complete the order."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

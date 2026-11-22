@@ -1,0 +1,226 @@
+{
+  "scenario": "gift-card-custom-amount-on-card",
+  "results": [
+    {
+      "success": true,
+      "orderId": "orders#1",
+      "giftCardId": "gift_cards#1",
+      "giftCardCode": "<code#1>",
+      "cardCharged": true,
+      "cardAmount": 25,
+      "paymentMethodUsed": "card"
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "paymentIntents.create",
+      "params": {
+        "amount": 2500,
+        "currency": "gbp",
+        "customer": "cus_seed",
+        "payment_method": "pm_seed",
+        "off_session": true,
+        "confirm": true,
+        "description": "Staff-created order for gift card",
+        "metadata": {
+          "order_id": "orders#1"
+        }
+      },
+      "idempotencyKey": "orders#1:charge"
+    }
+  ],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/orders",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "status": "paid",
+              "orderId": "orders#1",
+              "payment": {
+                "method": "card",
+                "collected": 25,
+                "cardCharged": true,
+                "giftCardApplied": 0,
+                "storeCreditApplied": 0
+              },
+              "bookingId": null,
+              "giftCardId": "gift_cards#1",
+              "giftCardCode": "<code#1>",
+              "sessionPassId": null,
+              "eventBookingId": null
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.create",
+          "entity_type": "order",
+          "entity_id": "orders#1",
+          "request_id": "gone#2",
+          "details": {
+            "promo": null,
+            "method": "card",
+            "postage": null,
+            "giftCard": null,
+            "amountDue": 25,
+            "bookingId": null,
+            "confirmed": {
+              "toCollect": 25
+            },
+            "overrides": [],
+            "toCollect": 25,
+            "awaitsCard": true,
+            "giftCardId": "gift_cards#1",
+            "orderTotal": 25,
+            "storeCredit": 0,
+            "addressSaved": false,
+            "sessionPassId": null,
+            "eventBookingId": null
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.paid",
+          "entity_type": "order",
+          "entity_id": "orders#1",
+          "request_id": "gone#2",
+          "details": {
+            "method": "card",
+            "collected": 25,
+            "addressSaved": false,
+            "paymentIntentId": "pi_fake_0002",
+            "eventBookingConfirmed": false
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "gift_cards": {
+      "added": [
+        {
+          "id": "gift_cards#1",
+          "code": "<code#1>",
+          "type": "monetary",
+          "original_value": "25.00",
+          "remaining_balance": "25.00",
+          "purchaser_id": "10000000-0000-4000-8000-000000000005",
+          "recipient_name": "Ali",
+          "recipient_email": null,
+          "gift_message": null,
+          "origin": "customer_purchase",
+          "issue_date": "2026-11-10",
+          "expiry_date": "2027-11-10",
+          "redeemed_at": null,
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "fulfillment_method": "pickup",
+          "picked_up": false,
+          "picked_up_at": null,
+          "picked_up_by": null,
+          "voided": false,
+          "shipped_at": null,
+          "shipped_by": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "order_line_items": {
+      "added": [
+        {
+          "id": "order_line_items#1",
+          "order_id": "orders#1",
+          "booking_id": null,
+          "product_variant_id": null,
+          "membership_plan_id": null,
+          "session_pass_type_id": null,
+          "gift_card_id": "gift_cards#1",
+          "item_type": "gift_card",
+          "quantity": 1,
+          "unit_price": "25.00",
+          "line_total": "25.00",
+          "created_at": "<set>",
+          "addon_id": null,
+          "refunded_at": null,
+          "refund_method": null,
+          "restocked": null,
+          "fulfillment_status": null,
+          "card_refunded_amount": "0.00",
+          "system_unit_price": null,
+          "price_override_reason": null,
+          "discount_amount": "0.00",
+          "event_booking_id": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "orders": {
+      "added": [
+        {
+          "id": "orders#1",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "order_total": "25.00",
+          "payment_status": "paid",
+          "stripe_payment_intent_id": "pi_fake_0002",
+          "promo_code": null,
+          "discount_amount": "0.00",
+          "shipping_address": null,
+          "shipping_status": null,
+          "tracking_number": null,
+          "order_source": "staff_created",
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "payment_method": "card",
+          "reader_payment": {
+            "flow": "checkout",
+            "method": "card",
+            "channel": "staff",
+            "livemode": false,
+            "save_card": false,
+            "created_at": "<time>",
+            "request_id": "gone#2",
+            "expected_amount": 25,
+            "payment_method_id": "pm_seed",
+            "charge_description": "Staff-created order for gift card",
+            "stripe_customer_id": "cus_seed",
+            "charge_payment_intent_id": "pi_fake_0002",
+            "save_address_to_customer": false
+          },
+          "refund_owed_amount": "0.00"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

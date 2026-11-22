@@ -1,0 +1,44 @@
+{
+  "scenario": "w08-refused-event-not-on-sale",
+  "results": [
+    {
+      "success": false,
+      "stage": "event",
+      "reason": "event_not_on_sale",
+      "message": "That event is not on sale."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/orders",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "EVENT_NOT_OPEN",
+              "details": {
+                "stage": "event",
+                "reason": "event_not_on_sale",
+                "message": "That event is not on sale."
+              },
+              "message": "That event is not on sale."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

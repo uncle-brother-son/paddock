@@ -1,0 +1,96 @@
+{
+  "scenario": "w48-tier-range-set",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-000000000020",
+      "service_type_id": "10000000-0000-4000-8000-00000000001b",
+      "min_people": 1,
+      "max_people": 8,
+      "price": "100.00"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/tier-groups/range",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "10000000-0000-4000-8000-000000000020",
+              "price": "100.00",
+              "max_people": 8,
+              "min_people": 1,
+              "range_stamp": "10000000-0000-4000-8000-000000000020@fields#<md5>",
+              "service_type_id": "10000000-0000-4000-8000-00000000001b"
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "catalog.tier_range_set",
+          "entity_type": "price_tier",
+          "entity_id": "10000000-0000-4000-8000-000000000020",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": [
+              {
+                "id": "10000000-0000-4000-8000-000000000020",
+                "band_id": "10000000-0000-4000-8000-000000000003",
+                "max_people": 8,
+                "min_people": 1
+              }
+            ],
+            "tiers": 1,
+            "before": [
+              {
+                "id": "10000000-0000-4000-8000-000000000020",
+                "band_id": "10000000-0000-4000-8000-000000000003",
+                "max_people": 10,
+                "min_people": 1
+              }
+            ],
+            "serviceTypeId": "10000000-0000-4000-8000-00000000001b"
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "service_type_price_tiers": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000020",
+          "max_people": [
+            10,
+            8
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

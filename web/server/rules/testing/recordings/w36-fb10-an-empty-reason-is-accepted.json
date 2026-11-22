@@ -1,0 +1,73 @@
+{
+  "scenario": "w36-fb10-an-empty-reason-is-accepted",
+  "results": [
+    {
+      "adjusted": false,
+      "reason": "reason_required",
+      "message": "A reason is required for the audit trail"
+    },
+    {
+      "adjusted": false,
+      "reason": "reason_required",
+      "message": "A reason is required for the audit trail"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/credits",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "reason",
+              "details": {
+                "action": "credits",
+                "reason": "reason_required",
+                "message": "A reason is required for the audit trail"
+              },
+              "message": "A reason is required for the audit trail"
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/credits",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "reason",
+              "details": {
+                "action": "credits",
+                "reason": "reason_required",
+                "message": "A reason is required for the audit trail"
+              },
+              "message": "A reason is required for the audit trail"
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

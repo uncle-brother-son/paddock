@@ -1,0 +1,167 @@
+{
+  "scenario": "w48-session-start-time-set-keeps-a-band-set-by-hand",
+  "results": [
+    {
+      "confirmed": true,
+      "sessionsAffected": 1,
+      "bookingsAffected": 0
+    },
+    {
+      "updated": true,
+      "session": {
+        "id": "10000000-0000-4000-8000-000000000004",
+        "start_time": "2026-11-12T18:00:00.000Z",
+        "end_time": "2026-11-12T19:00:00.000Z"
+      },
+      "band": {
+        "code": "core",
+        "name": "Core",
+        "overridden": true
+      }
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/sessions/10000000-0000-4000-8000-000000000004/band",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "confirmed": true,
+              "bookingsAffected": 0,
+              "sessionsAffected": 1
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/sessions/10000000-0000-4000-8000-000000000004/start-time",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "band": {
+                "code": "core",
+                "name": "Core",
+                "overridden": true
+              },
+              "session": {
+                "id": "10000000-0000-4000-8000-000000000004",
+                "end_time": "2026-11-12T19:00:00.000Z",
+                "start_time": "2026-11-12T18:00:00.000Z"
+              },
+              "updated": true
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "session.band_set",
+          "entity_type": "session",
+          "entity_id": "10000000-0000-4000-8000-000000000004",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": [
+              {
+                "id": "10000000-0000-4000-8000-000000000004",
+                "band_id": "10000000-0000-4000-8000-000000000003",
+                "band_overridden": true
+              }
+            ],
+            "bandId": "10000000-0000-4000-8000-000000000003",
+            "before": [
+              {
+                "id": "10000000-0000-4000-8000-000000000004",
+                "band_id": "10000000-0000-4000-8000-000000000003",
+                "band_overridden": false
+              }
+            ],
+            "bookingsAffected": 0,
+            "sessionsAffected": 1
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "session.start_time_set",
+          "entity_type": "session",
+          "entity_id": "10000000-0000-4000-8000-000000000004",
+          "request_id": "gone#4",
+          "details": {
+            "key": "gone#3",
+            "after": {
+              "id": "10000000-0000-4000-8000-000000000004",
+              "band_id": "10000000-0000-4000-8000-000000000003",
+              "end_time": "2026-11-12T19:00:00.000Z",
+              "start_time": "2026-11-12T18:00:00.000Z",
+              "band_overridden": true
+            },
+            "before": {
+              "id": "10000000-0000-4000-8000-000000000004",
+              "band_id": "10000000-0000-4000-8000-000000000003",
+              "duration": 60,
+              "end_time": "2026-11-12T11:00:00.000Z",
+              "start_time": "2026-11-12T10:00:00.000Z",
+              "band_overridden": true,
+              "service_type_id": "10000000-0000-4000-8000-000000000002"
+            }
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "sessions": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000004",
+          "start_time": [
+            "2026-11-12T10:00:00.000Z",
+            "2026-11-12T18:00:00.000Z"
+          ],
+          "end_time": [
+            "2026-11-12T11:00:00.000Z",
+            "2026-11-12T19:00:00.000Z"
+          ],
+          "band_overridden": [
+            false,
+            true
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -1,0 +1,151 @@
+{
+  "scenario": "w48-slot-add-refusals",
+  "results": [
+    {
+      "thrown": "serviceTypeId is required"
+    },
+    {
+      "thrown": "dayOfWeek must be an integer 0-6 (0 = Sunday); received 7"
+    },
+    {
+      "thrown": "dayOfWeek must be an integer 0-6 (0 = Sunday); received 1.5"
+    },
+    {
+      "thrown": "startTime must be in HH:MM or HH:MM:SS format"
+    },
+    {
+      "thrown": "This service type already has a slot on Tuesday at 07:00."
+    },
+    {
+      "thrown": "That service type no longer exists. Reload the page and try again."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/service-types/10000000-0000-4000-8000-000000000002/schedule-slots",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "dayOfWeek",
+              "details": {
+                "action": "timetable.slot_added",
+                "reason": "invalid_day",
+                "message": "dayOfWeek must be an integer 0-6 (0 = Sunday); received 7"
+              },
+              "message": "dayOfWeek must be an integer 0-6 (0 = Sunday); received 7"
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/service-types/10000000-0000-4000-8000-000000000002/schedule-slots",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "dayOfWeek",
+              "details": {
+                "action": "timetable.slot_added",
+                "reason": "invalid_day",
+                "message": "dayOfWeek must be an integer 0-6 (0 = Sunday); received 1.5"
+              },
+              "message": "dayOfWeek must be an integer 0-6 (0 = Sunday); received 1.5"
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/service-types/10000000-0000-4000-8000-000000000002/schedule-slots",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "startTime",
+              "details": {
+                "action": "timetable.slot_added",
+                "reason": "invalid_time",
+                "message": "startTime must be in HH:MM or HH:MM:SS format"
+              },
+              "message": "startTime must be in HH:MM or HH:MM:SS format"
+            },
+            "requestId": "gone#6"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#7",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/service-types/10000000-0000-4000-8000-000000000002/schedule-slots",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "timetable.slot_added",
+                "reason": "slot_already_exists",
+                "message": "This service type already has a slot on Tuesday at 07:00."
+              },
+              "message": "This service type already has a slot on Tuesday at 07:00."
+            },
+            "requestId": "gone#8"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#9",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/service-types/gone#10/schedule-slots",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "timetable.slot_added",
+                "reason": "service_type_not_found",
+                "message": "That service type no longer exists. Reload the page and try again."
+              },
+              "message": "That service type no longer exists. Reload the page and try again."
+            },
+            "requestId": "gone#11"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

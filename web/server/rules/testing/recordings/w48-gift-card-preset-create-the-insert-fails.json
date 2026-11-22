@@ -1,0 +1,36 @@
+{
+  "scenario": "w48-gift-card-preset-create-the-insert-fails",
+  "results": [
+    {
+      "thrown": "Adding the preset didn't get an answer, so it may or may not have been added. Press Add Preset again here (it won't add it twice), or reload the page and check the presets first."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/gift-card-types/10000000-0000-4000-8000-000000000019/presets",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "INTERNAL",
+              "message": "Something went wrong and the action may not have finished. Check before trying again."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 500,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

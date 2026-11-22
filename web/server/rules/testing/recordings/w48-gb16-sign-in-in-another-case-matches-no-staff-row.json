@@ -1,0 +1,29 @@
+{
+  "scenario": "w48-gb16-sign-in-in-another-case-matches-no-staff-row",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-000000000001",
+      "email": "Jo@Example.com",
+      "role": "admin",
+      "can_issue_refunds": true,
+      "can_manage_pricing": true,
+      "active": true
+    },
+    [
+      {
+        "id": "10000000-0000-4000-8000-000000000001",
+        "first_name": "Jo",
+        "last_name": "Staff",
+        "email": "Jo@Example.com",
+        "role": "admin",
+        "can_issue_refunds": true,
+        "can_manage_pricing": true,
+        "active": true,
+        "created_at": "<time>",
+        "updated_at": "<time>"
+      }
+    ]
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

@@ -1,0 +1,79 @@
+{
+  "scenario": "w48-gift-card-preset-active-refused-by-stripe",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-00000000001a",
+      "active": false
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/gift-card-presets/10000000-0000-4000-8000-00000000001a/active",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "10000000-0000-4000-8000-00000000001a",
+              "active": false
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "catalog.active_set",
+          "entity_type": "gift_card_preset",
+          "entity_id": "10000000-0000-4000-8000-00000000001a",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "id": "10000000-0000-4000-8000-00000000001a",
+              "active": false
+            },
+            "before": {
+              "id": "10000000-0000-4000-8000-00000000001a",
+              "active": true
+            }
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "gift_card_presets": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-00000000001a",
+          "active": [
+            true,
+            false
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

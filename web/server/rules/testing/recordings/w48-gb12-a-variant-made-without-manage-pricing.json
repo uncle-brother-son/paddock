@@ -1,0 +1,41 @@
+{
+  "scenario": "w48-gb12-a-variant-made-without-manage-pricing",
+  "results": [
+    {
+      "thrown": "You do not have permission to manage pricing (staff.can_manage_pricing is off for your account)."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/products/10000000-0000-4000-8000-000000000007/variants",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "FORBIDDEN",
+              "details": {
+                "action": "catalog.variant_created",
+                "reason": "no_pricing_permission",
+                "message": "You do not have permission to manage pricing (staff.can_manage_pricing is off for your account)."
+              },
+              "message": "You do not have permission to manage pricing (staff.can_manage_pricing is off for your account)."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 403,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -1,0 +1,112 @@
+{
+  "scenario": "w48-price-public-service-type",
+  "results": [
+    {
+      "success": true,
+      "item": {
+        "id": "10000000-0000-4000-8000-000000000002",
+        "sanity_service_type_id": null,
+        "name": "Sauna",
+        "thumbnail_url": null,
+        "duration": null,
+        "capacity": 6,
+        "booking_type": "public",
+        "price": "22.00",
+        "active": true,
+        "stripe_product_id": "prod_sauna",
+        "stripe_price_id": "price_sauna",
+        "created_at": "<time>",
+        "updated_at": "<time>"
+      },
+      "pricesUpdated": {
+        "price": 22
+      }
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/service-types/10000000-0000-4000-8000-000000000002/price",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "item": {
+                "id": "10000000-0000-4000-8000-000000000002",
+                "name": "Sauna",
+                "price": "22.00",
+                "active": true,
+                "capacity": 6,
+                "duration": null,
+                "created_at": "<time>",
+                "updated_at": "<time>",
+                "booking_type": "public",
+                "thumbnail_url": null,
+                "stripe_price_id": "price_sauna",
+                "stripe_product_id": "prod_sauna",
+                "sanity_service_type_id": null
+              },
+              "success": true,
+              "pricesUpdated": {
+                "price": 22
+              }
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "catalog.price_set",
+          "entity_type": "service_type",
+          "entity_id": "10000000-0000-4000-8000-000000000002",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "price": "22.00"
+            },
+            "before": {
+              "price": null,
+              "booking_type": "public"
+            }
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "service_types": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000002",
+          "price": [
+            null,
+            "22.00"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

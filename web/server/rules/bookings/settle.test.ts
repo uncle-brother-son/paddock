@@ -9,10 +9,11 @@ import { readFlow, undoFlowInTransaction, finaliseFlowInTransaction, FLOW_INTENT
 import { reconcile } from '@/server/rules/orders/reconcile'
 import { stuckList, CARD_FLOW_WAITING_WORDS } from '@/server/rules/orders/stuck-list'
 import { FAILURE_MESSAGES as ORDER_WORDS, NO_SAVED_CARD_MESSAGE } from '@/server/rules/orders/failure-messages'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/replay/harness'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
 import { ID, lapsedSeat, seed, whileFailing, giftCardRowFails } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
-import { BOOKING_KINDS_ON } from '@/server/rules/testing/replay/booking-side'
+import { BOOKING_KINDS_ON } from '@/server/rules/testing/sweep/booking-presses'
 import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
 import path from 'node:path'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
@@ -97,7 +98,7 @@ async function onALapsedSeat(work: (context: Context) => Promise<void>): Promise
         }
       },
     },
-    oldSide
+    workerSide()
   )
 }
 

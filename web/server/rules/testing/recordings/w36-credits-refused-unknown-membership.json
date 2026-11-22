@@ -1,0 +1,71 @@
+{
+  "scenario": "w36-credits-refused-unknown-membership",
+  "results": [
+    {
+      "adjusted": false,
+      "reason": "membership_not_found",
+      "message": "Membership not found."
+    },
+    {
+      "adjusted": false,
+      "reason": "membership_not_found",
+      "message": "Membership not found."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/gone#2/credits",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "credits",
+                "reason": "membership_not_found",
+                "message": "Membership not found."
+              },
+              "message": "Membership not found."
+            },
+            "requestId": "gone#3"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#4",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/gone#2/credits",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "credits",
+                "reason": "membership_not_found",
+                "message": "Membership not found."
+              },
+              "message": "Membership not found."
+            },
+            "requestId": "gone#5"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

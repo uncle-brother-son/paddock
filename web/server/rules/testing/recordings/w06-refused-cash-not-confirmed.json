@@ -1,0 +1,46 @@
+{
+  "scenario": "w06-refused-cash-not-confirmed",
+  "results": [
+    {
+      "success": false,
+      "stage": "payment",
+      "reason": "cash_amount_changed",
+      "message": "The amount due has changed to £45.00. Check it with the customer and confirm again.",
+      "amountDueTotal": 45
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/orders",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "TOTAL_CHANGED",
+              "details": {
+                "stage": "payment",
+                "reason": "cash_amount_changed",
+                "message": "The amount due has changed to £45.00. Check it with the customer and confirm again.",
+                "amountDueTotal": 45
+              },
+              "message": "The amount due has changed to £45.00. Check it with the customer and confirm again."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

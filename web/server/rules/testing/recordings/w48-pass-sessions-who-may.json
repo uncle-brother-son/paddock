@@ -1,0 +1,65 @@
+{
+  "scenario": "w48-pass-sessions-who-may",
+  "results": [
+    {
+      "thrown": "You do not have permission to manage pricing (staff.can_manage_pricing is off for your account)."
+    },
+    {
+      "thrown": "This staff account is inactive. Ask an admin to reactivate it."
+    },
+    {
+      "thrown": "No staff record matches the logged-in user's email (jo@example.com). Ask an admin to add you as staff before performing this action."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/session-pass-types/10000000-0000-4000-8000-000000000016/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "FORBIDDEN",
+              "details": {
+                "action": "catalog.details_set",
+                "reason": "no_pricing_permission",
+                "message": "You do not have permission to manage pricing (staff.can_manage_pricing is off for your account)."
+              },
+              "message": "You do not have permission to manage pricing (staff.can_manage_pricing is off for your account)."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 403,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "staff": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "email": [
+            "jo@example.com",
+            "someone.else@example.com"
+          ],
+          "can_manage_pricing": [
+            true,
+            false
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

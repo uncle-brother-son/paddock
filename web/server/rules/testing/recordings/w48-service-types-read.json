@@ -1,0 +1,79 @@
+{
+  "scenario": "w48-service-types-read",
+  "results": [
+    [
+      {
+        "id": "10000000-0000-4000-8000-00000000001b",
+        "sanity_service_type_id": null,
+        "name": "Private Hire",
+        "thumbnail_url": null,
+        "duration": null,
+        "capacity": 6,
+        "booking_type": "private",
+        "price": null,
+        "active": true,
+        "stripe_product_id": "prod_private",
+        "stripe_price_id": null,
+        "created_at": "<time>",
+        "updated_at": "<time>",
+        "price_tiers": [
+          {
+            "id": "10000000-0000-4000-8000-000000000020",
+            "service_type_id": "10000000-0000-4000-8000-00000000001b",
+            "min_people": 1,
+            "max_people": 10,
+            "price": "100.00",
+            "stripe_price_id": "price_tier_core",
+            "created_at": "<time>",
+            "updated_at": "<time>",
+            "band_id": "10000000-0000-4000-8000-000000000003",
+            "band_code": "core",
+            "band_name": "Core"
+          },
+          {
+            "id": "10000000-0000-4000-8000-000000000a11",
+            "service_type_id": "10000000-0000-4000-8000-00000000001b",
+            "min_people": 1,
+            "max_people": 10,
+            "price": "140.00",
+            "stripe_price_id": null,
+            "created_at": "<time>",
+            "updated_at": "<time>",
+            "band_id": "10000000-0000-4000-8000-00000000000c",
+            "band_code": "peak",
+            "band_name": "Peak"
+          }
+        ],
+        "schedule_slots": []
+      },
+      {
+        "id": "10000000-0000-4000-8000-000000000002",
+        "sanity_service_type_id": null,
+        "name": "Sauna",
+        "thumbnail_url": null,
+        "duration": null,
+        "capacity": 6,
+        "booking_type": "public",
+        "price": null,
+        "active": true,
+        "stripe_product_id": "prod_sauna",
+        "stripe_price_id": "price_sauna",
+        "created_at": "<time>",
+        "updated_at": "<time>",
+        "price_tiers": [],
+        "schedule_slots": [
+          {
+            "id": "10000000-0000-4000-8000-000000000a10",
+            "service_type_id": "10000000-0000-4000-8000-000000000002",
+            "day_of_week": 2,
+            "start_time": "07:00:00",
+            "created_at": "<time>",
+            "updated_at": "<time>"
+          }
+        ]
+      }
+    ]
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

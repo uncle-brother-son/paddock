@@ -1,0 +1,96 @@
+{
+  "scenario": "w48-postage-refusals",
+  "results": [
+    {
+      "thrown": "Standard price must be a non-negative number."
+    },
+    {
+      "thrown": "Express price must be a non-negative number."
+    },
+    {
+      "thrown": "Free-shipping threshold must be a non-negative number (0 = no free shipping)."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/postage/settings",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "standardPrice",
+              "details": {
+                "action": "postage.set",
+                "reason": "invalid_standard_price",
+                "message": "Standard price must be a non-negative number."
+              },
+              "message": "Standard price must be a non-negative number."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/postage/settings",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "expressPrice",
+              "details": {
+                "action": "postage.set",
+                "reason": "invalid_express_price",
+                "message": "Express price must be a non-negative number."
+              },
+              "message": "Express price must be a non-negative number."
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/postage/settings",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "freeShippingThreshold",
+              "details": {
+                "action": "postage.set",
+                "reason": "invalid_free_shipping_threshold",
+                "message": "Free-shipping threshold must be a non-negative number (0 = no free shipping)."
+              },
+              "message": "Free-shipping threshold must be a non-negative number (0 = no free shipping)."
+            },
+            "requestId": "gone#6"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

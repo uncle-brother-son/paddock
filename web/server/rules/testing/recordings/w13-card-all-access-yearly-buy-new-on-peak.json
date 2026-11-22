@@ -1,0 +1,399 @@
+{
+  "scenario": "w13-card-all-access-yearly-buy-new-on-peak",
+  "results": [
+    {
+      "success": true,
+      "orderId": "orders#1",
+      "bookingId": "bookings#1",
+      "membershipId": "customer_memberships#1",
+      "cardCharged": true,
+      "cardAmount": 750,
+      "paymentMethodUsed": "card",
+      "membershipSubscriptionId": "sub_fake_0003",
+      "membershipAmountPaid": 750,
+      "membershipInvoiceId": "in_fake_0002"
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "prices.retrieve",
+      "params": {
+        "id": "price_seed_all_access_yearly"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "customers.update",
+      "params": {
+        "id": "cus_seed",
+        "invoice_settings": {
+          "default_payment_method": "pm_seed"
+        }
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "subscriptions.create",
+      "params": {
+        "customer": "cus_seed",
+        "items": [
+          {
+            "price": "price_seed_all_access_yearly"
+          }
+        ],
+        "default_payment_method": "pm_seed",
+        "off_session": true,
+        "payment_behavior": "error_if_incomplete",
+        "metadata": {
+          "supabase_customer_id": "10000000-0000-4000-8000-000000000005",
+          "membership_plan_id": "10000000-0000-4000-8000-000000000a13",
+          "billing_frequency": "yearly",
+          "order_id": "orders#1"
+        },
+        "expand": [
+          "latest_invoice.payments"
+        ]
+      },
+      "idempotencyKey": "orders#1:subscription"
+    }
+  ],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/orders",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "status": "paid",
+              "orderId": "orders#1",
+              "payment": {
+                "method": "card",
+                "collected": 750,
+                "cardCharged": true,
+                "giftCardApplied": 0,
+                "storeCreditApplied": 0
+              },
+              "bookingId": "bookings#1",
+              "giftCardId": null,
+              "giftCardCode": null,
+              "membershipId": "customer_memberships#1",
+              "sessionPassId": null,
+              "eventBookingId": null,
+              "membershipSubscription": {
+                "invoiceId": "in_fake_0002",
+                "amountPaid": 750,
+                "subscriptionId": "sub_fake_0003"
+              }
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.create",
+          "entity_type": "order",
+          "entity_id": "orders#1",
+          "request_id": "gone#2",
+          "details": {
+            "promo": null,
+            "method": "card",
+            "postage": null,
+            "giftCard": null,
+            "amountDue": 750,
+            "bookingId": "bookings#1",
+            "confirmed": {
+              "toCollect": 0,
+              "firstInvoice": 750
+            },
+            "overrides": [],
+            "toCollect": 750,
+            "awaitsCard": true,
+            "giftCardId": null,
+            "membership": {
+              "rowId": "customer_memberships#1",
+              "coupon": 0,
+              "planId": "10000000-0000-4000-8000-000000000a13",
+              "replaces": null,
+              "firstInvoice": 750,
+              "firstPayment": 750,
+              "billingFrequency": "yearly"
+            },
+            "orderTotal": 750,
+            "storeCredit": 0,
+            "addressSaved": false,
+            "sessionPassId": null,
+            "eventBookingId": null
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.paid",
+          "entity_type": "order",
+          "entity_id": "orders#1",
+          "request_id": "gone#2",
+          "details": {
+            "method": "card",
+            "collected": 0,
+            "membership": {
+              "replaced": null,
+              "firstInvoice": 75000,
+              "membershipId": "customer_memberships#1",
+              "subscriptionId": "sub_fake_0003"
+            },
+            "addressSaved": false,
+            "paymentIntentId": "pi_fake_0001",
+            "eventBookingConfirmed": false
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "booking_guests": {
+      "added": [
+        {
+          "id": "booking_guests#1",
+          "booking_id": "bookings#1",
+          "guest_type": "account_holder",
+          "guest_name": "Sam Test",
+          "guest_email": "sam@example.com",
+          "waiver_accepted": false,
+          "waiver_version": null,
+          "waiver_accepted_at": null,
+          "waiver_method": null,
+          "reminder_sent_at": null,
+          "created_at": "<set>",
+          "date_of_birth": "1990-01-01",
+          "unit_price": "25.50",
+          "pay_by": "membership_credit"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "bookings": {
+      "added": [
+        {
+          "id": "bookings#1",
+          "session_id": "10000000-0000-4000-8000-00000000000e",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "party_size": 1,
+          "status": "confirmed",
+          "price_paid": "0.00",
+          "stripe_payment_id": null,
+          "redemption_source": "membership_credit",
+          "created_at": "<set>",
+          "cancelled_at": null,
+          "checked_in_at": null,
+          "updated_at": "<set>",
+          "start_time": "<set>",
+          "end_time": "<set>",
+          "redeemed_membership_id": "customer_memberships#1",
+          "redeemed_session_pass_id": null,
+          "band_id": "10000000-0000-4000-8000-00000000000c",
+          "credit_period_id": "membership_credit_periods#1",
+          "payment_due_by": null,
+          "cancel_reason": null,
+          "special_requests": null,
+          "guests_over_18_confirmed_at": null,
+          "part_refunded_amount": "0.00",
+          "refund_owed_amount": "0.00"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "customer_memberships": {
+      "added": [
+        {
+          "id": "customer_memberships#1",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "plan_id": "10000000-0000-4000-8000-000000000a13",
+          "stripe_subscription_id": "sub_fake_0003",
+          "subscription_status": "active",
+          "start_date": "2026-11-10",
+          "next_renewal_date": "2027-11-10",
+          "addon_credits_remaining": 4,
+          "bonus_addon_credits": 0,
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "order_line_item_id": "order_line_items#1",
+          "billing_frequency": "yearly",
+          "cancel_effective_date": null,
+          "is_herd": true,
+          "herd_override": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "membership_credit_periods": {
+      "added": [
+        {
+          "id": "membership_credit_periods#1",
+          "membership_id": "customer_memberships#1",
+          "period_start": "2026-11-10",
+          "period_end": "2026-12-09",
+          "credits_allocated": 0,
+          "is_unlimited": true,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "order_line_items": {
+      "added": [
+        {
+          "id": "order_line_items#1",
+          "order_id": "orders#1",
+          "booking_id": null,
+          "product_variant_id": null,
+          "membership_plan_id": "10000000-0000-4000-8000-000000000a13",
+          "session_pass_type_id": null,
+          "gift_card_id": null,
+          "item_type": "membership",
+          "quantity": 1,
+          "unit_price": "750.00",
+          "line_total": "750.00",
+          "created_at": "<set>",
+          "addon_id": null,
+          "refunded_at": null,
+          "refund_method": null,
+          "restocked": null,
+          "fulfillment_status": null,
+          "card_refunded_amount": "0.00",
+          "system_unit_price": null,
+          "price_override_reason": null,
+          "discount_amount": "0.00",
+          "event_booking_id": null
+        },
+        {
+          "id": "order_line_items#2",
+          "order_id": "orders#1",
+          "booking_id": "bookings#1",
+          "product_variant_id": null,
+          "membership_plan_id": null,
+          "session_pass_type_id": null,
+          "gift_card_id": null,
+          "item_type": "booking",
+          "quantity": 1,
+          "unit_price": "0.00",
+          "line_total": "0.00",
+          "created_at": "<set>",
+          "addon_id": null,
+          "refunded_at": null,
+          "refund_method": null,
+          "restocked": null,
+          "fulfillment_status": null,
+          "card_refunded_amount": "0.00",
+          "system_unit_price": null,
+          "price_override_reason": null,
+          "discount_amount": "0.00",
+          "event_booking_id": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "orders": {
+      "added": [
+        {
+          "id": "orders#1",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "order_total": "750.00",
+          "payment_status": "paid",
+          "stripe_payment_intent_id": "pi_fake_0001",
+          "promo_code": null,
+          "discount_amount": "0.00",
+          "shipping_address": null,
+          "shipping_status": null,
+          "tracking_number": null,
+          "order_source": "staff_created",
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "payment_method": "card",
+          "reader_payment": {
+            "flow": "checkout",
+            "method": "card",
+            "channel": "staff",
+            "livemode": false,
+            "save_card": false,
+            "created_at": "<time>",
+            "membership": {
+              "price": 750,
+              "plan_id": "10000000-0000-4000-8000-000000000a13",
+              "plan_name": "All-Access",
+              "coupon_name": "Gift card / store credit",
+              "coupon_amount": 0,
+              "first_invoice": 750,
+              "addons_included": 4,
+              "stripe_price_id": "price_seed_all_access_yearly",
+              "subscription_id": "sub_fake_0003",
+              "billing_frequency": "yearly",
+              "membership_row_id": "customer_memberships#1",
+              "first_payment_amount": 750,
+              "subscription_payment_intent_id": "pi_fake_0001"
+            },
+            "request_id": "gone#2",
+            "held_booking": {
+              "party_size": 1,
+              "session_id": "10000000-0000-4000-8000-00000000000e"
+            },
+            "expected_amount": 0,
+            "payment_method_id": "pm_seed",
+            "charge_description": "Staff-created order for booking",
+            "stripe_customer_id": "cus_seed",
+            "charge_payment_intent_id": null,
+            "save_address_to_customer": false
+          },
+          "refund_owed_amount": "0.00"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "sessions": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-00000000000e",
+          "total_booked": [
+            0,
+            1
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

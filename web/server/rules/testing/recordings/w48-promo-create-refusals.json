@@ -1,0 +1,420 @@
+{
+  "scenario": "w48-promo-create-refusals",
+  "results": [
+    {
+      "thrown": "The code must be 4–20 characters using only letters, numbers and dashes (stored upper-cased)."
+    },
+    {
+      "thrown": "The code must be 4–20 characters using only letters, numbers and dashes (stored upper-cased)."
+    },
+    {
+      "thrown": "The code must be 4–20 characters using only letters, numbers and dashes (stored upper-cased)."
+    },
+    {
+      "thrown": "Discount type must be \"percentage\" or \"fixed\"."
+    },
+    {
+      "thrown": "The discount value must be greater than 0."
+    },
+    {
+      "thrown": "The discount value must be greater than 0."
+    },
+    {
+      "thrown": "A percentage discount cannot exceed 100%."
+    },
+    {
+      "thrown": "Choose at least one valid basket part this code applies to (booking, add-on, product, session pass, membership)."
+    },
+    {
+      "thrown": "Choose at least one valid basket part this code applies to (booking, add-on, product, session pass, membership)."
+    },
+    {
+      "thrown": "The expiry must be a date (YYYY-MM-DD) or empty."
+    },
+    {
+      "thrown": "Maximum total uses must be a whole number of at least 1, or empty for unlimited."
+    },
+    {
+      "thrown": "Maximum total uses must be a whole number of at least 1, or empty for unlimited."
+    },
+    {
+      "thrown": "Minimum spend must be a non-negative amount, or empty for none."
+    },
+    {
+      "thrown": "The restricted customer does not exist."
+    },
+    {
+      "thrown": "A promo code \"ALLTEN\" already exists (codes are unique, case-insensitive)."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/promo-codes",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "code",
+              "details": {
+                "action": "promo.created",
+                "reason": "invalid_code",
+                "message": "The code must be 4–20 characters using only letters, numbers and dashes (stored upper-cased)."
+              },
+              "message": "The code must be 4–20 characters using only letters, numbers and dashes (stored upper-cased)."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/promo-codes",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "code",
+              "details": {
+                "action": "promo.created",
+                "reason": "invalid_code",
+                "message": "The code must be 4–20 characters using only letters, numbers and dashes (stored upper-cased)."
+              },
+              "message": "The code must be 4–20 characters using only letters, numbers and dashes (stored upper-cased)."
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/promo-codes",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "code",
+              "details": {
+                "action": "promo.created",
+                "reason": "invalid_code",
+                "message": "The code must be 4–20 characters using only letters, numbers and dashes (stored upper-cased)."
+              },
+              "message": "The code must be 4–20 characters using only letters, numbers and dashes (stored upper-cased)."
+            },
+            "requestId": "gone#6"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#7",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/promo-codes",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "discountType",
+              "details": {
+                "action": "promo.created",
+                "reason": "invalid_discount_type",
+                "message": "Discount type must be \"percentage\" or \"fixed\"."
+              },
+              "message": "Discount type must be \"percentage\" or \"fixed\"."
+            },
+            "requestId": "gone#8"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#9",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/promo-codes",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "discountValue",
+              "details": {
+                "action": "promo.created",
+                "reason": "invalid_discount_value",
+                "message": "The discount value must be greater than 0."
+              },
+              "message": "The discount value must be greater than 0."
+            },
+            "requestId": "gone#10"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#11",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/promo-codes",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "discountValue",
+              "details": {
+                "action": "promo.created",
+                "reason": "invalid_discount_value",
+                "message": "The discount value must be greater than 0."
+              },
+              "message": "The discount value must be greater than 0."
+            },
+            "requestId": "gone#12"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#13",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/promo-codes",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "discountValue",
+              "details": {
+                "action": "promo.created",
+                "reason": "percentage_over_100",
+                "message": "A percentage discount cannot exceed 100%."
+              },
+              "message": "A percentage discount cannot exceed 100%."
+            },
+            "requestId": "gone#14"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#15",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/promo-codes",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "appliesTo",
+              "details": {
+                "action": "promo.created",
+                "reason": "invalid_applies_to",
+                "message": "Choose at least one valid basket part this code applies to (booking, add-on, product, session pass, membership)."
+              },
+              "message": "Choose at least one valid basket part this code applies to (booking, add-on, product, session pass, membership)."
+            },
+            "requestId": "gone#16"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#17",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/promo-codes",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "appliesTo",
+              "details": {
+                "action": "promo.created",
+                "reason": "invalid_applies_to",
+                "message": "Choose at least one valid basket part this code applies to (booking, add-on, product, session pass, membership)."
+              },
+              "message": "Choose at least one valid basket part this code applies to (booking, add-on, product, session pass, membership)."
+            },
+            "requestId": "gone#18"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#19",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/promo-codes",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "expiresOn",
+              "details": {
+                "action": "promo.created",
+                "reason": "invalid_expiry",
+                "message": "The expiry must be a date (YYYY-MM-DD) or empty."
+              },
+              "message": "The expiry must be a date (YYYY-MM-DD) or empty."
+            },
+            "requestId": "gone#20"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#21",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/promo-codes",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "maxTotalUses",
+              "details": {
+                "action": "promo.created",
+                "reason": "invalid_max_uses",
+                "message": "Maximum total uses must be a whole number of at least 1, or empty for unlimited."
+              },
+              "message": "Maximum total uses must be a whole number of at least 1, or empty for unlimited."
+            },
+            "requestId": "gone#22"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#23",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/promo-codes",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "maxTotalUses",
+              "details": {
+                "action": "promo.created",
+                "reason": "invalid_max_uses",
+                "message": "Maximum total uses must be a whole number of at least 1, or empty for unlimited."
+              },
+              "message": "Maximum total uses must be a whole number of at least 1, or empty for unlimited."
+            },
+            "requestId": "gone#24"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#25",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/promo-codes",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "minSpend",
+              "details": {
+                "action": "promo.created",
+                "reason": "invalid_min_spend",
+                "message": "Minimum spend must be a non-negative amount, or empty for none."
+              },
+              "message": "Minimum spend must be a non-negative amount, or empty for none."
+            },
+            "requestId": "gone#26"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#27",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/promo-codes",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "restrictedCustomerId",
+              "details": {
+                "action": "promo.created",
+                "reason": "restricted_customer_not_found",
+                "message": "The restricted customer does not exist."
+              },
+              "message": "The restricted customer does not exist."
+            },
+            "requestId": "gone#28"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#29",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/promo-codes",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "field": "code",
+              "details": {
+                "action": "promo.created",
+                "reason": "duplicate_code",
+                "message": "A promo code \"ALLTEN\" already exists (codes are unique, case-insensitive)."
+              },
+              "message": "A promo code \"ALLTEN\" already exists (codes are unique, case-insensitive)."
+            },
+            "requestId": "gone#30"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

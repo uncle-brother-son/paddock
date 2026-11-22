@@ -1,0 +1,174 @@
+{
+  "scenario": "saved-card-declined-rolls-back",
+  "results": [
+    {
+      "success": false,
+      "stage": "payment",
+      "reason": "charge_failed",
+      "message": "Failed to charge saved card: Your card was declined."
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "paymentIntents.create",
+      "params": {
+        "amount": 5400,
+        "currency": "gbp",
+        "customer": "cus_seed",
+        "payment_method": "pm_seed",
+        "off_session": true,
+        "confirm": true,
+        "description": "Staff-created order for booking, add-ons, merchandise",
+        "metadata": {
+          "order_id": "gone#3"
+        }
+      },
+      "idempotencyKey": "gone#3:charge"
+    }
+  ],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/orders",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "PAYMENT_FAILED",
+              "details": {
+                "stage": "payment",
+                "reason": "charge_failed",
+                "message": "Failed to charge saved card: Your card was declined."
+              },
+              "message": "Failed to charge saved card: Your card was declined."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 402,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.create",
+          "entity_type": "order",
+          "entity_id": "gone#3",
+          "request_id": "gone#2",
+          "details": {
+            "promo": null,
+            "method": "card",
+            "postage": null,
+            "giftCard": null,
+            "amountDue": 69,
+            "bookingId": "gone#4",
+            "confirmed": {
+              "toCollect": 54
+            },
+            "overrides": [],
+            "toCollect": 54,
+            "awaitsCard": true,
+            "giftCardId": null,
+            "orderTotal": 69,
+            "storeCredit": 15,
+            "addressSaved": false,
+            "sessionPassId": null,
+            "eventBookingId": null
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.undo",
+          "entity_type": "order",
+          "entity_id": "gone#3",
+          "request_id": "gone#2",
+          "details": {
+            "why": "The card was refused: card_declined. Failed to charge saved card: Your card was declined.",
+            "parts": {
+              "event": null,
+              "stock": [
+                {
+                  "quantity": 2,
+                  "variant_id": "10000000-0000-4000-8000-000000000008"
+                }
+              ],
+              "booking": {
+                "id": "gone#4",
+                "status": "confirmed",
+                "party_size": 2,
+                "session_id": "10000000-0000-4000-8000-000000000004",
+                "booking_type": "public",
+                "pass_to_give_back": null,
+                "redemption_source": "paid"
+              },
+              "store_credit": "15.00",
+              "addon_credits": [],
+              "passes_bought": [],
+              "gift_card_used": null,
+              "gift_card_bought": null,
+              "memberships_bought": []
+            },
+            "removed": {
+              "lines_removed": 2,
+              "orders_removed": 1,
+              "passes_removed": 0,
+              "bookings_removed": 1,
+              "events_given_back": 0,
+              "passes_given_back": 0,
+              "gift_cards_removed": 0,
+              "addon_lines_removed": 1,
+              "ledger_rows_removed": 1,
+              "memberships_removed": 0,
+              "sessions_given_back": 1,
+              "variants_given_back": 1,
+              "customers_given_back": 1,
+              "gift_cards_given_back": 0,
+              "event_bookings_removed": 0,
+              "gift_card_uses_removed": 0,
+              "memberships_given_back": 0,
+              "store_credit_rows_removed": 1
+            },
+            "snapshot": {
+              "flow": "checkout",
+              "method": "card",
+              "channel": "staff",
+              "livemode": false,
+              "save_card": false,
+              "created_at": "<time>",
+              "request_id": "gone#2",
+              "held_booking": {
+                "party_size": 2,
+                "session_id": "10000000-0000-4000-8000-000000000004"
+              },
+              "expected_amount": 54,
+              "payment_method_id": "pm_seed",
+              "charge_description": "Staff-created order for booking, add-ons, merchandise",
+              "stripe_customer_id": "cus_seed",
+              "charge_payment_intent_id": null,
+              "save_address_to_customer": false
+            }
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

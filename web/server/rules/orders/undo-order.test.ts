@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Db } from '@/server/db'
 import type { FakeStripe } from '@/server/stripe/fake'
-import { oldSide, replay, startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
-import { orderInput, postOrder, withQuotedCardFigure, type OrderAnswer } from '@/server/rules/testing/replay/order-side'
+import { replay, startReplay, type ReplayEnvironment } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
+import { orderInput, postOrder, withQuotedCardFigure, type OrderAnswer } from '@/server/rules/testing/sweep/order-presses'
 import { ID, laterPublicSession, paidSeat, sam, seed } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import type { PendingSnapshot } from './pending-order'
@@ -87,7 +88,7 @@ describe('the one undo refuses changed_since (W10 review L1)', () => {
     let before: Awaited<ReturnType<typeof counts>> | null = null
     await heldThen(passSeat, async ({ orderId, bookingId, stripe }) => {
       expect(await counts()).toEqual({ session: 1, pass: 2, stock: 4 })
-      const cancelled = await oldSide(db, stripe).call('cancelCreditBooking', { bookingId })
+      const cancelled = await workerSide()(db, stripe).call('cancelCreditBooking', { bookingId })
       expect(cancelled).toMatchObject({ cancelled: true })
       before = await counts()
       expect(before).toEqual({ session: 0, pass: 3, stock: 4 })
@@ -102,7 +103,7 @@ describe('the one undo refuses changed_since (W10 review L1)', () => {
 
   it('a booking the old app moved to another session: refused, nothing given back on either session', async () => {
     await heldThen(paidSeat([sam]), async ({ orderId, bookingId, stripe }) => {
-      const moved = await oldSide(db, stripe).call('moveBooking', { bookingId, newSessionId: ID.laterPublicSession, confirmed: true })
+      const moved = await workerSide()(db, stripe).call('moveBooking', { bookingId, newSessionId: ID.laterPublicSession, confirmed: true })
       expect(moved).toMatchObject({ moved: true })
       const sessions = async () => db.query<{ id: string; total_booked: number }>('SELECT id, total_booked FROM sessions WHERE id = ANY($1::uuid[]) ORDER BY id', [[ID.session, ID.laterPublicSession]])
       const atMove = await sessions()
@@ -115,7 +116,7 @@ describe('the one undo refuses changed_since (W10 review L1)', () => {
 
   it('a guest the old app added to the held booking: refused (party size 2, not 1)', async () => {
     await heldThen(paidSeat([sam]), async ({ orderId, bookingId, stripe }) => {
-      const old = oldSide(db, stripe)
+      const old = workerSide()(db, stripe)
       const guest = { bookingId, guestName: alex.name, guestEmail: alex.email, guestsOver18Confirmed: true }
       await old.call('addBookingGuest', guest)
       const added = await old.call('addBookingGuest', { ...guest, payment: { method: 'cash', confirmedCashAmount: 20 } })

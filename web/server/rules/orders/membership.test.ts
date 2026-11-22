@@ -2,8 +2,9 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type Stripe from 'stripe'
 import type { Db, SqlParam, Tx } from '@/server/db'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
-import { oldSide, replay, startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
-import { orderInput, postOrder, postReaderStep, withQuotedCardFigure, type OrderAnswer } from '@/server/rules/testing/replay/order-side'
+import { replay, startReplay, type ReplayEnvironment } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
+import { orderInput, postOrder, postReaderStep, withQuotedCardFigure, type OrderAnswer } from '@/server/rules/testing/sweep/order-presses'
 import { ID, paidSeat, sam, seed, seedAllAccess, seedExhaustedMembership, whileFailing } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe, stripeCallsTakeASecond } from '@/server/rules/testing/replay/stripe-binding'
 import type { FinaliseReaderOrderOutput } from '@/contracts'
@@ -960,14 +961,20 @@ describe("the press's deadline (Retool's 60 s): every Stripe call of a saved-car
   })
 })
 
-describe('for the Worker step: the old createOrder when the subscription\'s answer is lost (F1)', () => {
-  it('rolls the order back as a failure though Stripe made the subscription and took its first invoice: a live subscription with no membership, £40 kept', async () => {
+/*
+ * F1 for memberships, on the Worker (W64). Until W64 this proved the old createOrder's fault on the frozen copy: the
+ * subscription's answer lost, it rolled the order back as a failure though Stripe had made the subscription and taken
+ * its first invoice (a live subscription with no membership, £40 kept). The frozen copy goes at W65, so the same lost
+ * answer is pressed through the Worker here: it asks Stripe again under the same key and records what Stripe made.
+ */
+describe('F1, the subscription\'s answer lost: on the Worker (the old createOrder rolled the order back)', () => {
+  it('the Worker asks again under the same key: one subscription, its membership and the order recorded, £40 once', async () => {
     let fake: FakeStripe | null = null
     const answers: unknown[] = []
     const recording = await replay(
       environment,
       {
-        name: 'old createOrder, subscription answer lost',
+        name: 'subscription answer lost, on the Worker',
         async seed(seedDb, stripe) {
           await seed(seedDb, stripe)
           stripe.failNext('subscriptions.create', { kind: 'lost_response' })
@@ -977,14 +984,16 @@ describe('for the Worker step: the old createOrder when the subscription\'s answ
           answers.push(await call('createOrder', { ...withSoap, membershipIdempotencyKey: 'basket-1' }))
         },
       },
-      oldSide
+      workerSide()
     )
-    expect(answers[0]).toMatchObject({ success: false, reason: 'membership_subscription_failed' })
+    expect(answers[0]).toMatchObject({ success: true, membershipAmountPaid: 40 })
     const stripe = fake as unknown as FakeStripe
     expect(stripe.liveSubscriptions).toHaveLength(1)
-    expect(stripe.netPence).toBe(4000)
-    expect(recording.tables['customer_memberships']).toBeUndefined()
-    expect(recording.tables['orders']).toBeUndefined()
+    const subscribes = recording.stripeCalls.filter((call) => call.method === 'subscriptions.create')
+    expect(subscribes).toHaveLength(2)
+    expect(new Set(subscribes.map((call) => call.idempotencyKey)).size).toBe(1)
+    expect(recording.tables['customer_memberships']?.added).toHaveLength(1)
+    expect(recording.tables['orders']?.added).toHaveLength(1)
   })
 })
 

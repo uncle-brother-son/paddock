@@ -1,0 +1,69 @@
+{
+  "scenario": "w36-payment-date-a-pending-row-stops-blocking-after-15-minutes",
+  "results": [
+    {
+      "changed": false,
+      "message": "A payment date change is already in progress for this membership"
+    },
+    {
+      "changed": false,
+      "message": "A payment date change is already in progress for this membership"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/payment-date",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "payment_date",
+                "reason": "refused",
+                "message": "A payment date change is already in progress for this membership"
+              },
+              "message": "A payment date change is already in progress for this membership"
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/payment-date",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "payment_date",
+                "reason": "refused",
+                "message": "A payment date change is already in progress for this membership"
+              },
+              "message": "A payment date change is already in progress for this membership"
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

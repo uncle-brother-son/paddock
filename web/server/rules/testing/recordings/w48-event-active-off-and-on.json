@@ -1,0 +1,148 @@
+{
+  "scenario": "w48-event-active-off-and-on",
+  "results": [
+    {
+      "updated": true,
+      "event": {
+        "id": "10000000-0000-4000-8000-000000000018",
+        "active": false
+      }
+    },
+    {
+      "updated": true,
+      "event": {
+        "id": "10000000-0000-4000-8000-000000000018",
+        "active": true
+      }
+    },
+    {
+      "updated": false,
+      "reason": "event_not_found",
+      "message": "That event no longer exists."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/events/10000000-0000-4000-8000-000000000018/active",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "event": {
+                "id": "10000000-0000-4000-8000-000000000018",
+                "active": false
+              },
+              "updated": true
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/events/10000000-0000-4000-8000-000000000018/active",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "event": {
+                "id": "10000000-0000-4000-8000-000000000018",
+                "active": true
+              },
+              "updated": true
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/events/gone#6/active",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "event.active_set",
+                "reason": "event_not_found",
+                "message": "That event no longer exists."
+              },
+              "message": "That event no longer exists."
+            },
+            "requestId": "gone#7"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "event.active_set",
+          "entity_type": "event",
+          "entity_id": "10000000-0000-4000-8000-000000000018",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "id": "10000000-0000-4000-8000-000000000018",
+              "active": false
+            },
+            "before": {
+              "id": "10000000-0000-4000-8000-000000000018",
+              "active": true
+            }
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "event.active_set",
+          "entity_type": "event",
+          "entity_id": "10000000-0000-4000-8000-000000000018",
+          "request_id": "gone#4",
+          "details": {
+            "key": "gone#3",
+            "after": {
+              "id": "10000000-0000-4000-8000-000000000018",
+              "active": true
+            },
+            "before": {
+              "id": "10000000-0000-4000-8000-000000000018",
+              "active": false
+            }
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

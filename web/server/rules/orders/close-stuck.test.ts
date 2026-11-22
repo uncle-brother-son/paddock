@@ -4,8 +4,9 @@ import type { CloseStuckOutput } from '@/contracts'
 import type { Db } from '@/server/db'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
 import { insert } from '@/server/rules/testing/database'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
-import { orderInput, postOrder, withQuotedCardFigure, type OrderAnswer } from '@/server/rules/testing/replay/order-side'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
+import { orderInput, postOrder, withQuotedCardFigure, type OrderAnswer } from '@/server/rules/testing/sweep/order-presses'
 import { ID, paidSeat, sam, seed } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe, stripeCallsTakeASecond } from '@/server/rules/testing/replay/stripe-binding'
 import type Stripe from 'stripe'
@@ -27,7 +28,8 @@ import {
   SUBSCRIPTION_REFUSED_WORDS,
 } from './stuck-list'
 import { changedElsewhereWords } from './changed-elsewhere'
-import { asWorkerFlow, postFlowStep } from '@/server/rules/testing/replay/flow-side'
+import { asWorkerFlow, postFlowStep } from '@/server/rules/testing/sweep/flow-presses'
+import { asTheOldCheckoutStartedIt, theOldScreensCancelledItToStoreCredit } from '@/server/rules/testing/sweep/old-states'
 import { lapsedSeat } from '@/server/rules/testing/replay/scenarios'
 
 // Brief W14b item 4: the manual close, per item type, through the real route (Issue refunds, a reason), on PGlite
@@ -145,7 +147,7 @@ async function heldEverything(stripe: FakeStripe): Promise<string> {
 async function changedSince(stripe: FakeStripe, orderId: string): Promise<void> {
   later(16)
   const booking = await bookingOf()
-  await oldSide(db, stripe).call('cancelCreditBooking', { bookingId: booking?.id })
+  await workerSide()(db, stripe).call('cancelCreditBooking', { bookingId: booking?.id })
   replayStripe.current = stripe
   expect(await run(stripe)).toMatchObject({ left: 1, items: [{ id: orderId, outcome: 'left', reason: 'changed_since' }] })
 }
@@ -251,7 +253,7 @@ describe('held_order: changed_since (W12 review L2)', () => {
     await onASeed(async (stripe) => {
       const orderId = await heldEverything(stripe)
       later(16)
-      await oldSide(db, stripe).call('cancelCreditBooking', { bookingId: (await bookingOf())?.id })
+      await workerSide()(db, stripe).call('cancelCreditBooking', { bookingId: (await bookingOf())?.id })
       replayStripe.current = stripe
       const before = await figures()
       // Reconcile hasn't looked yet (Stripe may still be dealing with its payment).
@@ -288,8 +290,10 @@ describe('held_order: changed_since (W12 review L2)', () => {
 
   it("an order the old checkout started: refused (the old sweep's), nothing changed", async () => {
     await onASeed(async (stripe) => {
-      const old = oldSide(db, stripe)
+      const old = workerSide()(db, stripe)
       const placed = (await old.call('createOrder', { customerId: ID.customer, products: [soap], payment: { method: 'reader' } })) as { orderId: string }
+      // W64: placed through the Worker, then the mark taken off: the order as the old checkout left it (sweep/old-states.ts).
+      await asTheOldCheckoutStartedIt(db, placed.orderId)
       replayStripe.current = stripe
       later(16)
       expect(dataOf(await postClose({ kind: 'held_order', orderId: placed.orderId, reason: WHY }))).toMatchObject({ closed: false, reason: 'order_not_started_here', message: CLOSE_WORDS.order_not_started_here })
@@ -459,7 +463,8 @@ describe('changed_elsewhere: recorded as sorted (W12a N2)', () => {
     await place({ customerId: ID.customer, booking: paidSeat([sam]), products: [soap], payment: { method: 'card' } })
     const orderId = await pendingOrder()
     later(16)
-    await oldSide(db, stripe).call('refundBooking', { bookingId: (await bookingOf())?.id, refundMethod: 'credit' })
+    // W64: the old screens' Cancel & Refund to store credit, as an SQL fixture (sweep/old-states.ts): only they could do it.
+    await theOldScreensCancelledItToStoreCredit(db, { bookingId: (await bookingOf())?.id as string, orderId, customerId: ID.customer, amount: 20 })
     replayStripe.current = stripe
     return orderId
   }
@@ -644,7 +649,7 @@ describe('words (brief W14b item 3; W12 review L5, W13 to W13d)', () => {
 
   it("a Worker Settle whose booking was changed meanwhile: the undo's warning says no payment was taken (never \"refunded\")", async () => {
     await onASeed(async (stripe) => {
-      const old = oldSide(db, stripe)
+      const old = workerSide()(db, stripe)
       const bookingId = await lapsedSeat((action, params) => old.call(action, params), db)
       const started = (await old.call('settleLapsedBooking', { bookingId, payment: { method: 'reader' } })) as { pendingReaderPayment: { pendingId: string } }
       await asWorkerFlow(db, started.pendingReaderPayment.pendingId)

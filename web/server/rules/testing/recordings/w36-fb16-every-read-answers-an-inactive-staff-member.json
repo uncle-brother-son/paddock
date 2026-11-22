@@ -1,0 +1,28 @@
+{
+  "scenario": "w36-fb16-every-read-answers-an-inactive-staff-member",
+  "results": [
+    {
+      "thrown": "This staff account is inactive. Ask an admin to reactivate it. (FORBIDDEN)"
+    },
+    {
+      "thrown": "This staff account is inactive. Ask an admin to reactivate it. (FORBIDDEN)"
+    },
+    {
+      "thrown": "This staff account is inactive. Ask an admin to reactivate it. (FORBIDDEN)"
+    },
+    {
+      "thrown": "This staff account is inactive. Ask an admin to reactivate it. (FORBIDDEN)"
+    },
+    {
+      "thrown": "This staff account is inactive. Ask an admin to reactivate it. (FORBIDDEN)"
+    },
+    {
+      "thrown": "This staff account is inactive. Ask an admin to reactivate it. (FORBIDDEN)"
+    },
+    {
+      "thrown": "This staff account is inactive. Ask an admin to reactivate it. (FORBIDDEN)"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

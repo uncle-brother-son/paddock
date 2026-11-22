@@ -4,8 +4,9 @@ import { createDb, type Db, type DbDriver, type DriverSession } from '@/server/d
 import { createPostgresDriver } from '@/server/db/postgres-driver'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
 import type { Recording } from '@/server/rules/testing/replay/compare'
-import { oldSide, replay, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/replay/harness'
-import { newOrderSide, orderInput, postOrder, withQuotedCardFigure, type OrderAnswer } from '@/server/rules/testing/replay/order-side'
+import { replay, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
+import { newOrderSide, orderInput, postOrder, withQuotedCardFigure, type OrderAnswer } from '@/server/rules/testing/sweep/order-presses'
 import { ID, PROMO, paidSeat, sam, seed, whileFailing, type WriteFailure } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe, stripeClientsMade } from '@/server/rules/testing/replay/stripe-binding'
 import { ORDER_STRIPE_LIMITS } from '@/server/stripe/client'
@@ -1201,14 +1202,20 @@ describe('round trips (about 20 ms each through Hyperdrive)', () => {
 
 })
 
-describe('for the Worker step (F1): the old createOrder when the charge\'s answer is lost', () => {
-  it('rolls the order back though Stripe took the money, and staff pressing again are charged again: £69 twice, one order', async () => {
+/*
+ * F1 on the Worker (W64). Until W64 this proved the old createOrder's fault on the frozen copy: the charge's answer lost,
+ * it rolled the order back though Stripe had taken the money, and staff pressing again were charged again (£69 twice,
+ * one order; the charges carried no key). The frozen copy goes at W65, so the same lost answer is pressed through the
+ * Worker here: it asks again under the same key, Stripe gives back the payment it took, and the order keeps it.
+ */
+describe('F1, the charge\'s answer lost: on the Worker (the old createOrder rolled the order back)', () => {
+  it('the Worker asks again under the same key: the £69 Stripe took is on the order, once; staff are told it went through', async () => {
     const answers: unknown[] = []
     let fake: FakeStripe | null = null
     const recording = await replay(
       environment,
       {
-        name: 'old createOrder, answer lost',
+        name: 'charge answer lost, on the Worker',
         async seed(seedDb, stripe) {
           await seed(seedDb, stripe)
           stripe.failNext('paymentIntents.create', { kind: 'lost_response' })
@@ -1216,17 +1223,17 @@ describe('for the Worker step (F1): the old createOrder when the charge\'s answe
         async run({ call, stripe }) {
           fake = stripe
           answers.push(await call('createOrder', cardBasket))
-          answers.push(await call('createOrder', cardBasket))
         },
       },
-      oldSide
+      workerSide()
     )
-    expect(answers[0]).toMatchObject({ success: false, stage: 'payment', reason: 'charge_failed', message: 'Failed to charge saved card: An error occurred with our connection to Stripe.' })
-    expect(answers[1]).toMatchObject({ success: true, cardCharged: true, cardAmount: 69 })
+    expect(answers[0]).toMatchObject({ success: true, cardCharged: true, cardAmount: 69 })
     const charged = (fake as unknown as FakeStripe).chargedByIntent
-    expect([...charged.values()]).toEqual([6900, 6900])
-    expect(recording.tables['orders']?.added).toHaveLength(1)
-    // The first charge carried no key, so nothing tied the second to it.
-    expect(recording.stripeCalls.map((call) => call.idempotencyKey)).toEqual([null, null])
+    expect([...charged.values()]).toEqual([6900])
+    expect(recording.tables['orders']?.added).toEqual([expect.objectContaining({ payment_status: 'paid', stripe_payment_intent_id: [...charged.keys()][0] })])
+    // Both sends carried the order's own key, so the second got the first's payment back, not a second charge.
+    const sends = recording.stripeCalls.filter((call) => call.method === 'paymentIntents.create')
+    expect(sends).toHaveLength(2)
+    expect(new Set(sends.map((call) => call.idempotencyKey)).size).toBe(1)
   })
 })

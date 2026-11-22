@@ -2,7 +2,7 @@ import { vi } from 'vitest'
 import type { Db, SqlParam } from '@/server/db'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
 import { insert } from '../database'
-import { putBackWhenEmpty, type Scenario, type ScenarioContext } from './harness'
+import { putBackWhenEmpty, type Scenario, type ScenarioContext } from '../sweep/run'
 
 /** Fixed ids, so a recording can name what it was seeded with. */
 export const ID = {

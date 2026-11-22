@@ -10,8 +10,9 @@ import { reconcile } from '@/server/rules/orders/reconcile'
 import { stuckList } from '@/server/rules/orders/stuck-list'
 import { insert } from '@/server/rules/testing/database'
 import { asOwner, BEFORE_031_SQL, migration031 } from '@/server/rules/testing/migration-031'
-import { throughStaffApp } from '@/server/rules/testing/replay/booking-side'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
+import { throughStaffApp } from '@/server/rules/testing/sweep/booking-presses'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
 import { ID, MO_SUBSCRIPTION, seed } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe, stripeClientsMade } from '@/server/rules/testing/replay/stripe-binding'
 import { invoiceEvent, webhookClient, webhookRpc } from '@/server/rules/testing/webhook'
@@ -115,7 +116,7 @@ async function onASeed(work: (stripe: FakeStripe) => Promise<void>, with031 = tr
           }
         },
       },
-      oldSide
+      workerSide()
     )
   } finally {
     await functions(true)

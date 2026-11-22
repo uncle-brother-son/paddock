@@ -6,9 +6,10 @@ import { lapseSweep } from '@/server/rules/bookings/lapse-sweep'
 import { getCustomerCreditOptions } from '@/server/rules/credits/credit-options'
 import { insert } from '@/server/rules/testing/database'
 import { asOwner, BEFORE_030_SQL, migration030 } from '@/server/rules/testing/migration-030'
-import { BOOKING_KINDS_ON } from '@/server/rules/testing/replay/booking-side'
-import { oldSide, replay, startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
-import { orderInput, postOrder } from '@/server/rules/testing/replay/order-side'
+import { BOOKING_KINDS_ON } from '@/server/rules/testing/sweep/booking-presses'
+import { replay, startReplay, type ReplayEnvironment } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
+import { orderInput, postOrder } from '@/server/rules/testing/sweep/order-presses'
 import { ID, memberCredit, mo, MO_SUBSCRIPTION, paidSeat, seed } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { invoiceEvent, subscriptionUpdatedEvent, webhookRpc } from '@/server/rules/testing/webhook'
@@ -98,7 +99,7 @@ async function onASeed(work: (stripe: FakeStripe) => Promise<void>, with030 = tr
           }
         },
       },
-      oldSide
+      workerSide()
     )
   } finally {
     await functions(true)

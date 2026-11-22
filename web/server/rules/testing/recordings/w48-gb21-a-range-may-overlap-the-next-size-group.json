@@ -1,0 +1,180 @@
+{
+  "scenario": "w48-gb21-a-range-may-overlap-the-next-size-group",
+  "results": [
+    [
+      {
+        "id": "service_type_price_tiers#1",
+        "service_type_id": "10000000-0000-4000-8000-00000000001b",
+        "min_people": 11,
+        "max_people": 14,
+        "price": null,
+        "stripe_price_id": null,
+        "created_at": "<time>",
+        "updated_at": "<time>",
+        "band_id": "10000000-0000-4000-8000-000000000003"
+      },
+      {
+        "id": "service_type_price_tiers#2",
+        "service_type_id": "10000000-0000-4000-8000-00000000001b",
+        "min_people": 11,
+        "max_people": 14,
+        "price": null,
+        "stripe_price_id": null,
+        "created_at": "<time>",
+        "updated_at": "<time>",
+        "band_id": "10000000-0000-4000-8000-00000000000c"
+      }
+    ],
+    {
+      "thrown": "That range overlaps the 11 to 14 people size group. Change that group first, or choose a range that doesn't overlap it."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/service-types/10000000-0000-4000-8000-00000000001b/tiers",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": [
+              {
+                "id": "service_type_price_tiers#1",
+                "price": null,
+                "band_id": "10000000-0000-4000-8000-000000000003",
+                "created_at": "<time>",
+                "max_people": 14,
+                "min_people": 11,
+                "updated_at": "<time>",
+                "service_type_id": "10000000-0000-4000-8000-00000000001b",
+                "stripe_price_id": null
+              },
+              {
+                "id": "service_type_price_tiers#2",
+                "price": null,
+                "band_id": "10000000-0000-4000-8000-00000000000c",
+                "created_at": "<time>",
+                "max_people": 14,
+                "min_people": 11,
+                "updated_at": "<time>",
+                "service_type_id": "10000000-0000-4000-8000-00000000001b",
+                "stripe_price_id": null
+              }
+            ],
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/tier-groups/range",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "field": "minPeople",
+              "details": {
+                "action": "catalog.tier_range_set",
+                "reason": "range_overlaps",
+                "message": "That range overlaps the 11 to 14 people size group. Change that group first, or choose a range that doesn't overlap it."
+              },
+              "message": "That range overlaps the 11 to 14 people size group. Change that group first, or choose a range that doesn't overlap it."
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "catalog.tier_created",
+          "entity_type": "service_type",
+          "entity_id": "10000000-0000-4000-8000-00000000001b",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": [
+              {
+                "id": "service_type_price_tiers#1",
+                "price": null,
+                "band_id": "10000000-0000-4000-8000-000000000003",
+                "created_at": "<time>",
+                "max_people": 14,
+                "min_people": 11,
+                "updated_at": "<time>",
+                "service_type_id": "10000000-0000-4000-8000-00000000001b",
+                "stripe_price_id": null
+              },
+              {
+                "id": "service_type_price_tiers#2",
+                "price": null,
+                "band_id": "10000000-0000-4000-8000-00000000000c",
+                "created_at": "<time>",
+                "max_people": 14,
+                "min_people": 11,
+                "updated_at": "<time>",
+                "service_type_id": "10000000-0000-4000-8000-00000000001b",
+                "stripe_price_id": null
+              }
+            ],
+            "before": null,
+            "maxPeople": 14,
+            "minPeople": 11
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "service_type_price_tiers": {
+      "added": [
+        {
+          "id": "service_type_price_tiers#1",
+          "service_type_id": "10000000-0000-4000-8000-00000000001b",
+          "min_people": 11,
+          "max_people": 14,
+          "price": null,
+          "stripe_price_id": null,
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "band_id": "10000000-0000-4000-8000-000000000003"
+        },
+        {
+          "id": "service_type_price_tiers#2",
+          "service_type_id": "10000000-0000-4000-8000-00000000001b",
+          "min_people": 11,
+          "max_people": 14,
+          "price": null,
+          "stripe_price_id": null,
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "band_id": "10000000-0000-4000-8000-00000000000c"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 2
+    }
+  }
+}

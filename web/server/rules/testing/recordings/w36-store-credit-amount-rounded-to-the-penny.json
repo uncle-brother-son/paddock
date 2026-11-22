@@ -1,0 +1,157 @@
+{
+  "scenario": "w36-store-credit-amount-rounded-to-the-penny",
+  "results": [
+    {
+      "ok": true,
+      "appliedAmount": 12.35,
+      "balance": 42.35,
+      "transactionId": "store_credit_transactions#1"
+    },
+    {
+      "ok": true,
+      "appliedAmount": 0.01,
+      "balance": 42.36,
+      "transactionId": "store_credit_transactions#2"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/customers/10000000-0000-4000-8000-000000000005/store-credit",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "balance": 42.35,
+              "appliedAmount": 12.35,
+              "transactionId": "store_credit_transactions#1"
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/customers/10000000-0000-4000-8000-000000000005/store-credit",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "balance": 42.36,
+              "appliedAmount": 0.01,
+              "transactionId": "store_credit_transactions#2"
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "customer.store_credit_adjusted",
+          "entity_type": "customer",
+          "entity_id": "10000000-0000-4000-8000-000000000005",
+          "request_id": "gone#2",
+          "details": {
+            "mode": "add",
+            "amount": 12.35,
+            "reason": "Goodwill for a cold sauna",
+            "balanceAfter": 42.35,
+            "balanceBefore": 30,
+            "transactionId": "store_credit_transactions#1"
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "customer.store_credit_adjusted",
+          "entity_type": "customer",
+          "entity_id": "10000000-0000-4000-8000-000000000005",
+          "request_id": "gone#4",
+          "details": {
+            "mode": "add",
+            "amount": 0.01,
+            "reason": "Goodwill for a cold sauna",
+            "balanceAfter": 42.36,
+            "balanceBefore": 42.35,
+            "transactionId": "store_credit_transactions#2"
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "customers": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000005",
+          "store_credit_balance": [
+            "30.00",
+            "42.36"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    },
+    "store_credit_transactions": {
+      "added": [
+        {
+          "id": "store_credit_transactions#1",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "amount": "12.35",
+          "balance_after": "42.35",
+          "reason": "manual_adjustment",
+          "order_id": null,
+          "booking_id": null,
+          "gift_card_id": null,
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "note": "Goodwill for a cold sauna",
+          "created_at": "<set>",
+          "event_booking_id": null
+        },
+        {
+          "id": "store_credit_transactions#2",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "amount": "0.01",
+          "balance_after": "42.36",
+          "reason": "manual_adjustment",
+          "order_id": null,
+          "booking_id": null,
+          "gift_card_id": null,
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "note": "Goodwill for a cold sauna",
+          "created_at": "<set>",
+          "event_booking_id": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -7,10 +7,11 @@ import { POST as closeRoute } from '@/app/api/v1/staff/orders/stuck/close/route'
 import type { Db } from '@/server/db'
 import { reconcile } from '@/server/rules/orders/reconcile'
 import { stuckList } from '@/server/rules/orders/stuck-list'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/replay/harness'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
 import { bea, ID, paidSeat, sam, seed, tieredPrivatePrices, whileFailing, type WriteFailure } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
-import { BOOKING_KINDS_ON } from '@/server/rules/testing/replay/booking-side'
+import { BOOKING_KINDS_ON } from '@/server/rules/testing/sweep/booking-presses'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
 import {
   AMOUNT_CHANGED_MESSAGE,
@@ -87,7 +88,7 @@ async function withAGuest(work: (context: Context) => Promise<void>, { privateBo
         }
       },
     },
-    oldSide
+    workerSide()
   )
 }
 

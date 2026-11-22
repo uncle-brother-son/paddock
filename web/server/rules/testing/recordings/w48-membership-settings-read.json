@@ -1,0 +1,22 @@
+{
+  "scenario": "w48-membership-settings-read",
+  "results": [
+    {
+      "addonCreditWaitMonths": 3
+    },
+    {
+      "addonCreditWaitMonths": 6
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "membership_settings": {
+      "added": [],
+      "changed": [],
+      "removed": [
+        "true"
+      ],
+      "tied": 0
+    }
+  }
+}

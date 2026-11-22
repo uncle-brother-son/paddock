@@ -1,0 +1,118 @@
+{
+  "scenario": "w48-gb4-a-capacity-or-length-change-reaches-no-session-already-made",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-000000000002",
+      "duration": 90,
+      "capacity": 8,
+      "booking_type": "public"
+    },
+    {
+      "sessions": [
+        {
+          "id": "10000000-0000-4000-8000-000000000004",
+          "service_type_id": "10000000-0000-4000-8000-000000000002",
+          "service_type_name": "Sauna",
+          "booking_type": "public",
+          "start_time": "2026-11-12T10:00:00.000Z",
+          "end_time": "2026-11-12T11:00:00.000Z",
+          "capacity": 10,
+          "total_booked": 0,
+          "status": "open",
+          "blocked_reason": null,
+          "blocked_by": null,
+          "started": false,
+          "band_id": "10000000-0000-4000-8000-000000000003",
+          "band_code": "core",
+          "band_name": "Core",
+          "band_price": "20.00",
+          "band_overridden": false,
+          "confirmed_booking_count": 0
+        }
+      ],
+      "madeUpTo": null,
+      "closedDates": []
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/service-types/10000000-0000-4000-8000-000000000002/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "10000000-0000-4000-8000-000000000002",
+              "stamp": "fields#<md5>",
+              "capacity": 8,
+              "duration": 90,
+              "booking_type": "public"
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "catalog.details_set",
+          "entity_type": "service_type",
+          "entity_id": "10000000-0000-4000-8000-000000000002",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "id": "10000000-0000-4000-8000-000000000002",
+              "capacity": 8,
+              "duration": 90,
+              "booking_type": "public"
+            },
+            "before": {
+              "id": "10000000-0000-4000-8000-000000000002",
+              "capacity": 6,
+              "duration": null,
+              "booking_type": "public"
+            }
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "service_types": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000002",
+          "duration": [
+            null,
+            90
+          ],
+          "capacity": [
+            6,
+            8
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

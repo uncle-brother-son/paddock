@@ -6,8 +6,9 @@ import { POST as partRoute } from '@/app/api/v1/staff/bookings/[bookingId]/refun
 import { GET as figuresRoute } from '@/app/api/v1/staff/bookings/[bookingId]/refund-figures/route'
 import type { Db } from '@/server/db'
 import { reconcile } from '@/server/rules/orders/reconcile'
-import { BOOKING_KINDS_ON } from '@/server/rules/testing/replay/booking-side'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
+import { BOOKING_KINDS_ON } from '@/server/rules/testing/sweep/booking-presses'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
 import { ID, paidSeat, sam, seed } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import type { FakeStripe } from '@/server/stripe/fake'
@@ -119,7 +120,7 @@ async function onAHundredPoundBooking(work: (made: { bookingId: string; stripe: 
         }
       },
     },
-    oldSide
+    workerSide()
   )
 }
 

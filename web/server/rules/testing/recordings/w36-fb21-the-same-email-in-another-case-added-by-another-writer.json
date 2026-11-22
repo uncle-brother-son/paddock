@@ -1,0 +1,75 @@
+{
+  "scenario": "w36-fb21-the-same-email-in-another-case-added-by-another-writer",
+  "results": [
+    {
+      "thrown": "A customer with this email address already exists"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/customers",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "field": "email",
+              "details": {
+                "action": "create_customer",
+                "reason": "duplicate_email",
+                "message": "A customer with this email address already exists"
+              },
+              "message": "A customer with this email address already exists"
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "customers": {
+      "added": [
+        {
+          "id": "customers#1",
+          "auth_user_id": null,
+          "first_name": "Sam",
+          "last_name": "Again",
+          "email": "SAM@example.com",
+          "phone": null,
+          "stripe_customer_id": null,
+          "saved_payment_method_id": null,
+          "created_at": "<set>",
+          "marketing_consent": false,
+          "birthday_marketing_consent": false,
+          "address_line1": null,
+          "address_line2": null,
+          "city": null,
+          "postcode": null,
+          "country": "GB",
+          "waiver_accepted": false,
+          "waiver_version": null,
+          "waiver_accepted_at": null,
+          "date_of_birth": "1990-01-01",
+          "updated_at": "<set>",
+          "saved_card_last4": null,
+          "saved_card_brand": null,
+          "store_credit_balance": "0.00"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "scenario": "w08-refused-event-guests-not-confirmed",
+  "results": [
+    {
+      "success": false,
+      "stage": "event",
+      "reason": "guests_over_18_not_confirmed",
+      "message": "Confirm that everyone else in the booking is 18 or over."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/orders",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "AGE_CONFIRMATION_REQUIRED",
+              "details": {
+                "stage": "event",
+                "reason": "guests_over_18_not_confirmed",
+                "message": "Confirm that everyone else in the booking is 18 or over."
+              },
+              "message": "Confirm that everyone else in the booking is 18 or over."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 422,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

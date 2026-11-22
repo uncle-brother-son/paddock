@@ -1,0 +1,176 @@
+{
+  "scenario": "w36-fb1-payment-date-worker-dies-after-the-charge-then-pressed-again",
+  "results": [
+    {
+      "changed": false,
+      "message": "The card payment went through, but the change couldn't be finished. It's on hold: don't take payment again. Check the Orders page in a few minutes.",
+      "held": true
+    },
+    {
+      "changed": false,
+      "message": "A payment date change is already in progress for this membership"
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "subscriptions.retrieve",
+      "params": {
+        "id": "sub_mo"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "paymentIntents.create",
+      "params": {
+        "amount": 2194,
+        "currency": "gbp",
+        "customer": "cus_member",
+        "payment_method": "pm_member",
+        "off_session": true,
+        "confirm": true,
+        "description": "Payment date change: 17 extra days",
+        "metadata": {
+          "purpose": "membership_payment_date_change",
+          "stripe_subscription_id": "sub_mo",
+          "membership_id": "10000000-0000-4000-8000-000000000010",
+          "new_renewal_date": "2026-12-27",
+          "change_id": "membership_payment_date_changes#1"
+        }
+      },
+      "idempotencyKey": "membership_payment_date_changes#1:charge"
+    }
+  ],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/payment-date",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "PAYMENT_UNCONFIRMED",
+              "details": {
+                "held": {
+                  "changeId": "membership_payment_date_changes#1"
+                },
+                "action": "payment_date",
+                "reason": "move_unconfirmed",
+                "message": "The card payment went through, but the change couldn't be finished. It's on hold: don't take payment again. Check the Orders page in a few minutes."
+              },
+              "message": "The card payment went through, but the change couldn't be finished. It's on hold: don't take payment again. Check the Orders page in a few minutes."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 502,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/payment-date",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "payment_date",
+                "reason": "refused",
+                "message": "A payment date change is already in progress for this membership"
+              },
+              "message": "A payment date change is already in progress for this membership"
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.payment_date_changed",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#2",
+          "details": {
+            "shown": 21.94,
+            "state": "started",
+            "amount": 21.94,
+            "planId": "10000000-0000-4000-8000-00000000000a",
+            "channel": "staff",
+            "changeId": "membership_payment_date_changes#1",
+            "livemode": false,
+            "override": null,
+            "trialEnd": 1798329600,
+            "extraDays": 17,
+            "customerId": "10000000-0000-4000-8000-00000000000f",
+            "description": "Payment date change: 17 extra days",
+            "newRenewalDate": "2026-12-27",
+            "oldRenewalDate": "2026-12-10",
+            "subscriptionId": "sub_mo",
+            "paymentMethodId": "pm_member",
+            "stripeCustomerId": "cus_member"
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.payment_date_changed",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#2",
+          "details": {
+            "state": "held",
+            "detail": "S3 after pi_fake_0003: no code: the Worker died",
+            "reason": "move_unconfirmed",
+            "changeId": "membership_payment_date_changes#1",
+            "paymentIntentId": null
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 2
+    },
+    "membership_payment_date_changes": {
+      "added": [
+        {
+          "id": "membership_payment_date_changes#1",
+          "membership_id": "10000000-0000-4000-8000-000000000010",
+          "old_renewal_date": "2026-12-10",
+          "new_renewal_date": "2026-12-27",
+          "extra_days": 17,
+          "amount_charged": "21.94",
+          "stripe_payment_intent_id": "pi_fake_0003",
+          "order_id": null,
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "override_reason": null,
+          "status": "pending",
+          "failure_message": null,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -1,0 +1,95 @@
+{
+  "scenario": "w48-gb19-the-waiting-period-is-saved-and-the-herd-refresh-fails",
+  "results": [
+    {
+      "addonCreditWaitMonths": 12,
+      "herdFlagsChanged": 1
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/membership-settings",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "herdFlagsChanged": 1,
+              "addonCreditWaitMonths": 12
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership_settings.set",
+          "entity_type": "membership_settings",
+          "entity_id": "true",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "addon_credit_wait_months": 12
+            },
+            "before": {
+              "addon_credit_wait_months": 6
+            },
+            "leaveHerd": 1,
+            "becomeHerd": 0,
+            "herdFlagsShown": 1,
+            "herdFlagsChanged": 1
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "customer_memberships": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000010",
+          "is_herd": [
+            true,
+            false
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    },
+    "membership_settings": {
+      "added": [],
+      "changed": [
+        {
+          "id": "true",
+          "addon_credit_wait_months": [
+            6,
+            12
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

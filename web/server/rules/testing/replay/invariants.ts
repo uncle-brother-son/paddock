@@ -1,6 +1,6 @@
 import type { Db } from '@/server/db'
 import type { FakeStripe } from '@/server/stripe/fake'
-import { replay, type ReplayEnvironment, type ReplaySide, type Scenario, type ScenarioContext } from './harness'
+import { replay, type ReplayEnvironment, type ReplaySide, type Scenario, type ScenarioContext } from '../sweep/run'
 
 // The W05 invariants (W05d, W05k), moved here from w05d.test.ts unchanged in W18 so the new side can run them too
 // (D-plan 4.11 item 3): no booking gets back more than was paid, price_paid is paid less given back, what is owed is
@@ -67,16 +67,24 @@ export async function sweepInvariants(
   list: readonly Scenario[],
   makeSide: (db: Db, stripe: FakeStripe) => ReplaySide
 ): Promise<InvariantSweep> {
-  const wrong: string[] = []
+  const sweep: InvariantSweep = { wrong: [], needed: new Set<string>(), bookingsChecked: 0 }
+  for (const scenario of list) await replay(environment, watchedForInvariants(scenario, sweep), makeSide)
+  return sweep
+}
+
+/**
+ * W64: `scenario` with the invariants checked on what it leaves, into `sweep`, so a caller that keeps the recording (the
+ * all-Worker sweep) checks them on the same run. Moved out of sweepInvariants unchanged.
+ */
+export function watchedForInvariants(scenario: Scenario, sweep: InvariantSweep): Scenario {
+  const { wrong, needed } = sweep
   /** Each exception must still be needed, so a stale one can't hide a new problem. */
-  const needed = new Set<string>()
   const allowed = (list: Record<string, string>, name: string) => {
     if (!(name in list)) return false
     needed.add(`${Object.keys(list)[0]}/${name}`)
     return true
   }
-  let bookingsChecked = 0
-  for (const scenario of list) {
+  {
     /** Cash that no order line or row records: a move or a settle paid in cash. Store credit and gift card
      *  parts are read from their rows below (W05k): from the request, a press that counted a part
      *  it never took would pass. */
@@ -130,7 +138,7 @@ export async function sweepInvariants(
         )
         // A seeded booking has no order behind it.
         for (const row of rows.filter((r) => !seeded.some((s) => s.id === r.id))) {
-          bookingsChecked += 1
+          sweep.bookingsChecked += 1
           const paid = Number.parseFloat(row.paid) + Number.parseFloat(row.parts) + (offLines.get(row.id) ?? 0)
           const back = Number.parseFloat(row.card) + Number.parseFloat(row.credit)
           const left = Number.parseFloat(row.price_paid ?? '0')
@@ -223,7 +231,6 @@ export async function sweepInvariants(
         }
       },
     }
-    await replay(environment, watched, makeSide)
+    return watched
   }
-  return { wrong, needed, bookingsChecked }
 }

@@ -1,0 +1,146 @@
+{
+  "scenario": "w48-addon-sku-set",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-000000000006",
+      "sku": "TOWEL-2"
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000006",
+      "sku": null
+    },
+    null
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "addons": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000006",
+          "sku": [
+            "TOWEL",
+            null
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    },
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/addons/10000000-0000-4000-8000-000000000006/sku",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "10000000-0000-4000-8000-000000000006",
+              "sku": "TOWEL-2"
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/addons/10000000-0000-4000-8000-000000000006/sku",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "10000000-0000-4000-8000-000000000006",
+              "sku": null
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/addons/gone#6/sku",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "catalog.details_set",
+                "reason": "addon_not_found",
+                "message": "Item not found"
+              },
+              "message": "Item not found"
+            },
+            "requestId": "gone#7"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "catalog.details_set",
+          "entity_type": "addon",
+          "entity_id": "10000000-0000-4000-8000-000000000006",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "id": "10000000-0000-4000-8000-000000000006",
+              "sku": "TOWEL-2"
+            },
+            "before": {
+              "id": "10000000-0000-4000-8000-000000000006",
+              "sku": "TOWEL"
+            }
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "catalog.details_set",
+          "entity_type": "addon",
+          "entity_id": "10000000-0000-4000-8000-000000000006",
+          "request_id": "gone#4",
+          "details": {
+            "key": "gone#3",
+            "after": {
+              "id": "10000000-0000-4000-8000-000000000006",
+              "sku": null
+            },
+            "before": {
+              "id": "10000000-0000-4000-8000-000000000006",
+              "sku": "TOWEL-2"
+            }
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

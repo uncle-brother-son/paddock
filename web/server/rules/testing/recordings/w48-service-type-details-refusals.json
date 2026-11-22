@@ -1,0 +1,174 @@
+{
+  "scenario": "w48-service-type-details-refusals",
+  "results": [
+    {
+      "thrown": "Duration must be a positive whole number of minutes"
+    },
+    {
+      "thrown": "Duration must be a positive whole number of minutes"
+    },
+    {
+      "thrown": "Capacity must be a positive whole number"
+    },
+    {
+      "thrown": "Capacity must be a positive whole number"
+    },
+    {
+      "thrown": "Invalid booking type: members"
+    },
+    null
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/service-types/10000000-0000-4000-8000-000000000002/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "duration",
+              "details": {
+                "action": "catalog.details_set",
+                "reason": "invalid_params",
+                "message": "Duration must be a positive whole number of minutes"
+              },
+              "message": "Duration must be a positive whole number of minutes"
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/service-types/10000000-0000-4000-8000-000000000002/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "duration",
+              "details": {
+                "action": "catalog.details_set",
+                "reason": "invalid_params",
+                "message": "Duration must be a positive whole number of minutes"
+              },
+              "message": "Duration must be a positive whole number of minutes"
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/service-types/10000000-0000-4000-8000-000000000002/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "capacity",
+              "details": {
+                "action": "catalog.details_set",
+                "reason": "invalid_params",
+                "message": "Capacity must be a positive whole number"
+              },
+              "message": "Capacity must be a positive whole number"
+            },
+            "requestId": "gone#6"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#7",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/service-types/10000000-0000-4000-8000-000000000002/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "capacity",
+              "details": {
+                "action": "catalog.details_set",
+                "reason": "invalid_params",
+                "message": "Capacity must be a positive whole number"
+              },
+              "message": "Capacity must be a positive whole number"
+            },
+            "requestId": "gone#8"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#9",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/service-types/10000000-0000-4000-8000-000000000002/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "bookingType",
+              "details": {
+                "action": "catalog.details_set",
+                "reason": "invalid_params",
+                "message": "Invalid booking type: members"
+              },
+              "message": "Invalid booking type: members"
+            },
+            "requestId": "gone#10"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#11",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/service-types/gone#12/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "catalog.details_set",
+                "reason": "service_type_not_found",
+                "message": "That service type no longer exists. Reload the page and try again."
+              },
+              "message": "That service type no longer exists. Reload the page and try again."
+            },
+            "requestId": "gone#13"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

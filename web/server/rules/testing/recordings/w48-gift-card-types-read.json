@@ -1,0 +1,43 @@
+{
+  "scenario": "w48-gift-card-types-read",
+  "results": [
+    [
+      {
+        "id": "10000000-0000-4000-8000-000000000019",
+        "sanity_gift_card_type_id": null,
+        "name": "Gift Card",
+        "thumbnail_url": null,
+        "active": true,
+        "stripe_product_id": "prod_gift",
+        "custom_amount_enabled": true,
+        "custom_amount_min": "10.00",
+        "custom_amount_max": "200.00",
+        "created_at": "<time>",
+        "updated_at": "<time>",
+        "expiry_months": 12,
+        "presets": [
+          {
+            "id": "10000000-0000-4000-8000-000000000a17",
+            "gift_card_type_id": "10000000-0000-4000-8000-000000000019",
+            "amount": "25.00",
+            "active": false,
+            "stripe_price_id": null,
+            "created_at": "<time>",
+            "updated_at": "<time>"
+          },
+          {
+            "id": "10000000-0000-4000-8000-00000000001a",
+            "gift_card_type_id": "10000000-0000-4000-8000-000000000019",
+            "amount": "60.00",
+            "active": true,
+            "stripe_price_id": "price_preset_60",
+            "created_at": "<time>",
+            "updated_at": "<time>"
+          }
+        ]
+      }
+    ]
+  ],
+  "stripeCalls": [],
+  "tables": {}
+}

@@ -17,7 +17,8 @@ import { stuckList, WATCH_WORDS } from '@/server/rules/orders/stuck-list'
 import { REFUND_WATCH } from '@/server/rules/refunds/refund-watch'
 import { insert } from '@/server/rules/testing/database'
 import { TABLES } from '@/server/rules/testing/replay/compare'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
 import { ID, MO_SUBSCRIPTION, seed, whileFailing } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { invoiceEvent, webhookRpc } from '@/server/rules/testing/webhook'
@@ -112,7 +113,7 @@ async function onASeed(work: (stripe: FakeStripe) => Promise<void>, prepare?: Pr
         }
       },
     },
-    oldSide
+    workerSide()
   )
 }
 

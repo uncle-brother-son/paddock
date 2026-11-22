@@ -1,0 +1,167 @@
+{
+  "scenario": "w36-fb7-two-session-adjustments-at-once-lose-one",
+  "results": [
+    {
+      "adjusted": true,
+      "period": {
+        "period_id": "10000000-0000-4000-8000-000000000021",
+        "credits_allocated": 5,
+        "credits_used": 0,
+        "period_start": "2026-11-10",
+        "period_end": "2026-12-09"
+      }
+    },
+    {
+      "adjusted": true,
+      "period": {
+        "period_id": "10000000-0000-4000-8000-000000000021",
+        "credits_allocated": 7,
+        "credits_used": 0,
+        "period_start": "2026-11-10",
+        "period_end": "2026-12-09"
+      }
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/credits",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "period": {
+                "period_id": "10000000-0000-4000-8000-000000000021",
+                "period_end": "2026-12-09",
+                "credits_used": 0,
+                "period_start": "2026-11-10",
+                "credits_allocated": 5
+              }
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/credits",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "period": {
+                "period_id": "10000000-0000-4000-8000-000000000021",
+                "period_end": "2026-12-09",
+                "credits_used": 0,
+                "period_start": "2026-11-10",
+                "credits_allocated": 7
+              }
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.credits_adjusted",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#2",
+          "details": {
+            "used": 0,
+            "after": 5,
+            "amount": 1,
+            "before": 4,
+            "reason": "Goodwill after a cold sauna",
+            "periodId": "10000000-0000-4000-8000-000000000021",
+            "creditType": "session",
+            "adjustmentId": "membership_credit_adjustments#1"
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.credits_adjusted",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#4",
+          "details": {
+            "used": 0,
+            "after": 7,
+            "amount": 2,
+            "before": 5,
+            "reason": "Second tab",
+            "periodId": "10000000-0000-4000-8000-000000000021",
+            "creditType": "session",
+            "adjustmentId": "membership_credit_adjustments#2"
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "membership_credit_adjustments": {
+      "added": [
+        {
+          "id": "membership_credit_adjustments#1",
+          "membership_id": "10000000-0000-4000-8000-000000000010",
+          "credit_type": "session",
+          "amount": 1,
+          "reason": "Goodwill after a cold sauna",
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "created_at": "<set>"
+        },
+        {
+          "id": "membership_credit_adjustments#2",
+          "membership_id": "10000000-0000-4000-8000-000000000010",
+          "credit_type": "session",
+          "amount": 2,
+          "reason": "Second tab",
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "membership_credit_periods": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000021",
+          "credits_allocated": [
+            4,
+            7
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

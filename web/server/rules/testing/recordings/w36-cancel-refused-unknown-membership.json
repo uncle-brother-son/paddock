@@ -1,0 +1,71 @@
+{
+  "scenario": "w36-cancel-refused-unknown-membership",
+  "results": [
+    {
+      "updated": false,
+      "reason": "membership_not_found",
+      "message": "Membership not found"
+    },
+    {
+      "updated": false,
+      "reason": "membership_not_found",
+      "message": "Membership not found"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/gone#2/cancel",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "cancel",
+                "reason": "membership_not_found",
+                "message": "Membership not found"
+              },
+              "message": "Membership not found"
+            },
+            "requestId": "gone#3"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#4",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/gone#2/undo-cancel",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "undo_cancel",
+                "reason": "membership_not_found",
+                "message": "Membership not found"
+              },
+              "message": "Membership not found"
+            },
+            "requestId": "gone#5"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

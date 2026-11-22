@@ -10,8 +10,9 @@ import { GUESTS_OVER_18_NOT_CONFIRMED_MESSAGE } from '@/server/rules/orders/gues
 import { FLOW_INTENT_UNCONFIRMED_MESSAGE, flowCustomerMismatchMessage, readFlow } from '@/server/rules/orders/reader-flow'
 import { reconcile } from '@/server/rules/orders/reconcile'
 import { CARD_FLOW_WAITING_WORDS, stuckList } from '@/server/rules/orders/stuck-list'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/replay/harness'
-import { BOOKING_KINDS_ON } from '@/server/rules/testing/replay/booking-side'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
+import { BOOKING_KINDS_ON } from '@/server/rules/testing/sweep/booking-presses'
 import { goodwill, ID, paidSeat, PROMO, sam, seed, tieredPrivatePrices, whileFailing } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
@@ -114,7 +115,7 @@ async function onABooking(
         }
       },
     },
-    oldSide
+    workerSide()
   )
 }
 

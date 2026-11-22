@@ -1,0 +1,44 @@
+{
+  "scenario": "w48-slot-remove-refusals",
+  "results": [
+    {
+      "thrown": "slotId is required"
+    },
+    {
+      "deleted": false
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/schedule-slots/gone#2/remove",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "timetable.slot_removed",
+                "reason": "slot_not_found",
+                "message": "That weekly slot no longer exists. Reload the page and try again."
+              },
+              "message": "That weekly slot no longer exists. Reload the page and try again."
+            },
+            "requestId": "gone#3"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

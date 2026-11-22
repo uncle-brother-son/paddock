@@ -1,0 +1,411 @@
+{
+  "scenario": "w48-stock-adjust-each-reason",
+  "results": [
+    {
+      "id": "10000000-0000-4000-8000-000000000008",
+      "stock_quantity": 15
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000008",
+      "stock_quantity": 13
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000008",
+      "stock_quantity": 12
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000008",
+      "stock_quantity": 11
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000008",
+      "stock_quantity": 12
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000008",
+      "stock_quantity": 0
+    },
+    [
+      {
+        "id": "stock_adjustments#6",
+        "variant_id": "10000000-0000-4000-8000-000000000008",
+        "change_amount": -12,
+        "reason": "Other: Given to the raffle",
+        "staff_id": "10000000-0000-4000-8000-000000000001",
+        "staff_first_name": "Jo",
+        "staff_last_name": "Staff",
+        "created_at": "<time>"
+      },
+      {
+        "id": "stock_adjustments#5",
+        "variant_id": "10000000-0000-4000-8000-000000000008",
+        "change_amount": 1,
+        "reason": "Refund Restock",
+        "staff_id": "10000000-0000-4000-8000-000000000001",
+        "staff_first_name": "Jo",
+        "staff_last_name": "Staff",
+        "created_at": "<time>"
+      },
+      {
+        "id": "stock_adjustments#4",
+        "variant_id": "10000000-0000-4000-8000-000000000008",
+        "change_amount": -1,
+        "reason": "Sale",
+        "staff_id": "10000000-0000-4000-8000-000000000001",
+        "staff_first_name": "Jo",
+        "staff_last_name": "Staff",
+        "created_at": "<time>"
+      },
+      {
+        "id": "stock_adjustments#3",
+        "variant_id": "10000000-0000-4000-8000-000000000008",
+        "change_amount": -1,
+        "reason": "Recount",
+        "staff_id": "10000000-0000-4000-8000-000000000001",
+        "staff_first_name": "Jo",
+        "staff_last_name": "Staff",
+        "created_at": "<time>"
+      },
+      {
+        "id": "stock_adjustments#2",
+        "variant_id": "10000000-0000-4000-8000-000000000008",
+        "change_amount": -2,
+        "reason": "Damage",
+        "staff_id": "10000000-0000-4000-8000-000000000001",
+        "staff_first_name": "Jo",
+        "staff_last_name": "Staff",
+        "created_at": "<time>"
+      },
+      {
+        "id": "stock_adjustments#1",
+        "variant_id": "10000000-0000-4000-8000-000000000008",
+        "change_amount": 10,
+        "reason": "Delivery",
+        "staff_id": "10000000-0000-4000-8000-000000000001",
+        "staff_first_name": "Jo",
+        "staff_last_name": "Staff",
+        "created_at": "<time>"
+      }
+    ]
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/variants/10000000-0000-4000-8000-000000000008/stock",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "10000000-0000-4000-8000-000000000008",
+              "stock_quantity": 15
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/variants/10000000-0000-4000-8000-000000000008/stock",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "10000000-0000-4000-8000-000000000008",
+              "stock_quantity": 13
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/variants/10000000-0000-4000-8000-000000000008/stock",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "10000000-0000-4000-8000-000000000008",
+              "stock_quantity": 12
+            },
+            "requestId": "gone#6"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#7",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/variants/10000000-0000-4000-8000-000000000008/stock",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "10000000-0000-4000-8000-000000000008",
+              "stock_quantity": 11
+            },
+            "requestId": "gone#8"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#9",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/variants/10000000-0000-4000-8000-000000000008/stock",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "10000000-0000-4000-8000-000000000008",
+              "stock_quantity": 12
+            },
+            "requestId": "gone#10"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#11",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/variants/10000000-0000-4000-8000-000000000008/stock",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "id": "10000000-0000-4000-8000-000000000008",
+              "stock_quantity": 0
+            },
+            "requestId": "gone#12"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "stock.adjusted",
+          "entity_type": "product_variant",
+          "entity_id": "10000000-0000-4000-8000-000000000008",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "stock_quantity": 15
+            },
+            "before": {
+              "stock_quantity": 5
+            },
+            "reason": "Delivery",
+            "changeAmount": 10
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "stock.adjusted",
+          "entity_type": "product_variant",
+          "entity_id": "10000000-0000-4000-8000-000000000008",
+          "request_id": "gone#4",
+          "details": {
+            "key": "gone#3",
+            "after": {
+              "stock_quantity": 13
+            },
+            "before": {
+              "stock_quantity": 15
+            },
+            "reason": "Damage",
+            "changeAmount": -2
+          }
+        },
+        {
+          "id": "audit_log#3",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "stock.adjusted",
+          "entity_type": "product_variant",
+          "entity_id": "10000000-0000-4000-8000-000000000008",
+          "request_id": "gone#6",
+          "details": {
+            "key": "gone#5",
+            "after": {
+              "stock_quantity": 12
+            },
+            "before": {
+              "stock_quantity": 13
+            },
+            "reason": "Recount",
+            "changeAmount": -1
+          }
+        },
+        {
+          "id": "audit_log#4",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "stock.adjusted",
+          "entity_type": "product_variant",
+          "entity_id": "10000000-0000-4000-8000-000000000008",
+          "request_id": "gone#8",
+          "details": {
+            "key": "gone#7",
+            "after": {
+              "stock_quantity": 11
+            },
+            "before": {
+              "stock_quantity": 12
+            },
+            "reason": "Sale",
+            "changeAmount": -1
+          }
+        },
+        {
+          "id": "audit_log#5",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "stock.adjusted",
+          "entity_type": "product_variant",
+          "entity_id": "10000000-0000-4000-8000-000000000008",
+          "request_id": "gone#10",
+          "details": {
+            "key": "gone#9",
+            "after": {
+              "stock_quantity": 12
+            },
+            "before": {
+              "stock_quantity": 11
+            },
+            "reason": "Refund Restock",
+            "changeAmount": 1
+          }
+        },
+        {
+          "id": "audit_log#6",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "stock.adjusted",
+          "entity_type": "product_variant",
+          "entity_id": "10000000-0000-4000-8000-000000000008",
+          "request_id": "gone#12",
+          "details": {
+            "key": "gone#11",
+            "after": {
+              "stock_quantity": 0
+            },
+            "before": {
+              "stock_quantity": 12
+            },
+            "reason": "Other: Given to the raffle",
+            "changeAmount": -12
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "product_variants": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000008",
+          "stock_quantity": [
+            5,
+            0
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    },
+    "stock_adjustments": {
+      "added": [
+        {
+          "id": "stock_adjustments#1",
+          "variant_id": "10000000-0000-4000-8000-000000000008",
+          "change_amount": 10,
+          "reason": "Delivery",
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "created_at": "<set>"
+        },
+        {
+          "id": "stock_adjustments#2",
+          "variant_id": "10000000-0000-4000-8000-000000000008",
+          "change_amount": -2,
+          "reason": "Damage",
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "created_at": "<set>"
+        },
+        {
+          "id": "stock_adjustments#3",
+          "variant_id": "10000000-0000-4000-8000-000000000008",
+          "change_amount": -1,
+          "reason": "Recount",
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "created_at": "<set>"
+        },
+        {
+          "id": "stock_adjustments#4",
+          "variant_id": "10000000-0000-4000-8000-000000000008",
+          "change_amount": -1,
+          "reason": "Sale",
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "created_at": "<set>"
+        },
+        {
+          "id": "stock_adjustments#5",
+          "variant_id": "10000000-0000-4000-8000-000000000008",
+          "change_amount": 1,
+          "reason": "Refund Restock",
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "created_at": "<set>"
+        },
+        {
+          "id": "stock_adjustments#6",
+          "variant_id": "10000000-0000-4000-8000-000000000008",
+          "change_amount": -12,
+          "reason": "Other: Given to the raffle",
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

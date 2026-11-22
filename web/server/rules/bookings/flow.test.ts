@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Db } from '@/server/db'
 import { readFlow, type FlowRow } from '@/server/rules/orders/reader-flow'
-import { postFlowStep } from '@/server/rules/testing/replay/flow-side'
-import { oldSide, replay, startReplay, type ReplayEnvironment, type Scenario, type ScenarioContext } from '@/server/rules/testing/replay/harness'
+import { postFlowStep } from '@/server/rules/testing/sweep/flow-presses'
+import { replay, startReplay, type ReplayEnvironment, type Scenario, type ScenarioContext } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
 import { bea, ID, lapsedSeat, publicOnCard, seed, sessionsToMoveBetween, whileFailing } from '@/server/rules/testing/replay/scenarios'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
-import { READER_PAYMENT_OPEN_MESSAGE, CARD_FLOW_CHARGED_WITHOUT_RECORD_MESSAGE, CARD_FLOW_PAID_NOT_FINISHED_MESSAGE, CHANGE_PAYMENT_UNCONFIRMED_MESSAGE, NOT_A_READER_FLOW_MESSAGE } from './failure-messages'
+import { CARD_PAYMENT_OPEN_MESSAGE, CARD_FLOW_CHARGED_WITHOUT_RECORD_MESSAGE, CARD_FLOW_PAID_NOT_FINISHED_MESSAGE, CHANGE_PAYMENT_UNCONFIRMED_MESSAGE, NOT_A_READER_FLOW_MESSAGE } from './failure-messages'
 import { chargeCardFlow, flowChargeKey, settleCardFlow, undoCardFlow, writeFlowRecord, type CardFlowSnapshot } from './flow'
 
 // W17 brief item 3: a booking change paid on the saved card is a flow with `method: 'card'`. Its C2 and undo are W12's
@@ -88,7 +89,7 @@ describe('a card flow: charge, C2 and undo (W17)', () => {
 
   /** Runs `steps` after the seed, on the old side for whatever the old code does. */
   const run = (name: string, steps: (context: ScenarioContext) => Promise<void>, seedWith: Scenario['seed'] = seed) =>
-    replay(environment, { name, seed: seedWith, run: steps }, oldSide)
+    replay(environment, { name, seed: seedWith, run: steps }, workerSide())
   const movingSeed: Scenario['seed'] = async (db, stripe) => {
     await seed(db, stripe)
     await sessionsToMoveBetween(db)
@@ -237,7 +238,9 @@ describe('a card flow: charge, C2 and undo (W17)', () => {
       expect(await settleCardFlow(db, stripe, pendingId, actor)).toMatchObject({ outcome: 'finished' })
       expect(await places()).toEqual({ core: 0, peak: 2 })
       expect(await rows(db, 'SELECT session_id, price_paid::text AS paid FROM bookings WHERE id = $1', [bookingId])).toEqual([{ session_id: ID.peakSession, paid: '51.00' }])
-      expect(charges(stripe)[0]?.params).toMatchObject({ amount: 1100, metadata: { flow: 'move', record_id: bookingId, pending_id: pendingId } })
+      // W64: the booking's own order is now placed on the card by the Worker too, under its order's key: the flow's
+      // charge is the one keyed from the record.
+      expect(charges(stripe).find((call) => call.idempotencyKey === `${pendingId}:charge`)?.params).toMatchObject({ amount: 1100, metadata: { flow: 'move', record_id: bookingId, pending_id: pendingId } })
     }, movingSeed)
     await run('w17-flow-move-declined', async (context) => {
       const { db, stripe } = context
@@ -266,14 +269,15 @@ describe('a card flow: charge, C2 and undo (W17)', () => {
     })
   })
 
-  it('held means held: while a card flow is open the old functions refuse the booking, and the reader routes refuse the card flow', async () => {
+  it('held means held: while a card flow is open the booking\'s changes are refused, and the reader routes refuse the card flow', async () => {
     await run('w17-flow-held', async (context) => {
       const { db, call, attempt } = context
       const { bookingId, pendingId } = await settleFlow(context)
-      const refusal = { reason: 'reader_payment_open' }
+      // W64: the presses go to the Worker now (the old functions that refused in W17's words are going): its guard sees
+      // the open card flow and answers in its own words for a card payment (CARD_PAYMENT_OPEN_MESSAGE).
       // refundBooking throws its refusal; staff see the words.
-      expect(await attempt('refundBooking', { bookingId, refundMethod: 'credit', amount: 5, reason: 'Goodwill' })).toEqual({ thrown: READER_PAYMENT_OPEN_MESSAGE })
-      expect(await call('addBookingGuest', { bookingId, ...bea, payment: { method: 'cash', confirmedCashAmount: 20 } })).toMatchObject(refusal)
+      expect(await attempt('refundBooking', { bookingId, refundMethod: 'credit', amount: 5, reason: 'Goodwill' })).toEqual({ thrown: CARD_PAYMENT_OPEN_MESSAGE })
+      expect(await call('addBookingGuest', { bookingId, ...bea, payment: { method: 'cash', confirmedCashAmount: 20 } })).toMatchObject({ added: false, message: CARD_PAYMENT_OPEN_MESSAGE })
       for (const step of ['finalise', 'cancel'] as const) {
         const answer = await postFlowStep(step, pendingId)
         expect(answer.body).toMatchObject({ ok: true, data: { reason: 'not_a_reader_flow', message: NOT_A_READER_FLOW_MESSAGE } })

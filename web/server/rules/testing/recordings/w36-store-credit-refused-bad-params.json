@@ -1,0 +1,271 @@
+{
+  "scenario": "w36-store-credit-refused-bad-params",
+  "results": [
+    {
+      "ok": false,
+      "message": "Customer id is required."
+    },
+    {
+      "ok": false,
+      "message": "Mode must be \"add\" or \"remove\"."
+    },
+    {
+      "ok": false,
+      "message": "Amount must be greater than 0."
+    },
+    {
+      "ok": false,
+      "message": "Amount must be greater than 0."
+    },
+    {
+      "ok": false,
+      "message": "Amount must be greater than 0."
+    },
+    {
+      "ok": false,
+      "message": "Amount must be greater than 0."
+    },
+    {
+      "ok": false,
+      "message": "A reason of at least 5 characters is required."
+    },
+    {
+      "ok": false,
+      "message": "A reason of at least 5 characters is required."
+    },
+    {
+      "ok": false,
+      "message": "A reason of at least 5 characters is required."
+    },
+    {
+      "ok": false,
+      "message": "A reason of at least 5 characters is required."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/customers/10000000-0000-4000-8000-000000000005/store-credit",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "mode",
+              "details": {
+                "action": "store_credit",
+                "reason": "mode_invalid",
+                "message": "Mode must be \"add\" or \"remove\"."
+              },
+              "message": "Mode must be \"add\" or \"remove\"."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/customers/10000000-0000-4000-8000-000000000005/store-credit",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "amount",
+              "details": {
+                "action": "store_credit",
+                "reason": "amount_invalid",
+                "message": "Amount must be greater than 0."
+              },
+              "message": "Amount must be greater than 0."
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/customers/10000000-0000-4000-8000-000000000005/store-credit",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "amount",
+              "details": {
+                "action": "store_credit",
+                "reason": "amount_invalid",
+                "message": "Amount must be greater than 0."
+              },
+              "message": "Amount must be greater than 0."
+            },
+            "requestId": "gone#6"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#7",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/customers/10000000-0000-4000-8000-000000000005/store-credit",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "amount",
+              "details": {
+                "action": "store_credit",
+                "reason": "amount_invalid",
+                "message": "Amount must be greater than 0."
+              },
+              "message": "Amount must be greater than 0."
+            },
+            "requestId": "gone#8"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#9",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/customers/10000000-0000-4000-8000-000000000005/store-credit",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "amount",
+              "details": {
+                "action": "store_credit",
+                "reason": "amount_invalid",
+                "message": "Amount must be greater than 0."
+              },
+              "message": "Amount must be greater than 0."
+            },
+            "requestId": "gone#10"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#11",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/customers/10000000-0000-4000-8000-000000000005/store-credit",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "reason",
+              "details": {
+                "action": "store_credit",
+                "reason": "reason_required",
+                "message": "A reason of at least 5 characters is required."
+              },
+              "message": "A reason of at least 5 characters is required."
+            },
+            "requestId": "gone#12"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#13",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/customers/10000000-0000-4000-8000-000000000005/store-credit",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "reason",
+              "details": {
+                "action": "store_credit",
+                "reason": "reason_required",
+                "message": "A reason of at least 5 characters is required."
+              },
+              "message": "A reason of at least 5 characters is required."
+            },
+            "requestId": "gone#14"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#15",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/customers/10000000-0000-4000-8000-000000000005/store-credit",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "reason",
+              "details": {
+                "action": "store_credit",
+                "reason": "reason_required",
+                "message": "A reason of at least 5 characters is required."
+              },
+              "message": "A reason of at least 5 characters is required."
+            },
+            "requestId": "gone#16"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#17",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/customers/10000000-0000-4000-8000-000000000005/store-credit",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "reason",
+              "details": {
+                "action": "store_credit",
+                "reason": "reason_required",
+                "message": "A reason of at least 5 characters is required."
+              },
+              "message": "A reason of at least 5 characters is required."
+            },
+            "requestId": "gone#18"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

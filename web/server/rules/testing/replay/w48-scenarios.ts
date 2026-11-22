@@ -3,7 +3,7 @@ import type { Db, SqlParam } from '@/server/db'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
 import { insert } from '../database'
 import { GENERATOR_BEFORE_032_NAME } from '../migration-032'
-import type { Scenario, ScenarioContext } from './harness'
+import type { Scenario, ScenarioContext } from '../sweep/run'
 import { ID, paidSeat, sam, seed, whileFailing } from './scenarios'
 
 // Brief W48 item 4 (G-plan 4.9 item 1, lead call L5): step G's golden files. Every scenario here runs the staff app's

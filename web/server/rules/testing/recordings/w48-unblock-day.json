@@ -1,0 +1,176 @@
+{
+  "scenario": "w48-unblock-day",
+  "results": [
+    {
+      "confirmed": false,
+      "blockedSessions": 0,
+      "blockedBefore": 1,
+      "closedDates": 0
+    },
+    {
+      "confirmed": true,
+      "blockedSessions": 0,
+      "blockedBefore": 1,
+      "unblocked": 0,
+      "closedDateRemoved": false
+    },
+    {
+      "confirmed": true,
+      "blockedSessions": 0,
+      "blockedBefore": 1,
+      "unblocked": 0,
+      "closedDateRemoved": false
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/sessions/days/2026-11-12/unblock",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "confirmed": true,
+              "unblocked": 0,
+              "blockedBefore": 1,
+              "blockedSessions": 0,
+              "closedDateRemoved": false
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/sessions/days/2026-11-12/unblock",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "confirmed": true,
+              "unblocked": 0,
+              "blockedBefore": 1,
+              "blockedSessions": 0,
+              "closedDateRemoved": false
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "session.unblocked",
+          "entity_type": "session_day",
+          "entity_id": "2026-11-12",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "date": "2026-11-12",
+            "after": [
+              {
+                "id": "10000000-0000-4000-8000-000000000004",
+                "status": "open",
+                "blocked_by": null,
+                "blocked_reason": null
+              },
+              {
+                "id": "10000000-0000-4000-8000-000000000a31",
+                "status": "blocked",
+                "blocked_by": "10000000-0000-4000-8000-000000000001",
+                "blocked_reason": "Boiler repair"
+              }
+            ],
+            "before": [
+              {
+                "id": "10000000-0000-4000-8000-000000000004",
+                "status": "open",
+                "blocked_by": null,
+                "blocked_reason": null
+              },
+              {
+                "id": "10000000-0000-4000-8000-000000000a31",
+                "status": "blocked",
+                "blocked_by": "10000000-0000-4000-8000-000000000001",
+                "blocked_reason": "Boiler repair"
+              }
+            ],
+            "unblocked": 0,
+            "sessionIds": [],
+            "leftBlocked": 1,
+            "closedDateRemoved": false
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "session.unblocked",
+          "entity_type": "session_day",
+          "entity_id": "2026-11-12",
+          "request_id": "gone#4",
+          "details": {
+            "key": "gone#3",
+            "date": "2026-11-12",
+            "after": [
+              {
+                "id": "10000000-0000-4000-8000-000000000004",
+                "status": "open",
+                "blocked_by": null,
+                "blocked_reason": null
+              },
+              {
+                "id": "10000000-0000-4000-8000-000000000a31",
+                "status": "blocked",
+                "blocked_by": "10000000-0000-4000-8000-000000000001",
+                "blocked_reason": "Boiler repair"
+              }
+            ],
+            "before": [
+              {
+                "id": "10000000-0000-4000-8000-000000000004",
+                "status": "open",
+                "blocked_by": null,
+                "blocked_reason": null
+              },
+              {
+                "id": "10000000-0000-4000-8000-000000000a31",
+                "status": "blocked",
+                "blocked_by": "10000000-0000-4000-8000-000000000001",
+                "blocked_reason": "Boiler repair"
+              }
+            ],
+            "unblocked": 0,
+            "sessionIds": [],
+            "leftBlocked": 1,
+            "closedDateRemoved": false
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

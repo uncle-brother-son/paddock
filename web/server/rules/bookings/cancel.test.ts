@@ -12,10 +12,11 @@ import { reconcile } from '@/server/rules/orders/reconcile'
 import { loadOrderCardPortion } from './money-left'
 import { MONEY_OWED_WORDS } from '@/server/rules/refunds/failure-messages'
 import { moneyOwedList } from '@/server/rules/refunds/money-owed-list'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/replay/harness'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
 import { bea, ID, memberCredit, mo, paidSeat, sam, seed, whileFailing, type WriteFailure } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
-import { BOOKING_KINDS_ON } from '@/server/rules/testing/replay/booking-side'
+import { BOOKING_KINDS_ON } from '@/server/rules/testing/sweep/booking-presses'
 import { STRIPE_DEADLINE_MS } from '@/server/stripe/deadline'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
 import {
@@ -102,7 +103,7 @@ async function withBooking(
         }
       },
     },
-    oldSide
+    workerSide()
   )
 }
 

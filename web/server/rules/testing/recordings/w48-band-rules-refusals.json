@@ -1,0 +1,327 @@
+{
+  "scenario": "w48-band-rules-refusals",
+  "results": [
+    {
+      "thrown": "Day of week must be a whole number from 0 (Sunday) to 6 (Saturday)."
+    },
+    {
+      "thrown": "Day of week must be a whole number from 0 (Sunday) to 6 (Saturday)."
+    },
+    {
+      "thrown": "At least one band window is required — the day must be fully covered."
+    },
+    {
+      "thrown": "At least one band window is required — the day must be fully covered."
+    },
+    {
+      "thrown": "Window times must be valid HH:MM times."
+    },
+    {
+      "thrown": "Each window must end after it starts."
+    },
+    {
+      "thrown": "Window times must fall within the day (00:00–24:00)."
+    },
+    {
+      "thrown": "The first window must start at 00:00 — the day must be fully covered."
+    },
+    {
+      "thrown": "The windows have a gap or overlap — every minute of the day must belong to exactly one band."
+    },
+    {
+      "thrown": "The windows have a gap or overlap — every minute of the day must belong to exactly one band."
+    },
+    {
+      "thrown": "The last window must end at 24:00 — the day must be fully covered."
+    },
+    {
+      "thrown": "One of the selected bands no longer exists."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/pricing/band-rules/7",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "details": {
+                "action": "pricing.band_rules_set",
+                "reason": "invalid_day",
+                "message": "Day of week must be a whole number from 0 (Sunday) to 6 (Saturday)."
+              },
+              "message": "Day of week must be a whole number from 0 (Sunday) to 6 (Saturday)."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/pricing/band-rules/2.5",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "details": {
+                "action": "pricing.band_rules_set",
+                "reason": "invalid_day",
+                "message": "Day of week must be a whole number from 0 (Sunday) to 6 (Saturday)."
+              },
+              "message": "Day of week must be a whole number from 0 (Sunday) to 6 (Saturday)."
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/pricing/band-rules/6",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "details": {
+                "action": "pricing.band_rules_set",
+                "reason": "no_windows",
+                "message": "At least one band window is required — the day must be fully covered."
+              },
+              "message": "At least one band window is required — the day must be fully covered."
+            },
+            "requestId": "gone#6"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#7",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/pricing/band-rules/6",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "details": {
+                "action": "pricing.band_rules_set",
+                "reason": "no_windows",
+                "message": "At least one band window is required — the day must be fully covered."
+              },
+              "message": "At least one band window is required — the day must be fully covered."
+            },
+            "requestId": "gone#8"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#9",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/pricing/band-rules/6",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "details": {
+                "action": "pricing.band_rules_set",
+                "reason": "invalid_time",
+                "message": "Window times must be valid HH:MM times."
+              },
+              "message": "Window times must be valid HH:MM times."
+            },
+            "requestId": "gone#10"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#11",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/pricing/band-rules/6",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "details": {
+                "action": "pricing.band_rules_set",
+                "reason": "window_ends_before_it_starts",
+                "message": "Each window must end after it starts."
+              },
+              "message": "Each window must end after it starts."
+            },
+            "requestId": "gone#12"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#13",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/pricing/band-rules/6",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "details": {
+                "action": "pricing.band_rules_set",
+                "reason": "window_outside_the_day",
+                "message": "Window times must fall within the day (00:00–24:00)."
+              },
+              "message": "Window times must fall within the day (00:00–24:00)."
+            },
+            "requestId": "gone#14"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#15",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/pricing/band-rules/6",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "details": {
+                "action": "pricing.band_rules_set",
+                "reason": "day_not_covered",
+                "message": "The first window must start at 00:00 — the day must be fully covered."
+              },
+              "message": "The first window must start at 00:00 — the day must be fully covered."
+            },
+            "requestId": "gone#16"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#17",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/pricing/band-rules/6",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "details": {
+                "action": "pricing.band_rules_set",
+                "reason": "gap_or_overlap",
+                "message": "The windows have a gap or overlap — every minute of the day must belong to exactly one band."
+              },
+              "message": "The windows have a gap or overlap — every minute of the day must belong to exactly one band."
+            },
+            "requestId": "gone#18"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#19",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/pricing/band-rules/6",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "details": {
+                "action": "pricing.band_rules_set",
+                "reason": "gap_or_overlap",
+                "message": "The windows have a gap or overlap — every minute of the day must belong to exactly one band."
+              },
+              "message": "The windows have a gap or overlap — every minute of the day must belong to exactly one band."
+            },
+            "requestId": "gone#20"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#21",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/pricing/band-rules/6",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "details": {
+                "action": "pricing.band_rules_set",
+                "reason": "day_not_covered",
+                "message": "The last window must end at 24:00 — the day must be fully covered."
+              },
+              "message": "The last window must end at 24:00 — the day must be fully covered."
+            },
+            "requestId": "gone#22"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#23",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/pricing/band-rules/6",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "pricing.band_rules_set",
+                "reason": "band_not_found",
+                "message": "One of the selected bands no longer exists."
+              },
+              "message": "One of the selected bands no longer exists."
+            },
+            "requestId": "gone#24"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -7,8 +7,9 @@ import { POST as finaliseFlowRoute } from '@/app/api/v1/staff/reader-flows/[pend
 import type { Db } from '@/server/db'
 import { reconcile } from '@/server/rules/orders/reconcile'
 import { FAILURE_MESSAGES as ORDER_WORDS } from '@/server/rules/orders/failure-messages'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/replay/harness'
-import { BOOKING_KINDS_ON } from '@/server/rules/testing/replay/booking-side'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
+import { BOOKING_KINDS_ON } from '@/server/rules/testing/sweep/booking-presses'
 import {
   ID,
   lastDayIs,
@@ -103,7 +104,7 @@ async function withBooking(order: Record<string, unknown>, work: (context: Conte
         }
       },
     },
-    oldSide
+    workerSide()
   )
 }
 

@@ -10,8 +10,10 @@ import { POST as removeGuestRoute } from '@/app/api/v1/staff/bookings/guests/[gu
 import type { Db } from '@/server/db'
 import { reconcile } from '@/server/rules/orders/reconcile'
 import { arrivedRecordedOnWords } from '@/server/rules/refunds/failure-messages'
-import { BOOKING_KINDS_ON } from '@/server/rules/testing/replay/booking-side'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/replay/harness'
+import { BOOKING_KINDS_ON } from '@/server/rules/testing/sweep/booking-presses'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
+import { asTheOldAddGuestLeftIt } from '@/server/rules/testing/sweep/old-states'
 import { bea as beaOldWay, ID, paidSeat, sam, seed } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
@@ -79,7 +81,7 @@ async function withBooking(order: Record<string, unknown>, work: (context: Conte
         }
       },
     },
-    oldSide
+    workerSide()
   )
 }
 
@@ -433,6 +435,8 @@ describe("a removed guest's own line (W05h step E items 2 to 6)", () => {
     await withBooking(twoInCash, async ({ bookingId, call }) => {
       await call('addBookingGuest', { bookingId, ...beaOldWay })
       await call('addBookingGuest', { bookingId, ...beaOldWay, payment: { method: 'cash', confirmedCashAmount: 20 } })
+      // W64: added through the Worker, then as the old Add Guest left her: no row names her line (sweep/old-states.ts).
+      await asTheOldAddGuestLeftIt(db, bookingId)
       vi.setSystemTime(Date.now() + 1000)
       const bea = await guestId(bookingId, 'Bea Guest')
       expect(await guestLine(db, bookingId, bea)).toBeNull()
@@ -548,6 +552,8 @@ describe("W53a (W53 review S1; Wayne's Q40): Remove Guest refunds the payment th
     await withBooking(twoOnCard, async ({ bookingId, call, stripe }) => {
       await call('addBookingGuest', { bookingId, ...beaOldWay })
       await call('addBookingGuest', { bookingId, ...beaOldWay, payment: { method: 'card' } })
+      // W64: added through the Worker, then as the old Add Guest left her: no row names her line (sweep/old-states.ts).
+      await asTheOldAddGuestLeftIt(db, bookingId)
       vi.setSystemTime(Date.now() + 1000)
       const bea = await guestId(bookingId, 'Bea Guest')
       expect(await guestLine(db, bookingId, bea)).toBeNull()

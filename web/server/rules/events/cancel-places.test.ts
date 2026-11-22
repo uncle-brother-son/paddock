@@ -15,8 +15,9 @@ import { MONEY_OWED_WORDS } from '@/server/rules/refunds/failure-messages'
 import { moneyOwedList } from '@/server/rules/refunds/money-owed-list'
 import { EVENT_BOOKING_REFUND_OPEN_MESSAGE, REFUND_PATH_OFF_MESSAGE } from '@/server/rules/refunds/failure-messages'
 import { claimRefundKey } from '@/server/rules/refunds/pipeline'
-import { BOOKING_KINDS_ON, withSwitch } from '@/server/rules/testing/replay/booking-side'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/replay/harness'
+import { BOOKING_KINDS_ON, withSwitch } from '@/server/rules/testing/sweep/booking-presses'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
 import { ID, PROMO, seed } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
@@ -92,7 +93,7 @@ async function onAnEventOrder(order: Record<string, unknown>, work: (context: Co
         }
       },
     },
-    oldSide
+    workerSide()
   )
 }
 
@@ -375,7 +376,7 @@ describe('every refusal: nothing is cancelled and nothing is sent', () => {
           }
         },
       },
-      oldSide
+      workerSide()
     )
     await onAnEventOrder({ event: two, payment: card }, async ({ eventBookingId }) => {
       await db.query('UPDATE event_attendees SET cancelled_at = now() WHERE event_booking_id = $1', [eventBookingId])

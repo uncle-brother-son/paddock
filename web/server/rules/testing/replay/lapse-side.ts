@@ -1,7 +1,7 @@
-import { vi } from 'vitest'
 import type { Db } from '@/server/db'
 import { BOOKING_LAPSED } from '@/server/rules/bookings/cancel'
-import { lapseSweep, type LapseSweepResult } from '@/server/rules/bookings/lapse-sweep'
+import type { LapseSweepResult } from '@/server/rules/bookings/lapse-sweep'
+import { lapseSweepAsTheWorkerRunsIt, REPLAY_SWEEP_REQUEST } from '../sweep/lapse-presses'
 import type { FakeStripe } from '@/server/stripe/fake'
 import { withCanonicalGoneNumbers, type Recording, type Row } from './compare'
 import { oldSide, type ReplaySide } from './harness'
@@ -15,8 +15,8 @@ import { runLapseSweep } from './scenarios'
  * through the frozen copies, so the seed state is exactly what each golden file recorded.
  */
 
-/** The request id the replay's sweep writes on its rows. */
-export const REPLAY_SWEEP_REQUEST = 'replay-lapse-sweep'
+// W64: the Worker's sweep as the replay runs it, moved to the sweep folder (H-plan 3.3 step 3); re-exported for the old replay's files.
+export { lapseSweepAsTheWorkerRunsIt, REPLAY_SWEEP_REQUEST } from '../sweep/lapse-presses'
 
 export interface LapseSideOptions {
   /** The switch the sweep's run is handed. Default: the kind on. */
@@ -36,9 +36,7 @@ export function newLapseSide({ orderSwitch = 'lapse_sweep', runs, database }: La
       call: (action, params) => old.call(action, params),
       async lapseSweep(sweepDb) {
         if (database === 'first') await runLapseSweep(sweepDb)
-        // The clock moves between the scenario's last statement and the run, as it does between the old side's statements.
-        vi.setSystemTime(Date.now() + 1)
-        runs?.push(await lapseSweep(sweepDb, { requestId: REPLAY_SWEEP_REQUEST, orderSwitch }))
+        await lapseSweepAsTheWorkerRunsIt(sweepDb, { orderSwitch, ...(runs ? { runs } : {}) })
         if (database === 'after') await runLapseSweep(sweepDb)
       },
     }

@@ -5,9 +5,9 @@ import { bookingPathOff } from '@/server/rules/bookings/booking-switch'
 import { customerCancelPathOff } from '@/server/rules/customer/cancel-switch'
 import { kindsOn, ORDER_KINDS, orderKind, orderPathOff } from '@/server/rules/orders/order-switch'
 import { eventCancelPathOff, orderRefundPathOff } from '@/server/rules/refunds/refund-switch'
-import { BOOKING_KINDS_ON } from '@/server/rules/testing/replay/booking-side'
-import { ORDER_REFUND_KINDS_ON } from '@/server/rules/testing/replay/order-refund-side'
-import { ALL_KINDS_ON } from '@/server/rules/testing/replay/order-side'
+import { BOOKING_KINDS_ON } from '@/server/rules/testing/sweep/booking-presses'
+import { ORDER_REFUND_KINDS_ON } from '@/server/rules/testing/sweep/order-refund-presses'
+import { ALL_KINDS_ON } from '@/server/rules/testing/sweep/order-presses'
 import { MEMBERSHIP_PATH_OFF_MESSAGE } from './failure-messages'
 import {
   CARD_MOVE_KINDS,

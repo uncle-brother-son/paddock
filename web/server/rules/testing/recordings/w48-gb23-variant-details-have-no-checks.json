@@ -1,0 +1,96 @@
+{
+  "scenario": "w48-gb23-variant-details-have-no-checks",
+  "results": [
+    {
+      "thrown": "Enter a size for this variant."
+    },
+    {
+      "thrown": "The SKU \"CANDLE-1\" is already used by another variant. Each SKU can only be used once, whatever its capitals."
+    },
+    {
+      "thrown": "Enter a SKU for this variant."
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/variants/10000000-0000-4000-8000-000000000008/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "size",
+              "details": {
+                "action": "catalog.details_set",
+                "reason": "size_required",
+                "message": "Enter a size for this variant."
+              },
+              "message": "Enter a size for this variant."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/variants/10000000-0000-4000-8000-000000000008/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "field": "sku",
+              "details": {
+                "action": "catalog.details_set",
+                "reason": "sku_taken",
+                "message": "The SKU \"CANDLE-1\" is already used by another variant. Each SKU can only be used once, whatever its capitals."
+              },
+              "message": "The SKU \"CANDLE-1\" is already used by another variant. Each SKU can only be used once, whatever its capitals."
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/variants/10000000-0000-4000-8000-000000000008/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "VALIDATION",
+              "field": "sku",
+              "details": {
+                "action": "catalog.details_set",
+                "reason": "sku_required",
+                "message": "Enter a SKU for this variant."
+              },
+              "message": "Enter a SKU for this variant."
+            },
+            "requestId": "gone#6"
+          },
+          "http_status": 400,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

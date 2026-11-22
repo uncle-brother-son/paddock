@@ -1,0 +1,158 @@
+{
+  "scenario": "w48-gb2-plan-price-old-stripe-price-archived-then-the-new-one-fails",
+  "results": [
+    {
+      "thrown": "Stripe refused the new price, so the plan's price was not changed (its other details were saved): Stripe refused this change."
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "prices.create",
+      "params": {
+        "product": "prod_seed",
+        "unit_amount": 4500,
+        "currency": "gbp",
+        "recurring": {
+          "interval": "month"
+        },
+        "metadata": {
+          "plan_id": "10000000-0000-4000-8000-00000000000a",
+          "change_id": "gone#3",
+          "frequency": "monthly"
+        }
+      },
+      "idempotencyKey": "gone#3:monthly"
+    }
+  ],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/membership-plans/10000000-0000-4000-8000-00000000000a/details",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "plan.price_change",
+                "reason": "stripe_refused",
+                "message": "Stripe refused the new price, so the plan's price was not changed (its other details were saved): Stripe refused this change."
+              },
+              "message": "Stripe refused the new price, so the plan's price was not changed (its other details were saved): Stripe refused this change."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "plan.details_set",
+          "entity_type": "membership_plan",
+          "entity_id": "10000000-0000-4000-8000-00000000000a",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "name": "Core Plus",
+              "level": "core",
+              "is_unlimited": false,
+              "addons_included": 0,
+              "sessions_included": 6
+            },
+            "before": {
+              "name": "Core",
+              "level": "core",
+              "is_unlimited": false,
+              "addons_included": 0,
+              "sessions_included": 4
+            },
+            "changeId": "gone#3"
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "plan.price_change",
+          "entity_type": "membership_plan",
+          "entity_id": "10000000-0000-4000-8000-00000000000a",
+          "request_id": "gone#2",
+          "details": {
+            "made": {
+              "priceIds": {},
+              "productId": "prod_seed"
+            },
+            "state": "failed",
+            "reason": "Stripe refused this change.",
+            "changeId": "gone#3"
+          }
+        },
+        {
+          "id": "audit_log#3",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "plan.price_change",
+          "entity_type": "membership_plan",
+          "entity_id": "10000000-0000-4000-8000-00000000000a",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "state": "started",
+            "planId": "10000000-0000-4000-8000-00000000000a",
+            "prices": {
+              "monthly": {
+                "to": "45.00",
+                "from": "40.00",
+                "oldPriceId": "price_seed_monthly"
+              }
+            },
+            "changeId": "gone#3",
+            "productId": "prod_seed",
+            "productName": "Core Plus",
+            "membersToMove": 1,
+            "productActive": true
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 2
+    },
+    "membership_plans": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-00000000000a",
+          "name": [
+            "Core",
+            "Core Plus"
+          ],
+          "sessions_included": [
+            4,
+            6
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

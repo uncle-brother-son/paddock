@@ -1,0 +1,99 @@
+{
+  "scenario": "w48-gift-card-preset-create-refused-by-stripe",
+  "results": [
+    {
+      "success": true,
+      "preset": {
+        "id": "gift_card_presets#1",
+        "gift_card_type_id": "10000000-0000-4000-8000-000000000019",
+        "amount": "25.00",
+        "active": true,
+        "stripe_price_id": null,
+        "created_at": "<time>",
+        "updated_at": "<time>"
+      }
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/catalog/gift-card-types/10000000-0000-4000-8000-000000000019/presets",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "preset": {
+                "id": "gift_card_presets#1",
+                "active": true,
+                "amount": "25.00",
+                "created_at": "<time>",
+                "updated_at": "<time>",
+                "stripe_price_id": null,
+                "gift_card_type_id": "10000000-0000-4000-8000-000000000019"
+              },
+              "success": true
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "catalog.preset_created",
+          "entity_type": "gift_card_preset",
+          "entity_id": "gift_card_presets#1",
+          "request_id": "gone#2",
+          "details": {
+            "key": "gone#1",
+            "after": {
+              "id": "gift_card_presets#1",
+              "active": true,
+              "amount": "25.00",
+              "created_at": "<time>",
+              "updated_at": "<time>",
+              "stripe_price_id": null,
+              "gift_card_type_id": "10000000-0000-4000-8000-000000000019"
+            },
+            "before": null
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "gift_card_presets": {
+      "added": [
+        {
+          "id": "gift_card_presets#1",
+          "gift_card_type_id": "10000000-0000-4000-8000-000000000019",
+          "amount": "25.00",
+          "active": true,
+          "stripe_price_id": null,
+          "created_at": "<set>",
+          "updated_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -10,7 +10,8 @@ import { closeStuckItem } from '@/server/rules/orders/close-stuck'
 import { reconcile } from '@/server/rules/orders/reconcile'
 import { stuckList } from '@/server/rules/orders/stuck-list'
 import { insert } from '@/server/rules/testing/database'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
 import { ID, MO_SUBSCRIPTION, seed, whileFailing } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import type { StripeClient } from '@/server/stripe/client'
@@ -90,7 +91,7 @@ async function onASeed(work: (stripe: FakeStripe) => Promise<void>, prepare?: Pr
         }
       },
     },
-    oldSide
+    workerSide()
   )
 }
 

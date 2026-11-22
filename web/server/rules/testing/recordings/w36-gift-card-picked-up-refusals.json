@@ -1,0 +1,96 @@
+{
+  "scenario": "w36-gift-card-picked-up-refusals",
+  "results": [
+    {
+      "updated": false,
+      "reason": "not_found"
+    },
+    {
+      "updated": false,
+      "reason": "not_pickup_fulfillment"
+    },
+    {
+      "updated": false,
+      "reason": "not_pickup_fulfillment"
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/gift-cards/gone#2/picked-up",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "gift_card_picked_up",
+                "reason": "not_found",
+                "message": "Failed to update pickup status"
+              },
+              "message": "Failed to update pickup status"
+            },
+            "requestId": "gone#3"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#4",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/gift-cards/10000000-0000-4000-8000-000000000009/picked-up",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "gift_card_picked_up",
+                "reason": "not_pickup_fulfillment",
+                "message": "This gift card is not a pickup-fulfillment card"
+              },
+              "message": "This gift card is not a pickup-fulfillment card"
+            },
+            "requestId": "gone#5"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#6",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/gift-cards/10000000-0000-4000-8000-000000000f32/picked-up",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "gift_card_picked_up",
+                "reason": "not_pickup_fulfillment",
+                "message": "This gift card is not a pickup-fulfillment card"
+              },
+              "message": "This gift card is not a pickup-fulfillment card"
+            },
+            "requestId": "gone#7"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -12,11 +12,13 @@ import { CLOSE_WORDS } from '@/server/rules/orders/close-stuck'
 import { PAYMENT_WATCH_DAYS, WATCHED_PAYMENT_WORDS } from '@/server/rules/orders/payment-watch'
 import { MONEY_OWED_WORDS } from '@/server/rules/refunds/failure-messages'
 import { moneyOwedList } from '@/server/rules/refunds/money-owed-list'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/replay/harness'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
+import { asTheOldAddGuestPaidItByStoreCredit } from '@/server/rules/testing/sweep/old-states'
 import { bea, ID, paidSeat, sam, seed, whileFailing } from '@/server/rules/testing/replay/scenarios'
 import { STRIPE_DEADLINE_MS } from '@/server/stripe/deadline'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
-import { BOOKING_KINDS_ON } from '@/server/rules/testing/replay/booking-side'
+import { BOOKING_KINDS_ON } from '@/server/rules/testing/sweep/booking-presses'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
 import {
   BOOKING_PATH_OFF_MESSAGE,
@@ -107,7 +109,7 @@ async function onABooking(
         }
       },
     },
-    oldSide
+    workerSide()
   )
 }
 
@@ -655,6 +657,8 @@ describe('the figures route (W21)', () => {
   it("a guest's store-credit-only own order (payment_method null, W20) is never read as card money", async () => {
     await onABooking(
       async ({ bookingId, stripe }) => {
+        // W64: the guest is added through the Worker, which writes `store_credit` (L9); the order as the old Add Guest wrote it.
+        await asTheOldAddGuestPaidItByStoreCredit(db, bookingId)
         const own = await db.query<{ payment_method: string | null; stripe_payment_intent_id: string | null }>(
           "SELECT o.payment_method, o.stripe_payment_intent_id FROM orders o JOIN order_line_items l ON l.order_id = o.id WHERE l.booking_id = $1 AND l.item_type = 'booking' ORDER BY l.created_at DESC LIMIT 1",
           [bookingId]
@@ -782,7 +786,7 @@ describe('held claims and flows closed by hand (W21, W19 review later 1)', () =>
           }
         },
       },
-      oldSide
+      workerSide()
     )
   })
 })
@@ -986,7 +990,7 @@ describe('W25 item 9: the manual close shows per-part findings, and watches a pa
           }
         },
       },
-      oldSide
+      workerSide()
     )
   })
 
@@ -1036,7 +1040,7 @@ describe('W25 item 9: the manual close shows per-part findings, and watches a pa
           }
         },
       },
-      oldSide
+      workerSide()
     )
   })
 
@@ -1076,7 +1080,7 @@ describe('W25 item 9: the manual close shows per-part findings, and watches a pa
           }
         },
       },
-      oldSide
+      workerSide()
     )
   })
   // Brief W47 item 4 and brief W47a item 2 (W47 review S2). A watch runs out one way only: Stripe can't find the payment
@@ -1116,7 +1120,7 @@ describe('W25 item 9: the manual close shows per-part findings, and watches a pa
           }
         },
       },
-      oldSide
+      workerSide()
     )
   const closeRows = async () => (await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'order.close' AND details->>'kind' = 'payment_watch' ORDER BY at, id")).map((row) => row.details)
 

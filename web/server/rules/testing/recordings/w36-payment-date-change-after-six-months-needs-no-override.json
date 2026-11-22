@@ -1,0 +1,250 @@
+{
+  "scenario": "w36-payment-date-change-after-six-months-needs-no-override",
+  "results": [
+    {
+      "membershipId": "10000000-0000-4000-8000-000000000010",
+      "customerId": "10000000-0000-4000-8000-00000000000f",
+      "planId": "10000000-0000-4000-8000-00000000000a",
+      "stripeSubscriptionId": "sub_mo",
+      "refusal": null,
+      "needsOverride": false,
+      "lastChangedAt": "<time>",
+      "currentRenewalDate": "2026-12-10",
+      "earliestDate": "2026-12-11",
+      "latestDate": "2027-01-09",
+      "daysInPeriod": 31,
+      "monthlyPrice": 40,
+      "cardLast4": "4444",
+      "cardBrand": "visa",
+      "newRenewalDate": "2026-12-27",
+      "extraDays": 17,
+      "amount": 21.94
+    },
+    {
+      "changed": true,
+      "newRenewalDate": "2026-12-27",
+      "extraDays": 17,
+      "amountCharged": 21.94,
+      "paymentIntentId": "pi_fake_0003",
+      "orderId": "orders#1"
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "subscriptions.retrieve",
+      "params": {
+        "id": "sub_mo"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "paymentIntents.create",
+      "params": {
+        "amount": 2194,
+        "currency": "gbp",
+        "customer": "cus_member",
+        "payment_method": "pm_member",
+        "off_session": true,
+        "confirm": true,
+        "description": "Payment date change: 17 extra days",
+        "metadata": {
+          "purpose": "membership_payment_date_change",
+          "stripe_subscription_id": "sub_mo",
+          "membership_id": "10000000-0000-4000-8000-000000000010",
+          "new_renewal_date": "2026-12-27",
+          "change_id": "membership_payment_date_changes#1"
+        }
+      },
+      "idempotencyKey": "membership_payment_date_changes#1:charge"
+    },
+    {
+      "method": "subscriptions.update",
+      "params": {
+        "id": "sub_mo",
+        "trial_end": 1798329600,
+        "proration_behavior": "none"
+      },
+      "idempotencyKey": "membership_payment_date_changes#1:move"
+    }
+  ],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/payment-date",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "orderId": "orders#1",
+              "extraDays": 17,
+              "amountCharged": 21.94,
+              "newRenewalDate": "2026-12-27",
+              "paymentIntentId": "pi_fake_0003"
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.payment_date_changed",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#2",
+          "details": {
+            "how": "press",
+            "state": "done",
+            "amount": 21.94,
+            "orderId": "orders#1",
+            "changeId": "membership_payment_date_changes#1",
+            "nextRenewalDate": {
+              "after": "2026-12-27",
+              "before": "2026-12-10"
+            },
+            "paymentIntentId": "pi_fake_0003"
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.payment_date_changed",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#2",
+          "details": {
+            "shown": 21.94,
+            "state": "started",
+            "amount": 21.94,
+            "planId": "10000000-0000-4000-8000-00000000000a",
+            "channel": "staff",
+            "changeId": "membership_payment_date_changes#1",
+            "livemode": false,
+            "override": null,
+            "trialEnd": 1798329600,
+            "extraDays": 17,
+            "customerId": "10000000-0000-4000-8000-00000000000f",
+            "description": "Payment date change: 17 extra days",
+            "newRenewalDate": "2026-12-27",
+            "oldRenewalDate": "2026-12-10",
+            "subscriptionId": "sub_mo",
+            "paymentMethodId": "pm_member",
+            "stripeCustomerId": "cus_member"
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 2
+    },
+    "customer_memberships": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000010",
+          "next_renewal_date": [
+            "2026-12-10",
+            "2026-12-27"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    },
+    "membership_payment_date_changes": {
+      "added": [
+        {
+          "id": "membership_payment_date_changes#1",
+          "membership_id": "10000000-0000-4000-8000-000000000010",
+          "old_renewal_date": "2026-12-10",
+          "new_renewal_date": "2026-12-27",
+          "extra_days": 17,
+          "amount_charged": "21.94",
+          "stripe_payment_intent_id": "pi_fake_0003",
+          "order_id": "orders#1",
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "override_reason": null,
+          "status": "done",
+          "failure_message": null,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "order_line_items": {
+      "added": [
+        {
+          "id": "order_line_items#1",
+          "order_id": "orders#1",
+          "booking_id": null,
+          "product_variant_id": null,
+          "membership_plan_id": "10000000-0000-4000-8000-00000000000a",
+          "session_pass_type_id": null,
+          "gift_card_id": null,
+          "item_type": "membership",
+          "quantity": 1,
+          "unit_price": "21.94",
+          "line_total": "21.94",
+          "created_at": "<set>",
+          "addon_id": null,
+          "refunded_at": null,
+          "refund_method": null,
+          "restocked": null,
+          "fulfillment_status": null,
+          "card_refunded_amount": "0.00",
+          "system_unit_price": null,
+          "price_override_reason": null,
+          "discount_amount": "0.00",
+          "event_booking_id": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "orders": {
+      "added": [
+        {
+          "id": "orders#1",
+          "customer_id": "10000000-0000-4000-8000-00000000000f",
+          "order_total": "21.94",
+          "payment_status": "paid",
+          "stripe_payment_intent_id": "pi_fake_0003",
+          "promo_code": null,
+          "discount_amount": "0.00",
+          "shipping_address": null,
+          "shipping_status": null,
+          "tracking_number": null,
+          "order_source": "staff_created",
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "payment_method": "card",
+          "reader_payment": null,
+          "refund_owed_amount": "0.00"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

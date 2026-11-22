@@ -1,0 +1,95 @@
+{
+  "scenario": "w36-fb4-payment-date-the-figure-changes-between-the-quote-and-the-press",
+  "results": [
+    {
+      "membershipId": "10000000-0000-4000-8000-000000000010",
+      "customerId": "10000000-0000-4000-8000-00000000000f",
+      "planId": "10000000-0000-4000-8000-00000000000a",
+      "stripeSubscriptionId": "sub_mo",
+      "refusal": null,
+      "needsOverride": false,
+      "lastChangedAt": null,
+      "currentRenewalDate": "2026-12-10",
+      "earliestDate": "2026-12-11",
+      "latestDate": "2027-01-09",
+      "daysInPeriod": 31,
+      "monthlyPrice": 40,
+      "cardLast4": "4444",
+      "cardBrand": "visa",
+      "newRenewalDate": "2026-12-27",
+      "extraDays": 17,
+      "amount": 21.94
+    },
+    {
+      "changed": false,
+      "message": "The part-month charge is now £24.68, not the £21.94 shown. Nothing was charged and the payment date has not changed. Check the new figure with the customer and press again.",
+      "amountNow": 24.68
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/payment-date",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "TOTAL_CHANGED",
+              "details": {
+                "quote": {
+                  "amount": 24.68,
+                  "planId": "10000000-0000-4000-8000-00000000000a",
+                  "refusal": null,
+                  "cardBrand": "visa",
+                  "cardLast4": "4444",
+                  "extraDays": 17,
+                  "customerId": "10000000-0000-4000-8000-00000000000f",
+                  "latestDate": "2027-01-09",
+                  "daysInPeriod": 31,
+                  "earliestDate": "2026-12-11",
+                  "membershipId": "10000000-0000-4000-8000-000000000010",
+                  "monthlyPrice": 45,
+                  "lastChangedAt": null,
+                  "needsOverride": false,
+                  "newRenewalDate": "2026-12-27",
+                  "currentRenewalDate": "2026-12-10",
+                  "stripeSubscriptionId": "sub_mo"
+                },
+                "action": "payment_date",
+                "reason": "amount_changed",
+                "message": "The part-month charge is now £24.68, not the £21.94 shown. Nothing was charged and the payment date has not changed. Check the new figure with the customer and press again."
+              },
+              "message": "The part-month charge is now £24.68, not the £21.94 shown. Nothing was charged and the payment date has not changed. Check the new figure with the customer and press again."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "membership_plans": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-00000000000a",
+          "price_monthly": [
+            "40.00",
+            "45.00"
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

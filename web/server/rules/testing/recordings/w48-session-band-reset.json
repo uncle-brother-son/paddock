@@ -1,0 +1,183 @@
+{
+  "scenario": "w48-session-band-reset",
+  "results": [
+    {
+      "reset": false,
+      "reason": "session_not_found",
+      "message": "This session no longer exists. Reload the page and try again."
+    },
+    {
+      "reset": false,
+      "reason": "not_overridden",
+      "message": "This session's band is already set automatically."
+    },
+    {
+      "confirmed": true,
+      "sessionsAffected": 1,
+      "bookingsAffected": 0
+    },
+    {
+      "reset": true,
+      "band": {
+        "code": "core",
+        "name": "Core"
+      }
+    }
+  ],
+  "stripeCalls": [],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/sessions/gone#2/band/reset",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "NOT_FOUND",
+              "details": {
+                "action": "session.band_reset",
+                "reason": "session_not_found",
+                "message": "This session no longer exists. Reload the page and try again."
+              },
+              "message": "This session no longer exists. Reload the page and try again."
+            },
+            "requestId": "gone#3"
+          },
+          "http_status": 404,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#4",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/sessions/10000000-0000-4000-8000-000000000004/band/reset",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "session.band_reset",
+                "reason": "not_overridden",
+                "message": "This session's band is already set automatically."
+              },
+              "message": "This session's band is already set automatically."
+            },
+            "requestId": "gone#5"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#6",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/sessions/10000000-0000-4000-8000-000000000004/band",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "confirmed": true,
+              "bookingsAffected": 0,
+              "sessionsAffected": 1
+            },
+            "requestId": "gone#7"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#8",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/sessions/10000000-0000-4000-8000-000000000004/band/reset",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "band": {
+                "code": "core",
+                "name": "Core"
+              },
+              "reset": true
+            },
+            "requestId": "gone#9"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "session.band_set",
+          "entity_type": "session",
+          "entity_id": "10000000-0000-4000-8000-000000000004",
+          "request_id": "gone#7",
+          "details": {
+            "key": "gone#6",
+            "after": [
+              {
+                "id": "10000000-0000-4000-8000-000000000004",
+                "band_id": "10000000-0000-4000-8000-00000000000c",
+                "band_overridden": true
+              }
+            ],
+            "bandId": "10000000-0000-4000-8000-00000000000c",
+            "before": [
+              {
+                "id": "10000000-0000-4000-8000-000000000004",
+                "band_id": "10000000-0000-4000-8000-000000000003",
+                "band_overridden": false
+              }
+            ],
+            "bookingsAffected": 0,
+            "sessionsAffected": 1
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "session.band_reset",
+          "entity_type": "session",
+          "entity_id": "10000000-0000-4000-8000-000000000004",
+          "request_id": "gone#9",
+          "details": {
+            "key": "gone#8",
+            "after": {
+              "id": "10000000-0000-4000-8000-000000000004",
+              "band_id": "10000000-0000-4000-8000-000000000003",
+              "band_overridden": false
+            },
+            "before": {
+              "id": "10000000-0000-4000-8000-000000000004",
+              "band_id": "10000000-0000-4000-8000-00000000000c",
+              "band_overridden": true
+            }
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

@@ -2,8 +2,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import type { BasketQuoteInput } from '@/contracts'
 import type { Db } from '@/server/db'
 import { pruneClientSecrets } from '@/server/http/idempotency'
-import { oldSide, replay, startReplay, type ReplayEnvironment } from '@/server/rules/testing/replay/harness'
-import { orderInput, postOrder } from '@/server/rules/testing/replay/order-side'
+import { replay, startReplay, type ReplayEnvironment } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
+import { orderInput, postOrder } from '@/server/rules/testing/sweep/order-presses'
 import { ID, paidSeat, seed } from '@/server/rules/testing/replay/scenarios'
 import { finaliseOrder } from './finalise-order'
 import type { MadeSubscription } from './membership'
@@ -30,7 +31,7 @@ beforeAll(async () => {
 })
 afterAll(() => environment.stop())
 beforeEach(async () => {
-  await replay(environment, { name: 'seed only', seed, run: async () => {} }, oldSide)
+  await replay(environment, { name: 'seed only', seed, run: async () => {} }, workerSide())
 })
 
 const quote = (input: Record<string, unknown>) => priceBasket(db, { customerId: ID.customer, ...input } as BasketQuoteInput)

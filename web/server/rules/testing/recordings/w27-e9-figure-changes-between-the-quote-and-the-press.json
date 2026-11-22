@@ -1,0 +1,755 @@
+{
+  "scenario": "w27-e9-figure-changes-between-the-quote-and-the-press",
+  "results": [
+    {
+      "success": true,
+      "orderId": "orders#1",
+      "eventBookingId": "event_bookings#1",
+      "cardCharged": true,
+      "cardAmount": 115,
+      "paymentMethodUsed": "card"
+    },
+    {
+      "ok": true,
+      "places": 3,
+      "wholeBooking": true,
+      "value": 115,
+      "refundCutoffAt": "<time>",
+      "beforeCutoff": true,
+      "eventStarted": false,
+      "cardAmount": 115,
+      "storeCreditAmount": 0,
+      "cashAmount": 0,
+      "refundOwed": 0
+    },
+    {
+      "ok": true,
+      "places": 1,
+      "refundedAmount": 38.34,
+      "cardRefundedAmount": 38.34,
+      "storeCreditRefundedAmount": 0,
+      "booking": {
+        "id": "event_bookings#1",
+        "customer_id": "10000000-0000-4000-8000-000000000005",
+        "customer_first_name": "Sam",
+        "customer_last_name": "Test",
+        "customer_email": "sam@example.com",
+        "customer_phone": null,
+        "status": "confirmed",
+        "places": 2,
+        "price_paid": "115.00",
+        "ordered_at": "<time>",
+        "cancelled_at": null,
+        "cancel_reason": null,
+        "order_id": "orders#1",
+        "refund_owed_amount": "0.00",
+        "attendees": [
+          {
+            "id": "event_attendees#1",
+            "event_booking_id": "event_bookings#1",
+            "attendee_type": "account_holder",
+            "name": "Sam Test",
+            "email": "sam@example.com",
+            "price_level": "public",
+            "unit_price": "38.34",
+            "waiver_accepted": false,
+            "waiver_method": null,
+            "waiver_accepted_at": null,
+            "extra_waiver_state": "not_needed",
+            "event_waiver_method": null,
+            "event_waiver_accepted_at": null,
+            "checked_in_at": null,
+            "cancelled_at": "<time>",
+            "cancel_reason": null,
+            "cancelled_by_name": "Jo Staff",
+            "cancelled_value": "38.34",
+            "refunded_amount": "38.34",
+            "card_refunded_amount": "38.34",
+            "refund_method": "card",
+            "refund_after_cutoff": false
+          },
+          {
+            "id": "event_attendees#2",
+            "event_booking_id": "event_bookings#1",
+            "attendee_type": "guest",
+            "name": "Alex Guest",
+            "email": "alex@example.com",
+            "price_level": "public",
+            "unit_price": "38.34",
+            "waiver_accepted": false,
+            "waiver_method": null,
+            "waiver_accepted_at": null,
+            "extra_waiver_state": "not_needed",
+            "event_waiver_method": null,
+            "event_waiver_accepted_at": null,
+            "checked_in_at": null,
+            "cancelled_at": null,
+            "cancel_reason": null,
+            "cancelled_by_name": null,
+            "cancelled_value": "0.00",
+            "refunded_amount": "0.00",
+            "card_refunded_amount": "0.00",
+            "refund_method": null,
+            "refund_after_cutoff": false
+          },
+          {
+            "id": "event_attendees#3",
+            "event_booking_id": "event_bookings#1",
+            "attendee_type": "guest",
+            "name": "Bea Guest",
+            "email": "bea@example.com",
+            "price_level": "public",
+            "unit_price": "38.32",
+            "waiver_accepted": false,
+            "waiver_method": null,
+            "waiver_accepted_at": null,
+            "extra_waiver_state": "not_needed",
+            "event_waiver_method": null,
+            "event_waiver_accepted_at": null,
+            "checked_in_at": null,
+            "cancelled_at": null,
+            "cancel_reason": null,
+            "cancelled_by_name": null,
+            "cancelled_value": "0.00",
+            "refunded_amount": "0.00",
+            "card_refunded_amount": "0.00",
+            "refund_method": null,
+            "refund_after_cutoff": false
+          }
+        ]
+      },
+      "eventPlacesBooked": 2
+    },
+    {
+      "ok": false,
+      "reason": "figures_changed",
+      "message": "The figures on this event booking have just changed. Check them and confirm again.",
+      "quote": {
+        "places": 2,
+        "wholeBooking": true,
+        "value": 76.66,
+        "refundCutoffAt": "<time>",
+        "beforeCutoff": true,
+        "eventStarted": false,
+        "cardAmount": 76.66,
+        "storeCreditAmount": 0,
+        "cashAmount": 0,
+        "refundOwed": 0
+      }
+    }
+  ],
+  "stripeCalls": [
+    {
+      "method": "paymentIntents.create",
+      "params": {
+        "amount": 11500,
+        "currency": "gbp",
+        "customer": "cus_seed",
+        "payment_method": "pm_seed",
+        "off_session": true,
+        "confirm": true,
+        "description": "Staff-created order for event",
+        "metadata": {
+          "order_id": "orders#1"
+        }
+      },
+      "idempotencyKey": "orders#1:charge"
+    },
+    {
+      "method": "refunds.create",
+      "params": {
+        "payment_intent": "pi_fake_0002",
+        "amount": 3834,
+        "metadata": {
+          "refund_key": "audit_log#3:refund:orders#1",
+          "claim_id": "audit_log#3"
+        }
+      },
+      "idempotencyKey": "audit_log#3:refund:orders#1"
+    }
+  ],
+  "tables": {
+    "api_idempotency": {
+      "added": [
+        {
+          "key": "gone#1",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/orders",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "status": "paid",
+              "orderId": "orders#1",
+              "payment": {
+                "method": "card",
+                "collected": 115,
+                "cardCharged": true,
+                "giftCardApplied": 0,
+                "storeCreditApplied": 0
+              },
+              "bookingId": null,
+              "giftCardId": null,
+              "giftCardCode": null,
+              "sessionPassId": null,
+              "eventBookingId": "event_bookings#1"
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/event-bookings/event_bookings#1/cancel",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "places": 1,
+              "booking": {
+                "id": "event_bookings#1",
+                "places": 2,
+                "status": "confirmed",
+                "order_id": "orders#1",
+                "attendees": [
+                  {
+                    "id": "event_attendees#1",
+                    "name": "Sam Test",
+                    "email": "sam@example.com",
+                    "unit_price": "38.34",
+                    "price_level": "public",
+                    "cancelled_at": "<time>",
+                    "attendee_type": "account_holder",
+                    "cancel_reason": null,
+                    "checked_in_at": null,
+                    "refund_method": "card",
+                    "waiver_method": null,
+                    "cancelled_value": "38.34",
+                    "refunded_amount": "38.34",
+                    "waiver_accepted": false,
+                    "event_booking_id": "event_bookings#1",
+                    "cancelled_by_name": "Jo Staff",
+                    "extra_waiver_state": "not_needed",
+                    "waiver_accepted_at": null,
+                    "event_waiver_method": null,
+                    "refund_after_cutoff": false,
+                    "card_refunded_amount": "38.34",
+                    "event_waiver_accepted_at": null
+                  },
+                  {
+                    "id": "event_attendees#2",
+                    "name": "Alex Guest",
+                    "email": "alex@example.com",
+                    "unit_price": "38.34",
+                    "price_level": "public",
+                    "cancelled_at": null,
+                    "attendee_type": "guest",
+                    "cancel_reason": null,
+                    "checked_in_at": null,
+                    "refund_method": null,
+                    "waiver_method": null,
+                    "cancelled_value": "0.00",
+                    "refunded_amount": "0.00",
+                    "waiver_accepted": false,
+                    "event_booking_id": "event_bookings#1",
+                    "cancelled_by_name": null,
+                    "extra_waiver_state": "not_needed",
+                    "waiver_accepted_at": null,
+                    "event_waiver_method": null,
+                    "refund_after_cutoff": false,
+                    "card_refunded_amount": "0.00",
+                    "event_waiver_accepted_at": null
+                  },
+                  {
+                    "id": "event_attendees#3",
+                    "name": "Bea Guest",
+                    "email": "bea@example.com",
+                    "unit_price": "38.32",
+                    "price_level": "public",
+                    "cancelled_at": null,
+                    "attendee_type": "guest",
+                    "cancel_reason": null,
+                    "checked_in_at": null,
+                    "refund_method": null,
+                    "waiver_method": null,
+                    "cancelled_value": "0.00",
+                    "refunded_amount": "0.00",
+                    "waiver_accepted": false,
+                    "event_booking_id": "event_bookings#1",
+                    "cancelled_by_name": null,
+                    "extra_waiver_state": "not_needed",
+                    "waiver_accepted_at": null,
+                    "event_waiver_method": null,
+                    "refund_after_cutoff": false,
+                    "card_refunded_amount": "0.00",
+                    "event_waiver_accepted_at": null
+                  }
+                ],
+                "ordered_at": "<time>",
+                "price_paid": "115.00",
+                "customer_id": "10000000-0000-4000-8000-000000000005",
+                "cancelled_at": null,
+                "cancel_reason": null,
+                "customer_email": "sam@example.com",
+                "customer_phone": null,
+                "customer_last_name": "Test",
+                "refund_owed_amount": "0.00",
+                "customer_first_name": "Sam"
+              },
+              "refundedAmount": 38.34,
+              "eventPlacesBooked": 2,
+              "cardRefundedAmount": 38.34,
+              "storeCreditRefundedAmount": 0
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/event-bookings/event_bookings#1/cancel",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "quote": {
+                  "value": 76.66,
+                  "places": 2,
+                  "cardAmount": 76.66,
+                  "cashAmount": 0,
+                  "refundOwed": 0,
+                  "beforeCutoff": true,
+                  "eventStarted": false,
+                  "wholeBooking": true,
+                  "refundCutoffAt": "<time>",
+                  "storeCreditAmount": 0
+                },
+                "action": "cancel_places",
+                "reason": "figures_changed",
+                "message": "The figures on this event booking have just changed. Check them and confirm again."
+              },
+              "message": "The figures on this event booking have just changed. Check them and confirm again."
+            },
+            "requestId": "gone#6"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "audit_log": {
+      "added": [
+        {
+          "id": "audit_log#1",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.create",
+          "entity_type": "order",
+          "entity_id": "orders#1",
+          "request_id": "gone#2",
+          "details": {
+            "promo": {
+              "code": "FIVER",
+              "discount": 5
+            },
+            "method": "card",
+            "postage": null,
+            "giftCard": null,
+            "amountDue": 115,
+            "bookingId": null,
+            "confirmed": {
+              "toCollect": 115
+            },
+            "overrides": [],
+            "toCollect": 115,
+            "awaitsCard": true,
+            "giftCardId": null,
+            "orderTotal": 120,
+            "storeCredit": 0,
+            "addressSaved": false,
+            "sessionPassId": null,
+            "eventBookingId": "event_bookings#1"
+          }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.paid",
+          "entity_type": "order",
+          "entity_id": "orders#1",
+          "request_id": "gone#2",
+          "details": {
+            "method": "card",
+            "collected": 115,
+            "addressSaved": false,
+            "paymentIntentId": "pi_fake_0002",
+            "eventBookingConfirmed": true
+          }
+        },
+        {
+          "id": "audit_log#3",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "event_booking.refund_claimed",
+          "entity_type": "event_booking",
+          "entity_id": "event_bookings#1",
+          "request_id": "gone#4",
+          "details": {
+            "kind": "cancel_places",
+            "plan": {
+              "card": [
+                {
+                  "lines": [
+                    {
+                      "amount": 38.34,
+                      "lineId": "order_line_items#1"
+                    }
+                  ],
+                  "amount": 38.34,
+                  "orderId": "orders#1",
+                  "paymentIntentId": "pi_fake_0002"
+                }
+              ],
+              "cash": 0,
+              "ownOrderId": "orders#1",
+              "storeCredit": 0
+            },
+            "amount": 38.34,
+            "cancel": {
+              "lineId": "order_line_items#1",
+              "places": [
+                {
+                  "id": "event_attendees#1",
+                  "value": 38.34,
+                  "unitPrice": 38.34
+                }
+              ],
+              "eventId": "10000000-0000-4000-8000-000000000018",
+              "afterCutoff": false,
+              "bookingCancelled": false
+            },
+            "method": "card",
+            "reason": null,
+            "worker": true,
+            "orderId": "orders#1",
+            "livemode": false
+          }
+        },
+        {
+          "id": "audit_log#4",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "event_booking.cancel_places",
+          "entity_type": "event_booking",
+          "entity_id": "event_bookings#1",
+          "request_id": "gone#4",
+          "details": {
+            "owed": 0,
+            "value": 38.34,
+            "amount": 38.34,
+            "places": 1,
+            "reason": null,
+            "refund": "card",
+            "afterCutoff": false,
+            "attendeeIds": [
+              "event_attendees#1"
+            ],
+            "cardRefunded": 38.34,
+            "bookingCancelled": false,
+            "storeCreditRefunded": 0
+          }
+        },
+        {
+          "id": "audit_log#5",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "event_booking.refund_finished",
+          "entity_type": "event_booking",
+          "entity_id": "event_bookings#1",
+          "request_id": "gone#4",
+          "details": {
+            "owed": 0,
+            "claimId": "audit_log#3",
+            "outcome": "given",
+            "refunds": [
+              {
+                "amount": 38.34,
+                "status": "succeeded",
+                "orderId": "orders#1",
+                "refundId": "re_fake_0003",
+                "paymentIntentId": "pi_fake_0002"
+              }
+            ],
+            "cardRefunded": 38.34,
+            "storeCreditRefunded": 0
+          }
+        },
+        {
+          "id": "audit_log#6",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "refund.watch",
+          "entity_type": "refund_watch",
+          "entity_id": "re_fake_0003",
+          "request_id": "gone#4",
+          "details": {
+            "on": "event_booking",
+            "lines": [
+              {
+                "amount": 38.34,
+                "lineId": "order_line_items#1"
+              }
+            ],
+            "state": "watching",
+            "amount": 38.34,
+            "status": "succeeded",
+            "claimId": "audit_log#3",
+            "orderId": "orders#1",
+            "livemode": false,
+            "refundId": "re_fake_0003",
+            "subjectId": "event_bookings#1",
+            "paymentIntentId": "pi_fake_0002"
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "event_attendees": {
+      "added": [
+        {
+          "id": "event_attendees#1",
+          "event_booking_id": "event_bookings#1",
+          "attendee_type": "account_holder",
+          "name": "Sam Test",
+          "email": "sam@example.com",
+          "date_of_birth": "1990-01-01",
+          "unit_price": "38.34",
+          "price_level": "public",
+          "waiver_accepted": false,
+          "waiver_version": null,
+          "waiver_accepted_at": null,
+          "waiver_method": null,
+          "event_waiver_accepted": false,
+          "event_waiver_version": null,
+          "event_waiver_accepted_at": null,
+          "checked_in_at": null,
+          "created_at": "<set>",
+          "event_waiver_method": null,
+          "cancelled_at": "<set>",
+          "cancelled_by": "10000000-0000-4000-8000-000000000001",
+          "cancel_reason": null,
+          "cancelled_value": "38.34",
+          "refunded_amount": "38.34",
+          "card_refunded_amount": "38.34",
+          "refund_method": "card",
+          "refund_after_cutoff": false
+        },
+        {
+          "id": "event_attendees#2",
+          "event_booking_id": "event_bookings#1",
+          "attendee_type": "guest",
+          "name": "Alex Guest",
+          "email": "alex@example.com",
+          "date_of_birth": null,
+          "unit_price": "38.34",
+          "price_level": "public",
+          "waiver_accepted": false,
+          "waiver_version": null,
+          "waiver_accepted_at": null,
+          "waiver_method": null,
+          "event_waiver_accepted": false,
+          "event_waiver_version": null,
+          "event_waiver_accepted_at": null,
+          "checked_in_at": null,
+          "created_at": "<set>",
+          "event_waiver_method": null,
+          "cancelled_at": null,
+          "cancelled_by": null,
+          "cancel_reason": null,
+          "cancelled_value": "0.00",
+          "refunded_amount": "0.00",
+          "card_refunded_amount": "0.00",
+          "refund_method": null,
+          "refund_after_cutoff": false
+        },
+        {
+          "id": "event_attendees#3",
+          "event_booking_id": "event_bookings#1",
+          "attendee_type": "guest",
+          "name": "Bea Guest",
+          "email": "bea@example.com",
+          "date_of_birth": null,
+          "unit_price": "38.32",
+          "price_level": "public",
+          "waiver_accepted": false,
+          "waiver_version": null,
+          "waiver_accepted_at": null,
+          "waiver_method": null,
+          "event_waiver_accepted": false,
+          "event_waiver_version": null,
+          "event_waiver_accepted_at": null,
+          "checked_in_at": null,
+          "created_at": "<set>",
+          "event_waiver_method": null,
+          "cancelled_at": null,
+          "cancelled_by": null,
+          "cancel_reason": null,
+          "cancelled_value": "0.00",
+          "refunded_amount": "0.00",
+          "card_refunded_amount": "0.00",
+          "refund_method": null,
+          "refund_after_cutoff": false
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "event_bookings": {
+      "added": [
+        {
+          "id": "event_bookings#1",
+          "event_id": "10000000-0000-4000-8000-000000000018",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "places": 2,
+          "status": "confirmed",
+          "account_holder_attending": true,
+          "price_paid": "115.00",
+          "created_by_staff_id": "10000000-0000-4000-8000-000000000001",
+          "cancelled_at": null,
+          "cancel_reason": null,
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "guests_over_18_confirmed_at": "<set>",
+          "cancelled_by": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "events": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000018",
+          "places_booked": [
+            0,
+            2
+          ]
+        }
+      ],
+      "removed": [],
+      "tied": 0
+    },
+    "order_line_items": {
+      "added": [
+        {
+          "id": "order_line_items#1",
+          "order_id": "orders#1",
+          "booking_id": null,
+          "product_variant_id": null,
+          "membership_plan_id": null,
+          "session_pass_type_id": null,
+          "gift_card_id": null,
+          "item_type": "event",
+          "quantity": 3,
+          "unit_price": "40.00",
+          "line_total": "120.00",
+          "created_at": "<set>",
+          "addon_id": null,
+          "refunded_at": null,
+          "refund_method": null,
+          "restocked": null,
+          "fulfillment_status": null,
+          "card_refunded_amount": "38.34",
+          "system_unit_price": null,
+          "price_override_reason": null,
+          "discount_amount": "5.00",
+          "event_booking_id": "event_bookings#1"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "orders": {
+      "added": [
+        {
+          "id": "orders#1",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "order_total": "120.00",
+          "payment_status": "partially_refunded",
+          "stripe_payment_intent_id": "pi_fake_0002",
+          "promo_code": "FIVER",
+          "discount_amount": "5.00",
+          "shipping_address": null,
+          "shipping_status": null,
+          "tracking_number": null,
+          "order_source": "staff_created",
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "payment_method": "card",
+          "reader_payment": {
+            "flow": "checkout",
+            "method": "card",
+            "channel": "staff",
+            "livemode": false,
+            "save_card": false,
+            "created_at": "<time>",
+            "request_id": "gone#2",
+            "expected_amount": 115,
+            "payment_method_id": "pm_seed",
+            "charge_description": "Staff-created order for event",
+            "stripe_customer_id": "cus_seed",
+            "charge_payment_intent_id": "pi_fake_0002",
+            "save_address_to_customer": false
+          },
+          "refund_owed_amount": "0.00"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "promo_code_redemptions": {
+      "added": [
+        {
+          "id": "promo_code_redemptions#1",
+          "promo_code_id": "10000000-0000-4000-8000-00000000001e",
+          "order_id": "orders#1",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "discount_amount": "5.00",
+          "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    }
+  }
+}

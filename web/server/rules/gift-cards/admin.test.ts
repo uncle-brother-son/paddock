@@ -6,8 +6,9 @@ import { POST as shippedRoute } from '@/app/api/v1/staff/gift-cards/[giftCardId]
 import { GET as listRoute } from '@/app/api/v1/staff/gift-cards/route'
 import type { Db } from '@/server/db'
 import { insert } from '@/server/rules/testing/database'
-import { oldSide, replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/replay/harness'
-import { refundOrderAsTheDialogPresses } from '@/server/rules/testing/replay/order-refund-side'
+import { replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/sweep/run'
+import { workerSide } from '@/server/rules/testing/sweep/worker'
+import { refundOrderAsTheDialogPresses } from '@/server/rules/testing/sweep/order-refund-presses'
 import { ID, paidSeat, seed, W36_ID, whileFailing } from '@/server/rules/testing/replay/scenarios'
 import { extendGiftCard, GIFT_CARD_COLUMNS, listGiftCardRedemptions, listGiftCards, setGiftCardPickedUp } from './admin'
 import { GIFT_CARD_EXTEND_MAX_MONTHS, GIFT_CARD_EXTEND_NEW_REASONS, GIFT_CARD_EXTEND_NEW_WORDS, GIFT_CARD_EXTEND_WORDS, GIFT_CARD_FLAG_WORDS } from './failure-messages'
@@ -63,7 +64,7 @@ async function seeded(work: (context: ScenarioContext) => Promise<void>): Promis
       },
       run: work,
     },
-    oldSide
+    workerSide()
   )
 }
 
