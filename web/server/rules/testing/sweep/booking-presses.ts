@@ -308,24 +308,12 @@ export function refundBuiltFor(params: unknown): boolean {
 }
 
 /**
- * W21: actions only some of whose calls the Worker answers (the rest still run through the old function). W23: none
- * since Cancel & Refund moved.
- */
-export const PARTLY_BUILT: ReadonlyMap<string, (params: unknown) => boolean> = new Map()
-
-/**
- * The actions the Worker answers so far, by old name. W17: the refund figures, straight from the rule (the old
- * function threw 'Booking not found.' for a missing booking; so does this). W18: special requests and status, through
- * the staff app's thin wrappers. W19: Settle, with the figures the dialog now sends, and the reader flows' finalise and
- * cancel, through the staff app's wrappers, which send a flow the Worker started to the Worker and an old one (old
- * Move and Add Guest, until W24 and W20) to their old body.
- */
-export const BUILT_BOOKING_ACTIONS: ReadonlyMap<string, NewBookingAction> = bookingPresses()
-
-/**
- * The actions above, each with press keys and quoted figures of its own. W64a item 8 (W64 review, "for later" 5): the
- * all-Worker side makes a new set for every scenario (sweep/worker.ts), so a key held after no answer never follows a
- * seeded booking id into the next scenario; BUILT_BOOKING_ACTIONS is one set for the old replay's side.
+ * The booking actions the Worker answers, by old name, each with press keys and quoted figures of its own. W17: the
+ * refund figures. W18: special requests and status, through the staff app's thin wrappers. W19: Settle, with the
+ * figures the dialog now sends, and the reader flows' finalise and cancel, through the staff app's wrappers. W64a item 8
+ * (W64 review, "for later" 5): the all-Worker side makes a new set for every scenario (sweep/worker.ts), so a key held
+ * after no answer never follows a seeded booking id into the next scenario. W65: the old replay's one shared set
+ * (BUILT_BOOKING_ACTIONS) and its empty PARTLY_BUILT went with the old side.
  */
 export function bookingPresses(): ReadonlyMap<string, NewBookingAction> {
   return new Map<string, NewBookingAction>([

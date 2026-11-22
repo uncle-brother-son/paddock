@@ -34,7 +34,8 @@ const OWED_NEXT = 'bookings/money-owed-next-steps.test.ts, the test named after 
 
 /**
  * Scenarios only the old code can run, dropped from the sweep (H-plan 3.3 step 3), each with where its decided
- * behaviour is held in a rule test (briefs/W64-report.md lists them too).
+ * behaviour is held in a rule test (briefs/W64-report.md lists them too). W65: the scenarios themselves went with the
+ * old side (scenarios.ts, w48-scenarios.ts); their names stay here so dropped.test.ts still proves each is held.
  */
 export const DROPPED: Readonly<Record<string, string>> = {
   // GB24 (W51): generateUpcomingSessions was deleted, not moved; nothing on the Worker answers for it. The nightly job
@@ -47,12 +48,11 @@ export const DROPPED: Readonly<Record<string, string>> = {
   // GB24 too: the "who may" recording of the same deleted function. Each press reached the all-Worker side's own words
   // ("no press for generateUpcomingSessions"), so it recorded the harness, not the Worker (W64 review S5).
   'w48-generate-upcoming-sessions-who-may': 'GB24: server/rules/testing/sweep/dropped.test.ts (no such function in the staff app; no route; the job makes sessions: sessions/admin.test.ts)',
-  // W05g's and W05h's money owed, set up on the old side (scenarios.ts onTheOldSide, fortyOwed, fortyLanded: a cheaper
-  // move whose store credit failed or couldn't be told). On the Worker a move is one transaction, so that setup leaves
-  // nothing owed. W64a item 1 (W64 review S1): money owed is still reached on the Worker, by a card refund Stripe never
-  // got, so each next step is held in the rule test named, which makes it that way and holds the figures booking-replay
-  // accepted. They stay dropped rather than rebuilt here: scenarios.ts is still the old replay's until W65, and a
-  // different setup would no longer match the golden files there.
+  // W05g's and W05h's money owed, set up on the old side (scenarios.ts's onTheOldSide, fortyOwed and fortyLanded until
+  // W65: a cheaper move whose store credit failed or couldn't be told). On the Worker a move is one transaction, so that
+  // setup leaves nothing owed. W64a item 1 (W64 review S1): money owed is still reached on the Worker, by a card refund
+  // Stripe never got, so each next step is held in the rule test named, which makes it that way and holds the figures
+  // booking-replay accepted.
   ...Object.fromEntries(
     (
       [

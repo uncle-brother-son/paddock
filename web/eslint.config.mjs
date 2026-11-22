@@ -17,19 +17,6 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
-    // W16: a frozen test-only copy of the removed order code and the two legacy routes it calls, linted where
-    // it lived (the staff app; app/api). Deleted at step H.
-    "server/rules/testing/legacy-order/**",
-    // W17: the same for the old step D functions (legacy-booking/README.md), linted in the staff app. Step H.
-    "server/rules/testing/legacy-booking/**",
-    // W27: the same for the old step E functions (legacy-refund/README.md), linted in the staff app. Step H.
-    "server/rules/testing/legacy-refund/**",
-    // W36: the same for the old step F functions and the three legacy membership routes (legacy-account/README.md),
-    // linted where they live (the staff app; app/api/memberships). Step H.
-    "server/rules/testing/legacy-account/**",
-    // W48: the same for the old step G functions and the seven legacy catalogue routes (legacy-admin/README.md),
-    // linted where they lived (the staff app; app/api/catalog, removed at W61). Step H.
-    "server/rules/testing/legacy-admin/**",
   ]),
   ...storybook.configs["flat/recommended"],
   // Values go in as $1 parameters. A dynamic query (e.g. a variable number of search words) can

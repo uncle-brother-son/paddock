@@ -4,7 +4,6 @@ import { vi } from 'vitest'
 import type { Db } from '@/server/db'
 import { FakeStripe } from '@/server/stripe/fake'
 import { startTestDatabase, type TestDatabase } from '../database'
-import { generatorBefore032UnderItsOwnNameSql } from '../migration-032'
 import { buildRecording, TABLES, type Recording, type Row, type TableDump } from '../replay/compare'
 import { replayStripe } from '../replay/stripe-binding'
 
@@ -33,9 +32,9 @@ export interface ReplaySide {
    */
   lapseSweep?(db: Db): Promise<void>
   /**
-   * W51 (migration 032): the nightly job this side runs where a scenario recorded the database's own
-   * (w48-scenarios.ts, runNightlyJob). Left out (the old side, and every side before W51): the job as it was before
-   * 032, which is what the golden files recorded (GENERATOR_BEFORE_032_NAME, startReplay below).
+   * W51 (migration 032): the nightly job this side runs where a scenario runs the database's own (w48-scenarios.ts,
+   * runNightlyJob). W65: a side without one can't run those scenarios (the old side's "job as it was before 032" went
+   * with the golden files).
    */
   nightlyJob?(db: Db): Promise<void>
 }
@@ -64,34 +63,11 @@ export interface ReplayEnvironment {
   stop(): Promise<void>
 }
 
-/**
- * W33 (migration 024, Wayne's Q43): the database's event_cancellation_quote now answers `before_cutoff` with the
- * event's start when it has no cut-off. The old functions were recorded against the function as it was (bug E8: an
- * event with no cut-off counted as after it), and that old answer is part of what their golden files hold. So the
- * replay keeps the function as it was before 024 under this name, and the old functions' own SQL is pointed at it
- * (oldSide's paddockData, in replay/harness.ts). Worker code always reads the real one. W65 takes it out with the old
- * side.
- */
-export const EVENT_QUOTE_BEFORE_024 = 'event_cancellation_quote_before_024'
-const EVENT_QUOTE_LINE_024 = "    'before_cutoff', COALESCE(v_now_london < (COALESCE(b.refund_cutoff_at, b.starts_at) AT TIME ZONE 'UTC'), true),"
-const EVENT_QUOTE_LINE_BEFORE_024 = "    'before_cutoff', b.refund_cutoff_at IS NOT NULL AND v_now_london < (b.refund_cutoff_at AT TIME ZONE 'UTC'),"
-
-/** The saved schema's event_cancellation_quote with 024's one line put back as it was, under the name above. */
-export function eventQuoteBefore024Sql(): string {
-  const catalog = JSON.parse(readFileSync(path.join(__dirname, '..', 'live-catalog.json'), 'utf8')) as { functions: Array<{ name: string; definition: string }> }
-  const saved = catalog.functions.find((fn) => fn.name === 'event_cancellation_quote')?.definition ?? ''
-  if (!saved.includes(EVENT_QUOTE_LINE_024)) throw new Error("The saved schema's event_cancellation_quote isn't migration 024's: the replay can't make the function as it was before it.")
-  return saved.replace(EVENT_QUOTE_LINE_024, EVENT_QUOTE_LINE_BEFORE_024).replace('FUNCTION public.event_cancellation_quote(', `FUNCTION public.${EVENT_QUOTE_BEFORE_024}(`)
-}
-
+// W65: the two functions the old side ran under their own names (event_cancellation_quote as it was before 024, the
+// nightly job as it was before 032) went with it. Every side here reads the saved schema's own.
 export async function startReplay(): Promise<ReplayEnvironment> {
   // Started on the real clock: Postgres's own start-up waits on time passing.
   const database = await startTestDatabase({ schema: 'live' })
-  await database.pg.exec(`RESET ROLE; ${eventQuoteBefore024Sql()}; GRANT EXECUTE ON FUNCTION public.${EVENT_QUOTE_BEFORE_024}(uuid, uuid[]) TO paddock_worker; SET ROLE paddock_worker;`)
-  // W51 (migration 032): the nightly job as it was before 032, under its own name. W48's recordings of the job (the
-  // control, and GB3's "one far-future session stops it") were made against it, so the recorded side runs this one;
-  // the Worker's side runs the real one (ReplaySide.nightlyJob). Run by the tables' owner, as the job is.
-  await database.pg.exec(`RESET ROLE; ${generatorBefore032UnderItsOwnNameSql()} SET ROLE paddock_worker;`)
   vi.useFakeTimers({ toFake: ['Date'], now: new Date(REPLAY_NOW) })
   return {
     database,

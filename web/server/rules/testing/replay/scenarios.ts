@@ -748,17 +748,27 @@ export async function dyingAfter(path: string, steps: () => Promise<unknown>, { 
 const workerApi = () => (globalThis as unknown as { paddockWorkerV1: { rawRequest: RawRequest } }).paddockWorkerV1
 
 /**
- * W19: a legacy step an action's old function made, and the Worker route that makes it now the action has moved (the
- * staff app's thin wrapper calls it through paddockWorkerV1). Settle's saved-card charge is made inside the settle
- * route; W20: Add Guest's inside the guests route. The old functions never call these routes, so the old side's
- * recordings are unchanged.
+ * W65: each step a fault hook breaks, keyed by the Worker routes that make it (as their folders under app/ name them).
+ * Until W65 the keys were the legacy routes the old functions called for the same step; those routes and the old side
+ * are gone.
+ */
+const CHARGE_PATH = '/api/v1/staff/bookings/[bookingId]/{settle,guests,move}'
+const REFUND_PATH = '/api/v1/staff/{bookings,orders,event-bookings}/[id]/{refunds,refunds/owed,cancel-and-refund,cancel-credit,move,cancel}'
+const MEMBERSHIP_CANCEL_PATH = '/api/v1/staff/memberships/[membershipId]/cancel'
+const MEMBERSHIP_UNDO_CANCEL_PATH = '/api/v1/staff/memberships/[membershipId]/undo-cancel'
+const PAYMENT_DATE_PATH = '/api/v1/staff/memberships/[membershipId]/payment-date'
+
+/**
+ * W19: a step an action's old function made through a legacy route, and the Worker route that makes it now the action
+ * has moved (the staff app's thin wrapper calls it through paddockWorkerV1). Settle's saved-card charge is made inside
+ * the settle route; W20: Add Guest's inside the guests route.
  */
 const WORKER_DOES_IT_NOW: Readonly<Record<string, { route: RegExp; answerLost: RegExp }>> = {
   // W24: and Move's (inside the move route; its answer is lost as Add Guest's is).
-  '/api/payments/charge-saved-card': { route: /^\/api\/v1\/staff\/bookings\/[^/]+\/(settle|guests|move)$/, answerLost: /\/(guests|move)$/ },
+  [CHARGE_PATH]: { route: /^\/api\/v1\/staff\/bookings\/[^/]+\/(settle|guests|move)$/, answerLost: /\/(guests|move)$/ },
   // W21: a Part refund's and Refund the rest's card refunds are sent inside their routes.
   // W23: and Cancel & Refund's and Cancel & return credit's (one card part per order, sent inside the cancel route).
-  '/api/payments/refund-order': {
+  [REFUND_PATH]: {
     // W24: and a cheaper Move's (inside the move route).
     // W28: and an order refund's (inside the order's refunds route; the old refundOrder made the legacy call itself).
     // W30: and an event place cancel's (inside the event booking's cancel route, not its quote).
@@ -767,14 +777,12 @@ const WORKER_DOES_IT_NOW: Readonly<Record<string, { route: RegExp; answerLost: R
   },
   // W40: a membership's cancel and its undo are whole routes of their own now (the old function called the legacy
   // route): the route runs to the end and its answer is lost.
-  '/api/memberships/cancel': { route: /^\/api\/v1\/staff\/memberships\/[^/]+\/cancel$/, answerLost: /^\/api\/v1\/staff\/memberships\/[^/]+\/cancel$/ },
-  '/api/memberships/undo-cancel': { route: /^\/api\/v1\/staff\/memberships\/[^/]+\/undo-cancel$/, answerLost: /^\/api\/v1\/staff\/memberships\/[^/]+\/undo-cancel$/ },
+  [MEMBERSHIP_CANCEL_PATH]: { route: /^\/api\/v1\/staff\/memberships\/[^/]+\/cancel$/, answerLost: /^\/api\/v1\/staff\/memberships\/[^/]+\/cancel$/ },
+  [MEMBERSHIP_UNDO_CANCEL_PATH]: { route: /^\/api\/v1\/staff\/memberships\/[^/]+\/undo-cancel$/, answerLost: /^\/api\/v1\/staff\/memberships\/[^/]+\/undo-cancel$/ },
   // W41: and the payment date change (the old function called the legacy route for the charge and the date move).
-  '/api/memberships/change-payment-date': { route: /^\/api\/v1\/staff\/memberships\/[^/]+\/payment-date$/, answerLost: /^\/api\/v1\/staff\/memberships\/[^/]+\/payment-date$/ },
+  [PAYMENT_DATE_PATH]: { route: /^\/api\/v1\/staff\/memberships\/[^/]+\/payment-date$/, answerLost: /^\/api\/v1\/staff\/memberships\/[^/]+\/payment-date$/ },
 }
 
-const CHARGE_PATH = '/api/payments/charge-saved-card'
-const REFUND_PATH = '/api/payments/refund-order'
 type QueryFn = (sql: string, params?: unknown[]) => Promise<unknown>
 const dataApi = () => (globalThis as unknown as { paddockData: { query: QueryFn } }).paddockData
 
@@ -970,46 +978,12 @@ async function readerMoveLeftOpen(bookingId: string, call: BookingSteps['call'])
   return started.pendingReaderPayment?.pendingId
 }
 
-const itArrived = { amount: 40, owedArrived: true, reason: 'Found on their balance' }
-
-/**
- * W24: a setup step the new side runs through the frozen copy of the old functions (D-plan 4.11 item 1: setup steps run
- * through the frozen copy, so the seed state is what each golden file recorded, whichever actions have switched). Used
- * where the state a step leaves can't be made through the Worker's version of the action: W05g's and W05h's money owed
- * after a move's store credit failed or couldn't be told. On the Worker a move is one transaction, so a failing store
- * credit leaves nothing moved and nothing owed (`move-refund-store-credit-fails-outright` and its family, which test the
- * move itself, stay on the Worker). These scenarios test what the later steps do with money owed, which the Worker still
- * reaches: a refund that reconcile finds Stripe never received ends as owed. The old side runs every step through the
- * old functions anyway, so this changes nothing there.
- */
-let oldSideSetup = 0
-export async function onTheOldSide<T>(steps: () => Promise<T>): Promise<T> {
-  oldSideSetup += 1
-  try {
-    return await steps()
-  } finally {
-    oldSideSetup -= 1
-  }
-}
-/** True inside onTheOldSide: newBookingSide sends every call to the old functions. */
-export const inOldSideSetup = (): boolean => oldSideSetup > 0
-
-/** The same £40 as fortyOwed, but the store credit landed and only its answer was lost. W24: a setup on the old side. */
-async function fortyLanded({ move }: Pick<BookingSteps, 'move'>): Promise<void> {
-  await onTheOldSide(() => creditCantBeTold(() => move(ID.laterPrivateSession, { refundMethod: 'credit' })))
-}
-
 const payments = {
   card: { method: 'card' },
   reader: { method: 'reader' },
   storeCreditAndCard: { method: 'card', storeCredit: { amount: 10 } },
   giftCardAndReader: { method: 'reader', giftCard: { giftCardId: ID.giftCard, amount: 20 } },
   publicGiftCardAndReader: { method: 'reader', giftCard: { giftCardId: ID.giftCard, amount: 10 } },
-}
-
-/** A dearer booking's move to £100 at Core, with the store credit refund failing: all of it owed. W24: a setup on the old side. */
-async function fortyOwed({ db, move }: Pick<BookingSteps, 'db' | 'move'>): Promise<void> {
-  await onTheOldSide(() => whileFailing(db, refundCreditFails, () => move(ID.laterPrivateSession, { refundMethod: 'credit' })))
 }
 
 /** A third guest's £50 on a card, then a £120 part refund stopping after the first £50. */
@@ -2027,12 +2001,12 @@ export const scenarios: Scenario[] = [
     await call('refundBooking', { bookingId, refundMethod: 'credit', amount: 40, owedArrived: true, reason: 'Found on their balance' })
   }),
   booked('unsure-part-refund-card-then-the-rest-then-cancel', noPromoOnCard, async ({ bookingId, call }) => {
-    await losingTheWorkersAnswer('/api/payments/refund-order', () => call('refundBooking', { bookingId, refundMethod: 'card', amount: 40, ...goodwill }))
+    await losingTheWorkersAnswer(REFUND_PATH,() => call('refundBooking', { bookingId, refundMethod: 'card', amount: 40, ...goodwill }))
     await call('refundBooking', { bookingId, refundMethod: 'card', amount: 40, refundOwed: true })
     await call('refundBooking', { bookingId, refundMethod: 'card' })
   }),
   booked('unsure-part-refund-card-arrived', noPromoOnCard, async ({ bookingId, call }) => {
-    await losingTheWorkersAnswer('/api/payments/refund-order', () => call('refundBooking', { bookingId, refundMethod: 'card', amount: 40, ...goodwill }))
+    await losingTheWorkersAnswer(REFUND_PATH,() => call('refundBooking', { bookingId, refundMethod: 'card', amount: 40, ...goodwill }))
     await call('refundBooking', { bookingId, refundMethod: 'credit', amount: 40, owedArrived: true, reason: 'Seen in Stripe' })
     await call('refundBooking', { bookingId, refundMethod: 'card' })
   }),
@@ -2044,7 +2018,7 @@ export const scenarios: Scenario[] = [
     await attempt('refundBooking', { bookingId, refundMethod: 'credit' })
   }),
   booked('unsure-cancel-card-pressed-again', noPromoOnCard, async ({ bookingId, call }) => {
-    await losingTheWorkersAnswer('/api/payments/refund-order', () => call('refundBooking', { bookingId, refundMethod: 'card' }))
+    await losingTheWorkersAnswer(REFUND_PATH,() => call('refundBooking', { bookingId, refundMethod: 'card' }))
     await call('refundBooking', { bookingId, refundMethod: 'card' })
   }),
   booked('unsure-remove-guest-store-credit-arrived', publicOnCard, async ({ bookingId, call, add }) => {
@@ -2058,7 +2032,7 @@ export const scenarios: Scenario[] = [
     'unsure-cheaper-move-card-then-the-rest',
     peakPrivateOnCard,
     async ({ bookingId, call, move }) => {
-      await losingTheWorkersAnswer('/api/payments/refund-order', () => move(ID.laterPrivateSession, { refundMethod: 'card' }))
+      await losingTheWorkersAnswer(REFUND_PATH,() => move(ID.laterPrivateSession, { refundMethod: 'card' }))
       await call('refundBooking', { bookingId, refundMethod: 'card', amount: 40, refundOwed: true })
     },
     sessionsToMoveBetween
@@ -2074,13 +2048,13 @@ export const scenarios: Scenario[] = [
     publicOnCard,
     async ({ bookingId, call }) => {
       const confirmed = { bookingId, newSessionId: ID.peakSession, confirmed: true, payment: { method: 'card', storeCredit: { amount: 5 } } }
-      await dyingAfter('/api/payments/charge-saved-card', () => call('moveBooking', confirmed))
+      await dyingAfter(CHARGE_PATH,() => call('moveBooking', confirmed))
       await call('moveBooking', confirmed)
     }
   ),
   booked('dies-after-the-charge-add-guest', publicOnCard, async ({ bookingId, call }) => {
     const guest = { bookingId, ...bea, payment: { method: 'card', giftCard: { giftCardId: ID.giftCard, amount: 5 } } }
-    await dyingAfter('/api/payments/charge-saved-card', () => call('addBookingGuest', guest))
+    await dyingAfter(CHARGE_PATH,() => call('addBookingGuest', guest))
     await call('addBookingGuest', guest)
   }),
   booked(
@@ -2497,155 +2471,9 @@ export const scenarios: Scenario[] = [
     await call('removeBookingGuest', { guestId: guest.guest?.id })
     await call('removeBookingGuest', { guestId: guest.guest?.id, confirmedRefundAmount: 25.5, refundMethod: 'card' })
   }),
-  // --- W05g: Refund the rest, and what a later action does with money owed
-  // Peak £140 moved to £100 with the store credit failing: £40 owed, £140 on price_paid.
-  booked(
-    'owed-then-a-same-price-move',
-    peakPrivateOnCard,
-    async ({ bookingId, call, db, move }) => {
-      await fortyOwed({ db, move })
-      await move(ID.privateSession, {})
-      await call('refundBooking', { bookingId, refundMethod: 'card', amount: 40, refundOwed: true })
-      await call('refundBooking', { bookingId, refundMethod: 'card' })
-    },
-    sessionsToMoveBetween
-  ),
-  booked(
-    'owed-then-a-dearer-move',
-    peakPrivateOnCard,
-    async ({ bookingId, call, db, move }) => {
-      await fortyOwed({ db, move })
-      await move(ID.peakPrivateSession, { payment: payments.card })
-      await call('refundBooking', { bookingId, refundMethod: 'card', amount: 40, refundOwed: true })
-      await call('refundBooking', { bookingId, refundMethod: 'card' })
-    },
-    sessionsToMoveBetween
-  ),
-  // The dearer move, then Cancel & Refund with the money still owed: it gives that too.
-  booked(
-    'owed-then-a-dearer-move-then-cancel',
-    peakPrivateOnCard,
-    async ({ bookingId, call, db, move }) => {
-      await fortyOwed({ db, move })
-      await move(ID.peakPrivateSession, { payment: payments.card })
-      await call('refundBooking', { bookingId, refundMethod: 'card' })
-    },
-    sessionsToMoveBetween
-  ),
-  // £110 part refund leaves £30, all of it owed once the move's refund fails. A same-price move
-  // works out £10 too much was given, and has nothing left to take it from: it must not touch the £30.
-  booked(
-    'owed-with-nothing-left-then-a-same-price-move',
-    peakPrivateOnCard,
-    async ({ bookingId, call, db, move }) => {
-      await call('refundBooking', { bookingId, refundMethod: 'card', amount: 110, ...goodwill })
-      await onTheOldSide(() => whileFailing(db, refundCreditFails, () => move(ID.laterPrivateSession, { refundMethod: 'credit' })))
-      await move(ID.privateSession, { refundMethod: 'credit' })
-    },
-    sessionsToMoveBetween
-  ),
-  booked(
-    'owed-public-then-a-same-price-move',
-    publicPeakOnCard,
-    async ({ bookingId, call, db, move }) => {
-      await onTheOldSide(() => whileFailing(db, refundCreditFails, () => move(ID.laterPublicSession, { refundMethod: 'credit' })))
-      await move(ID.session, {})
-      await call('refundBooking', { bookingId, refundMethod: 'credit', amount: 11, refundOwed: true })
-      await call('refundBooking', { bookingId, refundMethod: 'card' })
-    },
-    laterPublicSession
-  ),
-  // One seat at Peak, moved to £100: a second guest is the same tier, so nothing is due.
-  booked(
-    'owed-then-a-guest-same-tier',
-    oneOnCard,
-    async ({ bookingId, call, db, move, add }) => {
-      await fortyOwed({ db, move })
-      await add(bea)
-      await call('refundBooking', { bookingId, refundMethod: 'card', amount: 40, refundOwed: true })
-      await call('refundBooking', { bookingId, refundMethod: 'card' })
-    },
-    sessionsToMoveBetween
-  ),
-  // Three people at Core is £150, and only £100 was paid toward it: the £40 owed pays for nothing.
-  booked(
-    'owed-then-a-guest-higher-tier',
-    peakPrivateOnCard,
-    async ({ bookingId, call, db, move, add }) => {
-      await fortyOwed({ db, move })
-      await add(bea, payments.card)
-      await call('refundBooking', { bookingId, refundMethod: 'card', amount: 40, refundOwed: true })
-      await call('refundBooking', { bookingId, refundMethod: 'card' })
-    },
-    sessionsToMoveBetween
-  ),
-  // £76.50 for three at Peak, moved to £60 with £16.50 owed, then £50 part refunded: £10 is left,
-  // so the guest's £20 seat stops at £10 and the £16.50 stays owed.
-  booked(
-    'owed-then-remove-guest-stops-at-what-is-left',
-    publicPeakOnCard,
-    async ({ bookingId, call, db, move, add }) => {
-      const guest = await add(bea, payments.card)
-      await onTheOldSide(() => whileFailing(db, refundCreditFails, () => move(ID.laterPublicSession, { refundMethod: 'credit' })))
-      await call('refundBooking', { bookingId, refundMethod: 'card', amount: 50, ...goodwill })
-      await call('removeBookingGuest', { guestId: guest.guest?.id })
-      await call('removeBookingGuest', { guestId: guest.guest?.id, confirmedRefundAmount: 10, refundMethod: 'card' })
-      await call('refundBooking', { bookingId, refundMethod: 'credit', amount: 16.5, refundOwed: true })
-    },
-    laterPublicSession
-  ),
-  booked(
-    'owed-then-cancel',
-    peakPrivateOnCard,
-    async ({ bookingId, call, db, move }) => {
-      await fortyOwed({ db, move })
-      await call('refundBooking', { bookingId, refundMethod: 'card' })
-    },
-    sessionsToMoveBetween
-  ),
-  // All £140 reaches the card and the cancel then fails: £40 of it was the money owed.
-  booked(
-    'owed-then-cancel-write-fails',
-    peakPrivateOnCard,
-    async ({ bookingId, call, db, move }) => {
-      await fortyOwed({ db, move })
-      await cancelThatFails({ bookingId, call, db })
-    },
-    sessionsToMoveBetween
-  ),
-  // £110 reaches the card and the £30 store credit is taken back, so £30 is left to retry.
-  booked(
-    'owed-then-cancel-write-fails-after-part-of-it',
-    peakPrivatePartCredit,
-    async ({ bookingId, call, db, move }) => {
-      await fortyOwed({ db, move })
-      await cancelThatFails({ bookingId, call, db })
-      await call('refundBooking', { bookingId, refundMethod: 'card' })
-    },
-    sessionsToMoveBetween
-  ),
-  // £100 part refund leaves £10 on the card, then £40 owed: card money doesn't cover what's owed.
-  booked(
-    'refund-the-rest-card-then-store-credit',
-    peakPrivatePartCredit,
-    async ({ bookingId, call, db, move }) => {
-      await call('refundBooking', { bookingId, refundMethod: 'card', amount: 100, ...goodwill })
-      await fortyOwed({ db, move })
-      await call('refundBooking', { bookingId, refundMethod: 'card', amount: 40, refundOwed: true })
-    },
-    sessionsToMoveBetween
-  ),
-  booked(
-    'refund-the-rest-fails-partway-then-retried',
-    peakPrivatePartCredit,
-    async ({ bookingId, call, db, move }) => {
-      await call('refundBooking', { bookingId, refundMethod: 'card', amount: 100, ...goodwill })
-      await fortyOwed({ db, move })
-      await whileFailing(db, refundCreditFails, () => call('refundBooking', { bookingId, refundMethod: 'card', amount: 40, refundOwed: true }))
-      await call('refundBooking', { bookingId, refundMethod: 'credit', amount: 30, refundOwed: true })
-    },
-    sessionsToMoveBetween
-  ),
+  // --- W05g: Refund the rest, and what a later action does with money owed. W65: the thirteen scenarios here were set
+  // up on the old side (a move whose store credit failed, so £40 was owed) and dropped from the sweep at W64; they went
+  // with the old side. Each one's next step is held in the rule test sweep.ts's DROPPED names.
   // --- W05g: a part refund failing partway. £100 and a third guest's £50 on their own order: a £120
   // part refund takes £50 from the newest order, the card then declines, and store credit fails.
   booked(
@@ -2694,48 +2522,8 @@ export const scenarios: Scenario[] = [
     await call('cancelReaderPayment', { pendingId })
     await call('refundBooking', { bookingId, refundMethod: 'card', amount: 10, ...goodwill })
   }),
-  booked(
-    'refund-the-rest-while-a-reader-move-is-open',
-    publicPeakOnCard,
-    async ({ bookingId, call, db, move }) => {
-      await onTheOldSide(() => whileFailing(db, refundCreditFails, () => move(ID.laterPublicSession, { refundMethod: 'credit' })))
-      const pendingId = await readerMoveLeftOpen(bookingId, call)
-      await call('refundBooking', { bookingId, refundMethod: 'card', amount: 11, refundOwed: true }).catch(() => undefined)
-      await call('cancelReaderPayment', { pendingId })
-      await call('refundBooking', { bookingId, refundMethod: 'card', amount: 11, refundOwed: true })
-    },
-    laterPublicSession
-  ),
-  // --- W05h: store credit that landed though its answer was lost. Paying it would give £40 twice.
-  booked(
-    'owed-arrived-after-a-lost-answer',
-    peakPrivateOnCard,
-    async (steps) => {
-      await fortyLanded(steps)
-      await steps.call('refundBooking', { bookingId: steps.bookingId, refundMethod: 'credit', ...itArrived })
-    },
-    sessionsToMoveBetween
-  ),
-  booked(
-    'owed-arrived-then-a-same-price-move',
-    peakPrivateOnCard,
-    async (steps) => {
-      await fortyLanded(steps)
-      await steps.call('refundBooking', { bookingId: steps.bookingId, refundMethod: 'credit', ...itArrived })
-      await steps.move(ID.privateSession, {})
-    },
-    sessionsToMoveBetween
-  ),
-  booked(
-    'owed-arrived-then-cancel',
-    peakPrivateOnCard,
-    async (steps) => {
-      await fortyLanded(steps)
-      await steps.call('refundBooking', { bookingId: steps.bookingId, refundMethod: 'credit', ...itArrived })
-      await steps.call('refundBooking', { bookingId: steps.bookingId, refundMethod: 'card' })
-    },
-    sessionsToMoveBetween
-  ),
+  // W65: 'refund-the-rest-while-a-reader-move-is-open' and W05h's three store credit that landed though its answer was
+  // lost ('owed-arrived-…') went with the old side as above.
   // --- W05h: a guest on the reader, in price_paid but not collected, blocks all of these
   booked('cancel-while-a-guest-is-on-the-reader', publicOnCard, async ({ bookingId, call }) => {
     const pendingId = await readerGuestLeftOpen(bookingId, call)
@@ -2782,15 +2570,7 @@ export const scenarios: Scenario[] = [
     await add(bea, { storeCredit: { amount: 20 } })
     await call('getBookingRefundFigures', { bookingId })
   }),
-  booked(
-    'figures-with-money-owed',
-    peakPrivateOnCard,
-    async ({ bookingId, call, db, move }) => {
-      await fortyOwed({ db, move })
-      await call('getBookingRefundFigures', { bookingId })
-    },
-    sessionsToMoveBetween
-  ),
+  // W65: 'figures-with-money-owed' went with the old side as above.
   // --- W05k: two presses at once on one booking share one charge (review 2, finding 1) ----------------
   // Settle: a £20 seat, £2 of it store credit and £18 on the card.
   {
@@ -5560,7 +5340,7 @@ function w36Scenarios(): Scenario[] {
       await whileFailing(db, membershipWrite, () => cancelMo(call))
     }, moSubscribed),
     f('cancel-answer-lost-then-pressed-again', async ({ call }) => {
-      await losingTheWorkersAnswer('/api/memberships/cancel', () => cancelMo(call))
+      await losingTheWorkersAnswer(MEMBERSHIP_CANCEL_PATH,() => cancelMo(call))
       await cancelMo(call)
     }, moSubscribed),
     f('undo-refused-by-stripe', async ({ call, stripe }) => {
@@ -5574,7 +5354,7 @@ function w36Scenarios(): Scenario[] {
     }, moSubscribed),
     f('undo-answer-lost-then-pressed-again', async ({ call }) => {
       await cancelMo(call)
-      await losingTheWorkersAnswer('/api/memberships/undo-cancel', () => undoMo(call))
+      await losingTheWorkersAnswer(MEMBERSHIP_UNDO_CANCEL_PATH,() => undoMo(call))
       await undoMo(call)
     }, moSubscribed),
     // FB5: neither route checks the membership's state.
@@ -5780,7 +5560,7 @@ function w36Scenarios(): Scenario[] {
     }, moSubscribed),
     // The Worker did everything and its answer was lost: charged, the date moved in Stripe, nothing recorded.
     f('payment-date-answer-lost-after-everything-then-pressed-again', async ({ call }) => {
-      await losingTheWorkersAnswer('/api/memberships/change-payment-date', () => change(call))
+      await losingTheWorkersAnswer(PAYMENT_DATE_PATH,() => change(call))
       await change(call)
     }, moSubscribed),
     // FB2: charged and moved in Stripe, then Retool's own write fails: "success" with a warning to add an order by hand.

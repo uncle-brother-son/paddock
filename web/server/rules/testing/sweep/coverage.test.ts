@@ -23,7 +23,9 @@ describe('the sweep covers every scenario once (W64)', () => {
       const files = Object.entries(SWEEP_FILES).filter(([, holds]) => holds(name)).map(([file]) => file)
       expect(files, name).toHaveLength(1)
     }
-    for (const name of Object.keys(DROPPED)) expect(names, name).toContain(name)
+    // W65: the dropped scenarios went with the old side; DROPPED keeps only their names (dropped.test.ts).
+    for (const name of Object.keys(DROPPED)) expect(names, name).not.toContain(name)
+    expect(Object.keys(DROPPED)).toHaveLength(21)
     const testFiles = readdirSync(__dirname).filter((file) => /^sweep-.*\.test\.ts$/.test(file)).map((file) => file.replace(/^sweep-|\.test\.ts$/g, ''))
     expect(testFiles.sort()).toEqual(Object.keys(SWEEP_FILES).sort())
   })

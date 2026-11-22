@@ -2,7 +2,6 @@ import { vi } from 'vitest'
 import type { Db, SqlParam } from '@/server/db'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
 import { insert } from '../database'
-import { GENERATOR_BEFORE_032_NAME } from '../migration-032'
 import type { Scenario, ScenarioContext } from '../sweep/run'
 import { ID, paidSeat, sam, seed, whileFailing } from './scenarios'
 
@@ -461,14 +460,8 @@ function productScenarios(): Scenario[] {
       await call('setProductActive', { productId: ID.product, active: true })
       await attempt('setProductActive', { productId: W48_ID.unknown, active: false })
     }, soapSynced),
-    // GB15: the legacy route takes the shared key and asks about no staff member. Jo's account is inactive, so the
-    // function refuses; the same change sent straight to the route goes through, and nothing records who made it.
-    g('gb15-the-legacy-route-takes-the-shared-key-and-asks-no-staff-member', async ({ attempt }) => {
-      await attempt('setProductActive', { productId: ID.product, active: false })
-      const legacy = (globalThis as unknown as { paddockBackendApi2: { rawRequest(request: { path: string; method: string; body: unknown }): Promise<unknown> } }).paddockBackendApi2
-      await legacy.rawRequest({ path: '/api/catalog/toggle-active', method: 'POST', body: { itemType: 'product', itemId: ID.product, active: false } })
-      await legacy.rawRequest({ path: '/api/catalog/update-price', method: 'POST', body: { itemType: 'product', itemId: ID.product, basePrice: 1 } })
-    }, soapSynced, staffIs('UPDATE staff SET active = false WHERE id = $1')),
+    // W65: GB15's scenario (the legacy catalogue route takes the shared key) went with the old side; its decided
+    // behaviour is held in sweep/dropped.test.ts (sweep.ts, DROPPED).
     g('product-fulfilment-who-may', whoMay('setProductFulfillmentMethod', { productId: ID.product, fulfillmentMethod: 'both' }, 'manage_pricing')),
     g('product-fulfilment-set', async ({ call, attempt }) => {
       await attempt('setProductFulfillmentMethod', { productId: ID.product, fulfillmentMethod: 'courier' })
@@ -1410,19 +1403,13 @@ async function samBooked({ call }: Pick<ScenarioContext, 'call'>, more: Record<s
 }
 
 /**
- * The database's nightly job, run as the job runs it (the table owner, not the Worker's role). W51 (migration 032):
- * the side's own when it has one (the Worker's side: the job as the saved schema has it), else the job as it was
- * before 032, which is what the golden files recorded (harness.ts, startReplay).
+ * The database's nightly job, as the side runs it (W51, migration 032: the Worker's side runs the job as the saved
+ * schema has it, as the table owner). W65: the old side's fallback (the job as it was before 032) went with the golden
+ * files, so a side without a job of its own can't run these scenarios.
  */
 async function runNightlyJob({ db, side }: Pick<ScenarioContext, 'db' | 'side'>): Promise<void> {
-  if (side.nightlyJob) return side.nightlyJob(db)
-  await db.query('RESET ROLE')
-  try {
-    // eslint-disable-next-line no-restricted-syntax -- test data only: the function's name is a literal in migration-032.ts
-    await db.query(`SELECT public.${GENERATOR_BEFORE_032_NAME}()`)
-  } finally {
-    await db.query('SET ROLE paddock_worker')
-  }
+  if (!side.nightlyJob) throw new Error(`The ${side.name} side has no nightly job to run.`)
+  return side.nightlyJob(db)
 }
 
 function sessionScenarios(): Scenario[] {
@@ -1621,12 +1608,8 @@ function sessionScenarios(): Scenario[] {
       await runNightlyJob({ db, side })
       await call('getSessionsForRange', { startDate: '2026-11-15', endDate: '2026-12-10' })
     }, saunaHour, thursdaySlot, weekOfBandRules),
-    // GB24: no screen calls it. Run by hand it makes 98 days of sessions after the furthest one (not up to today + 98).
-    g('gb24-generate-upcoming-sessions-is-dead-code-that-still-runs', async ({ call }) => {
-      await call('generateUpcomingSessions', {})
-      await call('generateUpcomingSessions', {})
-    }, saunaHour, thursdaySlot, weekOfBandRules),
-    g('generate-upcoming-sessions-who-may', whoMay('generateUpcomingSessions', {}, 'none'), saunaHour, thursdaySlot, weekOfBandRules),
+    // W65: GB24's two scenarios (generateUpcomingSessions run by hand, and its "who may") went with the old side; the
+    // function was deleted, not moved. Held in sweep/dropped.test.ts (sweep.ts, DROPPED).
   ]
 }
 

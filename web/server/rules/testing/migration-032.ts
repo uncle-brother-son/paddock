@@ -5,7 +5,7 @@ import path from 'node:path'
 // the lead applies it after W51's review and before the Worker push. The saved schema (live-catalog.json,
 // live-schema.sql) carries it already, as W27 did for 023, so every test runs against the schema live will have: the
 // Worker's calendar read needs 032's table. Kept here: the two functions as they were before 032, word for word (the
-// file's Down; what GB3's and W51-1's controls run; what the replay's recorded side runs), and the lines 032 adds.
+// file's Down; what GB3's and W51-1's controls run), and the lines 032 adds.
 // Tests only.
 
 export const MIGRATION_032 = path.resolve(__dirname, '../../../../supabase/migrations/032_sessions_made_up_to_and_the_band_guard.sql')
@@ -203,14 +203,6 @@ export function down032(): string {
 
 /** The two functions as they were before 032, as a script. */
 export const FUNCTIONS_BEFORE_032_SQL = `${GENERATOR_BEFORE_032.trimEnd()};\n\n${REBAND_BEFORE_032.trimEnd()};\n`
-
-/**
- * The nightly job as it was before 032, under its own name, for the replay's recorded side: W48's recordings of the
- * job (the control, and GB3's) were made against it, and that is what their golden files hold. The Worker's side
- * runs the real one (replay/harness.ts, ReplaySide.nightlyJob).
- */
-export const GENERATOR_BEFORE_032_NAME = 'generate_upcoming_sessions_before_032'
-export const generatorBefore032UnderItsOwnNameSql = (): string => `${GENERATOR_BEFORE_032.replace('FUNCTION public.generate_upcoming_sessions(', `FUNCTION public.${GENERATOR_BEFORE_032_NAME}(`).trimEnd()};`
 
 /**
  * Runs a script on a test database (PGlite) as the tables' owner, then goes back to the Worker's role. CREATE OR

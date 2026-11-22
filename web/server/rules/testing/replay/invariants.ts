@@ -1,48 +1,31 @@
-import type { Db } from '@/server/db'
-import type { FakeStripe } from '@/server/stripe/fake'
-import { replay, type ReplayEnvironment, type ReplaySide, type Scenario, type ScenarioContext } from '../sweep/run'
+import type { Scenario, ScenarioContext } from '../sweep/run'
 
 // The W05 invariants (W05d, W05k), moved here from w05d.test.ts unchanged in W18 so the new side can run them too
 // (D-plan 4.11 item 3): no booking gets back more than was paid, price_paid is paid less given back, what is owed is
 // never negative or more than that, Stripe's refunds are on the rows, every gift card lost what its redemptions say,
 // and every PaymentIntent that took money is on exactly one order. Seat money only: add-ons have their own lines and
-// their own refunds.
+// their own refunds. Run on every scenario of the all-Worker sweep (sweep/sweep.ts).
 
 /**
- * Allowed to break a check below, each for a reason nothing here can fix. Two sets: the old replay's (its old side ran
- * the old functions; w05d.test.ts holds every one still needed there, and W65 deletes both), and the Worker's, which the
- * all-Worker sweep uses and holds to exactly what it needs (W64a item 4, W64 review S3: sweep/sweep.ts).
+ * Allowed to break a check below, each for a reason nothing here can fix: the Worker's lists, which the all-Worker
+ * sweep holds to exactly what it needs (W64a item 4, W64 review S3: sweep/sweep.ts). W65: the old replay's own lists
+ * (its old side ran the old functions) went with it.
  */
-/** W13 on the old functions: they put a membership's money back and rolled the order back: taken and refunded, on no row. */
-const OLD_FUNCTIONS_ROLLED_BACK = "W13 on the old functions: a membership that couldn't be set up, its payment refunded and the order rolled back, so the money is on no row"
 /**
  * W13 on the Worker (W64a item 4): a membership order that can't finish after Stripe took money (the rest of the basket
  * declined, the old subscription's cancel refused, a reader card that can't be saved) is compensated: the subscription
  * cancelled, its first invoice or the tap refunded under the order's keys, then the order undone. That money went out
  * and back with no order left to hold it, so it is on no row.
  */
-export const MEMBERSHIP_ROLLED_BACK = "W13 on the Worker: a membership order compensated (the subscription cancelled, the payment refunded under the order's keys) and then undone, so that money is on no row"
-export const STRIPE_REFUNDS_NOT_ON_ROWS: Record<string, string> = {
-  'q3-reader-buy-new-pass-with-a-membership': 'W05a Q3 on the reader: £90 taken and refunded by the rollback of an order that never existed. Tracked for go-live',
-  'w13-card-charge-declined-after-the-subscription': OLD_FUNCTIONS_ROLLED_BACK,
-  'w13-card-old-cancel-refused': OLD_FUNCTIONS_ROLLED_BACK,
-  'w13-reader-buy-new-pass-event-and-membership': OLD_FUNCTIONS_ROLLED_BACK,
-  'w13-reader-card-not-reusable': OLD_FUNCTIONS_ROLLED_BACK,
-  'w13-reader-old-cancel-refused': OLD_FUNCTIONS_ROLLED_BACK,
-  'unsure-part-refund-card-arrived': 'It already arrived moves no money and records nothing on the line, so a refund that really left Stripe is on no row. It is capped by price_paid, so nothing can go twice',
-}
+const MEMBERSHIP_ROLLED_BACK = "W13 on the Worker: a membership order compensated (the subscription cancelled, the payment refunded under the order's keys) and then undone, so that money is on no row"
 const PRICE_PAID_CLEARED: Record<string, string> = {
   'price-paid-cleared-nothing-back-then-cancel': 'price_paid is forced to £0 by the scenario, so a cancel has nothing to give',
   'price-paid-cleared-half-back-then-cancel': 'the same',
   'price-paid-cleared-addon-credit-is-not-seat-money': 'the same',
   'credit-booking-price-paid-cleared-then-cancelled': 'the same',
 }
-export const CANCELLED_WITHOUT_ALL_THE_MONEY: Record<string, string> = {
-  ...PRICE_PAID_CLEARED,
-  'unsure-part-refund-card-arrived': 'It already arrived: the £40 reached the customer and is on no row',
-}
-export const FIRST_INVOICE = "a membership's first invoice belongs to its subscription, so no order names that PaymentIntent (Q21)"
-/** The scenarios whose first invoice is on no order, on either side. */
+const FIRST_INVOICE = "a membership's first invoice belongs to its subscription, so no order names that PaymentIntent (Q21)"
+/** The scenarios whose first invoice is on no order. */
 const FIRST_INVOICES: Record<string, string> = {
   'event-at-member-price-with-a-new-membership': FIRST_INVOICE,
   'buy-new-membership-covers-the-seat': FIRST_INVOICE,
@@ -62,35 +45,11 @@ const FIRST_INVOICES: Record<string, string> = {
 const AMOUNT_MISMATCH: Record<string, string> = {
   'w11-reader-amount-mismatch-a-pound-short': 'W03-plan 2.5: a payment that does not match its order is left for a person, not finalised',
 }
-export const CHARGES_NOT_ON_ONE_ORDER: Record<string, string> = {
-  ...FIRST_INVOICES,
-  'q3-reader-buy-new-pass-with-a-membership': 'W05a Q3 on the reader: the order rolled back, so the £90 has none. Tracked for go-live',
-  // W13's own on the old functions.
-  'w13-card-charge-declined-after-the-subscription': OLD_FUNCTIONS_ROLLED_BACK,
-  'w13-card-old-cancel-refused': OLD_FUNCTIONS_ROLLED_BACK,
-  'w13-reader-buy-new-pass-event-and-membership': OLD_FUNCTIONS_ROLLED_BACK,
-  'w13-reader-card-not-reusable': OLD_FUNCTIONS_ROLLED_BACK,
-  'w13-reader-old-cancel-refused': OLD_FUNCTIONS_ROLLED_BACK,
-  ...AMOUNT_MISMATCH,
-}
-
-/** The three lists a run is allowed to break the checks below by. */
+/** The three lists a run is allowed to break the checks below by. A use is named in `needed` as `<list name>/<scenario>`. */
 export interface InvariantExceptions {
   stripeRefundsNotOnRows: Readonly<Record<string, string>>
   cancelledWithoutAllTheMoney: Readonly<Record<string, string>>
   chargesNotOnOneOrder: Readonly<Record<string, string>>
-  /**
-   * How a use is named in `needed`: `<list name>/<scenario>`. Without it, `<the list's first key>/<scenario>`, the form
-   * w05d.test.ts reads for the old lists.
-   */
-  byListName?: boolean
-}
-
-/** The old replay's lists (its old side). */
-const OLD_SIDE_EXCEPTIONS: InvariantExceptions = {
-  stripeRefundsNotOnRows: STRIPE_REFUNDS_NOT_ON_ROWS,
-  cancelledWithoutAllTheMoney: CANCELLED_WITHOUT_ALL_THE_MONEY,
-  chargesNotOnOneOrder: CHARGES_NOT_ON_ONE_ORDER,
 }
 
 /** W13's compensated membership orders on the Worker: the money out and back, on no row and on no order. */
@@ -112,39 +71,26 @@ export const WORKER_EXCEPTIONS: InvariantExceptions = {
   stripeRefundsNotOnRows: COMPENSATED,
   cancelledWithoutAllTheMoney: PRICE_PAID_CLEARED,
   chargesNotOnOneOrder: { ...FIRST_INVOICES, ...COMPENSATED, ...AMOUNT_MISMATCH },
-  byListName: true,
 }
 
 export interface InvariantSweep {
   /** One line per breach, `<scenario>: <what>`. */
   wrong: string[]
-  /** Which exceptions were used (`<list's first key>/<scenario>`), so a stale one can be caught. */
+  /** Which exceptions were used (`<list name>/<scenario>`), so a stale one can be caught. */
   needed: Set<string>
   bookingsChecked: number
 }
 
-/** Runs each scenario through `makeSide` and checks the invariants on what it leaves. */
-export async function sweepInvariants(
-  environment: ReplayEnvironment,
-  list: readonly Scenario[],
-  makeSide: (db: Db, stripe: FakeStripe) => ReplaySide
-): Promise<InvariantSweep> {
-  const sweep: InvariantSweep = { wrong: [], needed: new Set<string>(), bookingsChecked: 0 }
-  for (const scenario of list) await replay(environment, watchedForInvariants(scenario, sweep), makeSide)
-  return sweep
-}
-
 /**
  * W64: `scenario` with the invariants checked on what it leaves, into `sweep`, so a caller that keeps the recording (the
- * all-Worker sweep) checks them on the same run. Moved out of sweepInvariants unchanged.
+ * all-Worker sweep) checks them on the same run.
  */
-export function watchedForInvariants(scenario: Scenario, sweep: InvariantSweep, exceptions: InvariantExceptions = OLD_SIDE_EXCEPTIONS): Scenario {
+export function watchedForInvariants(scenario: Scenario, sweep: InvariantSweep, exceptions: InvariantExceptions = WORKER_EXCEPTIONS): Scenario {
   const { wrong, needed } = sweep
   /** Each exception must still be needed, so a stale one can't hide a new problem. */
   const allowed = (kind: 'stripeRefundsNotOnRows' | 'cancelledWithoutAllTheMoney' | 'chargesNotOnOneOrder', name: string) => {
-    const list = exceptions[kind]
-    if (!(name in list)) return false
-    needed.add(exceptions.byListName === true ? `${kind}/${name}` : `${Object.keys(list)[0]}/${name}`)
+    if (!(name in exceptions[kind])) return false
+    needed.add(`${kind}/${name}`)
     return true
   }
   /** Cash that no order line or row records: a move or a settle paid in cash. Store credit and gift card

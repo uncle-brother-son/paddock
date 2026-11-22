@@ -7,11 +7,12 @@ import { staffAppDir } from './staff-app-dir'
  * W64a item 7 (H-plan 3.1): the one standing removal test. It merges what the five old removal guards hold
  * (server/removed-order-code.test.ts, W16; removed-booking-code, W25; removed-refund-code, W34; removed-account-code,
  * W44; removed-admin-code, W61), as explicit lists read from nothing but this file: the files deleted, the routes
- * deleted, the staff app modules gone, and the names removed. W65 deletes the five (some read the frozen copies) with
+ * deleted, the staff app modules gone, and the names removed. W65 deleted the five (some read the frozen copies) with
  * the copies; this stays, so removed code can't come back after them.
  *
- * Until W65, the frozen copies, the replay files W65 deletes and the five old guards still name what was removed (they
- * drive or guard the old code): they are left out of the scan. After W65 they are gone and the scan covers everything.
+ * Until W65 the frozen copies, the old replay files and the old guards were left out of the scan (they drove or guarded
+ * the old code). W65 deleted them, so the scan covers every file but this one. What W65 deleted is held gone by
+ * old-code-reach.test.ts.
  */
 
 const workerDir = path.resolve(__dirname, '../../..')
@@ -286,20 +287,6 @@ function sourceFiles(root: string, dirs: string[]): string[] {
   return found
 }
 
-const TESTING = __dirname
-const REPLAY = path.join(TESTING, 'replay')
-/** The replay files W65 keeps: scanned. */
-const REPLAY_KEPT = ['scenarios.ts', 'w48-scenarios.ts', 'compare.ts', 'stripe-binding.ts', 'invariants.ts'].map((name) => path.join(REPLAY, name))
-/** The frozen copies' folders, by name built from parts (a literal naming one would trip the old guards until W65). */
-const FROZEN = ['order', 'booking', 'refund', 'account', 'admin'].map((part) => path.join(TESTING, ['legacy', part].join('-')))
-/** The five old removal guards and the four frozen-copy guards, which name what they guard until W65 deletes them. */
-const OLD_GUARDS = [
-  ...['account', 'admin', 'booking', 'refund'].flatMap((part) => [`frozen-${part}-code.test.ts`, `removed-${part}-code.test.ts`].map((file) => path.join(TESTING, file))),
-  path.join(workerDir, 'server', 'removed-order-code.test.ts'),
-]
-const goesAtW65 = (file: string): boolean =>
-  FROZEN.some((dir) => file.startsWith(dir + path.sep)) || (file.startsWith(REPLAY + path.sep) && !REPLAY_KEPT.includes(file)) || OLD_GUARDS.includes(file)
-
 /** The code without its comments, so a comment naming what was removed doesn't count (as the old guards read it). */
 function withoutComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1')
@@ -311,7 +298,7 @@ function literals(code: string): string[] {
 
 const workerFiles = sourceFiles(workerDir, ['app', 'server', 'lib', 'contracts', 'scripts', 'components', 'features'])
   .concat(['custom-worker.ts', 'middleware.ts', 'next.config.ts'].map((file) => path.join(workerDir, file)).filter((file) => existsSync(file)))
-  .filter((file) => file !== __filename && !goesAtW65(file))
+  .filter((file) => file !== __filename)
 const staffAppFiles = sourceFiles(appDir, ['backend', 'frontend']).filter((file) => !GENERATED.some((generated) => file.includes(generated)))
 const workerCode = new Map(workerFiles.map((file) => [file, withoutComments(readFileSync(file, 'utf8'))]))
 const staffAppCode = new Map(staffAppFiles.map((file) => [file, withoutComments(readFileSync(file, 'utf8'))]))
@@ -351,7 +338,7 @@ function routePatterns(): Array<{ file: string; pattern: RegExp }> {
 }
 const routesServing = (urlPath: string): string[] => routePatterns().filter(({ pattern }) => pattern.test(urlPath)).map(({ file }) => path.relative(workerDir, file))
 
-// --- W64b (W64a check C3): two staff app checks the old guards held alone, kept here when W65 deletes them.
+// --- W64b (W64a check C3): two staff app checks the old guards held alone, kept here since W65 deleted them.
 
 /** What a file imports: `from '...'`, a side-effect `import '...'`, and `import('...')` of a literal (as W61's guard read it). */
 const importsOf = (code: string): string[] => [...code.matchAll(/(?<![.\w])(?:from|import)\s*\(?\s*['"]([^'"]+)['"]/g)].map((match) => match[1] ?? '')
@@ -395,9 +382,9 @@ describe('removed code stays removed (H-plan 3.1; W64a item 7: the five removal 
   it('no code or test in either repo calls a deleted route', () => {
     const found: string[] = []
     for (const [file, text] of [...workerCode, ...staffAppCode]) {
-      // The kept scenario files name old routes as fault-hook keys and in GB15's dropped recording (W64a item 9: W65's
-      // list); a route is a call only as a path, not as a word in a sentence that names it (LEGACY_CATALOG_ROUTE_WORDS).
-      if (REPLAY_KEPT.includes(file)) continue
+      // W65: the kept scenario files' fault hooks are keyed by the Worker routes now, and GB15's dropped scenario went
+      // with the old side, so they are scanned too. A route is a call only as a path, not as a word in a sentence that
+      // names it (LEGACY_CATALOG_ROUTE_WORDS).
       for (const literal of literals(text)) if (literal.startsWith('/api/') && deletedRouteIn(literal)) found.push(`${shown(file)}: '${literal}'`)
     }
     expect(found).toEqual([])
