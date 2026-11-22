@@ -28,7 +28,7 @@ const eslintConfig = defineConfig([
     // linted where they live (the staff app; app/api/memberships). Step H.
     "server/rules/testing/legacy-account/**",
     // W48: the same for the old step G functions and the seven legacy catalogue routes (legacy-admin/README.md),
-    // linted where they live (the staff app; app/api/catalog). Step H.
+    // linted where they lived (the staff app; app/api/catalog, removed at W61). Step H.
     "server/rules/testing/legacy-admin/**",
   ]),
   ...storybook.configs["flat/recommended"],

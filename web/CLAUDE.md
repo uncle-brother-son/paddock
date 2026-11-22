@@ -56,7 +56,7 @@ These are enforced server-side in this Worker; the front end never computes them
 
 ## Integrations
 - **Stripe** (test mode until go-live): card entry only through Elements or Checkout. Memberships are subscriptions created by the order route (`server/rules/orders/membership.ts`); the old `create-subscription` route was removed at W16.
-- **Retool → Worker routes:** legacy routes use `Bearer RETOOL_API_KEY`. New staff routes (`/api/v1/staff/...`) use the staff auth from brief W01 (key plus the acting staff member's email, permissions checked here). Website routes use the customer's Supabase session, never a staff key in the browser.
+- **Retool → Worker routes:** the legacy routes that took `Bearer RETOOL_API_KEY` are all gone (the last seven, `/api/catalog/*`, at W61), so nothing deployed reads that secret. Staff routes (`/api/v1/staff/...`) use the staff auth from brief W01 (key plus the acting staff member's email, permissions checked here). Website routes use the customer's Supabase session, never a staff key in the browser.
 - **Email:** Resend + React Email (templates not built yet). Marketing goes through Klaviyo after consent.
 - **react-email** is a dev dependency until the email templates are built; move it back to dependencies if templates render at runtime.
 - **Analytics:** GA4 (`NEXT_PUBLIC_GA_ID`) loads only after consent.

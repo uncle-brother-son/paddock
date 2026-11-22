@@ -334,7 +334,7 @@ describe('Prices, on and off sale (L2: no Stripe)', () => {
     expect((await press(productPriceRoute, { productId: product }, { basePrice: -1 })).error?.message).toBe(OLD.updateCatalogItemPrice.mustNonNegativeNumber('basePrice'))
     expect((await press(productPriceRoute, { productId: product }, { salePrice: null })).error?.message).toBe(OLD.updateCatalogItemPrice.mustNonNegativeNumber('salePrice'))
     expect((await press(productPriceRoute, { productId: product }, { monthlyPrice: 30 })).error?.message).toBe(NEW.fieldNotOnThisItem('monthlyPrice', 'a product'))
-    expect((await press(serviceTypePriceRoute, { serviceTypeId: privateType }, { basePrice: 90 })).error?.message).toBe(LEGACY_CATALOG_ROUTE_WORDS['update-price'].privateServiceTypesUsePriceTiers)
+    expect((await press(serviceTypePriceRoute, { serviceTypeId: privateType }, { basePrice: 90 })).error?.message).toBe(NEW.privateServiceTypeUsesTiers)
     expect((await press(productPriceRoute, { productId: UNKNOWN_ID }, { basePrice: 1 })).error?.message).toBe(LEGACY_CATALOG_ROUTE_WORDS['toggle-active'].itemNotFound)
     expect(await auditRowsOf(db)).toEqual([])
   })

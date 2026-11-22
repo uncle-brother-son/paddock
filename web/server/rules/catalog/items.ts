@@ -223,7 +223,7 @@ export async function setItemPrice(db: Db, kind: PricedKind, itemId: string, inp
       },
       async change(tx, before) {
         if (kind === 'service_type' && before['booking_type'] !== 'public') {
-          throw adminRefusal('CONFLICT', action, 'private_service_type', LEGACY_CATALOG_ROUTE_WORDS['update-price'].privateServiceTypesUsePriceTiers)
+          throw adminRefusal('CONFLICT', action, 'private_service_type', NEW_WORDS.privateServiceTypeUsesTiers)
         }
         const sets = columns.map((column, i) => `${column} = $${i + 1}::numeric`)
         const values = columns.map((column) => prices.filter((price) => price.column === column).at(-1)?.text ?? null)

@@ -52,6 +52,11 @@ export const CATALOG_ITEM_NEW_WORDS = {
   /** A pass type or gift card type that isn't there, where the old function answered nothing. */
   passTypeNotFound: 'This pass type no longer exists.',
   giftCardTypeNotFound: 'That gift card type no longer exists. Reload the page and try again.',
+  /**
+   * W61 (the lead's call): a base price on a private service type. The legacy update-price route's own words sent
+   * staff to the legacy tier price route, which W61 removed with the other legacy catalogue routes.
+   */
+  privateServiceTypeUsesTiers: 'Private service types are priced by their tiers: change the tier prices instead.',
 } as const
 
 /**

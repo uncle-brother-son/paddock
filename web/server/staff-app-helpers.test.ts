@@ -6,6 +6,7 @@ import type { Queryable } from '@/server/db'
 import { authenticateStaff } from './auth/staff'
 import { CATALOG_ITEM_NEW_WORDS } from './rules/catalog/item-failure-messages'
 import { ADDON_PRICE_NOT_SET_MESSAGE } from './rules/orders/failure-messages'
+import { legacyAdminDir } from './rules/testing/replay/harness'
 import { staffAppDir } from './rules/testing/staff-app-dir'
 
 // The staff app has no test runner, so its Worker helpers are tested here, from its checkout
@@ -14,6 +15,8 @@ const appDir = staffAppDir()
 const shared = path.join(appDir, 'backend/paddock/shared')
 
 const load = (name: string) => import(/* @vite-ignore */ path.join(shared, name))
+/** W61: a shared module the staff app no longer has, from step G's frozen copy (the staff app's at W48, byte for byte). */
+const loadOld = (name: string) => import(/* @vite-ignore */ path.join(legacyAdminDir, 'shared', name))
 
 const user = { email: 'jo@example.com' }
 const success = (data: unknown) => ({ data: { ok: true, data, requestId: 'worker-request' } })
@@ -36,6 +39,9 @@ describe('staff app helpers', () => {
   })
 
   describe('inactive staff', () => {
+    // W61: the staff app's own checks (shared/staffAccess, resolveStaffId, pricingStaff) had no caller left and were
+    // deleted; the Worker checks every staff member now. What these tests proved of them still holds of the frozen copy,
+    // and the last one still holds the old words to the Worker's.
     const INACTIVE = 'This staff account is inactive. Ask an admin to reactivate it.'
     const row = (active: boolean | null) => ({
       id: 'staff-1',
@@ -56,9 +62,9 @@ describe('staff app helpers', () => {
     }
 
     const guards = async () => {
-      const access = await load('staffAccess')
-      const ids = await load('resolveStaffId')
-      const pricing = await load('pricingStaff')
+      const access = await loadOld('staffAccess')
+      const ids = await loadOld('resolveStaffId')
+      const pricing = await loadOld('pricingStaff')
       return {
         getStaffAccessRow: access.getStaffAccessRow,
         requireStaffAdmin: access.requireStaffAdmin,
@@ -106,7 +112,7 @@ describe('staff app helpers', () => {
 
     it('getStaffRowAnyStatus still shows the screen an inactive row', async () => {
       stubStaffTable([row(false)])
-      const { getStaffRowAnyStatus } = await load('staffAccess')
+      const { getStaffRowAnyStatus } = await loadOld('staffAccess')
 
       expect(await getStaffRowAnyStatus('jo@example.com')).toMatchObject({ active: false })
     })
@@ -214,7 +220,7 @@ describe('staff app helpers', () => {
     // every charge and reader intent is the Worker's (server/rules/testing/removed-booking-code.test.ts).
 
     it('uses the same wording as the Worker', async () => {
-      const { INACTIVE_STAFF_MESSAGE } = await load('staffAccess')
+      const { INACTIVE_STAFF_MESSAGE } = await loadOld('staffAccess')
       const db = { query: async () => [row(false)] } as unknown as Queryable
       const headers = new Headers({ authorization: 'Bearer key', 'x-staff-email': 'jo@example.com' })
 
@@ -1242,11 +1248,11 @@ describe('staff app helpers', () => {
         expect(source, name).toMatch(/from '\.\/shared\/adminWorker'/)
       }
       // The place cancel's answer takes its booking type from the thin read now, so the three shared event modules
-      // have no caller left (they stay until W61, which removes them).
+      // have no caller left: W61 removed them (removed-admin-code.test.ts).
       const cancel = readFileSync(path.join(appDir, 'backend/paddock/cancelEventPlaces.ts'), 'utf8')
       expect(cancel).toContain("import type { EventAttendeeBooking } from './getEventAttendees'")
       expect(cancel).not.toMatch(/shared\/eventAttendeeList/)
-      for (const leftover of ['eventAttendance', 'eventCheckIn', 'eventAttendeeList']) expect(existsSync(path.join(shared, `${leftover}.ts`)), leftover).toBe(true)
+      for (const leftover of ['eventAttendance', 'eventCheckIn', 'eventAttendeeList']) expect(existsSync(path.join(shared, `${leftover}.ts`)), leftover).toBe(false)
     })
 
     it("W35a's comment on the place cancel is brought up to date (brief item 11): No refund is open to active staff except on an event the club has cancelled", () => {
@@ -2210,7 +2216,7 @@ describe('staff app helpers', () => {
     })
   })
 
-  describe('the nine quote and availability reads', () => {
+  describe('the eight quote and availability reads (W61: validatePromoCode went; no screen had called it since W14a)', () => {
     const customerId = '00000000-0000-4000-8000-000000000001'
     const sessionId = '00000000-0000-4000-8000-000000000002'
     const serviceTypeId = '00000000-0000-4000-8000-000000000003'
@@ -2228,13 +2234,11 @@ describe('staff app helpers', () => {
 
     const seats = { sessionId, customerId, partySize: 2, newMembershipPlanId: serviceTypeId }
     const event = { eventId: sessionId, customerId, places: 2, accountHolderAttending: true, newMembershipFrequency: 'monthly' }
-    const promo = { code: 'TEN', customerId, lines: [{ key: 'seat:0', itemType: 'booking', amount: 20, isMemberPriced: false }] }
     const conflict = { sessionId, serviceTypeId, startTime, endTime }
 
     const reads: Read[] = [
       { name: 'quoteBookingSeats', params: seats, path: '/api/v1/staff/quotes/booking-seats', method: 'POST', body: seats },
       { name: 'quoteEvent', params: event, path: '/api/v1/staff/quotes/event', method: 'POST', body: event },
-      { name: 'validatePromoCode', params: promo, path: '/api/v1/staff/promo-codes/validate', method: 'POST', body: promo },
       {
         name: 'getCustomerCreditOptions',
         params: { customerId },
@@ -2332,9 +2336,8 @@ describe('staff app helpers', () => {
     it('messages returned in a field pass through as answers, not errors', async () => {
       const unpriced = { seats: [], band: null, paidTotal: 0, unpriced: true, error: 'No band is assigned to this session.' }
       const blocked = { blockReason: 'event_members_only', blockMessage: 'This event is for members only.', places: [], total: 0, placesLeft: 4 }
-      const refused = { ok: false, reason: 'not_found', message: 'That promo code does not exist.' }
 
-      for (const [name, answer] of [['quoteBookingSeats', unpriced], ['quoteEvent', blocked], ['validatePromoCode', refused]] as const) {
+      for (const [name, answer] of [['quoteBookingSeats', unpriced], ['quoteEvent', blocked]] as const) {
         rawRequest.mockResolvedValue(success(answer))
         expect(await (await wrapper(name))({ params: {}, user })).toBe(answer)
       }
@@ -3797,8 +3800,8 @@ describe('staff app helpers', () => {
       describe('money owed on the attendee list (Q39)', () => {
         const page = () => readFileSync(path.join(appDir, 'frontend/pages/EventAttendeesPage.tsx'), 'utf8')
 
-        it("the staff app's loader reads the order that paid for each booking and the money still to refund on it, as the Worker's loader does", async () => {
-          const loader = readFileSync(path.join(appDir, 'backend/paddock/shared/eventAttendeeList.ts'), 'utf8')
+        it("the old loader (step G's frozen copy: W61 deleted the staff app's) reads the order that paid for each booking and the money still to refund on it, as the Worker's loader does", async () => {
+          const loader = readFileSync(path.join(legacyAdminDir, 'shared/eventAttendeeList.ts'), 'utf8')
           const worker = readFileSync(path.join(appDir, '..', 'paddock/web/server/rules/events/attendee-list.ts'), 'utf8')
           const read = /paid\.order_id, COALESCE\(paid\.refund_owed_amount, 0\)::numeric\(10,2\)::text AS refund_owed_amount/
           const from = /LEFT JOIN LATERAL \(\s+SELECT o\.id AS order_id, o\.refund_owed_amount\s+FROM order_line_items oli JOIN orders o ON o\.id = oli\.order_id\s+WHERE oli\.event_booking_id = eb\.id AND oli\.item_type = 'event'\s+ORDER BY oli\.created_at, oli\.id LIMIT 1\s+\) paid ON true/
@@ -3806,7 +3809,7 @@ describe('staff app helpers', () => {
             expect(source).toMatch(read)
             expect(source).toMatch(from)
           }
-          // Still read-only (getEventAttendees imports it).
+          // Read-only, as it was.
           expect(loader).not.toMatch(/\b(INSERT|UPDATE|DELETE)\b/)
         })
 

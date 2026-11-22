@@ -162,7 +162,7 @@ describe('W48: the frozen copy of the 82 old step G functions and the seven lega
     }
   })
 
-  it('each route and the price-move helper is its original in the app, byte for byte but for the one repointed import line, while the app still has it (W61 removes them)', () => {
+  it('each route and the price-move helper was its original in the app, byte for byte but for the one repointed import line, while the app had it (W61 removed them: none is left to compare)', () => {
     const routeCopies = copyFiles.filter((one) => !one.startsWith(COPY_CODE + path.sep)).map(inCopy)
     expect(routeCopies).toHaveLength(8)
     let compared = 0
@@ -174,8 +174,8 @@ describe('W48: the frozen copy of the 82 old step G functions and the seven lega
       expect(repointed ? copy.replace(repointed.copy, repointed.original) : copy, name).toBe(readFileSync(original, 'utf8'))
       compared += 1
     }
-    // All eight while the live routes stand; none once W61 has removed them (never some: they go together).
-    expect([0, 8]).toContain(compared)
+    // All eight while the live routes stood; none since W61 removed them together (removed-admin-code.test.ts).
+    expect(compared).toBe(0)
     expect(originalOf('routes/catalog/update-price/route.ts')).toBe('app/api/catalog/update-price/route.ts')
     for (const [name, { copy }] of Object.entries(REPOINTED)) expect(readFileSync(path.join(COPY_DIR, name), 'utf8').split(copy), name).toHaveLength(2)
   })

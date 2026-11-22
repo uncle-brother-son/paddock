@@ -515,7 +515,7 @@ export function stepIsDone(subscription: Pick<Stripe.Subscription, 'cancel_at' |
 
 /**
  * W57: a subscription that has ended can't renew, so a price move for it is moot. As the legacy route
- * (lib/membership-price-migration.ts, ENDED_STATUSES), an `incomplete_expired` one counts as ended too.
+ * (lib/membership-price-migration.ts, ENDED_STATUSES; both removed at W61), an `incomplete_expired` one counts as ended too.
  */
 const hasEnded = (status: string, kind: StepKind): boolean => status === 'canceled' || (kind === 'price' && status === 'incomplete_expired')
 
@@ -574,7 +574,8 @@ export async function trySendStep(stripe: StripeClient, step: Pick<LeftStep, 'id
   if (hasEnded(now.status, step.kind)) return endedAnswer(step)
   if (stepIsDone(now, step)) return { kind: 'done', sent: false, detail: 'Stripe already showed it' }
   // W57: a price move switches the subscription's one item. With none or more than one, the legacy route's own
-  // failure (lib/membership-price-migration.ts): Stripe can't be told which item to move, so it is for a person.
+  // failure (lib/membership-price-migration.ts, removed at W61): Stripe can't be told which item to move, so it is for a
+  // person.
   const items = step.kind === 'price' ? itemsOf(now) : []
   if (step.kind === 'price' && items.length !== 1) return { kind: 'refused', message: PLAN_PRICE_MOVE_WORDS.expectedOneSubscriptionItem(items.length) }
   // W57a (W57 review S1): never across intervals (Stripe would charge at once). Nothing is sent.

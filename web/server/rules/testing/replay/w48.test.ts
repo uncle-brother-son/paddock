@@ -13,7 +13,8 @@ import { W48_GROUPS, W48_PREFIX, w48Scenarios } from './w48-scenarios'
 import { WHAT_EACH_PROVES } from './w48-what-each-proves'
 
 // Brief W48 item 4 (G-plan 4.9 items 1 and 2, lead call L5): step G's golden files, recorded from the staff app's 82
-// old functions and the seven legacy /api/catalog routes while they still exist, and replayed here against the frozen
+// old functions and the seven legacy /api/catalog routes while they still existed (W61 removed them), and replayed
+// here against the frozen
 // copy of them (legacy-admin/): each gives the same recording every time and matches its golden file. This file also
 // says, in plain lines, what each scenario's steps do on the old code (w48-what-each-proves.ts), so a scenario that
 // stopped reaching the branch it is named for fails here; that the list covers every function, every reason and every

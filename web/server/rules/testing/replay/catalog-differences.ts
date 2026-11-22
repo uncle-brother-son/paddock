@@ -54,6 +54,7 @@ export const W55_W56_DECISIONS = {
   NO_ANSWER: 'Briefs W49 + W54 "Where I was unsure" 5, as every step G slice: a failed write is no answer to the staff app, and nothing is saved',
   PASS_LEVEL_STAFF: 'Bug GB14 / G-plan 4.2 (every route checks the staff member first); the old setSessionPassLevel read the permission itself',
   NEW_GROUP_OVERLAP: 'W55 + W56 review S2; brief W55a item 4 (a new size group is checked for an overlap as the range edit is; the same range only fills a band that lacks it)',
+  W61: "Brief W61 (the lead's call on part 1's Noticed 1): the old words sent staff to a legacy catalogue route, and W61 removed those routes",
 } as const
 const D = W55_W56_DECISIONS
 
@@ -344,6 +345,7 @@ const NAMED: Readonly<Record<string, Named>> = {
         ['.tables.products', changed([{ id: ID.candle, base_price: ['20.00', '14.00'] }])],
       ]
     ),
+    pinned(`W61: a base price on a private service type is refused in words that name no route ("${NEW.privateServiceTypeUsesTiers}"). (The legacy route's words named the tier price route W61 removed.)`, D.W61, [['.results[9].thrown', NEW.privateServiceTypeUsesTiers]]),
   ],
   'w48-price-a-field-the-item-does-not-have': () => [
     pinned(`A price field the item's kind doesn't have is refused in words ("${NEW.fieldNotOnThisItem('monthlyPrice', 'a product')}"), before anything is read. (The legacy route failed: "Failed to update item".)`, D.WORDS, [['.results[0].thrown', NEW.fieldNotOnThisItem('monthlyPrice', 'a product')]]),

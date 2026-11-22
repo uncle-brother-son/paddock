@@ -130,6 +130,7 @@ export const LEGACY_CATALOG_ROUTE_WORDS = {
   'update-price': {
     itemNotFound: 'Item not found',
     itemHasNoStripeProductSync: 'Item has no Stripe product. Sync from Sanity first.',
+    /** The old sentence, kept for the words test. Since W61 the Worker answers CATALOG_ITEM_NEW_WORDS.privateServiceTypeUsesTiers. */
     privateServiceTypesUsePriceTiers: 'Private service types use price tiers. Use /api/catalog/update-tier-price instead.',
     failedUpdateItem: 'Failed to update item',
   },
@@ -167,7 +168,7 @@ export const LEGACY_CATALOG_ROUTE_WORDS = {
   },
 } as const
 
-/** The price move's own failure for one member (lib/membership-price-migration.ts), which the legacy route lists and the plan function drops (GB1). */
+/** The price move's own failure for one member (lib/membership-price-migration.ts, removed at W61), which the legacy route listed and the plan function drops (GB1). */
 export const PLAN_PRICE_MOVE_WORDS = {
   expectedOneSubscriptionItem: (first: unknown): string => `Expected one subscription item, found ${String(first)}.`,
 } as const

@@ -25,7 +25,7 @@ const ROUTES: Record<string, () => Promise<unknown>> = {
   '/api/memberships/undo-cancel': () => import('../legacy-account/routes/memberships/undo-cancel/route'),
   '/api/memberships/change-payment-date': () => import('../legacy-account/routes/memberships/change-payment-date/route'),
   // W48: the seven legacy catalogue routes the old step G functions call, from the frozen copy (legacy-admin/README.md),
-  // so step G's golden files keep replaying when W61 deletes the live ones from app/api/catalog.
+  // so step G's golden files keep replaying now that W61 has deleted the live ones from app/api/catalog.
   '/api/catalog/toggle-active': () => import('../legacy-admin/routes/catalog/toggle-active/route'),
   '/api/catalog/update-price': () => import('../legacy-admin/routes/catalog/update-price/route'),
   '/api/catalog/update-tier-price': () => import('../legacy-admin/routes/catalog/update-tier-price/route'),

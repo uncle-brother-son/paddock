@@ -5,7 +5,7 @@ import { fixtures, insert, startTestDatabase, type TestDatabase } from '@/server
 import { stepBRoutes } from '@/server/rules/testing/routes'
 import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
 
-// The staff app's nine functions against the real Worker routes, on one database: what a screen
+// The staff app's eight functions against the real Worker routes, on one database: what a screen
 // gets, end to end. staff-app-helpers.test.ts checks each wrapper against a fake rawRequest; this
 // file sends the same calls through the real route, so it also proves the route reads each query
 // and body the way the wrapper sends it.
@@ -13,6 +13,9 @@ import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
 // Until W02b this compared the old Retool code with the routes through shadowCompare. That old code
 // is gone, so there is nothing left to compare: every input below is kept as a check that the
 // wrapper returns exactly what the route answered, and that the route's output matches its contract.
+//
+// W61: validatePromoCode, the ninth, went from the staff app (no screen had called it since W14a). Its route stays and
+// is tested in server/rules/routes.test.ts and server/rules/promo/promo.test.ts.
 
 const KEY = 'test-staff-api-key'
 const functions = path.join(staffAppDir(), 'backend/paddock')
@@ -134,26 +137,6 @@ describe('the staff app wrappers through the real routes', () => {
     }
   })
 
-  it('validatePromoCode', async () => {
-    const lines = [
-      { key: 'seat:0', itemType: 'booking', amount: 20, isMemberPriced: true },
-      { key: 'seat:1', itemType: 'booking', amount: 20, isMemberPriced: false },
-      { key: 'addon:0', itemType: 'addon', amount: 9.99, isMemberPriced: false },
-    ]
-    const codes = [
-      await fixtures.promo(t.db, { code: 'PCT-10', discount_type: 'percentage', discount_value: '10' }),
-      await fixtures.promo(t.db, { code: 'FIX-7', discount_type: 'fixed', discount_value: '7', applies_on_member_prices: true }),
-      await fixtures.promo(t.db, { code: 'OLD-1', expires_on: '2020-01-01' }),
-      await fixtures.promo(t.db, { code: 'MIN-1', min_spend: '1000' }),
-      await fixtures.promo(t.db, { code: 'OFF-1', active: false }),
-    ]
-    expect(codes).toHaveLength(5)
-    for (const code of ['PCT-10', 'fix-7', 'OLD-1', 'MIN-1', 'OFF-1', 'NOPE']) {
-      await same('validatePromoCode', { code, customerId: customer, lines })
-    }
-    await same('validatePromoCode', { code: 'PCT-10', customerId: customer, lines: [] })
-  })
-
   it('getCustomerCreditOptions', async () => {
     await same('getCustomerCreditOptions', { customerId: customer })
     await same('getCustomerCreditOptions', { customerId: member })
@@ -257,12 +240,6 @@ describe('the staff app wrappers through the real routes', () => {
     const membersOnly = await fixtures.event(t.db, { access: 'members_only' })
     const event = (await same('quoteEvent', { eventId: membersOnly, customerId: customer, places: 1, accountHolderAttending: true })) as { blockReason: string }
     expect(event.blockReason).toBe('event_members_only')
-
-    expect(await same('validatePromoCode', { code: 'NOPE', customerId: customer, lines: [] })).toEqual({
-      ok: false,
-      reason: 'not_found',
-      message: 'That promo code does not exist.',
-    })
   })
 
   it('the screen gets exactly what the Worker sent', async () => {
@@ -306,10 +283,9 @@ describe('the staff app wrappers through the real routes', () => {
   })
 
   describe('who is refused', () => {
-    const allNine: Array<[string, unknown]> = [
+    const allEight: Array<[string, unknown]> = [
       ['quoteBookingSeats', () => ({ sessionId: session, customerId: customer, partySize: 1 })],
       ['quoteEvent', () => ({ eventId: session, customerId: customer, places: 1, accountHolderAttending: true })],
-      ['validatePromoCode', () => ({ code: 'NOPE', customerId: customer, lines: [] })],
       ['getCustomerCreditOptions', () => ({ customerId: customer })],
       ['getAvailableSessions', () => ({ date: '2030-06-15' })],
       ['checkCustomerDayConflict', () => ({ customerId: customer, sessionId: session })],
@@ -321,7 +297,7 @@ describe('the staff app wrappers through the real routes', () => {
       ['getPostageSettings', () => undefined],
     ]
 
-    it.each(allNine)('%s: no staff row', async (name, params) => {
+    it.each(allEight)('%s: no staff row', async (name, params) => {
       const fn = await load(name)
       const email = 'nobody@example.com'
 
@@ -330,7 +306,7 @@ describe('the staff app wrappers through the real routes', () => {
       )
     })
 
-    it.each(allNine)('%s: inactive staff', async (name, params) => {
+    it.each(allEight)('%s: inactive staff', async (name, params) => {
       const email = 'gone@example.com'
       await t.db.query('DELETE FROM staff WHERE email = $1', [email])
       await insert(t.db, 'staff', { first_name: 'C', last_name: 'D', email, role: 'staff', can_issue_refunds: false, can_manage_pricing: false, active: false })

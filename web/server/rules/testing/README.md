@@ -407,7 +407,8 @@ subscription refuses any of them.
 function that was not a thin call when step G began: the staff list, the catalogue, pricing, promo codes, sessions
 and the timetable, the booking and order screens' reads and flags, event check-in) and the 17 modules they import,
 byte for byte at staff app `7a4aede`, and the seven legacy `/api/catalog` routes they call with
-`lib/membership-price-migration.ts`, copied from the app at Worker `a88c8c8` while they are still live there.
+`lib/membership-price-migration.ts`, copied from the app at Worker `a88c8c8`. W61 removed the live routes and the
+helper from the app, so this copy is the only one left.
 `oldFunctionPath` loads the 82 from it (`LEGACY_ADMIN_ACTIONS`), `legacy-routes.ts` binds the seven routes to it, and
 `frozen-admin-code.test.ts` keeps it as frozen and out of reach of app code. From W48 no old function is loaded from
 the staff app's own checkout: only its thin wrappers are.

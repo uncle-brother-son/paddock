@@ -63,7 +63,7 @@ const REMOVED_WORKER_NAMES = [
 
 /** The staff app's three files W44 deleted. */
 const DELETED_STAFF_APP = ['frontend/components/StarterCanvas.tsx', 'frontend/components/ChangeSessionServiceTypeDialog.tsx', 'frontend/notes/store-credit-changes.md']
-/** The fifteen exports W44 took out of six shared modules that stay (inventory D1 to D6). */
+/** The fifteen exports W44 took out of six shared modules that stayed (inventory D1 to D6) until W61 deleted them whole. */
 const REMOVED_STAFF_EXPORTS: Record<string, string[]> = {
   'shared/staffAccess.ts': ['requireCanIssueRefunds'],
   'shared/promoCodes.ts': ['applyPromoCode', 'spreadFixedDiscount', 'PROMO_FAILURE_MESSAGES', 'PromoUsageCounts'],
@@ -205,30 +205,16 @@ describe('W44: nothing still needs what was removed', () => {
     expect(literals(bindings).filter((literal) => literal.startsWith('@/app/api/memberships'))).toEqual([])
   })
 
-  it('the staff app uses none of the removed names, and each trimmed module is still there without them', () => {
+  it('the staff app uses none of the removed names, and each trimmed module has since gone whole (W61)', () => {
     const found: string[] = []
     for (const [file, text] of staffAppCode) {
       for (const name of REMOVED_STAFF_NAMES) if (new RegExp(`\\b${name}\\b`).test(text)) found.push(`${shown(file)}: ${name}`)
     }
     expect(found).toEqual([])
     expect(REMOVED_STAFF_NAMES).toHaveLength(17)
-    for (const file of Object.keys(REMOVED_STAFF_EXPORTS)) expect(existsSync(path.join(appDir, 'backend/paddock', file)), file).toBe(true)
-    // What stays in them is still exported (the inventory's "stay" list).
-    const exported = (file: string, name: string) => new RegExp(`export (async )?(function|const|interface|type) ${name}\\b`).test(read(path.join(appDir, 'backend/paddock', file)))
-    for (const [file, name] of [
-      ['shared/staffAccess.ts', 'getStaffAccessRow'],
-      ['shared/staffAccess.ts', 'requireStaffAdmin'],
-      ['shared/promoCodes.ts', 'validatePromoCodeFields'],
-      ['shared/promoCodes.ts', 'normalizePromoCodeText'],
-      ['shared/guestValidation.ts', 'GuestInput'],
-      ['shared/readerPaymentOpen.ts', 'NO_READER_PAYMENT_OPEN'],
-      ['shared/readerPaymentOpen.ts', 'READER_PAYMENT_OPEN_MESSAGE'],
-      ['shared/londonTime.ts', 'londonToday'],
-      ['shared/londonTime.ts', 'londonWallClockToUtc'],
-      ['shared/eventAttendance.ts', 'ATTENDEE_STATE_COLUMNS_SQL'],
-    ] as const) {
-      expect(exported(file, name), `${file}: ${name}`).toBe(true)
-    }
+    // W61 (Wayne's yes, 22 Nov 2026): what W44 left in the six had no caller either, so each was deleted whole
+    // (removed-admin-code.test.ts).
+    for (const file of Object.keys(REMOVED_STAFF_EXPORTS)) expect(existsSync(path.join(appDir, 'backend/paddock', file)), file).toBe(false)
   })
 
   it('the test itself would catch one (each check finds a planted use)', () => {

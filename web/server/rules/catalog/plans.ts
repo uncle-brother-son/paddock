@@ -3,7 +3,8 @@
 // old functions as frozen at W48 (testing/legacy-admin: getMembershipPlans, createMembershipPlan,
 // setMembershipPlanActive, setMembershipPlanDetails, getMembershipSettings, setMembershipSettings, and
 // updateCatalogItemPrice's plan branch), with their words (failure-messages.ts) and the legacy routes' (sync-stripe,
-// update-price, toggle-active; lib/membership-price-migration.ts). Their Stripe side is plan-stripe.ts.
+// update-price, toggle-active; lib/membership-price-migration.ts; all removed from the app at W61). Their Stripe side
+// is plan-stripe.ts.
 //
 // Level A (G-plan 4.2): making a plan, its price, and on and off sale. Each is gated by `plan_changes` at its route
 // (plan-switch.ts), before anything is read; reconcile still finishes what is held or left.

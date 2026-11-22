@@ -84,7 +84,7 @@ describe("step G's side of the replay: the catalogue (W55 + W56)", () => {
     expect([...REFUSED_NOW].every((name) => W55_W56_DIFFERING.includes(name))).toBe(true)
     // GB9 is kept by Wayne's decision (Q52): its recording matches exactly.
     expect(named('w48-gb9-a-level-change-reaches-passes-already-sold')).toEqual([])
-    expect(Object.keys(W55_W56_DECISIONS).sort()).toEqual(['GB10', 'GB12', 'GB13', 'GB2', 'GB21', 'GB23', 'L2', 'NEW_GROUP_OVERLAP', 'NO_ANSWER', 'PASS_LEVEL_STAFF', 'WORDS'])
+    expect(Object.keys(W55_W56_DECISIONS).sort()).toEqual(['GB10', 'GB12', 'GB13', 'GB2', 'GB21', 'GB23', 'L2', 'NEW_GROUP_OVERLAP', 'NO_ANSWER', 'PASS_LEVEL_STAFF', 'W61', 'WORDS'])
     expect([W55_ACTIONS.size, W56_ACTIONS.size]).toEqual([11, 18])
   })
 

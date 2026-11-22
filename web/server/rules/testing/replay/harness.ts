@@ -92,7 +92,8 @@ export const legacyAccountDir = path.join(__dirname, '../legacy-account/backend/
  * W48 (G-plan 4.9 items 1 and 2, lead call L5): step G moves the staff app's last 82 functions that are not a thin
  * call (the staff list, the catalogue, pricing, promo codes, sessions and the timetable, the booking and order
  * screens' reads and flags, event check-in) to the Worker slice by slice, and each slice deletes that function's old
- * body. Its golden files were recorded through them and through the seven legacy /api/catalog routes, so those 82
+ * body. Its golden files were recorded through them and through the seven legacy /api/catalog routes (removed from
+ * the app at W61), so those 82
  * functions and every module they import run from a fifth frozen test-only copy (legacy-admin/README.md), which also
  * holds the seven routes (bound in legacy-routes.ts). The recorded side and setup only; it goes at step H. From here
  * on no old function is loaded from the staff app's own checkout: only its thin wrappers are.
