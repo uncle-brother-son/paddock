@@ -5613,4 +5613,193 @@ describe('staff app helpers', () => {
       }
     })
   })
+
+  describe('W62a: the step G audit fixes on the screens (S1, S2)', () => {
+    const component = (name: string) => readFileSync(path.join(appDir, 'frontend/components', name), 'utf8')
+    const page = (name: string) => readFileSync(path.join(appDir, 'frontend/pages', name), 'utf8')
+    type MembershipLabel = (
+      m: { subscription_status: string | null; cancel_effective_date: string | null; refunded?: boolean },
+      today?: string
+    ) => string
+    const membershipLabel = async () =>
+      ((await import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/membershipStatus.ts'))) as { membershipDisplayStatus: MembershipLabel })
+        .membershipDisplayStatus
+
+    it('S1: a membership reads "Cancelling" only while it is active and its last day is today or later (London); otherwise its stored status, or "Refunded"', async () => {
+      const label = await membershipLabel()
+      const today = '2026-11-22'
+      // Active and the last day still to come, or today (the last day is a day of access).
+      expect(label({ subscription_status: 'active', cancel_effective_date: '2026-12-21' }, today)).toBe('cancelling')
+      expect(label({ subscription_status: 'active', cancel_effective_date: '2026-11-22' }, today)).toBe('cancelling')
+      // Active and the last day passed (Stripe's cancel not landed yet): not "Cancelling".
+      expect(label({ subscription_status: 'active', cancel_effective_date: '2026-11-21' }, today)).toBe('active')
+      // Cancelled with a last day (the two W57 Test memberships, ended 21 Nov), whatever the date.
+      expect(label({ subscription_status: 'cancelled', cancel_effective_date: '2026-11-21' }, today)).toBe('cancelled')
+      expect(label({ subscription_status: 'cancelled', cancel_effective_date: '2026-12-21' }, today)).toBe('cancelled')
+      // A failing member with a last day reads as overdue (the badge's "Payment overdue").
+      expect(label({ subscription_status: 'past_due', cancel_effective_date: '2026-12-21' }, today)).toBe('past_due')
+      expect(label({ subscription_status: 'past_due', cancel_effective_date: '2026-11-21' }, today)).toBe('past_due')
+      // Refunded (W40): a cancelled one whose line was refunded, with or without a last day.
+      expect(label({ subscription_status: 'cancelled', cancel_effective_date: '2026-11-21', refunded: true }, today)).toBe('refunded')
+      expect(label({ subscription_status: 'canceled', cancel_effective_date: null, refunded: true }, today)).toBe('refunded')
+      // No last day: the stored status.
+      expect(label({ subscription_status: 'active', cancel_effective_date: null }, today)).toBe('active')
+      expect(label({ subscription_status: null, cancel_effective_date: null }, today)).toBe('')
+      // Left out, today is London's today.
+      expect(label({ subscription_status: 'active', cancel_effective_date: '2999-01-01' })).toBe('cancelling')
+      expect(label({ subscription_status: 'active', cancel_effective_date: '2000-01-01' })).toBe('active')
+    })
+
+    it('S1: the customer profile and the Subscriptions page both use that one rule; Subscriptions keeps an ended membership\'s last day as plain text', () => {
+      expect(component('StatusBadge.tsx')).not.toContain('function membershipStatus')
+      const customers = page('CustomersPage.tsx')
+      // W63 adds membershipIsLive to the same import.
+      expect(customers).toMatch(/import \{[^}]*\bmembershipDisplayStatus\b[^}]*\} from '\.\.\/utils\/membershipStatus'/)
+      expect(customers).not.toContain('function displayStatus')
+      expect(customers).toContain('<SubscriptionStatusBadge status={membershipDisplayStatus(m)} />')
+      expect(customers).toContain("{m.cancel_effective_date && membershipDisplayStatus(m) === 'cancelling' ? (")
+      const subscriptions = page('SubscriptionsPage.tsx')
+      expect(subscriptions).toMatch(/import \{[^}]*\bmembershipDisplayStatus\b[^}]*\} from '\.\.\/utils\/membershipStatus'/)
+      expect(subscriptions).toContain('const status = membershipDisplayStatus(sub)')
+      expect(subscriptions).toMatch(
+        /\{status === 'cancelling' && sub\.cancel_effective_date \? \(\s+<Badge variant="warning">Cancelling, last day \{formatDate\(sub\.cancel_effective_date\)\}<\/Badge>\s+\) : \(\s+<>\s+<SubscriptionStatusBadge status=\{status\} \/>\s+\{sub\.cancel_effective_date && status !== 'refunded' \? \(\s+<div className="text-xs text-muted-foreground mt-0\.5">last day \{formatDate\(sub\.cancel_effective_date\)\}<\/div>/
+      )
+      // The old test (a last day alone made "Cancelling") is gone; the badge appears once.
+      expect(subscriptions).not.toMatch(/: sub\.cancel_effective_date \? \(/)
+      expect(subscriptions.match(/>Cancelling, last day \{/g)).toHaveLength(1)
+    })
+
+    it.each([
+      'EditProductDialog.tsx',
+      'EditAddonDialog.tsx',
+      'EditServiceTypeDialog.tsx',
+      'EditServiceTypeTierDialog.tsx',
+      'EditSessionPassTypeDialog.tsx',
+      'EditGiftCardTypeDialog.tsx',
+      'EditSessionStartTimeDialog.tsx',
+      'BlockDayDialog.tsx',
+      'BlockSessionDialog.tsx',
+      'UnblockDayDialog.tsx',
+      'ChangeSessionBandDialog.tsx',
+      'AcceptWaiverDialog.tsx',
+    ])('S2 (G-plan 4.10): %s cannot be closed while its press runs', (file) => {
+      const dialog = component(file)
+      // The one dialog in the file hands its open changes to a named handler...
+      const roots = [...dialog.matchAll(/<Dialog open=\{open\} onOpenChange=\{(\w+)\}>/g)]
+      expect(roots).toHaveLength(1)
+      const handler = roots[0]?.[1] ?? ''
+      expect(['closeDialog', 'handleOpenChange']).toContain(handler)
+      // ...whose first statement refuses a close while the press runs.
+      expect(dialog).toMatch(new RegExp(`function ${handler}\\(next: boolean\\) \\{\\s+(?:\\/\\/[^\\n]*\\s+)*if \\(!next && submitting\\) return\\n`))
+      // `submitting` is the press's own state, set for the press and cleared after it.
+      expect(dialog).toContain('const [submitting, setSubmitting] = useState(false)')
+      expect(dialog).toContain('setSubmitting(true)')
+      expect(dialog).toContain('setSubmitting(false)')
+    })
+
+    it("S2: the band dialog wraps its parent's onOpenChange; the session dialogs still close themselves when the press succeeds", () => {
+      expect(component('ChangeSessionBandDialog.tsx')).toMatch(/function handleOpenChange\(next: boolean\) \{\s+if \(!next && submitting\) return\s+onOpenChange\(next\)\s+\}/)
+      for (const file of ['BlockDayDialog.tsx', 'BlockSessionDialog.tsx', 'UnblockDayDialog.tsx']) {
+        expect(component(file)).toMatch(/function handleOpenChange\(next: boolean\) \{\s+if \(!next && submitting\) return\s+if \(next\) setOpen\(true\)\s+else resetAndClose\(\)\s+\}/)
+        // The guard is on the dialog's own close only: the press's success path calls resetAndClose, which closes.
+        expect(component(file)).toMatch(/function resetAndClose\(\) \{\s+setOpen\(false\)/)
+      }
+      expect(component('EditSessionStartTimeDialog.tsx')).toMatch(/function handleOpenChange\(next: boolean\) \{\s+if \(!next && submitting\) return\s+if \(next\) onOpenChange\(true\)\s+else resetAndClose\(\)\s+\}/)
+      expect(component('EditSessionStartTimeDialog.tsx')).toMatch(/function resetAndClose\(\) \{\s+onOpenChange\(false\)/)
+    })
+  })
+
+  describe('W63 (H-plan L-H5) + W63 fix: an ended membership shows "—" for its renewal and credits; Change payment date only when Active or Cancelling', () => {
+    const page = (name: string) => readFileSync(path.join(appDir, 'frontend/pages', name), 'utf8')
+    const DASH = '<span className="text-xs text-muted-foreground">—</span>'
+    const IMPORT = "import { membershipDisplayStatus, membershipIsLive, membershipOffersPaymentDateChange } from '../utils/membershipStatus'"
+    type Rules = {
+      membershipDisplayStatus: (m: { subscription_status: string | null; cancel_effective_date: string | null; refunded?: boolean }, today?: string) => string
+      membershipIsLive: (displayStatus: string) => boolean
+      membershipOffersPaymentDateChange: (displayStatus: string) => boolean
+    }
+    const rules = async () => (await import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/membershipStatus.ts'))) as Rules
+    type Row = { subscription_status: string | null; cancel_effective_date: string | null; refunded?: boolean }
+
+    it('figures: an "Active", "Cancelling" or "Payment overdue" membership is live (Wayne, 22 Nov: overdue keeps its figures); cancelled, refunded and anything else are not', async () => {
+      const { membershipDisplayStatus, membershipIsLive } = await rules()
+      const today = '2026-11-22'
+      const live = (m: Row) => membershipIsLive(membershipDisplayStatus(m, today))
+      expect(live({ subscription_status: 'active', cancel_effective_date: null })).toBe(true)
+      expect(live({ subscription_status: 'active', cancel_effective_date: '2026-12-21' })).toBe(true) // Cancelling
+      expect(live({ subscription_status: 'active', cancel_effective_date: '2026-11-22' })).toBe(true) // its last day, today
+      // Active past its last day before Stripe's cancel lands: W62a's rule reads it "Active", so its figures stay.
+      expect(live({ subscription_status: 'active', cancel_effective_date: '2026-11-21' })).toBe(true)
+      // Payment overdue keeps its figures, with or without a last day.
+      expect(live({ subscription_status: 'past_due', cancel_effective_date: null })).toBe(true)
+      expect(live({ subscription_status: 'past_due', cancel_effective_date: '2026-11-21' })).toBe(true)
+      // The two W57 Test memberships (cancelled, last day 21 Nov), refunded ones, an empty status.
+      expect(live({ subscription_status: 'cancelled', cancel_effective_date: '2026-11-21' })).toBe(false)
+      expect(live({ subscription_status: 'canceled', cancel_effective_date: null })).toBe(false)
+      expect(live({ subscription_status: 'cancelled', cancel_effective_date: '2026-11-21', refunded: true })).toBe(false)
+      expect(live({ subscription_status: null, cancel_effective_date: null })).toBe(false)
+      for (const status of ['active', 'cancelling', 'past_due']) expect(membershipIsLive(status), status).toBe(true)
+      for (const status of ['cancelled', 'canceled', 'refunded', 'lapsed', 'pending', '']) expect(membershipIsLive(status), status).toBe(false)
+    })
+
+    it('Change payment date: only "Active" or "Cancelling"; never "Payment overdue" (the Worker refuses it) nor an ended one', async () => {
+      const { membershipDisplayStatus, membershipOffersPaymentDateChange } = await rules()
+      const today = '2026-11-22'
+      const offered = (m: Row) => membershipOffersPaymentDateChange(membershipDisplayStatus(m, today))
+      expect(offered({ subscription_status: 'active', cancel_effective_date: null })).toBe(true)
+      expect(offered({ subscription_status: 'active', cancel_effective_date: '2026-12-21' })).toBe(true)
+      expect(offered({ subscription_status: 'past_due', cancel_effective_date: null })).toBe(false)
+      expect(offered({ subscription_status: 'cancelled', cancel_effective_date: '2026-11-21' })).toBe(false)
+      expect(offered({ subscription_status: 'cancelled', cancel_effective_date: '2026-11-21', refunded: true })).toBe(false)
+      for (const status of ['active', 'cancelling']) expect(membershipOffersPaymentDateChange(status), status).toBe(true)
+      for (const status of ['past_due', 'cancelled', 'canceled', 'refunded', 'lapsed', 'pending', '']) {
+        expect(membershipOffersPaymentDateChange(status), status).toBe(false)
+      }
+    })
+
+    it('Subscriptions: next renewal, session credits and add-on credits show "—" unless live; Change payment date only when offered; the last day stays', () => {
+      const source = page('SubscriptionsPage.tsx')
+      expect(source).toContain(IMPORT)
+      expect(source).toMatch(/const status = membershipDisplayStatus\(sub\)\n(?:\s+\/\/[^\n]*\n)*\s+const live = membershipIsLive\(status\)\n/)
+      // Next renewal (with its "Payment date changed on" line) only when live.
+      expect(source).toMatch(
+        /<TableCell>\s+\{live \? \(\s+<>\s+\{formatDate\(sub\.next_renewal_date\)\}\s+\{sub\.payment_date_changed_at \? \([\s\S]{0,400}?<\/>\s+\) : \(\s+<span className="text-xs text-muted-foreground">—<\/span>\s+\)\}\s+<\/TableCell>/
+      )
+      // Session credits.
+      expect(source).toMatch(/\{live \? \(\s+membershipCreditText\(\{[\s\S]{0,300}?\}, sub\.subscription_status\)\s+\) : \(\s+<span className="text-xs text-muted-foreground">—<\/span>\s+\)\}/)
+      // Add-on credits.
+      expect(source).toContain(`{live ? sub.addon_credits_remaining : ${DASH}}`)
+      // Change payment date: its own rule, not `live` (a "Payment overdue" row is live but has no button).
+      expect(source).toContain("{membershipOffersPaymentDateChange(status) && sub.billing_frequency === 'monthly' ? (\n                    <ChangePaymentDateDialog")
+      expect(source.match(/<ChangePaymentDateDialog /g)).toHaveLength(1)
+      // Each figure appears once, behind the rule.
+      expect(source.match(/formatDate\(sub\.next_renewal_date\)/g)).toHaveLength(1)
+      expect(source.match(/membershipCreditText\(\{/g)).toHaveLength(1)
+      expect(source.match(/sub\.addon_credits_remaining/g)).toHaveLength(1)
+      // The last day is untouched (W62a's pin holds the badge and the plain line).
+      expect(source).toContain('last day {formatDate(sub.cancel_effective_date)}</div>')
+    })
+
+    it('Customer profile: the same rule on its memberships table', () => {
+      const source = page('CustomersPage.tsx')
+      expect(source).toContain(IMPORT)
+      expect(source).toMatch(
+        /\{detail\.memberships\.map\(\(m\) => \{\n(?:\s+\/\/[^\n]*\n)*\s+const status = membershipDisplayStatus\(m\)\n\s+const live = membershipIsLive\(status\)\n\s+return \(/
+      )
+      expect(source).toMatch(/\{live \? \(\s+membershipCreditText\(\{[\s\S]{0,300}?\}, m\.subscription_status\)\s+\) : \(\s+<span className="text-xs text-muted-foreground">—<\/span>\s+\)\}/)
+      expect(source).toMatch(
+        /\{live \? \(\s+<>\s+\{m\.addon_credits_remaining\}\s+\{m\.bonus_addon_credits \? \([\s\S]{0,400}?<\/>\s+\) : \(\s+<span className="text-xs text-muted-foreground">—<\/span>\s+\)\}/
+      )
+      expect(source).toMatch(
+        /\{live \? \(\s+<>\s+\{formatDate\(m\.next_renewal_date\)\}\s+\{m\.payment_date_changed_at \? \([\s\S]{0,400}?<\/>\s+\) : \(\s+<span className="text-xs text-muted-foreground">—<\/span>\s+\)\}/
+      )
+      expect(source).toContain("{membershipOffersPaymentDateChange(status) && m.billing_frequency === 'monthly' ? (\n                        <ChangePaymentDateDialog")
+      // Retry payment on an overdue membership is unchanged (W47r).
+      expect(source).toContain("{m.subscription_status === 'past_due' ? (\n                        <RetryPaymentDialog")
+      expect(source.match(/<ChangePaymentDateDialog /g)).toHaveLength(1)
+      expect(source.match(/formatDate\(m\.next_renewal_date\)/g)).toHaveLength(1)
+      expect(source.match(/membershipCreditText\(\{/g)).toHaveLength(1)
+      expect(source.match(/\{m\.addon_credits_remaining\}/g)).toHaveLength(1)
+    })
+  })
 })
