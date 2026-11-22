@@ -638,7 +638,7 @@ export class FakeStripe implements StripeClient {
 
   /**
    * W13b: a charge Stripe has authorised but not yet captured (`requires_capture`): nothing taken yet, and it
-   * can still be cancelled, or succeed (completeReaderPayment, which works for any intent).
+   * can still be cancelled, or succeed (completeReaderPayment, which works for any intent not cancelled).
    */
   markRequiresCapture(id: string): void {
     const intent = this.intents.get(id)
@@ -679,6 +679,11 @@ export class FakeStripe implements StripeClient {
   ): void {
     const intent = this.intents.get(id)
     if (!intent) throw new Error(`The fake has no PaymentIntent ${id}.`)
+    // W65a (W35 audit row 3, W28 "Noticed" 1): as Stripe, a cancelled PaymentIntent can't be confirmed or captured: a
+    // tap on it takes nothing. Until W65a the fake let any intent succeed here.
+    if (intent.status === 'canceled') {
+      throw fakeStripeErrors.invalid('payment_intent_unexpected_state', "This PaymentIntent's status is canceled: a cancelled PaymentIntent can't be confirmed or captured.")
+    }
     intent.status = 'succeeded'
     if (options.amount !== undefined) intent.amount = options.amount
     intent.amount_received = intent.amount

@@ -10,6 +10,11 @@
       "paymentMethodUsed": "card"
     },
     {
+      "added": false,
+      "reason": "card_payment_open",
+      "message": "A card payment on this booking is still being checked. Don't take payment again: use Resolve now on the Orders page after 15 minutes."
+    },
+    {
       "added": true,
       "limitReached": false,
       "guest": {
@@ -100,6 +105,29 @@
           "request_hash": "<sha-256>",
           "status": "done",
           "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "add_guest",
+                "reason": "card_payment_open",
+                "message": "A card payment on this booking is still being checked. Don't take payment again: use Resolve now on the Orders page after 15 minutes."
+              },
+              "message": "A card payment on this booking is still being checked. Don't take payment again: use Resolve now on the Orders page after 15 minutes."
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/bookings/bookings#1/guests",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
             "ok": true,
             "data": {
               "added": true,
@@ -114,7 +142,7 @@
               "addonLineIds": [],
               "limitReached": false
             },
-            "requestId": "gone#4"
+            "requestId": "gone#6"
           },
           "http_status": 200,
           "created_at": "<set>"
@@ -181,7 +209,7 @@
           "action": "booking.guest_add",
           "entity_type": "booking",
           "entity_id": "bookings#1",
-          "request_id": "gone#4",
+          "request_id": "gone#6",
           "details": {
             "method": "card",
             "guestId": "booking_guests#3",
@@ -204,7 +232,7 @@
           "action": "reader_payment.finalise",
           "entity_type": "reader_payment",
           "entity_id": "pending_reader_payments#1",
-          "request_id": "gone#4",
+          "request_id": "gone#6",
           "details": {
             "flow": "add_guest",
             "orderId": "orders#2",
@@ -451,7 +479,7 @@
             "channel": "staff",
             "livemode": false,
             "booking_id": "bookings#1",
-            "request_id": "gone#4",
+            "request_id": "gone#6",
             "session_id": "10000000-0000-4000-8000-000000000004",
             "customer_id": "10000000-0000-4000-8000-000000000005",
             "description": "Additional guest added to booking bookings#1",

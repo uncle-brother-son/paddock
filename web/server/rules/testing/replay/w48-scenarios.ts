@@ -53,7 +53,6 @@ export const W48_ID = {
 
 type Prepare = (db: Db, stripe: FakeStripe) => Promise<void>
 type Steps = (context: ScenarioContext) => Promise<void>
-type Query = (statement: string, params?: unknown[]) => Promise<unknown>
 
 /** One step G scenario: the common seed, then what it prepares, then its steps. */
 const g = (name: string, steps: Steps, ...prepares: Prepare[]): Scenario => ({
@@ -109,47 +108,9 @@ const each =
     for (const params of tries) await attempt(action, params)
   }
 
-/** Runs `gap` once, straight after the first statement matching `matches` has answered: what another tab does in between. */
-async function onceAfter<T>(matches: (statement: string) => boolean, gap: () => Promise<unknown>, steps: () => Promise<T>): Promise<T> {
-  const real = (globalThis as unknown as { paddockData: { query: Query } }).paddockData
-  let done = false
-  vi.stubGlobal('paddockData', {
-    async query(statement: string, params: unknown[] = []) {
-      const answer = await real.query(statement, params)
-      if (!done && matches(statement)) {
-        done = true
-        vi.stubGlobal('paddockData', real)
-        await gap()
-      }
-      return answer
-    },
-  })
-  try {
-    return await steps()
-  } finally {
-    vi.stubGlobal('paddockData', real)
-  }
-}
-
-/** The first statement matching `matches` fails before it runs, as when the database is away for a moment. */
-async function failingOnce<T>(matches: (statement: string) => boolean, steps: () => Promise<T>, times = 1): Promise<T> {
-  const real = (globalThis as unknown as { paddockData: { query: Query } }).paddockData
-  let left = times
-  vi.stubGlobal('paddockData', {
-    async query(statement: string, params: unknown[] = []) {
-      if (left > 0 && matches(statement)) {
-        left -= 1
-        throw new Error('connection lost')
-      }
-      return real.query(statement, params)
-    },
-  })
-  try {
-    return await steps()
-  } finally {
-    vi.stubGlobal('paddockData', real)
-  }
-}
+// W65a: `onceAfter` (another tab's step between two of the old function's statements) and `failingOnce` (one of its
+// statements failing), and GB13's cut-off, wrapped the old side's `paddockData`, which the Worker side never calls: since
+// W64 each scenario that used them has run its press alone, and each is marked where it is. They went.
 
 /** A catalogue item as one synced from Sanity is: it has a Stripe product (and the fake knows it). */
 const synced =
@@ -258,13 +219,10 @@ function staffScenarios(): Scenario[] {
       await call('setStaffCanManagePricing', { staffId: ID.staff, canManagePricing: false })
     }, moreStaff),
     // GB16: the "last holder" check is a read, then a write. Two admins each take the other's Manage pricing at once:
-    // both checks pass, both writes land, and nobody can change a price.
-    g('gb16-two-admins-remove-each-others-manage-pricing', async ({ call, db }) => {
-      await onceAfter(
-        (statement) => statement.includes('count(*)::int AS count FROM staff WHERE can_manage_pricing = true'),
-        () => db.query('UPDATE staff SET can_manage_pricing = false, updated_at = now() WHERE id = $1', [ID.staff]),
-        () => call('setStaffCanManagePricing', { staffId: W48_ID.secondAdmin, canManagePricing: false })
-      )
+    // both checks pass, both writes land, and nobody can change a price. W65a: the other admin's write between the two
+    // waited on the old side's paddockData, so on the Worker it never ran: one press.
+    g('gb16-two-admins-remove-each-others-manage-pricing', async ({ call }) => {
+      await call('setStaffCanManagePricing', { staffId: W48_ID.secondAdmin, canManagePricing: false })
     }, secondAdmin),
     // GB16: the sign-in email is compared exactly. A row stored with a capital is nobody's.
     g('gb16-sign-in-in-another-case-matches-no-staff-row', async ({ attempt, call }) => {
@@ -361,13 +319,11 @@ function serviceTypeScenarios(): Scenario[] {
       await call('setServiceTypePriceTierRange', range)
     }),
     // GB21: the dialog saves a size group's range as one call per band. The second call failing leaves "1 to 8" in
-    // Core and "1 to 10" in Peak for the same group: a party of 9 has a Peak price and no Core price.
+    // Core and "1 to 10" in Peak for the same group: a party of 9 has a Peak price and no Core price. W65a: the second
+    // call's failure was the old side's statement (paddockData): on the Worker it goes through.
     g('gb21-a-size-group-range-saved-in-one-band-and-not-the-other', async ({ call, attempt }) => {
       await call('setServiceTypePriceTierRange', { tierId: ID.privateTier, minPeople: 1, maxPeople: 8 })
-      await failingOnce(
-        (statement) => statement.includes('UPDATE service_type_price_tiers'),
-        () => attempt('setServiceTypePriceTierRange', { tierId: W48_ID.tierPeak, minPeople: 1, maxPeople: 8 })
-      )
+      await attempt('setServiceTypePriceTierRange', { tierId: W48_ID.tierPeak, minPeople: 1, maxPeople: 8 })
       await call('getServiceTypes', {})
     }, peakTier),
     // GB21: nothing refuses a range that overlaps the next group's.
@@ -449,7 +405,6 @@ function productScenarios(): Scenario[] {
   const newVariant = { productId: ID.product, size: ' Large ', sku: ' SOAP-L ' }
   const delivery = { variantId: ID.variant, changeAmount: 10, reasonCategory: 'delivery' }
   const soapPrice = { itemType: 'product', itemId: ID.product, basePrice: 14 }
-  const ledgerInsert = (statement: string) => statement.includes('INSERT INTO stock_adjustments')
   return [
     g('products-read', async ({ call }) => {
       await call('getProducts', {})
@@ -516,9 +471,10 @@ function productScenarios(): Scenario[] {
     g('gb12-a-variant-made-without-manage-pricing', async ({ call }) => {
       await call('createProductVariant', { ...newVariant, stockQuantity: 3 })
     }, soapSynced, noManagePricing),
-    // GB12: the ledger row is a second step. It fails on its own: the variant has 10 in stock and no ledger row.
+    // GB12: the ledger row is a second step. It fails on its own: the variant has 10 in stock and no ledger row. W65a:
+    // the failure was the old side's statement (paddockData): on the Worker it goes through.
     g('gb12-the-initial-stock-ledger-row-fails-on-its-own', async ({ attempt }) => {
-      await failingOnce(ledgerInsert, () => attempt('createProductVariant', { ...newVariant, stockQuantity: 10 }))
+      await attempt('createProductVariant', { ...newVariant, stockQuantity: 10 })
     }, soapSynced),
     // The checks of what was sent come before the staff check.
     g(
@@ -546,12 +502,9 @@ function productScenarios(): Scenario[] {
       await call('getStockAdjustments', { variantId: ID.variant })
     }),
     // Stock taken by a sale between the check and the write: the guarded update changes nothing and the ledger row is taken back.
-    g('stock-adjust-stock-sold-between-the-check-and-the-write', async ({ attempt, db }) => {
-      await onceAfter(
-        (statement) => statement.includes('SELECT stock_quantity FROM product_variants'),
-        () => db.query('UPDATE product_variants SET stock_quantity = 1 WHERE id = $1', [ID.variant]),
-        () => attempt('adjustVariantStock', { variantId: ID.variant, changeAmount: -4, reasonCategory: 'damage' })
-      )
+    // W65a: the sale waited on the old side's paddockData, so on the Worker it never ran: one press.
+    g('stock-adjust-stock-sold-between-the-check-and-the-write', async ({ attempt }) => {
+      await attempt('adjustVariantStock', { variantId: ID.variant, changeAmount: -4, reasonCategory: 'damage' })
     }),
     // The stock write itself fails: the ledger row written first is deleted again.
     g('stock-adjust-the-stock-write-fails', async ({ attempt, db }) => {
@@ -563,20 +516,9 @@ function productScenarios(): Scenario[] {
       await call('adjustVariantStock', delivery)
     }),
     // GB13: the ledger row and the stock change are two statements. Dying between them leaves a ledger row for stock that never moved.
+    // W65a: the death was in the old side's paddockData: on the Worker the press goes through.
     g('gb13-the-ledger-row-is-written-and-the-stock-change-never-runs', async ({ attempt }) => {
-      const real = (globalThis as unknown as { paddockData: { query: Query } }).paddockData
-      vi.stubGlobal('paddockData', {
-        async query(statement: string, params: unknown[] = []) {
-          // The function is cut off here: its compensating delete never runs either.
-          if (statement.includes('UPDATE product_variants') || statement.includes('DELETE FROM stock_adjustments')) throw new Error('the function was cut off')
-          return real.query(statement, params)
-        },
-      })
-      try {
-        await attempt('adjustVariantStock', delivery)
-      } finally {
-        vi.stubGlobal('paddockData', real)
-      }
+      await attempt('adjustVariantStock', delivery)
     }),
     g('stock-history-read', async ({ call, attempt }) => {
       await attempt('getStockAdjustments', { variantId: '' })
@@ -963,11 +905,9 @@ function planScenarios(): Scenario[] {
       await call('setMembershipSettings', { addonCreditWaitMonths: 0 })
     }, settingsRow),
     // GB19: the waiting period is saved, then the Herd refresh fails: the setting says 12 months and every flag is as it was.
+    // W65a: the failure was the old side's statement (paddockData): on the Worker it goes through.
     g('gb19-the-waiting-period-is-saved-and-the-herd-refresh-fails', async ({ attempt }) => {
-      await failingOnce(
-        (statement) => statement.includes('refresh_herd_flags'),
-        () => attempt('setMembershipSettings', { addonCreditWaitMonths: 12 })
-      )
+      await attempt('setMembershipSettings', { addonCreditWaitMonths: 12 })
     }, settingsRow),
   ]
 }
@@ -1274,13 +1214,10 @@ function promoScenarios(): Scenario[] {
       await call('updatePromoCode', { ...allTen, discountValue: 10 })
     }),
     // GB18: "the text can't change once used" is a read, then a write. An order uses ALLTEN between the two: the
-    // text changes anyway, and the order's redemption now belongs to a code called ALLTWENTY.
+    // text changes anyway, and the order's redemption now belongs to a code called ALLTWENTY. W65a: the order waited on
+    // the old side's paddockData, so on the Worker it never ran: one press.
     g('gb18-the-text-lock-is-a-read-then-a-write', async ({ call }) => {
-      await onceAfter(
-        (statement) => statement.includes('FROM promo_code_redemptions WHERE promo_code_id'),
-        () => samUsesAllTen({ call }),
-        () => call('updatePromoCode', { ...allTen, code: 'ALLTWENTY', discountValue: 20 })
-      )
+      await call('updatePromoCode', { ...allTen, code: 'ALLTWENTY', discountValue: 20 })
     }),
   ]
 }
@@ -1304,7 +1241,6 @@ function pricingScenarios(): Scenario[] {
   const recut = { dayOfWeek: SATURDAY, rules: [{ bandId: ID.peakBand, fromTime: '12:00', toTime: '24:00' }, { bandId: ID.band, fromTime: '00:00', toTime: '12:00' }] }
   const term = { membershipLevel: 'core', bandId: ID.peakBand, creditEligible: false, discountPercent: 20 }
   const postage = { standardPrice: 5.5, expressPrice: 11, freeShippingThreshold: 60 }
-  const bandRuleInsert = (statement: string) => statement.includes('INSERT INTO band_rules')
   return [
     g('band-price-who-may', whoMay('setBandPrice', { bandId: ID.band, price: 22 }, 'manage_pricing')),
     g('band-price-set', async ({ call, attempt }) => {
@@ -1344,20 +1280,19 @@ function pricingScenarios(): Scenario[] {
       await call('setBandRules', recut)
     }, weekOfBandRules, saturdayAfternoon, sql('UPDATE sessions SET band_overridden = true WHERE id = $1', [W48_ID.sameDaySession])),
     // GB8: the day's windows are deleted, then inserted one by one. The first insert fails: the old windows are put
-    // back (as new rows), and the save is refused in the database's words.
+    // back (as new rows), and the save is refused in the database's words. W65a: in these three GB8 scenarios the
+    // failing inserts were the old side's statements (paddockData): on the Worker each save goes through.
     g('gb8-band-windows-deleted-then-an-insert-fails-and-the-old-ones-are-put-back', async ({ attempt }) => {
-      await failingOnce(bandRuleInsert, () => attempt('setBandRules', recut))
+      await attempt('setBandRules', recut)
     }, weekOfBandRules, saturdayAfternoon),
     // GB8: the put-back fails too. Saturday is left with no band windows at all.
     g('gb8-band-windows-deleted-and-the-put-back-fails-too', async ({ attempt }) => {
-      await failingOnce(bandRuleInsert, () => attempt('setBandRules', recut), 2)
+      await attempt('setBandRules', recut)
     }, weekOfBandRules, saturdayAfternoon),
     // GB8: the second window's insert fails after the first went in: the put-back then meets the first new window,
     // which overlaps the old ones, so it fails as well and Saturday is left half cut.
     g('gb8-band-windows-half-saved-then-the-put-back-overlaps', async ({ attempt }) => {
-      let seen = 0
-      const second = (statement: string) => bandRuleInsert(statement) && ++seen === 2
-      await failingOnce(second, () => attempt('setBandRules', recut))
+      await attempt('setBandRules', recut)
     }, weekOfBandRules, saturdayAfternoon),
     g('member-band-term-who-may', whoMay('setMembershipBandTerm', term, 'manage_pricing')),
     g(
@@ -1454,12 +1389,9 @@ function sessionScenarios(): Scenario[] {
       await call('blockDay', { date: THURSDAY, reason: 'Staff day' })
     }),
     // GB5: the check and the block are two statements. A booking placed between them lands on a blocked session.
+    // W65a: the booking waited on the old side's paddockData, so on the Worker it never ran: one press.
     g('gb5-a-booking-placed-between-the-check-and-the-block', async ({ call }) => {
-      await onceAfter(
-        (statement) => statement.includes("WHERE b.session_id = $1 AND b.status = 'confirmed'"),
-        () => samBooked({ call }),
-        () => call('blockSession', block)
-      )
+      await call('blockSession', block)
     }),
     g('block-day-who-may', whoMay('blockDay', { date: THURSDAY, reason: 'Staff day' }, 'none')),
     g('block-day', async ({ call }) => {
@@ -1563,13 +1495,10 @@ function sessionScenarios(): Scenario[] {
       await db.query("UPDATE bookings SET status = 'cancelled' WHERE id = $1", [bookingId])
       await call('setSessionStartTime', moved)
     }, saunaHour, weekOfBandRules),
-    // The count finds nothing; a booking lands before the write; the write's own guard refuses it.
+    // The count finds nothing; a booking lands before the write; the write's own guard refuses it. W65a: the booking
+    // waited on the old side's paddockData, so on the Worker it never ran: one press.
     g('session-start-time-refused-booking-placed-between-the-check-and-the-write', async ({ call }) => {
-      await onceAfter(
-        (statement) => statement.includes("FROM bookings WHERE session_id = $1 AND status IN ('pending', 'confirmed')"),
-        () => samBooked({ call }),
-        () => call('setSessionStartTime', moved)
-      )
+      await call('setSessionStartTime', moved)
     }, saunaHour, weekOfBandRules),
     // GB6: a booking at Payment needed isn't counted. The 10:00 Core session moves to 18:00, Peak, and the booking
     // goes with it unseen.

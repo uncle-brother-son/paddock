@@ -51,6 +51,15 @@ export const BOOKING_KINDS_ON = 'no_stripe,saved_card,reader,membership,booking_
  */
 export const pressSwitch: { live: string | null } = { live: null }
 
+/**
+ * W65a: on while two presses overlap (replay/scenarios.ts, overlapped): one press's payment or refund is still open.
+ * The replay's forced settles (settleHeldRefund, settleHeldEventRefund, settleHeldOrderRefund) stand for a staff member
+ * who checked the Orders page before their next step, and run reconcile on a claim whatever its age; a press made while
+ * another is still in flight had no such check, and reconcile itself leaves a claim alone for its first 15 minutes
+ * (RECONCILE_WINDOW_MINUTES). So while this is on they settle nothing.
+ */
+export const pressInFlight: { on: boolean } = { on: false }
+
 /** `work` with ORDER_SWITCH set to `value` (or the press's live switch), put back after it (the old side's own calls see their own). */
 export async function withSwitch<T>(value: string, work: () => Promise<T>): Promise<T> {
   const before = process.env.ORDER_SWITCH
@@ -170,7 +179,7 @@ export function refundAsTheDialogPresses(): NewBookingAction {
  * press, and again before the booking's next step if a write the scenario made fail was still failing then.
  */
 export async function settleHeldRefund(db: Db, bookingId: string | undefined): Promise<void> {
-  if (!bookingId || !replayStripe.current) return
+  if (!bookingId || !replayStripe.current || pressInFlight.on) return
   const held = await openRefundClaimOn(db, bookingId)
   if (held) await reconcileClaimNow(db, replayStripe.current, held, { actor: { type: 'system', id: null }, requestId: crypto.randomUUID() })
 }

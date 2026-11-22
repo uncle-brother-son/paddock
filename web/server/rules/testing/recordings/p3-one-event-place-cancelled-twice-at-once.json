@@ -10,6 +10,11 @@
       "paymentMethodUsed": "card"
     },
     {
+      "ok": false,
+      "reason": "refund_open",
+      "message": "A refund on this event booking is still being checked. Don't refund it again: check the Orders page in a few minutes."
+    },
+    {
       "ok": true,
       "places": 1,
       "refundedAmount": 40,
@@ -328,6 +333,29 @@
           "request_hash": "<sha-256>",
           "status": "done",
           "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "refund",
+                "reason": "refund_open",
+                "message": "A refund on this event booking is still being checked. Don't refund it again: check the Orders page in a few minutes."
+              },
+              "message": "A refund on this event booking is still being checked. Don't refund it again: check the Orders page in a few minutes."
+            },
+            "requestId": "gone#6"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#7",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/event-bookings/event_bookings#1/cancel",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
             "ok": true,
             "data": {
               "places": 1,
@@ -402,7 +430,7 @@
               "cardRefundedAmount": 40,
               "storeCreditRefundedAmount": 0
             },
-            "requestId": "gone#6"
+            "requestId": "gone#8"
           },
           "http_status": 200,
           "created_at": "<set>"
@@ -598,7 +626,7 @@
           "action": "event_booking.refund_claimed",
           "entity_type": "event_booking",
           "entity_id": "event_bookings#1",
-          "request_id": "gone#6",
+          "request_id": "gone#8",
           "details": {
             "kind": "cancel_places",
             "plan": {
@@ -648,7 +676,7 @@
           "action": "event_booking.cancel_places",
           "entity_type": "event_booking",
           "entity_id": "event_bookings#1",
-          "request_id": "gone#6",
+          "request_id": "gone#8",
           "details": {
             "owed": 0,
             "value": 40,
@@ -673,7 +701,7 @@
           "action": "event_booking.refund_finished",
           "entity_type": "event_booking",
           "entity_id": "event_bookings#1",
-          "request_id": "gone#6",
+          "request_id": "gone#8",
           "details": {
             "owed": 0,
             "claimId": "audit_log#7",
@@ -699,7 +727,7 @@
           "action": "refund.watch",
           "entity_type": "refund_watch",
           "entity_id": "re_fake_0004",
-          "request_id": "gone#6",
+          "request_id": "gone#8",
           "details": {
             "on": "event_booking",
             "lines": [

@@ -2,7 +2,7 @@ import type { Db } from '@/server/db'
 import type { OrderRefundFigures } from '@/contracts'
 import { reconcileClaimNow } from '@/server/rules/orders/reconcile'
 import { ORDER_CLAIMS, openClaimOn } from '@/server/rules/refunds/pipeline'
-import { BOOKING_KINDS_ON, throughStaffApp, withSwitch } from './booking-presses'
+import { BOOKING_KINDS_ON, pressInFlight, throughStaffApp, withSwitch } from './booking-presses'
 import { replayStripe } from '../replay/stripe-binding'
 
 /*
@@ -22,7 +22,7 @@ export type Params = { orderId?: string; lineItemIds?: string[]; refundMethod?: 
  * before the order's next step.
  */
 export async function settleHeldOrderRefund(db: Db, orderId: string | undefined): Promise<void> {
-  if (!orderId || !replayStripe.current || !/^[0-9a-f-]{36}$/i.test(orderId)) return
+  if (!orderId || !replayStripe.current || pressInFlight.on || !/^[0-9a-f-]{36}$/i.test(orderId)) return
   const held = await openClaimOn(db, ORDER_CLAIMS, orderId)
   if (held) await reconcileClaimNow(db, replayStripe.current, held, { actor: { type: 'system', id: null }, requestId: crypto.randomUUID() })
 }

@@ -1181,13 +1181,18 @@ describe('the deadline from the request\'s start (W10a), for the reader\'s Strip
   it('the routes ask for the order\'s limits (10 s a call, no SDK retries) for finalise, cancel and the setup intent and the saved card (under the deadline), and read limits for the token', async () => {
     await onASeed(async (stripe) => {
       const placed = placedOf(await placeThrough(readerBasket))
+      // W65a: the card is saved from a second reader payment. The cancel below cancels the first at Stripe, and a
+      // cancelled PaymentIntent can't be tapped (the fake refuses it, as Stripe does). The member's, products only: the
+      // customer's own second order would be refused while the first is pending (Q10).
+      const toSave = placedOf(await placeThrough({ customerId: ID.member, products: [soap], payment: reader }))
       stripeClientsMade.length = 0
       await finalise(placed.orderId)
       await cancel(placed.orderId)
       await staffPost(setupIntentsRoute, '/api/v1/staff/terminal/setup-intents', { customerId: ID.customer })
       await staffPost(connectionTokenRoute, '/api/v1/staff/terminal/connection-token', {})
-      stripe.completeReaderPayment(placed.pendingReaderPayment.paymentIntentId, { generatedCard: 'pm_x' })
-      await staffPost(savedCardRoute, `/api/v1/staff/customers/${ID.customer}/saved-card`, { paymentIntentId: placed.pendingReaderPayment.paymentIntentId }, { customerId: ID.customer })
+      stripe.completeReaderPayment(toSave.pendingReaderPayment.paymentIntentId, { generatedCard: 'pm_x' })
+      const saved = await staffPost(savedCardRoute, `/api/v1/staff/customers/${ID.member}/saved-card`, { paymentIntentId: toSave.pendingReaderPayment.paymentIntentId }, { customerId: ID.member })
+      expect(saved.status).toBe(200)
       expect(stripeClientsMade.map((made) => made.limits)).toEqual([ORDER_STRIPE_LIMITS, ORDER_STRIPE_LIMITS, ORDER_STRIPE_LIMITS, READ_STRIPE_LIMITS, ORDER_STRIPE_LIMITS])
     })
   })

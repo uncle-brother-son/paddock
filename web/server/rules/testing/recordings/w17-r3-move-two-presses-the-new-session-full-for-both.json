@@ -43,6 +43,10 @@
       "reason": "insufficient_capacity"
     },
     {
+      "moved": false,
+      "reason": "insufficient_capacity"
+    },
+    {
       "status": "confirmed",
       "customerId": "10000000-0000-4000-8000-000000000005",
       "pricePaid": 40,
@@ -131,6 +135,30 @@
               "message": "Not enough capacity left in this slot for this booking's party size."
             },
             "requestId": "gone#4"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/bookings/bookings#1/move",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "move",
+                "reason": "insufficient_capacity",
+                "message": "Not enough capacity left in this slot for this booking's party size.",
+                "screenWords": true
+              },
+              "message": "Not enough capacity left in this slot for this booking's party size."
+            },
+            "requestId": "gone#6"
           },
           "http_status": 409,
           "created_at": "<set>"

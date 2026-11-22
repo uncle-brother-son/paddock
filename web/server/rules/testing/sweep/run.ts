@@ -8,14 +8,12 @@ import { buildRecording, TABLES, type Recording, type Row, type TableDump } from
 import { replayStripe } from '../replay/stripe-binding'
 
 /**
- * W64 (H-plan 3.3 step 1): the part of the replay harness that runs a scenario and records it, with nothing of the old
- * code in it, so the Worker's own rule tests and the all-Worker sweep can use it after the frozen copies go (W65).
- * Moved here unchanged from `replay/harness.ts`, which re-exports all of it beside the old side (`oldSide`) and the
- * golden files.
+ * W64 (H-plan 3.3 step 1): what runs a scenario and records it, for the Worker's own rule tests and the all-Worker
+ * sweep. W65 and W65a: the old side that shared it went, with its golden files.
  *
- * The clock is fixed and moves 1ms per statement on the old side (and before each press on a Worker side), which also
- * moves PGlite's now(), because it reads the same Date.now. So a run is exactly repeatable, dates included, and
- * recordings don't go stale. Statements still get different created_at values, as they do in production.
+ * The clock is fixed and moves before each press on the Worker side (sweep/worker.ts), which also moves PGlite's
+ * now(), because it reads the same Date.now. So a run is exactly repeatable, dates included, and recordings don't go
+ * stale. Rows still get different created_at values, as they do in production.
  */
 
 /** Tuesday, in winter, so London time and UTC agree. */
@@ -89,10 +87,14 @@ const quoted = (name: string) => `"${name}"`
  */
 const READ_BY: Readonly<Record<string, string>> = { gift_card_redemptions: 'redeemed_at' }
 
-async function dumpTables(db: Db, orderBy: (table: string, orderedBy: string | null) => string | null): Promise<TableDump> {
+/**
+ * Every table, read by created_at (or at, or READ_BY's column), then its key. W65a: the one order: the golden files'
+ * (by created_at alone) went with them.
+ */
+async function dumpTables(db: Db): Promise<TableDump> {
   const dump: TableDump = {}
   for (const [table, info] of TABLES) {
-    const first = orderBy(table, info.orderedBy)
+    const first = info.orderedBy ?? READ_BY[table] ?? null
     const order = [...(first ? [first] : []), ...info.primaryKey].map(quoted).join(', ')
     // Test data only: the names come from the catalog.
     const sql = `SELECT * FROM ${table}${order ? ` ORDER BY ${order}` : ''}`
@@ -100,11 +102,6 @@ async function dumpTables(db: Db, orderBy: (table: string, orderedBy: string | n
   }
   return dump
 }
-
-/** As the golden files were read: by created_at (or at), then the key. */
-const asTheGoldenFilesRead = (_table: string, orderedBy: string | null): string | null => orderedBy
-/** As the sweep's recordings are read: the same, and gift card redemptions by when they were made (READ_BY). */
-const asTheSweepReads = (table: string, orderedBy: string | null): string | null => orderedBy ?? READ_BY[table] ?? null
 
 async function emptyTables(database: TestDatabase): Promise<void> {
   const names = [...TABLES.keys()].map((table) => `public.${table}`).join(', ')
@@ -114,8 +111,6 @@ async function emptyTables(database: TestDatabase): Promise<void> {
 export interface ReplayOptions {
   /** Runs after the scenario and before the rows are read: how tests plant a deliberate difference. */
   tamper?(db: Db, stripe: FakeStripe): Promise<void>
-  /** W64: read gift card redemptions by `redeemed_at` (the sweep's recordings). Left out: as the golden files were read. */
-  readRedemptionsInOrder?: boolean
 }
 
 /**
@@ -142,13 +137,12 @@ export async function replay(
 ): Promise<Recording> {
   const { database } = environment
   const { db } = database
-  const orderBy = options.readRedemptionsInOrder ? asTheSweepReads : asTheGoldenFilesRead
   vi.setSystemTime(new Date(REPLAY_NOW))
   await emptyTables(database)
   await putBackOnceEmpty(db)
   const stripe = new FakeStripe()
   await scenario.seed(db, stripe)
-  const before = await dumpTables(db, orderBy)
+  const before = await dumpTables(db)
 
   // Each run's fake, bound again by a side that charges through the order route (W10).
   replayStripe.current = null
@@ -174,36 +168,17 @@ export async function replay(
       return result
     },
   })
-  // W14: the old functions ask the Worker first. With every kind off its only trace is the answer stored
-  // against each press's key (ORDER_PATH_OFF; `not_a_reader_order` from finalise and cancel, W25: the Worker's
-  // answer for an order with no mark of its own, where it used to say the old checkout's; or, for an order
-  // already gone, the Worker's own "already gone", in the old words), which is the Worker's bookkeeping, not
-  // the old code's. Those rows alone are taken out before the rows are read, so the old side's recording
-  // is exactly the old code's, as the golden files hold it. Anything else the Worker wrote would show.
-  if (side.name === 'old') await forgetSwitchedOffAnswers(db)
+  // W65a: the old side's step here (forgetSwitchedOffAnswers: the Worker's stored answers taken out so its recording
+  // matched the golden files) went with it. Every row a press wrote is read.
   await options.tamper?.(db, stripe)
 
   return buildRecording({
     scenario: scenario.name,
     before,
-    after: await dumpTables(db, orderBy),
+    after: await dumpTables(db),
     results,
     stripeCalls: stripe.calls,
   })
-}
-
-/**
- * The answers the wrappers' Worker calls stored against their keys, and nothing else (see replay): an order
- * route's ORDER_PATH_OFF, and a finalise or cancel the Worker refused as not its own reader order (`not_a_reader_order`) or
- * found the order already gone (answered by the Worker in the old words, nothing touched).
- */
-export async function forgetSwitchedOffAnswers(db: Db): Promise<void> {
-  await db.query(
-    `DELETE FROM api_idempotency
-      WHERE response->'error'->>'code' = 'ORDER_PATH_OFF'
-         OR (endpoint LIKE 'POST /api/v1/staff/orders/%'
-             AND (response->'data'->>'reason' IN ('not_a_reader_order', 'order_not_found') OR response->'data'->>'alreadyGone' = 'true'))`
-  )
 }
 
 /**

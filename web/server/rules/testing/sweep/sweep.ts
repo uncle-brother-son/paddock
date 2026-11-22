@@ -185,7 +185,7 @@ export async function sweepOne(
       },
     }
   }
-  const recording = await replay(environment, checked, watchedSide, { readRedemptionsInOrder: true, ...extra.replay })
+  const recording = await replay(environment, checked, watchedSide, extra.replay)
   return {
     recording: steadied(recording),
     problems: [...invariants.wrong, ...g, ...answeredStampProblems(stamps).map((one) => `a stamp of the wrong form: ${one}`)],

@@ -1,7 +1,7 @@
 import type { Db } from '@/server/db'
 import { reconcileClaimNow } from '@/server/rules/orders/reconcile'
 import { EVENT_BOOKING_CLAIMS, openClaimOn } from '@/server/rules/refunds/pipeline'
-import { BOOKING_KINDS_ON, throughStaffApp, withSwitch } from './booking-presses'
+import { BOOKING_KINDS_ON, pressInFlight, throughStaffApp, withSwitch } from './booking-presses'
 import { replayStripe } from '../replay/stripe-binding'
 
 /*
@@ -29,7 +29,7 @@ export const dialogFor = (eventBookingId: string, attendeeIds: readonly string[]
  * again before the booking's next step.
  */
 export async function settleHeldEventRefund(db: Db, eventBookingId: string | undefined): Promise<void> {
-  if (!eventBookingId || !replayStripe.current || !UUID.test(eventBookingId)) return
+  if (!eventBookingId || !replayStripe.current || pressInFlight.on || !UUID.test(eventBookingId)) return
   const held = await openClaimOn(db, EVENT_BOOKING_CLAIMS, eventBookingId)
   if (held) await reconcileClaimNow(db, replayStripe.current, held, { actor: { type: 'system', id: null }, requestId: crypto.randomUUID() })
 }

@@ -19,7 +19,8 @@ const MOVE_CREDIT_HELD = "booking-replay.test.ts MOVE_CREDIT_HELD_BREACHES (W24)
 const MOVE_GIFT_CARD_HELD = "booking-replay.test.ts MOVE_GIFT_CARD_ROW_HELD_BREACHES (W24): a card move whose gift card row failed in C2 is held, the £6 card payment on no order yet; move.test.ts runs reconcile and it is put right"
 const SETTLE_GIFT_CARD_HELD = "booking-replay.test.ts (W19): Settle's gift card row failed after the card paid, so the change is held for reconcile; settle.test.ts runs reconcile on the same state and every line is put right"
 const EVENT_HELD = "event-places-replay.test.ts (W30): the recording ends inside its own planted failure (the store credit write keeps failing), so R2 can't be saved and the claim is still held; the family's next test shows reconcile recording it"
-const E2_TAP = "order-refund-replay.test.ts (W28): E2's recording makes the customer tap after the refund; on the Worker the refund was refused and the reader payment cancelled (the order undone), and the fake lets a cancelled PaymentIntent be completed, which Stripe wouldn't (W35 row 3, W65 makes the fake refuse it)"
+// W65a: E2_TAP went. E2's tap after the cancel completed a cancelled PaymentIntent, which only the fake allowed (W35 row
+// 3): £24 taken on no order. The fake now refuses it, as Stripe does, so E2 has no tap and no breach.
 const CANCELLED_BY_HAND = 'The scenario cancels the booking itself with an UPDATE and asks for no refund (a state for the read or flag it tests): no code made it'
 const FIRST_INVOICE = "Q21 (W13): a membership's first invoice belongs to its subscription, so no order names that PaymentIntent (replay/invariants.ts FIRST_INVOICE; the old code put it on the order in these three, so the old side's list didn't need them)"
 const MISMATCH_LEFT = 'W03-plan 2.5 (W11): a reader payment that does not match its order is left for a person, the order pending with nothing confirmed (order-replay.test.ts and orders/reader.test.ts hold it)'
@@ -66,7 +67,6 @@ export const NAMED_BREACHES: Readonly<Record<string, NamedBreaches>> = {
     ],
     why: EVENT_HELD,
   },
-  'w27-e2-order-refund-while-its-reader-payment-is-still-open': { lines: ['w27-e2-order-refund-while-its-reader-payment-is-still-open: pi_fake_0001 is on 0 orders'], why: E2_TAP },
   'w48-addon-prep-read': { lines: ['w48-addon-prep-read: cancelled with £0.00 back on £40.00 paid'], why: CANCELLED_BY_HAND },
   'w48-gb17-a-cancelled-booking-and-a-payment-needed-one-are-checked-in': {
     lines: ['w48-gb17-a-cancelled-booking-and-a-payment-needed-one-are-checked-in: cancelled with £0.00 back on £20.00 paid'],

@@ -637,10 +637,13 @@ describe('a payment that succeeded on an order already undone (charged_without_o
         const { pendingId, paymentIntentId } = started.pendingReaderPayment
         // W64a item 8: started through the Worker, so its record carries the Worker's mark already (no asWorkerFlow).
         replayStripe.current = stripe
-        await postFlowStep('cancel', pendingId) // undone: the intent cancelled
-        // The tap that "lands" anyway is modelled by T2 meeting a cancelled row with a succeeded payment.
+        // W65a: undone by hand while the payment is still open at Stripe, as the manual close does (close-stuck.ts,
+        // held_flow), and then the tap lands: T2 meets a cancelled row with a succeeded payment. Until W65a this used the
+        // cancel route, which cancels the intent at Stripe first, so the tap after it was one Stripe would refuse (the
+        // fake now does).
+        const { finaliseFlowInTransaction, undoFlowInTransaction } = await import('./reader-flow')
+        await undoFlowInTransaction(db, pendingId, { actor: { type: 'staff', id: ID.staff }, requestId: 'close', why: 'Closed by hand: the reader is off' })
         stripe.completeReaderPayment(paymentIntentId)
-        const { finaliseFlowInTransaction } = await import('./reader-flow')
         vi.setSystemTime(Date.now() + 1_000)
         expect(await finaliseFlowInTransaction(db, pendingId, (await stripe.paymentIntents.retrieve(paymentIntentId)) as Stripe.PaymentIntent, { actor: { type: 'system', id: null }, requestId: 't' })).toEqual({
           finalised: false,

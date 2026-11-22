@@ -89,6 +89,28 @@ describe('reader PaymentIntents', () => {
     await expect(stripe.paymentIntents.cancel(paid.id)).rejects.toThrow('could not be canceled')
   })
 
+  it('W65a (W35 audit row 3): a cancelled PaymentIntent is never completed: the tap is refused and nothing is taken; one held for capture still completes', async () => {
+    const cancelled = await stripe.paymentIntents.create(reader)
+    await stripe.paymentIntents.cancel(cancelled.id)
+    let refused: unknown
+    try {
+      stripe.completeReaderPayment(cancelled.id)
+    } catch (err) {
+      refused = err
+    }
+    expect(refused).toMatchObject({ code: 'payment_intent_unexpected_state' })
+    expect(() => stripe.completeReaderPayment(cancelled.id, { generatedCard: 'pm_saved' })).toThrow("can't be confirmed or captured")
+    const after = await stripe.paymentIntents.retrieve(cancelled.id)
+    expect([after.status, after.amount_received, after.latest_charge]).toEqual(['canceled', 0, null])
+    expect(stripe.netPence).toBe(0)
+    // Control: an intent authorised and waiting for capture is still completed by the tap's capture.
+    const held = await stripe.paymentIntents.create(reader)
+    stripe.markRequiresCapture(held.id)
+    stripe.completeReaderPayment(held.id)
+    expect((await stripe.paymentIntents.retrieve(held.id)).status).toBe('succeeded')
+    expect(stripe.netPence).toBe(2000)
+  })
+
   it('finds an order by metadata through list, as reconcile will', async () => {
     await stripe.paymentIntents.create({ ...reader, metadata: { order_id: 'order-1' } })
     const found = await stripe.paymentIntents.list({ customer: 'cus_1' })

@@ -10,6 +10,10 @@
       "paymentMethodUsed": "card"
     },
     {
+      "moved": false,
+      "reason": "same_session"
+    },
+    {
       "moved": true,
       "booking": {
         "id": "bookings#1",
@@ -94,6 +98,30 @@
           "request_hash": "<sha-256>",
           "status": "done",
           "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "move",
+                "reason": "same_session",
+                "message": "Pick a different session than the one this booking is already on.",
+                "screenWords": true
+              },
+              "message": "Pick a different session than the one this booking is already on."
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/bookings/bookings#1/move",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
             "ok": true,
             "data": {
               "moved": true,
@@ -102,7 +130,7 @@
                 "price_paid": 51
               }
             },
-            "requestId": "gone#4"
+            "requestId": "gone#6"
           },
           "http_status": 200,
           "created_at": "<set>"
@@ -169,7 +197,7 @@
           "action": "booking.move",
           "entity_type": "booking",
           "entity_id": "bookings#1",
-          "request_id": "gone#4",
+          "request_id": "gone#6",
           "details": {
             "owed": 0,
             "method": "card",
@@ -196,7 +224,7 @@
           "action": "reader_payment.finalise",
           "entity_type": "reader_payment",
           "entity_id": "pending_reader_payments#1",
-          "request_id": "gone#4",
+          "request_id": "gone#6",
           "details": {
             "flow": "move",
             "orderId": "orders#2",
@@ -440,7 +468,7 @@
             "livemode": false,
             "booking_id": "bookings#1",
             "party_size": 2,
-            "request_id": "gone#4",
+            "request_id": "gone#6",
             "customer_id": "10000000-0000-4000-8000-000000000005",
             "description": "Booking moved to a differently priced session (bookings#1)",
             "old_band_id": "10000000-0000-4000-8000-000000000003",

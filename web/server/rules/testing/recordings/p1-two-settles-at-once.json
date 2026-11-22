@@ -10,6 +10,11 @@
       "paymentMethodUsed": null
     },
     {
+      "settled": false,
+      "reason": "booking_not_payment_needed",
+      "message": "This booking is no longer awaiting payment — refresh and check its status."
+    },
+    {
       "settled": true,
       "booking": {
         "id": "bookings#1",
@@ -97,6 +102,29 @@
             "requestId": "gone#4"
           },
           "http_status": 200,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#5",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/bookings/bookings#1/settle",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "settle",
+                "reason": "booking_not_payment_needed",
+                "message": "This booking is no longer awaiting payment — refresh and check its status."
+              },
+              "message": "This booking is no longer awaiting payment — refresh and check its status."
+            },
+            "requestId": "gone#6"
+          },
+          "http_status": 409,
           "created_at": "<set>"
         }
       ],
