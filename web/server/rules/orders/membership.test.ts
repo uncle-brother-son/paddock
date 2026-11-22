@@ -729,6 +729,25 @@ describe('the reader', () => {
     })
   })
 
+  // Brief W64a item 2 (W64 review S2): Q3 on the reader. The old createOrder failed this basket at finalise and refunded
+  // the £90 tap (order-replay's OUTCOME_DIFFERS, deleted at W65); the Worker finalises it and keeps both.
+  it('Q3 on the reader: a buy-new pass booking with a membership too, tapped and finalised: the pass and the membership written, the £90 kept, nothing refunded', async () => {
+    await onASeed(async (stripe) => {
+      const { placed, finalised } = await tapAndFinalise(stripe, { booking: { ...paidSeat([sam]), redemptionSource: 'buy_new_session_pass' }, sessionPassTypeId: ID.passType })
+      // A pass booking: T1 writes no membership row (only a buy-new membership booking needs one first); finalise does.
+      expect(placed.membershipId ?? null).toBeNull()
+      expect(finalised).toMatchObject({ finalised: true, membershipId: expect.any(String), membershipSubscriptionId: stripe.subscriptionsMade[0] })
+      expect(stripe.calls.filter((call) => call.method === 'refunds.create')).toEqual([])
+      expect(stripe.netPence).toBe(9000)
+      const [order] = await orders()
+      expect(order).toMatchObject({ payment_status: 'paid', payment_method: 'reader' })
+      expect(await memberships()).toEqual([expect.objectContaining({ id: finalised?.membershipId, stripe_subscription_id: stripe.subscriptionsMade[0], subscription_status: 'active' })])
+      // The pass bought (the seed's own passes aside), with its sessions.
+      expect(await db.query('SELECT pass_type_id FROM customer_session_passes WHERE customer_id = $1 AND id <> ALL($2::uuid[])', [ID.customer, [ID.ownedPass, ID.ownedCorePass]])).toEqual([{ pass_type_id: ID.passType }])
+      await invariant(stripe)
+    })
+  })
+
   it("Q8 on the reader: the subscription first, then the old cancel refused: the tap refunded, the new subscription cancelled, undone", async () => {
     await onASeed(
       async (stripe) => {

@@ -6,7 +6,7 @@ import type { Queryable } from '@/server/db'
 import { authenticateStaff } from './auth/staff'
 import { CATALOG_ITEM_NEW_WORDS } from './rules/catalog/item-failure-messages'
 import { ADDON_PRICE_NOT_SET_MESSAGE } from './rules/orders/failure-messages'
-import { legacyAdminDir } from './rules/testing/replay/harness'
+import { OLD_WORDS } from './rules/testing/old-words'
 import { staffAppDir } from './rules/testing/staff-app-dir'
 
 // The staff app has no test runner, so its Worker helpers are tested here, from its checkout
@@ -15,8 +15,6 @@ const appDir = staffAppDir()
 const shared = path.join(appDir, 'backend/paddock/shared')
 
 const load = (name: string) => import(/* @vite-ignore */ path.join(shared, name))
-/** W61: a shared module the staff app no longer has, from step G's frozen copy (the staff app's at W48, byte for byte). */
-const loadOld = (name: string) => import(/* @vite-ignore */ path.join(legacyAdminDir, 'shared', name))
 
 const user = { email: 'jo@example.com' }
 const success = (data: unknown) => ({ data: { ok: true, data, requestId: 'worker-request' } })
@@ -61,61 +59,8 @@ describe('staff app helpers', () => {
       return query
     }
 
-    const guards = async () => {
-      const access = await loadOld('staffAccess')
-      const ids = await loadOld('resolveStaffId')
-      const pricing = await loadOld('pricingStaff')
-      return {
-        getStaffAccessRow: access.getStaffAccessRow,
-        requireStaffAdmin: access.requireStaffAdmin,
-        // W44: requireCanIssueRefunds left the staff app (no caller: the Worker checks Issue refunds).
-        resolveStaffId: ids.resolveStaffId,
-        requireStaffId: ids.requireStaffId,
-        requireCanManagePricing: pricing.requireCanManagePricing,
-      } as Record<string, (email: string) => Promise<unknown>>
-    }
-
-    it('every lookup gives the same refusal, with active off or unset', async () => {
-      for (const active of [false, null]) {
-        stubStaffTable([row(active)])
-        for (const [name, guard] of Object.entries(await guards())) {
-          await expect(guard('jo@example.com'), name).rejects.toThrow(INACTIVE)
-        }
-      }
-    })
-
-    it('every lookup filters on active', async () => {
-      const query = stubStaffTable([row(true)])
-      for (const guard of Object.values(await guards())) await guard('jo@example.com')
-      expect(query.mock.calls.every(([sql]) => sql.includes('AND active = true'))).toBe(true)
-    })
-
-    it('active staff pass, with one query', async () => {
-      const query = stubStaffTable([row(true)])
-      const { getStaffAccessRow, resolveStaffId } = await guards()
-
-      expect(await getStaffAccessRow?.('jo@example.com')).toMatchObject({ id: 'staff-1' })
-      expect(await resolveStaffId?.('jo@example.com')).toBe('staff-1')
-      expect(query).toHaveBeenCalledTimes(2)
-    })
-
-    it('an unknown email keeps its own outcome, not the inactive refusal', async () => {
-      stubStaffTable([])
-      const { getStaffAccessRow, resolveStaffId, requireStaffId, requireStaffAdmin, requireCanManagePricing } = await guards()
-
-      expect(await getStaffAccessRow?.('x@example.com')).toBeNull()
-      expect(await resolveStaffId?.('x@example.com')).toBeNull()
-      await expect(requireStaffId?.('x@example.com')).rejects.toThrow('No staff record matches')
-      await expect(requireStaffAdmin?.('x@example.com')).rejects.toThrow('No staff record matches')
-      await expect(requireCanManagePricing?.('x@example.com')).rejects.toThrow('No staff record matches')
-    })
-
-    it('getStaffRowAnyStatus still shows the screen an inactive row', async () => {
-      stubStaffTable([row(false)])
-      const { getStaffRowAnyStatus } = await loadOld('staffAccess')
-
-      expect(await getStaffRowAnyStatus('jo@example.com')).toMatchObject({ active: false })
-    })
+    // W64a item 7: the five tests of the old checks themselves (step G's frozen copy) moved to
+    // testing/replay/old-staff-guards.test.ts, which W65 deletes with the copy they test.
 
     // Every function W01c added the check to. Called as an inactive account with empty params,
     // each must refuse straight away: no write, no Worker call.
@@ -220,7 +165,9 @@ describe('staff app helpers', () => {
     // every charge and reader intent is the Worker's (server/rules/testing/removed-booking-code.test.ts).
 
     it('uses the same wording as the Worker', async () => {
-      const { INACTIVE_STAFF_MESSAGE } = await loadOld('staffAccess')
+      // W64a item 7: the old shared/staffAccess's words, pinned in testing/old-words.json.
+      const INACTIVE_STAFF_MESSAGE = OLD_WORDS.facts.inactiveStaffMessage
+      expect(INACTIVE_STAFF_MESSAGE).toBe(INACTIVE)
       const db = { query: async () => [row(false)] } as unknown as Queryable
       const headers = new Headers({ authorization: 'Bearer key', 'x-staff-email': 'jo@example.com' })
 
@@ -3801,16 +3748,17 @@ describe('staff app helpers', () => {
         const page = () => readFileSync(path.join(appDir, 'frontend/pages/EventAttendeesPage.tsx'), 'utf8')
 
         it("the old loader (step G's frozen copy: W61 deleted the staff app's) reads the order that paid for each booking and the money still to refund on it, as the Worker's loader does", async () => {
-          const loader = readFileSync(path.join(legacyAdminDir, 'shared/eventAttendeeList.ts'), 'utf8')
+          // W64a item 7: the old loader's two parts, as this test matched them in the frozen copy, pinned in testing/old-words.json.
+          const loader = OLD_WORDS.facts.attendeeListLoader
           const worker = readFileSync(path.join(appDir, '..', 'paddock/web/server/rules/events/attendee-list.ts'), 'utf8')
           const read = /paid\.order_id, COALESCE\(paid\.refund_owed_amount, 0\)::numeric\(10,2\)::text AS refund_owed_amount/
           const from = /LEFT JOIN LATERAL \(\s+SELECT o\.id AS order_id, o\.refund_owed_amount\s+FROM order_line_items oli JOIN orders o ON o\.id = oli\.order_id\s+WHERE oli\.event_booking_id = eb\.id AND oli\.item_type = 'event'\s+ORDER BY oli\.created_at, oli\.id LIMIT 1\s+\) paid ON true/
-          for (const source of [loader, worker]) {
-            expect(source).toMatch(read)
-            expect(source).toMatch(from)
-          }
+          expect(loader.read ?? '').toMatch(read)
+          expect(loader.from ?? '').toMatch(from)
+          expect(worker).toMatch(read)
+          expect(worker).toMatch(from)
           // Read-only, as it was.
-          expect(loader).not.toMatch(/\b(INSERT|UPDATE|DELETE)\b/)
+          expect(loader.writes).toBe(false)
         })
 
         it('a booking with money owed shows the order\'s owed bar (Refund the rest, It already arrived), and the list is read again when it changes', () => {

@@ -77,6 +77,23 @@
         ]
       },
       "idempotencyKey": "orders#1:subscription"
+    },
+    {
+      "method": "subscriptions.retrieve",
+      "params": {
+        "id": "sub_fake_0002"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "customers.update",
+      "params": {
+        "id": "cus_seed",
+        "invoice_settings": {
+          "default_payment_method": "pm_seed"
+        }
+      },
+      "idempotencyKey": null
     }
   ],
   "tables": {
@@ -173,6 +190,60 @@
           "at": "<set>",
           "actor_type": "staff",
           "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "customer.invoice_default",
+          "entity_type": "customer",
+          "entity_id": "10000000-0000-4000-8000-000000000005",
+          "request_id": "gone#2",
+          "details": {
+            "set": true,
+            "paymentMethodId": "pm_seed",
+            "stripeCustomerId": "cus_seed"
+          }
+        },
+        {
+          "id": "audit_log#3",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.step_left",
+          "entity_type": "membership",
+          "entity_id": "customer_memberships#1",
+          "request_id": "gone#2",
+          "details": {
+            "kind": "payment_method",
+            "want": {
+              "paymentMethod": "pm_seed"
+            },
+            "state": "done",
+            "detail": "Stripe already showed it",
+            "stepId": "gone#3",
+            "subscriptionId": "sub_fake_0002"
+          }
+        },
+        {
+          "id": "audit_log#4",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.step_left",
+          "entity_type": "membership",
+          "entity_id": "customer_memberships#1",
+          "request_id": "gone#2",
+          "details": {
+            "kind": "payment_method",
+            "want": {
+              "paymentMethod": "pm_seed"
+            },
+            "state": "left",
+            "stepId": "gone#3",
+            "subscriptionId": "sub_fake_0002"
+          }
+        },
+        {
+          "id": "audit_log#5",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
           "action": "order.paid",
           "entity_type": "order",
           "entity_id": "orders#1",
@@ -194,7 +265,7 @@
       ],
       "changed": [],
       "removed": [],
-      "tied": 0
+      "tied": 3
     },
     "customer_memberships": {
       "added": [

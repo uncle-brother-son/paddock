@@ -968,6 +968,84 @@ describe('refusals before any money moves', () => {
   })
 })
 
+// --- Brief W64a item 2 (W64 review S2): R1b, R3 and R4b, the third W05 release review's Move findings, held here
+// before W65 deletes booking-replay (which held them on its new side).
+
+describe('W64a: R1b, R3, R4b on the Worker', () => {
+  const balances = async () => ({
+    storeCredit: (await db.query<{ b: string }>('SELECT store_credit_balance::text AS b FROM customers WHERE id = $1', [ID.customer]))[0]?.b,
+    giftCard: (await db.query<{ b: string }>('SELECT remaining_balance::text AS b FROM gift_cards WHERE id = $1', [ID.giftCard]))[0]?.b,
+    giftCardRows: await db.query<{ a: string; booking_id: string | null; order_id: string | null }>('SELECT amount_used::text AS a, booking_id, order_id FROM gift_card_redemptions WHERE gift_card_id = $1 ORDER BY redeemed_at, id', [ID.giftCard]),
+  })
+  const noCardMoney = { storeCredit: { amount: 6 }, giftCard: { giftCardId: ID.giftCard, amount: 5 } }
+
+  it('R3: a dearer move into a full session is refused (insufficient_capacity) in C1, before any charge: no paymentIntents.create, no flow row, the places as they were', async () => {
+    await withBooking(publicOnCard, async ({ bookingId, stripe }) => {
+      await db.query('UPDATE sessions SET total_booked = capacity WHERE id = $1', [ID.peakSession])
+      const before = await snapshot(bookingId)
+      // The figures the dialog showed before the session filled.
+      const answer = await move(bookingId, ID.peakSession, { payment: { method: 'card' }, figures: { amountDue: 11, toCollect: 11 } })
+      expect(answer.body.error?.details).toMatchObject({ reason: 'insufficient_capacity' })
+      expect(charges(stripe)).toHaveLength(1)
+      expect(refunds(stripe)).toEqual([])
+      expect(await flows(bookingId)).toEqual([])
+      expect(await snapshot(bookingId)).toEqual(before)
+      expect(await auditRows(bookingId, 'booking.move')).toEqual([])
+    })
+  })
+
+  it('R1b: a dearer move paid by £6 store credit and a £5 gift card goes through once: one £6 store credit row, one £5 gift card row naming the booking, no charge', async () => {
+    await withBooking(publicOnCard, async ({ bookingId, stripe }) => {
+      const before = await balances()
+      expect(before).toMatchObject({ storeCredit: '30.00', giftCard: '40.00', giftCardRows: [] })
+      const answer = await move(bookingId, ID.peakSession, { payment: noCardMoney })
+      expect(answer.body.data).toEqual({ moved: true, booking: { id: bookingId, price_paid: 51 } })
+      expect(await balances()).toEqual({ storeCredit: '24.00', giftCard: '35.00', giftCardRows: [{ a: '5.00', booking_id: bookingId, order_id: null }] })
+      expect((await storeCreditRows()).map((row) => `${row.amount} ${row.reason}`)).toEqual(['-6.00 redemption'])
+      expect(charges(stripe)).toHaveLength(1)
+      expect([await places(ID.session), await places(ID.peakSession)]).toEqual([0, 2])
+      expect(await auditRows(bookingId, 'booking.move')).toHaveLength(1)
+    })
+  })
+
+  it('R1b / R4b: a dearer private move paid by £6 store credit, a £5 gift card and £29 on the card goes through once: the claims inside C1, the card charged once from its record', async () => {
+    const privateOnCard = { booking: { ...paidSeat([sam, { name: 'Alex Guest', email: 'alex@example.com' }]), sessionId: ID.privateSession }, payment: { method: 'card' } }
+    await withBooking(privateOnCard, async ({ bookingId, stripe }) => {
+      expect((await quote(bookingId, ID.peakPrivateSession)).priceImpact.amountDue).toBe(40)
+      const answer = await move(bookingId, ID.peakPrivateSession, { payment: { method: 'card', ...noCardMoney } })
+      expect(answer.body.data).toEqual({ moved: true, booking: { id: bookingId, price_paid: 140 } })
+      const [flow] = await flows(bookingId)
+      expect(flow).toMatchObject({ status: 'finalised', expected_amount: '29.00' })
+      const sends = charges(stripe).slice(1)
+      expect(sends.map((call) => [(call.params as { amount: number }).amount, call.idempotencyKey])).toEqual([[2900, `${flow?.id}:charge`]])
+      expect(stripe.netPence).toBe(10000 + 2900)
+      expect(await balances()).toEqual({ storeCredit: '24.00', giftCard: '35.00', giftCardRows: [{ a: '5.00', booking_id: bookingId, order_id: null }] })
+      expect((await storeCreditRows()).map((row) => `${row.amount} ${row.reason}`)).toEqual(['-6.00 redemption'])
+      expect((await cardOrders(bookingId)).map((row) => row.order_total)).toEqual(['100.00', '29.00'])
+      expect([await places(ID.privateSession), await places(ID.peakPrivateSession)]).toEqual([0, 10])
+    })
+  })
+
+  it('R1b / R4b: a fault inside C1 (booking.move\'s audit row) keeps nothing: the store credit, the gift card and the places as they were, nothing charged', async () => {
+    await withBooking(publicOnCard, async ({ bookingId, stripe }) => {
+      const before = { ...(await snapshot(bookingId)), ...(await balances()) }
+      const answer = await whileFailing(db, { table: 'audit_log', event: 'INSERT', when: "NEW.action = 'booking.move'" }, () => move(bookingId, ID.peakSession, { payment: noCardMoney }))
+      expect(answer.status).toBe(500)
+      expect(answer.body.error?.details).toMatchObject({ reason: 'move_not_saved', message: MOVE_NOT_SAVED_MESSAGE })
+      expect({ ...(await snapshot(bookingId)), ...(await balances()) }).toEqual(before)
+      expect(charges(stripe)).toHaveLength(1)
+      // And with the card too: the claims and the flow record are C1's, so the fault leaves no flow and sends no charge.
+      const withCard = await whileFailing(db, { table: 'audit_log', event: 'INSERT', when: "NEW.action = 'booking.move'" }, () =>
+        move(bookingId, ID.peakSession, { payment: { method: 'card', storeCredit: { amount: 6 } } })
+      )
+      expect(withCard.status).toBe(500)
+      expect({ ...(await snapshot(bookingId)), ...(await balances()) }).toEqual(before)
+      expect(await flows(bookingId)).toEqual([])
+      expect(charges(stripe)).toHaveLength(1)
+    })
+  })
+})
+
 // --- Brief W25, Part B
 
 describe('W25: the Move items sent to W25 (W24 review L1, L7; W24 noticed)', () => {

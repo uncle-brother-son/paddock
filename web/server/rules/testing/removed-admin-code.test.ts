@@ -145,8 +145,8 @@ const GENERATED = [`${path.sep}hooks${path.sep}backend${path.sep}`, `${path.sep}
 const staffAppFiles = sourceFiles(appDir, ['backend', 'frontend']).filter((file) => !GENERATED.some((generated) => file.includes(generated)))
 const COPY_DIRS = [path.resolve(legacyAdminDir, '../..'), path.resolve(legacyAccountDir, '../..')]
 const inACopy = (file: string) => file.includes(`${path.sep}testing${path.sep}legacy-`) || COPY_DIRS.some((dir) => file.startsWith(dir + path.sep))
-/** The Worker's files scanned for uses: all of them, less this guard and the frozen copies. */
-const scannedWorkerFiles = workerFiles.filter((file) => file !== __filename && !inACopy(file))
+/** The Worker's files scanned for uses: all of them, less this guard, the frozen copies and W64a's merged guard (it lists them). */
+const scannedWorkerFiles = workerFiles.filter((file) => file !== __filename && file !== path.join(__dirname, 'removed-code.test.ts') && !inACopy(file))
 const read = (file: string) => withoutComments(readFileSync(file, 'utf8'))
 const workerCode = new Map(scannedWorkerFiles.map((file) => [file, read(file)]))
 const staffAppCode = new Map(staffAppFiles.map((file) => [file, read(file)]))

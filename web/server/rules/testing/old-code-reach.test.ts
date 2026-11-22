@@ -148,23 +148,13 @@ export const OLD_CODE_GUARDS: readonly string[] = [
 ]
 
 /**
- * W64, LEFT (briefs/W64-report.md, item 1): the tests that hold the Worker's words to the old functions' text, read
- * from the frozen copies with the parser (frozenWords and the rest), and the one part of the staff app helpers' test
- * that loads the old shared modules. Each still reads a frozen folder. Before W65 deletes the folders they become a
- * pinned list of the old words (recorded once from the copies, then read from the list alone); until then they are
- * named here, so the import test passes only for these and no other.
+ * W64, LEFT (briefs/W64-report.md, item 1): the tests that held the Worker's words to the old functions' text, read
+ * from the frozen copies with the parser. W64a item 7: all nine now read the old words pinned in testing/old-words.json
+ * (recorded once from the copies by replay/old-words.test.ts, which W65 deletes with them), and the staff app helpers'
+ * tests of the old staff checks moved to replay/old-staff-guards.test.ts. The list is empty: nothing W65 keeps reads the
+ * old code.
  */
-export const WORDS_HELD_TO_THE_OLD_CODE: readonly string[] = [
-  'server/rules/admin/words.test.ts',
-  'server/rules/bookings/failure-messages.test.ts',
-  'server/rules/customers/failure-messages.test.ts',
-  'server/rules/events/failure-messages.test.ts',
-  'server/rules/gift-cards/failure-messages.test.ts',
-  'server/rules/memberships/failure-messages.test.ts',
-  'server/rules/memberships/payment-date-status.test.ts',
-  'server/rules/refunds/failure-messages.test.ts',
-  'server/staff-app-helpers.test.ts',
-]
+export const WORDS_HELD_TO_THE_OLD_CODE: readonly string[] = []
 
 /** Rule 1's findings for one file: what it reaches of the old code. */
 export function oldCodeReached(file: string, reach: Reach): string[] {
@@ -222,6 +212,27 @@ describe('nothing reaches the old code but the replay and the old code\'s own gu
 
   it('W64 left: the words tests named still read the old code, and only them (each one done comes off the list)', () => {
     for (const name of WORDS_HELD_TO_THE_OLD_CODE) expect(oldCodeReached(name, reachOf(path.join(WORKER, name))).length, name).toBeGreaterThan(0)
+  })
+
+  it('W64a item 7: the list ends empty, and the nine words tests that were on it read only the pinned words', () => {
+    expect(WORDS_HELD_TO_THE_OLD_CODE).toEqual([])
+    const nine = [
+      'server/rules/admin/words.test.ts',
+      'server/rules/bookings/failure-messages.test.ts',
+      'server/rules/customers/failure-messages.test.ts',
+      'server/rules/events/failure-messages.test.ts',
+      'server/rules/gift-cards/failure-messages.test.ts',
+      'server/rules/memberships/failure-messages.test.ts',
+      'server/rules/memberships/payment-date-status.test.ts',
+      'server/rules/refunds/failure-messages.test.ts',
+      'server/staff-app-helpers.test.ts',
+    ]
+    for (const name of nine) {
+      const reach = reachOf(path.join(WORKER, name))
+      expect(oldCodeReached(name, reach), name).toEqual([])
+      expect(reach.modules.some((module) => module.endsWith(`${TESTING}old-words.ts`)), name).toBe(true)
+      expect(reach.modules.some((module) => module.endsWith('frozen-words.ts')), name).toBe(false)
+    }
   })
 
   it('the guards named are each a real file, and each reaches the old code (a guard that no longer does is no longer one)', () => {

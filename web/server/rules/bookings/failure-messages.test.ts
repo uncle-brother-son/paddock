@@ -1,15 +1,16 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
-import { legacyBookingDir } from '@/server/rules/testing/replay/harness'
+import { oldWords } from '@/server/rules/testing/old-words'
 import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
 import * as words from './failure-messages'
 
 // W17: step D's words, moved ahead of the slices that use them. The screens' maps must be the screens', word for
 // word, until each screen goes (read here from the staff app's source with the TypeScript parser, as step C's test
-// does), and the old functions' words must be in the frozen copy of the old code, word for word, so a word changed on
-// either side fails. The words W17 adds are checked for what they must say.
+// does), and the old functions' words must be the old code's, word for word, so a word changed on either side fails
+// (W64a item 7: read from the old code's words pinned in testing/old-words.json, recorded from step D's frozen copy).
+// The words W17 adds are checked for what they must say.
 
 const components = path.join(staffAppDir(), 'frontend/components')
 const read = (file: string) => ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true)
@@ -53,26 +54,8 @@ function objectLiteral(source: ts.SourceFile, name: string, maps: Record<string,
   return entries
 }
 
-/** Every string literal in the frozen copy, and the static text of every template literal. */
-function frozenCode(): { strings: Set<string>; templates: string[] } {
-  const strings = new Set<string>()
-  const templates: string[] = []
-  const walk = (dir: string) => {
-    for (const name of readdirSync(dir)) {
-      const full = path.join(dir, name)
-      if (statSync(full).isDirectory()) walk(full)
-      else if (name.endsWith('.ts')) {
-        read(full).forEachChild(function visit(node) {
-          if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) strings.add(node.text)
-          if (ts.isTemplateExpression(node)) templates.push([node.head.text, ...node.templateSpans.map((span) => span.literal.text)].join('\u0000'))
-          node.forEachChild(visit)
-        })
-      }
-    }
-  }
-  walk(legacyBookingDir)
-  return { strings, templates }
-}
+/** Every string literal in step D's frozen copy, and the static text of every template literal (pinned, W64a item 7). */
+const frozenCode = (): { strings: Set<string>; templates: string[] } => oldWords('booking')
 
 /** Whether `text` is a frozen template filled in: its static parts, in order, with anything between. */
 const fillsTemplate = (templates: string[], text: string): boolean =>

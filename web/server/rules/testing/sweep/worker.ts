@@ -23,7 +23,7 @@ import {
   type AnsweredPlanExtra,
   type AnsweredStamp,
 } from './admin-presses'
-import { BUILT_BOOKING_ACTIONS, bookingOf, settleHeldRefund, throughStaffApp, withSwitch } from './booking-presses'
+import { bookingOf, bookingPresses, pressSwitch, settleHeldRefund, throughStaffApp, withSwitch } from './booking-presses'
 import { createAsTheDialogPresses as createCustomerAsTheDialogPresses, READS_ALREADY_SWITCHED, W39_ACTIONS } from './customer-presses'
 import { EVENT_CANCEL_KINDS_ON, EVENT_PLACE_ACTIONS, eventPlacesAsTheDialogPresses, settleHeldEventRefund } from './event-places-presses'
 import { giftCardsAsTheScreensPress, W38_ACTIONS } from './gift-card-presses'
@@ -50,7 +50,10 @@ import { cancelEventAsTheDialogPresses, WHOLE_EVENT_ACTIONS } from './whole-even
  * fake (replay/stripe-binding.ts), and sets STAFF_API_KEY.
  */
 
-/** Every kind the live ORDER_SWITCH lists (CLAUDE.md, 22 Nov): a press its family doesn't switch itself sees these. */
+/**
+ * Every kind the live ORDER_SWITCH lists (CLAUDE.md, 22 Nov). W64a item 8: every press on this side sees exactly these
+ * (or `orderSwitch`), its family's own set and New Order's four kinds replaced by them (booking-presses.ts, pressSwitch).
+ */
 export const LIVE_KINDS_ON =
   'no_stripe,saved_card,reader,membership,booking_changes,reader_flows,order_refunds,event_cancels,membership_changes,payment_date_changes,card_moves,lapse_sweep,payment_retries,plan_changes'
 
@@ -79,7 +82,7 @@ export interface WorkerSideOptions {
   planExtras?: AnsweredPlanExtra[]
   /** The lapse sweep's results, where a scenario runs it. */
   lapseRuns?: LapseSweepResult[]
-  /** ORDER_SWITCH for presses whose family doesn't set its own (default: every live kind). */
+  /** ORDER_SWITCH for every press and the lapse sweep (default: every live kind). W64a item 8: the families' sets no longer apply. */
   orderSwitch?: string
 }
 
@@ -134,8 +137,9 @@ export function workerSide(options: WorkerSideOptions = {}): (db: Db, stripe: Fa
     const eventPlaces = eventPlacesAsTheDialogPresses()
     const cancelEvent = cancelEventAsTheDialogPresses()
     const creates = new Map([...CREATES].map((action) => [action, createAsItsDialogPresses(action)] as const))
-    // Each booking press keeps its own held keys across the run, as the dialog does (BUILT_BOOKING_ACTIONS is one set a module).
-    const booking = BUILT_BOOKING_ACTIONS
+    // Each booking press keeps its own held keys across the run, as the dialog does. W64a item 8: a new set for each
+    // scenario, so no key is held over from the last one.
+    const booking = bookingPresses()
 
     const order = async (action: string, params: unknown): Promise<unknown> => {
       placing.on = true
@@ -207,7 +211,7 @@ export function workerSide(options: WorkerSideOptions = {}): (db: Db, stripe: Fa
     return {
       name: 'worker',
       nightlyJob: runNightlyJobAsNow,
-      lapseSweep: (sweepDb) => lapseSweepAsTheWorkerRunsIt(sweepDb, lapseRuns ? { runs: lapseRuns } : {}),
+      lapseSweep: (sweepDb) => lapseSweepAsTheWorkerRunsIt(sweepDb, { orderSwitch, ...(lapseRuns ? { runs: lapseRuns } : {}) }),
       async call(action, params) {
         calls?.push(action)
         // The clock moves between presses. 50 ms, not the families' 1 ms: New Order's T1 spaces its rows a millisecond
@@ -216,12 +220,16 @@ export function workerSide(options: WorkerSideOptions = {}): (db: Db, stripe: Fa
         // are seconds apart; 50 ms is still far inside every window a scenario times (a press's 60 seconds, 24 hours).
         vi.setSystemTime(Date.now() + PRESS_STEP_MS)
         let answer: unknown
+        const outer = pressSwitch.live
+        pressSwitch.live = orderSwitch
         try {
           answer = await press(action, params)
         } catch (err) {
           const asAnswer = (refusedReadsAsAnswers === true && isRead(action) && action !== 'createCustomer') || (refusedPressesAsAnswers === true && STEP_G_ACTIONS_MOVED.has(action) && !isRead(action))
           if (!asAnswer) throw err
           answer = { thrown: err instanceof Error ? err.message : String(err) }
+        } finally {
+          pressSwitch.live = outer
         }
         return adjust ? adjust(action, answer) : answer
       },

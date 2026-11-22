@@ -126,7 +126,12 @@ const staffAppFiles = sourceFiles(appDir, ['backend', 'frontend']).filter((file)
 /** W17: the frozen copy of the old step D functions, guarded by frozen-booking-code.test.ts. It is old code too. */
 const BOOKING_FIXTURE_DIR = path.join(workerDir, 'server/rules/testing/legacy-booking')
 const everyFile = [...workerFiles, ...staffAppFiles].filter(
-  (file) => file !== __filename && !file.startsWith(FIXTURE_DIR + path.sep) && !file.startsWith(BOOKING_FIXTURE_DIR + path.sep)
+  (file) =>
+    file !== __filename &&
+    // W64a: the merged guard lists what every guard holds.
+    file !== path.join(workerDir, 'server/rules/testing/removed-code.test.ts') &&
+    !file.startsWith(FIXTURE_DIR + path.sep) &&
+    !file.startsWith(BOOKING_FIXTURE_DIR + path.sep)
 )
 const code = new Map(everyFile.map((file) => [file, withoutComments(readFileSync(file, 'utf8'))]))
 const shown = (file: string) => path.relative(path.dirname(workerDir), file)

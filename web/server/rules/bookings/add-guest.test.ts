@@ -739,6 +739,31 @@ describe('the saved card (pending first, keyed from the record, C2 or the undo)'
     })
   })
 
+  // Brief W64a item 2 (W64 review S2): R2a and R2b (the third W05 release review's finding 2), held here before W65
+  // deletes booking-replay. The press ran to its end on the Worker (£5 store credit, £15 on the card) and only its answer
+  // was lost; the dialog keeps the key and sends the next press under it.
+  it('R2a / R2b: the answer lost after the charge; the next press under the same key with a gift card is refused (422 IDEMPOTENCY_MISMATCH): one guest, one order, one £15 charge, the gift card untouched', async () => {
+    await onABooking(publicBooking, async ({ bookingId, stripe }) => {
+      const key = crypto.randomUUID()
+      const lost = await post(bookingId, { ...bea, ...onCard({ storeCredit: { amount: 5 } }, 20, 15) }, { key })
+      expect(lost.body.data).toMatchObject({ added: true })
+      const again = await post(bookingId, { ...bea, ...onCard({ giftCard: { giftCardId: ID.giftCard, amount: 5 } }, 20, 15) }, { key })
+      expect(again.status).toBe(422)
+      expect(again.body.error).toMatchObject({ code: 'IDEMPOTENCY_MISMATCH' })
+      // R2a's next press on the card alone: refused the same way.
+      expect((await post(bookingId, { ...bea, ...onCard() }, { key })).body.error).toMatchObject({ code: 'IDEMPOTENCY_MISMATCH' })
+      expect((await guests(bookingId)).map((guest) => guest.guest_name)).toEqual(['Sam Test', 'Alex Guest', 'Bea Guest'])
+      expect(await booking(bookingId)).toMatchObject({ price_paid: '60.00', party_size: 3 })
+      expect(await places()).toBe(3)
+      expect((await addOrders(bookingId)).map((order) => [order.order_total, order.payment_method])).toEqual([['15.00', 'card']])
+      expect(creates(stripe).map((call) => (call.params as { amount: number }).amount)).toEqual([1500])
+      expect(await storeCredit()).toBe('25.00')
+      expect((await creditRows(bookingId)).map((row) => `${row.amount} ${row.reason}`)).toEqual(['-5.00 redemption'])
+      expect(await giftCard()).toEqual({ b: '40.00', r: false })
+      expect(await giftRows(bookingId)).toEqual([])
+    })
+  })
+
   it("R2d: C2 fails after the card paid (its order refused): held, never refunded, its PaymentIntent on the row; reconcile writes the order", async () => {
     await onABooking(publicBooking, async ({ bookingId, stripe }) => {
       const answer = await whileFailing(db, { table: 'orders', event: 'INSERT', when: 'true' }, () => post(bookingId, { ...bea, ...onCard({ storeCredit: { amount: 5 } }, 20, 15) }))

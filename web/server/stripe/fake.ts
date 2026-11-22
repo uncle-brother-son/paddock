@@ -626,6 +626,17 @@ export class FakeStripe implements StripeClient {
   }
 
   /**
+   * W64a item 8 (W64 review, "for later" 6): an intent as the old screens made it, with `field` left out of its
+   * metadata (the Worker always writes `pending_id` on a flow's intent; the old code didn't). Test data only: Stripe's own
+   * metadata can't lose a field like this.
+   */
+  withoutMetadataField(id: string, field: string): void {
+    const intent = this.intents.get(id)
+    if (!intent) throw new Error(`The fake has no PaymentIntent ${id}.`)
+    intent.metadata = Object.fromEntries(Object.entries(intent.metadata).filter(([key]) => key !== field))
+  }
+
+  /**
    * W13b: a charge Stripe has authorised but not yet captured (`requires_capture`): nothing taken yet, and it
    * can still be cancelled, or succeed (completeReaderPayment, which works for any intent).
    */

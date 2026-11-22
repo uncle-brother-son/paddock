@@ -65,6 +65,23 @@
       "idempotencyKey": "orders#1:subscription"
     },
     {
+      "method": "subscriptions.retrieve",
+      "params": {
+        "id": "sub_fake_0003"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "customers.update",
+      "params": {
+        "id": "cus_seed",
+        "invoice_settings": {
+          "default_payment_method": "pm_seed"
+        }
+      },
+      "idempotencyKey": null
+    },
+    {
       "method": "subscriptions.cancel",
       "params": {
         "id": "sub_fake_0003"
@@ -195,6 +212,60 @@
           "at": "<set>",
           "actor_type": "staff",
           "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "customer.invoice_default",
+          "entity_type": "customer",
+          "entity_id": "10000000-0000-4000-8000-000000000005",
+          "request_id": "gone#2",
+          "details": {
+            "set": true,
+            "paymentMethodId": "pm_seed",
+            "stripeCustomerId": "cus_seed"
+          }
+        },
+        {
+          "id": "audit_log#3",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.step_left",
+          "entity_type": "membership",
+          "entity_id": "customer_memberships#1",
+          "request_id": "gone#2",
+          "details": {
+            "kind": "payment_method",
+            "want": {
+              "paymentMethod": "pm_seed"
+            },
+            "state": "done",
+            "detail": "Stripe already showed it",
+            "stepId": "gone#5",
+            "subscriptionId": "sub_fake_0003"
+          }
+        },
+        {
+          "id": "audit_log#4",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.step_left",
+          "entity_type": "membership",
+          "entity_id": "customer_memberships#1",
+          "request_id": "gone#2",
+          "details": {
+            "kind": "payment_method",
+            "want": {
+              "paymentMethod": "pm_seed"
+            },
+            "state": "left",
+            "stepId": "gone#5",
+            "subscriptionId": "sub_fake_0003"
+          }
+        },
+        {
+          "id": "audit_log#5",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
           "action": "order.paid",
           "entity_type": "order",
           "entity_id": "orders#1",
@@ -214,7 +285,7 @@
           }
         },
         {
-          "id": "audit_log#3",
+          "id": "audit_log#6",
           "at": "<set>",
           "actor_type": "staff",
           "actor_id": "10000000-0000-4000-8000-000000000001",
@@ -255,7 +326,7 @@
           }
         },
         {
-          "id": "audit_log#4",
+          "id": "audit_log#7",
           "at": "<set>",
           "actor_type": "staff",
           "actor_id": "10000000-0000-4000-8000-000000000001",
@@ -269,7 +340,7 @@
             ],
             "found": "refund",
             "state": "left",
-            "claimId": "audit_log#3",
+            "claimId": "audit_log#6",
             "refunded": [],
             "amountPaid": 0,
             "subscriptionId": "sub_fake_0003",
@@ -277,7 +348,7 @@
           }
         },
         {
-          "id": "audit_log#5",
+          "id": "audit_log#8",
           "at": "<set>",
           "actor_type": "staff",
           "actor_id": "10000000-0000-4000-8000-000000000001",
@@ -298,7 +369,7 @@
           }
         },
         {
-          "id": "audit_log#6",
+          "id": "audit_log#9",
           "at": "<set>",
           "actor_type": "staff",
           "actor_id": "10000000-0000-4000-8000-000000000001",
@@ -308,7 +379,7 @@
           "request_id": "gone#4",
           "details": {
             "owed": 0,
-            "claimId": "audit_log#3",
+            "claimId": "audit_log#6",
             "outcome": "given",
             "cardRefunded": 0,
             "storeCreditRefunded": 40
@@ -317,7 +388,7 @@
       ],
       "changed": [],
       "removed": [],
-      "tied": 0
+      "tied": 3
     },
     "customer_memberships": {
       "added": [
@@ -470,7 +541,7 @@
           "booking_id": null,
           "gift_card_id": null,
           "staff_id": "10000000-0000-4000-8000-000000000001",
-          "note": "Refund to store credit — order line items refunded by staff. [ref gone#5]",
+          "note": "Refund to store credit — order line items refunded by staff. [ref gone#6]",
           "created_at": "<set>",
           "event_booking_id": null
         }

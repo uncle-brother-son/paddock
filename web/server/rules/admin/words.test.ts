@@ -1,6 +1,5 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
-import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 import { BOOKING_ADMIN_WORDS } from '@/server/rules/bookings/admin-failure-messages'
 import { CATALOG_ADMIN_DIALOG_WORDS, CATALOG_ADMIN_REASONS, CATALOG_ADMIN_WORDS, LEGACY_CATALOG_ROUTE_WORDS, PLAN_PRICE_MOVE_WORDS } from '@/server/rules/catalog/failure-messages'
@@ -10,72 +9,20 @@ import { PRICING_ADMIN_WORDS } from '@/server/rules/pricing/admin-failure-messag
 import { PROMO_ADMIN_REASONS, PROMO_ADMIN_WORDS } from '@/server/rules/promo/admin-failure-messages'
 import { SESSION_ADMIN_DIALOG_WORDS, SESSION_ADMIN_REASONS, SESSION_ADMIN_WORDS } from '@/server/rules/sessions/admin-failure-messages'
 import { STAFF_ADMIN_WORDS } from '@/server/rules/staff/failure-messages'
-import { legacyAdminDir } from '@/server/rules/testing/replay/harness'
+import { OLD_WORDS, type OldAdminWord } from '@/server/rules/testing/old-words'
 import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
 
 // Brief W48 item 1: every refusal reason of the 82 old step G functions, and its words, is in the Worker's words
-// files, word for word, and nothing else is. The old sentences are read from the frozen copy (testing/legacy-admin)
-// with the TypeScript parser, so a word changed on either side fails here; the reasons are read from each old
-// function's own result type; the dialogs' own sentences from the dialogs' source in the staff app.
+// files, word for word, and nothing else is. The old sentences were read from step G's frozen copy with the TypeScript
+// parser, so a word changed on either side fails here; the reasons from each old function's own result type; the
+// dialogs' own sentences from the dialogs' source in the staff app. W64a item 7: what this test read from the copy (its
+// file count, every sentence staff could see, each function's reasons) is pinned in testing/old-words.json, recorded by
+// replay/old-words.test.ts with this file's own reading of the copy, moved there unchanged.
 
-const COPY = path.resolve(legacyAdminDir, '../..')
 /** Stands in for a value a sentence takes (`${…}` in the old source; the argument of the word's function here). */
 const VALUE = '${}'
 
-/** A literal, a template or literals joined with `+`, as one string with each `${…}` shown as ${}. Null for anything else. */
-function textOf(node: ts.Node): string | null {
-  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text
-  if (ts.isTemplateExpression(node)) return node.head.text + node.templateSpans.map((span) => VALUE + span.literal.text).join('')
-  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
-    const left = textOf(node.left)
-    const right = textOf(node.right)
-    return left === null || right === null ? null : left + right
-  }
-  if (ts.isParenthesizedExpression(node)) return textOf(node.expression)
-  return null
-}
-
-interface OldWord {
-  kind: 'thrown' | 'message' | 'route' | 'record' | 'const' | 'fallback' | 'returned'
-  text: string
-}
-
-/** Every sentence a file can show staff: thrown, answered as `message`, a route's `error`, a named message, a fallback. */
-function oldWords(file: string): OldWord[] {
-  const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true)
-  const found: OldWord[] = []
-  const add = (kind: OldWord['kind'], node: ts.Node) => {
-    const text = textOf(node)
-    if (text !== null && text.trim() !== '') found.push({ kind, text })
-  }
-  const visit = (node: ts.Node) => {
-    if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'Error' && node.arguments?.[0]) add('thrown', node.arguments[0])
-    if (ts.isPropertyAssignment(node) && (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name))) {
-      if (node.name.text === 'message') add('message', node.initializer)
-      if (node.name.text === 'error') add('route', node.initializer)
-      const record = node.parent.parent
-      if (ts.isVariableDeclaration(record) && ts.isIdentifier(record.name) && /MESSAGES$/.test(record.name.text)) add('record', node.initializer)
-    }
-    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && /_MESSAGE$/.test(node.name.text) && node.initializer) add('const', node.initializer)
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'invalid' && node.arguments[0]) add('message', node.arguments[0])
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'extractApiErrorMessage' && node.arguments[1]) add('fallback', node.arguments[1])
-    if (ts.isArrayLiteralExpression(node) && node.elements.length === 2 && node.elements[0] && node.elements[1] && ts.isStringLiteral(node.elements[0]) && /^events_/.test(node.elements[0].text)) add('message', node.elements[1])
-    if (ts.isReturnStatement(node) && node.expression && (ts.isStringLiteral(node.expression) || ts.isNoSubstitutionTemplateLiteral(node.expression)) && /[a-z] [a-z]/.test(node.expression.text)) add('returned', node.expression)
-    ts.forEachChild(node, visit)
-  }
-  visit(source)
-  return found
-}
-
-/** The reasons a file's own result types name. */
-const oldReasons = (file: string): string[] => [...new Set([...readFileSync(file, 'utf8').matchAll(/reason\??:\s*((?:\s*\|?\s*'[a-z_]+')+)/g)].flatMap((match) => [...(match[1] ?? '').matchAll(/'([a-z_]+)'/g)].map((reason) => reason[1] ?? '')))]
-
-function filesUnder(dir: string): string[] {
-  return readdirSync(dir).flatMap((name) => {
-    const full = path.join(dir, name)
-    return statSync(full).isDirectory() ? filesUnder(full) : name.endsWith('.ts') ? [full] : []
-  })
-}
+type OldWord = OldAdminWord
 
 /** The plumbing between Retool, the legacy routes and Stripe, and a state one transaction can't leave: never moved. */
 const NOT_MOVED = [/returned an HTML page/, /^Unauthorized$/, /^Missing required fields/, /^Internal server error$/, /^Unparseable timestamp/, /could not be read back/]
@@ -87,12 +34,11 @@ const sentences = (words: Words): string[] => Object.values(words).flatMap((grou
 
 const NEW_WORDS: Words[] = [STAFF_ADMIN_WORDS, CATALOG_ADMIN_WORDS, LEGACY_CATALOG_ROUTE_WORDS, { lib: PLAN_PRICE_MOVE_WORDS }, PROMO_ADMIN_WORDS, PRICING_ADMIN_WORDS, SESSION_ADMIN_WORDS, BOOKING_ADMIN_WORDS, EVENT_ADMIN_WORDS, ORDER_ADMIN_WORDS]
 const moved = new Set(NEW_WORDS.flatMap(sentences))
-const copyFiles = filesUnder(COPY)
-const everyOldWord = copyFiles.flatMap((file) => oldWords(file).map((word) => ({ ...word, file: path.relative(COPY, file) })))
+const everyOldWord: OldWord[] = OLD_WORDS.admin.words
 
 describe("step G's words (brief W48 item 1)", () => {
   it('reads the frozen copy: 107 files, 214 sentences in 53 of them, 168 of them different', () => {
-    expect(copyFiles).toHaveLength(107)
+    expect(OLD_WORDS.admin.files).toBe(107)
     expect(everyOldWord).toHaveLength(214)
     expect(new Set(everyOldWord.map((word) => word.file)).size).toBe(53)
     expect(new Set(everyOldWord.map((word) => word.text)).size).toBe(168)
@@ -131,11 +77,7 @@ describe("step G's words (brief W48 item 1)", () => {
 
   it("every reason an old function's result type names is listed, in its order", () => {
     const listed: Record<string, readonly string[]> = { ...CATALOG_ADMIN_REASONS, ...PROMO_ADMIN_REASONS, ...SESSION_ADMIN_REASONS, ...EVENT_ADMIN_REASONS, ...ORDER_ADMIN_REASONS }
-    const old = Object.fromEntries(
-      copyFiles
-        .map((file) => [path.basename(file, '.ts'), oldReasons(file)] as const)
-        .filter(([, reasons]) => reasons.length > 0)
-    )
+    const old = OLD_WORDS.admin.reasons
     expect(listed).toEqual(old)
     expect(Object.keys(old).sort()).toEqual(['createOneOffSession', 'eventCheckIn', 'resetSessionBand', 'setEventActive', 'setEventAttendeeCheckIn', 'setEventAttendeeWaiver', 'setEventDetails', 'setOrderLineItemFulfilled', 'setSessionPassLevel', 'setSessionStartTime', 'updatePromoCode'])
     // The check-in's full list of eight is its message record's keys, and the two window reasons, whose words are the

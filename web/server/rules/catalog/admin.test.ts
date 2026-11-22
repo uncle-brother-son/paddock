@@ -492,6 +492,23 @@ describe("W54a's stale-page rule on the edits that send a whole row back", () =>
   })
 })
 
+// Brief W64a item 2 (W64 review S2): GB4, held before W65 deletes the step G replay that recorded it
+// (`w48-gb4-a-capacity-or-length-change-reaches-no-session-already-made`).
+describe("GB4: a service type's length or capacity change reaches no session already made", () => {
+  it('the type changes to 90 minutes and 8 places; its sessions already made keep their times and capacity', async () => {
+    const made = await fixtures.session(db, { service_type_id: serviceType, band_id: core })
+    const booked = await fixtures.session(db, { service_type_id: serviceType, band_id: peak, start_time: '2030-06-16 18:00:00+00', end_time: '2030-06-16 19:00:00+00', total_booked: 9 })
+    const sessions = () => db.query<{ id: string }>('SELECT id, start_time::text AS start_time, end_time::text AS end_time, capacity, total_booked FROM sessions WHERE service_type_id = $1 ORDER BY start_time', [serviceType])
+    const before = await sessions()
+    expect(before.map((row) => row.id)).toEqual([made, booked])
+    const stamp = ((await read<Array<{ id: string; stamp: string }>>(serviceTypesRoute)).data ?? []).find((type) => type.id === serviceType)?.stamp
+    expect((await press(serviceTypeDetailsRoute, { serviceTypeId: serviceType }, { duration: 90, capacity: 8, bookingType: 'public', stamp })).ok).toBe(true)
+    expect(await one('SELECT duration, capacity FROM service_types WHERE id = $1', [serviceType])).toEqual({ duration: 90, capacity: 8 })
+    // The 9 booked of 10 stay 9 of 10 (never 9 of 8), and the hour stays an hour.
+    expect(await sessions()).toEqual(before)
+  })
+})
+
 describe("W55a: the W55 + W56 review's fixes", () => {
   it('B1: a variant for a product with no base price, or a base price of £0, is refused in words; nothing written', async () => {
     const unpriced = await insert(db, 'products', { name: 'Robe', category: 'Merch' })

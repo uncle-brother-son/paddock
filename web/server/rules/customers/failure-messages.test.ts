@@ -1,24 +1,23 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { frozenWords, propertyUnionMembers, sourceHolds, templatesFilledBy } from '@/server/rules/testing/frozen-words'
-import { legacyAccountDir } from '@/server/rules/testing/replay/harness'
+import { OLD_WORDS, oldPropertyUnionMembers, oldWords, sourceHolds, templatesFilledBy } from '@/server/rules/testing/old-words'
 import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
 import * as words from './failure-messages'
 
 // Brief W36 item 1: the customer words (store credit, creating a customer, the saved card's screen), moved ahead of
-// the slices that use them (W37, W39, W42). Every word moved must be the old function's, word for word, read here
-// from the frozen copy of the old code (legacy-account) with the TypeScript parser, so a word changed on either side
-// fails. The dialogs' own words are held to the dialogs' source until each screen changes with its slice.
+// the slices that use them (W37, W39, W42). Every word moved must be the old function's, word for word, read (W64a item
+// 7) from the old code's words pinned in testing/old-words.json (recorded from step F's frozen copy with the TypeScript
+// parser), so a word changed on either side fails. The dialogs' own words are held to the dialogs' source until each
+// screen changes with its slice.
 
-const { strings, templates } = frozenWords(legacyAccountDir)
+const { strings, templates } = oldWords('account')
 const component = (name: string) => path.join(staffAppDir(), 'frontend/components', name)
-const fn = (name: string) => path.join(legacyAccountDir, name)
 const isOldWord = (text: string): boolean => strings.has(text) || templatesFilledBy(templates, text).length > 0
 
 describe("adjustCustomerStoreCredit's reasons and words, moved (brief W36 item 1)", () => {
   it('every reason the old function could answer with is listed, and no other', () => {
-    const old = propertyUnionMembers(fn('adjustCustomerStoreCredit.ts'), 'AdjustCustomerStoreCreditResult', 'reason')
+    const old = oldPropertyUnionMembers('account', 'AdjustCustomerStoreCreditResult', 'reason')
     expect(old).toHaveLength(3)
     expect([...words.STORE_CREDIT_REASONS]).toEqual(old)
   })
@@ -32,7 +31,8 @@ describe("adjustCustomerStoreCredit's reasons and words, moved (brief W36 item 1
   it("the shortest reason allowed is the old function's and the dialog's (5 characters)", () => {
     expect(words.STORE_CREDIT_MIN_REASON_LENGTH).toBe(5)
     expect(words.STORE_CREDIT_WORDS.reasonRequired).toContain(`at least ${words.STORE_CREDIT_MIN_REASON_LENGTH} characters`)
-    for (const file of [fn('adjustCustomerStoreCredit.ts'), component('AdjustStoreCreditDialog.tsx')]) expect(readFileSync(file, 'utf8'), file).toContain('const MIN_REASON_LENGTH = 5')
+    expect(OLD_WORDS.facts.minReasonLength).toBe('const MIN_REASON_LENGTH = 5')
+    expect(readFileSync(component('AdjustStoreCreditDialog.tsx'), 'utf8')).toContain('const MIN_REASON_LENGTH = 5')
   })
 
   it("the dialog's own words are in the dialog's source, and its fallback is the function's own sentence", () => {

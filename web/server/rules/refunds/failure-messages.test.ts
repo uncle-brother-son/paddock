@@ -1,16 +1,16 @@
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { frozenWords, sourceHolds, templatesFilledBy, unionMembers } from '@/server/rules/testing/frozen-words'
-import { legacyRefundDir } from '@/server/rules/testing/replay/harness'
+import { oldUnionMembers, oldWords, sourceHolds, templatesFilledBy } from '@/server/rules/testing/old-words'
 import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
 import * as words from './failure-messages'
 
 // Brief W27 item 5: the order refund's words, moved ahead of the slices that use them (W28, W29). Every reason of
-// refundOrder must be listed, and every word moved must be the old function's, word for word, read here from the
-// frozen copy of the old code (legacy-refund) with the TypeScript parser, so a word changed on either side fails.
-// The dialog's own words are held to the dialog's source until the screen changes at W28.
+// refundOrder must be listed, and every word moved must be the old function's, word for word, read (W64a item 7) from
+// the old code's words pinned in testing/old-words.json (recorded from step E's frozen copy with the TypeScript
+// parser), so a word changed on either side fails. The dialog's own words are held to the dialog's source until the
+// screen changes at W28.
 
-const { strings, templates } = frozenWords(legacyRefundDir)
+const { strings, templates } = oldWords('refund')
 const dialog = path.join(staffAppDir(), 'frontend/components/RefundOrderDialog.tsx')
 const LINE = '7c9e6679-7425-40de-944b-e07fc1f90ae7'
 
@@ -21,7 +21,7 @@ function isOldWord(text: string): boolean {
 
 describe("refundOrder's reasons and words, moved (brief W27 item 5)", () => {
   it('every reason the old function could answer with is listed, and no other', () => {
-    const old = unionMembers(path.join(legacyRefundDir, 'refundOrder.ts'), 'RefundOrderFailureReason')
+    const old = oldUnionMembers('refund', 'RefundOrderFailureReason')
     expect(old).toHaveLength(17)
     expect([...words.ORDER_REFUND_REASONS]).toEqual(old)
   })

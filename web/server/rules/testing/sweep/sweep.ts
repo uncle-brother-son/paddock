@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { compareRecordings, type Recording } from '../replay/compare'
-import { watchedForInvariants, type InvariantSweep } from '../replay/invariants'
+import { watchedForInvariants, WORKER_EXCEPTIONS, type InvariantExceptions, type InvariantSweep } from '../replay/invariants'
 import { scenarios } from '../replay/scenarios'
 import { w48Scenarios } from '../replay/w48-scenarios'
 import { answeredStampProblems, type AnsweredPlanExtra, type AnsweredStamp } from './admin-presses'
@@ -29,6 +29,9 @@ import { workerSide, type WorkerSideOptions } from './worker'
 /** Every scenario the sweep runs, in the order the old replay had them. */
 export const SWEEP_SCENARIOS: readonly Scenario[] = [...scenarios, ...W12_FLOW_SCENARIOS, ...w48Scenarios()]
 
+/** W64a item 1: the rule test file holding the next step on money owed, made on the Worker (each test named after its scenario). */
+const OWED_NEXT = 'bookings/money-owed-next-steps.test.ts, the test named after this scenario'
+
 /**
  * Scenarios only the old code can run, dropped from the sweep (H-plan 3.3 step 3), each with where its decided
  * behaviour is held in a rule test (briefs/W64-report.md lists them too).
@@ -41,31 +44,38 @@ export const DROPPED: Readonly<Record<string, string>> = {
   // GB15 (W61): the scenario calls the legacy catalogue routes straight through paddockBackendApi2, which W61 removed;
   // every Worker route checks the staff member first (GB14).
   'w48-gb15-the-legacy-route-takes-the-shared-key-and-asks-no-staff-member': 'GB15: server/rules/testing/sweep/dropped.test.ts (no /api/catalog route in app/; an inactive account is refused setProductActive)',
+  // GB24 too: the "who may" recording of the same deleted function. Each press reached the all-Worker side's own words
+  // ("no press for generateUpcomingSessions"), so it recorded the harness, not the Worker (W64 review S5).
+  'w48-generate-upcoming-sessions-who-may': 'GB24: server/rules/testing/sweep/dropped.test.ts (no such function in the staff app; no route; the job makes sessions: sessions/admin.test.ts)',
   // W05g's and W05h's money owed, set up on the old side (scenarios.ts onTheOldSide, fortyOwed, fortyLanded: a cheaper
-  // move whose store credit failed or couldn't be told). On the Worker a move is one transaction, so a failing store
-  // credit leaves nothing moved and nothing owed: the state these scenarios test the next step on can't be made. What
-  // each later step does with money owed is held in the rule tests named (briefs/W64-report.md, "Dropped scenarios").
+  // move whose store credit failed or couldn't be told). On the Worker a move is one transaction, so that setup leaves
+  // nothing owed. W64a item 1 (W64 review S1): money owed is still reached on the Worker, by a card refund Stripe never
+  // got, so each next step is held in the rule test named, which makes it that way and holds the figures booking-replay
+  // accepted. They stay dropped rather than rebuilt here: scenarios.ts is still the old replay's until W65, and a
+  // different setup would no longer match the golden files there.
   ...Object.fromEntries(
-    [
-      'owed-then-a-same-price-move',
-      'owed-then-a-dearer-move',
-      'owed-then-a-dearer-move-then-cancel',
-      'owed-with-nothing-left-then-a-same-price-move',
-      'owed-public-then-a-same-price-move',
-      'owed-then-a-guest-same-tier',
-      'owed-then-a-guest-higher-tier',
-      'owed-then-remove-guest-stops-at-what-is-left',
-      'owed-then-cancel',
-      'owed-then-cancel-write-fails',
-      'owed-then-cancel-write-fails-after-part-of-it',
-      'refund-the-rest-card-then-store-credit',
-      'refund-the-rest-fails-partway-then-retried',
-      'refund-the-rest-while-a-reader-move-is-open',
-      'owed-arrived-after-a-lost-answer',
-      'owed-arrived-then-a-same-price-move',
-      'owed-arrived-then-cancel',
-      'figures-with-money-owed',
-    ].map((name) => [name, 'W05g / W05h money owed, set up on the old side: briefs/W64-report.md "Dropped scenarios" names the rule test for each step'])
+    (
+      [
+        ['owed-then-a-same-price-move', OWED_NEXT],
+        ['owed-then-a-dearer-move', OWED_NEXT],
+        ['owed-then-a-dearer-move-then-cancel', OWED_NEXT],
+        ['owed-with-nothing-left-then-a-same-price-move', OWED_NEXT],
+        ['owed-public-then-a-same-price-move', OWED_NEXT],
+        ['owed-then-a-guest-same-tier', OWED_NEXT],
+        ['owed-then-a-guest-higher-tier', OWED_NEXT],
+        ['owed-then-remove-guest-stops-at-what-is-left', OWED_NEXT],
+        ['refund-the-rest-while-a-reader-move-is-open', OWED_NEXT],
+        ['owed-arrived-then-a-same-price-move', OWED_NEXT],
+        ['figures-with-money-owed', OWED_NEXT],
+        ['owed-then-cancel', 'bookings/cancel.test.ts: "money owed from an earlier unclear refund is included once: the cancel gives what is left and what is owed, never the gone part twice"'],
+        ['owed-then-cancel-write-fails', 'bookings/cancel.test.ts: "N4: a database fault after the cancel (the places) changes nothing" and "Cancel & Refund with £5 owed and a credit towel ticked, declined: refund_owed_amount back to 5, …"'],
+        ['owed-then-cancel-write-fails-after-part-of-it', "bookings/cancel.test.ts: \"a failure seen while a cancel's refund is being sent waits for it: … the earlier £5 is still put back as owed afterwards (an undo never wipes it out)\""],
+        ['refund-the-rest-card-then-store-credit', 'bookings/refunds.test.ts: "Refund the rest: exactly what is owed …, to store credit; never a part refund" and "Refund the rest to the card: the first part refused puts it back as owed"'],
+        ['refund-the-rest-fails-partway-then-retried', 'bookings/refunds.test.ts: "Refund the rest to the card: the first part refused puts it back as owed"'],
+        ['owed-arrived-after-a-lost-answer', 'bookings/refunds.test.ts: "It already arrived: off the booking, no money moves, a reason required, the amount checked" and "W28 (audit row 31): It already arrived takes part of what is owed; …"'],
+        ['owed-arrived-then-cancel', 'bookings/cancel.test.ts: "money owed from an earlier unclear refund is included once: …" and "It already arrived runs on the cancelled booking: what is owed comes off, no money moves"'],
+      ] as const
+    ).map(([name, where]) => [name, `W05g / W05h money owed (set up on the old side): ${where}`])
   ),
 }
 
@@ -124,14 +134,29 @@ export interface SweptScenario {
   recording: Recording
   /** Every invariant breach and every stamp of the wrong form. */
   problems: string[]
-  /** The W05 exceptions used (replay/invariants.ts): `<list's first key>/<scenario>`. */
+  /** The W05 exceptions used (replay/invariants.ts, WORKER_EXCEPTIONS): `<list name>/<scenario>`. */
   exceptionsUsed: string[]
 }
 
+/**
+ * W64a item 4 (W64 review S3): every W05 exception the Worker's lists give the scenarios in `names`, as
+ * `<list name>/<scenario>`: what a sweep file must use, exactly.
+ */
+export function exceptionsListedFor(names: readonly string[], exceptions: InvariantExceptions = WORKER_EXCEPTIONS): string[] {
+  const lists = { stripeRefundsNotOnRows: exceptions.stripeRefundsNotOnRows, cancelledWithoutAllTheMoney: exceptions.cancelledWithoutAllTheMoney, chargesNotOnOneOrder: exceptions.chargesNotOnOneOrder }
+  return Object.entries(lists)
+    .flatMap(([kind, list]) => Object.keys(list).filter((name) => names.includes(name)).map((name) => `${kind}/${name}`))
+    .sort()
+}
+
 /** One scenario through the Worker alone, with every check on what it leaves. `extra` plants a deliberate difference. */
-export async function sweepOne(environment: ReplayEnvironment, scenario: Scenario, extra: { side?: WorkerSideOptions; replay?: ReplayOptions } = {}): Promise<SweptScenario> {
+export async function sweepOne(
+  environment: ReplayEnvironment,
+  scenario: Scenario,
+  extra: { side?: WorkerSideOptions; replay?: ReplayOptions; exceptions?: InvariantExceptions } = {}
+): Promise<SweptScenario> {
   const invariants: InvariantSweep = { wrong: [], needed: new Set<string>(), bookingsChecked: 0 }
-  const watched = watchedForInvariants(asPressedNow(scenario), invariants)
+  const watched = watchedForInvariants(asPressedNow(scenario), invariants, extra.exceptions ?? WORKER_EXCEPTIONS)
   const g: string[] = []
   const checked: Scenario = {
     ...watched,
@@ -189,9 +214,13 @@ export function sweepFile(file: string): void {
     })
     afterAll(() => environment.stop())
 
+    const used: string[] = []
+    const swept: string[] = []
     it.each(list.map((scenario) => scenario.name))('%s: the invariants hold, and it does what its recording says', async (name) => {
       const scenario = list.find((one) => one.name === name) as Scenario
-      const { recording, problems } = await sweepOne(environment, scenario)
+      const { recording, problems, exceptionsUsed } = await sweepOne(environment, scenario)
+      used.push(...exceptionsUsed)
+      swept.push(name)
       // Investigating a failure: every recording and its problems, whatever they are, in a folder of your choosing.
       if (process.env.SWEEP_DUMP_DIR) dumpForReading(process.env.SWEEP_DUMP_DIR, recording, problems)
       expect(problems).toEqual([...(NAMED_BREACHES[name]?.lines ?? [])])
@@ -202,6 +231,14 @@ export function sweepFile(file: string): void {
       const kept = readRecording(name)
       expect(kept, `No recording for ${name}: run with UPDATE_RECORDINGS=1 and read the diff`).not.toBeNull()
       expect(compareRecordings(kept as Recording, recording)).toEqual([])
+    })
+
+    // W64a item 4 (W64 review S3; w05d.test.ts held the old side the same way): after this file's scenarios, the W05
+    // exceptions they used are exactly the Worker's lists' entries for them. One listed and not used is stale (it could
+    // hide a new breach); one needed and not listed fails its scenario above as a breach.
+    it('the W05 exceptions these scenarios used are exactly the ones listed for them (WORKER_EXCEPTIONS)', () => {
+      expect(swept.sort()).toEqual(list.map((scenario) => scenario.name).sort())
+      expect([...new Set(used)].sort()).toEqual(exceptionsListedFor(swept))
     })
   })
 }

@@ -140,6 +140,8 @@ const everyFile = [...workerFiles, ...staffAppFiles].filter(
   (file) =>
     file !== __filename &&
     file !== W16_GUARD &&
+    // W64a: the merged guard lists what every guard holds.
+    file !== path.join(__dirname, 'removed-code.test.ts') &&
     !file.startsWith(ORDER_FIXTURE_DIR + path.sep) &&
     !file.startsWith(BOOKING_FIXTURE_DIR + path.sep) &&
     !awaitingYesFiles.includes(file)

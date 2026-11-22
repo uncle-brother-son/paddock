@@ -1,24 +1,23 @@
-import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { BOOKING_PATH_OFF_MESSAGE, CHANGE_PAYMENT_UNCONFIRMED_MESSAGE } from '@/server/rules/bookings/failure-messages'
 import { PAYMENT_UNCONFIRMED_MESSAGE } from '@/server/rules/orders/failure-messages'
 import { REFUND_PATH_OFF_MESSAGE } from '@/server/rules/refunds/failure-messages'
-import { frozenWords, propertyUnionMembers, sourceHolds, templatesFilledBy } from '@/server/rules/testing/frozen-words'
-import { legacyAccountDir } from '@/server/rules/testing/replay/harness'
+import { OLD_WORDS, oldPropertyUnionMembers, oldWords, sourceHolds, templatesFilledBy } from '@/server/rules/testing/old-words'
 import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
 import * as words from './failure-messages'
 
 // Brief W36 item 1: the membership words, moved ahead of the slices that use them (W37, W40, W41). Every word moved
-// must be the old code's, word for word, read here from the frozen copy (legacy-account: the staff app's functions
-// and the three legacy routes) with the TypeScript parser, so a word changed on either side fails. The dialogs' own
-// words are held to the dialogs' source until each screen changes with its slice.
+// must be the old code's, word for word, read (W64a item 7) from the old code's words pinned in testing/old-words.json
+// (recorded from step F's frozen copy, the staff app's functions and the three legacy routes, with the TypeScript
+// parser), so a word changed on either side fails. The dialogs' own words are held to the dialogs' source until each
+// screen changes with its slice.
 
-const functions = frozenWords(legacyAccountDir)
-const routes = frozenWords(path.resolve(legacyAccountDir, '../../routes'))
+const functions = oldWords('account')
+const routes = oldWords('accountRoutes')
 const component = (name: string) => path.join(staffAppDir(), 'frontend/components', name)
 const page = (name: string) => path.join(staffAppDir(), 'frontend/pages', name)
-const fn = (name: string) => path.join(legacyAccountDir, name)
+const reasonsOf = (result: string) => oldPropertyUnionMembers('account', result, 'reason')
 
 const stringsOf = (group: Record<string, unknown>): Array<[string, string]> => Object.entries(group).filter(([, value]) => typeof value === 'string') as Array<[string, string]>
 const functionsOf = (group: Record<string, unknown>): string[] => Object.entries(group).filter(([, value]) => typeof value === 'function').map(([name]) => name)
@@ -27,7 +26,7 @@ const isOldWord = (text: string, from = functions): boolean => from.strings.has(
 
 describe("the membership cancel's reasons and words, moved (brief W36 item 1)", () => {
   it('every reason the old function could answer with is listed, and no other', () => {
-    const old = propertyUnionMembers(fn('setMembershipCancellation.ts'), 'SetMembershipCancellationResult', 'reason')
+    const old = reasonsOf('SetMembershipCancellationResult')
     expect(old).toHaveLength(5)
     expect([...words.MEMBERSHIP_CANCEL_REASONS]).toEqual(old)
   })
@@ -53,7 +52,7 @@ describe("the payment date change's words, moved (brief W36 item 1)", () => {
     expect(fixed.map(([name]) => name)).toEqual(['yearly', 'paymentFailing', 'notActive', 'cancelScheduled', 'renewalOverdue', 'paymentNeeded', 'noSubscription', 'noSavedCard', 'inProgress', 'noMonthlyPrice'])
     for (const [name, text] of fixed) expect(functions.strings.has(text), name).toBe(true)
     // The old order, as the function tests them (the plan's price comes last, in loadPaymentDateQuote).
-    const source = frozenOrder(fn('shared/membershipPaymentDate.ts'), fixed.map(([, text]) => text))
+    const source = frozenOrder(fixed.map(([, text]) => text))
     expect(source).toEqual([...source].sort((a, b) => a - b))
   })
 
@@ -150,7 +149,7 @@ describe("the credit and Herd words, moved (brief W36 item 1)", () => {
   })
 
   it("Herd has one reason and no words of its own; the Customers page's fallback is in the page's source", () => {
-    expect([...words.HERD_REASONS]).toEqual(propertyUnionMembers(fn('setMembershipHerd.ts'), 'SetMembershipHerdResult', 'reason'))
+    expect([...words.HERD_REASONS]).toEqual(reasonsOf('SetMembershipHerdResult'))
     expect(sourceHolds(page('CustomersPage.tsx'), words.HERD_FALLBACK)).toBe(true)
   })
 
@@ -244,12 +243,15 @@ describe('the words W36 adds', () => {
   })
 })
 
-/** Where each of `texts` first appears in a file's source: for "in the old order" checks. */
-function frozenOrder(file: string, texts: string[]): number[] {
-  const source = readFileSync(file, 'utf8')
+/**
+ * Where each of `texts` first appears among the old shared/membershipPaymentDate.ts's string literals (pinned in source
+ * order, W64a item 7): for "in the old order" checks.
+ */
+function frozenOrder(texts: string[]): number[] {
+  const inOrder = OLD_WORDS.facts.paymentDateStrings
   return texts.map((text) => {
-    const at = [`'${text}'`, `"${text}"`].map((quoted) => source.indexOf(quoted)).find((index) => index >= 0)
-    if (at === undefined) throw new Error(`${file} doesn't hold: ${text}`)
+    const at = inOrder.indexOf(text)
+    if (at < 0) throw new Error(`shared/membershipPaymentDate.ts doesn't hold: ${text}`)
     return at
   })
 }

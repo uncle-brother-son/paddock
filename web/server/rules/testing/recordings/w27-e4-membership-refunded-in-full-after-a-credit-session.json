@@ -72,16 +72,33 @@
       "idempotencyKey": "orders#1:subscription"
     },
     {
+      "method": "subscriptions.retrieve",
+      "params": {
+        "id": "sub_fake_0003"
+      },
+      "idempotencyKey": null
+    },
+    {
+      "method": "customers.update",
+      "params": {
+        "id": "cus_seed",
+        "invoice_settings": {
+          "default_payment_method": "pm_seed"
+        }
+      },
+      "idempotencyKey": null
+    },
+    {
       "method": "refunds.create",
       "params": {
         "payment_intent": "pi_fake_0001",
         "amount": 4000,
         "metadata": {
-          "refund_key": "audit_log#5:refund:orders#1",
-          "claim_id": "audit_log#5"
+          "refund_key": "audit_log#8:refund:orders#1",
+          "claim_id": "audit_log#8"
         }
       },
-      "idempotencyKey": "audit_log#5:refund:orders#1"
+      "idempotencyKey": "audit_log#8:refund:orders#1"
     },
     {
       "method": "subscriptions.cancel",
@@ -233,6 +250,60 @@
           "at": "<set>",
           "actor_type": "staff",
           "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "customer.invoice_default",
+          "entity_type": "customer",
+          "entity_id": "10000000-0000-4000-8000-000000000005",
+          "request_id": "gone#2",
+          "details": {
+            "set": true,
+            "paymentMethodId": "pm_seed",
+            "stripeCustomerId": "cus_seed"
+          }
+        },
+        {
+          "id": "audit_log#3",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.step_left",
+          "entity_type": "membership",
+          "entity_id": "customer_memberships#1",
+          "request_id": "gone#2",
+          "details": {
+            "kind": "payment_method",
+            "want": {
+              "paymentMethod": "pm_seed"
+            },
+            "state": "done",
+            "detail": "Stripe already showed it",
+            "stepId": "gone#7",
+            "subscriptionId": "sub_fake_0003"
+          }
+        },
+        {
+          "id": "audit_log#4",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.step_left",
+          "entity_type": "membership",
+          "entity_id": "customer_memberships#1",
+          "request_id": "gone#2",
+          "details": {
+            "kind": "payment_method",
+            "want": {
+              "paymentMethod": "pm_seed"
+            },
+            "state": "left",
+            "stepId": "gone#7",
+            "subscriptionId": "sub_fake_0003"
+          }
+        },
+        {
+          "id": "audit_log#5",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
           "action": "order.paid",
           "entity_type": "order",
           "entity_id": "orders#1",
@@ -252,7 +323,7 @@
           }
         },
         {
-          "id": "audit_log#3",
+          "id": "audit_log#6",
           "at": "<set>",
           "actor_type": "staff",
           "actor_id": "10000000-0000-4000-8000-000000000001",
@@ -279,7 +350,7 @@
           }
         },
         {
-          "id": "audit_log#4",
+          "id": "audit_log#7",
           "at": "<set>",
           "actor_type": "staff",
           "actor_id": "10000000-0000-4000-8000-000000000001",
@@ -295,7 +366,7 @@
           }
         },
         {
-          "id": "audit_log#5",
+          "id": "audit_log#8",
           "at": "<set>",
           "actor_type": "staff",
           "actor_id": "10000000-0000-4000-8000-000000000001",
@@ -350,7 +421,7 @@
           }
         },
         {
-          "id": "audit_log#6",
+          "id": "audit_log#9",
           "at": "<set>",
           "actor_type": "staff",
           "actor_id": "10000000-0000-4000-8000-000000000001",
@@ -361,7 +432,7 @@
           "details": {
             "found": "refund",
             "state": "cancelled",
-            "claimId": "audit_log#5",
+            "claimId": "audit_log#8",
             "refunded": [],
             "amountPaid": 0,
             "subscriptionId": "sub_fake_0003",
@@ -369,7 +440,7 @@
           }
         },
         {
-          "id": "audit_log#7",
+          "id": "audit_log#10",
           "at": "<set>",
           "actor_type": "staff",
           "actor_id": "10000000-0000-4000-8000-000000000001",
@@ -383,7 +454,7 @@
             ],
             "found": "refund",
             "state": "left",
-            "claimId": "audit_log#5",
+            "claimId": "audit_log#8",
             "refunded": [],
             "amountPaid": 0,
             "subscriptionId": "sub_fake_0003",
@@ -391,7 +462,7 @@
           }
         },
         {
-          "id": "audit_log#8",
+          "id": "audit_log#11",
           "at": "<set>",
           "actor_type": "staff",
           "actor_id": "10000000-0000-4000-8000-000000000001",
@@ -412,7 +483,7 @@
           }
         },
         {
-          "id": "audit_log#9",
+          "id": "audit_log#12",
           "at": "<set>",
           "actor_type": "staff",
           "actor_id": "10000000-0000-4000-8000-000000000001",
@@ -422,7 +493,7 @@
           "request_id": "gone#6",
           "details": {
             "owed": 0,
-            "claimId": "audit_log#5",
+            "claimId": "audit_log#8",
             "outcome": "given",
             "refunds": [
               {
@@ -438,7 +509,7 @@
           }
         },
         {
-          "id": "audit_log#10",
+          "id": "audit_log#13",
           "at": "<set>",
           "actor_type": "staff",
           "actor_id": "10000000-0000-4000-8000-000000000001",
@@ -457,7 +528,7 @@
             "state": "watching",
             "amount": 40,
             "status": "succeeded",
-            "claimId": "audit_log#5",
+            "claimId": "audit_log#8",
             "orderId": "orders#1",
             "livemode": false,
             "refundId": "re_fake_0004",
@@ -468,7 +539,7 @@
       ],
       "changed": [],
       "removed": [],
-      "tied": 2
+      "tied": 5
     },
     "booking_guests": {
       "added": [

@@ -11,19 +11,32 @@ import type { Db } from '@/server/db'
  * Worker's mark, reader-order.ts and close-stuck.ts). The order is placed through the Worker; the mark is taken off.
  */
 export async function asTheOldCheckoutStartedIt(db: Db, orderId: string): Promise<void> {
-  await db.query("UPDATE orders SET reader_payment = reader_payment - 'method' - 'request_id' WHERE id = $1::uuid", [orderId])
+  // W64a item 8 (W64 review, "for later" 2): the same five keys asTheOldCodeStartedIt takes off a flow's record. The old
+  // createOrder wrote none of them (`channel` and `livemode` too: the Worker's not-found branch reads `livemode`).
+  await db.query("UPDATE orders SET reader_payment = reader_payment - 'method' - 'request_id' - 'channel' - 'stripe_customer_id' - 'livemode' WHERE id = $1::uuid", [orderId])
 }
 
 /**
  * What the old Cancel & Refund to store credit wrote on a booking whose card order was still held (W12 review P1): the
- * booking cancelled, its seat money given as store credit, and the order moved out of pending to partially refunded.
- * Only the old screens could do this (the Worker refuses while a payment is unconfirmed): the rows the old function wrote
- * that reconcile, the stuck list and the manual close read.
+ * booking cancelled, its seat money given as store credit, the order moved out of pending to partially refunded, and
+ * (W64a item 8, as `legacy-booking/backend/paddock/shared/bookingRefund.ts` did in the one statement after the money)
+ * nothing left owed, the session's places released (a private session's all of them, else the party's) and the booking's
+ * lines stamped refunded to store credit. Only the old screens could do this (the Worker refuses while a payment is
+ * unconfirmed): the rows the old function wrote that reconcile, the stuck list and the manual close read.
  */
 export async function theOldScreensCancelledItToStoreCredit(db: Db, { bookingId, orderId, customerId, amount }: { bookingId: string; orderId: string; customerId: string; amount: number }): Promise<void> {
-  await db.query("UPDATE bookings SET status = 'cancelled', cancelled_at = now(), updated_at = now() WHERE id = $1::uuid", [bookingId])
+  await db.query("UPDATE bookings SET status = 'cancelled', cancelled_at = now(), refund_owed_amount = 0, updated_at = now() WHERE id = $1::uuid", [bookingId])
   const [balance] = await db.query<{ b: string }>('UPDATE customers SET store_credit_balance = store_credit_balance + $1::numeric WHERE id = $2::uuid RETURNING store_credit_balance::text AS b', [amount, customerId])
   await db.query("INSERT INTO store_credit_transactions (customer_id, amount, balance_after, reason, booking_id, note) VALUES ($1::uuid, $2::numeric, $3::numeric, 'refund', $4::uuid, 'Refund for cancelled booking')", [customerId, amount, balance?.b, bookingId])
+  await db.query(
+    `UPDATE sessions s SET total_booked = CASE WHEN s.type = 'private' THEN 0 ELSE GREATEST(s.total_booked - b.party_size, 0) END, updated_at = now()
+     FROM bookings b WHERE b.id = $1::uuid AND s.id = b.session_id`,
+    [bookingId]
+  )
+  await db.query(
+    "UPDATE order_line_items SET refunded_at = COALESCE(refunded_at, now()), refund_method = 'credit' WHERE booking_id = $1::uuid AND item_type = 'booking'",
+    [bookingId]
+  )
   await db.query("UPDATE orders SET payment_status = 'partially_refunded' WHERE id = $1::uuid", [orderId])
 }
 

@@ -6,6 +6,7 @@ import { POST as quoteRoute } from '@/app/api/v1/staff/quotes/basket/route'
 import type { Db } from '@/server/db'
 import type { FakeStripe } from '@/server/stripe/fake'
 import { replayStripe, stripeCallsTakeASecond } from '../replay/stripe-binding'
+import { pressSwitch } from './booking-presses'
 import { REPLAY_USER, type ReplaySide } from './run'
 
 /**
@@ -94,9 +95,10 @@ export async function postOrder(
   input: unknown,
   { key = crypto.randomUUID(), email = REPLAY_USER.email, orderSwitch = ALL_KINDS_ON }: { key?: string; email?: string; orderSwitch?: string } = {}
 ): Promise<OrderAnswer> {
-  // W14: the switch for this one call, put back after it, so an old side in the same test still sees its own.
+  // W14: the switch for this one call, put back after it, so an old side in the same test still sees its own. W64a item
+  // 8: the all-Worker side's live switch while it presses.
   const before = process.env.ORDER_SWITCH
-  process.env.ORDER_SWITCH = orderSwitch
+  process.env.ORDER_SWITCH = pressSwitch.live ?? orderSwitch
   try {
     return await sendOrder(input, key, email)
   } finally {

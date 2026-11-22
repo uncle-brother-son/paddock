@@ -134,8 +134,8 @@ const workerFiles = sourceFiles(workerDir, ['app', 'server', 'lib', 'contracts',
 const GENERATED = [`${path.sep}hooks${path.sep}backend${path.sep}`, `${path.sep}hooks${path.sep}useBackendFunctions.ts`]
 const staffAppFiles = sourceFiles(appDir, ['backend', 'frontend']).filter((file) => !GENERATED.some((generated) => file.includes(generated)))
 const inFixture = (file: string) => FIXTURE_DIRS.some((dir) => file.startsWith(dir + path.sep))
-/** The Worker's files scanned for uses: all of them, less this guard and the frozen copies. */
-const scannedWorkerFiles = workerFiles.filter((file) => file !== __filename && !inFixture(file))
+/** The Worker's files scanned for uses: all of them, less this guard, the frozen copies and W64a's merged guard (it lists them). */
+const scannedWorkerFiles = workerFiles.filter((file) => file !== __filename && file !== path.join(__dirname, 'removed-code.test.ts') && !inFixture(file))
 const read = (file: string) => withoutComments(readFileSync(file, 'utf8'))
 const workerCode = new Map(scannedWorkerFiles.map((file) => [file, read(file)]))
 const staffAppCode = new Map(staffAppFiles.map((file) => [file, read(file)]))

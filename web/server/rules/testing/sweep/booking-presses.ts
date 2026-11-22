@@ -43,10 +43,18 @@ export function throughStaffApp(name: string): NewBookingAction {
  */
 export const BOOKING_KINDS_ON = 'no_stripe,saved_card,reader,membership,booking_changes,reader_flows'
 
-/** `work` with ORDER_SWITCH set to `value`, put back after it (the old side's own calls see their own). */
+/**
+ * W64a item 8 (W64 review, "for later" 1): while the all-Worker side presses (sweep/worker.ts sets it around each
+ * press), every press runs with this one switch, the live one, in place of its family's set (`withSwitch` and New
+ * Order's `postOrder` both replace the whole value). Null everywhere else, so a rule test's own route call keeps the
+ * switch it sends.
+ */
+export const pressSwitch: { live: string | null } = { live: null }
+
+/** `work` with ORDER_SWITCH set to `value` (or the press's live switch), put back after it (the old side's own calls see their own). */
 export async function withSwitch<T>(value: string, work: () => Promise<T>): Promise<T> {
   const before = process.env.ORDER_SWITCH
-  process.env.ORDER_SWITCH = value
+  process.env.ORDER_SWITCH = pressSwitch.live ?? value
   try {
     return await work()
   } finally {
@@ -312,21 +320,30 @@ export const PARTLY_BUILT: ReadonlyMap<string, (params: unknown) => boolean> = n
  * cancel, through the staff app's wrappers, which send a flow the Worker started to the Worker and an old one (old
  * Move and Add Guest, until W24 and W20) to their old body.
  */
-export const BUILT_BOOKING_ACTIONS: ReadonlyMap<string, NewBookingAction> = new Map<string, NewBookingAction>([
-  ['setBookingSpecialRequests', throughStaffApp('setBookingSpecialRequests')],
-  ['setBookingStatus', throughStaffApp('setBookingStatus')],
-  ['settleLapsedBooking', async (db, params) => withSwitch(BOOKING_KINDS_ON, async () => throughStaffApp('settleLapsedBooking')(db, await withSettleFigures(db, params)))],
-  ['addBookingGuest', addGuestAsTheDialogPresses()],
-  ['finaliseReaderPayment', throughStaffApp('finaliseReaderPayment')],
-  ['cancelReaderPayment', throughStaffApp('cancelReaderPayment')],
-  // W21: through the staff app's thin wrapper and the figures route (W17 answered it from the rule directly).
-  ['getBookingRefundFigures', throughStaffApp('getBookingRefundFigures')],
-  ['refundBooking', refundAsTheDialogPresses()],
-  // W22: Remove Guest and Remove add-on, through the staff app's thin wrappers as the dialogs press them.
-  ['removeBookingGuest', removeGuestAsTheDialogPresses()],
-  ['removeBookingAddon', removeAddonAsTheDialogPresses()],
-  // W23: Cancel & return credit and Cancel (payment needed), through the staff app's thin wrapper as the dialogs press it.
-  ['cancelCreditBooking', cancelCreditAsTheDialogPresses()],
-  // W24: Move, through the staff app's thin wrapper as the dialog presses it.
-  ['moveBooking', moveAsTheDialogPresses()],
-])
+export const BUILT_BOOKING_ACTIONS: ReadonlyMap<string, NewBookingAction> = bookingPresses()
+
+/**
+ * The actions above, each with press keys and quoted figures of its own. W64a item 8 (W64 review, "for later" 5): the
+ * all-Worker side makes a new set for every scenario (sweep/worker.ts), so a key held after no answer never follows a
+ * seeded booking id into the next scenario; BUILT_BOOKING_ACTIONS is one set for the old replay's side.
+ */
+export function bookingPresses(): ReadonlyMap<string, NewBookingAction> {
+  return new Map<string, NewBookingAction>([
+    ['setBookingSpecialRequests', throughStaffApp('setBookingSpecialRequests')],
+    ['setBookingStatus', throughStaffApp('setBookingStatus')],
+    ['settleLapsedBooking', async (db, params) => withSwitch(BOOKING_KINDS_ON, async () => throughStaffApp('settleLapsedBooking')(db, await withSettleFigures(db, params)))],
+    ['addBookingGuest', addGuestAsTheDialogPresses()],
+    ['finaliseReaderPayment', throughStaffApp('finaliseReaderPayment')],
+    ['cancelReaderPayment', throughStaffApp('cancelReaderPayment')],
+    // W21: through the staff app's thin wrapper and the figures route (W17 answered it from the rule directly).
+    ['getBookingRefundFigures', throughStaffApp('getBookingRefundFigures')],
+    ['refundBooking', refundAsTheDialogPresses()],
+    // W22: Remove Guest and Remove add-on, through the staff app's thin wrappers as the dialogs press them.
+    ['removeBookingGuest', removeGuestAsTheDialogPresses()],
+    ['removeBookingAddon', removeAddonAsTheDialogPresses()],
+    // W23: Cancel & return credit and Cancel (payment needed), through the staff app's thin wrapper as the dialogs press it.
+    ['cancelCreditBooking', cancelCreditAsTheDialogPresses()],
+    // W24: Move, through the staff app's thin wrapper as the dialog presses it.
+    ['moveBooking', moveAsTheDialogPresses()],
+  ])
+}

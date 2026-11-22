@@ -129,7 +129,7 @@ SELECT b.id, b.session_id, b.customer_id, b.party_size, b.status, b.price_paid::
       FROM order_line_items oli
       JOIN orders o ON o.id = oli.order_id
      WHERE oli.booking_id = b.id
-     ORDER BY (o.payment_method IS NULL), oli.created_at ASC
+     ORDER BY (o.payment_method IS NULL), oli.created_at ASC, oli.id ASC
      LIMIT 1
   ) ord ON true`
 export const BOOKING_ROW_TIMES = ['created_at', 'cancelled_at', 'checked_in_at', 'updated_at', 'payment_due_by', 'guests_over_18_confirmed_at', 'start_time', 'end_time'] as const

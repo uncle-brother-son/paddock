@@ -92,9 +92,26 @@ export const ATTEMPTED: ReadonlySet<string> = new Set([
   'w48-gb17-a-removed-addon-is-marked-prepared',
 ])
 
-/** A scenario as its family pressed it on the Worker (TOLD_AGAIN, ATTEMPTED), else as it is. */
+/**
+ * W64a item 5 (W64 review S4): a press the screen could never send, pressed on the Worker as its dialog sends it. W50's
+ * read of "the method of the booking's own order" needs a guest added on an order of its own: the recording added Bea
+ * with `payment: { method: 'store_credit' }`, which the Worker refuses (`invalid_payment_method`: store credit is a part,
+ * not a method), so the read was never reached with two orders. With store credit covering the £20, AddGuestDialog.tsx
+ * sends `payment: { storeCredit: { amount: 20 } }` and no method (a method only when something is left to pay); the
+ * press adds the figures, and Bea's over-18 tick is the scenario's. The old replay keeps the scenario as its golden file
+ * recorded it.
+ */
+export const AS_THE_DIALOG_SENDS: Readonly<Record<string, Scenario['run']>> = {
+  'w48-bookings-read-the-method-of-the-bookings-own-order': async ({ call }) => {
+    const { bookingId } = (await samBooks(call)) as { bookingId: string }
+    await call('addBookingGuest', { bookingId, guestName: 'Bea Guest', guestEmail: 'bea@example.com', guestsOver18Confirmed: true, payment: { storeCredit: { amount: 20 } } })
+    await call('getBookingById', { bookingId })
+  },
+}
+
+/** A scenario as its family pressed it on the Worker (TOLD_AGAIN, ATTEMPTED), or as its dialog sends it (AS_THE_DIALOG_SENDS), else as it is. */
 export function asPressedNow(scenario: Scenario): Scenario {
-  const toldAgain = TOLD_AGAIN[scenario.name]
+  const toldAgain = TOLD_AGAIN[scenario.name] ?? AS_THE_DIALOG_SENDS[scenario.name]
   if (toldAgain) return { ...scenario, run: toldAgain }
   if (ATTEMPTED.has(scenario.name)) return { ...scenario, run: (context) => scenario.run({ ...context, call: context.attempt }) }
   return scenario

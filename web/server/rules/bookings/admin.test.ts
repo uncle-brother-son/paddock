@@ -203,6 +203,18 @@ describe('the booking list and one booking (GET bookings, GET bookings/:bookingI
     expect((await get<Record<string, unknown>>(bookingRoute, {}, { bookingId: id })).data?.['payment_method']).toBe('card')
   })
 
+  it('W64a item 8 (W64 review, "for later" 3): two booking lines written in one millisecond: the line with the smaller id decides, every time', async () => {
+    const { id } = await bookingOn(await sessionAt(JULY_1), sam)
+    const at = '2027-06-01 09:00:00.123+00'
+    // The larger id written first, so a read with no tie-break would find it first.
+    const cash = await insert(db, 'orders', { customer_id: sam, order_total: '20.00', payment_status: 'paid', payment_method: 'cash', order_source: 'staff_created' })
+    await insert(db, 'order_line_items', { id: '10000000-0000-4000-8000-0000000000f9', order_id: cash, item_type: 'booking', booking_id: id, quantity: 1, unit_price: '20.00', line_total: '20.00', created_at: at })
+    const card = await insert(db, 'orders', { customer_id: sam, order_total: '20.00', payment_status: 'paid', payment_method: 'card', order_source: 'staff_created' })
+    await insert(db, 'order_line_items', { id: '10000000-0000-4000-8000-0000000000f1', order_id: card, item_type: 'booking', booking_id: id, quantity: 1, unit_price: '20.00', line_total: '20.00', created_at: at })
+    for (let read = 0; read < 3; read += 1) expect((await get<Record<string, unknown>>(bookingRoute, {}, { bookingId: id })).data?.['payment_method']).toBe('card')
+    expect(((await get<Array<Record<string, unknown>>>(listRoute, range(JULY_1))).data ?? []).find((row) => row['id'] === id)?.['payment_method']).toBe('card')
+  })
+
   it('filters by range, by status, by both, and by neither (every booking, as before); newest session first', async () => {
     const first = await bookingOn(await sessionAt(JULY_1), sam)
     const second = await bookingOn(await sessionAt(JULY_2), mo, { status: 'cancelled', cancelled_at: '2027-06-20 09:00:00+00' })

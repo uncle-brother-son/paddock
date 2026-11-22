@@ -1,44 +1,25 @@
 import path from 'node:path'
-import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
-import { frozenWords, readSource, sourceHolds, templatesFilledBy, unionMembers } from '@/server/rules/testing/frozen-words'
-import { legacyRefundDir } from '@/server/rules/testing/replay/harness'
+import { OLD_WORDS, oldUnionMembers, oldWords, sourceHolds, templatesFilledBy } from '@/server/rules/testing/old-words'
 import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
 import * as words from './failure-messages'
 
 // Brief W27 item 5: the event cancellations' words, moved ahead of the slices that use them (W30, W31). Every reason
-// must be listed, and every word moved must be the old functions', word for word, read here from the frozen copy of
-// the old code (legacy-refund) with the TypeScript parser, so a word changed on either side fails. The dialogs' own
-// words are held to the dialogs' source until the screens change at W30 and W31.
+// must be listed, and every word moved must be the old functions', word for word, read (W64a item 7) from the old
+// code's words pinned in testing/old-words.json (recorded from step E's frozen copy with the TypeScript parser), so a
+// word changed on either side fails. The dialogs' own words are held to the dialogs' source until the screens change at
+// W30 and W31.
 
-const { strings, templates } = frozenWords(legacyRefundDir)
+const { strings, templates } = oldWords('refund')
 const components = path.join(staffAppDir(), 'frontend/components')
 const fills = (text: string): boolean => templatesFilledBy(templates, text).length > 0
 
-/** shared/eventCancellationQuote.ts's QUOTE_REFUSALS, read as it is written: `{ key: { reason, message } }`. */
-function oldQuoteRefusals(): Record<string, { reason: string; message: string }> {
-  const source = readSource(path.join(legacyRefundDir, 'shared/eventCancellationQuote.ts'))
-  const found: Record<string, { reason: string; message: string }> = {}
-  source.forEachChild(function visit(node) {
-    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === 'QUOTE_REFUSALS' && node.initializer && ts.isObjectLiteralExpression(node.initializer)) {
-      for (const property of node.initializer.properties) {
-        if (!ts.isPropertyAssignment(property) || !ts.isObjectLiteralExpression(property.initializer)) throw new Error('QUOTE_REFUSALS has an entry that is not an object')
-        const entry: Record<string, string> = {}
-        for (const inner of property.initializer.properties) {
-          if (!ts.isPropertyAssignment(inner) || !ts.isStringLiteralLike(inner.initializer)) throw new Error('QUOTE_REFUSALS has a value that is not a string')
-          entry[inner.name.getText(source)] = inner.initializer.text
-        }
-        found[property.name.getText(source)] = { reason: entry['reason'] ?? '', message: entry['message'] ?? '' }
-      }
-    }
-    node.forEachChild(visit)
-  })
-  return found
-}
+/** shared/eventCancellationQuote.ts's QUOTE_REFUSALS, as it is written: `{ key: { reason, message } }` (pinned, W64a item 7). */
+const oldQuoteRefusals = (): Record<string, { reason: string; message: string }> => OLD_WORDS.facts.quoteRefusals
 
 describe("the event cancellations' reasons and words, moved (brief W27 item 5)", () => {
   it('every reason a place cancel could answer with is listed, and no other', () => {
-    const old = unionMembers(path.join(legacyRefundDir, 'shared/eventCancellationQuote.ts'), 'CancelPlacesFailureReason')
+    const old = oldUnionMembers('refund', 'CancelPlacesFailureReason')
     expect(old).toHaveLength(15)
     expect([...words.EVENT_CANCEL_REASONS]).toEqual(old)
   })
@@ -103,10 +84,10 @@ describe("the event cancellations' reasons and words, moved (brief W27 item 5)",
   })
 
   it('the whole event: every reason, and each one\'s words, word for word', () => {
-    const cancelEvent = readSource(path.join(legacyRefundDir, 'cancelEvent.ts')).getFullText()
-    for (const reason of words.EVENT_WHOLE_CANCEL_REASONS) expect(cancelEvent, reason).toContain(`'${reason}'`)
+    // cancelEvent.ts's string literals and its result's union, pinned (W64a item 7).
+    for (const reason of words.EVENT_WHOLE_CANCEL_REASONS) expect(OLD_WORDS.facts.cancelEventStrings, reason).toContain(reason)
     // The old result's union names exactly these four.
-    expect(/reason: ((?:'[a-z_]+'(?: \| )?)+); message: string/.exec(cancelEvent)?.[1]?.split(' | ').map((quoted) => quoted.replace(/'/g, ''))).toEqual([...words.EVENT_WHOLE_CANCEL_REASONS])
+    expect(OLD_WORDS.facts.cancelEventReasons).toEqual([...words.EVENT_WHOLE_CANCEL_REASONS])
     const fixed = Object.entries(words.EVENT_WHOLE_CANCEL_WORDS).filter(([, value]) => typeof value === 'string') as Array<[string, string]>
     expect(fixed.length).toBe(5)
     for (const [name, text] of fixed) expect(strings.has(text), name).toBe(true)

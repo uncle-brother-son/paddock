@@ -4,7 +4,7 @@ import { GET as stuckRoute } from '@/app/api/v1/staff/orders/stuck/route'
 import { POST as reconcileRoute } from '@/app/api/v1/staff/orders/reconcile/route'
 import type { Db } from '@/server/db'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
-import { asWorkerFlow, postFlowStep } from '@/server/rules/testing/sweep/flow-presses'
+import { postFlowStep } from '@/server/rules/testing/sweep/flow-presses'
 import { asTheOldCheckoutStartedIt, asTheOldCodeStartedIt, theOldScreensCancelledItToStoreCredit } from '@/server/rules/testing/sweep/old-states'
 import { replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/sweep/run'
 import { workerSide } from '@/server/rules/testing/sweep/worker'
@@ -635,7 +635,7 @@ describe('a payment that succeeded on an order already undone (charged_without_o
         const bookingId = await lapsedSeat((action, params) => old.call(action, params), db)
         const started = (await old.call('settleLapsedBooking', { bookingId, payment: { method: 'reader' } })) as { pendingReaderPayment: { pendingId: string; paymentIntentId: string } }
         const { pendingId, paymentIntentId } = started.pendingReaderPayment
-        await asWorkerFlow(db, pendingId)
+        // W64a item 8: started through the Worker, so its record carries the Worker's mark already (no asWorkerFlow).
         replayStripe.current = stripe
         await postFlowStep('cancel', pendingId) // undone: the intent cancelled
         // The tap that "lands" anyway is modelled by T2 meeting a cancelled row with a succeeded payment.
@@ -867,7 +867,6 @@ describe("W14b (W12-6): a reader flow in a staff member's run keeps to the run's
       const bookingId = await lapsedSeat((action, params) => old.call(action, params), db)
       const started = (await old.call('settleLapsedBooking', { bookingId, payment: { method: 'reader' } })) as { pendingReaderPayment: { pendingId: string } }
       const { pendingId } = started.pendingReaderPayment
-      await asWorkerFlow(db, pendingId)
       replayStripe.current = stripe
       later(16)
       const before = stripe.calls.length
@@ -985,7 +984,6 @@ describe('crash tests: the pipeline stopped at each step, then reconcile', () =>
       const old = workerSide()(db, stripe)
       const bookingId = await lapsedSeat((action, params) => old.call(action, params), db)
       const started = (await old.call('settleLapsedBooking', { bookingId, payment: { method: 'reader' } })) as { pendingReaderPayment: { pendingId: string; paymentIntentId: string } }
-      await asWorkerFlow(db, started.pendingReaderPayment.pendingId)
       replayStripe.current = stripe
       return { ...started.pendingReaderPayment, bookingId }
     }
@@ -1227,11 +1225,9 @@ describe("W12a S2 (a): another intent of the same customer isn't this order's or
       const { pendingId, paymentIntentId } = started.pendingReaderPayment
       replayStripe.current = stripe
       await db.query('UPDATE pending_reader_payments SET payment_intent_id = NULL WHERE id = $1', [pendingId])
-      // W64: its intent as the old screens made it, with no pending_id in its metadata (the Worker always writes one):
-      // the fake's own record edited, as only the old code could make such an intent.
-      const intents = (stripe as unknown as { intents: Map<string, { metadata: Record<string, string> }> }).intents
-      const own = intents.get(paymentIntentId)
-      if (own) own.metadata = Object.fromEntries(Object.entries(own.metadata).filter(([field]) => field !== 'pending_id'))
+      // W64: its intent as the old screens made it, with no pending_id in its metadata (the Worker always writes one), as
+      // only the old code could make such an intent. W64a item 8: through the fake's own option.
+      stripe.withoutMetadataField(paymentIntentId, 'pending_id')
       const untouched = await strangers(stripe, 2000, 'pending_id')
       later(16)
       expect(await run(stripe)).toMatchObject({ undone: 1, finalised: 0, left: 0 })
