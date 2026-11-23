@@ -13,6 +13,11 @@ export const STOCK_LIMIT = 2_147_483_647
 
 export const CATALOG_ITEM_NEW_WORDS = {
   /**
+   * W66a (Wayne's Q61, 23 Nov): an item put on sale while it has no price. Since W66 a new item from Sanity arrives off
+   * sale and unpriced; the checkout refuses to sell one (W55a), and the website would list it. A plan's too.
+   */
+  setItsPriceFirst: 'Set its price first.',
+  /**
    * W53 review L7: a price that isn't pounds and pence (three decimals), or is too big for its column. The database
    * would round it, so what is stored and anything worked out from what was typed could differ by a penny.
    */

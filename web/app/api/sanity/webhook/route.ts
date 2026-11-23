@@ -6,9 +6,11 @@ import { syncSanityDocument, takeSanityDocumentOffSale, type SanityKind, type Sa
 import { createStripeClient } from '@/server/stripe/client'
 
 // W66 (H-plan 4.3, H7; Q57): every write on the Worker's own database connection (server/rules/catalog/sanity-sync.ts),
-// where it was Supabase's client with the service-role key. The signature check first, unchanged; then one
-// transaction per document. A new item arrives off sale; no Stripe product is made or renamed for anything but a
-// membership plan; a delete takes the item off sale with an audit row by the system as `sanity`.
+// where it was Supabase's client with the service-role key. The signature check first; then one transaction per
+// document. A new item arrives off sale; no Stripe product is made or renamed for anything but a membership plan; a
+// delete takes the item off sale with an audit row by the system as `sanity`.
+// W66a (W66 review F7): the signature must be no older than 5 minutes, so a signed delete someone captured can't be
+// sent again later, and it is compared in constant time.
 
 /** W59 (W45 audit row 3): an image field as this route reads it (the builder takes its asset reference). */
 interface SanityImage {
@@ -33,6 +35,27 @@ const imageBuilder = createImageUrlBuilder({
   dataset: process.env.NEXT_PUBLIC_SANITY_DATASET!,
 })
 
+/** W66a (F7): how old a signature may be. Sanity sends a failed delivery again twice, 30 seconds apart (its docs, 23 Nov 2026). */
+const SIGNATURE_LIFE_MS = 5 * 60 * 1000
+
+/**
+ * When Sanity signed it, in milliseconds, or null when `t=` isn't a whole number. Sanity's is in milliseconds; a number
+ * too small to be one (before 1973) is read as seconds, as Stripe's scheme, which Sanity's follows, writes it. `t` is
+ * part of what is signed, so nobody without the secret chooses it.
+ */
+function signedAtMs(timestamp: string): number | null {
+  if (!/^\d{1,16}$/.test(timestamp)) return null
+  const t = Number(timestamp)
+  return t < 100_000_000_000 ? t * 1000 : t
+}
+
+/** Whether two texts are the same, in a time that doesn't say where they differ. Only their length shows. */
+function sameText(a: string, b: string): boolean {
+  const left = Buffer.from(a)
+  const right = Buffer.from(b)
+  return left.length === right.length && crypto.timingSafeEqual(left, right)
+}
+
 // Verify webhook signature from Sanity
 function verifySignature(body: string, signature: string): boolean {
   const secret = process.env.SANITY_WEBHOOK_SECRET
@@ -51,8 +74,13 @@ function verifySignature(body: string, signature: string): boolean {
     return false
   }
 
-  const timestamp = timestampPart.split('=')[1]
-  const receivedHash = hashPart.split('=')[1]
+  const timestamp = timestampPart.slice('t='.length)
+  const receivedHash = hashPart.slice('v1='.length)
+  const signedAt = signedAtMs(timestamp)
+  if (signedAt === null) {
+    console.error('Invalid signature format')
+    return false
+  }
 
   // Create HMAC with timestamp and body
   const signedPayload = `${timestamp}.${body}`
@@ -64,7 +92,12 @@ function verifySignature(body: string, signature: string): boolean {
     .replace(/\//g, '_')
     .replace(/=+$/, '')
 
-  return computedHash === receivedHash
+  if (!sameText(computedHash, receivedHash)) return false
+  if (Date.now() - signedAt > SIGNATURE_LIFE_MS) {
+    console.error('Sanity webhook signature refused: signed more than 5 minutes ago')
+    return false
+  }
+  return true
 }
 
 // Extract thumbnail URL from a Sanity image object, resized to 80px wide (height scales

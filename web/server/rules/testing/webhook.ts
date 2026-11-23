@@ -1,7 +1,7 @@
 import type Stripe from 'stripe'
 import { membershipFunctions, webhookStore, type WebhookStore } from '@/app/api/stripe/webhook/database'
 import type { RpcClient } from '@/app/api/stripe/webhook/dispatch'
-import type { Queryable } from '@/server/db'
+import type { Db } from '@/server/db'
 
 // W45a (W45 audit S1, F4): Stripe's webhook on a test database, for tests only, so a test can hand a real event to
 // the real handlers (dispatchStripeEvent, processWebhookEvent) and read what the real database functions wrote.
@@ -20,7 +20,7 @@ export interface WebhookRpcCall {
 }
 
 /** `rpc` as the webhook uses it, on `db` (database.ts, membershipFunctions), recording each call in `calls`. */
-export function webhookRpc(db: Queryable): RpcClient & { calls: WebhookRpcCall[] } {
+export function webhookRpc(db: Db): RpcClient & { calls: WebhookRpcCall[] } {
   const calls: WebhookRpcCall[] = []
   const functions = membershipFunctions(db)
   return {
@@ -45,7 +45,7 @@ export interface WebhookEventRow {
  * The store processWebhookEvent takes, on `db`: the webhook's own (database.ts, webhookStore), with each function
  * call recorded as above. `eventRow` reads back what was recorded for an event.
  */
-export function webhookClient(db: Queryable): WebhookStore & { calls: WebhookRpcCall[]; eventRow(eventId: string): Promise<WebhookEventRow | null> } {
+export function webhookClient(db: Db): WebhookStore & { calls: WebhookRpcCall[]; eventRow(eventId: string): Promise<WebhookEventRow | null> } {
   const rpc = webhookRpc(db)
   return {
     ...webhookStore(db),

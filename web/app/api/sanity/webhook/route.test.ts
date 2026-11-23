@@ -1,4 +1,4 @@
-import { createHash, createHmac } from 'node:crypto'
+import nodeCrypto, { createHash, createHmac } from 'node:crypto'
 import { NextRequest } from 'next/server'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Db } from '@/server/db'
@@ -15,6 +15,9 @@ import { POST } from './route'
 // - one transaction per document: a write failing leaves nothing half written;
 // - no Stripe call for anything but a membership plan; a plan's product made under a key from the plan's id, so the
 //   same delivery twice makes one product; a plan taken off sale only through the plan rule's guard.
+// W66a (the W66 review's S1, F2, F6, F7): a republish changes nothing on the row but Sanity's own fields, on every
+// statement's path; a plan renamed after a lost create still has one product; a delete of an item already off sale
+// writes nothing; a signature older than 5 minutes is refused.
 
 vi.setConfig({ testTimeout: 60_000 })
 
@@ -51,9 +54,8 @@ beforeEach(() => {
   holder.stripe = stripe
 })
 
-/** Sanity's signature: `t=<time>,v1=<base64url HMAC-SHA256 of "<time>.<body>">`, as the route checks it. */
-function signed(body: string, secret = SECRET): string {
-  const t = String(Math.floor(Date.now() / 1000))
+/** Sanity's signature: `t=<time>,v1=<base64url HMAC-SHA256 of "<time>.<body>">`, as the route checks it. The time is Sanity's, in milliseconds. */
+function signed(body: string, secret = SECRET, t = String(Date.now())): string {
   const hash = createHmac('sha256', secret).update(`${t}.${body}`).digest('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
   return `t=${t},v1=${hash}`
 }
@@ -67,6 +69,8 @@ const published = (document: Record<string, unknown>) => deliver(document, { 'sa
 const deleted = (documentId: string) => deliver(null, { 'sanity-operation': 'delete', 'sanity-document-id': documentId })
 
 const IMAGE = { asset: { _ref: 'image-abc123-800x600-jpg' } }
+/** The route's fingerprint of an extra waiver: the first 12 hex characters of its trimmed text's SHA-256. */
+const createHashOf = (text: string): string => createHash('sha256').update(text).digest('hex').slice(0, 12)
 
 /** Each Sanity type, its table and the column holding the document's id. */
 const TYPES = [
@@ -80,6 +84,32 @@ const TYPES = [
 ] as const
 type TypeInfo = (typeof TYPES)[number]
 const NON_PLAN = TYPES.filter((t) => t.type !== 'membershipPlan')
+/**
+ * Every statement that can bring a row up to date: one per type, and for a product and an add-on (whose category the
+ * Studio requires, so every live document has it) the one with the category and the one without.
+ */
+const PUBLISHED_AGAIN = TYPES.flatMap((info): Array<{ path: string; info: TypeInfo; extra: Record<string, unknown>; sanitysOwn: Record<string, unknown> }> => {
+  const plain = { path: info.type, info, extra: {}, sanitysOwn: {} }
+  if (info.type === 'product' || info.type === 'addon') {
+    return [
+      { path: `${info.type} with its category, as every live one is sent`, info, extra: { category: 'Wellbeing' }, sanitysOwn: { category: 'Wellbeing' } },
+      { ...plain, path: `${info.type} without a category` },
+    ]
+  }
+  if (info.type === 'event') return [{ ...plain, extra: { extraWaiver: 'Cold water.' }, sanitysOwn: { has_extra_waiver: true, extra_waiver_version: createHashOf('Cold water.') } }]
+  return [plain]
+})
+
+/** What staff set on each type before a republish: every price the type has, and what else the catalogue pages edit. */
+const STAFF_SET: Readonly<Record<TypeInfo['type'], string>> = {
+  serviceType: "price = 22.50, duration = 75, capacity = 9, booking_type = 'public', stripe_price_id = 'price_old_' || id",
+  product: "base_price = 12.00, member_price = 10.00, sale_price = 11.00, fulfillment_method = 'pickup', stripe_price_id_base = 'price_base_' || id, stripe_price_id_member = 'price_member_' || id, stripe_price_id_sale = 'price_sale_' || id",
+  addon: "sku = 'W66A-' || id, base_price = 4.00, member_price = 3.00, sale_price = 3.50, stripe_price_id_base = 'price_base_' || id, stripe_price_id_member = 'price_member_' || id, stripe_price_id_sale = 'price_sale_' || id",
+  membershipPlan: "sessions_included = 4, addons_included = 2, price_monthly = 40.00, price_yearly = 400.00, level = 'core', is_unlimited = false, stripe_price_id = 'price_month_' || id, stripe_price_id_yearly = 'price_year_' || id",
+  sessionPassType: "price = 90.00, sessions_included = 5, expiry_months = 9, level = 'core', stripe_price_id = 'price_pass_' || id",
+  giftCardType: 'custom_amount_enabled = true, custom_amount_min = 10.00, custom_amount_max = 200.00, expiry_months = 24',
+  event: "access = 'members_first', public_release_at = now() + interval '10 days', price_public = 21.00, price_pre_herd = 19.00, price_herd = 16.00, capacity = 12",
+}
 
 // The table and column are literals from TYPES, never from a request.
 const rowOf = async (info: TypeInfo, documentId: string) =>
@@ -111,8 +141,12 @@ describe("Sanity's webhook on the Worker's connection (W66)", () => {
     expect(rows[0]).toMatchObject({ name: 'New thing', active: false })
     expect(rows[0]?.thumbnail_url).toMatch(/^https:\/\/cdn\.sanity\.io\/images\/w66test\/production\/abc123-800x600\.jpg\?w=80$/)
     if (info.type === 'membershipPlan') {
-      // As before: a new plan gets its Stripe product, under a key from the plan's id.
-      expect(stripe.calls.map((call) => [call.method, call.idempotencyKey])).toEqual([['products.create', `${rows[0]?.id}:sanity-plan-product`]])
+      // As before: a new plan gets its Stripe product, under a key from the plan's id. W66a (F2), a named difference: the
+      // create sends the name and the metadata alone, then the name and picture are sent as an update.
+      expect(stripe.calls.map((call) => [call.method, call.idempotencyKey, call.params])).toEqual([
+        ['products.create', `${rows[0]?.id}:sanity-plan-product`, { name: 'New thing', active: true, metadata: { sanity_id: documentId, type: 'membership_plan' } }],
+        ['products.update', null, { id: rows[0]?.stripe_product_id, name: 'New thing', images: [rows[0]?.thumbnail_url] }],
+      ])
       expect(rows[0]?.stripe_product_id).toMatch(/^prod_/)
     } else {
       // L2: no Stripe product made for anything else.
@@ -137,6 +171,26 @@ describe("Sanity's webhook on the Worker's connection (W66)", () => {
     } else {
       expect(stripe.calls).toEqual([])
       if (info.type !== 'event') expect(row?.stripe_product_id).toBe(`prod_old_${id}`)
+    }
+  })
+
+  // S1 (the W66 review): the whole row, so a republish that moved `active`, a price or any staff setting is caught on
+  // every statement's path, a live product's and add-on's (with their category) included.
+  it.each(PUBLISHED_AGAIN)('$path: published again, on sale and off sale, changes nothing on the row but Sanity\'s own fields (S1)', async ({ info, extra, sanitysOwn }) => {
+    for (const active of [true, false]) {
+      const documentId = `w66a-again-${info.type}-${crypto.randomUUID()}`
+      const id = await onSale(info, documentId)
+      await database.pg.exec(`RESET ROLE; UPDATE ${info.table} SET ${STAFF_SET[info.type]}, active = ${String(active)} WHERE id = '${id}'; SET ROLE paddock_worker;`)
+      const [before] = await rowOf(info, documentId)
+      expect(await published({ _type: info.type, _id: documentId, name: 'After', images: [IMAGE], ...extra })).toEqual({ status: 200, body: { success: true } })
+      const [after] = await rowOf(info, documentId)
+      const { updated_at: changedAt, ...rest } = after as unknown as Record<string, unknown>
+      const { updated_at: wasAt, ...was } = before as unknown as Record<string, unknown>
+      expect(new Date(changedAt as string).getTime()).toBeGreaterThanOrEqual(new Date(wasAt as string).getTime())
+      expect(rest).toEqual({ ...was, name: 'After', thumbnail_url: 'https://cdn.sanity.io/images/w66test/production/abc123-800x600.jpg?w=80', ...sanitysOwn })
+      expect(rest['active']).toBe(active)
+      // The staff settings were really there to lose: no price on the row is empty.
+      for (const [name, value] of Object.entries(was)) if (/price|amount_m/.test(name)) expect(value, name).not.toBeNull()
     }
   })
 
@@ -208,6 +262,38 @@ describe("Sanity's webhook on the Worker's connection (W66)", () => {
     expect((await stripe.products.list({ limit: 100 })).data.filter((product) => product.metadata['sanity_id'] === documentId)).toHaveLength(1)
   })
 
+  it('membershipPlan: a lost create, then published again with a new name within 24 hours (Stripe refuses the key): its one product is found, given to the plan and renamed (F2)', async () => {
+    const info = TYPES.find((t) => t.type === 'membershipPlan') as TypeInfo
+    const documentId = `w66a-plan-renamed-${crypto.randomUUID()}`
+    stripe.failNext('products.create', { kind: 'lost_response' })
+    expect(await published({ _type: 'membershipPlan', _id: documentId, name: 'Cor', images: [IMAGE] })).toEqual({ status: 200, body: { success: true } })
+    expect((await rowOf(info, documentId))[0]?.stripe_product_id ?? null).toBeNull()
+    // Another plan's product, newer than the lost one: the look-up is by this document's id.
+    expect((await published({ _type: 'membershipPlan', _id: `${documentId}-other`, name: 'Other' })).status).toBe(200)
+    stripe.calls.length = 0
+    expect(await published({ _type: 'membershipPlan', _id: documentId, name: 'Core', images: [IMAGE] })).toEqual({ status: 200, body: { success: true } })
+    const [row] = await rowOf(info, documentId)
+    const made = (await stripe.products.list({ limit: 100 })).data.filter((product) => product.metadata['sanity_id'] === documentId)
+    expect(made).toEqual([expect.objectContaining({ name: 'Core', images: [row?.thumbnail_url] })])
+    expect(row).toMatchObject({ name: 'Core', stripe_product_id: made[0]?.id })
+    // The refused create made nothing; then the product's own update.
+    expect(stripe.calls.map((call) => call.method)).toEqual(['products.create', 'products.list', 'products.update', 'products.list'])
+    // And the next publish is an ordinary rename of that product.
+    expect(await published({ _type: 'membershipPlan', _id: documentId, name: 'Core plan' })).toEqual({ status: 200, body: { success: true } })
+    expect((await stripe.products.retrieve(made[0]?.id as string)).name).toBe('Core plan')
+  })
+
+  it('membershipPlan: a lost create, then published again with a new picture only: the same product, with the new picture (the create carries no picture)', async () => {
+    const info = TYPES.find((t) => t.type === 'membershipPlan') as TypeInfo
+    const documentId = `w66a-plan-picture-${crypto.randomUUID()}`
+    stripe.failNext('products.create', { kind: 'lost_response' })
+    await published({ _type: 'membershipPlan', _id: documentId, name: 'Core' })
+    expect(await published({ _type: 'membershipPlan', _id: documentId, name: 'Core', images: [IMAGE] })).toEqual({ status: 200, body: { success: true } })
+    const [row] = await rowOf(info, documentId)
+    const made = (await stripe.products.list({ limit: 100 })).data.filter((product) => product.metadata['sanity_id'] === documentId)
+    expect(made).toEqual([expect.objectContaining({ id: row?.stripe_product_id, name: 'Core', images: [row?.thumbnail_url] })])
+  })
+
   it('product and add-on: the category is set when the document has the field, and left as it is when it has none; a new one with a category arrives off sale too', async () => {
     for (const info of TYPES.filter((t) => t.type === 'product' || t.type === 'addon')) {
       const documentId = `w66-cat-${info.type}-${crypto.randomUUID()}`
@@ -263,9 +349,71 @@ describe("Sanity's webhook on the Worker's connection (W66)", () => {
     expect(response.status).toBe(401)
     expect(await rowOf(info, documentId)).toEqual([])
     const id = await onSale(info, documentId)
-    expect(await deliver(null, { 'sanity-operation': 'delete', 'sanity-document-id': documentId }, 't=1,v1=forged')).toEqual({ status: 401, body: { error: 'Invalid signature' } })
+    expect(await deliver(null, { 'sanity-operation': 'delete', 'sanity-document-id': documentId }, `t=${Date.now()},v1=forged`)).toEqual({ status: 401, body: { error: 'Invalid signature' } })
     expect((await rowOf(info, documentId))[0]).toMatchObject({ active: true })
     expect(await auditRows(id)).toEqual([])
+  })
+
+  it('a signature older than 5 minutes is refused (401) and writes nothing: a captured delete can\'t be sent again later (F7)', async () => {
+    const info = TYPES.find((t) => t.type === 'product') as TypeInfo
+    const documentId = `w66a-old-${crypto.randomUUID()}`
+    const id = await onSale(info, documentId)
+    const headers = { 'sanity-operation': 'delete', 'sanity-document-id': documentId }
+    const refused = { status: 401, body: { error: 'Invalid signature' } }
+    const minutesAgo = (minutes: number): number => Date.now() - minutes * 60_000
+    // Signed with the right secret, 5 minutes and a second ago: in milliseconds (Sanity's) and in seconds.
+    expect(await deliver(null, headers, signed('', SECRET, String(minutesAgo(5) - 1000)))).toEqual(refused)
+    expect(await deliver(null, headers, signed('', SECRET, String(Math.floor(minutesAgo(5) / 1000) - 1)))).toEqual(refused)
+    // A time that isn't one, though signed.
+    for (const t of ['', 'now', '-1', '1e15', '99999999999999999999']) expect(await deliver(null, headers, signed('', SECRET, t)), t).toEqual(refused)
+    // A fresh time put on an old signature: not what was signed.
+    const old = signed('', SECRET, String(minutesAgo(60)))
+    expect(await deliver(null, headers, `t=${Date.now()},${old.slice(old.indexOf('v1='))}`)).toEqual(refused)
+    expect((await rowOf(info, documentId))[0]).toMatchObject({ active: true })
+    expect(await auditRows(id)).toEqual([])
+    // Sanity's own second and third tries come within about two minutes: signed 4 minutes ago is taken.
+    expect(await deliver(null, headers, signed('', SECRET, String(minutesAgo(4))))).toEqual({ status: 200, body: { success: true } })
+    expect((await rowOf(info, documentId))[0]).toMatchObject({ active: false })
+    // In seconds too.
+    expect(await deliver(null, headers, signed('', SECRET, String(Math.floor(minutesAgo(1) / 1000))))).toEqual({ status: 200, body: { success: true } })
+  })
+
+  it('the signature is compared in constant time (crypto.timingSafeEqual), whatever its length (F7)', async () => {
+    const info = TYPES.find((t) => t.type === 'product') as TypeInfo
+    const documentId = `w66a-constant-${crypto.randomUUID()}`
+    const body = JSON.stringify({ _type: 'product', _id: documentId, name: 'Soap' })
+    const right = signed(body)
+    const compare = vi.spyOn(nodeCrypto, 'timingSafeEqual')
+    try {
+      const wrong = `${right.slice(0, -1)}${right.endsWith('A') ? 'B' : 'A'}`
+      const post = async (signature: string) => (await POST(new NextRequest('http://localhost/api/sanity/webhook', { method: 'POST', body, headers: { 'sanity-webhook-signature': signature } }))).status
+      expect(await post(wrong)).toBe(401)
+      expect(compare).toHaveBeenCalledTimes(1)
+      // Shorter, longer, empty: refused, never thrown (timingSafeEqual itself throws on two lengths).
+      for (const signature of [right.slice(0, -1), `${right}A`, right.replace(/v1=.*/, 'v1='), right.replace(/v1=.*/, 'v1=\u00e9')]) expect(await post(signature), signature).toBe(401)
+      expect(await rowOf(info, documentId)).toEqual([])
+      expect(await post(right)).toBe(200)
+      expect(compare).toHaveBeenCalledTimes(2)
+    } finally {
+      compare.mockRestore()
+    }
+    expect(await rowOf(info, documentId)).toHaveLength(1)
+  })
+
+  it.each(TYPES)('$type: a delete of an item already off sale writes no update and no audit row, however often it comes (F6)', async (info) => {
+    const documentId = `w66a-off-${info.type}-${crypto.randomUUID()}`
+    const id = await onSale(info, documentId)
+    expect(await deleted(documentId)).toEqual({ status: 200, body: { success: true } })
+    const [off] = await rowOf(info, documentId)
+    const rows = await auditRows(id)
+    expect(rows.filter((row) => row.action === info.action)).toHaveLength(1)
+    stripe.calls.length = 0
+    // Delivered again, then again: the row (its updated_at too) and the audit trail as they were, nothing to Stripe.
+    expect(await deleted(documentId)).toEqual({ status: 200, body: { success: true } })
+    expect(await deleted(documentId)).toEqual({ status: 200, body: { success: true } })
+    expect((await rowOf(info, documentId))[0]).toEqual(off)
+    expect(await auditRows(id)).toEqual(rows)
+    expect(stripe.calls).toEqual([])
   })
 
   it('a type with no row here is ignored, and a delete of a document with no row writes nothing', async () => {
@@ -306,5 +454,3 @@ describe("Sanity's webhook on the Worker's connection (W66)", () => {
   })
 })
 
-/** The route's fingerprint of an extra waiver: the first 12 hex characters of its trimmed text's SHA-256. */
-const createHashOf = (text: string): string => createHash('sha256').update(text).digest('hex').slice(0, 12)

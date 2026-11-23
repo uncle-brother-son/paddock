@@ -1,4 +1,4 @@
-import type { Queryable, SqlParam } from '@/server/db'
+import type { Db, SqlParam } from '@/server/db'
 import type { RpcClient } from './dispatch'
 
 // New in W66 (H-plan 4.2, H8, N1): the Stripe webhook's database steps on the Worker's own connection, in place of
@@ -7,14 +7,16 @@ import type { RpcClient } from './dispatch'
 //   `ignoreDuplicates` sent);
 // - `outcomeOf`: the row's outcome, read back;
 // - `rpc`: one of the four membership functions, called by name with its own argument names (as PostgREST called
-//   them). Each call is its own statement and so its own transaction, as PostgREST made it: the function locks the
-//   membership's row itself (`FOR UPDATE`) and the lock ends with the call. No Stripe read is ever made inside one;
+//   them). Each call is its own transaction of one statement, as PostgREST made it: the function locks the membership's
+//   row itself (`FOR UPDATE`) and the lock ends with the call. No Stripe read is ever made inside one. W66a (the W66
+//   review's F1): through `db.transaction`, so the server's own limits hold (a lock waited for 5 seconds, a statement 8)
+//   and end the call before the client's 10 seconds: a call answered as failed has been undone, and can't land later;
 // - `recordOutcome` / `recordError`: the row's outcome when the handler ends. As the client's update, only the
 //   fields given are written: an error leaves `detail` as it was.
 // The role (`paddock_worker`) holds INSERT and UPDATE on `stripe_webhook_events` and EXECUTE on the four functions
 // (the lead's live check W66-1, 23 Nov); the functions are SECURITY DEFINER, as they were for the service role.
 
-/** The four functions the handlers call (dispatch.ts), with their argument names in order. */
+/** The four functions the handlers call (dispatch.ts; W66a: and "Try the payment again now", retry-payment.ts), with their argument names in order. */
 const MEMBERSHIP_FUNCTIONS: Readonly<Record<string, { sql: string; params: readonly string[] }>> = {
   membership_mark_paid: {
     sql: 'SELECT public.membership_mark_paid(p_stripe_subscription_id => $1::text, p_period_end => $2::timestamptz) AS data',
@@ -55,7 +57,7 @@ export interface WebhookStore extends RpcClient {
  * `rpc` on `db`. As Supabase's client answered: it never throws; a failure comes back as `error` (dispatch.ts throws
  * it). The params must be exactly the function's own, as PostgREST finds a function by its argument names.
  */
-export function membershipFunctions(db: Queryable): RpcClient {
+export function membershipFunctions(db: Db): RpcClient {
   return {
     async rpc(fn, params = {}) {
       const known = MEMBERSHIP_FUNCTIONS[fn]
@@ -63,7 +65,7 @@ export function membershipFunctions(db: Queryable): RpcClient {
       const given = Object.keys(params).sort().join(', ')
       if (given !== [...known.params].sort().join(', ')) return { data: null, error: new Error(`${fn} takes (${known.params.join(', ')}), not (${given}).`) }
       try {
-        const rows = await db.query<{ data: unknown }>(known.sql, known.params.map((name) => (params[name] ?? null) as SqlParam))
+        const rows = await db.transaction((tx) => tx.query<{ data: unknown }>(known.sql, known.params.map((name) => (params[name] ?? null) as SqlParam)))
         const data = rows[0]?.data ?? null
         return { data: typeof data === 'string' ? JSON.parse(data) : data, error: null }
       } catch (err) {
@@ -74,7 +76,7 @@ export function membershipFunctions(db: Queryable): RpcClient {
 }
 
 /** The webhook's database steps on `db` (the route's own request connection). */
-export function webhookStore(db: Queryable): WebhookStore {
+export function webhookStore(db: Db): WebhookStore {
   return {
     ...membershipFunctions(db),
     async claim(eventId, eventType) {

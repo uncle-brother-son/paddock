@@ -162,6 +162,12 @@ export const stuckCloseKindSchema = z.enum([
    * sent. `orderId` is the step's id. Last, so the older values keep their order.
    */
   'plan_step',
+  /**
+   * W66a (Wayne's Q62): a membership whose subscription renews in Stripe at another interval than the membership says
+   * (`steps` on the list, `what: 'frequency_mismatch'`), once a person has looked: recorded as sorted, with the reason.
+   * Nothing is sent. `orderId` is the line's id (`stepId`). Last, so the older values keep their order.
+   */
+  'frequency_mismatch',
 ])
 export type StuckCloseKind = z.infer<typeof stuckCloseKindSchema>
 
@@ -300,8 +306,12 @@ export const stuckStepSchema = z.object({
    * (for a person: a manager cancels the subscription in Stripe) and there is no `close`; it goes once Stripe has
    * ended the subscription. Last in the list, so the older values keep their order.
    * W57: or `plan_price`, a member's move to their plan's new price from their next renewal (step `price`).
+   * W66a (Wayne's Q62): or `frequency_mismatch`: a membership whose subscription renews in Stripe at another interval
+   * than the membership says, found by the automatic check's daily read. Not a step: `stepId` is the line's own id,
+   * `step` is `price` (a price change would pass the member by), `state` is `refused` (for a person) and `close` is
+   * Mark sorted (`frequency_mismatch`). Last in the list, so the older values keep their order.
    */
-  what: z.enum(['cancel_date', 'clear_cancel_date', 'card', 'still_live', 'plan_price']),
+  what: z.enum(['cancel_date', 'clear_cancel_date', 'card', 'still_live', 'plan_price', 'frequency_mismatch']),
   /** `cancel_date`: the membership's last day of access the step sets (YYYY-MM-DD, London). `still_live`: the last day that has passed. */
   lastDay: z.string().optional(),
   customerId: z.string().nullable(),

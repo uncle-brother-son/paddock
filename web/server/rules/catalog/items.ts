@@ -96,6 +96,37 @@ export const KINDS: Readonly<Record<ItemKind, KindInfo>> = {
 /** An item's whole row, every column by name: `alias.col`, money as text. */
 export const itemColumnsSql = (kind: ItemKind, alias: string): string => namedColumns(alias, KINDS[kind].columns, KINDS[kind].money)
 
+/**
+ * W66a (Wayne's Q61): whether an item (`$1`) has a price to be sold at, per kind, as the checkout prices it:
+ * - product: a price of its own (catalog-price.ts, variantPriceFor: base, sale or member), or else variants that each
+ *   have an override. Its variants sell at the product's prices, and one with none of them would be unpriced;
+ * - add-on: base, sale or member price (addonPriceFor);
+ * - service type: a public one is priced by its bands (quote_booking reads the session's band; its own `price` column is
+ *   read by nothing), so it needs none; a private one needs a size group with a price (its tiers; one still pending in
+ *   some band is refused at the booking, as before);
+ * - session pass: its price;
+ * - gift card type: a preset on sale, or custom amounts on with both limits set;
+ * - gift card preset: its amount, which the column requires: always priced.
+ */
+const PRICED_SQL: Readonly<Record<ItemKind, string>> = {
+  product: `SELECT (COALESCE(p.base_price, p.sale_price, p.member_price) IS NOT NULL
+     OR (EXISTS (SELECT 1 FROM product_variants v WHERE v.product_id = p.id)
+         AND NOT EXISTS (SELECT 1 FROM product_variants v WHERE v.product_id = p.id AND v.price_override IS NULL))) AS priced
+  FROM products p WHERE p.id = $1::uuid`,
+  addon: 'SELECT (COALESCE(a.base_price, a.sale_price, a.member_price) IS NOT NULL) AS priced FROM addons a WHERE a.id = $1::uuid',
+  service_type: `SELECT (st.booking_type IS DISTINCT FROM 'private'
+     OR EXISTS (SELECT 1 FROM service_type_price_tiers t WHERE t.service_type_id = st.id AND t.price IS NOT NULL)) AS priced
+  FROM service_types st WHERE st.id = $1::uuid`,
+  session_pass_type: 'SELECT (spt.price IS NOT NULL) AS priced FROM session_pass_types spt WHERE spt.id = $1::uuid',
+  gift_card_type: `SELECT ((gct.custom_amount_enabled AND gct.custom_amount_min IS NOT NULL AND gct.custom_amount_max IS NOT NULL)
+     OR EXISTS (SELECT 1 FROM gift_card_presets gcp WHERE gcp.gift_card_type_id = gct.id AND gcp.active)) AS priced
+  FROM gift_card_types gct WHERE gct.id = $1::uuid`,
+  gift_card_preset: 'SELECT (gcp.amount IS NOT NULL) AS priced FROM gift_card_presets gcp WHERE gcp.id = $1::uuid',
+}
+
+/** W66a (Q61): the refusal of an item with no price put on sale, in the lead's words. Nothing has been written. */
+export const priceFirst = (action: AdminAction) => adminRefusal('CONFLICT', action, 'price_not_set', NEW_WORDS.setItsPriceFirst)
+
 /** "Item not found", the legacy routes' words for an item that isn't there. */
 const itemNotFound = (action: AdminAction) => adminRefusal('NOT_FOUND', action, 'item_not_found', LEGACY_CATALOG_ROUTE_WORDS['toggle-active'].itemNotFound)
 
@@ -105,6 +136,8 @@ const itemNotFound = (action: AdminAction) => adminRefusal('NOT_FOUND', action, 
  * Manage pricing. One transaction under the item's lock: the switch, and a `catalog.active_set` audit row with the
  * switch before and after. L2: no Stripe product or price is switched (the legacy route switched Stripe's first, and
  * could be refused there or fail between the two). A switch writes only what was pressed, so it carries no stamp.
+ * W66a (Q61): on is refused while the item has no price (`price_not_set`, "Set its price first."), read under the item's
+ * lock; off never is.
  */
 export async function setItemActive(db: Db, kind: ItemKind, itemId: string, active: boolean, options: AdminWriteOptions): Promise<{ id: string; active: boolean }> {
   const action: AdminAction = 'catalog.active_set'
@@ -127,6 +160,7 @@ export async function setItemActive(db: Db, kind: ItemKind, itemId: string, acti
         return { id: row.id, active: row.active === true }
       },
       async change(tx) {
+        if (active && (await tx.query<{ priced: boolean | null }>(PRICED_SQL[kind], [itemId]))[0]?.priced !== true) throw priceFirst(action)
         // eslint-disable-next-line no-restricted-syntax -- the table is a literal from KINDS
         const [row] = await tx.query<Switch>(`UPDATE ${table} SET active = $1::boolean, updated_at = now() WHERE id = $2::uuid RETURNING id, active`, [active, itemId])
         if (!row) throw new Error('The item was held but not updated.')

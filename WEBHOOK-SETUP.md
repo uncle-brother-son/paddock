@@ -116,7 +116,8 @@ https://paddock.paddock-55d.workers.dev/api/sanity/webhook
 - **Check the Filter field lists this document's `_type`** — if it's not in the list, Sanity
   never calls the webhook at all, and no delivery will even appear in the History tab
 - Verify you published (not just saved draft)
-- Check RLS policies - webhook uses service role key so should bypass RLS
+- Check the Worker's logs for the delivery: since W66 the webhook writes on the Worker's own database connection
+  (role `paddock_worker`, through Hyperdrive), not with a Supabase key, so there is no key to check here
 - Query directly: `SELECT * FROM products WHERE sanity_product_id = 'YOUR_SANITY_ID'`
 
 ### Images not showing

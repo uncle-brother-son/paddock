@@ -49,6 +49,9 @@
 // - `paid_after_end_owed` (W47r-d; W47r-c "Noticed" 3, W47r-b "Noticed" 4): the second close of the same line, Mark as
 //   owed, for a payment that was in fact for a period the member had. Recorded with the person's reason (on the
 //   line's `owed` row and on the `order.close` row). No Stripe call at all, and nothing sent or refunded.
+// - `frequency_mismatch` (W66a; Wayne's Q62): a membership listed because its subscription renews in Stripe at another
+//   interval than the membership says (memberships/frequency-check.ts, sortFrequencyMismatch), once a person has
+//   looked: recorded as sorted, with the reason. No Stripe call, and the membership's row is not changed.
 //
 // W14c (W14b review S1): a compensation is closed only when its latest held row says every step left is Stripe's
 // definite refusal. Anything else reconcile finishes on its own (each step is safe to repeat, and reads a step a
@@ -85,6 +88,7 @@ import { lockForBooking } from '@/server/rules/bookings/locks'
 import { CLOSED_ON_A_CANCELLED_BOOKING_WORDS } from '@/server/rules/bookings/failure-messages'
 import { flowClosable, HELD_CLAIM_CLOSE_REASONS } from './stuck-list'
 import { WATCHED_PAYMENTS_LISTED_SQL, type ListedWatchedPayment } from './payment-watch'
+import { sortFrequencyMismatch } from '@/server/rules/memberships/frequency-check'
 import { sortLeftStep } from '@/server/rules/memberships/left'
 import { LEFT_STEP_WORDS } from '@/server/rules/memberships/failure-messages'
 import { sortPlanStep } from '@/server/rules/catalog/plan-stripe'
@@ -899,6 +903,20 @@ export async function closeStuckItem(db: Db, input: CloseStuckInput, options: Cl
     }))
     const words = sorted.closed ? LEFT_STEP_WORDS.sorted : sorted.reason === 'still_trying' ? LEFT_STEP_WORDS.stillTrying : LEFT_STEP_WORDS.notListed
     return answer('plan_step', input.orderId, sorted.closed ? { closed: true, ...(sorted.alreadyClosed ? { alreadyClosed: true } : {}), message: words } : { closed: false, reason: sorted.reason ?? 'not_listed', message: words })
+  }
+  // W66a (Wayne's Q62): a membership listed for renewing in Stripe at another interval than its row says, once a person
+  // has looked: recorded as sorted. Nothing is sent or read in Stripe; `orderId` is the listing's id.
+  if (input.kind === 'frequency_mismatch') {
+    const sorted = await sortFrequencyMismatch(db, input.orderId, why, { actor: options.actor, requestId: options.requestId }, (listing) => ({
+      actorType: options.actor.type,
+      actorId: options.actor.id,
+      action: CLOSE_ACTION,
+      entityType: 'membership_frequency',
+      entityId: listing.listingId,
+      requestId: options.requestId,
+      details: { kind: 'frequency_mismatch', why, membershipId: listing.membershipId, subscriptionId: listing.subscriptionId, frequency: listing.frequency, stripeInterval: listing.stripeInterval },
+    }))
+    return answer('frequency_mismatch', input.orderId, sorted.closed ? { closed: true, ...(sorted.alreadyClosed ? { alreadyClosed: true } : {}), message: LEFT_STEP_WORDS.sorted } : { closed: false, reason: sorted.reason, message: LEFT_STEP_WORDS.notListed })
   }
   // W41 (F-plan 4.10): a membership's payment date change the automatic check left for a person: recorded as not
   // finished with what Stripe last showed (reconcile's own last row), so the membership can be changed again. Never a

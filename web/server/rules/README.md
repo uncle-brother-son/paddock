@@ -1732,7 +1732,7 @@ on the 11th still lapses. This pays the subscription's open invoice there and th
     of its own retries got there first; or the answer was lost and the invoice reads `paid`): the route runs the
     webhook's own `invoice.paid` steps for that invoice (`app/api/stripe/webhook/dispatch.ts`, `recordInvoicePaid`:
     the subscription read now, `membership_mark_paid` only when it is paid up and the invoice is its newest, read
-    again after the write), on the Worker's own connection (`membershipRpc`). The flagged bookings go back to
+    again after the write), on the Worker's own connection (`membershipRpc`; since W66a the webhook's `membershipFunctions`). The flagged bookings go back to
     confirmed at once; the event, when it arrives, changes nothing. The answer says what changed. A write that finds
     nothing to do (Stripe has started a newer invoice, say) still ends the record `paid`, and the words say why the
     membership was not changed.
@@ -2906,3 +2906,27 @@ create, on/off, the T2 hook); `catalog/plans-postgres.test.ts` (7 races on real 
 - **Item 0 (W65b's leftovers):** the five R1 scenarios rebuilt as lost route answers and renamed; thirteen scenarios
   that had become another's press and fault taken out with their recordings (briefs/W66-logs/item0-duplicates.md); G
   invariant 7: a payment date move charged once.
+
+## The W66 review's fixes, Q61 and Q62 (W66a, step H)
+
+- **Membership functions inside a transaction (F1), `app/api/stripe/webhook/database.ts`:** `membershipFunctions` runs
+  each call in `db.transaction` (one statement), so Postgres ends it at the lock or statement limit (5 or 8 s) before
+  the client's 10 s, and a call answered as failed never lands later. "Try the payment again now" uses it too
+  (`membershipRpc` is gone).
+- **A plan's Stripe product (F2), `catalog/sanity-sync.ts`:** made with the name and metadata only, then the name and
+  picture sent as an update; a key refused for other parameters (`idempotency_error`) means it was made: found by
+  `metadata.sanity_id`.
+- **A Sanity delete of an item already off sale (F6)** writes nothing, a plan's too.
+- **Sanity's signature (F7), `app/api/sanity/webhook/route.ts`:** refused when signed more than 5 minutes ago (`t=` in
+  milliseconds, as Sanity sends it, or seconds), and compared with `crypto.timingSafeEqual`.
+- **The frequency reads (S2, F3), `memberships/frequency-check.ts`:** the list of reads due looks back 48 hours, once;
+  a list that can't be read is none this run; a membership Stripe gives no clear answer about is noted (`tried`) and
+  waits behind the others.
+- **Q61, `catalog/items.ts` `PRICED_SQL` and `catalog/plans.ts`:** on sale is refused (`price_not_set`, "Set its price
+  first.") while the item has no price; off never is. A public service type is priced by its bands, so it needs none.
+- **Q62:** a listed mismatch is a line on the stuck list's `steps` (`what: 'frequency_mismatch'`) with Mark sorted (close
+  kind `frequency_mismatch`: a `sorted` row on the membership and an `order.close` row on `membership_frequency`). It
+  goes by itself when the membership is no longer live with that subscription and frequency. Marked sorted and still
+  wrong at a later day's read, it is listed again.
+- **G invariant 7 (F4):** also at most one key per change row. **The key guard (F5):** no `npm:@supabase/` alias, and
+  `process.env[…]` by a plain name only.

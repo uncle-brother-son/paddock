@@ -377,7 +377,15 @@ describe("the banner's words (frontend/utils/stuckList.ts)", () => {
     expect(closeDialogText('held_claim')).toContain('that failed later waits while this is open')
     // W58b (the W35 audit's row 27): a hint per close kind; the old one only where it fits.
     const { closeReasonHint } = helpers
-    const kinds = ['held_order', 'changed_elsewhere', 'subscription_left', 'late_refund', 'held_flow', 'held_claim', 'refund_watch', 'left_step', 'held_payment_date', 'payment_watch', 'retry_paid_after_end', 'paid_after_end_owed', 'plan_step']
+    const kinds = ['held_order', 'changed_elsewhere', 'subscription_left', 'late_refund', 'held_flow', 'held_claim', 'refund_watch', 'left_step', 'held_payment_date', 'payment_watch', 'retry_paid_after_end', 'paid_after_end_owed', 'plan_step', 'frequency_mismatch']
+    // W66a (Wayne's Q62): a membership whose subscription renews at another interval in Stripe: its own heading, Mark
+    // sorted with its own words, counted with the membership changes.
+    expect(stepLabel({ what: 'frequency_mismatch', state: 'refused', customerName: 'Mo Member' }, day)).toBe('Membership renews at a different interval in Stripe · Mo Member')
+    expect(stepLabel({ what: 'frequency_mismatch', state: 'refused', customerName: null }, day)).toBe('Membership renews at a different interval in Stripe')
+    expect(closeButtonLabel('frequency_mismatch')).toBe('Mark sorted')
+    expect(closeDialogText('frequency_mismatch', 'frequency_mismatch')).toContain('Only do this once you have checked the subscription in Stripe and it renews as the membership here says')
+    expect(closeDialogText('frequency_mismatch')).toContain('Nothing is changed in Stripe or on the membership here.')
+    expect(stuckCount({ ...empty, steps: [{ stepId: 's', what: 'frequency_mismatch' }] })).toBe(1)
     for (const kind of kinds) expect(closeReasonHint(kind), kind).toMatch(/^For example: /)
     expect(kinds.filter((kind) => closeReasonHint(kind).includes('old screens'))).toEqual(['held_order', 'changed_elsewhere'])
     expect(closeReasonHint('paid_after_end_owed')).toBe('For example: it paid for December, which the member had')

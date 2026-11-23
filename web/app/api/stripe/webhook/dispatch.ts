@@ -15,7 +15,7 @@ export interface RpcAnswer {
 
 // The only part of the database dispatchStripeEvent needs: one of the four membership functions, by name. W66 (H8):
 // on the Worker's own connection (database.ts, membershipFunctions), where it was Supabase's client; "Try the payment
-// again now" passes its own (retry-payment.ts, membershipRpc).
+// again now" passes the same (retry-payment.ts; its own copy until W66a).
 export interface RpcClient {
   rpc(fn: string, params?: Record<string, unknown>): PromiseLike<RpcAnswer>
 }

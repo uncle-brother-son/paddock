@@ -4558,7 +4558,9 @@ function w27Scenarios(): Scenario[] {
       // The earlier refund is settled first and counts: no store credit goes.
       await refund(ids, 'credit')
     }),
-    after('order-refund-held-two-days-then-found-by-its-key', soapOnCard, async ({ refund, lines, stripe }) => {
+    // W66a: renamed from `order-refund-held-two-days-then-found-by-its-key`: on the Worker the first press finished (its
+    // answer was lost), so nothing is held or looked for; the second press two days later finds it done.
+    after('order-refund-answer-lost-then-pressed-again-two-days-later', soapOnCard, async ({ refund, lines, stripe }) => {
       const ids = await lines('product')
       await losingTheWorkersAnswer(REFUND_PATH, () => refund(ids, 'card'))
       later(TWO_DAYS)
@@ -4601,7 +4603,7 @@ function w27Scenarios(): Scenario[] {
       await refund(ids, 'card')
     }),
     // W66 item 0: `order-refund-held-two-days-and-the-look-fails` went: the Worker's second press makes no list (the first
-    // finished), so its fault never acted and it was order-refund-held-two-days-then-found-by-its-key's press.
+    // finished), so its fault never acted and it was order-refund-answer-lost-then-pressed-again-two-days-later's press.
     // W65b: these three lost the old side's statements until W64 (then plain presses). The first two lose the Worker
     // route's answer instead, and are renamed for what the Worker does (it gives the credit inside the route's
     // transaction: there is no note to find and no look to fail); the third is renamed for what it does.
@@ -4811,7 +4813,9 @@ function w27Scenarios(): Scenario[] {
       // Pressed again: the card money already back is used up, not refunded again.
       await cancel('card', [first as string])
     }),
-    after('event-cancel-recording-fails-to-store-credit-is-taken-back', eventInCash, async ({ cancel, places: ids, db }) => {
+    // W66a: renamed from `event-cancel-recording-fails-to-store-credit-is-taken-back`: on the Worker the place's stamp and
+    // the credit are one transaction, so no credit was given and there is nothing to take back.
+    after('event-cancel-recording-fails-to-store-credit-nothing-given', eventInCash, async ({ cancel, places: ids, db }) => {
       const [first] = await ids()
       await whileFailing(db, placeStampFails, () => cancel('credit', [first as string]))
     }),
@@ -5002,7 +5006,7 @@ function w27Scenarios(): Scenario[] {
       await whileFailing(db, placeStampFails, () => cancel('credit', [first as string]))
     }),
     // W66 item 0: `event-cancel-recording-fails-to-store-credit-on-a-cash-booking` went: the same press and fault as
-    // event-cancel-recording-fails-to-store-credit-is-taken-back (on the Worker the place's stamp and the credit are one
+    // event-cancel-recording-fails-to-store-credit-nothing-given (on the Worker the place's stamp and the credit are one
     // transaction, so there is no take-back whose answer could be lost).
   ]
 

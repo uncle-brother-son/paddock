@@ -294,8 +294,9 @@ function serviceTypeScenarios(): Scenario[] {
     g('service-type-active-with-no-stripe-product', async ({ call }) => {
       await call('setServiceTypeActive', { serviceTypeId: ID.serviceType, active: false })
     }),
-    g('service-type-active-refused-by-stripe', async ({ attempt, stripe }) => {
-      stripe.failNext('products.update', { kind: 'error', error: refusedByStripe() })
+    // W66a: renamed from `service-type-active-refused-by-stripe`, its Stripe fault taken out: since W55 (L2) the switch
+    // makes no Stripe call, so nothing could refuse it. What it holds: a type with an old Stripe product is switched alone.
+    g('service-type-active-with-an-old-stripe-product', async ({ attempt }) => {
       await attempt('setServiceTypeActive', { serviceTypeId: ID.serviceType, active: false })
     }, saunaSynced),
     // Stripe's product is switched first, then the row. The row's write failing leaves Stripe off and the row on.
@@ -700,8 +701,9 @@ function passAndGiftCardScenarios(): Scenario[] {
       await call('createGiftCardPreset', { giftCardTypeId: ID.giftCardType, amount: 25 })
       await call('createGiftCardPreset', { giftCardTypeId: ID.giftCardType, amount: 99.99 })
     }, giftTypeSynced),
-    g('gift-card-preset-create-refused-by-stripe', async ({ attempt, stripe }) => {
-      stripe.failNext('prices.create', { kind: 'error', error: refusedByStripe() })
+    // W66a: renamed from `gift-card-preset-create-refused-by-stripe`, its Stripe fault taken out: since W56 (L2) a preset
+    // makes no Stripe price. What it holds: a preset made on a type with an old Stripe product, with no Stripe price.
+    g('gift-card-preset-create-with-an-old-stripe-product', async ({ attempt }) => {
       await attempt('createGiftCardPreset', { giftCardTypeId: ID.giftCardType, amount: 25 })
     }, giftTypeSynced),
     // The Stripe price is made, the row's insert fails, and the route archives the price again.

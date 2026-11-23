@@ -656,7 +656,8 @@ describe('item 3: Mark as owed, the second close of a paid-after-end line', () =
   it('the kind is one the close route takes, and the states that end a line are refunded and owed', () => {
     expect(stuckCloseKindSchema.options).toContain('paid_after_end_owed')
     // W57, a named difference: `plan_step` (a plan's Stripe step marked sorted) comes after it, last.
-    expect(stuckCloseKindSchema.options.slice(-2)).toEqual(['paid_after_end_owed', 'plan_step'])
+    // W66a, a named difference: `frequency_mismatch` (Q62) comes after that, last.
+    expect(stuckCloseKindSchema.options.slice(-3)).toEqual(['paid_after_end_owed', 'plan_step', 'frequency_mismatch'])
     expect([...INVOICE_LINE_CLOSING_STATES]).toEqual(['refunded', 'owed'])
   })
 

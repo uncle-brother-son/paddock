@@ -62,6 +62,13 @@ export const PRICE_MOVE_INTERVAL_WORDS = {
  * the `left` words say what to do if it stays (set it in Stripe by hand: the step is read first, so the next check
  * closes it). W40 (L2): `missing`, when the refusal is that Stripe has no such subscription.
  */
+/** W66a (Q62): what Stripe renews a subscription at, in a sentence: "Stripe renews its subscription (sub_…) every month". */
+function everyInterval(stripeInterval: string, subscriptionId: string): string {
+  const [interval, count] = stripeInterval.split('x')
+  if (interval !== 'day' && interval !== 'week' && interval !== 'month' && interval !== 'year') return `Stripe doesn't show one renewal period for its subscription (${subscriptionId})`
+  return `Stripe renews its subscription (${subscriptionId}) every ${count ? `${count} ${interval}s` : interval}`
+}
+
 export const LEFT_STEP_WORDS = {
   cancel_at: {
     left: (subscriptionId: string): string =>
@@ -127,6 +134,13 @@ export const LEFT_STEP_WORDS = {
    */
   stillLive: (name: string | null, lastDay: string): string =>
     `${name ? `${name}'s membership` : 'A membership'} ended here on ${dayAndMonth(lastDay)}, but Stripe's subscription is still live and will keep charging. Tell a manager: cancel it in Stripe.`,
+  /**
+   * W66a (Wayne's Q62, 23 Nov; frequency-check.ts): a membership whose subscription renews in Stripe at another interval
+   * than the membership says. `name` and `plan`: null when not known. `frequency`: the membership's own (`yearly`, or
+   * monthly). `stripeInterval`: `month`, `year`, `monthx3` (every 3 months), or `unknown` (Stripe gives no one interval).
+   */
+  frequencyMismatch: (name: string | null, plan: string | null, frequency: string, stripeInterval: string, subscriptionId: string): string =>
+    `${name ? `${name}'s` : 'A'} ${plan ? `${plan} ` : ''}membership is paid ${frequency === 'yearly' ? 'yearly' : 'monthly'} here, but ${everyInterval(stripeInterval, subscriptionId)}, so a change to the plan's price could pass this member by. Nothing was changed. Check the subscription in Stripe: if Stripe is wrong, put it right there; if the membership here is wrong, tell a manager. Then press Mark sorted (needs the Issue refunds permission). If the two still differ at the next day's check, it is listed again.`,
   /** The manual close's answer. */
   sorted: 'Marked as sorted. It is no longer listed.',
   notListed: 'This is no longer on the list (it was sorted in the meantime). Nothing was changed.',

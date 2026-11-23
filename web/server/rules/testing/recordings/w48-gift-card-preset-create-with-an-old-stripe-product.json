@@ -1,5 +1,5 @@
 {
-  "scenario": "w48-gift-card-preset-create-refused-by-stripe",
+  "scenario": "w48-gift-card-preset-create-with-an-old-stripe-product",
   "results": [
     {
       "success": true,

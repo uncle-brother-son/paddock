@@ -1,5 +1,5 @@
 {
-  "scenario": "w27-event-cancel-recording-fails-to-store-credit-is-taken-back",
+  "scenario": "w27-event-cancel-recording-fails-to-store-credit-nothing-given",
   "results": [
     {
       "success": true,

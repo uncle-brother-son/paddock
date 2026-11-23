@@ -349,6 +349,86 @@ describe('Prices, on and off sale (L2: no Stripe)', () => {
     expect((await press(presetActiveRoute, { presetId: UNKNOWN_ID }, { active: true })).error?.message).toBe(LEGACY_CATALOG_ROUTE_WORDS['toggle-active'].itemNotFound)
   })
 
+  // Wayne's Q61 (23 Nov; W66a): what a price is, per kind, as the checkout charges it (catalog-price.ts, the tiers, the presets).
+  /** Everything off sale, as a new item from Sanity arrives, with `sql` run as staff's other pages would leave it. */
+  const offSale = async (table: string, id: string, sql = '') => {
+    await database.pg.exec(`RESET ROLE; UPDATE ${table} SET active = false WHERE id = '${id}'; ${sql}; SET ROLE paddock_worker;`)
+  }
+  const turnOn = (handler: AdminRouteHandler, params: Record<string, string>) => press<{ id: string; active: boolean }>(handler, params, { active: true })
+  // eslint-disable-next-line no-restricted-syntax -- the table is a literal from KIND below
+  const isOn = async (table: string, id: string) => (await database.db.query<{ active: boolean }>(`SELECT active FROM ${table} WHERE id = $1`, [id]))[0]?.active
+  const KIND = {
+    product: () => ({ handler: productActiveRoute, params: { productId: product }, table: 'products', id: product }),
+    addon: () => ({ handler: addonActiveRoute, params: { addonId: addon }, table: 'addons', id: addon }),
+    publicType: () => ({ handler: serviceTypeActiveRoute, params: { serviceTypeId: serviceType }, table: 'service_types', id: serviceType }),
+    privateType: () => ({ handler: serviceTypeActiveRoute, params: { serviceTypeId: privateType }, table: 'service_types', id: privateType }),
+    pass: () => ({ handler: passActiveRoute, params: { passTypeId: passType }, table: 'session_pass_types', id: passType }),
+    giftType: () => ({ handler: giftTypeActiveRoute, params: { giftCardTypeId: giftType }, table: 'gift_card_types', id: giftType }),
+    preset: () => ({ handler: presetActiveRoute, params: { presetId: preset }, table: 'gift_card_presets', id: preset }),
+  } as const
+  const tierSql = (price: string) => `INSERT INTO service_type_price_tiers (service_type_id, band_id, min_people, max_people, price) VALUES ('${privateType}', '${core}', 1, 4, ${price})`
+
+  type PriceCase = readonly [label: string, kind: keyof typeof KIND, sql: () => string]
+  it.each<PriceCase>([
+    ['a product with no price of its own and a variant with none', 'product', () => 'UPDATE products SET base_price = NULL'],
+    ['a product with no price and no variants', 'product', () => 'UPDATE products SET base_price = NULL; DELETE FROM product_variants'],
+    ['a product with no price, one variant with an override and one without', 'product', () => `UPDATE products SET base_price = NULL; UPDATE product_variants SET price_override = 12; INSERT INTO product_variants (product_id, size, sku) VALUES ('${product}', 'L', 'TEE-L')`],
+    ['an add-on with no price', 'addon', () => 'UPDATE addons SET base_price = NULL'],
+    ['a private service type with no size group', 'privateType', () => ''],
+    ['a private service type whose only size group has its price pending', 'privateType', () => tierSql('NULL')],
+    ['a private service type with only its own unused price column set', 'privateType', () => 'UPDATE service_types SET price = 90'],
+    ['a session pass with no price', 'pass', () => 'UPDATE session_pass_types SET price = NULL'],
+    ['a gift card type with no preset and no custom amounts', 'giftType', () => 'DELETE FROM gift_card_presets'],
+    ['a gift card type whose only preset is off sale', 'giftType', () => 'UPDATE gift_card_presets SET active = false'],
+    ["a gift card type with custom amounts on and a limit not set", 'giftType', () => 'DELETE FROM gift_card_presets; UPDATE gift_card_types SET custom_amount_enabled = true, custom_amount_min = 10'],
+  ])('Q61: %s is refused on sale, as data, in the lead\'s words; nothing written; off is never refused', async (_label, kind, sql) => {
+    const { handler, params, table, id } = KIND[kind]()
+    await offSale(table, id, sql())
+    const refused = await turnOn(handler, params)
+    expect([refused.status, refused.ok, refused.reason, refused.error?.message]).toEqual([409, false, 'price_not_set', 'Set its price first.'])
+    expect(NEW.setItsPriceFirst).toBe('Set its price first.')
+    expect(await isOn(table, id)).toBe(false)
+    expect(await auditRowsOf(db)).toEqual([])
+    // Off: for an item already off, and for one left on sale with no price (from before Q61).
+    expect((await press(handler, params, { active: false })).data).toEqual({ id, active: false })
+    await database.pg.exec(`RESET ROLE; UPDATE ${table} SET active = true WHERE id = '${id}'; SET ROLE paddock_worker;`)
+    expect((await press(handler, params, { active: false })).data).toEqual({ id, active: false })
+    expect(await isOn(table, id)).toBe(false)
+  })
+
+  it.each<PriceCase>([
+    ['a product with a base price', 'product', () => ''],
+    ['a product with only a sale price', 'product', () => 'UPDATE products SET base_price = NULL, sale_price = 9'],
+    ['a product with only a member price (members can buy it)', 'product', () => 'UPDATE products SET base_price = NULL, member_price = 9'],
+    ['a product at £0', 'product', () => 'UPDATE products SET base_price = 0'],
+    ['a product whose every variant has an override', 'product', () => 'UPDATE products SET base_price = NULL; UPDATE product_variants SET price_override = 12'],
+    ['an add-on with a base price', 'addon', () => ''],
+    ['an add-on with only a member price', 'addon', () => 'UPDATE addons SET base_price = NULL, member_price = 3'],
+    ['a public service type, priced by its bands, with no price of its own', 'publicType', () => 'UPDATE service_types SET price = NULL'],
+    ['a service type with no booking type yet', 'publicType', () => 'UPDATE service_types SET price = NULL, booking_type = NULL'],
+    ['a private service type with one size group priced and one pending', 'privateType', () => `${tierSql('120')}; ${tierSql('NULL').replace(core, peak)}`],
+    ['a session pass with a price', 'pass', () => ''],
+    ['a gift card type with a preset on sale', 'giftType', () => ''],
+    ['a gift card type with custom amounts and no preset', 'giftType', () => 'DELETE FROM gift_card_presets; UPDATE gift_card_types SET custom_amount_enabled = true, custom_amount_min = 10, custom_amount_max = 100'],
+    ['a gift card preset (its amount is always set)', 'preset', () => ''],
+  ])('Q61: %s goes on sale as before', async (_label, kind, sql) => {
+    const { handler, params, table, id } = KIND[kind]()
+    await offSale(table, id, sql())
+    expect((await turnOn(handler, params)).data).toEqual({ id, active: true })
+    expect(await isOn(table, id)).toBe(true)
+    expect((await auditRowsOf(db)).map((row) => [row.action, row.details.before, row.details.after])).toEqual([['catalog.active_set', { id, active: false }, { id, active: true }]])
+  })
+
+  it('Q61: refused, then its price set, then on; and an unknown item and no permission are still refused as before', async () => {
+    await offSale('addons', addon, 'UPDATE addons SET base_price = NULL')
+    expect((await turnOn(addonActiveRoute, { addonId: addon })).error?.message).toBe('Set its price first.')
+    expect((await press(addonPriceRoute, { addonId: addon }, { basePrice: 5 })).ok).toBe(true)
+    expect((await turnOn(addonActiveRoute, { addonId: addon })).data).toEqual({ id: addon, active: true })
+    expect((await turnOn(addonActiveRoute, { addonId: UNKNOWN_ID })).error?.message).toBe(LEGACY_CATALOG_ROUTE_WORDS['toggle-active'].itemNotFound)
+    await offSale('addons', addon, 'UPDATE addons SET base_price = NULL')
+    expect((await press(addonActiveRoute, { addonId: addon }, { active: true }, TIA)).error?.message).toBe(NO_PRICING)
+  })
+
   it('brief item 11: a preset\'s price change leaves a gift card already sold at its old amount', async () => {
     const customer = await fixtures.customer(db)
     const card = await insert(db, 'gift_cards', { code: 'GIFT-OLD-60', type: 'monetary', original_value: '60.00', remaining_balance: '60.00', purchaser_id: customer, origin: 'customer_purchase', expiry_date: '2099-01-01' })

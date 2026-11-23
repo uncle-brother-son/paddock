@@ -964,6 +964,32 @@ describe('on and off sale', () => {
     })
   })
 
+  it("Q61 (Wayne, 23 Nov; W66a): on is refused while the plan has no price, before Stripe is asked anything; off never is; one price, either, is enough", async () => {
+    await onASeed(async (stripe) => {
+      expect((await press(activeRoute, { planId: ID.plan }, { active: false })).data).toEqual({ id: ID.plan, active: false })
+      const product = stripe.product('prod_seed')?.['active']
+      expect(product).toBe(false)
+      await db.query('UPDATE membership_plans SET price_monthly = NULL, price_yearly = NULL WHERE id = $1', [ID.plan])
+      const auditedBefore = (await audited('plan.active_set')).length
+      const callsBefore = stripe.calls.length
+      const refusedOn = await press(activeRoute, { planId: ID.plan }, { active: true })
+      expect([refusedOn.status, refusedOn.reason, refusedOn.error?.message]).toEqual([409, 'price_not_set', 'Set its price first.'])
+      expect((await plan()).active).toBe(false)
+      expect(stripe.calls).toHaveLength(callsBefore)
+      expect(await audited('plan.active_set')).toHaveLength(auditedBefore)
+      expect((await press(activeRoute, { planId: ID.plan }, { active: false })).data).toEqual({ id: ID.plan, active: false })
+      // A yearly price alone, then a monthly alone: on sale.
+      for (const sql of ['UPDATE membership_plans SET price_yearly = 400 WHERE id = $1', 'UPDATE membership_plans SET price_yearly = NULL, price_monthly = 40 WHERE id = $1']) {
+        await db.query(sql, [ID.plan])
+        pastTheWindow()
+        await reconcileNow(stripe)
+        expect((await press(activeRoute, { planId: ID.plan }, { active: true })).data).toEqual({ id: ID.plan, active: true })
+        expect(stripe.product('prod_seed')?.['active']).toBe(true)
+        expect((await press(activeRoute, { planId: ID.plan }, { active: false })).data).toEqual({ id: ID.plan, active: false })
+      }
+    })
+  })
+
   it('W58c (W58 review FL4): off is refused while a price change on the plan is still moving its members; nothing written; allowed once they have moved', async () => {
     await onASeed(async (stripe) => {
       stripe.failNext('subscriptions.update', { kind: 'unreachable' })

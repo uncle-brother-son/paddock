@@ -26,7 +26,7 @@ import type { StripeClient } from '@/server/stripe/client'
 import { stripeTiming, type StripeTiming } from '@/server/stripe/deadline'
 import { CATALOG_ADMIN_WORDS, LEGACY_CATALOG_ROUTE_WORDS } from './failure-messages'
 import { CATALOG_ITEM_NEW_WORDS } from './item-failure-messages'
-import { isPoundsAndPence, priceText, withIsoTimes } from './items'
+import { isPoundsAndPence, priceFirst, priceText, withIsoTimes } from './items'
 import { herdChangeWords, MEMBERSHIP_SETTINGS_NEW_WORDS, PLAN_NEW_WORDS, planMoveWords, type PlanMoveFigures } from './plan-failure-messages'
 import {
   applyPriceChange,
@@ -346,9 +346,9 @@ export async function createPlan(db: Db, input: PlanCreateInput, options: PlanPr
 
 const activeAction: AdminAction = 'plan.active_set'
 const itemNotFound = (action: string) => adminRefusal('NOT_FOUND', action, 'item_not_found', LEGACY_CATALOG_ROUTE_WORDS['toggle-active'].itemNotFound)
-const LOCK_PLAN_ROW_SQL = 'SELECT id, active, stripe_product_id, name FROM membership_plans WHERE id = $1::uuid'
+const LOCK_PLAN_ROW_SQL = 'SELECT id, active, stripe_product_id, name, (price_monthly IS NOT NULL OR price_yearly IS NOT NULL) AS priced FROM membership_plans WHERE id = $1::uuid'
 
-type PlanSwitchSeen = { id: string; active: boolean | null; stripe_product_id: string | null; name: string }
+type PlanSwitchSeen = { id: string; active: boolean | null; stripe_product_id: string | null; name: string; priced: boolean }
 
 /** The plan's row under its lock, as the switch reads it; "Item not found" when there is none. */
 async function lookAtPlan(tx: Tx, planId: string): Promise<PlanSwitchSeen> {
@@ -366,7 +366,8 @@ const recordPlanSwitch = (tx: Tx, by: StepBy, key: string | null, planId: string
  * `POST catalog/membership-plans/:planId/active` (setMembershipPlanActive). Manage pricing. Live members are never
  * touched, as before.
  *  On:  the plan must be set up in Stripe (not still being set up; not just taken off sale with that still being
- *       sent); Stripe's product put on sale first, then one transaction: the row on, any off step closed as
+ *       sent) and (W66a, Wayne's Q61) have a price, monthly or yearly: "Set its price first." otherwise, before
+ *       anything is sent; Stripe's product put on sale first, then one transaction: the row on, any off step closed as
  *       replaced, a product step recorded `done` (so it is checked 20 minutes later), and `plan.active_set`. A Stripe
  *       refusal or no clear answer changes nothing here.
  *  Off: refused while a price change on the plan is still open (W58c, FL4). Otherwise one transaction: the row off,
@@ -393,6 +394,8 @@ export async function setPlanActive(db: Db, planId: string, active: unknown, opt
       if (await createStillOpen(tx, planId)) throw adminRefusal('CONFLICT', action, 'still_being_set_up', NEW.stillBeingSetUp)
       if (!row.stripe_product_id) throw adminRefusal('CONFLICT', action, 'no_stripe_product', NEW.noStripeProduct)
       if (await offStillBeingSent(tx, planId)) throw adminRefusal('CONFLICT', action, 'off_still_being_sent', NEW.offStillBeingSent)
+      // W66a (Q61): a plan sold at one frequency only needs that one price (the checkout refuses the other).
+      if (!row.priced) throw priceFirst(action)
       // W57a (W57 review L3): the off presses made so far, so the second transaction can tell one made meanwhile.
       return { ...row, offPresses: await offPressSteps(tx, planId) }
     })

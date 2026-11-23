@@ -12,7 +12,7 @@ import type { FakeStripe } from '@/server/stripe/fake'
  *   5. a day's band windows always cover the whole day (every day that has windows);
  *   6. always one active admin and one active Manage pricing holder;
  *   7. (W66) a membership's payment date moved, and charged for, once: no two change rows moving it from the same
- *      renewal date both charged and not failed.
+ *      renewal date both charged and not failed; and (W66a) no change row charged more than once, under whatever key.
  * One to five are read after the seed and after the run, and only a breach the run made counts: a seed may set up an
  * unusual state on purpose, and that is the scenario's, not the code's. Six is read around each staff press
  * (staffHoldersProblems), because the "who may" recordings make their only admin inactive by hand during the run.
@@ -125,17 +125,17 @@ export async function gBreaches(db: Db, stripe: FakeStripe, before: GState): Pro
   // the same membership from the same renewal date, both charged (a `paymentIntents.create` under the row's key) and
   // neither failed. A first try that failed (declined, or refused and refunded) leaves its row `failed`, so trying
   // again is not counted; a later move starts from the date the first set, so it is not counted either.
-  const chargedRows = new Set(
-    stripe.calls
-      .filter((call) => call.method === 'paymentIntents.create' && typeof call.idempotencyKey === 'string' && call.idempotencyKey.endsWith(':charge'))
-      .map((call) => (call.idempotencyKey as string).slice(0, -':charge'.length))
-  )
+  const chargeKeys = stripe.calls.filter((call) => call.method === 'paymentIntents.create').flatMap((call) => (typeof call.idempotencyKey === 'string' ? [call.idempotencyKey] : []))
   const changes = await db.query<{ id: string; membership_id: string; old_renewal_date: string; status: string }>(
     'SELECT id::text AS id, membership_id::text AS membership_id, old_renewal_date::text AS old_renewal_date, status FROM membership_payment_date_changes ORDER BY created_at, id'
   )
   const movesCharged = new Map<string, string[]>()
   for (const change of changes) {
-    if (!chargedRows.has(change.id) || change.status === 'failed') continue
+    // W66a (W66 review F4): and per row, whatever its key's ending. A second payment for one row would go out under a key
+    // of its own (`<changeId>:charge-2`), which the count per move above can't see. The same key sent again is one payment.
+    const keys = new Set(chargeKeys.filter((key) => key.startsWith(`${change.id}:`)))
+    if (keys.size > 1) wrong.push(`payment date change ${change.id} charged under ${keys.size} keys: ${[...keys].join(', ')}`)
+    if (keys.size === 0 || change.status === 'failed') continue
     const move = `membership ${change.membership_id} from ${change.old_renewal_date}`
     movesCharged.set(move, [...(movesCharged.get(move) ?? []), change.id])
   }

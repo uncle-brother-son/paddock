@@ -1804,14 +1804,27 @@ async function checkLivePastLastDay(run: Run, due: StillLiveDue, now: () => numb
 /**
  * W67 (L-new; lead call L-H14): one live membership's subscription read for its interval (memberships/frequency-check.ts):
  * one read, never a send. No item unless this read lists it (then the line, left for a person, once); every clear read
- * is noted in `read`, so the membership isn't read again for a day.
+ * is noted in `read`, so the membership isn't read again for a day. W66a (W66 review F3): one Stripe gave no clear
+ * answer about is noted in `tried`, so it waits behind the others.
  */
-async function checkMembershipFrequency(run: Run, due: FrequencyDue, read: string[]): Promise<ReconcileItem | null> {
+async function checkMembershipFrequency(run: Run, due: FrequencyDue, looked: { read: string[]; tried: string[] }): Promise<ReconcileItem | null> {
   const checked = await checkFrequency(run.db, run.stripe, due, { actor: run.options.actor, requestId: run.options.requestId }, run.timing)
-  if (checked.kind === 'wait') return null
-  read.push(frequencyKey(due))
+  if (checked.kind === 'wait') {
+    if (checked.tried) looked.tried.push(frequencyKey(due))
+    return null
+  }
+  looked.read.push(frequencyKey(due))
   if (checked.kind !== 'listed') return null
   return left('step', checked.listingId, MEMBERSHIP_FREQUENCY_MISMATCH, `membership ${due.membershipId}'s row says ${checked.frequency}, and Stripe renews its subscription ${due.subscriptionId} every ${checked.stripeInterval}: a price change would pass it by. Listed for a person`)
+}
+
+/** W66a (W66 review S2): the day's interval reads due. A list that can't be read is none this run (as lastTried): everything else the run does goes on. */
+async function frequenciesDue(db: Db): Promise<FrequencyDue[]> {
+  try {
+    return await frequencyReadsDue(db)
+  } catch {
+    return []
+  }
 }
 
 // --- Steps and checks taken by when they were last tried (W46)
@@ -2046,8 +2059,8 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
   // W67 (L-new, lead call L-H14): live memberships whose subscription's interval wasn't read in the last day, each read
   // in Stripe (frequency-check.ts): at most MAX_FREQUENCY_READS_PER_RUN a run, the ones read longest ago first. A read
   // each, never a send; the run notes what it read, so each is read once a day.
-  const frequencies = options.readIntervals === true ? await frequencyReadsDue(db) : []
-  const frequencyRead: string[] = []
+  const frequencies = options.readIntervals === true ? await frequenciesDue(db) : []
+  const frequencyLooked = { read: [] as string[], tried: [] as string[] }
   // W57 (G-plan 4.7): a plan's Stripe side past its press's window: price changes held, plans half made, plan steps
   // (an old price to archive, the product on or off sale) not refused, and products due their check.
   const planChanges = (await openChanges(db)).filter((open) => !open.inWindow)
@@ -2085,7 +2098,7 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
         return checkLivePastLastDay(run, due, now)
       },
     })),
-    ...frequencies.map((due) => ({ kind: 'step' as const, id: due.membershipId, watch: true as const, go: () => checkMembershipFrequency(run, due, frequencyRead) })),
+    ...frequencies.map((due) => ({ kind: 'step' as const, id: due.membershipId, watch: true as const, go: () => checkMembershipFrequency(run, due, frequencyLooked) })),
   ]
   const work: Work[] = [
     ...refunds.map((due) => ({ kind: 'refund' as const, id: due.entity_id, go: () => settleLateRefund(run, due) })),
@@ -2259,7 +2272,7 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
   // W67 (L-new): the memberships this run read, so each is read once a day. Only a note for the order: a run that can't
   // write it reads them again next run (nothing is listed twice: the listing looks for its own row).
   try {
-    await recordFrequencyReads(db, frequencyRead, { actor: options.actor, requestId: options.requestId })
+    await recordFrequencyReads(db, frequencyLooked, { actor: options.actor, requestId: options.requestId })
   } catch {
     // Read again next run.
   }

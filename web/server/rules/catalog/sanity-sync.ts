@@ -14,20 +14,25 @@
 //   are. Membership plans as before (L-H6): a product made for a plan that has none, its name and picture sent again
 //   on every publish, now on the Worker's Stripe client, after the row's transaction (never inside it), and the new
 //   product made under a key from the plan's id, so a second delivery (or a retry) can't make a second product.
+//   W66a (W66 review F2): the create sends only the name and the metadata, and the name and picture are then sent as an
+//   update; a create Stripe refuses because the name has changed since the first send (`idempotency_error`) means the
+//   first one was made, so it is looked up by its `sanity_id` and renamed.
 //   A Stripe failure is logged and the document still answered 200, as before: the next publish makes or renames it.
 // - A delete takes the item off sale (never a row delete, as before), in one transaction with an audit row by the
 //   system as `sanity`: `catalog.active_set` for the five item kinds (as the staff app's switch writes), and
 //   `event.active_set` for an event. A plan goes off sale only through the plan rule's own switch (plans.ts,
 //   takePlanOffSale): refused while a price change on the plan is open, and then logged, answered 200 and recorded
-//   (`catalog.sanity_delete_refused`) for the lead.
+//   (`catalog.sanity_delete_refused`) for the lead. W66a (F6): an item (or plan) already off sale is left as it is, with
+//   no row of its own: a delete delivered again, or of something staff took off sale first, writes nothing.
 import 'server-only'
+import Stripe from 'stripe'
 import { audit } from '@/server/audit'
 import type { Db, Tx } from '@/server/db'
 import { ApiError } from '@/server/http/errors'
 import { stripeIdempotencyKey } from '@/server/http/idempotency'
 import type { StepBy } from '@/server/rules/memberships/left'
 import type { StripeClient } from '@/server/stripe/client'
-import { PLAN_ENTITY } from './plan-stripe'
+import { everyPage, PLAN_ENTITY } from './plan-stripe'
 import { takePlanOffSale } from './plans'
 
 /** Who a Sanity write is by: the system, named `sanity` (audit_log's actor types are staff, customer and system). */
@@ -134,10 +139,36 @@ async function upsert(tx: Tx, kind: SanityKind, documentId: string, mirror: Sani
   return row
 }
 
+/** The product's name and picture as the document has them now (no picture: none in Stripe either). */
+const shownAs = (mirror: SanityMirror): { name: string; images: string[] } => ({ name: mirror.name, images: mirror.thumbnailUrl ? [mirror.thumbnailUrl] : [] })
+
+/** Stripe's refusal of a key sent again with other parameters: whatever the key was first sent with was run. */
+const isIdempotencyError = (err: unknown): boolean => err instanceof Stripe.errors.StripeIdempotencyError
+
+/**
+ * A plan's Stripe product, for a plan whose row has none (Stripe away when it was first published, or its answer or
+ * the row's write lost). Made under a key from the plan's id with parameters that don't follow the picture: the name
+ * and the metadata only, so a second send (a delivery sent again, a retry, a new picture) gets the product made the
+ * first time. A changed name within the 24 hours Stripe keeps the key is refused `idempotency_error`: the first send
+ * went through, so its product is found by `metadata.sanity_id` (the newest; Stripe lists newest first) and used.
+ */
+async function makePlanProduct(stripe: StripeClient, planId: string, documentId: string, name: string): Promise<string> {
+  try {
+    const made = await stripe.products.create({ name, active: true, metadata: { sanity_id: documentId, type: 'membership_plan' } }, { idempotencyKey: stripeIdempotencyKey(planId, 'sanity-plan-product') })
+    return made.id
+  } catch (err) {
+    if (!isIdempotencyError(err)) throw err
+    const products = await everyPage<Stripe.Product>((after) => stripe.products.list({ limit: 100, ...(after ? { starting_after: after } : {}) }))
+    const found = products.find((product) => product.metadata?.['sanity_id'] === documentId)
+    if (!found) throw err
+    return found.id
+  }
+}
+
 /**
  * A published document: its row made (off sale, Q57) or brought up to date, in one transaction. For a membership plan,
- * then its Stripe product (after the transaction): made under a key from the plan's id when the row has none,
- * otherwise renamed. Throws when the database fails, so the route answers 500 and Sanity sends it again.
+ * then its Stripe product (after the transaction): made under a key from the plan's id when the row has none, and its
+ * name and picture sent (W66a). Throws when the database fails, so the route answers 500 and Sanity sends it again.
  */
 export async function syncSanityDocument(db: Db, kind: SanityKind, documentId: string, mirror: SanityMirror, options: SanityOptions): Promise<SyncedDocument> {
   const row = await db.transaction((tx) => upsert(tx, kind, documentId, mirror))
@@ -146,16 +177,14 @@ export async function syncSanityDocument(db: Db, kind: SanityKind, documentId: s
   try {
     const stripe = options.stripe()
     if (row.stripe_product_id) {
-      await stripe.products.update(row.stripe_product_id, { name: mirror.name, images: mirror.thumbnailUrl ? [mirror.thumbnailUrl] : [] })
+      await stripe.products.update(row.stripe_product_id, shownAs(mirror))
       return { ...synced, planProduct: 'renamed' }
     }
-    // Self-heals a plan whose product was never made (Stripe away at the time), as before. The key comes from the
-    // plan's id, so Stripe answers a second send (a delivery sent again, a retry) with the product it made the first time.
-    const product = await stripe.products.create(
-      { name: mirror.name, ...(mirror.thumbnailUrl ? { images: [mirror.thumbnailUrl] } : {}), active: true, metadata: { sanity_id: documentId, type: 'membership_plan' } },
-      { idempotencyKey: stripeIdempotencyKey(row.id, 'sanity-plan-product') }
-    )
-    await db.query(SET_PLAN_PRODUCT_SQL, [product.id, row.id])
+    // Self-heals a plan whose product was never made (Stripe away at the time), as before. The row is given the product
+    // before its name and picture are sent, so a failed rename is put right by the next publish.
+    const productId = await makePlanProduct(stripe, row.id, documentId, mirror.name)
+    await db.query(SET_PLAN_PRODUCT_SQL, [productId, row.id])
+    await stripe.products.update(productId, shownAs(mirror))
     return { ...synced, planProduct: 'made' }
   } catch (err) {
     // As before: the row stands, and the next publish makes or renames the product.
@@ -171,9 +200,10 @@ export type SanityDeleted =
 
 /**
  * A deleted (or unpublished) document: its row taken off sale, whichever table holds it, with an audit row by the
- * system as `sanity`; one transaction. A plan through the plan rule's switch (takePlanOffSale), which keeps it on sale
- * while a price change is open: that refusal is recorded for the lead and answered, never thrown. Any other failure
- * throws, so the route answers 500 and Sanity sends it again.
+ * system as `sanity`; one transaction. W66a (F6): one already off sale (a delete delivered again, or staff took it off
+ * first) is answered as found, with nothing written. A plan through the plan rule's switch (takePlanOffSale), which
+ * keeps it on sale while a price change is open: that refusal is recorded for the lead and answered, never thrown. Any
+ * other failure throws, so the route answers 500 and Sanity sends it again.
  */
 export async function takeSanityDocumentOffSale(db: Db, documentId: string, options: SanityOptions): Promise<SanityDeleted> {
   const by: StepBy = { actor: { ...SANITY_ACTOR }, requestId: options.requestId }
@@ -181,7 +211,8 @@ export async function takeSanityDocumentOffSale(db: Db, documentId: string, opti
     for (const where of DELETE_TABLES) {
       const [row] = await tx.query<{ id: string; active: boolean | null }>(where.findSql, [documentId])
       if (!row) continue
-      if (where.entity === PLAN_ENTITY) return { plan: row.id, wasActive: row.active === true }
+      if (row.active !== true) return { found: true, entity: where.entity, id: row.id, wasActive: false }
+      if (where.entity === PLAN_ENTITY) return { plan: row.id, wasActive: true }
       await tx.query(where.offSql, [row.id])
       await audit.record(tx, {
         actorType: SANITY_ACTOR.type,
@@ -190,9 +221,9 @@ export async function takeSanityDocumentOffSale(db: Db, documentId: string, opti
         entityType: where.entity,
         entityId: row.id,
         requestId: options.requestId,
-        details: { before: { id: row.id, active: row.active === true }, after: { id: row.id, active: false }, key: null, sanityDocumentId: documentId, why: 'sanity_delete' },
+        details: { before: { id: row.id, active: true }, after: { id: row.id, active: false }, key: null, sanityDocumentId: documentId, why: 'sanity_delete' },
       })
-      return { found: true, entity: where.entity, id: row.id, wasActive: row.active === true }
+      return { found: true, entity: where.entity, id: row.id, wasActive: true }
     }
     return { found: false }
   })

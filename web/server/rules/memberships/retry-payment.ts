@@ -78,10 +78,11 @@
 // taken after the subscription ended is refunded by a person in Stripe.
 import 'server-only'
 import Stripe from 'stripe'
-import { ENDED_IN_STRIPE, getSubscriptionLatestInvoiceId, recordInvoicePaid, type DispatchResult, type RpcClient, type SubscriptionReader } from '@/app/api/stripe/webhook/dispatch'
+import { ENDED_IN_STRIPE, getSubscriptionLatestInvoiceId, recordInvoicePaid, type DispatchResult, type SubscriptionReader } from '@/app/api/stripe/webhook/dispatch'
+import { membershipFunctions } from '@/app/api/stripe/webhook/database'
 import type { ApiErrorCode, RetryPaymentInput, RetryPaymentOutput, RetryPaymentQuoteOutput, RetryPaymentRefusalDetails } from '@/contracts'
 import { audit, type AuditEntry } from '@/server/audit'
-import type { Db, Queryable, SqlParam } from '@/server/db'
+import type { Db, Queryable } from '@/server/db'
 import { ApiError } from '@/server/http/errors'
 import { stripeIdempotencyKey } from '@/server/http/idempotency'
 import type { StripeClient } from '@/server/stripe/client'
@@ -546,39 +547,6 @@ export async function readInvoiceState(stripe: StripeClient, invoiceId: string, 
 
 // --- The paid write (review point 4)
 
-/** The two database functions the webhook's payment write can call, on the Worker's own connection. */
-const PAYMENT_FUNCTIONS: Readonly<Record<string, { sql: string; params: readonly string[] }>> = {
-  membership_mark_paid: {
-    sql: 'SELECT public.membership_mark_paid(p_stripe_subscription_id => $1::text, p_period_end => $2::timestamptz) AS data',
-    params: ['p_stripe_subscription_id', 'p_period_end'],
-  },
-  membership_mark_payment_failed: {
-    sql: 'SELECT public.membership_mark_payment_failed(p_stripe_subscription_id => $1::text) AS data',
-    params: ['p_stripe_subscription_id'],
-  },
-}
-
-/**
- * The webhook's `rpc` on the Worker's database connection: as Supabase's, it never throws, and a failure comes back
- * as `error`. Only the two functions a payment's write calls; each is its own statement (the function locks the
- * membership's row itself).
- */
-export function membershipRpc(db: Queryable): RpcClient {
-  return {
-    async rpc(fn, params = {}) {
-      const known = PAYMENT_FUNCTIONS[fn]
-      if (!known) return { data: null, error: new Error(`The retry's payment write has no function ${fn}.`) }
-      try {
-        const rows = await db.query<{ data: unknown }>(known.sql, known.params.map((name) => (params[name] ?? null) as SqlParam))
-        const data = rows[0]?.data ?? null
-        return { data: typeof data === 'string' ? JSON.parse(data) : data, error: null }
-      } catch (err) {
-        return { data: null, error: err }
-      }
-    },
-  }
-}
-
 /** The reads the write makes, each inside the press's deadline (none for a run): the subscription, and (W47r-b) the invoice of one that has ended. */
 const subscriptionReader = (stripe: StripeClient, timing: StripeTiming | undefined): SubscriptionReader => ({
   subscriptions: { retrieve: async (id) => stripe.subscriptions.retrieve(id, undefined, sendOptions(timing)) },
@@ -591,9 +559,10 @@ const subscriptionReader = (stripe: StripeClient, timing: StripeTiming | undefin
  * key's: only a test key ignores "no such subscription", as only a test-mode event does (W46b).
  * W47r-b: with the listing the webhook's route gives it (paid-after-end.ts), so an invoice paid after its
  * subscription had ended is listed for a refund by the same rule whichever of the two finds it first.
+ * W66a (W66 "Noticed" 3): the membership functions are called by the webhook's own membershipFunctions (database.ts).
  */
 function writePaid(db: Db, stripe: StripeClient, subscriptionId: string, invoiceId: string, timing: StripeTiming | undefined, by: RetryBy): Promise<DispatchResult> {
-  return recordInvoicePaid(subscriptionReader(stripe, timing), membershipRpc(db), subscriptionId, invoiceId, stripe.keyLivemode !== false, listPaidAfterEnd(db, by, 'retry'))
+  return recordInvoicePaid(subscriptionReader(stripe, timing), membershipFunctions(db), subscriptionId, invoiceId, stripe.keyLivemode !== false, listPaidAfterEnd(db, by, 'retry'))
 }
 
 /** W47r-b: what the write's listing answered (`detail.paid_after_end`), when the subscription had ended: why it was or wasn't listed. */

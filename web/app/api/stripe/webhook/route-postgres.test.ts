@@ -213,3 +213,41 @@ describe("Stripe's webhook route and reconcile on the same membership, at the sa
     expect(await openStepsOf(membership)).toEqual([])
   })
 })
+
+describe('a membership function that has to wait too long for the row (W66a, the W66 review\'s F1)', () => {
+  it("ends in Postgres at the lock limit (5 seconds), before the client's own 10: the event is an error Stripe sends again, and the write it gave up on never lands later; the delivery sent again writes it", async () => {
+    const stripe = new FakeStripe()
+    holder.stripe = stripe
+    const { membership, subscription } = await member(stripe)
+    // Stripe shows an end, so the notice is written by the function alone (no cancel pressed here).
+    const ends = Math.floor(Date.now() / 1000) + 20 * 86_400
+    await stripe.subscriptions.update(subscription, { cancel_at: ends })
+    const event = subscriptionUpdatedEvent(subscription, { cancelAt: ends, periodEnd: ends })
+    const release = deferred()
+    const locked = deferred()
+    const holding = first.transaction(async (tx) => {
+      await tx.query('SELECT id FROM customer_memberships WHERE id = $1 FOR UPDATE', [membership])
+      locked.resolve()
+      await release.promise
+    })
+    await locked.promise
+    holder.db = second
+    const started = Date.now()
+    const refused = await posted(event)
+    const took = Date.now() - started
+    expect(refused.status).toBe(500)
+    expect(took).toBeGreaterThan(4_000)
+    expect(took).toBeLessThan(8_500)
+    expect(await eventRow(event.id)).toMatchObject({ outcome: 'error', error: expect.stringMatching(/./) })
+    // Nothing is left waiting for the row, so nothing can land when it is free.
+    expect(await pg.admin.unsafe("SELECT pid FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query ILIKE '%membership_sync_cancel_at_period_end%'")).toHaveLength(0)
+    release.resolve()
+    await holding
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(await lastDay(membership)).toBeNull()
+    // Stripe sends it again: written, once.
+    expect((await posted(event)).status).toBe(200)
+    expect(await eventRow(event.id)).toMatchObject({ outcome: 'processed', error: null })
+    expect(await lastDay(membership)).not.toBeNull()
+  })
+})

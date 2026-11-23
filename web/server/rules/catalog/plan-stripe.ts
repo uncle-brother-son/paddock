@@ -218,7 +218,7 @@ export async function makeChangePrices(stripe: StripeClient, change: PriceChange
 }
 
 /** Every page of a list, up to `most` rows (a plan has a handful of prices; the bound only stops a loop in bad data). */
-async function everyPage<T extends { id: string }>(page: (startingAfter: string | undefined) => Promise<Stripe.ApiList<T>>, most = 1000): Promise<T[]> {
+export async function everyPage<T extends { id: string }>(page: (startingAfter: string | undefined) => Promise<Stripe.ApiList<T>>, most = 1000): Promise<T[]> {
   const all: T[] = []
   let after: string | undefined
   for (;;) {

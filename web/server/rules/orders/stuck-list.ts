@@ -20,6 +20,7 @@ import { LEFT_BY_REFUND } from './refund-subscription'
 import { LATE_REFUND_STEP, WATCH_DAYS, WATCHES_LISTED_SQL, type WatchDetails } from '@/server/rules/refunds/refund-watch'
 import { notLeftAgain, openSteps, stepWhat, stepWords, type StepKind } from '@/server/rules/memberships/left'
 import { stillLiveListed } from '@/server/rules/memberships/still-live'
+import { frequencyMismatchesListed } from '@/server/rules/memberships/frequency-check'
 import { LEFT_STEP_WORDS, paymentDateStuckWords, PAYMENT_RETRY_STUCK_WORDS, PAYMENT_RETRY_WORDS, WEBHOOK_NOTICE_WORDS } from '@/server/rules/memberships/failure-messages'
 import { WATCHED_PAYMENT_WORDS, WATCHED_PAYMENTS_LISTED_SQL, type ListedWatchedPayment } from './payment-watch'
 import { PAYMENT_DATE_CHANGES_LISTED_SQL, PAYMENT_DATE_CLOSE_REASONS, PAYMENT_DATE_REFUND_WATCH_STEP, paymentDateListedReason, type ListedPaymentDateChange } from '@/server/rules/memberships/payment-date'
@@ -342,8 +343,11 @@ export interface StuckStep {
    * W47r-e: or `still_live`: not a step at all, but a membership whose last day here (`lastDay`) has passed while
    * Stripe's subscription is still live (memberships/still-live.ts). `stepId` is then the line's own id, `step` is
    * `cancel_at`, `state` is `refused` (it is for a person) and it has no close: it goes when Stripe ends the subscription.
+   * W66a (Q62): or `frequency_mismatch`: not a step either, but a membership whose subscription renews in Stripe at
+   * another interval than the membership says (memberships/frequency-check.ts). `stepId` is then the line's own id,
+   * `step` is `price` (what would pass it by), `state` is `refused`, and `close` (`frequency_mismatch`) is Mark sorted.
    */
-  what: 'cancel_date' | 'clear_cancel_date' | 'card' | 'still_live' | 'plan_price'
+  what: 'cancel_date' | 'clear_cancel_date' | 'card' | 'still_live' | 'plan_price' | 'frequency_mismatch'
   lastDay?: string
   customerId: string | null
   customerName: string | null
@@ -1016,6 +1020,21 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
         state: 'refused' as const,
         at: line.at,
         words: LEFT_STEP_WORDS.stillLive(line.customerName, line.lastDay),
+      })),
+      // W66a (Wayne's Q62): memberships whose subscription the day's check found renewing in Stripe at another interval
+      // than the membership says. For a person, with Mark sorted.
+      ...(await frequencyMismatchesListed(db)).map((line) => ({
+        stepId: line.listingId,
+        membershipId: line.membershipId,
+        subscriptionId: line.subscriptionId,
+        step: 'price' as const,
+        what: 'frequency_mismatch' as const,
+        customerId: line.customerId,
+        customerName: line.customerName,
+        state: 'refused' as const,
+        at: line.at,
+        words: line.words,
+        close: { kind: 'frequency_mismatch' as const, orderId: line.listingId },
       })),
     ],
     watchedPayments: watchedPayments.map((row): StuckWatchedPayment => {
