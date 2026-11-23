@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Db } from '@/server/db'
@@ -377,7 +378,7 @@ describe("the banner's words (frontend/utils/stuckList.ts)", () => {
     expect(closeDialogText('held_claim')).toContain('that failed later waits while this is open')
     // W58b (the W35 audit's row 27): a hint per close kind; the old one only where it fits.
     const { closeReasonHint } = helpers
-    const kinds = ['held_order', 'changed_elsewhere', 'subscription_left', 'late_refund', 'held_flow', 'held_claim', 'refund_watch', 'left_step', 'held_payment_date', 'payment_watch', 'retry_paid_after_end', 'paid_after_end_owed', 'plan_step', 'frequency_mismatch']
+    const kinds = ['held_order', 'changed_elsewhere', 'subscription_left', 'late_refund', 'held_flow', 'held_claim', 'refund_watch', 'left_step', 'held_payment_date', 'payment_watch', 'retry_paid_after_end', 'paid_after_end_owed', 'plan_step', 'frequency_mismatch', 'sanity_delete']
     // W66a (Wayne's Q62): a membership whose subscription renews at another interval in Stripe: its own heading, Mark
     // sorted with its own words, counted with the membership changes.
     expect(stepLabel({ what: 'frequency_mismatch', state: 'refused', customerName: 'Mo Member' }, day)).toBe('Membership renews at a different interval in Stripe · Mo Member')
@@ -387,7 +388,22 @@ describe("the banner's words (frontend/utils/stuckList.ts)", () => {
     expect(closeDialogText('frequency_mismatch')).toContain('Nothing is changed in Stripe or on the membership here.')
     expect(stuckCount({ ...empty, steps: [{ stepId: 's', what: 'frequency_mismatch' }] })).toBe(1)
     for (const kind of kinds) expect(closeReasonHint(kind), kind).toMatch(/^For example: /)
-    expect(kinds.filter((kind) => closeReasonHint(kind).includes('old screens'))).toEqual(['held_order', 'changed_elsewhere'])
+    // W70a (W68a noticed 1): no hint and no close dialog names the old screens, and the two kinds that did still have a
+    // hint of their own.
+    expect(kinds.filter((kind) => closeReasonHint(kind).includes('old screens') || closeDialogText(kind).includes('old screens'))).toEqual([])
+    expect([closeReasonHint('held_order'), closeReasonHint('changed_elsewhere')]).toEqual(Array(2).fill("For example: booking cancelled another way, customer didn't pay"))
+    expect(closeDialogText('held_order')).toContain('if it was cancelled or changed another way, its places and pass session were dealt with then.')
+    // W70a (the W70 audit's L2): a plan deleted in Sanity that a price change kept on sale: its own heading, Mark sorted
+    // with its own words, counted with the membership changes.
+    const { planLineLabel } = helpers
+    expect(planLineLabel({ what: 'sanity_delete', state: 'refused', planName: 'All Access' })).toBe('Plan "All Access" deleted in Sanity, still on sale here')
+    expect(planLineLabel({ what: 'sanity_delete', state: 'refused', planName: null })).toBe('A plan deleted in Sanity, still on sale here')
+    expect(closeButtonLabel('sanity_delete')).toBe('Mark sorted')
+    expect(closeDialogText('sanity_delete')).toBe(
+      'Marks this line as sorted, so it is no longer listed. Only do this if the plan should stay on sale here, or it has been published again in Sanity. To take it off sale, use its switch on the Membership Plans page instead: the line then goes by itself. Nothing is changed on the plan, in Sanity or in Stripe here.'
+    )
+    expect(closeReasonHint('sanity_delete')).toBe('For example: deleted by mistake, published again in Sanity')
+    expect(stuckCount({ ...empty, plans: [{ lineId: 'l', what: 'sanity_delete' }] })).toBe(1)
     expect(closeReasonHint('paid_after_end_owed')).toBe('For example: it paid for December, which the member had')
     const run = (fields: Record<string, unknown>) => ({ ok: true, run: { checked: 0, finalised: 0, undone: 0, refunds: 0, left: 0, deferred: 0, stripeRefused: false, ...fields } })
     expect(reconcileLine(run({}))).toBe('The automatic check found nothing to settle.')
@@ -734,5 +750,29 @@ describe('W47: money still to refund, Resolve now with nothing listed, the banne
     } finally {
       vi.unstubAllGlobals()
     }
+  })
+})
+
+// --- Brief W70a item 5 (W68a noticed 1)
+
+describe('no sentence staff see names the old screens (W70a): they are gone, so the words say "another way"', () => {
+  const WEB = path.resolve(__dirname, '..')
+  const codeFiles = (dir: string): string[] =>
+    readdirSync(dir).flatMap((name) => {
+      const full = path.join(dir, name)
+      if (statSync(full).isDirectory()) return ['node_modules', 'testing', '.next', '.open-next'].includes(name) ? [] : codeFiles(full)
+      return /\.(ts|tsx)$/.test(name) && !/\.test\.tsx?$/.test(name) ? [full] : []
+    })
+  /** The code without its comments: a comment saying where a rule came from is not a sentence staff see. */
+  const withoutComments = (source: string): string => source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1')
+  const named = (files: readonly string[]) => files.filter((file) => /old screens?\b/i.test(withoutComments(readFileSync(file, 'utf8')))).map((file) => path.basename(file))
+
+  it('in the Worker (rules, routes, contracts) and in the staff app', () => {
+    const worker = ['app', 'contracts', 'lib', 'server'].flatMap((dir) => codeFiles(path.join(WEB, dir)))
+    const app = ['backend', 'frontend'].flatMap((dir) => codeFiles(path.join(staffAppDir(), dir)))
+    expect([worker.length > 200, app.length > 150]).toEqual([true, true])
+    // The fake Stripe is test code (an intent as the old screens made it).
+    expect(named(worker.filter((file) => !file.endsWith(path.join('stripe', 'fake.ts'))))).toEqual([])
+    expect(named(app)).toEqual([])
   })
 })

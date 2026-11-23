@@ -84,7 +84,7 @@ const place = async (attendeeId: string) =>
     )
   )[0]
 const flagRowsOf = async (attendeeId: string) =>
-  (await first.query<{ action: string; actor_id: string }>("SELECT action, actor_id FROM audit_log WHERE entity_id = $1 AND action LIKE 'event_attendee.%' ORDER BY at, id", [attendeeId])).map((row) => [row.action, row.actor_id])
+  (await first.query<{ action: string; actor_id: string }>("SELECT action, actor_id FROM audit_log WHERE entity_id = $1 AND action LIKE 'event_attendee.%' ORDER BY at, ctid", [attendeeId])).map((row) => [row.action, row.actor_id])
 const eventCancelled = async (eventId: string) => (await first.query('SELECT 1 FROM events WHERE id = $1 AND cancelled_at IS NOT NULL', [eventId])).length === 1
 const checkedInOutcomes = (outcome: Awaited<ReturnType<typeof outcomeOf<Awaited<ReturnType<typeof checkInEventAttendees>>>>>) =>
   'answered' in outcome ? outcome.answered.results.map((one) => (one.updated ? 'checked in' : one.reason)) : [`refused: ${outcome.refused}`]

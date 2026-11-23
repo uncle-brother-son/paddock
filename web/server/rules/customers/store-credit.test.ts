@@ -82,7 +82,7 @@ async function state(customerId: string = ID.customer): Promise<State> {
     'SELECT amount::text AS amount, balance_after::text AS balance_after, reason, note, staff_id::text AS staff_id, order_id::text AS order_id, booking_id::text AS booking_id, gift_card_id::text AS gift_card_id FROM store_credit_transactions WHERE customer_id = $1 ORDER BY created_at, id',
     [customerId]
   )
-  const audit = await db.query<State['audit'][number]>(`SELECT action, actor_id, details FROM audit_log WHERE entity_type = 'customer' AND entity_id = $1 ORDER BY at, id`, [customerId])
+  const audit = await db.query<State['audit'][number]>(`SELECT action, actor_id, details FROM audit_log WHERE entity_type = 'customer' AND entity_id = $1 ORDER BY at, ctid`, [customerId])
   return { balance: customer?.balance ?? '', movements, audit }
 }
 const UNTOUCHED: State = { balance: '30.00', movements: [], audit: [] }

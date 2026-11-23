@@ -1,5 +1,5 @@
 {
-  "scenario": "p2-two-dialogs-one-after-the-other-add-the-same-guest-twice-two-charges",
+  "scenario": "p2-q59-two-dialogs-one-after-the-other-add-the-same-guest-twice-two-charges",
   "results": [
     {
       "success": true,

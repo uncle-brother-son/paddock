@@ -144,7 +144,7 @@ const membership = async () =>
   ))[0] as { id: string; subscription: string | null; status: string; addons: number; ends: string | null }
 const creditBookings = async (membershipId: string) =>
   db.query<{ id: string; session_id: string; status: string; due: boolean }>('SELECT id, session_id, status, payment_due_by IS NOT NULL AS due FROM bookings WHERE redeemed_membership_id = $1 ORDER BY start_time, id', [membershipId])
-const auditRows = async (action: string) => db.query<{ id: string; entity_id: string; details: Record<string, unknown> }>('SELECT id, entity_id, details FROM audit_log WHERE action = $1 ORDER BY at, id', [action])
+const auditRows = async (action: string) => db.query<{ id: string; entity_id: string; details: Record<string, unknown> }>('SELECT id, entity_id, details FROM audit_log WHERE action = $1 ORDER BY at, ctid', [action])
 const storeCredit = async () => Number((await db.query<{ balance: string }>('SELECT store_credit_balance::text AS balance FROM customers WHERE id = $1', [ID.customer]))[0]?.balance)
 const refundsSent = (stripe: FakeStripe) => stripe.calls.filter((call) => call.method === 'refunds.create').map((call) => call.params as { payment_intent: string; amount: number })
 const cancelsSent = (stripe: FakeStripe) => stripe.calls.filter((call) => call.method === 'subscriptions.cancel').map((call) => (call.params as { id: string }).id)

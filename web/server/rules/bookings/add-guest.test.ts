@@ -199,7 +199,7 @@ const addonLines = async (bookingId: string) =>
     [bookingId]
   )
 const audits = async (bookingId: string) =>
-  db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE entity_id = $1 AND action = 'booking.guest_add' ORDER BY at, id", [bookingId])
+  db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE entity_id = $1 AND action = 'booking.guest_add' ORDER BY at, ctid", [bookingId])
 const giftRows = async (bookingId: string) =>
   db.query<{ amount_used: string; order_id: string | null }>('SELECT amount_used::text AS amount_used, order_id FROM gift_card_redemptions WHERE booking_id = $1 ORDER BY redeemed_at, id', [bookingId])
 const creditRows = async (bookingId: string) =>

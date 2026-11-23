@@ -4,8 +4,8 @@ import { claimIdempotencyKey, completeIdempotencyKey, type IdempotencyScope } fr
 import { startTestDatabase, type TestDatabase } from '@/server/rules/testing/database'
 
 // Every jsonb column the Worker writes through this driver, read back from the live schema: the
-// audit log and the idempotent response (W16: the parity log has no writer since the shadow went).
-// The legacy routes write through supabase-js and PostgREST, so they never reach the driver.
+// audit log and the idempotent response (W16: the parity log had no writer once the shadow went; migration 034 dropped
+// it). Everything the Worker writes goes through this driver, the Stripe and Sanity webhooks too (W66).
 describe('what the Worker stores in jsonb columns', () => {
   let t: TestDatabase
 

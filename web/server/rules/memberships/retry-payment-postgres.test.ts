@@ -124,7 +124,7 @@ function heldAtThePay(stripe: FakeStripe): { stripe: FakeStripe; release(): void
 }
 
 const states = async (membership: string) =>
-  (await third.query<{ state: string }>(`SELECT details->>'state' AS state FROM audit_log WHERE action = $1 AND entity_id = $2 ORDER BY at`, [PAYMENT_RETRY_ACTION, membership])).map((row) => row.state)
+  (await third.query<{ state: string }>(`SELECT details->>'state' AS state FROM audit_log WHERE action = $1 AND entity_id = $2 ORDER BY at, ctid`, [PAYMENT_RETRY_ACTION, membership])).map((row) => row.state)
 const status = async (membership: string) => (await third.query<{ status: string }>('SELECT subscription_status AS status FROM customer_memberships WHERE id = $1', [membership]))[0]?.status
 
 describe('two presses of "Try the payment again now" at once: one record, one send, one charge', () => {

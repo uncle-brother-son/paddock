@@ -264,3 +264,16 @@ describe("the staff app's customer screens (brief W39 item 4), read as source", 
     expect(page).toMatch(/function handleCustomerCreated\(customer: CustomerRow\) \{\s+setRows\(\(prev\) => \[customer, \.\.\.prev\]\)/)
   })
 })
+
+// --- Brief W70a (the W05j calls, lead, 7 Nov: the `[ref <uuid>]` on store credit notes is hidden on screen)
+
+describe('the reference at the end of a store credit note is hidden on screen (W05j)', () => {
+  it('only that exact ending goes; any other note, and none, is shown as it is; the history shows the note through it', async () => {
+    const { storeCreditNoteForDisplay } = (await import(/* @vite-ignore */ path.join(staffAppDir(), 'frontend/utils/storeCreditNote'))) as { storeCreditNoteForDisplay: (note: string | null) => string | null }
+    const ref = '[ref 3f2504e0-4f89-41d3-9a0c-0305e82c3301]'
+    expect(storeCreditNoteForDisplay(`Booking refund. ${ref}`)).toBe('Booking refund.')
+    for (const note of ['Booking refund.', `${ref} first`, 'Booking refund. [ref 3f25]', `Booking refund.${ref}`, '']) expect(storeCreditNoteForDisplay(note), note).toBe(note)
+    expect(storeCreditNoteForDisplay(null)).toBeNull()
+    expect(readFileSync(path.join(staffAppDir(), 'frontend/components/StoreCreditSection.tsx'), 'utf8')).toContain('storeCreditNoteForDisplay(')
+  })
+})

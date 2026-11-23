@@ -11,6 +11,8 @@ import { createStripeClient } from '@/server/stripe/client'
 // delete takes the item off sale with an audit row by the system as `sanity`.
 // W66a (W66 review F7): the signature must be no older than 5 minutes, so a signed delete someone captured can't be
 // sent again later, and it is compared in constant time.
+// W70a (the W70 audit's L1): a delete acts on the signed body's `_id` alone. Sanity's headers aren't signed, so a
+// `sanity-document-id` that names another document is refused (400), and so is a delete whose body names none.
 
 /** W59 (W45 audit row 3): an image field as this route reads it (the builder takes its asset reference). */
 interface SanityImage {
@@ -130,6 +132,16 @@ function mirrorOf(kind: SanityKind, payload: SanityDocument): SanityMirror {
   return mirror
 }
 
+/** The document id in a signed body, or null when it isn't JSON or names none. */
+function signedDocumentId(body: string): string | null {
+  try {
+    const id: unknown = (JSON.parse(body) as { _id?: unknown } | null)?._id
+    return typeof id === 'string' && id !== '' ? id : null
+  } catch {
+    return null
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     // Verify webhook signature
@@ -143,25 +155,23 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Sanity always sends this header regardless of payload shape — relied on here instead of
-    // inferring create/update/delete from the body, since a delete event's body may not
-    // reliably include every field once the document no longer exists.
+    // Sanity always sends this header, and nothing in the body says which of the three it is (the projection is the
+    // document itself). It isn't signed: W70a (L1), so a delete takes its document's id from the signed body only.
     const operation = request.headers.get('sanity-operation')
     const options: SanityOptions = { requestId: crypto.randomUUID(), stripe: () => createStripeClient() }
 
     if (operation === 'delete') {
-      const headerDocumentId = request.headers.get('sanity-document-id')
-      let bodyDocumentId: string | null = null
-      try {
-        bodyDocumentId = JSON.parse(body)?._id ?? null
-      } catch {
-        // Body may be empty/non-JSON for a delete event — the header is the reliable source.
-      }
-      const documentId = headerDocumentId ?? bodyDocumentId
-
+      // W70a (L1): the document named in what Sanity signed. A 400 is never sent again (Sanity's docs) and shows in its
+      // attempts log, so an id that isn't in the body is seen there, not passed over with a 200.
+      const documentId = signedDocumentId(body)
       if (!documentId) {
-        console.error('Delete event received with no document id in header or body')
-        return NextResponse.json({ message: 'No document id on delete event' })
+        console.error('Sanity delete refused: its signed body names no document')
+        return NextResponse.json({ error: 'No document id in the signed body' }, { status: 400 })
+      }
+      const headerDocumentId = request.headers.get('sanity-document-id')
+      if (headerDocumentId !== null && headerDocumentId !== documentId) {
+        console.error(`Sanity delete refused: its signed body names ${documentId}, its header another document`)
+        return NextResponse.json({ error: 'Document id mismatch' }, { status: 400 })
       }
       if (documentId.startsWith('drafts.')) {
         return NextResponse.json({ message: 'Draft delete ignored' })

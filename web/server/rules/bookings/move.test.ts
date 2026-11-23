@@ -198,7 +198,7 @@ const flows = (bookingId: string) =>
 const charges = (stripe: FakeStripe) => stripe.calls.filter((call) => call.method === 'paymentIntents.create')
 const refunds = (stripe: FakeStripe) => stripe.calls.filter((call) => call.method === 'refunds.create')
 const auditRows = (bookingId: string, action: string) =>
-  db.query<{ id: string; details: Record<string, unknown> }>("SELECT id, details FROM audit_log WHERE entity_type = 'booking' AND entity_id = $1 AND action = $2 ORDER BY at, id", [bookingId, action])
+  db.query<{ id: string; details: Record<string, unknown> }>("SELECT id, details FROM audit_log WHERE entity_type = 'booking' AND entity_id = $1 AND action = $2 ORDER BY at, ctid", [bookingId, action])
 const cardOrders = (bookingId: string) =>
   db.query<{ order_total: string; payment_method: string | null; line_total: string }>(
     `SELECT o.order_total::text AS order_total, o.payment_method, l.line_total::text AS line_total FROM orders o JOIN order_line_items l ON l.order_id = o.id
@@ -976,6 +976,51 @@ describe('refusals before any money moves', () => {
       expect(part.body.ok).toBe(true)
       const q = await quote(bookingId, ID.laterPrivateSession)
       expect(q.priceImpact.amountDue).toBe(-20)
+    })
+  })
+})
+
+describe('Q28: a part refund stays with the customer on a public move (W70a, the W70 audit\'s S1 f; W05d, W05i finding 7)', () => {
+  const publicPeakOnCard = { booking: { ...paidSeat([sam, { name: 'Alex Guest', email: 'alex@example.com' }]), sessionId: ID.peakSession }, payment: { method: 'card' } }
+  const partRefund = async (bookingId: string, amount: number) => {
+    expect((await post(partRoute, `${base(bookingId)}/refunds`, { bookingId }, { amount, refundMethod: 'card', reason: 'Goodwill' })).body.ok).toBe(true)
+  }
+  const due = async (bookingId: string, sessionId: string) => (await quote(bookingId, sessionId)).priceImpact.amountDue
+
+  it('£51 of seats, £45 part refunded, moved to Core (the £6 left back) and to Peak again: £6 is due, never the £11 the seats differ by', async () => {
+    await withBooking(publicPeakOnCard, async ({ bookingId, stripe }) => {
+      await partRefund(bookingId, 45)
+      expect(await due(bookingId, ID.laterPublicSession)).toBe(-6)
+      expect((await move(bookingId, ID.laterPublicSession, { refundMethod: 'card' })).body.data).toMatchObject({ moved: true })
+      expect(await bookingRow(bookingId)).toMatchObject({ price_paid: '0.00' })
+      expect(await due(bookingId, ID.peakSession)).toBe(6)
+      expect((await move(bookingId, ID.peakSession, { payment: { method: 'card' } })).body.data).toMatchObject({ moved: true })
+      expect((charges(stripe).at(-1)?.params as { amount: number }).amount).toBe(600)
+      expect(await bookingRow(bookingId)).toMatchObject({ price_paid: '6.00' })
+    })
+  })
+
+  it('£10 part refunded on £40: a same-price move is £0, a dearer one the £11 the seats differ by, and a cheaper one back again £11', async () => {
+    await withBooking(publicOnCard, async ({ bookingId }) => {
+      await partRefund(bookingId, 10)
+      expect(await due(bookingId, ID.laterPublicSession)).toBe(0)
+      expect(await due(bookingId, ID.peakSession)).toBe(11)
+      expect((await move(bookingId, ID.peakSession, { payment: { method: 'cash', confirmedCashAmount: 11 } })).body.data).toMatchObject({ moved: true })
+      expect(await bookingRow(bookingId)).toMatchObject({ price_paid: '41.00' })
+      expect(await due(bookingId, ID.laterPublicSession)).toBe(-11)
+    })
+  })
+
+  it('the cap never turns a dearer move into a refund: everything part refunded, then dearer is what the seats cost above it; a sum below nothing is £0', async () => {
+    await withBooking(publicOnCard, async ({ bookingId }) => {
+      await partRefund(bookingId, 30)
+      // £51 of seats less the £10 held toward them less the £30 the customer keeps: £11.
+      expect(await due(bookingId, ID.peakSession)).toBe(11)
+      // Test data: a capped Remove Guest can leave more part refunded than the new seats cost (£51 - £10 - £60 is below
+      // nothing): £0, and never the £10 still on the booking given back by a dearer move.
+      await db.query('UPDATE bookings SET part_refunded_amount = 60 WHERE id = $1', [bookingId])
+      const q = await quote(bookingId, ID.peakSession)
+      expect(q.priceImpact).toMatchObject({ amountDue: 0, refundDue: false })
     })
   })
 })

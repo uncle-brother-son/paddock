@@ -122,4 +122,7 @@ export const PLAN_STUCK_WORDS = {
     `The plan "${planName}" has a new price, but Stripe hasn't confirmed its old price archived yet. Nothing sells on the old price here; the automatic check tries again every 5 minutes. Nothing to do yet.`,
   archiveRefused: (planName: string): string =>
     `The plan "${planName}" has a new price, but Stripe refused to archive the old one, so the automatic check has stopped trying. Nothing here sells on it. Archive the old price in Stripe by hand (or tell a manager), then press Mark sorted (needs the Issue refunds permission).`,
+  /** W70a (the W70 audit's L2): a plan deleted (or unpublished) in Sanity while a price change on it was open. */
+  sanityDeleteKept: (planName: string): string =>
+    `The plan "${planName}" was deleted or unpublished in Sanity while a price change on it was still moving its members to the new price, so it stays on sale here. Nothing was changed. Once its members have moved (about 20 minutes), take it off sale on the Membership Plans page (needs the Manage pricing permission): this line then goes. If it should stay on sale, or it has been published again in Sanity, press Mark sorted (needs the Issue refunds permission).`,
 } as const

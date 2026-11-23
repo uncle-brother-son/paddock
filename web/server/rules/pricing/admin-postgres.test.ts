@@ -69,7 +69,7 @@ const atNoon = () => [{ bandId: core, fromTime: '00:00', toTime: '12:00' }, { ba
 const atThree = () => [{ bandId: core, fromTime: '00:00', toTime: '15:00' }, { bandId: peak, fromTime: '15:00', toTime: '24:00' }]
 const windows = async (db: Db) => (await db.query<{ band_id: string; from_time: string; to_time: string }>('SELECT band_id, from_time::text AS from_time, to_time::text AS to_time FROM band_rules WHERE day_of_week = $1 ORDER BY from_time', [SATURDAY])).map((row) => `${row.band_id === core ? 'core' : 'peak'} ${row.from_time.slice(0, 5)}-${row.to_time.slice(0, 5)}`)
 const bandOf = async (session: string) => ((await first.query<{ band_id: string }>('SELECT band_id FROM sessions WHERE id = $1', [session]))[0]?.band_id === core ? 'core' : 'peak')
-const audits = () => first.query<{ action: string; details: { before: unknown; after: unknown; rebandedSessions?: number } }>('SELECT action, details FROM audit_log ORDER BY at')
+const audits = () => first.query<{ action: string; details: { before: unknown; after: unknown; rebandedSessions?: number } }>('SELECT action, details FROM audit_log ORDER BY at, ctid')
 const backendPid = async (tx: Tx) => (await tx.query<{ pid: number }>('SELECT pg_backend_pid() AS pid'))[0]?.pid as number
 /** W54a: the stamps a Pricing page holds after a load, read through the page's own two reads on the given connection. */
 const dayStamp = async (db: Db, day = SATURDAY) => (await getPricingConfig(db, true)).bandRulesStamps[day]

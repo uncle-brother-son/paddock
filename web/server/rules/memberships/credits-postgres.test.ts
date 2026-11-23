@@ -168,7 +168,7 @@ const used = async (period: string) =>
   (await one<{ n: number }>(`SELECT count(*)::int AS n FROM bookings WHERE credit_period_id = $1 AND redemption_source = 'membership_credit' AND status <> 'cancelled'`, [period]))?.n
 const addonLeft = async (membership: string) => (await one<{ n: number }>('SELECT addon_credits_remaining AS n FROM customer_memberships WHERE id = $1', [membership]))?.n
 const adjustments = async (membership: string) => (await third.query<{ amount: number }>('SELECT amount FROM membership_credit_adjustments WHERE membership_id = $1 ORDER BY created_at, id', [membership])).map((row) => row.amount)
-const auditOf = async (entityId: string, action: string) => (await third.query<{ details: Record<string, unknown> }>('SELECT details FROM audit_log WHERE entity_id = $1 AND action = $2 ORDER BY at, id', [entityId, action])).map((row) => row.details)
+const auditOf = async (entityId: string, action: string) => (await third.query<{ details: Record<string, unknown> }>('SELECT details FROM audit_log WHERE entity_id = $1 AND action = $2 ORDER BY at, ctid', [entityId, action])).map((row) => row.details)
 const ordersFor = async (customer: string) => (await one<{ n: number }>('SELECT count(*)::int AS n FROM orders WHERE customer_id = $1', [customer]))?.n
 
 /** The old adjustMembershipCredits's session branch, step by step: read the allocation and what is used, check, then write a fixed figure. */

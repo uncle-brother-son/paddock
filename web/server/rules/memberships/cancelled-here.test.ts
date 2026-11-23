@@ -124,7 +124,7 @@ async function onASeed(work: (stripe: FakeStripe) => Promise<void>, with031 = tr
 }
 
 type AuditRow = { action: string; actor_type: string; actor_id: string | null; entity_type: string; entity_id: string; details: Record<string, unknown> }
-const audited = (action: string) => db.query<AuditRow>('SELECT action, actor_type, actor_id, entity_type, entity_id, details FROM audit_log WHERE action = $1 ORDER BY at', [action])
+const audited = (action: string) => db.query<AuditRow>('SELECT action, actor_type, actor_id, entity_type, entity_id, details FROM audit_log WHERE action = $1 ORDER BY at, ctid', [action])
 const invoiceRows = () => audited(INVOICE_PAID_AFTER_END_ACTION)
 const closeRows = () => audited(CLOSE_ACTION)
 const listed = async () => (await stuckList(db)).paymentRetries
@@ -657,7 +657,8 @@ describe('item 3: Mark as owed, the second close of a paid-after-end line', () =
     expect(stuckCloseKindSchema.options).toContain('paid_after_end_owed')
     // W57, a named difference: `plan_step` (a plan's Stripe step marked sorted) comes after it, last.
     // W66a, a named difference: `frequency_mismatch` (Q62) comes after that, last.
-    expect(stuckCloseKindSchema.options.slice(-3)).toEqual(['paid_after_end_owed', 'plan_step', 'frequency_mismatch'])
+    // W70a, a named difference: `sanity_delete` (the W70 audit's L2) comes after that, last.
+    expect(stuckCloseKindSchema.options.slice(-4)).toEqual(['paid_after_end_owed', 'plan_step', 'frequency_mismatch', 'sanity_delete'])
     expect([...INVOICE_LINE_CLOSING_STATES]).toEqual(['refunded', 'owed'])
   })
 

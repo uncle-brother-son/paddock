@@ -168,6 +168,12 @@ export const stuckCloseKindSchema = z.enum([
    * Nothing is sent. `orderId` is the line's id (`stepId`). Last, so the older values keep their order.
    */
   'frequency_mismatch',
+  /**
+   * W70a (the W70 audit's L2): a membership plan deleted in Sanity that a price change kept on sale here (`plans` on the
+   * list, `what: 'sanity_delete'`), once a person has looked: recorded as sorted, with the reason. The plan is not
+   * changed. `orderId` is the line's id (`lineId`). Last, so the older values keep their order.
+   */
+  'sanity_delete',
 ])
 export type StuckCloseKind = z.infer<typeof stuckCloseKindSchema>
 
@@ -428,12 +434,14 @@ export type StuckWebhookNoticeOutput = z.infer<typeof stuckWebhookNoticeSchema>
  * plan whose Stripe set-up didn't finish (`plan_create`), or a plan step (the product on or off sale, an old price to
  * archive) left past its window or refused by Stripe for good (that one with `close`, kind `plan_step`). A member's
  * move to a new price is a membership step (`steps`, `plan_price`).
+ * W70a (the W70 audit's L2): or a plan deleted in Sanity that a price change kept on sale here (`sanity_delete`, state
+ * `refused`, with `close`, kind `sanity_delete`). Last in the list, so the older values keep their order.
  */
 export const stuckPlanSchema = z.object({
   lineId: z.string(),
   planId: z.string(),
   planName: z.string().nullable(),
-  what: z.enum(['price_change', 'plan_create', 'product_on', 'product_off', 'archive_price']),
+  what: z.enum(['price_change', 'plan_create', 'product_on', 'product_off', 'archive_price', 'sanity_delete']),
   state: z.enum(['left', 'refused']),
   at: z.string(),
   words: z.string(),

@@ -137,7 +137,7 @@ async function orderNow(id: string) {
   )[0]
 }
 const auditActions = async (orderId: string) =>
-  (await db.query<{ action: string }>("SELECT action FROM audit_log WHERE entity_id = $1 AND entity_type = 'order' ORDER BY at, id", [orderId])).map((row) => row.action)
+  (await db.query<{ action: string }>("SELECT action FROM audit_log WHERE entity_id = $1 AND entity_type = 'order' ORDER BY at, ctid", [orderId])).map((row) => row.action)
 const customerCard = async () =>
   (await db.query<{ stripe_customer_id: string | null; saved_payment_method_id: string | null; saved_card_last4: string | null; saved_card_brand: string | null }>(
     'SELECT stripe_customer_id, saved_payment_method_id, saved_card_last4, saved_card_brand FROM customers WHERE id = $1',
@@ -562,7 +562,7 @@ describe('finalise (finaliseReaderOrder, T2)', () => {
           // W42a, with `card_moves` on as live has it: the invoice default follows the saved card (Sam has no membership).
           ['customers.update', { id: 'cus_seed', invoice_settings: { default_payment_method: 'pm_reader_saved' } }],
         ])
-        const audit = await db.query<{ action: string; entity_type: string }>("SELECT action, entity_type FROM audit_log WHERE action IN ('order.paid', 'customer.card_saved') ORDER BY at")
+        const audit = await db.query<{ action: string; entity_type: string }>("SELECT action, entity_type FROM audit_log WHERE action IN ('order.paid', 'customer.card_saved') ORDER BY at, ctid")
         expect(audit).toEqual([
           { action: 'order.paid', entity_type: 'order' },
           { action: 'customer.card_saved', entity_type: 'customer' },

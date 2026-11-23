@@ -197,7 +197,7 @@ const bookingLines = (bookingId: string) =>
   )
 const refunds = (stripe: FakeStripe) => stripe.calls.filter((call) => call.method === 'refunds.create')
 const auditRows = (bookingId: string, action: string) =>
-  db.query<{ id: string; details: Record<string, unknown> }>("SELECT id, details FROM audit_log WHERE entity_type = 'booking' AND entity_id = $1 AND action = $2 ORDER BY at, id", [bookingId, action])
+  db.query<{ id: string; details: Record<string, unknown> }>("SELECT id, details FROM audit_log WHERE entity_type = 'booking' AND entity_id = $1 AND action = $2 ORDER BY at, ctid", [bookingId, action])
 const storeCredit = (customerId = ID.customer) =>
   db.query<{ amount: string; reason: string; order_id: string | null; note: string }>(
     "SELECT amount::text, reason, order_id, note FROM store_credit_transactions WHERE customer_id = $1 AND reason = 'refund' ORDER BY created_at, id",

@@ -135,7 +135,7 @@ function heldAtStripe(stripe: FakeStripe): { stripe: FakeStripe; release(): void
 }
 
 const lastDay = async (membership: string) => (await third.query<{ ends: string | null }>('SELECT cancel_effective_date::text AS ends FROM customer_memberships WHERE id = $1', [membership]))[0]?.ends ?? null
-const rowsOf = async (membership: string, action: string) => (await third.query<{ details: Record<string, unknown> }>('SELECT details FROM audit_log WHERE entity_id = $1 AND action = $2 ORDER BY at, id', [membership, action])).map((row) => row.details)
+const rowsOf = async (membership: string, action: string) => (await third.query<{ details: Record<string, unknown> }>('SELECT details FROM audit_log WHERE entity_id = $1 AND action = $2 ORDER BY at, ctid', [membership, action])).map((row) => row.details)
 const updates = (stripe: FakeStripe, subscription: string) => stripe.calls.filter((call) => call.method === 'subscriptions.update' && paramsOf(call)['id'] === subscription).map((call) => paramsOf(call)['cancel_at'])
 
 describe('two presses on one membership at the same instant (W36 review S1)', () => {

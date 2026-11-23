@@ -153,7 +153,7 @@ describe('T2 and the undo racing on one order', () => {
     expect(await t2).toEqual({ finalised: false, reason: 'order_gone' })
     expect(await orderStatus(charge.orderId)).toBe('gone')
     expect(await stockNow()).toBe((stock ?? 0) + 2)
-    const kept = await first.query<{ action: string }>(`SELECT action FROM audit_log WHERE entity_id = $1 ORDER BY at`, [charge.orderId])
+    const kept = await first.query<{ action: string }>(`SELECT action FROM audit_log WHERE entity_id = $1 ORDER BY at, ctid`, [charge.orderId])
     expect(kept.map((row) => row.action)).toEqual(['order.create', 'order.undo', 'order.charge_without_order'])
   })
 

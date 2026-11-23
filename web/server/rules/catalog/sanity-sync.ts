@@ -22,16 +22,20 @@
 //   system as `sanity`: `catalog.active_set` for the five item kinds (as the staff app's switch writes), and
 //   `event.active_set` for an event. A plan goes off sale only through the plan rule's own switch (plans.ts,
 //   takePlanOffSale): refused while a price change on the plan is open, and then logged, answered 200 and recorded
-//   (`catalog.sanity_delete_refused`) for the lead. W66a (F6): an item (or plan) already off sale is left as it is, with
+//   (`catalog.sanity_delete_refused`). W66a (F6): an item (or plan) already off sale is left as it is, with
 //   no row of its own: a delete delivered again, or of something staff took off sale first, writes nothing.
+//   W70a (the W70 audit's L2; H-plan 4.3): that refusal is a line on the Orders page's list (sanityDeletesListed, read
+//   by stuck-list.ts), one a plan, until the plan is taken off sale or a person presses Mark sorted (sortSanityDelete,
+//   the manual close's `sanity_delete`).
 import 'server-only'
 import Stripe from 'stripe'
-import { audit } from '@/server/audit'
-import type { Db, Tx } from '@/server/db'
+import { audit, type AuditEntry } from '@/server/audit'
+import type { Db, Queryable, Tx } from '@/server/db'
 import { ApiError } from '@/server/http/errors'
 import { stripeIdempotencyKey } from '@/server/http/idempotency'
 import type { StepBy } from '@/server/rules/memberships/left'
 import type { StripeClient } from '@/server/stripe/client'
+import { PLAN_STUCK_WORDS } from './plan-failure-messages'
 import { everyPage, PLAN_ENTITY } from './plan-stripe'
 import { takePlanOffSale } from './plans'
 
@@ -103,7 +107,10 @@ const DELETE_TABLES: ReadonlyArray<{ table: string; findSql: string; offSql: str
   { table: 'events', findSql: 'SELECT id, active FROM events WHERE sanity_event_id = $1 FOR UPDATE', offSql: 'UPDATE events SET active = false, updated_at = now() WHERE id = $1::uuid', entity: 'event', action: 'event.active_set' },
 ]
 
-/** The audit action a Sanity delete of a plan records when the plan rule keeps the plan on sale. */
+/**
+ * The audit action a Sanity delete of a plan records when the plan rule keeps the plan on sale. W70a: its row is the
+ * line on the Orders page's list; a person's Mark sorted writes another with `state: 'sorted'` naming it.
+ */
 export const SANITY_DELETE_REFUSED_ACTION = 'catalog.sanity_delete_refused'
 
 export interface SanityOptions {
@@ -242,4 +249,97 @@ export async function takeSanityDocumentOffSale(db: Db, documentId: string, opti
     console.error(`Sanity deleted membership plan ${planId} (${documentId}), but it stays on sale: ${message}`)
     return { found: true, entity: PLAN_ENTITY, id: planId, refused: 'price_change_open', message }
   }
+}
+
+// --- The Orders page's line (W70a; the W70 audit's L2, H-plan 4.3)
+
+/**
+ * The refused deletes still to deal with, oldest first: each plan's newest refusal, while the plan is on sale, it has
+ * not been taken off sale since (by anyone: `plan.active_set`), and nobody has marked it sorted.
+ */
+const DELETES_LISTED_SQL = `
+SELECT r.id::text AS refusal_id, r.at, r.entity_id AS plan_id, r.details->>'sanityDocumentId' AS document_id, p.name AS plan_name
+FROM audit_log r
+JOIN membership_plans p ON p.id::text = r.entity_id AND p.active
+WHERE r.action = '${SANITY_DELETE_REFUSED_ACTION}' AND r.entity_type = '${PLAN_ENTITY}' AND r.details->>'state' IS DISTINCT FROM 'sorted'
+  AND NOT EXISTS (
+    SELECT 1 FROM audit_log n
+    WHERE n.action = '${SANITY_DELETE_REFUSED_ACTION}' AND n.entity_type = '${PLAN_ENTITY}' AND n.entity_id = r.entity_id
+      AND n.details->>'state' IS DISTINCT FROM 'sorted' AND (n.at, n.id) > (r.at, r.id)
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM audit_log s
+    WHERE s.action = '${SANITY_DELETE_REFUSED_ACTION}' AND s.entity_type = '${PLAN_ENTITY}' AND s.entity_id = r.entity_id
+      AND s.details->>'state' = 'sorted' AND s.details->>'refusalId' = r.id::text
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM audit_log o
+    WHERE o.action = 'plan.active_set' AND o.entity_type = '${PLAN_ENTITY}' AND o.entity_id = r.entity_id
+      AND o.details->'after'->>'active' = 'false' AND o.at >= r.at
+  )
+ORDER BY r.at, r.id`
+
+/** One refusal (`$1`, its row's id): its plan, and whether a person has marked it sorted. */
+const REFUSAL_SQL = `
+SELECT r.entity_id AS plan_id, r.details->>'sanityDocumentId' AS document_id,
+       EXISTS (SELECT 1 FROM audit_log s WHERE s.action = r.action AND s.entity_type = r.entity_type AND s.entity_id = r.entity_id
+               AND s.details->>'state' = 'sorted' AND s.details->>'refusalId' = r.id::text) AS sorted
+FROM audit_log r
+WHERE r.action = '${SANITY_DELETE_REFUSED_ACTION}' AND r.entity_type = '${PLAN_ENTITY}' AND r.details->>'state' IS DISTINCT FROM 'sorted' AND r.id::text = $1`
+
+export interface SanityDeleteListed {
+  /** The refusal's own audit row: the line's id. */
+  refusalId: string
+  planId: string
+  planName: string | null
+  documentId: string | null
+  at: string
+  words: string
+}
+
+/** Every plan deleted in Sanity that a price change kept on sale here: the stuck list's. */
+export async function sanityDeletesListed(db: Queryable): Promise<SanityDeleteListed[]> {
+  const rows = await db.query<{ refusal_id: string; at: string | Date; plan_id: string; document_id: string | null; plan_name: string | null }>(DELETES_LISTED_SQL)
+  return rows.map((row) => ({
+    refusalId: row.refusal_id,
+    planId: row.plan_id,
+    planName: row.plan_name,
+    documentId: row.document_id,
+    at: (row.at instanceof Date ? row.at : new Date(row.at)).toISOString(),
+    words: PLAN_STUCK_WORDS.sanityDeleteKept(row.plan_name ?? 'a plan'),
+  }))
+}
+
+export type SortedSanityDelete = { closed: true; alreadyClosed?: true } | { closed: false; reason: 'not_listed' }
+
+/**
+ * Mark sorted on one of those lines (the manual close, close-stuck.ts; Issue refunds, checked by its route): one
+ * `sorted` row with the reason, and `closeRow`, the close's own `order.close` row, in one transaction under the plan's
+ * lock. The plan is not changed and nothing is sent. A line that has gone in the meantime (the plan taken off sale, or a
+ * newer delete refused) is refused `not_listed`; one sorted already is answered so.
+ */
+export async function sortSanityDelete(db: Db, refusalId: string, why: string, by: StepBy, closeRow: (listed: { refusalId: string; planId: string; documentId: string | null }) => AuditEntry): Promise<SortedSanityDelete> {
+  return db.transaction(async (tx): Promise<SortedSanityDelete> => {
+    const [found] = await tx.query<{ plan_id: string }>(REFUSAL_SQL, [refusalId])
+    if (!found) return { closed: false, reason: 'not_listed' }
+    await tx.query('SELECT id FROM membership_plans WHERE id::text = $1 FOR NO KEY UPDATE', [found.plan_id])
+    // Read again in its own statement, after the lock: two presses take turns.
+    const [row] = await tx.query<{ plan_id: string; document_id: string | null; sorted: boolean }>(REFUSAL_SQL, [refusalId])
+    if (!row) return { closed: false, reason: 'not_listed' }
+    if (row.sorted) return { closed: true, alreadyClosed: true }
+    if (!(await sanityDeletesListed(tx)).some((line) => line.refusalId === refusalId)) return { closed: false, reason: 'not_listed' }
+    await audit.recordAll(tx, [
+      {
+        actorType: by.actor.type,
+        actorId: by.actor.id,
+        action: SANITY_DELETE_REFUSED_ACTION,
+        entityType: PLAN_ENTITY,
+        entityId: row.plan_id,
+        requestId: by.requestId,
+        details: { state: 'sorted', refusalId, sanityDocumentId: row.document_id, byHand: { why } },
+      },
+      closeRow({ refusalId, planId: row.plan_id, documentId: row.document_id }),
+    ])
+    return { closed: true }
+  })
 }

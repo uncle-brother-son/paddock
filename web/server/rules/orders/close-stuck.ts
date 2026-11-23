@@ -52,6 +52,9 @@
 // - `frequency_mismatch` (W66a; Wayne's Q62): a membership listed because its subscription renews in Stripe at another
 //   interval than the membership says (memberships/frequency-check.ts, sortFrequencyMismatch), once a person has
 //   looked: recorded as sorted, with the reason. No Stripe call, and the membership's row is not changed.
+// - `sanity_delete` (W70a; the W70 audit's L2): a membership plan deleted in Sanity that a price change kept on sale
+//   here (catalog/sanity-sync.ts, sortSanityDelete), once a person has looked: recorded as sorted, with the reason. No
+//   Stripe call, and the plan is not changed (taking it off sale is the Membership Plans page's switch).
 //
 // W14c (W14b review S1): a compensation is closed only when its latest held row says every step left is Stripe's
 // definite refusal. Anything else reconcile finishes on its own (each step is safe to repeat, and reads a step a
@@ -91,6 +94,7 @@ import { sortFrequencyMismatch } from '@/server/rules/memberships/frequency-chec
 import { sortLeftStep } from '@/server/rules/memberships/left'
 import { LEFT_STEP_WORDS } from '@/server/rules/memberships/failure-messages'
 import { sortPlanStep } from '@/server/rules/catalog/plan-stripe'
+import { sortSanityDelete } from '@/server/rules/catalog/sanity-sync'
 import { INVOICE_PAID_AFTER_END_ENTITY, markInvoiceOwed, markInvoiceRefunded, readInvoicePaidAfterEnd } from '@/server/rules/memberships/paid-after-end'
 import { closePaymentDateChange, PAYMENT_DATE_RECONCILE_ENTITY } from '@/server/rules/memberships/payment-date'
 import { markRetryOwed, markRetryRefunded, PAID_AFTER_END_CLOSE_KIND, PAID_AFTER_END_OWED_KIND, PAYMENT_RETRY_RECONCILE_ENTITY } from '@/server/rules/memberships/retry-payment'
@@ -408,9 +412,9 @@ async function closeHeldOrder(db: Db, orderId: string, why: string, options: Clo
     if (parts.passes_bought.length > 0) givenBack.push(`${plural(parts.passes_bought.length, 'pass', 'passes')} it was buying (never paid for) removed`)
     if (parts.memberships_bought.length > 0) givenBack.push('the membership it was buying (never paid for) removed')
     const leftAsFound: string[] = []
-    if (booking) leftAsFound.push(`the booking (now ${booking.status}): its places, pass session and add-ons stay as the old screens left them`)
-    else if (snapshot.held_booking) leftAsFound.push('the booking: the old screens had already removed it')
-    if (event && !eventBack) leftAsFound.push(`the event booking (now ${event.status}): its places stay as the old screens left them`)
+    if (booking) leftAsFound.push(`the booking (now ${booking.status}): its places, pass session and add-ons stay as they were left`)
+    else if (snapshot.held_booking) leftAsFound.push('the booking: it had already been removed')
+    if (event && !eventBack) leftAsFound.push(`the event booking (now ${event.status}): its places stay as they were left`)
 
     await audit.recordAll(tx, [
       ...(compensating ? [{ ...closeEntry(options, orderId, byHand), action: 'order.compensate' }] : []),
@@ -914,6 +918,20 @@ export async function closeStuckItem(db: Db, input: CloseStuckInput, options: Cl
       details: { kind: 'frequency_mismatch', why, membershipId: listing.membershipId, subscriptionId: listing.subscriptionId, frequency: listing.frequency, stripeInterval: listing.stripeInterval },
     }))
     return answer('frequency_mismatch', input.orderId, sorted.closed ? { closed: true, ...(sorted.alreadyClosed ? { alreadyClosed: true } : {}), message: LEFT_STEP_WORDS.sorted } : { closed: false, reason: sorted.reason, message: LEFT_STEP_WORDS.notListed })
+  }
+  // W70a (the W70 audit's L2): a plan deleted in Sanity that a price change kept on sale here, once a person has looked:
+  // recorded as sorted. The plan is not changed and Stripe is not asked; `orderId` is the line's id.
+  if (input.kind === 'sanity_delete') {
+    const sorted = await sortSanityDelete(db, input.orderId, why, { actor: options.actor, requestId: options.requestId }, (listed) => ({
+      actorType: options.actor.type,
+      actorId: options.actor.id,
+      action: CLOSE_ACTION,
+      entityType: 'sanity_delete',
+      entityId: listed.refusalId,
+      requestId: options.requestId,
+      details: { kind: 'sanity_delete', why, planId: listed.planId, sanityDocumentId: listed.documentId },
+    }))
+    return answer('sanity_delete', input.orderId, sorted.closed ? { closed: true, ...(sorted.alreadyClosed ? { alreadyClosed: true } : {}), message: LEFT_STEP_WORDS.sorted } : { closed: false, reason: sorted.reason, message: LEFT_STEP_WORDS.notListed })
   }
   // W41 (F-plan 4.10): a membership's payment date change the automatic check left for a person: recorded as not
   // finished with what Stripe last showed (reconcile's own last row), so the membership can be changed again. Never a

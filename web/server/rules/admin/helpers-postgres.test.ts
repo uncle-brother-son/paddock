@@ -44,7 +44,7 @@ const newSession = async (band: string): Promise<string> => {
   const day = String(n).padStart(2, '0')
   return insert(first, 'sessions', { service_type_id: serviceType, start_time: `2031-03-${day} 10:00:00+00`, end_time: `2031-03-${day} 11:00:00+00`, type: 'public', capacity: 10, band_id: band })
 }
-const auditOf = (entityId: string) => first.query<{ details: { before?: { price: string }; after: Record<string, unknown> } }>('SELECT details FROM audit_log WHERE entity_id = $1 ORDER BY at', [entityId])
+const auditOf = (entityId: string) => first.query<{ details: { before?: { price: string }; after: Record<string, unknown> } }>('SELECT details FROM audit_log WHERE entity_id = $1 ORDER BY at, ctid', [entityId])
 
 /** Waits until Postgres reports some session blocked by `holder`, and answers that session's pid. */
 async function sessionBlockedBy(holder: number): Promise<number> {

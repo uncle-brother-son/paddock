@@ -107,6 +107,30 @@ describe('staff app helpers', () => {
       expect(query).not.toHaveBeenCalled()
     })
 
+    // Brief W70a (W68a noticed 2): a refusal with a reason comes back as data, in the Worker's words alone; anything
+    // without one is thrown as before, and a made intent is answered as before.
+    it('createTerminalSetupIntent: the switched-off refusal comes back as data with no code or request id in its words; any other failure is thrown', async () => {
+      const { default: fn } = await import(/* @vite-ignore */ path.join(appDir, 'backend/paddock/createTerminalSetupIntent'))
+      const press = () => fn({ params: { customerId: 'c1', idempotencyKey: 'key-1' }, user })
+      const WORDS = 'Card changes are switched off.'
+      const failed = (error: Record<string, unknown>) => ({ data: { ok: false, requestId: 'req-9', error } })
+      rawRequest.mockResolvedValue(failed({ code: 'MEMBERSHIP_PATH_OFF', message: WORDS, details: { reason: 'membership_path_off', message: WORDS, kinds: ['card_moves'] } }))
+      expect(await press()).toEqual({ clientSecret: null, setupIntentId: null, stripeCustomerId: null, refused: { reason: 'membership_path_off', message: WORDS } })
+      rawRequest.mockResolvedValue(failed({ code: 'NOT_FOUND', message: 'No such customer.' }))
+      await expect(press()).rejects.toThrow('No such customer. (NOT_FOUND, request req-9)')
+      rawRequest.mockRejectedValue(new Error('socket closed'))
+      await expect(press()).rejects.toThrow('Could not reach the Worker: socket closed')
+      const made = { clientSecret: 'seti_secret', setupIntentId: 'seti_1', stripeCustomerId: 'cus_1' }
+      rawRequest.mockResolvedValue({ data: { ok: true, requestId: 'req-9', data: made } })
+      expect(await press()).toEqual(made)
+      expect(rawRequest.mock.calls.at(-1)?.[0]).toMatchObject({ path: '/api/v1/staff/terminal/setup-intents', method: 'POST', body: { customerId: 'c1' }, headers: { 'Idempotency-Key': 'key-1' } })
+      // The screen shows the refusal's words and asks the reader for nothing.
+      const screen = readFileSync(path.join(appDir, 'frontend/utils/saveCardViaReader.ts'), 'utf8')
+      expect(screen.indexOf('throw new Error(intent.refused.message)')).toBeGreaterThan(screen.indexOf('await deps.createSetupIntent('))
+      expect(screen.indexOf('throw new Error(intent.refused.message)')).toBeLessThan(screen.indexOf('collectSetupIntentPaymentMethod('))
+      expect(readFileSync(path.join(appDir, 'frontend/components/SaveCardOnReaderButton.tsx'), 'utf8')).toContain('setError(err instanceof Error ? err.message')
+    })
+
     // Brief W39: createCustomer is a thin call to the Worker now (it was one of W01c's guarded functions), whose
     // defineRoute refuses an inactive account before anything is read (the route's own tests, customers/customers.test.ts).
     // The refusal comes back as data with the same words. Never the database or the legacy routes themselves.

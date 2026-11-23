@@ -454,6 +454,28 @@ describe('the other decisions', () => {
   })
 })
 
+describe('Q6, the buy-new seat 1 (W70a, the W70 audit\'s S1)', () => {
+  it('a paid seat 1 on a buy-new booking counts as member-priced, so a promo leaves it out: on Peak the £21.68 seat keeps its price, and the guest and the membership get 10% off; a code for member prices takes it too', async () => {
+    const basket = { booking: twoSeats({ sessionId: ID.peakSession, redemptionSource: 'buy_new_membership' }), ...monthly, promoCode: PROMO.percent }
+    const result = await quote(basket)
+    expect(result.booking?.seats.map((s) => [s.payBy, s.unitPrice])).toEqual([['paid', 21.68], ['paid', 25.5]])
+    expect(result.promo?.perLine).toEqual([
+      { key: 'seat:2', discount: 2.55 },
+      { key: 'membership', discount: 4 },
+    ])
+    expect(result.booking).toMatchObject({ price: 47.18, discount: 2.55 })
+    const both = await during(() => db.query('UPDATE promo_codes SET applies_on_member_prices = true WHERE id = $1', [ID.promoPercent]), () => quote(basket))
+    expect(both.promo?.perLine.map((line) => line.key)).toEqual(['seat:1', 'seat:2', 'membership'])
+  })
+
+  it('an ordinary booking\'s member-discounted seat 1 is left out the same way, and a seat at the list price never is', async () => {
+    const member = await quote({ customerId: ID.member, booking: twoSeats({ sessionId: ID.peakSession, guests: [{ ...sam, name: 'Mo Member' }, alex] }), promoCode: PROMO.percent })
+    expect(member.promo?.perLine).toEqual([{ key: 'seat:2', discount: 2.55 }])
+    const listed = await quote({ booking: twoSeats({ sessionId: ID.peakSession }), promoCode: PROMO.percent })
+    expect(listed.promo?.perLine.map((line) => line.key)).toEqual(['seat:1', 'seat:2'])
+  })
+})
+
 describe('price overrides', () => {
   const sent = { products: [{ ...soap, unitPrice: 1 }], standaloneAddons: [{ ...towel, unitPrice: 1 }] }
 
@@ -1083,5 +1105,100 @@ describe('W55b (W55a noticed 1): a member price only is not a free price for a n
     )
     expect(result.problems).toEqual([])
     expect(result.lines[0]).toMatchObject({ kind: 'addon', unitPrice: 3 })
+  })
+})
+
+describe("W70a (the W70 audit's S1): rules only a recording, or nothing, held", () => {
+  // Test data only: each statement is one of these tests' own.
+  const towelAt = (base: number | null, sale: number | null, member: number | null) => () =>
+    db.query('UPDATE addons SET base_price = $1, sale_price = $2, member_price = $3 WHERE id = $4', [base, sale, member, ID.addon])
+  const soapAt = (base: number | null, sale: number | null, member: number | null, override: number | null = null) => async () => {
+    await db.query('UPDATE products SET base_price = $1, sale_price = $2, member_price = $3 WHERE id = $4', [base, sale, member, ID.product])
+    await db.query('UPDATE product_variants SET price_override = $1 WHERE id = $2', [override, ID.variant])
+  }
+
+  it('S1 a: an add-on\'s sale price beats its base price (on its own and on a booking, £4 not £5); a member pays the member price, and the sale price when there is none', async () => {
+    const onSale = towelAt(5, 4, 3)
+    for (const [customerId, price] of [[ID.customer, 4], [undefined, 4], [ID.member, 3]] as const) {
+      const alone = await during(onSale, () => quote({ customerId, standaloneAddons: [towel] }))
+      expect(alone.problems, String(customerId)).toEqual([])
+      expect(alone.lines[0], String(customerId)).toMatchObject({ kind: 'addon', unitPrice: price, systemUnitPrice: price })
+    }
+    const onBooking = await during(onSale, () => quote({ booking: seat({ addons: [towel] }) }))
+    expect(onBooking.booking?.addons[0]).toMatchObject({ unitPrice: 4, charged: 4 })
+    expect(onBooking.totals.amountDue).toBe(24)
+    // No member price: a member pays the sale price too, never the base.
+    expect((await during(towelAt(5, 4, null), () => quote({ customerId: ID.member, standaloneAddons: [towel] }))).totals.amountDue).toBe(4)
+    // A sale price above the base is still the price set.
+    expect((await during(towelAt(5, 6, null), () => quote({ standaloneAddons: [towel] }))).totals.amountDue).toBe(6)
+  })
+
+  it('S1 a: a product\'s sale price beats its base price (£9 not £12); a member pays the member price', async () => {
+    const onSale = soapAt(12, 9, 8)
+    expect((await during(onSale, () => quote({ products: [soap] }))).totals.amountDue).toBe(18)
+    expect((await during(onSale, () => quote({ customerId: undefined, products: [soap] }))).totals.amountDue).toBe(18)
+    expect((await during(onSale, () => quote({ customerId: ID.member, products: [soap] }))).totals.amountDue).toBe(16)
+  })
+
+  it('S1 b: a variant\'s own price beats the product\'s sale price (£7 not £9) and its base; a member still pays the member price, and the override when there is none', async () => {
+    const all = soapAt(12, 9, 8, 7)
+    expect((await during(all, () => quote({ products: [soap] }))).totals.amountDue).toBe(14)
+    expect((await during(all, () => quote({ customerId: ID.member, products: [soap] }))).totals.amountDue).toBe(16)
+    expect((await during(soapAt(12, 9, null, 7), () => quote({ customerId: ID.member, products: [soap] }))).totals.amountDue).toBe(14)
+    expect((await during(soapAt(12, null, null, 7), () => quote({ products: [soap] }))).totals.amountDue).toBe(14)
+    // Dearer than the sale price: it is still the variant's own price.
+    expect((await during(soapAt(12, 9, null, 10), () => quote({ products: [soap] }))).totals.amountDue).toBe(20)
+  })
+
+  it('S1 g: free Standard postage starts at exactly the threshold, to the penny: £60.00 of candles is free at £60.00 and at £59.99, and £4.95 at £60.01; pennies that don\'t add up in floats still reach it', async () => {
+    const threshold = (amount: string) => () => db.query('UPDATE postage_settings SET free_shipping_threshold = $1', [amount])
+    const candles = (quantity: number) => quote({ products: [{ ...candle, quantity }], ...shipped })
+    for (const [at, postage] of [['60.00', 0], ['59.99', 0], ['60.01', 4.95]] as const) {
+      const result = await during(threshold(at), () => candles(3))
+      expect(result.postage, at).toEqual({ method: 'standard', amount: postage, shippedValue: 60 })
+    }
+    // W14 (W7-6): £16.65 three times is 49.949999999999996 in floats, and £49.95 in pounds and pence.
+    const pennies = await during(
+      async () => {
+        await threshold('49.95')()
+        await db.query('UPDATE products SET base_price = 16.65 WHERE id = $1', [ID.candle])
+      },
+      () => candles(3)
+    )
+    expect(pennies.postage).toMatchObject({ amount: 0 })
+    // Express is charged at and past it.
+    expect((await during(threshold('60.00'), () => quote({ products: [{ ...candle, quantity: 3 }], ...shipped, postageMethod: 'express' }))).postage?.amount).toBe(9.95)
+  })
+
+  it('S1 h: a gift card works on its last day and not the day after', async () => {
+    const pay = { products: [soap], payment: { giftCard: { giftCardId: ID.giftCard, amount: 24 } } }
+    const expires = (day: string) => () => db.query('UPDATE gift_cards SET expiry_date = $1 WHERE id = $2', [day, ID.giftCard])
+    const lastDay = await during(expires('2026-11-10'), () => quote(pay))
+    expect(lastDay.problems).toEqual([])
+    expect(lastDay.totals).toMatchObject({ giftCardApplied: 24, toCollect: { card: 0 } })
+    expect(reasons(await during(expires('2026-11-09'), () => quote(pay)))).toEqual(['gift_card_expired'])
+  })
+
+  it('S1 i: a promo skips a place already at a member price: the member\'s own £30 place keeps it, the guest\'s £40 public place gets 10% off; a code for member prices takes both', async () => {
+    const result = await quote({ event: eventPlaces, ...monthly, promoCode: PROMO.percent })
+    expect(result.event?.places.map((p) => [p.priceLevel, p.unitPrice])).toEqual([['pre_herd', 30], ['public', 40]])
+    expect(result.promo?.perLine).toEqual([
+      { key: 'membership', discount: 4 },
+      { key: 'event:2', discount: 4 },
+    ])
+    expect(result.totals.promoDiscount).toBe(8)
+    // On its own, a Herd member's place has nothing the code may come off.
+    const alone = await quote({ customerId: ID.member, event: { ...eventPlaces, attendees: [{ name: 'Mo Member', email: 'mo@example.com', dateOfBirth: '1985-05-05', isAccountHolder: true }] }, promoCode: PROMO.percent })
+    expect(alone.event?.places.map((p) => [p.priceLevel, p.unitPrice])).toEqual([['herd', 20]])
+    expect(alone.problems[0]?.message).toBe(`Promo code "${PROMO.percent}" cannot be used: Nothing in this basket is eligible for that promo code.`)
+    const both = await during(
+      () => db.query('UPDATE promo_codes SET applies_on_member_prices = true WHERE id = $1', [ID.promoPercent]),
+      () => quote({ event: eventPlaces, ...monthly, promoCode: PROMO.percent })
+    )
+    expect(both.promo?.perLine).toEqual([
+      { key: 'membership', discount: 4 },
+      { key: 'event:1', discount: 3 },
+      { key: 'event:2', discount: 4 },
+    ])
   })
 })

@@ -129,7 +129,7 @@ async function onASeed(work: (stripe: FakeStripe) => Promise<void>, with031 = tr
 }
 
 type AuditRow = { action: string; actor_type: string; actor_id: string | null; entity_type: string; entity_id: string; details: Record<string, unknown> }
-const audited = (action: string) => db.query<AuditRow>('SELECT action, actor_type, actor_id, entity_type, entity_id, details FROM audit_log WHERE action = $1 ORDER BY at', [action])
+const audited = (action: string) => db.query<AuditRow>('SELECT action, actor_type, actor_id, entity_type, entity_id, details FROM audit_log WHERE action = $1 ORDER BY at, ctid', [action])
 const stillLiveRows = () => audited(STILL_LIVE_ACTION)
 const paidLines = async () => (await stuckList(db)).paymentRetries
 const stepLines = async () => (await stuckList(db)).steps

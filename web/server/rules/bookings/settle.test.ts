@@ -11,7 +11,7 @@ import { stuckList, CARD_FLOW_WAITING_WORDS } from '@/server/rules/orders/stuck-
 import { FAILURE_MESSAGES as ORDER_WORDS, NO_SAVED_CARD_MESSAGE } from '@/server/rules/orders/failure-messages'
 import { replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/sweep/run'
 import { workerSide } from '@/server/rules/testing/sweep/worker'
-import { ID, lapsedSeat, seed, whileFailing, giftCardRowFails } from '@/server/rules/testing/replay/scenarios'
+import { ID, lapsedSeat, memberCredit, mo, paidSeat, seed, whileFailing, giftCardRowFails } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { BOOKING_KINDS_ON } from '@/server/rules/testing/sweep/booking-presses'
 import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
@@ -161,7 +161,7 @@ const ordersFor = async (bookingId: string) =>
     [bookingId]
   )
 const audits = async (bookingId: string) =>
-  db.query<{ action: string; details: Record<string, unknown> }>("SELECT action, details FROM audit_log WHERE entity_id = $1 AND action = 'booking.settle' ORDER BY at, id", [bookingId])
+  db.query<{ action: string; details: Record<string, unknown> }>("SELECT action, details FROM audit_log WHERE entity_id = $1 AND action = 'booking.settle' ORDER BY at, ctid", [bookingId])
 const creditRows = async (bookingId: string) =>
   db.query<{ amount: string; reason: string; note: string; staff_id: string | null }>(
     'SELECT amount::text AS amount, reason, note, staff_id FROM store_credit_transactions WHERE booking_id = $1 ORDER BY created_at, id',
@@ -204,6 +204,33 @@ describe('Settle with no card money (C1 finishes it: one transaction, Q36: no or
       expect(await flows(bookingId)).toEqual([])
       expect((await audits(bookingId)).map((row) => row.details)).toEqual([{ amount: 20, storeCredit: 0, giftCard: 0, method: 'cash', toCollect: 20, pendingId: null }])
     })
+  })
+
+  it('it adds to what was already paid (W70a, the W70 audit\'s S1 c): a £20 paid guest on the lapsed booking and £20 taken for seat 1 make price_paid £40, and Cancel & Refund gives the £40 back', async () => {
+    await replay(
+      environment,
+      {
+        name: 'w70a settle beside a paid guest',
+        seed,
+        async run({ call, db: scenarioDb, stripe }) {
+          replayStripe.current = stripe
+          try {
+            const { bookingId } = (await call('createOrder', { customerId: ID.member, booking: { ...paidSeat([mo, { name: 'Alex Guest', email: 'alex@example.com' }]), ...memberCredit }, payment: { method: 'card' } })) as { bookingId: string }
+            expect(await booking(bookingId)).toMatchObject({ price_paid: '20.00', redemption_source: 'membership_credit' })
+            await scenarioDb.query("UPDATE bookings SET status = 'payment_needed', payment_due_by = now() + interval '1 day' WHERE id = $1", [bookingId])
+            const answer = await post(bookingId, { payment: { method: 'cash', confirmedCashAmount: 20 }, ...figures(20, 20) })
+            expect(answer.body.data).toEqual({ settled: true, booking: { id: bookingId, status: 'confirmed', redemption_source: 'paid', price_paid: '40.00', payment_due_by: null }, amountCharged: 20 })
+            expect(await booking(bookingId)).toMatchObject({ status: 'confirmed', price_paid: '40.00' })
+            // The guest's £20 to the card that paid it, the £20 of cash as store credit: £40 in all, never £20.
+            expect(await call('refundBooking', { bookingId, refundMethod: 'card' })).toMatchObject({ cardRefundedAmount: 20, storeCreditRefundedAmount: 20 })
+            expect(stripe.refundedPence).toBe(2000)
+          } finally {
+            replayStripe.current = null
+          }
+        },
+      },
+      workerSide()
+    )
   })
 
   it('gift card and store credit covering it all: their rows as today (the gift card row with the booking and no order), no order, no Stripe', async () => {

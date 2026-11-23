@@ -147,7 +147,7 @@ const bookingLines = async (bookingId: string) =>
   )
 const creditRefunds = async () => db.query<{ amount: string; note: string; order_id: string | null }>("SELECT amount::text AS amount, note, order_id FROM store_credit_transactions WHERE reason = 'refund' ORDER BY created_at")
 const refundCalls = (stripe: FakeStripe) => stripe.calls.filter((call) => call.method === 'refunds.create')
-const auditRows = async (action: string) => db.query<{ id: string; details: Record<string, unknown> }>('SELECT id, details FROM audit_log WHERE action = $1 ORDER BY at', [action])
+const auditRows = async (action: string) => db.query<{ id: string; details: Record<string, unknown> }>('SELECT id, details FROM audit_log WHERE action = $1 ORDER BY at, ctid', [action])
 
 describe('Remove Guest: the quote (W22)', () => {
   it("the seat's price, the account holder blocked, a guest gone, and nothing changed", async () => {
@@ -313,7 +313,7 @@ describe('Remove Guest: the removal (W22)', () => {
       expect(await creditRefunds()).toEqual([])
       expect(await guestRow(guestId)).toBeUndefined()
       expect(await booking(bookingId)).toMatchObject({ price_paid: '40.00', refund_owed_amount: '10.00', party_size: 2 })
-      expect((await auditRows('booking.refund_finished')).at(-1)?.details).toMatchObject({ outcome: 'owed', cardRefunded: 10, storeCreditRefunded: 0, owed: 10, refused: refundRefusedDetail('Your card was declined.') })
+      expect((await auditRows('booking.refund_finished')).find((row) => row.details['outcome'] === 'owed')?.details).toMatchObject({ outcome: 'owed', cardRefunded: 10, storeCreditRefunded: 0, owed: 10, refused: refundRefusedDetail('Your card was declined.') })
       expect((await auditRows('booking.guest_remove'))[0]?.details).toMatchObject({ guestId, cardRefunded: 10, storeCreditRefunded: 0, owed: 10 })
       // Reconcile does nothing for it.
       pastTheWindow()
@@ -378,7 +378,7 @@ describe('Remove Guest: the removal (W22)', () => {
       await runReconcile()
       expect(refundCalls(stripe)).toHaveLength(sent)
       // Reconcile finds the £10 that went and the refused part never went: owed (D-plan 4.10), never resent.
-      expect((await auditRows('booking.refund_finished')).at(-1)?.details).toMatchObject({ outcome: 'owed', cardRefunded: 10, storeCreditRefunded: 0, owed: 10, refused: refundRefusedDetail('Your card was declined.'), by: { how: 'reconcile' } })
+      expect((await auditRows('booking.refund_finished')).find((row) => row.details['outcome'] === 'owed')?.details).toMatchObject({ outcome: 'owed', cardRefunded: 10, storeCreditRefunded: 0, owed: 10, refused: refundRefusedDetail('Your card was declined.'), by: { how: 'reconcile' } })
       expect(await booking(bookingId)).toMatchObject({ price_paid: '40.00', refund_owed_amount: '10.00' })
       expect(await creditRefunds()).toEqual([])
     })

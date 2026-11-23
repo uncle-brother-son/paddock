@@ -52,7 +52,7 @@ const refund = (db: Db, order: { orderId: string; lineId: string }) =>
 const refundHoldingTheOrder = () => holdingAfter(first, (sql) => sql.includes('FROM (SELECT id, customer_id FROM orders WHERE id = $1::uuid FOR UPDATE) o'))
 
 const lineNow = async (lineId: string) => (await first.query<{ fulfillment_status: string | null; refunded: boolean }>('SELECT fulfillment_status, (refunded_at IS NOT NULL) AS refunded FROM order_line_items WHERE id = $1', [lineId]))[0]
-const tickRowsOf = async (lineId: string) => (await first.query<{ actor_id: string; fulfilled: boolean }>("SELECT actor_id, (details->>'fulfilled')::boolean AS fulfilled FROM audit_log WHERE entity_id = $1 AND action = 'order_line.fulfilled_set' ORDER BY at", [lineId])).map((row) => [row.actor_id, row.fulfilled])
+const tickRowsOf = async (lineId: string) => (await first.query<{ actor_id: string; fulfilled: boolean }>("SELECT actor_id, (details->>'fulfilled')::boolean AS fulfilled FROM audit_log WHERE entity_id = $1 AND action = 'order_line.fulfilled_set' ORDER BY at, ctid", [lineId])).map((row) => [row.actor_id, row.fulfilled])
 
 describe('the fulfilled tick against a refund of the same line (W48 review L2)', () => {
   it("a tick pressed while the line's order is being refunded waits for the refund on the order's row, and is then refused on what the refund committed: the line is refunded and was never marked fulfilled", async () => {

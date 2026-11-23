@@ -14,6 +14,7 @@ import { CHANGED_SINCE_MESSAGE } from './failure-messages'
 import { isWorkerCardFlow, isWorkerFlow, type FlowSnapshot } from './reader-flow'
 import type { StuckCloseTarget, StuckPlanOutput } from '@/contracts'
 import { planStuckLines } from '@/server/rules/catalog/plan-stripe'
+import { sanityDeletesListed } from '@/server/rules/catalog/sanity-sync'
 import { PROCESSING_MINUTES as RECONCILE_WINDOW_MINUTES } from './pending-order'
 import { MEMBERSHIP_REFUND_WORDS } from '@/server/rules/refunds/failure-messages'
 import { LEFT_BY_REFUND } from './refund-subscription'
@@ -430,7 +431,7 @@ export interface StuckListOutput {
   webhook: StuckWebhookNotice | null
   /** W47r: payments tried again from the desk, held for the automatic check. */
   paymentRetries: StuckPaymentRetry[]
-  /** W57: membership plans' own lines (catalog/plan-stripe.ts, planStuckLines). */
+  /** W57: membership plans' own lines (catalog/plan-stripe.ts, planStuckLines). W70a: and catalog/sanity-sync.ts's (sanityDeletesListed). */
   plans: StuckPlanOutput[]
   alert: { at: string; words: string } | null
 }
@@ -1116,7 +1117,7 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
       }),
     ],
     // W57 (G-plan 4.7): membership plans' own lines. A plan step Stripe refused for good can be marked sorted by hand.
-    plans: (await planStuckLines(db)).map((line) => ({
+    plans: (await planStuckLines(db)).map((line): StuckPlanOutput => ({
       lineId: line.lineId,
       planId: line.planId,
       planName: line.planName,
@@ -1125,7 +1126,19 @@ export async function stuckList(db: Db, { olderThanMinutes = RECONCILE_WINDOW_MI
       at: line.at,
       words: line.words,
       ...(line.stepId ? { close: { kind: 'plan_step' as const, orderId: line.stepId } } : {}),
-    })),
+    })).concat(
+      // W70a (the W70 audit's L2): then the plans deleted in Sanity that a price change kept on sale here.
+      (await sanityDeletesListed(db)).map((line): StuckPlanOutput => ({
+        lineId: line.refusalId,
+        planId: line.planId,
+        planName: line.planName,
+        what: 'sanity_delete',
+        state: 'refused',
+        at: line.at,
+        words: line.words,
+        close: { kind: 'sanity_delete', orderId: line.refusalId },
+      }))
+    ),
     alert: alert ? { at: iso(alert.at), words: STRIPE_REFUSED_WORDS } : null,
   }
 }

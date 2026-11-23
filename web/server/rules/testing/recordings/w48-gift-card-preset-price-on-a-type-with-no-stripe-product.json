@@ -1,9 +1,17 @@
 {
-  "scenario": "w48-gift-card-preset-active-refused-by-stripe",
+  "scenario": "w48-gift-card-preset-price-on-a-type-with-no-stripe-product",
   "results": [
     {
-      "id": "10000000-0000-4000-8000-00000000001a",
-      "active": false
+      "success": true,
+      "preset": {
+        "id": "10000000-0000-4000-8000-00000000001a",
+        "gift_card_type_id": "10000000-0000-4000-8000-000000000019",
+        "amount": "75.00",
+        "active": true,
+        "stripe_price_id": null,
+        "created_at": "<time>",
+        "updated_at": "<time>"
+      }
     }
   ],
   "stripeCalls": [],
@@ -14,14 +22,22 @@
           "key": "gone#1",
           "actor_type": "staff",
           "actor_id": "10000000-0000-4000-8000-000000000001",
-          "endpoint": "POST /api/v1/staff/catalog/gift-card-presets/10000000-0000-4000-8000-00000000001a/active",
+          "endpoint": "POST /api/v1/staff/catalog/gift-card-presets/10000000-0000-4000-8000-00000000001a/price",
           "request_hash": "<sha-256>",
           "status": "done",
           "response": {
             "ok": true,
             "data": {
-              "id": "10000000-0000-4000-8000-00000000001a",
-              "active": false
+              "preset": {
+                "id": "10000000-0000-4000-8000-00000000001a",
+                "active": true,
+                "amount": "75.00",
+                "created_at": "<time>",
+                "updated_at": "<time>",
+                "stripe_price_id": null,
+                "gift_card_type_id": "10000000-0000-4000-8000-000000000019"
+              },
+              "success": true
             },
             "requestId": "gone#2"
           },
@@ -40,19 +56,17 @@
           "at": "<set>",
           "actor_type": "staff",
           "actor_id": "10000000-0000-4000-8000-000000000001",
-          "action": "catalog.active_set",
+          "action": "catalog.price_set",
           "entity_type": "gift_card_preset",
           "entity_id": "10000000-0000-4000-8000-00000000001a",
           "request_id": "gone#2",
           "details": {
             "key": "gone#1",
             "after": {
-              "id": "10000000-0000-4000-8000-00000000001a",
-              "active": false
+              "amount": "75.00"
             },
             "before": {
-              "id": "10000000-0000-4000-8000-00000000001a",
-              "active": true
+              "amount": "60.00"
             }
           }
         }
@@ -66,9 +80,9 @@
       "changed": [
         {
           "id": "10000000-0000-4000-8000-00000000001a",
-          "active": [
-            true,
-            false
+          "amount": [
+            "60.00",
+            "75.00"
           ]
         }
       ],

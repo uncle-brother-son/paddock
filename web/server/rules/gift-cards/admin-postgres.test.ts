@@ -116,7 +116,7 @@ async function race<A, B>(held: (db: Db) => Promise<A>, waiter: (db: Db) => Prom
 
 const cardNow = async (card: string) =>
   (await third.query<{ expiry_date: string; voided: boolean | null; picked_up: boolean }>('SELECT expiry_date::text AS expiry_date, voided, picked_up FROM gift_cards WHERE id = $1', [card]))[0]
-const auditOf = async (card: string, action: string) => (await third.query<{ details: Record<string, unknown> }>('SELECT details FROM audit_log WHERE entity_id = $1 AND action = $2 ORDER BY at, id', [card, action])).map((row) => row.details)
+const auditOf = async (card: string, action: string) => (await third.query<{ details: Record<string, unknown> }>('SELECT details FROM audit_log WHERE entity_id = $1 AND action = $2 ORDER BY at, ctid', [card, action])).map((row) => row.details)
 
 describe('an extension against the refund that voids the card (Q46, FB13)', () => {
   it('the refund first: the extension waits on the card, then sees the refunded line and is refused (voided_by_refund); the card stays voided, its date unmoved, no audit row', async () => {

@@ -117,7 +117,7 @@ const refusalOf = (answer: Answer) => [answer.status, answer.error?.code, answer
 const lastDay = async (membershipId: string = ID.membership) =>
   (await db.query<{ ends: string | null }>('SELECT cancel_effective_date::text AS ends FROM customer_memberships WHERE id = $1', [membershipId]))[0]?.ends ?? null
 type AuditRow = { action: string; actor_type: string; actor_id: string | null; entity_type: string; entity_id: string; details: Record<string, unknown> }
-const audited = (action: string) => db.query<AuditRow>('SELECT action, actor_type, actor_id, entity_type, entity_id, details FROM audit_log WHERE action = $1 ORDER BY at', [action])
+const audited = (action: string) => db.query<AuditRow>('SELECT action, actor_type, actor_id, entity_type, entity_id, details FROM audit_log WHERE action = $1 ORDER BY at, ctid', [action])
 const cancelRows = async () => [...(await audited(CANCEL_SCHEDULED_ACTION)), ...(await audited(CANCEL_UNDONE_ACTION)), ...(await audited(CANCEL_PUT_BACK_ACTION))]
 const stepStates = async () => (await audited(STEP_LEFT_ACTION)).map((row) => [row.details['stepId'], row.details['state']] as [string, string])
 const statesOf = async (stepId: string) => (await stepStates()).filter(([id]) => id === stepId).map(([, state]) => state).sort()
@@ -793,7 +793,7 @@ describe('W40a: a stale send is never the last word with nothing listed (W40 rev
     expect(answer.data).toMatchObject({ stripeUpdated: true })
     expect(answer.data?.['left']).toBeUndefined()
   }
-  const lastStepOf = async (action: string) => String((await db.query<{ step: string }>("SELECT details->>'stepId' AS step FROM audit_log WHERE action = $1 ORDER BY at DESC LIMIT 1", [action]))[0]?.step)
+  const lastStepOf = async (action: string) => String((await db.query<{ step: string }>("SELECT details->>'stepId' AS step FROM audit_log WHERE action = $1 ORDER BY at DESC, ctid DESC LIMIT 1", [action]))[0]?.step)
   const leftRowOf = async (stepId: string) => (await audited(STEP_LEFT_ACTION)).find((row) => row.details['stepId'] === stepId && row.details['state'] === 'left')
   const lines = async () => (await listed()).map((line) => [line.stepId, line.state, line.what, line.lastDay])
 
@@ -1187,7 +1187,9 @@ describe('W40a: a stale send is never the last word with nothing listed (W40 rev
         expect(stripe.calls).toHaveLength(calls)
         expect(await lines()).toEqual([[again, 'left', 'cancel_date', '2026-12-09']])
         expect(await leftRowOf(again)).toMatchObject({ actor_type: 'system', details: { leftAgainFor: c, want: { cancelAt: ENDS } } })
-        expect((await reconcileRows()).at(-1)).toEqual([c, { outcome: 'settled_elsewhere', detail: `step ${c}: its wish left again as step ${again}`, leaveAgain: c }])
+        // W70a (the W70 audit's S2): the row by the step it is on and what it says, never by its place: under the frozen
+        // clock the two runs' rows share a time.
+        expect((await reconcileRows()).filter(([id]) => id === c)).toEqual([[c, { outcome: 'settled_elsewhere', detail: `step ${c}: its wish left again as step ${again}`, leaveAgain: c }]])
         // Settled: not tried a third time.
         expect((await reconcileNow(stripe)).items).toEqual([])
         expect((await audited(STEP_LEFT_ACTION)).filter((row) => row.details['leftAgainFor'] === c)).toHaveLength(1)
@@ -1244,7 +1246,7 @@ describe('W40a: a stale send is never the last word with nothing listed (W40 rev
         const run = await whileFailing(db, failing("NEW.details->>'state' = 'stale_send'"), () => reconcileNow(racing(stripe, pressOfC.start, false), 'run-1'))
         const c = await lastStepOf(CANCEL_SCHEDULED_ACTION)
         expect(run.items).toEqual([{ kind: 'step', id: b, outcome: 'left', reason: 'step_not_left_again', detail: expect.stringMatching(new RegExp(`^replaced by step ${c}: this run's send of the replaced step got no clear answer and may still land: not marked yet \\(.*connection lost.*\\)$`)) }])
-        expect((await reconcileRows()).at(-1)?.[1]).toMatchObject({ leaveAgain: c })
+        expect((await reconcileRows()).filter(([, details]) => (details as Record<string, unknown>)['leaveAgain'] === c)).toHaveLength(1)
         // W46: while C's step is open it is on the list as itself, once (not twice).
         expect((await listed()).map((line) => [line.stepId, line.words])).toEqual([[c, LEFT_STEP_WORDS.cancel_at.left(MO_SUBSCRIPTION)]])
         await pressOfC.finish()
@@ -1711,7 +1713,7 @@ describe("W46: the check sets the membership's own last day against Stripe's, an
   const checkRows = async () => (await audited(STEP_CHECK_ACTION)).map((row) => row.details)
   const sends = (stripe: FakeStripe) => stripe.calls.filter((call) => call.method === 'subscriptions.update').length
   const setRow = (day: string | null) => db.query('UPDATE customer_memberships SET cancel_effective_date = $1::date WHERE id = $2', [day, ID.membership])
-  const lastStepOf = async (action: string) => String((await db.query<{ step: string }>("SELECT details->>'stepId' AS step FROM audit_log WHERE action = $1 ORDER BY at DESC LIMIT 1", [action]))[0]?.step)
+  const lastStepOf = async (action: string) => String((await db.query<{ step: string }>("SELECT details->>'stepId' AS step FROM audit_log WHERE action = $1 ORDER BY at DESC, ctid DESC LIMIT 1", [action]))[0]?.step)
 
   it.each([
     ['the row has no last day, Stripe ends the subscription on 10 December (the wish)', 'cancel', null, { row: null, stripe: '2026-12-09' }],

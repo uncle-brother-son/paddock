@@ -1,9 +1,15 @@
 import nodeCrypto, { createHash, createHmac } from 'node:crypto'
 import { NextRequest } from 'next/server'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { POST as closeRoute } from '@/app/api/v1/staff/orders/stuck/close/route'
+import { stuckCloseKindSchema, stuckListOutputSchema } from '@/contracts'
 import type { Db } from '@/server/db'
-import { SANITY_DELETE_REFUSED_ACTION } from '@/server/rules/catalog/sanity-sync'
-import { startTestDatabase, type TestDatabase } from '@/server/rules/testing/database'
+import { PLAN_STUCK_WORDS } from '@/server/rules/catalog/plan-failure-messages'
+import { sanityDeletesListed, SANITY_DELETE_REFUSED_ACTION, sortSanityDelete } from '@/server/rules/catalog/sanity-sync'
+import { LEFT_STEP_WORDS } from '@/server/rules/memberships/failure-messages'
+import { stuckList } from '@/server/rules/orders/stuck-list'
+import { ADMIN_TEST_KEY, pressRoute } from '@/server/rules/testing/admin-routes'
+import { insert, startTestDatabase, type TestDatabase } from '@/server/rules/testing/database'
 import { FakeStripe } from '@/server/stripe/fake'
 import { POST } from './route'
 
@@ -18,6 +24,8 @@ import { POST } from './route'
 // W66a (the W66 review's S1, F2, F6, F7): a republish changes nothing on the row but Sanity's own fields, on every
 // statement's path; a plan renamed after a lost create still has one product; a delete of an item already off sale
 // writes nothing; a signature older than 5 minutes is refused.
+// W70a (the W70 audit's L1, L2): a delete acts on the signed body's document alone; a plan a price change kept on sale
+// is a line on the Orders page's list, until it is off sale or marked sorted.
 
 vi.setConfig({ testTimeout: 60_000 })
 
@@ -37,13 +45,19 @@ vi.mock('@/server/stripe/client', async (importOriginal) => ({
 }))
 
 const SECRET = 'w66-sanity-secret'
+const JO = 'jo.sanity@example.com'
+const FRAN = 'fran.sanity@example.com'
+let jo: string
 let database: TestDatabase
 let stripe: FakeStripe
 
 beforeAll(async () => {
   vi.stubEnv('SANITY_WEBHOOK_SECRET', SECRET)
+  vi.stubEnv('STAFF_API_KEY', ADMIN_TEST_KEY)
   database = await startTestDatabase({ schema: 'live' })
   holder.db = database.db
+  jo = await insert(database.db, 'staff', { role: 'staff', first_name: 'Jo', last_name: 'Staff', email: JO, can_issue_refunds: true })
+  await insert(database.db, 'staff', { role: 'staff', first_name: 'Fran', last_name: 'Desk', email: FRAN, can_issue_refunds: false, can_manage_pricing: true })
 })
 afterAll(async () => {
   vi.unstubAllEnvs()
@@ -66,7 +80,8 @@ async function deliver(document: Record<string, unknown> | null, headers: Record
   return { status: response.status, body: await response.json() }
 }
 const published = (document: Record<string, unknown>) => deliver(document, { 'sanity-operation': 'update' })
-const deleted = (documentId: string) => deliver(null, { 'sanity-operation': 'delete', 'sanity-document-id': documentId })
+/** W70a (L1): a delete as Sanity sends it: the document's id in the signed body, and in the header that isn't signed. */
+const deleted = (documentId: string) => deliver({ _id: documentId }, { 'sanity-operation': 'delete', 'sanity-document-id': documentId })
 
 const IMAGE = { asset: { _ref: 'image-abc123-800x600-jpg' } }
 /** The route's fingerprint of an extra waiver: the first 12 hex characters of its trimmed text's SHA-256. */
@@ -115,7 +130,7 @@ const STAFF_SET: Readonly<Record<TypeInfo['type'], string>> = {
 const rowOf = async (info: TypeInfo, documentId: string) =>
   (await database.db.query<{ id: string; name: string; thumbnail_url: string | null; active: boolean; stripe_product_id?: string | null; category?: string | null }>(`SELECT * FROM ${info.table} WHERE ${info.column} = $1`, [documentId]))
 const auditRows = (entityId: string) =>
-  database.db.query<{ actor_type: string; actor_id: string | null; action: string; details: Record<string, unknown> }>('SELECT actor_type, actor_id, action, details FROM audit_log WHERE entity_id = $1 ORDER BY at, id', [entityId])
+  database.db.query<{ actor_type: string; actor_id: string | null; action: string; details: Record<string, unknown> }>('SELECT actor_type, actor_id, action, details FROM audit_log WHERE entity_id = $1 ORDER BY at, ctid', [entityId])
 
 /**
  * An item already made and put on sale by staff, with an old Stripe product id from before W55 (a plan keeps the
@@ -350,7 +365,7 @@ describe("Sanity's webhook on the Worker's connection (W66)", () => {
     expect(response.status).toBe(401)
     expect(await rowOf(info, documentId)).toEqual([])
     const id = await onSale(info, documentId)
-    expect(await deliver(null, { 'sanity-operation': 'delete', 'sanity-document-id': documentId }, `t=${Date.now()},v1=forged`)).toEqual({ status: 401, body: { error: 'Invalid signature' } })
+    expect(await deliver({ _id: documentId }, { 'sanity-operation': 'delete', 'sanity-document-id': documentId }, `t=${Date.now()},v1=forged`)).toEqual({ status: 401, body: { error: 'Invalid signature' } })
     expect((await rowOf(info, documentId))[0]).toMatchObject({ active: true })
     expect(await auditRows(id)).toEqual([])
   })
@@ -360,23 +375,25 @@ describe("Sanity's webhook on the Worker's connection (W66)", () => {
     const documentId = `w66a-old-${crypto.randomUUID()}`
     const id = await onSale(info, documentId)
     const headers = { 'sanity-operation': 'delete', 'sanity-document-id': documentId }
+    const document = { _id: documentId }
+    const body = JSON.stringify(document)
     const refused = { status: 401, body: { error: 'Invalid signature' } }
     const minutesAgo = (minutes: number): number => Date.now() - minutes * 60_000
     // Signed with the right secret, 5 minutes and a second ago: in milliseconds (Sanity's) and in seconds.
-    expect(await deliver(null, headers, signed('', SECRET, String(minutesAgo(5) - 1000)))).toEqual(refused)
-    expect(await deliver(null, headers, signed('', SECRET, String(Math.floor(minutesAgo(5) / 1000) - 1)))).toEqual(refused)
+    expect(await deliver(document, headers, signed(body, SECRET, String(minutesAgo(5) - 1000)))).toEqual(refused)
+    expect(await deliver(document, headers, signed(body, SECRET, String(Math.floor(minutesAgo(5) / 1000) - 1)))).toEqual(refused)
     // A time that isn't one, though signed.
-    for (const t of ['', 'now', '-1', '1e15', '99999999999999999999']) expect(await deliver(null, headers, signed('', SECRET, t)), t).toEqual(refused)
+    for (const t of ['', 'now', '-1', '1e15', '99999999999999999999']) expect(await deliver(document, headers, signed(body, SECRET, t)), t).toEqual(refused)
     // A fresh time put on an old signature: not what was signed.
-    const old = signed('', SECRET, String(minutesAgo(60)))
-    expect(await deliver(null, headers, `t=${Date.now()},${old.slice(old.indexOf('v1='))}`)).toEqual(refused)
+    const old = signed(body, SECRET, String(minutesAgo(60)))
+    expect(await deliver(document, headers, `t=${Date.now()},${old.slice(old.indexOf('v1='))}`)).toEqual(refused)
     expect((await rowOf(info, documentId))[0]).toMatchObject({ active: true })
     expect(await auditRows(id)).toEqual([])
     // Sanity's own second and third tries come within about two minutes: signed 4 minutes ago is taken.
-    expect(await deliver(null, headers, signed('', SECRET, String(minutesAgo(4))))).toEqual({ status: 200, body: { success: true } })
+    expect(await deliver(document, headers, signed(body, SECRET, String(minutesAgo(4))))).toEqual({ status: 200, body: { success: true } })
     expect((await rowOf(info, documentId))[0]).toMatchObject({ active: false })
     // In seconds too.
-    expect(await deliver(null, headers, signed('', SECRET, String(Math.floor(minutesAgo(1) / 1000))))).toEqual({ status: 200, body: { success: true } })
+    expect(await deliver(document, headers, signed(body, SECRET, String(Math.floor(minutesAgo(1) / 1000))))).toEqual({ status: 200, body: { success: true } })
   })
 
   it('the signature is compared in constant time (crypto.timingSafeEqual), whatever its length (F7)', async () => {
@@ -417,6 +434,38 @@ describe("Sanity's webhook on the Worker's connection (W66)", () => {
     expect(stripe.calls).toEqual([])
   })
 
+  it("a delete acts on the signed body's document alone: a header naming another is refused (400), and so is a body naming none; nothing is written, whichever of the two has the row (W70a, L1)", async () => {
+    const info = TYPES.find((t) => t.type === 'product') as TypeInfo
+    const signedId = `w70a-signed-${crypto.randomUUID()}`
+    const headerId = `w70a-header-${crypto.randomUUID()}`
+    const [signedRow, headerRow] = [await onSale(info, signedId), await onSale(info, headerId)]
+    const untouched = async () => {
+      expect((await rowOf(info, signedId))[0]).toMatchObject({ active: true })
+      expect((await rowOf(info, headerId))[0]).toMatchObject({ active: true })
+      expect([...(await auditRows(signedRow)), ...(await auditRows(headerRow))]).toEqual([])
+    }
+    const asDelete = (id?: string) => ({ 'sanity-operation': 'delete', ...(id === undefined ? {} : { 'sanity-document-id': id }) })
+    // A request really signed for one document, with its unsigned header (or its operation) changed to take another off sale.
+    expect(await deliver({ _id: signedId, _type: 'product', name: 'Soap' }, asDelete(headerId))).toEqual({ status: 400, body: { error: 'Document id mismatch' } })
+    expect(await deliver({ _id: signedId }, asDelete(`drafts.${signedId}`))).toEqual({ status: 400, body: { error: 'Document id mismatch' } })
+    await untouched()
+    // No id in what was signed: never the header's.
+    for (const document of [null, {}, { _id: '' }, { _id: 7 }, { _id: null }, { name: headerId }]) {
+      expect(await deliver(document, asDelete(headerId)), JSON.stringify(document)).toEqual({ status: 400, body: { error: 'No document id in the signed body' } })
+    }
+    for (const body of ['null', '[]', '"text"', 'not json']) {
+      const response = await POST(new NextRequest('http://localhost/api/sanity/webhook', { method: 'POST', body, headers: { 'sanity-webhook-signature': signed(body), ...asDelete(headerId) } }))
+      expect([response.status, await response.json()], body).toEqual([400, { error: 'No document id in the signed body' }])
+    }
+    await untouched()
+    // The two agree, or the header isn't there: the signed document goes off sale, the other stays.
+    expect(await deliver({ _id: signedId }, asDelete())).toEqual({ status: 200, body: { success: true } })
+    expect((await rowOf(info, signedId))[0]).toMatchObject({ active: false })
+    expect((await rowOf(info, headerId))[0]).toMatchObject({ active: true })
+    expect(await deliver({ _id: headerId }, asDelete(headerId))).toEqual({ status: 200, body: { success: true } })
+    expect((await rowOf(info, headerId))[0]).toMatchObject({ active: false })
+  })
+
   it('a type with no row here is ignored, and a delete of a document with no row writes nothing', async () => {
     expect(await published({ _type: 'blogPost', _id: `w66-blog-${crypto.randomUUID()}`, name: 'News' })).toEqual({ status: 200, body: { message: 'Non-catalog type ignored' } })
     const before = (await database.db.query<{ n: number }>('SELECT count(*)::int AS n FROM audit_log'))[0]?.n
@@ -455,3 +504,144 @@ describe("Sanity's webhook on the Worker's connection (W66)", () => {
   })
 })
 
+describe("W70a (the W70 audit's L2; H-plan 4.3): a plan deleted in Sanity that a price change kept on sale is a line on the Orders page's list", () => {
+  const PLAN = TYPES.find((t) => t.type === 'membershipPlan') as TypeInfo
+  const asOwner = (sql: string) => database.pg.exec(`RESET ROLE; ${sql}; SET ROLE paddock_worker;`)
+  const priceChange = (id: string, state: 'started' | 'done', changeId = `change-${id}`) =>
+    database.db.query(
+      "INSERT INTO audit_log (actor_type, actor_id, action, entity_type, entity_id, request_id, details) VALUES ('staff', 'jo', 'plan.price_change', 'membership_plan', $1, 'req-open', $2::jsonb)",
+      [id, JSON.stringify({ changeId, planId: id, state, prices: { monthly: 45 }, membersToMove: 0, productName: 'Core' })]
+    )
+  /** A plan on sale, deleted in Sanity while a price change on it is open: kept on sale. */
+  async function kept(name = 'Core'): Promise<{ id: string; documentId: string }> {
+    const documentId = `w70a-kept-${crypto.randomUUID()}`
+    expect((await published({ _type: 'membershipPlan', _id: documentId, name })).status).toBe(200)
+    const id = (await rowOf(PLAN, documentId))[0]?.id as string
+    await asOwner(`UPDATE membership_plans SET active = true WHERE id = '${id}'`)
+    await priceChange(id, 'started')
+    expect(await deleted(documentId)).toEqual({ status: 200, body: { success: true, kept: 'price_change_open' } })
+    return { id, documentId }
+  }
+  const linesOf = async (id: string) => ((await stuckList(database.db)).plans ?? []).filter((line) => line.planId === id && line.what === 'sanity_delete')
+  const refusals = async (id: string) =>
+    database.db.query<{ id: string; details: Record<string, unknown>; actor_type: string; actor_id: string | null }>('SELECT id, details, actor_type, actor_id FROM audit_log WHERE entity_id = $1 AND action = $2 ORDER BY at, ctid', [id, SANITY_DELETE_REFUSED_ACTION])
+  const close = (lineId: string, { email = JO, reason = 'Deleted by mistake, published again', key = crypto.randomUUID() } = {}) =>
+    pressRoute<Record<string, unknown>>(closeRoute, 'POST', { email, params: {}, body: { kind: 'sanity_delete', orderId: lineId, reason }, key })
+  const closeRows = (lineId: string) =>
+    database.db.query<{ actor_id: string | null; entity_type: string; details: Record<string, unknown> }>("SELECT actor_id, entity_type, details FROM audit_log WHERE action = 'order.close' AND entity_id = $1", [lineId])
+
+  it('the line names the plan and says what to do, with Mark sorted; the contract carries it; the kind is the last of the close kinds and of what a plan line is', async () => {
+    const { id } = await kept('All Access')
+    const [refusal] = await refusals(id)
+    const lines = await linesOf(id)
+    expect(lines).toEqual([
+      { lineId: refusal?.id, planId: id, planName: 'All Access', what: 'sanity_delete', state: 'refused', at: expect.any(String), words: PLAN_STUCK_WORDS.sanityDeleteKept('All Access'), close: { kind: 'sanity_delete', orderId: refusal?.id } },
+    ])
+    expect(lines[0]?.words).toBe(
+      'The plan "All Access" was deleted or unpublished in Sanity while a price change on it was still moving its members to the new price, so it stays on sale here. Nothing was changed. Once its members have moved (about 20 minutes), take it off sale on the Membership Plans page (needs the Manage pricing permission): this line then goes. If it should stay on sale, or it has been published again in Sanity, press Mark sorted (needs the Issue refunds permission).'
+    )
+    const parsed = stuckListOutputSchema.parse(JSON.parse(JSON.stringify(await stuckList(database.db))))
+    expect(parsed.plans?.find((line) => line.planId === id)?.what).toBe('sanity_delete')
+    expect(stuckCloseKindSchema.options.at(-1)).toBe('sanity_delete')
+    // Still listed once the members have moved: only taking it off sale, or a person, ends it.
+    await priceChange(id, 'done')
+    expect(await linesOf(id)).toHaveLength(1)
+  })
+
+  it('it goes once the plan is taken off sale (a second delete from Sanity, once the change is done), and stays gone when staff put the plan back on sale', async () => {
+    const { id, documentId } = await kept()
+    const other = await kept('Other')
+    await priceChange(id, 'done')
+    expect(await deleted(documentId)).toEqual({ status: 200, body: { success: true } })
+    expect((await rowOf(PLAN, documentId))[0]).toMatchObject({ active: false })
+    expect(await linesOf(id)).toEqual([])
+    await asOwner(`UPDATE membership_plans SET active = true WHERE id = '${id}'`)
+    expect(await linesOf(id)).toEqual([])
+    // A later price change, and deleted again while it is open: listed, whatever was dealt with before.
+    await priceChange(id, 'started', `change-2-${id}`)
+    expect(await deleted(documentId)).toEqual({ status: 200, body: { success: true, kept: 'price_change_open' } })
+    expect(await linesOf(id)).toHaveLength(1)
+    // A plan off sale without a row for it is not listed either, and comes back with the plan (nothing dealt with it).
+    await asOwner(`UPDATE membership_plans SET active = false WHERE id = '${other.id}'`)
+    expect(await linesOf(other.id)).toEqual([])
+    await asOwner(`UPDATE membership_plans SET active = true WHERE id = '${other.id}'`)
+    expect(await linesOf(other.id)).toHaveLength(1)
+  })
+
+  it('deleted twice while the change is open: one line, the newest refusal; the older one can\'t be closed, and closing the newest ends both', async () => {
+    const { id, documentId } = await kept()
+    expect(await deleted(documentId)).toEqual({ status: 200, body: { success: true, kept: 'price_change_open' } })
+    const rows = await refusals(id)
+    expect(rows).toHaveLength(2)
+    const lines = await linesOf(id)
+    expect(lines).toHaveLength(1)
+    const newest = lines[0]?.lineId as string
+    const older = rows.map((row) => row.id).find((one) => one !== newest) as string
+    expect((await close(older)).data).toEqual({ closed: false, reason: 'not_listed', kind: 'sanity_delete', orderId: older, message: LEFT_STEP_WORDS.notListed })
+    expect(await linesOf(id)).toHaveLength(1)
+    expect((await close(newest)).data).toEqual({ closed: true, kind: 'sanity_delete', orderId: newest, message: 'Marked as sorted. It is no longer listed.' })
+    expect(await linesOf(id)).toEqual([])
+  })
+
+  it("Mark sorted: Issue refunds and a reason; one `sorted` row and the close's own, by the person; the plan and Stripe left alone; pressed again it says so; a later delete refused is listed again", async () => {
+    const { id, documentId } = await kept()
+    const [line] = await linesOf(id)
+    const lineId = line?.lineId as string
+    const row = (await rowOf(PLAN, documentId))[0]
+    stripe.calls.length = 0
+    expect((await close(lineId, { email: FRAN })).error?.code).toBe('FORBIDDEN')
+    expect((await close(lineId, { reason: 'no' })).error?.code).toBe('VALIDATION')
+    expect(await linesOf(id)).toHaveLength(1)
+    expect(await closeRows(lineId)).toEqual([])
+
+    expect((await close(lineId)).data).toEqual({ closed: true, kind: 'sanity_delete', orderId: lineId, message: LEFT_STEP_WORDS.sorted })
+    expect(await linesOf(id)).toEqual([])
+    const why = 'Deleted by mistake, published again'
+    expect((await refusals(id)).filter((one) => one.details['state'] === 'sorted')).toEqual([
+      { id: expect.any(String), actor_type: 'staff', actor_id: jo, details: { state: 'sorted', refusalId: lineId, sanityDocumentId: documentId, byHand: { why } } },
+    ])
+    expect(await closeRows(lineId)).toEqual([{ actor_id: jo, entity_type: 'sanity_delete', details: { kind: 'sanity_delete', why, planId: id, sanityDocumentId: documentId } }])
+    expect((await rowOf(PLAN, documentId))[0]).toEqual(row)
+    expect(stripe.calls).toEqual([])
+
+    expect((await close(lineId)).data).toEqual({ closed: true, alreadyClosed: true, kind: 'sanity_delete', orderId: lineId, message: 'Marked as sorted. It is no longer listed.' })
+    expect(await closeRows(lineId)).toHaveLength(1)
+    expect((await refusals(id)).filter((one) => one.details['state'] === 'sorted')).toHaveLength(1)
+
+    // Deleted again with the change still open: a new line of its own.
+    expect(await deleted(documentId)).toEqual({ status: 200, body: { success: true, kept: 'price_change_open' } })
+    const again = await linesOf(id)
+    expect(again).toHaveLength(1)
+    expect(again[0]?.lineId).not.toBe(lineId)
+  })
+
+  it('not on the list: an id nothing has, a plan taken off sale meanwhile and a `sorted` row itself are refused with nothing written', async () => {
+    const { id } = await kept()
+    const [line] = await linesOf(id)
+    const lineId = line?.lineId as string
+    const refusedAs = (orderId: string) => ({ closed: false, reason: 'not_listed', kind: 'sanity_delete', orderId, message: LEFT_STEP_WORDS.notListed })
+    const nobody = crypto.randomUUID()
+    expect((await close(nobody)).data).toEqual(refusedAs(nobody))
+    await asOwner(`UPDATE membership_plans SET active = false WHERE id = '${id}'`)
+    expect((await close(lineId)).data).toEqual(refusedAs(lineId))
+    expect(await closeRows(lineId)).toEqual([])
+    await asOwner(`UPDATE membership_plans SET active = true WHERE id = '${id}'`)
+    expect((await close(lineId)).data).toMatchObject({ closed: true })
+    const sorted = (await refusals(id)).find((one) => one.details['state'] === 'sorted')?.id as string
+    expect((await close(sorted)).data).toEqual(refusedAs(sorted))
+  })
+
+  it('a fault at the second row keeps neither (one transaction), and the line stays', async () => {
+    const { id } = await kept()
+    const [line] = await linesOf(id)
+    const lineId = line?.lineId as string
+    const by = { actor: { type: 'staff' as const, id: jo }, requestId: 'w70a-fault' }
+    await expect(
+      sortSanityDelete(database.db, lineId, 'why it was closed', by, () => {
+        throw new Error('the close row failed')
+      })
+    ).rejects.toThrow('the close row failed')
+    expect((await refusals(id)).filter((one) => one.details['state'] === 'sorted')).toEqual([])
+    expect((await sanityDeletesListed(database.db)).map((one) => one.refusalId)).toContain(lineId)
+  })
+})

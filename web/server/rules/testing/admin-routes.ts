@@ -52,4 +52,4 @@ export interface AdminAuditRow {
 }
 
 /** Every audit row, oldest first. */
-export const auditRowsOf = (db: Db): Promise<AdminAuditRow[]> => db.query<AdminAuditRow>('SELECT action, actor_type, actor_id, entity_type, entity_id, request_id, details FROM audit_log ORDER BY at, id')
+export const auditRowsOf = (db: Db): Promise<AdminAuditRow[]> => db.query<AdminAuditRow>('SELECT action, actor_type, actor_id, entity_type, entity_id, request_id, details FROM audit_log ORDER BY at, ctid')

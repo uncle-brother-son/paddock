@@ -425,7 +425,7 @@ describe('the refusal mark (W26a), on each subject', () => {
     // and two rows written back to back can share one.
     await db.query("UPDATE audit_log SET at = at - interval '1 second' WHERE action = $1 AND details->>'claimId' = $2", [on.refused, claim.id])
     await markRefused(db, on, claim, part, 'a later reason', 'press-10')
-    const rows = await db.query<Record<string, unknown>>('SELECT actor_id, action, entity_type, entity_id, request_id, details FROM audit_log WHERE action = $1 ORDER BY at, id', [on.refused])
+    const rows = await db.query<Record<string, unknown>>('SELECT actor_id, action, entity_type, entity_id, request_id, details FROM audit_log WHERE action = $1 ORDER BY at, ctid', [on.refused])
     expect(rows).toHaveLength(2)
     expect(rows[0]).toEqual({
       actor_id: STAFF,

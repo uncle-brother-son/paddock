@@ -1350,7 +1350,7 @@ describe("W51a (W51 review L1): a block's audit row keeps the clock read under t
     await database.pg.exec(
       "RESET ROLE; UPDATE audit_log SET at = (SELECT min(at) FROM audit_log) - interval '1 minute' WHERE action = 'session.blocked' AND entity_type = 'session'; SET ROLE paddock_worker;"
     )
-    const rows = await db.query<{ entity_type: string }>("SELECT entity_type FROM audit_log WHERE action = 'session.blocked' ORDER BY at")
+    const rows = await db.query<{ entity_type: string }>("SELECT entity_type FROM audit_log WHERE action = 'session.blocked' ORDER BY at, ctid")
     expect(rows.map((row) => row.entity_type)).toEqual(['session', 'session_day'])
     // By the lock's clock the deep clean is still the 10:00's latest block: blocked on its own, and left by Unblock Day.
     expect((await unblockQuote()).data).toMatchObject({ blockedSessions: 2, blockedBefore: 1 })

@@ -95,7 +95,7 @@ const customers = () => db.query<{ email: string; first_name: string }>('SELECT 
 const emails = async () => (await customers()).map((row) => row.email)
 const audit = () =>
   db.query<{ action: string; actor_type: string; actor_id: string; entity_type: string; entity_id: string; details: Record<string, unknown> }>(
-    "SELECT action, actor_type, actor_id, entity_type, entity_id, details FROM audit_log WHERE action LIKE 'customer.%' ORDER BY at, id"
+    "SELECT action, actor_type, actor_id, entity_type, entity_id, details FROM audit_log WHERE action LIKE 'customer.%' ORDER BY at, ctid"
   )
 const SEEDED = ['sam@example.com', 'mo@example.com']
 

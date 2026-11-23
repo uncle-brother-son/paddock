@@ -111,7 +111,7 @@ const timesDiffer = async (sessionId: string) =>
     )
   )[0]?.n
 const finished = async (bookingId: string) =>
-  (await first.query<{ details: { outcome?: string; owed?: number; by?: { how?: string } } }>("SELECT details FROM audit_log WHERE action = 'booking.refund_finished' AND entity_id = $1 ORDER BY at", [bookingId])).map((row) => row.details)
+  (await first.query<{ details: { outcome?: string; owed?: number; by?: { how?: string } } }>("SELECT details FROM audit_log WHERE action = 'booking.refund_finished' AND entity_id = $1 ORDER BY at, ctid", [bookingId])).map((row) => row.details)
 
 /** A dearer Move on the reader, as the Move dialog presses it: Core (two at GBP 20) to Peak (two at GBP 25.50), GBP 11 to take. */
 const toPeakOnTheReader = (db: Db, stripe: FakeStripe, bookingId: string, peakSession: string) =>

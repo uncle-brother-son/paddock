@@ -160,7 +160,7 @@ const renewal = async () => (await db.query<{ d: string | null }>('SELECT next_r
 const orders = () => db.query<{ id: string; order_total: string; payment_status: string; stripe_payment_intent_id: string | null; payment_method: string | null; order_source: string | null }>('SELECT id, order_total::text, payment_status, stripe_payment_intent_id, payment_method, order_source FROM orders ORDER BY created_at, id')
 const lines = () => db.query<{ order_id: string; item_type: string; quantity: number; unit_price: string; line_total: string; membership_plan_id: string | null }>('SELECT order_id, item_type, quantity, unit_price::text, line_total::text, membership_plan_id FROM order_line_items')
 type AuditRow = { action: string; actor_type: string; actor_id: string | null; entity_type: string; entity_id: string; details: Record<string, unknown> }
-const audited = (action: string) => db.query<AuditRow>('SELECT action, actor_type, actor_id, entity_type, entity_id, details FROM audit_log WHERE action = $1 ORDER BY at', [action])
+const audited = (action: string) => db.query<AuditRow>('SELECT action, actor_type, actor_id, entity_type, entity_id, details FROM audit_log WHERE action = $1 ORDER BY at, ctid', [action])
 const states = async () => (await audited(PAYMENT_DATE_ACTION)).map((row) => row.details['state'] as string)
 const callsOf = (stripe: FakeStripe, method: string) => stripe.calls.filter((call) => call.method === method)
 const paramsOf = (call: { params: unknown } | undefined): Record<string, unknown> => (call?.params ?? {}) as Record<string, unknown>
@@ -415,7 +415,7 @@ describe('P1 (brief W41 item 3): every refusal, in the old order, with nothing w
       async () => {
         expect((await press({ ...BODY, override: true, overrideReason: ' Payday moved to the 27th ' })).status).toBe(200)
         expect((await changes()).at(-1)).toMatchObject({ status: 'done', override_reason: 'Payday moved to the 27th' })
-        expect((await audited(PAYMENT_DATE_ACTION))[0]?.details).toMatchObject({ state: 'started', override: { reason: 'Payday moved to the 27th' } })
+        expect((await audited(PAYMENT_DATE_ACTION)).find((row) => row.details['state'] === 'started')?.details).toMatchObject({ state: 'started', override: { reason: 'Payday moved to the 27th' } })
       },
       earlier({ status: 'done', created_at: '2026-09-10T09:00:00.000Z' })
     )
@@ -760,7 +760,7 @@ describe('S2: the charge', () => {
       expect(await changes()).toMatchObject([{ status: 'done', stripe_payment_intent_id: paid?.id }])
       expect(await orders()).toMatchObject([{ order_total: '21.94', payment_status: 'paid', stripe_payment_intent_id: paid?.id }])
       expect(await renewal()).toBe(NEW_DATE)
-      expect((await audited(PAYMENT_DATE_ACTION)).at(-1)).toMatchObject({ actor_type: 'system', details: { state: 'done', how: 'reconcile' } })
+      expect((await audited(PAYMENT_DATE_ACTION)).find((row) => row.details['state'] === 'done')).toMatchObject({ actor_type: 'system', details: { state: 'done', how: 'reconcile' } })
       // One payment, however many sends; nothing more on later runs.
       expect(charges(stripe)).toHaveLength(2)
       expect(await taken(stripe)).toHaveLength(1)
@@ -964,8 +964,8 @@ describe('S3: the date move', () => {
       expect(closed).toEqual({ closed: true, kind: 'held_payment_date', orderId: change?.id, message: PAYMENT_DATE_CLOSE_WORDS.closed(`refund_refused; ${paid?.id}; payment ${paid?.id}`) })
       expect(stripe.calls).toHaveLength(calls)
       expect((await changes()).map((row) => [row.status, row.failure_message])).toEqual([['failed', 'Closed by hand: Refunded in Stripe by hand']])
-      expect((await audited(PAYMENT_DATE_ACTION)).at(-1)?.details).toMatchObject({ state: 'closed', why: 'Refunded in Stripe by hand', found: { reason: 'refund_refused', paymentIntentId: paid?.id } })
-      expect((await audited('order.close')).at(-1)).toMatchObject({ entity_type: 'payment_date_change', entity_id: change?.id, details: { kind: 'held_payment_date', why: 'Refunded in Stripe by hand', reason: 'refund_refused' } })
+      expect((await audited(PAYMENT_DATE_ACTION)).find((row) => row.details['state'] === 'closed')?.details).toMatchObject({ state: 'closed', why: 'Refunded in Stripe by hand', found: { reason: 'refund_refused', paymentIntentId: paid?.id } })
+      expect((await audited('order.close')).find((row) => row.entity_id === change?.id)).toMatchObject({ entity_type: 'payment_date_change', entity_id: change?.id, details: { kind: 'held_payment_date', why: 'Refunded in Stripe by hand', reason: 'refund_refused' } })
       expect(await listed()).toEqual([])
       // Closed twice: not listed any more.
       expect(await closeStuckItem(db, { kind: 'held_payment_date', orderId: change?.id as string, reason: 'Again, to be sure' }, { actor: { type: 'staff', id: ID.staff }, requestId: crypto.randomUUID() })).toMatchObject({ closed: false, reason: 'not_listed' })

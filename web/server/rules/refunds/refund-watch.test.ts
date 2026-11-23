@@ -32,7 +32,7 @@ beforeEach(async () => {
 
 const by = { actor: { type: 'system' as const, id: null }, requestId: 'w32-watch' }
 const part = (orderId: string, paymentIntentId: string, amount: number): CardPart => ({ orderId, paymentIntentId, amount, lines: [{ lineId: crypto.randomUUID(), amount }] })
-const watchRows = async () => (await db.query<{ id: string; details: Record<string, unknown> }>('SELECT id, details FROM audit_log WHERE action = $1 ORDER BY at, id', [REFUND_WATCH])).map((row) => row.details)
+const watchRows = async () => (await db.query<{ id: string; details: Record<string, unknown> }>('SELECT id, details FROM audit_log WHERE action = $1 ORDER BY at, ctid', [REFUND_WATCH])).map((row) => row.details)
 const due = async (days = WATCH_DAYS, hours = WATCH_READ_HOURS, most = 50) => db.query<WatchDue>(WATCHES_DUE_SQL, [days, hours, most])
 /** Time passes for the watch's rows: each is that much older (the database's clock is the real one in this file). */
 const older = (interval: string) => db.query(`UPDATE audit_log SET at = at - $1::interval WHERE action = $2`, [interval, REFUND_WATCH])

@@ -35,7 +35,7 @@ beforeEach(async () => {
 
 const activeHolders = async () => (await first.query<{ id: string }>('SELECT id FROM staff WHERE can_manage_pricing = true AND active = true ORDER BY id')).map((row) => row.id)
 const activeAdmins = async () => (await first.query<{ id: string }>("SELECT id FROM staff WHERE role = 'admin' AND active = true ORDER BY id")).map((row) => row.id)
-const audited = async () => (await first.query<{ action: string; entity_id: string }>('SELECT action, entity_id FROM audit_log ORDER BY at')).map((row) => [row.action, row.entity_id])
+const audited = async () => (await first.query<{ action: string; entity_id: string }>('SELECT action, entity_id FROM audit_log ORDER BY at, ctid')).map((row) => [row.action, row.entity_id])
 const afterItsWrite = (sql: string) => sql.startsWith('UPDATE staff')
 
 /** Two presses at once: the first held open after its write until the second is blocked by it. Answers both outcomes and what the second waited on. */

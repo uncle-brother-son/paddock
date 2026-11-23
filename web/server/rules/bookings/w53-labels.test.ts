@@ -177,7 +177,7 @@ const creditRows = (bookingId: string) => db.query<{ amount: string; order_id: s
 const refundsSent = (stripe: FakeStripe) => stripe.calls.filter((call) => call.method === 'refunds.create').map((call) => call.params as { amount: number; payment_intent: string })
 const intentOf = async (orderId: string | null | undefined) => (await db.query<{ intent: string | null }>('SELECT stripe_payment_intent_id AS intent FROM orders WHERE id = $1', [orderId ?? null]))[0]?.intent
 const auditDetails = async (bookingId: string, action: string) =>
-  (await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE entity_type = 'booking' AND entity_id = $1 AND action = $2 ORDER BY at, id", [bookingId, action])).map((row) => row.details)
+  (await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE entity_type = 'booking' AND entity_id = $1 AND action = $2 ORDER BY at, ctid", [bookingId, action])).map((row) => row.details)
 
 /** The towel removed to the card, its £5 refund never reaching Stripe: £5 owed on the live booking, the towel's line with nothing on it. */
 async function towelRefundOwed({ bookingId, stripe }: Context): Promise<{ towel: string; orderId: string; sent: number }> {

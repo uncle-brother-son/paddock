@@ -1560,3 +1560,16 @@ describe('W09: a claim write fails', () => {
     expect(tablesTouched(worker.recording)).toEqual(['api_idempotency'])
   })
 })
+
+// --- Brief W70a (the W70 audit's S1 h): only one recording held it on T1
+
+describe('a gift card on its last day, as the order claims it (T1)', () => {
+  const expires = (day: string) => (seedDb: Db) => seedDb.query('UPDATE gift_cards SET expiry_date = $1 WHERE id = $2', [day, ID.giftCard]).then(() => undefined)
+
+  it('is taken: the £24 comes off the card, with its redemption on the order', async () => {
+    const { answer, recording } = await placeThrough(giftCardOnly, expires('2026-11-10'))
+    expect(answer.status).toBe(200)
+    expect(answer.body.ok && answer.body.data).toMatchObject({ status: 'paid', payment: { method: 'gift_card', giftCardApplied: 24, collected: 0 } })
+    expect(recording.tables['gift_card_redemptions']?.added).toMatchObject([{ gift_card_id: ID.giftCard, amount_used: '24.00' }])
+  })
+})

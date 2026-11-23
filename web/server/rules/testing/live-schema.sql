@@ -438,17 +438,6 @@ CREATE TABLE public.orders (
   refund_owed_amount numeric(10,2) DEFAULT 0 NOT NULL
 );
 
-CREATE TABLE public.parity_log (
-  id uuid DEFAULT gen_random_uuid() NOT NULL,
-  at timestamp with time zone DEFAULT now() NOT NULL,
-  action text NOT NULL,
-  request_id text,
-  old_result jsonb,
-  new_result jsonb,
-  matches boolean NOT NULL,
-  diff jsonb
-);
-
 CREATE TABLE public.pending_reader_payments (
   id uuid DEFAULT gen_random_uuid() NOT NULL,
   flow text NOT NULL,
@@ -558,7 +547,6 @@ CREATE TABLE public.service_types (
   duration integer,
   capacity integer DEFAULT 6,
   booking_type text,
-  price numeric(10,2),
   active boolean DEFAULT true,
   stripe_product_id text,
   stripe_price_id text,
@@ -961,8 +949,10 @@ begin
     from unnest(v_days) as q(day) left join closed_dates c on c.closed_on = q.day;
 
   insert into sessions (service_type_id, start_time, end_time, type, capacity, status)
-  select svc.id, (d.day + sl.start_time),
-         (d.day + sl.start_time) + (svc.duration || ' minutes')::interval,
+  -- 034 (H11): a session's time is London's wall-clock digits stored as UTC, named here, so the row is the same
+  -- whatever zone the connection running the job is in.
+  select svc.id, ((d.day + sl.start_time) at time zone 'UTC'),
+         ((d.day + sl.start_time) at time zone 'UTC') + (svc.duration || ' minutes')::interval,
          svc.booking_type, svc.capacity, 'open'
   from unnest(v_open) as g(day_ts)
   cross join lateral (select g.day_ts::date as day) d
@@ -978,29 +968,6 @@ begin
   on conflict (id) do update set made_up_to = excluded.made_up_to, closed_days_skipped = excluded.closed_days_skipped, updated_at = now();
   return v_inserted;
 end $function$;
-
-CREATE OR REPLACE FUNCTION public.lapse_sweep_expired_bookings()
- RETURNS integer
- LANGUAGE plpgsql
- SECURITY DEFINER
- SET search_path TO 'public'
-AS $function$
-DECLARE n integer := 0; r record;
-BEGIN
-  FOR r IN
-    SELECT b.id, b.session_id, b.party_size
-    FROM bookings b
-    WHERE b.status = 'payment_needed' AND b.payment_due_by <= now() AND COALESCE(b.price_paid, 0) = 0
-    FOR UPDATE OF b
-  LOOP
-    UPDATE bookings SET status = 'cancelled', cancelled_at = now(), cancel_reason = 'membership_lapsed', updated_at = now()
-    WHERE id = r.id;
-    UPDATE sessions SET total_booked = GREATEST(total_booked - r.party_size, 0), updated_at = now()
-    WHERE id = r.session_id;
-    n := n + 1;
-  END LOOP;
-  RETURN n;
-END $function$;
 
 CREATE OR REPLACE FUNCTION public.membership_mark_cancelled_by_stripe(p_stripe_subscription_id text)
  RETURNS jsonb
@@ -1096,31 +1063,6 @@ BEGIN
   RETURN jsonb_build_object('found', true, 'action', 'past_due', 'covered_through', covered, 'bookings_flagged', flagged);
 END $function$;
 
-CREATE OR REPLACE FUNCTION public.membership_period_for(p_anchor date, p_day date)
- RETURNS TABLE(period_start date, period_end date)
- LANGUAGE plpgsql
- IMMUTABLE
-AS $function$
-DECLARE
-  n INTEGER;
-BEGIN
-  IF p_day < p_anchor THEN
-    RETURN;
-  END IF;
-  n := (EXTRACT(YEAR FROM p_day)::INTEGER - EXTRACT(YEAR FROM p_anchor)::INTEGER) * 12
-     + (EXTRACT(MONTH FROM p_day)::INTEGER - EXTRACT(MONTH FROM p_anchor)::INTEGER);
-  WHILE (p_anchor + make_interval(months => n))::DATE > p_day LOOP
-    n := n - 1;
-  END LOOP;
-  WHILE (p_anchor + make_interval(months => n + 1))::DATE <= p_day LOOP
-    n := n + 1;
-  END LOOP;
-  period_start := (p_anchor + make_interval(months => n))::DATE;
-  period_end   := (p_anchor + make_interval(months => n + 1))::DATE - 1;
-  RETURN NEXT;
-END;
-$function$;
-
 CREATE OR REPLACE FUNCTION public.membership_sync_cancel_at_period_end(p_stripe_subscription_id text, p_cancel_at_period_end boolean, p_cancel_at timestamp with time zone, p_period_end timestamp with time zone)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -1200,19 +1142,6 @@ AS $function$
 DECLARE n integer;
 BEGIN
   DELETE FROM api_idempotency WHERE created_at < now() - interval '7 days';
-  GET DIAGNOSTICS n = ROW_COUNT;
-  RETURN n;
-END $function$;
-
-CREATE OR REPLACE FUNCTION public.purge_parity_log()
- RETURNS integer
- LANGUAGE plpgsql
- SECURITY DEFINER
- SET search_path TO 'public'
-AS $function$
-DECLARE n integer;
-BEGIN
-  DELETE FROM parity_log WHERE at < now() - interval '30 days';
   GET DIAGNOSTICS n = ROW_COUNT;
   RETURN n;
 END $function$;
@@ -1576,7 +1505,6 @@ ALTER TABLE public.orders ADD CONSTRAINT orders_payment_status_check CHECK ((pay
 ALTER TABLE public.orders ADD CONSTRAINT orders_pkey PRIMARY KEY (id);
 ALTER TABLE public.orders ADD CONSTRAINT orders_refund_owed_amount_check CHECK ((refund_owed_amount >= (0)::numeric));
 ALTER TABLE public.orders ADD CONSTRAINT orders_shipping_status_check CHECK ((shipping_status = ANY (ARRAY['pending'::text, 'shipped'::text, 'delivered'::text])));
-ALTER TABLE public.parity_log ADD CONSTRAINT parity_log_pkey PRIMARY KEY (id);
 ALTER TABLE public.pending_reader_payments ADD CONSTRAINT pending_reader_payments_expected_amount_check CHECK ((expected_amount >= (0)::numeric));
 ALTER TABLE public.pending_reader_payments ADD CONSTRAINT pending_reader_payments_flow_check CHECK ((flow = ANY (ARRAY['checkout'::text, 'move'::text, 'settle'::text, 'add_guest'::text])));
 ALTER TABLE public.pending_reader_payments ADD CONSTRAINT pending_reader_payments_pkey PRIMARY KEY (id);
@@ -1640,22 +1568,6 @@ ALTER TABLE public.store_credit_transactions ADD CONSTRAINT store_credit_transac
 ALTER TABLE public.stripe_webhook_events ADD CONSTRAINT stripe_webhook_events_pkey PRIMARY KEY (event_id);
 
 -- Views
-CREATE VIEW public.membership_credit_period_balances AS
-SELECT p.id,
-    p.membership_id,
-    p.period_start,
-    p.period_end,
-    p.credits_allocated,
-    p.is_unlimited,
-    count(b.id) AS credits_used,
-        CASE
-            WHEN p.is_unlimited THEN NULL::bigint
-            ELSE p.credits_allocated - count(b.id)
-        END AS credits_remaining
-   FROM membership_credit_periods p
-     LEFT JOIN bookings b ON b.credit_period_id = p.id AND b.redemption_source = 'membership_credit'::text AND (b.status = ANY (ARRAY['pending'::text, 'confirmed'::text, 'completed'::text, 'no-show'::text]))
-  GROUP BY p.id;
-
 CREATE VIEW public.membership_current_credits AS
 SELECT p.membership_id,
     p.id AS period_id,
@@ -1750,6 +1662,7 @@ ALTER TABLE public.store_credit_transactions ADD CONSTRAINT store_credit_transac
 
 -- Indexes
 CREATE INDEX api_idempotency_created_at_idx ON public.api_idempotency USING btree (created_at);
+CREATE INDEX audit_log_action_entity_idx ON public.audit_log USING btree (action, entity_type, entity_id);
 CREATE INDEX audit_log_actor_idx ON public.audit_log USING btree (actor_id, at);
 CREATE INDEX audit_log_entity_idx ON public.audit_log USING btree (entity_type, entity_id);
 CREATE INDEX audit_log_refund_claims_idx ON public.audit_log USING btree (action, at) WHERE (action = ANY (ARRAY['booking.refund_claimed'::text, 'order.refund_claimed'::text, 'event_booking.refund_claimed'::text]));
@@ -1773,7 +1686,6 @@ CREATE INDEX idx_bookings_session ON public.bookings USING btree (session_id);
 CREATE INDEX idx_bookings_status ON public.bookings USING btree (status);
 CREATE INDEX idx_credit_adjustments_membership ON public.membership_credit_adjustments USING btree (membership_id);
 CREATE INDEX idx_customers_auth_user ON public.customers USING btree (auth_user_id);
-CREATE INDEX idx_customers_email ON public.customers USING btree (email);
 CREATE INDEX idx_customers_stripe_id ON public.customers USING btree (stripe_customer_id);
 CREATE INDEX idx_gift_card_presets_type ON public.gift_card_presets USING btree (gift_card_type_id);
 CREATE INDEX idx_gift_card_types_sanity ON public.gift_card_types USING btree (sanity_gift_card_type_id);
@@ -1806,7 +1718,6 @@ CREATE INDEX idx_variants_product ON public.product_variants USING btree (produc
 CREATE INDEX idx_variants_sku ON public.product_variants USING btree (sku);
 CREATE INDEX membership_payment_date_changes_membership_idx ON public.membership_payment_date_changes USING btree (membership_id, created_at DESC);
 CREATE UNIQUE INDEX orders_stripe_payment_intent_id_key ON public.orders USING btree (stripe_payment_intent_id) WHERE (stripe_payment_intent_id IS NOT NULL);
-CREATE INDEX parity_log_action_idx ON public.parity_log USING btree (action, at DESC);
 CREATE INDEX pending_reader_payments_record_idx ON public.pending_reader_payments USING btree (record_id);
 CREATE INDEX pending_reader_payments_status_idx ON public.pending_reader_payments USING btree (status, created_at);
 CREATE INDEX promo_code_redemptions_code_idx ON public.promo_code_redemptions USING btree (promo_code_id);

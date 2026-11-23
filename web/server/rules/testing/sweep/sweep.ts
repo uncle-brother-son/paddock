@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { compareRecordings, type Recording } from '../replay/compare'
-import { watchedForInvariants, WORKER_EXCEPTIONS, type InvariantExceptions, type InvariantSweep } from '../replay/invariants'
+import { exceptionKey, watchedForInvariants, WORKER_EXCEPTIONS, type InvariantExceptions, type InvariantSweep } from '../replay/invariants'
 import { scenarios } from '../replay/scenarios'
 import { w48Scenarios } from '../replay/w48-scenarios'
 import { answeredStampProblems, type AnsweredPlanExtra, type AnsweredStamp } from './admin-presses'
@@ -39,8 +39,7 @@ const OWED_NEXT = 'bookings/money-owed-next-steps.test.ts, the test named after 
  */
 export const DROPPED: Readonly<Record<string, string>> = {
   // GB24 (W51): generateUpcomingSessions was deleted, not moved; nothing on the Worker answers for it. The nightly job
-  // alone makes sessions.
-  // Its "who may" recording stays in the sweep: each press is attempted, and each is refused with no function to load.
+  // alone makes sessions. Its "who may" recording went too (W64a, below).
   'w48-gb24-generate-upcoming-sessions-is-dead-code-that-still-runs': 'GB24: server/rules/testing/sweep/dropped.test.ts (no such function in the staff app; no route; the job makes sessions: sessions/admin.test.ts)',
   // GB15 (W61): the scenario calls the legacy catalogue routes straight through paddockBackendApi2, which W61 removed;
   // every Worker route checks the staff member first (GB14).
@@ -134,18 +133,18 @@ export interface SweptScenario {
   recording: Recording
   /** Every invariant breach and every stamp of the wrong form. */
   problems: string[]
-  /** The W05 exceptions used (replay/invariants.ts, WORKER_EXCEPTIONS): `<list name>/<scenario>`. */
+  /** The W05 exceptions used (replay/invariants.ts, WORKER_EXCEPTIONS): exceptionKey, once for each time. */
   exceptionsUsed: string[]
 }
 
 /**
- * W64a item 4 (W64 review S3): every W05 exception the Worker's lists give the scenarios in `names`, as
- * `<list name>/<scenario>`: what a sweep file must use, exactly.
+ * W64a item 4 (W64 review S3): every W05 exception the Worker's lists give the scenarios in `names` (exceptionKey): what a
+ * sweep file must use, exactly. W70a (the W70 audit's L5): each names what breaks the check, the PaymentIntent with it.
  */
 export function exceptionsListedFor(names: readonly string[], exceptions: InvariantExceptions = WORKER_EXCEPTIONS): string[] {
-  const lists = { stripeRefundsNotOnRows: exceptions.stripeRefundsNotOnRows, cancelledWithoutAllTheMoney: exceptions.cancelledWithoutAllTheMoney, chargesNotOnOneOrder: exceptions.chargesNotOnOneOrder }
-  return Object.entries(lists)
-    .flatMap(([kind, list]) => Object.keys(list).filter((name) => names.includes(name)).map((name) => `${kind}/${name}`))
+  const kinds = ['stripeRefundsNotOnRows', 'cancelledWithoutAllTheMoney', 'chargesNotOnOneOrder'] as const
+  return kinds
+    .flatMap((kind) => Object.entries(exceptions[kind]).filter(([name]) => names.includes(name)).flatMap(([name, one]) => one.breaches.map((breach) => exceptionKey(kind, name, breach))))
     .sort()
 }
 
@@ -155,7 +154,7 @@ export async function sweepOne(
   scenario: Scenario,
   extra: { side?: WorkerSideOptions; replay?: ReplayOptions; exceptions?: InvariantExceptions } = {}
 ): Promise<SweptScenario> {
-  const invariants: InvariantSweep = { wrong: [], needed: new Set<string>(), bookingsChecked: 0 }
+  const invariants: InvariantSweep = { wrong: [], needed: [], bookingsChecked: 0 }
   const watched = watchedForInvariants(asPressedNow(scenario), invariants, extra.exceptions ?? WORKER_EXCEPTIONS)
   const g: string[] = []
   const checked: Scenario = {
@@ -238,7 +237,7 @@ export function sweepFile(file: string): void {
     // hide a new breach); one needed and not listed fails its scenario above as a breach.
     it('the W05 exceptions these scenarios used are exactly the ones listed for them (WORKER_EXCEPTIONS)', () => {
       expect(swept.sort()).toEqual(list.map((scenario) => scenario.name).sort())
-      expect([...new Set(used)].sort()).toEqual(exceptionsListedFor(swept))
+      expect(used.sort()).toEqual(exceptionsListedFor(swept))
     })
   })
 }

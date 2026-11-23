@@ -122,7 +122,7 @@ async function cardNow(id: string = ID.giftCard): Promise<Card> {
 }
 const audit = (action?: string) =>
   db.query<{ action: string; actor_type: string; actor_id: string; entity_type: string; entity_id: string; details: Record<string, unknown> }>(
-    `SELECT action, actor_type, actor_id, entity_type, entity_id, details FROM audit_log WHERE action LIKE 'gift_card.%' AND ($1::text IS NULL OR action = $1) ORDER BY at, id`,
+    `SELECT action, actor_type, actor_id, entity_type, entity_id, details FROM audit_log WHERE action LIKE 'gift_card.%' AND ($1::text IS NULL OR action = $1) ORDER BY at, ctid`,
     [action ?? null]
   )
 const setCard = (statement: string, id: string = ID.giftCard) => db.query(statement, [id])

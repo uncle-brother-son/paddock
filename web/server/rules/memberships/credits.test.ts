@@ -100,7 +100,7 @@ async function state(membershipId: string = ID.membership): Promise<State> {
   const [membership] = await db.query<{ addon: number; is_herd: boolean; herd_override: boolean | null }>('SELECT addon_credits_remaining AS addon, is_herd, herd_override FROM customer_memberships WHERE id = $1', [membershipId])
   const [period] = await db.query<{ allocated: number }>('SELECT credits_allocated AS allocated FROM membership_current_credits WHERE membership_id = $1', [membershipId])
   const adjustments = await db.query<State['adjustments'][number]>('SELECT credit_type, amount, reason, staff_id::text AS staff_id FROM membership_credit_adjustments WHERE membership_id = $1 ORDER BY created_at, id', [membershipId])
-  const audit = await db.query<State['audit'][number]>(`SELECT action, actor_id, details FROM audit_log WHERE entity_type = 'membership' AND entity_id = $1 ORDER BY at, id`, [membershipId])
+  const audit = await db.query<State['audit'][number]>(`SELECT action, actor_id, details FROM audit_log WHERE entity_type = 'membership' AND entity_id = $1 ORDER BY at, ctid`, [membershipId])
   return { allocated: period?.allocated ?? -1, addon: membership?.addon ?? -1, isHerd: membership?.is_herd ?? false, override: membership?.herd_override ?? null, adjustments, audit }
 }
 const UNTOUCHED: State = { allocated: 4, addon: 2, isHerd: true, override: null, adjustments: [], audit: [] }

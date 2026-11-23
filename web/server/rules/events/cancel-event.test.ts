@@ -171,7 +171,7 @@ const placeRows = async (eventBookingId: string) =>
 const orderRow = async (orderId: string) => (await db.query<{ payment_status: string; owed: string }>('SELECT payment_status, refund_owed_amount::text AS owed FROM orders WHERE id = $1', [orderId]))[0]
 // In amount order: two rows written back to back can share a millisecond on the tests' database.
 const creditRefunds = async () => db.query<{ amount: string; customer_id: string }>("SELECT amount::text AS amount, customer_id FROM store_credit_transactions WHERE reason = 'refund' ORDER BY amount, id")
-const auditRows = async (action: string) => db.query<{ entity_id: string; actor_id: string | null; details: Record<string, unknown> }>('SELECT entity_id, actor_id, details FROM audit_log WHERE action = $1 ORDER BY at, id', [action])
+const auditRows = async (action: string) => db.query<{ entity_id: string; actor_id: string | null; details: Record<string, unknown> }>('SELECT entity_id, actor_id, details FROM audit_log WHERE action = $1 ORDER BY at, ctid', [action])
 const refundsSent = (stripe: FakeStripe) => stripe.calls.filter((call) => call.method === 'refunds.create')
 const moneyBack = (stripe: FakeStripe) => stripe.refundsSent.reduce((total, sent) => total + sent.amount, 0)
 const refusal = () => fakeStripeErrors.invalid('charge_disputed', 'This charge is disputed.')

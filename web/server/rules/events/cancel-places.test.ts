@@ -175,7 +175,7 @@ const placeRows = async (eventBookingId: string) =>
   )
 const placesBooked = async () => Number((await db.query<{ places_booked: number }>('SELECT places_booked FROM events WHERE id = $1', [ID.event]))[0]?.places_booked)
 const creditRefunds = async () => db.query<{ amount: string; order_id: string | null; note: string }>("SELECT amount::text AS amount, order_id, note FROM store_credit_transactions WHERE reason = 'refund' ORDER BY created_at, id")
-const auditRows = async (action: string) => db.query<{ id: string; entity_id: string; details: Record<string, unknown> }>('SELECT id, entity_id, details FROM audit_log WHERE action = $1 ORDER BY at, id', [action])
+const auditRows = async (action: string) => db.query<{ id: string; entity_id: string; details: Record<string, unknown> }>('SELECT id, entity_id, details FROM audit_log WHERE action = $1 ORDER BY at, ctid', [action])
 const refundsSent = (stripe: FakeStripe) => stripe.calls.filter((call) => call.method === 'refunds.create')
 const moneyBack = (stripe: FakeStripe) => stripe.refundsSent.filter((sent) => sent.status !== 'failed' && sent.status !== 'canceled').reduce((total, sent) => total + sent.amount, 0)
 const refusal = () => fakeStripeErrors.invalid('charge_disputed', 'This charge is disputed.')

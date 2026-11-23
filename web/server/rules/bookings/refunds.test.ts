@@ -16,7 +16,8 @@ import { moneyOwedList } from '@/server/rules/refunds/money-owed-list'
 import { replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/sweep/run'
 import { workerSide } from '@/server/rules/testing/sweep/worker'
 import { asTheOldAddGuestPaidItByStoreCredit } from '@/server/rules/testing/sweep/old-states'
-import { bea, ID, paidSeat, sam, seed, whileFailing } from '@/server/rules/testing/replay/scenarios'
+import { insert } from '@/server/rules/testing/database'
+import { bea, ID, memberCredit, mo, paidSeat, PROMO, sam, seed, tieredPrivatePrices, whileFailing } from '@/server/rules/testing/replay/scenarios'
 import { STRIPE_DEADLINE_MS } from '@/server/stripe/deadline'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { BOOKING_KINDS_ON } from '@/server/rules/testing/sweep/booking-presses'
@@ -188,7 +189,7 @@ const bookingLines = async (bookingId: string) =>
     [bookingId]
   )
 const refundCalls = (stripe: FakeStripe) => stripe.calls.filter((call) => call.method === 'refunds.create')
-const auditRows = async (action: string) => db.query<{ id: string; details: Record<string, unknown>; request_id: string | null }>('SELECT id, details, request_id FROM audit_log WHERE action = $1 ORDER BY at', [action])
+const auditRows = async (action: string) => db.query<{ id: string; details: Record<string, unknown>; request_id: string | null }>('SELECT id, details, request_id FROM audit_log WHERE action = $1 ORDER BY at, ctid', [action])
 
 describe('Part refund (W21)', () => {
   it('to the card across three orders, newest first, each capped at its own card money; keys and metadata from the claim', async () => {
@@ -540,6 +541,127 @@ describe('Part refund (W21)', () => {
   })
 })
 
+describe("a booking line's refundable seat money leaves out its promo (W70a, the W70 audit's S1 e)", () => {
+  /**
+   * A £100 private hire with 10% off (£90) and a soap (£10.80) on one order, then a guest into the £150 tier (£50) on an
+   * order of their own. The booking's money is £140; the soap's £10.80 is the order's, never the booking's.
+   */
+  async function onAPromoBooking(payment: Record<string, unknown>, guestPayment: Record<string, unknown>, work: (context: Context & { orderId: string; guestOrderId: string | undefined }) => Promise<void>): Promise<void> {
+    await replay(
+      environment,
+      {
+        name: 'w70a promo refunds',
+        async seed(seedDb, stripe) {
+          await seed(seedDb, stripe)
+          await tieredPrivatePrices(seedDb)
+        },
+        async run(context) {
+          replayStripe.current = context.stripe
+          try {
+            const placed = (await context.call('createOrder', {
+              customerId: ID.customer,
+              booking: { ...paidSeat([sam, { name: 'Alex Guest', email: 'alex@example.com' }]), sessionId: ID.privateSession },
+              products: [{ productVariantId: ID.variant, quantity: 1 }],
+              promoCode: PROMO.percent,
+              payment,
+            })) as { bookingId: string; orderId: string }
+            const { bookingId, orderId } = placed
+            vi.setSystemTime(Date.now() + 1000)
+            await context.call('addBookingGuest', { bookingId, ...bea })
+            await context.call('addBookingGuest', { bookingId, ...bea, payment: guestPayment })
+            vi.setSystemTime(Date.now() + 1000)
+            expect(await booking(bookingId)).toMatchObject({ price_paid: '140.00' })
+            const guestOrderId = (await bookingLines(bookingId)).map((line) => line.order_id).find((id) => id !== orderId)
+            await work({ ...context, bookingId, orderId, guestOrderId })
+          } finally {
+            replayStripe.current = null
+          }
+        },
+      },
+      workerSide()
+    )
+  }
+  const sentParts = (stripe: FakeStripe) => stripe.refundsSent.map((sent) => [sent.payment_intent, sent.amount])
+  const intentOf = async (orderId: string | undefined) => (await db.query<{ pi: string | null }>('SELECT stripe_payment_intent_id AS pi FROM orders WHERE id = $1', [orderId ?? null]))[0]?.pi
+  const CASH = (amount: number) => ({ method: 'cash', confirmedCashAmount: amount })
+
+  it('both on the card: £140 goes back in two parts, the guest\'s £50 to their order and £90 to the first; the soap\'s £10.80 stays', async () => {
+    await onAPromoBooking({ method: 'card' }, { method: 'card' }, async ({ bookingId, orderId, guestOrderId, stripe }) => {
+      expect((await figures(bookingId)).body.data).toMatchObject({ left: 140, cardLeft: 140, parts: { card: 140, giftCard: 0, storeCredit: 0, cash: 0 } })
+      const answer = await refund('part', bookingId, { amount: 140, refundMethod: 'card', reason: 'Goodwill' })
+      expect(answer.body.data).toMatchObject({ cardRefundedAmount: 140, storeCreditRefundedAmount: 0, pricePaid: 0 })
+      expect(sentParts(stripe)).toEqual([[await intentOf(guestOrderId), 5000], [await intentOf(orderId), 9000]])
+    })
+  })
+
+  it('the guest in cash: the card can take back the £90 it paid for the booking, never the £100 of the list price (the other £10 is the soap\'s); then nothing more', async () => {
+    await onAPromoBooking({ method: 'card' }, CASH(50), async ({ bookingId, orderId, call, stripe }) => {
+      expect((await figures(bookingId)).body.data).toMatchObject({ left: 140, cardLeft: 90, parts: { card: 90, cash: 50 } })
+      const tooMuch = await refund('part', bookingId, { amount: 100, refundMethod: 'card', reason: 'Goodwill' })
+      expect(tooMuch.body.ok).toBe(false)
+      expect(refundCalls(stripe)).toEqual([])
+      const answer = await refund('part', bookingId, { amount: 90, refundMethod: 'card', reason: 'Goodwill' })
+      expect(answer.body.data).toMatchObject({ cardRefundedAmount: 90, storeCreditRefundedAmount: 0, pricePaid: 50 })
+      expect((await figures(bookingId)).body.data).toMatchObject({ left: 50, cardLeft: 0, parts: { card: 0, cash: 50 } })
+      // Cancel & Refund: the £50 of cash is store credit. No line has seat money left, so the soap's £10.80 stays on the card.
+      expect(await call('refundBooking', { bookingId, refundMethod: 'card' })).toMatchObject({ cardRefundedAmount: 0, storeCreditRefundedAmount: 50 })
+      expect(sentParts(stripe)).toEqual([[await intentOf(orderId), 9000]])
+    })
+  })
+
+  it('all in cash, the guest on the card: the cash that can be handed back is the £90 paid for the booking, not £100', async () => {
+    await onAPromoBooking(CASH(100.8), { method: 'card' }, async ({ bookingId }) => {
+      expect((await figures(bookingId)).body.data).toMatchObject({ left: 140, cardLeft: 50, cashLeft: 90, parts: { card: 50, cash: 90 } })
+      const tooMuch = await refund('part', bookingId, { amount: 100, refundMethod: 'cash', reason: 'Goodwill' })
+      expect(tooMuch.body.ok).toBe(false)
+      expect((await refund('part', bookingId, { amount: 90, refundMethod: 'cash', reason: 'Goodwill' })).body.ok).toBe(true)
+      expect((await figures(bookingId)).body.data).toMatchObject({ left: 50, cashLeft: 0 })
+    })
+  })
+
+  it('cash handed back for a promo guest is the £18 they paid, not their £20 seat, with cash on the booking no order records (a Settle\'s £20)', async () => {
+    await replay(
+      environment,
+      {
+        name: 'w70a promo cash',
+        seed,
+        async run(context) {
+          replayStripe.current = context.stripe
+          try {
+            // Mo's seat on a credit, Alex's £20 seat with 10% off, and a soap, all the money in cash (£18 + £10.80).
+            const { bookingId } = (await context.call('createOrder', {
+              customerId: ID.member,
+              booking: { ...paidSeat([mo, { name: 'Alex Guest', email: 'alex@example.com' }]), ...memberCredit },
+              products: [{ productVariantId: ID.variant, quantity: 1 }],
+              promoCode: PROMO.percent,
+              payment: CASH(28.8),
+            })) as { bookingId: string }
+            await db.query("UPDATE bookings SET status = 'payment_needed', payment_due_by = now() + interval '1 day' WHERE id = $1", [bookingId])
+            await context.call('settleLapsedBooking', { bookingId, payment: CASH(20) })
+            expect(await booking(bookingId)).toMatchObject({ price_paid: '38.00' })
+            // Q36: the Settle's £20 is on no order, so only the £18 can be handed back as cash (the rest as store credit).
+            expect((await figures(bookingId)).body.data).toMatchObject({ left: 38, cashLeft: 18, parts: { card: 0, cash: 38 } })
+            expect((await refund('part', bookingId, { amount: 20, refundMethod: 'cash', reason: 'Goodwill' })).body.ok).toBe(false)
+            expect((await refund('part', bookingId, { amount: 18, refundMethod: 'cash', reason: 'Goodwill' })).body.ok).toBe(true)
+          } finally {
+            replayStripe.current = null
+          }
+        },
+      },
+      workerSide()
+    )
+  })
+
+  it('two lines on one order count that order\'s card money once, the promo off each (W05g, two lines on one order)', async () => {
+    await onAPromoBooking({ method: 'card' }, CASH(50), async ({ bookingId, orderId }) => {
+      // Test data: only an old order can have two booking lines. A second £20 line, £2 of promo, for the same booking.
+      await insert(db, 'order_line_items', { order_id: orderId, item_type: 'booking', booking_id: bookingId, quantity: 1, unit_price: '20.00', line_total: '20.00', discount_amount: '2.00' })
+      // £90 and £18 of seat money, and only £100.80 of card money on the order.
+      expect((await figures(bookingId)).body.data).toMatchObject({ cardLeft: 100.8 })
+    })
+  })
+})
+
 describe('Refund the rest and It already arrived (W21)', () => {
   /** £20 owed: a card refund Stripe never got, settled by reconcile as owed. */
   async function withTwentyOwed(stripe: FakeStripe, bookingId: string) {
@@ -877,7 +999,7 @@ describe('W25 item 9: the manual close shows per-part findings, and watches a pa
         // The run's answer carries no findings; its audit row does, for the close.
         expect(run.items.find((item) => item.kind === 'claim')).not.toHaveProperty('record')
         const left = (await db.query<{ details: { parts?: Array<{ orderId: string; found: string }> } }>(
-          "SELECT details FROM audit_log WHERE entity_type = 'refund_claim' AND entity_id = $1 AND action = 'order.reconcile' ORDER BY at DESC LIMIT 1",
+          "SELECT details FROM audit_log WHERE entity_type = 'refund_claim' AND entity_id = $1 AND action = 'order.reconcile' ORDER BY at DESC, ctid DESC LIMIT 1",
           [claimId]
         ))[0]
         expect(left?.details.parts).toMatchObject([
@@ -939,7 +1061,7 @@ describe('W25 item 9: the manual close shows per-part findings, and watches a pa
   }
   const watchRows = (pendingId: string) =>
     db.query<{ action: string; details: Record<string, unknown> }>(
-      "SELECT action, details FROM audit_log WHERE entity_type = 'reader_payment' AND entity_id = $1 AND action IN ('reader_payment.payment_watched', 'reader_payment.charge_without_record') ORDER BY at, id",
+      "SELECT action, details FROM audit_log WHERE entity_type = 'reader_payment' AND entity_id = $1 AND action IN ('reader_payment.payment_watched', 'reader_payment.charge_without_record') ORDER BY at, ctid",
       [pendingId]
     )
   const flowItems = async () => (await runReconcile()).items.filter((item) => item.kind === 'flow' || item.kind === 'refund')
@@ -1150,7 +1272,7 @@ describe('W25 item 9: the manual close shows per-part findings, and watches a pa
       },
       workerSide()
     )
-  const closeRows = async () => (await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'order.close' AND details->>'kind' = 'payment_watch' ORDER BY at, id")).map((row) => row.details)
+  const closeRows = async () => (await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'order.close' AND details->>'kind' = 'payment_watch' ORDER BY at, ctid")).map((row) => row.details)
 
   it("W47a item 2 (W47 review S2): a payment Stripe reads as `processing` stays watched for as long as it takes. 31 days on, and 90, it is still read every run and still a line with nothing to do; when the bank then completes it, it is recorded and refunded automatically, once", async () => {
     await inAReplay('w47a watched payment, processing for months', async (context) => {
@@ -1289,7 +1411,7 @@ describe('W25 item 9: the manual close shows per-part findings, and watches a pa
   const expiredIds = async (pendingId: string) =>
     (
       await db.query<{ id: string }>(
-        "SELECT id::text AS id FROM audit_log WHERE entity_type = 'reader_payment' AND entity_id = $1 AND action = 'reader_payment.payment_watched' AND details->>'state' = 'expired' ORDER BY at, id",
+        "SELECT id::text AS id FROM audit_log WHERE entity_type = 'reader_payment' AND entity_id = $1 AND action = 'reader_payment.payment_watched' AND details->>'state' = 'expired' ORDER BY at, ctid",
         [pendingId]
       )
     ).map((row) => row.id)

@@ -147,7 +147,7 @@ const plan = (id: string = ID.plan) => one<{ price_monthly: string | null; price
   'SELECT price_monthly::text AS price_monthly, price_yearly::text AS price_yearly, stripe_price_id, stripe_price_id_yearly, stripe_product_id, active, name FROM membership_plans WHERE id = $1',
   [id]
 )
-const audited = (action: string) => db.query<{ action: string; actor_id: string | null; entity_id: string; details: Row }>('SELECT action, actor_id, entity_id, details FROM audit_log WHERE action = $1 ORDER BY at, id', [action])
+const audited = (action: string) => db.query<{ action: string; actor_id: string | null; entity_id: string; details: Row }>('SELECT action, actor_id, entity_id, details FROM audit_log WHERE action = $1 ORDER BY at, ctid', [action])
 /** A change's rows in the order they can only have been written (rows of one press share the replay's frozen time). */
 const STATE_ORDER = ['started', 'held', 'done', 'failed']
 const changeStates = async () => (await audited(PLAN_CHANGE_ACTION)).map((row) => String(row.details['state'])).sort((a, b) => STATE_ORDER.indexOf(a) - STATE_ORDER.indexOf(b))

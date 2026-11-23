@@ -119,7 +119,7 @@ async function figures(bookingId: string) {
 const rowOf = async (pendingId: string) =>
   (await db.query<{ status: string; snapshot: Record<string, unknown> }>('SELECT status, snapshot FROM pending_reader_payments WHERE id = $1', [pendingId]))[0]
 const flowAudit = async (pendingId: string) =>
-  (await db.query<{ action: string }>("SELECT action FROM audit_log WHERE entity_type = 'reader_payment' AND entity_id = $1 ORDER BY at, id", [pendingId])).map((row) => row.action)
+  (await db.query<{ action: string }>("SELECT action FROM audit_log WHERE entity_type = 'reader_payment' AND entity_id = $1 ORDER BY at, ctid", [pendingId])).map((row) => row.action)
 
 describe("a pending row with no mark of the Worker's is refused (W25: not_a_reader_flow, tell a manager)", () => {
   it('finalise and cancel refuse it and change nothing, tapped or not', async () => {
@@ -297,6 +297,9 @@ describe('cancel', () => {
       const answer = (await cancel(started.pendingId)).data
       expect(answer).toMatchObject({ cancelled: false, finalisedInstead: true, finaliseResult: { finalised: true }, message: 'The reader payment actually succeeded — the booking payment was completed instead of cancelled.' })
       expect(context.stripe.calls.map((call) => call.method)).toEqual(['paymentIntents.create', 'paymentIntents.retrieve'])
+      expect(await figures(started.bookingId)).toMatchObject({ orders: 1, credit: '5.00' })
+      // W70a (W05i finding 2): a change already finalised is never undone, whoever asks: nothing is given back.
+      expect(await undoFlowInTransaction(db, started.pendingId, { actor, requestId: 'r', why: 'late' })).toEqual({ undone: false, reason: 'already_finalised' })
       expect(await figures(started.bookingId)).toMatchObject({ orders: 1, credit: '5.00' })
     }, withStoreCredit)
   })

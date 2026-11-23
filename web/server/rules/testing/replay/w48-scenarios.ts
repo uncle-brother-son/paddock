@@ -587,9 +587,10 @@ function productScenarios(): Scenario[] {
     // A price field the item's kind doesn't have (a monthly price on a product): the function lets it through, the
     // route prices nothing and its update is given no column to set, which fails: "Failed to update item".
     g('price-a-field-the-item-does-not-have', each('updateCatalogItemPrice', { itemType: 'product', itemId: ID.product, monthlyPrice: 30 }), soapSynced),
-    // GB2, for a product: the old Stripe price archived, the new one refused, the row left on the archived price.
-    g('gb2-product-price-old-stripe-price-archived-then-the-new-one-fails', async ({ attempt, stripe }) => {
-      stripe.failNext('prices.create', { kind: 'error', error: refusedByStripe() })
+    // GB2, for a product: the old code archived the old Stripe price, then left the row on it when the new one was refused.
+    // W70a (L7): renamed from `...-old-stripe-price-archived-then-the-new-one-fails`, its Stripe fault taken out: since
+    // W55 (L2) a product's price makes no Stripe call, and the old Stripe price on the row is left as it is.
+    g('gb2-product-price-with-an-old-stripe-price', async ({ attempt }) => {
       await attempt('updateCatalogItemPrice', soapPrice)
     }, soapSynced),
     g('addons-read', async ({ call }) => {
@@ -687,8 +688,9 @@ function passAndGiftCardScenarios(): Scenario[] {
       await call('setGiftCardPresetActive', { presetId: ID.giftCardPreset, active: true })
       await attempt('setGiftCardPresetActive', { presetId: W48_ID.unknown, active: true })
     }, giftTypeSynced, presetPriced),
-    g('gift-card-preset-active-refused-by-stripe', async ({ attempt, stripe }) => {
-      stripe.failNext('prices.update', { kind: 'error', error: refusedByStripe() })
+    // W70a (L7): renamed from `gift-card-preset-active-refused-by-stripe`, its Stripe fault taken out: since W56 (L2) the
+    // switch makes no Stripe call. What it holds: a preset with an old Stripe price is switched alone.
+    g('gift-card-preset-active-with-an-old-stripe-price', async ({ attempt }) => {
       await attempt('setGiftCardPresetActive', { presetId: ID.giftCardPreset, active: false })
     }, giftTypeSynced, presetPriced),
     g('gift-card-preset-create-who-may', whoMay('createGiftCardPreset', { giftCardTypeId: ID.giftCardType, amount: 25 }, 'manage_pricing'), giftTypeSynced),
@@ -697,7 +699,9 @@ function passAndGiftCardScenarios(): Scenario[] {
       each('createGiftCardPreset', { giftCardTypeId: '', amount: 25 }, { giftCardTypeId: ID.giftCardType, amount: 0 }, { giftCardTypeId: ID.giftCardType, amount: -5 }, { giftCardTypeId: ID.giftCardType, amount: Number.NaN }, { giftCardTypeId: W48_ID.unknown, amount: 25 }),
       giftTypeSynced
     ),
-    g('gift-card-preset-create-refused-type-has-no-stripe-product', each('createGiftCardPreset', { giftCardTypeId: ID.giftCardType, amount: 25 })),
+    // W70a (L7): renamed, with the price below, from `...-refused-type-has-no-stripe-product`: since W56 (L2) neither
+    // needs the type to have a Stripe product, so both are done.
+    g('gift-card-preset-create-on-a-type-with-no-stripe-product', each('createGiftCardPreset', { giftCardTypeId: ID.giftCardType, amount: 25 })),
     g('gift-card-preset-create', async ({ call }) => {
       await call('createGiftCardPreset', { giftCardTypeId: ID.giftCardType, amount: 25 })
       await call('createGiftCardPreset', { giftCardTypeId: ID.giftCardType, amount: 99.99 })
@@ -718,7 +722,7 @@ function passAndGiftCardScenarios(): Scenario[] {
       giftTypeSynced,
       presetPriced
     ),
-    g('gift-card-preset-price-refused-type-has-no-stripe-product', each('updateGiftCardPresetPrice', { presetId: ID.giftCardPreset, amount: 75 })),
+    g('gift-card-preset-price-on-a-type-with-no-stripe-product', each('updateGiftCardPresetPrice', { presetId: ID.giftCardPreset, amount: 75 })),
     // The seed's gift card (£40, bought earlier) is untouched: only the preset and its Stripe price change.
     g('gift-card-preset-price-set', async ({ call }) => {
       await call('updateGiftCardPresetPrice', { presetId: ID.giftCardPreset, amount: 75 })

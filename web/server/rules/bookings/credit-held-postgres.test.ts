@@ -158,7 +158,7 @@ const bookingRow = (bookingId: string) =>
   )
 const seatOne = async (bookingId: string) => (await one<{ pay_by: string }>("SELECT pay_by FROM booking_guests WHERE booking_id = $1 AND guest_type = 'account_holder'", [bookingId]))?.pay_by
 const flowOf = (bookingId: string) => one<{ id: string; status: string; snapshot: Record<string, unknown> }>('SELECT id, status, snapshot FROM pending_reader_payments WHERE record_id = $1', [bookingId])
-const auditOf = async (entityId: string, action: string) => (await third.query<{ details: Record<string, unknown> }>('SELECT details FROM audit_log WHERE entity_id = $1 AND action = $2 ORDER BY at, id', [entityId, action])).map((row) => row.details)
+const auditOf = async (entityId: string, action: string) => (await third.query<{ details: Record<string, unknown> }>('SELECT details FROM audit_log WHERE entity_id = $1 AND action = $2 ORDER BY at, ctid', [entityId, action])).map((row) => row.details)
 
 /** Used is never above allocated, by both counts. */
 async function neverAbove(who: Member): Promise<void> {

@@ -119,9 +119,9 @@ async function figures() {
   }
 }
 const SEED = { places: 0, pass: 3, stock: 5, credit: '30.00', giftCard: '40.00', eventPlaces: 0 }
-const actions = async (orderId: string) => (await db.query<{ action: string }>('SELECT action FROM audit_log WHERE entity_id = $1 ORDER BY at, id', [orderId])).map((row) => row.action)
+const actions = async (orderId: string) => (await db.query<{ action: string }>('SELECT action FROM audit_log WHERE entity_id = $1 ORDER BY at, ctid', [orderId])).map((row) => row.action)
 const latestCompensation = async (orderId: string) =>
-  (await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'order.compensate' AND entity_id = $1 ORDER BY at DESC, id DESC LIMIT 1", [orderId]))[0]?.details
+  (await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'order.compensate' AND entity_id = $1 ORDER BY at DESC, ctid DESC LIMIT 1", [orderId]))[0]?.details
 const bookingOf = async () => (await db.query<{ id: string; status: string; session_id: string; party_size: number }>('SELECT id, status, session_id, party_size FROM bookings WHERE customer_id = $1', [ID.customer]))[0]
 
 /**
@@ -172,7 +172,7 @@ describe('held_order: changed_since (W12 review L2)', () => {
         closed: true,
         message: CLOSE_WORDS.held_order,
         givenBack: ['1 item back in stock', '£5.00 store credit back to the customer', '£5.00 back on the gift card it used', '1 event place given back'],
-        leftAsFound: ['the booking (now cancelled): its places, pass session and add-ons stay as the old screens left them'],
+        leftAsFound: ['the booking (now cancelled): its places, pass session and add-ons stay as they were left'],
       })
       // Everything back to the seed: the place and the pass session exactly once (by old Cancel), the rest by the close.
       expect(await figures()).toEqual(SEED)
@@ -220,7 +220,7 @@ describe('held_order: changed_since (W12 review L2)', () => {
 
       const closed = dataOf(await postClose({ kind: 'held_order', orderId, reason: WHY }))
       expect(closed).toMatchObject({ closed: true, givenBack: ['1 item back in stock', '1 event place given back'] })
-      expect(closed.leftAsFound).toEqual(['the booking (now confirmed): its places, pass session and add-ons stay as the old screens left them'])
+      expect(closed.leftAsFound).toEqual(['the booking (now confirmed): its places, pass session and add-ons stay as they were left'])
       // The booking keeps its session, its pass session (2 left) and its towel; the order is gone.
       expect(await figures()).toEqual({ ...SEED, pass: 2 })
       expect((await db.query<{ n: number }>('SELECT total_booked AS n FROM sessions WHERE id = $1', [ID.peakSession]))[0]?.n).toBe(peakBefore)
@@ -242,7 +242,7 @@ describe('held_order: changed_since (W12 review L2)', () => {
       await db.query('UPDATE events SET places_booked = places_booked - 1 WHERE id = $1', [ID.event])
       expect(await run(stripe)).toMatchObject({ items: [{ outcome: 'left', reason: 'changed_since', detail: 'the event booking is cancelled' }] })
       const closed = dataOf(await postClose({ kind: 'held_order', orderId, reason: WHY }))
-      expect(closed).toMatchObject({ closed: true, givenBack: ['1 item back in stock', '£5.00 store credit back to the customer'], leftAsFound: ['the event booking (now cancelled): its places stay as the old screens left them'] })
+      expect(closed).toMatchObject({ closed: true, givenBack: ['1 item back in stock', '£5.00 store credit back to the customer'], leftAsFound: ['the event booking (now cancelled): its places stay as they were left'] })
       expect(await figures()).toEqual(SEED)
       expect(await db.query<{ status: string }>('SELECT status FROM event_bookings')).toEqual([{ status: 'cancelled' }])
     })
@@ -321,7 +321,7 @@ describe('held_order: a compensation finished by hand (W13)', () => {
       expect(stripe.calls.length).toBe(callsBefore)
       expect(await figures()).toEqual(SEED)
       expect(await db.query('SELECT id FROM orders')).toEqual([])
-      const compensate = await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'order.compensate' AND entity_id = $1 ORDER BY at, id", [orderId])
+      const compensate = await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'order.compensate' AND entity_id = $1 ORDER BY at, ctid", [orderId])
       expect(compensate.map((row) => row.details)).toContainEqual(expect.objectContaining({ state: 'done', byHand: true }))
       // One transaction's rows share the replay's fixed clock, so they are compared as a set.
       const all = await actions(orderId)
@@ -425,7 +425,7 @@ describe('W14c (W14b N1): late_refund, a refund Stripe refused, recorded as refu
       expect(stripe.calls.length).toBe(calls)
       expect((await stuckList(db)).refunds).toEqual([])
       const rows = await db.query<{ actor_type: string; details: Record<string, unknown> }>(
-        "SELECT actor_type, details FROM audit_log WHERE entity_id = $1 AND action IN ('order.reconcile', 'order.close') AND (details ? 'refund' OR details->>'kind' = 'late_refund') ORDER BY at, id",
+        "SELECT actor_type, details FROM audit_log WHERE entity_id = $1 AND action IN ('order.reconcile', 'order.close') AND (details ? 'refund' OR details->>'kind' = 'late_refund') ORDER BY at, ctid",
         [orderId]
       )
       expect(rows.map((row) => row.details)).toContainEqual({ outcome: 'refund_confirmed', refund: { paymentIntentId, state: 'confirmed', byHand: { why: 'Refunded in the Stripe dashboard after the dispute closed.' } } })
@@ -576,7 +576,7 @@ describe('W13c review L4: put-back retries come last, and a definite refusal sto
       const ran = await run(stripe)
       expect(ran.items.map((item) => item.id)).toEqual([orderId, goneOrder])
       expect(ran.items[1]).toMatchObject({ outcome: 'left', reason: 'subscription_refused' })
-      const rows = await db.query<{ details: { state: string } }>("SELECT details FROM audit_log WHERE action = 'order.subscription_left' AND entity_id = $1 ORDER BY at, id", [goneOrder])
+      const rows = await db.query<{ details: { state: string } }>("SELECT details FROM audit_log WHERE action = 'order.subscription_left' AND entity_id = $1 ORDER BY at, ctid", [goneOrder])
       expect(rows.map((row) => row.details.state)).toEqual(['left', 'refused'])
       expect((await stuckList(db)).warnings).toEqual([expect.objectContaining({ id: goneOrder, warning: SUBSCRIPTION_REFUSED_WORDS(made.id), close: expect.objectContaining({ kind: 'subscription_left' }) })])
       // Not retried: no Stripe call on the next run.
@@ -641,6 +641,10 @@ describe('words (brief W14b item 3; W12 review L5, W13 to W13d)', () => {
     // W68a (W68 noticed 5): the sentence no longer names the old screens, and no line's reason does.
     expect(STUCK_WORDS['unexpected_state']).toBe("This isn't in a state the automatic check expected (something else may have changed it). Nothing was changed: don't take payment again, and tell a manager.")
     expect(Object.entries(STUCK_WORDS).filter(([, words]) => words.includes('old screens'))).toEqual([])
+    // W70a (W68a noticed 1): nor do a changed-elsewhere line's, whatever was found, or anything the close answers.
+    for (const state of ['taken', 'nothing_taken', 'open', 'unclear', 'other_mode'] as const) expect(changedElsewhereWords({ state, amount: 100, paymentIntentIds: ['pi_1'] }), state).not.toContain('old screens')
+    expect(changedElsewhereWords(null)).toBe("Changed another way while its payment was unconfirmed. The automatic check is looking in Stripe for what was taken. Don't take payment again.")
+    expect(Object.entries(CLOSE_WORDS).filter(([, words]) => words.includes('old screens'))).toEqual([])
     expect(STUCK_WORDS['changed_since']).toContain('press Close order on the Orders page')
     expect(STRIPE_REFUSED_WORDS).toContain('Tell a manager straight away')
     for (const state of ['taken', 'nothing_taken', 'other_mode'] as const) expect(changedElsewhereWords({ state, amount: 100, paymentIntentIds: [] })).toContain('then press Mark sorted')

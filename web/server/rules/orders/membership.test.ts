@@ -112,7 +112,7 @@ const memberships = async () =>
     [ID.customer]
   )
 const auditOf = async (orderId: string) =>
-  (await db.query<{ action: string }>('SELECT action FROM audit_log WHERE entity_id = $1 ORDER BY at, id', [orderId])).map((row) => row.action)
+  (await db.query<{ action: string }>('SELECT action FROM audit_log WHERE entity_id = $1 ORDER BY at, ctid', [orderId])).map((row) => row.action)
 
 /** The places, stock, store credit and gift card an order can hold. Back to these = given back. */
 async function held() {
@@ -440,7 +440,7 @@ describe('definite after the subscription exists (W11 review L3): compensate, th
       expect(refund?.idempotencyKey).toMatch(/:refund-subscription$/)
       expect(stripe.netPence).toBe(0)
       expect(await orders()).toEqual([])
-      const audit = await db.query<{ action: string }>("SELECT action FROM audit_log WHERE action IN ('order.create', 'order.compensate', 'order.undo') ORDER BY at, id")
+      const audit = await db.query<{ action: string }>("SELECT action FROM audit_log WHERE action IN ('order.create', 'order.compensate', 'order.undo') ORDER BY at, ctid")
       expect(audit.map((row) => row.action)).toEqual(['order.create', 'order.compensate', 'order.undo'])
       await invariant(stripe)
     })
@@ -1131,7 +1131,7 @@ function slowMark(base: Db, ms: number): Db {
 }
 
 const subscriptionLeftRows = async (orderId: string) =>
-  (await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'order.subscription_left' AND entity_id = $1 ORDER BY at", [orderId])).map((row) => row.details)
+  (await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'order.subscription_left' AND entity_id = $1 ORDER BY at, ctid", [orderId])).map((row) => row.details)
 
 /**
  * W13c (S1b): T2 records the subscription its press made as left, in its own transaction, then (with time to send)
@@ -2584,7 +2584,7 @@ describe('W32 item 3: a membership compensation puts the customer\'s Stripe bala
 // Brief W32 item 2 (W13 review L2): step C's compensation refunds are watched as a claim's are. Their order is undone
 // (or isn't a refunded order), so a failure can't be owed anywhere: it is a line for a person.
 describe("W32 item 2: a compensation's refund Stripe answers pending is watched", () => {
-  const watchRows = async () => (await db.query<{ id: string; details: Record<string, unknown> }>("SELECT id, details FROM audit_log WHERE action = 'refund.watch' ORDER BY at, id"))
+  const watchRows = async () => (await db.query<{ id: string; details: Record<string, unknown> }>("SELECT id, details FROM audit_log WHERE action = 'refund.watch' ORDER BY at, ctid"))
   const watchStates = async () => (await watchRows()).map((row) => String(row.details['state'])).sort()
   const refundItems = async (stripe: FakeStripe) => (await runReconcile(stripe)).items.filter((item) => item.kind === 'refund')
   /** A saved-card membership with soap, the soap's charge declined: the first invoice's £40 refund is answered pending. */
@@ -2768,8 +2768,8 @@ describe("W32 item 2: a compensation's refund Stripe answers pending is watched"
 describe("W67 (W35 row 29): a compensation's refund past its key's life is read for before any send", () => {
   const refundCreates = (stripe: FakeStripe) => stripe.calls.filter((call) => call.method === 'refunds.create')
   const attemptRows = async (orderId: string) =>
-    (await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'order.refund_attempt' AND entity_id = $1 ORDER BY at, id", [orderId])).map((row) => row.details)
-  const watched = async () => (await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'refund.watch' AND details->>'state' = 'watching' ORDER BY at, id")).map((row) => row.details)
+    (await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'order.refund_attempt' AND entity_id = $1 ORDER BY at, ctid", [orderId])).map((row) => row.details)
+  const watched = async () => (await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'refund.watch' AND details->>'state' = 'watching' ORDER BY at, ctid")).map((row) => row.details)
   /** A day and an hour: past the key's life, and Stripe may have forgotten it. */
   const aDayLater = (stripe: FakeStripe) => {
     later(25 * 60)
@@ -2814,7 +2814,7 @@ describe("W67 (W35 row 29): a compensation's refund past its key's life is read 
       expect(await attemptRows(orderId)).toEqual([])
       const [order] = await orders()
       expect(order?.payment_status).toBe('pending')
-      const [held] = (await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'order.compensate' AND entity_id = $1 ORDER BY at DESC, id DESC LIMIT 1", [orderId])).map((row) => row.details)
+      const [held] = (await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'order.compensate' AND entity_id = $1 ORDER BY at DESC, ctid DESC LIMIT 1", [orderId])).map((row) => row.details)
       expect(held).toMatchObject({ state: 'held', definite: true, left: [expect.stringContaining(`Stripe's refund ${refundId} failed`)] })
       // A later run reads again and still sends nothing.
       later(6)

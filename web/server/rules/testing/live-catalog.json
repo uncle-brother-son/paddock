@@ -2986,75 +2986,6 @@
    ]
   },
   {
-   "name": "parity_log",
-   "columns": [
-    {
-     "name": "id",
-     "type": "uuid",
-     "notNull": true,
-     "default": "gen_random_uuid()",
-     "generated": "",
-     "identity": ""
-    },
-    {
-     "name": "at",
-     "type": "timestamp with time zone",
-     "notNull": true,
-     "default": "now()",
-     "generated": "",
-     "identity": ""
-    },
-    {
-     "name": "action",
-     "type": "text",
-     "notNull": true,
-     "default": null,
-     "generated": "",
-     "identity": ""
-    },
-    {
-     "name": "request_id",
-     "type": "text",
-     "notNull": false,
-     "default": null,
-     "generated": "",
-     "identity": ""
-    },
-    {
-     "name": "old_result",
-     "type": "jsonb",
-     "notNull": false,
-     "default": null,
-     "generated": "",
-     "identity": ""
-    },
-    {
-     "name": "new_result",
-     "type": "jsonb",
-     "notNull": false,
-     "default": null,
-     "generated": "",
-     "identity": ""
-    },
-    {
-     "name": "matches",
-     "type": "boolean",
-     "notNull": true,
-     "default": null,
-     "generated": "",
-     "identity": ""
-    },
-    {
-     "name": "diff",
-     "type": "jsonb",
-     "notNull": false,
-     "default": null,
-     "generated": "",
-     "identity": ""
-    }
-   ]
-  },
-  {
    "name": "pending_reader_payments",
    "columns": [
     {
@@ -3764,14 +3695,6 @@
     {
      "name": "booking_type",
      "type": "text",
-     "notNull": false,
-     "default": null,
-     "generated": "",
-     "identity": ""
-    },
-    {
-     "name": "price",
-     "type": "numeric(10,2)",
      "notNull": false,
      "default": null,
      "generated": "",
@@ -5518,12 +5441,6 @@
    "definition": "CHECK ((shipping_status = ANY (ARRAY['pending'::text, 'shipped'::text, 'delivered'::text])))"
   },
   {
-   "table": "parity_log",
-   "name": "parity_log_pkey",
-   "type": "p",
-   "definition": "PRIMARY KEY (id)"
-  },
-  {
    "table": "pending_reader_payments",
    "name": "pending_reader_payments_expected_amount_check",
    "type": "c",
@@ -6010,6 +5927,10 @@
    "definition": "CREATE INDEX api_idempotency_created_at_idx ON public.api_idempotency USING btree (created_at)"
   },
   {
+   "name": "audit_log_action_entity_idx",
+   "definition": "CREATE INDEX audit_log_action_entity_idx ON public.audit_log USING btree (action, entity_type, entity_id)"
+  },
+  {
    "name": "audit_log_actor_idx",
    "definition": "CREATE INDEX audit_log_actor_idx ON public.audit_log USING btree (actor_id, at)"
   },
@@ -6100,10 +6021,6 @@
   {
    "name": "idx_customers_auth_user",
    "definition": "CREATE INDEX idx_customers_auth_user ON public.customers USING btree (auth_user_id)"
-  },
-  {
-   "name": "idx_customers_email",
-   "definition": "CREATE INDEX idx_customers_email ON public.customers USING btree (email)"
   },
   {
    "name": "idx_customers_stripe_id",
@@ -6234,10 +6151,6 @@
    "definition": "CREATE UNIQUE INDEX orders_stripe_payment_intent_id_key ON public.orders USING btree (stripe_payment_intent_id) WHERE (stripe_payment_intent_id IS NOT NULL)"
   },
   {
-   "name": "parity_log_action_idx",
-   "definition": "CREATE INDEX parity_log_action_idx ON public.parity_log USING btree (action, at DESC)"
-  },
-  {
    "name": "pending_reader_payments_record_idx",
    "definition": "CREATE INDEX pending_reader_payments_record_idx ON public.pending_reader_payments USING btree (record_id)"
   },
@@ -6263,10 +6176,6 @@
   }
  ],
  "views": [
-  {
-   "name": "membership_credit_period_balances",
-   "definition": " SELECT p.id,\n    p.membership_id,\n    p.period_start,\n    p.period_end,\n    p.credits_allocated,\n    p.is_unlimited,\n    count(b.id) AS credits_used,\n        CASE\n            WHEN p.is_unlimited THEN NULL::bigint\n            ELSE p.credits_allocated - count(b.id)\n        END AS credits_remaining\n   FROM membership_credit_periods p\n     LEFT JOIN bookings b ON b.credit_period_id = p.id AND b.redemption_source = 'membership_credit'::text AND (b.status = ANY (ARRAY['pending'::text, 'confirmed'::text, 'completed'::text, 'no-show'::text]))\n  GROUP BY p.id;"
-  },
   {
    "name": "membership_current_credits",
    "definition": " SELECT p.membership_id,\n    p.id AS period_id,\n    p.period_start,\n    p.period_end,\n    p.is_unlimited,\n    p.credits_allocated,\n    COALESCE(u.used, 0::bigint)::integer AS credits_used,\n        CASE\n            WHEN p.is_unlimited THEN NULL::bigint\n            ELSE GREATEST(p.credits_allocated - COALESCE(u.used, 0::bigint), 0::bigint)\n        END::integer AS credits_remaining\n   FROM membership_credit_periods p\n     LEFT JOIN LATERAL ( SELECT count(*) AS used\n           FROM bookings b\n          WHERE b.credit_period_id = p.id AND b.redemption_source = 'membership_credit'::text AND b.status <> 'cancelled'::text) u ON true\n  WHERE (now() AT TIME ZONE 'Europe/London'::text)::date >= p.period_start AND (now() AT TIME ZONE 'Europe/London'::text)::date <= p.period_end;"
@@ -6322,12 +6231,7 @@
   {
    "name": "generate_upcoming_sessions",
    "identity": "horizon_days integer",
-   "definition": "CREATE OR REPLACE FUNCTION public.generate_upcoming_sessions(horizon_days integer DEFAULT 98)\n RETURNS integer\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\ndeclare v_edge date; v_target date; v_inserted int; v_skipped date[]; v_days date[]; v_open date[]; v_closed date[];\nbegin\n  -- 032 (W51-1): the band guard, shared, before anything is written. A band-window save holds these rows, so a\n  -- session made here is banded by the windows the save leaves, and a save that starts later waits for this run.\n  perform 1 from session_bands order by id for share;\n  v_target := (now() at time zone 'Europe/London')::date + horizon_days;\n  -- 032 (GB3): the job's own date, not the furthest session. Locked, so two runs at once take turns. With no row\n  -- (a database never set up) it starts from today, and writes the row below.\n  select made_up_to, closed_days_skipped into v_edge, v_skipped from sessions_made_up_to where id for update;\n  if not found then v_edge := (now() at time zone 'Europe/London')::date - 1; v_skipped := '{}'; end if;\n  -- 032 (closed dates): the days this run is for. Each day after the job's date up to the target, and each closed\n  -- day an earlier run left out that hasn't passed. Then one lock for each, in date order: the lock Block Day,\n  -- Unblock Day and a one-off session take for their date, so no date is closed or reopened while this run makes it.\n  -- Then which of them are closed, read after the locks (a new statement sees what a press that held one committed).\n  select coalesce(array_agg(q.day order by q.day), '{}') into v_days\n    from (select g.day_ts::date as day from generate_series((v_edge + 1)::timestamp, v_target::timestamp, interval '1 day') as g(day_ts)\n          union\n          select s.day from unnest(v_skipped) as s(day) where s.day >= (now() at time zone 'Europe/London')::date) q;\n  if v_days = '{}' then return 0; end if;\n  perform pg_advisory_xact_lock(hashtextextended('session_day:' || to_char(l.day, 'YYYY-MM-DD'), 0)) from unnest(v_days) as l(day);\n  select coalesce(array_agg(q.day order by q.day) filter (where c.closed_on is null), '{}'),\n         coalesce(array_agg(q.day order by q.day) filter (where c.closed_on is not null), '{}')\n    into v_open, v_closed\n    from unnest(v_days) as q(day) left join closed_dates c on c.closed_on = q.day;\n\n  insert into sessions (service_type_id, start_time, end_time, type, capacity, status)\n  select svc.id, (d.day + sl.start_time),\n         (d.day + sl.start_time) + (svc.duration || ' minutes')::interval,\n         svc.booking_type, svc.capacity, 'open'\n  from unnest(v_open) as g(day_ts)\n  cross join lateral (select g.day_ts::date as day) d\n  join service_type_schedule_slots sl on sl.day_of_week = extract(dow from d.day)::smallint\n  join service_types svc on svc.id = sl.service_type_id\n  where svc.active and svc.duration is not null and svc.duration > 0 and svc.booking_type is not null\n  on conflict (service_type_id, start_time) do nothing;\n\n  get diagnostics v_inserted = row_count;\n  -- 032 (GB3): made up to the target, whether or not any slot fell on those days (never moved back by a run with a\n  -- shorter horizon). The closed days this run left out are kept, so a later run makes one that has been reopened.\n  insert into sessions_made_up_to (id, made_up_to, closed_days_skipped) values (true, greatest(v_edge, v_target), v_closed)\n  on conflict (id) do update set made_up_to = excluded.made_up_to, closed_days_skipped = excluded.closed_days_skipped, updated_at = now();\n  return v_inserted;\nend $function$\n"
-  },
-  {
-   "name": "lapse_sweep_expired_bookings",
-   "identity": "",
-   "definition": "CREATE OR REPLACE FUNCTION public.lapse_sweep_expired_bookings()\n RETURNS integer\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\nDECLARE n integer := 0; r record;\nBEGIN\n  FOR r IN\n    SELECT b.id, b.session_id, b.party_size\n    FROM bookings b\n    WHERE b.status = 'payment_needed' AND b.payment_due_by <= now() AND COALESCE(b.price_paid, 0) = 0\n    FOR UPDATE OF b\n  LOOP\n    UPDATE bookings SET status = 'cancelled', cancelled_at = now(), cancel_reason = 'membership_lapsed', updated_at = now()\n    WHERE id = r.id;\n    UPDATE sessions SET total_booked = GREATEST(total_booked - r.party_size, 0), updated_at = now()\n    WHERE id = r.session_id;\n    n := n + 1;\n  END LOOP;\n  RETURN n;\nEND $function$\n"
+   "definition": "CREATE OR REPLACE FUNCTION public.generate_upcoming_sessions(horizon_days integer DEFAULT 98)\n RETURNS integer\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\ndeclare v_edge date; v_target date; v_inserted int; v_skipped date[]; v_days date[]; v_open date[]; v_closed date[];\nbegin\n  -- 032 (W51-1): the band guard, shared, before anything is written. A band-window save holds these rows, so a\n  -- session made here is banded by the windows the save leaves, and a save that starts later waits for this run.\n  perform 1 from session_bands order by id for share;\n  v_target := (now() at time zone 'Europe/London')::date + horizon_days;\n  -- 032 (GB3): the job's own date, not the furthest session. Locked, so two runs at once take turns. With no row\n  -- (a database never set up) it starts from today, and writes the row below.\n  select made_up_to, closed_days_skipped into v_edge, v_skipped from sessions_made_up_to where id for update;\n  if not found then v_edge := (now() at time zone 'Europe/London')::date - 1; v_skipped := '{}'; end if;\n  -- 032 (closed dates): the days this run is for. Each day after the job's date up to the target, and each closed\n  -- day an earlier run left out that hasn't passed. Then one lock for each, in date order: the lock Block Day,\n  -- Unblock Day and a one-off session take for their date, so no date is closed or reopened while this run makes it.\n  -- Then which of them are closed, read after the locks (a new statement sees what a press that held one committed).\n  select coalesce(array_agg(q.day order by q.day), '{}') into v_days\n    from (select g.day_ts::date as day from generate_series((v_edge + 1)::timestamp, v_target::timestamp, interval '1 day') as g(day_ts)\n          union\n          select s.day from unnest(v_skipped) as s(day) where s.day >= (now() at time zone 'Europe/London')::date) q;\n  if v_days = '{}' then return 0; end if;\n  perform pg_advisory_xact_lock(hashtextextended('session_day:' || to_char(l.day, 'YYYY-MM-DD'), 0)) from unnest(v_days) as l(day);\n  select coalesce(array_agg(q.day order by q.day) filter (where c.closed_on is null), '{}'),\n         coalesce(array_agg(q.day order by q.day) filter (where c.closed_on is not null), '{}')\n    into v_open, v_closed\n    from unnest(v_days) as q(day) left join closed_dates c on c.closed_on = q.day;\n\n  insert into sessions (service_type_id, start_time, end_time, type, capacity, status)\n  -- 034 (H11): a session's time is London's wall-clock digits stored as UTC, named here, so the row is the same\n  -- whatever zone the connection running the job is in.\n  select svc.id, ((d.day + sl.start_time) at time zone 'UTC'),\n         ((d.day + sl.start_time) at time zone 'UTC') + (svc.duration || ' minutes')::interval,\n         svc.booking_type, svc.capacity, 'open'\n  from unnest(v_open) as g(day_ts)\n  cross join lateral (select g.day_ts::date as day) d\n  join service_type_schedule_slots sl on sl.day_of_week = extract(dow from d.day)::smallint\n  join service_types svc on svc.id = sl.service_type_id\n  where svc.active and svc.duration is not null and svc.duration > 0 and svc.booking_type is not null\n  on conflict (service_type_id, start_time) do nothing;\n\n  get diagnostics v_inserted = row_count;\n  -- 032 (GB3): made up to the target, whether or not any slot fell on those days (never moved back by a run with a\n  -- shorter horizon). The closed days this run left out are kept, so a later run makes one that has been reopened.\n  insert into sessions_made_up_to (id, made_up_to, closed_days_skipped) values (true, greatest(v_edge, v_target), v_closed)\n  on conflict (id) do update set made_up_to = excluded.made_up_to, closed_days_skipped = excluded.closed_days_skipped, updated_at = now();\n  return v_inserted;\nend $function$\n"
   },
   {
    "name": "membership_mark_cancelled_by_stripe",
@@ -6343,11 +6247,6 @@
    "name": "membership_mark_payment_failed",
    "identity": "p_stripe_subscription_id text",
    "definition": "CREATE OR REPLACE FUNCTION public.membership_mark_payment_failed(p_stripe_subscription_id text)\n RETURNS jsonb\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\nDECLARE m customer_memberships%ROWTYPE; covered date; flagged integer;\nBEGIN\n  SELECT * INTO m FROM customer_memberships WHERE stripe_subscription_id = p_stripe_subscription_id FOR UPDATE;\n  IF NOT FOUND THEN RETURN jsonb_build_object('found', false); END IF;\n  IF m.subscription_status = 'cancelled' THEN\n    RETURN jsonb_build_object('found', true, 'action', 'ignored_cancelled');\n  END IF;\n  -- 031: the membership's last day has passed (London's date). It has ended here, whatever Stripe's subscription\n  -- still does, so a payment that fails after that day does not mark it past due and flags no booking. Nothing is\n  -- written for it; the Worker lists a subscription still live in Stripe for a person (W47r-e).\n  IF m.cancel_effective_date < (now() AT TIME ZONE 'Europe/London')::date THEN\n    RETURN jsonb_build_object('found', true, 'action', 'ignored_cancelled', 'last_day', m.cancel_effective_date);\n  END IF; -- 031\n  UPDATE customer_memberships SET subscription_status = 'past_due', updated_at = now() WHERE id = m.id;\n  SELECT COALESCE(max(period_end), (now() AT TIME ZONE 'Europe/London')::date - 1) INTO covered\n  FROM membership_credit_periods WHERE membership_id = m.id;\n  -- 030: a payment due today or earlier has not been made, so the period it was for is not covered, whatever credit\n  -- period has already been allocated for it. Covered through the day before that payment was due.\n  IF m.next_renewal_date <= (now() AT TIME ZONE 'Europe/London')::date THEN\n    covered := m.next_renewal_date - 1;\n  END IF;\n  flagged := public.flag_uncovered_credit_bookings(m.id, covered);\n  RETURN jsonb_build_object('found', true, 'action', 'past_due', 'covered_through', covered, 'bookings_flagged', flagged);\nEND $function$\n"
-  },
-  {
-   "name": "membership_period_for",
-   "identity": "p_anchor date, p_day date",
-   "definition": "CREATE OR REPLACE FUNCTION public.membership_period_for(p_anchor date, p_day date)\n RETURNS TABLE(period_start date, period_end date)\n LANGUAGE plpgsql\n IMMUTABLE\nAS $function$\nDECLARE\n  n INTEGER;\nBEGIN\n  IF p_day < p_anchor THEN\n    RETURN;\n  END IF;\n  n := (EXTRACT(YEAR FROM p_day)::INTEGER - EXTRACT(YEAR FROM p_anchor)::INTEGER) * 12\n     + (EXTRACT(MONTH FROM p_day)::INTEGER - EXTRACT(MONTH FROM p_anchor)::INTEGER);\n  WHILE (p_anchor + make_interval(months => n))::DATE > p_day LOOP\n    n := n - 1;\n  END LOOP;\n  WHILE (p_anchor + make_interval(months => n + 1))::DATE <= p_day LOOP\n    n := n + 1;\n  END LOOP;\n  period_start := (p_anchor + make_interval(months => n))::DATE;\n  period_end   := (p_anchor + make_interval(months => n + 1))::DATE - 1;\n  RETURN NEXT;\nEND;\n$function$\n"
   },
   {
    "name": "membership_sync_cancel_at_period_end",
@@ -6368,11 +6267,6 @@
    "name": "purge_api_idempotency",
    "identity": "",
    "definition": "CREATE OR REPLACE FUNCTION public.purge_api_idempotency()\n RETURNS integer\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\nDECLARE n integer;\nBEGIN\n  DELETE FROM api_idempotency WHERE created_at < now() - interval '7 days';\n  GET DIAGNOSTICS n = ROW_COUNT;\n  RETURN n;\nEND $function$\n"
-  },
-  {
-   "name": "purge_parity_log",
-   "identity": "",
-   "definition": "CREATE OR REPLACE FUNCTION public.purge_parity_log()\n RETURNS integer\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\nDECLARE n integer;\nBEGIN\n  DELETE FROM parity_log WHERE at < now() - interval '30 days';\n  GET DIAGNOSTICS n = ROW_COUNT;\n  RETURN n;\nEND $function$\n"
   },
   {
    "name": "quote_booking",

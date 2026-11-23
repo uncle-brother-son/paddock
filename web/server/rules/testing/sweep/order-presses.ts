@@ -6,7 +6,7 @@ import { POST as quoteRoute } from '@/app/api/v1/staff/quotes/basket/route'
 import type { Db } from '@/server/db'
 import type { FakeStripe } from '@/server/stripe/fake'
 import { replayStripe, stripeCallsTakeASecond } from '../replay/stripe-binding'
-import { pressSwitch } from './booking-presses'
+import { holdSwitch, pressSwitch } from './booking-presses'
 import { REPLAY_USER, type ReplaySide } from './run'
 
 /**
@@ -93,13 +93,11 @@ export interface OrderAnswer {
  * saved-card route takes a save. With it off both refuse (customers/saved-card.test.ts, the kind's own tests).
  */
 export async function withCardMoves<T>(work: () => Promise<T>): Promise<T> {
-  const before = process.env.ORDER_SWITCH
-  process.env.ORDER_SWITCH = 'card_moves'
+  const putBack = holdSwitch('card_moves')
   try {
     return await work()
   } finally {
-    if (before === undefined) delete process.env.ORDER_SWITCH
-    else process.env.ORDER_SWITCH = before
+    putBack()
   }
 }
 
@@ -112,13 +110,12 @@ export async function postOrder(
 ): Promise<OrderAnswer> {
   // W14: the switch for this one call, put back after it, so the next call in the same test sees its own. W64a item
   // 8: the all-Worker side's live switch while it presses.
-  const before = process.env.ORDER_SWITCH
-  process.env.ORDER_SWITCH = pressSwitch.live ?? orderSwitch
+  // W70a (W68a noticed 3): put back once the last open press ends (holdSwitch).
+  const putBack = holdSwitch(pressSwitch.live ?? orderSwitch)
   try {
     return await sendOrder(input, key, email)
   } finally {
-    if (before === undefined) delete process.env.ORDER_SWITCH
-    else process.env.ORDER_SWITCH = before
+    putBack()
   }
 }
 

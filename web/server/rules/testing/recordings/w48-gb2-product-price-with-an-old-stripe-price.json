@@ -1,5 +1,5 @@
 {
-  "scenario": "w48-gb2-product-price-old-stripe-price-archived-then-the-new-one-fails",
+  "scenario": "w48-gb2-product-price-with-an-old-stripe-price",
   "results": [
     {
       "success": true,

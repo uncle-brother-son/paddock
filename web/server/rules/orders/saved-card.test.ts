@@ -617,7 +617,7 @@ describe('T2 (finalise-order.ts)', () => {
     if (charged.outcome !== 'answered') throw new Error('not answered')
     vi.setSystemTime(Date.now() + 1_000)
     expect(await finaliseOrder(db, order.id, charged.paymentIntent, asReconcile)).toEqual({ finalised: false, reason: 'order_gone' })
-    const kept = await db.query<{ action: string; details: Record<string, unknown> }>(`SELECT action, details FROM audit_log WHERE entity_id = $1 ORDER BY at`, [order.id])
+    const kept = await db.query<{ action: string; details: Record<string, unknown> }>(`SELECT action, details FROM audit_log WHERE entity_id = $1 ORDER BY at, ctid`, [order.id])
     expect(kept.map((row) => row.action)).toEqual(['order.create', 'order.undo', 'order.charge_without_order'])
     expect(kept[2]?.details).toEqual({ paymentIntentId: charged.paymentIntent.id, amount: 6900, status: 'succeeded' })
   })

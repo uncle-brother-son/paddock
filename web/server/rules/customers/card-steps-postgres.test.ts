@@ -103,7 +103,7 @@ async function blockedBy(holder: number): Promise<number> {
 const savedCard = async (customerId: string) => (await third.query<{ card: string | null }>('SELECT saved_payment_method_id AS card FROM customers WHERE id = $1', [customerId]))[0]?.card ?? null
 const membershipOf = async (customerId: string) => (await third.query<{ id: string; subscription: string | null }>('SELECT id::text AS id, stripe_subscription_id AS subscription FROM customer_memberships WHERE customer_id = $1', [customerId]))[0] ?? null
 const stepRows = async (membershipId: string) =>
-  (await third.query<{ details: { state: string; want: { paymentMethod?: string } } }>('SELECT details FROM audit_log WHERE action = $1 AND entity_id = $2 ORDER BY at, id', [STEP_LEFT_ACTION, membershipId])).map((row) => `${row.details.state} ${row.details.want.paymentMethod ?? ''}`)
+  (await third.query<{ details: { state: string; want: { paymentMethod?: string } } }>('SELECT details FROM audit_log WHERE action = $1 AND entity_id = $2 ORDER BY at, ctid', [STEP_LEFT_ACTION, membershipId])).map((row) => `${row.details.state} ${row.details.want.paymentMethod ?? ''}`)
 const cardSends = (stripe: FakeStripe) => stripe.calls.filter((call) => call.method === 'subscriptions.update').map((call) => (call.params as { default_payment_method?: string }).default_payment_method)
 const subscriptionCard = (stripe: FakeStripe, subscription: string) => stripe.subscriptionSettings(subscription)?.defaultPaymentMethod ?? null
 

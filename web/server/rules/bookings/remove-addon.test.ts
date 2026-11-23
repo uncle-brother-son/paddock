@@ -150,7 +150,7 @@ const booking = async (bookingId: string) =>
 const orderStatus = async (orderId: string | null | undefined) => (await db.query<{ payment_status: string }>('SELECT payment_status FROM orders WHERE id = $1', [orderId ?? null]))[0]?.payment_status
 const creditRefunds = async () => db.query<{ amount: string; note: string; order_id: string | null }>("SELECT amount::text AS amount, note, order_id FROM store_credit_transactions WHERE reason = 'refund' ORDER BY created_at")
 const refundCalls = (stripe: FakeStripe) => stripe.calls.filter((call) => call.method === 'refunds.create')
-const auditRows = async (action: string) => db.query<{ id: string; details: Record<string, unknown> }>('SELECT id, details FROM audit_log WHERE action = $1 ORDER BY at', [action])
+const auditRows = async (action: string) => db.query<{ id: string; details: Record<string, unknown> }>('SELECT id, details FROM audit_log WHERE action = $1 ORDER BY at, ctid', [action])
 const credits = async () => (await db.query<{ n: number }>('SELECT addon_credits_remaining AS n FROM customer_memberships WHERE id = $1', [ID.membership]))[0]?.n
 
 describe('Remove add-on: the quote (W22)', () => {

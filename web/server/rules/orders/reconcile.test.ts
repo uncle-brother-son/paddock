@@ -68,7 +68,7 @@ async function held() {
 const NOTHING_HELD = { places: 0, stock: 5, credit: '30.00', giftCard: '40.00' }
 const orders = async () => db.query<{ id: string; payment_status: string; stripe_payment_intent_id: string | null }>('SELECT id, payment_status, stripe_payment_intent_id FROM orders ORDER BY created_at')
 const reconcileRows = async (entityId: string) =>
-  (await db.query<{ details: Record<string, unknown>; actor_type: string }>("SELECT details, actor_type FROM audit_log WHERE action = 'order.reconcile' AND entity_id = $1 ORDER BY at, id", [entityId])).map((row) => ({
+  (await db.query<{ details: Record<string, unknown>; actor_type: string }>("SELECT details, actor_type FROM audit_log WHERE action = 'order.reconcile' AND entity_id = $1 ORDER BY at, ctid", [entityId])).map((row) => ({
     actor: row.actor_type,
     ...row.details,
   }))
@@ -492,7 +492,7 @@ describe('a payment that succeeded on an order already undone (charged_without_o
   })
 
   /** W32a: the refund watch's rows, as tests read them. */
-  const watchRows = async () => (await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'refund.watch' ORDER BY at, id")).map((row) => row.details)
+  const watchRows = async () => (await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'refund.watch' ORDER BY at, ctid")).map((row) => row.details)
   const day = 24 * 60
 
   it('Stripe answers pending (W32a, W32 review S3): the refund is handed to the refund watch with the row that records it, and this path never reads it again; while it is on its way it is on no list and nothing is left for a person', async () => {
@@ -629,7 +629,7 @@ describe('a payment that succeeded on an order already undone (charged_without_o
   })
 
   // W67 item 4 (W35 audit row 30; W32a "Noticed" 1): `charge_already_refunded` is read, not taken on trust.
-  const watchesOf = async (refundId: string) => (await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'refund.watch' AND entity_id = $1 ORDER BY at, id", [refundId])).map((row) => row.details)
+  const watchesOf = async (refundId: string) => (await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'refund.watch' AND entity_id = $1 ORDER BY at, ctid", [refundId])).map((row) => row.details)
 
   it("W67 (row 30): its own refund made, its answer lost, then Stripe forgets the key: the send is refused as already refunded; the payment's refunds are read, its own found by its key and watched", async () => {
     await onASeed(async ({ stripe }) => {
@@ -757,7 +757,7 @@ describe('a payment that succeeded on an order already undone (charged_without_o
       const staff = { type: 'staff' as const, id: ID.staff }
       expect(await run(stripe, { ...MANUAL_LIMITS, actor: staff })).toMatchObject({ refunds: 1, undone: 1 })
       const rows = await db.query<{ entity_id: string; actor_type: string; actor_id: string | null; details: { outcome: string; runBy?: unknown } }>(
-        "SELECT entity_id, actor_type, actor_id, details FROM audit_log WHERE action = 'order.reconcile' ORDER BY at, id"
+        "SELECT entity_id, actor_type, actor_id, details FROM audit_log WHERE action = 'order.reconcile' ORDER BY at, ctid"
       )
       // Under the test clock both refund rows can carry the same millisecond: compared in outcome order.
       const refundRows = rows.filter((row) => row.entity_id === orderId).sort((a, b) => a.details.outcome.localeCompare(b.details.outcome))
@@ -1105,7 +1105,7 @@ describe('W12a S1: a Worker order the old screens moved out of pending (W12 revi
     return { orderId, paymentIntentId: [...stripe.chargedByIntent.keys()][0] }
   }
   const figures = async () => ({ ...(await held()), orders: await orders() })
-  const SAID = 'Changed on the old screens while its payment was unconfirmed'
+  const SAID = 'Changed another way while its payment was unconfirmed'
 
   for (const taken of [true, false]) {
     it(`P1, ${taken ? 'Stripe took £32' : 'Stripe took nothing'}: reconcile reads Stripe, records what it finds once, never acts; the stuck list says it in plain words`, async () => {
@@ -1133,8 +1133,8 @@ describe('W12a S1: a Worker order the old screens moved out of pending (W12 revi
             finding,
             // W14b: the words say what to do, and a final finding carries the close (Mark sorted).
             words: taken
-              ? `${SAID}: Stripe shows £32.00 taken. Check that against what the old screens gave back, put any difference right by hand, then press Mark sorted.`
-              : `${SAID}: Stripe shows nothing taken. Check what the old screens gave back (it was never paid for), put it right by hand, then press Mark sorted.`,
+              ? `${SAID}: Stripe shows £32.00 taken. Check that against what was given back when it was changed, put any difference right by hand, then press Mark sorted.`
+              : `${SAID}: Stripe shows nothing taken. Check what was given back when it was changed (it was never paid for), put it right by hand, then press Mark sorted.`,
             close: { kind: 'changed_elsewhere', orderId },
           }),
         ])

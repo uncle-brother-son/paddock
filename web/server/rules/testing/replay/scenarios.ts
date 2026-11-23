@@ -2693,10 +2693,11 @@ export const scenarios: Scenario[] = [
       press
     )
   }),
-  // W65a (Wayne, 22 Nov), a finding for the lead: two Add Guest dialogs, the second pressed after the first finished
-  // (no payment open). Each press has its own key and the Worker has no rule against the same guest twice, so this is
-  // two decisions: two Beas, two £15 charges, £5 of store credit each time.
-  booked('p2-two-dialogs-one-after-the-other-add-the-same-guest-twice-two-charges', publicOnCard, async ({ bookingId, call, db }) => {
+  // Q59 (Wayne, 22 Nov): two Add Guest dialogs pressed one after the other with the same guest name add two guests with
+  // two charges: allowed, with no warning. The second is pressed after the first finished (no payment open); each press
+  // has its own key, so this is two decisions: two Beas, two £15 charges, £5 of store credit each time. (The overlap, the
+  // second press while the first payment is open, is refused: the p2 scenarios above.)
+  booked('p2-q59-two-dialogs-one-after-the-other-add-the-same-guest-twice-two-charges', publicOnCard, async ({ bookingId, call, db }) => {
     await db.query(`UPDATE customers SET store_credit_balance = 10 WHERE id = $1`, [ID.customer])
     const press = () => call('addBookingGuest', { bookingId, ...bea, payment: { method: 'card', storeCredit: { amount: 5 } } })
     await press()
@@ -2791,6 +2792,18 @@ export const scenarios: Scenario[] = [
     await settle(call, stripe, bookingId, w05lPay.card)
     await call('refundBooking', { bookingId, refundMethod: 'card' })
   }),
+  // W70a (the W70 audit's S1 c): Settle adds to what was already paid, so the W05 invariants see it. A £20 paid guest on
+  // the lapsed booking, £20 in cash for seat 1 (price_paid £40), then Cancel & Refund gives the £40 back.
+  {
+    name: 'settle-adds-to-what-a-guest-paid-then-cancel',
+    seed,
+    async run({ call, db }) {
+      const { bookingId } = (await call('createOrder', { customerId: ID.member, booking: { ...paidSeat([mo, alex]), ...memberCredit }, payment: { method: 'card' } })) as { bookingId: string }
+      await db.query(`UPDATE bookings SET status = 'payment_needed', payment_due_by = now() + interval '1 day' WHERE id = $1`, [bookingId])
+      await call('settleLapsedBooking', { bookingId, payment: cash(20) })
+      await call('refundBooking', { bookingId, refundMethod: 'card' })
+    },
+  },
   lapsed('w05l-settle-gift-card-row-fails', async ({ call, db, stripe }, bookingId) => {
     await whileFailing(db, giftCardRowFails, () => settle(call, stripe, bookingId, w05lPay.card))
   }),

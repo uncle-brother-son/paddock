@@ -137,7 +137,7 @@ const statusOf = async (bookingId: string) => (await first.query<{ status: strin
 const waiverOf = async (guestId: string) => (await first.query<{ waiver_accepted: boolean | null; waiver_method: string | null }>('SELECT waiver_accepted, waiver_method FROM booking_guests WHERE id = $1', [guestId]))[0]
 const preparedOf = async (lineId: string) => (await first.query<{ prepared: boolean; prepared_by: string | null }>('SELECT prepared, prepared_by FROM addon_order_lines WHERE id = $1', [lineId]))[0]
 const checkedIn = async (bookingId: string) => (await first.query('SELECT 1 FROM bookings WHERE id = $1 AND checked_in_at IS NOT NULL', [bookingId])).length === 1
-const flagRowsOf = async (entityId: string) => (await first.query<{ action: string; actor_id: string }>("SELECT action, actor_id FROM audit_log WHERE entity_id = $1 AND action LIKE 'booking.%' ORDER BY at", [entityId])).map((row) => [row.action, row.actor_id])
+const flagRowsOf = async (entityId: string) => (await first.query<{ action: string; actor_id: string }>("SELECT action, actor_id FROM audit_log WHERE entity_id = $1 AND action LIKE 'booking.%' ORDER BY at, ctid", [entityId])).map((row) => [row.action, row.actor_id])
 
 const sign = { accepted: true, waiverMethod: 'in_person' }
 const staffPress = (staffId: string) => ({ channel: 'staff' as const, ...pressBy(staffId, 'staff') })

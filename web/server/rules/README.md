@@ -2957,8 +2957,8 @@ create, on/off, the T2 hook); `catalog/plans-postgres.test.ts` (7 races on real 
   answers 404; with nobody pressing and not on a 5-minute mark: its first statement locks the three busy tables NOWAIT, so
   one in use fails it with nothing changed): an `audit_log (action, entity_type, entity_id)` index; the duplicate email index, `membership_credit_period_balances`, `service_types.price`,
   `parity_log` and its purge, `membership_period_for` and `lapse_sweep_expired_bookings` dropped; the nightly job names
-  `AT TIME ZONE 'UTC'` for its session times (H11). The saved schema is refreshed after it is applied: the tests pass
-  before and after. A Worker revert to before W68 needs the column back first (the file's ROLLBACK). **Never run 028's
+  `AT TIME ZONE 'UTC'` for its session times (H11). Applied live 23 Nov; the saved schema was refreshed
+  with it at W70a. A Worker revert to before W68 needs the column back first (the file's ROLLBACK). **Never run 028's
   Down after 034** (the hourly job would call the dropped function).
 - **`/api/test`** is deleted (H6), and held by `testing/removed-code.test.ts`.
 
@@ -2986,3 +2986,25 @@ create, on/off, the T2 hook); `catalog/plans-postgres.test.ts` (7 races on real 
 - **`@react-email/ui` carries its own `next` (16.4.1), left as it is (lead call L-H13).** `npm ls next` lists it beside our
   16.4.5. It is a development dependency only (the email preview tool): nothing of `react-email` is in OpenNext's output or
   the Worker's bundle. `npm audit` names it; it goes when `@react-email/ui` next moves.
+
+## The step H audit's fixes (W70a, step H)
+
+- **A Sanity delete acts on the signed body's `_id` alone (the W70 audit's L1), `app/api/sanity/webhook/route.ts`:** the
+  headers aren't signed, so one naming another document is refused (400), and so is a body naming none. A 400 is never sent
+  again, and shows in Sanity's attempts log.
+- **A plan deleted in Sanity that a price change kept on sale (L2), `catalog/sanity-sync.ts`:** its
+  `catalog.sanity_delete_refused` row is a line on the stuck list's `plans` (`what: 'sanity_delete'`, the plan's newest
+  refusal) with Mark sorted (close kind `sanity_delete`: a `sorted` row on the plan naming the refusal, and an `order.close`
+  row on `sanity_delete`). It goes by itself once the plan is off sale, or has been taken off sale since
+  (`plan.active_set`). Nothing here changes the plan.
+- **Only `app/api/v1/` and the two webhooks (L4):** `server/api-allowlist.test.ts`.
+- **The sweep's exceptions name what they let through (L5), `testing/replay/invariants.ts`:** each lists its exact breaches
+  (the PaymentIntent with them), each let through once; `testing/sweep/exceptions.test.ts`.
+- **Words (W68a noticed 1):** no sentence staff see names the old screens. A card-save's refusal before the tap comes back
+  as data in the staff app (noticed 2).
+- **The saved schema has 034 (S2).** A test's `audit_log ORDER BY at` breaks its ties by `ctid`, the order the rows were
+  written (`testing/audit-order.test.ts`), and a test that means one row finds it by what it says.
+- **ORDER_SWITCH in the tests (noticed 3), `testing/sweep/booking-presses.ts` `holdSwitch`:** presses that overlap end in
+  any order and leave the switch as the test set it (`testing/sweep/switch-held.test.ts`).
+- **Rule tests for rules only a recording, or nothing, held (S1):** a to i, and the decisions W64's table left out because
+  the old code and the Worker agreed; the table is in the staff app repo's `briefs/W70a-report.md`.

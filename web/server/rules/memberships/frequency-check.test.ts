@@ -67,7 +67,7 @@ async function member(stripe: FakeStripe, frequency: string | null, price: 'pric
 const endEveryone = () => database.pg.exec("RESET ROLE; UPDATE customer_memberships SET subscription_status = 'cancelled'; SET ROLE paddock_worker;")
 const reads = (stripe: FakeStripe) => stripe.calls.filter((call) => call.method === 'subscriptions.retrieve').map((call) => (call.params as { id?: string }).id)
 const sends = (stripe: FakeStripe) => stripe.calls.filter((call) => !call.method.endsWith('.retrieve') && !call.method.endsWith('.list'))
-const LISTED_ROWS_SQL = `SELECT details FROM audit_log WHERE action = '${FREQUENCY_MISMATCH_ACTION}' AND entity_id = $1 ORDER BY at, id`
+const LISTED_ROWS_SQL = `SELECT details FROM audit_log WHERE action = '${FREQUENCY_MISMATCH_ACTION}' AND entity_id = $1 ORDER BY at, ctid`
 const listedRows = async (membership: string) => (await db.query<{ details: Record<string, unknown> }>(LISTED_ROWS_SQL, [membership])).map((row) => row.details)
 /** The day has passed since every read so far. */
 const aDayLater = () => database.pg.exec(`RESET ROLE; UPDATE audit_log SET at = at - interval '25 hours' WHERE action = '${FREQUENCY_READ_ACTION}'; SET ROLE paddock_worker;`)
@@ -110,6 +110,25 @@ describe("L-new: a membership whose subscription renews at another interval than
     expect(await listedRows(wrong.membership)).toMatchObject([{ frequency: 'monthly', stripeInterval: 'year' }])
     expect(await listedRows(unsaid.membership)).toMatchObject([{ frequency: 'monthly', stripeInterval: 'year' }])
     expect(await listedRows(fine.membership)).toEqual([])
+  })
+
+  it("a subscription renewing every 3 months (interval_count 3) is another interval than monthly: listed, with words that say so; every 1 month is monthly (W70a, the W70 audit's S1 d)", async () => {
+    await endEveryone()
+    const stripe = stripeWithPrices()
+    stripe.addPrice('price_quarterly', 12000, 'month', 'gbp', true, 3)
+    stripe.addPrice('price_two_yearly', 80000, 'year', 'gbp', true, 2)
+    const quarterly = await member(stripe, 'monthly', 'price_quarterly' as 'price_monthly')
+    const twoYearly = await member(stripe, 'yearly', 'price_two_yearly' as 'price_yearly')
+    const monthly = await member(stripe, 'monthly', 'price_monthly')
+    const run = await runScheduled(stripe)
+    expect(new Set(reads(stripe))).toEqual(new Set([quarterly.subscription, twoYearly.subscription, monthly.subscription]))
+    expect(await listedRows(quarterly.membership)).toMatchObject([{ state: 'listed', frequency: 'monthly', stripeInterval: 'monthx3' }])
+    expect(await listedRows(twoYearly.membership)).toMatchObject([{ state: 'listed', frequency: 'yearly', stripeInterval: 'yearx2' }])
+    expect(await listedRows(monthly.membership)).toEqual([])
+    expect(run.items.map((item) => item.reason)).toEqual([MEMBERSHIP_FREQUENCY_MISMATCH, MEMBERSHIP_FREQUENCY_MISMATCH])
+    const words = (await stuckList(db)).steps.filter((step) => step.what === 'frequency_mismatch').map((step) => step.words)
+    expect(words.some((line) => line.includes('every 3 months'))).toBe(true)
+    expect(sends(stripe)).toEqual([])
   })
 
   it('a matching interval, a past-due member included: read, nothing listed', async () => {
@@ -233,7 +252,7 @@ describe('F3 (the W66 review): a membership Stripe gives no clear answer about',
     for (let i = 0; i < MAX_FREQUENCY_READS_PER_RUN; i += 1) stripe.failNext('subscriptions.retrieve', { kind: 'unreachable' })
     await runScheduled(stripe)
     expect(reads(stripe)).toEqual(stuck.map((one) => one.subscription))
-    const [noted] = await db.query<{ details: { read?: string[]; tried?: string[] } }>("SELECT details FROM audit_log WHERE action = $1 AND at > now() - interval '1 minute' ORDER BY at DESC, id DESC LIMIT 1", [FREQUENCY_READ_ACTION])
+    const [noted] = await db.query<{ details: { read?: string[]; tried?: string[] } }>("SELECT details FROM audit_log WHERE action = $1 AND at > now() - interval '1 minute' ORDER BY at DESC, ctid DESC LIMIT 1", [FREQUENCY_READ_ACTION])
     expect(noted?.details).toEqual({ read: [], tried: stuck.map(keyOf) })
     // The next run takes the two never looked at first, then the ones tried.
     expect((await dueNow()).slice(0, 2)).toEqual(others.map((one) => one.membership))

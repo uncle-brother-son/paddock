@@ -865,7 +865,7 @@ describe('sends to one subscription take turns (W40; W36 review S1)', () => {
 // subscription Stripe can't find or has ended.
 describe('W40c: a closed step is checked once more against Stripe', () => {
   const pastTheCheck = () => vi.setSystemTime(Date.now() + CHECK_AFTER_MINUTES * 60_000 + 60_000)
-  const checkRows = async () => (await db.query<{ details: Record<string, unknown> }>('SELECT details FROM audit_log WHERE action = $1 ORDER BY at', [STEP_CHECK_ACTION])).map((row) => row.details)
+  const checkRows = async () => (await db.query<{ details: Record<string, unknown> }>('SELECT details FROM audit_log WHERE action = $1 ORDER BY at, ctid', [STEP_CHECK_ACTION])).map((row) => row.details)
   const methods = (stripe: FakeStripe, from: number) => stripe.calls.slice(from).map((call) => call.method)
   /** A step its press sent and closed as done. */
   async function doneStep(stripe: FakeStripe, kind: StepKind, want: StepWant, subscriptionId = MO_SUBSCRIPTION): Promise<LeftStep> {
@@ -1294,8 +1294,8 @@ describe('W40c: a closed step is checked once more against Stripe', () => {
 describe('W46: steps and checks are taken by when they were last tried, and steps go first on a staff run', () => {
   const pastTheCheck = () => vi.setSystemTime(Date.now() + CHECK_AFTER_MINUTES * 60_000 + 60_000)
   const nextRun = () => vi.setSystemTime(Date.now() + 5 * 60_000)
-  const checkRows = async () => (await db.query<{ details: Record<string, unknown> }>('SELECT details FROM audit_log WHERE action = $1 ORDER BY at', [STEP_CHECK_ACTION])).map((row) => row.details)
-  const triedRows = async () => (await db.query<{ details: { steps: string[]; checks: string[] } }>('SELECT details FROM audit_log WHERE action = $1 ORDER BY at', [STEPS_TRIED_ACTION])).map((row) => row.details)
+  const checkRows = async () => (await db.query<{ details: Record<string, unknown> }>('SELECT details FROM audit_log WHERE action = $1 ORDER BY at, ctid', [STEP_CHECK_ACTION])).map((row) => row.details)
+  const triedRows = async () => (await db.query<{ details: { steps: string[]; checks: string[] } }>('SELECT details FROM audit_log WHERE action = $1 ORDER BY at, ctid', [STEPS_TRIED_ACTION])).map((row) => row.details)
   /** Stripe with no answer for some subscriptions' reads: a 500 every time, however often they are asked. */
   function unanswering(stripe: FakeStripe, silent: readonly string[]): StripeClient {
     const real = stripe.subscriptions as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>

@@ -303,14 +303,15 @@ export class FakeStripe implements StripeClient {
     this.customersById.set(id, { id, object: 'customer', metadata: {}, ...fields })
   }
 
-  addPrice(id: string, unitAmount: number, interval: 'month' | 'year' | null, currency = 'gbp', active = true): void {
+  /** `intervalCount` (W70a): how many of the interval it renews every (Stripe's `interval_count`), 1 unless said. */
+  addPrice(id: string, unitAmount: number, interval: 'month' | 'year' | null, currency = 'gbp', active = true, intervalCount = 1): void {
     this.pricesById.set(id, {
       id,
       object: 'price',
       active,
       unit_amount: unitAmount,
       currency,
-      recurring: interval ? { interval } : null,
+      recurring: interval ? { interval, ...(intervalCount === 1 ? {} : { interval_count: intervalCount }) } : null,
     })
   }
 
@@ -992,13 +993,13 @@ export class FakeStripe implements StripeClient {
     const items = {
       data: sub.items.data.map((item) => {
         const price = this.pricesById.get(item.price.id)
-        const recurring = price?.['recurring'] as { interval: string } | null | undefined
+        const recurring = price?.['recurring'] as { interval: string; interval_count?: number } | null | undefined
         return {
           // W48: the item's id, which a price switch names (`items: [{ id, price }]`). One item, so one id, from the subscription's.
           id: subscriptionItemId(sub.id),
           ...item,
           quantity: 1,
-          price: { id: item.price.id, unit_amount: price ? Number(price['unit_amount']) : null, recurring: recurring ? { interval: recurring.interval, interval_count: 1 } : null },
+          price: { id: item.price.id, unit_amount: price ? Number(price['unit_amount']) : null, recurring: recurring ? { interval: recurring.interval, interval_count: recurring.interval_count ?? 1 } : null },
         }
       }),
     }

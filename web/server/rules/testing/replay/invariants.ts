@@ -7,6 +7,23 @@ import type { Scenario, ScenarioContext } from '../sweep/run'
 // their own refunds. Run on every scenario of the all-Worker sweep (sweep/sweep.ts).
 
 /**
+ * One scenario's exception on one list: exactly what breaks the check, the PaymentIntent named wherever there is one, and
+ * why. W70a (the W70 audit's L5): until then an exception was a scenario's whole list, so a second breach of the same
+ * kind in that scenario (another payment on no order, say) would have been let through with the first.
+ */
+export interface InvariantException {
+  breaches: readonly string[]
+  why: string
+}
+/** The three lists a run is allowed to break the checks below by. A use is named in `needed` (exceptionKey). */
+export interface InvariantExceptions {
+  stripeRefundsNotOnRows: Readonly<Record<string, InvariantException>>
+  cancelledWithoutAllTheMoney: Readonly<Record<string, InvariantException>>
+  chargesNotOnOneOrder: Readonly<Record<string, InvariantException>>
+}
+export const exceptionKey = (kind: keyof InvariantExceptions, name: string, breach: string): string => `${kind}/${name}: ${breach}`
+
+/**
  * Allowed to break a check below, each for a reason nothing here can fix: the Worker's lists, which the all-Worker
  * sweep holds to exactly what it needs (W64a item 4, W64 review S3: sweep/sweep.ts). W65: the lists for the old
  * functions went with that code.
@@ -18,46 +35,47 @@ import type { Scenario, ScenarioContext } from '../sweep/run'
  * and back with no order left to hold it, so it is on no row.
  */
 const MEMBERSHIP_ROLLED_BACK = "W13 on the Worker: a membership order compensated (the subscription cancelled, the payment refunded under the order's keys) and then undone, so that money is on no row"
-const PRICE_PAID_CLEARED: Record<string, string> = {
-  'price-paid-cleared-nothing-back-then-cancel': 'price_paid is forced to £0 by the scenario, so a cancel has nothing to give',
-  'price-paid-cleared-half-back-then-cancel': 'the same',
-  'price-paid-cleared-addon-credit-is-not-seat-money': 'the same',
-  'credit-booking-price-paid-cleared-then-cancelled': 'the same',
+const CLEARED = 'price_paid is forced to £0 by the scenario, so a cancel has nothing to give'
+const PRICE_PAID_CLEARED: Record<string, InvariantException> = {
+  'price-paid-cleared-nothing-back-then-cancel': { breaches: ['cancelled with £0.00 back on £100.00 paid'], why: CLEARED },
+  'price-paid-cleared-half-back-then-cancel': { breaches: ['cancelled with £50.00 back on £100.00 paid'], why: CLEARED },
+  'price-paid-cleared-addon-credit-is-not-seat-money': { breaches: ['cancelled with £95.00 back on £100.00 paid'], why: CLEARED },
+  'credit-booking-price-paid-cleared-then-cancelled': { breaches: ['cancelled with £0.00 back on £20.00 paid'], why: CLEARED },
 }
 const FIRST_INVOICE = "a membership's first invoice belongs to its subscription, so no order names that PaymentIntent (Q21)"
 /** The scenarios whose first invoice is on no order. */
-const FIRST_INVOICES: Record<string, string> = {
-  'event-at-member-price-with-a-new-membership': FIRST_INVOICE,
-  'buy-new-membership-covers-the-seat': FIRST_INVOICE,
-  'buy-new-membership-on-peak-pays-the-seat': FIRST_INVOICE,
-  'q3-buy-new-membership-with-a-pass': FIRST_INVOICE,
-  'q5-buy-new-keeps-address-and-requests': FIRST_INVOICE,
-  'q6-promo-on-buy-new-seats': FIRST_INVOICE,
-  'w13-card-membership-and-products': FIRST_INVOICE,
-  'w13-card-yearly-and-a-shipped-product': FIRST_INVOICE,
-  'w13-card-buy-new-membership-with-a-guest-and-an-addon': FIRST_INVOICE,
-  'w13-card-replace-exhausted-with-a-paid-guest': FIRST_INVOICE,
+const FIRST_INVOICES: Record<string, InvariantException> = {
+  'event-at-member-price-with-a-new-membership': { breaches: ['pi_fake_0001 is on 0 orders'], why: FIRST_INVOICE },
+  'buy-new-membership-covers-the-seat': { breaches: ['pi_fake_0001 is on 0 orders'], why: FIRST_INVOICE },
+  'buy-new-membership-on-peak-pays-the-seat': { breaches: ['pi_fake_0001 is on 0 orders'], why: FIRST_INVOICE },
+  'q3-buy-new-membership-with-a-pass': { breaches: ['pi_fake_0001 is on 0 orders'], why: FIRST_INVOICE },
+  'q5-buy-new-keeps-address-and-requests': { breaches: ['pi_fake_0001 is on 0 orders'], why: FIRST_INVOICE },
+  'q6-promo-on-buy-new-seats': { breaches: ['pi_fake_0001 is on 0 orders'], why: FIRST_INVOICE },
+  'w13-card-membership-and-products': { breaches: ['pi_fake_0001 is on 0 orders'], why: FIRST_INVOICE },
+  'w13-card-yearly-and-a-shipped-product': { breaches: ['pi_fake_0001 is on 0 orders'], why: FIRST_INVOICE },
+  'w13-card-buy-new-membership-with-a-guest-and-an-addon': { breaches: ['pi_fake_0001 is on 0 orders'], why: FIRST_INVOICE },
+  'w13-card-replace-exhausted-with-a-paid-guest': { breaches: ['pi_fake_0002 is on 0 orders'], why: FIRST_INVOICE },
   // W27's own: a membership bought with a robe on one card (E3). The order names the robe's payment.
-  'w27-e3-membership-and-robe-on-one-card-refunded-to-card': FIRST_INVOICE,
+  'w27-e3-membership-and-robe-on-one-card-refunded-to-card': { breaches: ['pi_fake_0001 is on 0 orders'], why: FIRST_INVOICE },
 }
 // W11: the reader took £44 for a £45 order, so finalise refuses it (amount_mismatch) and the order is
 // left pending for a person, as finaliseReaderOrder did (W03-plan 2.5, "amounts don't match").
-const AMOUNT_MISMATCH: Record<string, string> = {
-  'w11-reader-amount-mismatch-a-pound-short': 'W03-plan 2.5: a payment that does not match its order is left for a person, not finalised',
-}
-/** The three lists a run is allowed to break the checks below by. A use is named in `needed` as `<list name>/<scenario>`. */
-export interface InvariantExceptions {
-  stripeRefundsNotOnRows: Readonly<Record<string, string>>
-  cancelledWithoutAllTheMoney: Readonly<Record<string, string>>
-  chargesNotOnOneOrder: Readonly<Record<string, string>>
+const AMOUNT_MISMATCH: Record<string, InvariantException> = {
+  'w11-reader-amount-mismatch-a-pound-short': { breaches: ['pi_fake_0001 is on 0 orders'], why: 'W03-plan 2.5: a payment that does not match its order is left for a person, not finalised' },
 }
 
-/** W13's compensated membership orders on the Worker: the money out and back, on no row and on no order. */
-const COMPENSATED: Record<string, string> = {
-  'w13-card-charge-declined-after-the-subscription': MEMBERSHIP_ROLLED_BACK,
-  'w13-card-old-cancel-refused': MEMBERSHIP_ROLLED_BACK,
-  'w13-reader-card-not-reusable': MEMBERSHIP_ROLLED_BACK,
-  'w13-reader-old-cancel-refused': MEMBERSHIP_ROLLED_BACK,
+/** W13's compensated membership orders on the Worker: the money out and back, on no row (REFUNDED) and on no order (CHARGED). */
+const COMPENSATED_REFUNDS: Record<string, InvariantException> = {
+  'w13-card-charge-declined-after-the-subscription': { breaches: ['Stripe refunded £40.00 of pi_fake_0001, the rows say £0'], why: MEMBERSHIP_ROLLED_BACK },
+  'w13-card-old-cancel-refused': { breaches: ['Stripe refunded £40.00 of pi_fake_0002 and £20.00 of pi_fake_0006, the rows say £0'], why: MEMBERSHIP_ROLLED_BACK },
+  'w13-reader-card-not-reusable': { breaches: ['Stripe refunded £40.00 of pi_fake_0001, the rows say £0'], why: MEMBERSHIP_ROLLED_BACK },
+  'w13-reader-old-cancel-refused': { breaches: ['Stripe refunded £40.00 of pi_fake_0002, the rows say £0'], why: MEMBERSHIP_ROLLED_BACK },
+}
+const COMPENSATED_CHARGES: Record<string, InvariantException> = {
+  'w13-card-charge-declined-after-the-subscription': { breaches: ['pi_fake_0001 is on 0 orders'], why: MEMBERSHIP_ROLLED_BACK },
+  'w13-card-old-cancel-refused': { breaches: ['pi_fake_0002 is on 0 orders', 'pi_fake_0006 is on 0 orders'], why: MEMBERSHIP_ROLLED_BACK },
+  'w13-reader-card-not-reusable': { breaches: ['pi_fake_0001 is on 0 orders'], why: MEMBERSHIP_ROLLED_BACK },
+  'w13-reader-old-cancel-refused': { breaches: ['pi_fake_0002 is on 0 orders'], why: MEMBERSHIP_ROLLED_BACK },
 }
 
 /**
@@ -68,16 +86,16 @@ const COMPENSATED: Record<string, string> = {
  * and `unsure-part-refund-card-arrived` (W47 item 8: It already arrived records the card money on the line).
  */
 export const WORKER_EXCEPTIONS: InvariantExceptions = {
-  stripeRefundsNotOnRows: COMPENSATED,
+  stripeRefundsNotOnRows: COMPENSATED_REFUNDS,
   cancelledWithoutAllTheMoney: PRICE_PAID_CLEARED,
-  chargesNotOnOneOrder: { ...FIRST_INVOICES, ...COMPENSATED, ...AMOUNT_MISMATCH },
+  chargesNotOnOneOrder: { ...FIRST_INVOICES, ...COMPENSATED_CHARGES, ...AMOUNT_MISMATCH },
 }
 
 export interface InvariantSweep {
   /** One line per breach, `<scenario>: <what>`. */
   wrong: string[]
-  /** Which exceptions were used (`<list name>/<scenario>`), so a stale one can be caught. */
-  needed: Set<string>
+  /** Which exceptions were used (exceptionKey), once for each time, so a stale one can be caught. */
+  needed: string[]
   bookingsChecked: number
 }
 
@@ -87,10 +105,15 @@ export interface InvariantSweep {
  */
 export function watchedForInvariants(scenario: Scenario, sweep: InvariantSweep, exceptions: InvariantExceptions = WORKER_EXCEPTIONS): Scenario {
   const { wrong, needed } = sweep
-  /** Each exception must still be needed, so a stale one can't hide a new problem. */
-  const allowed = (kind: 'stripeRefundsNotOnRows' | 'cancelledWithoutAllTheMoney' | 'chargesNotOnOneOrder', name: string) => {
-    if (!(name in exceptions[kind])) return false
-    needed.add(`${kind}/${name}`)
+  /** Each exception must still be needed, so a stale one can't hide a new problem. Each listed breach is let through once. */
+  const left = new Map<keyof InvariantExceptions, string[]>()
+  const allowed = (kind: keyof InvariantExceptions, name: string, breach: string) => {
+    const listed = left.get(kind) ?? [...(exceptions[kind][name]?.breaches ?? [])]
+    left.set(kind, listed)
+    const at = listed.indexOf(breach)
+    if (at === -1) return false
+    listed.splice(at, 1)
+    needed.push(exceptionKey(kind, name, breach))
     return true
   }
   /** Cash that no order line or row records: a move or a settle paid in cash. Store credit and gift card
@@ -160,8 +183,9 @@ export function watchedForInvariants(scenario: Scenario, sweep: InvariantSweep, 
         if (row.status === 'confirmed' && Math.abs(left - (paid - back)) > 0.005) {
           wrong.push(`${scenario.name}: price_paid £${left.toFixed(2)}, but £${paid.toFixed(2)} paid less £${back.toFixed(2)} back`)
         }
-        if (row.status === 'cancelled' && Math.abs(paid - back) > 0.005 && !allowed('cancelledWithoutAllTheMoney', scenario.name)) {
-          wrong.push(`${scenario.name}: cancelled with £${back.toFixed(2)} back on £${paid.toFixed(2)} paid`)
+        const cancelled = `cancelled with £${back.toFixed(2)} back on £${paid.toFixed(2)} paid`
+        if (row.status === 'cancelled' && Math.abs(paid - back) > 0.005 && !allowed('cancelledWithoutAllTheMoney', scenario.name, cancelled)) {
+          wrong.push(`${scenario.name}: ${cancelled}`)
         }
       }
 
@@ -171,9 +195,11 @@ export function watchedForInvariants(scenario: Scenario, sweep: InvariantSweep, 
                 + (SELECT COALESCE(SUM(card_refunded_amount), 0) FROM addon_order_lines) AS card`
       )
       const stripeBack = context.stripe.refundedPence / 100
-      if (Math.abs(stripeBack - Number.parseFloat(recorded?.card ?? '0')) > 0.005 && !allowed('stripeRefundsNotOnRows', scenario.name)) {
-        // W53 (migration 033): the sum's text is to the penny now (`15.00`); said as it always was (`15`).
-        wrong.push(`${scenario.name}: Stripe refunded £${stripeBack.toFixed(2)}, the rows say £${String(Number.parseFloat(recorded?.card ?? '0'))}`)
+      // W53 (migration 033): the sum's text is to the penny now (`15.00`); said as it always was (`15`).
+      const rowsSay = `the rows say £${String(Number.parseFloat(recorded?.card ?? '0'))}`
+      const byIntent = [...context.stripe.refundedByIntent].filter(([, pence]) => pence !== 0).sort(([a], [b]) => a.localeCompare(b)).map(([intent, pence]) => `£${(pence / 100).toFixed(2)} of ${intent}`)
+      if (Math.abs(stripeBack - Number.parseFloat(recorded?.card ?? '0')) > 0.005 && !allowed('stripeRefundsNotOnRows', scenario.name, `Stripe refunded ${byIntent.join(' and ')}, ${rowsSay}`)) {
+        wrong.push(`${scenario.name}: Stripe refunded £${stripeBack.toFixed(2)}, ${rowsSay}`)
       }
 
       // Every gift card that was seeded lost exactly what its redemptions record (W05k): a part
@@ -236,7 +262,8 @@ export function watchedForInvariants(scenario: Scenario, sweep: InvariantSweep, 
       // Every PaymentIntent that took money is on exactly one order, so its card money counts once.
       for (const [intent] of context.stripe.chargedByIntent) {
         const orders = await context.db.query<{ id: string }>('SELECT id FROM orders WHERE stripe_payment_intent_id = $1', [intent])
-        if (orders.length !== 1 && !allowed('chargesNotOnOneOrder', scenario.name)) wrong.push(`${scenario.name}: ${intent} is on ${orders.length} orders`)
+        const isOn = `${intent} is on ${orders.length} orders`
+        if (orders.length !== 1 && !allowed('chargesNotOnOneOrder', scenario.name, isOn)) wrong.push(`${scenario.name}: ${isOn}`)
       }
     },
   }

@@ -499,7 +499,7 @@ describe('the lapse sweep: money on the booking (Q48; bug FB18)', () => {
   }
   const towelsLine = async (lineId: string) => (await db.query<{ refunded: string; method: string }>('SELECT refunded_amount::numeric(10,2)::text AS refunded, refund_method AS method FROM addon_order_lines WHERE id = $1', [lineId]))[0]
   const auditRows = (bookingId: string, action: string) =>
-    db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE entity_type = 'booking' AND entity_id = $1 AND action = $2 ORDER BY at, id", [bookingId, action])
+    db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE entity_type = 'booking' AND entity_id = $1 AND action = $2 ORDER BY at, ctid", [bookingId, action])
   const towelsCard = async (lineId: string) => (await db.query<{ card: string }>('SELECT card_refunded_amount::numeric(10,2)::text AS card FROM addon_order_lines WHERE id = $1', [lineId]))[0]?.card
 
   it("W46: money owed that was an add-on's never stamps a seat whose money was kept. £20 owed for removed towels (their card refund never arrived), the booking lapsed 23 hours before with the guest's £20 kept: It already arrived for the £20 leaves the guest's line unstamped; Refund the rest instead gives the towels' line its £20 and still leaves the guest's line unstamped", async () => {

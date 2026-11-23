@@ -62,7 +62,7 @@ export interface ChangedElsewhereFinding {
 
 export const FINAL_FINDINGS: readonly ChangedElsewhereState[] = ['taken', 'nothing_taken']
 
-const SAID = 'Changed on the old screens while its payment was unconfirmed'
+const SAID = 'Changed another way while its payment was unconfirmed'
 
 /** The stuck list's words for one of these orders, from reconcile's last finding (null: not looked yet). */
 export function changedElsewhereWords(finding: ChangedElsewhereFinding | null): string {
@@ -70,9 +70,9 @@ export function changedElsewhereWords(finding: ChangedElsewhereFinding | null): 
     case undefined:
       return `${SAID}. The automatic check is looking in Stripe for what was taken. Don't take payment again.`
     case 'taken':
-      return `${SAID}: Stripe shows £${(finding.amount / 100).toFixed(2)} taken. Check that against what the old screens gave back, put any difference right by hand, then press Mark sorted.`
+      return `${SAID}: Stripe shows £${(finding.amount / 100).toFixed(2)} taken. Check that against what was given back when it was changed, put any difference right by hand, then press Mark sorted.`
     case 'nothing_taken':
-      return `${SAID}: Stripe shows nothing taken. Check what the old screens gave back (it was never paid for), put it right by hand, then press Mark sorted.`
+      return `${SAID}: Stripe shows nothing taken. Check what was given back when it was changed (it was never paid for), put it right by hand, then press Mark sorted.`
     case 'open':
       return `${SAID}: Stripe shows nothing taken yet, but its payment (${finding.paymentIntentIds.join(', ')}) is still open in Stripe. Cancel that payment in Stripe; the automatic check then sees it settled, and Mark sorted becomes available.`
     case 'unclear':

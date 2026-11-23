@@ -187,7 +187,7 @@ describe('finalise and cancel racing on one order', () => {
     await blockedBy(undo.pid)
     await undo.finish('commit')
     expect(await finalising).toMatchObject({ finalised: false, reason: 'charged_without_order' })
-    const recorded = await first.query<{ action: string }>('SELECT action FROM audit_log WHERE entity_id = $1 ORDER BY at', [orderId])
+    const recorded = await first.query<{ action: string }>('SELECT action FROM audit_log WHERE entity_id = $1 ORDER BY at, ctid', [orderId])
     expect(recorded.map((row) => row.action)).toEqual(['order.create', 'order.undo', 'order.charge_without_order'])
   })
 

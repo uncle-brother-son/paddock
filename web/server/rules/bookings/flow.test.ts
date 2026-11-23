@@ -120,7 +120,7 @@ describe('a card flow: charge, C2 and undo (W17)', () => {
       // Again (a second press, or reconcile): nothing more is charged or written.
       expect(await settleCardFlow(db, stripe, pendingId, actor)).toMatchObject({ outcome: 'finished', alreadyFinished: true, orderId: outcome.outcome === 'finished' ? outcome.orderId : 'x' })
       expect(charges(stripe)).toHaveLength(1)
-      expect(await rows(db, "SELECT action FROM audit_log WHERE entity_id = $1 ORDER BY at", [pendingId])).toEqual([{ action: 'reader_payment.finalise' }])
+      expect(await rows(db, "SELECT action FROM audit_log WHERE entity_id = $1 ORDER BY at, ctid", [pendingId])).toEqual([{ action: 'reader_payment.finalise' }])
     })
   })
 

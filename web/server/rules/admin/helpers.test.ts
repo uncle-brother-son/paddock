@@ -47,7 +47,7 @@ beforeEach(async () => {
 /** One change to Jo's staff row. Test data only: each `set` is a literal in this file, and the email goes in as a parameter. */
 // eslint-disable-next-line no-restricted-syntax -- test data only: every `set` is a literal written in this file
 const staffIs = (set: string) => db.query(`UPDATE staff SET ${set} WHERE email = $1`, [JO])
-const auditRows = () => db.query<{ action: string; actor_id: string | null; entity_type: string; entity_id: string; request_id: string; details: Record<string, unknown> }>('SELECT action, actor_id, entity_type, entity_id, request_id, details FROM audit_log ORDER BY at')
+const auditRows = () => db.query<{ action: string; actor_id: string | null; entity_type: string; entity_id: string; request_id: string; details: Record<string, unknown> }>('SELECT action, actor_id, entity_type, entity_id, request_id, details FROM audit_log ORDER BY at, ctid')
 const price = async () => (await db.query<{ price: string }>('SELECT price::text AS price FROM session_bands WHERE id = $1', [bandId]))[0]?.price
 const checkedIn = async () => (await db.query<{ checked_in_at: Date | null }>('SELECT checked_in_at FROM bookings WHERE id = $1', [bookingId]))[0]?.checked_in_at !== null
 

@@ -60,15 +60,39 @@ export const pressSwitch: { live: string | null } = { live: null }
  */
 export const pressInFlight: { on: boolean } = { on: false }
 
-/** `work` with ORDER_SWITCH set to `value` (or the press's live switch), put back after it. */
+/** The presses holding ORDER_SWITCH now, in the order they began: the value each set, and what it found. */
+const holding: { value: string; found: string | undefined }[] = []
+
+/**
+ * ORDER_SWITCH set to `value` until the answer is called. W70a (W68a noticed 3): presses may overlap, and end in any
+ * order. Each used to put back what it had found, so when the one that began first also ended first, the other put its
+ * value back for good, and later tests in the file ran with every kind on. Now one that ends before a press that began
+ * after it leaves the switch as it is, and that press puts back what this one found.
+ */
+export function holdSwitch(value: string): () => void {
+  const mine = { value, found: process.env.ORDER_SWITCH }
+  holding.push(mine)
+  process.env.ORDER_SWITCH = value
+  return () => {
+    const at = holding.indexOf(mine)
+    if (at === -1) return
+    const next = holding[at + 1]
+    holding.splice(at, 1)
+    if (next) {
+      // What that press found was this one's value (not something a test set in between): it puts back this one's.
+      if (next.found === mine.value) next.found = mine.found
+    } else if (mine.found === undefined) delete process.env.ORDER_SWITCH
+    else process.env.ORDER_SWITCH = mine.found
+  }
+}
+
+/** `work` with ORDER_SWITCH set to `value` (or the press's live switch), put back after it (holdSwitch). */
 export async function withSwitch<T>(value: string, work: () => Promise<T>): Promise<T> {
-  const before = process.env.ORDER_SWITCH
-  process.env.ORDER_SWITCH = pressSwitch.live ?? value
+  const putBack = holdSwitch(pressSwitch.live ?? value)
   try {
     return await work()
   } finally {
-    if (before === undefined) delete process.env.ORDER_SWITCH
-    else process.env.ORDER_SWITCH = before
+    putBack()
   }
 }
 

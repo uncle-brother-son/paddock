@@ -79,7 +79,7 @@ const onOrder = (orderId: string, details: OrderClaimDetails) => db.transaction(
 const onEventBooking = (eventBookingId: string, details: EventBookingClaimDetails) => db.transaction((tx) => writeEventBookingClaim(tx, eventBookingId, details, by()))
 const finish = (on: { finished: string; entityType: string }, subjectId: string, claimId: string) =>
   db.query("INSERT INTO audit_log (actor_type, action, entity_type, entity_id, details) VALUES ('staff', $1, $2, $3, $4::jsonb)", [on.finished, on.entityType, subjectId, JSON.stringify({ claimId, outcome: 'given' })])
-const claimRows = async () => db.query<{ action: string }>("SELECT action FROM audit_log WHERE action LIKE '%.refund_claimed' ORDER BY at, id")
+const claimRows = async () => db.query<{ action: string }>("SELECT action FROM audit_log WHERE action LIKE '%.refund_claimed' ORDER BY at, ctid")
 
 async function refusal(work: () => Promise<unknown>): Promise<ApiError> {
   try {
@@ -337,7 +337,7 @@ describe("the refusal mark, the finish and the due lists, on step E's subjects",
     await markStepEClaimRefused(db, event, 'Failed to refund payment: the refund failed', 'press-2')
     expect(await stepEClaimRefusal(db, order)).toBe('Failed to refund payment: This charge is disputed.')
     expect(await stepEClaimRefusal(db, event)).toBe('Failed to refund payment: the refund failed')
-    const marks = await db.query<Record<string, unknown>>("SELECT action, entity_type, entity_id, details FROM audit_log WHERE action LIKE '%.refund_refused' ORDER BY at, id")
+    const marks = await db.query<Record<string, unknown>>("SELECT action, entity_type, entity_id, details FROM audit_log WHERE action LIKE '%.refund_refused' ORDER BY at, ctid")
     expect(marks).toEqual([
       { action: 'order.refund_refused', entity_type: 'order', entity_id: orderId, details: { claimId: order.id, orderId, amount: 24, detail: 'Failed to refund payment: This charge is disputed.' } },
       { action: 'event_booking.refund_refused', entity_type: 'event_booking', entity_id: eventBookingId, details: { claimId: event.id, orderId: eventOrder, amount: 40, detail: 'Failed to refund payment: the refund failed' } },

@@ -3,7 +3,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { NAMED_BREACHES } from './named-breaches'
 import { AS_THE_DIALOG_SENDS, ATTEMPTED, NEW_SIDE_CONFIRMS, REFUSED_PRESSES_AS_ANSWERS, REFUSED_READS_AS_ANSWERS, REPEATED_PRESS_SCENARIOS } from './press-forms'
-import { WORKER_EXCEPTIONS } from '../replay/invariants'
+import { WORKER_EXCEPTIONS, type InvariantException } from '../replay/invariants'
 import { DROPPED, exceptionsListedFor, SWEEP_FILES, SWEEP_SCENARIOS } from './sweep'
 
 // W64 (H-plan 3.3 step 3): the sweep's own bookkeeping. Every scenario runs in exactly one sweep file, or is dropped
@@ -52,6 +52,20 @@ describe('the sweep covers every scenario once (W64)', () => {
     const listed = [WORKER_EXCEPTIONS.stripeRefundsNotOnRows, WORKER_EXCEPTIONS.cancelledWithoutAllTheMoney, WORKER_EXCEPTIONS.chargesNotOnOneOrder].flatMap((list) => Object.keys(list))
     expect(listed).toHaveLength(4 + 4 + 16)
     for (const name of listed) expect(swept, name).toContain(name)
-    expect(exceptionsListedFor(swept)).toHaveLength(24)
+    // W70a (L5): by what breaks the check, so a scenario with two payments on no order is two.
+    expect(exceptionsListedFor(swept)).toHaveLength(25)
+  })
+
+  it('W70a (the W70 audit\'s L5): every exception names exactly what it lets through, the PaymentIntent with it, and why', () => {
+    const of = (list: Readonly<Record<string, InvariantException>>) => Object.entries(list).flatMap(([name, one]) => one.breaches.map((breach) => [name, breach] as const))
+    for (const [name, breach] of of(WORKER_EXCEPTIONS.chargesNotOnOneOrder)) expect(breach, name).toMatch(/^pi_fake_\d{4} is on 0 orders$/)
+    for (const [name, breach] of of(WORKER_EXCEPTIONS.stripeRefundsNotOnRows)) expect(breach, name).toMatch(/^Stripe refunded £\d+\.\d{2} of pi_fake_\d{4}( and £\d+\.\d{2} of pi_fake_\d{4})*, the rows say £0$/)
+    for (const [name, breach] of of(WORKER_EXCEPTIONS.cancelledWithoutAllTheMoney)) expect(breach, name).toMatch(/^cancelled with £\d+\.\d{2} back on £\d+\.\d{2} paid$/)
+    for (const list of Object.values(WORKER_EXCEPTIONS)) {
+      for (const [name, one] of Object.entries(list as Record<string, InvariantException>)) {
+        expect(one.breaches.length, name).toBeGreaterThan(0)
+        expect(one.why.length, name).toBeGreaterThan(20)
+      }
+    }
   })
 })

@@ -58,7 +58,7 @@ describe('GB13: a stock adjustment on real Postgres', () => {
     expect((await two).stock_quantity).toBe(12)
     expect(await stockNow()).toBe(12)
     expect(await ledger()).toEqual([3, 4])
-    const rows = await first.query<{ details: { before: { stock_quantity: number }; after: { stock_quantity: number } } }>("SELECT details FROM audit_log WHERE action = 'stock.adjusted' ORDER BY at")
+    const rows = await first.query<{ details: { before: { stock_quantity: number }; after: { stock_quantity: number } } }>("SELECT details FROM audit_log WHERE action = 'stock.adjusted' ORDER BY at, ctid")
     expect(rows.map((row) => [row.details.before.stock_quantity, row.details.after.stock_quantity])).toEqual([
       [5, 8],
       [8, 12],

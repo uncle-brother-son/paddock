@@ -165,8 +165,14 @@ const booking = async (id: string) => (await db.query<{ status: string; due: str
 const membership = async (id: string = ID.membership) =>
   (await db.query<{ status: string; renews: string | null }>('SELECT subscription_status AS status, next_renewal_date::text AS renews FROM customer_memberships WHERE id = $1', [id]))[0]
 type AuditRow = { action: string; actor_type: string; actor_id: string | null; entity_type: string; entity_id: string; details: Record<string, unknown> }
-const audited = (action: string) => db.query<AuditRow>('SELECT action, actor_type, actor_id, entity_type, entity_id, details FROM audit_log WHERE action = $1 ORDER BY at', [action])
+const audited = (action: string) => db.query<AuditRow>('SELECT action, actor_type, actor_id, entity_type, entity_id, details FROM audit_log WHERE action = $1 ORDER BY at, ctid', [action])
 const retryRows = () => audited(PAYMENT_RETRY_ACTION)
+/** W70a: the one row of `state` (and `reason`), never a place in the list: the press's rows share a time under the frozen clock. */
+async function retryRow(state: string, reason?: string): Promise<AuditRow | undefined> {
+  const found = (await retryRows()).filter((row) => row.details['state'] === state && (reason === undefined || row.details['reason'] === reason))
+  expect(found, `${state} ${reason ?? ''}`).toHaveLength(1)
+  return found[0]
+}
 const states = async () => (await retryRows()).map((row) => row.details['state'] as string)
 const callsOf = (stripe: FakeStripe, method: string) => stripe.calls.filter((call) => call.method === method)
 const pays = (stripe: FakeStripe) => callsOf(stripe, 'invoices.pay')
@@ -473,7 +479,7 @@ describe("Mo (the brief's case): the renewal fails, the card is replaced, the pa
       pastTheWindow()
       expect(await retryItems(stripe)).toMatchObject([{ kind: 'payment_retry', outcome: 'finalised' }])
       expect(await states()).toEqual(['started', 'paid'])
-      expect((await retryRows())[1]?.details).toMatchObject({ how: 'reconcile', membership: { action: 'reactivated', bookings_restored: 2 } })
+      expect((await retryRow('paid'))?.details).toMatchObject({ how: 'reconcile', membership: { action: 'reactivated', bookings_restored: 2 } })
       expect(await booking(failed.eleventh)).toEqual({ status: 'confirmed', due: null })
       expect(await membership()).toEqual({ status: 'active', renews: '2027-01-10' })
       expect(await retryItems(stripe)).toEqual([])
@@ -543,7 +549,7 @@ describe('declined (brief item 4): nothing is written to the membership, and the
         "The payment was not taken: The payment method pm_member is not attached to this customer. Nothing was charged and the membership is still overdue. Stripe's own retries carry on, and the bookings waiting for payment keep the deadline they had. If this happens again, tell a manager.",
       ])
       expect(await states()).toEqual(['started', 'declined'])
-      expect((await retryRows())[1]?.details).toMatchObject({ stripeCode: 'payment_method_not_attached' })
+      expect((await retryRow('declined'))?.details).toMatchObject({ stripeCode: 'payment_method_not_attached' })
       expect(stripe.netPence).toBe(0)
     })
   })
@@ -555,7 +561,7 @@ describe('no clear answer (brief item 4, review point 3): held, listed, never cl
       const failed = await renewalHasFailed(stripe)
       stripe.failNext('invoices.pay', noAnswer())
       const answer = await pressShown(failed.invoice)
-      const retryId = (await retryRows())[0]?.details['retryId'] as string
+      const retryId = (await retryRow('started'))?.details['retryId'] as string
       expect(refusalOf(answer)).toEqual([
         502,
         'PAYMENT_UNCONFIRMED',
@@ -610,7 +616,7 @@ describe('no clear answer (brief item 4, review point 3): held, listed, never cl
       expect(run.items.filter((item) => item.kind === 'payment_retry')).toEqual([{ kind: 'payment_retry', id: retryId, outcome: 'finalised', detail: `invoice ${failed.invoice} is paid; the membership was marked paid` }])
       expect(writesSince(stripe, callsBefore)).toEqual([])
       expect(await states()).toEqual(['started', 'held', 'paid'])
-      expect((await retryRows())[2]?.details).toMatchObject({ how: 'reconcile', membership: { action: 'reactivated', bookings_restored: 2 } })
+      expect((await retryRow('paid'))?.details).toMatchObject({ how: 'reconcile', membership: { action: 'reactivated', bookings_restored: 2 } })
       expect(await booking(failed.eleventh)).toEqual({ status: 'confirmed', due: null })
       expect(await booking(failed.fifteenth)).toEqual({ status: 'confirmed', due: null })
       expect(await membership()).toEqual({ status: 'active', renews: '2027-01-10' })
@@ -660,7 +666,7 @@ describe('no clear answer (brief item 4, review point 3): held, listed, never cl
       const failed = await renewalHasFailed(stripe)
       stripe.failNext('invoices.pay', noAnswer())
       expect((await pressShown(failed.invoice)).error?.code).toBe('PAYMENT_UNCONFIRMED')
-      const retryId = (await retryRows())[0]?.details['retryId'] as string
+      const retryId = (await retryRow('started'))?.details['retryId'] as string
       pastTheWindow()
       const callsBefore = stripe.calls.length
       expect(await retryItems(stripe)).toEqual([{ kind: 'payment_retry', id: retryId, outcome: 'undone', detail: `invoice ${failed.invoice} is open; ${failed.paymentIntent} requires_payment_method` }])
@@ -814,7 +820,7 @@ describe('no clear answer (brief item 4, review point 3): held, listed, never cl
       expect(refusalOf(answer)).toEqual([502, 'PAYMENT_UNCONFIRMED', 'paid_not_recorded', PAYMENT_RETRY_WORDS.paidNotRecorded])
       expect(stripe.netPence).toBe(4000)
       expect(await states()).toEqual(['started', 'held'])
-      expect((await retryRows())[1]?.details).toMatchObject({ reason: 'paid_not_recorded' })
+      expect((await retryRow('held'))?.details).toMatchObject({ reason: 'paid_not_recorded' })
       expect(await membership()).toMatchObject({ status: 'past_due' })
       expect((await booking(failed.eleventh))?.status).toBe('payment_needed')
       pastTheWindow()
@@ -891,7 +897,7 @@ describe("already paid by Stripe's own retry (review point 3): treated as paid, 
           'Stripe shows this payment had already gone through (one of its own retries got there first), so nothing was charged by this press. The membership is active again and its next payment is on 10 Jan 2027. 2 bookings that were waiting for payment are confirmed again.',
       })
       expect(await states()).toEqual(['started', 'paid'])
-      expect((await retryRows())[1]?.details).toMatchObject({ alreadyPaid: true })
+      expect((await retryRow('paid'))?.details).toMatchObject({ alreadyPaid: true })
       expect(await booking(failed.eleventh)).toEqual({ status: 'confirmed', due: null })
       // One payment in all: Stripe's own, on the subscription's card.
       expect(pays(stripe)).toHaveLength(1)
@@ -969,7 +975,7 @@ describe("already paid by Stripe's own retry (review point 3): treated as paid, 
           "£40.00 was taken on the Visa card ending 4444. The membership here was not changed: Stripe has started a newer invoice for it since, and that invoice's own payment decides whether the membership is paid up. Look at the membership again in an hour.",
       })
       expect(await states()).toEqual(['started', 'paid'])
-      expect((await retryRows())[1]?.details).toMatchObject({ membership: { outcome: 'ignored', reason: 'not_latest_invoice' } })
+      expect((await retryRow('paid'))?.details).toMatchObject({ membership: { outcome: 'ignored', reason: 'not_latest_invoice' } })
       expect(await membership()).toEqual({ status: 'past_due', renews: '2026-12-10' })
     })
   })
@@ -1587,7 +1593,7 @@ describe("W47r-a S1 (the W47r review): money taken after the subscription ended 
         'paid_after_end',
         '£40.00 was taken on the card ending 4444 after this membership had ended here. Refund it in Stripe (tell a manager) and check the subscription is cancelled in Stripe, then press Mark refunded on the Orders page.',
       ])
-      expect((await retryRows())[1]?.details).toMatchObject({ reason: 'paid_after_end', cancelledHere: true, detail: `invoice ${failed.invoice} is paid; the membership here has ended` })
+      expect((await retryRow('held'))?.details).toMatchObject({ reason: 'paid_after_end', cancelledHere: true, detail: `invoice ${failed.invoice} is paid; the membership here has ended` })
       expect(await listed()).toMatchObject([
         {
           reason: 'paid_after_end',
@@ -1605,7 +1611,7 @@ describe("W47r-a S1 (the W47r review): money taken after the subscription ended 
       const answer = await pressShown(failed.invoice)
       replayStripe.current = stripe
       expect(refusalOf(answer)).toEqual([502, 'PAYMENT_UNCONFIRMED', 'paid_after_end', AFTER_END_PRESS])
-      const held = (await retryRows())[1]?.details ?? {}
+      const held = (await retryRow('held'))?.details ?? {}
       expect(held).toMatchObject({ reason: 'paid_after_end', detail: `invoice ${failed.invoice} is paid; no membership here has the subscription any more` })
       // Only a row cancelled here is told to check the subscription.
       expect('cancelledHere' in held).toBe(false)
@@ -1780,7 +1786,7 @@ describe('W47r-a S3 (the W47r review): the press confirms the card the window sh
       expect(paid.status).toBe(200)
       expect(pays(stripe)).toHaveLength(1)
       expect(pays(stripe)[0]?.params).toMatchObject({ payment_method: NEW_CARD })
-      expect((await retryRows())[0]?.details).toMatchObject({ paymentMethodId: NEW_CARD, shown: { invoiceId: failed.invoice, amount: 40, paymentMethodId: NEW_CARD } })
+      expect((await retryRow('started'))?.details).toMatchObject({ paymentMethodId: NEW_CARD, shown: { invoiceId: failed.invoice, amount: 40, paymentMethodId: NEW_CARD } })
       expect(stripe.netPence).toBe(4000)
     })
   })
@@ -2487,7 +2493,7 @@ describe('W47r-c: the hold goes by the time rule, and a renewal taken for a memb
         expect(refusalOf(answer)).toEqual([502, 'PAYMENT_UNCONFIRMED', 'paid_after_end', HELD_PRESS])
         const retryId = answer.error?.details?.held?.retryId as string
         expect(await states()).toEqual(['started', 'held'])
-        expect((await retryRows())[1]?.details).toMatchObject({ reason: 'paid_after_end', detail: `invoice ${failed.invoice} is paid; Stripe shows the subscription as canceled` })
+        expect((await retryRow('held'))?.details).toMatchObject({ reason: 'paid_after_end', detail: `invoice ${failed.invoice} is paid; Stripe shows the subscription as canceled` })
         expect((await stripe.invoices.retrieve(failed.invoice)).status_transitions?.paid_at).toBe(FOUR_PM + 1)
         expect((await stripe.subscriptions.retrieve(MO_SUBSCRIPTION)).ended_at).toBe(FOUR_PM)
         expect(await listed()).toMatchObject([{ retryId, reason: 'paid_after_end', cardLast4: '4444', close: { kind: 'retry_paid_after_end', orderId: retryId } }])
@@ -2561,7 +2567,7 @@ describe('W47r-c: the hold goes by the time rule, and a renewal taken for a memb
         replayStripe.current = stripe
         expect(answer.error?.details?.reason).toBe('paid_after_end')
         const retryId = answer.error?.details?.held?.retryId as string
-        expect((await retryRows())[1]?.details).toMatchObject({ reason: 'paid_after_end', cancelledHere: true })
+        expect((await retryRow('held'))?.details).toMatchObject({ reason: 'paid_after_end', cancelledHere: true })
         const line = { retryId, reason: 'paid_after_end', words: '£40.00 was taken on the card ending 4444 after this membership had ended here. Refund it in Stripe (tell a manager) and check the subscription is cancelled in Stripe, then press Mark refunded.' }
         expect(await listed()).toMatchObject([line])
         // The retry's record is the one line for its invoice (W47r-b): the paid write's own listing leaves it alone.
@@ -2619,7 +2625,7 @@ describe('W47r-c: the hold goes by the time rule, and a renewal taken for a memb
         replayStripe.current = stripe
         expect(answer.error?.details?.reason).toBe('paid_after_end')
         expect(await states()).toEqual(['started', 'held'])
-        expect((await retryRows())[1]?.details).toMatchObject({ reason: 'paid_after_end', cancelledHere: true })
+        expect((await retryRow('held'))?.details).toMatchObject({ reason: 'paid_after_end', cancelledHere: true })
         // One line: the record's. The listing wrote nothing beside it.
         expect(await invoiceRows()).toEqual([])
         expect(await listed()).toHaveLength(1)
@@ -3023,7 +3029,7 @@ describe("W47r-d: the retry reads 031's answer, and Mark as owed ends a held ret
             expect(refusalOf(answer)).toEqual([502, 'PAYMENT_UNCONFIRMED', 'paid_after_end', HELD_HERE_PRESS])
             const retryId = answer.error?.details?.held?.retryId as string
             expect(await states()).toEqual(['started', 'held'])
-            expect((await retryRows())[1]?.details).toMatchObject({ reason: 'paid_after_end', cancelledHere: true, detail: `invoice ${failed.invoice} is paid; the membership here has ended` })
+            expect((await retryRow('held'))?.details).toMatchObject({ reason: 'paid_after_end', cancelledHere: true, detail: `invoice ${failed.invoice} is paid; the membership here has ended` })
             // Nothing written to the membership: still past due, its next payment date unmoved, its bookings still waiting.
             expect(await membership()).toEqual({ status: 'past_due', renews: '2026-12-10' })
             expect((await booking(failed.eleventh))?.status).toBe('payment_needed')
@@ -3060,7 +3066,7 @@ describe("W47r-d: the retry reads 031's answer, and Mark as owed ends a held ret
           expect(await retryItems(stripe)).toMatchObject([{ kind: 'payment_retry', id: retryId, outcome: 'left', reason: 'paid_after_end', detail: `invoice ${failed.invoice} is paid; the membership here has ended` }])
           expect(writesSince(stripe, before)).toEqual([])
           expect(await states()).toEqual(['started', 'held', 'held'])
-          expect((await retryRows())[2]?.details).toMatchObject({ reason: 'paid_after_end', cancelledHere: true })
+          expect((await retryRow('held', 'paid_after_end'))?.details).toMatchObject({ reason: 'paid_after_end', cancelledHere: true })
           expect(await membership()).toEqual({ status: 'past_due', renews: '2026-12-10' })
           expect((await booking(failed.fifteenth))?.status).toBe('payment_needed')
           expect(await listed()).toMatchObject([{ retryId, reason: 'paid_after_end', words: HELD_HERE_LINE, closeOwed: { kind: 'paid_after_end_owed', orderId: retryId } }])
@@ -3080,7 +3086,7 @@ describe("W47r-d: the retry reads 031's answer, and Mark as owed ends a held ret
         const answer = await pressShown(failed.invoice)
         replayStripe.current = stripe
         const retryId = answer.error?.details?.held?.retryId as string
-        expect((await retryRows())[1]?.details).toMatchObject({ reason: 'paid_after_end', cancelledHere: true })
+        expect((await retryRow('held'))?.details).toMatchObject({ reason: 'paid_after_end', cancelledHere: true })
         vi.setSystemTime(Date.now() + 60_000)
         stripe.setSubscription(MO_SUBSCRIPTION, { status: 'canceled' })
         // Until W47r-d only W47r-c's guard kept this held ("held for a refund since an earlier look").
