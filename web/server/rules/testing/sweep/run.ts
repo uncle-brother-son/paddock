@@ -9,7 +9,7 @@ import { replayStripe } from '../replay/stripe-binding'
 
 /**
  * W64 (H-plan 3.3 step 1): what runs a scenario and records it, for the Worker's own rule tests and the all-Worker
- * sweep. W65 and W65a: the old side that shared it went, with its golden files.
+ * sweep. W65 and W65a: the side for the old functions, which shared it, went.
  *
  * The clock is fixed and moves before each press on the Worker side (sweep/worker.ts), which also moves PGlite's
  * now(), because it reads the same Date.now. So a run is exactly repeatable, dates included, and recordings don't go
@@ -26,13 +26,13 @@ export interface ReplaySide {
   call(action: string, params: unknown): Promise<unknown>
   /**
    * W43: the lapse sweep this side runs where a scenario recorded the database's own (scenarios.ts, sweepLapsed).
-   * Left out (the old side, and every side before W43): the database's lapse_sweep_expired_bookings, as recorded.
+   * Left out (every side before W43): the database's lapse_sweep_expired_bookings, as recorded.
    */
   lapseSweep?(db: Db): Promise<void>
   /**
    * W51 (migration 032): the nightly job this side runs where a scenario runs the database's own (w48-scenarios.ts,
-   * runNightlyJob). W65: a side without one can't run those scenarios (the old side's "job as it was before 032" went
-   * with the golden files).
+   * runNightlyJob). W65: a side without one can't run those scenarios (the "job as it was before 032" went with
+   * the old functions).
    */
   nightlyJob?(db: Db): Promise<void>
 }
@@ -88,8 +88,8 @@ const quoted = (name: string) => `"${name}"`
 const READ_BY: Readonly<Record<string, string>> = { gift_card_redemptions: 'redeemed_at' }
 
 /**
- * Every table, read by created_at (or at, or READ_BY's column), then its key. W65a: the one order: the golden files'
- * (by created_at alone) went with them.
+ * Every table, read by created_at (or at, or READ_BY's column), then its key. W65a: the one order (the old recordings'
+ * by created_at alone went).
  */
 async function dumpTables(db: Db): Promise<TableDump> {
   const dump: TableDump = {}
@@ -168,8 +168,8 @@ export async function replay(
       return result
     },
   })
-  // W65a: the old side's step here (forgetSwitchedOffAnswers: the Worker's stored answers taken out so its recording
-  // matched the golden files) went with it. Every row a press wrote is read.
+  // W65a: the step here for the old functions' side (forgetSwitchedOffAnswers: the Worker's stored answers taken out so
+  // its recording matched theirs) went. Every row a press wrote is read.
   await options.tamper?.(db, stripe)
 
   return buildRecording({
@@ -183,7 +183,7 @@ export async function replay(
 
 /**
  * W64 (H-plan 3.1, lead call L-H2): the all-Worker sweep's own recordings, one file a scenario, recorded from the Worker
- * once the bridge check had held them to the golden files (briefs/W64-report.md). `UPDATE_RECORDINGS=1` writes them
+ * once the bridge check had held them to the old functions' recordings (briefs/W64-report.md). `UPDATE_RECORDINGS=1` writes them
  * again: read the diff before keeping it, as a re-record accepts whatever the code now does.
  */
 const recordingsDir = path.join(__dirname, '..', 'recordings')

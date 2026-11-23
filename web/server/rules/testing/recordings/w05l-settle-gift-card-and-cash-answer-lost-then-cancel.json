@@ -10,15 +10,9 @@
       "paymentMethodUsed": null
     },
     {
-      "settled": true,
-      "booking": {
-        "id": "bookings#1",
-        "status": "confirmed",
-        "redemption_source": "paid",
-        "price_paid": "20.00",
-        "payment_due_by": null
-      },
-      "amountCharged": 20
+      "settled": false,
+      "reason": "no_answer",
+      "message": "Take Payment didn't get an answer, so the payment may or may not have gone through. Don't take payment again yet: reload the booking. If it's confirmed and shows no payment still open, it's paid. If it shows a payment still open, it's being checked: don't take payment, and use Resolve now on the Orders page after 15 minutes. If it's still awaiting payment, press Take Payment again (it won't charge twice)."
     },
     {
       "cardRefundedAmount": 0,

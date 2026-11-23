@@ -6,7 +6,7 @@ import { EVENT_CANCEL_KINDS_ON, settleHeldEventRefund } from './event-places-pre
 /*
  * W64 (H-plan 3.3 step 3): the Cancel event dialog's presses (W31, W52), as the screen presses them, moved here unchanged from
  * `replay/whole-event-side.ts` so the all-Worker sweep and the Worker's own rule tests can press the Worker with nothing of the
- * old code loaded. The replay side re-exports all of it; what it keeps is its old side and its comparisons (W65).
+ * old code loaded.
  */
 
 /** The two old actions W31 gives to the Worker. */
@@ -60,7 +60,7 @@ export function cancelEventAsTheDialogPresses(): (db: Db, params: unknown) => Pr
     }
     /** One booking's press, and its row as the dialog lists it. `definite`: an answer came back (the key is dropped). */
     const pressBooking = async (eventBookingId: string, press: HeldPress): Promise<{ row: Record<string, unknown>; definite: boolean; ok: boolean }> => {
-      // The clock moves between presses, as the old side's moves with each statement (harness.ts, tick).
+      // The clock moves between presses, as it did with each statement of the old functions.
       vi.setSystemTime(Date.now() + 1)
       const row = { eventBookingId, customerName: press.customerName, places: press.places, cardRefundedAmount: 0, storeCreditRefundedAmount: 0 }
       let answer: PlacesAnswer

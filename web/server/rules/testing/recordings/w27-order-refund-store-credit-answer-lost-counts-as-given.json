@@ -1,5 +1,5 @@
 {
-  "scenario": "w27-order-refund-store-credit-that-cannot-be-looked-for-counts-as-given",
+  "scenario": "w27-order-refund-store-credit-answer-lost-counts-as-given",
   "results": [
     {
       "success": true,
@@ -9,12 +9,10 @@
       "paymentMethodUsed": "card"
     },
     {
-      "success": true,
-      "refundedAmount": 24,
-      "refundMethod": "credit",
-      "storeCreditRefundedAmount": 24,
-      "storeCreditBalance": 54,
-      "orderPaymentStatus": "refunded"
+      "success": false,
+      "reason": "no_answer",
+      "message": "The refund didn't get an answer, so it may or may not have gone through. Don't start a new refund: press again here (it won't refund twice), or close this and check the order first.",
+      "noAnswer": true
     }
   ],
   "stripeCalls": [

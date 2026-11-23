@@ -30,7 +30,7 @@ import { claimRefundKey } from './refunds'
 
 // Brief W22 item 1: Remove Guest on the Worker, through W21's refund pipeline, on the replay's live schema (its
 // triggers and the store credit function included), through the routes as the staff app calls them. The bookings and
-// their guests are made by the old functions (the frozen copy), as the golden scenarios make them. Stripe is only ever
+// their guests are made through the Worker's routes, as the screens press them (sweep/worker.ts). Stripe is only ever
 // the fake.
 
 const holder = vi.hoisted(() => ({ db: null as unknown }))

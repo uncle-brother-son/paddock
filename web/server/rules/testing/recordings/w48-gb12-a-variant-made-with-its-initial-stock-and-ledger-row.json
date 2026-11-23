@@ -1,5 +1,5 @@
 {
-  "scenario": "w48-gb12-the-initial-stock-ledger-row-fails-on-its-own",
+  "scenario": "w48-gb12-a-variant-made-with-its-initial-stock-and-ledger-row",
   "results": [
     {
       "success": true,

@@ -7,7 +7,7 @@ import { formatIsoDate, PAYMENT_DATE_FACTS_COLUMNS_SQL, PAYMENT_DATE_FACTS_JOIN_
 
 // Brief W39 item 2: the customer's profile carries why "Change payment date" is refused on each membership row. The
 // Worker's read rule (the facts' SQL and the order of the refusals) is held here to the old module,
-// shared/membershipPaymentDate.ts: to its SQL as step F's frozen copy holds it (W64a item 7: pinned in
+// shared/membershipPaymentDate.ts: to its SQL as step F's old code had it (W64a item 7: pinned in
 // testing/old-words.json) always, and to the staff app's own file while it is still there (W41: nothing in the staff
 // app calls it any more). W41 changes one thing on purpose (brief item 4): a pending change holds the membership until
 // it is settled, where the old rule let one go after 15 minutes.
@@ -46,7 +46,7 @@ const ALLOWED: PaymentDateFacts = {
 }
 
 describe("the payment date button's refusal on the profile (brief W39 item 2)", () => {
-  it("the facts' SQL is the old module's, word for word (the frozen copy, and the staff app's own while it has it)", () => {
+  it("the facts' SQL is the old module's, word for word (as pinned, and the staff app's own while it has it)", () => {
     let compared = 0
     for (const { from, columns, join } of oldSql()) {
       const old = normal(columns)

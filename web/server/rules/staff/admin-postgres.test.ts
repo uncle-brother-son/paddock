@@ -103,7 +103,7 @@ describe('two admins removing the last two Manage pricing holders at once (GB16)
   })
 
   it('control: the old read-then-write, with no guard, lets both through and leaves nobody able to change a price', async () => {
-    // The old setStaffCanManagePricing's own three statements (testing/legacy-admin), on two connections.
+    // The old setStaffCanManagePricing's own three statements (as it was at W48), on two connections.
     const others = (db: Db, id: string) => db.query<{ count: number }>('SELECT count(*)::int AS count FROM staff WHERE can_manage_pricing = true AND active = true AND id <> $1', [id])
     const take = (db: Db, id: string) => db.query('UPDATE staff SET can_manage_pricing = $1, updated_at = now() WHERE id = $2 RETURNING id, can_manage_pricing', [false, id])
     // Both read before either writes: each sees the other still holding it.

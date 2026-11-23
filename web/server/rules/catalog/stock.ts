@@ -1,6 +1,6 @@
 // Brief W55 (G-plan 1.2, 4.1, 4.3, 4.6; bugs GB13 and GB14): stock adjustments and their history on the Worker.
-// Ported from the staff app's adjustVariantStock.ts, getStockAdjustments.ts and shared/stockAdjustments.ts (frozen at
-// W48 in testing/legacy-admin), with their words.
+// Ported from the staff app's adjustVariantStock.ts, getStockAdjustments.ts and shared/stockAdjustments.ts (as they were
+// at W48), with their words.
 //
 // GB13. The old adjustment wrote the ledger row, then changed the stock in a second statement, deleting the ledger row
 // again if that failed; and it had no press key, so a delivery of 10 whose answer was lost, pressed again, counted 20.

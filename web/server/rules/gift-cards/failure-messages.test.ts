@@ -6,7 +6,7 @@ import * as words from './failure-messages'
 
 // Brief W36 item 1: the gift card words, moved ahead of the slice that uses them (W38). The functions have almost no
 // words of their own (most refusals are a reason alone), so each reason list is held to the old function's own, read
-// (W64a item 7) from the old code's words pinned in testing/old-words.json (recorded from step F's frozen copy with the
+// (W64a item 7) from the old code's words pinned in testing/old-words.json (recorded from step F's old code with the
 // TypeScript parser), and the words the screens show for those reasons are held to the screens' source. W38 uses them
 // (admin.ts) and adds Q46's two sentences.
 

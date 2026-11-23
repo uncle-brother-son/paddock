@@ -12,14 +12,14 @@ import type { FakeStripe } from '@/server/stripe/fake'
 import { READER_PAYMENT_OPEN_MESSAGE } from './failure-messages'
 
 /*
- * Brief W64a item 1 (W64 review S1): what the next step does with money owed on a booking. W05g's and W05h's golden
+ * Brief W64a item 1 (W64 review S1): what the next step does with money owed on a booking. W05g's and W05h's
  * scenarios made the money owed on the old functions (a cheaper Move whose store credit write failed), so W64 dropped
  * them from the all-Worker sweep (sweep/sweep.ts, DROPPED). The state is reachable on the Worker, and live, the way
  * move.test.ts makes it: a cheaper Move's card refund that never reaches Stripe, found by reconcile past its window,
  * ends as money owed on the booking (`refund_owed_amount`), with `price_paid` still holding it. Each test then runs the
  * dropped scenario's next steps on the Worker, as the screens press them (sweep/worker.ts), and holds the figures
- * booking-replay accepted for it (its new side, N: the old setup, then the Worker; every difference from the golden
- * file was a key or the W53a payment-first change, none a figure: briefs/W64a-logs/owed-n-differences-read.txt).
+ * booking-replay accepted for it (its new side, N: the old setup, then the Worker; every difference from the old
+ * recording was a key or the W53a payment-first change, none a figure: briefs/W64a-logs/owed-n-differences-read.txt).
  *
  * The replay's clock is 10 Nov 2026 09:00. Private hire: Peak 14 Nov (£140 for 1-2, £190 for 3-4), Core 13 Nov and
  * 20 Nov (£100 for 1-2, £150 for 3-4). Public seats: Peak 14 Nov £25.50, Core 12 Nov and 20 Nov £20. Store credit starts

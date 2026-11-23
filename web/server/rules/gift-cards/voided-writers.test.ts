@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest'
 // today's. A new one fails here until someone has read that rule and decided what mark it leaves.
 //
 // Not covered: a statement whose table or column name is built at run time (none is), the test-only code under
-// server/rules/testing (the frozen copies of the old staff app code and the replay's set-up), and the migrations and
+// server/rules/testing (the replay's set-up and fixtures), and the migrations and
 // database functions (the saved live schema has no function that writes `voided`; the last test here holds that).
 
 const README_RULE =

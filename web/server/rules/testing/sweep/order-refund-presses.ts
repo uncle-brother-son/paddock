@@ -8,7 +8,7 @@ import { replayStripe } from '../replay/stripe-binding'
 /*
  * W64 (H-plan 3.3 step 3): an order refund's press (W28, W29), as the screen presses them, moved here unchanged from
  * `replay/order-refund-side.ts` so the all-Worker sweep and the Worker's own rule tests can press the Worker with nothing of the
- * old code loaded. The replay side re-exports all of it; what it keeps is its old side and its comparisons (W65).
+ * old code loaded.
  */
 
 /** ORDER_SWITCH as it will be live once Wayne adds `order_refunds` (W27's kind; off with today's secret). */

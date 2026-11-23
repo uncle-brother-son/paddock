@@ -81,7 +81,7 @@ async function everything(): Promise<Record<string, unknown[]>> {
   )
   const dump: Record<string, unknown[]> = {}
   for (const { table_name: table } of tables) {
-    // Test data only: the names come from the catalog, as in harness.ts's dumpTables.
+    // Test data only: the names come from the catalog, as in sweep/run.ts's dumpTables.
     const sql = `SELECT * FROM public.${table}`
     const rows = await db.query<Record<string, unknown>>(sql)
     dump[table] = rows
@@ -1366,8 +1366,8 @@ describe('card saving (getTerminalConnectionToken, createTerminalSetupIntent, sa
   })
 })
 
-// W16 review S1: the staff app's own thin finaliseReaderOrder and cancelReaderOrder (backend/paddock, not the frozen
-// test-only copy the replay's setup uses), through the Worker's routes: the path staff take on every reader order.
+// W16 review S1: the staff app's own thin finaliseReaderOrder and cancelReaderOrder (backend/paddock), through the
+// Worker's routes: the path staff take on every reader order.
 describe("the staff app's finalise and cancel, through the Worker", () => {
   type StaffStep = (req: { params: Record<string, unknown>; user: typeof REPLAY_USER }) => Promise<Record<string, unknown>>
   /** Binds the staff app's globals (workerSide()) and loads its own file, as order-switch.test.ts does for createOrder. */

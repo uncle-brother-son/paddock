@@ -4,7 +4,7 @@ import { throughStaffApp } from './booking-presses'
 /*
  * W64 (H-plan 3.3 step 3): the membership cancel presses (W40), as the screen presses them, moved here unchanged from
  * `replay/membership-side.ts` so the all-Worker sweep and the Worker's own rule tests can press the Worker with nothing of the
- * old code loaded. The replay side re-exports all of it; what it keeps is its old side and its comparisons (W65).
+ * old code loaded.
  */
 
 /** The old actions this side gives to the Worker: W40's two, and the profile (W39's, whose membership rows are W40's code). */

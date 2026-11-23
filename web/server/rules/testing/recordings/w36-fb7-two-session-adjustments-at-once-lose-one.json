@@ -5,7 +5,7 @@
       "adjusted": true,
       "period": {
         "period_id": "10000000-0000-4000-8000-000000000021",
-        "credits_allocated": 5,
+        "credits_allocated": 6,
         "credits_used": 0,
         "period_start": "2026-11-10",
         "period_end": "2026-12-09"
@@ -41,7 +41,7 @@
                 "period_end": "2026-12-09",
                 "credits_used": 0,
                 "period_start": "2026-11-10",
-                "credits_allocated": 5
+                "credits_allocated": 7
               }
             },
             "requestId": "gone#2"
@@ -64,7 +64,7 @@
                 "period_end": "2026-12-09",
                 "credits_used": 0,
                 "period_start": "2026-11-10",
-                "credits_allocated": 7
+                "credits_allocated": 6
               }
             },
             "requestId": "gone#4"
@@ -87,13 +87,13 @@
           "action": "membership.credits_adjusted",
           "entity_type": "membership",
           "entity_id": "10000000-0000-4000-8000-000000000010",
-          "request_id": "gone#2",
+          "request_id": "gone#4",
           "details": {
             "used": 0,
-            "after": 5,
-            "amount": 1,
+            "after": 6,
+            "amount": 2,
             "before": 4,
-            "reason": "Goodwill after a cold sauna",
+            "reason": "Second tab",
             "periodId": "10000000-0000-4000-8000-000000000021",
             "creditType": "session",
             "adjustmentId": "membership_credit_adjustments#1"
@@ -107,13 +107,13 @@
           "action": "membership.credits_adjusted",
           "entity_type": "membership",
           "entity_id": "10000000-0000-4000-8000-000000000010",
-          "request_id": "gone#4",
+          "request_id": "gone#2",
           "details": {
             "used": 0,
             "after": 7,
-            "amount": 2,
-            "before": 5,
-            "reason": "Second tab",
+            "amount": 1,
+            "before": 6,
+            "reason": "Goodwill after a cold sauna",
             "periodId": "10000000-0000-4000-8000-000000000021",
             "creditType": "session",
             "adjustmentId": "membership_credit_adjustments#2"
@@ -130,8 +130,8 @@
           "id": "membership_credit_adjustments#1",
           "membership_id": "10000000-0000-4000-8000-000000000010",
           "credit_type": "session",
-          "amount": 1,
-          "reason": "Goodwill after a cold sauna",
+          "amount": 2,
+          "reason": "Second tab",
           "staff_id": "10000000-0000-4000-8000-000000000001",
           "created_at": "<set>"
         },
@@ -139,8 +139,8 @@
           "id": "membership_credit_adjustments#2",
           "membership_id": "10000000-0000-4000-8000-000000000010",
           "credit_type": "session",
-          "amount": 2,
-          "reason": "Second tab",
+          "amount": 1,
+          "reason": "Goodwill after a cold sauna",
           "staff_id": "10000000-0000-4000-8000-000000000001",
           "created_at": "<set>"
         }

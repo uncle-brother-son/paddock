@@ -1,27 +1,67 @@
 {
-  "scenario": "w05l-settle-answer-lost-and-the-look-fails",
+  "scenario": "w05l-move-gift-card-and-cash-answer-lost",
   "results": [
     {
       "success": true,
       "orderId": "orders#1",
       "bookingId": "bookings#1",
-      "cardCharged": false,
-      "cardAmount": 0,
-      "paymentMethodUsed": null
+      "cardCharged": true,
+      "cardAmount": 40,
+      "paymentMethodUsed": "card"
     },
     {
-      "settled": true,
-      "booking": {
-        "id": "bookings#1",
-        "status": "confirmed",
-        "redemption_source": "paid",
-        "price_paid": "20.00",
-        "payment_due_by": null
-      },
-      "amountCharged": 20
+      "moved": false,
+      "priceImpact": {
+        "amountDue": 11,
+        "refundDue": false,
+        "seatDeltas": [
+          {
+            "seatNo": 1,
+            "seatKind": "account_holder",
+            "payBy": "paid",
+            "oldUnitPrice": 20,
+            "newUnitPrice": 25.5,
+            "delta": 5.5,
+            "creditReleased": false
+          },
+          {
+            "seatNo": 2,
+            "seatKind": "guest",
+            "payBy": "paid",
+            "oldUnitPrice": 20,
+            "newUnitPrice": 25.5,
+            "delta": 5.5,
+            "creditReleased": false
+          }
+        ],
+        "legacyPricing": false,
+        "customerId": "10000000-0000-4000-8000-000000000005"
+      }
+    },
+    {
+      "moved": false,
+      "reason": "no_answer",
+      "message": "Moving didn't get an answer, so the booking may or may not have moved, with its payment or refund. Don't take payment or refund it another way yet: reload the booking. If it's on the new session and shows no payment still open, it's done. If it shows a payment still open, it's being checked: don't take payment, and use Resolve now on the Orders page after 15 minutes. If it's still on its old session, press Confirm Move again (it won't move, charge or refund twice)."
     }
   ],
-  "stripeCalls": [],
+  "stripeCalls": [
+    {
+      "method": "paymentIntents.create",
+      "params": {
+        "amount": 4000,
+        "currency": "gbp",
+        "customer": "cus_seed",
+        "payment_method": "pm_seed",
+        "off_session": true,
+        "confirm": true,
+        "description": "Staff-created order for booking",
+        "metadata": {
+          "order_id": "orders#1"
+        }
+      },
+      "idempotencyKey": "orders#1:charge"
+    }
+  ],
   "tables": {
     "api_idempotency": {
       "added": [
@@ -38,9 +78,9 @@
               "status": "paid",
               "orderId": "orders#1",
               "payment": {
-                "method": null,
-                "collected": 0,
-                "cardCharged": false,
+                "method": "card",
+                "collected": 40,
+                "cardCharged": true,
                 "giftCardApplied": 0,
                 "storeCreditApplied": 0
               },
@@ -59,21 +99,17 @@
           "key": "gone#3",
           "actor_type": "staff",
           "actor_id": "10000000-0000-4000-8000-000000000001",
-          "endpoint": "POST /api/v1/staff/bookings/bookings#1/settle",
+          "endpoint": "POST /api/v1/staff/bookings/bookings#1/move",
           "request_hash": "<sha-256>",
           "status": "done",
           "response": {
             "ok": true,
             "data": {
+              "moved": true,
               "booking": {
                 "id": "bookings#1",
-                "status": "confirmed",
-                "price_paid": "20.00",
-                "payment_due_by": null,
-                "redemption_source": "paid"
-              },
-              "settled": true,
-              "amountCharged": 20
+                "price_paid": 51
+              }
             },
             "requestId": "gone#4"
           },
@@ -98,16 +134,19 @@
           "request_id": "gone#2",
           "details": {
             "promo": null,
-            "method": null,
+            "method": "card",
             "postage": null,
             "giftCard": null,
-            "amountDue": 0,
+            "amountDue": 40,
             "bookingId": "bookings#1",
-            "confirmed": null,
+            "confirmed": {
+              "toCollect": 40
+            },
             "overrides": [],
-            "toCollect": 0,
+            "toCollect": 40,
+            "awaitsCard": true,
             "giftCardId": null,
-            "orderTotal": 0,
+            "orderTotal": 40,
             "storeCredit": 0,
             "addressSaved": false,
             "sessionPassId": null,
@@ -124,10 +163,11 @@
           "entity_id": "orders#1",
           "request_id": "gone#2",
           "details": {
-            "method": null,
-            "giftCard": 0,
-            "collected": 0,
-            "storeCredit": 0
+            "method": "card",
+            "collected": 40,
+            "addressSaved": false,
+            "paymentIntentId": "pi_fake_0002",
+            "eventBookingConfirmed": false
           }
         },
         {
@@ -135,17 +175,26 @@
           "at": "<set>",
           "actor_type": "staff",
           "actor_id": "10000000-0000-4000-8000-000000000001",
-          "action": "booking.settle",
+          "action": "booking.move",
           "entity_type": "booking",
           "entity_id": "bookings#1",
           "request_id": "gone#4",
           "details": {
-            "amount": 20,
+            "owed": 0,
             "method": "cash",
             "giftCard": 5,
+            "amountDue": 11,
             "pendingId": null,
-            "toCollect": 15,
-            "storeCredit": 0
+            "toCollect": 6,
+            "storeCredit": 0,
+            "cardRefunded": 0,
+            "newSessionId": "10000000-0000-4000-8000-00000000000e",
+            "oldSessionId": "10000000-0000-4000-8000-000000000004",
+            "passReleased": null,
+            "refundMethod": null,
+            "legacyPricing": false,
+            "creditReleased": false,
+            "storeCreditRefunded": 0
           }
         }
       ],
@@ -159,16 +208,32 @@
           "id": "booking_guests#1",
           "booking_id": "bookings#1",
           "guest_type": "account_holder",
-          "guest_name": "Mo Member",
-          "guest_email": "mo@example.com",
+          "guest_name": "Sam Test",
+          "guest_email": "sam@example.com",
           "waiver_accepted": false,
           "waiver_version": null,
           "waiver_accepted_at": null,
           "waiver_method": null,
           "reminder_sent_at": null,
           "created_at": "<set>",
-          "date_of_birth": "1985-05-05",
-          "unit_price": "20.00",
+          "date_of_birth": "1990-01-01",
+          "unit_price": "25.50",
+          "pay_by": "paid"
+        },
+        {
+          "id": "booking_guests#2",
+          "booking_id": "bookings#1",
+          "guest_type": "additional_guest",
+          "guest_name": "Alex Guest",
+          "guest_email": "alex@example.com",
+          "waiver_accepted": false,
+          "waiver_version": null,
+          "waiver_accepted_at": null,
+          "waiver_method": null,
+          "reminder_sent_at": null,
+          "created_at": "<set>",
+          "date_of_birth": null,
+          "unit_price": "25.50",
           "pay_by": "paid"
         }
       ],
@@ -180,11 +245,11 @@
       "added": [
         {
           "id": "bookings#1",
-          "session_id": "10000000-0000-4000-8000-000000000004",
-          "customer_id": "10000000-0000-4000-8000-00000000000f",
-          "party_size": 1,
+          "session_id": "10000000-0000-4000-8000-00000000000e",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "party_size": 2,
           "status": "confirmed",
-          "price_paid": "20.00",
+          "price_paid": "51.00",
           "stripe_payment_id": null,
           "redemption_source": "paid",
           "created_at": "<set>",
@@ -195,12 +260,12 @@
           "end_time": "<set>",
           "redeemed_membership_id": null,
           "redeemed_session_pass_id": null,
-          "band_id": "10000000-0000-4000-8000-000000000003",
+          "band_id": "10000000-0000-4000-8000-00000000000c",
           "credit_period_id": null,
           "payment_due_by": null,
           "cancel_reason": null,
           "special_requests": null,
-          "guests_over_18_confirmed_at": null,
+          "guests_over_18_confirmed_at": "<set>",
           "part_refunded_amount": "0.00",
           "refund_owed_amount": "0.00"
         }
@@ -251,8 +316,8 @@
           "gift_card_id": null,
           "item_type": "booking",
           "quantity": 1,
-          "unit_price": "0.00",
-          "line_total": "0.00",
+          "unit_price": "40.00",
+          "line_total": "40.00",
           "created_at": "<set>",
           "addon_id": null,
           "refunded_at": null,
@@ -274,10 +339,10 @@
       "added": [
         {
           "id": "orders#1",
-          "customer_id": "10000000-0000-4000-8000-00000000000f",
-          "order_total": "0.00",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "order_total": "40.00",
           "payment_status": "paid",
-          "stripe_payment_intent_id": null,
+          "stripe_payment_intent_id": "pi_fake_0002",
           "promo_code": null,
           "discount_amount": "0.00",
           "shipping_address": null,
@@ -286,8 +351,26 @@
           "order_source": "staff_created",
           "created_at": "<set>",
           "updated_at": "<set>",
-          "payment_method": null,
-          "reader_payment": null,
+          "payment_method": "card",
+          "reader_payment": {
+            "flow": "checkout",
+            "method": "card",
+            "channel": "staff",
+            "livemode": false,
+            "save_card": false,
+            "created_at": "<time>",
+            "request_id": "gone#2",
+            "held_booking": {
+              "party_size": 2,
+              "session_id": "10000000-0000-4000-8000-000000000004"
+            },
+            "expected_amount": 40,
+            "payment_method_id": "pm_seed",
+            "charge_description": "Staff-created order for booking",
+            "stripe_customer_id": "cus_seed",
+            "charge_payment_intent_id": "pi_fake_0002",
+            "save_address_to_customer": false
+          },
           "refund_owed_amount": "0.00"
         }
       ],
@@ -299,10 +382,10 @@
       "added": [],
       "changed": [
         {
-          "id": "10000000-0000-4000-8000-000000000004",
+          "id": "10000000-0000-4000-8000-00000000000e",
           "total_booked": [
             0,
-            1
+            2
           ]
         }
       ],

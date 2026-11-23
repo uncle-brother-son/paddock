@@ -5,7 +5,7 @@ import { MEMBERSHIP_KINDS_ON } from './membership-presses'
 /*
  * W64 (H-plan 3.3 step 3): the payment date presses (W41), as the screen presses them, moved here unchanged from
  * `replay/payment-date-side.ts` so the all-Worker sweep and the Worker's own rule tests can press the Worker with nothing of the
- * old code loaded. The replay side re-exports all of it; what it keeps is its old side and its comparisons (W65).
+ * old code loaded.
  */
 
 /** The old actions this side gives to the Worker. */

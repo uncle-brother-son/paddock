@@ -7,11 +7,11 @@ import { staffAppDir } from './staff-app-dir'
  * W64a item 7 (H-plan 3.1): the one standing removal test. It merges what the five old removal guards hold
  * (server/removed-order-code.test.ts, W16; removed-booking-code, W25; removed-refund-code, W34; removed-account-code,
  * W44; removed-admin-code, W61), as explicit lists read from nothing but this file: the files deleted, the routes
- * deleted, the staff app modules gone, and the names removed. W65 deleted the five (some read the frozen copies) with
- * the copies; this stays, so removed code can't come back after them.
+ * deleted, the staff app modules gone, and the names removed. W65 deleted the five with the old
+ * code; this stays, so removed code can't come back after them.
  *
- * Until W65 the frozen copies, the old replay files and the old guards were left out of the scan (they drove or guarded
- * the old code). W65 deleted them, so the scan covers every file but this one. What W65 deleted is held gone by
+ * Until W65 the old code and the test files that drove or guarded it were left out of the scan. W65 deleted them, so
+ * the scan covers every file but this one. What W65 deleted is held gone by
  * old-code-reach.test.ts.
  */
 
@@ -130,6 +130,12 @@ const DELETED_WORKER_FILES = [
   'lib/membership-price-migration.ts',
   'lib/membership-price-migration.test.ts',
   'lib/supabase/database.types.ts',
+  // W65b (Wayne's yes, 22 Nov): unread since their route went at W34, and an older copy of the London time helpers
+  // (the live ones are server/rules/time/london-time.ts).
+  'server/rules/payments/payment-intent-refunds.ts',
+  'server/rules/payments/payment-intent-refunds.test.ts',
+  'lib/london-time.ts',
+  'lib/london-time.test.ts',
 ]
 
 /** Every route deleted, as a caller writes the path. */
@@ -321,6 +327,15 @@ function goneModulesIn(code: string): string[] {
   return found
 }
 
+/** W65b: a deleted Worker file, as an import names it (`@/…` or relative, with or without its extension). */
+const DELETED_WORKER_MODULES: ReadonlySet<string> = new Set(DELETED_WORKER_FILES.map((file) => file.replace(/\.(ts|tsx)$/, '')))
+function deletedWorkerImportsIn(file: string, code: string): string[] {
+  return importsOf(code).filter((target) => {
+    const resolved = target.startsWith('@/') ? target.slice(2) : target.startsWith('.') ? path.relative(workerDir, path.resolve(path.dirname(file), target)).split(path.sep).join('/') : null
+    return resolved !== null && DELETED_WORKER_MODULES.has(resolved.replace(/\.(ts|tsx)$/, ''))
+  })
+}
+
 /** Every route file under app/, as the URL pattern Next serves it at. */
 function routePatterns(): Array<{ file: string; pattern: RegExp }> {
   return sourceFiles(workerDir, ['app'])
@@ -367,7 +382,13 @@ describe('removed code stays removed (H-plan 3.1; W64a item 7: the five removal 
   it('every deleted file is gone, in both repos', () => {
     expect(DELETED_STAFF_APP_FILES.filter((file) => existsSync(path.join(appDir, file)))).toEqual([])
     expect(DELETED_WORKER_FILES.filter((file) => existsSync(path.join(workerDir, file)))).toEqual([])
-    expect([DELETED_STAFF_APP_FILES.length, DELETED_WORKER_FILES.length]).toEqual([49, 56])
+    expect([DELETED_STAFF_APP_FILES.length, DELETED_WORKER_FILES.length]).toEqual([49, 60])
+  })
+
+  it('no code or test in the Worker imports a deleted Worker file (W65b)', () => {
+    const found: string[] = []
+    for (const [file, text] of workerCode) for (const target of deletedWorkerImportsIn(file, text)) found.push(`${shown(file)}: '${target}'`)
+    expect(found).toEqual([])
   })
 
   it('every deleted route answers 404: no route file under app/ serves it (the routes that stay still are)', () => {
@@ -422,6 +443,9 @@ describe('removed code stays removed (H-plan 3.1; W64a item 7: the five removal 
     expect(goneModulesIn(code)).toEqual(['./shared/shadowCompare', 'eventCancellationQuote'])
     // A route that only starts like a deleted one is not it.
     expect(deletedRouteIn('/api/bookings/refunds-report')).toBeUndefined()
+    // W65b: an import of a deleted Worker file, by alias or relative path; the live London time helpers are not it.
+    const importing = "import { getLondonOffsetMinutes } from '@/lib/london-time'\nimport { listPaymentIntentRefunds } from './payment-intent-refunds'\nimport { londonWallClockToUtc } from '@/server/rules/time/london-time'"
+    expect(deletedWorkerImportsIn(path.join(workerDir, 'server/rules/payments/terminal.ts'), importing)).toEqual(['@/lib/london-time', './payment-intent-refunds'])
   })
 })
 

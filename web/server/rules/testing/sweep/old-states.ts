@@ -19,7 +19,7 @@ export async function asTheOldCheckoutStartedIt(db: Db, orderId: string): Promis
 /**
  * What the old Cancel & Refund to store credit wrote on a booking whose card order was still held (W12 review P1): the
  * booking cancelled, its seat money given as store credit, the order moved out of pending to partially refunded, and
- * (W64a item 8, as `legacy-booking/backend/paddock/shared/bookingRefund.ts` did in the one statement after the money)
+ * (W64a item 8, as the old shared/bookingRefund.ts did in the one statement after the money)
  * nothing left owed, the session's places released (a private session's all of them, else the party's) and the booking's
  * lines stamped refunded to store credit. Only the old screens could do this (the Worker refuses while a payment is
  * unconfirmed): the rows the old function wrote that reconcile, the stuck list and the manual close read.

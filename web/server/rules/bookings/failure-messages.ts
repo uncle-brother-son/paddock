@@ -3,7 +3,7 @@
 // - the screens' reason maps, word for word: frontend/components/MoveBookingDialog.tsx, SettleLapsedPaymentDialog.tsx,
 //   AddGuestDialog.tsx and RemoveGuestDialog.tsx (their FAILURE_MESSAGES / REASON_MESSAGES), and the dialogs' own
 //   "Failed to ..." words for when nothing else has any;
-// - the old functions' own words, word for word (the frozen copy in server/rules/testing/legacy-booking): what they
+// - the old functions' own words, word for word (pinned in server/rules/testing/old-words.json): what they
 //   sent as `message`, which the screens show before their own;
 // - the words W17 adds: the switch, Wayne's Q35 and Q37 answers (12 Nov), and a held card flow.
 // failure-messages.test.ts holds the first two to their sources.

@@ -2,7 +2,7 @@
 // from the staff app's functions (setMembershipCancellation, changeMembershipPaymentDate, shared/membershipPaymentDate,
 // adjustMembershipCredits, setMembershipHerd), the three legacy membership routes and the dialogs, ahead of the slices
 // that use them (W37 credits and Herd, W40 cancel and undo, W41 payment date). Nothing uses them yet. The test beside
-// this file holds each to its source (the frozen copy, legacy-account/, and the dialogs) until the old code goes.
+// this file holds each to its source (the old code's words, pinned in testing/old-words.json, and the dialogs).
 //
 // What is NOT moved, on purpose: words that only describe a state the Worker's version can't leave. The legacy
 // plumbing between Retool and the Worker ("returned an HTML page", "did not report success"); "If unsure, check Stripe

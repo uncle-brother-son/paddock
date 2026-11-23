@@ -1,8 +1,8 @@
 // New in W36 (F-plan 4.1, brief W36 item 1): every word staff see from a gift card action, moved here word for word
 // from the staff app's functions (extendGiftCardExpiry, setGiftCardPickedUp, setGiftCardShipped) and the screens that
 // show them (ExtendGiftCardDialog, the Gift Cards page, the order's line items), ahead of the slice that uses them
-// (W38). Used from W38 by admin.ts. The test beside this file holds each to its source (the frozen copy,
-// legacy-account/, and the screens) until the old code goes. Most of these reasons have no words in the function: the
+// (W38). Used from W38 by admin.ts. The test beside this file holds each to its source (the old
+// code's words, pinned in testing/old-words.json, and the screens). Most of these reasons have no words in the function: the
 // screen has them. W38's own two sentences (Wayne's Q46) are GIFT_CARD_EXTEND_NEW_WORDS.
 import 'server-only'
 

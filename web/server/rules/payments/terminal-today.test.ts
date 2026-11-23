@@ -7,7 +7,7 @@ import { saveCustomerCard } from './terminal'
 
 // Brief W36 item 4 (F-plan 4.12 item 1: "today's outcome for each bug that can be recorded"). Two of step F's tracked
 // items are in the saved card, which is already the Worker's own code (W11) behind a thin staff app call, so there is
-// no old function to record a golden file from and nothing to freeze. This holds what the rule does today instead:
+// no old function to record a scenario from and no old code to keep. This holds what the rule does today instead:
 //
 // - FB17 (W11 F4): the intent's Stripe customer is never compared with the customer being saved to.
 // - Q19: a membership's subscription keeps charging its old card after the customer's card is replaced.
@@ -15,7 +15,7 @@ import { saveCustomerCard } from './terminal'
 // W42 fixes both (F-plan 4.7) in server/rules/customers/saved-card.ts, behind its own switch kind `card_moves`. This
 // function is kept exactly as it was, as what the route does with the kind off (a rollback of the moves alone), so
 // these two tests stay as they are and now hold that: off, the card is saved as before W42. The fixed behaviour is
-// held by customers/saved-card.test.ts, and the two set against each other by testing/replay/saved-card-replay.test.ts.
+// held by customers/saved-card.test.ts.
 
 vi.setConfig({ testTimeout: 60_000 })
 

@@ -2,7 +2,7 @@
 // W53 review L7; W54a's stale-page rule): Catalog → Session Passes and Gift Card Types on the Worker: the two reads, a
 // pass type's sessions, expiry and level, a gift card type's custom amounts and expiry, and a gift card preset made
 // and re-priced. On and off sale and a pass type's price are items.ts's. Ported from the staff app's old functions as
-// frozen at W48 (testing/legacy-admin), with their words.
+// they were at W48, with their words.
 //
 // GB10. Nothing checked a pass type's sessions or expiry, or a gift card type's expiry: a pass type saved with 0
 // sessions sold at full price and gave nothing; an expiry of -1 expired the pass the day it was bought. Now each is a

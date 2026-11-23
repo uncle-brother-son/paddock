@@ -71,7 +71,7 @@ const flowStatus = async (pendingId: string) => (await db.query<{ status: string
  * One reader order from each side, both untapped and over the window: the old checkout's (Sam) and the Worker's (Mo).
  * W16: no old checkout order can be made live any more (none was left, checked 11 Nov); the old one shows nothing
  * settles it twice and the old sweep no longer touches orders at all. W64: it is placed through the Worker and its
- * mark taken off (an SQL fixture, sweep/old-states.ts), the state the old checkout left, as the frozen copy is going.
+ * mark taken off (an SQL fixture, sweep/old-states.ts), the state the old checkout left (that code went at W65).
  */
 async function oneOfEach(old: ReplaySide, stripe: FakeStripe): Promise<{ oldOrder: string; oldIntent: string; workerOrder: string; workerIntent: string }> {
   const placed = (await old.call('createOrder', { customerId: ID.customer, products: [soaps], payment: { method: 'reader' } })) as { orderId: string; pendingReaderPayment: { paymentIntentId: string } }
@@ -493,7 +493,7 @@ describe('W47: money still to refund, Resolve now with nothing listed, the banne
   type Listed = Array<{ id: string; computed_status: string; refund_owed_amount: string }>
   /**
    * W59 (W53 "For later" 7): the Orders read the staff app makes now, the Worker's own (`GET /api/v1/staff/orders`,
-   * which the thin getOrders calls), not the frozen old function the replay's old side still answers with.
+   * which the thin getOrders calls), not the old function (gone at W65).
    */
   const workerOrders = async (view?: string): Promise<Listed> => {
     const response = await ordersListRoute(

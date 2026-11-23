@@ -23,6 +23,30 @@
           "key": "gone#1",
           "actor_type": "staff",
           "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/promo-codes/10000000-0000-4000-8000-00000000001d",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "field": "code",
+              "details": {
+                "action": "promo.updated",
+                "reason": "code_locked",
+                "message": "This code has been redeemed at least once — its text can no longer be changed. Deactivate it and create a new code instead."
+              },
+              "message": "This code has been redeemed at least once — its text can no longer be changed. Deactivate it and create a new code instead."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
           "endpoint": "POST /api/v1/staff/orders",
           "request_hash": "<sha-256>",
           "status": "done",
@@ -44,33 +68,9 @@
               "sessionPassId": null,
               "eventBookingId": null
             },
-            "requestId": "gone#2"
-          },
-          "http_status": 200,
-          "created_at": "<set>"
-        },
-        {
-          "key": "gone#3",
-          "actor_type": "staff",
-          "actor_id": "10000000-0000-4000-8000-000000000001",
-          "endpoint": "POST /api/v1/staff/promo-codes/10000000-0000-4000-8000-00000000001d",
-          "request_hash": "<sha-256>",
-          "status": "done",
-          "response": {
-            "ok": false,
-            "error": {
-              "code": "CONFLICT",
-              "field": "code",
-              "details": {
-                "action": "promo.updated",
-                "reason": "code_locked",
-                "message": "This code has been redeemed at least once — its text can no longer be changed. Deactivate it and create a new code instead."
-              },
-              "message": "This code has been redeemed at least once — its text can no longer be changed. Deactivate it and create a new code instead."
-            },
             "requestId": "gone#4"
           },
-          "http_status": 409,
+          "http_status": 200,
           "created_at": "<set>"
         }
       ],
@@ -88,7 +88,7 @@
           "action": "order.create",
           "entity_type": "order",
           "entity_id": "orders#1",
-          "request_id": "gone#2",
+          "request_id": "gone#4",
           "details": {
             "promo": {
               "code": "ALLTEN",
@@ -120,7 +120,7 @@
           "action": "order.paid",
           "entity_type": "order",
           "entity_id": "orders#1",
-          "request_id": "gone#2",
+          "request_id": "gone#4",
           "details": {
             "method": "cash",
             "giftCard": 0,

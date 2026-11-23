@@ -10,9 +10,9 @@
       "paymentMethodUsed": "card"
     },
     {
-      "cardRefundedAmount": 0,
-      "storeCreditRefundedAmount": 100,
-      "storeCreditBalance": 130
+      "noAnswer": {
+        "message": "Cancelling didn't get an answer, so the booking may or may not have been cancelled, with its refund. Don't refund it another way: press again here (it won't cancel or refund twice), or close this and reload the booking first."
+      }
     },
     {
       "refused": {
@@ -112,7 +112,7 @@
           "created_at": "<set>"
         },
         {
-          "key": "gone#5",
+          "key": "gone#3",
           "actor_type": "staff",
           "actor_id": "10000000-0000-4000-8000-000000000001",
           "endpoint": "POST /api/v1/staff/bookings/bookings#1/refunds/owed-arrived",
@@ -146,13 +146,13 @@
               },
               "message": "Nothing is owed on this booking any more."
             },
-            "requestId": "gone#6"
+            "requestId": "gone#5"
           },
           "http_status": 409,
           "created_at": "<set>"
         },
         {
-          "key": "gone#7",
+          "key": "gone#6",
           "actor_type": "staff",
           "actor_id": "10000000-0000-4000-8000-000000000001",
           "endpoint": "POST /api/v1/staff/bookings/bookings#1/cancel-and-refund",
@@ -169,7 +169,7 @@
               },
               "message": "This booking is already cancelled."
             },
-            "requestId": "gone#8"
+            "requestId": "gone#7"
           },
           "http_status": 409,
           "created_at": "<set>"
@@ -480,7 +480,7 @@
           "booking_id": "bookings#1",
           "gift_card_id": null,
           "staff_id": "10000000-0000-4000-8000-000000000001",
-          "note": "Booking refund. [ref gone#9]",
+          "note": "Booking refund. [ref gone#8]",
           "created_at": "<set>",
           "event_booking_id": null
         }

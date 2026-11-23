@@ -2,7 +2,7 @@ import { readdirSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { NAMED_BREACHES } from './named-breaches'
-import { AS_THE_DIALOG_SENDS, ATTEMPTED, NEW_SIDE_CONFIRMS, REFUSED_PRESSES_AS_ANSWERS, REFUSED_READS_AS_ANSWERS, REPEATED_PRESS_SCENARIOS, TOLD_AGAIN } from './press-forms'
+import { AS_THE_DIALOG_SENDS, ATTEMPTED, NEW_SIDE_CONFIRMS, REFUSED_PRESSES_AS_ANSWERS, REFUSED_READS_AS_ANSWERS, REPEATED_PRESS_SCENARIOS } from './press-forms'
 import { WORKER_EXCEPTIONS } from '../replay/invariants'
 import { DROPPED, exceptionsListedFor, SWEEP_FILES, SWEEP_SCENARIOS } from './sweep'
 
@@ -40,7 +40,6 @@ describe('the sweep covers every scenario once (W64)', () => {
       ...REPEATED_PRESS_SCENARIOS,
       ...REFUSED_READS_AS_ANSWERS,
       ...REFUSED_PRESSES_AS_ANSWERS,
-      ...Object.keys(TOLD_AGAIN),
       ...Object.keys(AS_THE_DIALOG_SENDS),
       ...ATTEMPTED,
       ...Object.keys(NAMED_BREACHES),

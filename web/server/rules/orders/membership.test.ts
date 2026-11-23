@@ -981,9 +981,9 @@ describe("the press's deadline (Retool's 60 s): every Stripe call of a saved-car
 })
 
 /*
- * F1 for memberships, on the Worker (W64). Until W64 this proved the old createOrder's fault on the frozen copy: the
+ * F1 for memberships, on the Worker (W64). Until W64 this proved the old createOrder's fault on the old code itself: the
  * subscription's answer lost, it rolled the order back as a failure though Stripe had made the subscription and taken
- * its first invoice (a live subscription with no membership, £40 kept). The frozen copy goes at W65, so the same lost
+ * its first invoice (a live subscription with no membership, £40 kept). That code went at W65, so the same lost
  * answer is pressed through the Worker here: it asks Stripe again under the same key and records what Stripe made.
  */
 describe('F1, the subscription\'s answer lost: on the Worker (the old createOrder rolled the order back)', () => {

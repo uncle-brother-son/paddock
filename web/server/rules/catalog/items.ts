@@ -1,8 +1,8 @@
 // Briefs W55 + W56 (G-plan 1.1 to 1.3, 4.1, 4.3, 4.6, 4.8; bugs GB12, GB14, GB15, GB23; lead calls L2, L11, L12;
 // W53 review L7; W54a's stale-page rule): the catalogue's items on the Worker: products, their variants and add-ons
 // (W55), and what every item kind shares: on and off sale, and its price (W55 for products and add-ons, W56 for
-// public service types and session passes). Ported from the staff app's old functions as frozen at W48
-// (testing/legacy-admin), with their words (failure-messages.ts) and the legacy routes' own (toggle-active,
+// public service types and session passes). Ported from the staff app's old functions as they were
+// at W48, with their words (failure-messages.ts) and the legacy routes' own (toggle-active,
 // update-price, create-variant).
 //
 // The reads (GB14): an active staff member, through the admin read helper, with named columns. Each read takes the

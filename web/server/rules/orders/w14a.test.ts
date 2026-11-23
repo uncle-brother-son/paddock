@@ -70,7 +70,7 @@ describe('W9-3 and W7-7: an amount with a fraction of a penny is refused, never 
     expect(card.problems[0]).toMatchObject({ reason: 'gift_card_amount_invalid', message: SUB_PENNY_PAYMENT_MESSAGE })
   })
 
-  it('the order refuses it too, keeping nothing (the golden w09-half-penny-store-credit-covers-it is the old code\'s)', async () => {
+  it('the order refuses it too, keeping nothing (w09-half-penny-store-credit-covers-it first recorded the old code\'s answer)', async () => {
     const answer = await postOrder(orderInput({ customerId: ID.customer, booking: paidSeat(), payment: { storeCredit: { amount: 19.995 } } }))
     expect(answer.body).toMatchObject({ ok: false, error: { code: 'VALIDATION', message: SUB_PENNY_PAYMENT_MESSAGE, details: { reason: 'store_credit_amount_invalid' } } })
     expect((await db.query('SELECT 1 FROM orders')).length).toBe(0)

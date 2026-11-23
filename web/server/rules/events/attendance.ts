@@ -2,7 +2,7 @@
 // "For the Worker step" 5): the event attendee list, Overview's today's events, and the event day's three flags on
 // the Worker. Ported from the staff app's getEventAttendees.ts, getTodaysEvents.ts, setEventAttendeeCheckIn.ts,
 // setEventAttendeesCheckIn.ts and setEventAttendeeWaiver.ts with shared/eventAttendance.ts, shared/eventCheckIn.ts
-// and shared/eventAttendeeList.ts (frozen at W48 in testing/legacy-admin), with their words
+// and shared/eventAttendeeList.ts (as they were at W48), with their words
 // (./admin-failure-messages.ts).
 //
 // The two reads

@@ -25,7 +25,7 @@ import {
 import { claimRefundKey } from './refunds'
 
 // Brief W22 item 2: Remove add-on on the Worker, through W21's refund pipeline, on the replay's live schema, through
-// the routes as the staff app calls them. The bookings and add-ons are made by the old functions (the frozen copy).
+// the routes as the staff app calls them. The bookings and add-ons are made through the Worker's routes (sweep/worker.ts).
 // Stripe is only ever the fake. The replay's clock is 10 Nov 2026 09:00; the booking's session is 12 Nov 10:00.
 
 const holder = vi.hoisted(() => ({ db: null as unknown }))

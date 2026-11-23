@@ -2,8 +2,14 @@
   "scenario": "w48-stock-adjust-stock-sold-between-the-check-and-the-write",
   "results": [
     {
-      "id": "10000000-0000-4000-8000-000000000008",
-      "stock_quantity": 1
+      "success": true,
+      "orderId": "orders#1",
+      "cardCharged": false,
+      "cardAmount": 48,
+      "paymentMethodUsed": "cash"
+    },
+    {
+      "thrown": "This adjustment would bring stock below zero (current stock: 1, change: -4)."
     }
   ],
   "stripeCalls": [],
@@ -18,12 +24,48 @@
           "request_hash": "<sha-256>",
           "status": "done",
           "response": {
-            "ok": true,
-            "data": {
-              "id": "10000000-0000-4000-8000-000000000008",
-              "stock_quantity": 1
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "field": "changeAmount",
+              "details": {
+                "action": "stock.adjusted",
+                "reason": "stock_below_zero",
+                "message": "This adjustment would bring stock below zero (current stock: 1, change: -4)."
+              },
+              "message": "This adjustment would bring stock below zero (current stock: 1, change: -4)."
             },
             "requestId": "gone#2"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/orders",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": true,
+            "data": {
+              "status": "paid",
+              "orderId": "orders#1",
+              "payment": {
+                "method": "cash",
+                "collected": 48,
+                "cardCharged": false,
+                "giftCardApplied": 0,
+                "storeCreditApplied": 0
+              },
+              "bookingId": null,
+              "giftCardId": null,
+              "giftCardCode": null,
+              "sessionPassId": null,
+              "eventBookingId": null
+            },
+            "requestId": "gone#4"
           },
           "http_status": 200,
           "created_at": "<set>"
@@ -40,21 +82,101 @@
           "at": "<set>",
           "actor_type": "staff",
           "actor_id": "10000000-0000-4000-8000-000000000001",
-          "action": "stock.adjusted",
-          "entity_type": "product_variant",
-          "entity_id": "10000000-0000-4000-8000-000000000008",
-          "request_id": "gone#2",
+          "action": "order.create",
+          "entity_type": "order",
+          "entity_id": "orders#1",
+          "request_id": "gone#4",
           "details": {
-            "key": "gone#1",
-            "after": {
-              "stock_quantity": 1
+            "promo": null,
+            "method": "cash",
+            "postage": null,
+            "giftCard": null,
+            "amountDue": 48,
+            "bookingId": null,
+            "confirmed": {
+              "toCollect": 48
             },
-            "before": {
-              "stock_quantity": 5
-            },
-            "reason": "Damage",
-            "changeAmount": -4
+            "overrides": [],
+            "toCollect": 48,
+            "giftCardId": null,
+            "orderTotal": 48,
+            "storeCredit": 0,
+            "addressSaved": false,
+            "sessionPassId": null,
+            "eventBookingId": null
           }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.paid",
+          "entity_type": "order",
+          "entity_id": "orders#1",
+          "request_id": "gone#4",
+          "details": {
+            "method": "cash",
+            "giftCard": 0,
+            "collected": 48,
+            "storeCredit": 0
+          }
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "order_line_items": {
+      "added": [
+        {
+          "id": "order_line_items#1",
+          "order_id": "orders#1",
+          "booking_id": null,
+          "product_variant_id": "10000000-0000-4000-8000-000000000008",
+          "membership_plan_id": null,
+          "session_pass_type_id": null,
+          "gift_card_id": null,
+          "item_type": "product",
+          "quantity": 4,
+          "unit_price": "12.00",
+          "line_total": "48.00",
+          "created_at": "<set>",
+          "addon_id": null,
+          "refunded_at": null,
+          "refund_method": null,
+          "restocked": null,
+          "fulfillment_status": "pending",
+          "card_refunded_amount": "0.00",
+          "system_unit_price": "12.00",
+          "price_override_reason": null,
+          "discount_amount": "0.00",
+          "event_booking_id": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "orders": {
+      "added": [
+        {
+          "id": "orders#1",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "order_total": "48.00",
+          "payment_status": "paid",
+          "stripe_payment_intent_id": null,
+          "promo_code": null,
+          "discount_amount": "0.00",
+          "shipping_address": null,
+          "shipping_status": null,
+          "tracking_number": null,
+          "order_source": "staff_created",
+          "created_at": "<set>",
+          "updated_at": "<set>",
+          "payment_method": "cash",
+          "reader_payment": null,
+          "refund_owed_amount": "0.00"
         }
       ],
       "changed": [],
@@ -81,8 +203,8 @@
           "id": "stock_adjustments#1",
           "variant_id": "10000000-0000-4000-8000-000000000008",
           "change_amount": -4,
-          "reason": "Damage",
-          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "reason": "Sale (Order #orders#1)",
+          "staff_id": null,
           "created_at": "<set>"
         }
       ],

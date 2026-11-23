@@ -21,7 +21,7 @@ import { orderPaymentStatusAfterRefunds, recordBookingOrdersPaymentStatus, recor
 import { guestLine } from './refunds'
 
 // Brief W53 items 4 and 6 (the labels; card money on the line its payment took), through the routes as the staff app
-// calls them, on the replay's live schema. Bookings are made by the frozen old order code; guests and later add-ons
+// calls them, on the replay's live schema. Bookings are made through the Worker's order route; guests and later add-ons
 // are added by the Worker's own Add Guest (which writes the `booking.guest_add` row W53 reads), except where a test
 // says a guest was added the old way. Stripe is only ever the fake. The replay's clock is 10 Nov 2026 09:00; the
 // booking's session is 12 Nov 10:00. Each test says what the same steps left before W53.
@@ -63,7 +63,7 @@ afterAll(() => environment.stop())
 
 type Context = ScenarioContext & { bookingId: string }
 
-/** A booking made by the frozen old order code, then `work` on it. */
+/** A booking made through the Worker's order route, then `work` on it. */
 async function withBooking(order: Record<string, unknown>, work: (context: Context) => Promise<void>): Promise<void> {
   await replay(
     environment,

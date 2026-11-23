@@ -31,8 +31,8 @@ vi.setConfig({ testTimeout: 60_000 })
 // the real routes. Each read's fields, its range by London day, its staff check (GB14) and its channel; every refusal
 // of each flag with its words (GB17, Q49), a cancelled and a Payment needed booking on each flag, on and off, a
 // removed add-on line, the audit rows, and the customer channel's waiver rule. The races with a cancel, on two
-// connections, are in admin-postgres.test.ts; the old functions' recordings replay in
-// testing/replay/booking-admin-replay.test.ts.
+// connections, are in admin-postgres.test.ts; the scenarios first recorded from the old
+// functions run in the all-Worker sweep (testing/sweep/).
 
 const holder = vi.hoisted(() => ({ db: null as unknown }))
 vi.mock('@/server/db/connection', () => ({

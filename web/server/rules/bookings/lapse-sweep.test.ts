@@ -18,11 +18,11 @@ import { MONEY_OWED_WORDS } from '@/server/rules/refunds/failure-messages'
 import { moneyOwedList } from '@/server/rules/refunds/money-owed-list'
 
 // Brief W43 (F-plan 1.9, 4.8; Wayne's Q48, 15 Nov; N8, bugs FB18 and FB19): the lapse sweep on the Worker, on the
-// replay's live schema (the database's own functions, constraints and its own sweep). The bookings are made by the old
-// functions (the frozen copy), as the golden scenarios make them: Mo's membership credit seat, then flagged payment
+// replay's live schema (the database's own functions, constraints and its own sweep). The bookings are made through the
+// Worker's routes, as the screens press them (sweep/worker.ts): Mo's membership credit seat, then flagged payment
 // needed with its deadline backdated, as the lead's preview does. Stripe is only ever the fake, and the sweep must
 // never call it. The replay's clock is 10 Nov 2026 09:00; the session is 12 Nov 10:00.
-// The races are lapse-sweep-postgres.test.ts's; the parity with the database's sweep is replay/lapse-replay.test.ts's.
+// The races are lapse-sweep-postgres.test.ts's; the lapse scenarios run in the all-Worker sweep (testing/sweep/).
 
 vi.setConfig({ testTimeout: 120_000 })
 

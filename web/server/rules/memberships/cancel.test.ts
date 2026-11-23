@@ -82,7 +82,7 @@ async function onASeed(work: (stripe: FakeStripe) => Promise<void>, prepare?: Pr
       },
       async run({ stripe }) {
         replayStripe.current = stripe
-        // The harness's old side switches every kind off for its own calls; these presses run with the kind on.
+        // These presses run with the kind on.
         vi.stubEnv('ORDER_SWITCH', 'membership_changes')
         try {
           await work(stripe)

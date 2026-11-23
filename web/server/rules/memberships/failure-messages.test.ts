@@ -9,7 +9,7 @@ import * as words from './failure-messages'
 
 // Brief W36 item 1: the membership words, moved ahead of the slices that use them (W37, W40, W41). Every word moved
 // must be the old code's, word for word, read (W64a item 7) from the old code's words pinned in testing/old-words.json
-// (recorded from step F's frozen copy, the staff app's functions and the three legacy routes, with the TypeScript
+// (recorded from step F's old code, the staff app's functions and the three legacy routes, with the TypeScript
 // parser), so a word changed on either side fails. The dialogs' own words are held to the dialogs' source until each
 // screen changes with its slice.
 

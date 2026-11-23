@@ -7,8 +7,8 @@ import * as words from './failure-messages'
 
 // Brief W36 item 1: the customer words (store credit, creating a customer, the saved card's screen), moved ahead of
 // the slices that use them (W37, W39, W42). Every word moved must be the old function's, word for word, read (W64a item
-// 7) from the old code's words pinned in testing/old-words.json (recorded from step F's frozen copy with the TypeScript
-// parser), so a word changed on either side fails. The dialogs' own words are held to the dialogs' source until each
+// 7) from the old code's words pinned in testing/old-words.json (recorded from step F's old code with the TypeScript
+// parser, before it went), so a word changed on either side fails. The dialogs' own words are held to the dialogs' source until each
 // screen changes with its slice.
 
 const { strings, templates } = oldWords('account')

@@ -11,8 +11,8 @@ import { chargeCardFlow, flowChargeKey, settleCardFlow, undoCardFlow, writeFlowR
 
 // W17 brief item 3: a booking change paid on the saved card is a flow with `method: 'card'`. Its C2 and undo are W12's
 // flow finalise and undo; the charge is keyed from the record's id with `metadata.pending_id`. These run on PGlite with
-// the replay's seed: the change itself is started by the frozen old function on the reader (its C1 writes the same
-// record and holds the same claims a card flow's will), then made a Worker card flow, as W19 to W24's C1 will write it.
+// the replay's seed: the change itself is started through the Worker's route on the reader (its C1 writes the same
+// record and holds the same claims a card flow's does), then made a Worker card flow, as W19 to W24's C1 writes it.
 // Real Postgres races are in flow-postgres.test.ts.
 
 const holder = vi.hoisted(() => ({ db: null as unknown }))
@@ -87,7 +87,7 @@ describe('a card flow: charge, C2 and undo (W17)', () => {
   })
   afterAll(() => environment.stop())
 
-  /** Runs `steps` after the seed, on the old side for whatever the old code does. */
+  /** Runs `steps` after the seed, through the Worker as the screens press it (workerSide). */
   const run = (name: string, steps: (context: ScenarioContext) => Promise<void>, seedWith: Scenario['seed'] = seed) =>
     replay(environment, { name, seed: seedWith, run: steps }, workerSide())
   const movingSeed: Scenario['seed'] = async (db, stripe) => {

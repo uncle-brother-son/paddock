@@ -2,6 +2,10 @@
   "scenario": "w36-payment-date-refused-a-second-press-while-the-first-is-running",
   "results": [
     {
+      "changed": false,
+      "message": "A payment date change is already in progress for this membership"
+    },
+    {
       "changed": true,
       "newRenewalDate": "2026-12-27",
       "extraDays": 17,
@@ -71,6 +75,29 @@
           },
           "http_status": 200,
           "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/memberships/10000000-0000-4000-8000-000000000010/payment-date",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "payment_date",
+                "reason": "refused",
+                "message": "A payment date change is already in progress for this membership"
+              },
+              "message": "A payment date change is already in progress for this membership"
+            },
+            "requestId": "gone#4"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
         }
       ],
       "changed": [],
@@ -81,28 +108,6 @@
       "added": [
         {
           "id": "audit_log#1",
-          "at": "<set>",
-          "actor_type": "staff",
-          "actor_id": "10000000-0000-4000-8000-000000000001",
-          "action": "membership.payment_date_changed",
-          "entity_type": "membership",
-          "entity_id": "10000000-0000-4000-8000-000000000010",
-          "request_id": "gone#2",
-          "details": {
-            "how": "press",
-            "state": "done",
-            "amount": 21.94,
-            "orderId": "orders#1",
-            "changeId": "membership_payment_date_changes#1",
-            "nextRenewalDate": {
-              "after": "2026-12-27",
-              "before": "2026-12-10"
-            },
-            "paymentIntentId": "pi_fake_0003"
-          }
-        },
-        {
-          "id": "audit_log#2",
           "at": "<set>",
           "actor_type": "staff",
           "actor_id": "10000000-0000-4000-8000-000000000001",
@@ -129,11 +134,33 @@
             "paymentMethodId": "pm_member",
             "stripeCustomerId": "cus_member"
           }
+        },
+        {
+          "id": "audit_log#2",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "membership.payment_date_changed",
+          "entity_type": "membership",
+          "entity_id": "10000000-0000-4000-8000-000000000010",
+          "request_id": "gone#2",
+          "details": {
+            "how": "press",
+            "state": "done",
+            "amount": 21.94,
+            "orderId": "orders#1",
+            "changeId": "membership_payment_date_changes#1",
+            "nextRenewalDate": {
+              "after": "2026-12-27",
+              "before": "2026-12-10"
+            },
+            "paymentIntentId": "pi_fake_0003"
+          }
         }
       ],
       "changed": [],
       "removed": [],
-      "tied": 2
+      "tied": 0
     },
     "customer_memberships": {
       "added": [],

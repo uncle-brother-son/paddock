@@ -1,5 +1,5 @@
 {
-  "scenario": "w27-event-cancel-store-credit-that-cannot-be-looked-for-counts-as-given",
+  "scenario": "w27-event-cancel-store-credit-answer-lost-counts-as-given",
   "results": [
     {
       "success": true,
@@ -10,79 +10,10 @@
       "paymentMethodUsed": "card"
     },
     {
-      "ok": true,
-      "places": 1,
-      "refundedAmount": 40,
-      "cardRefundedAmount": 0,
-      "storeCreditRefundedAmount": 40,
-      "storeCreditBalance": 70,
-      "booking": {
-        "id": "event_bookings#1",
-        "customer_id": "10000000-0000-4000-8000-000000000005",
-        "customer_first_name": "Sam",
-        "customer_last_name": "Test",
-        "customer_email": "sam@example.com",
-        "customer_phone": null,
-        "status": "confirmed",
-        "places": 1,
-        "price_paid": "80.00",
-        "ordered_at": "<time>",
-        "cancelled_at": null,
-        "cancel_reason": null,
-        "order_id": "orders#1",
-        "refund_owed_amount": "0.00",
-        "attendees": [
-          {
-            "id": "event_attendees#1",
-            "event_booking_id": "event_bookings#1",
-            "attendee_type": "account_holder",
-            "name": "Sam Test",
-            "email": "sam@example.com",
-            "price_level": "public",
-            "unit_price": "40.00",
-            "waiver_accepted": false,
-            "waiver_method": null,
-            "waiver_accepted_at": null,
-            "extra_waiver_state": "not_needed",
-            "event_waiver_method": null,
-            "event_waiver_accepted_at": null,
-            "checked_in_at": null,
-            "cancelled_at": "<time>",
-            "cancel_reason": null,
-            "cancelled_by_name": "Jo Staff",
-            "cancelled_value": "40.00",
-            "refunded_amount": "40.00",
-            "card_refunded_amount": "0.00",
-            "refund_method": "credit",
-            "refund_after_cutoff": false
-          },
-          {
-            "id": "event_attendees#2",
-            "event_booking_id": "event_bookings#1",
-            "attendee_type": "guest",
-            "name": "Alex Guest",
-            "email": "alex@example.com",
-            "price_level": "public",
-            "unit_price": "40.00",
-            "waiver_accepted": false,
-            "waiver_method": null,
-            "waiver_accepted_at": null,
-            "extra_waiver_state": "not_needed",
-            "event_waiver_method": null,
-            "event_waiver_accepted_at": null,
-            "checked_in_at": null,
-            "cancelled_at": null,
-            "cancel_reason": null,
-            "cancelled_by_name": null,
-            "cancelled_value": "0.00",
-            "refunded_amount": "0.00",
-            "card_refunded_amount": "0.00",
-            "refund_method": null,
-            "refund_after_cutoff": false
-          }
-        ]
-      },
-      "eventPlacesBooked": 1
+      "ok": false,
+      "reason": "no_answer",
+      "message": "The cancellation didn't get an answer, so it may or may not have gone through. Don't start a new one: press again here (it won't cancel or refund twice), or close this and check the attendee list first.",
+      "noAnswer": true
     }
   ],
   "stripeCalls": [

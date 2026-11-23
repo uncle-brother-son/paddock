@@ -34,8 +34,8 @@ import { refundOrderLines, type OrderRefundOptions } from './refund-lines'
 import { WATCH_DAYS } from '@/server/rules/refunds/refund-watch'
 
 // Brief W28 (E-plan 5.1): order refunds on the Worker, on the replay's live schema (its triggers and the store credit
-// function included), through the routes as the staff app calls them. The orders are placed by the old functions (the
-// frozen copy), as the golden scenarios place them. Stripe is only ever the fake.
+// function included), through the routes as the staff app calls them. The orders are placed through the Worker's order
+// route, as New Order places them (sweep/worker.ts). Stripe is only ever the fake.
 
 vi.setConfig({ testTimeout: 120_000 })
 
@@ -61,7 +61,7 @@ beforeAll(async () => {
 })
 afterAll(() => environment.stop())
 
-// The golden scenarios' baskets (scenarios.ts keeps its own to itself).
+// The sweep scenarios' baskets (scenarios.ts keeps its own to itself).
 const soap = { productVariantId: ID.variant, quantity: 2, unitPrice: 12, systemUnitPrice: 12 }
 const mug = { productVariantId: ID.mugVariant, quantity: 1, unitPrice: 15, systemUnitPrice: 15, fulfillmentChoice: 'pickup' }
 const towel = { addonId: ID.addon, quantity: 1, unitPrice: 5, systemUnitPrice: 5 }

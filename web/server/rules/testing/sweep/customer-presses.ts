@@ -4,7 +4,7 @@ import { throughStaffApp } from './booking-presses'
 /*
  * W64 (H-plan 3.3 step 3): the customer presses (W39), as the screen presses them, moved here unchanged from
  * `replay/customer-side.ts` so the all-Worker sweep and the Worker's own rule tests can press the Worker with nothing of the
- * old code loaded. The replay side re-exports all of it; what it keeps is its old side and its comparisons (W65).
+ * old code loaded.
  */
 
 /** The old customer actions W39 gives to the Worker. */

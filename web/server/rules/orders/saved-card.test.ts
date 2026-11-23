@@ -467,7 +467,7 @@ async function everything(): Promise<Record<string, unknown[]>> {
   )
   const dump: Record<string, unknown[]> = {}
   for (const { table_name: table } of tables) {
-    // Test data only: the names come from the catalog, as in harness.ts's dumpTables.
+    // Test data only: the names come from the catalog, as in sweep/run.ts's dumpTables.
     const sql = `SELECT * FROM public.${table}`
     const rows = await db.query<Record<string, unknown>>(sql)
     dump[table] = rows
@@ -1203,9 +1203,9 @@ describe('round trips (about 20 ms each through Hyperdrive)', () => {
 })
 
 /*
- * F1 on the Worker (W64). Until W64 this proved the old createOrder's fault on the frozen copy: the charge's answer lost,
+ * F1 on the Worker (W64). Until W64 this proved the old createOrder's fault on the old code itself: the charge's answer lost,
  * it rolled the order back though Stripe had taken the money, and staff pressing again were charged again (£69 twice,
- * one order; the charges carried no key). The frozen copy goes at W65, so the same lost answer is pressed through the
+ * one order; the charges carried no key). That code went at W65, so the same lost answer is pressed through the
  * Worker here: it asks again under the same key, Stripe gives back the payment it took, and the order keeps it.
  */
 describe('F1, the charge\'s answer lost: on the Worker (the old createOrder rolled the order back)', () => {

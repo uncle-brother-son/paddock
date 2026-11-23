@@ -1,5 +1,5 @@
 {
-  "scenario": "w48-gb8-band-windows-half-saved-then-the-put-back-overlaps",
+  "scenario": "w48-gb8-band-windows-the-afternoon-window-fails-and-the-old-ones-stay",
   "results": [
     {
       "thrown": "That didn't get an answer, so it may or may not have been saved. The screen has been reloaded: check it, and press again if it hasn't changed."

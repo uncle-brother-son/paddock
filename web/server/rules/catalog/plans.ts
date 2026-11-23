@@ -1,6 +1,6 @@
 // Brief W57 (G-plan 1.4, 4.3, 4.4, 4.6, 4.8, 4.10; bugs GB1, GB2, GB14, GB19, GB20; Wayne's Q53; lead calls L3, L11,
 // L13; W54a's stale-page rule): membership plans and membership settings on the Worker. Ported from the staff app's
-// old functions as frozen at W48 (testing/legacy-admin: getMembershipPlans, createMembershipPlan,
+// old functions as they were at W48 (getMembershipPlans, createMembershipPlan,
 // setMembershipPlanActive, setMembershipPlanDetails, getMembershipSettings, setMembershipSettings, and
 // updateCatalogItemPrice's plan branch), with their words (failure-messages.ts) and the legacy routes' (sync-stripe,
 // update-price, toggle-active; lib/membership-price-migration.ts; all removed from the app at W61). Their Stripe side

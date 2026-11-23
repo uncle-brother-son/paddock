@@ -37,8 +37,8 @@ import { CARD_FLOW_SEND_LIMIT_MINUTES, chargeCardFlow, flowChargeKey, flowReader
 
 // Brief W20: Add Guest on the Worker (D-plan 1.3, 4.2, 4.7, 4.8), on the replay's live schema (its triggers,
 // quote_booking and the store credit function included), through the route as the staff app calls it, and C1, the card
-// and reader flows, reconcile and the crash points directly. Bookings are made by the frozen old order code (the
-// replay's old side). Stripe is only ever the fake.
+// and reader flows, reconcile and the crash points directly. Bookings are made through the Worker's order route
+// (sweep/worker.ts). Stripe is only ever the fake.
 
 const holder = vi.hoisted(() => ({ db: null as unknown, crash: null as null | 'after_c1' | 'after_charge' }))
 vi.mock('@/server/db/connection', () => ({
@@ -90,7 +90,7 @@ const privateBooking = { booking: { ...paidSeat([sam, alex]), sessionId: ID.priv
 /** The same with ALLTEN (10% off): £90 paid, £10 the promo's share. */
 const privateWithPromo = { ...privateBooking, promoCode: PROMO.percent, payment: { method: 'cash', confirmedCashAmount: 90 } }
 
-/** A booking made by the frozen old order code for `customerId`, then `work`. The fake is the route's. */
+/** A booking made through the Worker's order route for `customerId`, then `work`. The fake is the route's. */
 async function onABooking(
   order: Record<string, unknown>,
   work: (context: Context) => Promise<void>,

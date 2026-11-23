@@ -7,7 +7,7 @@ import { staffAppDir } from './rules/testing/staff-app-dir'
 // setGiftCardShipped, getGiftCards, getGiftCardRedemptions) against a stand-in for the Worker, and its screens read as
 // source (the staff app has no test runner): the Extend dialog's press key kept after no answer or a throw, closing
 // blocked while a press runs, the list reloaded on close, and Q46's words shown; the picked up and shipped buttons;
-// New Order's gift card search. The wrappers through the real routes are held by gift-card-replay.test.ts.
+// New Order's gift card search. The wrappers through the real routes are held by the all-Worker sweep (server/rules/testing/sweep/).
 
 const appDir = staffAppDir()
 const backend = (name: string) => import(/* @vite-ignore */ path.join(appDir, 'backend/paddock', name))

@@ -26,8 +26,8 @@ import { forCustomer } from './cancels'
 
 // Brief W33 (E-plan 4.11, 5.1; Wayne's Q44): the website's four cancel routes, through the routes as the website will
 // call them, on the replay's live schema (the database's own functions and constraints, migration 024's
-// event_cancellation_quote among them). The bookings and event orders are made by the old functions (the frozen copy),
-// as the golden scenarios make them. Stripe is only ever the fake, and a customer's cancel must never call it.
+// event_cancellation_quote among them). The bookings and event orders are made through the Worker's routes (sweep/worker.ts),
+// as the screens press them. Stripe is only ever the fake, and a customer's cancel must never call it.
 // The replay's clock is 10 Nov 2026 09:00; the session is 12 Nov 10:00; the event is 1 Dec 19:00, cut-off 30 Nov 19:00.
 
 vi.setConfig({ testTimeout: 120_000 })

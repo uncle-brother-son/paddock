@@ -3,19 +3,30 @@ import type { Db, SqlParam } from '@/server/db'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
 import { insert } from '../database'
 import type { Scenario, ScenarioContext } from '../sweep/run'
-import { ID, paidSeat, sam, seed, whileFailing } from './scenarios'
+import {
+  atItsFirstTransaction,
+  ID,
+  paidSeat,
+  PROMO_CODE_PATH,
+  sam,
+  seed,
+  SESSION_BLOCK_PATH,
+  SESSION_START_TIME_PATH,
+  STAFF_PERMISSIONS_PATH,
+  VARIANT_STOCK_PATH,
+  whileFailing,
+} from './scenarios'
 
-// Brief W48 item 4 (G-plan 4.9 item 1, lead call L5): step G's golden files. Every scenario here runs the staff app's
-// old functions (the 82 that were not a thin call when step G began) and, through them, the seven legacy /api/catalog
-// routes, from the frozen copy (../legacy-admin), with the fake Stripe. They hold every refusal of G-plan section 1's
-// functions, each success, today's outcome for each bug in section 3 (GB1 to GB24, named `gbN-…`), and each read's
-// shape against a seeded database. W49 to W57 replay them through the Worker's routes and name each difference.
+// Brief W48 item 4 (G-plan 4.9 item 1, lead call L5): step G's scenarios. They hold every refusal of G-plan section
+// 1's functions (the staff app's admin presses), each success, the outcome for each bug in section 3 (GB1 to GB24,
+// named `gbN-…`), and each read's shape against a seeded database, pressed through the Worker's routes with the fake
+// Stripe. A `gbN-…` name keeps the bug it was written for; where the Worker no longer has the bug, the scenario holds
+// what it does instead.
 //
-// They are their own list, not part of `scenarios`: w48.test.ts replays each (the same every time; it matches its
-// golden file). The older sweeps over `scenarios` (w05c, w05d, booking-replay) check money and step D's routes, and
-// nothing here moves a customer's money; w05c already sits near its time limit (W45 row 23).
+// They are their own list, not part of `scenarios`; the all-Worker sweep runs them in its step-g files
+// (sweep/sweep.ts, SWEEP_FILES), each against its recording. Nothing here moves a customer's money.
 
-/** The name every step G golden scenario starts with. */
+/** The name every step G scenario starts with. */
 export const W48_PREFIX = 'w48-'
 
 /** Fixed ids for what these scenarios add to the seed, and an id nothing has. */
@@ -110,7 +121,9 @@ const each =
 
 // W65a: `onceAfter` (another tab's step between two of the old function's statements) and `failingOnce` (one of its
 // statements failing), and GB13's cut-off, wrapped the old side's `paddockData`, which the Worker side never calls: since
-// W64 each scenario that used them has run its press alone, and each is marked where it is. They went.
+// W64 each scenario that used them had run its press alone. They went. W65b: each overlap is rebuilt on the Worker
+// (atItsFirstTransaction) or, where only the old code could fail between its statements, renamed for what it does;
+// each is marked where it is.
 
 /** A catalogue item as one synced from Sanity is: it has a Stripe product (and the fake knows it). */
 const synced =
@@ -219,10 +232,16 @@ function staffScenarios(): Scenario[] {
       await call('setStaffCanManagePricing', { staffId: ID.staff, canManagePricing: false })
     }, moreStaff),
     // GB16: the "last holder" check is a read, then a write. Two admins each take the other's Manage pricing at once:
-    // both checks pass, both writes land, and nobody can change a price. W65a: the other admin's write between the two
-    // waited on the old side's paddockData, so on the Worker it never ran: one press.
-    g('gb16-two-admins-remove-each-others-manage-pricing', async ({ call }) => {
-      await call('setStaffCanManagePricing', { staffId: W48_ID.secondAdmin, canManagePricing: false })
+    // both checks pass, both writes land, and nobody can change a price. W65b: on the Worker the check and the write
+    // are one transaction; the other admin's write (a statement standing for their press, as before W65a) lands at the
+    // nearest point, just before that transaction opens.
+    g('gb16-two-admins-remove-each-others-manage-pricing', async ({ attempt, db, stripe }) => {
+      await atItsFirstTransaction(
+        { db, stripe },
+        STAFF_PERMISSIONS_PATH,
+        () => db.query('UPDATE staff SET can_manage_pricing = false, updated_at = now() WHERE id = $1', [ID.staff]),
+        () => attempt('setStaffCanManagePricing', { staffId: W48_ID.secondAdmin, canManagePricing: false })
+      )
     }, secondAdmin),
     // GB16: the sign-in email is compared exactly. A row stored with a capital is nobody's.
     g('gb16-sign-in-in-another-case-matches-no-staff-row', async ({ attempt, call }) => {
@@ -319,9 +338,10 @@ function serviceTypeScenarios(): Scenario[] {
       await call('setServiceTypePriceTierRange', range)
     }),
     // GB21: the dialog saves a size group's range as one call per band. The second call failing leaves "1 to 8" in
-    // Core and "1 to 10" in Peak for the same group: a party of 9 has a Peak price and no Core price. W65a: the second
-    // call's failure was the old side's statement (paddockData): on the Worker it goes through.
-    g('gb21-a-size-group-range-saved-in-one-band-and-not-the-other', async ({ call, attempt }) => {
+    // Core and "1 to 10" in Peak for the same group: a party of 9 has a Peak price and no Core price. W65b: renamed from
+    // gb21-a-size-group-range-saved-in-one-band-and-not-the-other: the second call's failure was the old side's own
+    // statement (gone at W65a); on the Worker both calls go through, one band each.
+    g('gb21-a-size-group-range-saved-band-by-band', async ({ call, attempt }) => {
       await call('setServiceTypePriceTierRange', { tierId: ID.privateTier, minPeople: 1, maxPeople: 8 })
       await attempt('setServiceTypePriceTierRange', { tierId: W48_ID.tierPeak, minPeople: 1, maxPeople: 8 })
       await call('getServiceTypes', {})
@@ -471,9 +491,10 @@ function productScenarios(): Scenario[] {
     g('gb12-a-variant-made-without-manage-pricing', async ({ call }) => {
       await call('createProductVariant', { ...newVariant, stockQuantity: 3 })
     }, soapSynced, noManagePricing),
-    // GB12: the ledger row is a second step. It fails on its own: the variant has 10 in stock and no ledger row. W65a:
-    // the failure was the old side's statement (paddockData): on the Worker it goes through.
-    g('gb12-the-initial-stock-ledger-row-fails-on-its-own', async ({ attempt }) => {
+    // GB12: the ledger row is a second step. It fails on its own: the variant has 10 in stock and no ledger row. W65b:
+    // renamed from gb12-the-initial-stock-ledger-row-fails-on-its-own: the failure was the old side's own statement
+    // (gone at W65a); on the Worker the variant and its ledger row are written together.
+    g('gb12-a-variant-made-with-its-initial-stock-and-ledger-row', async ({ attempt }) => {
       await attempt('createProductVariant', { ...newVariant, stockQuantity: 10 })
     }, soapSynced),
     // The checks of what was sent come before the staff check.
@@ -502,9 +523,17 @@ function productScenarios(): Scenario[] {
       await call('getStockAdjustments', { variantId: ID.variant })
     }),
     // Stock taken by a sale between the check and the write: the guarded update changes nothing and the ledger row is taken back.
-    // W65a: the sale waited on the old side's paddockData, so on the Worker it never ran: one press.
-    g('stock-adjust-stock-sold-between-the-check-and-the-write', async ({ attempt }) => {
-      await attempt('adjustVariantStock', { variantId: ID.variant, changeAmount: -4, reasonCategory: 'damage' })
+    // W65b: on the Worker the check and the write are one transaction; the sale lands at the nearest point, just before
+    // that transaction opens. A real sale of four in cash (5 to 1), so its ledger row is written as live writes it (until
+    // W65a a statement setting the stock to 1 stood for it).
+    g('stock-adjust-stock-sold-between-the-check-and-the-write', async ({ attempt, call, db, stripe }) => {
+      const fourSoaps = { productVariantId: ID.variant, quantity: 4, unitPrice: 12, systemUnitPrice: 12 }
+      await atItsFirstTransaction(
+        { db, stripe },
+        VARIANT_STOCK_PATH,
+        () => call('createOrder', { customerId: ID.customer, products: [fourSoaps], payment: { method: 'cash', confirmedCashAmount: 48 } }),
+        () => attempt('adjustVariantStock', { variantId: ID.variant, changeAmount: -4, reasonCategory: 'damage' })
+      )
     }),
     // The stock write itself fails: the ledger row written first is deleted again.
     g('stock-adjust-the-stock-write-fails', async ({ attempt, db }) => {
@@ -516,8 +545,9 @@ function productScenarios(): Scenario[] {
       await call('adjustVariantStock', delivery)
     }),
     // GB13: the ledger row and the stock change are two statements. Dying between them leaves a ledger row for stock that never moved.
-    // W65a: the death was in the old side's paddockData: on the Worker the press goes through.
-    g('gb13-the-ledger-row-is-written-and-the-stock-change-never-runs', async ({ attempt }) => {
+    // W65b: renamed from gb13-the-ledger-row-is-written-and-the-stock-change-never-runs: the death was the old side's
+    // (gone at W65a); on the Worker the ledger row and the stock change are one transaction, and the press goes through.
+    g('gb13-a-delivery-writes-its-ledger-row-and-the-stock-change-together', async ({ attempt }) => {
       await attempt('adjustVariantStock', delivery)
     }),
     g('stock-history-read', async ({ call, attempt }) => {
@@ -905,8 +935,9 @@ function planScenarios(): Scenario[] {
       await call('setMembershipSettings', { addonCreditWaitMonths: 0 })
     }, settingsRow),
     // GB19: the waiting period is saved, then the Herd refresh fails: the setting says 12 months and every flag is as it was.
-    // W65a: the failure was the old side's statement (paddockData): on the Worker it goes through.
-    g('gb19-the-waiting-period-is-saved-and-the-herd-refresh-fails', async ({ attempt }) => {
+    // W65b: renamed from gb19-the-waiting-period-is-saved-and-the-herd-refresh-fails: the failure was the old side's own
+    // statement (gone at W65a); on the Worker the setting and the Herd refresh are saved together.
+    g('gb19-the-waiting-period-is-saved-with-the-herd-refresh', async ({ attempt }) => {
       await attempt('setMembershipSettings', { addonCreditWaitMonths: 12 })
     }, settingsRow),
   ]
@@ -1214,10 +1245,10 @@ function promoScenarios(): Scenario[] {
       await call('updatePromoCode', { ...allTen, discountValue: 10 })
     }),
     // GB18: "the text can't change once used" is a read, then a write. An order uses ALLTEN between the two: the
-    // text changes anyway, and the order's redemption now belongs to a code called ALLTWENTY. W65a: the order waited on
-    // the old side's paddockData, so on the Worker it never ran: one press.
-    g('gb18-the-text-lock-is-a-read-then-a-write', async ({ call }) => {
-      await call('updatePromoCode', { ...allTen, code: 'ALLTWENTY', discountValue: 20 })
+    // text changes anyway, and the order's redemption now belongs to a code called ALLTWENTY. W65b: on the Worker the
+    // read and the write are one transaction; the order lands at the nearest point, just before it opens.
+    g('gb18-the-text-lock-is-a-read-then-a-write', async ({ call, db, stripe }) => {
+      await atItsFirstTransaction({ db, stripe }, PROMO_CODE_PATH, () => samUsesAllTen({ call }), () => call('updatePromoCode', { ...allTen, code: 'ALLTWENTY', discountValue: 20 }))
     }),
   ]
 }
@@ -1280,19 +1311,23 @@ function pricingScenarios(): Scenario[] {
       await call('setBandRules', recut)
     }, weekOfBandRules, saturdayAfternoon, sql('UPDATE sessions SET band_overridden = true WHERE id = $1', [W48_ID.sameDaySession])),
     // GB8: the day's windows are deleted, then inserted one by one. The first insert fails: the old windows are put
-    // back (as new rows), and the save is refused in the database's words. W65a: in these three GB8 scenarios the
-    // failing inserts were the old side's statements (paddockData): on the Worker each save goes through.
-    g('gb8-band-windows-deleted-then-an-insert-fails-and-the-old-ones-are-put-back', async ({ attempt }) => {
-      await attempt('setBandRules', recut)
+    // back (as new rows), and the save is refused in the database's words. W65b: on the Worker a day's windows are saved
+    // in one transaction, so there is no put-back: the three GB8 scenarios run the failing insert there (the form the
+    // sweep pressed them in since W64, press-forms.ts TOLD_AGAIN until W65b), and are renamed for what they do.
+    // Renamed from gb8-band-windows-deleted-then-an-insert-fails-and-the-old-ones-are-put-back.
+    g('gb8-band-windows-the-morning-window-fails-and-the-old-ones-stay', async ({ attempt, db }) => {
+      await whileFailing(db, { table: 'band_rules', event: 'INSERT', when: "NEW.from_time = '00:00'" }, () => attempt('setBandRules', recut))
     }, weekOfBandRules, saturdayAfternoon),
-    // GB8: the put-back fails too. Saturday is left with no band windows at all.
-    g('gb8-band-windows-deleted-and-the-put-back-fails-too', async ({ attempt }) => {
-      await attempt('setBandRules', recut)
+    // GB8: the put-back fails too. Saturday is left with no band windows at all. W65b: renamed from
+    // gb8-band-windows-deleted-and-the-put-back-fails-too.
+    g('gb8-band-windows-every-insert-fails-and-the-old-ones-stay', async ({ attempt, db }) => {
+      await whileFailing(db, { table: 'band_rules', event: 'INSERT', when: 'true' }, () => attempt('setBandRules', recut))
     }, weekOfBandRules, saturdayAfternoon),
     // GB8: the second window's insert fails after the first went in: the put-back then meets the first new window,
-    // which overlaps the old ones, so it fails as well and Saturday is left half cut.
-    g('gb8-band-windows-half-saved-then-the-put-back-overlaps', async ({ attempt }) => {
-      await attempt('setBandRules', recut)
+    // which overlaps the old ones, so it fails as well and Saturday is left half cut. W65b: renamed from
+    // gb8-band-windows-half-saved-then-the-put-back-overlaps.
+    g('gb8-band-windows-the-afternoon-window-fails-and-the-old-ones-stay', async ({ attempt, db }) => {
+      await whileFailing(db, { table: 'band_rules', event: 'INSERT', when: "NEW.from_time = '12:00'" }, () => attempt('setBandRules', recut))
     }, weekOfBandRules, saturdayAfternoon),
     g('member-band-term-who-may', whoMay('setMembershipBandTerm', term, 'manage_pricing')),
     g(
@@ -1339,8 +1374,8 @@ async function samBooked({ call }: Pick<ScenarioContext, 'call'>, more: Record<s
 
 /**
  * The database's nightly job, as the side runs it (W51, migration 032: the Worker's side runs the job as the saved
- * schema has it, as the table owner). W65: the old side's fallback (the job as it was before 032) went with the golden
- * files, so a side without a job of its own can't run these scenarios.
+ * schema has it, as the table owner). W65: the fallback for the old functions (the job as it was before 032) went with
+ * them, so a side without a job of its own can't run these scenarios.
  */
 async function runNightlyJob({ db, side }: Pick<ScenarioContext, 'db' | 'side'>): Promise<void> {
   if (!side.nightlyJob) throw new Error(`The ${side.name} side has no nightly job to run.`)
@@ -1389,9 +1424,10 @@ function sessionScenarios(): Scenario[] {
       await call('blockDay', { date: THURSDAY, reason: 'Staff day' })
     }),
     // GB5: the check and the block are two statements. A booking placed between them lands on a blocked session.
-    // W65a: the booking waited on the old side's paddockData, so on the Worker it never ran: one press.
-    g('gb5-a-booking-placed-between-the-check-and-the-block', async ({ call }) => {
-      await call('blockSession', block)
+    // W65b: on the Worker the check and the block are one transaction under the session's lock; the booking lands at
+    // the nearest point, just before it opens.
+    g('gb5-a-booking-placed-between-the-check-and-the-block', async ({ call, db, stripe }) => {
+      await atItsFirstTransaction({ db, stripe }, SESSION_BLOCK_PATH, () => samBooked({ call }), () => call('blockSession', block))
     }),
     g('block-day-who-may', whoMay('blockDay', { date: THURSDAY, reason: 'Staff day' }, 'none')),
     g('block-day', async ({ call }) => {
@@ -1495,10 +1531,10 @@ function sessionScenarios(): Scenario[] {
       await db.query("UPDATE bookings SET status = 'cancelled' WHERE id = $1", [bookingId])
       await call('setSessionStartTime', moved)
     }, saunaHour, weekOfBandRules),
-    // The count finds nothing; a booking lands before the write; the write's own guard refuses it. W65a: the booking
-    // waited on the old side's paddockData, so on the Worker it never ran: one press.
-    g('session-start-time-refused-booking-placed-between-the-check-and-the-write', async ({ call }) => {
-      await call('setSessionStartTime', moved)
+    // The count finds nothing; a booking lands before the write; the write's own guard refuses it. W65b: on the Worker
+    // the count and the write are one transaction; the booking lands at the nearest point, just before it opens.
+    g('session-start-time-refused-booking-placed-between-the-check-and-the-write', async ({ call, db, stripe }) => {
+      await atItsFirstTransaction({ db, stripe }, SESSION_START_TIME_PATH, () => samBooked({ call }), () => call('setSessionStartTime', moved))
     }, saunaHour, weekOfBandRules),
     // GB6: a booking at Payment needed isn't counted. The 10:00 Core session moves to 18:00, Peak, and the booking
     // goes with it unseen.
@@ -1602,8 +1638,8 @@ function bookingAndOrderScenarios(): Scenario[] {
       await call('getBookingDetail', { bookingId: made[0]?.id ?? '' })
     }),
     // The other words: a saved-card payment the Worker started and hasn't settled (its record carries a request id).
-    // The booking and the payment's record are part of the seed, not written by the scenario: flow-replay.test.ts
-    // takes every recording that writes a card-flow row as one of its own.
+    // The booking and the payment's record are part of the seed, not written by the scenario (a scenario that
+    // writes a card-flow row in its steps belongs with the flow scenarios).
     g('booking-detail-read-with-a-card-payment-being-checked', async ({ call }) => {
       await call('getBookingDetail', { bookingId: W48_ID.seededBooking })
     }, async (db) => {
@@ -1803,7 +1839,7 @@ function bookingAndOrderScenarios(): Scenario[] {
   ]
 }
 
-/** Every step G golden scenario, by screen (G-plan section 1's order). */
+/** Every step G scenario, by screen (G-plan section 1's order). */
 export function w48Scenarios(): Scenario[] {
   return [
     ...staffScenarios(),
@@ -1819,7 +1855,7 @@ export function w48Scenarios(): Scenario[] {
   ]
 }
 
-/** The screen each scenario group belongs to, for the report's counts (w48.test.ts). */
+/** The screen each scenario group belongs to, for the report's counts. */
 export const W48_GROUPS: ReadonlyArray<{ screen: string; scenarios: () => Scenario[] }> = [
   { screen: 'Staff', scenarios: staffScenarios },
   { screen: 'Catalog: service types', scenarios: serviceTypeScenarios },

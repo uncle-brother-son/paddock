@@ -1,6 +1,6 @@
 // W54 (G-plan 1.6, 4.1, 4.3, 4.6; bugs GB14 and GB18): the Promo Codes page on the Worker. Ported from the staff
 // app's getPromoCodes.ts, getPromoCodeRedemptions.ts, createPromoCode.ts and updatePromoCode.ts and the field checks
-// of shared/promoCodes.ts (frozen at W48 in testing/legacy-admin), with their words (./admin-failure-messages.ts).
+// of shared/promoCodes.ts (as they were at W48), with their words (./admin-failure-messages.ts).
 //
 // What GB18 changes. An edit is one transaction under the code's own row lock, which is the lock an order using the
 // code takes before it writes its redemption (orders/locks.ts): so "the code's text can't change once used" is

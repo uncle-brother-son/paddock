@@ -6,7 +6,7 @@ import * as words from './failure-messages'
 
 // Brief W27 item 5: the event cancellations' words, moved ahead of the slices that use them (W30, W31). Every reason
 // must be listed, and every word moved must be the old functions', word for word, read (W64a item 7) from the old
-// code's words pinned in testing/old-words.json (recorded from step E's frozen copy with the TypeScript parser), so a
+// code's words pinned in testing/old-words.json (recorded from step E's old code with the TypeScript parser), so a
 // word changed on either side fails. The dialogs' own words are held to the dialogs' source until the screens change at
 // W30 and W31.
 

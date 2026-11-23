@@ -103,7 +103,7 @@ async function onASeed(work: (stripe: FakeStripe) => Promise<void>, prepare?: Pr
       },
       async run({ stripe }) {
         replayStripe.current = stripe
-        // The harness's old side switches every kind off for its own calls; these presses run with the kind on.
+        // These presses run with the kind on.
         // W41a: the date change's own kind; `membership_changes` is on for the cancel and undo presses these tests make.
         vi.stubEnv('ORDER_SWITCH', 'membership_changes,payment_date_changes')
         try {

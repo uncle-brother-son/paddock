@@ -26,8 +26,8 @@ import { eventFullRefusal } from './basket-event'
 import { storeCreditChangedMessage } from './price-basket'
 import { writeBooking, type BookingToWrite, type SeatToWrite } from './write-booking'
 
-// T1 on PGlite with the live schema and the replay seed, through the real routes. The parity proof
-// is order-replay.test.ts; this file is about the transaction: refusals that come after writes,
+// T1 on PGlite with the live schema and the replay seed, through the real routes. The order scenarios
+// run in the all-Worker sweep (testing/sweep/sweep-orders.test.ts); this file is about the transaction: refusals that come after writes,
 // errors Postgres raises, round trips, request idempotency, the dry run, the audit rows, and what a
 // database error leaves behind (B11).
 

@@ -30,8 +30,8 @@ vi.setConfig({ testTimeout: 60_000 })
 // an edit with places sold (Q51: the cut-off earlier refused, later allowed, price and date changes) and the stale
 // page; the check-in window's three states; an older extra waiver version; London dates; the customer channel's
 // waiver rule; money owed on a cancelled booking (F1) and a refund still being checked (row 18). The races with a
-// place cancel, on two connections, are in attendance-postgres.test.ts; the old functions' recordings replay in
-// testing/replay/event-admin-replay.test.ts.
+// place cancel, on two connections, are in attendance-postgres.test.ts; the scenarios first recorded from the old
+// functions run in the all-Worker sweep (testing/sweep/).
 
 const holder = vi.hoisted(() => ({ db: null as unknown }))
 vi.mock('@/server/db/connection', () => ({

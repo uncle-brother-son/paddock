@@ -116,7 +116,7 @@ describe("a promo edit against an order using the code (GB18)", () => {
   })
 
   it("control: the old count-then-write lets the text change under the order's redemption", async () => {
-    // The old updatePromoCode's own statements (testing/legacy-admin): count the uses, then write.
+    // The old updatePromoCode's own statements (as it was at W48): count the uses, then write.
     const [counted] = await second.query<{ uses: string }>('SELECT COUNT(*) AS uses FROM promo_code_redemptions WHERE promo_code_id = $1', [allTen])
     expect(counted?.uses).toBe('0')
     // An order uses the code between the two.

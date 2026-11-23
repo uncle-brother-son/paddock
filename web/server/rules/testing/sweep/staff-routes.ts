@@ -5,7 +5,7 @@ import type { Db } from '@/server/db'
  * W64 (H-plan 3.3 step 1): the staff app's `paddockWorkerV1` resource, standing in for Retool: a thin wrapper's call
  * runs the real /api/v1/staff route on the test database. Moved here from `replay/legacy-routes.ts` (W14 to W63), so the
  * Worker's own tests and the all-Worker sweep can call the staff app's thin wrappers with nothing of the old code
- * loaded. `replay/legacy-routes.ts` binds the old side through this one, adding its one frozen route.
+ * loaded.
  */
 
 type Route = Record<string, (request: Request, context?: { params: Promise<Record<string, string>> }) => Promise<Response>>
@@ -255,7 +255,7 @@ export interface StaffCall {
  * A stand-in for paddockWorkerV1.rawRequest, running the real /api/v1/staff route. The resource
  * adds the key, as the "Paddock Worker v1" resource does; callWorker adds who is acting. Uses the
  * key a test file already set, so its own routes keep working. W64: `db` is the database the routes open (left out:
- * the one bound last); `extra` adds routes by exact path (the old side's one frozen route, legacy-routes.ts).
+ * the one bound last); `extra` adds routes by exact path.
  */
 export function bindStaffRoutes(db?: Db, extra: Readonly<Record<string, () => Promise<unknown>>> = {}) {
   bindReplayDatabase(db)

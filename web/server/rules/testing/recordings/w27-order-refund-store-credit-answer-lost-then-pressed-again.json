@@ -1,5 +1,5 @@
 {
-  "scenario": "w27-order-refund-store-credit-cannot-be-looked-for-then-the-stamp-fails",
+  "scenario": "w27-order-refund-store-credit-answer-lost-then-pressed-again",
   "results": [
     {
       "success": true,
@@ -10,8 +10,17 @@
     },
     {
       "success": false,
-      "reason": "refund_not_saved",
-      "message": "The refund couldn't be saved (the system was busy, or one of its records couldn't be written), so nothing was refunded. Try again."
+      "reason": "no_answer",
+      "message": "The refund didn't get an answer, so it may or may not have gone through. Don't start a new refund: press again here (it won't refund twice), or close this and check the order first.",
+      "noAnswer": true
+    },
+    {
+      "success": true,
+      "refundedAmount": 24,
+      "refundMethod": "credit",
+      "storeCreditRefundedAmount": 24,
+      "storeCreditBalance": 54,
+      "orderPaymentStatus": "refunded"
     }
   ],
   "stripeCalls": [
@@ -73,19 +82,17 @@
           "request_hash": "<sha-256>",
           "status": "done",
           "response": {
-            "ok": false,
-            "error": {
-              "code": "INTERNAL",
-              "details": {
-                "action": "refund",
-                "reason": "refund_not_saved",
-                "message": "The refund couldn't be saved (the system was busy, or one of its records couldn't be written), so nothing was refunded. Try again."
-              },
-              "message": "The refund couldn't be saved (the system was busy, or one of its records couldn't be written), so nothing was refunded. Try again."
+            "ok": true,
+            "data": {
+              "refundMethod": "credit",
+              "refundedAmount": 24,
+              "orderPaymentStatus": "refunded",
+              "storeCreditBalance": 54,
+              "storeCreditRefundedAmount": 24
             },
             "requestId": "gone#4"
           },
-          "http_status": 500,
+          "http_status": 200,
           "created_at": "<set>"
         }
       ],
@@ -141,9 +148,94 @@
             "paymentIntentId": "pi_fake_0002",
             "eventBookingConfirmed": false
           }
+        },
+        {
+          "id": "audit_log#3",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.refund_claimed",
+          "entity_type": "order",
+          "entity_id": "orders#1",
+          "request_id": "gone#4",
+          "details": {
+            "kind": "refund",
+            "plan": {
+              "card": [],
+              "cash": 0,
+              "ownOrderId": "orders#1",
+              "storeCredit": 24
+            },
+            "lines": [
+              {
+                "id": "order_line_items#1",
+                "amount": 24,
+                "method": "credit",
+                "itemType": "product",
+                "restocked": false
+              }
+            ],
+            "amount": 24,
+            "method": "credit",
+            "reason": null,
+            "worker": true,
+            "livemode": null
+          }
+        },
+        {
+          "id": "audit_log#4",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.refund",
+          "entity_type": "order",
+          "entity_id": "orders#1",
+          "request_id": "gone#4",
+          "details": {
+            "owed": 0,
+            "amount": 24,
+            "method": "credit",
+            "restocked": [],
+            "lineItemIds": [
+              "order_line_items#1"
+            ],
+            "cardRefunded": 0,
+            "storeCreditRefunded": 24
+          }
+        },
+        {
+          "id": "audit_log#5",
+          "at": "<set>",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
+          "action": "order.refund_finished",
+          "entity_type": "order",
+          "entity_id": "orders#1",
+          "request_id": "gone#4",
+          "details": {
+            "owed": 0,
+            "claimId": "audit_log#3",
+            "outcome": "given",
+            "cardRefunded": 0,
+            "storeCreditRefunded": 24
+          }
         }
       ],
       "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "customers": {
+      "added": [],
+      "changed": [
+        {
+          "id": "10000000-0000-4000-8000-000000000005",
+          "store_credit_balance": [
+            "30.00",
+            "54.00"
+          ]
+        }
+      ],
       "removed": [],
       "tied": 0
     },
@@ -163,9 +255,9 @@
           "line_total": "24.00",
           "created_at": "<set>",
           "addon_id": null,
-          "refunded_at": null,
-          "refund_method": null,
-          "restocked": null,
+          "refunded_at": "<set>",
+          "refund_method": "credit",
+          "restocked": false,
           "fulfillment_status": "pending",
           "card_refunded_amount": "0.00",
           "system_unit_price": "12.00",
@@ -184,7 +276,7 @@
           "id": "orders#1",
           "customer_id": "10000000-0000-4000-8000-000000000005",
           "order_total": "24.00",
-          "payment_status": "paid",
+          "payment_status": "refunded",
           "stripe_payment_intent_id": "pi_fake_0002",
           "promo_code": null,
           "discount_amount": "0.00",
@@ -240,6 +332,27 @@
           "reason": "Sale (Order #orders#1)",
           "staff_id": null,
           "created_at": "<set>"
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "store_credit_transactions": {
+      "added": [
+        {
+          "id": "store_credit_transactions#1",
+          "customer_id": "10000000-0000-4000-8000-000000000005",
+          "amount": "24.00",
+          "balance_after": "54.00",
+          "reason": "refund",
+          "order_id": "orders#1",
+          "booking_id": null,
+          "gift_card_id": null,
+          "staff_id": "10000000-0000-4000-8000-000000000001",
+          "note": "Refund to store credit — order line items refunded by staff. [ref gone#5]",
+          "created_at": "<set>",
+          "event_booking_id": null
         }
       ],
       "changed": [],

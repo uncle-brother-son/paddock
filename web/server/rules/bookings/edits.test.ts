@@ -257,10 +257,10 @@ describe('the status route while a payment is still being taken (W18 review S1)'
     expect(answer.body, JSON.stringify(answer.body)).toMatchObject({ ok: true, data: { id: bookingId, status: to, cancelled_at: null } })
     expect(await bookingRow(bookingId)).toMatchObject({ status: to })
   }
-  const onTheOldSide = (name: string, run: (context: ScenarioContext) => Promise<void>) => replay(environment, { name, seed, run }, workerSide())
+  const throughTheWorker = (name: string, run: (context: ScenarioContext) => Promise<void>) => replay(environment, { name, seed, run }, workerSide())
 
   it('a held reader Settle (the booking already confirmed with £20 in price_paid): refused with the reader words; once finalised it goes through', async () => {
-    await onTheOldSide('w18a settle finalised', async ({ call, stripe, db: runDb }) => {
+    await throughTheWorker('w18a settle finalised', async ({ call, stripe, db: runDb }) => {
       const bookingId = await lapsedSeat(call, runDb)
       const started = (await call('settleLapsedBooking', { bookingId, payment: { method: 'reader' } })) as Pending
       expect(await bookingRow(bookingId)).toMatchObject({ status: 'confirmed', price_paid: '20.00' })
@@ -273,7 +273,7 @@ describe('the status route while a payment is still being taken (W18 review S1)'
   })
 
   it('the review\'s £ example: the held Settle refused, so its undo puts the booking back awaiting payment with £0 paid', async () => {
-    await onTheOldSide('w18a settle cancelled', async ({ call, db: runDb }) => {
+    await throughTheWorker('w18a settle cancelled', async ({ call, db: runDb }) => {
       const bookingId = await lapsedSeat(call, runDb)
       const started = (await call('settleLapsedBooking', { bookingId, payment: { method: 'reader' } })) as Pending
       expect((await post('status', bookingId, { status: 'pending' })).body.error?.details?.reason).toBe('reader_payment_open')
@@ -285,7 +285,7 @@ describe('the status route while a payment is still being taken (W18 review S1)'
   })
 
   it('a held saved-card flow (the Worker\'s, `method: card`): the card words; a card and a reader flow together: the reader words', async () => {
-    await onTheOldSide('w18a card flow', async ({ call, db: runDb }) => {
+    await throughTheWorker('w18a card flow', async ({ call, db: runDb }) => {
       const bookingId = await lapsedSeat(call, runDb)
       const started = (await call('settleLapsedBooking', { bookingId, payment: { method: 'reader' } })) as Pending
       const pendingId = started.pendingReaderPayment.pendingId
@@ -306,7 +306,7 @@ describe('the status route while a payment is still being taken (W18 review S1)'
   })
 
   it('a held reader Move: refused; once cancelled (the booking still confirmed) it goes through', async () => {
-    await onTheOldSide('w18a move cancelled', async ({ call }) => {
+    await throughTheWorker('w18a move cancelled', async ({ call }) => {
       const { bookingId } = (await call('createOrder', { customerId: ID.customer, ...publicOnCard })) as { bookingId: string }
       const started = (await call('moveBooking', { bookingId, newSessionId: ID.peakSession, confirmed: true, payment: { method: 'reader' } })) as Pending
       await refusesAll(bookingId, 'reader_payment_open', READER_PAYMENT_OPEN_MESSAGE)
@@ -317,7 +317,7 @@ describe('the status route while a payment is still being taken (W18 review S1)'
   })
 
   it('a New Order on the reader still being paid for the booking: refused with the reader words; once finalised it goes through', async () => {
-    await onTheOldSide('w18a reader order', async ({ call, stripe }) => {
+    await throughTheWorker('w18a reader order', async ({ call, stripe }) => {
       const placed = (await call('createOrder', { customerId: ID.customer, ...publicOnCard, payment: { method: 'reader' } })) as Pending & { orderId: string }
       const [line] = await db.query<{ booking_id: string }>(`SELECT booking_id FROM order_line_items WHERE order_id = $1 AND item_type = 'booking'`, [placed.orderId])
       const bookingId = line?.booking_id ?? ''
@@ -331,7 +331,7 @@ describe('the status route while a payment is still being taken (W18 review S1)'
   })
 
   it('special requests still save while a payment is being taken (they touch no money)', async () => {
-    await onTheOldSide('w18a requests while held', async ({ call, db: runDb }) => {
+    await throughTheWorker('w18a requests while held', async ({ call, db: runDb }) => {
       const bookingId = await lapsedSeat(call, runDb)
       await call('settleLapsedBooking', { bookingId, payment: { method: 'reader' } })
       expect((await post('special-requests', bookingId, { specialRequests: 'Late arrival' })).body.ok).toBe(true)

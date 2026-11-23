@@ -12,8 +12,7 @@ import type { FakeStripe } from '@/server/stripe/fake'
  *     return stripeClientMock(await importOriginal())
  *   })
  *
- * With nothing bound, the real createStripeClient runs, so the legacy routes' stand-in (legacy-routes.ts)
- * still answers for the old side.
+ * With nothing bound, the real createStripeClient runs.
  */
 export const replayStripe: { current: StripeClient | null } = { current: null }
 

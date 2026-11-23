@@ -280,14 +280,14 @@ export class FakeStripe implements StripeClient {
   private readonly couponsById = new Map<string, Stripe.Coupon>()
   private readonly customersById = new Map<string, Record<string, unknown>>()
   private readonly pricesById = new Map<string, Record<string, unknown>>()
-  /** W48: catalogue products, by id (what the legacy /api/catalog routes made and switched on and off; since W61 only their frozen copy). */
+  /** W48: catalogue products, by id (what the legacy /api/catalog routes made and switched on and off, until W61). */
   private readonly productsById = new Map<string, Record<string, unknown>>()
   private sequence = 0
 
   /**
    * W12: `idTag` goes into every id this fake makes (`pi_fake_<tag>_0001`). Migration 022 lets one
    * PaymentIntent be on one order only, so tests that run many fakes against one database (the real
-   * Postgres races) give each its own tag. Without one, ids are as before (the golden files name them).
+   * Postgres races) give each its own tag. Without one, ids are as before (the recordings name them).
    */
   constructor(private readonly options: { idTag?: string } = {}) {}
 
@@ -1060,7 +1060,7 @@ export class FakeStripe implements StripeClient {
           amount_due: due,
           ending_balance: endingBalance,
           amount_paid: taken,
-          // As before W13a (the golden files hold it): one entry, with no PaymentIntent when nothing was taken.
+          // As before W13a (the recordings hold it): one entry, with no PaymentIntent when nothing was taken.
           payments: { data: [{ payment: { payment_intent: paid?.id ?? null } }] },
         }
         const sub: FakeSubscription = {
@@ -1340,9 +1340,8 @@ export class FakeStripe implements StripeClient {
       }) as unknown as Promise<Stripe.ApiList<Stripe.CustomerBalanceTransaction>>,
   }
 
-  // W48 (brief item 4): `create` and `update` are what the seven legacy /api/catalog routes sent (since W61 only their
-  // frozen copy sends them), so step G's golden
-  // files can be recorded through them with this fake. W57: they are on the Worker's StripeClient for membership plans
+  // W48 (brief item 4): `create` and `update` are what the seven legacy /api/catalog routes sent (until W61), so step
+  // G's first recordings could be made through them with this fake. W57: they are on the Worker's StripeClient for membership plans
   // only (G-plan L2), with keys, and `list` finds a price by its product (and `metadata`, which the caller reads). A
   // new price is live, takes its amount, currency, product, metadata and (for a plan) how often; an update sets
   // `active` (archiving) only. A list is newest first, a page at a time (10 unless `limit` says, at most 100;

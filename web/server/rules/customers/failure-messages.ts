@@ -1,8 +1,8 @@
 // New in W36 (F-plan 4.1, brief W36 item 1): every word staff see from a customer action, moved here word for word
 // from the staff app's functions (adjustCustomerStoreCredit, createCustomer) and their dialogs (AdjustStoreCreditDialog,
 // NewCustomerDialog, SaveCardOnReaderButton), ahead of the slices that use them (W37 store credit, W39 customers, W42
-// replace card). W37 uses the store credit words and W39 the create words. The test beside this file holds each to its source (the frozen copy,
-// legacy-account/, and the dialogs) until the old code goes. The saved card's own refusals are already the Worker's
+// replace card). W37 uses the store credit words and W39 the create words. The test beside this file holds each to its source (the old
+// code's words, pinned in testing/old-words.json, and the dialogs). The saved card's own refusals are already the Worker's
 // (server/rules/payments/terminal.ts, W11).
 import 'server-only'
 

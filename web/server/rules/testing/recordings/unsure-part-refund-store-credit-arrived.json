@@ -10,10 +10,9 @@
       "paymentMethodUsed": "card"
     },
     {
-      "cardRefundedAmount": 0,
-      "storeCreditRefundedAmount": 40,
-      "storeCreditBalance": 70,
-      "pricePaid": 60
+      "noAnswer": {
+        "message": "The refund didn't get an answer, so it may or may not have gone through. Don't start a new refund: press Refund again here (it won't refund twice), or close this and check the booking's figures first."
+      }
     },
     {
       "refused": {
@@ -110,7 +109,7 @@
           "created_at": "<set>"
         },
         {
-          "key": "gone#5",
+          "key": "gone#3",
           "actor_type": "staff",
           "actor_id": "10000000-0000-4000-8000-000000000001",
           "endpoint": "POST /api/v1/staff/bookings/bookings#1/refunds/owed-arrived",
@@ -144,7 +143,7 @@
               },
               "message": "Nothing is owed on this booking any more."
             },
-            "requestId": "gone#6"
+            "requestId": "gone#5"
           },
           "http_status": 409,
           "created_at": "<set>"
@@ -454,7 +453,7 @@
           "booking_id": "bookings#1",
           "gift_card_id": null,
           "staff_id": "10000000-0000-4000-8000-000000000001",
-          "note": "Booking partial refund: Goodwill. [ref gone#7]",
+          "note": "Booking partial refund: Goodwill. [ref gone#6]",
           "created_at": "<set>",
           "event_booking_id": null
         }

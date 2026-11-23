@@ -5,8 +5,8 @@ import { describe, expect, it } from 'vitest'
 // Brief W27a item 3 (W27 review L6). The rules of an order's and an event booking's claim (one card part at most, on
 // the claim's own order; the sums; the order's lock before the look for an open claim) are kept in the two writers of
 // refunds/claims.ts. pipeline.ts exports `writeClaimRow`, which writes a claim's row with none of them, so a later
-// slice calling `writeClaimRow(tx, ORDER_CLAIMS, …)` itself would skip them all. This is a text search, as W16's
-// removal test (server/removed-order-code.test.ts): no app file outside refunds/claims.ts may pass ORDER_CLAIMS or
+// slice calling `writeClaimRow(tx, ORDER_CLAIMS, …)` itself would skip them all. This is a text search, as the
+// removal test is (server/rules/testing/removed-code.test.ts): no app file outside refunds/claims.ts may pass ORDER_CLAIMS or
 // EVENT_BOOKING_CLAIMS to writeClaimRow. Test files may (the race test's control does, to show what goes wrong).
 
 const workerDir = path.resolve(__dirname, '../../..')
@@ -118,7 +118,7 @@ describe("W27a: an order's or an event booking's claim is only ever written by r
     expect(breach(withoutComments('// never writeClaimRow(tx, ORDER_CLAIMS, …) here\nconst a = 1'))).toBeNull()
     // A test file isn't app code.
     expect(isTest(path.join(workerDir, 'server/rules/refunds/claims-postgres.test.ts'))).toBe(true)
-    expect(isTest(path.join(workerDir, 'server/rules/testing/replay/harness.ts'))).toBe(true)
+    expect(isTest(path.join(workerDir, 'server/rules/testing/replay/scenarios.ts'))).toBe(true)
     expect(isTest(CLAIMS_FILE)).toBe(false)
   })
 

@@ -6,7 +6,7 @@ import { staffAppDir } from './rules/testing/staff-app-dir'
 // Brief W37 item 5: the staff app's four thin wrappers (adjustCustomerStoreCredit, adjustMembershipCredits,
 // getMembershipCreditAdjustments, setMembershipHerd) against a stand-in for the Worker, and its three screens read as
 // source (the staff app has no test runner): the press key kept after no answer or a throw, closing blocked while a
-// press runs, and a reload on close. The wrappers through the real routes are held by account-replay.test.ts.
+// press runs, and a reload on close. The wrappers through the real routes are held by the all-Worker sweep (server/rules/testing/sweep/).
 
 const appDir = staffAppDir()
 const backend = (name: string) => import(/* @vite-ignore */ path.join(appDir, 'backend/paddock', name))

@@ -27,8 +27,8 @@ import { WATCH_DAYS } from '@/server/rules/refunds/refund-watch'
 
 // Brief W30 (E-plan 5.1): event places on the Worker, on the replay's live schema (the database's own
 // event_cancellation_quote, release_event_places and store credit function included), through the routes as the staff
-// app calls them. The event orders are placed by the old createOrder (the frozen copy), as the golden scenarios place
-// them. Stripe is only ever the fake.
+// app calls them. The event orders are placed through the Worker's order route, as New Order places
+// them (sweep/worker.ts). Stripe is only ever the fake.
 
 vi.setConfig({ testTimeout: 120_000 })
 

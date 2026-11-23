@@ -1,6 +1,6 @@
 // W49 (G-plan 1.8, 4.1, 4.3, 4.6; bug GB16; lead calls L10 and L11): the Staff page on the Worker. Ported from the
 // staff app's getCurrentStaff.ts, getStaff.ts, createStaff.ts, setStaffRole.ts, setStaffPermission.ts and
-// setStaffCanManagePricing.ts (frozen at W48 in testing/legacy-admin), with their words (./failure-messages.ts).
+// setStaffCanManagePricing.ts (as they were at W48), with their words (./failure-messages.ts).
 //
 // What GB16 changes. Every staff change is one transaction under the staff table's guard (every staff row, locked
 // in id order: admin/locks.ts, EVERY_ROW), so two admins pressing at once take turns, and "keep one active admin" and

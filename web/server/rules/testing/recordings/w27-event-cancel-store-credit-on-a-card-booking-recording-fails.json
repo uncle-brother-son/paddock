@@ -1,13 +1,13 @@
 {
-  "scenario": "w27-event-cancel-recording-fails-and-the-take-back-answer-is-lost",
+  "scenario": "w27-event-cancel-store-credit-on-a-card-booking-recording-fails",
   "results": [
     {
       "success": true,
       "orderId": "orders#1",
       "eventBookingId": "event_bookings#1",
-      "cardCharged": false,
+      "cardCharged": true,
       "cardAmount": 80,
-      "paymentMethodUsed": "cash"
+      "paymentMethodUsed": "card"
     },
     {
       "ok": false,
@@ -15,7 +15,24 @@
       "message": "The cancellation couldn't be saved (the system was busy, or one of its records couldn't be written), so nothing was cancelled. Try again."
     }
   ],
-  "stripeCalls": [],
+  "stripeCalls": [
+    {
+      "method": "paymentIntents.create",
+      "params": {
+        "amount": 8000,
+        "currency": "gbp",
+        "customer": "cus_seed",
+        "payment_method": "pm_seed",
+        "off_session": true,
+        "confirm": true,
+        "description": "Staff-created order for event",
+        "metadata": {
+          "order_id": "orders#1"
+        }
+      },
+      "idempotencyKey": "orders#1:charge"
+    }
+  ],
   "tables": {
     "api_idempotency": {
       "added": [
@@ -32,9 +49,9 @@
               "status": "paid",
               "orderId": "orders#1",
               "payment": {
-                "method": "cash",
+                "method": "card",
                 "collected": 80,
-                "cardCharged": false,
+                "cardCharged": true,
                 "giftCardApplied": 0,
                 "storeCreditApplied": 0
               },
@@ -90,7 +107,7 @@
           "request_id": "gone#2",
           "details": {
             "promo": null,
-            "method": "cash",
+            "method": "card",
             "postage": null,
             "giftCard": null,
             "amountDue": 80,
@@ -100,6 +117,7 @@
             },
             "overrides": [],
             "toCollect": 80,
+            "awaitsCard": true,
             "giftCardId": null,
             "orderTotal": 80,
             "storeCredit": 0,
@@ -118,10 +136,11 @@
           "entity_id": "orders#1",
           "request_id": "gone#2",
           "details": {
-            "method": "cash",
-            "giftCard": 0,
+            "method": "card",
             "collected": 80,
-            "storeCredit": 0
+            "addressSaved": false,
+            "paymentIntentId": "pi_fake_0002",
+            "eventBookingConfirmed": true
           }
         }
       ],
@@ -267,7 +286,7 @@
           "customer_id": "10000000-0000-4000-8000-000000000005",
           "order_total": "80.00",
           "payment_status": "paid",
-          "stripe_payment_intent_id": null,
+          "stripe_payment_intent_id": "pi_fake_0002",
           "promo_code": null,
           "discount_amount": "0.00",
           "shipping_address": null,
@@ -276,8 +295,22 @@
           "order_source": "staff_created",
           "created_at": "<set>",
           "updated_at": "<set>",
-          "payment_method": "cash",
-          "reader_payment": null,
+          "payment_method": "card",
+          "reader_payment": {
+            "flow": "checkout",
+            "method": "card",
+            "channel": "staff",
+            "livemode": false,
+            "save_card": false,
+            "created_at": "<time>",
+            "request_id": "gone#2",
+            "expected_amount": 80,
+            "payment_method_id": "pm_seed",
+            "charge_description": "Staff-created order for event",
+            "stripe_customer_id": "cus_seed",
+            "charge_payment_intent_id": "pi_fake_0002",
+            "save_address_to_customer": false
+          },
           "refund_owed_amount": "0.00"
         }
       ],

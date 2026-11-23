@@ -1,6 +1,6 @@
 // Brief W57 (G-plan 1.4, 4.4, 4.7; bugs GB1, GB2, GB19, GB20; Wayne's Q53): the new words of membership plans and
 // membership settings, for what the old functions had no words of their own for. The old functions' own sentences
-// stay in failure-messages.ts (CATALOG_ADMIN_WORDS, LEGACY_CATALOG_ROUTE_WORDS), held to the frozen copy by
+// stay in failure-messages.ts (CATALOG_ADMIN_WORDS, LEGACY_CATALOG_ROUTE_WORDS), held to the old words by
 // server/rules/admin/words.test.ts; these are kept apart so that test still holds both ways. Read-only: a read may
 // import it.
 

@@ -119,6 +119,8 @@ function orderCallsTakeASecond(stripe: FakeStripe, placing: { on: boolean }): vo
 export function workerSide(options: WorkerSideOptions = {}): (db: Db, stripe: FakeStripe) => ReplaySide {
   const { adjust, calls, orderAnswers, confirms, repeatedPress, refusedReadsAsAnswers, refusedPressesAsAnswers, stamps, planExtras, lapseRuns, orderSwitch = LIVE_KINDS_ON } = options
   return (db, stripe) => {
+    // W65b (lead call): kept as a guard. No hook wraps these any more; a staff app function that still reaches an old
+    // resource fails loudly here instead of passing quietly.
     vi.stubGlobal('paddockData', { query: refusedOld('paddockData') })
     vi.stubGlobal('paddockBackendApi2', { rawRequest: refusedOld('paddockBackendApi2') })
     vi.stubGlobal('paddockWorkerV1', { rawRequest: bindStaffRoutes(db) })
@@ -200,7 +202,7 @@ export function workerSide(options: WorkerSideOptions = {}): (db: Db, stripe: Fa
       if (W41_ACTIONS.has(action)) return withSwitch(PAYMENT_DATE_KINDS_ON, () => paymentDates(db, action, params))
       if (STEP_G_ACTIONS_MOVED.has(action)) return stepG(action, params)
       // Any other staff app function (the Orders page's reconcileOrders, getStuckReaderPayments, closeStuckOrder,
-      // getMoneyOwed...): the staff app's own file, as the old side loaded it. Every one is a thin call to the Worker.
+      // getMoneyOwed...): the staff app's own file, loaded as Retool runs it. Every one is a thin call to the Worker.
       const own = path.join(staffAppDir(), 'backend/paddock', `${action}.ts`)
       if (!existsSync(own)) throw new Error(`The all-Worker side has no press for ${action}.`)
       const loaded = (await import(/* @vite-ignore */ own)) as { default: (req: { params: unknown; user: typeof REPLAY_USER }) => Promise<unknown> }

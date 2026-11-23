@@ -12,15 +12,15 @@ import { replayStripe } from '../replay/stripe-binding'
 /*
  * W64 (H-plan 3.3 step 3): step D's presses (W18 to W24), as the screen presses them, moved here unchanged from
  * `replay/booking-side.ts` so the all-Worker sweep and the Worker's own rule tests can press the Worker with nothing of the
- * old code loaded. The replay side re-exports all of it; what it keeps is its old side and its comparisons (W65).
+ * old code loaded.
  */
 
 /** How the Worker answers one old action, in the old function's shape. */
 export type NewBookingAction = (db: Db, params: unknown) => Promise<unknown>
 
 /**
- * W18 on: the staff app's own thin wrapper, which calls the real route through the old side's paddockWorkerV1
- * stand-in (bindStaffRoutes), so the replay holds the wrapper and the route together to the old function. callWorker
+ * W18 on: the staff app's own thin wrapper, which calls the real route through the paddockWorkerV1
+ * stand-in (bindStaffRoutes), so the sweep holds the wrapper and the route together. callWorker
  * puts a fresh request id into an error it throws; that id is left out so a recording repeats.
  */
 export function throughStaffApp(name: string): NewBookingAction {
@@ -60,7 +60,7 @@ export const pressSwitch: { live: string | null } = { live: null }
  */
 export const pressInFlight: { on: boolean } = { on: false }
 
-/** `work` with ORDER_SWITCH set to `value` (or the press's live switch), put back after it (the old side's own calls see their own). */
+/** `work` with ORDER_SWITCH set to `value` (or the press's live switch), put back after it. */
 export async function withSwitch<T>(value: string, work: () => Promise<T>): Promise<T> {
   const before = process.env.ORDER_SWITCH
   process.env.ORDER_SWITCH = pressSwitch.live ?? value
@@ -267,7 +267,7 @@ export function cancelCreditAsTheDialogPresses(): NewBookingAction {
  * and its figures are kept for that booking, as the dialog keeps them on screen; the press sends them back (Q18:
  * `figures.amountDue`, signed; `toCollect` the cash tick's own figure for cash, else what the method takes after the
  * gift card and store credit), with a press key kept after no answer (W20a's rule), and the switch on. A press with no
- * quote before it (none in the golden files) asks for one first. The old params had no figures.
+ * quote before it (none in the scenarios) asks for one first. The old params had no figures.
  */
 export function moveAsTheDialogPresses(): NewBookingAction {
   const heldKeys = new Map<string, string>()
@@ -321,8 +321,8 @@ export function refundBuiltFor(params: unknown): boolean {
  * refund figures. W18: special requests and status, through the staff app's thin wrappers. W19: Settle, with the
  * figures the dialog now sends, and the reader flows' finalise and cancel, through the staff app's wrappers. W64a item 8
  * (W64 review, "for later" 5): the all-Worker side makes a new set for every scenario (sweep/worker.ts), so a key held
- * after no answer never follows a seeded booking id into the next scenario. W65: the old replay's one shared set
- * (BUILT_BOOKING_ACTIONS) and its empty PARTLY_BUILT went with the old side.
+ * after no answer never follows a seeded booking id into the next scenario. W65: the one shared set the old
+ * functions' side used (BUILT_BOOKING_ACTIONS) and its empty PARTLY_BUILT went with them.
  */
 export function bookingPresses(): ReadonlyMap<string, NewBookingAction> {
   return new Map<string, NewBookingAction>([

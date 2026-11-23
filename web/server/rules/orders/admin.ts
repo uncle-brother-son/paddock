@@ -1,6 +1,6 @@
 // W53 (G-plan 1.11, 1.12, 4.1, 4.3, 4.8; bugs GB14 and GB22; lead calls L6, L9, L11, L12): the Orders page, an order's
 // lines, the fulfilled tick and Overview's "Needs attention: payments" on the Worker. Ported from the staff app's
-// getOrders.ts, getOrderLineItems.ts and setOrderLineItemFulfilled.ts (frozen at W48 in testing/legacy-admin), with
+// getOrders.ts, getOrderLineItems.ts and setOrderLineItemFulfilled.ts (as they were at W48), with
 // their words (./admin-failure-messages.ts). getPaymentAttentionItems moved here from bookings/admin.ts, unchanged
 // (W50 report, "Where I was unsure" 8: G-plan 4.1 places it with orders).
 //

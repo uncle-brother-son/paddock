@@ -13,11 +13,11 @@ import { OLD_WORDS, type OldAdminWord } from '@/server/rules/testing/old-words'
 import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
 
 // Brief W48 item 1: every refusal reason of the 82 old step G functions, and its words, is in the Worker's words
-// files, word for word, and nothing else is. The old sentences were read from step G's frozen copy with the TypeScript
-// parser, so a word changed on either side fails here; the reasons from each old function's own result type; the
-// dialogs' own sentences from the dialogs' source in the staff app. W64a item 7: what this test read from the copy (its
-// file count, every sentence staff could see, each function's reasons) is pinned in testing/old-words.json, recorded by
-// replay/old-words.test.ts with this file's own reading of the copy, moved there unchanged.
+// files, word for word, and nothing else is. The old sentences were read from step G's old functions with the
+// TypeScript parser, so a word changed on either side fails here; the reasons from each old function's own result type; the
+// dialogs' own sentences from the dialogs' source in the staff app. W64a item 7: what this test read from the old code (its
+// file count, every sentence staff could see, each function's reasons) is pinned in testing/old-words.json, recorded
+// once before that code went at W65.
 
 /** Stands in for a value a sentence takes (`${…}` in the old source; the argument of the word's function here). */
 const VALUE = '${}'
@@ -37,7 +37,7 @@ const moved = new Set(NEW_WORDS.flatMap(sentences))
 const everyOldWord: OldWord[] = OLD_WORDS.admin.words
 
 describe("step G's words (brief W48 item 1)", () => {
-  it('reads the frozen copy: 107 files, 214 sentences in 53 of them, 168 of them different', () => {
+  it('the old words as pinned: 107 files, 214 sentences in 53 of them, 168 of them different', () => {
     expect(OLD_WORDS.admin.files).toBe(107)
     expect(everyOldWord).toHaveLength(214)
     expect(new Set(everyOldWord.map((word) => word.file)).size).toBe(53)

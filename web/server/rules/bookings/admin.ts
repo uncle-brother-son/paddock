@@ -2,7 +2,7 @@
 // the booking detail and Overview's booking cards on the Worker. Ported from the staff app's getBookings.ts,
 // getBookingById.ts, getBookingDetail.ts (with shared/bookingPaymentOpenWords.ts and shared/readerPaymentOpen.ts),
 // getAddonPrepChecklistForRange.ts, getWaiverGapsForRange.ts, getPaymentAttentionItems.ts, setBookingCheckedIn.ts,
-// setGuestWaiverStatus.ts and setAddonLinePrepared.ts (frozen at W48 in testing/legacy-admin), with their words
+// setGuestWaiverStatus.ts and setAddonLinePrepared.ts (as they were at W48), with their words
 // (./admin-failure-messages.ts). W53: getPaymentAttentionItems' read (listPaymentAttention) moved to
 // server/rules/orders/admin.ts, unchanged, where G-plan 4.1 places it; it still reads a booking by BOOKING_ROW_SQL.
 //

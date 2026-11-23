@@ -19,17 +19,9 @@
       }
     },
     {
-      "added": true,
-      "limitReached": false,
-      "guest": {
-        "id": "booking_guests#3",
-        "pay_by": "paid",
-        "guest_name": "Bea Guest",
-        "guest_type": "additional_guest",
-        "unit_price": 20,
-        "guest_email": "bea@example.com"
-      },
-      "addonLineIds": []
+      "added": false,
+      "reason": "no_answer",
+      "message": "Adding didn't get an answer, so it may or may not have gone through, with its payment. Don't take payment again yet: reload the booking. If the guest or add-ons are there and it shows no payment still open, it's done. If it shows a payment still open, it's being checked: don't take payment, and use Resolve now on the Orders page after 15 minutes. If they aren't there, press again (it won't add or charge twice)."
     },
     {
       "cardRefundedAmount": 40,

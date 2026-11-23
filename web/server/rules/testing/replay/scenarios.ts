@@ -721,6 +721,16 @@ const REFUND_PATH = '/api/v1/staff/{bookings,orders,event-bookings}/[id]/{refund
 const MEMBERSHIP_CANCEL_PATH = '/api/v1/staff/memberships/[membershipId]/cancel'
 const MEMBERSHIP_UNDO_CANCEL_PATH = '/api/v1/staff/memberships/[membershipId]/undo-cancel'
 const PAYMENT_DATE_PATH = '/api/v1/staff/memberships/[membershipId]/payment-date'
+// W65b: the routes the rebuilt overlaps and lost answers run at (each its press's own route, alone).
+const SETTLE_PATH = '/api/v1/staff/bookings/[bookingId]/settle'
+const REMOVE_GUEST_PATH = '/api/v1/staff/bookings/guests/[guestId]/remove'
+const WHOLE_EVENT_CANCEL_PATH = '/api/v1/staff/events/[eventId]/cancel'
+const CREDITS_PATH = '/api/v1/staff/memberships/[membershipId]/credits'
+export const STAFF_PERMISSIONS_PATH = '/api/v1/staff/staff/[staffId]/permissions'
+export const VARIANT_STOCK_PATH = '/api/v1/staff/catalog/variants/[variantId]/stock'
+export const PROMO_CODE_PATH = '/api/v1/staff/promo-codes/[id]'
+export const SESSION_BLOCK_PATH = '/api/v1/staff/sessions/[sessionId]/block'
+export const SESSION_START_TIME_PATH = '/api/v1/staff/sessions/[sessionId]/start-time'
 
 /**
  * W19: a step an action's old function made through a legacy route, and the Worker route that makes it now the action
@@ -745,10 +755,19 @@ const WORKER_DOES_IT_NOW: Readonly<Record<string, { route: RegExp; answerLost: R
   [MEMBERSHIP_UNDO_CANCEL_PATH]: { route: /^\/api\/v1\/staff\/memberships\/[^/]+\/undo-cancel$/, answerLost: /^\/api\/v1\/staff\/memberships\/[^/]+\/undo-cancel$/ },
   // W41: and the payment date change (the old function called the legacy route for the charge and the date move).
   [PAYMENT_DATE_PATH]: { route: /^\/api\/v1\/staff\/memberships\/[^/]+\/payment-date$/, answerLost: /^\/api\/v1\/staff\/memberships\/[^/]+\/payment-date$/ },
+  // W65b: Settle alone (CHARGE_PATH loses only Add Guest's and Move's answers), and Remove Guest.
+  [SETTLE_PATH]: { route: /^\/api\/v1\/staff\/bookings\/[^/]+\/settle$/, answerLost: /^\/api\/v1\/staff\/bookings\/[^/]+\/settle$/ },
+  [REMOVE_GUEST_PATH]: { route: /^\/api\/v1\/staff\/bookings\/guests\/[^/]+\/remove$/, answerLost: /^\/api\/v1\/staff\/bookings\/guests\/[^/]+\/remove$/ },
+  // W65b: the whole event's cancel (its first half, which moves no money) and a membership's credit adjustment.
+  [WHOLE_EVENT_CANCEL_PATH]: { route: /^\/api\/v1\/staff\/events\/[^/]+\/cancel$/, answerLost: /^\/api\/v1\/staff\/events\/[^/]+\/cancel$/ },
+  [CREDITS_PATH]: { route: /^\/api\/v1\/staff\/memberships\/[^/]+\/credits$/, answerLost: /^\/api\/v1\/staff\/memberships\/[^/]+\/credits$/ },
+  // W65b: step G's admin presses (w48-scenarios.ts).
+  [STAFF_PERMISSIONS_PATH]: { route: /^\/api\/v1\/staff\/staff\/[^/]+\/permissions$/, answerLost: /^\/api\/v1\/staff\/staff\/[^/]+\/permissions$/ },
+  [VARIANT_STOCK_PATH]: { route: /^\/api\/v1\/staff\/catalog\/variants\/[^/]+\/stock$/, answerLost: /^\/api\/v1\/staff\/catalog\/variants\/[^/]+\/stock$/ },
+  [PROMO_CODE_PATH]: { route: /^\/api\/v1\/staff\/promo-codes\/[^/]+$/, answerLost: /^\/api\/v1\/staff\/promo-codes\/[^/]+$/ },
+  [SESSION_BLOCK_PATH]: { route: /^\/api\/v1\/staff\/sessions\/[^/]+\/block$/, answerLost: /^\/api\/v1\/staff\/sessions\/[^/]+\/block$/ },
+  [SESSION_START_TIME_PATH]: { route: /^\/api\/v1\/staff\/sessions\/[^/]+\/start-time$/, answerLost: /^\/api\/v1\/staff\/sessions\/[^/]+\/start-time$/ },
 }
-
-type QueryFn = (sql: string, params?: unknown[]) => Promise<unknown>
-const dataApi = () => (globalThis as unknown as { paddockData: { query: QueryFn } }).paddockData
 
 /** What the overlap hooks reach into: the run's database and fake Stripe, the same objects the Worker's routes use. */
 export interface Overlap {
@@ -801,6 +820,7 @@ async function overlapped<T>({ db, stripe }: Overlap, path: string, when: 'after
   const realRefund = stripe.refunds.create
   const realTransaction = db.transaction
   let secondRun: Promise<unknown> | null = null
+  let secondEnded = false
   let letFirstOn = () => {}
   const secondsPaymentOpen = new Promise<void>((resolve) => {
     letFirstOn = resolve
@@ -834,7 +854,10 @@ async function overlapped<T>({ db, stripe }: Overlap, path: string, when: 'after
       ran = true
       db.transaction = realTransaction
       // Whatever the second press does, the first carries on once it ends (a second refused before its charge).
-      secondRun = gap().finally(letFirstOn)
+      secondRun = gap().finally(() => {
+        secondEnded = true
+        letFirstOn()
+      })
       await secondsPaymentOpen
       vi.setSystemTime(Date.now() + PRESS_STEP_MS)
       return realTransaction.call(db, fn) as Promise<R>
@@ -842,7 +865,9 @@ async function overlapped<T>({ db, stripe }: Overlap, path: string, when: 'after
     let handedOver = false
     stripe.paymentIntents.create = async (params, options) => {
       const answer = await realCharge(params, options)
-      if (secondRun && !handedOver) {
+      // W65b: only the second press's own charge, while it runs: once it has ended (a gap that charges nothing, say)
+      // a charge is the first press's own, which goes straight on.
+      if (secondRun && !secondEnded && !handedOver) {
         // The second press's charge, its payment open: the first press runs C1 and to its end, then this one goes on.
         handedOver = true
         pressInFlight.on = true
@@ -880,6 +905,14 @@ export const afterTheCharge = <T>(on: Overlap, gap: () => Promise<unknown>, firs
 export const afterTheRefund = <T>(on: Overlap, gap: () => Promise<unknown>, first: () => Promise<T>) => overlapped(on, REFUND_PATH, 'after', gap, first)
 /** The other way round: the first press waits at its C1 while the second press's card payment opens (see overlapped). */
 export const beforeTheStartedRow = <T>(on: Overlap, gap: () => Promise<unknown>, first: () => Promise<T>) => overlapped(on, CHARGE_PATH, 'before', gap, first)
+/**
+ * W65b: `gap` (another tab's step: a press, or a write standing for one) lands just before the first press's route, at
+ * `path`, opens its first transaction (see overlapped, `before`). For the routes that hold their check and their
+ * write in one transaction, this is the nearest point to "between the check and the write" there is.
+ */
+export const atItsFirstTransaction = <T>(on: Overlap, path: string, gap: () => Promise<unknown>, first: () => Promise<T>) => overlapped(on, path, 'before', gap, first)
+/** W65b: `gap`, a second press, runs inside the first press's Stripe charge at `path`, its payment open (see overlapped, `after`). */
+export const insideItsCharge = <T>(on: Overlap, path: string, gap: () => Promise<unknown>, first: () => Promise<T>) => overlapped(on, path, 'after', gap, first)
 
 /**
  * Retool stops waiting for the charge (the press is told it may have gone through), and the Worker carries on: W20:
@@ -1044,11 +1077,8 @@ export const w05lPay = {
 }
 /** The gift card's redemption row can't be written: its statement fails. */
 export const giftCardRowFails: WriteFailure = { table: 'gift_card_redemptions', event: 'INSERT', when: 'true' }
-/** Move's and Settle's final statements, by the pending row they can write. */
-export const MOVE_STATEMENT = (sql: string) => sql.includes("SELECT 'move', bk.id")
-export const SETTLE_STATEMENT = (sql: string) => sql.includes("SELECT 'settle', bk.id")
-export const ADD_GUEST_STATEMENT = (sql: string) => sql.includes("SELECT 'add_guest', ok.id")
-// W65a: PRESS_LOOK and andTheLookFails (the look for a press's finished row failing too) went with `losingTheAnswer`.
+// W65a/W65b: the old functions' statement matchers (MOVE_STATEMENT, SETTLE_STATEMENT, ADD_GUEST_STATEMENT, PRESS_LOOK)
+// went with the hooks that matched them (`losingTheAnswer`, `landingAfterTheLook`).
 
 /** A member's £20 seat whose credit lapsed: awaiting payment, for Settle. */
 export async function lapsedSeat(call: ScenarioContext['call'], db: Db): Promise<string> {
@@ -1067,6 +1097,18 @@ export async function settle(call: ScenarioContext['call'], stripe: FakeStripe, 
   return settled
 }
 
+/**
+ * W65b: Cancel & Refund after a lost answer that started a reader payment (the screen never showed the tap): refused
+ * while the reader payment is open, so staff cancel the reader payment first, as the refusal says, then the booking.
+ */
+async function cancelPastAnOpenReader({ bookingId, call, attempt, db }: Pick<BookingSteps, 'bookingId' | 'call' | 'attempt' | 'db'>): Promise<void> {
+  await attempt('refundBooking', { bookingId, refundMethod: 'card' })
+  const open = (await db.query<{ id: string }>("SELECT id FROM pending_reader_payments WHERE status = 'pending' ORDER BY created_at, id"))[0]
+  if (!open) throw new Error('No reader payment was left open by the lost answer.')
+  await attempt('cancelReaderPayment', { pendingId: open.id })
+  await call('refundBooking', { bookingId, refundMethod: 'card' })
+}
+
 /** Settle scenarios: a lapsed seat, then `steps`. */
 function lapsed(name: string, steps: (context: ScenarioContext, bookingId: string) => Promise<void>): Scenario {
   return {
@@ -1078,9 +1120,9 @@ function lapsed(name: string, steps: (context: ScenarioContext, bookingId: strin
   }
 }
 
-/** W27: the name every step E golden scenario starts with (declared here, above the list that builds them). */
+/** W27: the name every step E scenario starts with (declared here, above the list that builds them). */
 export const W27_PREFIX = 'w27-'
-/** W36: the name every step F golden scenario starts with. */
+/** W36: the name every step F scenario starts with. */
 export const W36_PREFIX = 'w36-'
 /** W36: Mo's Stripe subscription, once a scenario has given her membership one (`moSubscribed`). */
 export const MO_SUBSCRIPTION = 'sub_mo'
@@ -2026,10 +2068,10 @@ export const scenarios: Scenario[] = [
   addonOnGuest('addon-with-guest-same-tier-to-store-credit-not-ticked', { order: promoOnCard, payment: payments.card, ticked: false, refundMethod: 'credit' }),
   addonOnGuest('addon-with-guest-same-tier-to-store-credit-ticked', { order: promoOnCard, payment: payments.card, ticked: true, refundMethod: 'credit' }),
   // --- A lost answer (W05i): the money may have gone, so it stays owed until staff say which
-  // W65a: the store credit ones ("…store-credit-arrived") lost the old side's statement (paddockData): on the Worker
-  // they have been plain presses since W64. The card ones lose the Worker route's answer.
+  // W65b: the store credit ones ("…store-credit-arrived") lost the old side's statement until W64 (then plain presses);
+  // now, like the card ones, each loses its Worker route's answer (the route finished: the credit was given).
   booked('unsure-part-refund-store-credit-arrived', noPromoOnCard, async ({ bookingId, call }) => {
-    await call('refundBooking', { bookingId, refundMethod: 'credit', amount: 40, ...goodwill })
+    await losingTheWorkersAnswer(REFUND_PATH, () => call('refundBooking', { bookingId, refundMethod: 'credit', amount: 40, ...goodwill }))
     await call('refundBooking', { bookingId, refundMethod: 'credit', amount: 40, owedArrived: true, reason: 'Found on their balance' })
   }),
   booked('unsure-part-refund-card-then-the-rest-then-cancel', noPromoOnCard, async ({ bookingId, call }) => {
@@ -2043,8 +2085,8 @@ export const scenarios: Scenario[] = [
     await call('refundBooking', { bookingId, refundMethod: 'card' })
   }),
   booked('unsure-cancel-store-credit-arrived', noPromoOnCard, async ({ bookingId, call, attempt }) => {
-    await call('refundBooking', { bookingId, refundMethod: 'credit' })
-    // W23: `attempt` (the old side answers as `call` did): on the Worker the cancel went through once, so these two
+    await losingTheWorkersAnswer(REFUND_PATH, () => call('refundBooking', { bookingId, refundMethod: 'credit' }))
+    // W23: `attempt`: on the Worker the cancel went through once, so these two
     // find the booking cancelled and are refused.
     await attempt('refundBooking', { bookingId, refundMethod: 'credit', amount: 100, owedArrived: true, reason: 'Found on their balance' })
     await attempt('refundBooking', { bookingId, refundMethod: 'credit' })
@@ -2056,7 +2098,7 @@ export const scenarios: Scenario[] = [
   booked('unsure-remove-guest-store-credit-arrived', publicOnCard, async ({ bookingId, call, add }) => {
     const guest = await add(bea, payments.card)
     const guestId = guest.guest?.id
-    await call('removeBookingGuest', { guestId, confirmedRefundAmount: 20, refundMethod: 'credit' })
+    await losingTheWorkersAnswer(REMOVE_GUEST_PATH, () => call('removeBookingGuest', { guestId, confirmedRefundAmount: 20, refundMethod: 'credit' }))
     await call('refundBooking', { bookingId, refundMethod: 'credit', amount: 20, owedArrived: true, reason: 'Found on their balance' })
     await call('removeBookingGuest', { guestId, confirmedRefundAmount: 0 })
   }),
@@ -2719,16 +2761,18 @@ export const scenarios: Scenario[] = [
     await call('cancelReaderPayment', { pendingId: started.pendingReaderPayment?.pendingId })
     await call('refundBooking', { bookingId, refundMethod: 'card' })
   }),
-  // W24: the cancel is an `attempt` (the old side records it as before): on the Worker the move is held for reconcile,
+  // W24: the cancel is an `attempt`: on the Worker the move is held for reconcile,
   // which refuses the cancel while the payment is checked.
   booked('w05l-move-gift-card-row-fails-then-cancel', publicOnCard, async ({ bookingId, attempt, db, move }) => {
     await whileFailing(db, giftCardRowFails, () => move(ID.peakSession, { payment: w05lPay.card }))
     await attempt('refundBooking', { bookingId, refundMethod: 'card' })
   }),
-  // W65a: every "…answer-lost…" W05l scenario lost the old side's statement (paddockData): on the Worker each has been a
-  // plain press since W64 (the statement is inside the route's transaction).
+  // W65b: every "…answer-lost…" W05l scenario lost the old side's statement until W64 (the statement is inside the
+  // Worker route's transaction), then was a plain press; now each loses its Worker route's answer instead (the route
+  // finished; the screen is told nothing). The three "…-and-the-look-fails" ones are renamed: the look was the old
+  // function's own, and the Worker has none.
   booked('w05l-move-gift-card-answer-lost-then-cancel', publicOnCard, async ({ bookingId, call, move }) => {
-    await move(ID.peakSession, { payment: w05lPay.card })
+    await losingTheWorkersAnswer(CHARGE_PATH, () => move(ID.peakSession, { payment: w05lPay.card }))
     await call('refundBooking', { bookingId, refundMethod: 'card' })
   }),
   // Settle: a £20 seat, £5 on the gift card and £15 on the card or the reader.
@@ -2751,49 +2795,56 @@ export const scenarios: Scenario[] = [
     await whileFailing(db, giftCardRowFails, () => settle(call, stripe, bookingId, w05lPay.card))
   }),
   lapsed('w05l-settle-gift-card-answer-lost-then-cancel', async ({ call, stripe }, bookingId) => {
-    await settle(call, stripe, bookingId, w05lPay.card)
+    await losingTheWorkersAnswer(SETTLE_PATH, () => settle(call, stripe, bookingId, w05lPay.card))
     await call('refundBooking', { bookingId, refundMethod: 'card' })
   }),
   // --- W05l: a statement that wrote and lost its answer, with no card charge, is never undone ------------
+  // W65b: on the Worker, a route that finished and lost its answer: nothing it did is undone.
   booked('w05l-move-gift-card-and-cash-answer-lost-then-cancel', publicOnCard, async ({ bookingId, call, move }) => {
-    await move(ID.peakSession, { payment: w05lPay.cash })
+    await losingTheWorkersAnswer(CHARGE_PATH, () => move(ID.peakSession, { payment: w05lPay.cash }))
     await call('refundBooking', { bookingId, refundMethod: 'card' })
   }),
-  booked('w05l-move-gift-card-and-reader-answer-lost-then-cancel', publicOnCard, async ({ bookingId, call, move }) => {
-    await move(ID.peakSession, { payment: w05lPay.reader })
-    await call('refundBooking', { bookingId, refundMethod: 'card' })
+  // W65b: the answer lost is the one that starts the reader payment, so the screen never shows the tap.
+  booked('w05l-move-gift-card-and-reader-answer-lost-then-cancel', publicOnCard, async ({ bookingId, call, attempt, db, move }) => {
+    await losingTheWorkersAnswer(CHARGE_PATH, () => move(ID.peakSession, { payment: w05lPay.reader }))
+    await cancelPastAnOpenReader({ bookingId, call, attempt, db })
   }),
   // £51 to the £40 session: the £11 difference still goes back to the card.
   booked(
     'w05l-move-cheaper-answer-lost',
     publicPeakOnCard,
     async ({ move }) => {
-      await move(ID.laterPublicSession, { refundMethod: 'card' })
+      await losingTheWorkersAnswer(REFUND_PATH, () => move(ID.laterPublicSession, { refundMethod: 'card' }))
     },
     laterPublicSession
   ),
-  booked('w05l-move-answer-lost-and-the-look-fails', publicOnCard, async ({ move }) => {
-    await move(ID.peakSession, { payment: w05lPay.cash })
+  // W65b: renamed from w05l-move-answer-lost-and-the-look-fails.
+  booked('w05l-move-gift-card-and-cash-answer-lost', publicOnCard, async ({ move }) => {
+    await losingTheWorkersAnswer(CHARGE_PATH, () => move(ID.peakSession, { payment: w05lPay.cash }))
   }),
   lapsed('w05l-settle-gift-card-and-cash-answer-lost-then-cancel', async ({ call, stripe }, bookingId) => {
-    await settle(call, stripe, bookingId, { ...w05lPay.card, method: 'cash', confirmedCashAmount: 15 })
+    await losingTheWorkersAnswer(SETTLE_PATH, () => settle(call, stripe, bookingId, { ...w05lPay.card, method: 'cash', confirmedCashAmount: 15 }))
     await call('refundBooking', { bookingId, refundMethod: 'card' })
   }),
-  lapsed('w05l-settle-gift-card-and-reader-answer-lost-then-cancel', async ({ call, stripe }, bookingId) => {
-    await settle(call, stripe, bookingId, w05lPay.reader)
-    await call('refundBooking', { bookingId, refundMethod: 'card' })
+  lapsed('w05l-settle-gift-card-and-reader-answer-lost-then-cancel', async ({ call, attempt, db, stripe }, bookingId) => {
+    await losingTheWorkersAnswer(SETTLE_PATH, () => settle(call, stripe, bookingId, w05lPay.reader))
+    await cancelPastAnOpenReader({ bookingId, call, attempt, db })
   }),
-  lapsed('w05l-settle-answer-lost-and-the-look-fails', async ({ call, stripe }, bookingId) => {
-    await settle(call, stripe, bookingId, { ...w05lPay.card, method: 'cash', confirmedCashAmount: 15 })
+  // W65b: renamed from w05l-settle-answer-lost-and-the-look-fails.
+  lapsed('w05l-settle-gift-card-and-cash-answer-lost', async ({ call, stripe }, bookingId) => {
+    await losingTheWorkersAnswer(SETTLE_PATH, () => settle(call, stripe, bookingId, { ...w05lPay.card, method: 'cash', confirmedCashAmount: 15 }))
   }),
-  // Bea's £20 seat: £5 on the gift card and £15 in cash.
+  // Bea's £20 seat: £5 on the gift card and £15 in cash. W65b: the quote first, as `add` sends it; the paid press loses
+  // its answer (Add Guest's quote and press share the route).
   booked('w05l-add-guest-gift-card-and-cash-answer-lost-then-cancel', publicOnCard, async ({ bookingId, call, add }) => {
-    await add(bea, { ...cash(15), giftCard: W05L_GIFT })
+    await add(bea)
+    await losingTheWorkersAnswer(CHARGE_PATH, () => call('addBookingGuest', { bookingId, ...bea, payment: { ...cash(15), giftCard: W05L_GIFT } }))
     await call('refundBooking', { bookingId, refundMethod: 'card' })
   }),
-  booked('w05l-add-guest-gift-card-and-reader-answer-lost-then-cancel', publicOnCard, async ({ bookingId, call, add }) => {
-    await add(bea, w05lPay.reader)
-    await call('refundBooking', { bookingId, refundMethod: 'card' })
+  booked('w05l-add-guest-gift-card-and-reader-answer-lost-then-cancel', publicOnCard, async ({ bookingId, call, attempt, db, add }) => {
+    await add(bea)
+    await losingTheWorkersAnswer(CHARGE_PATH, () => call('addBookingGuest', { bookingId, ...bea, payment: w05lPay.reader }))
+    await cancelPastAnOpenReader({ bookingId, call, attempt, db })
   }),
   // An earlier press's row on the same booking is not this press's: a statement that really failed is undone.
   booked('w05l-move-fails-after-another-press-finished', publicOnCard, async ({ bookingId, call, db, add, move }) => {
@@ -2801,8 +2852,10 @@ export const scenarios: Scenario[] = [
     await whileFailing(db, giftCardRowFails, () => move(ID.peakSession, { payment: { ...w05lPay.cash, confirmedCashAmount: 11.5 } }))
     await call('refundBooking', { bookingId, refundMethod: 'card' })
   }),
-  booked('w05l-add-guest-answer-lost-and-the-look-fails', publicOnCard, async ({ add }) => {
-    await add(bea, { ...cash(15), giftCard: W05L_GIFT })
+  // W65b: renamed from w05l-add-guest-answer-lost-and-the-look-fails.
+  booked('w05l-add-guest-gift-card-and-cash-answer-lost', publicOnCard, async ({ bookingId, call, add }) => {
+    await add(bea)
+    await losingTheWorkersAnswer(CHARGE_PATH, () => call('addBookingGuest', { bookingId, ...bea, payment: { ...cash(15), giftCard: W05L_GIFT } }))
   }),
   ...w06Scenarios(),
   ...w07Scenarios(),
@@ -2817,8 +2870,8 @@ export const scenarios: Scenario[] = [
 ]
 
 // --- W06: the Worker's order core. Every createOrder and createBooking reason in W06's scope that had
-// no scenario yet, and the paid and nothing-owed shapes it builds. They run through the old createOrder
-// for their golden files, and order-replay.test.ts runs them through the new route too.
+// no scenario yet, and the paid and nothing-owed shapes it builds. They run through the Worker's order
+// route as New Order presses it (sweep/worker.ts).
 function w06Scenarios(): Scenario[] {
   const robe = { addonId: ID.robe, quantity: 1, unitPrice: 8, systemUnitPrice: 8 }
   const moCredit = { ...paidSeat([mo]), ...memberCredit }
@@ -2916,8 +2969,8 @@ function w06Scenarios(): Scenario[] {
 
 // --- W07: products, the delivery address and postage, session passes and gift cards bought. Every
 // createOrder reason for stages 5, 7, 9, 10 and 13, and the shapes stages 19, 22, 25, 26 and 35 write,
-// in cash or with nothing owed. They run through the old createOrder for their golden files, and
-// order-replay.test.ts runs them through the new route too.
+// in cash or with nothing owed. They run through the Worker's order route as New Order presses it
+// (sweep/worker.ts).
 function w07Scenarios(): Scenario[] {
   const UNKNOWN = '10000000-0000-4000-8000-0000000000fe'
   const mug = (fulfillmentChoice?: string) => ({ productVariantId: ID.mugVariant, quantity: 1, unitPrice: 15, systemUnitPrice: 15, ...(fulfillmentChoice ? { fulfillmentChoice } : {}) })
@@ -3100,8 +3153,8 @@ function w07Scenarios(): Scenario[] {
 // attendee list, the ages, the 18+ tick, the quote) and stage 21 (event_full), where each comes among
 // the other stages, and the shapes stage 21 writes: the places claimed, the event booking, an
 // attendee row per place in place order, and the event's line, at member and public prices, in cash
-// or with nothing owed. They run through the old createOrder for their golden files, and
-// order-replay.test.ts runs them through the new route too.
+// or with nothing owed. They run through the Worker's order route as New Order presses it
+// (sweep/worker.ts).
 
 /** The live check that an event on sale is complete (events_on_sale_complete), as it stands, put back NOT VALID. */
 const RESTORE_ON_SALE_COMPLETE =
@@ -3331,8 +3384,8 @@ function w08Scenarios(): Scenario[] {
 // --- W09: promo codes, store credit and gift cards used to pay. Every reason of stages 15, 16, 20, 24,
 // 25a and 30 in scope with its words, the discount on everything a code applies to (seats, private
 // bookings, event places, add-ons, products, passes), the payment method each mix records, and W02's
-// noise cases (exact cover, fully covered orders, half pennies). Each runs through the old createOrder
-// for its golden file, and order-replay.test.ts runs it through the new route too.
+// noise cases (exact cover, fully covered orders, half pennies). Each runs through the Worker's order
+// route as New Order presses it (sweep/worker.ts).
 function w09Scenarios(): Scenario[] {
   const UNKNOWN = '10000000-0000-4000-8000-0000000000fc'
   const beaSeat: Guest = { name: 'Bea Guest', email: 'bea@example.com' }
@@ -3514,8 +3567,8 @@ function w09Scenarios(): Scenario[] {
 
 // --- W10: the saved card. Every kind T1 takes, paid by the saved card, alone and with a gift card,
 // store credit and a promo code; then the card declined, needing authentication, and missing, and an
-// unclear answer. Each runs through the old createOrder (and its charge route) with the fake Stripe for
-// its golden file, and order-replay.test.ts runs it through the new route too.
+// unclear answer. Each runs through the Worker's order route, as New Order presses it, with the fake
+// Stripe (sweep/worker.ts).
 function w10Scenarios(): Scenario[] {
   const card = { method: 'card' }
   const beaSeat: Guest = { name: 'Bea Guest', email: 'bea@example.com' }
@@ -3613,9 +3666,8 @@ function w10Scenarios(): Scenario[] {
 // --- W11: the reader. Every kind T1 takes, paid on the reader, alone and with a gift card, store credit
 // and a promo code; the card saved (a reusable card, and the simulated reader's, bug 7) and not; the tap
 // declined and the order cancelled (bugs 8 and 9); cancel finding the payment taken; the amount off; the
-// intent refused or unclear; finalise and cancel twice. Each runs through the old createOrder,
-// finaliseReaderOrder and cancelReaderOrder (and their legacy routes) with the fake Stripe for its golden
-// file, and order-replay.test.ts runs it through the new routes too.
+// intent refused or unclear; finalise and cancel twice. Each runs through the Worker's order,
+// finalise and cancel routes, as New Order presses them, with the fake Stripe (sweep/worker.ts).
 
 /** What the customer does at the reader. */
 type Tap =
@@ -3773,8 +3825,8 @@ function w11Scenarios(): Scenario[] {
 // charged as well, Q21) and on the reader (the tap taking the first payment), with a promo, a gift card,
 // store credit spilling onto the first payment (Q1, Q2), a buy-new booking (alone, with a pass, Q3, and with
 // a pass and an event, W08 review L2), replacing an exhausted membership (Q8), and refused at each Stripe
-// step. Each runs through the old createOrder (and finaliseReaderOrder or cancelReaderOrder) with the fake
-// Stripe for its golden file, and order-replay.test.ts runs it through the new routes too.
+// step. Each runs through the Worker's order route (and its finalise or cancel), as New Order presses
+// them, with the fake Stripe (sweep/worker.ts).
 
 
 /** An unlimited All-Access plan, covering Core and Peak sessions on credit, with add-on credits. */
@@ -3885,37 +3937,15 @@ function w13Scenarios(): Scenario[] {
   ]
 }
 
-// --- W17 (lead call L6, D-plan 4.11 item 6): the golden gaps, recorded from the old functions while they exist (the
-// frozen copy, legacy-booking/), with today's outcomes, so step D's named differences are held against real
-// recordings. R1a to R4b are the third W05 release review's proofs (briefs/W05-release-review-3-report.md, findings 1
+// --- W17 (lead call L6, D-plan 4.11 item 6): the gaps first recorded from the old functions, now run on the Worker
+// (since W64), so step D's named differences are held against real recordings. R1a to R4b are the third W05 release review's proofs (briefs/W05-release-review-3-report.md, findings 1
 // to 4); N1, N3 and N4 are D-plan section 3's bugs. Each records what the old code does today, faults included:
 // the slice that moves the action names the difference (W19 Settle, W20 Add Guest, W23 Cancel, W24 Move, W18 status).
 
-/**
- * The statement matching `matches` gets no answer before it has run (the driver gave up while it waited, for a lock
- * or in the pooler's queue), and then runs once `steps` is over: what a statement that commits after the press looked
- * for it and undid everything leaves (the review's `landingAfterTheLook`). The late statement's own answer is lost.
- */
-export async function landingAfterTheLook<T>(matches: (sql: string) => boolean, steps: () => Promise<T>): Promise<T> {
-  const real = dataApi()
-  let held: { sql: string; params: unknown[] } | null = null
-  vi.stubGlobal('paddockData', {
-    async query(sql: string, params: unknown[] = []) {
-      if (!held && matches(sql)) {
-        held = { sql, params }
-        throw new Error('timeout exceeded when trying to connect')
-      }
-      return real.query(sql, params)
-    },
-  })
-  try {
-    return await steps()
-  } finally {
-    vi.stubGlobal('paddockData', real)
-    const late = held as { sql: string; params: unknown[] } | null
-    if (late) await real.query(late.sql, late.params).catch(() => undefined)
-  }
-}
+// W65b: `landingAfterTheLook` (an old function's statement held back, then run after the press had looked for it and
+// undone everything) went: it wrapped the old side's `paddockData`, which the Worker side never calls, so since W64
+// each R1 scenario below has run its press as a plain press. On the Worker the statement is inside the route's
+// transaction: it commits with the route or not at all.
 
 /** Sam's other booking on `day`, in the cold plunge, so a move onto that day meets the one-a-day trigger (N1). */
 /** W17: Sam's other booking on `day` (N1). Exported for move.test.ts (W24). */
@@ -3962,13 +3992,15 @@ function w17Scenarios(): Scenario[] {
   })
   return [
     // R1 (review 3, finding 1): a no-card press whose statement commits after the press looked for it and undid.
+    // W65b: the late statement was the old side's (`landingAfterTheLook`, gone): on the Worker each of the five R1
+    // scenarios is its press alone, as it has been since W64.
     {
       name: 'w17-r1a-settle-store-credit-and-gift-card-statement-lands-late',
       seed,
       async run({ call, attempt, db }) {
         const bookingId = await lapsedSeat(call, db)
         await db.query('UPDATE customers SET store_credit_balance = 15 WHERE id = $1', [ID.member])
-        await landingAfterTheLook(SETTLE_STATEMENT, () => attempt('settleLapsedBooking', { bookingId, payment: R1_MONEY }))
+        await attempt('settleLapsedBooking', { bookingId, payment: R1_MONEY })
       },
     },
     {
@@ -3977,7 +4009,7 @@ function w17Scenarios(): Scenario[] {
       async run({ call, attempt, db }) {
         const bookingId = await lapsedSeat(call, db)
         await db.query('UPDATE customers SET store_credit_balance = 15 WHERE id = $1', [ID.member])
-        await landingAfterTheLook(SETTLE_STATEMENT, () => attempt('settleLapsedBooking', { bookingId, payment: { method: 'card', storeCredit: { amount: 5 } } }))
+        await attempt('settleLapsedBooking', { bookingId, payment: { method: 'card', storeCredit: { amount: 5 } } })
       },
     },
     {
@@ -3986,7 +4018,7 @@ function w17Scenarios(): Scenario[] {
       async run({ call, attempt }) {
         const bookingId = await placeSamsTwoSeats(call)
         await call('moveBooking', toPeak(bookingId))
-        await landingAfterTheLook(MOVE_STATEMENT, () => attempt('moveBooking', toPeak(bookingId, { storeCredit: { amount: 6 }, giftCard: { giftCardId: ID.giftCard, amount: 5 } })))
+        await attempt('moveBooking', toPeak(bookingId, { storeCredit: { amount: 6 }, giftCard: { giftCardId: ID.giftCard, amount: 5 } }))
       },
     },
     {
@@ -3995,7 +4027,7 @@ function w17Scenarios(): Scenario[] {
       async run({ call, attempt }) {
         const bookingId = await placeSamsTwoSeats(call)
         await call('addBookingGuest', { bookingId, ...bea })
-        await landingAfterTheLook(ADD_GUEST_STATEMENT, () => attempt('addBookingGuest', { bookingId, ...bea, payment: R1_MONEY }))
+        await attempt('addBookingGuest', { bookingId, ...bea, payment: R1_MONEY })
       },
     },
     {
@@ -4004,7 +4036,7 @@ function w17Scenarios(): Scenario[] {
       async run({ call, attempt, db }) {
         const bookingId = await placeSamsTwoSeats(call)
         await call('moveBooking', toPeak(bookingId))
-        await landingAfterTheLook(MOVE_STATEMENT, () => attempt('moveBooking', toPeak(bookingId, { method: 'reader', giftCard: { giftCardId: ID.giftCard, amount: 5 } })))
+        await attempt('moveBooking', toPeak(bookingId, { method: 'reader', giftCard: { giftCardId: ID.giftCard, amount: 5 } }))
         const open = (await db.query<{ id: string }>("SELECT id FROM pending_reader_payments WHERE record_id = $1 AND status = 'pending'", [bookingId]))[0]
         // As the old sweep does after 15 minutes: cancel the reader payment the late statement left open.
         if (open) await attempt('cancelReaderPayment', { pendingId: open.id })
@@ -4086,8 +4118,9 @@ function w17Scenarios(): Scenario[] {
       async run({ call, attempt }) {
         const bookingId = await placeSamsTwoSeats(call)
         await call('moveBooking', toPeak(bookingId))
-        // W65a: a plain press on the Worker since W64 (the lost answer was the old side's statement, through paddockData).
-        await attempt('moveBooking', toPeak(bookingId, { method: 'card', storeCredit: { amount: 6 } }))
+        // W65b: the lost answer was the old side's statement until W64 (then a plain press); now the move route's own
+        // answer is lost, as R4a's Add Guest's is.
+        await losingTheWorkersAnswer(CHARGE_PATH, () => attempt('moveBooking', toPeak(bookingId, { method: 'card', storeCredit: { amount: 6 } })))
       },
     },
     // N1: Move meets the one-booking-a-day rule only at its write.
@@ -4164,10 +4197,10 @@ function w17Scenarios(): Scenario[] {
   ]
 }
 
-// --- W27 (E-plan 4.13 item 1, lead call L6): step E's golden files, recorded from the old functions ------------------
+// --- W27 (E-plan 4.13 item 1, lead call L6): step E's scenarios, first recorded from the old functions -------------
 //
-// Every scenario below runs the staff app's old refundOrder, cancelEventPlaces, cancelEvent, getEventCancellationQuote
-// or getEventCancellationOverview (from the frozen copy, legacy-refund/) and records today's outcome: each refusal of
+// Every scenario below presses refundOrder, cancelEventPlaces, cancelEvent, getEventCancellationQuote or
+// getEventCancellationOverview through the Worker's routes, as the screens press them, and records the outcome: each refusal of
 // E-plan 1.2 to 1.4, each kind of line, each way the money goes back, the event cancellations by place, by booking
 // and by event, and what the old code does today for each bug in the plan's section 3. W28 to W31 replay them through
 // the Worker's routes and name every difference. `server/rules/testing/replay/w27.test.ts` says, in pounds and pence,
@@ -4234,49 +4267,10 @@ function w27Scenarios(): Scenario[] {
   const afterCutoff = eventIs("UPDATE events SET refund_cutoff_at = '2026-11-09 09:00:00+00' WHERE id = $1")
   const checkIn = (db: Db, attendeeId: string) => db.query('UPDATE event_attendees SET checked_in_at = now() WHERE id = $1', [attendeeId])
 
-  /** Runs `gap` once, straight after the first statement matching `matches` has answered: what another tab does in between. */
-  async function onceAfter<T>(matches: (sql: string) => boolean, gap: () => Promise<unknown>, steps: () => Promise<T>): Promise<T> {
-    type Query = (sql: string, params?: unknown[]) => Promise<unknown>
-    const real = (globalThis as unknown as { paddockData: { query: Query } }).paddockData
-    let done = false
-    vi.stubGlobal('paddockData', {
-      async query(sql: string, params: unknown[] = []) {
-        const answer = await real.query(sql, params)
-        if (!done && matches(sql)) {
-          done = true
-          vi.stubGlobal('paddockData', real)
-          await gap()
-        }
-        return answer
-      },
-    })
-    try {
-      return await steps()
-    } finally {
-      vi.stubGlobal('paddockData', real)
-    }
-  }
-
-  /** Every statement matching `matches` fails before it runs, as a read does when the database is away: nothing is changed by it. */
-  async function whileUnreadable<T>(matches: (sql: string) => boolean, steps: () => Promise<T>): Promise<T> {
-    type Query = (sql: string, params?: unknown[]) => Promise<unknown>
-    const real = (globalThis as unknown as { paddockData: { query: Query } }).paddockData
-    vi.stubGlobal('paddockData', {
-      async query(sql: string, params: unknown[] = []) {
-        if (matches(sql)) throw new Error('connection lost')
-        return real.query(sql, params)
-      },
-    })
-    try {
-      return await steps()
-    } finally {
-      vi.stubGlobal('paddockData', real)
-    }
-  }
-  /** The count of earlier refusals that goes into a card refund's key (shared/cardRefundAttempts.ts). */
-  const refusalCount = (sql: string) => sql.includes('count(*)::int AS refused')
-  /** The look for a card refund held with no clear answer (shared/heldCardRefund.ts). */
-  const heldLook = (sql: string) => sql.includes("action = 'card_refund_held'") && sql.trimStart().startsWith('SELECT')
+  // W65b: `onceAfter` (another tab's step between two of the old function's statements) and `whileUnreadable` (an old
+  // function's read failing), with the statements they matched, went: they wrapped the old side's `paddockData`, which
+  // the Worker side never calls. The overlaps are rebuilt on the Worker (atItsFirstTransaction); each unreadable
+  // scenario has been its press alone since W64, and is marked where it is.
 
   /** An order (unless `order` is null), then `steps` with what it made. */
   function after(name: string, order: Record<string, unknown> | null, steps: (made: W27Steps) => Promise<void>, prepare?: (db: Db, stripe: FakeStripe) => Promise<void>): Scenario {
@@ -4413,13 +4407,15 @@ function w27Scenarios(): Scenario[] {
     }),
     after('order-refund-refused-when-the-card-check-cannot-be-read', soapOnCard, async ({ refund, lines }) => {
       // The count of earlier refusals (part of the refund's key) can't be read: nothing is sent, nothing refunded.
+      // W65b: the count was the old function's own read (gone with `whileUnreadable`): on the Worker, its press alone.
       const ids = await lines('product')
-      await whileUnreadable(refusalCount, () => refund(ids, 'card'))
+      await refund(ids, 'card')
     }),
     after('order-refund-refused-when-the-look-for-a-held-refund-fails', soapOnCard, async ({ refund, lines }) => {
       // The look for an earlier refund with no clear answer can't be read: the press stops before the lines are read.
+      // W65b: the look was the old function's own read (gone with `whileUnreadable`): on the Worker, its press alone.
       const ids = await lines('product')
-      await whileUnreadable(heldLook, () => refund(ids, 'card'))
+      await refund(ids, 'card')
     }),
     after('order-refund-store-credit-write-fails', soapInCash, async ({ refund, lines, db }) => {
       const ids = await lines('product')
@@ -4622,17 +4618,19 @@ function w27Scenarios(): Scenario[] {
       stripe.failNext('refunds.list', { kind: 'unreachable' })
       await refund(ids, 'card')
     }),
-    // W65a: these three lost the old side's statements (paddockData): plain presses on the Worker since W64.
-    after('order-refund-store-credit-answer-lost-is-found-by-its-note', soapOnCard, async ({ refund, lines }) => {
+    // W65b: these three lost the old side's statements until W64 (then plain presses). The first two lose the Worker
+    // route's answer instead, and are renamed for what the Worker does (it gives the credit inside the route's
+    // transaction: there is no note to find and no look to fail); the third is renamed for what it does.
+    after('order-refund-store-credit-answer-lost-then-pressed-again', soapOnCard, async ({ refund, lines }) => {
       const ids = await lines('product')
-      await refund(ids, 'credit')
+      await losingTheWorkersAnswer(REFUND_PATH, () => refund(ids, 'credit'))
       await refund(ids, 'credit')
     }),
-    after('order-refund-store-credit-that-cannot-be-looked-for-counts-as-given', soapOnCard, async ({ refund, lines }) => {
+    after('order-refund-store-credit-answer-lost-counts-as-given', soapOnCard, async ({ refund, lines }) => {
       const ids = await lines('product')
-      await refund(ids, 'credit')
+      await losingTheWorkersAnswer(REFUND_PATH, () => refund(ids, 'credit'))
     }),
-    after('order-refund-store-credit-cannot-be-looked-for-then-the-stamp-fails', soapOnCard, async ({ refund, lines, db }) => {
+    after('order-refund-store-credit-the-line-stamp-fails', soapOnCard, async ({ refund, lines, db }) => {
       const ids = await lines('product')
       await whileFailing(db, lineStampFails, () => refund(ids, 'credit'))
     }),
@@ -4781,11 +4779,13 @@ function w27Scenarios(): Scenario[] {
       await cancel('card', [(await ids())[0] as string])
       await cancel('credit', [(await ids())[0] as string], '   ')
     }, afterCutoff),
-    after('event-cancel-refused-order-line-not-found', eventOnCard, async ({ cancel, orderId, db }) => {
+    after('event-cancel-refused-order-line-not-found', eventOnCard, async ({ cancel, orderId, db, stripe }) => {
       // The places' value comes from the order line, so a line that was never there gives £0 and no refusal. The
       // reason is only reached when the line goes between the quote and the look for it (nothing on a screen does that).
+      // W65b: on the Worker the quote and the look are both inside R1, under the order's lock. The line goes at the
+      // nearest point: after the route's first read of the booking's ids, just before R1 opens.
       const detach = () => db.query("UPDATE order_line_items SET event_booking_id = NULL WHERE order_id = $1 AND item_type = 'event'", [orderId])
-      await onceAfter((sql) => sql.includes('event_cancellation_quote'), detach, () => cancel('card'))
+      await atItsFirstTransaction({ db, stripe }, REFUND_PATH, detach, () => cancel('card'))
     }),
     after('event-cancel-with-no-order-line-is-worth-nothing', eventOnCard, async ({ cancel, orderId, db, call, eventBookingId }) => {
       // A booking whose order line doesn't name it: the quote says £0, and a Card cancel gives nothing back and says ok.
@@ -4799,13 +4799,15 @@ function w27Scenarios(): Scenario[] {
       await cancel('card', [first as string])
       await cancel('card', [first as string])
     }),
+    // W65b: in these two the failing read was the old function's own (gone with `whileUnreadable`): on the Worker each
+    // is its press alone.
     after('event-cancel-refused-when-the-card-check-cannot-be-read', eventOnCard, async ({ cancel, places: ids }) => {
       const [first] = await ids()
-      await whileUnreadable(refusalCount, () => cancel('card', [first as string]))
+      await cancel('card', [first as string])
     }),
     after('event-cancel-refused-when-the-look-for-a-held-refund-fails', eventOnCard, async ({ cancel, places: ids }) => {
       const [first] = await ids()
-      await whileUnreadable(heldLook, () => cancel('card', [first as string]))
+      await cancel('card', [first as string])
     }),
     after('event-cancel-store-credit-write-fails', eventInCash, async ({ cancel, places: ids, db }) => {
       const [first] = await ids()
@@ -4815,10 +4817,12 @@ function w27Scenarios(): Scenario[] {
       // £80 of places, £50 of it on the card: £50 goes back to the card, then the £30 to store credit fails.
       await whileFailing(db, refundCreditFails, () => cancel('card'))
     }),
-    after('event-cancel-changed-by-someone-else-a-place-checked-in-meanwhile', eventOnCard, async ({ cancel, places: ids, db }) => {
+    after('event-cancel-changed-by-someone-else-a-place-checked-in-meanwhile', eventOnCard, async ({ cancel, places: ids, db, stripe }) => {
       const [first] = await ids()
       // Checked in after the quote and before the statement that records the cancel: the card refund has gone by then.
-      await onceAfter((sql) => sql.includes('event_cancellation_quote'), () => checkIn(db, first as string), () => cancel('card', [first as string]))
+      // W65b: on the Worker the place is stamped in R1, before any refund, and R1 holds the event's lock (a check-in
+      // takes it too). The check-in lands at the nearest point: just before R1 opens.
+      await atItsFirstTransaction({ db, stripe }, REFUND_PATH, () => checkIn(db, first as string), () => cancel('card', [first as string]))
     }),
     after('event-cancel-recording-fails-after-the-card-refund', eventOnCard, async ({ cancel, places: ids, db }) => {
       const [first] = await ids()
@@ -5004,23 +5008,25 @@ function w27Scenarios(): Scenario[] {
       stripe.failNext('refunds.list', { kind: 'unreachable' })
       await cancel('card', [second as string])
     }),
-    // W65a: these three lost the old side's statements (paddockData): plain presses on the Worker since W64.
-    after('event-cancel-store-credit-answer-lost-is-found-by-its-note', eventOnCard, async ({ cancel, places: ids }) => {
+    // W65b: these four lost the old side's statements until W64 (then plain presses). The first two lose the Worker
+    // route's answer instead, renamed as the order refund's are; the last two are renamed for what they do.
+    after('event-cancel-store-credit-answer-lost-then-pressed-again', eventOnCard, async ({ cancel, places: ids }) => {
       const [first] = await ids()
-      await cancel('credit', [first as string])
+      await losingTheWorkersAnswer(REFUND_PATH, () => cancel('credit', [first as string]))
       await cancel('credit', [first as string])
     }),
-    after('event-cancel-store-credit-that-cannot-be-looked-for-counts-as-given', eventOnCard, async ({ cancel, places: ids }) => {
+    after('event-cancel-store-credit-answer-lost-counts-as-given', eventOnCard, async ({ cancel, places: ids }) => {
       const [first] = await ids()
-      await cancel('credit', [first as string])
+      await losingTheWorkersAnswer(REFUND_PATH, () => cancel('credit', [first as string]))
     }),
-    after('event-cancel-store-credit-cannot-be-looked-for-then-recording-fails', eventOnCard, async ({ cancel, places: ids, db }) => {
+    after('event-cancel-store-credit-on-a-card-booking-recording-fails', eventOnCard, async ({ cancel, places: ids, db }) => {
       const [first] = await ids()
       await whileFailing(db, placeStampFails, () => cancel('credit', [first as string]))
     }),
-    after('event-cancel-recording-fails-and-the-take-back-answer-is-lost', eventInCash, async ({ cancel, places: ids, db }) => {
+    // The same press and fault as event-cancel-recording-fails-to-store-credit-is-taken-back: on the Worker the place's
+    // stamp and the credit are one transaction, so there is no take-back whose answer could be lost.
+    after('event-cancel-recording-fails-to-store-credit-on-a-cash-booking', eventInCash, async ({ cancel, places: ids, db }) => {
       const [first] = await ids()
-      // W65a: the take-back's lost answer was the old side's statement (paddockData); on the Worker the write fails alone.
       await whileFailing(db, placeStampFails, () => cancel('credit', [first as string]))
     }),
   ]
@@ -5138,21 +5144,21 @@ function w27Scenarios(): Scenario[] {
       // starts between them is finished later, on a cancelled event, and nobody refunds it until the dialog is opened again.
       name: `${W27_PREFIX}e7-a-reader-order-started-between-the-check-and-the-cancel`,
       seed,
-      async run({ call, stripe }) {
+      async run({ call, stripe, db }) {
         await call('createOrder', { customerId: ID.member, event: places([moAttending]), payment: cash(20) })
         let pending: { orderId: string; pendingReaderPayment: { paymentIntentId: string } } | null = null
-        await onceAfter(
-          (sql) => sql.includes("eb.status = 'pending'"),
+        // W31: the Worker's cancel is one transaction under the event's lock, so there is no "between" the check and
+        // the mark. W65b: the reader order starts at the nearest point, just before that transaction opens; once its
+        // reader payment is being made (the order's pending booking written) the cancel carries on, then the order ends.
+        await atItsFirstTransaction(
+          { db, stripe },
+          WHOLE_EVENT_CANCEL_PATH,
           async () => {
             pending = (await call('createOrder', { customerId: ID.customer, event: eventPlaces, payment: { method: 'reader' } })) as typeof pending
           },
           () => call('cancelEvent', storm)
         )
-        let started = pending as { orderId?: string; pendingReaderPayment?: { paymentIntentId: string } } | null
-        // W31: the Worker's cancel is one transaction under the event's lock, so there is no "between" for the gap to
-        // open in (it is hooked on the old code's own statement): an order that starts while the cancel runs waits
-        // for it. On that side the order is started where it would land, straight after the cancel, and is refused.
-        if (!started) started = (await call('createOrder', { customerId: ID.customer, event: eventPlaces, payment: { method: 'reader' } })) as typeof started
+        const started = pending as { orderId?: string; pendingReaderPayment?: { paymentIntentId: string } } | null
         if (started?.pendingReaderPayment && started.orderId) {
           stripe.completeReaderPayment(started.pendingReaderPayment.paymentIntentId)
           await call('finaliseReaderOrder', { orderId: started.orderId })
@@ -5175,12 +5181,12 @@ function w27Scenarios(): Scenario[] {
   return [...orderRefusals, ...orderLines, ...orderUnclear, ...orderBugs, ...placeRefusals, ...placeCancels, ...placeUnclear, ...wholeEvent]
 }
 
-// --- W36: step F's golden files (F-plan 4.12 item 1, lead call L5), recorded from the old functions and the three
-// legacy membership routes while they exist: every refusal and each success of the membership cancel and undo, the
+// --- W36: step F's scenarios (F-plan 4.12 item 1, lead call L5), first recorded from the old functions and the three
+// legacy membership routes: every refusal and each success of the membership cancel and undo, the
 // payment date change and its quote, the credit and Herd adjustments, the store credit adjustment, the gift card
 // actions, creating a customer, each read's shape, the database's lapse sweep, and today's outcome for each bug of
-// the plan's section 3 that can be recorded (FB1 to FB16, FB18, FB19, FB21). They replay against the frozen copy
-// (legacy-account/); W37 to W43 replay them through the Worker's routes and name each difference.
+// the plan's section 3 that can be recorded (FB1 to FB16, FB18, FB19, FB21). Since W64 they run on the Worker
+// alone (W37 to W43 named each difference from the old functions).
 
 interface W36Steps {
   call: ScenarioContext['call']
@@ -5203,7 +5209,7 @@ export async function runLapseSweep(db: Db): Promise<void> {
 
 /**
  * W43: the sweep a lapse scenario runs: the side's own when it has one (the Worker's, lapse-side.ts), else the
- * database's, which is what the golden files recorded.
+ * database's, which is what the old functions' recordings had.
  */
 const sweepLapsed = (context: Pick<ScenarioContext, 'side' | 'db'>): Promise<void> => (context.side.lapseSweep ? context.side.lapseSweep(context.db) : runLapseSweep(context.db))
 
@@ -5245,78 +5251,28 @@ function w36Scenarios(): Scenario[] {
   const inactiveStaff = sql('UPDATE staff SET active = false WHERE id = $1', [ID.staff])
   const refusal = () => fakeStripeErrors.invalid('subscription_update_refused', 'This subscription cannot be updated right now.')
 
-  /** Runs `gap` once, straight after the first statement matching `matches` has answered: what another tab does in between. */
-  async function onceAfter<T>(matches: (statement: string) => boolean, gap: () => Promise<unknown>, steps: () => Promise<T>): Promise<T> {
-    type Query = (statement: string, params?: unknown[]) => Promise<unknown>
-    const real = (globalThis as unknown as { paddockData: { query: Query } }).paddockData
-    let done = false
-    vi.stubGlobal('paddockData', {
-      async query(statement: string, params: unknown[] = []) {
-        const answer = await real.query(statement, params)
-        if (!done && matches(statement)) {
-          done = true
-          vi.stubGlobal('paddockData', real)
-          await gap()
-        }
-        return answer
-      },
-    })
-    try {
-      return await steps()
-    } finally {
-      vi.stubGlobal('paddockData', real)
-    }
-  }
-
-  /** Every statement matching `matches` fails before it runs, as when the database is away: nothing is changed by it. */
-  async function whileUnreadable<T>(matches: (statement: string) => boolean, steps: () => Promise<T>): Promise<T> {
-    type Query = (statement: string, params?: unknown[]) => Promise<unknown>
-    const real = (globalThis as unknown as { paddockData: { query: Query } }).paddockData
-    vi.stubGlobal('paddockData', {
-      async query(statement: string, params: unknown[] = []) {
-        if (matches(statement)) throw new Error('connection lost')
-        return real.query(statement, params)
-      },
-    })
-    try {
-      return await steps()
-    } finally {
-      vi.stubGlobal('paddockData', real)
-    }
-  }
+  // W65b: `onceAfter` and `whileUnreadable` went from here too, as in W27's block: the overlaps are rebuilt on the
+  // Worker (atItsFirstTransaction, insideItsCharge); the unreadable step has been its press alone since W64.
 
   /**
    * FB1: the Worker stops dead once the card has been charged, before the billing date moves (and so before it can
-   * refund): nothing after the charge reaches Stripe, and the function gets no answer. What a Worker killed at its
-   * limit, or a request cut off, leaves.
+   * refund): nothing after the charge reaches Stripe. What a Worker killed at its limit leaves. W65b: the half that
+   * also lost the legacy route's answer (on the old side's `paddockBackendApi2`, which the Worker side never calls)
+   * went; the Stripe half, which the Worker's route meets, is kept.
    */
   async function workerDyingAfterTheCharge<T>(stripe: FakeStripe, steps: () => Promise<T>): Promise<T> {
-    type RawRequest = (request: { path: string }) => Promise<unknown>
-    const api = (globalThis as unknown as { paddockBackendApi2: { rawRequest: RawRequest } }).paddockBackendApi2
     const subscriptions = stripe.subscriptions as { update: unknown }
     const refunds = stripe.refunds as { create: unknown }
     const realUpdate = subscriptions.update
     const realRefund = refunds.create
-    let dead = false
-    const died = () => {
-      dead = true
-      return Promise.reject(new Error('the Worker died'))
-    }
+    const died = () => Promise.reject(new Error('the Worker died'))
     subscriptions.update = died
     refunds.create = died
-    vi.stubGlobal('paddockBackendApi2', {
-      async rawRequest(request: { path: string }) {
-        const answer = await api.rawRequest(request)
-        if (dead) throw new Error('socket hang up')
-        return answer
-      },
-    })
     try {
       return await steps()
     } finally {
       subscriptions.update = realUpdate
       refunds.create = realRefund
-      vi.stubGlobal('paddockBackendApi2', api)
     }
   }
 
@@ -5459,7 +5415,6 @@ function w36Scenarios(): Scenario[] {
   }
   const changeRowWrite: WriteFailure = { table: 'membership_payment_date_changes', event: 'UPDATE', when: 'true' }
   const orderWrite: WriteFailure = { table: 'orders', event: 'INSERT', when: 'true' }
-  const quoteRead = (statement: string) => statement.includes('AS earliest_date')
 
   const paymentDates: Scenario[] = [
     f('payment-date-refused-missing-params', async ({ call }) => {
@@ -5536,12 +5491,10 @@ function w36Scenarios(): Scenario[] {
       await change(call, { newRenewalDate: '2027-01-05' })
     }, moSubscribed),
     // Two presses at once: the second's own check finds the first's pending row.
-    f('payment-date-refused-a-second-press-while-the-first-is-running', async ({ call, db }) => {
-      await onceAfter(
-        quoteRead,
-        () => insert(db, 'membership_payment_date_changes', { membership_id: ID.membership, old_renewal_date: '2026-12-10', new_renewal_date: NEW_DATE, extra_days: 17, amount_charged: '21.94', staff_id: ID.staff, status: 'pending' }),
-        () => change(call)
-      )
+    // W65b: until W64 the first press was a row written by hand; on the Worker the second press runs inside the first
+    // press's card charge (its change recorded first, its payment open), as two tabs pressing at once would.
+    f('payment-date-refused-a-second-press-while-the-first-is-running', async ({ call, db, stripe }) => {
+      await insideItsCharge({ db, stripe }, PAYMENT_DATE_PATH, () => change(call), () => change(call))
     }, moSubscribed),
     // Today a pending row stops holding the membership after 15 minutes, whatever became of its charge.
     f('payment-date-a-pending-row-stops-blocking-after-15-minutes', async ({ call }) => {
@@ -5627,7 +5580,6 @@ function w36Scenarios(): Scenario[] {
   const adjustment = (creditType: string, amount: number, reason = 'Goodwill after a cold sauna') => ({ membershipId: ID.membership, creditType, amount, reason })
   const history = (call: Call) => call('getMembershipCreditAdjustments', { membershipId: ID.membership })
   const adjustmentRow: WriteFailure = { table: 'membership_credit_adjustments', event: 'INSERT', when: 'true' }
-  const currentPeriodRead = (statement: string) => statement.includes('LEFT JOIN membership_current_credits mcc')
   const HERD = 'setMembershipHerd'
 
   const credits: Scenario[] = [
@@ -5674,26 +5626,14 @@ function w36Scenarios(): Scenario[] {
     }),
     // FB7: the session branch reads the allocation, then writes a fixed number.
     // W37: the Worker's adjustment is one transaction under the credit period's lock, so there is no "between" for the
-    // gap to open in (it is hooked on the old code's own statement): whatever starts while the adjustment runs waits
-    // for it. On that side the second step is run where it would land, straight after the adjustment.
-    f('fb7-two-session-adjustments-at-once-lose-one', async ({ call }) => {
-      let landed = false
-      const secondTab = async () => {
-        landed = true
-        await call(ADJUST, adjustment('session', 2, 'Second tab'))
-      }
-      await onceAfter(currentPeriodRead, secondTab, () => call(ADJUST, adjustment('session', 1)))
-      if (!landed) await secondTab()
+    // gap to open in: whatever starts while the adjustment runs waits for it. W65b: the second step lands at the
+    // nearest point, just before the adjustment's transaction opens.
+    f('fb7-two-session-adjustments-at-once-lose-one', async ({ call, db, stripe }) => {
+      await atItsFirstTransaction({ db, stripe }, CREDITS_PATH, () => call(ADJUST, adjustment('session', 2, 'Second tab')), () => call(ADJUST, adjustment('session', 1)))
     }),
-    f('fb7-a-credit-booking-lands-between-the-check-and-the-write', async ({ call }) => {
+    f('fb7-a-credit-booking-lands-between-the-check-and-the-write', async ({ call, db, stripe }) => {
       // One credit allocated, none used. Staff take it away while a booking takes it: 0 allocated, 1 used.
-      let landed = false
-      const booking = async () => {
-        landed = true
-        await call('createOrder', moCreditSeat)
-      }
-      await onceAfter(currentPeriodRead, booking, () => call(ADJUST, adjustment('session', -1)))
-      if (!landed) await booking()
+      await atItsFirstTransaction({ db, stripe }, CREDITS_PATH, () => call('createOrder', moCreditSeat), () => call(ADJUST, adjustment('session', -1)))
     }, sql('UPDATE membership_credit_periods SET credits_allocated = 1 WHERE id = $1', [ID.creditPeriod])),
     // FB8: the record is a second statement. It fails, the credits have moved, and the error invites a retry.
     f('fb8-the-record-fails-after-the-credits-moved-then-retried', async ({ call, attempt, db }) => {
@@ -5745,7 +5685,9 @@ function w36Scenarios(): Scenario[] {
     // FB11: clearing is two statements, and nothing records who changed Herd.
     f('fb11-herd-clear-stops-before-the-automatic-rule-runs', async ({ call, attempt }) => {
       await call(HERD, { membershipId: ID.membership, herd: true })
-      await whileUnreadable((statement) => statement.includes('refresh_herd_flags'), () => attempt(HERD, { membershipId: ID.membership, herd: null }))
+      // W65b: the failing step was the old function's second statement (gone with `whileUnreadable`): on the Worker,
+      // where the clear and the rule run in one transaction, its press alone.
+      await attempt(HERD, { membershipId: ID.membership, herd: null })
     }, membershipIs("UPDATE customer_memberships SET start_date = '2026-11-01', is_herd = false WHERE id = $1")),
   ]
 

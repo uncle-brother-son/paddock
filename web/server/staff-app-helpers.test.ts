@@ -38,8 +38,8 @@ describe('staff app helpers', () => {
 
   describe('inactive staff', () => {
     // W61: the staff app's own checks (shared/staffAccess, resolveStaffId, pricingStaff) had no caller left and were
-    // deleted; the Worker checks every staff member now. What these tests proved of them still holds of the frozen copy,
-    // and the last one still holds the old words to the Worker's.
+    // deleted; the Worker checks every staff member now. What these tests proved of them
+    // went with them at W65; the last one still holds the old words to the Worker's.
     const INACTIVE = 'This staff account is inactive. Ask an admin to reactivate it.'
     const row = (active: boolean | null) => ({
       id: 'staff-1',
@@ -59,8 +59,8 @@ describe('staff app helpers', () => {
       return query
     }
 
-    // W64a item 7: the five tests of the old checks themselves (step G's frozen copy) moved to
-    // testing/replay/old-staff-guards.test.ts, which W65 deletes with the copy they test.
+    // W64a item 7: the five tests of the old checks themselves moved out of here; W65 deleted them with the old code
+    // they tested.
 
     // Every function W01c added the check to. Called as an inactive account with empty params,
     // each must refuse straight away: no write, no Worker call.
@@ -162,7 +162,7 @@ describe('staff app helpers', () => {
     })
 
     // W25: chargeSavedCard and createTerminalPaymentIntent, and their unguarded versions, went with the old flow code:
-    // every charge and reader intent is the Worker's (server/rules/testing/removed-booking-code.test.ts).
+    // every charge and reader intent is the Worker's (server/rules/testing/removed-code.test.ts).
 
     it('uses the same wording as the Worker', async () => {
       // W64a item 7: the old shared/staffAccess's words, pinned in testing/old-words.json.
@@ -1195,7 +1195,7 @@ describe('staff app helpers', () => {
         expect(source, name).toMatch(/from '\.\/shared\/adminWorker'/)
       }
       // The place cancel's answer takes its booking type from the thin read now, so the three shared event modules
-      // have no caller left: W61 removed them (removed-admin-code.test.ts).
+      // have no caller left: W61 removed them (server/rules/testing/removed-code.test.ts).
       const cancel = readFileSync(path.join(appDir, 'backend/paddock/cancelEventPlaces.ts'), 'utf8')
       expect(cancel).toContain("import type { EventAttendeeBooking } from './getEventAttendees'")
       expect(cancel).not.toMatch(/shared\/eventAttendeeList/)
@@ -3747,8 +3747,8 @@ describe('staff app helpers', () => {
       describe('money owed on the attendee list (Q39)', () => {
         const page = () => readFileSync(path.join(appDir, 'frontend/pages/EventAttendeesPage.tsx'), 'utf8')
 
-        it("the old loader (step G's frozen copy: W61 deleted the staff app's) reads the order that paid for each booking and the money still to refund on it, as the Worker's loader does", async () => {
-          // W64a item 7: the old loader's two parts, as this test matched them in the frozen copy, pinned in testing/old-words.json.
+        it("the old loader (as pinned from step G's old code: W61 deleted the staff app's) reads the order that paid for each booking and the money still to refund on it, as the Worker's loader does", async () => {
+          // W64a item 7: the old loader's two parts, as this test matched them in the old code, pinned in testing/old-words.json.
           const loader = OLD_WORDS.facts.attendeeListLoader
           const worker = readFileSync(path.join(appDir, '..', 'paddock/web/server/rules/events/attendee-list.ts'), 'utf8')
           const read = /paid\.order_id, COALESCE\(paid\.refund_owed_amount, 0\)::numeric\(10,2\)::text AS refund_owed_amount/
@@ -4721,8 +4721,8 @@ describe('staff app helpers', () => {
     // 'refund safety' (W05j, W05k) is gone. Its tests left as each action went to the Worker: refundBooking (W21),
     // Cancel & Refund (W23), giveBookingMoneyBack (W24a), refundOrder (W28). Brief W34 took the last two, which loaded
     // the staff app's shared/eventCancellation (deleted at W34; W31 review L2): store credit that gave no clear answer
-    // on an event place cancel. The Worker's rule is tested in server/rules/events/, and the frozen copy of the old
-    // code is replayed by server/rules/testing/replay/event-places-replay.test.ts (legacy-refund/).
+    // on an event place cancel. The Worker's rule is tested in server/rules/events/, and its scenarios run in the
+    // all-Worker sweep (server/rules/testing/sweep/).
 
     describe('the screens', () => {
       it('the tick keeps the figure its words show', async () => {

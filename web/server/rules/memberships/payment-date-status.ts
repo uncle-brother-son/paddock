@@ -1,7 +1,7 @@
 // Ported in W39 from the staff app's shared/membershipPaymentDate.ts: why "Change payment date" is refused on a
 // membership row (F-plan 1.7; brief W39 item 2). Read-only. W41: this is now the rule's one home. The Subscriptions
 // list, the customer's profile, the quote and the press (payment-date.ts) all read these facts and this order of
-// refusals; the staff app's module has no caller left. payment-date-status.test.ts holds it to the frozen copy, but
+// refusals; the staff app's module has no caller left. payment-date-status.test.ts holds it to the old module's SQL, but
 // for the one change W41 makes on purpose: a pending change holds the membership until it is settled, with no
 // 15-minute expiry (brief W41 item 4; reconcile ends it).
 import 'server-only'

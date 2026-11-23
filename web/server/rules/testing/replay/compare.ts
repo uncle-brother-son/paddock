@@ -71,7 +71,7 @@ const RANDOM_COLUMNS: Readonly<Record<string, readonly string[]>> = {
  * Only step G's: the 991 recordings before it are read exactly as they were written.
  *
  * W51 (W48 review L6): a later slice's own recordings move these times too, and would hide them again under their
- * own prefix. So the prefixes are a list: step G's golden files (`w48-`) and W51's (`w51-`: a session's start moved,
+ * own prefix. So the prefixes are a list: step G's recordings (`w48-`) and W51's (`w51-`: a session's start moved,
  * a one-off session, the sessions the nightly job makes). A slice that records scenarios which move a time (W52's
  * events) adds its prefix here.
  */
@@ -361,7 +361,7 @@ export interface AllowedDifference {
   path: RegExp
   /**
    * W20 (W19 review later 4): when set, a difference on `path` is allowed only if this says the new side's value (and
-   * the golden file's) is what the decision says it should be, so an allowance can't hide a wrong value on its path.
+   * the kept recording's) is what the decision says it should be, so an allowance can't hide a wrong value on its path.
    */
   actual?: (actual: unknown, expected: unknown, path: string, recordings: { expected: Recording; actual: Recording }) => boolean
 }
@@ -370,7 +370,7 @@ const pennies = (value: unknown): number => Math.round(Number(value) * 100)
 
 /**
  * W20a (W20 review S2), for the W05c Noticed 5 allowances: a changed `order_line_items.added[N].unit_price` or
- * `.line_total` is allowed only on a booking line (one seat, in both recordings), and only at exactly the golden value
+ * `.line_total` is allowed only on a booking line (one seat, in both recordings), and only at exactly the kept value
  * less the paid add-ons on that line's order in the new recording (price × quantity, not membership credit), to the
  * penny and never below £0 (the Worker's C2 rule). Add-ons taken off twice, or any other smaller figure, fail.
  */
@@ -378,9 +378,9 @@ export function seatLineLessPaidAddOns(value: unknown, expected: unknown, path: 
   const index = /^\.tables\.order_line_items\.added\[(\d+)\]\.(unit_price|line_total)$/.exec(path)?.[1]
   if (index === undefined) return false
   const line = recordings.actual.tables['order_line_items']?.added[Number(index)]
-  const golden = recordings.expected.tables['order_line_items']?.added[Number(index)]
-  if (!line || !golden || line['item_type'] !== 'booking' || golden['item_type'] !== 'booking') return false
-  if (Number(line['quantity']) !== 1 || Number(golden['quantity']) !== 1 || typeof line['order_id'] !== 'string') return false
+  const kept = recordings.expected.tables['order_line_items']?.added[Number(index)]
+  if (!line || !kept || line['item_type'] !== 'booking' || kept['item_type'] !== 'booking') return false
+  if (Number(line['quantity']) !== 1 || Number(kept['quantity']) !== 1 || typeof line['order_id'] !== 'string') return false
   const addOns = (recordings.actual.tables['addon_order_lines']?.added ?? [])
     .filter((row) => row['order_id'] === line['order_id'] && row['redemption_source'] !== 'membership_credit')
     .reduce((sum, row) => sum + pennies(row['price_at_purchase']) * Number(row['quantity']), 0)
@@ -391,7 +391,7 @@ export function seatLineLessPaidAddOns(value: unknown, expected: unknown, path: 
 /**
  * W53 (migration 033): the fields of an answer that hold one of the fourteen money columns 033 makes numeric(10,2).
  * A plain `numeric` column printed its figure as it was written (`0`, `12`, `4.5`); `numeric(10,2)` prints it to the
- * penny (`0.00`, `12.00`, `4.50`). The golden files were recorded before 033 and the saved schema now carries it, so
+ * penny (`0.00`, `12.00`, `4.50`). Recordings made before 033 hold the old form and the saved schema now carries it, so
  * in an ANSWER these fields are compared as money, to the penny, as a table's numeric columns always were
  * (Labeller.column). Only for these names, and only when both sides are plain decimal text: a figure that differs by
  * a penny, or that rounding changed, is still a difference.

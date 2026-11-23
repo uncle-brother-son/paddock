@@ -1,6 +1,6 @@
 // W54 (G-plan 1.7, 4.1, 4.3, 4.6; bug GB8; W48 review S1 and L1): the Pricing page's four setters on the Worker.
 // Ported from the staff app's setBandPrice.ts, setBandRules.ts, setMembershipBandTerm.ts and setPostageSettings.ts
-// (frozen at W48 in testing/legacy-admin), with their words (./admin-failure-messages.ts). Each is one transaction
+// (as they were at W48), with their words (./admin-failure-messages.ts). Each is one transaction
 // under its row's lock, with an audit row of who and the row before and after (admin/write.ts); Manage pricing, in
 // the old words. No Stripe: a band price, a window, a member term and postage are read live by every quote.
 import 'server-only'

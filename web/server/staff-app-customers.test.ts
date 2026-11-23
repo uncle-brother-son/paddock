@@ -7,7 +7,7 @@ import { staffAppDir } from './rules/testing/staff-app-dir'
 // against a stand-in for the Worker, and its screens read as source (the staff app has no test runner): the New
 // Customer dialog's press key kept after no answer or a throw, closing blocked while a press runs, and the duplicate
 // words shown as the Worker gives them; the customer picker and usePaymentCustomer on New Order; the Customers page
-// and the profile. The wrappers through the real routes are held by customer-replay.test.ts.
+// and the profile. The wrappers through the real routes are held by the all-Worker sweep (server/rules/testing/sweep/).
 
 const appDir = staffAppDir()
 const backend = (name: string) => import(/* @vite-ignore */ path.join(appDir, 'backend/paddock', name))

@@ -52,7 +52,7 @@ import { STUCK_WORDS, stuckList as listStuck } from '@/server/rules/orders/stuck
 import { claimRefundKey } from './refunds'
 
 // Brief W24: Move on the Worker, through the routes as the staff app calls them, on the replay's live schema. The
-// bookings are made by the old createOrder (the frozen copy). Stripe is only ever the fake. The replay's clock is
+// bookings are made through the Worker's order route (sweep/worker.ts). Stripe is only ever the fake. The replay's clock is
 // 10 Nov 2026 09:00. Sessions: Core 12 Nov 10:00 (£20 a seat), Peak 14 Nov 18:00 (£25.50; a Core member pays 15% less
 // and has no credit), a later Core session 20 Nov 10:00; private: Core 13 Nov (£100 for 1-2), Peak 14 Nov (£140 for
 // 1-2), a later Core one 20 Nov (£100).

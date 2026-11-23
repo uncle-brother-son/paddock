@@ -3,10 +3,9 @@ import path from 'node:path'
 
 /*
  * W64a item 7 (W64 plan, agreed by the W64 review): the words of the old staff app code, pinned. The failure-messages
- * tests hold each Worker sentence to the old function's, word for word; until W64a they read the frozen copies with the
- * TypeScript parser. W65 deletes the copies, so what each test read from them is recorded once in `old-words.json`
- * (replay/old-words.test.ts records it and, while the copies exist, proves the file equals them), and the tests read it
- * here. Nothing here reads the old code.
+ * tests hold each Worker sentence to the old function's, word for word; until W64a they read the old code itself with the
+ * TypeScript parser. That code went at W65, so what each test read from it was recorded once in `old-words.json`, and
+ * the tests read it here. Nothing here reads the old code.
  *
  * The folders, by short name: `account` (step F's functions), `accountRoutes` (step F's three legacy routes), `refund`
  * (step E's), `booking` (step D's), `admin` (step G's). A file is named from its folder's `backend/paddock` (or the
@@ -58,7 +57,7 @@ export interface OldWords {
 
 export const OLD_WORDS: OldWords = JSON.parse(readFileSync(OLD_WORDS_FILE, 'utf8')) as OldWords
 
-/** A folder's strings and templates, as frozen-words.ts's frozenWords answered them. */
+/** A folder's strings and templates, as the old code's parser answered them before W65. */
 export function oldWords(folder: OldFolder): { strings: Set<string>; templates: string[] } {
   const recorded = OLD_WORDS.folders[folder]
   return { strings: new Set(recorded.strings), templates: [...recorded.templates] }
@@ -66,7 +65,7 @@ export function oldWords(folder: OldFolder): { strings: Set<string>; templates: 
 
 /**
  * The string members of a union type alias of the old code, by its name (each is declared once). Named by type, not by
- * file: the W34 guards refuse a gone module's path named outside the frozen copies.
+ * file: the removal guard refuses a gone module's path.
  */
 export function oldUnionMembers(folder: OldFolder, typeName: string): string[] {
   const members = OLD_WORDS.unions[`${folder}:${typeName}`]
@@ -81,7 +80,7 @@ export function oldPropertyUnionMembers(folder: OldFolder, interfaceName: string
   return [...members]
 }
 
-/** The templates `text` fills in: their static parts, in order, with anything between (frozen-words.ts's, unchanged). */
+/** The templates `text` fills in: their static parts, in order, with anything between (as the old code's parser had it, unchanged). */
 export function templatesFilledBy(templates: readonly string[], text: string): string[] {
   return templates.filter((template) => {
     const parts = template.split('\u0000')
@@ -91,7 +90,7 @@ export function templatesFilledBy(templates: readonly string[], text: string): s
   })
 }
 
-/** Every string a file's source holds between quotes of any kind, for "the dialog still says this" checks (frozen-words.ts's, unchanged). */
+/** Every string a file's source holds between quotes of any kind, for "the dialog still says this" checks (as the old code's parser had it, unchanged). */
 export function sourceHolds(file: string, words: string): boolean {
   const source = readFileSync(file, 'utf8')
   return [`'${words}'`, `"${words}"`, `\`${words}\``].some((quoted) => source.includes(quoted)) || source.includes(`>${words}<`)

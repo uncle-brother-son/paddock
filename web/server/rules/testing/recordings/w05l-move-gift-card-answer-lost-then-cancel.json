@@ -39,11 +39,9 @@
       }
     },
     {
-      "moved": true,
-      "booking": {
-        "id": "bookings#1",
-        "price_paid": 51
-      }
+      "moved": false,
+      "reason": "no_answer",
+      "message": "Moving didn't get an answer, so the booking may or may not have moved, with its payment or refund. Don't take payment or refund it another way yet: reload the booking. If it's on the new session and shows no payment still open, it's done. If it shows a payment still open, it's being checked: don't take payment, and use Resolve now on the Orders page after 15 minutes. If it's still on its old session, press Confirm Move again (it won't move, charge or refund twice)."
     },
     {
       "cardRefundedAmount": 46,

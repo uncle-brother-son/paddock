@@ -2,7 +2,7 @@
 // review L1; W50 review L1): sessions and the timetable on the Worker. Ported from the staff app's
 // getSessionsForRange.ts, getServiceTypesForSlot.ts, blockSession.ts, blockDay.ts, unblockSession.ts, unblockDay.ts,
 // setSessionBand.ts, resetSessionBand.ts, setSessionStartTime.ts, createOneOffSession.ts,
-// addServiceTypeScheduleSlot.ts and deleteServiceTypeScheduleSlot.ts (frozen at W48 in testing/legacy-admin), with
+// addServiceTypeScheduleSlot.ts and deleteServiceTypeScheduleSlot.ts (as they were at W48), with
 // their words (./admin-failure-messages.ts). generateUpcomingSessions.ts is not ported: it was dead code (GB24), and
 // the nightly job is the database's own function (migration 032).
 //

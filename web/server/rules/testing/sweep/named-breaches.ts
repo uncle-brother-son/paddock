@@ -13,17 +13,17 @@ export interface NamedBreaches {
   why: string
 }
 
-const R2D = "booking-replay.test.ts (W20, R2d): the card paid and its order couldn't be written, so the Add Guest change is held for reconcile; add-guest.test.ts runs reconcile on the same hold and it writes the order"
-const REMOVE_HELD = "booking-replay.test.ts REMOVE_HELD_BREACHES (W22): Remove Guest's card part went and its store credit write failed, so its refund is held; remove-guest.test.ts runs reconcile and it records both"
-const MOVE_CREDIT_HELD = "booking-replay.test.ts MOVE_CREDIT_HELD_BREACHES (W24): a cheaper move's card part went and its store credit write failed (R2 held); move.test.ts runs reconcile on the same hold and it finishes it"
-const MOVE_GIFT_CARD_HELD = "booking-replay.test.ts MOVE_GIFT_CARD_ROW_HELD_BREACHES (W24): a card move whose gift card row failed in C2 is held, the £6 card payment on no order yet; move.test.ts runs reconcile and it is put right"
-const SETTLE_GIFT_CARD_HELD = "booking-replay.test.ts (W19): Settle's gift card row failed after the card paid, so the change is held for reconcile; settle.test.ts runs reconcile on the same state and every line is put right"
-const EVENT_HELD = "event-places-replay.test.ts (W30): the recording ends inside its own planted failure (the store credit write keeps failing), so R2 can't be saved and the claim is still held; the family's next test shows reconcile recording it"
+const R2D = "W20 (R2d): the card paid and its order couldn't be written, so the Add Guest change is held for reconcile; add-guest.test.ts runs reconcile on the same hold and it writes the order"
+const REMOVE_HELD = "W22: Remove Guest's card part went and its store credit write failed, so its refund is held; remove-guest.test.ts runs reconcile and it records both"
+const MOVE_CREDIT_HELD = "W24: a cheaper move's card part went and its store credit write failed (R2 held); move.test.ts runs reconcile on the same hold and it finishes it"
+const MOVE_GIFT_CARD_HELD = "W24: a card move whose gift card row failed in C2 is held, the £6 card payment on no order yet; move.test.ts runs reconcile and it is put right"
+const SETTLE_GIFT_CARD_HELD = "W19: Settle's gift card row failed after the card paid, so the change is held for reconcile; settle.test.ts runs reconcile on the same state and every line is put right"
+const EVENT_HELD = "W30: the recording ends inside its own planted failure (the store credit write keeps failing), so R2 can't be saved and the claim is still held; the family's next test shows reconcile recording it"
 // W65a: E2_TAP went. E2's tap after the cancel completed a cancelled PaymentIntent, which only the fake allowed (W35 row
 // 3): £24 taken on no order. The fake now refuses it, as Stripe does, so E2 has no tap and no breach.
 const CANCELLED_BY_HAND = 'The scenario cancels the booking itself with an UPDATE and asks for no refund (a state for the read or flag it tests): no code made it'
-const FIRST_INVOICE = "Q21 (W13): a membership's first invoice belongs to its subscription, so no order names that PaymentIntent (replay/invariants.ts FIRST_INVOICE; the old code put it on the order in these three, so the old side's list didn't need them)"
-const MISMATCH_LEFT = 'W03-plan 2.5 (W11): a reader payment that does not match its order is left for a person, the order pending with nothing confirmed (order-replay.test.ts and orders/reader.test.ts hold it)'
+const FIRST_INVOICE = "Q21 (W13): a membership's first invoice belongs to its subscription, so no order names that PaymentIntent (replay/invariants.ts FIRST_INVOICE; the old code put it on the order in these three)"
+const MISMATCH_LEFT = 'W03-plan 2.5 (W11): a reader payment that does not match its order is left for a person, the order pending with nothing confirmed (orders/reader.test.ts holds it)'
 const PAYMENT_DATE_CHARGE = "W41 (F-plan 4.7): a payment date change's charge is the membership's own, recorded on its membership_payment_date_changes row and its membership.payment_date_changed rows, not on an order"
 const PAYMENT_DATE_HELD = `${PAYMENT_DATE_CHARGE}; here the scenario stops the press after the charge (or its writes fail), so the change is held and never charged again (memberships/payment-date.test.ts runs reconcile on it)`
 

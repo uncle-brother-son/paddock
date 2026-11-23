@@ -9,7 +9,7 @@ import * as words from './failure-messages'
 // W17: step D's words, moved ahead of the slices that use them. The screens' maps must be the screens', word for
 // word, until each screen goes (read here from the staff app's source with the TypeScript parser, as step C's test
 // does), and the old functions' words must be the old code's, word for word, so a word changed on either side fails
-// (W64a item 7: read from the old code's words pinned in testing/old-words.json, recorded from step D's frozen copy).
+// (W64a item 7: read from the old code's words pinned in testing/old-words.json, recorded from step D's old code before it went).
 // The words W17 adds are checked for what they must say.
 
 const components = path.join(staffAppDir(), 'frontend/components')
@@ -54,7 +54,7 @@ function objectLiteral(source: ts.SourceFile, name: string, maps: Record<string,
   return entries
 }
 
-/** Every string literal in step D's frozen copy, and the static text of every template literal (pinned, W64a item 7). */
+/** Every string literal in step D's old code, and the static text of every template literal (pinned, W64a item 7). */
 const frozenCode = (): { strings: Set<string>; templates: string[] } => oldWords('booking')
 
 /** Whether `text` is a frozen template filled in: its static parts, in order, with anything between. */
@@ -157,7 +157,7 @@ describe('staffSees: what each dialog showed', () => {
 describe("the old functions' words, moved", () => {
   const { strings, templates } = frozenCode()
 
-  it('every constant is in the frozen copy, word for word', () => {
+  it('every constant is in the old code, word for word', () => {
     const constants = [
       words.READER_PAYMENT_OPEN_MESSAGE,
       words.CARD_CHARGE_IN_PROGRESS_MESSAGE,
@@ -181,7 +181,7 @@ describe("the old functions' words, moved", () => {
     expect(constants.length).toBeGreaterThan(45)
   })
 
-  it('every template, filled in, is one of the frozen copy\'s templates', () => {
+  it('every template, filled in, is one of the old code\'s templates', () => {
     const filled = [
       words.amountChangedToMessage(12.5),
       words.moveReaderSetupFailedMessage('card_declined'),

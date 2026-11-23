@@ -15,18 +15,18 @@ import { readRecording, replay, startReplay, writeRecording, type ReplayEnvironm
 import { workerSide, type WorkerSideOptions } from './worker'
 
 /*
- * W64 (H-plan 3.1, 3.3 step 3; lead call L-H2): the all-Worker sweep. Every scenario the old replay recorded (scenarios.ts
- * with W27's and W36's, W12's reader flows, W48's step G recordings) runs on the Worker alone (worker.ts), from the same
+ * W64 (H-plan 3.1, 3.3 step 3; lead call L-H2): the all-Worker sweep. Every scenario (scenarios.ts with W27's and W36's,
+ * W12's reader flows, W48's step G scenarios) runs on the Worker alone (worker.ts), from the same
  * seed, as each screen presses it. On each: the W05 invariants (replay/invariants.ts), G-plan 4.9 item 5's
  * (g-invariants.ts), the stamps set aside checked for their form, and then a comparison with its own recording in
- * `testing/recordings/`, made from the Worker once the bridge check held it to the golden files (W64 report). A
+ * `testing/recordings/`, made from the Worker once the bridge check held it to the old functions' recordings (W64 report). A
  * deliberate change re-records with `UPDATE_RECORDINGS=1` and the diff is read before it is kept.
  *
  * Split into files by family (sweep-*.test.ts, each naming its scenarios by prefix in SWEEP_FILES) so no file nears its
  * time limit; `coverage.test.ts` holds that every scenario is in exactly one file.
  */
 
-/** Every scenario the sweep runs, in the order the old replay had them. */
+/** Every scenario the sweep runs, in the order they were first recorded. */
 export const SWEEP_SCENARIOS: readonly Scenario[] = [...scenarios, ...W12_FLOW_SCENARIOS, ...w48Scenarios()]
 
 /** W64a item 1: the rule test file holding the next step on money owed, made on the Worker (each test named after its scenario). */
@@ -48,8 +48,8 @@ export const DROPPED: Readonly<Record<string, string>> = {
   // GB24 too: the "who may" recording of the same deleted function. Each press reached the all-Worker side's own words
   // ("no press for generateUpcomingSessions"), so it recorded the harness, not the Worker (W64 review S5).
   'w48-generate-upcoming-sessions-who-may': 'GB24: server/rules/testing/sweep/dropped.test.ts (no such function in the staff app; no route; the job makes sessions: sessions/admin.test.ts)',
-  // W05g's and W05h's money owed, set up on the old side (scenarios.ts's onTheOldSide, fortyOwed and fortyLanded until
-  // W65: a cheaper move whose store credit failed or couldn't be told). On the Worker a move is one transaction, so that
+  // W05g's and W05h's money owed, set up on the old functions until W65 (a cheaper move whose store credit failed or
+  // couldn't be told). On the Worker a move is one transaction, so that
   // setup leaves nothing owed. W64a item 1 (W64 review S1): money owed is still reached on the Worker, by a card refund
   // Stripe never got, so each next step is held in the rule test named, which makes it that way and holds the figures
   // booking-replay accepted.
@@ -98,7 +98,7 @@ export const SWEEP_FILES: Readonly<Record<string, (name: string) => boolean>> = 
  * value: a stored press's `request_hash` (a SHA-256 of a body that names new ids), and a stamp's fingerprint (an MD5 of
  * a row whose id is new each run), and the order of a set of rows' stamps (listed by id: `<row>@<stamp>,...`), and a
  * gift card code that no row is left to label (a cancelled order's stored answer). Everything else in a recording is
- * compared exactly. The golden files never held any of them (the old code wrote no press rows and answered no stamps).
+ * compared exactly. The old functions' recordings never held any of them (they wrote no press rows and answered no stamps).
  */
 const SHA_256 = /^[0-9a-f]{64}$/
 const STAMP_HASH = /#[0-9a-f]{32}\b/g
@@ -233,7 +233,7 @@ export function sweepFile(file: string): void {
       expect(compareRecordings(kept as Recording, recording)).toEqual([])
     })
 
-    // W64a item 4 (W64 review S3; w05d.test.ts held the old side the same way): after this file's scenarios, the W05
+    // W64a item 4 (W64 review S3): after this file's scenarios, the W05
     // exceptions they used are exactly the Worker's lists' entries for them. One listed and not used is stale (it could
     // hide a new breach); one needed and not listed fails its scenario above as a breach.
     it('the W05 exceptions these scenarios used are exactly the ones listed for them (WORKER_EXCEPTIONS)', () => {

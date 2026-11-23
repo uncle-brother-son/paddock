@@ -47,8 +47,8 @@ import {
 import { claimRefundKey } from './refunds'
 
 // Brief W23 items 1 to 4: Cancel & Refund, Cancel & return credit and Cancel (payment needed) on the Worker, through the
-// routes as the staff app calls them, on the replay's live schema. The bookings are made by the old functions (the
-// frozen copy). Stripe is only ever the fake. The replay's clock is 10 Nov 2026 09:00; the booking's session is
+// routes as the staff app calls them, on the replay's live schema. The bookings are made through the Worker's routes, as
+// the screens press them (sweep/worker.ts). Stripe is only ever the fake. The replay's clock is 10 Nov 2026 09:00; the booking's session is
 // 12 Nov 10:00.
 
 const holder = vi.hoisted(() => ({ db: null as unknown }))

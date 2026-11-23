@@ -5,7 +5,7 @@ import { throughStaffApp } from './booking-presses'
 /*
  * W64 (H-plan 3.3 step 3): step G's presses (W49 to W57), as the screen presses them, moved here unchanged from
  * `replay/admin-side.ts` so the all-Worker sweep and the Worker's own rule tests can press the Worker with nothing of the
- * old code loaded. The replay side re-exports all of it; what it keeps is its old side and its comparisons (W65).
+ * old code loaded.
  */
 
 /** W49: the six staff functions. */
@@ -127,7 +127,7 @@ export function createAsTheDialogPresses(action: string): (db: Db, params: unkno
 
 /**
  * W51. Block Day, Unblock Day and a band change send the figures their dialog showed (`seen`), and the Worker
- * refuses a press whose figures are no longer right. A golden file's params have none (the old functions counted
+ * refuses a press whose figures are no longer right. A scenario's params have none (the old functions counted
  * again for themselves), so each press is made as its dialog makes it: the quote first, by the same sign-in, then
  * the press with the figures the quote gave. A quote the Worker refuses (an inactive account, no Manage pricing)
  * gives no figures; the press is then refused the same way, before any figure is looked at, as the recording has
@@ -176,7 +176,7 @@ export async function withTheFiguresShown(action: string, db: Db, params: unknow
 export const NO_ROW = 'none'
 
 /**
- * W54a. The four edits that send a whole row back carry the stamp their screen loaded. A golden file's params have
+ * W54a. The four edits that send a whole row back carry the stamp their screen loaded. A scenario's params have
  * none (the old functions took none), so each is pressed as its screen presses it: the screen's own read first, by
  * the same sign-in, then the press with the stamp that read gave. A read the Worker refuses (an inactive account, a
  * sign-in with no staff row) gives no stamp; the press is then refused by the staff check, before a stamp is looked
@@ -246,7 +246,7 @@ export const priceChanges = (stored: unknown, priceId: unknown, typed: unknown):
 /**
  * W57. The edit dialog says how many members will move to a changed price before the press, from the row it opened on,
  * and sends that count (`membersToMove`); the waiting period control reads the Herd count for the period typed and
- * sends it (`herdFlagsToChange`). A golden file's params have neither (the old functions counted nothing), so each is
+ * sends it (`herdFlagsToChange`). A scenario's params have neither (the old functions counted nothing), so each is
  * read just before the press, as the screens read it. A read the Worker refuses gives none; the press is then refused
  * before any count is looked at, as the recording has it. updateCatalogItemPrice for a plan is pressed by no screen,
  * so it is sent as recorded, with no count.

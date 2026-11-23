@@ -2,7 +2,7 @@
 // W53 review L7; W54a's stale-page rule): Catalog → Service Types on the Worker: the read (with each type's tiers
 // and weekly slots), a type's details, a new size group, a size group's range, and a tier's price. On and off sale
 // and a public type's price are items.ts's (setItemActive, setItemPrice). Ported from the staff app's old functions
-// as frozen at W48 (testing/legacy-admin), with their words.
+// as they were at W48, with their words.
 //
 // GB21. A private service type is priced in size groups: one tier row per band for each group of people ("1 to 4
 // people" in Off-Peak, Core and Peak). The old dialog saved a group's range as one call per band, so one failing left

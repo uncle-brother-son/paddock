@@ -7,7 +7,7 @@ import { bea, ID, lapsedSeat, memberCredit, mo, paidSeat, publicOnCard, sam, see
 /*
  * W64 (H-plan 3.3 step 3): W12's reader flow scenarios and the flow steps, as the screen presses them, moved here unchanged from
  * `replay/flow-side.ts` so the all-Worker sweep and the Worker's own rule tests can press the Worker with nothing of the
- * old code loaded. The replay side re-exports all of it; what it keeps is its old side and its comparisons (W65).
+ * old code loaded.
  */
 
 export type Pending = { pendingReaderPayment?: { pendingId: string; paymentIntentId: string } }

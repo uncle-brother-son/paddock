@@ -32,13 +32,11 @@
       "addonLineIds": []
     },
     {
-      "removed": true,
+      "removed": false,
       "blocked": false,
       "guestId": "gone#6",
-      "refundedAmount": 20,
-      "cardRefundedAmount": 0,
-      "storeCreditRefundedAmount": 20,
-      "storeCreditBalance": 50
+      "reason": "no_answer",
+      "message": "Removing didn't get an answer, so the guest may or may not have been removed, with their refund. Don't refund them another way: press Remove again here (it won't remove or refund twice), or close this and reload the booking first."
     },
     {
       "refused": {
@@ -66,7 +64,9 @@
       "removed": false,
       "blocked": false,
       "guestId": "gone#6",
-      "reason": "guest_not_found"
+      "reason": "pressed_after_no_answer",
+      "message": "The last press didn't get an answer, so this can't be sent as a new one. Close this, reload the booking and check whether the guest was removed (and refunded) before trying again.",
+      "retryLocked": true
     }
   ],
   "stripeCalls": [
@@ -249,30 +249,6 @@
             "requestId": "gone#11"
           },
           "http_status": 409,
-          "created_at": "<set>"
-        },
-        {
-          "key": "gone#12",
-          "actor_type": "staff",
-          "actor_id": "10000000-0000-4000-8000-000000000001",
-          "endpoint": "POST /api/v1/staff/bookings/guests/gone#6/remove",
-          "request_hash": "<sha-256>",
-          "status": "done",
-          "response": {
-            "ok": false,
-            "error": {
-              "code": "NOT_FOUND",
-              "details": {
-                "action": "remove_guest",
-                "reason": "guest_not_found",
-                "message": "This guest has already been removed.",
-                "screenWords": true
-              },
-              "message": "This guest has already been removed."
-            },
-            "requestId": "gone#13"
-          },
-          "http_status": 404,
           "created_at": "<set>"
         }
       ],
@@ -706,7 +682,7 @@
           "booking_id": "bookings#1",
           "gift_card_id": null,
           "staff_id": "10000000-0000-4000-8000-000000000001",
-          "note": "Refund for a guest removed from the booking (Bea Guest). [ref gone#14]",
+          "note": "Refund for a guest removed from the booking (Bea Guest). [ref gone#12]",
           "created_at": "<set>",
           "event_booking_id": null
         }

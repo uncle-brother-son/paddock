@@ -22,6 +22,29 @@
           "key": "gone#1",
           "actor_type": "staff",
           "actor_id": "10000000-0000-4000-8000-000000000001",
+          "endpoint": "POST /api/v1/staff/sessions/10000000-0000-4000-8000-000000000004/start-time",
+          "request_hash": "<sha-256>",
+          "status": "done",
+          "response": {
+            "ok": false,
+            "error": {
+              "code": "CONFLICT",
+              "details": {
+                "action": "session.start_time_set",
+                "reason": "session_has_bookings",
+                "message": "This slot has a booking, so its start time can't be changed."
+              },
+              "message": "This slot has a booking, so its start time can't be changed."
+            },
+            "requestId": "gone#2"
+          },
+          "http_status": 409,
+          "created_at": "<set>"
+        },
+        {
+          "key": "gone#3",
+          "actor_type": "staff",
+          "actor_id": "10000000-0000-4000-8000-000000000001",
           "endpoint": "POST /api/v1/staff/orders",
           "request_hash": "<sha-256>",
           "status": "done",
@@ -43,32 +66,9 @@
               "sessionPassId": null,
               "eventBookingId": null
             },
-            "requestId": "gone#2"
-          },
-          "http_status": 200,
-          "created_at": "<set>"
-        },
-        {
-          "key": "gone#3",
-          "actor_type": "staff",
-          "actor_id": "10000000-0000-4000-8000-000000000001",
-          "endpoint": "POST /api/v1/staff/sessions/10000000-0000-4000-8000-000000000004/start-time",
-          "request_hash": "<sha-256>",
-          "status": "done",
-          "response": {
-            "ok": false,
-            "error": {
-              "code": "CONFLICT",
-              "details": {
-                "action": "session.start_time_set",
-                "reason": "session_has_bookings",
-                "message": "This slot has a booking, so its start time can't be changed."
-              },
-              "message": "This slot has a booking, so its start time can't be changed."
-            },
             "requestId": "gone#4"
           },
-          "http_status": 409,
+          "http_status": 200,
           "created_at": "<set>"
         }
       ],
@@ -86,7 +86,7 @@
           "action": "order.create",
           "entity_type": "order",
           "entity_id": "orders#1",
-          "request_id": "gone#2",
+          "request_id": "gone#4",
           "details": {
             "promo": null,
             "method": "cash",
@@ -115,7 +115,7 @@
           "action": "order.paid",
           "entity_type": "order",
           "entity_id": "orders#1",
-          "request_id": "gone#2",
+          "request_id": "gone#4",
           "details": {
             "method": "cash",
             "giftCard": 0,

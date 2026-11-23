@@ -33,7 +33,7 @@ vi.setConfig({ testTimeout: 60_000 })
 // Payment needed booking (GB22); the filters; how each order was paid, in words (L9); every kind of line's name and
 // the two summary sentences; the staff check on the reads (GB14) and their channel; every refusal of the tick with its
 // words, on and off, and its audit rows. The tick's race with a line refund, on two connections, is in
-// admin-postgres.test.ts; the old functions' recordings replay in testing/replay/order-admin-replay.test.ts.
+// admin-postgres.test.ts; the scenarios first recorded from the old functions run in the all-Worker sweep (testing/sweep/).
 
 const holder = vi.hoisted(() => ({ db: null as unknown }))
 vi.mock('@/server/db/connection', () => ({

@@ -1,6 +1,6 @@
 import type { Scenario, ScenarioContext } from '../sweep/run'
 
-// The W05 invariants (W05d, W05k), moved here from w05d.test.ts unchanged in W18 so the new side can run them too
+// The W05 invariants (W05d, W05k), moved here unchanged in W18 so the Worker's side could run them too
 // (D-plan 4.11 item 3): no booking gets back more than was paid, price_paid is paid less given back, what is owed is
 // never negative or more than that, Stripe's refunds are on the rows, every gift card lost what its redemptions say,
 // and every PaymentIntent that took money is on exactly one order. Seat money only: add-ons have their own lines and
@@ -8,8 +8,8 @@ import type { Scenario, ScenarioContext } from '../sweep/run'
 
 /**
  * Allowed to break a check below, each for a reason nothing here can fix: the Worker's lists, which the all-Worker
- * sweep holds to exactly what it needs (W64a item 4, W64 review S3: sweep/sweep.ts). W65: the old replay's own lists
- * (its old side ran the old functions) went with it.
+ * sweep holds to exactly what it needs (W64a item 4, W64 review S3: sweep/sweep.ts). W65: the lists for the old
+ * functions went with that code.
  */
 /**
  * W13 on the Worker (W64a item 4): a membership order that can't finish after Stripe took money (the rest of the basket
@@ -104,9 +104,10 @@ export function watchedForInvariants(scenario: Scenario, sweep: InvariantSweep, 
         const result = await context.call(action, params)
         const sent = params as { bookingId?: string; payment?: { method?: string; confirmedCashAmount?: number } }
         // W27: an old function can answer null (getEventCancellationOverview, for an event that is gone).
-        const answer = (result ?? {}) as { moved?: boolean; settled?: boolean; message?: string }
-        // An unclear save (W05l) keeps everything taken, the cash too, until staff check.
-        const unclear = answer.message?.includes('checking whether it was saved failed too') === true
+        const answer = (result ?? {}) as { moved?: boolean; settled?: boolean; message?: string; reason?: string }
+        // An unclear save (W05l) keeps everything taken, the cash too, until staff check. W65b: on the Worker that is a
+        // press whose route's answer was lost (`no_answer`): the cash was handed over before the press.
+        const unclear = answer.message?.includes('checking whether it was saved failed too') === true || answer.reason === 'no_answer'
         const done = (action === 'moveBooking' && (answer.moved || unclear)) || (action === 'settleLapsedBooking' && (answer.settled || unclear))
         if (done && sent.bookingId && sent.payment?.method === 'cash') {
           offLines.set(sent.bookingId, (offLines.get(sent.bookingId) ?? 0) + (sent.payment.confirmedCashAmount ?? 0))

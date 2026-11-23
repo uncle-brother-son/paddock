@@ -8,8 +8,8 @@ import { z } from 'zod'
  *
  * Every answer is the old function's own, in its field names (snake_case columns, money and dates as the database
  * gives them, a moment as ISO text), so nothing a screen reads today is missing; an id or a moment is any text here,
- * so the recordings' own answers can be held to it (server/rules/testing/replay/w48-contracts.test.ts, which runs all
- * 271 step G scenarios through the frozen copy and checks every call).
+ * so the recordings' own answers can be held to it (W48 to W64: a test ran
+ * every step G scenario through the old functions and checked every call; that code went at W65).
  *
  * Every input is loose where the old function answered for itself: a word from a set (a role, a level, a reason) is
  * any text, and a number may be empty, so the rule can refuse in the old words instead of a generic validation
@@ -20,7 +20,7 @@ import { z } from 'zod'
  * wrappers put the old result shapes back (`updated: false, reason, message`; `blocked: false, conflict: true…`; a
  * thrown message where the old function threw).
  *
- * First written from the frozen copy with the TypeScript checker (briefs/W48-logs/generate-admin-contracts.mjs in
+ * First written from the old step G functions with the TypeScript checker (briefs/W48-logs/generate-admin-contracts.mjs in
  * the staff app repo) and kept by hand from here on.
  */
 

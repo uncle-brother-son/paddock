@@ -1,6 +1,6 @@
 // W52 (G-plan 1.5, 4.1, 4.3, 4.6; bugs GB11 and GB14; Wayne's Q51; W54a's stale-page rule): Catalog → Events on the
-// Worker. Ported from the staff app's getEvents.ts, setEventActive.ts and setEventDetails.ts (frozen at W48 in
-// testing/legacy-admin), with their words (server/rules/events/admin-failure-messages.ts).
+// Worker. Ported from the staff app's getEvents.ts, setEventActive.ts and setEventDetails.ts (as they were at
+// W48), with their words (server/rules/events/admin-failure-messages.ts).
 //
 // The read (GB14): an active staff member, through the admin read helper (the old read checked nobody), with named
 // columns. Each event also answers its stamp, which the edit dialog sends back with a save.

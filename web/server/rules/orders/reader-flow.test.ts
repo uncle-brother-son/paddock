@@ -22,9 +22,9 @@ import {
 import { otherModeMessage } from './reader-order'
 
 // W12 item 2: the reader flows' finalise and cancel through the new routes, on PGlite with the live schema
-// and the replay seed, FakeStripe for Stripe. A flow is started by the old function (as every flow is until
-// step D) and given what step D's Worker start writes (asWorkerFlow). The replay (flow-replay.test.ts) holds
-// every recorded flow to the old functions; this file holds what differs by decision, the refusals, a
+// and the replay seed, FakeStripe for Stripe. A flow is started through the Worker's route, as the screen starts
+// it (workerSide), and given what step D's Worker start writes (asWorkerFlow). The all-Worker sweep
+// (testing/sweep/sweep-flows.test.ts) holds every recorded flow; this file holds what differs by decision, the refusals, a
 // second press, and a failure at each step (each one transaction: R1, R2, bug 12, W5-17).
 
 const holder = vi.hoisted(() => ({ db: null as unknown }))

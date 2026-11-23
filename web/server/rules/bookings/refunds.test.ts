@@ -42,7 +42,7 @@ import { claimRefundKey, readClaim, REFUND_CLAIMED, type ClaimDetails } from './
 
 // Brief W21: the refund pipeline (D-plan 4.3, 4.10), Part refund, Refund the rest, It already arrived and the figures,
 // on the replay's live schema (its triggers and the store credit function included), through the routes as the staff
-// app calls them. The bookings are made by the old functions (the frozen copy), as the golden scenarios make them.
+// app calls them. The bookings are made through the Worker's routes, as the screens press them (sweep/worker.ts).
 // Stripe is only ever the fake.
 
 const holder = vi.hoisted(() => ({ db: null as unknown }))

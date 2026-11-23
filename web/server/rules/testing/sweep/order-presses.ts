@@ -95,7 +95,7 @@ export async function postOrder(
   input: unknown,
   { key = crypto.randomUUID(), email = REPLAY_USER.email, orderSwitch = ALL_KINDS_ON }: { key?: string; email?: string; orderSwitch?: string } = {}
 ): Promise<OrderAnswer> {
-  // W14: the switch for this one call, put back after it, so an old side in the same test still sees its own. W64a item
+  // W14: the switch for this one call, put back after it, so the next call in the same test sees its own. W64a item
   // 8: the all-Worker side's live switch while it presses.
   const before = process.env.ORDER_SWITCH
   process.env.ORDER_SWITCH = pressSwitch.live ?? orderSwitch
@@ -182,7 +182,7 @@ function oldReaderStepResult(answer: OrderAnswer): unknown {
 
 /**
  * Replays createOrder through the new route. `answers` keeps each raw answer, for what staff see.
- * `adjust` changes what is sent where a decision changes it (order-differences.ts, NEW_SIDE_CONFIRMS).
+ * `adjust` changes what is sent where a decision changes it (press-forms.ts, NEW_SIDE_CONFIRMS).
  * W10: the run's FakeStripe is the one the route charges (stripe-binding.ts), and a card order sends
  * the quote's card figure as confirmed.
  */

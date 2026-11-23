@@ -26,8 +26,8 @@ import {
 
 // Brief W31 (E-plan 4.4 "Whole event", 5.1): the whole event on the Worker, on the replay's live schema (the
 // database's own event_cancellation_quote, release_event_places and store credit function included), through the
-// routes as the staff app calls them. The event orders are placed by the old createOrder (the frozen copy), as the
-// golden scenarios place them. Stripe is only ever the fake.
+// routes as the staff app calls them. The event orders are placed through the Worker's order route, as New Order
+// places them (sweep/worker.ts). Stripe is only ever the fake.
 
 vi.setConfig({ testTimeout: 120_000 })
 
