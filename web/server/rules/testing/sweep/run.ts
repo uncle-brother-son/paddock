@@ -25,8 +25,8 @@ export interface ReplaySide {
   name: string
   call(action: string, params: unknown): Promise<unknown>
   /**
-   * W43: the lapse sweep this side runs where a scenario recorded the database's own (scenarios.ts, sweepLapsed).
-   * Left out (every side before W43): the database's lapse_sweep_expired_bookings, as recorded.
+   * W43: the lapse sweep this side runs where a scenario recorded the database's own (scenarios.ts, sweepLapsed). W68:
+   * a side without one can't run those scenarios (the database's own was dropped by migration 034).
    */
   lapseSweep?(db: Db): Promise<void>
   /**

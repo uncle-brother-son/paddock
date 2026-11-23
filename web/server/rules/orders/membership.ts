@@ -430,13 +430,13 @@ export type StartAnswer =
   | { kind: 'started'; replaced: boolean }
   /** W13c (B1): refused, because another press's start is younger than SUBSCRIPTION_START_GUARD_SECONDS. */
   | { kind: 'starting' }
-  /** Refused: the order is gone, paid, carrying the compensation mark, or the old rollback's. */
+  /** Refused: the order is gone, paid, or carrying the compensation mark. */
   | { kind: 'not_pending' }
 
 /**
  * W13a (B1, part a): the screen's finalise of a reader membership writes its start before it asks Stripe for the
  * subscription: `membership.subscription_started_at` (the database's clock) and `subscription_started_by` (this
- * press). Only on a pending order with no compensation mark and no old rollback: the mark and this write lock the
+ * press). Only on a pending order with no compensation mark: the mark and this write lock the
  * same row, so one of them goes first and the other sees it. Refused there, the order is being compensated (or is
  * no longer pending), so no subscription may be made.
  *
@@ -455,7 +455,7 @@ export async function markSubscriptionStarting(db: Db, orderId: string, press: s
        open AS (
          SELECT id, reader_payment FROM locked
          WHERE payment_status = 'pending' AND reader_payment ? 'membership'
-           AND (reader_payment->'rollback') IS NULL AND NOT reader_payment ? 'compensation'
+           AND NOT reader_payment ? 'compensation'
        ),
        allowed AS (
          SELECT id, reader_payment FROM open
@@ -486,13 +486,13 @@ export async function markSubscriptionStarting(db: Db, orderId: string, press: s
 export type MarkAnswer =
   /** The order carries the mark now (this call's or an earlier one's), with the subscription's start it carried, if any. */
   | { marked: true; startedAt: string | null; startedBy: string | null }
-  /** `starting`: held off by another press's start (W13a B1). `not_pending`: gone, paid, or the old rollback's. */
+  /** `starting`: held off by another press's start (W13a B1). `not_pending`: gone or paid. */
   | { marked: false; why: 'starting' | 'not_pending' }
 
 /**
  * The compensation mark (pending-order.ts, `compensation`), written and committed before anything is
  * reversed, once: T2 refuses an order carrying it, so a refunded payment (which still reads `succeeded`)
- * can never be finalised. Only on a pending order the old rollback hasn't started on.
+ * can never be finalised. Only on a pending order.
  *
  * W13a (B1, part b): with `guard`, not while another press's start of the subscription is younger than
  * SUBSCRIPTION_START_GUARD_SECONDS (a start by `guard.press` itself doesn't count). One statement: the order's
@@ -508,7 +508,7 @@ export async function markCompensating(db: Db, orderId: string, why: string, gua
        ),
        allowed AS (
          SELECT id, reader_payment FROM locked
-         WHERE payment_status = 'pending' AND reader_payment IS NOT NULL AND (reader_payment->'rollback') IS NULL
+         WHERE payment_status = 'pending' AND reader_payment IS NOT NULL
            AND (reader_payment ? 'compensation' OR NOT $3::boolean
                 OR (reader_payment->'membership'->>'subscription_started_at') IS NULL
                 OR reader_payment->'membership'->>'subscription_started_by' = $4::text
@@ -524,7 +524,7 @@ export async function markCompensating(db: Db, orderId: string, why: string, gua
          RETURNING o.id
        )
        SELECT (SELECT count(*)::int FROM marked) AS marked,
-              (l.payment_status = 'pending' AND l.reader_payment IS NOT NULL AND (l.reader_payment->'rollback') IS NULL) AS pending,
+              (l.payment_status = 'pending' AND l.reader_payment IS NOT NULL) AS pending,
               l.reader_payment->'membership'->>'subscription_started_at' AS started_at,
               l.reader_payment->'membership'->>'subscription_started_by' AS started_by
        FROM locked l`,
@@ -879,12 +879,12 @@ export const SUBSCRIPTION_LEFT_ACTION = 'order.subscription_left'
 
 /**
  * What T2 found that leaves a subscription the caller made with no order to pay (W13a: gone or marked; W13d, W13c
- * review S-1: also the old rollback's, paid with another payment, or otherwise not pending). The order can't be paid
+ * review S-1: also paid with another payment, or otherwise not pending). The order can't be paid
  * with that subscription on any of them, so T2 records it as left and the caller puts it back.
  */
-export type SubscriptionPutBackReason = 'order_gone' | 'compensating' | 'rollback_started' | 'paid_by_another_payment' | 'not_pending'
+export type SubscriptionPutBackReason = 'order_gone' | 'compensating' | 'paid_by_another_payment' | 'not_pending'
 
-const SUBSCRIPTION_PUT_BACK_REASONS: ReadonlySet<string> = new Set<SubscriptionPutBackReason>(['order_gone', 'compensating', 'rollback_started', 'paid_by_another_payment', 'not_pending'])
+const SUBSCRIPTION_PUT_BACK_REASONS: ReadonlySet<string> = new Set<SubscriptionPutBackReason>(['order_gone', 'compensating', 'paid_by_another_payment', 'not_pending'])
 
 /** T2's answer is one on which a subscription the caller made is put back. */
 export const isPutBackReason = (reason: string): reason is SubscriptionPutBackReason => SUBSCRIPTION_PUT_BACK_REASONS.has(reason)
@@ -952,9 +952,9 @@ export const LEFT_AT_T2 = 'not put back yet: T2 found the order gone, being put 
  * little time left to send anything (under MIN_SEND_MS before the deadline) this does nothing at all: no Stripe call
  * and no row, so nothing is written after T2 once the window has closed. Reconcile retries the left row (L3).
  *
- * W13d (W13c review S-1): also run when T2 found the old rollback's, paid with another payment, or not pending. Only
+ * W13d (W13c review S-1): also run when T2 found the order paid with another payment, or not pending. Only
  * this subscription and its own first invoice are touched (`:refund-subscription`); the order's other money is the
- * old rollback's, the paying payment's, or (gone) the late refund's.
+ * paying payment's, or (gone) the late refund's.
  */
 export async function putBackSubscription(
   db: Db,

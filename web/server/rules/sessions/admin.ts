@@ -51,9 +51,10 @@
 //    multi-row write, so none can deadlock with a band-window save re-banding the same day.
 //  - Q18's rule for counts: the day actions and a band change show their figures first (a quote), and the press
 //    sends the figures staff saw. If they are no longer right nothing is written and the refusal carries the new ones.
-//  - W54a's stale-page rule applies to none of these: a block or unblock is one switch; a band, a start time, a new
-//    session and a weekly slot each write only what was pressed, never a row as a page read it. The figures a press
-//    confirms are held by Q18's rule above.
+//  - W54a's stale-page rule applies to one of these (W68, Wayne's Q58): a one-off session's dialog shows the band and
+//    price it would get (`GET sessions/one-off/quote`), and the press sends that quote's stamp: changed since, nothing is
+//    made. The rest write only what was pressed, never a row as a page read it: a block or unblock is one switch; a
+//    band, a start time and a weekly slot are one value each. The figures a press confirms are held by Q18's rule above.
 //  - Q50 part 2 (Wayne, 20 Nov): adding or removing a weekly slot needs Manage pricing. Block, unblock, start time
 //    and one-off sessions stay open to every active staff member; a band override and its reset need Manage pricing,
 //    as they did.
@@ -66,6 +67,7 @@ import type {
   AdminSetSessionBandOutput,
   BlockDayQuoteRouteOutput,
   BlockDayRouteOutput,
+  OneOffSessionQuoteRouteOutput,
   OneOffSessionRouteOutput,
   ScheduleSlotRow,
   SessionBandResetRouteOutput,
@@ -904,11 +906,77 @@ export async function setSessionStartTime(db: Db, sessionId: string, startTime: 
 }
 
 const SERVICE_TYPE_SQL = 'SELECT id, duration, capacity, booking_type, active FROM service_types WHERE id = $1::uuid'
+/** The band the database's own trigger gives a session at `$1` (sessions_assign_band), and its price. */
+const ONE_OFF_BAND_SQL = 'SELECT b.id, b.code, b.name, b.price::text AS price FROM session_bands b WHERE b.id = band_for_session_start($1::timestamptz)'
+/** A private type's size groups at a band: what the checkout prices a private session from (orders/load-basket.ts, `private_tier`). */
+const ONE_OFF_SIZE_GROUPS_SQL = `
+SELECT t.min_people, t.max_people, t.price::text AS price
+  FROM service_type_price_tiers t
+ WHERE t.service_type_id = $1::uuid AND t.band_id = $2::uuid
+ ORDER BY t.min_people, t.max_people, t.id`
 const SESSION_AT_SQL = 'SELECT 1 AS taken FROM sessions WHERE service_type_id = $1::uuid AND start_time = $2::timestamptz'
+/** W68a: whether any session on a London day had its band set by hand. */
+const DAY_SET_BY_HAND_SQL = `SELECT EXISTS (SELECT 1 FROM sessions s WHERE ${withinLondonDaysSql('s.start_time', '$1', '$1')} AND s.band_overridden) AS there`
 const INSERT_SESSION_SQL = `
 INSERT INTO sessions (service_type_id, start_time, end_time, type, capacity, status)
 VALUES ($1::uuid, $2::timestamptz, $2::timestamptz + ($3::int * interval '1 minute'), $4, $5, 'open')
 RETURNING id, service_type_id, start_time, end_time, capacity, type, band_id`
+
+interface OneOffSession {
+  serviceType: { id: string; duration: number; capacity: number; bookingType: 'public' | 'private' }
+  startTime: string
+  /** What the dialog shows, with its stamp (the quote adds its note, `othersSetByHand`). */
+  quote: Omit<OneOffSessionQuoteRouteOutput, 'othersSetByHand'>
+}
+
+/**
+ * W68 (Wayne's Q58): a one-off session as it would be made now: the old refusals in the old order, then the band its time
+ * has by the day's windows and what it would sell at. The quote and the press both come through here, so the dialog can't
+ * be shown one thing and the session made as another. The stamp is the whole of what is here, as text, with the service
+ * type and the time it is for: a band, a price or a size group that differs is a different stamp.
+ */
+async function oneOffSession(db: Queryable, serviceTypeId: unknown, startTime: unknown): Promise<OneOffSession> {
+  const action = 'session.created'
+  const words = SESSION_ADMIN_DIALOG_WORDS.CreateOneOffSessionDialog
+  const [serviceType] = isUuid(serviceTypeId)
+    ? await db.query<{ id: string; duration: number | null; capacity: number | null; booking_type: string | null; active: boolean | null }>(SERVICE_TYPE_SQL, [serviceTypeId])
+    : []
+  if (!serviceType || !serviceType.active) throw adminRefusal('NOT_FOUND', action, 'service_type_not_found', words.service_type_not_found)
+  if (!serviceType.duration || serviceType.duration <= 0 || !serviceType.capacity || !serviceType.booking_type) throw adminRefusal('CONFLICT', action, 'service_type_incomplete', words.service_type_incomplete)
+  if (!isValidIsoDateTime(startTime)) throw adminRefusal('VALIDATION', action, 'invalid_start_time', SESSION_ADMIN_WORDS.setSessionStartTime.enterValidDateAndTime, { field: 'startTime' })
+  // W51a: no session is added to a closed date (Unblock Day reopens the date first).
+  if (await closedDate(db, dayOf(startTime))) throw dateClosed(action, NEW.dateClosed)
+  if ((await db.query(SESSION_AT_SQL, [serviceType.id, startTime])).length > 0) throw adminRefusal('CONFLICT', action, 'slot_already_exists', words.slot_already_exists)
+  const type = serviceType.booking_type === 'private' ? ('private' as const) : ('public' as const)
+  const [band] = await db.query<{ id: string; code: string; name: string; price: string | null }>(ONE_OFF_BAND_SQL, [startTime])
+  const groups = band && type === 'private' ? await db.query<{ min_people: number; max_people: number; price: string | null }>(ONE_OFF_SIZE_GROUPS_SQL, [serviceType.id, band.id]) : []
+  const price = band && type === 'public' ? band.price : null
+  return {
+    serviceType: { id: serviceType.id, duration: serviceType.duration, capacity: serviceType.capacity, bookingType: type },
+    startTime,
+    quote: {
+      type,
+      band: band ? { code: band.code, name: band.name } : null,
+      pricePerPerson: price === null ? null : Number(price),
+      sizeGroups: groups.map((group) => ({ minPeople: group.min_people, maxPeople: group.max_people, price: group.price === null ? null : Number(group.price) })),
+      stamp: ['one-off', serviceType.id, startTime, type, band?.id ?? 'no band', band?.name ?? '', price ?? 'no price', ...groups.map((group) => `${group.min_people}-${group.max_people}:${group.price ?? 'no price'}`)].join('|'),
+    },
+  }
+}
+
+/**
+ * W68 (Wayne's Q58; H12): the band and price a one-off session would get (`GET sessions/one-off/quote`), shown in the dialog
+ * before the press. Any active staff member, as the press. Refused as the press would be (the service type, the time, a
+ * closed date, a session already there). Changes nothing. W68a (the H-plan's Q58 wording): it also says whether other
+ * sessions that day had their band set by hand, so staff know this one won't be in it. A note on the day, not what the
+ * session would be, so the press doesn't read it and the stamp leaves it out.
+ */
+export async function oneOffSessionQuote(db: Queryable, serviceTypeId: unknown, startTime: unknown, options: { actor: AdminActor }): Promise<OneOffSessionQuoteRouteOutput> {
+  requireAdminPermission(options.actor, 'staff', 'session.created')
+  const shown = await oneOffSession(db, serviceTypeId, startTime)
+  const [day] = await db.query<{ there: boolean }>(DAY_SET_BY_HAND_SQL, [dayOf(shown.startTime)])
+  return { ...shown.quote, othersSetByHand: day?.there === true }
+}
 
 /**
  * createOneOffSession (`POST sessions`): exactly one session for a service type at a time staff choose (a bespoke
@@ -920,12 +988,17 @@ RETURNING id, service_type_id, start_time, end_time, capacity, type, band_id`
  * database's own trigger; and a `session.created` audit row. However far ahead it is, the nightly job is not held up
  * by it any more (GB3: migration 032). W51a: a session on a closed date is refused (`date_closed`), read under the
  * date's lock, which Block Day and the nightly job take too.
+ *
+ * W68 (Wayne's Q58): `stamp` is the one the quote gave with the band and price the dialog showed. Read again under the band
+ * guard, after the old refusals: a press with no stamp, or whose band, price or size groups are no longer what was shown,
+ * is refused `changed_since` (W54a's rule) and nothing is made.
  */
-export async function createOneOffSession(db: Db, serviceTypeId: unknown, startTime: unknown, options: AdminWriteOptions): Promise<OneOffSessionRouteOutput> {
+export async function createOneOffSession(db: Db, serviceTypeId: unknown, startTime: unknown, stamp: unknown, options: AdminWriteOptions): Promise<OneOffSessionRouteOutput> {
   const action = 'session.created'
   const words = SESSION_ADMIN_DIALOG_WORDS.CreateOneOffSessionDialog
   requireAdminPermission(options.actor, 'staff', action)
   const taken = (): ApiError => adminRefusal('CONFLICT', action, 'slot_already_exists', words.slot_already_exists)
+  let made: OneOffSession | null = null
   try {
     return await adminWrite<null, OneOffSessionRouteOutput['session'] & { band_id: string | null }, OneOffSessionRouteOutput>(
       db,
@@ -934,29 +1007,23 @@ export async function createOneOffSession(db: Db, serviceTypeId: unknown, startT
         needs: 'staff',
         entity: { type: 'session', id: 'new' },
         locks: [],
-        unchangedSince: WRITES_ONLY_WHAT_WAS_PRESSED,
+        unchangedSince: { seen: stamp, now: async () => made?.quote.stamp ?? '' },
         async before(tx) {
           await holdBandGuardShared(tx)
           // W51a: the date's lock, after the guard: Block Day and the nightly job take it too, so the date isn't
-          // closed while this session is being made on it. A start that isn't a date and time is refused below.
+          // closed while this session is being made on it. A start that isn't a date and time is refused just below.
           if (isValidIsoDateTime(startTime)) await holdSessionDay(tx, dayOf(startTime))
+          made = await oneOffSession(tx, serviceTypeId, startTime)
           return null
         },
         async change(tx) {
-          const [serviceType] = isUuid(serviceTypeId)
-            ? await tx.query<{ id: string; duration: number | null; capacity: number | null; booking_type: string | null; active: boolean | null }>(SERVICE_TYPE_SQL, [serviceTypeId])
-            : []
-          if (!serviceType || !serviceType.active) throw adminRefusal('NOT_FOUND', action, 'service_type_not_found', words.service_type_not_found)
-          if (!serviceType.duration || serviceType.duration <= 0 || !serviceType.capacity || !serviceType.booking_type) throw adminRefusal('CONFLICT', action, 'service_type_incomplete', words.service_type_incomplete)
-          if (!isValidIsoDateTime(startTime)) throw adminRefusal('VALIDATION', action, 'invalid_start_time', SESSION_ADMIN_WORDS.setSessionStartTime.enterValidDateAndTime, { field: 'startTime' })
-          // W51a: no session is added to a closed date (Unblock Day reopens the date first).
-          if (await closedDate(tx, dayOf(startTime))) throw dateClosed(action, NEW.dateClosed)
-          if ((await tx.query(SESSION_AT_SQL, [serviceType.id, startTime])).length > 0) throw taken()
+          if (!made) throw new Error('The one-off session was not read.')
+          const { serviceType } = made
           const [written] = await tx.query<{ id: string; service_type_id: string; start_time: unknown; end_time: unknown; capacity: number; type: string; band_id: string | null }>(INSERT_SESSION_SQL, [
             serviceType.id,
-            startTime,
+            made.startTime,
             serviceType.duration,
-            serviceType.booking_type,
+            serviceType.bookingType,
             serviceType.capacity,
           ])
           if (!written) throw new Error('The session was not written.')

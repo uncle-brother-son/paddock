@@ -1,5 +1,5 @@
 // New in W43 (F-plan 1.9, 4.8; brief W43 items 1 and 2; Wayne's Q48, 15 Nov; N8, bugs FB18 and FB19): the lapse sweep
-// on the Worker. Until now the database's hourly job (run_membership_maintenance -> lapse_sweep_expired_bookings)
+// on the Worker. Until then the database's hourly job (run_membership_maintenance -> lapse_sweep_expired_bookings)
 // cancelled payment-needed bookings past their deadline with a bare status change: no audit row, none of the Worker's
 // locks, nothing of what a cancel does, and never a booking with money on it (which then held its places for ever).
 //
@@ -8,14 +8,16 @@
 // one transaction each, under the booking's locks, with its audit rows, and no Stripe call. What happens to money on
 // the booking is Q48's rule, in cancel.ts (lapsePlanOf).
 //
-// - Off (`lapse_sweep` not in the switch): nothing is read and nothing is cancelled; the database's sweep stays in
-//   charge. The switch is handed in by the run (a scheduled run's process.env doesn't hold the Worker's secrets).
+// - Off (`lapse_sweep` not in the switch): nothing is read and nothing is cancelled: lapsing pauses, and a booking past
+//   its deadline keeps its places until the kind is on again (W68, H5: there is no other sweep; the database's own left
+//   the hourly job at migration 028 and was dropped at 034). The switch is handed in by the run (a scheduled run's
+//   process.env doesn't hold the Worker's secrets).
 // - Capped per run, oldest deadline first; whatever is over waits for the next run (`more`).
 // - A booking that can't be cancelled now is left, with the reason, and read again by the next run: a payment still
 //   being taken on it (Settle on the reader), a refund still being checked, or (`booking_changed`) a change since it
 //   was read to the cancel it would be, to whether money comes back, or to its add-on lines. Any other change since
 //   the read (a guest removed, money owed) is not left: the booking lapses from what is found under its lock. One that
-//   is no longer due under its lock (settled, cancelled by staff, or by the database's sweep) is left as `not_lapsed`.
+//   is no longer due under its lock (settled, or cancelled by staff or another run) is left as `not_lapsed`.
 // - W47r-a (the W47r review's S2 b): a credit booking whose membership's overdue payment was tried again from the desk
 //   less than an hour ago, with that retry still open, is left as `payment_retry_held` (cancel.ts checks it under the
 //   booking's locks): the payment may have gone through and not be recorded yet. After the hour it lapses as before.
@@ -66,7 +68,7 @@ export interface LapseSweepResult {
   items: LapseSweepItem[]
 }
 
-/** The database sweep's own test of "due" (without its `price_paid = 0`: Q48), oldest deadline first, one over the cap. */
+/** Due: payment needed and past its deadline, money on it or not (Q48), oldest deadline first, one over the cap. */
 const DUE_SQL = `
 SELECT id FROM bookings
 WHERE status = 'payment_needed' AND payment_due_by <= now()

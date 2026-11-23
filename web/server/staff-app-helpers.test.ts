@@ -5,6 +5,7 @@ import { availableSessionsInputSchema, sessionTimeConflictInputSchema } from '@/
 import type { Queryable } from '@/server/db'
 import { authenticateStaff } from './auth/staff'
 import { CATALOG_ITEM_NEW_WORDS } from './rules/catalog/item-failure-messages'
+import { PAYMENT_DATE_REFUSALS } from './rules/memberships/failure-messages'
 import { ADDON_PRICE_NOT_SET_MESSAGE } from './rules/orders/failure-messages'
 import { OLD_WORDS } from './rules/testing/old-words'
 import { staffAppDir } from './rules/testing/staff-app-dir'
@@ -754,7 +755,8 @@ describe('staff app helpers', () => {
     ]
     /** The two that add something: a refusal comes back as data, so the dialog can tell it from no answer. */
     const creates: Array<[string, Record<string, unknown>, string, unknown]> = [
-      ['createOneOffSession', { serviceTypeId: ID, startTime: '2026-11-21T07:00:00.000Z' }, '/api/v1/staff/sessions', { serviceTypeId: ID, startTime: '2026-11-21T07:00:00.000Z' }],
+      // W68 (Q58): with the stamp of the band and price the dialog showed.
+      ['createOneOffSession', { serviceTypeId: ID, startTime: '2026-11-21T07:00:00.000Z', stamp: 'one-off|shown' }, '/api/v1/staff/sessions', { serviceTypeId: ID, startTime: '2026-11-21T07:00:00.000Z', stamp: 'one-off|shown' }],
       ['addServiceTypeScheduleSlot', { serviceTypeId: ID, dayOfWeek: 2, startTime: '07:00' }, `/api/v1/staff/catalog/service-types/${ID}/schedule-slots`, { dayOfWeek: 2, startTime: '07:00' }],
     ]
     const NAMES = [...new Set([...thin.map(([name]) => name), ...creates.map(([name]) => name)])]
@@ -1126,6 +1128,83 @@ describe('staff app helpers', () => {
           // Closing while a press runs is refused, and closing clears the key.
           expect(source, file).toMatch(/function resetAndClose\(\) \{\s+\/\/ Brief W51: never while a press runs \(the footer button is disabled too\)\.\s+if \(inFlight\.current\) return\s+pressKey\.current = null/)
         }
+      })
+
+      describe("W68 (Wayne's Q58): the one-off dialog says the band and price before Create Session", () => {
+        const START = '2026-11-21T07:00:00.000Z'
+        const STAMP = 'one-off|shown'
+        const words = () => import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/oneOffSession')) as Promise<{
+          ONE_OFF_CHANGED_MESSAGE: string
+          oneOffSessionWords(quote: { type: 'public' | 'private'; band: { code: string; name: string } | null; pricePerPerson: number | null; sizeGroups: Array<{ minPeople: number; maxPeople: number; price: number | null }>; othersSetByHand: boolean; stamp: string }): { sentence: string; lines: string[] }
+        }>
+
+        it('getOneOffSessionQuote asks only the Worker; a refusal is data with its words; no answer is thrown', async () => {
+          const quote = { type: 'public', band: { code: 'peak', name: 'Peak' }, pricePerPerson: 25.5, sizeGroups: [], othersSetByHand: true, stamp: STAMP }
+          rawRequest.mockResolvedValue({ data: { ok: true, data: quote, requestId: 'w68' } })
+          expect(await (await fn('getOneOffSessionQuote'))({ params: { serviceTypeId: ID, startTime: START }, user })).toEqual({ ok: true, quote })
+          expect(rawRequest).toHaveBeenCalledTimes(1)
+          expect(sent()).toMatchObject({ path: '/api/v1/staff/sessions/one-off/quote', method: 'GET', queryParams: { serviceTypeId: ID, startTime: START } })
+          rawRequest.mockResolvedValue(refused('CONFLICT', 'date_closed', 'This date is closed. Unblock the day first if you want to add a session.'))
+          expect(await (await fn('getOneOffSessionQuote'))({ params: { serviceTypeId: ID, startTime: START }, user })).toEqual({ ok: false, reason: 'date_closed', message: 'This date is closed. Unblock the day first if you want to add a session.' })
+          rawRequest.mockRejectedValue(new Error('fetch failed'))
+          await expect((await fn('getOneOffSessionQuote'))({ params: { serviceTypeId: ID, startTime: START }, user })).rejects.toThrow()
+        })
+
+        it('a press refused because the band or price changed comes back as data, with its reason', async () => {
+          rawRequest.mockResolvedValue(refused('CONFLICT', 'changed_since', 'This was changed by someone else since the page loaded. The page has been reloaded: check it and save again.'))
+          expect(await (await fn('createOneOffSession'))({ params: { serviceTypeId: ID, startTime: START, stamp: STAMP }, user })).toMatchObject({ created: false, reason: 'changed_since' })
+        })
+
+        it('the words, as staff see them', async () => {
+          const { oneOffSessionWords, ONE_OFF_CHANGED_MESSAGE } = await words()
+          const base = { band: { code: 'peak', name: 'Peak' }, pricePerPerson: null, sizeGroups: [], othersSetByHand: false, stamp: STAMP }
+          expect(oneOffSessionWords({ ...base, type: 'public', pricePerPerson: 25.5 })).toEqual({ sentence: 'This session will be Peak: £25.50 a person.', lines: [] })
+          expect(oneOffSessionWords({ ...base, type: 'private', sizeGroups: [{ minPeople: 1, maxPeople: 4, price: 95 }, { minPeople: 5, maxPeople: 8, price: null }, { minPeople: 9, maxPeople: 9, price: 200 }] })).toEqual({
+            sentence: 'This session will be Peak. Private hire at that band:',
+            lines: ['1 to 4 people: £95.00', '5 to 8 people: price not set', '9 people: £200.00'],
+          })
+          expect(oneOffSessionWords({ ...base, type: 'private' })).toEqual({ sentence: "This session will be Peak. This service type has no size groups priced for that band, so it can't be booked until it has.", lines: [] })
+          expect(oneOffSessionWords({ ...base, type: 'public' })).toEqual({ sentence: 'This session will be Peak. That band has no price set.', lines: [] })
+          for (const type of ['public', 'private'] as const) expect(oneOffSessionWords({ ...base, type, band: null })).toEqual({ sentence: "No band's hours cover this time, so this session will have no band and no price, and can't be booked until its band is set.", lines: [] })
+          // W68a (W68 noticed 2): the last line, whatever else is shown, when other sessions that day were set by hand.
+          const BY_HAND = 'Other sessions on this day were given their band by hand.'
+          const byHand = { ...base, othersSetByHand: true }
+          expect(oneOffSessionWords({ ...byHand, type: 'public', pricePerPerson: 25.5 })).toEqual({ sentence: 'This session will be Peak: £25.50 a person.', lines: [BY_HAND] })
+          expect(oneOffSessionWords({ ...byHand, type: 'private', sizeGroups: [{ minPeople: 1, maxPeople: 4, price: 95 }] }).lines).toEqual(['1 to 4 people: £95.00', BY_HAND])
+          expect(oneOffSessionWords({ ...byHand, type: 'private', band: null }).lines).toEqual([BY_HAND])
+          expect(ONE_OFF_CHANGED_MESSAGE).toBe('The band or price for this time has changed since it was shown, so nothing was created. Check the new one, then press Create Session again.')
+        })
+
+        it('the dialog reads the quote for what is chosen, shows it, sends its stamp, and can\'t be pressed before it shows; a changed band or price shows the new one', () => {
+          const dialog = component('CreateOneOffSessionDialog.tsx')
+          expect(dialog).toContain('const result = await getQuote({ serviceTypeId, startTime: toIsoUtc(startTime) }, { skipCache: true })')
+          expect(dialog).toContain('{ serviceTypeId, startTime: toIsoUtc(startTime), stamp: shown.quote.stamp, idempotencyKey: pressKey.current },')
+          expect(dialog).toContain('<div>{oneOffSessionWords(quoted.quote).sentence}</div>')
+          expect(dialog).toContain('{oneOffSessionWords(quoted.quote).lines.map((line) => (')
+          expect(dialog).toContain('disabled={submitting || !serviceTypeId || !startTime || (pressKey.current === null && !quoted?.ok)}')
+          // A quote for an earlier choice is never shown or sent, and an older answer never lands over a newer one.
+          expect(dialog).toContain('const quoted = shown !== null && shown.forChoice === choice ? shown : null')
+          expect(dialog).toContain('if (asked === latestQuote.current) setShown(next)')
+          expect(dialog).toContain("if (shown === null || !shown.ok || (quoted === null && pressKey.current === null)) {")
+          // W68a: the old quote goes at once; the effect reads the new one when the press ends.
+          expect(dialog).toContain("if (result.reason === 'changed_since') setShown(null)")
+          expect(dialog).toContain('  changed_since: ONE_OFF_CHANGED_MESSAGE,')
+          // After a press with no answer the same press sends what the first one sent: the quote isn't read again.
+          expect(dialog).toContain('if (!open || choice === null || submitting || inFlight.current || pressKey.current !== null) return')
+        })
+
+        it('W68a (W68 review S3): it never sticks on "Checking": the type and time are off while a press runs, the quote is looked at again when a press ends, and a wait already running checks for a press or a kept key before it reads', () => {
+          const dialog = component('CreateOneOffSessionDialog.tsx')
+          expect(dialog).toContain('<Select value={serviceTypeId} onValueChange={setServiceTypeId} disabled={submitting}>')
+          expect(dialog).toContain('<Input type="datetime-local" value={startTime} onChange={(e) => setStartTime(e.target.value)} disabled={submitting} />')
+          expect(dialog).toMatch(
+            /useEffect\(\(\) => \{\s+if \(!open \|\| choice === null \|\| submitting \|\| inFlight\.current \|\| pressKey\.current !== null\) return\s+const handle = setTimeout\(\(\) => \{\s+if \(inFlight\.current \|\| pressKey\.current !== null\) return\s+void loadQuote\(choice\)\s+\}, 300\)\s+return \(\) => clearTimeout\(handle\)\s+\/\/ [^\n]+\s+\}, \[open, choice, submitting\]\)/
+          )
+          // A press ends with the refs put back before the state the effect watches, so what the effect then sees is the end of it.
+          expect(dialog).toMatch(/\} finally \{\s+inFlight\.current = false\s+setSubmitting\(false\)\s+\}/)
+          // The one place the quote is read.
+          expect(dialog.match(/loadQuote\(/g)).toHaveLength(2)
+        })
       })
 
       it('the start time, unblock and slot screens show the Worker\'s words where they showed "Failed to…"', () => {
@@ -1864,8 +1943,14 @@ describe('staff app helpers', () => {
       await expect((await fn('setSessionPassLevel'))({ params: { passTypeId: ID, level: 'core' }, user })).rejects.toThrow(new Error(NO_ANSWER))
     })
 
-    it("updateCatalogItemPrice: the four kinds go to the Worker's price routes; W57, a named difference: a membership plan goes to the plan's own details route (no longer the legacy one), with its member count", async () => {
-      for (const [itemType, folder] of [['addon', 'addons'], ['service_type', 'service-types'], ['session_pass_type', 'session-pass-types']] as const) {
+    it('W68a: updateCatalogItemPrice has no service type (its Worker route is gone): refused in the old words before anything is sent', async () => {
+      await expect((await fn('updateCatalogItemPrice'))({ params: { itemType: 'service_type', itemId: ID, basePrice: 5 }, user })).rejects.toThrow(new Error('Invalid itemType'))
+      expect(rawRequest).not.toHaveBeenCalled()
+      expect(readFileSync(path.join(appDir, 'backend/paddock/updateCatalogItemPrice.ts'), 'utf8')).not.toMatch(/'service_type'|service-types/)
+    })
+
+    it("updateCatalogItemPrice: the three kinds go to the Worker's price routes; W57, a named difference: a membership plan goes to the plan's own details route (no longer the legacy one), with its member count", async () => {
+      for (const [itemType, folder] of [['product', 'products'], ['addon', 'addons'], ['session_pass_type', 'session-pass-types']] as const) {
         rawRequest.mockReset()
         rawRequest.mockResolvedValue(success({ success: true, item: { id: ID }, pricesUpdated: {} }))
         await (await fn('updateCatalogItemPrice'))({ params: { itemType, itemId: ID, basePrice: 5 }, user })
@@ -5597,6 +5682,31 @@ describe('staff app helpers', () => {
       // Left out, today is London's today.
       expect(label({ subscription_status: 'active', cancel_effective_date: '2999-01-01' })).toBe('cancelling')
       expect(label({ subscription_status: 'active', cancel_effective_date: '2000-01-01' })).toBe('active')
+    })
+
+    it("W68 (the lead's sighting, 23 Nov): after a cancel or its undo the profile's row goes by the press's answer, the reason Change payment date is off with it, and the profile is read again and that answer shown; Subscriptions and an opened profile never start from a kept answer", () => {
+      const customers = page('CustomersPage.tsx')
+      expect(customers).toMatch(
+        /const blocked = updated\.cancel_effective_date === null \? null : CANCELLATION_SCHEDULED_MESSAGE\s+setDetail\(\(prev\) => \{\s+if \(!prev\) return prev\s+return \{\s+\.\.\.prev,\s+memberships: prev\.memberships\.map\(\(m\) => \(m\.id === membershipId \? \{ \.\.\.m, \.\.\.updated, payment_date_change_blocked: blocked \} : m\)\),/
+      )
+      // The Worker's own words for it (memberships/failure-messages.ts).
+      expect(PAYMENT_DATE_REFUSALS.cancelScheduled).toBe('A cancellation is scheduled on this membership')
+      expect(customers).toContain(`const CANCELLATION_SCHEDULED_MESSAGE = '${PAYMENT_DATE_REFUSALS.cancelScheduled}'`)
+      // W68a (W68 review L10): a read that gets no answer, or throws, says so and leaves the row as the press left it.
+      expect(customers).toMatch(
+        /async function reloadProfile\(\) \{\s+let fresh: CustomerDetail \| null \| undefined\s+try \{\s+fresh = \(await trigger\(\{ customerId \}, \{ skipCache: true \}\)\) as CustomerDetail \| null \| undefined\s+\} catch \{\s+\/\/ [^\n]+\s+\}\s+if \(fresh\) setDetail\(fresh\)\s+else toast\.error\("This customer's details couldn't be read again, so some of them may be out of date\. Collapse and open the row again\."\)\s+\}/
+      )
+      expect(customers).toMatch(/<CancelMembershipDialog\s+membership=\{m\}\s+onChanged=\{handleCancellationChanged\}\s+onReload=\{\(\) => void reloadProfile\(\)\}/)
+      expect(customers).toMatch(/useEffect\(\(\) => \{\s+trigger\(\{ customerId \}, \{ skipCache: true \}\)\s+refreshCard\(\)\s+\}, \[customerId\]\)/)
+      expect(customers).not.toContain('trigger({ customerId })')
+      const subscriptions = page('SubscriptionsPage.tsx')
+      expect(subscriptions).toMatch(/useEffect\(\(\) => \{\s+trigger\(\{\}, \{ skipCache: true \}\)\s+\}, \[\]\)/)
+      expect(subscriptions).not.toContain('trigger({})')
+      expect(subscriptions).toMatch(/async function handlePaymentDateChanged\(\) \{\s+const fresh = [^\n]+\s+if \(fresh\) setRows\(fresh\)\s+\}/)
+      // The dialog: the answer's own last day to the page, and the reload on every close after a press (W40).
+      const dialog = component('CancelMembershipDialog.tsx')
+      expect(dialog).toContain('onChanged(membership.id, { cancel_effective_date: result.membership?.cancel_effective_date ?? null })')
+      expect(dialog).toMatch(/if \(reloadOnClose\.current\) \{\s+reloadOnClose\.current = false\s+onReload\(\)\s+\}/)
     })
 
     it('S1: the customer profile and the Subscriptions page both use that one rule; Subscriptions keeps an ended membership\'s last day as plain text', () => {

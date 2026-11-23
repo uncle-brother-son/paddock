@@ -127,6 +127,8 @@ describe('migration 032 (brief W51 item 1; brief W51a items 2 and 6): the nightl
       await pg.admin.unsafe('DELETE FROM public.sessions_made_up_to')
       writeFileSync(process.env.W51_CATALOG_OUT, JSON.stringify([{ catalog: await catalog() }]))
     }
+    // W68: migration 034 changes the job's times line. Once the saved schema carries it, this file still holds 032's own job.
+    await pg.admin.unsafe(generatorAfter032())
     jo = await insert(db, 'staff', { role: 'admin', first_name: 'Jo', last_name: 'Staff', email: 'w51a-032@example.com', can_issue_refunds: true, can_manage_pricing: true })
     core = await insert(db, 'session_bands', { code: 'core', name: 'Core', price: '20.00' })
     peak = await insert(db, 'session_bands', { code: 'peak', name: 'Peak', price: '25.00' })

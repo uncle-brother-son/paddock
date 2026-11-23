@@ -1,10 +1,10 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type Stripe from 'stripe'
 import type { Db, SqlParam, Tx } from '@/server/db'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
 import { replay, startReplay, type ReplayEnvironment } from '@/server/rules/testing/sweep/run'
 import { workerSide } from '@/server/rules/testing/sweep/worker'
-import { orderInput, postOrder, postReaderStep, withQuotedCardFigure, type OrderAnswer } from '@/server/rules/testing/sweep/order-presses'
+import { orderInput, postOrder, postReaderStep, withCardMoves, withQuotedCardFigure, type OrderAnswer } from '@/server/rules/testing/sweep/order-presses'
 import { ID, paidSeat, sam, seed, seedAllAccess, seedExhaustedMembership, whileFailing } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe, stripeCallsTakeASecond } from '@/server/rules/testing/replay/stripe-binding'
 import type { FinaliseReaderOrderOutput } from '@/contracts'
@@ -22,7 +22,7 @@ import { balanceToPutBack, cancelSubscriptionChecked, COMPENSATED_NOTE, compensa
 import { finaliseOrder } from './finalise-order'
 import type { PendingSnapshot } from './pending-order'
 import { placeOrder } from './place-order'
-import { finaliseReaderOrder } from './reader-order'
+import { ALREADY_FINALISED_MESSAGE, CARD_NOT_SAVED_WARNING, finaliseReaderOrder } from './reader-order'
 import { MANUAL_LIMITS, reconcile, SCHEDULED_LIMITS, type ReconcileOptions, type ReconcileResult } from './reconcile'
 import { MEMBERSHIP_STUCK_NOTE, REFUND_FAILED_WORDS, stuckList, SUBSCRIPTION_LEFT_WORDS, WATCH_WORDS } from './stuck-list'
 import { WATCH_DAYS } from '@/server/rules/refunds/refund-watch'
@@ -629,6 +629,21 @@ describe('W03a later 5 (R5): the buy-new row T1 wrote not as T2 expects it', () 
 })
 
 describe('the compensation mark: T2 and the undo refuse a marked order for good', () => {
+  it.each(['failed', 'refunded', 'partially_refunded', 'paid'])('W68a (W68 review L2): only a pending order is marked: one that is %s is refused `not_pending`, guarded or not, and nothing is written on it', async (status) => {
+    await onASeed(async () => {
+      const answer = await whileFailing(db, { table: 'orders', event: 'UPDATE', when: "NEW.payment_status = 'paid'" }, () => place(withSoap))
+      const orderId = (errorOf(answer)?.details as { orderId: string }).orderId
+      const record = (await orders())[0]?.reader_payment
+      await db.query('UPDATE orders SET payment_status = $1 WHERE id = $2::uuid', [status, orderId])
+      for (const guard of [undefined, { press: null }, { press: 'press-X' }]) expect(await markCompensating(db, orderId, 'test', guard)).toEqual({ marked: false, why: 'not_pending' })
+      expect((await orders())[0]).toMatchObject({ payment_status: status, reader_payment: record })
+      expect((await orders())[0]?.reader_payment).not.toHaveProperty('compensation')
+      // Pending again (test data): marked.
+      await db.query("UPDATE orders SET payment_status = 'pending' WHERE id = $1::uuid", [orderId])
+      expect(await markCompensating(db, orderId, 'test')).toMatchObject({ marked: true })
+    })
+  })
+
   it('T2 with a good subscription and charge answers compensating and writes nothing; the plain undo answers compensating too', async () => {
     await onASeed(async (stripe) => {
       const answer = await whileFailing(db, { table: 'orders', event: 'UPDATE', when: "NEW.payment_status = 'paid'" }, () => place(withSoap))
@@ -655,7 +670,7 @@ describe('the reader', () => {
   }
 
   it("the price checked before the tap; at finalise the card saved, the price again, a coupon covering the tap's first payment, the subscription (£0 first invoice), then T2", async () => {
-    await onASeed(async (stripe) => {
+    await withCardMoves(() => onASeed(async (stripe) => {
       const { placed, intent, finalised } = await tapAndFinalise(stripe)
       const orderId = placed.orderId
       expect(calls(stripe)).toEqual([
@@ -667,6 +682,9 @@ describe('the reader', () => {
         ['customers.update', null],
         ['coupons.create', `${orderId}:coupon`],
         ['subscriptions.create', `${orderId}:subscription`],
+        // W42a, with `card_moves` on as live has it: the new membership's card step (settled by one read) and the default.
+        ['subscriptions.retrieve', null],
+        ['customers.update', null],
       ])
       expect(stripe.coupon(couponId(orderId))).toMatchObject({ amount_off: 4000, name: 'Paid on card reader' })
       expect((stripe.calls[7]?.params as Stripe.SubscriptionCreateParams).default_payment_method).toBe('pm_reader_saved')
@@ -675,7 +693,7 @@ describe('the reader', () => {
       const customer = (await db.query<{ saved_payment_method_id: string }>('SELECT saved_payment_method_id FROM customers WHERE id = $1', [ID.customer]))[0]
       expect(customer?.saved_payment_method_id).toBe('pm_reader_saved')
       await invariant(stripe)
-    })
+    }))
   })
 
   it("the card can't be saved (the simulated reader): the tap refunded under <orderId>:refund-reader, the mark written first, then the undo", async () => {
@@ -1201,6 +1219,42 @@ describe('W13a B1: the screen finalise of a reader membership racing reconcile',
       expect(stripe.calls.slice(before).map((call) => call.method)).toEqual(['prices.retrieve'])
       expect(stripe.subscriptionsMade).toHaveLength(1)
       await invariant(stripe)
+    })
+  })
+
+  it("W68a (W68 review L9): reconcile finishes the order between the press's subscription and its T2, with `card_moves` off: the press's T2 finds it paid, and still says the card wasn't saved", async () => {
+    await onASeed(async (stripe) => {
+      vi.stubEnv('ORDER_SWITCH', 'no_stripe,saved_card,reader,membership')
+      onTestFinished(() => void vi.unstubAllEnvs())
+      const { orderId, intent } = await tapped(stripe)
+      let other: FinaliseReaderOrderOutput | null = null
+      after(stripe.subscriptions, 'create', async () => {
+        const found = await findOrderSubscriptions(stripe, undefined, 'cus_seed', orderId)
+        if (found.kind !== 'found') throw new Error('unclear')
+        other = await finaliseReaderOrder(db, stripe, orderId, { actor: { type: 'system', id: null }, requestId: 'reconcile', subscriptionFound: found.subscriptions[0] ?? null })
+      })
+      const late = await postReaderStep('finalise', orderId)
+      expect(other).toMatchObject({ finalised: true, warning: CARD_NOT_SAVED_WARNING })
+      expect(late.body).toMatchObject({ ok: true, data: { finalised: true, orderId, paymentIntentId: intent, alreadyFinalised: true, message: ALREADY_FINALISED_MESSAGE, warning: CARD_NOT_SAVED_WARNING } })
+      expect(stripe.subscriptionsMade).toHaveLength(1)
+      await invariant(stripe)
+    })
+  })
+
+  it("W68a (W68 review L9): two presses at once with `card_moves` off: the second, refused its start, still says the card wasn't saved; so does a third", async () => {
+    await onASeed(async (stripe) => {
+      vi.stubEnv('ORDER_SWITCH', 'no_stripe,saved_card,reader,membership')
+      onTestFinished(() => void vi.unstubAllEnvs())
+      const { orderId, intent } = await tapped(stripe)
+      const held = holdNext(stripe.prices, 'retrieve')
+      const second = postReaderStep('finalise', orderId)
+      await held.reached
+      const warning = CARD_NOT_SAVED_WARNING
+      expect((await postReaderStep('finalise', orderId)).body).toMatchObject({ ok: true, data: { finalised: true, warning } })
+      held.release()
+      const again = { finalised: true, orderId, paymentIntentId: intent, alreadyFinalised: true, message: ALREADY_FINALISED_MESSAGE, warning }
+      expect((await second).body).toMatchObject({ ok: true, data: again })
+      expect((await postReaderStep('finalise', orderId)).body).toMatchObject({ ok: true, data: again })
     })
   })
 
@@ -1859,22 +1913,6 @@ describe('W13c B1: one press at a time may start the subscription (the W13a revi
       await invariant(stripe)
     })
   })
-
-  it("RV9: the old rollback starts on the order between finalise's entry check and its start: the start's write refuses it, so no subscription is made", async () => {
-    await onASeed(async (stripe) => {
-      const { orderId } = await tapped(stripe)
-      const held = holdNext(stripe.prices, 'retrieve')
-      const screen = postReaderStep('finalise', orderId)
-      await held.reached
-      // Test data: what the old rollback (readerOrderRollback.ts) writes on an order it has started on.
-      await db.query(`UPDATE orders SET reader_payment = reader_payment || jsonb_build_object('rollback', jsonb_build_object('started_at', now()::text)) WHERE id = $1::uuid`, [orderId])
-      held.release()
-      expect((await screen).body).toMatchObject({ ok: true, data: { finalised: false } })
-      expect(stripe.calls.filter((call) => call.method === 'subscriptions.create')).toEqual([])
-      expect(stripe.subscriptionsMade).toEqual([])
-      expect((await orders())[0]?.reader_payment?.membership?.subscription_started_at).toBeUndefined()
-    })
-  })
 })
 
 describe('W13c S1: the pre-check bounded, and nothing written after T2 once the window has closed', () => {
@@ -2235,19 +2273,17 @@ describe("W13c L4: the W13a review's plants, caught", () => {
 // ---------------------------------------------------------------------------------------------------
 // W13d: the W13c review's S-1, S-2 and L3, each ending on the invariant where money moved.
 
-/** Test data: what the old rollback (readerOrderRollback.ts) writes on an order it has started on. */
-const oldRollbackStarts = (orderId: string) =>
-  db.query(`UPDATE orders SET reader_payment = reader_payment || jsonb_build_object('rollback', jsonb_build_object('started_at', now()::text)) WHERE id = $1::uuid`, [orderId])
+/** Test data: the order moved out of pending by another hand (W68: these tests used the old rollback's mark until it went). */
+const movedOutOfPending = (orderId: string) => db.query(`UPDATE orders SET payment_status = 'failed' WHERE id = $1::uuid`, [orderId])
 
 /**
- * Test data standing in for the old code's "Resolve now" after its rollback (old code, not run here): the order's
- * payment refunded and the order removed. The refund goes straight to the fake under the old code's own key; the
- * rollback's mark is lifted and the Worker's undo gives back what the order held and removes it.
+ * Test data standing in for the person who sorts that order: its payment refunded (straight to the fake, under a key of
+ * its own) and the order removed, by lifting the status and running the Worker's undo.
  */
-async function oldResolveNow(stripe: FakeStripe, orderId: string, paymentIntentId: string): Promise<void> {
-  await stripe.refunds.create({ payment_intent: paymentIntentId }, { idempotencyKey: `old-rollback:${orderId}` })
-  await db.query(`UPDATE orders SET reader_payment = reader_payment - 'rollback' WHERE id = $1::uuid`, [orderId])
-  expect(await undoOrder(db, orderId, { actor: { type: 'system', id: null }, requestId: 'old-resolve', why: 'test: the old rollback' })).toEqual({ undone: true })
+async function sortedByHand(stripe: FakeStripe, orderId: string, paymentIntentId: string): Promise<void> {
+  await stripe.refunds.create({ payment_intent: paymentIntentId }, { idempotencyKey: `by-hand:${orderId}` })
+  await db.query(`UPDATE orders SET payment_status = 'pending' WHERE id = $1::uuid`, [orderId])
+  expect(await undoOrder(db, orderId, { actor: { type: 'system', id: null }, requestId: 'by-hand', why: 'test: sorted by hand' })).toEqual({ undone: true })
 }
 
 /** Only the first call `after` sees. */
@@ -2262,77 +2298,56 @@ const firstOnly = (): (() => boolean) => {
 
 const refundKeys = (stripe: FakeStripe) => stripe.calls.filter((call) => call.method === 'refunds.create').map((call) => call.idempotencyKey)
 
-describe("W13d S-1: the old rollback after the press's start, and the other answers on which no order can be paid with the press's subscription", () => {
-  it("Q3: the old rollback starts on the order after the press's start, before T2: T2 records the press's subscription as left, the press cancels it at once; the old code's Resolve now then refunds the tap and removes the order", async () => {
-    await onASeed(async (stripe) => {
-      const { orderId, intent } = await tapped(stripe)
-      after(stripe.subscriptions, 'create', () => oldRollbackStarts(orderId))
-      const answer = await postReaderStep('finalise', orderId)
-      expect(answer.body).toMatchObject({ ok: true, data: { finalised: false, reason: 'rollback_started' } })
-      const made = stripe.subscriptionsMade[0] as string
-      expect(stripe.subscription(made)?.status).toBe('canceled')
-      expectLeftThenPutBack(await subscriptionLeftRows(orderId), made, 'rollback_started', 'cancelled')
-      expect((await stuckList(db)).warnings).toEqual([])
-      // The tap is the old rollback's to refund; the reader's first invoice is £0 (the coupon covers the tap's part).
-      expect(refundKeys(stripe)).toEqual([])
-      later(16)
-      expect((await runReconcile(stripe)).items).toEqual([expect.objectContaining({ id: orderId, outcome: 'left', reason: 'old_rollback' })])
-      await oldResolveNow(stripe, orderId, intent)
-      expect(await runReconcile(stripe)).toMatchObject({ checked: 0 })
-      expect(stripe.liveSubscriptions).toEqual([])
-      expect(stripe.netPence).toBe(0)
-      await invariant(stripe)
-    })
-  })
-
-  it("Q3 with the put-back's cancel unclear: T2's left row and the put-back's, and the stuck list's warning; while the order exists reconcile leaves it to the old code; once the old code has removed it, the retry cancels the subscription and closes the warning", async () => {
+describe("W13d S-1: the answers on which no order can be paid with the press's subscription", () => {
+  it("the put-back's cancel unclear: T2's left row and the put-back's, and the stuck list's warning; while the order exists reconcile leaves the subscription; once it has been removed, the retry cancels the subscription and closes the warning", async () => {
     await onASeed(async (stripe) => {
       const { orderId, intent } = await tapped(stripe)
       after(stripe.subscriptions, 'create', async () => {
-        await oldRollbackStarts(orderId)
+        await movedOutOfPending(orderId)
         stripe.failNext('subscriptions.cancel', { kind: 'unreachable' })
         stripe.failNext('subscriptions.retrieve', { kind: 'unreachable' })
       })
       const answer = await postReaderStep('finalise', orderId)
-      expect(answer.body).toMatchObject({ ok: true, data: { finalised: false, reason: 'rollback_started' } })
+      expect(answer.body).toMatchObject({ ok: true, data: { finalised: false, reason: 'unexpected_state' } })
       const made = stripe.subscriptionsMade[0] as string
       expect(stripe.subscription(made)?.status).toBe('active')
-      expectLeftThenPutBack(await subscriptionLeftRows(orderId), made, 'rollback_started', 'left')
+      expectLeftThenPutBack(await subscriptionLeftRows(orderId), made, 'not_pending', 'left')
       expect((await stuckList(db)).warnings).toEqual([expect.objectContaining({ kind: 'order', id: orderId, warning: SUBSCRIPTION_LEFT_WORDS(made) })])
-      // The order still exists (the old code's to finish): the retry leaves it alone (L3, gone only).
+      // The order still exists: the retry leaves the subscription alone (L3, gone only). W68a (W68 review L6): the run's one
+      // item is the order itself, left for a person as one moved out of pending with its payment taken; none is the put-back's.
       later(16)
-      expect((await runReconcile(stripe)).items).toEqual([expect.objectContaining({ id: orderId, outcome: 'left', reason: 'old_rollback' })])
+      expect((await runReconcile(stripe)).items).toEqual([expect.objectContaining({ kind: 'order', id: orderId, outcome: 'left', reason: 'changed_elsewhere', detail: 'the order is failed; Stripe: taken £40.00' })])
       expect(stripe.subscription(made)?.status).toBe('active')
       expect(await subscriptionLeftRows(orderId)).not.toContainEqual(expect.objectContaining({ state: 'cancelled' }))
-      await oldResolveNow(stripe, orderId, intent)
+      await sortedByHand(stripe, orderId, intent)
       later(6)
       expect((await runReconcile(stripe)).items).toEqual([expect.objectContaining({ kind: 'order', id: orderId, outcome: 'undone', detail: `subscription ${made} put back: cancelled` })])
       expect(stripe.subscription(made)?.status).toBe('canceled')
       expect(await subscriptionLeftRows(orderId)).toContainEqual(expect.objectContaining({ state: 'cancelled', subscriptionId: made, found: 'reconcile' }))
       expect((await stuckList(db)).warnings).toEqual([])
       expect(await runReconcile(stripe)).toMatchObject({ checked: 0 })
-      expect(refundKeys(stripe)).toEqual([`old-rollback:${orderId}`])
+      expect(refundKeys(stripe)).toEqual([`by-hand:${orderId}`])
       expect(stripe.netPence).toBe(0)
       await invariant(stripe)
     })
   })
 
-  it("the saved card: the old rollback's mark on the order after the charge (test data): T2 records the subscription as left and the press puts it back, its £40 first invoice refunded under :refund-subscription; the charge is the old code's", async () => {
+  it("the saved card: the order moved out of pending after the charge (test data): T2 records the subscription as left and the press puts it back, its £40 first invoice refunded under :refund-subscription; the charge is a person's", async () => {
     await onASeed(async (stripe) => {
       after(stripe.paymentIntents, 'create', async () => {
         const pending = (await orders()).find((order) => order.payment_status === 'pending')
-        await oldRollbackStarts(pending?.id as string)
+        await movedOutOfPending(pending?.id as string)
       })
       const answer = await place(withSoap)
       const orderId = (await orders())[0]?.id as string
       expect(errorOf(answer)).toMatchObject({ code: 'PAYMENT_UNCONFIRMED', details: { reason: 'payment_unconfirmed' } })
       const made = stripe.subscriptionsMade[0] as string
       expect(stripe.subscription(made)?.status).toBe('canceled')
-      expectLeftThenPutBack(await subscriptionLeftRows(orderId), made, 'rollback_started', 'cancelled')
+      expectLeftThenPutBack(await subscriptionLeftRows(orderId), made, 'not_pending', 'cancelled')
       expect(refundKeys(stripe)).toEqual([`${orderId}:refund-subscription`])
       expect(stripe.netPence).toBe(2400)
       const charge = [...stripe.chargedByIntent].find(([, pence]) => pence === 2400)?.[0] as string
-      await oldResolveNow(stripe, orderId, charge)
+      await sortedByHand(stripe, orderId, charge)
       later(16)
       expect(await runReconcile(stripe)).toMatchObject({ checked: 0 })
       expect((await stuckList(db)).warnings).toEqual([])
@@ -2503,12 +2518,12 @@ describe('W32 item 3: a membership compensation puts the customer\'s Stripe bala
     })
   })
 
-  it("a put-back (T2 found the old rollback's mark, test data) with a £5 credit: the subscription cancelled, the £35 its first invoice took refunded, and the £5 credit back on the balance", async () => {
+  it("a put-back (T2 found the order no longer pending, test data) with a £5 credit: the subscription cancelled, the £35 its first invoice took refunded, and the £5 credit back on the balance", async () => {
     await onASeed(async (stripe) => {
       stripe.setCustomerBalance('cus_seed', -500)
       after(stripe.paymentIntents, 'create', async () => {
         const pending = (await orders()).find((order) => order.payment_status === 'pending')
-        await oldRollbackStarts(pending?.id as string)
+        await movedOutOfPending(pending?.id as string)
       })
       await place(withSoap)
       const orderId = (await orders())[0]?.id as string

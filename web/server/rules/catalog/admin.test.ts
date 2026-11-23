@@ -17,7 +17,6 @@ import { POST as variantCreateRoute } from '@/app/api/v1/staff/catalog/products/
 import { GET as productsRoute } from '@/app/api/v1/staff/catalog/products/route'
 import { POST as serviceTypeActiveRoute } from '@/app/api/v1/staff/catalog/service-types/[serviceTypeId]/active/route'
 import { POST as serviceTypeDetailsRoute } from '@/app/api/v1/staff/catalog/service-types/[serviceTypeId]/details/route'
-import { POST as serviceTypePriceRoute } from '@/app/api/v1/staff/catalog/service-types/[serviceTypeId]/price/route'
 import { POST as tierCreateRoute } from '@/app/api/v1/staff/catalog/service-types/[serviceTypeId]/tiers/route'
 import { GET as serviceTypesRoute } from '@/app/api/v1/staff/catalog/service-types/route'
 import { POST as passActiveRoute } from '@/app/api/v1/staff/catalog/session-pass-types/[passTypeId]/active/route'
@@ -36,7 +35,7 @@ import { STAFF_ADMIN_WORDS } from '@/server/rules/staff/failure-messages'
 import { ADMIN_TEST_KEY, auditRowsOf, pressRoute, type AdminAnswer, type AdminRouteHandler } from '@/server/rules/testing/admin-routes'
 import { fixtures, insert, startTestDatabase, type TestDatabase } from '@/server/rules/testing/database'
 import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
-import { CATALOG_ADMIN_DIALOG_WORDS, CATALOG_ADMIN_WORDS, LEGACY_CATALOG_ROUTE_WORDS } from './failure-messages'
+import { CATALOG_ADMIN_DIALOG_WORDS, CATALOG_ADMIN_WORDS } from './failure-messages'
 import { CATALOG_ITEM_NEW_WORDS, passLevelHolderWords } from './item-failure-messages'
 import { isPoundsAndPence, listAddons, listProducts, priceText } from './items'
 import { listGiftCardTypes, listPassTypes } from './passes-gift-cards'
@@ -94,7 +93,7 @@ beforeEach(async () => {
   product = await insert(db, 'products', { name: 'T-shirt', category: 'Merch', base_price: '20.00', stripe_product_id: 'prod_tee', stripe_price_id_base: 'price_tee_base' })
   variant = await insert(db, 'product_variants', { product_id: product, size: 'M', sku: 'TEE-M', stock_quantity: 5 })
   addon = await insert(db, 'addons', { name: 'Towel', category: 'Extras', sku: 'TOWEL', base_price: '5.00' })
-  serviceType = await fixtures.serviceType(db, { duration: 60, capacity: 10, price: '20.00' })
+  serviceType = await fixtures.serviceType(db, { duration: 60, capacity: 10 })
   privateType = await fixtures.serviceType(db, { booking_type: 'private', duration: 120, capacity: 12 })
   core = await fixtures.band(db, { name: 'Core' })
   peak = await fixtures.band(db, { name: 'Peak', price: '25.00' })
@@ -155,7 +154,6 @@ describe('Manage pricing on each write, and the staff check on every route', () 
     ['add-on SKU', addonSkuRoute, () => ({ addonId: addon }), { sku: 'T2' }],
     ['service type on/off sale', serviceTypeActiveRoute, () => ({ serviceTypeId: serviceType }), { active: false }],
     ['service type details', serviceTypeDetailsRoute, () => ({ serviceTypeId: serviceType }), { duration: 60, capacity: 8, bookingType: 'public', stamp: 'x' }],
-    ['service type price', serviceTypePriceRoute, () => ({ serviceTypeId: serviceType }), { basePrice: 22 }],
     ['new size group', tierCreateRoute, () => ({ serviceTypeId: privateType }), { minPeople: 1, maxPeople: 4 }],
     ['pass on/off sale', passActiveRoute, () => ({ passTypeId: passType }), { active: false }],
     ['pass price', passPriceRoute, () => ({ passTypeId: passType }), { basePrice: 55 }],
@@ -240,7 +238,7 @@ describe('GB12: a new variant and its starting stock are one transaction', () =>
     expect((await press(variantCreateRoute, { productId: product }, { size: ' ', sku: 'X' })).error?.message).toBe(OLD.createProductVariant.productidSizeAndSkuAreRequired)
     expect((await press(variantCreateRoute, { productId: product }, { size: 'L', sku: 'X', stockQuantity: 1.5 })).error?.message).toBe(OLD.createProductVariant.stockquantityMustNonNegativeWholeNumber)
     expect((await press(variantCreateRoute, { productId: product }, { size: 'L', sku: 'X', stockQuantity: -1 })).error?.message).toBe(OLD.createProductVariant.stockquantityMustNonNegativeWholeNumber)
-    expect((await press(variantCreateRoute, { productId: UNKNOWN_ID }, { size: 'L', sku: 'X' })).error?.message).toBe(LEGACY_CATALOG_ROUTE_WORDS['create-variant'].productNotFound)
+    expect((await press(variantCreateRoute, { productId: UNKNOWN_ID }, { size: 'L', sku: 'X' })).error?.message).toBe(CATALOG_ADMIN_WORDS.createProductVariant.productNotFound)
   })
 })
 
@@ -329,13 +327,16 @@ describe('Prices, on and off sale (L2: no Stripe)', () => {
     expect([row?.action, row?.details.before, row?.details.after]).toEqual(['catalog.price_set', { base_price: '20.00', member_price: null, sale_price: null }, { base_price: '22.00', member_price: '18.50', sale_price: '15.99' }])
   })
 
-  it('the old checks in their words; a field the kind hasn\'t; a private service type; an unknown item', async () => {
+  it('the old checks in their words; a field the kind hasn\'t; an unknown item', async () => {
     expect((await press(productPriceRoute, { productId: product }, {})).error?.message).toBe(OLD.updateCatalogItemPrice.atLeastOnePriceFieldMust)
     expect((await press(productPriceRoute, { productId: product }, { basePrice: -1 })).error?.message).toBe(OLD.updateCatalogItemPrice.mustNonNegativeNumber('basePrice'))
     expect((await press(productPriceRoute, { productId: product }, { salePrice: null })).error?.message).toBe(OLD.updateCatalogItemPrice.mustNonNegativeNumber('salePrice'))
     expect((await press(productPriceRoute, { productId: product }, { monthlyPrice: 30 })).error?.message).toBe(NEW.fieldNotOnThisItem('monthlyPrice', 'a product'))
-    expect((await press(serviceTypePriceRoute, { serviceTypeId: privateType }, { basePrice: 90 })).error?.message).toBe(NEW.privateServiceTypeUsesTiers)
-    expect((await press(productPriceRoute, { productId: UNKNOWN_ID }, { basePrice: 1 })).error?.message).toBe(LEGACY_CATALOG_ROUTE_WORDS['toggle-active'].itemNotFound)
+    // W68a: the service type's own route is gone, so the other kind with one price holds the same three here.
+    expect((await press(passPriceRoute, { passTypeId: passType }, { memberPrice: 22 })).error?.message).toBe(NEW.fieldNotOnThisItem('memberPrice', 'a session pass'))
+    expect((await press(passPriceRoute, { passTypeId: passType }, { basePrice: 22.005 })).reason).toBe('not_pounds_and_pence')
+    expect((await press(passPriceRoute, { passTypeId: UNKNOWN_ID }, { basePrice: 22 })).error?.message).toBe(CATALOG_ADMIN_WORDS.toggleItemActive.itemNotFound)
+    expect((await press(productPriceRoute, { productId: UNKNOWN_ID }, { basePrice: 1 })).error?.message).toBe(CATALOG_ADMIN_WORDS.toggleItemActive.itemNotFound)
     expect(await auditRowsOf(db)).toEqual([])
   })
 
@@ -346,7 +347,7 @@ describe('Prices, on and off sale (L2: no Stripe)', () => {
       ['catalog.active_set', { id: product, active: true }, { id: product, active: false }],
       ['catalog.active_set', { id: product, active: false }, { id: product, active: true }],
     ])
-    expect((await press(presetActiveRoute, { presetId: UNKNOWN_ID }, { active: true })).error?.message).toBe(LEGACY_CATALOG_ROUTE_WORDS['toggle-active'].itemNotFound)
+    expect((await press(presetActiveRoute, { presetId: UNKNOWN_ID }, { active: true })).error?.message).toBe(CATALOG_ADMIN_WORDS.toggleItemActive.itemNotFound)
   })
 
   // Wayne's Q61 (23 Nov; W66a): what a price is, per kind, as the checkout charges it (catalog-price.ts, the tiers, the presets).
@@ -376,7 +377,6 @@ describe('Prices, on and off sale (L2: no Stripe)', () => {
     ['an add-on with no price', 'addon', () => 'UPDATE addons SET base_price = NULL'],
     ['a private service type with no size group', 'privateType', () => ''],
     ['a private service type whose only size group has its price pending', 'privateType', () => tierSql('NULL')],
-    ['a private service type with only its own unused price column set', 'privateType', () => 'UPDATE service_types SET price = 90'],
     ['a session pass with no price', 'pass', () => 'UPDATE session_pass_types SET price = NULL'],
     ['a gift card type with no preset and no custom amounts', 'giftType', () => 'DELETE FROM gift_card_presets'],
     ['a gift card type whose only preset is off sale', 'giftType', () => 'UPDATE gift_card_presets SET active = false'],
@@ -404,8 +404,8 @@ describe('Prices, on and off sale (L2: no Stripe)', () => {
     ['a product whose every variant has an override', 'product', () => 'UPDATE products SET base_price = NULL; UPDATE product_variants SET price_override = 12'],
     ['an add-on with a base price', 'addon', () => ''],
     ['an add-on with only a member price', 'addon', () => 'UPDATE addons SET base_price = NULL, member_price = 3'],
-    ['a public service type, priced by its bands, with no price of its own', 'publicType', () => 'UPDATE service_types SET price = NULL'],
-    ['a service type with no booking type yet', 'publicType', () => 'UPDATE service_types SET price = NULL, booking_type = NULL'],
+    ['a public service type, priced by its bands', 'publicType', () => ''],
+    ['a service type with no booking type yet', 'publicType', () => 'UPDATE service_types SET booking_type = NULL'],
     ['a private service type with one size group priced and one pending', 'privateType', () => `${tierSql('120')}; ${tierSql('NULL').replace(core, peak)}`],
     ['a session pass with a price', 'pass', () => ''],
     ['a gift card type with a preset on sale', 'giftType', () => ''],
@@ -424,7 +424,7 @@ describe('Prices, on and off sale (L2: no Stripe)', () => {
     expect((await turnOn(addonActiveRoute, { addonId: addon })).error?.message).toBe('Set its price first.')
     expect((await press(addonPriceRoute, { addonId: addon }, { basePrice: 5 })).ok).toBe(true)
     expect((await turnOn(addonActiveRoute, { addonId: addon })).data).toEqual({ id: addon, active: true })
-    expect((await turnOn(addonActiveRoute, { addonId: UNKNOWN_ID })).error?.message).toBe(LEGACY_CATALOG_ROUTE_WORDS['toggle-active'].itemNotFound)
+    expect((await turnOn(addonActiveRoute, { addonId: UNKNOWN_ID })).error?.message).toBe(CATALOG_ADMIN_WORDS.toggleItemActive.itemNotFound)
     await offSale('addons', addon, 'UPDATE addons SET base_price = NULL')
     expect((await press(addonActiveRoute, { addonId: addon }, { active: true }, TIA)).error?.message).toBe(NO_PRICING)
   })

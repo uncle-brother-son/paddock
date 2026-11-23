@@ -14,9 +14,12 @@ import { POST as blockDayRoute } from '@/app/api/v1/staff/sessions/days/[date]/b
 import { GET as unblockDayQuoteRoute } from '@/app/api/v1/staff/sessions/days/[date]/unblock/quote/route'
 import { POST as unblockDayRoute } from '@/app/api/v1/staff/sessions/days/[date]/unblock/route'
 import { GET as forSlotRoute } from '@/app/api/v1/staff/sessions/for-slot/route'
+import { GET as oneOffQuoteRoute } from '@/app/api/v1/staff/sessions/one-off/quote/route'
 import { GET as sessionsRoute, POST as oneOffRoute } from '@/app/api/v1/staff/sessions/route'
+import type { OneOffSessionQuoteRouteOutput } from '@/contracts'
 import type { Db, SqlParam, Tx } from '@/server/db'
 import { BAND_GUARD_SHARED_SQL, SESSION_DAY_LOCK_SQL } from '@/server/rules/admin/locks'
+import { CHANGED_SINCE_WORDS } from '@/server/rules/admin/stamp'
 import { STAFF_ADMIN_WORDS } from '@/server/rules/staff/failure-messages'
 import { ADMIN_TEST_KEY, auditRowsOf, pressRoute, type AdminAnswer, type AdminRouteHandler } from '@/server/rules/testing/admin-routes'
 import { fixtures, insert, startTestDatabase, type TestDatabase } from '@/server/rules/testing/database'
@@ -818,8 +821,15 @@ describe('POST sessions/:sessionId/start-time (setSessionStartTime, GB6, W51-1)'
   })
 })
 
+/** The one-off dialog's quote (W68, Q58), for a type and time, as the dialog asks. */
+const quote = (serviceTypeId: unknown, startTime: unknown, email: string | null = JO) => get<OneOffSessionQuoteRouteOutput>(oneOffQuoteRoute, { ...(serviceTypeId === undefined ? {} : { serviceTypeId: String(serviceTypeId) }), startTime: String(startTime) }, {}, email)
+
 describe('POST sessions (createOneOffSession, W51-1)', () => {
-  const create = (serviceTypeId: unknown, startTime: unknown, email: string | null = JO, key?: string) => post(oneOffRoute, {}, { serviceTypeId, startTime }, email, key)
+  /** As the dialog: the quote first (W68, Q58), then the press with the stamp it gave (none when the quote was refused). */
+  const create = async (serviceTypeId: unknown, startTime: unknown, email: string | null = JO, key?: string) => {
+    const shown = await quote(serviceTypeId, startTime, email)
+    return post(oneOffRoute, {}, { serviceTypeId, startTime, stamp: shown.data?.stamp }, email, key)
+  }
   const WORDS = SESSION_ADMIN_DIALOG_WORDS.CreateOneOffSessionDialog
 
   it('makes one session with the service type\'s length, capacity and kind, its band by the day\'s windows; the old answer, and one audit row', async () => {
@@ -853,8 +863,10 @@ describe('POST sessions (createOneOffSession, W51-1)', () => {
 
   it('a press made twice makes one session: the same key answers the first press', async () => {
     const key = crypto.randomUUID()
-    const first = await create(sauna, `${SUN}T07:00:00.000Z`, JO, key)
-    const again = await create(sauna, `${SUN}T07:00:00.000Z`, JO, key)
+    const stamp = (await quote(sauna, `${SUN}T07:00:00.000Z`)).data?.stamp
+    const press = () => post(oneOffRoute, {}, { serviceTypeId: sauna, startTime: `${SUN}T07:00:00.000Z`, stamp }, JO, key)
+    const first = await press()
+    const again = await press()
     expect(again.replayed).toBe(true)
     expect(again.data).toEqual(first.data)
     expect(await db.query('SELECT id FROM sessions')).toHaveLength(4)
@@ -863,7 +875,8 @@ describe('POST sessions (createOneOffSession, W51-1)', () => {
 
   it('W51-1: the band guard shared is the first statement, before the session is written', async () => {
     const { db: watched, seen } = watching(db)
-    await createOneOffSession(watched, sauna, `${SUN}T07:00:00.000Z`, by())
+    const shown = (await quote(sauna, `${SUN}T07:00:00.000Z`)).data
+    await createOneOffSession(watched, sauna, `${SUN}T07:00:00.000Z`, shown?.stamp, by())
     expect(seen[0]?.sql).toBe(BAND_GUARD_SHARED_SQL)
     // W51a: then the date's lock, then the closed date is read, then the session is written.
     expect(seen[1]?.sql).toBe(SESSION_DAY_LOCK_SQL)
@@ -875,6 +888,126 @@ describe('POST sessions (createOneOffSession, W51-1)', () => {
 })
 
 // ---------------------------------------------------------------------------------------------------------------------
+
+// Brief W68 item 4 (Wayne's Q58; H12): the one-off dialog names the session's band and price before Create Session, and the
+// press makes the session shown or nothing.
+describe("the one-off session's band and price, shown before the press (Wayne's Q58)", () => {
+  const at = (time: string, day = SUN) => `${day}T${time}:00.000Z`
+  const pressWith = (serviceTypeId: string, startTime: string, stamp: unknown, email = JO) => post(oneOffRoute, {}, { serviceTypeId, startTime, ...(stamp === undefined ? {} : { stamp }) }, email)
+  const CHANGED = { status: 409, reason: 'changed_since', words: CHANGED_SINCE_WORDS }
+  const madeNothing = async () => {
+    expect(await db.query('SELECT id FROM sessions')).toHaveLength(3)
+    expect(await auditRowsOf(db)).toEqual([])
+  }
+  let pool = ''
+  beforeEach(async () => {
+    // A private type with a length: 1 to 4 people priced in both bands, 5 to 8 priced at Core only.
+    pool = await insert(db, 'service_types', { name: 'Pool Hire', booking_type: 'private', duration: 90, capacity: 8 })
+    for (const [band, min, max, price] of [[core, 1, 4, '80.00'], [core, 5, 8, '120.50'], [peak, 1, 4, '95.00'], [peak, 5, 8, null]] as const) await insert(db, 'service_type_price_tiers', { service_type_id: pool, band_id: band, min_people: min, max_people: max, price })
+  })
+
+  it('a public type: its band and that band\'s price a person; the same time on the other side of the window is the other band; nothing is written', async () => {
+    const day = await quote(sauna, at('16:59'), TIA)
+    expect(day.status).toBe(200)
+    expect(day.data).toEqual({ type: 'public', band: { code: 'core', name: 'Core' }, pricePerPerson: 20, sizeGroups: [], othersSetByHand: false, stamp: expect.any(String) })
+    const night = await quote(sauna, at('17:00'))
+    expect(night.data).toMatchObject({ band: { code: 'peak', name: 'Peak' }, pricePerPerson: 25.5 })
+    expect(night.data?.stamp).not.toBe(day.data?.stamp)
+    await madeNothing()
+  })
+
+  it('a private type: its band and that band\'s size-group prices, in order, one not priced yet as none', async () => {
+    expect((await quote(pool, at('10:00'))).data).toMatchObject({ type: 'private', band: { code: 'core', name: 'Core' }, pricePerPerson: null, sizeGroups: [{ minPeople: 1, maxPeople: 4, price: 80 }, { minPeople: 5, maxPeople: 8, price: 120.5 }] })
+    expect((await quote(pool, at('18:00'))).data).toMatchObject({ band: { code: 'peak', name: 'Peak' }, sizeGroups: [{ minPeople: 1, maxPeople: 4, price: 95 }, { minPeople: 5, maxPeople: 8, price: null }] })
+  })
+
+  it('no window covers the time: no band and no price, and the session is made as it says', async () => {
+    await db.query("DELETE FROM band_rules WHERE day_of_week = 0 AND from_time = '17:00'")
+    const shown = await quote(sauna, at('18:00'))
+    expect(shown.data).toMatchObject({ type: 'public', band: null, pricePerPerson: null, sizeGroups: [] })
+    const made = await pressWith(sauna, at('18:00'), shown.data?.stamp)
+    expect(made.status).toBe(200)
+    expect((await stateOf((made.data as { session: { id: string } }).session.id))?.band_id).toBeNull()
+  })
+
+  it('Q58: on a day whose sessions staff set by hand, the one-off is made in the band the dialog showed (the windows\')', async () => {
+    await db.query('UPDATE sessions SET band_id = $1, band_overridden = true', [peak])
+    const shown = await quote(sauna, at('11:00', SAT))
+    expect(shown.data).toMatchObject({ band: { code: 'core' }, pricePerPerson: 20 })
+    // W68a: and the quote says so, on that day only.
+    expect(shown.data?.othersSetByHand).toBe(true)
+    expect((await quote(sauna, at('11:00'))).data?.othersSetByHand).toBe(false)
+    const made = await pressWith(sauna, at('11:00', SAT), shown.data?.stamp)
+    expect(await stateOf((made.data as { session: { id: string } }).session.id)).toMatchObject({ band_id: core, band_overridden: false })
+  })
+
+  it('W68a (W68 noticed 2): the quote says when another session that day, of any service type, had its band set by hand; a reset clears it; the day is the one staff see; the stamp is the same either way, so it refuses no press', async () => {
+    const shown = await quote(pool, at('23:30', SAT))
+    expect(shown.data?.othersSetByHand).toBe(false)
+    const [one] = await db.query<{ id: string }>('SELECT id FROM sessions WHERE service_type_id = $1 ORDER BY start_time LIMIT 1', [sauna])
+    await db.query('UPDATE sessions SET band_overridden = true WHERE id = $1', [one?.id ?? ''])
+    const now = await quote(pool, at('23:30', SAT))
+    expect(now.data).toEqual({ ...shown.data, othersSetByHand: true })
+    // Either side of midnight is another day.
+    for (const start of [at('00:00'), `2000-01-01T00:00:00.000Z`]) expect((await quote(pool, start)).data?.othersSetByHand, start).toBe(false)
+    expect((await quote(pool, at('00:00', SAT))).data?.othersSetByHand).toBe(true)
+    await db.query('UPDATE sessions SET band_overridden = false')
+    expect((await quote(pool, at('23:30', SAT))).data?.othersSetByHand).toBe(false)
+    await db.query('UPDATE sessions SET band_overridden = true WHERE id = $1', [one?.id ?? ''])
+    expect((await pressWith(pool, at('23:30', SAT), shown.data?.stamp)).status).toBe(200)
+  })
+
+  it('W68a (W68 review L3): a one-off session ends when its own service type does: 90 minutes for a 90-minute type', async () => {
+    const made = await pressWith(pool, at('10:00'), (await quote(pool, at('10:00'))).data?.stamp)
+    expect((made.data as { session: { start_time: string; end_time: string } }).session).toMatchObject({ start_time: at('10:00'), end_time: at('11:30') })
+    const [row] = await db.query<{ minutes: number }>('SELECT (extract(epoch FROM end_time - start_time) / 60)::int AS minutes FROM sessions WHERE service_type_id = $1', [pool])
+    expect(row?.minutes).toBe(90)
+  })
+
+  it.each([
+    ["the day's windows were cut again, so the time is another band", () => db.query("UPDATE band_rules SET to_time = '09:00' WHERE day_of_week = 0 AND from_time = '00:00'").then(() => db.query("UPDATE band_rules SET from_time = '09:00' WHERE day_of_week = 0 AND from_time = '17:00'")), 'sauna'],
+    ["the band's price changed", () => db.query("UPDATE session_bands SET price = '22.00' WHERE code = 'core'"), 'sauna'],
+    ['a size group\'s price changed', () => db.query("UPDATE service_type_price_tiers SET price = '130.00' WHERE price = '120.50'"), 'pool'],
+    ['a size group was added', () => insert(db, 'service_type_price_tiers', { service_type_id: pool, band_id: core, min_people: 9, max_people: 10, price: '150.00' }), 'pool'],
+  ] as const)('%s after the dialog showed it: refused in the rule\'s words, no session and no audit row; the new one shown and pressed is made', async (_what, change, which) => {
+    const type = which === 'sauna' ? sauna : pool
+    const shown = await quote(type, at('10:00'))
+    await change()
+    expect(refusedWith(await pressWith(type, at('10:00'), shown.data?.stamp))).toEqual(CHANGED)
+    await madeNothing()
+    const now = await quote(type, at('10:00'))
+    expect(now.data?.stamp).not.toBe(shown.data?.stamp)
+    const made = await pressWith(type, at('10:00'), now.data?.stamp)
+    expect(made.status).toBe(200)
+    expect((await auditRowsOf(db)).map((row) => row.action)).toEqual(['session.created'])
+  })
+
+  it('a press with no stamp, an empty one, or the stamp of another time, type or band is refused, and nothing is made', async () => {
+    const otherTime = (await quote(sauna, at('11:00'))).data?.stamp
+    const otherBand = (await quote(sauna, at('18:00'))).data?.stamp
+    const otherType = (await quote(pool, at('10:00'))).data?.stamp
+    // W68a (W68 review L1): a second public type at the same time, so the same band and the same price.
+    const steam = await insert(db, 'service_types', { name: 'Steam', booking_type: 'public', duration: 60, capacity: 10 })
+    const steamShown = (await quote(steam, at('10:00'))).data
+    expect(steamShown).toEqual({ ...(await quote(sauna, at('10:00'))).data, stamp: steamShown?.stamp })
+    const otherPublicType = steamShown?.stamp
+    for (const stamp of [undefined, '', null, 7, otherTime, otherBand, otherType, otherPublicType]) expect(refusedWith(await pressWith(sauna, at('10:00'), stamp)), String(stamp)).toEqual(CHANGED)
+    await madeNothing()
+  })
+
+  it('the quote is refused as the press would be, in the same words: the service type, the time, a closed date, a session already there, an inactive account', async () => {
+    const WORDS = SESSION_ADMIN_DIALOG_WORDS.CreateOneOffSessionDialog
+    expect(refusedWith(await quote(UNKNOWN_ID, at('10:00')))).toEqual({ status: 404, reason: 'service_type_not_found', words: WORDS.service_type_not_found })
+    expect(refusedWith(await quote(undefined, at('10:00')))).toMatchObject({ reason: 'service_type_not_found' })
+    expect(refusedWith(await quote(hire, at('10:00')))).toEqual({ status: 409, reason: 'service_type_incomplete', words: WORDS.service_type_incomplete })
+    expect(refusedWith(await quote(sauna, 'next Friday'))).toMatchObject({ status: 400, reason: 'invalid_start_time' })
+    expect(refusedWith(await quote(sauna, at('10:00', SAT)))).toEqual({ status: 409, reason: 'slot_already_exists', words: WORDS.slot_already_exists })
+    await db.query('INSERT INTO closed_dates (closed_on, reason) VALUES ($1::date, $2)', [SUN, 'Closed'])
+    expect(refusedWith(await quote(sauna, at('10:00')))).toEqual({ status: 409, reason: 'date_closed', words: NEW.dateClosed })
+    expect(refusedWith(await quote(sauna, at('10:00'), INA))).toEqual({ status: 403, reason: undefined, words: INACTIVE })
+    await madeNothing()
+  })
+})
 
 describe('the weekly timetable (addServiceTypeScheduleSlot, deleteServiceTypeScheduleSlot; Wayne\'s Q50)', () => {
   const add = (serviceTypeId: string, dayOfWeek: unknown, startTime: unknown, email: string | null = JO, key?: string) => post(slotAddRoute, { serviceTypeId }, { dayOfWeek, startTime }, email, key)
@@ -910,7 +1043,8 @@ describe('the weekly timetable (addServiceTypeScheduleSlot, deleteServiceTypeSch
     expect((await post(blockRoute, { sessionId: morning }, { reason: 'x' }, TIA)).status).toBe(200)
     expect((await post(unblockRoute, { sessionId: morning }, {}, TIA)).status).toBe(200)
     expect((await post(startTimeRoute, { sessionId: morning }, { startTime: `${SAT}T09:00:00.000Z` }, TIA)).status).toBe(200)
-    expect((await post(oneOffRoute, {}, { serviceTypeId: sauna, startTime: `${SUN}T09:00:00.000Z` }, TIA)).status).toBe(200)
+    const oneOff = { serviceTypeId: sauna, startTime: `${SUN}T09:00:00.000Z` }
+    expect((await post(oneOffRoute, {}, { ...oneOff, stamp: (await quote(oneOff.serviceTypeId, oneOff.startTime, TIA)).data?.stamp }, TIA)).status).toBe(200)
   })
 
   it('the old checks in the old words: the day, the time, a slot already there; a service type that isn\'t there in plain words; a slot that isn\'t there', async () => {
@@ -1077,7 +1211,8 @@ describe('W51a (W51 review L3; Wayne, 20 Nov 2026): closed dates', () => {
   const blockTheDay = (date: string, seen: unknown, reason = 'Closed for Christmas', email: string | null = JO) => post(blockDayRoute, { date }, { reason, seen }, email)
   const unblockQuote = (date: string) => get<{ blockedSessions: number; blockedBefore: number; closedDates: number; closedReason: string | null }>(unblockDayQuoteRoute, {}, { date })
   const unblockTheDay = (date: string, seen: unknown, email: string | null = JO) => post(unblockDayRoute, { date }, { seen }, email)
-  const create = (startTime: string) => post(oneOffRoute, {}, { serviceTypeId: sauna, startTime })
+  /** As the dialog: the quote, then the press with its stamp (none when the quote is refused). */
+  const create = async (startTime: string) => post(oneOffRoute, {}, { serviceTypeId: sauna, startTime, stamp: (await quote(sauna, startTime)).data?.stamp })
 
   it('Block Day on a date after "made up to": the quote says so, and the press records the closed date with the reason and who (it has no session to block), with one audit row; pressed again it changes nothing and the first reason and who stay', async () => {
     await madeUpTo('2031-06-01')

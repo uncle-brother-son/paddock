@@ -1390,7 +1390,7 @@ async function collectMembershipAndFinish(
     // touched here: T2 recorded it for the automatic refund (gone), or the compensation refunds it (marked).
     // W13c (W13a review S1): T2 has recorded the subscription as left in its own transaction; the put-back sends and
     // writes only while there is time to send, so nothing is written after T2 once the window has closed.
-    // W13d (W13c review S-1): likewise for the old rollback's, paid with another payment, or not pending.
+    // W13d (W13c review S-1): likewise for one paid with another payment, or not pending.
     // W14 (W13d defence): only when T2 wrote the row, so a paid order holding this subscription is never put back.
     if (isPutBackReason(finalised.reason) && finalised.subscriptionLeft) {
       try {

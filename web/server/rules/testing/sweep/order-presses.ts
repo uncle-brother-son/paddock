@@ -88,6 +88,21 @@ export interface OrderAnswer {
   body: { ok: true; data: PlaceOrderOutput } | ApiFailure
 }
 
+/**
+ * W68 (H5): `work` with the switch kind `card_moves` on, as live has it: an order's T2 saves the reader's card, and the
+ * saved-card route takes a save. With it off both refuse (customers/saved-card.test.ts, the kind's own tests).
+ */
+export async function withCardMoves<T>(work: () => Promise<T>): Promise<T> {
+  const before = process.env.ORDER_SWITCH
+  process.env.ORDER_SWITCH = 'card_moves'
+  try {
+    return await work()
+  } finally {
+    if (before === undefined) delete process.env.ORDER_SWITCH
+    else process.env.ORDER_SWITCH = before
+  }
+}
+
 /** W14: every kind of order the Worker takes, as ORDER_SWITCH lists them once W15 has switched them all on. */
 export const ALL_KINDS_ON = 'no_stripe,saved_card,reader,membership'
 

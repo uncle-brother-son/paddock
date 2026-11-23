@@ -13,7 +13,7 @@ import { CARD_FLOW_PAID_NOT_FINISHED_MESSAGE, CHANGE_PAYMENT_UNCONFIRMED_MESSAGE
 import { closeStuckItem } from '@/server/rules/orders/close-stuck'
 import { ORDER_STILL_PROCESSING_MESSAGE } from '@/server/rules/orders/failure-messages'
 import { reconcile } from '@/server/rules/orders/reconcile'
-import { stuckList, WATCH_WORDS } from '@/server/rules/orders/stuck-list'
+import { STUCK_WORDS, stuckList, WATCH_WORDS } from '@/server/rules/orders/stuck-list'
 import { REFUND_WATCH } from '@/server/rules/refunds/refund-watch'
 import { insert } from '@/server/rules/testing/database'
 import { TABLES } from '@/server/rules/testing/replay/compare'
@@ -987,7 +987,7 @@ describe('S3: the date move', () => {
         message: PAYMENT_DATE_CLOSE_WORDS.stillChecking,
       })
       expect((await changes()).map((row) => row.status)).toEqual(['pending'])
-      expect([...PAYMENT_DATE_CLOSE_REASONS].sort()).toEqual(['amount_mismatch', 'not_started_here', 'other_mode', 'refund_refused', 'refunded_elsewhere', 'several_payments', 'subscription_missing'])
+      expect([...PAYMENT_DATE_CLOSE_REASONS].sort()).toEqual(['amount_mismatch', 'other_mode', 'refund_refused', 'refunded_elsewhere', 'several_payments', 'subscription_missing', 'unexpected_state'])
       expect(stripe.calls.filter((call) => call.method === 'refunds.create')).toEqual([])
     })
   })
@@ -1404,12 +1404,13 @@ describe('a pending record holds the membership (brief W41 item 4)', () => {
       async (stripe) => {
         expect(refusalOf(await press())).toEqual([409, 'CONFLICT', 'refused', PAYMENT_DATE_REFUSALS.inProgress])
         const [change] = await changes()
-        expect(await dateItems(stripe)).toEqual([{ kind: 'date_change', id: change?.id, outcome: 'left', reason: 'not_started_here' }])
+        expect(await dateItems(stripe)).toEqual([{ kind: 'date_change', id: change?.id, outcome: 'left', reason: 'unexpected_state' }])
         expect(stripe.calls).toEqual([])
-        expect((await listed()).map((line) => [line.reason, line.close?.kind])).toEqual([['not_started_here', 'held_payment_date']])
-        // W58b (the W45 audit's row 38; W41 review L3): its own words, with what to look for in Stripe.
-        expect((await listed()).map((line) => line.words)).toEqual([PAYMENT_DATE_STUCK_WORDS['not_started_here']])
-        expect(PAYMENT_DATE_STUCK_WORDS['not_started_here']).toContain('"Payment date change" charge')
+        // W68 (H3): `not_started_here` and its own words went (none is left); the list's words for `unexpected_state`.
+        expect((await listed()).map((line) => [line.reason, line.close?.kind])).toEqual([['unexpected_state', 'held_payment_date']])
+        expect((await listed()).map((line) => line.words)).toEqual([STUCK_WORDS['unexpected_state']])
+        expect(STUCK_WORDS['unexpected_state']).toMatch(/tell a manager/)
+        expect(PAYMENT_DATE_STUCK_WORDS['not_started_here']).toBeUndefined()
         expect((await closeStuckItem(db, { kind: 'held_payment_date', orderId: change?.id as string, reason: 'Checked Stripe: no charge' }, { actor: { type: 'staff', id: ID.staff }, requestId: crypto.randomUUID() })).closed).toBe(true)
         expect((await press()).status).toBe(200)
       },

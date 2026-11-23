@@ -24,7 +24,7 @@ import { CARD_SAVED_ACTION, INVOICE_DEFAULT_ACTION } from './saved-card'
 // for another customer is refused with nothing saved; the card, its audit row and one card step per live membership
 // go in one transaction; each subscription is then moved under its step's key, with only its card sent; the card is
 // saved whatever Stripe says about a membership; a step Stripe didn't take is listed, sent again and checked by W40's
-// machinery; the newest card wins; and with `card_moves` off the card is saved exactly as before W42.
+// machinery; the newest card wins; and (W68, H5) with `card_moves` off the save is refused and nothing is saved.
 
 vi.setConfig({ testTimeout: 120_000 })
 
@@ -657,17 +657,15 @@ describe("W42a: an order's T2 runs the same rule (card_moves on)", () => {
     })
   })
 
-  it("the kind off: the same race ends as it does today (the new membership on the old card, no step, nothing sent about it), and the order's T2 takes no card step for anyone", async () => {
+  it("the kind off (W68, H5): the replace in the same race is refused, so the card on file stays the one the new membership is on; the order's T2 takes no card step for anyone", async () => {
     await onASeed(
       async (stripe) => {
         const during = replacingDuringTheOrder(stripe, 'pm_sams_new_card')
         const order = await postOrder(membershipOnCard(), { orderSwitch: ORDER_KINDS_NO_MOVES })
         expect(order.status).toBe(200)
-        // Off, the route saves the card as before W42: five fields, no counts.
-        expect(during.answer()?.status).toBe(200)
-        expect(during.answer()?.data).not.toHaveProperty('membershipsMoved')
+        expect([during.answer()?.status, during.answer()?.error?.code]).toEqual([501, 'MEMBERSHIP_PATH_OFF'])
         const subscription = (await samsMembership())?.stripe_subscription_id as string
-        expect((await cardOf(ID.customer))?.card).toBe('pm_sams_new_card')
+        expect((await cardOf(ID.customer))?.card).toBe('pm_seed')
         expect(subscriptionCard(stripe, subscription)).toBe('pm_seed')
         expect(await stepRows()).toEqual([])
         expect(updates(stripe)).toEqual([])
@@ -776,12 +774,15 @@ describe("W42a: an order's T2 runs the same rule (card_moves on)", () => {
     })
   })
 
-  it('the kind off: the reader order saves the card as today and no membership is moved: no step, nothing sent to the subscription or the invoice default', async () => {
+  it('the kind off (W68, H5): the reader order is paid, the card is NOT saved and staff are told; a row says why; no step, nothing sent to the subscription or the invoice default', async () => {
     await onASeed(
       async (stripe) => {
         const finalised = await readerOrderSavingCard(stripe, 'pm_mos_reader_card', ORDER_KINDS_NO_MOVES)
-        expect(finalised.body).toMatchObject({ ok: true, data: { finalised: true } })
-        expect((await cardOf())?.card).toBe('pm_mos_reader_card')
+        expect(finalised.body).toMatchObject({ ok: true, data: { finalised: true, warning: "The card couldn't be saved for future charges." } })
+        expect((await cardOf())?.card).toBe('pm_member')
+        expect((await audited('order.paid')).map((row) => row.details['cardSaved'])).toEqual([false])
+        expect(await audited(CARD_SAVED_ACTION)).toEqual([])
+        expect((await audited('customer.card_not_saved')).map((row) => [row.entity_id, row.details['reason'], row.details['paymentMethodId']])).toEqual([[ID.member, 'card_moves_off', 'pm_mos_reader_card']])
         // Untouched (the seed's subscription names no card of its own).
         expect(subscriptionCard(stripe)).toBeNull()
         expect(await stepRows()).toEqual([])
@@ -808,20 +809,22 @@ describe("W42a: an order's T2 runs the same rule (card_moves on)", () => {
 })
 
 describe('the switch kind `card_moves` (brief W42 item 1)', () => {
-  it('off: the card is saved exactly as before W42: five fields, no step, nothing sent about a subscription or the invoice default, and no F4', async () => {
+  it('off (W68, H5; the W45 audit\'s row 50): the save is refused in the switch\'s own words, before anything is read: no card saved (this customer\'s tap or another\'s), no row, no step, and Stripe asked nothing', async () => {
     await onASeed(
       async (stripe) => {
-        const answer = await replace(stripe, 'pm_mos_new_card')
-        expect(answer.status).toBe(200)
-        expect(answer.data).toEqual({ id: ID.member, stripe_customer_id: MO_STRIPE, saved_payment_method_id: 'pm_mos_new_card', saved_card_last4: '1881', saved_card_brand: 'mastercard' })
+        for (const [whose, card] of [[MO_STRIPE, 'pm_mos_new_card'], [SAM_STRIPE, 'pm_sams_card']] as const) {
+          const tap = await tapped(stripe, whose, card)
+          const calls = stripe.calls.length
+          const answer = await save(tap)
+          expect([answer.status, answer.error?.code, answer.error?.message]).toEqual([501, 'MEMBERSHIP_PATH_OFF', 'This is switched off in the booking system. Tell a manager.'])
+          expect(answer.error?.details).toEqual({ reason: 'membership_path_off', message: 'This is switched off in the booking system. Tell a manager.', kinds: ['card_moves'] })
+          expect(stripe.calls).toHaveLength(calls)
+        }
+        expect((await cardOf())?.card).toBe('pm_member')
         expect(await stepRows()).toEqual([])
-        expect([...updates(stripe), ...invoiceDefaults(stripe), ...stripe.calls.filter((call) => call.method === 'subscriptions.retrieve')]).toEqual([])
         expect(subscriptionCard(stripe)).toBeNull()
-        expect((await audited(CARD_SAVED_ACTION)).map((row) => Object.keys(row.details).sort())).toEqual([['brand', 'last4', 'paymentMethodId', 'setupIntentId']])
+        expect(await audited(CARD_SAVED_ACTION)).toEqual([])
         expect(await audited(INVOICE_DEFAULT_ACTION)).toEqual([])
-        // As before W42 (FB17 stands while the kind is off): another customer's tap is saved.
-        const other = await save(await tapped(stripe, SAM_STRIPE, 'pm_sams_card'))
-        expect([other.status, other.data?.['saved_payment_method_id']]).toEqual([200, 'pm_sams_card'])
       },
       undefined,
       'no_stripe,saved_card,reader,membership,booking_changes,reader_flows,order_refunds,event_cancels,membership_changes,payment_date_changes'
@@ -1005,14 +1008,15 @@ describe('W42b: the last card gaps before card_moves goes on (W42a review S1, S2
       })
     })
 
-    it("the other way: the run told the kind is off, with process.env naming it (a warm isolate's stale copy): the order is finalised as W11 had it, with no step. The run's word is the one T2 hears", async () => {
+    it("the other way: the run told the kind is off, with process.env naming it (a warm isolate's stale copy): the order is finalised with no card saved and no step. The run's word is the one T2 hears", async () => {
       await onASeed(async (stripe) => {
         await heldReaderOrder(stripe, 'pm_mos_reader_card')
         pastTheWindow()
         vi.stubEnv('ORDER_SWITCH', KINDS_ON)
         const run = await runTold(stripe, KINDS_NO_MOVES)
         expect(run.finalised).toBe(1)
-        expect((await cardOf())?.card).toBe('pm_mos_reader_card')
+        expect(run.items.map((item) => item.warning)).toEqual(["The card couldn't be saved for future charges."])
+        expect((await cardOf())?.card).toBe('pm_member')
         expect(await stepRows()).toEqual([])
         expect(subscriptionCard(stripe)).toBeNull()
         expect(invoiceDefaults(stripe)).toEqual([])
@@ -1117,16 +1121,16 @@ describe('W42b: the last card gaps before card_moves goes on (W42a review S1, S2
       })
     })
 
-    it("with card_moves off for the run, W11's behaviour is exactly as it was: the tapped card is saved over the newer one, no row says otherwise, and no membership is touched", async () => {
+    it("with card_moves off for the run (W68, H5): the tapped card is not saved, over a newer one or at all; a row says the kind is off, and no membership is touched", async () => {
       await onASeed(async (stripe) => {
         await heldReaderOrderThenReplace(stripe)
         vi.stubEnv('ORDER_SWITCH', KINDS_NO_MOVES)
         const run = await runTold(stripe, KINDS_NO_MOVES)
         expect(run.finalised).toBe(1)
-        expect((await cardOf())?.card).toBe('pm_mos_tapped_card')
-        expect(await paidRows()).toEqual([true])
-        expect(await audited(CARD_NOT_SAVED)).toEqual([])
-        expect((await audited(CARD_SAVED_ACTION)).map((row) => row.details['paymentMethodId'])).toEqual(['pm_mos_newest_card', 'pm_mos_tapped_card'])
+        expect((await cardOf())?.card).toBe('pm_mos_newest_card')
+        expect(await paidRows()).toEqual([false])
+        expect((await audited(CARD_NOT_SAVED)).map((row) => [row.details['reason'], row.details['paymentMethodId']])).toEqual([['card_moves_off', 'pm_mos_tapped_card']])
+        expect((await audited(CARD_SAVED_ACTION)).map((row) => row.details['paymentMethodId'])).toEqual(['pm_mos_newest_card'])
         expect(subscriptionCard(stripe)).toBe('pm_mos_newest_card')
         expect(updates(stripe).map((call) => paramsOf(call)['default_payment_method'])).toEqual(['pm_mos_newest_card'])
       })
@@ -1171,6 +1175,30 @@ describe('W42b: the last card gaps before card_moves goes on (W42a review S1, S2
       })
     })
 
+    it('a reader membership order with the kind off (W68, H5): paid, the membership made on the tapped card and written; the card not saved to the customer, a row saying why, staff told; no step', async () => {
+      await onASeed(
+        async (stripe) => {
+          const input = await withQuotedCardFigure(orderInput({ customerId: ID.customer, membershipPlanId: ID.plan, membershipBillingFrequency: 'monthly', payment: { method: 'reader', readerSaveCard: true } }))
+          const order = await postOrder(input, { orderSwitch: KINDS_NO_MOVES })
+          expect(order.status).toBe(200)
+          const data = order.body.ok ? order.body.data : null
+          vi.setSystemTime(Date.now() + 5000)
+          stripe.completeReaderPayment(data?.pendingReaderPayment?.paymentIntentId as string, { generatedCard: 'pm_sams_tapped_card' })
+          const finalised = await postReaderStep('finalise', data?.orderId as string)
+          expect(finalised.body).toMatchObject({ ok: true, data: { finalised: true, warning: "The card couldn't be saved for future charges." } })
+          const membership = (await db.query<{ stripe_subscription_id: string | null; subscription_status: string }>('SELECT stripe_subscription_id, subscription_status FROM customer_memberships WHERE customer_id = $1', [ID.customer]))[0]
+          expect(membership).toEqual({ stripe_subscription_id: stripe.subscriptionsMade.at(-1), subscription_status: 'active' })
+          expect(paramsOf(stripe.calls.find((call) => call.method === 'subscriptions.create'))['default_payment_method']).toBe('pm_sams_tapped_card')
+          expect((await cardOf(ID.customer))?.card).toBe('pm_seed')
+          expect((await audited(CARD_NOT_SAVED)).map((row) => [row.entity_id, row.details['reason'], row.details['paymentMethodId']])).toEqual([[ID.customer, 'card_moves_off', 'pm_sams_tapped_card']])
+          expect(await stepRows()).toEqual([])
+          expect(await listed()).toEqual([])
+        },
+        undefined,
+        KINDS_NO_MOVES
+      )
+    })
+
     it("a reader membership order whose card is replaced between the tap and the finalise: the new subscription is made on the tapped card, the tapped card is not saved, and the new membership moves to the customer's newer card like any other", async () => {
       await onASeed(async (stripe) => {
         // Sam (card pm_seed, no membership) buys a monthly membership on the reader and taps card T.
@@ -1195,6 +1223,10 @@ describe('W42b: the last card gaps before card_moves goes on (W42a review S1, S2
         // The customer's card is still the newer one, and the new membership has been moved to it.
         expect((await cardOf(ID.customer))?.card).toBe('pm_sams_newest_card')
         expect((await audited(CARD_NOT_SAVED)).map((row) => [row.entity_id, row.details['reason'], row.details['paymentMethodId']])).toEqual([[ID.customer, 'newer_card_on_file', 'pm_sams_tapped_card']])
+        // W68a (W68 review L9): that press didn't warn (a newer card is on file), so pressed again it doesn't either.
+        expect((finalised.body as { data?: { warning?: string } }).data?.warning).toBeUndefined()
+        const again = (await postReaderStep('finalise', data?.orderId as string)).body as { data?: { alreadyFinalised?: boolean; warning?: string } }
+        expect([again.data?.alreadyFinalised, again.data?.warning]).toEqual([true, undefined])
         expect(await stepRows()).toEqual([
           ['payment_method', 'left', 'pm_sams_newest_card', subscription],
           ['payment_method', 'done', 'pm_sams_newest_card', subscription],
@@ -1219,7 +1251,7 @@ describe('W42b: the last card gaps before card_moves goes on (W42a review S1, S2
         .filter((file) => /saved_payment_method_id\s*=\s*(\$|CASE)/.test(readFileSync(file, 'utf8')))
         .map((file) => path.relative(web, file).split(path.sep).join('/'))
         .sort()
-      expect(writers).toEqual(['server/rules/customers/saved-card.ts', 'server/rules/orders/finalise-order.ts', 'server/rules/payments/terminal.ts'])
+      expect(writers).toEqual(['server/rules/customers/saved-card.ts', 'server/rules/orders/finalise-order.ts'])
       for (const file of writers) expect(readFileSync(path.join(web, file), 'utf8')).toMatch(/action: ('customer\.card_saved'|CARD_SAVED_ACTION)/)
     })
   })
@@ -1370,11 +1402,12 @@ describe('the staff app (brief W42 item 5): saveCustomerCardOnFile and the words
     }, secondMembership())
   })
 
-  it('with `card_moves` off the wrapper answers the five fields alone, so the screen says nothing about memberships', async () => {
+  it('W68 (H5): with `card_moves` off the wrapper answers the refusal as data, with the switch\'s words, and nothing is saved', async () => {
     await onASeed(
       async (stripe) => {
         const saved = await (await wrapper())({ params: { customerId: ID.member, setupIntentId: await tapped(stripe, MO_STRIPE, 'pm_mos_new_card') }, user: REPLAY_USER })
-        expect(Object.keys(saved).sort()).toEqual(['id', 'saved_card_brand', 'saved_card_last4', 'saved_payment_method_id', 'stripe_customer_id'])
+        expect(saved).toEqual({ id: ID.member, stripe_customer_id: null, saved_payment_method_id: null, saved_card_last4: null, saved_card_brand: null, refused: { reason: 'membership_path_off', message: 'This is switched off in the booking system. Tell a manager.' } })
+        expect((await cardOf())?.card).toBe('pm_member')
       },
       undefined,
       'membership_changes,payment_date_changes'

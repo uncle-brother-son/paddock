@@ -935,10 +935,22 @@ describe('refusals before any money moves', () => {
     })
   })
 
-  it('the switch: a card move is gated (`saved_card`), a quote never', async () => {
-    await withBooking(publicOnCard, async ({ bookingId }) => {
+  it('the switch: a card move is gated (`saved_card`), and (W68a) cash, the reader and money back; a quote never', async () => {
+    await withBooking(publicOnCard, async ({ bookingId, stripe }) => {
       const off = await move(bookingId, ID.peakSession, { payment: { method: 'card' } }, { orderSwitch: 'no_stripe,booking_changes' })
       expect(off.body.error).toMatchObject({ code: 'BOOKING_PATH_OFF', message: BOOKING_PATH_OFF_MESSAGE })
+      const sent = stripe.calls.length
+      const gated = async (press: Parameters<typeof move>[2], orderSwitch: string) => (await move(bookingId, ID.peakSession, press, { orderSwitch })).body.error
+      const allBut = (kind: string) => ['booking_changes', 'saved_card', 'reader', 'reader_flows'].filter((one) => one !== kind).join(',')
+      expect(await gated({ payment: { method: 'cash' } }, allBut('booking_changes'))).toMatchObject({ code: 'BOOKING_PATH_OFF', details: { kinds: ['booking_changes'] } })
+      for (const kind of ['reader', 'reader_flows', 'booking_changes']) expect(await gated({ payment: { method: 'reader' } }, allBut(kind)), kind).toMatchObject({ code: 'BOOKING_PATH_OFF', details: { kinds: [kind] } })
+      // Money back needs `booking_changes` alone: gated by it, and by nothing else.
+      for (const refundMethod of ['card', 'credit']) {
+        const back = { figures: { amountDue: -11, toCollect: 0 }, refundMethod }
+        expect(await gated(back, allBut('booking_changes')), refundMethod).toMatchObject({ code: 'BOOKING_PATH_OFF', details: { kinds: ['booking_changes'] } })
+        expect((await gated(back, 'booking_changes'))?.code, refundMethod).not.toBe('BOOKING_PATH_OFF')
+      }
+      expect(stripe.calls.slice(sent)).toEqual([])
       const q = await post(moveQuoteRoute, `${base(bookingId)}/move/quote`, { bookingId }, { newSessionId: ID.peakSession }, { orderSwitch: '' })
       expect(q.body.ok).toBe(true)
     })

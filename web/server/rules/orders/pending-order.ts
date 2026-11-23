@@ -26,11 +26,6 @@ type PendingCommon = {
   /** When T1 wrote it (the transaction's time). */
   created_at?: string
   /**
-   * Written by the old rollback (readerOrderRollback.ts) when it starts on an order. The Worker never
-   * writes it, and T2 and the undo leave an order carrying it to the old code (W11).
-   */
-  rollback?: unknown
-  /**
    * W12 (W10 review L1): the booking as T1 wrote it (it was written `confirmed`), so the undo can see
    * whether old code has changed it since (cancelled, moved, a guest added or removed) and refuse
    * (`changed_since`) rather than give its places and pass session back a second time. Absent on an

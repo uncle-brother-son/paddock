@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { BOOKING_ADMIN_WORDS } from '@/server/rules/bookings/admin-failure-messages'
-import { CATALOG_ADMIN_DIALOG_WORDS, CATALOG_ADMIN_REASONS, CATALOG_ADMIN_WORDS, LEGACY_CATALOG_ROUTE_WORDS, PLAN_PRICE_MOVE_WORDS } from '@/server/rules/catalog/failure-messages'
+import { CATALOG_ADMIN_DIALOG_WORDS, CATALOG_ADMIN_REASONS, CATALOG_ADMIN_WORDS, PLAN_PRICE_MOVE_WORDS } from '@/server/rules/catalog/failure-messages'
 import { EVENT_ADMIN_REASONS, EVENT_ADMIN_WORDS } from '@/server/rules/events/admin-failure-messages'
 import { ORDER_ADMIN_REASONS, ORDER_ADMIN_WORDS } from '@/server/rules/orders/admin-failure-messages'
 import { PRICING_ADMIN_WORDS } from '@/server/rules/pricing/admin-failure-messages'
@@ -28,11 +28,40 @@ type OldWord = OldAdminWord
 const NOT_MOVED = [/returned an HTML page/, /^Unauthorized$/, /^Missing required fields/, /^Internal server error$/, /^Unparseable timestamp/, /could not be read back/]
 const notMoved = (word: OldWord): boolean => word.kind === 'fallback' || NOT_MOVED.some((pattern) => pattern.test(word.text))
 
+/**
+ * W68 (H3): the seven legacy /api/catalog routes' own refusals that nothing answers any more (the routes went at W61, the
+ * object that kept these words at W68). The six sentences the Worker still answers are in CATALOG_ADMIN_WORDS.
+ */
+const ROUTE_WORDS_GONE: ReadonlySet<string> = new Set([
+  'Failed to update Stripe price',
+  'Failed to update Stripe product',
+  'Failed to update item',
+  'Item has no Stripe product. Sync from Sanity first.',
+  'Private service types use price tiers. Use /api/catalog/update-tier-price instead.',
+  'Parent service type not found for this tier',
+  'Service type has no Stripe product. Sync from Sanity first.',
+  'Failed to update tier',
+  'Product has no Stripe product. Sync from Sanity first.',
+  'SKU already exists',
+  'No price available. Set priceOverride or ensure product has base_price.',
+  'Failed to create Stripe price',
+  'Failed to create variant',
+  'Item already has a Stripe product',
+  'Item must have a name to sync to Stripe',
+  'Failed to update item with Stripe IDs',
+  'Gift card type has no Stripe product. Sync from Sanity first.',
+  'Failed to create gift card preset',
+  'Parent gift card type not found for this preset',
+  'Failed to update preset',
+])
+/** Those sentences, where the old code had them: the routes themselves, and the functions that passed them on. */
+const gone = (word: OldWord): boolean => ROUTE_WORDS_GONE.has(word.text)
+
 type Words = Record<string, Record<string, string | ((...values: unknown[]) => string)>>
 /** Each word as text, a sentence that takes values shown with ${} in their place (as the old source is read). */
 const sentences = (words: Words): string[] => Object.values(words).flatMap((group) => Object.values(group).map((word) => (typeof word === 'function' ? word(VALUE, VALUE, VALUE) : word)))
 
-const NEW_WORDS: Words[] = [STAFF_ADMIN_WORDS, CATALOG_ADMIN_WORDS, LEGACY_CATALOG_ROUTE_WORDS, { lib: PLAN_PRICE_MOVE_WORDS }, PROMO_ADMIN_WORDS, PRICING_ADMIN_WORDS, SESSION_ADMIN_WORDS, BOOKING_ADMIN_WORDS, EVENT_ADMIN_WORDS, ORDER_ADMIN_WORDS]
+const NEW_WORDS: Words[] = [STAFF_ADMIN_WORDS, CATALOG_ADMIN_WORDS, { lib: PLAN_PRICE_MOVE_WORDS }, PROMO_ADMIN_WORDS, PRICING_ADMIN_WORDS, SESSION_ADMIN_WORDS, BOOKING_ADMIN_WORDS, EVENT_ADMIN_WORDS, ORDER_ADMIN_WORDS]
 const moved = new Set(NEW_WORDS.flatMap(sentences))
 const everyOldWord: OldWord[] = OLD_WORDS.admin.words
 
@@ -45,24 +74,39 @@ describe("step G's words (brief W48 item 1)", () => {
   })
 
   it('every sentence the old functions, their modules and the legacy routes can show staff is in a words file, word for word, unless it is plumbing', () => {
-    const missing = everyOldWord.filter((word) => !notMoved(word) && !moved.has(word.text)).map((word) => `${word.file}: ${word.text}`)
+    const missing = everyOldWord.filter((word) => !notMoved(word) && !gone(word) && !moved.has(word.text)).map((word) => `${word.file}: ${word.text}`)
     expect(missing).toEqual([])
   })
 
   it('nothing in the words files was made up: each is a sentence of the old code', () => {
     const old = new Set(everyOldWord.map((word) => word.text))
     expect([...moved].filter((sentence) => !old.has(sentence))).toEqual([])
-    // 144 different sentences moved (the access words and a few route refusals are shared by several functions).
-    expect(moved.size).toBe(144)
+    // 144 different sentences moved (the access words and a few route refusals are shared by several functions), less the
+    // 20 route sentences W68 took out: each of those was an old sentence, and none is in a words file now.
+    expect(moved.size).toBe(124)
+    expect(ROUTE_WORDS_GONE.size).toBe(20)
+    for (const sentence of ROUTE_WORDS_GONE) expect([old.has(sentence), moved.has(sentence)], sentence).toEqual([true, false])
+  })
+
+  it('W68 (H3): the six legacy route sentences still answered are in the catalogue\'s own words, word for word, and the object they were in is gone', () => {
+    expect([
+      CATALOG_ADMIN_WORDS.toggleItemActive.itemNotFound,
+      CATALOG_ADMIN_WORDS.updateCatalogItemPrice.itemNotFound,
+      CATALOG_ADMIN_WORDS.updateTierPrice.tierNotFound,
+      CATALOG_ADMIN_WORDS.createProductVariant.productNotFound,
+      CATALOG_ADMIN_WORDS.createGiftCardPreset.giftCardTypeNotFound,
+      CATALOG_ADMIN_WORDS.updateGiftCardPresetPrice.presetNotFound,
+    ]).toEqual(['Item not found', 'Item not found', 'Tier not found', 'Product not found', 'Gift card type not found', 'Preset not found'])
+    // Each was a sentence one of the old routes answered.
+    const routes = new Set(everyOldWord.filter((word) => word.kind === 'route').map((word) => word.text))
+    for (const sentence of ['Item not found', 'Tier not found', 'Product not found', 'Gift card type not found', 'Preset not found']) expect(routes.has(sentence), sentence).toBe(true)
+    expect(readFileSync(path.join(__dirname, '../catalog/failure-messages.ts'), 'utf8')).not.toContain(['LEGACY', 'CATALOG', 'ROUTE', 'WORDS'].join('_'))
   })
 
   it('the plumbing stays out: an HTML page, the shared key, missing fields, an internal error, the fallbacks, "could not be read back"', () => {
     const plumbing = everyOldWord.filter(notMoved)
     expect(plumbing.length).toBe(38)
-    // One fallback is also a legacy route's own refusal, and is moved as that: the preset route's "Failed to create gift card preset".
-    const routesOwn = new Set(everyOldWord.filter((word) => word.kind === 'route').map((word) => word.text))
-    expect(plumbing.filter((word) => moved.has(word.text) && !routesOwn.has(word.text)).map((word) => word.text)).toEqual([])
-    expect(plumbing.filter((word) => moved.has(word.text)).map((word) => word.text)).toEqual(['Failed to create gift card preset'])
+    expect(plumbing.filter((word) => moved.has(word.text)).map((word) => word.text)).toEqual([])
     for (const sentence of moved) expect(NOT_MOVED.some((pattern) => pattern.test(sentence)), sentence).toBe(false)
   })
 

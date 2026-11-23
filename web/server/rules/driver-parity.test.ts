@@ -114,7 +114,7 @@ describe('values bound to jsonb', () => {
 
   // Each difference from Retool, with what this driver does instead. Retool sends a JS array as a
   // Postgres array literal: `{1,2}` isn't JSON, so it refuses, and `{}` is an empty object. Here an
-  // array stays an array, which parity_log's diff relies on, and nothing in the old code binds one.
+  // array stays an array, and nothing in the old code binds one.
   const ARRAYS: Record<string, unknown> = {
     array_of_numbers: [1, 2],
     array_of_strings: ['a', 'b'],

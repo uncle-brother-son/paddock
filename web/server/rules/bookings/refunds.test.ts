@@ -5,6 +5,7 @@ import { POST as arrivedRoute } from '@/app/api/v1/staff/bookings/[bookingId]/re
 import { GET as figuresRoute } from '@/app/api/v1/staff/bookings/[bookingId]/refund-figures/route'
 import { POST as closeRoute } from '@/app/api/v1/staff/orders/stuck/close/route'
 import type { Db } from '@/server/db'
+import { ORDER_KINDS } from '@/server/rules/orders/order-switch'
 import { MANUAL_LIMITS, reconcile } from '@/server/rules/orders/reconcile'
 import { CLAIM_WAITING_WORDS, stuckList, WATCH_WORDS } from '@/server/rules/orders/stuck-list'
 import { readFlow } from '@/server/rules/orders/reader-flow'
@@ -518,8 +519,11 @@ describe('Part refund (W21)', () => {
       await db.query("INSERT INTO staff (first_name, last_name, email, role, can_issue_refunds, active) VALUES ('No', 'Refunds', 'nore@example.com', 'staff', false, true)")
       const forbidden = await refund('part', bookingId, { amount: 5, refundMethod: 'credit', reason: 'x' }, { email: 'nore@example.com' })
       expect(forbidden.body.error).toMatchObject({ code: 'FORBIDDEN', message: 'Needs Issue refunds permission — this action moves money back to the customer.' })
-      const off = await refund('part', bookingId, { amount: 5, refundMethod: 'card', reason: 'x' }, { orderSwitch: 'no_stripe,saved_card' })
-      expect(off.body.error).toMatchObject({ code: 'BOOKING_PATH_OFF', message: BOOKING_PATH_OFF_MESSAGE })
+      // W68a: each way the money can go back.
+      for (const refundMethod of ['card', 'credit', 'cash']) {
+        const off = await refund('part', bookingId, { amount: 5, refundMethod, reason: 'x' }, { orderSwitch: 'no_stripe,saved_card' })
+        expect(off.body.error, refundMethod).toMatchObject({ code: 'BOOKING_PATH_OFF', message: BOOKING_PATH_OFF_MESSAGE })
+      }
       expect(await booking(bookingId)).toMatchObject({ price_paid: '40.00' })
     })
   })
@@ -569,6 +573,30 @@ describe('Refund the rest and It already arrived (W21)', () => {
       expect(nothing.body.error?.details).toMatchObject({ reason: 'nothing_owed', message: REFUND_WORDS.nothingOwed })
       // Given: off the list.
       expect((await moneyOwedList(db)).owed).toEqual([])
+    })
+  })
+
+  it('W68a (W68 review S2): the switch gates Refund the rest: with `booking_changes` off and every other kind on, 501 BOOKING_PATH_OFF in the switched-off words, to the card or to store credit; nothing sent to Stripe, nothing given and still owed', async () => {
+    await onABooking(async ({ bookingId, stripe }) => {
+      await withTwentyOwed(stripe, bookingId)
+      const sent = stripe.calls.length
+      const others = ORDER_KINDS.filter((kind) => kind !== 'booking_changes').join(',')
+      for (const refundMethod of ['card', 'credit']) {
+        const off = await refund('owed', bookingId, { amount: 20, refundMethod }, { orderSwitch: others })
+        expect([off.status, off.body.error?.code, off.body.error?.message, off.body.error?.details], refundMethod).toEqual([
+          501,
+          'BOOKING_PATH_OFF',
+          BOOKING_PATH_OFF_MESSAGE,
+          { reason: 'booking_path_off', message: BOOKING_PATH_OFF_MESSAGE, kinds: ['booking_changes'] },
+        ])
+      }
+      expect(stripe.calls.slice(sent)).toEqual([])
+      expect(await booking(bookingId)).toMatchObject({ price_paid: '40.00', refund_owed_amount: '20.00' })
+      expect(await storeCredit()).toEqual([])
+      expect(await auditRows('booking.refund_owed')).toEqual([])
+      expect((await moneyOwedList(db)).owed).toHaveLength(1)
+      // On again: given.
+      expect((await refund('owed', bookingId, { amount: 20, refundMethod: 'card' })).body.data).toMatchObject({ cardRefundedAmount: 20 })
     })
   })
 

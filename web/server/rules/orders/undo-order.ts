@@ -5,7 +5,6 @@
 import 'server-only'
 import { audit } from '@/server/audit'
 import { inOpenTransaction, isDeadlock, type Db, type Tx } from '@/server/db'
-import { oldRollbackStarted } from './finalise-order'
 import { lockForOrder } from './locks'
 import type { PendingSnapshot } from './pending-order'
 
@@ -16,10 +15,8 @@ export type UndoOutcome =
   | { undone: false; reason: 'gone' }
   /**
    * Refused, nothing changed: a paid order is a real sale, and anything else isn't this undo's to touch.
-   * `rollback_started` (W11): the old code's rollback has started on it and may have given things back
-   * already, so giving back again here would give twice; the old code finishes it.
    */
-  | { undone: false; reason: 'paid' | 'not_pending' | 'rollback_started' }
+  | { undone: false; reason: 'paid' | 'not_pending' }
   /**
    * W12 (W10 review L1): refused, nothing changed. Old code has changed what the order holds since T1
    * wrote it (the booking cancelled, moved, or its party size changed; the event booking no longer
@@ -248,7 +245,6 @@ export async function undoInTransaction(tx: Tx, orderId: string, options: UndoOp
   if (!order) return { undone: false, reason: 'gone' }
   if (order.payment_status === 'paid') return { undone: false, reason: 'paid' }
   if (order.payment_status !== 'pending') return { undone: false, reason: 'not_pending' }
-  if (oldRollbackStarted(order.reader_payment)) return { undone: false, reason: 'rollback_started' }
   // W13: a compensation has started on it: only that compensation, finished, may undo it.
   if (order.reader_payment && 'compensation' in order.reader_payment && !options.compensated) return { undone: false, reason: 'compensating' }
   // W19 (W17 review S2, LOCK_ORDER): the order's booking straight after the order, before the customer and the rest,

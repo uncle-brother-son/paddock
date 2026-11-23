@@ -1,7 +1,6 @@
 // New in W42 (F-plan 4.7; Q19; Wayne's Q45; W11 F4 / FB17; lead call L11): a customer's card saved or replaced, and
 // each of their live memberships' renewals moved to it. Behind its own switch kind, `card_moves`
-// (memberships/membership-switch.ts): off, the route saves the card as before W42 (payments/terminal.ts,
-// `saveCustomerCard`, untouched) and nothing here runs.
+// (memberships/membership-switch.ts): off, the route refuses the save and nothing here runs (W68, H5).
 //
 //   read which reusable card the tap left (as before: stripe/saved-card.ts), refusing one that can't be charged later
 //   K1 (one transaction, under the customer's lock, then each of their memberships' locks in id order)
@@ -128,8 +127,8 @@ async function saveAndLeave(tx: Tx, customerId: string, card: ResolvedCard, sour
 }
 
 /**
- * saveCustomerCardOnFile with `card_moves` on. The checks of what was sent, the reading of the tap and the refusal of
- * a card that can't be charged later are `saveCustomerCard`'s, word for word.
+ * saveCustomerCardOnFile. The checks of what was sent, the reading of the tap and the refusal of a card that can't be
+ * charged later are the old function's, word for word (`saveCustomerCard`, W11's port, until W68).
  */
 export async function replaceCustomerCard(db: Db, stripe: StripeClient, input: SaveCustomerCardInput, options: ReplaceCardOptions): Promise<SavedCardRouteOutput> {
   const { customerId, paymentIntentId, setupIntentId } = input

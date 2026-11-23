@@ -209,6 +209,11 @@ export const STAMP_THE_SCREEN_LOADED: Readonly<Record<string, (db: Db, params: R
     const rows = (await throughStaffApp('getEvents')(db, {})) as Array<{ id?: unknown; stamp?: unknown }>
     return rows.find((row) => row.id === params['eventId'])?.stamp
   },
+  // W68 (Q58). CreateOneOffSessionDialog: the stamp of the band and price it shows for the type and time chosen.
+  async createOneOffSession(db, params) {
+    const shown = (await throughStaffApp('getOneOffSessionQuote')(db, { serviceTypeId: params['serviceTypeId'], startTime: params['startTime'] })) as { ok: boolean; quote?: { stamp?: unknown } }
+    return shown.ok ? shown.quote?.stamp : undefined
+  },
   // W55. Catalog → Products: the variant row's stamp from the products list.
   async setProductVariantDetails(db, params) {
     const products = (await throughStaffApp('getProducts')(db, {})) as Array<{ variants?: Array<{ id?: unknown; stamp?: unknown }> }>

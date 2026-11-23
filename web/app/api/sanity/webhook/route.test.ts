@@ -102,7 +102,7 @@ const PUBLISHED_AGAIN = TYPES.flatMap((info): Array<{ path: string; info: TypeIn
 
 /** What staff set on each type before a republish: every price the type has, and what else the catalogue pages edit. */
 const STAFF_SET: Readonly<Record<TypeInfo['type'], string>> = {
-  serviceType: "price = 22.50, duration = 75, capacity = 9, booking_type = 'public', stripe_price_id = 'price_old_' || id",
+  serviceType: "duration = 75, capacity = 9, booking_type = 'public', stripe_price_id = 'price_old_' || id",
   product: "base_price = 12.00, member_price = 10.00, sale_price = 11.00, fulfillment_method = 'pickup', stripe_price_id_base = 'price_base_' || id, stripe_price_id_member = 'price_member_' || id, stripe_price_id_sale = 'price_sale_' || id",
   addon: "sku = 'W66A-' || id, base_price = 4.00, member_price = 3.00, sale_price = 3.50, stripe_price_id_base = 'price_base_' || id, stripe_price_id_member = 'price_member_' || id, stripe_price_id_sale = 'price_sale_' || id",
   membershipPlan: "sessions_included = 4, addons_included = 2, price_monthly = 40.00, price_yearly = 400.00, level = 'core', is_unlimited = false, stripe_price_id = 'price_month_' || id, stripe_price_id_yearly = 'price_year_' || id",
@@ -189,8 +189,9 @@ describe("Sanity's webhook on the Worker's connection (W66)", () => {
       expect(new Date(changedAt as string).getTime()).toBeGreaterThanOrEqual(new Date(wasAt as string).getTime())
       expect(rest).toEqual({ ...was, name: 'After', thumbnail_url: 'https://cdn.sanity.io/images/w66test/production/abc123-800x600.jpg?w=80', ...sanitysOwn })
       expect(rest['active']).toBe(active)
-      // The staff settings were really there to lose: no price on the row is empty.
-      for (const [name, value] of Object.entries(was)) if (/price|amount_m/.test(name)) expect(value, name).not.toBeNull()
+      // The staff settings were really there to lose: no price on the row is empty. W68 (H10): a service type has no price of
+      // its own (migration 034 drops the column).
+      for (const [name, value] of Object.entries(was)) if (/price|amount_m/.test(name) && !(info.table === 'service_types' && name === 'price')) expect(value, name).not.toBeNull()
     }
   })
 

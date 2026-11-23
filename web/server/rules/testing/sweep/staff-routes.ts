@@ -48,6 +48,8 @@ const STAFF_ROUTES: Record<string, () => Promise<unknown>> = {
   // W51: the staff app's thin getSessionsForRange and createOneOffSession (one path, GET and POST), and getServiceTypesForSlot.
   '/api/v1/staff/sessions': () => import('@/app/api/v1/staff/sessions/route'),
   '/api/v1/staff/sessions/for-slot': () => import('@/app/api/v1/staff/sessions/for-slot/route'),
+  // W68: the staff app's thin getOneOffSessionQuote, which the one-off session dialog reads before its press.
+  '/api/v1/staff/sessions/one-off/quote': () => import('@/app/api/v1/staff/sessions/one-off/quote/route'),
   // W52: the staff app's thin getEvents and getTodaysEvents, and the check-in press (setEventAttendeeCheckIn checking in, and setEventAttendeesCheckIn).
   '/api/v1/staff/catalog/events': () => import('@/app/api/v1/staff/catalog/events/route'),
   '/api/v1/staff/events/today': () => import('@/app/api/v1/staff/events/today/route'),
@@ -85,7 +87,6 @@ const CATALOG_PATTERNS = [
   catalogRoute('addons', 'addonId', 'price', () => import('@/app/api/v1/staff/catalog/addons/[addonId]/price/route')),
   catalogRoute('addons', 'addonId', 'sku', () => import('@/app/api/v1/staff/catalog/addons/[addonId]/sku/route')),
   catalogRoute('service-types', 'serviceTypeId', 'active', () => import('@/app/api/v1/staff/catalog/service-types/[serviceTypeId]/active/route')),
-  catalogRoute('service-types', 'serviceTypeId', 'price', () => import('@/app/api/v1/staff/catalog/service-types/[serviceTypeId]/price/route')),
   catalogRoute('service-types', 'serviceTypeId', 'details', () => import('@/app/api/v1/staff/catalog/service-types/[serviceTypeId]/details/route')),
   catalogRoute('service-types', 'serviceTypeId', 'tiers', () => import('@/app/api/v1/staff/catalog/service-types/[serviceTypeId]/tiers/route')),
   catalogRoute('tiers', 'tierId', 'price', () => import('@/app/api/v1/staff/catalog/tiers/[tierId]/price/route')),

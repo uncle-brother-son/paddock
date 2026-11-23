@@ -6,7 +6,7 @@ import { ORDER_KINDS } from '@/server/rules/orders/order-switch'
 import { BOOKING_KINDS_ON, withSwitch } from '@/server/rules/testing/sweep/booking-presses'
 import { replay, REPLAY_USER, startReplay, type ReplayEnvironment, type ScenarioContext } from '@/server/rules/testing/sweep/run'
 import { workerSide } from '@/server/rules/testing/sweep/worker'
-import { bea, ID, memberCredit, mo, paidSeat, runLapseSweep, seed } from '@/server/rules/testing/replay/scenarios'
+import { bea, ID, memberCredit, mo, paidSeat, seed } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { ApiError } from '@/server/http/errors'
 import { BOOKING_LAPSED, LAPSE_LEFT_WORDS, lapseBooking, lapsePlanOf } from './cancel'
@@ -91,6 +91,9 @@ const creditSeatAndCreditTowel = { booking: { ...paidSeat([mo]), ...memberCredit
 
 /** Flagged payment needed, its deadline a minute ago (as the lead's preview: the deadline backdated). */
 const paymentNeeded = (bookingId: string) => db.query("UPDATE bookings SET status = 'payment_needed', payment_due_by = now() - interval '1 minute' WHERE id = $1", [bookingId])
+
+/** The database's hourly job, run as the job runs it (the table owner, not the Worker's role). */
+const hourlyJob = () => environment.database.pg.exec('RESET ROLE; SELECT public.run_membership_maintenance(); SET ROLE paddock_worker;')
 
 const sweep = (orderSwitch: string | null = ON, maxItems?: number): Promise<LapseSweepResult> =>
   lapseSweep(db, { requestId: 'lapse-sweep-test', orderSwitch, ...(maxItems !== undefined ? { maxItems } : {}) })
@@ -231,11 +234,7 @@ describe('the lapse sweep: money on the booking (Q48; bug FB18)', () => {
       expect(await bookingRow(bookingId)).toMatchObject({ status: 'payment_needed', price_paid: '20.00', party_size: 2 })
       expect(await totalBooked()).toBe(2)
       const calls = stripe.calls.length
-      // The database's own sweep never lapses it (FB18): run first, it leaves the booking exactly as it is.
-      const before = await snapshot(bookingId)
-      await runLapseSweep(db)
-      expect(await snapshot(bookingId)).toEqual(before)
-
+      // FB18 was the database's own sweep, which never lapsed it (dropped by migration 034).
       expect(await sweep()).toEqual({
         ...NOTHING,
         lapsed: 1,
@@ -670,7 +669,7 @@ describe('the lapse sweep: money on the booking (Q48; bug FB18)', () => {
 })
 
 describe('the lapse sweep: add-ons (bug FB19)', () => {
-  it('FB19 proved first: a payment-needed booking with `price_paid = 0` can hold a paid add-on (a credit seat, a £5 towel paid in cash, then flagged by the database\'s own flag_uncovered_credit_bookings), and the database\'s sweep cancels it, keeps the £5 and records nothing', async () => {
+  it('FB19 proved first: a payment-needed booking with `price_paid = 0` can hold a paid add-on (a credit seat, a £5 towel paid in cash, then flagged by the database\'s own flag_uncovered_credit_bookings). The database\'s sweep (dropped by migration 034) cancelled it, kept the £5 and recorded nothing; the Worker\'s records it', async () => {
     await withBooking(creditSeatAndPaidTowel, async ({ bookingId }) => {
       // The membership no longer covers the session's day: the database flags the booking itself, as the webhook does.
       await environment.database.pg.exec(`RESET ROLE; SELECT public.flag_uncovered_credit_bookings('${ID.membership}'::uuid, '2026-11-10'::date); SET ROLE paddock_worker;`)
@@ -680,11 +679,11 @@ describe('the lapse sweep: add-ons (bug FB19)', () => {
       expect(paid).toEqual([{ price: '5.00', source: 'paid' }])
       // Its deadline is the session's start (under 72 hours away), so it passes as the session starts.
       vi.setSystemTime(SESSION_START + 1000)
-      await runLapseSweep(db)
+      expect(await sweep()).toMatchObject({ lapsed: 1, storeCreditRefunded: 0, items: [{ back: false, kept: 'session_started' }] })
       expect(await bookingRow(bookingId)).toMatchObject({ status: 'cancelled', cancel_reason: 'membership_lapsed' })
-      expect(await addonLines(bookingId)).toEqual([{ removed: false, removed_by: null, refunded_amount: '0.00', card_refunded_amount: '0.00', refund_method: null }])
+      expect(await addonLines(bookingId)).toEqual([{ removed: true, removed_by: null, refunded_amount: '0.00', card_refunded_amount: '0.00', refund_method: 'none' }])
       expect(await balance()).toBe(0)
-      expect(await lapseRows(bookingId)).toEqual([])
+      expect(rowOf(await lapseRows(bookingId), BOOKING_LAPSED)).toMatchObject({ back: false, kept: 'session_started', pricePaid: 0, addonsKept: 5 })
     })
   })
 
@@ -909,7 +908,7 @@ describe('the switch kind `lapse_sweep` (brief W43 item 1)', () => {
     for (const off of [null, undefined, '', BOOKING_KINDS_ON, 'lapse', 'lapse_sweeps', 'membership_changes,payment_date_changes,card_moves']) expect(lapseSweepOn(off)).toBe(false)
   })
 
-  it("off (every other kind on, and the environment naming it): the sweep reads nothing and cancels nothing, and the database's own sweep is still the one that lapses the booking", async () => {
+  it("off (every other kind on, and the environment naming it): lapsing pauses (W68, H5): the sweep reads nothing and cancels nothing, the hourly job leaves the booking too, and the first run with the kind on again lapses it", async () => {
     await withBooking(creditSeat, async ({ bookingId }) => {
       await paymentNeeded(bookingId)
       const before = await snapshot(bookingId)
@@ -928,9 +927,12 @@ describe('the switch kind `lapse_sweep` (brief W43 item 1)', () => {
       })
       expect(statements).toEqual([])
       expect(await snapshot(bookingId)).toEqual(before)
-      await runLapseSweep(db)
+      // The database's hourly job has no sweep in it (028), so nothing else lapses the booking while the kind is off.
+      await hourlyJob()
+      expect(await snapshot(bookingId)).toEqual(before)
+      expect(await sweep()).toMatchObject({ ran: true, lapsed: 1 })
       expect(await bookingRow(bookingId)).toMatchObject({ status: 'cancelled', cancel_reason: 'membership_lapsed' })
-      expect(await lapseRows(bookingId)).toEqual([])
+      expect((await lapseRows(bookingId)).map((row) => row.action)).toEqual(['booking.cancel_credit', BOOKING_LAPSED])
     })
   })
 

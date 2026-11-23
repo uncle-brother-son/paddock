@@ -33,17 +33,8 @@ import { PAID_AFTER_END, PAID_AFTER_END_CLOSE_KIND, PAID_AFTER_END_OWED_KIND, PA
  * its own, saying what staff should do; W12 review L5). A reason with none falls back to `unexpected`.
  */
 const TELL_A_MANAGER = "Nothing was changed: don't take payment again, and tell a manager."
-/**
- * W14c (W14b review L2): the old rollback on a Worker order. Since W14b nothing finishes it (the old sweep skips Worker
- * orders and the Worker's undo refuses it), so the words no longer send staff to Resolve now. The close says the same.
- */
-export const OLD_ROLLBACK_WORDS =
-  "The old screens had started cancelling this order and couldn't finish. Nothing more will be changed automatically: don't take payment again, and tell a manager."
 export const STUCK_WORDS: Readonly<Record<string, string>> = {
   waiting: 'Waiting for the automatic check, which runs every 5 minutes and settles it if it can. Nothing to do yet.',
-  // W25: a pending order or flow with no mark of the Worker's. None can be made any more (the old screens' code is
-  // gone) and nothing settles one, so it is listed for a person.
-  not_started_here: `The booking system has no record of starting this payment, so the automatic check can't settle it. ${TELL_A_MANAGER}`,
   unclear: "Stripe didn't give a clear answer about this payment. The automatic check tries again every 5 minutes: don't take payment again.",
   other_mode: `Stripe can't find this payment with the payment account the system is using now (it may be in the other Stripe mode, live or test). ${TELL_A_MANAGER}`,
   amount_mismatch: `The amount Stripe took isn't the amount expected. ${TELL_A_MANAGER}`,
@@ -57,7 +48,6 @@ export const STUCK_WORDS: Readonly<Record<string, string>> = {
   // W25 (W24 noticed): a held move's undo meeting the customer's other booking (reader-flow.ts, FlowUndoBlocked).
   undo_blocked:
     "This move couldn't be undone: the customer now has another booking that clashes with putting this one back (on the same day, or at the same time). Nothing was taken for the move. Move or cancel the other booking, then press Resolve now; or tell a manager.",
-  old_rollback: OLD_ROLLBACK_WORDS,
   charged_without_order: 'A payment went through for an order that had already been cancelled. It is being refunded automatically: nothing to do.',
   charged_without_record: 'A payment went through for a change that had already been undone. It is being refunded automatically: nothing to do.',
   payment_not_succeeded: "The payment hasn't gone through. The automatic check tries again every 5 minutes: don't take payment again.",
@@ -73,15 +63,16 @@ export const STUCK_WORDS: Readonly<Record<string, string>> = {
   // W13a.
   subscription_starting:
     "A finalise of this order was setting up its membership in Stripe when the automatic check looked, so it was left alone. The check looks again in 5 minutes: don't take payment again.",
-  // W14b (W12 review L5): the reasons that used to fall back to "something unexpected".
-  unexpected_state: `This isn't in a state the automatic check expected (it may have been changed on the old screens). ${TELL_A_MANAGER}`,
+  // W14b (W12 review L5): the reasons that used to fall back to "something unexpected". W68 (H3): `unexpected_state` is
+  // also what a pending order, flow or payment date change with no mark of the Worker's is listed as (none is left, and
+  // none can be made): nothing settles one, so it is never left off the list.
+  unexpected_state: `This isn't in a state the automatic check expected (something else may have changed it). ${TELL_A_MANAGER}`,
   paid_by_another_payment: `This order was already paid with a different payment, and Stripe has another payment for it too. ${TELL_A_MANAGER}`,
   not_pending: 'This order is no longer waiting for payment: it was settled or changed elsewhere, so the automatic check leaves it alone. Nothing to do.',
   order_not_found: 'This order no longer exists (it was cancelled or removed in the meantime). Nothing to do.',
   not_a_reader_order: `This order isn't a card-reader order, so the automatic check couldn't settle its payment. ${TELL_A_MANAGER}`,
   intent_unconfirmed: "Its card-reader payment was never confirmed as set up. The automatic check looks for it in Stripe every 5 minutes: don't take payment again.",
   not_a_reader_flow: `This isn't a card reader payment the booking system can finish or cancel. ${TELL_A_MANAGER}`,
-  rollback_started: OLD_ROLLBACK_WORDS,
   compensating:
     "This membership order is being reversed (its subscription cancelled, its payments refunded). The automatic check finishes it every 5 minutes: don't take payment again.",
   membership_not_started: "The membership's subscription couldn't be found in Stripe. The automatic check tries again every 5 minutes: don't take payment again. If this stays, tell a manager.",
@@ -249,7 +240,7 @@ export interface StuckOrder {
   paymentIntentId: string | null
   createdAt: string
   ageMinutes: number
-  /** 'reader' or 'card' for an order the Worker made; null for a pending order with no mark of the Worker's (`not_started_here`). */
+  /** 'reader' or 'card' for an order the Worker made; null for a pending order with no mark of the Worker's (`unexpected_state`). */
   method: 'reader' | 'card' | null
   reason: string
   words: string
@@ -668,9 +659,12 @@ interface Last {
   reason?: string
 }
 
-/** Why an item is listed: what reconcile last found, or that it hasn't looked yet, or that the Worker never started it. */
+/**
+ * Why an item is listed: what reconcile last found, or that it hasn't looked yet. W68 (H3): one with no mark of the
+ * Worker's (none is left) is `unexpected_state`: nothing settles it, so it is listed for a person.
+ */
 function reasonFor(madeByWorker: boolean, last: Last | null): string {
-  if (!madeByWorker) return 'not_started_here'
+  if (!madeByWorker) return 'unexpected_state'
   if (last?.outcome === 'left' && last.reason) return last.reason
   return 'waiting'
 }

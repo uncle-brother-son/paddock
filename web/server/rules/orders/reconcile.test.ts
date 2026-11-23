@@ -8,7 +8,7 @@ import { postFlowStep } from '@/server/rules/testing/sweep/flow-presses'
 import { asTheOldCheckoutStartedIt, asTheOldCodeStartedIt, theOldScreensCancelledItToStoreCredit } from '@/server/rules/testing/sweep/old-states'
 import { replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/sweep/run'
 import { workerSide } from '@/server/rules/testing/sweep/worker'
-import { orderInput, postOrder, postReaderStep, withQuotedCardFigure, type OrderAnswer } from '@/server/rules/testing/sweep/order-presses'
+import { orderInput, postOrder, postReaderStep, withCardMoves, withQuotedCardFigure, type OrderAnswer } from '@/server/rules/testing/sweep/order-presses'
 import { ID, lapsedSeat, paidSeat, sam, seed, whileFailing } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { finaliseOrder } from './finalise-order'
@@ -824,9 +824,10 @@ describe('reader flows the Worker started (step D) and the old code started', ()
       expect(Object.keys(result).sort()).toEqual(['checked', 'deferred', 'finalised', 'items', 'left', 'paymentsWatched', 'refunds', 'refundsWaiting', 'stripeRefused', 'undone'])
       expect(stripe.calls.length).toBe(calls)
       expect(await flowStatus(flow.pendingId)).toBe('pending')
-      expect((await stuckList(db)).flows).toEqual([expect.objectContaining({ pendingId: flow.pendingId, reason: 'not_started_here', words: STUCK_WORDS['not_started_here'] })])
-      expect(STUCK_WORDS['not_started_here']).toMatch(/tell a manager/)
-      expect(STUCK_WORDS['not_started_here']).not.toMatch(/Resolve now|old screens/)
+      expect((await stuckList(db)).flows).toEqual([expect.objectContaining({ pendingId: flow.pendingId, reason: 'unexpected_state', words: STUCK_WORDS['unexpected_state'] })])
+      // W68 (H3): the reason it was listed with before (`not_started_here`) went; the line itself stays.
+      expect(STUCK_WORDS['unexpected_state']).toMatch(/tell a manager/)
+      expect(STUCK_WORDS['unexpected_state']).not.toMatch(/Resolve now/)
     })
   })
 
@@ -837,7 +838,7 @@ describe('reader flows the Worker started (step D) and the old code started', ()
       await asTheOldCheckoutStartedIt(db, placed.orderId)
       later(16)
       expect(await run(stripe)).toMatchObject({ checked: 0 })
-      expect((await stuckList(db)).checkout).toEqual([expect.objectContaining({ method: null, reason: 'not_started_here', words: STUCK_WORDS['not_started_here'] })])
+      expect((await stuckList(db)).checkout).toEqual([expect.objectContaining({ method: null, reason: 'unexpected_state', words: STUCK_WORDS['unexpected_state'] })])
     })
   })
 })
@@ -1309,14 +1310,16 @@ describe('W12a L4: a held reader order found paid by listing goes through the re
   const savedCard = async () => (await db.query<{ pm: string | null }>('SELECT saved_payment_method_id AS pm FROM customers WHERE id = $1', [ID.customer]))[0]?.pm
 
   it('the customer agreed to save the card: finalised with the card saved, as the screen would have', async () => {
-    await onASeed(async ({ stripe }) => {
+    await withCardMoves(() => onASeed(async ({ stripe }) => {
       const { orderId, paymentIntentId } = await tappedUnwritten(stripe, { generatedCard: 'pm_generated_l4' })
+      // The press that died is still inside postOrder, with its own switch: the run below has the live one.
+      process.env.ORDER_SWITCH = 'card_moves'
       expect((await run(stripe)).items).toEqual([{ kind: 'order', id: orderId, outcome: 'finalised', detail: paymentIntentId }])
       expect(await orders()).toEqual([{ id: orderId, payment_status: 'paid', stripe_payment_intent_id: paymentIntentId }])
       expect(await savedCard()).toBe('pm_generated_l4')
       expect(await db.query("SELECT details->>'paymentMethodId' AS pm FROM audit_log WHERE action = 'customer.card_saved'")).toEqual([{ pm: 'pm_generated_l4' }])
       await invariant(stripe)
-    })
+    }))
   })
 
   it("no reusable card (the simulated reader): finalised with R6's warning, which reaches the stuck list", async () => {
@@ -1332,7 +1335,7 @@ describe('W12a L4: a held reader order found paid by listing goes through the re
 
 describe('W12a L6: the refused-key watch covers every Stripe call reconcile makes (W12 review L6)', () => {
   it("a 401 on resolveSavedCard's card read (which it swallows) stops the run like any other: one alert row, the next item not tried", async () => {
-    await onASeed(async ({ stripe }) => {
+    await withCardMoves(() => onASeed(async ({ stripe }) => {
       const answer = await place(basket('reader', { readerSaveCard: true }))
       if (!answer.body.ok || !answer.body.data.pendingReaderPayment) throw new Error('not placed')
       const { orderId, paymentIntentId } = answer.body.data.pendingReaderPayment
@@ -1363,6 +1366,6 @@ describe('W12a L6: the refused-key watch covers every Stripe call reconcile make
       const mo = (await db.query<{ payment_status: string }>('SELECT payment_status FROM orders WHERE customer_id = $1', [ID.member]))[0]
       expect(mo).toEqual({ payment_status: 'pending' })
       expect(stripe.calls.filter((call) => call.method === 'paymentIntents.list')).toEqual([])
-    }, addThirdCustomer)
+    }, addThirdCustomer))
   })
 })

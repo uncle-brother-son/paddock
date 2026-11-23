@@ -26,7 +26,6 @@ import {
   REPLACED_UNCONFIRMED_MESSAGE,
   readerRefundedMessage,
   subscriptionWrongMessage,
-  OLD_ROLLBACK_STARTED_MESSAGE,
   READER_CHARGED_WITHOUT_ORDER_MESSAGE,
   READER_INTENT_UNCONFIRMED_MESSAGE,
   READER_PAID_NOT_FINISHED_MESSAGE,
@@ -34,7 +33,7 @@ import {
   SUBSCRIPTION_STARTING_MESSAGE,
 } from './failure-messages'
 import { sendCardSteps } from '@/server/rules/customers/card-steps'
-import { finaliseOrder, MEMBERSHIP_DEFINITE, membershipPrecheck, oldRollbackStarted, paymentMismatch, type FinaliseMismatch } from './finalise-order'
+import { finaliseOrder, MEMBERSHIP_DEFINITE, membershipPrecheck, paymentMismatch, type FinaliseMismatch } from './finalise-order'
 import {
   balanceToPutBack,
   cancelSubscriptionChecked,
@@ -84,7 +83,6 @@ export const ORDER_NOT_FOUND_MESSAGE = 'That order no longer exists.'
 export const NOT_A_READER_ORDER_MESSAGE = 'This order is not a pending card-reader order.'
 export const ALREADY_FINALISED_MESSAGE = 'This order was already finalised — nothing further was done.'
 export const PAID_BY_ANOTHER_MESSAGE = 'This order is already paid by a different payment.'
-export const FINALISE_ROLLBACK_STARTED_MESSAGE = "This order is already being rolled back, so it can't be finalised."
 export const LOOK_UP_FAILED_MESSAGE = 'Failed to look up the PaymentIntent in Stripe.'
 export const CARD_NOT_SAVED_WARNING = "The card couldn't be saved for future charges."
 export const ALREADY_GONE_MESSAGE = 'The order was already rolled back — nothing to do.'
@@ -124,8 +122,6 @@ function mismatchAnswer(reason: FinaliseMismatch, orderId: string, paymentIntent
       }
     case 'customer_mismatch':
       return { finalised: false, orderId, reason, message: readerCustomerMismatchMessage(paymentIntent.id) }
-    case 'rollback_started':
-      return { finalised: false, orderId, reason, message: FINALISE_ROLLBACK_STARTED_MESSAGE }
     case 'order_gone':
       return { finalised: false, orderId, reason: 'charged_without_order', message: READER_CHARGED_WITHOUT_ORDER_MESSAGE }
     case 'paid_by_another_payment':
@@ -184,6 +180,36 @@ export const isMissing = (err: unknown): boolean => {
 
 // --- Finalise
 
+/**
+ * W68a (W68 review L9): whether the order T2 paid didn't save the card the customer agreed to save, as the press that paid
+ * it warned (card-saving switched off, no reusable card left, or the card couldn't be read). Not one left unsaved for a newer
+ * card on file: that press didn't warn (W42b).
+ */
+const CARD_LEFT_UNSAVED_SQL = `
+SELECT 1 AS unsaved FROM audit_log p
+ WHERE p.action = 'order.paid' AND p.entity_type = 'order' AND p.entity_id = $1::text AND p.details->>'cardSaved' = 'false'
+   AND NOT EXISTS (SELECT 1 FROM audit_log n JOIN orders o ON o.customer_id::text = n.entity_id
+                    WHERE o.id::text = p.entity_id AND n.action = 'customer.card_not_saved' AND n.entity_type = 'customer'
+                      AND n.details->>'orderId' = p.entity_id AND n.details->>'reason' = 'newer_card_on_file')
+ LIMIT 1`
+
+/**
+ * The answer to a finalise of an order this tap has already paid (a press again after a lost answer, or two at once). W68a
+ * (W68 review L9): it still says the card wasn't saved, looked up from the rows T2 wrote, as the lost answer did. A look-up
+ * that fails leaves the warning out: the order is paid, and that is what the press must hear.
+ */
+async function alreadyFinalisedAnswer(db: Db, orderId: string, paymentIntentId: string, snapshot: ReaderSnapshot): Promise<FinaliseReaderOrderOutput> {
+  let unsaved = false
+  if (snapshot.save_card) {
+    try {
+      unsaved = (await db.query(CARD_LEFT_UNSAVED_SQL, [orderId])).length > 0
+    } catch {
+      // Answered without it.
+    }
+  }
+  return { finalised: true, orderId, paymentIntentId, alreadyFinalised: true, message: ALREADY_FINALISED_MESSAGE, ...(unsaved ? { warning: CARD_NOT_SAVED_WARNING } : {}) }
+}
+
 async function finaliseFound(
   db: Db,
   stripe: StripeClient,
@@ -200,12 +226,11 @@ async function finaliseFound(
   const { order, snapshot } = found
   if (order.payment_status === 'paid') {
     if (order.stripe_payment_intent_id === snapshot.payment_intent_id) {
-      return { finalised: true, orderId, paymentIntentId: snapshot.payment_intent_id, alreadyFinalised: true, message: ALREADY_FINALISED_MESSAGE }
+      return alreadyFinalisedAnswer(db, orderId, snapshot.payment_intent_id, snapshot)
     }
     return { finalised: false, orderId, reason: 'unexpected_state', message: PAID_BY_ANOTHER_MESSAGE }
   }
   if (order.payment_status !== 'pending') return { finalised: false, orderId, reason: 'unexpected_state', message: notFinalisedMessage(order.payment_status) }
-  if (oldRollbackStarted(snapshot)) return { finalised: false, orderId, reason: 'rollback_started', message: FINALISE_ROLLBACK_STARTED_MESSAGE }
   // W13: its money is being put back: only the compensation (or reconcile) finishes it.
   if (snapshot.compensation) return { finalised: false, orderId, reason: 'compensation_unfinished', message: COMPENSATION_HELD_MESSAGE }
 
@@ -249,7 +274,9 @@ async function finaliseFound(
   if (!outcome.finalised) return mismatchAnswer(outcome.reason, orderId, paymentIntent, snapshot)
   // W42a: the card this order saved is the customer's card now: their memberships' steps, left by T2, are sent.
   if (outcome.cardSteps) await sendCardSteps(db, stripe, outcome.cardSteps, { actor: options.actor, requestId: options.requestId, timing })
-  if (outcome.alreadyPaid) return { finalised: true, orderId, paymentIntentId: paymentIntent.id, alreadyFinalised: true, message: ALREADY_FINALISED_MESSAGE }
+  if (outcome.alreadyPaid) return alreadyFinalisedAnswer(db, orderId, paymentIntent.id, snapshot)
+  // W68 (H5): `card_moves` is off, so T2 saved no card.
+  if (outcome.cardSaveOff) warnings.push(CARD_NOT_SAVED_WARNING)
   return { finalised: true, orderId, paymentIntentId: paymentIntent.id, ...(warnings.length > 0 ? { warning: warnings.join(' ') } : {}) }
 }
 
@@ -348,7 +375,7 @@ async function finaliseMembership(
       try {
         const now = (await db.query<{ payment_status: string; stripe_payment_intent_id: string | null }>('SELECT payment_status, stripe_payment_intent_id FROM orders WHERE id = $1::uuid', [orderId]))[0]
         if (now?.payment_status === 'paid' && now.stripe_payment_intent_id === paymentIntent.id) {
-          return { finalised: true, orderId, paymentIntentId: paymentIntent.id, alreadyFinalised: true, message: ALREADY_FINALISED_MESSAGE }
+          return await alreadyFinalisedAnswer(db, orderId, paymentIntent.id, snapshot)
         }
       } catch {
         // Held, below: nothing was sent.
@@ -426,9 +453,8 @@ async function finaliseMembership(
     }
     // W13a (B1c): this press made a subscription for an order that is gone or being put back. W13c: T2 has recorded
     // it as left; the put-back sends and writes only while there is time to send (else nothing after T2). W13d (W13c
-    // review S-1): likewise when the old rollback started after this press's start, or the order was paid with
-    // another payment or is otherwise not pending: the old rollback refunds the tap, the put-back only the
-    // subscription's own first invoice.
+    // review S-1): likewise when the order was paid with another payment or is otherwise not pending: the put-back
+    // refunds only the subscription's own first invoice.
     // W14 (W13d defence): only when T2 wrote the row, so a paid order holding this subscription is never put back.
     if (madeHere && isPutBackReason(outcome.reason) && outcome.subscriptionLeft) {
       try {
@@ -441,13 +467,15 @@ async function finaliseMembership(
   }
   // W42a: the new membership, and any other live one, follow the card this order saved: T2's steps are sent.
   if (outcome.cardSteps) await sendCardSteps(db, stripe, outcome.cardSteps, { actor: options.actor, requestId: options.requestId, timing })
-  if (outcome.alreadyPaid) return { finalised: true, orderId, paymentIntentId: paymentIntent.id, alreadyFinalised: true, message: ALREADY_FINALISED_MESSAGE }
+  if (outcome.alreadyPaid) return alreadyFinalisedAnswer(db, orderId, paymentIntent.id, snapshot)
   return {
     finalised: true,
     orderId,
     paymentIntentId: paymentIntent.id,
     membershipSubscriptionId: subscription.id,
     ...(outcome.membershipId ? { membershipId: outcome.membershipId } : {}),
+    // W68 (H5): `card_moves` is off, so T2 saved no card. The membership renews on the tapped card, which it was made with.
+    ...(outcome.cardSaveOff ? { warning: CARD_NOT_SAVED_WARNING } : {}),
   }
 }
 
@@ -491,7 +519,7 @@ function pressTiming(options: ReaderRouteOptions, found: Found): StripeTiming | 
  *
  * The order is as reconcile selected it (pending, no PaymentIntent on it, this record), not read again: a
  * read here would come after the last Stripe call and lengthen a manual run past its stated bound. T2 locks
- * the order and re-checks all of it (still pending, the old rollback not started, the payment). `timing`
+ * the order and re-checks all of it (still pending, the payment). `timing`
  * is reconcile's run's.
  */
 export async function finaliseReaderOrderFound(
@@ -602,7 +630,6 @@ export async function cancelReaderOrder(db: Db, stripe: StripeClient, orderId: s
   const { order, snapshot } = found
   if (order.payment_status === 'paid') return { cancelled: false, orderId, reason: 'already_paid', message: ALREADY_PAID_MESSAGE }
   if (order.payment_status !== 'pending') return { cancelled: false, orderId, reason: 'already_cancelled', message: notCancelledMessage(order.payment_status) }
-  if (oldRollbackStarted(snapshot)) return { cancelled: false, orderId, reason: 'rollback_started', message: OLD_ROLLBACK_STARTED_MESSAGE }
 
   const settled = await settleIntent(stripe, snapshot, timing)
   if (settled.kind === 'unclear') return { cancelled: false, orderId, reason: 'stripe_error', message: settled.message }
@@ -636,8 +663,6 @@ export async function cancelReaderOrder(db: Db, stripe: StripeClient, orderId: s
       return { cancelled: true, orderId, alreadyGone: true, message: ALREADY_GONE_MESSAGE }
     case 'paid':
       return { cancelled: false, orderId, reason: 'already_paid', message: PAID_MEANWHILE_MESSAGE }
-    case 'rollback_started':
-      return { cancelled: false, orderId, reason: 'rollback_started', message: OLD_ROLLBACK_STARTED_MESSAGE }
     case 'not_pending':
       return { cancelled: false, orderId, reason: 'already_cancelled', message: 'This order is no longer pending, so it cannot be cancelled.' }
     case 'changed_since':

@@ -572,7 +572,6 @@ async function undoTheOrder(run: Run, orderId: string, why: string): Promise<Rec
     const undone = await undoOrder(run.db, orderId, { actor: run.options.actor, requestId: run.options.requestId, why })
     if (undone.undone) return { kind: 'order', id: orderId, outcome: 'undone', detail: why }
     if (undone.reason === 'changed_since') return left('order', orderId, 'changed_since', undone.changed.join('; '))
-    if (undone.reason === 'rollback_started') return left('order', orderId, 'old_rollback')
     return { kind: 'order', id: orderId, outcome: 'settled_elsewhere', detail: undone.reason }
   } catch (err) {
     return left('order', orderId, 'undo_failed', err instanceof Error ? err.message : String(err))
@@ -638,7 +637,6 @@ async function reconcileReaderOrder(run: Run, order: PendingOrder, snapshot: Rea
   }
   if (answer.reason === 'already_paid' || answer.reason === 'already_cancelled') return { kind: 'order', id: order.id, outcome: 'settled_elsewhere', detail: answer.reason }
   if (answer.reason === 'rollback_incomplete') return left('order', order.id, 'undo_failed', answer.message)
-  if (answer.reason === 'rollback_started') return left('order', order.id, 'old_rollback', answer.message)
   return left('order', order.id, answer.reason ?? 'unclear', answer.message)
 }
 
@@ -1013,7 +1011,7 @@ async function reconcilePaymentDateChange(run: Run, changeId: string): Promise<R
   const change = await readPaymentDateChange(run.db, changeId)
   if (!change || change.status !== 'pending') return { kind, id: changeId, outcome: 'settled_elsewhere', detail: change?.status ?? 'gone' }
   const s = change.started
-  if (!s) return left(kind, changeId, 'not_started_here')
+  if (!s) return left(kind, changeId, 'unexpected_state')
   if (change.refundRefused) return left(kind, changeId, 'refund_refused', change.paymentIntentId ?? undefined)
   const started = { ...change, started: s }
   const by = { actor: run.options.actor, requestId: run.options.requestId }

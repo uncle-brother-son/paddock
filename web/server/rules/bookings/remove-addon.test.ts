@@ -368,8 +368,10 @@ describe('Remove add-on: the removal (W22)', () => {
       await db.query("INSERT INTO staff (first_name, last_name, email, role, can_issue_refunds, active) VALUES ('No', 'Refunds', 'nore@example.com', 'staff', false, true)")
       const forbidden = await remove(lineId, 'credit', 5, { email: 'nore@example.com' })
       expect(forbidden.body.error).toMatchObject({ code: 'FORBIDDEN', message: ISSUE_REFUNDS_NEEDED_MESSAGE })
-      const off = await remove(lineId, 'card', 5, { orderSwitch: 'no_stripe' })
-      expect(off.body.error).toMatchObject({ code: 'BOOKING_PATH_OFF', message: BOOKING_PATH_OFF_MESSAGE })
+      for (const way of ['card', 'credit']) {
+        const off = await remove(lineId, way, 5, { orderSwitch: 'no_stripe' })
+        expect(off.body.error, way).toMatchObject({ code: 'BOOKING_PATH_OFF', message: BOOKING_PATH_OFF_MESSAGE })
+      }
       const missing = await remove(lineId, 'card', undefined)
       expect(missing.body.error?.details).toMatchObject({ reason: 'refund_changed', addonQuote: { refund: 5 } })
       expect(await line(lineId)).toMatchObject({ removed_at: null })

@@ -24,7 +24,7 @@ import { ALL_KINDS_ON, orderInput, postOrder, postReaderStep, withQuotedCardFigu
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
 import { fakeStripeErrors, type FakeStripe } from '@/server/stripe/fake'
-import { CATALOG_ADMIN_WORDS, LEGACY_CATALOG_ROUTE_WORDS } from './failure-messages'
+import { CATALOG_ADMIN_WORDS } from './failure-messages'
 import { herdChangeWords, MEMBERSHIP_SETTINGS_NEW_WORDS, PLAN_NEW_WORDS, PLAN_STUCK_WORDS, planMoveWords } from './plan-failure-messages'
 import { applyPriceChange, changeStartedEntry, followPlanPrice, makeChangePrices, openChanges, PLAN_CHANGE_ACTION, PLAN_STEP_ACTION, PRICE_MOVED_ACTION, type PriceChange } from './plan-stripe'
 import { listPlans } from './plans'
@@ -479,7 +479,7 @@ describe("a plan's price (G-plan 4.4; GB1, GB2; Q53)", () => {
       expect((await press(detailsRoute, { planId: ID.plan }, {})).error?.message).toBe(P.atLeastOnePriceFieldMust)
       expect((await press(detailsRoute, { planId: ID.plan }, { monthlyPrice: -5 })).error?.message).toBe(P.mustNonNegativeNumber('monthlyPrice'))
       expect((await press(detailsRoute, { planId: ID.plan }, { yearlyPrice: null })).error?.message).toBe(P.mustNonNegativeNumber('yearlyPrice'))
-      expect((await press(detailsRoute, { planId: UNKNOWN }, { monthlyPrice: 45 })).error?.message).toBe(LEGACY_CATALOG_ROUTE_WORDS['update-price'].itemNotFound)
+      expect((await press(detailsRoute, { planId: UNKNOWN }, { monthlyPrice: 45 })).error?.message).toBe(CATALOG_ADMIN_WORDS.updateCatalogItemPrice.itemNotFound)
       expect((await press(detailsRoute, { planId: ID.plan }, { monthlyPrice: 45 })).reason).toBe('count_missing')
       const saved = await press(detailsRoute, { planId: ID.plan }, { monthlyPrice: 45, membersToMove: 2 })
       expect(saved.data).toMatchObject({ pricesUpdated: { price_monthly: 45 }, priceChange: { state: 'done', moved: 2, toMove: 0 } })
@@ -932,7 +932,7 @@ describe('on and off sale', () => {
       stripe.failNext('products.retrieve', { kind: 'unreachable' })
       expect((await press(activeRoute, { planId: ID.plan }, { active: true })).error?.message).toBe(NEW.onUnclear)
       expect((await plan()).active).toBe(false)
-      expect((await press(activeRoute, { planId: UNKNOWN }, { active: true })).error?.message).toBe(LEGACY_CATALOG_ROUTE_WORDS['toggle-active'].itemNotFound)
+      expect((await press(activeRoute, { planId: UNKNOWN }, { active: true })).error?.message).toBe(CATALOG_ADMIN_WORDS.toggleItemActive.itemNotFound)
       expect((await press(activeRoute, { planId: ID.plan }, { active: true }, FRAN)).error?.message).toBe(NO_PRICING)
     })
   })

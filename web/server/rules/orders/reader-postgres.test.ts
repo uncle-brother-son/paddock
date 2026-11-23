@@ -119,8 +119,8 @@ describe('finalise twice at once', () => {
     stripe.completeReaderPayment(intent, { generatedCard: 'pm_race' })
     const card = { paymentMethodId: 'pm_race', reusable: true, last4: '4242', brand: 'visa', stripeCustomerId: null, tappedAt: null }
     const paymentIntent = await retrieved(stripe, intent)
-    const t2 = await holding(first, () => finaliseOrder(first, orderId, paymentIntent, { ...asReconcile, saveCard: card }))
-    expect(t2.result).toEqual({ finalised: true, alreadyPaid: false, cardSaved: true })
+    const t2 = await holding(first, () => finaliseOrder(first, orderId, paymentIntent, { ...asReconcile, saveCard: card, orderSwitch: 'card_moves' }))
+    expect(t2.result).toMatchObject({ finalised: true, alreadyPaid: false, cardSaved: true })
     const again = finaliseReaderOrder(second, stripe, orderId, asReconcile)
     const waiter = await blockedBy(t2.pid)
     expect(await waitingOn(pg, waiter)).toEqual(['orders'])

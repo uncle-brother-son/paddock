@@ -5176,21 +5176,14 @@ interface W36Steps {
   side: ScenarioContext['side']
 }
 
-/** W36: the database's own lapse sweep, run as the hourly job runs it (the table owner, not the Worker's role). */
-export async function runLapseSweep(db: Db): Promise<void> {
-  await db.query('RESET ROLE')
-  try {
-    await db.query('SELECT public.lapse_sweep_expired_bookings()')
-  } finally {
-    await db.query('SET ROLE paddock_worker')
-  }
-}
-
 /**
- * W43: the sweep a lapse scenario runs: the side's own when it has one (the Worker's, lapse-side.ts), else the
- * database's, which is what the old functions' recordings had.
+ * W43: the sweep a lapse scenario runs: the side's own (the Worker's, sweep/lapse-presses.ts). W68: the database's, which
+ * the old functions' recordings had, was dropped by migration 034, so a side without one can't run these scenarios.
  */
-const sweepLapsed = (context: Pick<ScenarioContext, 'side' | 'db'>): Promise<void> => (context.side.lapseSweep ? context.side.lapseSweep(context.db) : runLapseSweep(context.db))
+function sweepLapsed({ side, db }: Pick<ScenarioContext, 'side' | 'db'>): Promise<void> {
+  if (!side.lapseSweep) throw new Error(`The ${side.name} side has no lapse sweep to run.`)
+  return side.lapseSweep(db)
+}
 
 function w36Scenarios(): Scenario[] {
   type Prepare = (db: Db, stripe: FakeStripe) => Promise<void>

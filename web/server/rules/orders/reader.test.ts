@@ -13,12 +13,11 @@ import { ORDER_STRIPE_LIMITS, READ_STRIPE_LIMITS } from '@/server/stripe/client'
 import type { Recording } from '@/server/rules/testing/replay/compare'
 import { replay, REPLAY_USER, startReplay, type ReplayEnvironment } from '@/server/rules/testing/sweep/run'
 import { workerSide } from '@/server/rules/testing/sweep/worker'
-import { orderInput, postOrder, postReaderStep, withQuotedCardFigure, type OrderAnswer } from '@/server/rules/testing/sweep/order-presses'
+import { orderInput, postOrder, postReaderStep, withCardMoves, withQuotedCardFigure, type OrderAnswer } from '@/server/rules/testing/sweep/order-presses'
 import { ID, paidSeat, sam, seed, whileFailing } from '@/server/rules/testing/replay/scenarios'
 import { chargesTakeASecond, replayStripe, stripeClientsMade } from '@/server/rules/testing/replay/stripe-binding'
 import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
 import {
-  OLD_ROLLBACK_STARTED_MESSAGE,
   ORDER_STILL_PROCESSING_MESSAGE,
   READER_CHARGED_WITHOUT_ORDER_MESSAGE,
   READER_INTENT_UNCONFIRMED_MESSAGE,
@@ -27,7 +26,7 @@ import {
 import type { ReaderSnapshot } from './pending-order'
 import { placeOrder } from './place-order'
 import { READER_INTENT_NOT_SENT_MESSAGE } from './reader-intent'
-import { CARD_NOT_SAVED_WARNING, otherModeMessage, ROLLBACK_INCOMPLETE_MESSAGE } from './reader-order'
+import { ALREADY_FINALISED_MESSAGE, CARD_NOT_SAVED_WARNING, otherModeMessage, ROLLBACK_INCOMPLETE_MESSAGE } from './reader-order'
 import { finaliseOrder } from './finalise-order'
 import { undoOrder } from './undo-order'
 
@@ -77,7 +76,7 @@ const actor = { type: 'staff' as const, id: ID.staff }
 async function everything(): Promise<Record<string, unknown[]>> {
   const tables = await db.query<{ table_name: string }>(
     `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
-       AND table_name NOT IN ('audit_log', 'api_idempotency', 'request_log', 'parity_log') ORDER BY 1`
+       AND table_name NOT IN ('audit_log', 'api_idempotency', 'request_log') ORDER BY 1`
   )
   const dump: Record<string, unknown[]> = {}
   for (const { table_name: table } of tables) {
@@ -551,7 +550,7 @@ describe('finalise (finaliseReaderOrder, T2)', () => {
 
   describe('saving the card (finaliseReaderOrder through saveCustomerCardOnFile)', () => {
     it('a reusable card: saved to the customer with T2, its last four and brand, and recorded', async () => {
-      await onASeed(async (stripe) => {
+      await withCardMoves(() => onASeed(async (stripe) => {
         const placed = placedOf(await placeThrough(saving(readerBasket)))
         stripe.completeReaderPayment(placed.pendingReaderPayment.paymentIntentId, { generatedCard: 'pm_reader_saved' })
         expect((await finalise(placed.orderId)).data).toEqual({ finalised: true, orderId: placed.orderId, paymentIntentId: 'pi_fake_0001' })
@@ -560,13 +559,15 @@ describe('finalise (finaliseReaderOrder, T2)', () => {
           ['paymentIntents.create', expect.objectContaining({ setup_future_usage: 'off_session' })],
           ['paymentIntents.retrieve', { id: 'pi_fake_0001' }],
           ['paymentIntents.retrieve', { id: 'pi_fake_0001', expand: ['latest_charge'] }],
+          // W42a, with `card_moves` on as live has it: the invoice default follows the saved card (Sam has no membership).
+          ['customers.update', { id: 'cus_seed', invoice_settings: { default_payment_method: 'pm_reader_saved' } }],
         ])
         const audit = await db.query<{ action: string; entity_type: string }>("SELECT action, entity_type FROM audit_log WHERE action IN ('order.paid', 'customer.card_saved') ORDER BY at")
         expect(audit).toEqual([
           { action: 'order.paid', entity_type: 'order' },
           { action: 'customer.card_saved', entity_type: 'customer' },
         ])
-      })
+      }))
     })
 
     it('bug 7: the simulated reader leaves no reusable card: the order is still marked paid, with the warning, and the old card kept', async () => {
@@ -587,6 +588,76 @@ describe('finalise (finaliseReaderOrder, T2)', () => {
         stripe.failNext('paymentIntents.retrieve', { kind: 'unreachable' })
         expect((await finalise(placed.orderId)).data).toMatchObject({ finalised: true, warning: CARD_NOT_SAVED_WARNING })
         expect((await customerCard())?.saved_payment_method_id).toBe('pm_seed')
+      })
+    })
+
+    it("W68a (W68 review L9): a finalise pressed again after a lost answer still says the card wasn't saved: `card_moves` off, no reusable card, or the card couldn't be read; never when it was saved, or wasn't to be", async () => {
+      const again = (orderId: string, unsaved: boolean) => ({ finalised: true, orderId, paymentIntentId: 'pi_fake_0001', alreadyFinalised: true, message: ALREADY_FINALISED_MESSAGE, ...(unsaved ? { warning: CARD_NOT_SAVED_WARNING } : {}) })
+      /** Places, taps, finalises, then presses finalise again; both answers. */
+      const twice = async (basket: Record<string, unknown>, tap: Parameters<FakeStripe['completeReaderPayment']>[1], unreadable = false) => {
+        let answers: unknown[] = []
+        let orderId = ''
+        await onASeed(async (stripe) => {
+          const placed = placedOf(await placeThrough(basket))
+          orderId = placed.orderId
+          stripe.completeReaderPayment(placed.pendingReaderPayment.paymentIntentId, tap)
+          if (unreadable) {
+            stripe.failNext('paymentIntents.retrieve', { kind: 'none' })
+            stripe.failNext('paymentIntents.retrieve', { kind: 'unreachable' })
+          }
+          const first = (await finalise(orderId)).data as { warning?: string }
+          const state = await everything()
+          answers = [first.warning, (await finalise(orderId)).data, (await finalise(orderId)).data]
+          expect(await everything()).toEqual(state)
+        })
+        return { answers, orderId }
+      }
+      // `card_moves` off (this file's switch): T2 wrote the row.
+      const off = await twice(saving(readerBasket), { generatedCard: 'pm_reader_saved' })
+      expect(off.answers).toEqual([CARD_NOT_SAVED_WARNING, again(off.orderId, true), again(off.orderId, true)])
+      const simulated = await twice(saving(readerBasket), { simulatedReader: true })
+      expect(simulated.answers).toEqual([CARD_NOT_SAVED_WARNING, again(simulated.orderId, true), again(simulated.orderId, true)])
+      const unread = await twice(saving(readerBasket), { generatedCard: 'pm_reader_saved' }, true)
+      expect(unread.answers).toEqual([CARD_NOT_SAVED_WARNING, again(unread.orderId, true), again(unread.orderId, true)])
+      // Not agreed to; and (`card_moves` on) saved.
+      const notAgreed = await twice(readerBasket, { generatedCard: 'pm_reader_saved' })
+      expect(notAgreed.answers).toEqual([undefined, again(notAgreed.orderId, false), again(notAgreed.orderId, false)])
+      await withCardMoves(async () => {
+        const saved = await twice(saving(readerBasket), { generatedCard: 'pm_reader_saved' })
+        expect(saved.answers).toEqual([undefined, again(saved.orderId, false), again(saved.orderId, false)])
+      })
+    })
+
+    it("W68a (W68 review L9): two presses at once: the one whose T2 finds the order already paid by the other still says the card wasn't saved", async () => {
+      await onASeed(async (stripe) => {
+        const placed = placedOf(await placeThrough(saving(readerBasket)))
+        stripe.completeReaderPayment(placed.pendingReaderPayment.paymentIntentId, { generatedCard: 'pm_reader_saved' })
+        // While this press's first read of Stripe is out, another press finishes the order (`card_moves` off).
+        const retrieve = stripe.paymentIntents.retrieve
+        let other: unknown = null
+        stripe.paymentIntents.retrieve = async (id, params, options) => {
+          const intent = await retrieve(id, params, options)
+          if (other === null) {
+            other = 'pressing'
+            other = (await finalise(placed.orderId)).data
+          }
+          return intent
+        }
+        const late = (await finalise(placed.orderId)).data
+        expect(other).toEqual({ finalised: true, orderId: placed.orderId, paymentIntentId: 'pi_fake_0001', warning: CARD_NOT_SAVED_WARNING })
+        expect(late).toEqual({ finalised: true, orderId: placed.orderId, paymentIntentId: 'pi_fake_0001', alreadyFinalised: true, message: ALREADY_FINALISED_MESSAGE, warning: CARD_NOT_SAVED_WARNING })
+        expect(await auditActions(placed.orderId)).toEqual(['order.create', 'order.paid'])
+      })
+    })
+
+    it("W68a: the look-up failing doesn't stop the answer: already finalised, without the warning", async () => {
+      await onASeed(async (stripe) => {
+        const placed = placedOf(await placeThrough(saving(readerBasket)))
+        stripe.completeReaderPayment(placed.pendingReaderPayment.paymentIntentId, { simulatedReader: true })
+        await finalise(placed.orderId)
+        const { finaliseReaderOrder } = await import('./reader-order')
+        const failing = { ...db, query: (sql: string, params?: never) => (sql.includes('cardSaved') ? Promise.reject(new Error('lost')) : db.query(sql, params)) } as unknown as Db
+        expect(await finaliseReaderOrder(failing, stripe, placed.orderId, { actor, requestId: 'again' })).toEqual({ finalised: true, orderId: placed.orderId, paymentIntentId: 'pi_fake_0001', alreadyFinalised: true, message: ALREADY_FINALISED_MESSAGE })
       })
     })
 
@@ -633,22 +704,7 @@ describe('finalise (finaliseReaderOrder, T2)', () => {
     })
   })
 
-  it('the old rollback starts on the order while Stripe is read: T2 itself refuses it, and nothing is marked', async () => {
-    await onASeed(async (stripe) => {
-      const placed = placedOf(await placeThrough(readerBasket))
-      stripe.completeReaderPayment(placed.pendingReaderPayment.paymentIntentId)
-      const retrieve = stripe.paymentIntents.retrieve
-      stripe.paymentIntents.retrieve = async (id, params, options) => {
-        const intent = await retrieve(id, params, options)
-        await db.query(`UPDATE orders SET reader_payment = reader_payment || jsonb_build_object('rollback', jsonb_build_object('started_at', now(), 'done', '{}'::jsonb)) WHERE id = $1`, [placed.orderId])
-        return intent
-      }
-      expect((await finalise(placed.orderId)).data).toMatchObject({ finalised: false, reason: 'rollback_started' })
-      expect(await orderNow(placed.orderId)).toMatchObject({ payment_status: 'pending', stripe_payment_intent_id: null })
-    })
-  })
-
-  it('orders it isn\'t for: not a reader order, the old checkout\'s, or one the old rollback has started on', async () => {
+  it('orders it isn\'t for: not a reader order, or the old checkout\'s', async () => {
     await onASeed(async (stripe) => {
       const cash = await postOrder(orderInput({ customerId: ID.customer, products: [soap], payment: { method: 'cash', confirmedCashAmount: 24 } }))
       const cashId = (cash.body as { data: { orderId: string } }).data.orderId
@@ -662,15 +718,6 @@ describe('finalise (finaliseReaderOrder, T2)', () => {
       expect((await finalise(placed.orderId)).data).toMatchObject({ finalised: false, reason: 'not_a_reader_order', message: 'This order is not a pending card-reader order.' })
       expect((await cancel(placed.orderId)).data).toMatchObject({ cancelled: false, reason: 'not_a_reader_order' })
 
-      await db.query(
-        `UPDATE orders SET reader_payment = reader_payment || jsonb_build_object('method', 'reader', 'rollback', jsonb_build_object('started_at', now(), 'done', jsonb_build_object('session_capacity', true))) WHERE id = $1`,
-        [placed.orderId]
-      )
-      const state = await everything()
-      expect((await finalise(placed.orderId)).data).toMatchObject({ finalised: false, reason: 'rollback_started', message: "This order is already being rolled back, so it can't be finalised." })
-      expect((await cancel(placed.orderId)).data).toMatchObject({ cancelled: false, reason: 'rollback_started', message: OLD_ROLLBACK_STARTED_MESSAGE })
-      expect(await undoOrder(db, placed.orderId, { actor, requestId: 'direct', why: 'test' })).toEqual({ undone: false, reason: 'rollback_started' })
-      expect(await everything()).toEqual(state)
       expect((await finalise('10000000-0000-4000-8000-0000000000ff')).data).toMatchObject({ finalised: false, reason: 'order_not_found', message: 'That order no longer exists.' })
     })
   })
@@ -730,7 +777,7 @@ describe('cancel (cancelReaderOrder, the one undo)', () => {
   })
 
   it('the tap had in fact gone through: finalised instead, with the PaymentIntent just read (one read), and the card saved', async () => {
-    await onASeed(async (stripe) => {
+    await withCardMoves(() => onASeed(async (stripe) => {
       const placed = placedOf(await placeThrough(saving(readerBasket)))
       stripe.completeReaderPayment(placed.pendingReaderPayment.paymentIntentId, { generatedCard: 'pm_reader_saved' })
       expect((await cancel(placed.orderId)).data).toEqual({
@@ -742,8 +789,8 @@ describe('cancel (cancelReaderOrder, the one undo)', () => {
       })
       expect(await orderNow(placed.orderId)).toMatchObject({ payment_status: 'paid', payment_method: 'reader' })
       expect((await customerCard())?.saved_payment_method_id).toBe('pm_reader_saved')
-      expect(stripe.calls.map((call) => call.method)).toEqual(['paymentIntents.create', 'paymentIntents.retrieve', 'paymentIntents.retrieve'])
-    })
+      expect(stripe.calls.map((call) => call.method)).toEqual(['paymentIntents.create', 'paymentIntents.retrieve', 'paymentIntents.retrieve', 'customers.update'])
+    }))
   })
 
   it("the cancel refused because the tap went through between the read and the cancel: read again, finalised instead", async () => {
@@ -1179,7 +1226,7 @@ describe('the deadline from the request\'s start (W10a), for the reader\'s Strip
   })
 
   it('the routes ask for the order\'s limits (10 s a call, no SDK retries) for finalise, cancel and the setup intent and the saved card (under the deadline), and read limits for the token', async () => {
-    await onASeed(async (stripe) => {
+    await withCardMoves(() => onASeed(async (stripe) => {
       const placed = placedOf(await placeThrough(readerBasket))
       // W65a: the card is saved from a second reader payment. The cancel below cancels the first at Stripe, and a
       // cancelled PaymentIntent can't be tapped (the fake refuses it, as Stripe does). The member's, products only: the
@@ -1194,7 +1241,7 @@ describe('the deadline from the request\'s start (W10a), for the reader\'s Strip
       const saved = await staffPost(savedCardRoute, `/api/v1/staff/customers/${ID.member}/saved-card`, { paymentIntentId: toSave.pendingReaderPayment.paymentIntentId }, { customerId: ID.member })
       expect(saved.status).toBe(200)
       expect(stripeClientsMade.map((made) => made.limits)).toEqual([ORDER_STRIPE_LIMITS, ORDER_STRIPE_LIMITS, ORDER_STRIPE_LIMITS, READ_STRIPE_LIMITS, ORDER_STRIPE_LIMITS])
-    })
+    }))
   })
 })
 
@@ -1232,7 +1279,7 @@ describe('card saving (getTerminalConnectionToken, createTerminalSetupIntent, sa
   })
 
   it('the setup intent: the Stripe customer found or made (ensureStripeCustomer), then card_present for off-session use, under a key; moves no money and writes nothing else', async () => {
-    await onASeed(
+    await withCardMoves(() => onASeed(
       async (stripe) => {
         const before = await everything()
         const answer = await staffPost(setupIntentsRoute, '/api/v1/staff/terminal/setup-intents', { customerId: ID.customer })
@@ -1248,12 +1295,12 @@ describe('card saving (getTerminalConnectionToken, createTerminalSetupIntent, sa
         expect(stripe.netPence).toBe(0)
       },
       (seedDb) => seedDb.query('UPDATE customers SET stripe_customer_id = NULL WHERE id = $1', [ID.customer]).then(() => undefined)
-    )
+    ))
   })
 
   // W11a (review S1): the setup intent route has the request's deadline, as the other reader routes.
   it("the setup intent has the 30 s deadline from the request's start: each call gets what is left (at most 10 s)", async () => {
-    await onASeed(
+    await withCardMoves(() => onASeed(
       async (stripe) => {
         const seen: Array<[string, number | undefined]> = []
         const watch = (group: 'customers' | 'setupIntents', name: 'search' | 'create') => {
@@ -1275,7 +1322,7 @@ describe('card saving (getTerminalConnectionToken, createTerminalSetupIntent, sa
         ])
       },
       (seedDb) => seedDb.query('UPDATE customers SET stripe_customer_id = NULL WHERE id = $1', [ID.customer]).then(() => undefined)
-    )
+    ))
   })
 
   it('the setup intent with under 2 s left: nothing sent to Stripe, nothing written, and staff are told to try again', async () => {
@@ -1302,7 +1349,7 @@ describe('card saving (getTerminalConnectionToken, createTerminalSetupIntent, sa
   })
 
   it('the setup intent: the old words for no customer, an unknown one, and Stripe failing', async () => {
-    await onASeed(async (stripe) => {
+    await withCardMoves(() => onASeed(async (stripe) => {
       expect((await staffPost(setupIntentsRoute, '/api/v1/staff/terminal/setup-intents', {})).body.error).toEqual({ code: 'VALIDATION', message: 'customerId is required' })
       expect((await staffPost(setupIntentsRoute, '/api/v1/staff/terminal/setup-intents', { customerId: '10000000-0000-4000-8000-0000000000ff' })).body.error).toEqual({ code: 'NOT_FOUND', message: 'Customer not found' })
       expect((await staffPost(setupIntentsRoute, '/api/v1/staff/terminal/setup-intents', { customerId: 'not-an-id' })).body.error).toEqual({ code: 'NOT_FOUND', message: 'Customer not found' })
@@ -1311,11 +1358,11 @@ describe('card saving (getTerminalConnectionToken, createTerminalSetupIntent, sa
         code: 'INTERNAL',
         message: 'Failed to create SetupIntent: Received unknown parameter',
       })
-    })
+    }))
   })
 
-  it('saving the card after a card-save tap (a SetupIntent): the reusable card, its last four and brand from the generated card, and recorded; Q19: memberships keep their own card', async () => {
-    await onASeed(async (stripe) => {
+  it('saving the card after a card-save tap (a SetupIntent): the reusable card, its last four and brand from the generated card, and recorded', async () => {
+    await withCardMoves(() => onASeed(async (stripe) => {
       const setup = await staffPost(setupIntentsRoute, '/api/v1/staff/terminal/setup-intents', { customerId: ID.customer })
       const setupIntentId = setup.body.data?.['setupIntentId'] as string
       stripe.completeReaderSetup(setupIntentId, { generatedCard: 'pm_generated' })
@@ -1328,15 +1375,16 @@ describe('card saving (getTerminalConnectionToken, createTerminalSetupIntent, sa
       expect(stripe.calls.slice(1).map((call) => [call.method, call.params])).toEqual([
         ['setupIntents.retrieve', { id: setupIntentId, expand: ['latest_attempt'] }],
         ['paymentMethods.retrieve', { id: 'pm_generated' }],
+        // W42, with `card_moves` on as live has it: the invoice default follows the saved card (Sam has no live membership).
+        ['customers.update', { id: 'cus_seed', invoice_settings: { default_payment_method: 'pm_generated' } }],
       ])
       expect(await db.query('SELECT * FROM customer_memberships ORDER BY id')).toEqual(memberships)
-      expect(stripe.calls.some((call) => call.method.startsWith('subscriptions') || call.method === 'customers.update')).toBe(false)
-      expect((await db.query<{ action: string }>("SELECT action FROM audit_log WHERE entity_type = 'customer'")).map((row) => row.action)).toEqual(['customer.card_saved'])
-    })
+      expect((await db.query<{ action: string }>("SELECT action FROM audit_log WHERE entity_type = 'customer' ORDER BY action")).map((row) => row.action)).toEqual(['customer.card_saved', 'customer.invoice_default'])
+    }))
   })
 
   it('saving the card: the old words for a card Stripe won\'t let the club charge later, both or neither id, and no such customer; nothing written', async () => {
-    await onASeed(async (stripe) => {
+    await withCardMoves(() => onASeed(async (stripe) => {
       const placed = placedOf(await placeThrough(readerBasket))
       stripe.completeReaderPayment(placed.pendingReaderPayment.paymentIntentId, { simulatedReader: true })
       const state = await everything()
@@ -1362,7 +1410,7 @@ describe('card saving (getTerminalConnectionToken, createTerminalSetupIntent, sa
         message: 'Customer not found',
       })
       expect(await everything()).toEqual(state)
-    })
+    }))
   })
 })
 

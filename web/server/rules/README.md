@@ -106,8 +106,8 @@ A card order with something to charge runs W03-plan 2.1's pipeline:
 `LOCK_ORDER` now starts with an existing order: T2 and the undo lock it first.
 
 W16 removed the dry run (`dryRunOrder` and `POST /api/v1/staff/orders/dry-run`), the staff app's shadow and the
-parity route with it. `order-rows.ts` (the read-back) stays for the tests. `parity_log` and its 30-day purge stay in
-the database until step H; nothing writes to it any more.
+parity route with it. `order-rows.ts` (the read-back) stays for the tests. `parity_log` and its 30-day purge are dropped by
+migration 034 (W68).
 
 ## Step F's foundations (W36)
 
@@ -406,8 +406,7 @@ request started, each with what is left (at most 10 s) and none with under 2 s l
 (`server/stripe/deadline.ts`). `ensureStripeCustomer`'s read and write-back of the Stripe customer run in
 their own transactions with the lock and statement limits cut to what is left, so they end by it too. Finalise and cancel are
 safe twice and against each other: T2 and the undo lock the order and re-check it, and Stripe's own state
-decides which can go. An order the old checkout started (no `method`), or one its rollback has started on
-(`reader_payment.rollback`), is left to the old code: T2 and the undo refuse it. Memberships on the reader
+decides which can go. Memberships on the reader
 stay NOT_BUILT (W13). Card saving with no order (`payments/terminal.ts`): the connection token, the
 SetupIntent (`ensureStripeCustomer`, then `card_present` for off-session use under a key from the customer
 and the press), and the saved card, ported as it is (W03-decisions Q19).
@@ -535,7 +534,7 @@ finding or the other mode), or once it is settled meanwhile. Racing reconcile, e
   `left` put-back on an order no longer pending: cancelled (checked), its first invoice refunded under its key, then a
   `cancelled` row that closes the stuck list's warning (L3).
 - **W13d (the W13c review)**: T2 also records the press's subscription as `left`, and the press puts it back, when the
-  old rollback has started on the order, or it was paid with another payment, or it is otherwise not pending (S-1).
+  order was paid with another payment, or it is otherwise not pending (S-1).
   Reconcile's saved-card path passes the subscription it found as made here, so an order undone by another actor
   between its list and T2 leaves a row the next run puts back (S-2). The retry takes only rows whose order no longer
   exists, never a paid one (L3).
@@ -847,7 +846,7 @@ for byte, into `testing/legacy-order/routes/`, where the frozen copies still cal
 - **No "old" items.** `old_reader_flow`, `old_reader_order`, `old_code`, `OLD_DUE_SQL`, the run's `oldLeftAlone` and the
   stuck list's `madeBy` are gone. A pending order or flow with no mark of the Worker's (none can be made any more) is
   refused by the reader routes as `not_a_reader_order` / `not_a_reader_flow`, left alone by reconcile, and listed for a
-  person as `not_started_here` ("tell a manager"), never "press Resolve now": Resolve now is this reconcile and nothing
+  person as `unexpected_state` (W68; `not_started_here` until then: "tell a manager"), never "press Resolve now": Resolve now is this reconcile and nothing
   else.
 - **The look-up of old `booking.card_refund_unsure` notes** (W21a, W23) is gone with its `matched` parts: nothing writes
   those notes and live has none.
@@ -1357,9 +1356,12 @@ reconciler replaces this.
 ## Replace card (W42, W42a, W42b)
 
 `POST /api/v1/staff/customers/:customerId/saved-card` (F-plan 4.7; Q19; Wayne's Q45; W11 F4 / FB17; lead call L11),
-behind its own switch kind `card_moves` (`memberships/membership-switch.ts`, `cardMovesOn`). Off: the card is saved
-exactly as W11 built it (`payments/terminal.ts`, `saveCustomerCard`, untouched) and no membership is moved. On:
-`customers/saved-card.ts`, `replaceCustomerCard`.
+behind its own switch kind `card_moves` (`memberships/membership-switch.ts`, `cardMovePathOff`). On:
+`customers/saved-card.ts`, `replaceCustomerCard`. **Off (W68, H5; the W45 audit's row 50): refused**
+(`MEMBERSHIP_PATH_OFF`, "This is switched off in the booking system. Tell a manager."), with nothing read or saved; an
+order's T2 still finishes the order (its money is taken) but saves no card and leaves no step: `order.paid` says
+`cardSaved: false`, a `customer.card_not_saved` row says `card_moves_off`, and staff see "The card couldn't be saved for
+future charges.". Until W68, off saved the card the old way (W11's `saveCustomerCard`, gone).
 
 - **The tap is read** as before (`stripe/saved-card.ts`, which now also answers the intent's Stripe customer), and a
   card that can't be charged later is refused in the old words.
@@ -1389,7 +1391,7 @@ exactly as W11 built it (`payments/terminal.ts`, `saveCustomerCard`, untouched) 
   press, the reader's finalise, reconcile). K1 holds the same lock, so a replace and an order take turns: either K1
   finds the new membership, or T2 reads the new card. A step whose subscription already shows the card is settled by
   one read. T2 asks the switch from the Worker's environment; the scheduled run passes its own
-  (`ReconcileOptions.orderSwitch`), since its env is not copied into `process.env`. Off, T2 is as it was.
+  (`ReconcileOptions.orderSwitch`), since its env is not copied into `process.env`.
 - **W42b (W42a review S1): every T2 of a run hears the run's switch.** A run settles ORDER_SWITCH once when it starts
   (`reconcile.ts`, `runSwitch`: the scheduled run's own, or the request's environment for staff's Resolve now) and
   reaches T2 only through three helpers (`runT2`, `runReaderCancel`, `runReaderFinalise`), each given the switch by
@@ -1399,13 +1401,12 @@ exactly as W11 built it (`payments/terminal.ts`, `saveCustomerCard`, untouched) 
   `created`, `ResolvedCard.tappedAt`), asked under the customer's lock. Otherwise the customer's card stays, a
   `customer.card_not_saved` row (`reason: newer_card_on_file`) says why, `order.paid` says `cardSaved: false`, and
   the rule moves every membership (a reader membership order's new one, made on the tapped card, included) to the
-  customer's card as it is. Off, the tap's card is saved whatever came after it, as W11 had it.
+  customer's card as it is.
 - **W42b (W42a review L3, L4; W42a report, Noticed 1).** The invoice default is not sent when the customer's saved
   card, read again just before, is no longer the action's card (recorded with outcome `replaced`). The open steps
   are read once per action, not once per membership. And a T2 that writes a membership takes the customer's lock
   first whatever the kind, so T2 and the payment date change (customer, then membership) lock in the same order.
-- **The answer** is the customer's five fields plus `membershipsMoved` and `membershipsToMove` (absent with the kind
-  off). The staff app's wrapper names them `moved` and `toMove`, and answers a refusal as data.
+- **The answer** is the customer's five fields plus `membershipsMoved` and `membershipsToMove`. The staff app's wrapper names them `moved` and `toMove`, and answers a refusal as data.
 - **W40d Noticed 2** (the legacy cancel routes' guard counted `cancel_at` steps only): the guard was removed at W44.
 - **Who writes a subscription's card:** a step, and `subscriptionRequest` when a subscription is made
   (`orders/membership.ts`). `customers/saved-card.test.ts` holds the list.
@@ -1426,12 +1427,13 @@ of `bookings/cancel.ts` (`lapseBooking`, `lapsePlanOf`).
   (`membership_lapsed`) and its places released. No audit row, nothing of what a cancel does, and a booking with
   money on it was never lapsed (it held its places for ever).
 - **Where it runs.** On the Worker's five-minute schedule, before reconcile (`server/scheduled.ts`), behind its own
-  switch kind `lapse_sweep`. The run hands it the switch from the handler's `env` (never `process.env`). Off: it
-  reads nothing, and the database's sweep stays in charge. No route runs it.
+  switch kind `lapse_sweep`. The run hands it the switch from the handler's `env` (never `process.env`). **Off pauses
+  lapsing (W68, H5): it reads nothing and cancels nothing, no other sweep runs, and every booking past its deadline keeps
+  its places and goes with the first run once the kind is on again. Fix forward.** No route runs it.
 - **One booking, one transaction.** Each due booking (oldest deadline first, capped at 50 a run; `more` says some
   wait for the next) goes through the cancel's R1 on the system channel: the booking's locks in LOCK_ORDER, checked
   again under them (still payment needed, the deadline passed, the same cancel the read saw), the cancel with the
-  database sweep's reason, its places released, every add-on line still on it removed. No Stripe client is made.
+  old sweep's reason (`membership_lapsed`), its places released, every add-on line still on it removed. No Stripe client is made.
 - **Money on it (Q48).** 24 hours or more before the session: everything paid (paid guests, paid add-ons) to store
   credit, through the same claim as the customer's online cancel, finished in the same transaction; add-on credits
   back while the membership is active. Inside 24 hours, or once the session has started: cancelled with nothing
@@ -1454,22 +1456,19 @@ of `bookings/cancel.ts` (`lapseBooking`, `lapsePlanOf`).
 - **What it leaves, for the next run.** A payment still being taken on the booking (`reader_payment_open`,
   `card_payment_open`: Settle), a refund still being checked (`refund_open`), a booking whose cancel, "does money
   come back" or add-on lines changed between the read and the lock (`booking_changed`; any other change, such as a
-  guest removed, is not left: it lapses from what is under the lock, W43a review L1). One no longer due under its lock (settled, cancelled by staff, cancelled by the
-  database's sweep) is `not_lapsed`. A fault on one booking is counted as `failed` and never stops the others; a
+  guest removed, is not left: it lapses from what is under the lock, W43a review L1). One no longer due under its lock (settled, or cancelled by staff or another run) is `not_lapsed`. A fault on one booking is counted as `failed` and never stops the others; a
   fault in the sweep itself is logged and never stops reconcile.
 - **The log.** `lapse_sweep.run` when the run found anything (the counts, and each booking not lapsed with why);
   `lapse_sweep.failed`.
-- **Migration 028** (file only) takes the database's sweep out of the hourly job and keeps the function. Both
-  running is harmless, with one exception while it lasts: the database's sweep can reach a `price_paid = 0` booking
-  with a paid add-on first, and then the add-on's money is kept as before with nothing recorded. So (W43a, review
-  S4; the order is in 028's header): the pre-check (no such booking waiting), the kind on, then 028 **in the same
-  sitting**. Rollback: the kind off first, then 028's Down straight after.
+- **Migrations 028 and 034.** 028 (applied 18 Nov) took the database's sweep out of the hourly job and kept the
+  function; 034 (W68) drops it, which ends 028's Down: **never run it after 034** (the hourly job would call the dropped
+  function and fail). **Runbook: `lapse_sweep` off pauses lapsing; fix forward.** There is no rollback to the database's sweep.
 - **Parity:** `testing/replay/lapse-replay.test.ts` runs W36's four recordings of the database's sweep through the
   Worker's on the same seed: nothing paid and a deadline not passed match exactly (the sweep's audit rows apart,
   held to `lapseRowProblems`); FB18 and FB19 have one pinned, named difference each (`lapse-differences.ts`), and
   every pinned path must differ.
-- **Races on real Postgres:** `bookings/lapse-sweep-postgres.test.ts` (against Settle, Remove Guest, a staff cancel,
-  the database's sweep and a second run, each held until Postgres reports both waiting on the booking; the cap).
+- **Races on real Postgres:** `bookings/lapse-sweep-postgres.test.ts` (against Settle, Remove Guest, a staff cancel
+  and a second run, each held until Postgres reports both waiting on the booking; the cap).
 
 ## First in line 1: the webhook, the membership check, the lapse reason, line stamping (W46)
 
@@ -2334,7 +2333,8 @@ the lead before the Worker push).
 | `setSessionBand` | `GET` and `POST sessions/:sessionId/band(/quote)`, `sessions/days/:date/band(/quote)` | Manage pricing | A band set by hand, for one session or a day |
 | `resetSessionBand` | `POST sessions/:sessionId/band/reset` | Manage pricing | Back to automatic |
 | `setSessionStartTime` | `POST sessions/:sessionId/start-time` | any active staff | One session's start moved once |
-| `createOneOffSession` | `POST sessions` | any active staff | One session outside the weekly timetable |
+| `getOneOffSessionQuote` (W68) | `GET sessions/one-off/quote` | any active staff | The band and price a one-off session would get |
+| `createOneOffSession` | `POST sessions` | any active staff | One session outside the weekly timetable, as the quote showed it |
 | `addServiceTypeScheduleSlot` | `POST catalog/service-types/:serviceTypeId/schedule-slots` | **Manage pricing** (Q50 part 2) | A weekly slot added |
 | `deleteServiceTypeScheduleSlot` | `POST catalog/schedule-slots/:slotId/remove` | **Manage pricing** (Q50 part 2) | A weekly slot removed |
 
@@ -2376,8 +2376,9 @@ last date the nightly job has made sessions for (null on a database whose row wa
   job takes the same guard in the database (migration 032).
 - **W48 review L1.** Block Day, Unblock Day and a day's band change lock the day's sessions through
   `lockAdminRows` (id order) before their multi-row write, so none can deadlock with a save re-banding the same day.
-- **W54a's stale-page rule applies to none of them:** each writes only what was pressed, never a row as a page
-  read it. The figures a press confirms are held by Q18's rule.
+- **W54a's stale-page rule applies to the one-off session (W68, Wayne's Q58):** the dialog shows the band and price the
+  session would get and the press sends that quote's stamp; changed since, nothing is made. The rest write only what
+  was pressed, never a row as a page read it. The figures a press confirms are held by Q18's rule.
 - **Q50 part 1 (Wayne, 20 Nov): a timetable change reaches only the dates the nightly job makes from now on.** A
   slot added makes no session; a slot removed leaves its sessions bookable; a capacity or length change (W55's
   function) leaves sessions already made as they are. The staff app's Service Types page says so, with `madeUpTo`.
@@ -2851,7 +2852,7 @@ create, on/off, the T2 hook); `catalog/plans-postgres.test.ts` (7 races on real 
   was refunded meanwhile is settled `checked` by its check (W40c review L5).
 - **A refunded membership's subscription Stripe can't find (row 26):** its `refused` row carries `missing: true`, and
   the list says `MEMBERSHIP_REFUND_WORDS.cancelMissingListed`.
-- **Payment date changes (rows 38, 42):** `not_started_here` has its own words; a move the check never sent (W41a B1)
+- **Payment date changes (rows 38, 42):** a move the check never sent (W41a B1)
   marks its `refunding` row `notSent`, the list words it so (`PAYMENT_DATE_NOT_SENT_STUCK_WORDS`), and the record says
   the check's own sentence (`PAYMENT_DATE_NEW_WORDS.recheckFailed`).
 - **One failed refund counted once (the W35 audit's row 32), `orders/reconcile.ts`:** the late path that meets a
@@ -2930,3 +2931,33 @@ create, on/off, the T2 hook); `catalog/plans-postgres.test.ts` (7 races on real 
   wrong at a later day's read, it is listed again.
 - **G invariant 7 (F4):** also at most one key per change row. **The key guard (F5):** no `npm:@supabase/` alias, and
   `process.env[…]` by a plain name only.
+
+## Step H's leftovers (W68)
+
+- **Words (H3).** The legacy catalogue routes' object of words is gone: its six sentences still answered are with the
+  functions that answer them (`CATALOG_ADMIN_WORDS`), the other 20 are nowhere. The old screens' states are gone from
+  the stuck list and the close (`old_rollback`, `rollback_started`, `not_started_here`; live had none), with every check
+  of the old rollback's mark on an order (`orders.reader_payment.rollback`, which only the old code wrote). A pending
+  order, flow or payment date change with no mark of the Worker's is still never acted on and still listed, as
+  `unexpected_state` ("tell a manager"); a payment date change keeps its Close.
+- **A switch kind off refuses or pauses (H5; lead call L-H3).** The two kinds whose "off" did the work another way:
+  `card_moves` (a card save is refused, and W68a its setup intent before any tap; an order's T2 saves no card and says so,
+  and W68a a finalise pressed again still says so, looked up from T2's rows) and `lapse_sweep` (lapsing pauses).
+  Every gated route has a test of its own with its kind off, for each way its money can go (W68a).
+  **Runbook: `lapse_sweep` off pauses lapsing; fix forward.**
+- **The one-off session (H12; Wayne's Q58).** `GET sessions/one-off/quote` answers the band the day's windows give the
+  time, and the price a person (public) or the size-group prices (private). The quote and the press share one function
+  (`sessions/admin.ts`, `oneOffSession`), and the press runs it again under the band guard: the stamp it sends must be the
+  one the session would be made with now, or it is refused `changed_since` and nothing is made. W68a: the quote also says
+  when another session that day had its band set by hand (`othersSetByHand`), a note that is not in the stamp.
+- **`service_types.price` (H10)** is read and written by nothing: the service types read no longer answers it, and
+  `POST catalog/service-types/:id/price` is gone (W68a; no screen called it): a public type is priced by its bands, a
+  private one by its tiers.
+- **Migration 034** (`034_step_h_leftovers.sql`, applied by the lead once the W68 Worker is **live**: `GET /api/test`
+  answers 404; with nobody pressing and not on a 5-minute mark: its first statement locks the three busy tables NOWAIT, so
+  one in use fails it with nothing changed): an `audit_log (action, entity_type, entity_id)` index; the duplicate email index, `membership_credit_period_balances`, `service_types.price`,
+  `parity_log` and its purge, `membership_period_for` and `lapse_sweep_expired_bookings` dropped; the nightly job names
+  `AT TIME ZONE 'UTC'` for its session times (H11). The saved schema is refreshed after it is applied: the tests pass
+  before and after. A Worker revert to before W68 needs the column back first (the file's ROLLBACK). **Never run 028's
+  Down after 034** (the hourly job would call the dropped function).
+- **`/api/test`** is deleted (H6), and held by `testing/removed-code.test.ts`.

@@ -528,11 +528,10 @@ export const savedCardMembershipsSchema = z.object({
 export type SavedCardMemberships = z.infer<typeof savedCardMembershipsSchema>
 
 /**
- * W42: the route's answer. The customer's card as saved (today's five fields), and, with the switch kind `card_moves`
- * on, the two counts. With it off the card is saved as before W42, no membership is moved and neither count is sent,
- * so the screen says nothing about memberships.
+ * W42: the route's answer. The customer's card as saved (today's five fields) and the two counts. W68 (H5): with the
+ * switch kind `card_moves` off the save is refused (MEMBERSHIP_PATH_OFF), so an answer always has both counts.
  */
-export const savedCardRouteOutputSchema = saveCustomerCardOutputSchema.extend(savedCardMembershipsSchema.partial().shape)
+export const savedCardRouteOutputSchema = saveCustomerCardOutputSchema.extend(savedCardMembershipsSchema.shape)
 export type SavedCardRouteOutput = z.infer<typeof savedCardRouteOutputSchema>
 
 // --- What a refusal carries

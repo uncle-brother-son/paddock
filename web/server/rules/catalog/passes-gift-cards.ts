@@ -24,7 +24,7 @@ import { adminRead, namedRead } from '@/server/rules/admin/read'
 import { adminRefusal, requireAdminPermission, type AdminActor } from '@/server/rules/admin/refusal'
 import { fieldsStampSql, NO_ROW_STAMP } from '@/server/rules/admin/stamp'
 import { adminWrite, WRITES_ONLY_WHAT_WAS_PRESSED, type AdminWriteOptions } from '@/server/rules/admin/write'
-import { CATALOG_ADMIN_DIALOG_WORDS, CATALOG_ADMIN_WORDS, LEGACY_CATALOG_ROUTE_WORDS } from './failure-messages'
+import { CATALOG_ADMIN_DIALOG_WORDS, CATALOG_ADMIN_WORDS } from './failure-messages'
 import { CATALOG_ITEM_NEW_WORDS, passLevelHolderWords } from './item-failure-messages'
 import { isPoundsAndPence, itemColumnsSql, priceText, withIsoTimes, type CatalogReader } from './items'
 
@@ -293,7 +293,7 @@ export async function createPreset(db: Db, giftCardTypeId: string, amount: unkno
   const action: AdminAction = 'catalog.preset_created'
   requireAdminPermission(options.actor, 'manage_pricing', action)
   const value = checkedAmount(action, amount, WORDS.createGiftCardPreset)
-  const gone = () => adminRefusal('NOT_FOUND', action, 'gift_card_type_not_found', LEGACY_CATALOG_ROUTE_WORDS['create-gift-card-preset'].giftCardTypeNotFound)
+  const gone = () => adminRefusal('NOT_FOUND', action, 'gift_card_type_not_found', CATALOG_ADMIN_WORDS.createGiftCardPreset.giftCardTypeNotFound)
   return adminWrite<null, Record<string, unknown>, { success: true; preset: Record<string, unknown> }>(
     db,
     {
@@ -328,7 +328,7 @@ export async function setPresetPrice(db: Db, presetId: string, amount: unknown, 
   const action: AdminAction = 'catalog.price_set'
   requireAdminPermission(options.actor, 'manage_pricing', action)
   const value = checkedAmount(action, amount, WORDS.updateGiftCardPresetPrice)
-  const gone = () => adminRefusal('NOT_FOUND', action, 'preset_not_found', LEGACY_CATALOG_ROUTE_WORDS['update-gift-card-preset-price'].presetNotFound)
+  const gone = () => adminRefusal('NOT_FOUND', action, 'preset_not_found', CATALOG_ADMIN_WORDS.updateGiftCardPresetPrice.presetNotFound)
   type Amount = { amount: string }
   return adminWrite<Amount, Amount, { success: true; preset: Record<string, unknown> }>(
     db,

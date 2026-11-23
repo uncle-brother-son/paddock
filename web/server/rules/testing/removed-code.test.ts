@@ -136,9 +136,13 @@ const DELETED_WORKER_FILES = [
   'server/rules/payments/payment-intent-refunds.test.ts',
   'lib/london-time.ts',
   'lib/london-time.test.ts',
+  // W68 (H6; Wayne's yes, 23 Nov): a GET answering ok, with no caller.
+  'app/api/test/route.ts',
+  // W68a (Wayne's yes, 23 Nov): it only refused, and no screen called it.
+  'app/api/v1/staff/catalog/service-types/[serviceTypeId]/price/route.ts',
 ]
 
-/** Every route deleted, as a caller writes the path. */
+/** Every route deleted, as a caller writes the path (W68a: `*` stands for one part of it, an id). */
 const DELETED_ROUTES = [
   // W16
   '/api/v1/staff/orders/dry-run',
@@ -171,6 +175,10 @@ const DELETED_ROUTES = [
   '/api/catalog/sync-stripe',
   '/api/catalog/create-gift-card-preset',
   '/api/catalog/update-gift-card-preset-price',
+  // W68
+  '/api/test',
+  // W68a
+  '/api/v1/staff/catalog/service-types/*/price',
 ]
 
 /** Names removed from both repos (W16, W25: each guard scanned both). */
@@ -271,6 +279,17 @@ const REMOVED_WORKER_NAMES = [
   'computeMembershipCancellation',
   'computeMembershipEndDate',
   'legacyOff',
+  // W68: the legacy routes' words, the old rollback's, and what card_moves and lapse_sweep off did instead.
+  'LEGACY_CATALOG_ROUTE_WORDS',
+  'OLD_ROLLBACK_WORDS',
+  'OLD_ROLLBACK_STARTED_MESSAGE',
+  'FINALISE_ROLLBACK_STARTED_MESSAGE',
+  'oldRollbackStarted',
+  'saveCustomerCard',
+  'runLapseSweep',
+  // W68a: what only the service type price route said.
+  'privateServiceTypeUsesTiers',
+  'publicServiceTypeUsesBands',
 ]
 
 // --- The scan
@@ -311,7 +330,7 @@ const staffAppCode = new Map(staffAppFiles.map((file) => [file, withoutComments(
 const shown = (file: string) => path.relative(path.dirname(workerDir), file)
 
 const namesIn = (text: string, names: readonly string[]): string[] => names.filter((name) => new RegExp(`\\b${name}\\b`).test(text))
-const deletedRouteIn = (literal: string): string | undefined => DELETED_ROUTES.find((route) => new RegExp(`${route.replace(/[/-]/g, '\\$&')}(?![\\w-])`).test(literal))
+const deletedRouteIn = (literal: string): string | undefined => DELETED_ROUTES.find((route) => new RegExp(`${route.replace(/[/-]/g, '\\$&').replace('*', '[^/]+')}(?![\\w-])`).test(literal))
 /** A staff app module gone, as an import, a require or a test's loader names it (with or without `.ts`). */
 const GONE_STAFF_MODULES = DELETED_STAFF_APP_FILES.filter((file) => file.startsWith('backend/paddock/')).map((file) => file.replace(/^backend\/paddock\//, '').replace(/\.ts$/, ''))
 function goneModulesIn(code: string): string[] {
@@ -382,7 +401,7 @@ describe('removed code stays removed (H-plan 3.1; W64a item 7: the five removal 
   it('every deleted file is gone, in both repos', () => {
     expect(DELETED_STAFF_APP_FILES.filter((file) => existsSync(path.join(appDir, file)))).toEqual([])
     expect(DELETED_WORKER_FILES.filter((file) => existsSync(path.join(workerDir, file)))).toEqual([])
-    expect([DELETED_STAFF_APP_FILES.length, DELETED_WORKER_FILES.length]).toEqual([49, 60])
+    expect([DELETED_STAFF_APP_FILES.length, DELETED_WORKER_FILES.length]).toEqual([49, 62])
   })
 
   it('no code or test in the Worker imports a deleted Worker file (W65b)', () => {
@@ -405,7 +424,7 @@ describe('removed code stays removed (H-plan 3.1; W64a item 7: the five removal 
     for (const [file, text] of [...workerCode, ...staffAppCode]) {
       // W65: the kept scenario files' fault hooks are keyed by the Worker routes now, and GB15's dropped scenario went
       // with the old side, so they are scanned too. A route is a call only as a path, not as a word in a sentence that
-      // names it (LEGACY_CATALOG_ROUTE_WORDS).
+      // names it.
       for (const literal of literals(text)) if (literal.startsWith('/api/') && deletedRouteIn(literal)) found.push(`${shown(file)}: '${literal}'`)
     }
     expect(found).toEqual([])
@@ -443,6 +462,9 @@ describe('removed code stays removed (H-plan 3.1; W64a item 7: the five removal 
     expect(goneModulesIn(code)).toEqual(['./shared/shadowCompare', 'eventCancellationQuote'])
     // A route that only starts like a deleted one is not it.
     expect(deletedRouteIn('/api/bookings/refunds-report')).toBeUndefined()
+    // W68a: a route with an id in it, written with one or built; its neighbours are not it.
+    for (const path of ['/api/v1/staff/catalog/service-types/10000000-0000-4000-8000-000000000002/price', '/api/v1/staff/catalog/service-types/${encodeURIComponent(String(itemId))}/price']) expect(deletedRouteIn(path), path).toBe('/api/v1/staff/catalog/service-types/*/price')
+    for (const path of ['/api/v1/staff/catalog/service-types/x/active', '/api/v1/staff/catalog/tiers/x/price', '/api/v1/staff/catalog/session-pass-types/x/price', '/api/v1/staff/catalog/service-types/x/price-list']) expect(deletedRouteIn(path), path).toBeUndefined()
     // W65b: an import of a deleted Worker file, by alias or relative path; the live London time helpers are not it.
     const importing = "import { getLondonOffsetMinutes } from '@/lib/london-time'\nimport { listPaymentIntentRefunds } from './payment-intent-refunds'\nimport { londonWallClockToUtc } from '@/server/rules/time/london-time'"
     expect(deletedWorkerImportsIn(path.join(workerDir, 'server/rules/payments/terminal.ts'), importing)).toEqual(['@/lib/london-time', './payment-intent-refunds'])

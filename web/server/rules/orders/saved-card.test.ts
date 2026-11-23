@@ -463,7 +463,7 @@ const asReconcile = { actor, requestId: 'test-reconcile' }
 async function everything(): Promise<Record<string, unknown[]>> {
   const tables = await db.query<{ table_name: string }>(
     `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
-       AND table_name NOT IN ('audit_log', 'api_idempotency', 'request_log', 'parity_log') ORDER BY 1`
+       AND table_name NOT IN ('audit_log', 'api_idempotency', 'request_log') ORDER BY 1`
   )
   const dump: Record<string, unknown[]> = {}
   for (const { table_name: table } of tables) {
@@ -532,6 +532,23 @@ async function dyingOrder(params: Record<string, unknown>, when: 'before' | 'aft
   )
   return { stripe: fake as unknown as FakeStripe, before }
 }
+
+describe('the undo takes only a pending order (W68a, W68 review L2)', () => {
+  it.each(['refunded', 'failed', 'partially_refunded'])('an order that is %s: `not_pending`, with nothing given back and nothing removed (its places, store credit and gift card are not given back a second time)', async (status) => {
+    const { before } = await dyingOrder(splitBasket, 'before')
+    const [order] = await pendingOrders()
+    if (!order) throw new Error('no pending order')
+    await db.query('UPDATE orders SET payment_status = $1 WHERE id = $2::uuid', [status, order.id])
+    const held = await everything()
+    expect(await undoOrder(db, order.id, { ...asReconcile, why: 'test' })).toEqual({ undone: false, reason: 'not_pending' })
+    expect(await everything()).toEqual(held)
+    expect(await db.query("SELECT 1 FROM audit_log WHERE action = 'order.undo' AND entity_id = $1", [order.id])).toEqual([])
+    // Pending again (test data): the undo would have given it all back, so there was something to give twice.
+    await db.query("UPDATE orders SET payment_status = 'pending' WHERE id = $1::uuid", [order.id])
+    expect(await undoOrder(db, order.id, { ...asReconcile, why: 'test' })).toEqual({ undone: true })
+    expect(await everything()).toEqual(before)
+  })
+})
 
 describe('T2 (finalise-order.ts)', () => {
   it('safe twice: the second call finds the order paid with that PaymentIntent and writes nothing', async () => {

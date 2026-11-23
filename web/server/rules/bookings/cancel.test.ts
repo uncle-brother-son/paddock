@@ -566,6 +566,11 @@ describe('Cancel & Refund (brief W23 items 1 and 2)', () => {
       await db.query('UPDATE staff SET can_issue_refunds = true')
       const off = await cancel(bookingId, 'card', [], { orderSwitch: 'no_stripe' })
       expect(off.body.error).toMatchObject({ code: 'BOOKING_PATH_OFF', message: BOOKING_PATH_OFF_MESSAGE })
+      // W68a: to store credit too, and when only an add-on's money goes back.
+      for (const [way, confirmed] of [['credit', { refund: 20, addonsRefund: 0 }], ['card', { refund: 0, addonsRefund: 5 }], ['credit', { refund: 0, addonsRefund: 5 }]] as const) {
+        const refusedOff = await cancel(bookingId, way, [], { orderSwitch: 'no_stripe', confirmed })
+        expect(refusedOff.body.error, way).toMatchObject({ code: 'BOOKING_PATH_OFF', message: BOOKING_PATH_OFF_MESSAGE })
+      }
       expect(await bookingRow(bookingId)).toMatchObject({ status: 'confirmed' })
     })
     await withBooking(onCard, async ({ bookingId, stripe }) => {
@@ -1407,6 +1412,9 @@ describe("W25 item 8: the club's Cancel & return credit refunds paid guests in f
       for (const addonRefund of ['card', 'credit']) {
         const off = await cancelCredit(bookingId, { addonRefund, confirmed: { addonsRefund: 0, refund: q.refund }, clubCancelled: true }, { orderSwitch: 'no_stripe' })
         expect(off.body.error).toMatchObject({ code: 'BOOKING_PATH_OFF', message: BOOKING_PATH_OFF_MESSAGE })
+        // W68a: when only an add-on's money goes back.
+        const addonOnly = await cancelCredit(bookingId, { addonRefund, confirmed: { addonsRefund: 5 } }, { orderSwitch: 'no_stripe' })
+        expect(addonOnly.body.error).toMatchObject({ code: 'BOOKING_PATH_OFF', message: BOOKING_PATH_OFF_MESSAGE })
       }
       expect(await bookingRow(bookingId)).toMatchObject({ status: 'confirmed', price_paid: '20.00' })
       expect(await passSessions()).toBe(sessions)

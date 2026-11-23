@@ -11,7 +11,7 @@ import { ALL_KINDS_ON } from '@/server/rules/testing/sweep/order-presses'
 import { MEMBERSHIP_PATH_OFF_MESSAGE } from './failure-messages'
 import {
   CARD_MOVE_KINDS,
-  cardMovesOn,
+  cardMovePathOff, cardMovesOn,
   MEMBERSHIP_KINDS,
   membershipChangePathOff,
   membershipChangesOn,
@@ -155,8 +155,8 @@ describe("the payment date change's own switch kind (brief W41a item 1)", () => 
   })
 })
 
-// Brief W42 item 1: the replaced card's own kind, `card_moves`, as W41a's for the date change. Off is not a refusal:
-// the route saves the card as before W42 and moves no membership (customers/saved-card.test.ts holds the route).
+// Brief W42 item 1: the replaced card's own kind, `card_moves`, as W41a's for the date change. W68 (H5): off is a refusal
+// like every other kind's (customers/saved-card.test.ts holds the route; until W68 the card was saved the old way).
 describe("the replaced card's own switch kind (brief W42 item 1)", () => {
   /** The secret's value on live since 17 Nov (W41: `membership_changes` and `payment_date_changes` on). */
   const LIVE_SINCE_W41 = `${LIVE_TODAY},membership_changes,payment_date_changes`
@@ -171,7 +171,11 @@ describe("the replaced card's own switch kind (brief W42 item 1)", () => {
 
   it('off by default: unset, empty, the value live runs today, and every other kind on', () => {
     const everyOtherKind = ORDER_KINDS.filter((kind) => kind !== 'card_moves').join(',')
-    for (const value of [undefined, null, '', '   ', LIVE_TODAY, LIVE_SINCE_W41, everyOtherKind]) expect(cardMovesOn(value), String(value)).toBe(false)
+    for (const value of [undefined, null, '', '   ', LIVE_TODAY, LIVE_SINCE_W41, everyOtherKind]) {
+      expect(cardMovesOn(value), String(value)).toBe(false)
+      expect(cardMovePathOff(value), String(value)).toMatchObject({ code: 'MEMBERSHIP_PATH_OFF', message: MEMBERSHIP_PATH_OFF_MESSAGE, details: { reason: 'membership_path_off', message: MEMBERSHIP_PATH_OFF_MESSAGE, kinds: ['card_moves'] } })
+    }
+    expect(cardMovePathOff(`${LIVE_SINCE_W41},card_moves`)).toBeNull()
     // Deploying this Worker changes nothing for the cancel, the undo or the date change: they are on as they were.
     expect(membershipChangePathOff(LIVE_SINCE_W41)).toBeNull()
     expect(paymentDatePathOff(LIVE_SINCE_W41)).toBeNull()

@@ -50,7 +50,7 @@
       }
     },
     {
-      "thrown": "Private service types are priced by their tiers: change the tier prices instead."
+      "thrown": "Invalid itemType"
     }
   ],
   "stripeCalls": [],
@@ -259,29 +259,6 @@
             "requestId": "gone#17"
           },
           "http_status": 200,
-          "created_at": "<set>"
-        },
-        {
-          "key": "gone#18",
-          "actor_type": "staff",
-          "actor_id": "10000000-0000-4000-8000-000000000001",
-          "endpoint": "POST /api/v1/staff/catalog/service-types/10000000-0000-4000-8000-00000000001b/price",
-          "request_hash": "<sha-256>",
-          "status": "done",
-          "response": {
-            "ok": false,
-            "error": {
-              "code": "CONFLICT",
-              "details": {
-                "action": "catalog.price_set",
-                "reason": "private_service_type",
-                "message": "Private service types are priced by their tiers: change the tier prices instead."
-              },
-              "message": "Private service types are priced by their tiers: change the tier prices instead."
-            },
-            "requestId": "gone#19"
-          },
-          "http_status": 409,
           "created_at": "<set>"
         }
       ],

@@ -32,6 +32,34 @@ BEGIN
 END $function$
 `
 
+/**
+ * W68: the database's own sweep as it was when 028 kept it. Migration 034 drops it, so this file makes it for itself and
+ * reads the same before and after 034 is in the saved schema.
+ */
+const SWEEP_KEPT_BY_028 = `CREATE OR REPLACE FUNCTION public.lapse_sweep_expired_bookings()
+ RETURNS integer
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+DECLARE n integer := 0; r record;
+BEGIN
+  FOR r IN
+    SELECT b.id, b.session_id, b.party_size
+    FROM bookings b
+    WHERE b.status = 'payment_needed' AND b.payment_due_by <= now() AND COALESCE(b.price_paid, 0) = 0
+    FOR UPDATE OF b
+  LOOP
+    UPDATE bookings SET status = 'cancelled', cancelled_at = now(), cancel_reason = 'membership_lapsed', updated_at = now()
+    WHERE id = r.id;
+    UPDATE sessions SET total_booked = GREATEST(total_booked - r.party_size, 0), updated_at = now()
+    WHERE id = r.session_id;
+    n := n + 1;
+  END LOOP;
+  RETURN n;
+END $function$
+`
+
 /** The function 028 leaves. */
 const AFTER_028 = `CREATE OR REPLACE FUNCTION public.run_membership_maintenance()
  RETURNS jsonb
@@ -70,6 +98,7 @@ describe("migration 028 (brief W43 item 3): the hourly job stops calling the dat
 
   beforeAll(async () => {
     pg = await startRealPostgres()
+    await pg.admin.unsafe(SWEEP_KEPT_BY_028)
   }, 120_000)
   afterAll(() => pg.stop())
 
@@ -131,6 +160,7 @@ describe("migration 028 (brief W43 item 3): the hourly job stops calling the dat
     expect(definition(before)).toBe(BEFORE_028)
     expect(without(before)).toEqual(without(saved))
     const sweepBefore = definition(before, SWEEP)
+    expect(sweepBefore).toBe(SWEEP_KEPT_BY_028)
     expect(sweepBefore).toContain("cancel_reason = 'membership_lapsed'")
     const grants = async () =>
       (await pg.admin.unsafe<{ acl: string | null }[]>("SELECT proacl::text AS acl FROM pg_proc WHERE oid = 'public.run_membership_maintenance()'::regprocedure"))[0]?.acl

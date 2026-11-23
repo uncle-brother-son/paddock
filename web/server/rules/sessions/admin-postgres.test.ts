@@ -8,7 +8,7 @@ import { fixtures, insert } from '@/server/rules/testing/database'
 import { generatorFromFile032Sql } from '@/server/rules/testing/migration-032'
 import { deferred, waitingOn } from '@/server/rules/testing/race'
 import { startRealPostgres, type RealPostgres } from '@/server/rules/testing/real-postgres'
-import { blockDay, blockSession, createOneOffSession, resetSessionBand, setSessionBand, setSessionStartTime, unblockDay } from './admin'
+import { blockDay, blockSession, createOneOffSession, oneOffSessionQuote, resetSessionBand, setSessionBand, setSessionStartTime, unblockDay } from './admin'
 
 // Brief W51 items 5, 6, 8 and 9 ("Parity and tests": the two races; G-plan 4.9 item 7): the session races on real
 // Postgres 17.6, each press on its own connection. The first press is the rule itself, held open inside its
@@ -88,19 +88,36 @@ const heldSave = async () => {
   return { save, holder: await held.holding, release: held.release }
 }
 
+/** The stamp the one-off dialog would hold for a Sauna at this time, as the Worker answers it now (W68, Q58). */
+const shownFor = async (startTime: string) => (await oneOffSessionQuote(reader, sauna, startTime, { actor: pressBy(jo).actor })).stamp
+
 describe('W51-1: a session written while a band-window save is in progress', () => {
-  it('a one-off session made during the save waits on the band guard and gets the NEW band', async () => {
+  it("a one-off session pressed during the save waits on the band guard; the band it was shown (Core) is no longer the one it would get, so it is refused (W68, Q58) and nothing is made; shown again, it is made in the NEW band", async () => {
+    const shown = await shownFor(`${NEXT_SAT}T13:00:00.000Z`)
     const { save, holder, release } = await heldSave()
     // Next Saturday at 13:00: Core by the old windows, Peak by the ones the save is leaving.
-    const created = outcomeOf(createOneOffSession(second, sauna, `${NEXT_SAT}T13:00:00.000Z`, pressBy(jo)))
+    const refused = outcomeOf(createOneOffSession(second, sauna, `${NEXT_SAT}T13:00:00.000Z`, shown, pressBy(jo)))
     expect(await waitingOn(pg, await sessionBlockedBy(pg, holder))).toEqual(['session_bands'])
     // Nothing of it is written while it waits.
     expect(await first.query('SELECT id FROM sessions')).toHaveLength(2)
     release()
     expect(await save).toMatchObject({ answered: { saved: true, rebandedSessions: 2 } })
-    const made = (await created) as { answered: { created: boolean; session: { id: string } } }
+    expect(await refused).toEqual({ refused: 'changed_since' })
+    expect(await first.query('SELECT id FROM sessions')).toHaveLength(2)
+    const made = (await outcomeOf(createOneOffSession(second, sauna, `${NEXT_SAT}T13:00:00.000Z`, await shownFor(`${NEXT_SAT}T13:00:00.000Z`), pressBy(jo)))) as { answered: { created: boolean; session: { id: string } } }
     expect(made.answered.created).toBe(true)
     expect(await bandOf(made.answered.session.id)).toBe('peak')
+  })
+
+  it("a one-off session pressed during a save that leaves its time's band as it was waits, and is made in the band it was shown", async () => {
+    const shown = await shownFor(`${NEXT_SAT}T10:00:00.000Z`)
+    const { save, holder, release } = await heldSave()
+    const created = outcomeOf(createOneOffSession(second, sauna, `${NEXT_SAT}T10:00:00.000Z`, shown, pressBy(jo)))
+    expect(await waitingOn(pg, await sessionBlockedBy(pg, holder))).toEqual(['session_bands'])
+    release()
+    expect(await save).toMatchObject({ answered: { saved: true } })
+    const made = (await created) as { answered: { session: { id: string } } }
+    expect(await bandOf(made.answered.session.id)).toBe('core')
   })
 
   it('control: the same insert without the guard does not wait, reads the old windows, and keeps the OLD band after the save commits', async () => {
@@ -145,7 +162,7 @@ describe('W51-1: a session written while a band-window save is in progress', () 
 
   it('a save that starts while a one-off session is being made waits for it, then re-bands what it made', async () => {
     const held = holdingAfter(first, (sql) => sql.startsWith('INSERT INTO sessions'))
-    const created = outcomeOf(createOneOffSession(held.db, sauna, `${NEXT_SAT}T13:00:00.000Z`, pressBy(jo)))
+    const created = outcomeOf(createOneOffSession(held.db, sauna, `${NEXT_SAT}T13:00:00.000Z`, await shownFor(`${NEXT_SAT}T13:00:00.000Z`), pressBy(jo)))
     const holder = await held.holding
     const save = outcomeOf(setBandRules(second, SATURDAY, atNoon(), await dayStamp(), pressBy(jo)))
     expect(await waitingOn(pg, await sessionBlockedBy(pg, holder))).toEqual(['session_bands'])
@@ -482,10 +499,11 @@ describe("W51a (closed dates): Block Day, Unblock Day and a one-off session agai
 
   it("a one-off session pressed while Block Day holds the date waits on the date's lock and is then refused: none is made on the closed date; the other way round, Block Day waits and finds the session", async () => {
     const christmas = await day(200)
+    const shown = await shownFor(`${christmas}T13:00:00.000Z`)
     const held = holdingAfter(first, (sql) => sql.startsWith('INSERT INTO closed_dates'))
     const blocked = outcomeOf(blockDay(held.db, christmas, 'Closed for Christmas', nothingToBlock, pressBy(jo)))
     const holder = await held.holding
-    const created = outcomeOf(createOneOffSession(second, sauna, `${christmas}T13:00:00.000Z`, pressBy(jo)))
+    const created = outcomeOf(createOneOffSession(second, sauna, `${christmas}T13:00:00.000Z`, shown, pressBy(jo)))
     expect(await waitingOn(pg, await sessionBlockedBy(pg, holder))).toEqual(['advisory'])
     held.release()
     expect(await blocked).toMatchObject({ answered: { closedDate: true } })
@@ -495,7 +513,7 @@ describe("W51a (closed dates): Block Day, Unblock Day and a one-off session agai
     // The other way: the one-off first, held open with its session written; Block Day on that date waits for it.
     const boxingDay = await day(201)
     const making = holdingAfter(first, (sql) => sql.startsWith('INSERT INTO sessions'))
-    const made = outcomeOf(createOneOffSession(making.db, sauna, `${boxingDay}T13:00:00.000Z`, pressBy(jo)))
+    const made = outcomeOf(createOneOffSession(making.db, sauna, `${boxingDay}T13:00:00.000Z`, await shownFor(`${boxingDay}T13:00:00.000Z`), pressBy(jo)))
     const maker = await making.holding
     const closing = outcomeOf(blockDay(second, boxingDay, 'Closed', nothingToBlock, pressBy(jo)))
     expect(await waitingOn(pg, await sessionBlockedBy(pg, maker))).toEqual(['advisory'])

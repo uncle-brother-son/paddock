@@ -1,7 +1,7 @@
 // Briefs W55 + W56 (G-plan 1.1 to 1.3, 4.1, 4.3, 4.6, 4.8; bugs GB12, GB14, GB15, GB23; lead calls L2, L11, L12;
 // W53 review L7; W54a's stale-page rule): the catalogue's items on the Worker: products, their variants and add-ons
 // (W55), and what every item kind shares: on and off sale, and its price (W55 for products and add-ons, W56 for
-// public service types and session passes). Ported from the staff app's old functions as they were
+// session passes; W68a: a service type has none of its own, and its price route is gone). Ported from the staff app's old functions as they were
 // at W48, with their words (failure-messages.ts) and the legacy routes' own (toggle-active,
 // update-price, create-variant).
 //
@@ -31,7 +31,7 @@ import { fieldsStampSql, NO_ROW_STAMP } from '@/server/rules/admin/stamp'
 import { adminWrite, WRITES_ONLY_WHAT_WAS_PRESSED, type AdminWriteOptions } from '@/server/rules/admin/write'
 import type { AdminLockTable } from '@/server/rules/admin/locks'
 import { isUuid } from '@/server/rules/admin/locks'
-import { CATALOG_ADMIN_WORDS, LEGACY_CATALOG_ROUTE_WORDS } from './failure-messages'
+import { CATALOG_ADMIN_WORDS } from './failure-messages'
 import { CATALOG_ITEM_NEW_WORDS, PRICE_LIMIT_POUNDS } from './item-failure-messages'
 
 const WORDS = CATALOG_ADMIN_WORDS
@@ -79,7 +79,7 @@ interface KindInfo {
 
 export const PRODUCT_COLUMNS = ['id', 'sanity_product_id', 'name', 'thumbnail_url', 'category', 'base_price', 'member_price', 'sale_price', 'fulfillment_method', 'stripe_product_id', 'stripe_price_id_base', 'stripe_price_id_member', 'stripe_price_id_sale', 'active', 'created_at', 'updated_at'] as const
 export const ADDON_COLUMNS = ['id', 'sanity_addon_id', 'name', 'thumbnail_url', 'category', 'sku', 'base_price', 'member_price', 'sale_price', 'stripe_product_id', 'stripe_price_id_base', 'stripe_price_id_member', 'stripe_price_id_sale', 'active', 'created_at', 'updated_at'] as const
-export const SERVICE_TYPE_COLUMNS = ['id', 'sanity_service_type_id', 'name', 'thumbnail_url', 'duration', 'capacity', 'booking_type', 'price', 'active', 'stripe_product_id', 'stripe_price_id', 'created_at', 'updated_at'] as const
+export const SERVICE_TYPE_COLUMNS = ['id', 'sanity_service_type_id', 'name', 'thumbnail_url', 'duration', 'capacity', 'booking_type', 'active', 'stripe_product_id', 'stripe_price_id', 'created_at', 'updated_at'] as const
 export const PASS_TYPE_COLUMNS = ['id', 'sanity_pass_type_id', 'name', 'thumbnail_url', 'price', 'sessions_included', 'expiry_months', 'stripe_product_id', 'stripe_price_id', 'active', 'created_at', 'updated_at', 'level'] as const
 export const GIFT_CARD_TYPE_COLUMNS = ['id', 'sanity_gift_card_type_id', 'name', 'thumbnail_url', 'active', 'stripe_product_id', 'custom_amount_enabled', 'custom_amount_min', 'custom_amount_max', 'created_at', 'updated_at', 'expiry_months'] as const
 export const PRESET_COLUMNS = ['id', 'gift_card_type_id', 'amount', 'active', 'stripe_price_id', 'created_at', 'updated_at'] as const
@@ -87,7 +87,7 @@ export const PRESET_COLUMNS = ['id', 'gift_card_type_id', 'amount', 'active', 's
 export const KINDS: Readonly<Record<ItemKind, KindInfo>> = {
   product: { table: 'products', columns: PRODUCT_COLUMNS, money: ['base_price', 'member_price', 'sale_price'] },
   addon: { table: 'addons', columns: ADDON_COLUMNS, money: ['base_price', 'member_price', 'sale_price'] },
-  service_type: { table: 'service_types', columns: SERVICE_TYPE_COLUMNS, money: ['price'] },
+  service_type: { table: 'service_types', columns: SERVICE_TYPE_COLUMNS, money: [] },
   session_pass_type: { table: 'session_pass_types', columns: PASS_TYPE_COLUMNS, money: ['price'] },
   gift_card_type: { table: 'gift_card_types', columns: GIFT_CARD_TYPE_COLUMNS, money: ['custom_amount_min', 'custom_amount_max'] },
   gift_card_preset: { table: 'gift_card_presets', columns: PRESET_COLUMNS, money: ['amount'] },
@@ -101,8 +101,7 @@ export const itemColumnsSql = (kind: ItemKind, alias: string): string => namedCo
  * - product: a price of its own (catalog-price.ts, variantPriceFor: base, sale or member), or else variants that each
  *   have an override. Its variants sell at the product's prices, and one with none of them would be unpriced;
  * - add-on: base, sale or member price (addonPriceFor);
- * - service type: a public one is priced by its bands (quote_booking reads the session's band; its own `price` column is
- *   read by nothing), so it needs none; a private one needs a size group with a price (its tiers; one still pending in
+ * - service type: a public one is priced by its bands (quote_booking reads the session's band), so it needs none; a private one needs a size group with a price (its tiers; one still pending in
  *   some band is refused at the booking, as before);
  * - session pass: its price;
  * - gift card type: a preset on sale, or custom amounts on with both limits set;
@@ -128,7 +127,7 @@ const PRICED_SQL: Readonly<Record<ItemKind, string>> = {
 export const priceFirst = (action: AdminAction) => adminRefusal('CONFLICT', action, 'price_not_set', NEW_WORDS.setItsPriceFirst)
 
 /** "Item not found", the legacy routes' words for an item that isn't there. */
-const itemNotFound = (action: AdminAction) => adminRefusal('NOT_FOUND', action, 'item_not_found', LEGACY_CATALOG_ROUTE_WORDS['toggle-active'].itemNotFound)
+const itemNotFound = (action: AdminAction) => adminRefusal('NOT_FOUND', action, 'item_not_found', CATALOG_ADMIN_WORDS.toggleItemActive.itemNotFound)
 
 /**
  * On and off sale (`POST catalog/<kind>/:id/active`): setProductActive, setAddonActive, setServiceTypeActive,
@@ -178,15 +177,14 @@ export type PriceField = (typeof PRICE_FIELDS)[number]
 export type PriceInput = Partial<Record<PriceField, unknown>>
 
 /** Which column each price field sets, for each kind the Worker prices (the legacy update-price route's mapping). */
-const PRICE_COLUMNS: Readonly<Record<'product' | 'addon' | 'service_type' | 'session_pass_type', Partial<Record<PriceField, string>>>> = {
+const PRICE_COLUMNS: Readonly<Record<'product' | 'addon' | 'session_pass_type', Partial<Record<PriceField, string>>>> = {
   product: { basePrice: 'base_price', memberPrice: 'member_price', salePrice: 'sale_price' },
   addon: { basePrice: 'base_price', memberPrice: 'member_price', salePrice: 'sale_price' },
-  service_type: { basePrice: 'price' },
   session_pass_type: { basePrice: 'price' },
 }
 export type PricedKind = keyof typeof PRICE_COLUMNS
 /** How a kind is named in the "can't be set on" words. */
-const KIND_WORDS: Readonly<Record<PricedKind, string>> = { product: 'a product', addon: 'an add-on', service_type: 'a service type', session_pass_type: 'a session pass' }
+const KIND_WORDS: Readonly<Record<PricedKind, string>> = { product: 'a product', addon: 'an add-on', session_pass_type: 'a session pass' }
 
 /**
  * The old checks of a price press, in their order and words, then L7's: at least one field; each one sent a
@@ -222,11 +220,11 @@ export interface ItemPriceAnswer {
 }
 
 /**
- * A catalogue item's price (`POST catalog/<kind>/:id/price`): updateCatalogItemPrice for a product, an add-on, a
- * public service type or a session pass (a membership plan's stays on the legacy route until W57). Manage pricing;
+ * A catalogue item's price (`POST catalog/<kind>/:id/price`): updateCatalogItemPrice for a product, an add-on or a
+ * session pass (a membership plan's has its own route; a service type is priced by its bands or its tiers, and W68a took
+ * its route out). Manage pricing;
  * the old checks and L7's, before anything is read; then one transaction under the item's lock: the item must be
- * there ("Item not found"), a service type must be public (its old words: a private one is priced by its tiers), the
- * columns set, and a `catalog.price_set` audit row with the prices before and after. L2: no Stripe price is made or
+ * there ("Item not found"), the columns set, and a `catalog.price_set` audit row with the prices before and after. L2: no Stripe price is made or
  * archived, so GB2 (a row left on an archived price, a second price for one press) can't happen. Each press writes
  * only the prices it sends, so it carries no stamp: that is safe only because the dialogs send just the prices staff
  * changed, compared in pence (W55a, review S1: before that "20" ≠ "20.00" re-sent every price, and a stale dialog
@@ -238,7 +236,7 @@ export async function setItemPrice(db: Db, kind: PricedKind, itemId: string, inp
   const prices = checkedPrices(action, kind, input)
   const { table } = KINDS[kind]
   const columns = [...new Set(prices.map((price) => price.column))]
-  // The audit row keeps the item's prices before and after (a service type's booking type beside them, read to check it).
+  // The audit row keeps the item's prices before and after.
   return adminWrite<Record<string, unknown>, Record<string, unknown>, ItemPriceAnswer>(
     db,
     {
@@ -249,16 +247,12 @@ export async function setItemPrice(db: Db, kind: PricedKind, itemId: string, inp
       unchangedSince: WRITES_ONLY_WHAT_WAS_PRESSED,
       async before(tx, held) {
         if (!held[table]?.length) throw itemNotFound(action)
-        const extra = kind === 'service_type' ? ', booking_type' : ''
         // eslint-disable-next-line no-restricted-syntax -- the table and columns are literals from KINDS and PRICE_COLUMNS
-        const [row] = await tx.query<Record<string, unknown>>(`SELECT ${KINDS[kind].money.map((column) => `${column}::text AS ${column}`).join(', ')}${extra} FROM ${table} WHERE id = $1::uuid`, [itemId])
+        const [row] = await tx.query<Record<string, unknown>>(`SELECT ${KINDS[kind].money.map((column) => `${column}::text AS ${column}`).join(', ')} FROM ${table} WHERE id = $1::uuid`, [itemId])
         if (!row) throw itemNotFound(action)
         return row
       },
-      async change(tx, before) {
-        if (kind === 'service_type' && before['booking_type'] !== 'public') {
-          throw adminRefusal('CONFLICT', action, 'private_service_type', NEW_WORDS.privateServiceTypeUsesTiers)
-        }
+      async change(tx) {
         const sets = columns.map((column, i) => `${column} = $${i + 1}::numeric`)
         const values = columns.map((column) => prices.filter((price) => price.column === column).at(-1)?.text ?? null)
         // eslint-disable-next-line no-restricted-syntax -- the table and columns are literals from KINDS and PRICE_COLUMNS
@@ -328,7 +322,7 @@ export async function setProductFulfilment(db: Db, productId: string, method: un
   const action: AdminAction = 'catalog.details_set'
   requireAdminPermission(options.actor, 'manage_pricing', action)
   if (typeof method !== 'string' || !FULFILMENT_METHODS.includes(method)) throw adminRefusal('VALIDATION', action, 'invalid_params', WORDS.setProductFulfillmentMethod.invalidFulfillmentMethod(method), { field: 'fulfillmentMethod' })
-  const gone = () => adminRefusal('NOT_FOUND', action, 'product_not_found', LEGACY_CATALOG_ROUTE_WORDS['create-variant'].productNotFound)
+  const gone = () => adminRefusal('NOT_FOUND', action, 'product_not_found', CATALOG_ADMIN_WORDS.createProductVariant.productNotFound)
   type Row = { id: string; fulfillment_method: string }
   return adminWrite<Row, Row, Row>(
     db,
@@ -481,7 +475,7 @@ export async function createVariant(db: Db, input: CreateVariantInput, options: 
   const stock = input.stockQuantity === undefined || input.stockQuantity === null ? 0 : input.stockQuantity
   if (typeof stock !== 'number' || !Number.isInteger(stock) || stock < 0) throw adminRefusal('VALIDATION', action, 'invalid_params', words.stockquantityMustNonNegativeWholeNumber, { field: 'stockQuantity' })
   const { productId } = input
-  const gone = () => adminRefusal('NOT_FOUND', action, 'product_not_found', LEGACY_CATALOG_ROUTE_WORDS['create-variant'].productNotFound)
+  const gone = () => adminRefusal('NOT_FOUND', action, 'product_not_found', CATALOG_ADMIN_WORDS.createProductVariant.productNotFound)
   const staffId = options.actor.id
   return adminWrite<null, Record<string, unknown>, { success: true; variant: Record<string, unknown> }>(
     db,
@@ -534,7 +528,7 @@ export async function setAddonSku(db: Db, addonId: string, sku: unknown, options
   const action: AdminAction = 'catalog.details_set'
   requireAdminPermission(options.actor, 'manage_pricing', action)
   const value = typeof sku === 'string' && sku.trim() !== '' ? sku.trim() : null
-  const gone = () => adminRefusal('NOT_FOUND', action, 'addon_not_found', LEGACY_CATALOG_ROUTE_WORDS['toggle-active'].itemNotFound)
+  const gone = () => adminRefusal('NOT_FOUND', action, 'addon_not_found', CATALOG_ADMIN_WORDS.toggleItemActive.itemNotFound)
   type Row = { id: string; sku: string | null }
   return adminWrite<Row, Row, Row>(
     db,

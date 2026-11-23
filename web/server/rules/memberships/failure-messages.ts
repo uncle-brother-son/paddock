@@ -296,7 +296,7 @@ const CLOSE_DATE_CHANGE = 'Then press Close (needs the Issue refunds permission)
 /**
  * New in W41 (brief W41 item 5; F-plan 4.10): the stuck list's line for a payment date change that is held, by what
  * it is waiting on. A reason with no entry here uses the list's own words for it (step D's: `unclear`, `other_mode`,
- * `several_payments`, `amount_mismatch`, `payment_processing`, `not_started_here`, `unexpected`).
+ * `several_payments`, `amount_mismatch`, `payment_processing`, `unexpected_state`, `unexpected`).
  */
 export const PAYMENT_DATE_STUCK_WORDS: Readonly<Record<string, string>> = {
   waiting: `A payment date change didn't finish cleanly: its part-month charge may or may not have been taken. The automatic check, every 5 minutes, looks for the payment in Stripe and finishes the change or ends it; it never charges again. ${DONT_CHARGE_AGAIN}`,
@@ -314,9 +314,6 @@ export const PAYMENT_DATE_STUCK_WORDS: Readonly<Record<string, string>> = {
   // W47a (W47 review L7): the reason also covers a payment Stripe holds at `requires_confirmation` or
   // `requires_capture`, where nothing is waiting on the customer, so the words name the step as Stripe's.
   payment_needs_action: `A payment date change's part-month charge is waiting for a step Stripe needs (usually the customer's bank approval), which can't be done from here, so it won't finish on its own. Tell a manager: cancel that payment in Stripe. Once Stripe shows it cancelled, the automatic check ends the change within 5 minutes (nothing was taken) and the date can be changed again. It can't be closed by hand until then. ${DONT_CHARGE_AGAIN}`,
-  // W58b (the W45 audit's row 38; W41 review L3): a payment date row the Worker didn't start (the old screens'), with
-  // what to look for, in place of step D's general words.
-  not_started_here: `The booking system has no record of starting this payment date change (it was made on the old screens), so the automatic check can't settle it. Look in Stripe for a "Payment date change" charge on this customer and at the subscription's next payment date: if the charge was taken and the date didn't move, refund the charge in Stripe by hand (or tell a manager). ${CLOSE_DATE_CHANGE}`,
 }
 
 /**

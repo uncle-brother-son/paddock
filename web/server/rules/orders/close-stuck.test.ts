@@ -18,7 +18,6 @@ import { reconcile, SCHEDULED_LIMITS, type ReconcileOptions, type ReconcileResul
 import {
   COMPENSATION_REFUSED_WORDS,
   MEMBERSHIP_STUCK_NOTE,
-  OLD_ROLLBACK_WORDS,
   REFUND_FAILED_WORDS,
   REFUND_PENDING_WORDS,
   STRIPE_REFUSED_WORDS,
@@ -613,13 +612,13 @@ describe('words (brief W14b item 3; W12 review L5, W13 to W13d)', () => {
   // Every reason reconcile records for an order or flow it leaves, and the ones its finalise and cancel can hand it
   // (reconcile.ts left(...), FinaliseMismatch, the reader and flow routes' reasons).
   const REASONS = [
-    'waiting', 'not_started_here', 'unclear', 'other_mode', 'amount_mismatch', 'customer_mismatch', 'metadata_mismatch', 'currency_mismatch',
-    'several_payments', 'changed_since', 'finalise_failed', 'undo_failed', 'old_rollback', 'charged_without_order', 'charged_without_record',
+    'waiting', 'unclear', 'other_mode', 'amount_mismatch', 'customer_mismatch', 'metadata_mismatch', 'currency_mismatch',
+    'several_payments', 'changed_since', 'finalise_failed', 'undo_failed', 'charged_without_order', 'charged_without_record',
     'payment_not_succeeded', 'compensation_unfinished', 'several_subscriptions', 'replaced_unconfirmed', 'subscription_starting',
     // W12 review L5's list, which fell back to "something unexpected" before W14b.
     'unexpected_state', 'paid_by_another_payment', 'not_pending', 'order_not_found', 'not_a_reader_order', 'intent_unconfirmed',
     // The rest the routes can answer.
-    'not_a_reader_flow', 'undo_blocked', 'rollback_started', 'compensating', 'membership_not_started', 'payment_missing', 'subscription_mismatch',
+    'not_a_reader_flow', 'undo_blocked', 'compensating', 'membership_not_started', 'payment_missing', 'subscription_mismatch',
     'membership_line_missing', 'membership_row_missing', 'subscription_unconfirmed',
   ]
   it.each(REASONS)('%s has words of its own, saying what to do', (reason) => {
@@ -637,10 +636,11 @@ describe('words (brief W14b item 3; W12 review L5, W13 to W13d)', () => {
     expect(SUBSCRIPTION_REFUSED_WORDS('sub_1')).toContain('then press Mark sorted')
     // W14c (S1): Close order is offered only once Stripe has refused for good, so these words don't name it.
     expect(STUCK_WORDS['compensation_unfinished']).not.toContain('Close order')
-    // W14c (W14b review L2): nothing finishes the old rollback on a Worker order, so no one is sent to Resolve now.
-    const oldRollback =
-      "The old screens had started cancelling this order and couldn't finish. Nothing more will be changed automatically: don't take payment again, and tell a manager."
-    expect([OLD_ROLLBACK_WORDS, STUCK_WORDS['old_rollback'], STUCK_WORDS['rollback_started'], CLOSE_WORDS.old_rollback]).toEqual([oldRollback, oldRollback, oldRollback, oldRollback])
+    // W68 (H3): the old screens' states are gone from the list and the close.
+    for (const reason of ['old_rollback', 'rollback_started', 'not_started_here']) expect([STUCK_WORDS[reason], (CLOSE_WORDS as Record<string, unknown>)[reason]], reason).toEqual([undefined, undefined])
+    // W68a (W68 noticed 5): the sentence no longer names the old screens, and no line's reason does.
+    expect(STUCK_WORDS['unexpected_state']).toBe("This isn't in a state the automatic check expected (something else may have changed it). Nothing was changed: don't take payment again, and tell a manager.")
+    expect(Object.entries(STUCK_WORDS).filter(([, words]) => words.includes('old screens'))).toEqual([])
     expect(STUCK_WORDS['changed_since']).toContain('press Close order on the Orders page')
     expect(STRIPE_REFUSED_WORDS).toContain('Tell a manager straight away')
     for (const state of ['taken', 'nothing_taken', 'other_mode'] as const) expect(changedElsewhereWords({ state, amount: 100, paymentIntentIds: [] })).toContain('then press Mark sorted')

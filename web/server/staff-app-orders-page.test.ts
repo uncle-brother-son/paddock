@@ -161,8 +161,8 @@ describe("one stuck list, the Worker's (W12-5; W25: the staff app's own two quer
       expect(listed.workerProblem).toBeUndefined()
       expect(listed.checkout.map((item) => item.orderId).sort()).toEqual([oldOrder, workerOrder].sort())
       expect(listed.checkout).toContainEqual(expect.objectContaining({ orderId: workerOrder, reason: 'waiting', words: STUCK_WORDS['waiting'] }))
-      expect(listed.checkout).toContainEqual(expect.objectContaining({ orderId: oldOrder, reason: 'not_started_here', words: STUCK_WORDS['not_started_here'] }))
-      expect(STUCK_WORDS['not_started_here']).toMatch(/tell a manager/)
+      expect(listed.checkout).toContainEqual(expect.objectContaining({ orderId: oldOrder, reason: 'unexpected_state', words: STUCK_WORDS['unexpected_state'] }))
+      expect(STUCK_WORDS['unexpected_state']).toMatch(/tell a manager/)
       expect(listed.checkout.every((item) => !('madeBy' in item))).toBe(true)
       // After Resolve now, only the unmarked order is left, once.
       await old.call('reconcileOrders', {})
@@ -184,7 +184,7 @@ describe("one stuck list, the Worker's (W12-5; W25: the staff app's own two quer
           expect.objectContaining(
             worker
               ? { pendingId: started.pendingReaderPayment.pendingId, reason: 'waiting' }
-              : { pendingId: started.pendingReaderPayment.pendingId, reason: 'not_started_here', words: STUCK_WORDS['not_started_here'] }
+              : { pendingId: started.pendingReaderPayment.pendingId, reason: 'unexpected_state', words: STUCK_WORDS['unexpected_state'] }
           ),
         ])
         expect(listed.flows.every((item) => !('madeBy' in item))).toBe(true)

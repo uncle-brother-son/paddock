@@ -36,15 +36,16 @@ import { ApiError } from '@/server/http/errors'
  *
  * W42 (brief item 1): `card_moves` is the replaced card's own kind, as W41a's for the date change: on, saving a
  * customer's card also moves each of their live memberships' renewals to it (server/rules/customers/saved-card.ts).
- * Off, the card is saved as before W42 and no membership is moved, whatever `membership_changes` says (which keeps
- * the cancel and the undo only). Off until the lead adds it to the secret; it turns nothing else on.
+ * Off (W68, H5), the save is refused, and (W68a) so is its setup intent, before any tap, whatever `membership_changes`
+ * says (which keeps the cancel and the undo only). It turns nothing else on.
  * W42a: on, an order's T2 that writes a membership or saves a card on the reader also leaves a card step for each of
- * the customer's live memberships against their saved card (finalise-order.ts); off, T2 is as it was.
+ * the customer's live memberships against their saved card (finalise-order.ts); W68: off, T2 finishes the order, saves
+ * no card and leaves no step.
  *
  * W43 (brief item 1; F-plan 4.8): `lapse_sweep` is the lapse sweep's own kind. On, each scheduled run cancels the
- * payment-needed bookings past their deadline (server/rules/bookings/lapse-sweep.ts) before it reconciles. Off, the
- * run's sweep does nothing and the database's hourly sweep stays in charge (until migration 028 takes it out of the
- * hourly job). No route asks for it, and it turns nothing else on.
+ * payment-needed bookings past their deadline (server/rules/bookings/lapse-sweep.ts) before it reconciles. Off (W68,
+ * H5), lapsing pauses: a booking past its deadline keeps its places until the kind is on again. There is no other sweep
+ * (the database's own went with migrations 028 and 034). No route asks for it, and it turns nothing else on.
  *
  * W47r (brief item 1): `payment_retries` is "Try the payment again now"'s own kind: a past-due member's open renewal
  * invoice paid from the desk on their saved card (server/rules/memberships/retry-payment.ts). Asked by its press and

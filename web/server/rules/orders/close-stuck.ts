@@ -69,11 +69,10 @@ import type { Db, Tx } from '@/server/db'
 import type { StripeClient } from '@/server/stripe/client'
 import { sendOptions, stripeTiming, type StripeTiming } from '@/server/stripe/deadline'
 import { CHANGED_ELSEWHERE, CHANGED_ELSEWHERE_DAYS, CHANGED_ELSEWHERE_WHERE, FINAL_FINDINGS, type ChangedElsewhereFinding } from './changed-elsewhere'
-import { oldRollbackStarted } from './finalise-order'
 import { lockForOrder } from './locks'
 import { SUBSCRIPTION_LEFT_ACTION } from './membership'
 import { PROCESSING_MINUTES } from './pending-order'
-import { compensationDefiniteSql, HELD_ORDER_CLOSE_REASONS, OLD_ROLLBACK_WORDS, SUBSCRIPTIONS_LEFT_SQL } from './stuck-list'
+import { compensationDefiniteSql, HELD_ORDER_CLOSE_REASONS, SUBSCRIPTIONS_LEFT_SQL } from './stuck-list'
 import { changedSince, PARTS_SQL, undoInTransaction, type LockedOrder, type OrderParts } from './undo-order'
 import { FLOW_PAYMENT_WATCHED, FLOW_UNDO_BLOCKED_MESSAGE, FlowUndoBlocked, isWorkerCardFlow, isWorkerFlow, readFlow, undoFlowInTransaction } from './reader-flow'
 import { isMissing } from './reader-order'
@@ -137,7 +136,6 @@ export const CLOSE_WORDS = {
   gone: 'This order no longer exists: it was settled in the meantime. Nothing was changed.',
   settled: 'This order has been settled in the meantime (it is no longer waiting for payment). Nothing was changed.',
   order_not_started_here: "The booking system has no record of starting this order's payment, so the close can't act on it. Nothing was changed. Tell a manager.",
-  old_rollback: OLD_ROLLBACK_WORDS,
   not_left_for_a_person:
     "The automatic check hasn't left this order for a person: it may still be settling it, or Stripe may still be dealing with its payment. Nothing was changed. Wait for the next check (every 5 minutes) and look again.",
   bought_in_use:
@@ -322,7 +320,6 @@ async function closeHeldOrder(db: Db, orderId: string, why: string, options: Clo
     if (order.payment_status !== 'pending') return refused('held_order', orderId, 'settled')
     const snapshot = order.reader_payment
     if (snapshot?.method !== 'card' && snapshot?.method !== 'reader') return refused('held_order', orderId, 'order_not_started_here')
-    if (oldRollbackStarted(snapshot)) return refused('held_order', orderId, 'old_rollback')
 
     // 2. Only what reconcile has left for a person: it has read Stripe, and nothing there is still open (it cancelled
     //    the order's intents, or found none) or the compensation's steps are the person's to finish.

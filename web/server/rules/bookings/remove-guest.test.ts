@@ -509,8 +509,10 @@ describe('Remove Guest: the removal (W22)', () => {
       const forbidden = await remove(guestId, { confirmedRefundAmount: 20, refundMethod: 'credit' }, { email: 'nore@example.com' })
       expect(forbidden.status).toBe(403)
       expect(forbidden.body.error?.details).toMatchObject({ reason: 'no_refund_permission', blockedByRefundPermission: true, screenWords: true })
-      const off = await remove(guestId, { confirmedRefundAmount: 20, refundMethod: 'card' }, { orderSwitch: 'no_stripe,saved_card' })
-      expect(off.body.error).toMatchObject({ code: 'BOOKING_PATH_OFF', message: BOOKING_PATH_OFF_MESSAGE })
+      for (const refundMethod of ['card', 'credit']) {
+        const off = await remove(guestId, { confirmedRefundAmount: 20, refundMethod }, { orderSwitch: 'no_stripe,saved_card' })
+        expect(off.body.error, refundMethod).toMatchObject({ code: 'BOOKING_PATH_OFF', message: BOOKING_PATH_OFF_MESSAGE })
+      }
       expect(await guestRow(guestId)).toBeDefined()
       // A seat with nothing left to refund (all of it part refunded) goes for anyone, switch off or not.
       await partRefund(bookingId, { amount: 60, refundMethod: 'credit', reason: 'Goodwill' })

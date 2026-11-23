@@ -561,7 +561,7 @@ function productScenarios(): Scenario[] {
         { itemType: 'membership_plan', itemId: ID.plan, monthlyPrice: -5 },
         { itemType: 'membership_plan', itemId: ID.plan, yearlyPrice: Number.NaN },
         { ...soapPrice, itemId: W48_ID.unknown },
-        // Candle has no Stripe product; a private service type's prices are its tiers.
+        // Candle has no Stripe product. W68a: no service type is priced here (its prices are its tiers or its bands).
         { ...soapPrice, itemId: ID.candle },
         { itemType: 'service_type', itemId: ID.privateType, basePrice: 90 }
       ),
@@ -580,8 +580,9 @@ function productScenarios(): Scenario[] {
     g('price-session-pass', async ({ call }) => {
       await call('updateCatalogItemPrice', { itemType: 'session_pass_type', itemId: ID.passType, basePrice: 55 })
     }, passSynced),
-    g('price-public-service-type', async ({ call }) => {
-      await call('updateCatalogItemPrice', { itemType: 'service_type', itemId: ID.serviceType, basePrice: 22 })
+    // W68a: the press has no service type any more (its route is gone), so it is refused before anything is sent.
+    g('price-public-service-type', async ({ attempt }) => {
+      await attempt('updateCatalogItemPrice', { itemType: 'service_type', itemId: ID.serviceType, basePrice: 22 })
     }, saunaSynced),
     // A price field the item's kind doesn't have (a monthly price on a product): the function lets it through, the
     // route prices nothing and its update is given no column to set, which fails: "Failed to update item".

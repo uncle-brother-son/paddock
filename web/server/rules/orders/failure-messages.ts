@@ -175,14 +175,6 @@ export const READER_CHARGED_WITHOUT_ORDER_MESSAGE =
 export const readerCustomerMismatchMessage = (paymentIntentId: string): string =>
   `This PaymentIntent was made for a different Stripe customer — do NOT finalise automatically. Check the PaymentIntent (${paymentIntentId}) in Stripe before doing anything.`
 
-/**
- * Cancel: the old rollback has started on it, and may have given things back already. W25 (W16 review 3): nothing
- * finishes an old rollback any more (Resolve now is the Worker's reconcile, which leaves it for a person), so the
- * words send staff to a manager, as the stuck list's do (OLD_ROLLBACK_WORDS).
- */
-export const OLD_ROLLBACK_STARTED_MESSAGE =
-  "The old checkout had started cancelling this order and couldn't finish, so it can't be cancelled here. Nothing more will be changed automatically: don't take payment again, and tell a manager."
-
 /*
  * W12: words for reconcile, the reader flows and the stuck list (new; adjustable at W14).
  */

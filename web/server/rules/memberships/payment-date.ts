@@ -922,16 +922,16 @@ export interface ListedPaymentDateChange {
  * The reasons reconcile leaves a change with that only a person can end: the manual close is offered for these, and
  * for no other. Everything else the automatic check is still working on.
  */
-export const PAYMENT_DATE_CLOSE_REASONS: ReadonlySet<string> = new Set(['not_started_here', 'several_payments', 'amount_mismatch', 'other_mode', 'refund_refused', 'refunded_elsewhere', 'subscription_missing'])
+export const PAYMENT_DATE_CLOSE_REASONS: ReadonlySet<string> = new Set(['unexpected_state', 'several_payments', 'amount_mismatch', 'other_mode', 'refund_refused', 'refunded_elsewhere', 'subscription_missing'])
 
 /**
- * Why a held change is listed: what reconcile last left it with, or that it hasn't looked yet, or that the Worker
- * never started it. W47 (W41 "Noticed" 4, review L4; the W45 audit's row 39): a change whose refund Stripe refused
+ * Why a held change is listed: what reconcile last left it with, or that it hasn't looked yet. W68 (H3): one the Worker
+ * never started (none is left) is `unexpected_state`: never acted on, listed for a person with its Close. W47 (W41 "Noticed" 4, review L4; the W45 audit's row 39): a change whose refund Stripe refused
  * reads `refund_refused` from the press's own mark, before reconcile's first run (which leaves it with the same reason
  * from the same mark, and makes no call for it). Until W47 its line said "waiting" for up to 5 minutes, with no Close.
  */
 export function paymentDateListedReason(row: Pick<ListedPaymentDateChange, 'started_here' | 'last' | 'refund_refused'>): string {
-  if (!row.started_here) return 'not_started_here'
+  if (!row.started_here) return 'unexpected_state'
   if (row.last?.outcome === 'left' && row.last.reason) return row.last.reason
   return row.refund_refused === true ? 'refund_refused' : 'waiting'
 }

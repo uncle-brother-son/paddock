@@ -17,8 +17,9 @@ export const GET = defineRoute({ auth: 'staff', input: sessionsRouteInputSchema,
  * active staff member. One transaction: the band guard shared first (a band-window save in progress is waited for,
  * so the session's band is by the windows it leaves), the old checks with the old reasons, the session, and a
  * `session.created` audit row. Idempotent: the same press key gets the first press's answer, so a lost answer
- * pressed again never makes the session twice.
+ * pressed again never makes the session twice. W68 (Wayne's Q58): the press sends the stamp of the band and price the dialog
+ * showed (`GET sessions/one-off/quote`); if they have changed, nothing is made (`changed_since`).
  */
 export const POST = defineRoute({ auth: 'staff', input: oneOffSessionRouteInputSchema, output: oneOffSessionRouteOutputSchema, idempotent: true }, async ({ db, input, staff, requestId, idempotencyKey }) =>
-  createOneOffSession(db, input.serviceTypeId, input.startTime, { actor: adminActor(staff), requestId, pressKey: idempotencyKey })
+  createOneOffSession(db, input.serviceTypeId, input.startTime, input.stamp, { actor: adminActor(staff), requestId, pressKey: idempotencyKey })
 )

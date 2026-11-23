@@ -14,13 +14,14 @@
 // until it is on again). The quote, reconcile and the check never ask either: a held change is always finished.
 //
 // W42 (brief item 1): the replaced card has a kind of its own too, `card_moves`. The saved-card route asks that kind
-// and never `membership_changes`: off, the card is saved as before W42 and no membership is moved; on, each live
-// membership's renewals move to the new card (customers/saved-card.ts). So the moves can be switched off on their own
-// (no Retool rollback: the staff app shows whatever the Worker answers). Reconcile and the check never ask it for a
-// step: a card step that was left is always sent, listed and checked.
+// and never `membership_changes`: on, each live membership's renewals move to the new card (customers/saved-card.ts).
+// W68 (H5; lead call L-H3; the W45 audit's row 50): off, the card save is refused (MEMBERSHIP_PATH_OFF) before anything
+// is read; until W68 it was saved as before W42. Reconcile and the check never ask it for a step: a card step that was
+// left is always sent, listed and checked.
 // W42a: an order's T2 asks it too (orders/finalise-order.ts): on, a T2 that writes a membership or saves a card
-// leaves a card step for each of the customer's live memberships; off, it is as it was. That is asked wherever T2
-// runs, a reconcile run included (an order it finalises is the same T2).
+// leaves a card step for each of the customer's live memberships. W68: off, T2 still finishes the order (its money is
+// taken), saves no card (a `customer.card_not_saved` row says why, and staff are told) and leaves no step. That is
+// asked wherever T2 runs, a reconcile run included (an order it finalises is the same T2).
 //
 // W47r (brief item 1): "Try the payment again now" has a kind of its own, `payment_retries`. Its press and its quote
 // ask that kind and no other; off, they answer MEMBERSHIP_PATH_OFF (the same words) before anything is read, in the
@@ -62,12 +63,20 @@ export function paymentDatePathOff(switchValue: string | undefined | null): ApiE
 /** W42: the replaced card's own kind. Off unless the ORDER_SWITCH secret names it. */
 export const CARD_MOVE_KINDS = ['card_moves'] as const satisfies readonly OrderKind[]
 
-/**
- * W42: whether `card_moves` is on. Off is not a refusal: the card is saved as before W42 and no membership is moved.
- * `membership_changes` and `payment_date_changes` say nothing about it, either way.
- */
+/** W42: whether `card_moves` is on. `membership_changes` and `payment_date_changes` say nothing about it, either way. */
 export function cardMovesOn(switchValue: string | undefined | null): boolean {
   return kindsOn(switchValue).has('card_moves')
+}
+
+/**
+ * W68 (H5; the W45 audit's row 50): MEMBERSHIP_PATH_OFF (the same code and words, naming its own kind) when `card_moves`
+ * is off, else null. Saving a card has no other way: until W68, off saved it as before W42. W68a: the setup intent asks
+ * too (terminal/setup-intents), so the refusal comes before the tap. Reconcile never asks.
+ */
+export function cardMovePathOff(switchValue: string | undefined | null): ApiError | null {
+  return cardMovesOn(switchValue)
+    ? null
+    : new ApiError('MEMBERSHIP_PATH_OFF', MEMBERSHIP_PATH_OFF_MESSAGE, { details: { reason: 'membership_path_off', message: MEMBERSHIP_PATH_OFF_MESSAGE, kinds: [...CARD_MOVE_KINDS] } })
 }
 
 /** W47r: "Try the payment again now"'s own kind. Off unless the ORDER_SWITCH secret names it. */

@@ -1,7 +1,7 @@
 // Briefs W55 + W56 (G-plan 1.1 to 1.3; bugs GB10, GB12, GB13, GB21, GB23; Wayne's Q52; W53 review L7): the new
 // words of the catalogue's items, for refusals the old functions had no words of their own for (they showed the
 // database's error, or let the value through). The old functions' own sentences stay in failure-messages.ts
-// (CATALOG_ADMIN_WORDS, LEGACY_CATALOG_ROUTE_WORDS), held to the old words by server/rules/admin/words.test.ts;
+// (CATALOG_ADMIN_WORDS), held to the old words by server/rules/admin/words.test.ts;
 // these are kept apart so that test still holds both ways. Each is answered as a refusal's `message`, with its reason.
 // Read-only: a read may import it.
 
@@ -57,11 +57,6 @@ export const CATALOG_ITEM_NEW_WORDS = {
   /** A pass type or gift card type that isn't there, where the old function answered nothing. */
   passTypeNotFound: 'This pass type no longer exists.',
   giftCardTypeNotFound: 'That gift card type no longer exists. Reload the page and try again.',
-  /**
-   * W61 (the lead's call): a base price on a private service type. The legacy update-price route's own words sent
-   * staff to the legacy tier price route, which W61 removed with the other legacy catalogue routes.
-   */
-  privateServiceTypeUsesTiers: 'Private service types are priced by their tiers: change the tier prices instead.',
 } as const
 
 /**

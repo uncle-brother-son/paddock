@@ -19,7 +19,7 @@ import { adminRead } from '@/server/rules/admin/read'
 import { adminRefusal, requireAdminPermission, type AdminActor } from '@/server/rules/admin/refusal'
 import { fieldsStampSql, NO_ROW_STAMP, rowsStamp } from '@/server/rules/admin/stamp'
 import { adminWrite, WRITES_ONLY_WHAT_WAS_PRESSED, type AdminWriteOptions } from '@/server/rules/admin/write'
-import { CATALOG_ADMIN_WORDS, LEGACY_CATALOG_ROUTE_WORDS } from './failure-messages'
+import { CATALOG_ADMIN_WORDS } from './failure-messages'
 import { CATALOG_ITEM_NEW_WORDS } from './item-failure-messages'
 import { isPoundsAndPence, itemColumnsSql, priceText, withIsoTimes } from './items'
 
@@ -314,7 +314,7 @@ export async function setTierPrice(db: Db, tierId: string, price: unknown, optio
   requireAdminPermission(options.actor, 'manage_pricing', action)
   if (typeof price !== 'number' || !Number.isFinite(price) || price < 0) throw adminRefusal('VALIDATION', action, 'invalid_params', WORDS.updateTierPrice.priceMustNonNegativeNumber, { field: 'price' })
   if (!isPoundsAndPence(price)) throw adminRefusal('VALIDATION', action, 'not_pounds_and_pence', NEW_WORDS.notPoundsAndPence('price'), { field: 'price' })
-  const gone = () => adminRefusal('NOT_FOUND', action, 'tier_not_found', LEGACY_CATALOG_ROUTE_WORDS['update-tier-price'].tierNotFound)
+  const gone = () => adminRefusal('NOT_FOUND', action, 'tier_not_found', CATALOG_ADMIN_WORDS.updateTierPrice.tierNotFound)
   type Price = { price: string | null }
   return adminWrite<Price, Price, { success: true; tier: Record<string, unknown> }>(
     db,

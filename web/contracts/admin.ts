@@ -63,7 +63,7 @@ export type AdminSetStaffCanManagePricingOutput = z.infer<typeof adminSetStaffCa
 /** getServiceTypes: GET catalog/service-types. Level Read; W56. */
 export const adminGetServiceTypesInputSchema = z.object({})
 export type AdminGetServiceTypesInput = z.infer<typeof adminGetServiceTypesInputSchema>
-export const adminGetServiceTypesOutputSchema = z.array(z.object({ price_tiers: z.array(z.object({ id: z.string(), service_type_id: z.string(), band_id: z.string(), band_code: z.string().nullable(), band_name: z.string().nullable(), min_people: z.number(), max_people: z.number(), price: z.string().nullable(), stripe_price_id: z.string().nullable(), created_at: z.string(), updated_at: z.string() })), schedule_slots: z.array(z.object({ id: z.string(), service_type_id: z.string(), day_of_week: z.number(), start_time: z.string(), created_at: z.string(), updated_at: z.string() })), id: z.string(), sanity_service_type_id: z.string().nullable(), name: z.string(), thumbnail_url: z.string().nullable(), duration: z.number().nullable(), capacity: z.number().nullable(), booking_type: z.enum(['public', 'private']).nullable(), price: z.string().nullable(), active: z.boolean().nullable(), stripe_product_id: z.string().nullable(), stripe_price_id: z.string().nullable(), created_at: z.string(), updated_at: z.string() }))
+export const adminGetServiceTypesOutputSchema = z.array(z.object({ price_tiers: z.array(z.object({ id: z.string(), service_type_id: z.string(), band_id: z.string(), band_code: z.string().nullable(), band_name: z.string().nullable(), min_people: z.number(), max_people: z.number(), price: z.string().nullable(), stripe_price_id: z.string().nullable(), created_at: z.string(), updated_at: z.string() })), schedule_slots: z.array(z.object({ id: z.string(), service_type_id: z.string(), day_of_week: z.number(), start_time: z.string(), created_at: z.string(), updated_at: z.string() })), id: z.string(), sanity_service_type_id: z.string().nullable(), name: z.string(), thumbnail_url: z.string().nullable(), duration: z.number().nullable(), capacity: z.number().nullable(), booking_type: z.enum(['public', 'private']).nullable(), active: z.boolean().nullable(), stripe_product_id: z.string().nullable(), stripe_price_id: z.string().nullable(), created_at: z.string(), updated_at: z.string() }))
 export type AdminGetServiceTypesOutput = z.infer<typeof adminGetServiceTypesOutputSchema>
 
 /** setServiceTypeActive: POST catalog/service-types/:serviceTypeId/active. Level B; W56. */
@@ -985,14 +985,36 @@ export const sessionStartTimeRouteOutputSchema = z.object({
 })
 export type SessionStartTimeRouteOutput = z.infer<typeof sessionStartTimeRouteOutputSchema>
 
-/** `POST sessions`: createOneOffSession. A success is `created: true` and the new session. */
-export const oneOffSessionRouteInputSchema = z.object({ serviceTypeId: loose, startTime: loose })
+/**
+ * `POST sessions`: createOneOffSession. A success is `created: true` and the new session. W68 (Wayne's Q58): `stamp` is the
+ * one the quote below gave with the band and price the dialog showed.
+ */
+export const oneOffSessionRouteInputSchema = z.object({ serviceTypeId: loose, startTime: loose, stamp: loose })
 export type OneOffSessionRouteInput = z.infer<typeof oneOffSessionRouteInputSchema>
 export const oneOffSessionRouteOutputSchema = z.object({
   created: z.literal(true),
   session: z.object({ id: z.string(), service_type_id: z.string(), start_time: z.string(), end_time: z.string(), capacity: z.number(), type: z.string() }),
 })
 export type OneOffSessionRouteOutput = z.infer<typeof oneOffSessionRouteOutputSchema>
+
+/**
+ * W68 (Wayne's Q58; H12): `GET sessions/one-off/quote`: the band a one-off session at this time would get from the day's
+ * windows, and what it would sell at, shown in the dialog before the press. A public type has the band's price a person;
+ * a private one the band's size groups (a price not set yet is null). No window covering the time is no band and no
+ * price. `stamp` names all of that, and the press sends it back. W68a: `othersSetByHand` says whether another session
+ * that day was given its band by hand (the dialog says so); it is a note, so it is not in the stamp.
+ */
+export const oneOffSessionQuoteRouteInputSchema = z.object({ serviceTypeId: loose, startTime: loose })
+export type OneOffSessionQuoteRouteInput = z.infer<typeof oneOffSessionQuoteRouteInputSchema>
+export const oneOffSessionQuoteRouteOutputSchema = z.object({
+  type: z.enum(['public', 'private']),
+  band: z.object({ code: z.string(), name: z.string() }).nullable(),
+  pricePerPerson: z.number().nullable(),
+  sizeGroups: z.array(z.object({ minPeople: z.number(), maxPeople: z.number(), price: z.number().nullable() })),
+  othersSetByHand: z.boolean(),
+  stamp: z.string(),
+})
+export type OneOffSessionQuoteRouteOutput = z.infer<typeof oneOffSessionQuoteRouteOutputSchema>
 
 /** `POST catalog/service-types/:serviceTypeId/schedule-slots`: addServiceTypeScheduleSlot (Manage pricing: Q50 part 2). Answers the new slot's row. */
 export const scheduleSlotAddRouteInputSchema = z.object({ serviceTypeId: z.string(), dayOfWeek: loose, startTime: loose })

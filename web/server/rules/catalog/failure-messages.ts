@@ -8,12 +8,14 @@
 // function of it. Not here, on purpose (the same test holds that they stay out): the plumbing between Retool and
 // the legacy routes ("returned an HTML page", "Unauthorized", "Missing required fields", "Internal server
 // error", the fallbacks for an error with no words) and "saved but could not be read back", which one transaction
-// can't leave.
+// can't leave. W68 (H3): nor the sentences of the seven legacy /api/catalog routes nothing answers any more; the six
+// the Worker still answers ("Item not found", ...) are each with the function that answers it.
 
 export const CATALOG_ADMIN_WORDS = {
   /** toggleItemActive */
   toggleItemActive: {
     itemidRequired: 'itemId is required',
+    itemNotFound: 'Item not found',
   },
   /** setServiceTypeCapacityInfo */
   setServiceTypeCapacityInfo: {
@@ -38,6 +40,7 @@ export const CATALOG_ADMIN_WORDS = {
   updateTierPrice: {
     tieridRequired: 'tierId is required',
     priceMustNonNegativeNumber: 'price must be a non-negative number',
+    tierNotFound: 'Tier not found',
   },
   /** setProductFulfillmentMethod */
   setProductFulfillmentMethod: {
@@ -46,6 +49,7 @@ export const CATALOG_ADMIN_WORDS = {
   /** createProductVariant */
   createProductVariant: {
     productidSizeAndSkuAreRequired: 'productId, size, and sku are required',
+    productNotFound: 'Product not found',
     stockquantityMustNonNegativeWholeNumber: 'stockQuantity must be a non-negative whole number',
   },
   /** adjustVariantStock */
@@ -65,17 +69,20 @@ export const CATALOG_ADMIN_WORDS = {
   /** updateCatalogItemPrice */
   updateCatalogItemPrice: {
     itemidRequired: 'itemId is required',
+    itemNotFound: 'Item not found',
     atLeastOnePriceFieldMust: 'At least one price field must be provided',
     mustNonNegativeNumber: (first: unknown): string => `${String(first)} must be a non-negative number`,
   },
   /** createGiftCardPreset */
   createGiftCardPreset: {
     giftcardtypeidRequired: 'giftCardTypeId is required',
+    giftCardTypeNotFound: 'Gift card type not found',
     amountMustPositiveNumber: 'amount must be a positive number',
   },
   /** updateGiftCardPresetPrice */
   updateGiftCardPresetPrice: {
     presetidRequired: 'presetId is required',
+    presetNotFound: 'Preset not found',
     amountMustPositiveNumber: 'amount must be a positive number',
   },
   /** setGiftCardTypeCustomAmountSettings */
@@ -112,59 +119,6 @@ export const CATALOG_ADMIN_WORDS = {
   setMembershipSettings: {
     waitingPeriodMustWholeNumberMonths: 'The waiting period must be a whole number of months between 0 and 60.',
     membershipSettingsRowMissingInsertIt: 'The membership_settings row is missing — insert it (id = true) before editing the setting.',
-  },
-} as const
-
-/**
- * The seven legacy /api/catalog routes' own refusals, as the old functions pass them on to staff (the route's `error`,
- * with its `details` after a colon when it sends one). Under lead call L2 the Worker stops keeping Stripe products for
- * everything but membership plans, so most can no longer happen: W55 to W57 keep the ones their rules still reach.
- */
-export const LEGACY_CATALOG_ROUTE_WORDS = {
-  'toggle-active': {
-    itemNotFound: 'Item not found',
-    failedUpdateStripePrice: 'Failed to update Stripe price',
-    failedUpdateStripeProduct: 'Failed to update Stripe product',
-    failedUpdateItem: 'Failed to update item',
-  },
-  'update-price': {
-    itemNotFound: 'Item not found',
-    itemHasNoStripeProductSync: 'Item has no Stripe product. Sync from Sanity first.',
-    /** The old sentence, kept for the words test. Since W61 the Worker answers CATALOG_ITEM_NEW_WORDS.privateServiceTypeUsesTiers. */
-    privateServiceTypesUsePriceTiers: 'Private service types use price tiers. Use /api/catalog/update-tier-price instead.',
-    failedUpdateItem: 'Failed to update item',
-  },
-  'update-tier-price': {
-    tierNotFound: 'Tier not found',
-    parentServiceTypeNotFoundFor: 'Parent service type not found for this tier',
-    serviceTypeHasNoStripeProduct: 'Service type has no Stripe product. Sync from Sanity first.',
-    failedUpdateTier: 'Failed to update tier',
-  },
-  'create-variant': {
-    productNotFound: 'Product not found',
-    productHasNoStripeProductSync: 'Product has no Stripe product. Sync from Sanity first.',
-    skuAlreadyExists: 'SKU already exists',
-    noPriceAvailableSetPriceoverrideOr: 'No price available. Set priceOverride or ensure product has base_price.',
-    failedCreateStripePrice: 'Failed to create Stripe price',
-    failedCreateVariant: 'Failed to create variant',
-  },
-  'sync-stripe': {
-    itemNotFound: 'Item not found',
-    itemAlreadyHasStripeProduct: 'Item already has a Stripe product',
-    itemMustHaveNameSyncStripe: 'Item must have a name to sync to Stripe',
-    failedUpdateItemWithStripeIds: 'Failed to update item with Stripe IDs',
-  },
-  'create-gift-card-preset': {
-    giftCardTypeNotFound: 'Gift card type not found',
-    giftCardTypeHasNoStripe: 'Gift card type has no Stripe product. Sync from Sanity first.',
-    failedCreateStripePrice: 'Failed to create Stripe price',
-    failedCreateGiftCardPreset: 'Failed to create gift card preset',
-  },
-  'update-gift-card-preset-price': {
-    presetNotFound: 'Preset not found',
-    parentGiftCardTypeNotFound: 'Parent gift card type not found for this preset',
-    giftCardTypeHasNoStripe: 'Gift card type has no Stripe product. Sync from Sanity first.',
-    failedUpdatePreset: 'Failed to update preset',
   },
 } as const
 

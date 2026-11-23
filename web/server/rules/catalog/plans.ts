@@ -24,7 +24,7 @@ import type { AdminWriteOptions } from '@/server/rules/admin/write'
 import type { StepBy } from '@/server/rules/memberships/left'
 import type { StripeClient } from '@/server/stripe/client'
 import { stripeTiming, type StripeTiming } from '@/server/stripe/deadline'
-import { CATALOG_ADMIN_WORDS, LEGACY_CATALOG_ROUTE_WORDS } from './failure-messages'
+import { CATALOG_ADMIN_WORDS } from './failure-messages'
 import { CATALOG_ITEM_NEW_WORDS } from './item-failure-messages'
 import { isPoundsAndPence, priceFirst, priceText, withIsoTimes } from './items'
 import { herdChangeWords, MEMBERSHIP_SETTINGS_NEW_WORDS, PLAN_NEW_WORDS, planMoveWords, type PlanMoveFigures } from './plan-failure-messages'
@@ -345,7 +345,7 @@ export async function createPlan(db: Db, input: PlanCreateInput, options: PlanPr
 // --- On and off sale (level A)
 
 const activeAction: AdminAction = 'plan.active_set'
-const itemNotFound = (action: string) => adminRefusal('NOT_FOUND', action, 'item_not_found', LEGACY_CATALOG_ROUTE_WORDS['toggle-active'].itemNotFound)
+const itemNotFound = (action: string) => adminRefusal('NOT_FOUND', action, 'item_not_found', CATALOG_ADMIN_WORDS.toggleItemActive.itemNotFound)
 const LOCK_PLAN_ROW_SQL = 'SELECT id, active, stripe_product_id, name, (price_monthly IS NOT NULL OR price_yearly IS NOT NULL) AS priced FROM membership_plans WHERE id = $1::uuid'
 
 type PlanSwitchSeen = { id: string; active: boolean | null; stripe_product_id: string | null; name: string; priced: boolean }
@@ -541,7 +541,7 @@ function checkPress(input: PlanDetailsInput): CheckedPress {
       details: null,
       prices: { ...(input.monthlyPrice !== undefined ? { monthly: input.monthlyPrice as number } : {}), ...(input.yearlyPrice !== undefined ? { yearly: input.yearlyPrice as number } : {}) },
       action,
-      notFound: LEGACY_CATALOG_ROUTE_WORDS['update-price'].itemNotFound,
+      notFound: CATALOG_ADMIN_WORDS.updateCatalogItemPrice.itemNotFound,
     }
   }
   const action: AdminAction = 'plan.details_set'

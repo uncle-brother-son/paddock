@@ -26,9 +26,6 @@ beforeAll(async () => {
   first = pg.connect()
   second = pg.connect()
   third = pg.connect()
-  // The database's own sweep is run by the table owner (the hourly job). Here a Worker connection calls it, so the race
-  // has it on a connection of its own (the admin connection is the one that watches the locks). Test only.
-  await pg.admin.unsafe('GRANT EXECUTE ON FUNCTION public.lapse_sweep_expired_bookings() TO paddock_worker')
 })
 afterAll(() => pg.stop())
 
@@ -280,45 +277,6 @@ describe('the lapse sweep against a staff cancel on the same booking', () => {
         expect(after).toMatchObject({ cancel_reason: 'membership_lapsed', lapsed_rows: 1 })
       }
     }
-  })
-})
-
-describe("the database's own sweep and the Worker's on the same booking (F-plan 4.8: harmless while both run)", () => {
-  const databaseSweep = async (db: Db) => ({ cancelled: Number((await db.query<{ n: number }>('SELECT public.lapse_sweep_expired_bookings() AS n'))[0]?.n) })
-
-  it('both wait on the booking; one cancels it, the other finds it cancelled; its place is released once, whichever was first', async () => {
-    for (let round = 0; round < 4; round += 1) {
-      const lapsed = await lapsedBooking()
-      const sides = [() => databaseSweep(first), () => sweepOn(second)]
-      const [a, b] = await race(lapsed.bookingId, ...((round % 2 === 0 ? sides : [...sides].reverse()) as [() => Promise<unknown>, () => Promise<unknown>]))
-      const [database, worker] = round % 2 === 0 ? [a, b] : [b, a]
-      const after = await state(lapsed)
-      // Three places taken before; exactly one given back.
-      expect(after).toMatchObject({ status: 'cancelled', cancel_reason: 'membership_lapsed', total_booked: 2, price_paid: '0.00', balance: '0.00' })
-      const byDatabase = 'answered' in database ? Number(database.answered['cancelled']) : -1
-      expect(byDatabase + Number(lapsedOf(worker))).toBe(1)
-      expect(after?.lapsed_rows).toBe(Number(lapsedOf(worker)))
-      if (byDatabase === 1) expect(reasonsLeft(worker)).toEqual(['not_lapsed'])
-    }
-  })
-
-  it("a booking with a paid guest: the database's sweep passes it by (bug FB18) while the Worker's lapses it, in either order, and £20 is given once", async () => {
-    const lapsed = await lapsedBooking({ paidGuest: true })
-    const gate = await holdingTheBooking(lapsed.bookingId)
-    const worker = outcome(sweepOn(second))
-    let database: Answered
-    try {
-      await allBlockedBy(gate.pid, 1)
-      // The database's sweep reads only bookings with nothing paid: it never waits on this one's lock, and cancels none.
-      database = await outcome(databaseSweep(first))
-    } finally {
-      await gate.finish()
-    }
-    expect(database).toEqual({ answered: { cancelled: 0 } })
-    expect(lapsedOf(await worker)).toBe(1)
-    expect(await state(lapsed)).toMatchObject({ status: 'cancelled', cancel_reason: 'membership_lapsed', total_booked: 2, balance: '20.00', store_credit_rows: 1, lapsed_rows: 1 })
-    expect(await databaseSweep(first)).toEqual({ cancelled: 0 })
-    expect(await state(lapsed)).toMatchObject({ total_booked: 2, balance: '20.00' })
   })
 })
 
