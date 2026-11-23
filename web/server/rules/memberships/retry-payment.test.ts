@@ -2390,19 +2390,17 @@ describe('W47r-b: an invoice paid after its subscription had ended is always lis
     )
   })
 
-  it("the webhook's route gives the handler its listing, on the Worker's own database connection, opened only when there is a line to write", () => {
+  it("the webhook's route gives the handler its listing, on the Worker's own database connection", () => {
     const route = readFileSync(join(process.cwd(), 'app/api/stripe/webhook/route.ts'), 'utf8')
-    expect(route).toContain("listPaidAfterEnd(db, { actor: { type: 'system', id: null }, requestId: event.id }, 'webhook')(found)")
+    // W66 (H8), a named difference: every database step of the event is on one connection now (its own row and the four
+    // membership functions too, through Supabase's client until W66), so the listing is given that connection; it is
+    // opened once, after the signature check (nothing connects until the first statement), and closed afterwards.
+    expect(route).toContain("const list: ListPaidAfterEnd = listPaidAfterEnd(db, { actor: { type: 'system', id: null }, requestId: event.id }, 'webhook')")
     // W47r-e, a named difference: the call also gives the handler the update notice's write (cancel-wins.test.ts holds it).
     expect(route).toContain('createStripeClient(process.env.STRIPE_SECRET_KEY, READ_STRIPE_LIMITS), list, syncCancelDate)')
-    // The connection is opened inside the listing, never at the top of the handler: a notice with nothing to list opens none.
-    const opened = route.indexOf('openRequestDb()')
-    expect(opened).toBeGreaterThan(route.indexOf('const list: ListPaidAfterEnd = async (found) => {'))
-    // W47r-e, a named difference: opened in one more place, inside the update notice's write for a subscription with
-    // no end, and nowhere else: still never at the top of the handler.
-    expect(route.match(/openRequestDb\(\)/g)).toHaveLength(2)
-    expect(route.lastIndexOf('openRequestDb()')).toBeGreaterThan(route.indexOf('const syncCancelDate: SyncCancelDate = async (params) => {'))
-    expect(route.match(/await closeRequestDb\(db\)/g)).toHaveLength(2)
+    expect(route.match(/openRequestDb\(\)/g)).toHaveLength(1)
+    expect(route.indexOf('openRequestDb()')).toBeGreaterThan(route.indexOf('constructEventAsync('))
+    expect(route.match(/await closeRequestDb\(db\)/g)).toHaveLength(1)
   })
 })
 

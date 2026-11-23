@@ -1,14 +1,56 @@
-import { describe, it, expect, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, it, expect, vi } from 'vitest'
 import Stripe from 'stripe'
-import { dispatchStripeEvent, MOST_WRITES_AGAIN, type RpcAnswer, type RpcClient, type SubscriptionReader } from './dispatch'
+import { fixtures, startTestDatabase, type TestDatabase } from '@/server/rules/testing/database'
+import { membershipFunctions } from './database'
+import { dispatchStripeEvent, MOST_WRITES_AGAIN, type RpcClient, type SubscriptionReader } from './dispatch'
+
+// W66 (H8, N1): until W66 the database functions here were a mock that answered whatever each test chose. They are
+// now the four membership functions as the live database has them (live-schema.sql), on PGlite, through the
+// webhook's own calls (database.ts, membershipFunctions) as the role `paddock_worker`. Before each test the
+// subscriptions these tests name belong to fresh members (active, no last day, next payment 10 December 2026), so
+// every answer below is the function's real one. Stripe is still a stand-in for the one read the handlers make.
+vi.setConfig({ testTimeout: 60_000 })
+
+let database: TestDatabase
+beforeAll(async () => {
+  database = await startTestDatabase({ schema: 'live' })
+})
+afterAll(() => database.stop())
+
+/** The subscriptions these tests name. `sub_unknown` and `sub_gone` are nobody's. */
+const MEMBERS = ['sub_123', 'sub_456', 'sub_789', 'sub_999', 'sub_1']
+
+beforeEach(async () => {
+  const { db } = database
+  for (const subscription of MEMBERS) {
+    // The last test's member keeps its rows (its credit periods name it) under another subscription id.
+    await db.query("UPDATE customer_memberships SET stripe_subscription_id = stripe_subscription_id || '_before_' || gen_random_uuid()::text WHERE stripe_subscription_id = $1", [subscription])
+    const customer = await fixtures.customer(db)
+    const plan = await fixtures.plan(db)
+    await fixtures.membership(db, { customer_id: customer, plan_id: plan, billing_frequency: 'monthly', stripe_subscription_id: subscription, next_renewal_date: '2026-12-10' })
+  }
+})
+
+/** The membership of a subscription, as the functions left it. */
+const memberRow = async (subscription: string) =>
+  (await database.db.query<{ status: string; last_day: string | null; next: string | null }>('SELECT subscription_status AS status, cancel_effective_date::text AS last_day, next_renewal_date::text AS next FROM customer_memberships WHERE stripe_subscription_id = $1', [subscription]))[0]
 
 // W46b (S1): an event says which mode it was made in. Test mode unless a test says live.
 function fakeEvent(type: string, object: unknown, livemode = false): Stripe.Event {
   return { id: 'evt_test', type, livemode, data: { object } } as unknown as Stripe.Event
 }
 
-function fakeRpcClient(response: RpcAnswer): RpcClient & { rpc: ReturnType<typeof vi.fn> } {
-  return { rpc: vi.fn().mockResolvedValue(response) }
+/** The real functions on the test's database, each call recorded. */
+function databaseFunctions(): RpcClient & { rpc: ReturnType<typeof vi.fn> } {
+  const real = membershipFunctions(database.db)
+  return { rpc: vi.fn((fn: string, params?: Record<string, unknown>) => real.rpc(fn, params)) }
+}
+
+/** The real functions, with call number `failing` (1 = the first) answered as a database failure. */
+function failingCall(failing: number, error: Error): RpcClient & { rpc: ReturnType<typeof vi.fn> } {
+  const real = membershipFunctions(database.db)
+  let calls = 0
+  return { rpc: vi.fn((fn: string, params?: Record<string, unknown>) => (++calls === failing ? Promise.resolve({ data: null, error }) : real.rpc(fn, params))) }
 }
 
 // W45a: Stripe as the handlers read it. `showing` is the subscription as Stripe holds it now, which is what must be
@@ -47,7 +89,7 @@ const cycleInvoice = (subscription: string, periodEnd = 1700000000) => ({
 describe('dispatchStripeEvent', () => {
   // W46 (W45a "Noticed" 1): the period end is the subscription's as Stripe has it, not the invoice's line's.
   it.each(['active', 'trialing'])('invoice.paid reads the subscription and, for one Stripe shows as %s, calls membership_mark_paid with its period end as Stripe has it, not the invoice\'s', async (status) => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'reactivated' }, error: null })
+    const supabase = databaseFunctions()
     const stripe = fakeStripe(paidUp('sub_123', 1702592000, status))
     const result = await dispatchStripeEvent(fakeEvent('invoice.paid', cycleInvoice('sub_123', 1700000000)), supabase, stripe)
 
@@ -56,16 +98,18 @@ describe('dispatchStripeEvent', () => {
       p_stripe_subscription_id: 'sub_123',
       p_period_end: iso(1702592000),
     })
-    expect(result).toEqual({ outcome: 'processed', detail: { found: true, action: 'reactivated' } })
+    expect(result).toEqual({ outcome: 'processed', detail: { found: true, action: 'reactivated', was: 'active', bookings_restored: 0, periods_created: expect.any(Number) } })
     // One read before the write, and (L8) one after it that agrees.
     expect(stripe.subscriptions.retrieve).toHaveBeenCalledTimes(2)
     expect(stripe.subscriptions.retrieve).toHaveBeenCalledWith('sub_123')
+    // Stripe's period end (14 Dec 2023 23:33 London) is the next payment date.
+    expect(await memberRow('sub_123')).toEqual({ status: 'active', last_day: null, next: '2023-12-14' })
   })
 
   it.each(['past_due', 'unpaid', 'canceled', 'incomplete', 'incomplete_expired', 'paused'])(
     'invoice.paid for a subscription Stripe now shows as %s is ignored without calling the RPC, and says what Stripe showed',
     async (status) => {
-      const supabase = fakeRpcClient({ data: { found: true, action: 'reactivated' }, error: null })
+      const supabase = databaseFunctions()
       const stripe = fakeStripe(paidUp('sub_123', 1702592000, status))
       const result = await dispatchStripeEvent(fakeEvent('invoice.paid', cycleInvoice('sub_123')), supabase, stripe)
 
@@ -76,21 +120,21 @@ describe('dispatchStripeEvent', () => {
   )
 
   it('invoice.paid with no period end on the subscription Stripe shows is ignored (the invoice having one changes nothing)', async () => {
-    const supabase = fakeRpcClient({ data: null, error: null })
+    const supabase = databaseFunctions()
     const result = await dispatchStripeEvent(fakeEvent('invoice.paid', cycleInvoice('sub_123')), supabase, fakeStripe({ id: 'sub_123', status: 'active', latest_invoice: INVOICE, items: { data: [] } }))
     expect(supabase.rpc).not.toHaveBeenCalled()
     expect(result).toEqual({ outcome: 'ignored', detail: { reason: 'no_period_end' } })
   })
 
   it('invoice.paid throws when Stripe cannot be read, without calling the RPC: the event is not finished, so it is sent again', async () => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'reactivated' }, error: null })
+    const supabase = databaseFunctions()
     const stripe = { subscriptions: { retrieve: vi.fn().mockRejectedValue(new Error('stripe unreachable')) } }
     await expect(dispatchStripeEvent(fakeEvent('invoice.paid', cycleInvoice('sub_123')), supabase, stripe)).rejects.toThrow('stripe unreachable')
     expect(supabase.rpc).not.toHaveBeenCalled()
   })
 
   it('invoice.paid skips the first invoice (billing_reason subscription_create) without reading Stripe or calling the RPC', async () => {
-    const supabase = fakeRpcClient({ data: null, error: null })
+    const supabase = databaseFunctions()
     const invoice = {
       billing_reason: 'subscription_create',
       parent: { subscription_details: { subscription: 'sub_123' } },
@@ -105,7 +149,7 @@ describe('dispatchStripeEvent', () => {
   })
 
   it.each(['past_due', 'unpaid'])('invoice.payment_failed reads the subscription, and for one Stripe shows as %s calls membership_mark_payment_failed with the resolved subscription id', async (status) => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'past_due' }, error: null })
+    const supabase = databaseFunctions()
     const invoice = {
       billing_reason: 'subscription_cycle',
       parent: { subscription_details: { subscription: 'sub_456' } },
@@ -120,14 +164,15 @@ describe('dispatchStripeEvent', () => {
     expect(supabase.rpc).toHaveBeenCalledWith('membership_mark_payment_failed', {
       p_stripe_subscription_id: 'sub_456',
     })
-    expect(result).toEqual({ outcome: 'processed', detail: { found: true, action: 'past_due' } })
+    expect(result).toEqual({ outcome: 'processed', detail: { found: true, action: 'past_due', covered_through: expect.any(String), bookings_flagged: 0 } })
+    expect(await memberRow('sub_456')).toMatchObject({ status: 'past_due' })
   })
 
   // W45a (W45 audit S1): a failure handled after the payment that followed it went through.
   it.each(['active', 'trialing', 'canceled', 'incomplete', 'incomplete_expired', 'paused'])(
     'invoice.payment_failed for a subscription Stripe now shows as %s is ignored without calling the RPC, and says what Stripe showed',
     async (status) => {
-      const supabase = fakeRpcClient({ data: { found: true, action: 'past_due' }, error: null })
+      const supabase = databaseFunctions()
       const invoice = { billing_reason: 'subscription_cycle', parent: { subscription_details: { subscription: 'sub_456' } } }
       const stripe = fakeStripe({ id: 'sub_456', status })
       const result = await dispatchStripeEvent(fakeEvent('invoice.payment_failed', invoice), supabase, stripe)
@@ -139,7 +184,7 @@ describe('dispatchStripeEvent', () => {
   )
 
   it('invoice.payment_failed throws when Stripe cannot be read, without calling the RPC: the event is not finished, so it is sent again', async () => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'past_due' }, error: null })
+    const supabase = databaseFunctions()
     const invoice = { billing_reason: 'subscription_cycle', parent: { subscription_details: { subscription: 'sub_456' } } }
     const stripe = { subscriptions: { retrieve: vi.fn().mockRejectedValue(new Error('stripe unreachable')) } }
     await expect(dispatchStripeEvent(fakeEvent('invoice.payment_failed', invoice), supabase, stripe)).rejects.toThrow('stripe unreachable')
@@ -147,7 +192,7 @@ describe('dispatchStripeEvent', () => {
   })
 
   it('invoice.payment_failed skips the first invoice without reading Stripe or calling the RPC', async () => {
-    const supabase = fakeRpcClient({ data: null, error: null })
+    const supabase = databaseFunctions()
     const invoice = { billing_reason: 'subscription_create', parent: { subscription_details: { subscription: 'sub_456' } } }
     const stripe = fakeStripe()
     const result = await dispatchStripeEvent(fakeEvent('invoice.payment_failed', invoice), supabase, stripe)
@@ -158,7 +203,7 @@ describe('dispatchStripeEvent', () => {
   })
 
   it('customer.subscription.deleted calls membership_mark_cancelled_by_stripe', async () => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'cancelled' }, error: null })
+    const supabase = databaseFunctions()
     const stripe = fakeStripe()
     const result = await dispatchStripeEvent(
       fakeEvent('customer.subscription.deleted', { id: 'sub_789' }),
@@ -169,13 +214,14 @@ describe('dispatchStripeEvent', () => {
     expect(supabase.rpc).toHaveBeenCalledWith('membership_mark_cancelled_by_stripe', {
       p_stripe_subscription_id: 'sub_789',
     })
-    expect(result).toEqual({ outcome: 'processed', detail: { found: true, action: 'cancelled' } })
+    expect(result).toEqual({ outcome: 'processed', detail: { found: true, action: 'cancelled', covered_through: expect.any(String), bookings_flagged: 0 } })
+    expect(await memberRow('sub_789')).toMatchObject({ status: 'cancelled' })
     // W45a: only the id is taken from the event, and an ended subscription never comes back: no read.
     expect(stripe.subscriptions.retrieve).not.toHaveBeenCalled()
   })
 
   it('customer.subscription.updated reads the subscription and calls membership_sync_cancel_at_period_end with the resolved period end', async () => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'cancel_scheduled' }, error: null })
+    const supabase = databaseFunctions()
     const subscription = {
       id: 'sub_999',
       cancel_at_period_end: true,
@@ -195,11 +241,13 @@ describe('dispatchStripeEvent', () => {
       p_cancel_at: null,
       p_period_end: iso(1700000000),
     })
-    expect(result).toEqual({ outcome: 'processed', detail: { found: true, action: 'cancel_scheduled' } })
+    // Ending with the period that ends 14 Nov 2023 22:13 London: the last day is the day before.
+    expect(result).toEqual({ outcome: 'processed', detail: { found: true, action: 'cancel_scheduled', cancel_effective_date: '2023-11-13' } })
+    expect(await memberRow('sub_999')).toMatchObject({ last_day: '2023-11-13' })
   })
 
   it('customer.subscription.updated forwards a set cancel_at as an ISO timestamp', async () => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'cancel_scheduled' }, error: null })
+    const supabase = databaseFunctions()
     const subscription = {
       id: 'sub_999',
       cancel_at_period_end: false,
@@ -243,7 +291,7 @@ describe('dispatchStripeEvent', () => {
       { p_cancel_at_period_end: true, p_cancel_at: null, p_period_end: iso(1702592000) },
     ],
   ])("customer.subscription.updated passes what Stripe shows now, not the event's snapshot: %s", async (_name, snapshot, showing, passed) => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'unchanged' }, error: null })
+    const supabase = databaseFunctions()
     await dispatchStripeEvent(fakeEvent('customer.subscription.updated', { id: 'sub_999', ...snapshot }), supabase, fakeStripe({ id: 'sub_999', ...showing }))
 
     expect(supabase.rpc).toHaveBeenCalledTimes(1)
@@ -251,7 +299,7 @@ describe('dispatchStripeEvent', () => {
   })
 
   it('customer.subscription.updated throws when Stripe cannot be read, without calling the RPC: nothing is written from the event', async () => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'cancel_scheduled' }, error: null })
+    const supabase = databaseFunctions()
     const snapshot = { id: 'sub_999', cancel_at_period_end: false, cancel_at: 1700000000, items: { data: [{ current_period_end: 1700000000 }] } }
     const stripe = { subscriptions: { retrieve: vi.fn().mockRejectedValue(new Error('stripe unreachable')) } }
     await expect(dispatchStripeEvent(fakeEvent('customer.subscription.updated', snapshot), supabase, stripe)).rejects.toThrow('stripe unreachable')
@@ -259,7 +307,7 @@ describe('dispatchStripeEvent', () => {
   })
 
   it('customer.subscription.updated with no period end on the subscription Stripe shows is ignored (the event having one changes nothing)', async () => {
-    const supabase = fakeRpcClient({ data: null, error: null })
+    const supabase = databaseFunctions()
     const snapshot = { id: 'sub_999', cancel_at_period_end: false, cancel_at: null, items: { data: [{ current_period_end: 1700000000 }] } }
     const result = await dispatchStripeEvent(fakeEvent('customer.subscription.updated', snapshot), supabase, fakeStripe({ id: 'sub_999', cancel_at_period_end: false, cancel_at: null, items: { data: [] } }))
     expect(supabase.rpc).not.toHaveBeenCalled()
@@ -272,7 +320,7 @@ describe('dispatchStripeEvent', () => {
   const trialEnd = Date.UTC(2026, 11, 25) / 1000 // 25 Dec 2026 00:00 London (GMT)
 
   it('payment date change: the £0 trial invoice marks paid with the trial end as the period end', async () => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'reactivated', was: 'active' }, error: null })
+    const supabase = databaseFunctions()
     const invoice = {
       id: INVOICE,
       billing_reason: 'subscription_update',
@@ -288,10 +336,11 @@ describe('dispatchStripeEvent', () => {
       p_period_end: iso(trialEnd),
     })
     expect(result.outcome).toBe('processed')
+    expect(await memberRow('sub_123')).toEqual({ status: 'active', last_day: null, next: '2026-12-25' })
   })
 
   it('payment date change: subscription.updated while trialing only syncs the (cleared) cancellation', async () => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'unchanged', cancel_effective_date: null }, error: null })
+    const supabase = databaseFunctions()
     const subscription = {
       id: 'sub_123',
       status: 'trialing',
@@ -313,7 +362,7 @@ describe('dispatchStripeEvent', () => {
   })
 
   it('payment date change: the first full invoice on the new date marks paid for the month after it', async () => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'reactivated' }, error: null })
+    const supabase = databaseFunctions()
     const nextPeriodEnd = Date.UTC(2027, 0, 25) / 1000
     const invoice = {
       id: INVOICE,
@@ -327,13 +376,14 @@ describe('dispatchStripeEvent', () => {
       p_stripe_subscription_id: 'sub_123',
       p_period_end: iso(nextPeriodEnd),
     })
+    expect(await memberRow('sub_123')).toMatchObject({ next: '2027-01-25' })
   })
 
   // W46 (W45a "Noticed" 1) had the £0 invoice's event, handled after the first full payment on the new date went
   // through, write the period Stripe was in. W46b (W46 review B1): the £0 invoice is not the newest by then, so its
   // event is ignored; the full payment's own event writes that date (the test above).
   it("payment date change: the £0 trial invoice handled late, after the first full payment, is ignored: it is not the subscription's newest invoice", async () => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'reactivated', was: 'active' }, error: null })
+    const supabase = databaseFunctions()
     const nextPeriodEnd = Date.UTC(2027, 0, 25) / 1000
     const invoice = {
       id: INVOICE,
@@ -351,7 +401,7 @@ describe('dispatchStripeEvent', () => {
   })
 
   it('ignores event types that are not handled, without calling the RPC', async () => {
-    const supabase = fakeRpcClient({ data: null, error: null })
+    const supabase = databaseFunctions()
     const stripe = fakeStripe()
     const result = await dispatchStripeEvent(fakeEvent('charge.succeeded', {}), supabase, stripe)
 
@@ -360,8 +410,8 @@ describe('dispatchStripeEvent', () => {
     expect(result).toEqual({ outcome: 'ignored', detail: { reason: 'unhandled_event_type' } })
   })
 
-  it('treats an RPC result of found:false as ignored', async () => {
-    const supabase = fakeRpcClient({ data: { found: false }, error: null })
+  it('treats an RPC result of found:false as ignored (no membership has the subscription)', async () => {
+    const supabase = databaseFunctions()
     const result = await dispatchStripeEvent(
       fakeEvent('customer.subscription.deleted', { id: 'sub_unknown' }),
       supabase,
@@ -372,10 +422,19 @@ describe('dispatchStripeEvent', () => {
   })
 
   it('throws when the RPC call itself returns an error', async () => {
-    const supabase = fakeRpcClient({ data: null, error: new Error('db exploded') })
+    const supabase = failingCall(1, new Error('db exploded'))
     await expect(
       dispatchStripeEvent(fakeEvent('customer.subscription.deleted', { id: 'sub_789' }), supabase, fakeStripe())
     ).rejects.toThrow('db exploded')
+    expect(await memberRow('sub_789')).toMatchObject({ status: 'active' })
+  })
+
+  // W66: a name or argument the database doesn't have is refused before anything is sent (as PostgREST refused it).
+  it('a function the webhook does not call, or the wrong arguments, is answered as an error and nothing runs', async () => {
+    const functions = membershipFunctions(database.db)
+    expect((await functions.rpc('membership_mark_everything', { p_stripe_subscription_id: 'sub_1' })).error).toBeInstanceOf(Error)
+    expect((await functions.rpc('membership_mark_paid', { p_stripe_subscription_id: 'sub_1' })).error).toBeInstanceOf(Error)
+    expect(await memberRow('sub_1')).toEqual({ status: 'active', last_day: null, next: '2026-12-10' })
   })
 })
 
@@ -383,7 +442,7 @@ describe('dispatchStripeEvent', () => {
 // period already moved on, and its newest invoice is the draft. An invoice.paid for any other invoice is not recorded.
 describe("dispatchStripeEvent: invoice.paid records a payment only for the subscription's newest invoice (W46b)", () => {
   it.each(['active', 'trialing'])('a subscription Stripe shows as %s with a newer invoice than the event\'s: ignored as not_latest_invoice after one read, without calling the RPC', async (status) => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'reactivated' }, error: null })
+    const supabase = databaseFunctions()
     const stripe = fakeStripe(paidUp('sub_123', 1702592000, status, 'in_draft'))
     const result = await dispatchStripeEvent(fakeEvent('invoice.paid', cycleInvoice('sub_123')), supabase, stripe)
 
@@ -398,7 +457,7 @@ describe("dispatchStripeEvent: invoice.paid records a payment only for the subsc
     ["an expanded invoice with another id", { id: 'in_draft', object: 'invoice' }],
     ["the subscription's own id (never an invoice's)", 'sub_123'],
   ])('Stripe shows %s: ignored as not_latest_invoice', async (_name, latestInvoice) => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'reactivated' }, error: null })
+    const supabase = databaseFunctions()
     const result = await dispatchStripeEvent(fakeEvent('invoice.paid', cycleInvoice('sub_123')), supabase, fakeStripe(paidUp('sub_123', 1702592000, 'active', latestInvoice)))
     expect(supabase.rpc).not.toHaveBeenCalled()
     expect(result).toEqual({ outcome: 'ignored', detail: { reason: 'not_latest_invoice' } })
@@ -408,7 +467,7 @@ describe("dispatchStripeEvent: invoice.paid records a payment only for the subsc
     const noId = Object.fromEntries(Object.entries(cycleInvoice('sub_123')).filter(([field]) => field !== 'id'))
     expect(noId).not.toHaveProperty('id')
     for (const latestInvoice of [INVOICE, NONE, null, '']) {
-      const supabase = fakeRpcClient({ data: { found: true, action: 'reactivated' }, error: null })
+      const supabase = databaseFunctions()
       const result = await dispatchStripeEvent(fakeEvent('invoice.paid', noId), supabase, fakeStripe(paidUp('sub_123', 1702592000, 'active', latestInvoice)))
       expect(supabase.rpc).not.toHaveBeenCalled()
       expect(result).toEqual({ outcome: 'ignored', detail: { reason: 'not_latest_invoice' } })
@@ -416,7 +475,7 @@ describe("dispatchStripeEvent: invoice.paid records a payment only for the subsc
   })
 
   it('the newest invoice answered expanded (an object) with the event\'s id is the same invoice: the payment is recorded', async () => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'reactivated' }, error: null })
+    const supabase = databaseFunctions()
     const result = await dispatchStripeEvent(fakeEvent('invoice.paid', cycleInvoice('sub_123')), supabase, fakeStripe(paidUp('sub_123', 1702592000, 'active', { id: INVOICE, object: 'invoice' })))
     expect(supabase.rpc).toHaveBeenCalledTimes(1)
     expect(supabase.rpc).toHaveBeenCalledWith('membership_mark_paid', { p_stripe_subscription_id: 'sub_123', p_period_end: iso(1702592000) })
@@ -425,7 +484,7 @@ describe("dispatchStripeEvent: invoice.paid records a payment only for the subsc
 
   it('a subscription behind on its payment is still answered subscription_not_paid_up, whichever invoice is its newest', async () => {
     for (const latestInvoice of [INVOICE, 'in_draft']) {
-      const supabase = fakeRpcClient({ data: { found: true }, error: null })
+      const supabase = databaseFunctions()
       const result = await dispatchStripeEvent(fakeEvent('invoice.paid', cycleInvoice('sub_123')), supabase, fakeStripe(paidUp('sub_123', 1702592000, 'past_due', latestInvoice)))
       expect(supabase.rpc).not.toHaveBeenCalled()
       expect(result).toEqual({ outcome: 'ignored', detail: { reason: 'subscription_not_paid_up', status: 'past_due' } })
@@ -433,7 +492,7 @@ describe("dispatchStripeEvent: invoice.paid records a payment only for the subsc
   })
 
   it('invoice.payment_failed does not look at the newest invoice before its write: a subscription behind on its payment is marked', async () => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'past_due' }, error: null })
+    const supabase = databaseFunctions()
     const invoice = { id: INVOICE, billing_reason: 'subscription_cycle', parent: { subscription_details: { subscription: 'sub_456' } } }
     const result = await dispatchStripeEvent(fakeEvent('invoice.payment_failed', invoice), supabase, fakeStripe({ id: 'sub_456', status: 'past_due', latest_invoice: 'in_newer' }))
     expect(supabase.rpc).toHaveBeenCalledTimes(1)
@@ -454,7 +513,7 @@ describe('dispatchStripeEvent: a subscription Stripe cannot find (W46, W46b)', (
   ]
 
   it.each(events)('%s, test mode: a 404 on the read is ignored with the reason and the subscription, and no database function is called', async (type, object) => {
-    const supabase = fakeRpcClient({ data: { found: true }, error: null })
+    const supabase = databaseFunctions()
     const stripe = { subscriptions: { retrieve: vi.fn().mockRejectedValue(noSuchSubscription('sub_gone')) } }
     const result = await dispatchStripeEvent(fakeEvent(type, object, false), supabase, stripe)
 
@@ -465,7 +524,7 @@ describe('dispatchStripeEvent: a subscription Stripe cannot find (W46, W46b)', (
   })
 
   it.each(events)('%s, live mode: a 404 on the read is an error: it throws Stripe\'s own error, and no database function is called', async (type, object) => {
-    const supabase = fakeRpcClient({ data: { found: true }, error: null })
+    const supabase = databaseFunctions()
     const error = noSuchSubscription('sub_gone')
     const stripe = { subscriptions: { retrieve: vi.fn().mockRejectedValue(error) } }
     await expect(dispatchStripeEvent(fakeEvent(type, object, true), supabase, stripe)).rejects.toBe(error)
@@ -481,7 +540,7 @@ describe('dispatchStripeEvent: a subscription Stripe cannot find (W46, W46b)', (
     ['0', 0],
   ])('%s: a 404 is an error, as for a live event', async (_name, livemode) => {
     for (const [type, object] of events) {
-      const supabase = fakeRpcClient({ data: { found: true }, error: null })
+      const supabase = databaseFunctions()
       const error = noSuchSubscription('sub_gone')
       const event = { id: 'evt_test', type, data: { object }, ...(livemode === undefined ? {} : { livemode }) } as unknown as Stripe.Event
       await expect(dispatchStripeEvent(event, supabase, { subscriptions: { retrieve: vi.fn().mockRejectedValue(error) } })).rejects.toBe(error)
@@ -496,7 +555,7 @@ describe('dispatchStripeEvent: a subscription Stripe cannot find (W46, W46b)', (
   ])('%s is still an error in either mode: it throws, and nothing is written', async (_name, error) => {
     for (const livemode of [false, true]) {
       for (const [type, object] of events) {
-        const supabase = fakeRpcClient({ data: { found: true }, error: null })
+        const supabase = databaseFunctions()
         const stripe = { subscriptions: { retrieve: vi.fn().mockRejectedValue(error) } }
         await expect(dispatchStripeEvent(fakeEvent(type, object, livemode), supabase, stripe)).rejects.toBe(error)
         expect(supabase.rpc).not.toHaveBeenCalled()
@@ -505,18 +564,19 @@ describe('dispatchStripeEvent: a subscription Stripe cannot find (W46, W46b)', (
   })
 
   it('test mode, a 404 on the read after the write: the write stands, the event is processed, and the answer says the second read found no subscription', async () => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'past_due', bookings_flagged: 1 }, error: null })
+    const supabase = databaseFunctions()
     const retrieve = vi.fn().mockResolvedValueOnce({ id: 'sub_456', status: 'past_due' }).mockRejectedValue(noSuchSubscription('sub_456'))
     const invoice = { id: INVOICE, billing_reason: 'subscription_cycle', parent: { subscription_details: { subscription: 'sub_456' } } }
     const result = await dispatchStripeEvent(fakeEvent('invoice.payment_failed', invoice, false), supabase, { subscriptions: { retrieve } })
 
     expect(supabase.rpc).toHaveBeenCalledTimes(1)
     expect(retrieve).toHaveBeenCalledTimes(2)
-    expect(result).toEqual({ outcome: 'processed', detail: { found: true, action: 'past_due', bookings_flagged: 1, read_again: 'subscription_missing' } })
+    expect(result).toEqual({ outcome: 'processed', detail: { found: true, action: 'past_due', covered_through: expect.any(String), bookings_flagged: 0, read_again: 'subscription_missing' } })
+    expect(await memberRow('sub_456')).toMatchObject({ status: 'past_due' })
   })
 
   it('live mode, a 404 on the read after the write: it throws, so the event is an error and is sent again (the write stands, and is made again then)', async () => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'past_due', bookings_flagged: 1 }, error: null })
+    const supabase = databaseFunctions()
     const error = noSuchSubscription('sub_456')
     const retrieve = vi.fn().mockResolvedValueOnce({ id: 'sub_456', status: 'past_due' }).mockRejectedValue(error)
     const invoice = { id: INVOICE, billing_reason: 'subscription_cycle', parent: { subscription_details: { subscription: 'sub_456' } } }
@@ -534,7 +594,7 @@ describe('dispatchStripeEvent: the subscription is read again after the write (W
   const syncParams = (cancelAt: number | null, periodEnd = 1702592000) => ({ p_stripe_subscription_id: 'sub_1', p_cancel_at_period_end: false, p_cancel_at: cancelAt === null ? null : iso(cancelAt), p_period_end: iso(periodEnd) })
 
   it('customer.subscription.updated: Stripe changes between the read and the write: the first values are written, then the ones Stripe shows after, and a third read agrees', async () => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'cancel_cleared', cancel_effective_date: null }, error: null })
+    const supabase = databaseFunctions()
     const stripe = fakeStripe(updated(1700000000), updated(null))
     const result = await dispatchStripeEvent(fakeEvent('customer.subscription.updated', updated(1700000000)), supabase, stripe)
 
@@ -544,6 +604,7 @@ describe('dispatchStripeEvent: the subscription is read again after the write (W
     ])
     expect(stripe.subscriptions.retrieve).toHaveBeenCalledTimes(3)
     expect(result).toEqual({ outcome: 'processed', detail: { found: true, action: 'cancel_cleared', cancel_effective_date: null, written_again: 1, last_write: 'membership_sync_cancel_at_period_end' } })
+    expect(await memberRow('sub_1')).toMatchObject({ last_day: null })
   })
 
   it.each([
@@ -551,13 +612,13 @@ describe('dispatchStripeEvent: the subscription is read again after the write (W
     ['cancel_at_period_end', updated(null), { ...updated(null), cancel_at_period_end: true }],
     ['the period end', updated(null, 1700000000), updated(null, 1702592000)],
   ])('customer.subscription.updated: a change to %s alone between the read and the write is written again', async (_name, first, second) => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'unchanged' }, error: null })
+    const supabase = databaseFunctions()
     await dispatchStripeEvent(fakeEvent('customer.subscription.updated', first), supabase, fakeStripe(first, second))
     expect(supabase.rpc).toHaveBeenCalledTimes(2)
   })
 
   it('invoice.payment_failed: the payment goes through between the read and the write: marked past due, then the payment recorded with the period end Stripe shows', async () => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'reactivated', was: 'past_due', bookings_restored: 1 }, error: null })
+    const supabase = databaseFunctions()
     const stripe = fakeStripe({ id: 'sub_1', status: 'past_due' }, paidUp('sub_1', 1702592000))
     const result = await dispatchStripeEvent(fakeEvent('invoice.payment_failed', failedInvoice), supabase, stripe)
 
@@ -566,11 +627,12 @@ describe('dispatchStripeEvent: the subscription is read again after the write (W
       ['membership_mark_paid', { p_stripe_subscription_id: 'sub_1', p_period_end: iso(1702592000) }],
     ])
     expect(stripe.subscriptions.retrieve).toHaveBeenCalledTimes(3)
-    expect(result).toEqual({ outcome: 'processed', detail: { found: true, action: 'reactivated', was: 'past_due', bookings_restored: 1, written_again: 1, last_write: 'membership_mark_paid' } })
+    expect(result).toEqual({ outcome: 'processed', detail: { found: true, action: 'reactivated', was: 'past_due', bookings_restored: 0, periods_created: expect.any(Number), written_again: 1, last_write: 'membership_mark_paid' } })
+    expect(await memberRow('sub_1')).toMatchObject({ status: 'active', next: '2023-12-14' })
   })
 
   it('invoice.paid: a later payment fails between the read and the write: the payment recorded, then the member marked past due', async () => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'past_due' }, error: null })
+    const supabase = databaseFunctions()
     const stripe = fakeStripe(paidUp('sub_1', 1700000000, 'trialing'), { id: 'sub_1', status: 'past_due', items: { data: [{ current_period_end: 1702592000 }] } })
     const result = await dispatchStripeEvent(fakeEvent('invoice.paid', cycleInvoice('sub_1')), supabase, stripe)
 
@@ -579,12 +641,13 @@ describe('dispatchStripeEvent: the subscription is read again after the write (W
       ['membership_mark_payment_failed', { p_stripe_subscription_id: 'sub_1' }],
     ])
     expect(result.detail).toMatchObject({ written_again: 1, last_write: 'membership_mark_payment_failed' })
+    expect(await memberRow('sub_1')).toMatchObject({ status: 'past_due' })
   })
 
   // W46 wrote the later period end here whatever invoice it belonged to. W46b (W46 review B1): only while the event's
   // invoice is still the newest.
   it("invoice.paid: Stripe shows a later period end after the write, with the event's invoice still its newest: the later period end is written too", async () => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'reactivated' }, error: null })
+    const supabase = databaseFunctions()
     await dispatchStripeEvent(fakeEvent('invoice.paid', cycleInvoice('sub_1')), supabase, fakeStripe(paidUp('sub_1', 1700000000), paidUp('sub_1', 1702592000)))
     expect(supabase.rpc.mock.calls.map((call) => call[1])).toEqual([
       { p_stripe_subscription_id: 'sub_1', p_period_end: iso(1700000000) },
@@ -593,49 +656,52 @@ describe('dispatchStripeEvent: the subscription is read again after the write (W
   })
 
   it.each(['active', 'trialing'])("invoice.paid: the subscription renews between the read and the write (the next renewal's draft hour: %s, the period moved on, a draft its newest invoice): the renewal's date is not written; the write stands, after two reads", async (status) => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'reactivated' }, error: null })
+    const supabase = databaseFunctions()
     const stripe = fakeStripe(paidUp('sub_1', 1700000000), paidUp('sub_1', 1702592000, status, 'in_draft'))
     const result = await dispatchStripeEvent(fakeEvent('invoice.paid', cycleInvoice('sub_1')), supabase, stripe)
     expect(supabase.rpc.mock.calls).toEqual([['membership_mark_paid', { p_stripe_subscription_id: 'sub_1', p_period_end: iso(1700000000) }]])
     expect(stripe.subscriptions.retrieve).toHaveBeenCalledTimes(2)
-    expect(result).toEqual({ outcome: 'processed', detail: { found: true, action: 'reactivated' } })
+    expect(result).toEqual({ outcome: 'processed', detail: { found: true, action: 'reactivated', was: 'active', bookings_restored: 0, periods_created: expect.any(Number) } })
+    expect(await memberRow('sub_1')).toMatchObject({ next: '2023-11-14' })
   })
 
   it("invoice.payment_failed: Stripe shows the subscription paid up after the write with a newer invoice than the one that failed: no payment is recorded from this event; the write stands", async () => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'past_due' }, error: null })
+    const supabase = databaseFunctions()
     const stripe = fakeStripe({ id: 'sub_1', status: 'past_due', latest_invoice: INVOICE }, paidUp('sub_1', 1702592000, 'active', 'in_draft'))
     const result = await dispatchStripeEvent(fakeEvent('invoice.payment_failed', failedInvoice), supabase, stripe)
     expect(supabase.rpc.mock.calls).toEqual([['membership_mark_payment_failed', { p_stripe_subscription_id: 'sub_1' }]])
     expect(stripe.subscriptions.retrieve).toHaveBeenCalledTimes(2)
-    expect(result).toEqual({ outcome: 'processed', detail: { found: true, action: 'past_due' } })
+    expect(result).toEqual({ outcome: 'processed', detail: { found: true, action: 'past_due', covered_through: expect.any(String), bookings_flagged: 0 } })
   })
 
   it("invoice.paid: a newer invoice fails between the read and the write: the member is marked past due, whichever invoice is then the newest", async () => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'past_due' }, error: null })
+    const supabase = databaseFunctions()
     const stripe = fakeStripe(paidUp('sub_1', 1700000000), paidUp('sub_1', 1702592000, 'past_due', 'in_draft'))
     await dispatchStripeEvent(fakeEvent('invoice.paid', cycleInvoice('sub_1')), supabase, stripe)
     expect(supabase.rpc.mock.calls.map((call) => call[0])).toEqual(['membership_mark_paid', 'membership_mark_payment_failed'])
   })
 
   it.each(['canceled', 'incomplete_expired', 'paused'])('invoice.payment_failed: Stripe shows %s after the write: nothing more is written (an ended subscription has its own event)', async (status) => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'past_due' }, error: null })
+    const supabase = databaseFunctions()
     const stripe = fakeStripe({ id: 'sub_1', status: 'past_due' }, { id: 'sub_1', status })
     const result = await dispatchStripeEvent(fakeEvent('invoice.payment_failed', failedInvoice), supabase, stripe)
     expect(supabase.rpc).toHaveBeenCalledTimes(1)
     expect(stripe.subscriptions.retrieve).toHaveBeenCalledTimes(2)
-    expect(result).toEqual({ outcome: 'processed', detail: { found: true, action: 'past_due' } })
+    expect(result).toEqual({ outcome: 'processed', detail: { found: true, action: 'past_due', covered_through: expect.any(String), bookings_flagged: 0 } })
   })
 
   it.each([
     ['no membership has the subscription', { found: false }, 'ignored'],
     ['the membership has ended', { found: true, action: 'ignored_cancelled' }, 'processed'],
-  ] as const)('nothing was written (%s): no second read', async (_name, data, outcome) => {
+  ] as const)('nothing was written (%s): no second read', async (name, data, outcome) => {
+    if (name === 'the membership has ended') await database.db.query("UPDATE customer_memberships SET subscription_status = 'cancelled' WHERE stripe_subscription_id = 'sub_1'")
+    else await database.db.query("UPDATE customer_memberships SET stripe_subscription_id = 'sub_1_moved_' || gen_random_uuid()::text WHERE stripe_subscription_id = 'sub_1'")
     for (const [type, object, showing] of [
       ['invoice.paid', cycleInvoice('sub_1'), paidUp('sub_1', 1700000000)],
       ['invoice.payment_failed', failedInvoice, { id: 'sub_1', status: 'past_due' }],
       ['customer.subscription.updated', updated(null), updated(null)],
     ] as const) {
-      const supabase = fakeRpcClient({ data, error: null })
+      const supabase = databaseFunctions()
       const stripe = fakeStripe(showing)
       expect(await dispatchStripeEvent(fakeEvent(type, object), supabase, stripe)).toEqual({ outcome, detail: data })
       expect(stripe.subscriptions.retrieve).toHaveBeenCalledTimes(1)
@@ -644,20 +710,22 @@ describe('dispatchStripeEvent: the subscription is read again after the write (W
   })
 
   it('the read after the write fails: it throws, so the event is an error and is sent again (the write stands, and is made again then)', async () => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'past_due' }, error: null })
+    const supabase = databaseFunctions()
     const retrieve = vi.fn().mockResolvedValueOnce({ id: 'sub_1', status: 'past_due' }).mockRejectedValue(new Error('stripe unreachable'))
     await expect(dispatchStripeEvent(fakeEvent('invoice.payment_failed', failedInvoice), supabase, { subscriptions: { retrieve } })).rejects.toThrow('stripe unreachable')
     expect(supabase.rpc).toHaveBeenCalledTimes(1)
   })
 
   it('the second write failing throws', async () => {
-    const rpc = vi.fn().mockResolvedValueOnce({ data: { found: true, action: 'unchanged' }, error: null }).mockResolvedValue({ data: null, error: new Error('db exploded') })
+    const { rpc } = failingCall(2, new Error('db exploded'))
     await expect(dispatchStripeEvent(fakeEvent('customer.subscription.updated', updated(null)), { rpc }, fakeStripe(updated(null), updated(1700000000)))).rejects.toThrow('db exploded')
     expect(rpc).toHaveBeenCalledTimes(2)
+    // The first write (no end: unchanged) stands; the second never ran.
+    expect(await memberRow('sub_1')).toMatchObject({ last_day: null })
   })
 
   it(`a subscription that shows something else after every write: ${MOST_WRITES_AGAIN + 1} writes, then it throws, so the event is an error and Stripe sends it again`, async () => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'cancel_scheduled' }, error: null })
+    const supabase = databaseFunctions()
     // Each read shows a later end than the one before.
     let end = 1700000000
     const retrieve = vi.fn().mockImplementation(async () => updated((end += 86400)))
@@ -669,7 +737,7 @@ describe('dispatchStripeEvent: the subscription is read again after the write (W
   })
 
   it(`a subscription that settles on its last allowed write is processed: ${MOST_WRITES_AGAIN + 1} writes and a read that agrees`, async () => {
-    const supabase = fakeRpcClient({ data: { found: true, action: 'cancel_scheduled' }, error: null })
+    const supabase = databaseFunctions()
     const stripe = fakeStripe(updated(null), updated(1700000000), updated(1700086400))
     const result = await dispatchStripeEvent(fakeEvent('customer.subscription.updated', updated(null)), supabase, stripe)
     expect(supabase.rpc).toHaveBeenCalledTimes(3)

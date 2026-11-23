@@ -3992,53 +3992,55 @@ function w17Scenarios(): Scenario[] {
   })
   return [
     // R1 (review 3, finding 1): a no-card press whose statement commits after the press looked for it and undid.
-    // W65b: the late statement was the old side's (`landingAfterTheLook`, gone): on the Worker each of the five R1
-    // scenarios is its press alone, as it has been since W64.
+    // W65b: the late statement was the old side's (`landingAfterTheLook`, gone). W66 item 0: rebuilt as the Worker's
+    // nearest fault, its route's answer lost (the route finished; the screen is told nothing), and renamed
+    // (`…-statement-lands-late` until W66). The money the press took stays taken and is on its rows once.
     {
-      name: 'w17-r1a-settle-store-credit-and-gift-card-statement-lands-late',
+      name: 'w17-r1a-settle-store-credit-and-gift-card-answer-lost',
       seed,
       async run({ call, attempt, db }) {
         const bookingId = await lapsedSeat(call, db)
         await db.query('UPDATE customers SET store_credit_balance = 15 WHERE id = $1', [ID.member])
-        await attempt('settleLapsedBooking', { bookingId, payment: R1_MONEY })
+        await losingTheWorkersAnswer(SETTLE_PATH, () => attempt('settleLapsedBooking', { bookingId, payment: R1_MONEY }))
       },
     },
     {
-      name: 'w17-r1a-control-settle-store-credit-and-card-statement-lands-late',
+      name: 'w17-r1a-control-settle-store-credit-and-card-answer-lost',
       seed,
       async run({ call, attempt, db }) {
         const bookingId = await lapsedSeat(call, db)
         await db.query('UPDATE customers SET store_credit_balance = 15 WHERE id = $1', [ID.member])
-        await attempt('settleLapsedBooking', { bookingId, payment: { method: 'card', storeCredit: { amount: 5 } } })
+        await losingTheWorkersAnswer(SETTLE_PATH, () => attempt('settleLapsedBooking', { bookingId, payment: { method: 'card', storeCredit: { amount: 5 } } }))
       },
     },
     {
-      name: 'w17-r1b-move-store-credit-and-gift-card-statement-lands-late',
+      name: 'w17-r1b-move-store-credit-and-gift-card-answer-lost',
       seed: movingSeed,
       async run({ call, attempt }) {
         const bookingId = await placeSamsTwoSeats(call)
         await call('moveBooking', toPeak(bookingId))
-        await attempt('moveBooking', toPeak(bookingId, { storeCredit: { amount: 6 }, giftCard: { giftCardId: ID.giftCard, amount: 5 } }))
+        await losingTheWorkersAnswer(CHARGE_PATH, () => attempt('moveBooking', toPeak(bookingId, { storeCredit: { amount: 6 }, giftCard: { giftCardId: ID.giftCard, amount: 5 } })))
       },
     },
     {
-      name: 'w17-r1c-add-guest-store-credit-and-gift-card-statement-lands-late',
+      name: 'w17-r1c-add-guest-store-credit-and-gift-card-answer-lost',
       seed,
       async run({ call, attempt }) {
         const bookingId = await placeSamsTwoSeats(call)
         await call('addBookingGuest', { bookingId, ...bea })
-        await attempt('addBookingGuest', { bookingId, ...bea, payment: R1_MONEY })
+        await losingTheWorkersAnswer(CHARGE_PATH, () => attempt('addBookingGuest', { bookingId, ...bea, payment: R1_MONEY }))
       },
     },
     {
-      name: 'w17-r1d-move-gift-card-and-reader-statement-lands-late-then-cancel',
+      name: 'w17-r1d-move-gift-card-and-reader-answer-lost-then-cancel',
       seed: movingSeed,
       async run({ call, attempt, db }) {
         const bookingId = await placeSamsTwoSeats(call)
         await call('moveBooking', toPeak(bookingId))
-        await attempt('moveBooking', toPeak(bookingId, { method: 'reader', giftCard: { giftCardId: ID.giftCard, amount: 5 } }))
+        // The answer lost is the one that starts the reader payment, so the screen never shows the tap.
+        await losingTheWorkersAnswer(CHARGE_PATH, () => attempt('moveBooking', toPeak(bookingId, { method: 'reader', giftCard: { giftCardId: ID.giftCard, amount: 5 } })))
         const open = (await db.query<{ id: string }>("SELECT id FROM pending_reader_payments WHERE record_id = $1 AND status = 'pending'", [bookingId]))[0]
-        // As the old sweep does after 15 minutes: cancel the reader payment the late statement left open.
+        // Staff cancel the reader payment the lost answer left open (the move undone, the gift card back).
         if (open) await attempt('cancelReaderPayment', { pendingId: open.id })
       },
     },
@@ -4405,18 +4407,9 @@ function w27Scenarios(): Scenario[] {
       // A definite no leaves nothing behind: the next press has a new key and goes through.
       await refund(await lines('product'), 'card')
     }),
-    after('order-refund-refused-when-the-card-check-cannot-be-read', soapOnCard, async ({ refund, lines }) => {
-      // The count of earlier refusals (part of the refund's key) can't be read: nothing is sent, nothing refunded.
-      // W65b: the count was the old function's own read (gone with `whileUnreadable`): on the Worker, its press alone.
-      const ids = await lines('product')
-      await refund(ids, 'card')
-    }),
-    after('order-refund-refused-when-the-look-for-a-held-refund-fails', soapOnCard, async ({ refund, lines }) => {
-      // The look for an earlier refund with no clear answer can't be read: the press stops before the lines are read.
-      // W65b: the look was the old function's own read (gone with `whileUnreadable`): on the Worker, its press alone.
-      const ids = await lines('product')
-      await refund(ids, 'card')
-    }),
+    // W66 item 0: `order-refund-refused-when-the-card-check-cannot-be-read` and `…-when-the-look-for-a-held-refund-fails`
+    // went: since W65b each was order-refund-product-to-card-no-restock's press alone (their faults were the old
+    // function's own reads).
     after('order-refund-store-credit-write-fails', soapInCash, async ({ refund, lines, db }) => {
       const ids = await lines('product')
       await whileFailing(db, refundCreditFails, () => refund(ids, 'credit'))
@@ -4572,11 +4565,8 @@ function w27Scenarios(): Scenario[] {
       stripe.forgetIdempotencyKeys()
       await refund(ids, 'card')
     }),
-    after('order-refund-held-record-fails-too', soapOnCard, async ({ refund, lines, db }) => {
-      const ids = await lines('product')
-      await whileFailing(db, { table: 'audit_log', event: 'INSERT', when: `NEW.action = 'card_refund_held'` }, () => losingTheWorkersAnswer(REFUND_PATH, () => refund(ids, 'card')))
-      await refund(ids, 'card')
-    }),
+    // W66 item 0: `order-refund-held-record-fails-too` went: its trigger was on `card_refund_held`, which only the old code
+    // wrote, so it was order-refund-answer-lost-then-pressed-again's press and fault.
     after('order-refund-died-after-the-refund-then-pressed-again', soapOnCard, async ({ refund, lines }) => {
       const ids = await lines('product')
       await dyingAfter(REFUND_PATH, () => refund(ids, 'card'))
@@ -4610,14 +4600,8 @@ function w27Scenarios(): Scenario[] {
       // The look finds nothing, which counts as a no, and the press refunds for real.
       await refund(ids, 'card')
     }),
-    after('order-refund-held-two-days-and-the-look-fails', soapOnCard, async ({ refund, lines, stripe }) => {
-      const ids = await lines('product')
-      await losingTheWorkersAnswer(REFUND_PATH, () => refund(ids, 'card'))
-      later(TWO_DAYS)
-      stripe.forgetIdempotencyKeys()
-      stripe.failNext('refunds.list', { kind: 'unreachable' })
-      await refund(ids, 'card')
-    }),
+    // W66 item 0: `order-refund-held-two-days-and-the-look-fails` went: the Worker's second press makes no list (the first
+    // finished), so its fault never acted and it was order-refund-held-two-days-then-found-by-its-key's press.
     // W65b: these three lost the old side's statements until W64 (then plain presses). The first two lose the Worker
     // route's answer instead, and are renamed for what the Worker does (it gives the credit inside the route's
     // transaction: there is no note to find and no look to fail); the third is renamed for what it does.
@@ -4799,13 +4783,10 @@ function w27Scenarios(): Scenario[] {
       await cancel('card', [first as string])
       await cancel('card', [first as string])
     }),
-    // W65b: in these two the failing read was the old function's own (gone with `whileUnreadable`): on the Worker each
-    // is its press alone.
-    after('event-cancel-refused-when-the-card-check-cannot-be-read', eventOnCard, async ({ cancel, places: ids }) => {
-      const [first] = await ids()
-      await cancel('card', [first as string])
-    }),
-    after('event-cancel-refused-when-the-look-for-a-held-refund-fails', eventOnCard, async ({ cancel, places: ids }) => {
+    // W66 item 0: renamed from event-cancel-refused-when-the-card-check-cannot-be-read (its failing read was the old
+    // function's own, gone at W65b): one place to the card with no quote first. Its twin,
+    // `…-refused-when-the-look-for-a-held-refund-fails`, was the same press, and went.
+    after('event-cancel-one-place-to-card-without-a-quote', eventOnCard, async ({ cancel, places: ids }) => {
       const [first] = await ids()
       await cancel('card', [first as string])
     }),
@@ -4985,11 +4966,8 @@ function w27Scenarios(): Scenario[] {
       await cancel('credit', [first as string])
       await cancel('card', [first as string])
     }),
-    after('event-cancel-held-record-fails-too', eventOnCard, async ({ cancel, places: ids, db }) => {
-      const [first] = await ids()
-      await whileFailing(db, { table: 'audit_log', event: 'INSERT', when: `NEW.action = 'card_refund_held'` }, () => losingTheWorkersAnswer(REFUND_PATH, () => cancel('card', [first as string])))
-      await cancel('card', [first as string])
-    }),
+    // W66 item 0: `event-cancel-held-record-fails-too` went (its trigger was on the old code's `card_refund_held`): it was
+    // event-cancel-answer-lost-then-pressed-again's press and fault.
     after('event-cancel-never-reached-stripe-then-two-days-later', eventOnCard, async ({ cancel, places: ids, stripe }) => {
       const [first, second] = await ids()
       stripe.failNext('refunds.create', { kind: 'unreachable' })
@@ -5023,12 +5001,9 @@ function w27Scenarios(): Scenario[] {
       const [first] = await ids()
       await whileFailing(db, placeStampFails, () => cancel('credit', [first as string]))
     }),
-    // The same press and fault as event-cancel-recording-fails-to-store-credit-is-taken-back: on the Worker the place's
-    // stamp and the credit are one transaction, so there is no take-back whose answer could be lost.
-    after('event-cancel-recording-fails-to-store-credit-on-a-cash-booking', eventInCash, async ({ cancel, places: ids, db }) => {
-      const [first] = await ids()
-      await whileFailing(db, placeStampFails, () => cancel('credit', [first as string]))
-    }),
+    // W66 item 0: `event-cancel-recording-fails-to-store-credit-on-a-cash-booking` went: the same press and fault as
+    // event-cancel-recording-fails-to-store-credit-is-taken-back (on the Worker the place's stamp and the credit are one
+    // transaction, so there is no take-back whose answer could be lost).
   ]
 
   // --- cancelEvent and the overview: every refusal of E-plan 1.4, and a whole event ------------------------------------
@@ -5682,13 +5657,9 @@ function w36Scenarios(): Scenario[] {
       await call(HERD, { membershipId: ID.membership, herd: true })
       await call(HERD, { membershipId: ID.membership, herd: null })
     }, membershipIs("UPDATE customer_memberships SET start_date = '2026-11-01', is_herd = false WHERE id = $1")),
-    // FB11: clearing is two statements, and nothing records who changed Herd.
-    f('fb11-herd-clear-stops-before-the-automatic-rule-runs', async ({ call, attempt }) => {
-      await call(HERD, { membershipId: ID.membership, herd: true })
-      // W65b: the failing step was the old function's second statement (gone with `whileUnreadable`): on the Worker,
-      // where the clear and the rule run in one transaction, its press alone.
-      await attempt(HERD, { membershipId: ID.membership, herd: null })
-    }, membershipIs("UPDATE customer_memberships SET start_date = '2026-11-01', is_herd = false WHERE id = $1")),
+    // W66 item 0: `fb11-herd-clear-stops-before-the-automatic-rule-runs` went: since W65b it was the scenario above's two
+    // presses on its seed. FB11 (the clear and the Herd rule in one transaction, with who changed it) is held by
+    // memberships/credits.test.ts (its two FB11 tests).
   ]
 
   // --- Store credit (adjustCustomerStoreCredit). Sam has £30.

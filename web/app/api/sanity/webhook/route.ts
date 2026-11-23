@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import crypto from 'crypto'
-import Stripe from 'stripe'
 import { createImageUrlBuilder } from '@sanity/image-url'
+import { closeRequestDb, openRequestDb } from '@/server/db/connection'
+import { syncSanityDocument, takeSanityDocumentOffSale, type SanityKind, type SanityMirror, type SanityOptions } from '@/server/rules/catalog/sanity-sync'
+import { createStripeClient } from '@/server/stripe/client'
+
+// W66 (H-plan 4.3, H7; Q57): every write on the Worker's own database connection (server/rules/catalog/sanity-sync.ts),
+// where it was Supabase's client with the service-role key. The signature check first, unchanged; then one
+// transaction per document. A new item arrives off sale; no Stripe product is made or renamed for anything but a
+// membership plan; a delete takes the item off sale with an audit row by the system as `sanity`.
 
 /** W59 (W45 audit row 3): an image field as this route reads it (the builder takes its asset reference). */
 interface SanityImage {
@@ -17,7 +23,7 @@ interface SanityDocument {
   _type?: string
   _rev?: string
   name: string
-  category?: string
+  category?: string | null
   images?: SanityImage[]
   extraWaiver?: unknown
 }
@@ -26,13 +32,6 @@ const imageBuilder = createImageUrlBuilder({
   projectId: process.env.NEXT_PUBLIC_SANITY_PROJECT_ID!,
   dataset: process.env.NEXT_PUBLIC_SANITY_DATASET!,
 })
-
-function getStripe() {
-  return new Stripe(process.env.STRIPE_SECRET_KEY!, {
-    apiVersion: '2026-07-29.dahlia',
-    httpClient: Stripe.createFetchHttpClient(), // Workers' runtime doesn't support the SDK's default Node socket client
-  })
-}
 
 // Verify webhook signature from Sanity
 function verifySignature(body: string, signature: string): boolean {
@@ -46,15 +45,15 @@ function verifySignature(body: string, signature: string): boolean {
   const signatureParts = signature.split(',')
   const timestampPart = signatureParts.find((part) => part.startsWith('t='))
   const hashPart = signatureParts.find((part) => part.startsWith('v1='))
-  
+
   if (!timestampPart || !hashPart) {
     console.error('Invalid signature format')
     return false
   }
-  
+
   const timestamp = timestampPart.split('=')[1]
   const receivedHash = hashPart.split('=')[1]
-  
+
   // Create HMAC with timestamp and body
   const signedPayload = `${timestamp}.${body}`
   const computedHash = crypto
@@ -70,61 +69,40 @@ function verifySignature(body: string, signature: string): boolean {
 
 // Extract thumbnail URL from a Sanity image object, resized to 80px wide (height scales
 // proportionally, no crop). Uses the actual @sanity/image-url builder rather than hand-parsing
-// the asset reference string \u2014 the builder correctly reads the real dimensions Sanity bakes
+// the asset reference string — the builder correctly reads the real dimensions Sanity bakes
 // into the asset filename, which a manually constructed URL was missing entirely.
 function getThumbnailUrl(image: SanityImage | null | undefined): string | null {
   if (!image || !image.asset || !image.asset._ref) return null
   return imageBuilder.image(image).width(80).url()
 }
 
-// Deactivates whichever catalog table has a row matching this Sanity document id. Used for
-// delete/unpublish events, which never reliably include `_type` in the payload body once the
-// document no longer exists — matching by id across all catalog tables avoids depending on
-// that. Per 07-write-architecture.md: Sanity-side deletion always means "deactivate", never a
-// raw table delete.
-async function deactivateBySanityId(sanityId: string, supabase: SupabaseClient) {
-  const tables: Array<{ table: string; column: string }> = [
-    { table: 'service_types', column: 'sanity_service_type_id' },
-    { table: 'products', column: 'sanity_product_id' },
-    { table: 'addons', column: 'sanity_addon_id' },
-    { table: 'membership_plans', column: 'sanity_plan_id' },
-    { table: 'session_pass_types', column: 'sanity_pass_type_id' },
-    { table: 'gift_card_types', column: 'sanity_gift_card_type_id' },
-    { table: 'events', column: 'sanity_event_id' },
-  ]
+/** The Sanity document types with a row here; any other (page, blogPost, galleryImage) is ignored. */
+const CATALOG_TYPES: ReadonlySet<string> = new Set<SanityKind>(['serviceType', 'product', 'addon', 'membershipPlan', 'sessionPassType', 'giftCardType', 'event'])
 
-  for (const { table, column } of tables) {
-    const { data, error } = await supabase
-      .from(table)
-      .update({ active: false, updated_at: new Date().toISOString() })
-      .eq(column, sanityId)
-      .select('id')
-
-    if (error) {
-      console.error(`Error deactivating ${table} for deleted Sanity doc ${sanityId}:`, error)
-      continue
-    }
-    if (data && data.length > 0) {
-      console.log(`Deactivated ${table} row for deleted Sanity document: ${sanityId}`)
-      return
-    }
+/**
+ * The row's fields from the document. A product's or add-on's category only when the document has the field, so a
+ * document without one leaves the row's as it is (as the client's update did). Events: whether there is an extra
+ * waiver, with a short fingerprint of its text as the version, so a changed waiver is a new version for attendees who
+ * accept it later.
+ */
+function mirrorOf(kind: SanityKind, payload: SanityDocument): SanityMirror {
+  const thumbnailUrl = payload.images?.[0] ? getThumbnailUrl(payload.images[0]) : null
+  const mirror: SanityMirror = { name: payload.name, thumbnailUrl }
+  if ((kind === 'product' || kind === 'addon') && 'category' in payload) mirror.category = payload.category ?? null
+  if (kind === 'event') {
+    const waiverText = typeof payload.extraWaiver === 'string' ? payload.extraWaiver.trim() : ''
+    mirror.hasExtraWaiver = waiverText.length > 0
+    mirror.extraWaiverVersion = waiverText.length > 0 ? crypto.createHash('sha256').update(waiverText).digest('hex').slice(0, 12) : null
   }
-
-  console.log(`No matching catalog row found for deleted Sanity document: ${sanityId}`)
+  return mirror
 }
 
 export async function POST(request: NextRequest) {
   try {
-    // Initialize Supabase client with service role key for admin operations
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    )
-
     // Verify webhook signature
     const signature = request.headers.get('sanity-webhook-signature')
     const body = await request.text()
-    
+
     if (!signature || !verifySignature(body, signature)) {
       return NextResponse.json(
         { error: 'Invalid signature' },
@@ -136,6 +114,7 @@ export async function POST(request: NextRequest) {
     // inferring create/update/delete from the body, since a delete event's body may not
     // reliably include every field once the document no longer exists.
     const operation = request.headers.get('sanity-operation')
+    const options: SanityOptions = { requestId: crypto.randomUUID(), stripe: () => createStripeClient() }
 
     if (operation === 'delete') {
       const headerDocumentId = request.headers.get('sanity-document-id')
@@ -155,11 +134,20 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ message: 'Draft delete ignored' })
       }
 
-      await deactivateBySanityId(documentId, supabase)
+      // Per 07-write-architecture.md: Sanity-side deletion always means "off sale", never a raw table delete.
+      const db = openRequestDb()
+      try {
+        const deleted = await takeSanityDocumentOffSale(db, documentId, options)
+        if (!deleted.found) console.log(`No matching catalog row found for deleted Sanity document: ${documentId}`)
+        else if ('refused' in deleted) return NextResponse.json({ success: true, kept: deleted.refused })
+        else console.log(`Took ${deleted.entity} ${deleted.id} off sale for deleted Sanity document: ${documentId}`)
+      } finally {
+        await closeRequestDb(db)
+      }
       return NextResponse.json({ success: true })
     }
 
-    const payload = JSON.parse(body)
+    const payload = JSON.parse(body) as SanityDocument
     const { _type, _id } = payload
 
     // Only process published documents (drafts have _id starting with 'drafts.')
@@ -167,34 +155,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: 'Draft ignored' })
     }
 
-    console.log(`Processing ${_type} webhook for ${_id}`)
+    if (!_type || !CATALOG_TYPES.has(_type)) {
+      // Ignore non-catalog types (page, blogPost, galleryImage)
+      return NextResponse.json({ message: 'Non-catalog type ignored' })
+    }
+    const kind = _type as SanityKind
 
-    // Route to appropriate handler based on document type
-    switch (_type) {
-      case 'serviceType':
-        await handleServiceType(payload, supabase)
-        break
-      case 'product':
-        await handleProduct(payload, supabase)
-        break
-      case 'addon':
-        await handleAddon(payload, supabase)
-        break
-      case 'membershipPlan':
-        await handleMembershipPlan(payload, supabase)
-        break
-      case 'sessionPassType':
-        await handleSessionPassType(payload, supabase)
-        break
-      case 'giftCardType':
-        await handleGiftCardType(payload, supabase)
-        break
-      case 'event':
-        await handleEvent(payload, supabase)
-        break
-      default:
-        // Ignore non-catalog types (page, blogPost, galleryImage)
-        return NextResponse.json({ message: 'Non-catalog type ignored' })
+    console.log(`Processing ${_type} webhook for ${_id}`)
+    const db = openRequestDb()
+    try {
+      const synced = await syncSanityDocument(db, kind, _id, mirrorOf(kind, payload), options)
+      console.log(`${synced.created ? 'Created' : 'Updated'} ${kind}: ${_id}${synced.planProduct ? ` (Stripe product ${synced.planProduct})` : ''}`)
+    } finally {
+      await closeRequestDb(db)
     }
 
     return NextResponse.json({ success: true })
@@ -204,608 +177,5 @@ export async function POST(request: NextRequest) {
       { error: 'Internal server error' },
       { status: 500 }
     )
-  }
-}
-
-async function handleServiceType(payload: SanityDocument, supabase: SupabaseClient) {
-  const { _id, name, images } = payload
-  
-  const thumbnailUrl = images?.[0] ? getThumbnailUrl(images[0]) : null
-
-  // Check if service type already exists
-  const { data: existing, error: lookupError } = await supabase
-    .from('service_types')
-    .select('id, stripe_product_id')
-    .eq('sanity_service_type_id', _id)
-    .single()
-
-  // PGRST116 = "no rows found", the expected case for a new document. Any other error is a
-  // real query failure and must not be silently treated as "doesn't exist yet".
-  if (lookupError && lookupError.code !== 'PGRST116') {
-    throw lookupError
-  }
-
-  if (existing) {
-    // Update existing record (only mirror fields)
-    const { error } = await supabase
-      .from('service_types')
-      .update({
-        name,
-        thumbnail_url: thumbnailUrl,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', existing.id)
-
-    if (error) throw error
-    console.log(`Updated service_type: ${_id}`)
-
-    // Keep Stripe's name/image in sync on every republish, not just at creation
-    try {
-      if (existing.stripe_product_id) {
-        await getStripe().products.update(existing.stripe_product_id, {
-          name,
-          images: thumbnailUrl ? [thumbnailUrl] : [],
-        })
-        console.log(`Updated Stripe product for service_type: ${existing.stripe_product_id}`)
-      } else {
-        // Never got a Stripe product at creation (e.g. Stripe was down at the time) —
-        // self-heal by creating it now instead of leaving this permanently unsynced.
-        const stripeProduct = await getStripe().products.create({
-          name,
-          images: thumbnailUrl ? [thumbnailUrl] : undefined,
-          active: true,
-          metadata: { sanity_id: _id, type: 'service_type' },
-        })
-        await supabase.from('service_types').update({ stripe_product_id: stripeProduct.id }).eq('id', existing.id)
-        console.log(`Created Stripe product for service_type (self-healed): ${stripeProduct.id}`)
-      }
-    } catch (stripeError) {
-      console.error('Error syncing Stripe product:', stripeError)
-      // Don't fail the whole operation if Stripe fails
-    }
-  } else {
-    // Create new record
-    // Note: duration, capacity, booking_type, price, and tiers are Postgres-owned
-    // and must be set manually in Retool after initial sync
-    const { data, error } = await supabase
-      .from('service_types')
-      .insert({
-        sanity_service_type_id: _id,
-        name,
-        thumbnail_url: thumbnailUrl,
-        active: true
-      })
-      .select('id')
-      .single()
-
-    if (error) throw error
-    console.log(`Created service_type: ${_id}`)
-
-    // Create Stripe Product
-    try {
-      const stripeProduct = await getStripe().products.create({
-        name,
-        images: thumbnailUrl ? [thumbnailUrl] : undefined,
-        active: true,
-        metadata: {
-          sanity_id: _id,
-          type: 'service_type'
-        }
-      })
-      
-      await supabase
-        .from('service_types')
-        .update({ stripe_product_id: stripeProduct.id })
-        .eq('id', data.id)
-      
-      console.log(`Created Stripe product for service_type: ${stripeProduct.id}`)
-    } catch (stripeError) {
-      console.error('Error creating Stripe product:', stripeError)
-      // Don't fail the whole operation if Stripe fails
-    }
-  }
-}
-
-async function handleProduct(payload: SanityDocument, supabase: SupabaseClient) {
-  const { _id, name, category, images } = payload
-  
-  const thumbnailUrl = images?.[0] ? getThumbnailUrl(images[0]) : null
-
-  const { data: existing, error: lookupError } = await supabase
-    .from('products')
-    .select('id, stripe_product_id')
-    .eq('sanity_product_id', _id)
-    .single()
-
-  if (lookupError && lookupError.code !== 'PGRST116') {
-    throw lookupError
-  }
-
-  if (existing) {
-    const { error } = await supabase
-      .from('products')
-      .update({
-        name,
-        category,
-        thumbnail_url: thumbnailUrl,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', existing.id)
-
-    if (error) throw error
-    console.log(`Updated product: ${_id}`)
-
-    // Keep Stripe's name/image in sync on every republish, not just at creation
-    try {
-      if (existing.stripe_product_id) {
-        await getStripe().products.update(existing.stripe_product_id, {
-          name,
-          images: thumbnailUrl ? [thumbnailUrl] : [],
-        })
-        console.log(`Updated Stripe product for product: ${existing.stripe_product_id}`)
-      } else {
-        const stripeProduct = await getStripe().products.create({
-          name,
-          images: thumbnailUrl ? [thumbnailUrl] : undefined,
-          active: true,
-          metadata: { sanity_id: _id, type: 'product', category: category || '' },
-        })
-        await supabase.from('products').update({ stripe_product_id: stripeProduct.id }).eq('id', existing.id)
-        console.log(`Created Stripe product for product (self-healed): ${stripeProduct.id}`)
-      }
-    } catch (stripeError) {
-      console.error('Error syncing Stripe product:', stripeError)
-      // Don't fail the whole operation if Stripe fails
-    }
-  } else {
-    const { data, error } = await supabase
-      .from('products')
-      .insert({
-        sanity_product_id: _id,
-        name,
-        category,
-        thumbnail_url: thumbnailUrl,
-        active: true
-      })
-      .select('id')
-      .single()
-
-    if (error) throw error
-    console.log(`Created product: ${_id}`)
-
-    // Create Stripe Product
-    try {
-      const stripeProduct = await getStripe().products.create({
-        name,
-        images: thumbnailUrl ? [thumbnailUrl] : undefined,
-        active: true,
-        metadata: {
-          sanity_id: _id,
-          type: 'product',
-          category: category || ''
-        }
-      })
-
-      await supabase
-        .from('products')
-        .update({ stripe_product_id: stripeProduct.id })
-        .eq('id', data.id)
-
-      console.log(`Created Stripe product for product: ${stripeProduct.id}`)
-    } catch (stripeError) {
-      console.error('Error creating Stripe product:', stripeError)
-      // Don't fail the whole operation if Stripe fails
-    }
-  }
-}
-
-async function handleAddon(payload: SanityDocument, supabase: SupabaseClient) {
-  const { _id, name, category, images } = payload
-  
-  const thumbnailUrl = images?.[0] ? getThumbnailUrl(images[0]) : null
-
-  const { data: existing, error: lookupError } = await supabase
-    .from('addons')
-    .select('id, stripe_product_id')
-    .eq('sanity_addon_id', _id)
-    .single()
-
-  if (lookupError && lookupError.code !== 'PGRST116') {
-    throw lookupError
-  }
-
-  if (existing) {
-    const { error } = await supabase
-      .from('addons')
-      .update({
-        name,
-        category,
-        thumbnail_url: thumbnailUrl,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', existing.id)
-
-    if (error) throw error
-    console.log(`Updated addon: ${_id}`)
-
-    // Keep Stripe's name/image in sync on every republish, not just at creation
-    try {
-      if (existing.stripe_product_id) {
-        await getStripe().products.update(existing.stripe_product_id, {
-          name,
-          images: thumbnailUrl ? [thumbnailUrl] : [],
-        })
-        console.log(`Updated Stripe product for addon: ${existing.stripe_product_id}`)
-      } else {
-        const stripeProduct = await getStripe().products.create({
-          name,
-          images: thumbnailUrl ? [thumbnailUrl] : undefined,
-          active: true,
-          metadata: { sanity_id: _id, type: 'addon', category: category || '' },
-        })
-        await supabase.from('addons').update({ stripe_product_id: stripeProduct.id }).eq('id', existing.id)
-        console.log(`Created Stripe product for addon (self-healed): ${stripeProduct.id}`)
-      }
-    } catch (stripeError) {
-      console.error('Error syncing Stripe product:', stripeError)
-      // Don't fail the whole operation if Stripe fails
-    }
-  } else {
-    const { data, error } = await supabase
-      .from('addons')
-      .insert({
-        sanity_addon_id: _id,
-        name,
-        category,
-        thumbnail_url: thumbnailUrl,
-        active: true
-      })
-      .select('id')
-      .single()
-
-    if (error) throw error
-    console.log(`Created addon: ${_id}`)
-
-    // Create Stripe Product
-    try {
-      const stripeProduct = await getStripe().products.create({
-        name,
-        images: thumbnailUrl ? [thumbnailUrl] : undefined,
-        active: true,
-        metadata: {
-          sanity_id: _id,
-          type: 'addon',
-          category: category || ''
-        }
-      })
-
-      await supabase
-        .from('addons')
-        .update({ stripe_product_id: stripeProduct.id })
-        .eq('id', data.id)
-
-      console.log(`Created Stripe product for addon: ${stripeProduct.id}`)
-    } catch (stripeError) {
-      console.error('Error creating Stripe product:', stripeError)
-      // Don't fail the whole operation if Stripe fails
-    }
-  }
-}
-
-async function handleMembershipPlan(payload: SanityDocument, supabase: SupabaseClient) {
-  const { _id, name, images } = payload
-  
-  const thumbnailUrl = images?.[0] ? getThumbnailUrl(images[0]) : null
-
-  const { data: existing, error: lookupError } = await supabase
-    .from('membership_plans')
-    .select('id, stripe_product_id')
-    .eq('sanity_plan_id', _id)
-    .single()
-
-  if (lookupError && lookupError.code !== 'PGRST116') {
-    throw lookupError
-  }
-
-  if (existing) {
-    const { error } = await supabase
-      .from('membership_plans')
-      .update({
-        name,
-        thumbnail_url: thumbnailUrl,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', existing.id)
-
-    if (error) throw error
-    console.log(`Updated membership_plan: ${_id}`)
-
-    // Keep Stripe's name/image in sync on every republish, not just at creation
-    try {
-      if (existing.stripe_product_id) {
-        await getStripe().products.update(existing.stripe_product_id, {
-          name,
-          images: thumbnailUrl ? [thumbnailUrl] : [],
-        })
-        console.log(`Updated Stripe product for membership_plan: ${existing.stripe_product_id}`)
-      } else {
-        const stripeProduct = await getStripe().products.create({
-          name,
-          images: thumbnailUrl ? [thumbnailUrl] : undefined,
-          active: true,
-          metadata: { sanity_id: _id, type: 'membership_plan' },
-        })
-        await supabase.from('membership_plans').update({ stripe_product_id: stripeProduct.id }).eq('id', existing.id)
-        console.log(`Created Stripe product for membership_plan (self-healed): ${stripeProduct.id}`)
-      }
-    } catch (stripeError) {
-      console.error('Error syncing Stripe product:', stripeError)
-      // Don't fail the whole operation if Stripe fails
-    }
-  } else {
-    const { data, error } = await supabase
-      .from('membership_plans')
-      .insert({
-        sanity_plan_id: _id,
-        name,
-        thumbnail_url: thumbnailUrl,
-        active: true
-      })
-      .select('id')
-      .single()
-
-    if (error) throw error
-    console.log(`Created membership_plan: ${_id}`)
-
-    // Create Stripe Product
-    try {
-      const stripeProduct = await getStripe().products.create({
-        name,
-        images: thumbnailUrl ? [thumbnailUrl] : undefined,
-        active: true,
-        metadata: {
-          sanity_id: _id,
-          type: 'membership_plan'
-        }
-      })
-
-      await supabase
-        .from('membership_plans')
-        .update({ stripe_product_id: stripeProduct.id })
-        .eq('id', data.id)
-
-      console.log(`Created Stripe product for membership_plan: ${stripeProduct.id}`)
-    } catch (stripeError) {
-      console.error('Error creating Stripe product:', stripeError)
-      // Don't fail the whole operation if Stripe fails
-    }
-  }
-}
-
-async function handleSessionPassType(payload: SanityDocument, supabase: SupabaseClient) {
-  const { _id, name, images } = payload
-  
-  const thumbnailUrl = images?.[0] ? getThumbnailUrl(images[0]) : null
-
-  const { data: existing, error: lookupError } = await supabase
-    .from('session_pass_types')
-    .select('id, stripe_product_id')
-    .eq('sanity_pass_type_id', _id)
-    .single()
-
-  if (lookupError && lookupError.code !== 'PGRST116') {
-    throw lookupError
-  }
-
-  if (existing) {
-    const { error } = await supabase
-      .from('session_pass_types')
-      .update({
-        name,
-        thumbnail_url: thumbnailUrl,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', existing.id)
-
-    if (error) throw error
-    console.log(`Updated session_pass_type: ${_id}`)
-
-    // Keep Stripe's name/image in sync on every republish, not just at creation
-    try {
-      if (existing.stripe_product_id) {
-        await getStripe().products.update(existing.stripe_product_id, {
-          name,
-          images: thumbnailUrl ? [thumbnailUrl] : [],
-        })
-        console.log(`Updated Stripe product for session_pass_type: ${existing.stripe_product_id}`)
-      } else {
-        const stripeProduct = await getStripe().products.create({
-          name,
-          images: thumbnailUrl ? [thumbnailUrl] : undefined,
-          active: true,
-          metadata: { sanity_id: _id, type: 'session_pass_type' },
-        })
-        await supabase.from('session_pass_types').update({ stripe_product_id: stripeProduct.id }).eq('id', existing.id)
-        console.log(`Created Stripe product for session_pass_type (self-healed): ${stripeProduct.id}`)
-      }
-    } catch (stripeError) {
-      console.error('Error syncing Stripe product:', stripeError)
-      // Don't fail the whole operation if Stripe fails
-    }
-  } else {
-    const { data, error } = await supabase
-      .from('session_pass_types')
-      .insert({
-        sanity_pass_type_id: _id,
-        name,
-        thumbnail_url: thumbnailUrl,
-        active: true
-      })
-      .select('id')
-      .single()
-
-    if (error) throw error
-    console.log(`Created session_pass_type: ${_id}`)
-
-    // Create Stripe Product
-    try {
-      const stripeProduct = await getStripe().products.create({
-        name,
-        images: thumbnailUrl ? [thumbnailUrl] : undefined,
-        active: true,
-        metadata: {
-          sanity_id: _id,
-          type: 'session_pass_type'
-        }
-      })
-
-      await supabase
-        .from('session_pass_types')
-        .update({ stripe_product_id: stripeProduct.id })
-        .eq('id', data.id)
-
-      console.log(`Created Stripe product for session_pass_type: ${stripeProduct.id}`)
-    } catch (stripeError) {
-      console.error('Error creating Stripe product:', stripeError)
-      // Don't fail the whole operation if Stripe fails
-    }
-  }
-}
-
-async function handleGiftCardType(payload: SanityDocument, supabase: SupabaseClient) {
-  const { _id, name, images } = payload
-
-  const thumbnailUrl = images?.[0] ? getThumbnailUrl(images[0]) : null
-
-  const { data: existing, error: lookupError } = await supabase
-    .from('gift_card_types')
-    .select('id, stripe_product_id')
-    .eq('sanity_gift_card_type_id', _id)
-    .single()
-
-  if (lookupError && lookupError.code !== 'PGRST116') {
-    throw lookupError
-  }
-
-  if (existing) {
-    const { error } = await supabase
-      .from('gift_card_types')
-      .update({
-        name,
-        thumbnail_url: thumbnailUrl,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', existing.id)
-
-    if (error) throw error
-    console.log(`Updated gift_card_type: ${_id}`)
-
-    // Keep Stripe's name/image in sync on every republish, not just at creation
-    try {
-      if (existing.stripe_product_id) {
-        await getStripe().products.update(existing.stripe_product_id, {
-          name,
-          images: thumbnailUrl ? [thumbnailUrl] : [],
-        })
-        console.log(`Updated Stripe product for gift_card_type: ${existing.stripe_product_id}`)
-      } else {
-        const stripeProduct = await getStripe().products.create({
-          name,
-          images: thumbnailUrl ? [thumbnailUrl] : undefined,
-          active: true,
-          metadata: { sanity_id: _id, type: 'gift_card_type' },
-        })
-        await supabase.from('gift_card_types').update({ stripe_product_id: stripeProduct.id }).eq('id', existing.id)
-        console.log(`Created Stripe product for gift_card_type (self-healed): ${stripeProduct.id}`)
-      }
-    } catch (stripeError) {
-      console.error('Error syncing Stripe product:', stripeError)
-      // Don't fail the whole operation if Stripe fails
-    }
-  } else {
-    // Note: custom_amount_enabled/min/max and presets are Postgres-owned and must be
-    // set manually in Retool after initial sync — same pattern as the other 5 types.
-    const { data, error } = await supabase
-      .from('gift_card_types')
-      .insert({
-        sanity_gift_card_type_id: _id,
-        name,
-        thumbnail_url: thumbnailUrl,
-        active: true
-      })
-      .select('id')
-      .single()
-
-    if (error) throw error
-    console.log(`Created gift_card_type: ${_id}`)
-
-    // Create Stripe Product
-    try {
-      const stripeProduct = await getStripe().products.create({
-        name,
-        images: thumbnailUrl ? [thumbnailUrl] : undefined,
-        active: true,
-        metadata: {
-          sanity_id: _id,
-          type: 'gift_card_type'
-        }
-      })
-
-      await supabase
-        .from('gift_card_types')
-        .update({ stripe_product_id: stripeProduct.id })
-        .eq('id', data.id)
-
-      console.log(`Created Stripe product for gift_card_type: ${stripeProduct.id}`)
-    } catch (stripeError) {
-      console.error('Error creating Stripe product:', stripeError)
-      // Don't fail the whole operation if Stripe fails
-    }
-  }
-}
-
-// Events: Sanity owns the content; the booking system keeps name, thumbnail and whether there is
-// an extra waiver (with a short fingerprint of its text as the version, so a changed waiver is a
-// new version for attendees who accept it later). A new event arrives OFF sale with no date,
-// capacity or prices: staff set those in Retool (Catalog -> Events) before putting it on sale.
-// No Stripe product: event lines are charged as order amounts, like bookings.
-async function handleEvent(payload: SanityDocument, supabase: SupabaseClient) {
-  const { _id, name, images, extraWaiver } = payload
-
-  const thumbnailUrl = images?.[0] ? getThumbnailUrl(images[0]) : null
-  const waiverText = typeof extraWaiver === 'string' ? extraWaiver.trim() : ''
-  const hasExtraWaiver = waiverText.length > 0
-  const extraWaiverVersion = hasExtraWaiver
-    ? crypto.createHash('sha256').update(waiverText).digest('hex').slice(0, 12)
-    : null
-
-  const { data: existing, error: lookupError } = await supabase
-    .from('events')
-    .select('id')
-    .eq('sanity_event_id', _id)
-    .single()
-
-  if (lookupError && lookupError.code !== 'PGRST116') {
-    throw lookupError
-  }
-
-  const mirror = {
-    name,
-    thumbnail_url: thumbnailUrl,
-    has_extra_waiver: hasExtraWaiver,
-    extra_waiver_version: extraWaiverVersion,
-    updated_at: new Date().toISOString(),
-  }
-
-  if (existing) {
-    const { error } = await supabase.from('events').update(mirror).eq('id', existing.id)
-    if (error) throw error
-    console.log(`Updated event: ${_id}`)
-  } else {
-    const { error } = await supabase
-      .from('events')
-      .insert({ sanity_event_id: _id, ...mirror, active: false })
-    if (error) throw error
-    console.log(`Created event: ${_id}`)
   }
 }

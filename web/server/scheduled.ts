@@ -87,7 +87,7 @@ export async function runScheduledReconcile(env: ScheduledEnv, scheduledTime: nu
     } catch (err) {
       deps.log({ event: 'lapse_sweep.failed', requestId, error: err instanceof Error ? `${err.name}: ${err.message}` : String(err) })
     }
-    const result = await deps.reconcile(db, deps.stripe(secretKey), { actor: { type: 'system', id: null }, requestId, orderSwitch: env.ORDER_SWITCH ?? null, ...SCHEDULED_LIMITS })
+    const result = await deps.reconcile(db, deps.stripe(secretKey), { actor: { type: 'system', id: null }, requestId, orderSwitch: env.ORDER_SWITCH ?? null, readIntervals: true, ...SCHEDULED_LIMITS })
     const { items, ...counts } = result
     // W59 (W35 audit row 33, W32a "Noticed" 3): every item the run handled is named by its outcome, not only those
     // left for a person (a refund that failed later is on the stuck list, and now in the log too); `leftCount` keeps

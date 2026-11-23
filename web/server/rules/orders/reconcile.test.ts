@@ -628,6 +628,56 @@ describe('a payment that succeeded on an order already undone (charged_without_o
     })
   })
 
+  // W67 item 4 (W35 audit row 30; W32a "Noticed" 1): `charge_already_refunded` is read, not taken on trust.
+  const watchesOf = async (refundId: string) => (await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'refund.watch' AND entity_id = $1 ORDER BY at, id", [refundId])).map((row) => row.details)
+
+  it("W67 (row 30): its own refund made, its answer lost, then Stripe forgets the key: the send is refused as already refunded; the payment's refunds are read, its own found by its key and watched", async () => {
+    await onASeed(async ({ stripe }) => {
+      const { orderId, paymentIntentId } = await chargedWithoutOrder(stripe, 'card')
+      stripe.failNext('refunds.create', { kind: 'lost_response' })
+      expect((await run(stripe)).items[0]).toMatchObject({ outcome: 'refund_pending', reason: 'unclear' })
+      const own = stripe.refundsSent[0]
+      expect(own).toMatchObject({ payment_intent: paymentIntentId, amount: 6900 })
+      stripe.forgetIdempotencyKeys()
+      later(5)
+      expect((await run(stripe)).items[0]).toMatchObject({ kind: 'refund', id: orderId, outcome: 'refund_confirmed', detail: `already refunded under its key: ${own?.id} watched` })
+      // Before W67: confirmed with no refund, and nothing watched it.
+      expect(await watchesOf(own?.id as string)).toMatchObject([{ state: 'watching', refundId: own?.id, paymentIntentId, on: 'compensation', step: 'late-refund' }])
+      expect((await reconcileRows(orderId)).map((row) => (row as { refund?: Record<string, unknown> }).refund).at(-1)).toMatchObject({ state: 'confirmed', alreadyRefunded: true, refundId: own?.id, amount: 6900 })
+      // A later failure of that refund is the watch's line (read at once on a run that reads every watch, as Resolve now does).
+      stripe.settleRefund(own?.id as string, 'failed')
+      later(5)
+      expect((await run(stripe, { watchReadHours: 0 })).items).toContainEqual(expect.objectContaining({ kind: 'refund', id: own?.id, outcome: 'refund_failed', reason: 'refund_failed_later' }))
+      expect(stripe.refundsSent).toHaveLength(1)
+    })
+  })
+
+  it("W67 (row 30): Stripe says already refunded, but the refunds it shows accepted don't cover the payment: listed for a person with the figures, never sent again", async () => {
+    await onASeed(async ({ stripe }) => {
+      const { orderId, paymentIntentId } = await chargedWithoutOrder(stripe, 'card')
+      await stripe.refunds.create({ payment_intent: paymentIntentId, amount: 2000 })
+      stripe.failNext('refunds.create', { kind: 'error', error: fakeStripeErrors.invalid('charge_already_refunded', 'Charge has already been refunded.') })
+      expect((await run(stripe)).items[0]).toMatchObject({ kind: 'refund', id: orderId, outcome: 'refund_failed', reason: 'refund_failed', detail: 'Stripe says the payment is already refunded, but the refunds it shows accepted come to 20.00 of 69.00' })
+      expect((await stuckList(db)).refunds).toEqual([expect.objectContaining({ id: orderId, state: 'failed' })])
+      later(5)
+      await run(stripe)
+      expect(stripe.calls.filter((call) => call.method === 'refunds.create')).toHaveLength(2)
+      expect(stripe.refundedPence).toBe(2000)
+    })
+  })
+
+  it("W67 (row 30): already refunded, and the payment's refunds can't be read: nothing concluded, the next run tries again", async () => {
+    await onASeed(async ({ stripe }) => {
+      const { orderId, paymentIntentId } = await chargedWithoutOrder(stripe, 'card')
+      await stripe.refunds.create({ payment_intent: paymentIntentId })
+      stripe.failNext('refunds.list', { kind: 'unreachable' })
+      expect((await run(stripe)).items[0]).toMatchObject({ kind: 'refund', id: orderId, outcome: 'refund_pending', reason: 'unclear' })
+      later(5)
+      expect((await run(stripe)).items[0]).toMatchObject({ outcome: 'refund_confirmed', detail: 'already refunded' })
+      expect(stripe.refundedPence).toBe(6900)
+    })
+  })
+
   it('a flow: <pendingId>:refund-reader, from reader_payment.charge_without_record', async () => {
     await onASeed(
       async ({ stripe }) => {

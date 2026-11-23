@@ -1409,9 +1409,12 @@ export class FakeStripe implements StripeClient {
       this.run('products.update', { id, ...params }, options, () => {
         const product = this.productsById.get(id)
         if (!product) throw fakeStripeErrors.missing(`product: '${id}'`)
-        const unknown = Object.keys(params ?? {}).filter((name) => name !== 'active')
+        // W66: and a membership plan's name and picture, which Sanity's webhook sends again on every publish.
+        const unknown = Object.keys(params ?? {}).filter((name) => name !== 'active' && name !== 'name' && name !== 'images')
         if (unknown.length > 0) throw new Error(`The fake has not modelled updating a product's ${unknown.join(', ')}.`)
         if (params.active !== undefined) product['active'] = params.active
+        if (params.name !== undefined) product['name'] = params.name
+        if (params.images !== undefined) product['images'] = params.images === '' ? [] : params.images
         return clone(product)
       }) as unknown as Promise<Stripe.Product>,
 

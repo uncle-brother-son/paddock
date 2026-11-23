@@ -2872,3 +2872,37 @@ create, on/off, the T2 hook); `catalog/plans-postgres.test.ts` (7 races on real 
   whose order recorded a method, as the old reads chose it, so a credit booking whose guest paid by store credit reads
   `store_credit` since W53 (as cash and gift card guests already did); Refund the rest as store credit with one
   removed guest waiting links the whole credit row to that guest's order (one row for one press; labels only).
+
+## The webhooks off the service-role key; the money watches (W66 + W67, step H)
+
+- **Stripe's webhook (H8, N1), `app/api/stripe/webhook/database.ts`:** the event's row (`claim`, `outcomeOf`,
+  `recordOutcome`, `recordError`) and the four membership functions (`membershipFunctions`) on the Worker's own
+  connection, opened once per event after the signature check. The same statements in the same order with the same
+  answers as through Supabase's client: each its own statement, no Stripe read inside a transaction, the function
+  locking the membership as before. An error leaves `detail` as it was. `testing/webhook.ts` is now this very store with
+  a record of each function called. Tests: `dispatch.test.ts` and `idempotency.test.ts` on PGlite with the live schema;
+  `route-postgres.test.ts` races the route against reconcile on one membership, both ways round.
+- **Sanity's webhook (H7, Q57), `catalog/sanity-sync.ts`:** one transaction per document (`INSERT … ON CONFLICT` on the
+  item's unique Sanity id); a new row arrives off sale, whatever its kind; no Stripe product made or renamed for anything
+  but a membership plan, whose product is made under `<planId>:sanity-plan-product` after the row's transaction and
+  renamed on every publish; a delete takes the item off sale with `catalog.active_set` (an event: `event.active_set`) by
+  the system as `sanity`, and a plan through `takePlanOffSale` (the plan switch's own "off", extracted from
+  `setPlanActive`), which keeps it on sale while a price change is open (`catalog.sanity_delete_refused`, answered 200).
+- **The key guard, `server/no-service-role-key.test.ts`:** no code names `SUPABASE_SERVICE_ROLE_KEY`, and only
+  `lib/supabase/client.ts`, `server.ts`, `middleware.ts` and `server/auth/customer.ts` load a Supabase package.
+- **A compensation's refund past its key's life (W35 row 29), `orders/membership.ts` `refundOnce`:** inside
+  REFUND_KEY_LIFE_HOURS (23) of the step's newest key, as before. Past it, the payment's refunds are read first: one the
+  step made (`metadata.refund_key`) and Stripe accepted is the step's; only failed ones are a definite failure for a
+  person, never sent again; none: a new key `<orderId>:<step>-<attempt>` recorded first (`order.refund_attempt`, under
+  an advisory lock), then sent. Every attempt carries the step's own `refund_key`.
+- **A late payment's `charge_already_refunded` (W35 row 30), `reconcile.ts` `settleAlreadyRefunded`:** the payment's
+  refunds read; covered: confirmed, and the path's own refund watched; not covered: `failed`, listed with the figures.
+- **H14:** the late path meeting a compensation's watched refund that failed reads that watch in the same run
+  (`WATCH_OF_REFUND_SQL`), so its failure is listed at once.
+- **L-new (L-H14), `memberships/frequency-check.ts`:** the scheduled run alone (`readIntervals`) reads each live
+  membership's subscription once a day (MAX_FREQUENCY_READS_PER_RUN a run, `membership.frequency_read` notes what a run
+  read) and lists a row whose `billing_frequency` isn't Stripe's interval once (`membership.frequency_mismatch`; the
+  run's item `membership_frequency_mismatch`). Read only.
+- **Item 0 (W65b's leftovers):** the five R1 scenarios rebuilt as lost route answers and renamed; thirteen scenarios
+  that had become another's press and fault taken out with their recordings (briefs/W66-logs/item0-duplicates.md); G
+  invariant 7: a payment date move charged once.

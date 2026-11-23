@@ -1,5 +1,5 @@
 // New in W17 (D-plan 4.8): every word staff see from a booking change, moved here ahead of the slices that use them
-// (W18 to W24), so the website and the staff app tell people the same thing. Unused yet. Three sources:
+// (W18 to W24), so the website and the staff app tell people the same thing. Three sources:
 // - the screens' reason maps, word for word: frontend/components/MoveBookingDialog.tsx, SettleLapsedPaymentDialog.tsx,
 //   AddGuestDialog.tsx and RemoveGuestDialog.tsx (their FAILURE_MESSAGES / REASON_MESSAGES), and the dialogs' own
 //   "Failed to ..." words for when nothing else has any;

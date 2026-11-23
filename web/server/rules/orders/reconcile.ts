@@ -117,7 +117,8 @@ import { CLAIMS_DUE_SQL, claimRefusal, findCardPart, finishClaim, readClaim, typ
 import { finishEventClaim } from '@/server/rules/events/cancel-places'
 import { EVENT_BOOKING_CLAIMS_DUE_SQL, ORDER_CLAIMS_DUE_SQL, readEventBookingClaim, readOrderClaim, stepEClaimRefusal, type EventBookingClaim, type OrderClaim } from '@/server/rules/refunds/claims'
 import { finishOrderClaim } from './refund-lines'
-import { refundSeen, WATCH_DAYS, WATCH_READ_HOURS, WATCHES_DUE_SQL, WATCHES_WAITING_SQL, watchLateRefund, type RefundSeen, type WatchDue } from '@/server/rules/refunds/refund-watch'
+import { refundSeen, WATCH_DAYS, WATCH_OF_REFUND_SQL, WATCH_READ_HOURS, WATCHES_DUE_SQL, WATCHES_WAITING_SQL, watchLateRefund, type RefundSeen, type WatchDue } from '@/server/rules/refunds/refund-watch'
+import { listRefunds } from '@/server/rules/refunds/pipeline'
 import { checkWatchedRefund } from '@/server/rules/refunds/refund-watch-settle'
 import { PAYMENT_WATCH_DAYS, WATCHED_PAYMENTS_COUNT_SQL, WATCHED_PAYMENTS_DUE_SQL } from './payment-watch'
 import { cancelRefundedSubscription, cancelSubscriptionsAfterRefund, LEFT_BY_REFUND, refundCancelsDue, type RefundCancelDue } from './refund-subscription'
@@ -152,6 +153,7 @@ import {
 } from '@/server/rules/catalog/plan-stripe'
 import { endMembershipWithoutSubscription, membershipsToEnd } from '@/server/rules/memberships/no-subscription'
 import { checkStillLive, MAX_STILL_LIVE_READS_PER_RUN, MEMBERSHIP_STILL_LIVE, stillLiveDue, stillLiveKey, type StillLiveDue } from '@/server/rules/memberships/still-live'
+import { checkFrequency, frequencyKey, frequencyReadsDue, MEMBERSHIP_FREQUENCY_MISMATCH, recordFrequencyReads, type FrequencyDue } from '@/server/rules/memberships/frequency-check'
 import {
   checkSubscription,
   dateIsMoved,
@@ -286,6 +288,12 @@ export interface ReconcileOptions {
    * W42b: read once when the run starts (`runSwitch`) and given to every T2 the run reaches (`t2By`).
    */
   orderSwitch?: string | null
+  /**
+   * W67 (L-new): whether the run makes the day's interval reads (memberships/frequency-check.ts). The scheduled run
+   * does (server/scheduled.ts), every five minutes, so each live membership is read once a day; staff's Resolve now
+   * doesn't (its time is for what staff pressed it for), nor does any other caller unless it says so.
+   */
+  readIntervals?: boolean
 }
 
 export type ItemOutcome =
@@ -1484,7 +1492,14 @@ async function settleLateRefund(run: Run, due: LateRefundDue): Promise<Reconcile
       // W58b (W35 audit row 32; W32a "Noticed" 2): the compensation's own refund, which its watch already has. Its
       // failure is the watch's line and the watch's item (the list leaves this row out for that refund), so counting
       // it here too made one failed refund "2 left for a person" in one run.
-      if (await refundIsWatched(run.db, earlier.id)) return item('settled_elsewhere', undefined, `the refund ${earlier.id} ${earlier.status}: its watch lists it`)
+      // W67 (H14; W58b "Noticed" 1): and the watch is read now, in this run, so the failure is listed at once. Until
+      // W67 a watch whose last read was `succeeded` was read again only a day later (WATCH_READ_HOURS). Its item is
+      // the one this payment gives; a watch another run has ended meanwhile gives none, as before.
+      if (await refundIsWatched(run.db, earlier.id)) {
+        const [watch] = await run.db.query<WatchDue>(WATCH_OF_REFUND_SQL, [run.options.watchDays ?? WATCH_DAYS, earlier.id])
+        const read = watch ? await checkWatch(run, watch) : null
+        return read ?? item('settled_elsewhere', undefined, `the refund ${earlier.id} ${earlier.status}: its watch lists it`)
+      }
       return item('refund_failed', 'refund_failed')
     }
     if (earlier) {
@@ -1504,10 +1519,7 @@ async function settleLateRefund(run: Run, due: LateRefundDue): Promise<Reconcile
     )
   } catch (err) {
     const failure = readStripeFailure(err)
-    if (failure.code === 'charge_already_refunded') {
-      await run.recordRefund(due.entity_type, id, { outcome: 'refund_confirmed', refund: { ...base, state: 'confirmed', key, alreadyRefunded: true } })
-      return item('refund_confirmed', undefined, 'already refunded')
-    }
+    if (failure.code === 'charge_already_refunded') return settleAlreadyRefunded(run, due, paymentIntent, key)
     if (failure.outcome === 'definite' && !(err instanceof Stripe.errors.StripeAuthenticationError || err instanceof Stripe.errors.StripePermissionError)) {
       await run.recordRefund(due.entity_type, id, { outcome: 'refund_failed', refund: { ...base, state: 'failed', key, message: failure.message, code: failure.code } })
       return item('refund_failed', 'refund_failed', failure.message)
@@ -1524,6 +1536,38 @@ async function settleLateRefund(run: Run, due: LateRefundDue): Promise<Reconcile
   }
   await recordRefundWatched(run, due, refund, { outcome: 'refund_pending', refund: { ...base, state: 'sent', key, refundId: refund.id, status: refund.status } })
   return item('refund_pending', 'refund_pending')
+}
+
+/**
+ * W67 (W35 audit row 30; W32a "Noticed" 1): Stripe refused the late payment's refund as `charge_already_refunded`. Until
+ * W67 that was recorded `confirmed` with no refund, so nothing watched it: a refund made by hand, or this path's own
+ * from a send whose key Stripe has since forgotten (its row `started` for more than a day), that failed later went
+ * unseen. Now the payment's refunds are read (a list, nothing sent):
+ * - the refunds Stripe accepted (not `failed` or `canceled`) cover what the payment took: confirmed, and the one this
+ *   path made (`metadata.refund_key`, its key) handed to the watch, so a later failure is listed (a refund made by hand
+ *   is a person's, with nothing of this path's to watch);
+ * - they don't (Stripe says refunded, yet what it shows accepted is less than the payment): `failed`, listed for a
+ *   person with the figures (Mark refunded), never sent again;
+ * - the list not answering: left for the next run, as an unclear send is (the `started` row stays).
+ */
+async function settleAlreadyRefunded(run: Run, due: LateRefundDue, paymentIntent: Stripe.PaymentIntent, key: string): Promise<ReconcileItem> {
+  const id = due.entity_id
+  const base = { paymentIntentId: due.payment_intent_id }
+  const listed = await listRefunds(run.stripe, due.payment_intent_id, run.timing)
+  if (listed.kind === 'unclear') return { kind: 'refund', id, outcome: 'refund_pending', reason: 'unclear', detail: `already refunded, but its refunds couldn't be read (${listed.detail})` }
+  const accepted = listed.refunds.filter((refund) => refund.status !== 'failed' && refund.status !== 'canceled')
+  const acceptedPence = accepted.reduce((sum, refund) => sum + refund.amount, 0)
+  const takenPence = paymentIntent.amount_received
+  if (acceptedPence >= takenPence) {
+    const own = accepted.find((refund) => refund.metadata?.['refund_key'] === key)
+    const confirmed = { outcome: 'refund_confirmed', refund: { ...base, state: 'confirmed', key, alreadyRefunded: true, ...(own ? { refundId: own.id, amount: own.amount } : { refundIds: accepted.map((refund) => refund.id) }) } }
+    if (own) await recordRefundWatched(run, due, own, confirmed)
+    else await run.recordRefund(due.entity_type, id, confirmed)
+    return { kind: 'refund', id, outcome: 'refund_confirmed', detail: own ? `already refunded under its key: ${own.id} watched` : 'already refunded' }
+  }
+  const message = `Stripe says the payment is already refunded, but the refunds it shows accepted come to ${(acceptedPence / 100).toFixed(2)} of ${(takenPence / 100).toFixed(2)}`
+  await run.recordRefund(due.entity_type, id, { outcome: 'refund_failed', refund: { ...base, state: 'failed', key, message, code: 'charge_already_refunded', refundIds: listed.refunds.map((refund) => refund.id) } })
+  return { kind: 'refund', id, outcome: 'refund_failed', reason: 'refund_failed', detail: message }
 }
 
 /**
@@ -1755,6 +1799,21 @@ async function checkLivePastLastDay(run: Run, due: StillLiveDue, now: () => numb
   return left('step', checked.listingId, MEMBERSHIP_STILL_LIVE, `membership ${due.membershipId} ended here on ${checked.lastDay}, and Stripe shows its subscription ${due.subscriptionId} ${checked.status}: listed for a person`)
 }
 
+// --- A membership whose Stripe subscription renews at another interval than its row says (W67, L-new)
+
+/**
+ * W67 (L-new; lead call L-H14): one live membership's subscription read for its interval (memberships/frequency-check.ts):
+ * one read, never a send. No item unless this read lists it (then the line, left for a person, once); every clear read
+ * is noted in `read`, so the membership isn't read again for a day.
+ */
+async function checkMembershipFrequency(run: Run, due: FrequencyDue, read: string[]): Promise<ReconcileItem | null> {
+  const checked = await checkFrequency(run.db, run.stripe, due, { actor: run.options.actor, requestId: run.options.requestId }, run.timing)
+  if (checked.kind === 'wait') return null
+  read.push(frequencyKey(due))
+  if (checked.kind !== 'listed') return null
+  return left('step', checked.listingId, MEMBERSHIP_FREQUENCY_MISMATCH, `membership ${due.membershipId}'s row says ${checked.frequency}, and Stripe renews its subscription ${due.subscriptionId} every ${checked.stripeInterval}: a price change would pass it by. Listed for a person`)
+}
+
 // --- Steps and checks taken by when they were last tried (W46)
 
 /**
@@ -1984,6 +2043,11 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
   // MAX_STILL_LIVE_READS_PER_RUN a run, by when they were last read, as the checks. A read each, never a send.
   const liveWaiting = byLastTried(await stillLiveDue(db), stillLiveKey, tried.live)
   const live = liveWaiting.slice(0, MAX_STILL_LIVE_READS_PER_RUN)
+  // W67 (L-new, lead call L-H14): live memberships whose subscription's interval wasn't read in the last day, each read
+  // in Stripe (frequency-check.ts): at most MAX_FREQUENCY_READS_PER_RUN a run, the ones read longest ago first. A read
+  // each, never a send; the run notes what it read, so each is read once a day.
+  const frequencies = options.readIntervals === true ? await frequencyReadsDue(db) : []
+  const frequencyRead: string[] = []
   // W57 (G-plan 4.7): a plan's Stripe side past its press's window: price changes held, plans half made, plan steps
   // (an old price to archive, the product on or off sale) not refused, and products due their check.
   const planChanges = (await openChanges(db)).filter((open) => !open.inWindow)
@@ -2010,8 +2074,9 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
       },
     }))
   // W47r-e: with the checks, wherever they go: the same kind of work (one read, an item only when it lists).
-  const liveWork = (): Work[] =>
-    live.map((due) => ({
+  // W67 (L-new): and the day's interval reads after them, the same kind of work.
+  const liveWork = (): Work[] => [
+    ...live.map((due) => ({
       kind: 'step' as const,
       id: due.membershipId,
       watch: true as const,
@@ -2019,7 +2084,9 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
         triedNow.live.push(stillLiveKey(due))
         return checkLivePastLastDay(run, due, now)
       },
-    }))
+    })),
+    ...frequencies.map((due) => ({ kind: 'step' as const, id: due.membershipId, watch: true as const, go: () => checkMembershipFrequency(run, due, frequencyRead) })),
+  ]
   const work: Work[] = [
     ...refunds.map((due) => ({ kind: 'refund' as const, id: due.entity_id, go: () => settleLateRefund(run, due) })),
     ...orders.map((order) => ({ kind: 'order' as const, id: order.id, go: () => reconcileOrder(run, order) })),
@@ -2189,6 +2256,13 @@ export async function reconcile(db: Db, stripeClient: StripeClient, options: Rec
   }
   // W40 (L3): steps over the run's cap wait for the next run, as anything over its bounds does.
   result.deferred += stepsWaiting.length - steps.length
+  // W67 (L-new): the memberships this run read, so each is read once a day. Only a note for the order: a run that can't
+  // write it reads them again next run (nothing is listed twice: the listing looks for its own row).
+  try {
+    await recordFrequencyReads(db, frequencyRead, { actor: options.actor, requestId: options.requestId })
+  } catch {
+    // Read again next run.
+  }
   // W46: a run that could not get to every step and check that was due says which it did try, so the next runs take
   // the others first. Only a note for the order: a run that can't write it is answered all the same.
   if (

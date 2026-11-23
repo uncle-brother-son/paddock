@@ -1,5 +1,5 @@
 {
-  "scenario": "w17-r1a-control-settle-store-credit-and-card-statement-lands-late",
+  "scenario": "w17-r1a-settle-store-credit-and-gift-card-answer-lost",
   "results": [
     {
       "success": true,
@@ -10,37 +10,12 @@
       "paymentMethodUsed": null
     },
     {
-      "settled": true,
-      "booking": {
-        "id": "bookings#1",
-        "status": "confirmed",
-        "redemption_source": "paid",
-        "price_paid": "20.00",
-        "payment_due_by": null
-      },
-      "amountCharged": 20
+      "settled": false,
+      "reason": "no_answer",
+      "message": "Take Payment didn't get an answer, so the payment may or may not have gone through. Don't take payment again yet: reload the booking. If it's confirmed and shows no payment still open, it's paid. If it shows a payment still open, it's being checked: don't take payment, and use Resolve now on the Orders page after 15 minutes. If it's still awaiting payment, press Take Payment again (it won't charge twice)."
     }
   ],
-  "stripeCalls": [
-    {
-      "method": "paymentIntents.create",
-      "params": {
-        "amount": 1500,
-        "currency": "gbp",
-        "customer": "cus_member",
-        "payment_method": "pm_member",
-        "off_session": true,
-        "confirm": true,
-        "description": "Payment to settle lapsed-membership booking (bookings#1)",
-        "metadata": {
-          "flow": "settle",
-          "record_id": "bookings#1",
-          "pending_id": "pending_reader_payments#1"
-        }
-      },
-      "idempotencyKey": "pending_reader_payments#1:charge"
-    }
-  ],
+  "stripeCalls": [],
   "tables": {
     "api_idempotency": {
       "added": [
@@ -160,29 +135,11 @@
           "request_id": "gone#4",
           "details": {
             "amount": 20,
-            "method": "card",
-            "giftCard": 0,
-            "pendingId": "pending_reader_payments#1",
-            "toCollect": 15,
-            "storeCredit": 5
-          }
-        },
-        {
-          "id": "audit_log#4",
-          "at": "<set>",
-          "actor_type": "staff",
-          "actor_id": "10000000-0000-4000-8000-000000000001",
-          "action": "reader_payment.finalise",
-          "entity_type": "reader_payment",
-          "entity_id": "pending_reader_payments#1",
-          "request_id": "gone#4",
-          "details": {
-            "flow": "settle",
-            "orderId": "orders#2",
-            "recordId": "bookings#1",
-            "collected": 15,
-            "alreadyRecorded": false,
-            "paymentIntentId": "pi_fake_0002"
+            "method": null,
+            "giftCard": 5,
+            "pendingId": null,
+            "toCollect": 0,
+            "storeCredit": 15
           }
         }
       ],
@@ -246,14 +203,30 @@
       "removed": [],
       "tied": 0
     },
-    "customers": {
+    "gift_card_redemptions": {
+      "added": [
+        {
+          "id": "gift_card_redemptions#1",
+          "gift_card_id": "10000000-0000-4000-8000-000000000009",
+          "order_id": null,
+          "booking_id": "bookings#1",
+          "amount_used": "5.00",
+          "redeemed_at": "<set>",
+          "event_booking_id": null
+        }
+      ],
+      "changed": [],
+      "removed": [],
+      "tied": 0
+    },
+    "gift_cards": {
       "added": [],
       "changed": [
         {
-          "id": "10000000-0000-4000-8000-00000000000f",
-          "store_credit_balance": [
-            "0.00",
-            "10.00"
+          "id": "10000000-0000-4000-8000-000000000009",
+          "remaining_balance": [
+            "40.00",
+            "35.00"
           ]
         }
       ],
@@ -274,30 +247,6 @@
           "quantity": 1,
           "unit_price": "0.00",
           "line_total": "0.00",
-          "created_at": "<set>",
-          "addon_id": null,
-          "refunded_at": null,
-          "refund_method": null,
-          "restocked": null,
-          "fulfillment_status": null,
-          "card_refunded_amount": "0.00",
-          "system_unit_price": null,
-          "price_override_reason": null,
-          "discount_amount": "0.00",
-          "event_booking_id": null
-        },
-        {
-          "id": "order_line_items#2",
-          "order_id": "orders#2",
-          "booking_id": "bookings#1",
-          "product_variant_id": null,
-          "membership_plan_id": null,
-          "session_pass_type_id": null,
-          "gift_card_id": null,
-          "item_type": "booking",
-          "quantity": 1,
-          "unit_price": "15.00",
-          "line_total": "15.00",
           "created_at": "<set>",
           "addon_id": null,
           "refunded_at": null,
@@ -334,63 +283,6 @@
           "payment_method": null,
           "reader_payment": null,
           "refund_owed_amount": "0.00"
-        },
-        {
-          "id": "orders#2",
-          "customer_id": "10000000-0000-4000-8000-00000000000f",
-          "order_total": "15.00",
-          "payment_status": "paid",
-          "stripe_payment_intent_id": "pi_fake_0002",
-          "promo_code": null,
-          "discount_amount": "0.00",
-          "shipping_address": null,
-          "shipping_status": null,
-          "tracking_number": null,
-          "order_source": "staff_created",
-          "created_at": "<set>",
-          "updated_at": "<set>",
-          "payment_method": "card",
-          "reader_payment": null,
-          "refund_owed_amount": "0.00"
-        }
-      ],
-      "changed": [],
-      "removed": [],
-      "tied": 0
-    },
-    "pending_reader_payments": {
-      "added": [
-        {
-          "id": "pending_reader_payments#1",
-          "flow": "settle",
-          "record_id": "bookings#1",
-          "order_id": null,
-          "payment_intent_id": "pi_fake_0002",
-          "expected_amount": "15.00",
-          "snapshot": {
-            "amount": 20,
-            "method": "card",
-            "channel": "staff",
-            "livemode": false,
-            "booking_id": "bookings#1",
-            "old_status": "payment_needed",
-            "request_id": "gone#4",
-            "customer_id": "10000000-0000-4000-8000-00000000000f",
-            "description": "Payment to settle lapsed-membership booking (bookings#1)",
-            "old_price_paid": "0.00",
-            "old_seat1_pay_by": "membership_credit",
-            "payment_method_id": "pm_member",
-            "old_payment_due_by": "<time>",
-            "stripe_customer_id": "cus_member",
-            "store_credit_amount": 5,
-            "old_credit_period_id": "10000000-0000-4000-8000-000000000021",
-            "old_redemption_source": "membership_credit",
-            "old_redeemed_membership_id": "10000000-0000-4000-8000-000000000010",
-            "release_credit_on_finalise": true
-          },
-          "status": "finalised",
-          "created_at": "<set>",
-          "updated_at": "<set>"
         }
       ],
       "changed": [],
@@ -416,8 +308,8 @@
         {
           "id": "store_credit_transactions#1",
           "customer_id": "10000000-0000-4000-8000-00000000000f",
-          "amount": "-5.00",
-          "balance_after": "10.00",
+          "amount": "-15.00",
+          "balance_after": "0.00",
           "reason": "redemption",
           "order_id": null,
           "booking_id": "bookings#1",

@@ -7,14 +7,15 @@ export interface DispatchResult {
   detail: Record<string, unknown> | null
 }
 
-/** What Supabase's client answers for a database function: it never throws; a failure comes back as `error`. */
+/** What a database function answers (database.ts, as Supabase's client did until W66): it never throws; a failure comes back as `error`. */
 export interface RpcAnswer {
   data: unknown
   error: unknown
 }
 
-// The only part of the Supabase client dispatchStripeEvent needs — kept minimal so tests can
-// pass a plain mock instead of a real SupabaseClient. W46: typed (Supabase's builder is thenable, not a Promise).
+// The only part of the database dispatchStripeEvent needs: one of the four membership functions, by name. W66 (H8):
+// on the Worker's own connection (database.ts, membershipFunctions), where it was Supabase's client; "Try the payment
+// again now" passes its own (retry-payment.ts, membershipRpc).
 export interface RpcClient {
   rpc(fn: string, params?: Record<string, unknown>): PromiseLike<RpcAnswer>
 }
@@ -218,14 +219,14 @@ const wasKept = (data: unknown): boolean => isRecord(data) && data.reason === CA
 
 /**
  * W47r-e: how an update notice's write is made. Stripe showing an end (a date to set or move) is written as always,
- * by the database's function through `supabase`. Stripe showing NO end goes through `sync` when the route gave one:
+ * by the database's function through `functions`. Stripe showing NO end goes through `sync` when the route gave one:
  * the same function, called under the membership's lock only when no cancel pressed here still wants the last day.
  */
-function cancelDateSend(supabase: RpcClient, sync: SyncCancelDate | undefined): (write: MembershipWrite) => Promise<unknown> {
+function cancelDateSend(functions: RpcClient, sync: SyncCancelDate | undefined): (write: MembershipWrite) => Promise<unknown> {
   return async (write) => {
     const params = write.params as Parameters<SyncCancelDate>[0]
     const showsNoEnd = params.p_cancel_at === null && params.p_cancel_at_period_end !== true
-    if (!sync || write.fn !== 'membership_sync_cancel_at_period_end' || !showsNoEnd) return call(supabase, write)
+    if (!sync || write.fn !== 'membership_sync_cancel_at_period_end' || !showsNoEnd) return call(functions, write)
     const synced = await sync(params)
     return 'kept' in synced ? cancelKept(synced.kept) : synced.data
   }
@@ -263,8 +264,8 @@ export const SUBSCRIPTION_MISSING = 'subscription_missing'
  */
 const missing = (subscriptionId: string, message: string, livemode: boolean): DispatchResult => ({ outcome: 'ignored', detail: { reason: SUBSCRIPTION_MISSING, subscription: subscriptionId, message, livemode } })
 
-async function call(supabase: RpcClient, write: MembershipWrite): Promise<unknown> {
-  const { data, error } = await supabase.rpc(write.fn, write.params)
+async function call(functions: RpcClient, write: MembershipWrite): Promise<unknown> {
+  const { data, error } = await functions.rpc(write.fn, write.params)
   if (error) throw error
   return data
 }
@@ -303,13 +304,13 @@ export const MOST_WRITES_AGAIN = 2
  */
 async function writeAndConfirm(
   stripe: SubscriptionReader,
-  supabase: RpcClient,
+  functions: RpcClient,
   subscriptionId: string,
   livemode: boolean,
   first: MembershipWrite,
   wants: (subscription: Stripe.Subscription) => MembershipWrite | null,
-  /** W47r-e: how each write is made; absent, the database function through `supabase`, as always. */
-  send: (write: MembershipWrite) => Promise<unknown> = (write) => call(supabase, write)
+  /** W47r-e: how each write is made; absent, the database function through `functions`, as always. */
+  send: (write: MembershipWrite) => Promise<unknown> = (write) => call(functions, write)
 ): Promise<DispatchResult> {
   let written = first
   let data = await send(written)
@@ -419,7 +420,7 @@ async function paidAfterEnd(
  */
 export async function recordInvoicePaid(
   stripe: SubscriptionReader,
-  supabase: RpcClient,
+  functions: RpcClient,
   subscriptionId: string,
   invoiceId: string | undefined,
   livemode: boolean,
@@ -451,13 +452,13 @@ export async function recordInvoicePaid(
   }
   // The same holds for the read after the write (L8): a payment whose second read lands in the next renewal's
   // draft hour must not write that renewal's date.
-  const result = await writeAndConfirm(stripe, supabase, subscriptionId, livemode, write, (subscription) => paymentWrite(subscriptionId, subscription, invoiceId))
+  const result = await writeAndConfirm(stripe, functions, subscriptionId, livemode, write, (subscription) => paymentWrite(subscriptionId, subscription, invoiceId))
   // W47r-c: the membership's row has ended here, and Stripe has just shown its subscription paid up with this invoice.
   if (!list || !invoiceId || result.detail?.['action'] !== 'ignored_cancelled') return result
   return { ...result, detail: { ...result.detail, paid_after_end: await paidAfterEnd(stripe, subscriptionId, read.subscription, invoiceId, livemode, list, true) } }
 }
 
-export async function dispatchStripeEvent(event: Stripe.Event, supabase: RpcClient, stripe: SubscriptionReader, list?: ListPaidAfterEnd, syncCancelDate?: SyncCancelDate): Promise<DispatchResult> {
+export async function dispatchStripeEvent(event: Stripe.Event, functions: RpcClient, stripe: SubscriptionReader, list?: ListPaidAfterEnd, syncCancelDate?: SyncCancelDate): Promise<DispatchResult> {
   // W46b (S1): the event's own mode, as Stripe signed it. Anything but `false` is treated as live.
   const livemode = event.livemode
   switch (event.type) {
@@ -475,7 +476,7 @@ export async function dispatchStripeEvent(event: Stripe.Event, supabase: RpcClie
       // W47r: the handler's steps from here on are `recordInvoicePaid`, unchanged, so that "Try the payment again now"
       // (server/rules/memberships/retry-payment.ts) records a payment by the very same rule.
       // W47r-b: `list` is the line for a person when the invoice was paid after its subscription had ended.
-      return recordInvoicePaid(stripe, supabase, subscriptionId, invoice.id, livemode, list)
+      return recordInvoicePaid(stripe, functions, subscriptionId, invoice.id, livemode, list)
     }
 
     case 'invoice.payment_failed': {
@@ -501,7 +502,7 @@ export async function dispatchStripeEvent(event: Stripe.Event, supabase: RpcClie
       // payment is recorded, as its own invoice.paid would. W46b (B1): only when the invoice that failed is still the
       // subscription's newest, which a retry that goes through leaves it.
       let latest = read.subscription
-      const result = await writeAndConfirm(stripe, supabase, subscriptionId, livemode, { fn: 'membership_mark_payment_failed', params: { p_stripe_subscription_id: subscriptionId } }, (subscription) => {
+      const result = await writeAndConfirm(stripe, functions, subscriptionId, livemode, { fn: 'membership_mark_payment_failed', params: { p_stripe_subscription_id: subscriptionId } }, (subscription) => {
         latest = subscription
         return paymentWrite(subscriptionId, subscription, invoice.id)
       })
@@ -518,7 +519,7 @@ export async function dispatchStripeEvent(event: Stripe.Event, supabase: RpcClie
       // database from the membership's own rows), and a subscription that has ended never comes back, so this event
       // is still true however late it is handled.
       const subscription = event.data.object as Stripe.Subscription
-      const data = await call(supabase, { fn: 'membership_mark_cancelled_by_stripe', params: { p_stripe_subscription_id: subscription.id } })
+      const data = await call(functions, { fn: 'membership_mark_cancelled_by_stripe', params: { p_stripe_subscription_id: subscription.id } })
       return { outcome: isRecord(data) && data.found === false ? 'ignored' : 'processed', detail: isRecord(data) ? data : null }
     }
 
@@ -543,7 +544,7 @@ export async function dispatchStripeEvent(event: Stripe.Event, supabase: RpcClie
       // With an open cancel step that wants an end (left, or refused and listed for a person) the notice writes
       // nothing and is answered `ignored`, `cancel_wanted_here`: the step settles it. An Undo pressed here, a cancel
       // that finished in Stripe, and one a person marked sorted are written as before (cancel-kept.ts).
-      return writeAndConfirm(stripe, supabase, subscriptionId, livemode, write, (subscription) => cancelDateWrite(subscriptionId, subscription), cancelDateSend(supabase, syncCancelDate))
+      return writeAndConfirm(stripe, functions, subscriptionId, livemode, write, (subscription) => cancelDateWrite(subscriptionId, subscription), cancelDateSend(functions, syncCancelDate))
     }
 
     default:

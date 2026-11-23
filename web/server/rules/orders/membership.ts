@@ -536,19 +536,108 @@ export async function markCompensating(db: Db, orderId: string, why: string, gua
   return { marked: false, why: guard !== undefined && row?.pending === true ? 'starting' : 'not_pending' }
 }
 
-/** Refunds one payment in full, once, under its key. Pending at Stripe counts as sent (Stripe has accepted it). */
+/**
+ * W67 (W35 audit row 29; W32 review L1): Stripe keeps an idempotency key for at least 24 hours, then may forget it.
+ * A refund key older than this may be forgotten, so its send is read for first (an hour short of Stripe's 24, so a
+ * clock a little out can't pass it).
+ */
+export const REFUND_KEY_LIFE_HOURS = 23
+
+/** W67: a compensation refund's new key, recorded (and committed) before its first send: `<orderId>:<step>-<attempt>`. */
+export const REFUND_ATTEMPT_ACTION = 'order.refund_attempt'
+
+/**
+ * W67: a step's keys so far, for one payment: how many new keys were recorded (`attempts`; the first key,
+ * `<orderId>:<step>`, has no row), when the newest was, and the order's first sign of life (its oldest audit row or its
+ * row's own `created_at`, whichever is earlier: the first key was sent after both, so its life is counted from there,
+ * the safe side). Ages in hours, from the database's clock.
+ */
+const REFUND_KEYS_SQL = `
+SELECT (SELECT count(*)::int FROM audit_log a WHERE a.action = '${REFUND_ATTEMPT_ACTION}' AND a.entity_type = 'order' AND a.entity_id = $1
+          AND a.details->>'step' = $2 AND a.details->>'paymentIntentId' = $3) AS attempts,
+       extract(epoch FROM now() - (SELECT max(a.at) FROM audit_log a WHERE a.action = '${REFUND_ATTEMPT_ACTION}' AND a.entity_type = 'order' AND a.entity_id = $1
+          AND a.details->>'step' = $2 AND a.details->>'paymentIntentId' = $3)) / 3600 AS newest_age,
+       extract(epoch FROM now() - LEAST((SELECT min(a.at) FROM audit_log a WHERE a.entity_type = 'order' AND a.entity_id = $1),
+                                        (SELECT o.created_at FROM orders o WHERE o.id::text = $1))) / 3600 AS first_age`
+
+interface RefundKeys {
+  attempts: number
+  newest_age: number | string | null
+  first_age: number | string | null
+}
+
+const hours = (value: number | string | null): number | null => (value === null ? null : Number(value))
+
+/** Who a compensation's rows are by (CompensationOptions' actor and request). */
+export interface RefundBy {
+  actor: { type: 'staff' | 'customer' | 'system'; id: string | null }
+  requestId: string
+}
+
+type RefundOnceAnswer = { ok: true; refundId: string | null; amount: number | null; status: string | null } | { ok: false; left: string; definite: boolean }
+
+/**
+ * Refunds one payment in full, once, under its key. Pending at Stripe counts as sent (Stripe has accepted it).
+ *
+ * W67 (W35 audit row 29; W32 review L1): a compensation held over a day used to send its refund again under a key
+ * Stripe may have forgotten, so a refund that had failed meanwhile was sent a second time by the system while the
+ * watch's line told a person to refund it by hand. Now, while the step's newest key is inside its life
+ * (REFUND_KEY_LIFE_HOURS), the send is as before: Stripe answers a repeat with the same refund. Past it, nothing is
+ * sent before the payment's refunds are read:
+ * - one this step made (`metadata.refund_key`, which every attempt carries) that Stripe accepted: that refund, done;
+ * - only ones that failed or were cancelled: that refund's failure, definite, for a person (as a refund Stripe
+ *   answers `failed` at once); never sent again by the system;
+ * - none: a new key, `<orderId>:<step>-<attempt>`, recorded and committed first (`order.refund_attempt`, once, under
+ *   an advisory lock: a run that finds another has just recorded one sends nothing), then the send under it. A crash
+ *   after the record and before the send sends under the same new key next time; past that key's life, read first.
+ * So two sends for one step never happen without that read between them. Stripe's list not answering holds the step.
+ */
 export async function refundOnce(
+  db: Db,
   stripe: StripeClient,
   orderId: string,
   refund: { step: RefundStep; paymentIntentId: string },
-  timing: StripeTiming | undefined
-): Promise<{ ok: true; refundId: string | null; amount: number | null; status: string | null } | { ok: false; left: string; definite: boolean }> {
-  const key = stripeIdempotencyKey(orderId, refund.step)
+  timing: StripeTiming | undefined,
+  by: RefundBy
+): Promise<RefundOnceAnswer> {
+  const baseKey = stripeIdempotencyKey(orderId, refund.step)
+  const what = `${refund.step} ${refund.paymentIntentId}`
+  const [keys] = await db.query<RefundKeys>(REFUND_KEYS_SQL, [orderId, refund.step, refund.paymentIntentId])
+  const attempts = keys?.attempts ?? 0
+  const age = attempts > 0 ? hours(keys?.newest_age ?? null) : hours(keys?.first_age ?? null)
+  let attempt = attempts + 1
+  if (age === null || age >= REFUND_KEY_LIFE_HOURS) {
+    const listed = await listRefunds(stripe, refund.paymentIntentId, timing)
+    if (listed.kind === 'unclear') return { ok: false, left: `${what}: its key may be forgotten, and its refunds couldn't be read before sending again (${listed.detail})`, definite: false }
+    const mine = listed.refunds.filter((one) => one.metadata?.['refund_key'] === baseKey)
+    const accepted = mine.find((one) => toWatch(one.status))
+    if (accepted) return { ok: true, refundId: accepted.id, amount: accepted.amount, status: accepted.status }
+    const ended = mine[0]
+    if (ended) return { ok: false, left: `${what}: Stripe's refund ${ended.id} ${String(ended.status)}`, definite: true }
+    attempt = attempts + 2
+    const recorded = await db.transaction(async (tx) => {
+      await tx.query('SELECT pg_advisory_xact_lock(hashtext($1::text))', [`refund-attempt:${baseKey}:${refund.paymentIntentId}`])
+      const [now] = await tx.query<RefundKeys>(REFUND_KEYS_SQL, [orderId, refund.step, refund.paymentIntentId])
+      if ((now?.attempts ?? 0) !== attempts) return false
+      await audit.record(tx, {
+        actorType: by.actor.type,
+        actorId: by.actor.id,
+        action: REFUND_ATTEMPT_ACTION,
+        entityType: 'order',
+        entityId: orderId,
+        requestId: by.requestId,
+        details: { step: refund.step, paymentIntentId: refund.paymentIntentId, attempt, key: stripeIdempotencyKey(orderId, `${refund.step}-${attempt}`), why: 'key_past_its_life_and_no_refund_found' },
+      })
+      return true
+    })
+    if (!recorded) return { ok: false, left: `${what}: another run has just taken a new key for it; the next run reads again`, definite: false }
+  }
+  const key = attempt === 1 ? baseKey : stripeIdempotencyKey(orderId, `${refund.step}-${attempt}`)
   let last = ''
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
+  for (let tries = 1; tries <= 2; tries += 1) {
     try {
       const made = await stripe.refunds.create(
-        { payment_intent: refund.paymentIntentId, metadata: { order_id: orderId, refund_key: key, reason: 'membership_not_set_up' } },
+        { payment_intent: refund.paymentIntentId, metadata: { order_id: orderId, refund_key: baseKey, reason: 'membership_not_set_up', ...(attempt > 1 ? { attempt: String(attempt) } : {}) } },
         sendOptions(timing, { idempotencyKey: key })
       )
       if (made.status === 'failed' || made.status === 'canceled') return { ok: false, left: `${refund.step} ${refund.paymentIntentId}: Stripe's refund ${made.id} ${made.status}`, definite: true }
@@ -745,7 +834,7 @@ export async function compensateOrder(
   }
   const refunded: Array<{ step: RefundStep; paymentIntentId: string; refundId: string | null; amount: number | null; status: string | null }> = []
   for (const refund of work.refunds) {
-    const done = await refundOnce(stripe, orderId, refund, timing)
+    const done = await refundOnce(db, stripe, orderId, refund, timing, { actor: options.actor, requestId: options.requestId })
     if (done.ok) {
       refunded.push({ ...refund, refundId: done.refundId, amount: done.amount, status: done.status })
       // W32: the refund is watched before the order is undone (W32a: whatever its status).
@@ -884,7 +973,7 @@ export async function putBackSubscription(
   if (cancelled.kind !== 'cancelled') left.push(`subscription ${subscription.id}: ${cancelled.kind} (${cancelled.message})`)
   const refunded: Array<{ paymentIntentId: string; refundId: string | null; status?: string | null }> = []
   for (const refund of invoiceRefund(subscription)) {
-    const done = await refundOnce(stripe, orderId, refund, timing)
+    const done = await refundOnce(db, stripe, orderId, refund, timing, { actor: options.actor, requestId: options.requestId })
     if (done.ok) {
       refunded.push({ paymentIntentId: refund.paymentIntentId, refundId: done.refundId, ...(done.refundId ? { status: done.status } : {}) })
       // W32: the refund is watched (W32a: whatever its status); one that couldn't be recorded leaves the row `left` for the retry.
@@ -927,7 +1016,8 @@ export type RetriedPutBack =
  * subscription is read first, and nothing is sent unless it names this order (`metadata.order_id`). Then, as the
  * put-back does: cancelled, checked (skipped when Stripe already shows it cancelled); its first invoice refunded under
  * `<orderId>:refund-subscription`, with the compensation's parameters, so a refund already made under the key is
- * Stripe's same refund, never a second one (and once the key is forgotten, `charge_already_refunded` counts as done);
+ * Stripe's same refund, never a second one (W67: and once the key may be forgotten, the payment's refunds are read
+ * before any send: refundOnce);
  * then one `cancelled` row, which closes the stuck list's warning. Only the first invoice the row names is refunded,
  * and only when it took money.
  */
@@ -965,7 +1055,7 @@ export async function retryLeftSubscription(
   // with no `amountPaid` (none is written without one from W13c) is refunded if it names a PaymentIntent.
   if (row.invoicePaymentIntentId && (row.amountPaid === null || row.amountPaid > 0)) {
     const step = { step: 'refund-subscription' as const, paymentIntentId: row.invoicePaymentIntentId }
-    const done = await refundOnce(stripe, row.orderId, step, timing)
+    const done = await refundOnce(db, stripe, row.orderId, step, timing, { actor: options.actor, requestId: options.requestId })
     if (done.ok) {
       refunded.push({ paymentIntentId: row.invoicePaymentIntentId, refundId: done.refundId, ...(done.refundId ? { status: done.status } : {}) })
       // W32: watched (W32a: whatever its status); not recorded, the row stays `left` and the next run tries again.

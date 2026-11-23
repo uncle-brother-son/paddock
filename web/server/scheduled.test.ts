@@ -97,7 +97,8 @@ describe('the scheduled handler', () => {
     const asked: ReconcileOptions[] = []
     await runScheduledReconcile(env, Date.parse('2026-11-10T12:10:00Z'), { ...seen.deps, reconcile: (db, stripe, options) => (asked.push(options), reconcile(db, stripe, options)) })
     // W42a: the switch is passed from the handler's env (a scheduled run's isn't copied into process.env). Unset here: null, every kind off.
-    expect(asked).toEqual([{ actor: { type: 'system', id: null }, requestId: 'reconcile-2026-11-10T12:10:00.000Z', maxItems: 50, budgetMs: 120_000, orderSwitch: null }])
+    // W67 (L-new): and the day's interval reads, which only the scheduled run makes.
+    expect(asked).toEqual([{ actor: { type: 'system', id: null }, requestId: 'reconcile-2026-11-10T12:10:00.000Z', maxItems: 50, budgetMs: 120_000, orderSwitch: null, readIntervals: true }])
   })
 
   it("W42a: the run is given the Worker's ORDER_SWITCH secret from the handler's env, for `card_moves` on an order it finalises", async () => {

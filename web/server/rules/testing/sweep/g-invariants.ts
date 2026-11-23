@@ -10,7 +10,9 @@ import type { FakeStripe } from '@/server/stripe/fake'
  *      never without its ledger row (each variant moved by exactly what its new ledger rows say) and never below zero;
  *   4. no booking that isn't cancelled on a blocked session;
  *   5. a day's band windows always cover the whole day (every day that has windows);
- *   6. always one active admin and one active Manage pricing holder.
+ *   6. always one active admin and one active Manage pricing holder;
+ *   7. (W66) a membership's payment date moved, and charged for, once: no two change rows moving it from the same
+ *      renewal date both charged and not failed.
  * One to five are read after the seed and after the run, and only a breach the run made counts: a seed may set up an
  * unusual state on purpose, and that is the scenario's, not the code's. Six is read around each staff press
  * (staffHoldersProblems), because the "who may" recordings make their only admin inactive by hand during the run.
@@ -117,5 +119,26 @@ export async function gBreaches(db: Db, stripe: FakeStripe, before: GState): Pro
     [before.ledgerIds]
   )
   if (Number(presses?.rows ?? 0) > Number(presses?.presses ?? 0)) wrong.push(`${presses?.rows} staff stock changes for ${presses?.presses} stock presses`)
+
+  // 7 (W66 item 0; W65b "Noticed" 3): a membership's payment date is moved, and charged for, once. Each change row is
+  // charged under its own key (`<changeId>:charge`), so a second charge for one move is a second row: two rows moving
+  // the same membership from the same renewal date, both charged (a `paymentIntents.create` under the row's key) and
+  // neither failed. A first try that failed (declined, or refused and refunded) leaves its row `failed`, so trying
+  // again is not counted; a later move starts from the date the first set, so it is not counted either.
+  const chargedRows = new Set(
+    stripe.calls
+      .filter((call) => call.method === 'paymentIntents.create' && typeof call.idempotencyKey === 'string' && call.idempotencyKey.endsWith(':charge'))
+      .map((call) => (call.idempotencyKey as string).slice(0, -':charge'.length))
+  )
+  const changes = await db.query<{ id: string; membership_id: string; old_renewal_date: string; status: string }>(
+    'SELECT id::text AS id, membership_id::text AS membership_id, old_renewal_date::text AS old_renewal_date, status FROM membership_payment_date_changes ORDER BY created_at, id'
+  )
+  const movesCharged = new Map<string, string[]>()
+  for (const change of changes) {
+    if (!chargedRows.has(change.id) || change.status === 'failed') continue
+    const move = `membership ${change.membership_id} from ${change.old_renewal_date}`
+    movesCharged.set(move, [...(movesCharged.get(move) ?? []), change.id])
+  }
+  for (const [move, rows] of movesCharged) if (rows.length > 1) wrong.push(`a payment date change charged ${rows.length} times: ${move} (${rows.join(', ')})`)
   return wrong
 }

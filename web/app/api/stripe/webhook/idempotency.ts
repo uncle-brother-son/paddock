@@ -1,34 +1,13 @@
 import Stripe from 'stripe'
-import { dispatchStripeEvent, type ListPaidAfterEnd, type RpcClient, type SubscriptionReader, type SyncCancelDate } from './dispatch'
+import type { WebhookStore } from './database'
+import { dispatchStripeEvent, type ListPaidAfterEnd, type SubscriptionReader, type SyncCancelDate } from './dispatch'
 
 export interface ProcessResult {
   status: number
   body: Record<string, unknown>
 }
 
-/** A failure as Supabase's client answers it (it never throws). */
-type ClientError = { message: string } | null
-
-/** What is written to an event's row when its handler ends. */
-interface EventOutcomeFields {
-  processed_at: string
-  outcome: string
-  detail?: Record<string, unknown> | null
-  error?: string | null
-}
-
-/**
- * W46: the part of Supabase's client this file uses, typed (it was `any`): the membership functions (dispatch.ts)
- * and the three calls made on `stripe_webhook_events`. PostgREST's builders are thenable, not Promises, so each
- * answer is a PromiseLike. A test passes a stand-in with the same calls (server/rules/testing/webhook.ts).
- */
-export interface WebhookEventsClient extends RpcClient {
-  from(table: 'stripe_webhook_events'): {
-    upsert(row: { event_id: string; event_type: string }, options: { onConflict: string; ignoreDuplicates: boolean }): PromiseLike<{ error: ClientError }>
-    select(columns: string): { eq(column: string, value: string): { single(): PromiseLike<{ data: { outcome: string | null } | null; error: ClientError }> } }
-    update(fields: EventOutcomeFields): { eq(column: string, value: string): PromiseLike<{ error: ClientError }> }
-  }
-}
+const message = (err: unknown): string => (err instanceof Error ? err.message : 'Unknown error')
 
 // Idempotency + dispatch for a single, already signature-verified Stripe event. Split out from
 // route.ts so it can be unit tested without mocking Stripe signature verification or NextRequest.
@@ -37,26 +16,28 @@ export interface WebhookEventsClient extends RpcClient {
 // W47r-b: `list` writes the line for an invoice paid after its subscription had ended (dispatch.ts, recordInvoicePaid).
 // A listing that fails throws like a failed read: the event is an error, and Stripe sends it again.
 // W47r-e: `syncCancelDate` makes an update notice's write when Stripe shows no end (dispatch.ts): it throws the same way.
-export async function processWebhookEvent(event: Stripe.Event, supabase: WebhookEventsClient, stripe: SubscriptionReader, list?: ListPaidAfterEnd, syncCancelDate?: SyncCancelDate): Promise<ProcessResult> {
-  // Step 1: claim this event id. ON CONFLICT DO NOTHING via ignoreDuplicates — a conflict just
-  // means we've seen this event before, which the lookup below distinguishes from a fresh claim.
-  const { error: upsertError } = await supabase
-    .from('stripe_webhook_events')
-    .upsert({ event_id: event.id, event_type: event.type }, { onConflict: 'event_id', ignoreDuplicates: true })
-
-  if (upsertError) {
-    console.error('Error recording webhook event:', event.id, event.type, upsertError.message)
+// W66 (H8, N1): `store` is the Worker's own database connection (database.ts), where it was Supabase's client. The
+// same steps in the same order, with the same answers: a step Supabase's client answered with an error now throws,
+// and is answered here exactly as that error was.
+export async function processWebhookEvent(event: Stripe.Event, store: WebhookStore, stripe: SubscriptionReader, list?: ListPaidAfterEnd, syncCancelDate?: SyncCancelDate): Promise<ProcessResult> {
+  // Step 1: claim this event id. ON CONFLICT DO NOTHING — a conflict just means we've seen this
+  // event before, which the lookup below distinguishes from a fresh claim.
+  try {
+    await store.claim(event.id, event.type)
+  } catch (err) {
+    console.error('Error recording webhook event:', event.id, event.type, message(err))
     return { status: 500, body: { error: 'Internal server error' } }
   }
 
-  const { data: existing, error: lookupError } = await supabase
-    .from('stripe_webhook_events')
-    .select('outcome')
-    .eq('event_id', event.id)
-    .single()
-
-  if (lookupError || !existing) {
-    console.error('Error looking up webhook event:', event.id, event.type, lookupError?.message)
+  let existing: { outcome: string | null } | null
+  try {
+    existing = await store.outcomeOf(event.id)
+  } catch (err) {
+    console.error('Error looking up webhook event:', event.id, event.type, message(err))
+    return { status: 500, body: { error: 'Internal server error' } }
+  }
+  if (!existing) {
+    console.error('Error looking up webhook event:', event.id, event.type, 'no row')
     return { status: 500, body: { error: 'Internal server error' } }
   }
 
@@ -68,35 +49,25 @@ export async function processWebhookEvent(event: Stripe.Event, supabase: Webhook
   }
 
   try {
-    const result = await dispatchStripeEvent(event, supabase, stripe, list, syncCancelDate)
+    const result = await dispatchStripeEvent(event, store, stripe, list, syncCancelDate)
 
-    const { error: updateError } = await supabase
-      .from('stripe_webhook_events')
-      .update({
-        processed_at: new Date().toISOString(),
-        outcome: result.outcome,
-        detail: result.detail,
-        error: null,
-      })
-      .eq('event_id', event.id)
-
-    if (updateError) {
-      console.error('Error recording webhook outcome:', event.id, event.type, updateError.message)
+    // As before W66: the handler's writes are made, so a failure to record the outcome is logged and the event is
+    // still answered 200 (its row is left unfinished, and a delivery Stripe sends again is handled afresh).
+    try {
+      await store.recordOutcome(event.id, { processedAt: new Date().toISOString(), outcome: result.outcome, detail: result.detail })
+    } catch (err) {
+      console.error('Error recording webhook outcome:', event.id, event.type, message(err))
     }
 
     console.log('Stripe webhook handled:', event.id, event.type, result.outcome)
     return { status: 200, body: { received: true } }
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    console.error('Stripe webhook handler error:', event.id, event.type, message)
+    console.error('Stripe webhook handler error:', event.id, event.type, message(err))
 
-    const { error: updateError } = await supabase
-      .from('stripe_webhook_events')
-      .update({ processed_at: new Date().toISOString(), outcome: 'error', error: message })
-      .eq('event_id', event.id)
-
-    if (updateError) {
-      console.error('Error recording webhook error outcome:', event.id, event.type, updateError.message)
+    try {
+      await store.recordError(event.id, { processedAt: new Date().toISOString(), message: message(err) })
+    } catch (recordErr) {
+      console.error('Error recording webhook error outcome:', event.id, event.type, message(recordErr))
     }
 
     return { status: 500, body: { error: 'Internal server error' } }

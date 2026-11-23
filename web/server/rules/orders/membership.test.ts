@@ -2191,10 +2191,11 @@ describe("W13c L4: the W13a review's plants, caught", () => {
       stripe.settleRefund(refundId, 'failed')
       later(16)
       const run = await runReconcile(stripe)
-      // W58b (W35 audit row 32; W32a "Noticed" 2): the late path meets the compensation's watched refund and answers
-      // "settled elsewhere"; the watch ends it failed in the same run. One failed refund is one "left for a person".
-      expect(run.items).toContainEqual(expect.objectContaining({ kind: 'refund', id: orderId, outcome: 'settled_elsewhere', detail: `the refund ${refundId} failed: its watch lists it` }))
-      expect(run.items.filter((item) => item.outcome === 'refund_failed' || item.outcome === 'left')).toEqual([expect.objectContaining({ kind: 'refund', outcome: 'refund_failed', reason: 'refund_failed_later' })])
+      // W58b (W35 audit row 32; W32a "Noticed" 2): the late path meets the compensation's watched refund and leaves it
+      // to the watch. One failed refund is one "left for a person". W67 (H14): the late path reads that watch itself,
+      // in the same run, and its item is the watch's (before W67: `settled_elsewhere`, and the watch's own read later).
+      expect(run.items.some((item) => item.id === orderId && item.outcome === 'settled_elsewhere')).toBe(false)
+      expect(run.items.filter((item) => item.outcome === 'refund_failed' || item.outcome === 'left')).toEqual([expect.objectContaining({ kind: 'refund', id: refundId, outcome: 'refund_failed', reason: 'refund_failed_later' })])
       expect(run.left).toBe(1)
       // W32a (W32 review S3; W32 "Noticed" 1): the compensation's refund is watched, so it is listed once, as the
       // watch's line (Mark sorted), not as the late refund's too.
@@ -2741,6 +2742,202 @@ describe("W32 item 2: a compensation's refund Stripe answers pending is watched"
       expect(await watchRows()).toEqual([])
       expect(stripe.refundsSent).toHaveLength(1)
       expect(stripe.netPence).toBe(0)
+    })
+  })
+})
+
+// Brief W67 item 4 (H-plan 4.4; W35 audit row 29, W32 review L1): a compensation's refund held past its key's life.
+// Stripe keeps a key for at least 24 hours (the fake's forgetIdempotencyKeys is that day passing). Past
+// REFUND_KEY_LIFE_HOURS nothing is sent before the payment's refunds are read; a new send goes under a new key,
+// recorded first. Whatever happens, one refund for one step.
+describe("W67 (W35 row 29): a compensation's refund past its key's life is read for before any send", () => {
+  const refundCreates = (stripe: FakeStripe) => stripe.calls.filter((call) => call.method === 'refunds.create')
+  const attemptRows = async (orderId: string) =>
+    (await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'order.refund_attempt' AND entity_id = $1 ORDER BY at, id", [orderId])).map((row) => row.details)
+  const watched = async () => (await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'refund.watch' AND details->>'state' = 'watching' ORDER BY at, id")).map((row) => row.details)
+  /** A day and an hour: past the key's life, and Stripe may have forgotten it. */
+  const aDayLater = (stripe: FakeStripe) => {
+    later(25 * 60)
+    stripe.forgetIdempotencyKeys()
+  }
+
+  /** The soap declined after the subscription: the first invoice (£40) refunded under <orderId>:refund-subscription, but its watch can't be written, so the compensation is held with the refund made. */
+  async function heldWithItsRefundMade(stripe: FakeStripe): Promise<{ orderId: string; refundId: string }> {
+    stripe.failNext('paymentIntents.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
+    await whileFailing(db, { table: 'audit_log', event: 'INSERT', when: "NEW.action = 'refund.watch'" }, () => place(withSoap))
+    const [order] = await orders()
+    expect(order?.payment_status).toBe('pending')
+    expect(stripe.refundsSent).toHaveLength(1)
+    return { orderId: order?.id as string, refundId: stripe.refundsSent[0]?.id as string }
+  }
+
+  /** The same, but the refund's send never reached Stripe (no answer, twice): held with nothing refunded. */
+  async function heldWithNothingRefunded(stripe: FakeStripe): Promise<{ orderId: string; intent: string }> {
+    stripe.failNext('paymentIntents.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
+    stripe.failNext('refunds.create', { kind: 'unreachable' })
+    stripe.failNext('refunds.create', { kind: 'unreachable' })
+    await place(withSoap)
+    const [order] = await orders()
+    expect(order?.payment_status).toBe('pending')
+    expect(stripe.refundsSent).toEqual([])
+    // The first invoice's PaymentIntent, as the step's two sends named it.
+    const intent = (refundCreates(stripe)[0]?.params as { payment_intent?: string } | undefined)?.payment_intent
+    expect(intent).toMatch(/^pi_/)
+    return { orderId: order?.id as string, intent: intent as string }
+  }
+
+  it("the refund failed meanwhile and Stripe has forgotten the key: read, found failed, and never sent again by the system (the watch's line says to refund by hand); held for a person", async () => {
+    await onASeed(async (stripe) => {
+      const { orderId, refundId } = await heldWithItsRefundMade(stripe)
+      stripe.settleRefund(refundId, 'failed')
+      aDayLater(stripe)
+      expect(await runReconcile(stripe)).toMatchObject({ undone: 0 })
+      // Before W67 the refund was sent again under the forgotten key: a second refund, made by the system.
+      expect(refundCreates(stripe)).toHaveLength(1)
+      expect(stripe.refundsSent).toHaveLength(1)
+      expect(stripe.refundedPence).toBe(0)
+      expect(await attemptRows(orderId)).toEqual([])
+      const [order] = await orders()
+      expect(order?.payment_status).toBe('pending')
+      const [held] = (await db.query<{ details: Record<string, unknown> }>("SELECT details FROM audit_log WHERE action = 'order.compensate' AND entity_id = $1 ORDER BY at DESC, id DESC LIMIT 1", [orderId])).map((row) => row.details)
+      expect(held).toMatchObject({ state: 'held', definite: true, left: [expect.stringContaining(`Stripe's refund ${refundId} failed`)] })
+      // A later run reads again and still sends nothing.
+      later(6)
+      await runReconcile(stripe)
+      expect(refundCreates(stripe)).toHaveLength(1)
+    })
+  })
+
+  it('the refund went through and Stripe has forgotten the key: found by its key before any send, watched, and the order undone; never a second send', async () => {
+    await onASeed(async (stripe) => {
+      const { refundId } = await heldWithItsRefundMade(stripe)
+      aDayLater(stripe)
+      expect(await runReconcile(stripe)).toMatchObject({ undone: 1 })
+      expect(refundCreates(stripe)).toHaveLength(1)
+      expect(await watched()).toMatchObject([{ refundId, on: 'compensation', step: 'refund-subscription', status: 'succeeded' }])
+      expect(stripe.netPence).toBe(0)
+      await invariant(stripe)
+    })
+  })
+
+  it('the refund was made but its answers were lost, then held a day: found by its key, never sent again', async () => {
+    await onASeed(async (stripe) => {
+      stripe.failNext('paymentIntents.create', { kind: 'error', error: fakeStripeErrors.cardDeclined() })
+      stripe.failNext('refunds.create', { kind: 'lost_response' })
+      stripe.failNext('refunds.create', { kind: 'lost_response' })
+      await place(withSoap)
+      expect((await orders()).map((order) => order.payment_status)).toEqual(['pending'])
+      expect(stripe.refundsSent).toHaveLength(1)
+      aDayLater(stripe)
+      expect(await runReconcile(stripe)).toMatchObject({ undone: 1 })
+      expect(refundCreates(stripe)).toHaveLength(2)
+      expect(stripe.refundsSent).toHaveLength(1)
+      expect(stripe.netPence).toBe(0)
+      await invariant(stripe)
+    })
+  })
+
+  it("a partial refund made by hand while the step's own send never reached Stripe: a new key recorded first, then the rest refunded once (never more than was taken)", async () => {
+    await onASeed(async (stripe) => {
+      const { orderId, intent } = await heldWithNothingRefunded(stripe)
+      const byHand = await stripe.refunds.create({ payment_intent: intent, amount: 1000 })
+      aDayLater(stripe)
+      expect(await runReconcile(stripe)).toMatchObject({ undone: 1 })
+      expect(await attemptRows(orderId)).toEqual([{ step: 'refund-subscription', paymentIntentId: intent, attempt: 2, key: `${orderId}:refund-subscription-2`, why: 'key_past_its_life_and_no_refund_found' }])
+      const sent = refundCreates(stripe).at(-1)
+      expect(sent?.idempotencyKey).toBe(`${orderId}:refund-subscription-2`)
+      expect(sent?.params).toMatchObject({ payment_intent: intent, metadata: { order_id: orderId, refund_key: `${orderId}:refund-subscription`, attempt: '2' } })
+      expect(stripe.refundsSent.map((refund) => [refund.id === byHand.id ? 'by hand' : 'step', refund.amount])).toEqual([['by hand', 1000], ['step', 3000]])
+      expect(stripe.refundedByIntent.get(intent)).toBe(4000)
+      await invariant(stripe)
+    })
+  })
+
+  it('a crash after the read, before the new key is recorded: nothing sent; the next run reads again, records it and sends once', async () => {
+    await onASeed(async (stripe) => {
+      const { orderId, intent } = await heldWithNothingRefunded(stripe)
+      aDayLater(stripe)
+      await whileFailing(db, { table: 'audit_log', event: 'INSERT', when: "NEW.action = 'order.refund_attempt'" }, () => runReconcile(stripe))
+      expect(stripe.refundsSent).toEqual([])
+      expect(await attemptRows(orderId)).toEqual([])
+      later(6)
+      expect(await runReconcile(stripe)).toMatchObject({ undone: 1 })
+      expect(await attemptRows(orderId)).toHaveLength(1)
+      expect(stripe.refundsSent.map((refund) => refund.amount)).toEqual([4000])
+      expect(stripe.refundedByIntent.get(intent)).toBe(4000)
+      await invariant(stripe)
+    })
+  })
+
+  it('a crash after the new key is recorded, before its send reached Stripe: the next run (inside the new key\'s life) sends under the same new key, once', async () => {
+    await onASeed(async (stripe) => {
+      const { orderId } = await heldWithNothingRefunded(stripe)
+      aDayLater(stripe)
+      stripe.failNext('refunds.create', { kind: 'unreachable' })
+      stripe.failNext('refunds.create', { kind: 'unreachable' })
+      expect(await runReconcile(stripe)).toMatchObject({ undone: 0 })
+      expect(await attemptRows(orderId)).toHaveLength(1)
+      later(6)
+      expect(await runReconcile(stripe)).toMatchObject({ undone: 1 })
+      expect(await attemptRows(orderId)).toHaveLength(1)
+      expect(refundCreates(stripe).slice(2).map((call) => call.idempotencyKey)).toEqual([`${orderId}:refund-subscription-2`, `${orderId}:refund-subscription-2`, `${orderId}:refund-subscription-2`])
+      expect(stripe.refundsSent.map((refund) => refund.amount)).toEqual([4000])
+      await invariant(stripe)
+    })
+  })
+
+  it("a crash after the new key's send landed, its answer lost, then Stripe forgets that key too: read, found by the step's key, never a third send", async () => {
+    await onASeed(async (stripe) => {
+      const { orderId } = await heldWithNothingRefunded(stripe)
+      aDayLater(stripe)
+      stripe.failNext('refunds.create', { kind: 'lost_response' })
+      stripe.failNext('refunds.create', { kind: 'lost_response' })
+      expect(await runReconcile(stripe)).toMatchObject({ undone: 0 })
+      expect(stripe.refundsSent).toHaveLength(1)
+      aDayLater(stripe)
+      expect(await runReconcile(stripe)).toMatchObject({ undone: 1 })
+      expect(await attemptRows(orderId)).toHaveLength(1)
+      expect(stripe.refundsSent.map((refund) => refund.amount)).toEqual([4000])
+      expect(stripe.netPence).toBe(0)
+      await invariant(stripe)
+    })
+  })
+
+  it("inside the key's life nothing changes: the same key sent again, no read first, no new key", async () => {
+    await onASeed(async (stripe) => {
+      const { orderId } = await heldWithNothingRefunded(stripe)
+      later(16)
+      expect(await runReconcile(stripe)).toMatchObject({ undone: 1 })
+      expect(refundCreates(stripe).map((call) => call.idempotencyKey)).toEqual([`${orderId}:refund-subscription`, `${orderId}:refund-subscription`, `${orderId}:refund-subscription`])
+      expect(stripe.calls.filter((call) => call.method === 'refunds.list')).toEqual([])
+      expect(await attemptRows(orderId)).toEqual([])
+    })
+  })
+})
+
+// Brief W67 item 4 (H14; W58b "Noticed" 1): the late path meeting a compensation's watched refund that has failed reads
+// that watch in the same run, so the failure is listed at once, not at the watch's next daily read.
+describe('W67 (H14): the late path meets a failed watched refund: the watch is read in the same run', () => {
+  it('a compensation refund that went through (its watch read as succeeded, so not due for a day) fails later; the late refund meets it: listed in this run, once', async () => {
+    await onASeed(async (stripe) => {
+      const { orderId, intent } = await tapped(stripe)
+      const held = holdNext(stripe.subscriptions, 'create')
+      const screen = postReaderStep('finalise', orderId)
+      await held.reached
+      await compensateOrder(db, stripe, orderId, { subscriptionId: null, refunds: [{ step: 'refund-reader', paymentIntentId: intent }] }, 'test: unguarded', { actor: { type: 'system', id: null }, requestId: 'h14' }, undefined)
+      held.release()
+      expect((await screen).body).toMatchObject({ ok: true, data: { finalised: false, reason: 'charged_without_order' } })
+      const refundId = stripe.refundsSent.find((refund) => refund.payment_intent === intent)?.id as string
+      // The watch's last status is succeeded: the watches due list leaves it for WATCH_READ_HOURS.
+      stripe.settleRefund(refundId, 'failed')
+      later(16)
+      const run = await runReconcile(stripe)
+      expect(run.items.filter((item) => item.outcome === 'refund_failed' || item.outcome === 'left')).toEqual([expect.objectContaining({ kind: 'refund', id: refundId, outcome: 'refund_failed', reason: 'refund_failed_later' })])
+      expect(run.left).toBe(1)
+      expect((await stuckList(db)).watched).toMatchObject([{ refundId, paymentIntentId: intent, on: 'compensation', state: 'failed', owed: 0 }])
+      later(6)
+      expect((await runReconcile(stripe)).items).toEqual([])
+      expect(stripe.calls.filter((call) => call.method === 'refunds.create')).toHaveLength(1)
     })
   })
 })

@@ -313,6 +313,21 @@ ORDER BY COALESCE(l.at, w.at), w.id
 LIMIT $3::int`
 
 /**
+ * W67 (H14): one refund's watch (`$2`, Stripe's refund id), not ended, as the due list reads it but whether it is due
+ * or not: the late path (reconcile.ts, settleLateRefund) reads it in the same run when it meets that refund failed.
+ * `$1` as WATCHES_DUE_SQL's.
+ */
+export const WATCH_OF_REFUND_SQL = `
+SELECT w.id, w.at, (w.at < now() - make_interval(days => $1::int)) AS expired, w.details,
+       ${LAST_STATUS_SQL} AS "lastStatus", COALESCE(l.at, w.at) AS "readAt"
+FROM audit_log w${LAST_READ_SQL}
+WHERE w.action = '${REFUND_WATCH}' AND w.entity_type = '${REFUND_WATCH_ENTITY}' AND w.details->>'state' = 'watching'
+  AND w.entity_id = $2
+  AND${NOT_ENDED_SQL}
+ORDER BY w.at, w.id
+LIMIT 1`
+
+/**
  * W32a (review S2): how many watched refunds are still on their way at Stripe (their last status is neither
  * `succeeded` nor an end): what Resolve now shows as "waiting on Stripe". Nothing to do for any of them.
  */

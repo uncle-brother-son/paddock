@@ -1,6 +1,6 @@
 // Brief W48 item 1 (G-plan 4.1): the words of orders: a product line marked fulfilled (W53), moved word for word from
 // the staff app's old
-// functions as they were at W48. Unused yet: each slice that moves an action answers its refusals
+// functions as they were at W48. Each action that moved (W49 to W57) answers its refusals
 // with these, so the screens' handling still works. Generated once by briefs/W48-logs/generate-words-files.py in the
 // staff app repo and kept by hand from here on; server/rules/admin/words.test.ts holds this file to the old
 // sentences (read from the old code with the TypeScript parser, pinned in testing/old-words.json), both ways. A sentence that takes a value is a

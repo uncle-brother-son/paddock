@@ -348,6 +348,20 @@ const activeAction: AdminAction = 'plan.active_set'
 const itemNotFound = (action: string) => adminRefusal('NOT_FOUND', action, 'item_not_found', LEGACY_CATALOG_ROUTE_WORDS['toggle-active'].itemNotFound)
 const LOCK_PLAN_ROW_SQL = 'SELECT id, active, stripe_product_id, name FROM membership_plans WHERE id = $1::uuid'
 
+type PlanSwitchSeen = { id: string; active: boolean | null; stripe_product_id: string | null; name: string }
+
+/** The plan's row under its lock, as the switch reads it; "Item not found" when there is none. */
+async function lookAtPlan(tx: Tx, planId: string): Promise<PlanSwitchSeen> {
+  const held = await lockAdminRows(tx, [{ table: 'membership_plans', ids: [planId] }])
+  const [row] = held.membership_plans?.length ? await tx.query<PlanSwitchSeen>(LOCK_PLAN_ROW_SQL, [planId]) : []
+  if (!row) throw itemNotFound(activeAction)
+  return row
+}
+
+/** The switch's `plan.active_set` row (after any step rows in `extra`), by whoever pressed it. */
+const recordPlanSwitch = (tx: Tx, by: StepBy, key: string | null, planId: string, before: PlanSwitchSeen, active: boolean, extra: AuditEntry[]) =>
+  audit.recordAll(tx, [...extra, { actorType: by.actor.type, actorId: by.actor.id, action: activeAction, entityType: PLAN_ENTITY, entityId: planId, requestId: by.requestId, details: { before: { id: before.id, active: before.active === true }, after: { id: before.id, active }, key } }])
+
 /**
  * `POST catalog/membership-plans/:planId/active` (setMembershipPlanActive). Manage pricing. Live members are never
  * touched, as before.
@@ -370,15 +384,8 @@ export async function setPlanActive(db: Db, planId: string, active: unknown, opt
   const stripe = () => options.stripe()
   const timing = timingOf(options)
 
-  type Seen = { id: string; active: boolean | null; stripe_product_id: string | null; name: string }
-  const look = async (tx: Tx): Promise<Seen> => {
-    const held = await lockAdminRows(tx, [{ table: 'membership_plans', ids: [planId] }])
-    const [row] = held.membership_plans?.length ? await tx.query<Seen>(LOCK_PLAN_ROW_SQL, [planId]) : []
-    if (!row) throw itemNotFound(action)
-    return row
-  }
-  const record = (tx: Tx, before: Seen, extra: AuditEntry[]) =>
-    audit.recordAll(tx, [...extra, { actorType: options.actor.type, actorId: options.actor.id, action, entityType: PLAN_ENTITY, entityId: planId, requestId: options.requestId, details: { before: { id: before.id, active: before.active === true }, after: { id: before.id, active }, key: options.pressKey } }])
+  const look = (tx: Tx): Promise<PlanSwitchSeen> => lookAtPlan(tx, planId)
+  const record = (tx: Tx, before: PlanSwitchSeen, extra: AuditEntry[]) => recordPlanSwitch(tx, by, options.pressKey, planId, before, active, extra)
 
   if (active) {
     const seen = await db.transaction(async (tx) => {
@@ -407,20 +414,32 @@ export async function setPlanActive(db: Db, planId: string, active: unknown, opt
     })
   }
 
+  return takePlanOffSale(db, planId, { by, key: options.pressKey, stripe, timing })
+}
+
+/**
+ * The plan switch's "off" (setPlanActive above), by whoever takes the plan off sale: a staff member's press, or (W66,
+ * H7) a Sanity delete of the plan's document, by the system as `sanity`. Refused while a price change on the plan is
+ * still open (`price_change_open`), nothing written. Otherwise one transaction: the row off, any open product step
+ * replaced, a product step left (off), `plan.active_set`; then the step sent. Stripe's answer never undoes the row:
+ * unclear or refused, the step is reconcile's (and a refusal is listed for a person).
+ */
+export async function takePlanOffSale(db: Db, planId: string, how: { by: StepBy; key: string | null; stripe: () => StripeClient; timing: StripeTiming | undefined }): Promise<{ id: string; active: false }> {
+  const { by, timing } = how
   const left = await db.transaction(async (tx) => {
-    const before = await look(tx)
+    const before = await lookAtPlan(tx, planId)
     // W58c (W58 review FL4): Stripe won't move a subscription onto an off-sale product's price, so while a price change
     // on the plan is still open (its record, or its members' moves inside their press's window) the plan stays on
     // sale. Refused under the plan's lock, nothing written.
-    if (await changeStillOpen(tx, planId)) throw adminRefusal('CONFLICT', action, 'price_change_open', NEW.offWhileChangeOpen)
+    if (await changeStillOpen(tx, planId)) throw adminRefusal('CONFLICT', activeAction, 'price_change_open', NEW.offWhileChangeOpen)
     await replaceProductSteps(tx, planId, by, null)
     const step = before.stripe_product_id ? newPlanStep(planId, 'product_active', { productId: before.stripe_product_id, active: false }) : null
     await tx.query('UPDATE membership_plans SET active = false, updated_at = now() WHERE id = $1::uuid', [planId])
-    await record(tx, before, step ? [planStepLeftEntry(by, step, { byPress: true })] : [])
+    await recordPlanSwitch(tx, by, how.key, planId, before, false, step ? [planStepLeftEntry(by, step, { byPress: true })] : [])
     return step
   })
   if (left) {
-    const client = stripe()
+    const client = how.stripe()
     const answer = await sendPlanStep(client, left, timing)
     if (answer.kind !== 'unclear') await recordPlanStep(db, left, answer, by).catch(() => false)
   }

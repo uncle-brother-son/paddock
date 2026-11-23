@@ -499,7 +499,11 @@ describe('item 1: Stripe\'s update notice never clears a last day a cancel press
   it("the webhook's route gives the handler that write, on the Worker's own connection, closed afterwards", () => {
     const route = readFileSync(path.join(__dirname, '../../../app/api/stripe/webhook/route.ts'), 'utf8')
     expect(route).toContain("import { syncCancelDateUnlessWanted } from '@/server/rules/memberships/cancel-kept'")
-    expect(route).toMatch(/const syncCancelDate: SyncCancelDate = async \(params\) => \{\s+const db = openRequestDb\(\)\s+try \{\s+return await syncCancelDateUnlessWanted\(db, params\)\s+\} finally \{\s+await closeRequestDb\(db\)\s+\}\s+\}/)
+    // W66 (H8), a named difference: the event's one connection (every database step of the event is on it now, the
+    // event's own row included), opened after the signature check and closed once the answer has gone.
+    expect(route).toContain('const syncCancelDate: SyncCancelDate = (params) => syncCancelDateUnlessWanted(db, params)')
+    expect(route.match(/openRequestDb\(\)/g)).toHaveLength(1)
+    expect(route).toMatch(/\} finally \{\s+await closeRequestDb\(db\)\s+\}/)
     expect(route).toContain('createStripeClient(process.env.STRIPE_SECRET_KEY, READ_STRIPE_LIMITS), list, syncCancelDate)')
   })
 })
