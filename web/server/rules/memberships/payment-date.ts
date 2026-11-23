@@ -40,7 +40,7 @@ import 'server-only'
 import Stripe from 'stripe'
 import type { ApiErrorCode, ChangePaymentDateInput, ChangePaymentDateOutput, PaymentDateQuoteOutput } from '@/contracts'
 import { audit, type AuditEntry } from '@/server/audit'
-import type { Db, Queryable } from '@/server/db'
+import { inOpenTransaction, isDeadlock, type Db, type Queryable, type Tx } from '@/server/db'
 import { ApiError } from '@/server/http/errors'
 import { stripeIdempotencyKey } from '@/server/http/idempotency'
 import { accountRefusal } from '@/server/rules/account/refusal'
@@ -491,9 +491,14 @@ export type FinishedChange = { finished: true; orderId: string | null; paymentIn
  * P2 (FB2): the charge as its own order (paid, card, the payment) with one membership line, the membership's new
  * date, the row done and its audit row, all or nothing, under the membership's lock and then the row's. Run once:
  * a row already done answers its order; one already failed (closed by hand meanwhile) is left as it is.
+ *
+ * W70c (W70b "Noticed" 4): run once more after a deadlock, as a plan price change's D2 is (catalog/plan-stripe.ts): the
+ * first run was rolled back whole, the second starts again from the row's status, and nothing outside the database is
+ * called. A second deadlock is thrown, and the press holds the change for reconcile, as before.
  */
 export async function finishPaymentDateChange(db: Db, change: Started, paymentIntentId: string, by: ChangeBy, how: 'press' | 'reconcile'): Promise<FinishedChange> {
-  return db.transaction(async (tx): Promise<FinishedChange> => {
+  const opensItsOwn = !inOpenTransaction(db)
+  const work = async (tx: Tx): Promise<FinishedChange> => {
     await tx.query(LOCK_MEMBERSHIP_SQL, [change.membershipId])
     const row = (await tx.query<{ status: string; order_id: string | null; stripe_payment_intent_id: string | null }>(LOCK_CHANGE_SQL, [change.id]))[0]
     if (!row) return { finished: false, status: 'gone' }
@@ -507,7 +512,13 @@ export async function finishPaymentDateChange(db: Db, change: Started, paymentIn
     await tx.query(DONE_CHANGE_SQL, [paymentIntentId, order.id, change.id])
     await audit.record(tx, entry(change, by, 'done', { how, paymentIntentId, orderId: order.id, amount: s.amount, nextRenewalDate: { before: s.oldRenewalDate, after: s.newRenewalDate } }))
     return { finished: true, orderId: order.id, paymentIntentId, already: false }
-  })
+  }
+  try {
+    return await db.transaction(work)
+  } catch (err) {
+    if (!opensItsOwn || !isDeadlock(err)) throw err
+    return db.transaction(work)
+  }
 }
 
 // --- Stripe

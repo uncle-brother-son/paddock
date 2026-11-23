@@ -5565,6 +5565,20 @@ describe('staff app helpers', () => {
       expect(component('BookingDetailContent.tsx')).toContain('onMoved={() => onMoved?.(booking.id)}')
     })
 
+    it("W70c (W70b Noticed 3): the Move dialog starts on the booking's own date each time it opens, whatever opens it, and closing leaves the date alone", () => {
+      const dialog = component('MoveBookingDialog.tsx')
+      expect(body(dialog, 'openOnBookingsDate')).toMatch(/\{\s+setDate\(initialDate\)\s+setOpen\(true\)$/)
+      // The only way to open it, and the only place but the date box that sets the date.
+      expect(dialog.match(/setOpen\(true\)/g)).toHaveLength(1)
+      expect(dialog.match(/\bsetDate\(/g)).toHaveLength(2)
+      expect(dialog).toContain('<Button variant="outline" size="sm" onClick={openOnBookingsDate} disabled={Boolean(blockedReason)}>')
+      expect(dialog).toContain('next ? openOnBookingsDate() : resetAndClose())}>')
+      expect(dialog).toContain('<Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />')
+      expect(body(dialog, 'resetAndClose')).not.toContain('setDate')
+      // Its date is the booking's as the window shows it now: the row read again after a Move (QA2).
+      expect(component('BookingDetailContent.tsx')).toContain('initialDate={dateKeyFromIso(booking.start_time)}')
+    })
+
     it('QA3: a cancelled booking lists a refunded add-on as Removed with nothing to press; until the detail has been read since the cancel, no add-on on it shows Remove', () => {
       const detail = component('BookingDetailContent.tsx')
       // The status the detail was asked for, taken with each read; a status that changes reads it again.

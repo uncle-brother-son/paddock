@@ -3017,10 +3017,23 @@ create, on/off, the T2 hook); `catalog/plans-postgres.test.ts` (7 races on real 
   money. Money with no order (Move, Settle, a card or reader Add Guest) counts whole, less what that Add Guest's add-ons
   cost above its order's card money. The parts still add up to what is left, so Q26's cash is what was paid in cash.
   Example: seats £40 and an add-on £5 on one £45 order, all store credit, and a guest's £20 in cash: £40 and £20 (it read
-  £45 and £15, and £5 of the cash could not be handed back). Nothing else reads the parts' gift card and store credit. A
-  refund to store credit is still not told apart by where its money came from (Q31: only the card figure is exact).
-  Rule tests: `bookings/w05-rules.test.ts`, "W70b".
+  £45 and £15, and £5 of the cash could not be handed back). Nothing else reads the parts' gift card and store credit.
+  What goes back as store credit: W70c, below. Rule tests: `bookings/w05-rules.test.ts`, "W70b".
 - **A plan price change's D2 and a payment date change never deadlock (W70a noticed 1), `catalog/plan-stripe.ts`:** D2
   locks the plan, then the live members, and only then writes the plan's new price id (UNIQUE, so it takes the plan's row
   FOR UPDATE, which an order line naming the plan waits for); and it runs once more after a deadlock, as the undo does.
   `catalog/plans-postgres.test.ts`, both ways round.
+
+## Q63 and W70b's leftovers (W70c, step H)
+
+- **Q63 (Wayne, 23 Nov 2026): money given back as store credit comes off the store credit part first, then the gift
+  card,** so the cash paid stays available to hand back as cash. `bookings/money-left.ts` (`given`): the store credit of
+  the booking's finished Part refund, Remove Guest, cheaper Move and Refund the rest claims, less what was an add-on's.
+  Not a cancel's, nor what came after one: a cancelled booking keeps its price paid, so its figures stay as they were.
+  The card's part is as before; cash out never passes cash in (Q26, Q42, `cashLeftOn`). Examples: seats £40 in cash and a
+  guest's £20 on store credit, the guest removed to store credit: £40 cash (it read £20 and £20). The QA booking with £20
+  part refunded to store credit: £20 and £20 (it read £40 and no cash). A refund made by the old code, before W21, has no
+  claim and is not counted. Rule tests: `bookings/w05-rules.test.ts`, "W70c (Q63)".
+- **A payment date change's finish runs once more after a deadlock (W70b noticed 4),** `memberships/payment-date.ts`
+  `finishPaymentDateChange`, as a plan price change's D2 does: never inside a caller's transaction; a second one is held
+  for reconcile. `memberships/payment-date-postgres.test.ts`, with a real deadlock.

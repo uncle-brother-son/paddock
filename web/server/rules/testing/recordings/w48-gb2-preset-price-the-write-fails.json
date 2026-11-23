@@ -1,5 +1,5 @@
 {
-  "scenario": "w48-gb2-preset-price-made-in-stripe-then-the-write-fails",
+  "scenario": "w48-gb2-preset-price-the-write-fails",
   "results": [
     {
       "thrown": "That didn't get an answer, so it may or may not have been saved. The screen has been reloaded: check it, and press again if it hasn't changed."

@@ -6,6 +6,8 @@ import { workerSide } from '@/server/rules/testing/sweep/worker'
 import { bea, ID, laterPublicSession, memberCredit, mo, noPromoOnCard, paidSeat, PROMO, sam, seed, sessionsToMoveBetween, tieredPrivatePrices } from '@/server/rules/testing/replay/scenarios'
 import { replayStripe } from '@/server/rules/testing/replay/stripe-binding'
 import { insert } from '@/server/rules/testing/database'
+import { reconcile } from '@/server/rules/orders/reconcile'
+import { fakeStripeErrors } from '@/server/stripe/fake'
 import { READER_PAYMENT_OPEN_MESSAGE } from './failure-messages'
 
 // Brief W70a item 1 (the W70 audit's S1): decided rules of the bookings' money (Q24, Q25, Q29, and W05a to W05g) that the
@@ -481,7 +483,8 @@ describe('W70b (QA1, QA4): only the gift card and store credit that paid for sea
         expect(JSON.stringify(await attempt('refundBooking', { bookingId, refundMethod: 'cash', amount: 15.01, ...goodwill }))).toContain('Only £15.00 of cash')
 
         await call('removeBookingGuest', { guestId: added.guest.id, confirmedRefundAmount: 20, refundMethod: 'credit' })
-        expect(await money(bookingId)).toMatchObject({ pricePaid: 35, parts: { card: 0, giftCard: 0, storeCredit: 35, cash: 0 }, cashLeft: 0, paidWords: 'Paid £35.00 by gift card / store credit.' })
+        // W70c (Q63), a named difference: the £20 to store credit comes off the store credit part (it read £35 and no cash).
+        expect(await money(bookingId)).toMatchObject({ pricePaid: 35, parts: { card: 0, giftCard: 0, storeCredit: 20, cash: 15 }, cashLeft: 15, paidWords: 'Paid £20.00 by gift card / store credit and £15.00 in cash.' })
         // Cancel & Refund: the £35 and the add-on's £5, to store credit.
         await call('refundBooking', { bookingId, refundMethod: 'credit', addonLineIds: [await towelLine(bookingId)] })
         expect((await credit()).reduce((total, amount) => total + Number(amount), 0)).toBe(60)
@@ -635,6 +638,282 @@ describe('W70b (QA1, QA4): only the gift card and store credit that paid for sea
       },
       plenty
     )
+  })
+
+  // Brief W70c item 1 (Wayne's Q63, 23 Nov): money given back as store credit comes off the store credit part first, then
+  // the gift card, so the cash paid stays available to hand back as cash. Never more cash out than cash in (Q26, Q42).
+  describe('W70c (Q63): money given back as store credit comes off the store credit part first, then the gift card, so the cash stays', () => {
+    const cy = { guestName: 'Cy Guest', guestEmail: 'cy@example.com', guestsOver18Confirmed: true }
+    const added = async (steps: Steps, who: typeof cy, payment: Record<string, unknown>): Promise<string> =>
+      ((await steps.call('addBookingGuest', { bookingId: steps.bookingId, ...who, payment })) as { guest: { id: string } }).guest.id
+    const toCredit = (bookingId: string, amount: number) => ({ bookingId, refundMethod: 'credit', amount, ...goodwill })
+    /** Two seats (£40) and the towel on store credit; with Bea's £20 in cash, the QA run's booking. */
+    const qaBooking = { booking: withTowel, payment: storeCredit(45) }
+    /** A card refund that never reaches Stripe, settled by reconcile past its window: its money ends owed on the booking. */
+    async function neverArrives({ stripe }: Steps, press: () => Promise<unknown>): Promise<void> {
+      stripe.failNext('refunds.create', { kind: 'unreachable' })
+      stripe.failNext('refunds.create', { kind: 'unreachable' })
+      await press()
+      vi.setSystemTime(Date.now() + 16 * 60_000)
+      await reconcile(db, stripe, { actor: { type: 'system', id: null }, requestId: crypto.randomUUID(), maxItems: 50, budgetMs: 60_000 })
+    }
+
+    it("seats £40 in cash and a guest's £20 on store credit: the guest removed to store credit leaves £40 cash, all of it to hand back, and no more", async () => {
+      await withBooking(
+        { booking: twoSeats, payment: cash(40) },
+        async (steps) => {
+          const { call, attempt, bookingId } = steps
+          const guest = await added(steps, bea, storeCredit(20))
+          expect(await money(bookingId)).toMatchObject({ pricePaid: 60, parts: { card: 0, giftCard: 0, storeCredit: 20, cash: 40 }, cashLeft: 40 })
+          await call('removeBookingGuest', { guestId: guest, confirmedRefundAmount: 20, refundMethod: 'credit' })
+          expect(await money(bookingId)).toMatchObject({ pricePaid: 40, parts: { card: 0, giftCard: 0, storeCredit: 0, cash: 40 }, cashLeft: 40, paidWords: 'Paid £40.00 in cash.' })
+          await call('refundBooking', { bookingId, refundMethod: 'cash', amount: 40, ...goodwill })
+          expect(await money(bookingId)).toMatchObject({ pricePaid: 0, parts: { storeCredit: 0, cash: 0 }, cashLeft: 0 })
+          expect(JSON.stringify(await attempt('refundBooking', { bookingId, refundMethod: 'cash', amount: 1, ...goodwill }))).toContain('nothing left')
+        },
+        plenty
+      )
+    })
+
+    it("the QA run's booking, £20 part refunded to store credit: £20 store credit and £20 cash, so £20 of cash can be handed back (£20.01 is refused); then no cash is left, whatever store credit is", async () => {
+      await withBooking(
+        qaBooking,
+        async (steps) => {
+          const { call, attempt, bookingId } = steps
+          await added(steps, bea, cash(20))
+          await call('refundBooking', toCredit(bookingId, 20))
+          expect(await money(bookingId)).toMatchObject({
+            pricePaid: 40,
+            parts: { card: 0, giftCard: 0, storeCredit: 20, cash: 20 },
+            cashLeft: 20,
+            paidLine: 'Left to refund: £20.00 gift card / store credit and £20.00 cash.',
+          })
+          expect(JSON.stringify(await attempt('refundBooking', { bookingId, refundMethod: 'cash', amount: 20.01, ...goodwill }))).toContain('Only £20.00 of cash')
+          await call('refundBooking', { bookingId, refundMethod: 'cash', amount: 20, ...goodwill })
+          expect(await money(bookingId)).toMatchObject({ pricePaid: 20, parts: { storeCredit: 20, cash: 0 }, cashLeft: 0 })
+          expect(JSON.stringify(await attempt('refundBooking', { bookingId, refundMethod: 'cash', amount: 1, ...goodwill }))).toContain('No cash')
+        },
+        plenty
+      )
+    })
+
+    it.each([
+      ['£10: off the store credit alone', 10, { card: 0, giftCard: 25, storeCredit: 5, cash: 20 }],
+      ['£15: all of the store credit', 15, { card: 0, giftCard: 25, storeCredit: 0, cash: 20 }],
+      ['£30: the store credit, then £15 of the gift card', 30, { card: 0, giftCard: 10, storeCredit: 0, cash: 20 }],
+      ['£40: both, and the cash is whole', 40, { card: 0, giftCard: 0, storeCredit: 0, cash: 20 }],
+      ['£45: both, and £5 of the cash', 45, { card: 0, giftCard: 0, storeCredit: 0, cash: 15 }],
+    ] as const)("seats £25 gift card and £15 store credit, a guest's £20 in cash, part refunded to store credit %s", async (_name, amount, parts) => {
+      await withBooking(
+        { booking: twoSeats, payment: { ...gift(25), ...storeCredit(15) } },
+        async (steps) => {
+          await added(steps, bea, cash(20))
+          await steps.call('refundBooking', toCredit(steps.bookingId, amount))
+          expect(await money(steps.bookingId)).toMatchObject({ pricePaid: 60 - amount, parts, cashLeft: parts.cash })
+        },
+        plenty
+      )
+    })
+
+    it('two refunds to store credit are counted together, with cash handed back between them: cash out never passes cash in', async () => {
+      await withBooking(
+        qaBooking,
+        async (steps) => {
+          const { call, attempt, bookingId } = steps
+          await added(steps, bea, cash(20))
+          await call('refundBooking', toCredit(bookingId, 25))
+          expect(await money(bookingId)).toMatchObject({ pricePaid: 35, parts: { storeCredit: 15, cash: 20 }, cashLeft: 20 })
+          await call('refundBooking', { bookingId, refundMethod: 'cash', amount: 8, ...goodwill })
+          expect(await money(bookingId)).toMatchObject({ pricePaid: 27, parts: { storeCredit: 15, cash: 12 }, cashLeft: 12 })
+          await call('refundBooking', toCredit(bookingId, 20))
+          expect(await money(bookingId)).toMatchObject({ pricePaid: 7, parts: { storeCredit: 0, cash: 7 }, cashLeft: 7 })
+          expect(JSON.stringify(await attempt('refundBooking', { bookingId, refundMethod: 'cash', amount: 7.01, ...goodwill }))).toContain('£7.00')
+          await call('refundBooking', { bookingId, refundMethod: 'cash', amount: 7, ...goodwill })
+          expect(await money(bookingId)).toMatchObject({ pricePaid: 0, cashLeft: 0 })
+        },
+        plenty
+      )
+    })
+
+    it("the card's part is as before: card, store credit and cash, part refunded to store credit", async () => {
+      await withBooking(
+        { booking: twoSeats, payment: { ...card, ...storeCredit(15) } },
+        async (steps) => {
+          await added(steps, bea, cash(20))
+          expect(await money(steps.bookingId)).toMatchObject({ parts: { card: 25, giftCard: 0, storeCredit: 15, cash: 20 }, cashLeft: 20 })
+          await steps.call('refundBooking', toCredit(steps.bookingId, 10))
+          expect(await money(steps.bookingId)).toMatchObject({ cardLeft: 25, parts: { card: 25, giftCard: 0, storeCredit: 5, cash: 20 }, cashLeft: 20 })
+          await steps.call('refundBooking', toCredit(steps.bookingId, 10))
+          expect(await money(steps.bookingId)).toMatchObject({ cardLeft: 25, parts: { card: 25, giftCard: 0, storeCredit: 0, cash: 15 }, cashLeft: 15 })
+        },
+        plenty
+      )
+    })
+
+    it("Remove Guest to the card, of which the card can take only part: the rest, given as store credit, comes off the store credit part", async () => {
+      await withBooking(
+        { booking: twoSeats, payment: { ...card, ...storeCredit(30) } },
+        async (steps) => {
+          const guest = await added(steps, bea, cash(20))
+          expect(await money(steps.bookingId)).toMatchObject({ pricePaid: 60, parts: { card: 10, giftCard: 0, storeCredit: 30, cash: 20 }, cashLeft: 20 })
+          const answer = (await steps.call('removeBookingGuest', { guestId: guest, confirmedRefundAmount: 20, refundMethod: 'card' })) as Record<string, unknown>
+          expect(answer).toMatchObject({ cardRefundedAmount: 10, storeCreditRefundedAmount: 10 })
+          expect(await money(steps.bookingId)).toMatchObject({ pricePaid: 40, parts: { card: 0, giftCard: 0, storeCredit: 20, cash: 20 }, cashLeft: 20 })
+        },
+        plenty
+      )
+    })
+
+    it("a cheaper Move's refund to store credit: seats £51 on store credit and a guest's £25.50 in cash, moved to £20 seats", async () => {
+      await withBooking(
+        { booking: { ...twoSeats, sessionId: ID.peakSession }, payment: storeCredit(51) },
+        async (steps) => {
+          const { call, bookingId } = steps
+          await added(steps, bea, cash(25.5))
+          expect(await money(bookingId)).toMatchObject({ pricePaid: 76.5, parts: { storeCredit: 51, cash: 25.5 }, cashLeft: 25.5 })
+          await call('moveBooking', { bookingId, newSessionId: ID.laterPublicSession })
+          await call('moveBooking', { bookingId, newSessionId: ID.laterPublicSession, confirmed: true, refundMethod: 'credit' })
+          expect(await money(bookingId)).toMatchObject({ pricePaid: 60, parts: { card: 0, giftCard: 0, storeCredit: 34.5, cash: 25.5 }, cashLeft: 25.5 })
+        },
+        plenty
+      )
+    })
+
+    it("Refund the rest to store credit: a card guest's £20 that never reached the card, given as store credit, comes off the store credit part", async () => {
+      await withBooking(
+        { booking: twoSeats, payment: cash(40) },
+        async (steps) => {
+          const { call, bookingId } = steps
+          await added(steps, cy, storeCredit(20))
+          const guest = await added(steps, bea, card)
+          expect(await money(bookingId)).toMatchObject({ pricePaid: 80, parts: { card: 20, storeCredit: 20, cash: 40 }, cashLeft: 40 })
+          await neverArrives(steps, () => call('removeBookingGuest', { guestId: guest, confirmedRefundAmount: 20, refundMethod: 'card' }))
+          expect(await money(bookingId)).toMatchObject({ pricePaid: 80, refundOwed: 20, left: 60 })
+          await call('refundBooking', { bookingId, refundOwed: true, refundMethod: 'credit', amount: 20 })
+          expect(await money(bookingId)).toMatchObject({ pricePaid: 60, refundOwed: 0, parts: { card: 20, giftCard: 0, storeCredit: 0, cash: 40 }, cashLeft: 40 })
+        },
+        plenty
+      )
+    })
+
+    it("an add-on's money given as store credit is not seat money: by Remove add-on, and by Refund the rest after its card refund never arrived; with a seat's £20 owed beside it, only that £20 counts", async () => {
+      await withBooking(
+        qaBooking,
+        async (steps) => {
+          const { call, bookingId } = steps
+          const before = { parts: { card: 0, giftCard: 0, storeCredit: 40, cash: 20 }, cashLeft: 20 }
+          await added(steps, bea, cash(20))
+          await call('removeBookingAddon', { addonLineId: await towelLine(bookingId), refund: 'credit' })
+          expect(await money(bookingId)).toMatchObject({ pricePaid: 60, ...before })
+          // A second towel on the card, its refund owed, then given as store credit.
+          await call('addBookingGuest', { bookingId, addons: [{ addonId: ID.addon, quantity: 1 }], payment: card })
+          const second = (await db.query<{ id: string }>('SELECT id FROM addon_order_lines WHERE booking_id = $1 AND removed_at IS NULL', [bookingId]))[0]?.id
+          await neverArrives(steps, () => call('removeBookingAddon', { addonLineId: second, refund: 'card' }))
+          expect(await money(bookingId)).toMatchObject({ pricePaid: 65, refundOwed: 5, ...before })
+          await call('refundBooking', { bookingId, refundOwed: true, refundMethod: 'credit', amount: 5 })
+          expect(await money(bookingId)).toMatchObject({ pricePaid: 60, refundOwed: 0, ...before })
+          // A third, and a card guest's £20, both owed: £25 given together, £20 of it seat money.
+          await call('addBookingGuest', { bookingId, addons: [{ addonId: ID.addon, quantity: 1 }], payment: card })
+          const third = (await db.query<{ id: string }>('SELECT id FROM addon_order_lines WHERE booking_id = $1 AND removed_at IS NULL', [bookingId]))[0]?.id
+          const guest = await added(steps, cy, card)
+          await neverArrives(steps, () => call('removeBookingAddon', { addonLineId: third, refund: 'card' }))
+          await neverArrives(steps, () => call('removeBookingGuest', { guestId: guest, confirmedRefundAmount: 20, refundMethod: 'card' }))
+          expect(await money(bookingId)).toMatchObject({ pricePaid: 85, refundOwed: 25, left: 60 })
+          await call('refundBooking', { bookingId, refundOwed: true, refundMethod: 'credit', amount: 25 })
+          expect(await money(bookingId)).toMatchObject({ pricePaid: 60, refundOwed: 0, parts: { card: 20, giftCard: 0, storeCredit: 20, cash: 20 }, cashLeft: 20 })
+        },
+        plenty
+      )
+    })
+
+    it("another booking's refunds to store credit, a seat's and an add-on's, change nothing on this one", async () => {
+      await withBooking(
+        qaBooking,
+        async (steps) => {
+          const { call, bookingId } = steps
+          await added(steps, bea, cash(20))
+          const guest = await added(steps, cy, card)
+          await neverArrives(steps, () => call('removeBookingGuest', { guestId: guest, confirmedRefundAmount: 20, refundMethod: 'card' }))
+          await call('refundBooking', { bookingId, refundOwed: true, refundMethod: 'credit', amount: 20 })
+          const before = { pricePaid: 60, parts: { card: 20, giftCard: 0, storeCredit: 20, cash: 20 }, cashLeft: 20 }
+          expect(await money(bookingId)).toMatchObject(before)
+          const other = (await call('createOrder', { customerId: ID.customer, booking: { ...withTowel, sessionId: ID.laterPublicSession }, payment: storeCredit(45) })) as { bookingId: string }
+          await call('refundBooking', toCredit(other.bookingId, 10))
+          await call('removeBookingAddon', { addonLineId: await towelLine(other.bookingId), refund: 'credit' })
+          expect(await money(other.bookingId)).toMatchObject({ pricePaid: 30, parts: { storeCredit: 30, cash: 0 } })
+          expect(await money(bookingId)).toMatchObject(before)
+        },
+        plenty
+      )
+    })
+
+    it('a refund Stripe refused, put back, has given nothing', async () => {
+      await withBooking(
+        { booking: twoSeats, payment: storeCredit(40) },
+        async (steps) => {
+          const { stripe, attempt, bookingId } = steps
+          const guest = await added(steps, cy, card)
+          await added(steps, bea, cash(20))
+          const before = { pricePaid: 80, parts: { card: 20, giftCard: 0, storeCredit: 40, cash: 20 }, cashLeft: 20 }
+          expect(await money(bookingId)).toMatchObject(before)
+          stripe.failNext('refunds.create', { kind: 'error', error: fakeStripeErrors.invalid('charge_disputed', 'This charge has been charged back.') })
+          await attempt('removeBookingGuest', { guestId: guest, confirmedRefundAmount: 20, refundMethod: 'card' })
+          expect(await money(bookingId)).toMatchObject(before)
+        },
+        plenty
+      )
+    })
+
+    it("a cancelled booking keeps its price paid, so its figures stay as they were: the cancel's own store credit (seats and a ticked add-on) is not taken off, nor is Refund the rest after it", async () => {
+      // A part refund first, then Cancel & Refund of everything to store credit.
+      await withBooking(
+        qaBooking,
+        async (steps) => {
+          const { call, bookingId } = steps
+          await added(steps, bea, cash(20))
+          await call('refundBooking', toCredit(bookingId, 20))
+          const before = { pricePaid: 40, parts: { card: 0, giftCard: 0, storeCredit: 20, cash: 20 } }
+          expect(await money(bookingId)).toMatchObject(before)
+          await call('refundBooking', { bookingId, refundMethod: 'credit', addonLineIds: [await towelLine(bookingId)] })
+          expect(await booking(bookingId)).toMatchObject({ status: 'cancelled', price_paid: '40.00' })
+          expect(await money(bookingId)).toMatchObject(before)
+        },
+        plenty
+      )
+      // Refund the rest before the cancel counts after it too, with a ticked add-on's store credit beside it.
+      await withBooking(
+        qaBooking,
+        async (steps) => {
+          const { call, bookingId } = steps
+          await added(steps, bea, cash(20))
+          const guest = await added(steps, cy, card)
+          await neverArrives(steps, () => call('removeBookingGuest', { guestId: guest, confirmedRefundAmount: 20, refundMethod: 'card' }))
+          await call('refundBooking', { bookingId, refundOwed: true, refundMethod: 'credit', amount: 20 })
+          const before = { pricePaid: 60, parts: { card: 20, giftCard: 0, storeCredit: 20, cash: 20 } }
+          expect(await money(bookingId)).toMatchObject(before)
+          await call('refundBooking', { bookingId, refundMethod: 'credit', addonLineIds: [await towelLine(bookingId)] })
+          expect(await booking(bookingId)).toMatchObject({ status: 'cancelled' })
+          expect(await money(bookingId)).toMatchObject(before)
+        },
+        plenty
+      )
+      // The cancel's card refund owed, then given as store credit on the cancelled booking.
+      await withBooking(
+        { booking: twoSeats, payment: storeCredit(40) },
+        async (steps) => {
+          const { call, bookingId } = steps
+          await added(steps, cy, card)
+          await added(steps, bea, cash(20))
+          const before = { pricePaid: 80, parts: { card: 20, giftCard: 0, storeCredit: 40, cash: 20 } }
+          expect(await money(bookingId)).toMatchObject(before)
+          await neverArrives(steps, () => call('refundBooking', { bookingId, refundMethod: 'card' }))
+          expect(await booking(bookingId)).toMatchObject({ status: 'cancelled', price_paid: '80.00' })
+          await call('refundBooking', { bookingId, refundOwed: true, refundMethod: 'credit', amount: 20 })
+          expect(await money(bookingId)).toMatchObject({ refundOwed: 0, ...before })
+        },
+        plenty
+      )
+    })
   })
 })
 

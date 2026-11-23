@@ -299,9 +299,9 @@ function serviceTypeScenarios(): Scenario[] {
     g('service-type-active-with-an-old-stripe-product', async ({ attempt }) => {
       await attempt('setServiceTypeActive', { serviceTypeId: ID.serviceType, active: false })
     }, saunaSynced),
-    // The row's write fails: nothing is switched. W70b: no Stripe call is made (W55, L2), so the type's old Stripe product
-    // is not touched either, whatever this scenario's name says.
-    g('service-type-active-stripe-went-then-the-write-fails', async ({ attempt, db }) => {
+    // The row's write fails: nothing is switched. No Stripe call is made (W55, L2), so the type's old Stripe product is not
+    // touched either. W70c: renamed from `service-type-active-stripe-went-then-the-write-fails`.
+    g('service-type-active-the-write-fails', async ({ attempt, db }) => {
       await whileFailing(db, { table: 'service_types', event: 'UPDATE', when: 'true' }, () => attempt('setServiceTypeActive', { serviceTypeId: ID.serviceType, active: false }))
     }, saunaSynced),
     g('service-type-details-who-may', whoMay('setServiceTypeCapacityInfo', capacity, 'manage_pricing')),
@@ -363,23 +363,24 @@ function serviceTypeScenarios(): Scenario[] {
     // W70b: renamed from `tier-price-refused-service-type-has-no-stripe-product`: since W56 (L2) a tier's price doesn't
     // need the type to have a Stripe product, so it is done.
     g('tier-price-on-a-type-with-no-stripe-product', each('updateTierPrice', { tierId: ID.privateTier, price: 120 })),
-    // The old Stripe price is archived, a new one made, then the row written.
+    // The row alone: no Stripe price is made or archived (W56, L2), and the old price's id stays on the row.
     g('tier-price-set', async ({ call }) => {
       await call('updateTierPrice', { tierId: ID.privateTier, price: 120 })
     }, privateSynced, tierPriced),
-    // A tier with no Stripe price yet (a new size group): nothing to archive.
+    // A tier with no price yet (a new size group): the row alone, with no Stripe price (W56, L2).
     g('tier-price-set-for-the-first-time', async ({ call }) => {
       await call('updateTierPrice', { tierId: W48_ID.tierPeak, price: 150.5 })
     }, privateSynced, sql('INSERT INTO service_type_price_tiers (id, service_type_id, band_id, min_people, max_people) VALUES ($1, $2, $3, 1, 10)', [W48_ID.tierPeak, ID.privateType, ID.peakBand])),
     // W66 item 0: `gb2-tier-price-old-stripe-price-archived-then-the-new-one-fails` went: since W56 (L2) a tier's price
     // makes no Stripe price, so its fault never acted and it was tier-price-set's press.
-    // GB2: the row's write fails: the tier keeps its price. W70b: no Stripe price is made (W56, L2), so nothing is left
-    // in Stripe, whatever this scenario's name says.
-    g('gb2-tier-price-made-in-stripe-then-the-write-fails', async ({ attempt, db }) => {
+    // GB2: the row's write fails: the tier keeps its price. No Stripe price is made (W56, L2), so nothing is left in
+    // Stripe. W70c: renamed from `gb2-tier-price-made-in-stripe-then-the-write-fails`.
+    g('gb2-tier-price-the-write-fails', async ({ attempt, db }) => {
       await whileFailing(db, { table: 'service_type_price_tiers', event: 'UPDATE', when: 'true' }, () => attempt('updateTierPrice', { tierId: ID.privateTier, price: 120 }))
     }, privateSynced, tierPriced),
-    // GB2: no key. The same press made again (an answer lost) makes a second Stripe price for the one change.
-    g('gb2-tier-price-pressed-again-makes-a-second-stripe-price', async ({ call }) => {
+    // GB2: the same price set by a second press, under a key of its own: the price stays, and no Stripe price is made (W56,
+    // L2). W70c: renamed from `gb2-tier-price-pressed-again-makes-a-second-stripe-price`, which the old code did.
+    g('gb2-tier-price-pressed-again', async ({ call }) => {
       await call('updateTierPrice', { tierId: ID.privateTier, price: 120 })
       await call('updateTierPrice', { tierId: ID.privateTier, price: 120 })
     }, privateSynced, tierPriced),
@@ -475,7 +476,7 @@ function productScenarios(): Scenario[] {
     ),
     // W66 item 0: `variant-create-refused-by-stripe` went: since W55 (L2) a variant makes no Stripe price, so its fault
     // never acted and it was variant-create-with-no-starting-stock's press.
-    // The Stripe price is made, the variant's insert fails, and the route archives the price again.
+    // The variant's insert fails: nothing is made. No Stripe call (W55, L2).
     g('variant-create-the-insert-fails', async ({ attempt, db }) => {
       await whileFailing(db, { table: 'product_variants', event: 'INSERT', when: 'true' }, () => attempt('createProductVariant', newVariant))
     }, soapSynced),
@@ -486,7 +487,7 @@ function productScenarios(): Scenario[] {
     g('variant-create-with-starting-stock', async ({ call }) => {
       await call('createProductVariant', { ...newVariant, stockQuantity: 10 })
     }, soapSynced),
-    // GB12: Manage pricing is not asked for. A team member without it makes a variant (and its Stripe price).
+    // GB12: Manage pricing is not asked for. A team member without it makes a variant (with no Stripe price: W55, L2).
     g('gb12-a-variant-made-without-manage-pricing', async ({ call }) => {
       await call('createProductVariant', { ...newVariant, stockQuantity: 3 })
     }, soapSynced, noManagePricing),
@@ -572,7 +573,7 @@ function productScenarios(): Scenario[] {
       soapSynced,
       privateSynced
     ),
-    // Base (its old Stripe price archived), then a member and a sale price for the first time, all in one press.
+    // Base, then a member and a sale price for the first time, all in one press. No Stripe call (W55, L2).
     g('price-product-base-member-and-sale', async ({ call }) => {
       await call('updateCatalogItemPrice', { itemType: 'product', itemId: ID.product, basePrice: 14, memberPrice: 11.5, salePrice: 9.99 })
     }, soapSynced),
@@ -686,7 +687,7 @@ function passAndGiftCardScenarios(): Scenario[] {
       await attempt('setGiftCardTypeActive', { giftCardTypeId: W48_ID.unknown, active: true })
     }, giftTypeSynced),
     g('gift-card-preset-active-who-may', whoMay('setGiftCardPresetActive', { presetId: ID.giftCardPreset, active: false }, 'manage_pricing'), giftTypeSynced, presetPriced),
-    // A preset is switched by its Stripe price, not a product.
+    // The row alone is switched: no Stripe call (W56, L2).
     g('gift-card-preset-active-off-and-on', async ({ call, attempt }) => {
       await call('setGiftCardPresetActive', { presetId: ID.giftCardPreset, active: false })
       await call('setGiftCardPresetActive', { presetId: ID.giftCardPreset, active: true })
@@ -715,7 +716,7 @@ function passAndGiftCardScenarios(): Scenario[] {
     g('gift-card-preset-create-with-an-old-stripe-product', async ({ attempt }) => {
       await attempt('createGiftCardPreset', { giftCardTypeId: ID.giftCardType, amount: 25 })
     }, giftTypeSynced),
-    // The Stripe price is made, the row's insert fails, and the route archives the price again.
+    // The row's insert fails: nothing is made. No Stripe call (W56, L2).
     g('gift-card-preset-create-the-insert-fails', async ({ attempt, db }) => {
       await whileFailing(db, { table: 'gift_card_presets', event: 'INSERT', when: 'true' }, () => attempt('createGiftCardPreset', { giftCardTypeId: ID.giftCardType, amount: 25 }))
     }, giftTypeSynced),
@@ -727,13 +728,13 @@ function passAndGiftCardScenarios(): Scenario[] {
       presetPriced
     ),
     g('gift-card-preset-price-on-a-type-with-no-stripe-product', each('updateGiftCardPresetPrice', { presetId: ID.giftCardPreset, amount: 75 })),
-    // The seed's gift card (£40, bought earlier) is untouched: only the preset and its Stripe price change.
+    // The seed's gift card (£40, bought earlier) is untouched: only the preset changes (no Stripe price: W56, L2).
     g('gift-card-preset-price-set', async ({ call }) => {
       await call('updateGiftCardPresetPrice', { presetId: ID.giftCardPreset, amount: 75 })
     }, giftTypeSynced, presetPriced),
-    // GB2, for a preset: its write fails: the preset keeps its amount. W70b: no Stripe price is made or archived (W56, L2),
-    // whatever this scenario's name says.
-    g('gb2-preset-price-made-in-stripe-then-the-write-fails', async ({ attempt, db }) => {
+    // GB2, for a preset: its write fails: the preset keeps its amount. No Stripe price is made or archived (W56, L2).
+    // W70c: renamed from `gb2-preset-price-made-in-stripe-then-the-write-fails`.
+    g('gb2-preset-price-the-write-fails', async ({ attempt, db }) => {
       await whileFailing(db, { table: 'gift_card_presets', event: 'UPDATE', when: 'true' }, () => attempt('updateGiftCardPresetPrice', { presetId: ID.giftCardPreset, amount: 75 }))
     }, giftTypeSynced, presetPriced),
     // W66 item 0: `gb2-preset-price-old-stripe-price-archived-then-the-new-one-fails` went: as the tier's (L2), it was
@@ -823,7 +824,7 @@ function planScenarios(): Scenario[] {
         { ...newPlan, priceYearly: Number.NaN }
       )
     ),
-    // The row (off sale), then the legacy sync-stripe route (a product, a monthly and a yearly price), then toggle-active.
+    // The row (off sale), then Stripe's product and its monthly and yearly prices, then their ids on the row and on sale (W57).
     g('plan-create', async ({ call }) => {
       await call('createMembershipPlan', newPlan)
     }),
@@ -831,14 +832,15 @@ function planScenarios(): Scenario[] {
       // Unlimited: the sessions sent are ignored and saved as 0.
       await call('createMembershipPlan', { name: 'Unlimited', level: 'all_access', sessionsIncluded: 7, addonsIncluded: 2, isUnlimited: true, priceMonthly: 90, priceYearly: null })
     }),
-    // GB20: three steps and no undo. Stripe refuses the product: an off-sale plan row is left, one for each press.
+    // GB20: Stripe refuses the product: an off-sale plan row is left, one for each press.
     g('gb20-plan-create-stripe-step-fails-and-leaves-a-row-each-press', async ({ attempt, stripe }) => {
       stripe.failNext('products.create', { kind: 'error', error: refusedByStripe() })
       await attempt('createMembershipPlan', newPlan)
       stripe.failNext('products.create', { kind: 'error', error: refusedByStripe() })
       await attempt('createMembershipPlan', newPlan)
     }),
-    // GB20: the product and the monthly price are made, the yearly price is refused: Stripe has a product and a price no row names.
+    // GB20: the product and the monthly price are made, the yearly price is refused: both are archived in Stripe (W57), and
+    // the off-sale row names neither.
     g('gb20-plan-create-fails-part-way-through-stripe', async ({ attempt, stripe }) => {
       stripe.failNext('prices.create', { kind: 'none' })
       stripe.failNext('prices.create', { kind: 'error', error: refusedByStripe() })
@@ -879,8 +881,7 @@ function planScenarios(): Scenario[] {
       await call('setMembershipPlanDetails', { ...details, name: ' Core Plus ', level: 'all_access', sessionsIncluded: 6, addonsIncluded: 2 })
       await call('setMembershipPlanDetails', { ...details, isUnlimited: true, sessionsIncluded: 9 })
     }, planSynced),
-    // A plan never synced (no Stripe product): sync-stripe makes the product and prices from the row, then update-price
-    // archives those and makes them again at the new price.
+    // A plan never synced (no Stripe product): the product and both prices are made once, at the new prices (W57).
     g('plan-details-price-change-on-a-plan-never-synced', async ({ call }) => {
       await call('setMembershipPlanDetails', { planId: W48_ID.unsyncedPlan, level: 'core', isUnlimited: false, sessionsIncluded: 2, addonsIncluded: 0, priceMonthly: 30, priceYearly: 300 })
     }, sql("INSERT INTO membership_plans (id, name, level, sessions_included, price_monthly, price_yearly, active) VALUES ($1, 'Off Peak', 'core', 2, '28.00', '280.00', false)", [W48_ID.unsyncedPlan])),
@@ -907,9 +908,10 @@ function planScenarios(): Scenario[] {
       stripe.calls.length = 0
       await call('updateCatalogItemPrice', { itemType: 'membership_plan', itemId: ID.plan, monthlyPrice: 45 })
     }, planSynced, moSubscribed),
-    // GB2: the old monthly price is archived, the new one refused: the plan's row still names the archived price, and
-    // the details the same press carried (the name, the sessions) are not saved either.
-    g('gb2-plan-price-old-stripe-price-archived-then-the-new-one-fails', async ({ attempt, stripe }) => {
+    // GB2: the new monthly price is refused by Stripe: the plan keeps its price and its old Stripe price, which is never
+    // archived first (W57), and the details the same press carried (the name, the sessions) are saved. W70c: renamed from
+    // `gb2-plan-price-old-stripe-price-archived-then-the-new-one-fails`, which the old code did.
+    g('gb2-plan-price-the-new-stripe-price-refused', async ({ attempt, stripe }) => {
       stripe.failNext('prices.create', { kind: 'error', error: refusedByStripe() })
       await attempt('setMembershipPlanDetails', { ...details, name: 'Core Plus', sessionsIncluded: 6, priceMonthly: 45 })
     }, planSynced, moSubscribed),

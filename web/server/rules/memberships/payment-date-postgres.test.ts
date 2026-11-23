@@ -1,13 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import type { Db, Tx } from '@/server/db'
+import { DbTimeoutError, type Db, type SqlParam, type Tx } from '@/server/db'
 import { ApiError } from '@/server/http/errors'
 import { fixtures, insert } from '@/server/rules/testing/database'
 import { deferred, waitingOn } from '@/server/rules/testing/race'
 import { startRealPostgres, type RealPostgres } from '@/server/rules/testing/real-postgres'
 import { FakeStripe } from '@/server/stripe/fake'
 import { cancelMembership, type CancelOptions } from './cancel'
-import { MEMBERSHIP_CANCEL_NEW_WORDS, PAYMENT_DATE_REFUSALS } from './failure-messages'
-import { changePaymentDate, londonDateOfSeconds, paymentDateQuote, type PaymentDateOptions } from './payment-date'
+import { MEMBERSHIP_CANCEL_NEW_WORDS, PAYMENT_DATE_NEW_WORDS, PAYMENT_DATE_REFUSALS } from './failure-messages'
+import { changePaymentDate, finishPaymentDateChange, londonDateOfSeconds, paymentDateQuote, readPaymentDateChange, type PaymentDateOptions } from './payment-date'
 
 // Brief W41 item 9 (F-plan 4.12 item 7; R4's form) on real Postgres 17.6, each press on its own connection: two
 // payment date presses on one membership at the same instant, a press against a cancel, and a cancel against a press.
@@ -246,4 +246,148 @@ describe('a payment date press against a cancel, and a cancel against a press: n
     await one
     expect((await rowsOf(m.membership)).map((row) => row.status)).toEqual(['pending', 'pending'])
   })
+})
+
+// Brief W70c item 4 (W70b "Noticed" 4): P2 (finishPaymentDateChange) is run once more after a deadlock, as a plan price
+// change's D2 is (catalog/plans-postgres.test.ts). By then the card is charged and the date moved in Stripe, so without it
+// the press was held for reconcile.
+describe('W70c: P2 after a deadlock', () => {
+  /** A client that counts its transactions; `refuse` is asked about each that has written P2's order, before its commit. */
+  function counting(db: Db, refuse: () => Error | null = () => null): { db: Db; opened(): number; p2s(): number } {
+    let transactions = 0
+    let p2s = 0
+    const counted = new Proxy(db, {
+      get(inner, property, receiver) {
+        if (property !== 'transaction') return Reflect.get(inner, property, receiver) as unknown
+        return <R>(fn: (tx: Tx) => Promise<R>) => {
+          transactions += 1
+          let wroteOrder = false
+          return inner.transaction(async (tx) => {
+            const watched = new Proxy(tx, {
+              get(own, name, self) {
+                if (name !== 'query') return Reflect.get(own, name, self) as unknown
+                return (sql: string, params?: readonly SqlParam[]) => {
+                  if (sql.trim().startsWith('INSERT INTO orders')) {
+                    wroteOrder = true
+                    p2s += 1
+                  }
+                  return own.query(sql, params)
+                }
+              },
+            })
+            const answer = await fn(watched)
+            const refused = wroteOrder ? refuse() : null
+            if (refused) throw refused
+            return answer
+          })
+        }
+      },
+    })
+    return { db: counted, opened: () => transactions, p2s: () => p2s }
+  }
+  const deadlock = () => new DbTimeoutError('The database took too long to respond.', '40P01: deadlock detected')
+  const orders = async (m: Member) =>
+    (await third.query<{ n: number }>('SELECT count(*)::int AS n FROM orders o JOIN order_line_items l ON l.order_id = o.id WHERE l.membership_plan_id = $1 AND o.customer_id = (SELECT customer_id FROM customer_memberships WHERE id = $2)', [plan, m.membership]))[0]?.n
+  const doneRows = async (m: Member) =>
+    (await third.query<{ n: number }>("SELECT count(*)::int AS n FROM audit_log WHERE action = 'membership.payment_date_changed' AND entity_id = $1 AND details->>'state' = 'done'", [m.membership]))[0]?.n
+  /** The change is done once: one charge, one order with its line, the new date, one `done` row. */
+  async function doneOnce(stripe: FakeStripe, m: Member): Promise<void> {
+    expect(stripe.calls.filter((call) => call.method === 'paymentIntents.create')).toHaveLength(1)
+    expect(await paid(stripe, m.stripeCustomer)).toHaveLength(1)
+    expect((await rowsOf(m.membership)).map((row) => [row.status, row.order_id !== null])).toEqual([['done', true]])
+    expect(await orders(m)).toBe(1)
+    expect(await doneRows(m)).toBe(1)
+    expect((await facts(m.membership))?.renews).toBe(m.newDate)
+  }
+
+  it('a real deadlock (another session holds the plan its order line names, then wants the member): Postgres ends P2, it is run once more and the press is done; charged once', async () => {
+    await pg.admin.unsafe('GRANT SET ON PARAMETER deadlock_timeout TO paddock_worker')
+    const stripe = new FakeStripe({ idTag: 'w70c1' })
+    const m = await member(stripe)
+    const counted = counting(first)
+    const charged = deferred()
+    const planHeld = deferred()
+    const charge = stripe.paymentIntents.create
+    Object.assign(stripe.paymentIntents, {
+      create: async (...args: Parameters<typeof charge>) => {
+        const answer = await charge(...args)
+        charged.resolve()
+        await planHeld.promise
+        return answer
+      },
+    })
+    const pressed = outcome(press(counted.db, stripe, m))
+    await charged.promise
+    await second.transaction(async (tx) => {
+      // This session waits far longer before it looks for a deadlock, so P2 is the one Postgres ends.
+      await tx.query("SET LOCAL deadlock_timeout = '10s'")
+      await tx.query('SELECT id FROM membership_plans WHERE id = $1::uuid FOR UPDATE', [plan])
+      const holder = Number((await tx.query<{ pid: number }>('SELECT pg_backend_pid() AS pid'))[0]?.pid)
+      planHeld.resolve()
+      // P2 holds the member, and waits for the plan to write its order line.
+      await blockedBy(holder)
+      await tx.query('SELECT id FROM customer_memberships WHERE id = $1::uuid FOR UPDATE', [m.membership])
+    })
+    expect(await pressed).toMatchObject({ answered: { newRenewalDate: m.newDate, amountCharged: m.amount } })
+    // P1, P2 ended as the deadlock, and P2 again.
+    expect([counted.opened(), counted.p2s()]).toEqual([3, 2])
+    await doneOnce(stripe, m)
+  })
+
+  it('a second deadlock: the press is held with nothing of P2 written, and finished later with no second charge', async () => {
+    const stripe = new FakeStripe({ idTag: 'w70c2' })
+    const m = await member(stripe)
+    const before = (await facts(m.membership))?.renews
+    const twice = counting(first, deadlock)
+    expect(await outcome(press(twice.db, stripe, m))).toEqual({ refused: 'finalise_failed', message: PAYMENT_DATE_NEW_WORDS.paidNotFinished })
+    expect(twice.p2s()).toBe(2)
+    expect((await rowsOf(m.membership)).map((row) => [row.status, row.order_id])).toEqual([['pending', null]])
+    expect([await orders(m), await doneRows(m), (await facts(m.membership))?.renews]).toEqual([0, 0, before])
+
+    // Finished later (as reconcile does): one deadlock, then done.
+    const change = await heldChange(m)
+    let left = 1
+    const once = counting(first, () => (left-- > 0 ? deadlock() : null))
+    expect(await finishPaymentDateChange(once.db, change, change.paymentIntentId as string, { actor: { type: 'system', id: null }, requestId: crypto.randomUUID() }, 'reconcile')).toMatchObject({ finished: true, already: false })
+    expect([once.opened(), once.p2s()]).toEqual([2, 2])
+    await doneOnce(stripe, m)
+  })
+
+  it('anything but a deadlock is not run again, nor is a deadlock inside a transaction that belongs to the caller', async () => {
+    const stripe = new FakeStripe({ idTag: 'w70c3' })
+    const m = await member(stripe)
+    const cancelled = counting(first, () => new DbTimeoutError('The database took too long to respond.', '57014: canceling statement due to statement timeout'))
+    expect(await outcome(press(cancelled.db, stripe, m))).toMatchObject({ refused: 'finalise_failed' })
+    expect(cancelled.p2s()).toBe(1)
+
+    const change = await heldChange(m)
+    const by = { actor: { type: 'system' as const, id: null }, requestId: crypto.randomUUID() }
+    // Joined to the caller's transaction: the deadlock has ended that one, so there is nothing left to run again in.
+    let joined = 0
+    const own = second.transaction.bind(second)
+    const inCallers = second.transaction(async () => {
+      Object.assign(second, {
+        transaction: () => {
+          joined += 1
+          return Promise.reject(deadlock())
+        },
+      })
+      try {
+        return await finishPaymentDateChange(second, change, change.paymentIntentId as string, by, 'reconcile')
+      } finally {
+        Object.assign(second, { transaction: own })
+      }
+    })
+    await expect(inCallers).rejects.toThrow('took too long')
+    expect(joined).toBe(1)
+    expect((await rowsOf(m.membership)).map((row) => row.status)).toEqual(['pending'])
+  })
+
+  /** The member's pending change, with its record and its payment, as reconcile reads it. */
+  async function heldChange(m: Member): Promise<Parameters<typeof finishPaymentDateChange>[1]> {
+    const id = (await third.query<{ id: string }>("SELECT id FROM membership_payment_date_changes WHERE membership_id = $1 AND status = 'pending'", [m.membership]))[0]?.id as string
+    const change = await readPaymentDateChange(third, id)
+    if (!change?.started || !change.paymentIntentId) throw new Error('The change has no record or no payment.')
+    return { ...change, started: change.started }
+  }
 })

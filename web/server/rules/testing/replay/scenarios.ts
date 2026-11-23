@@ -2238,6 +2238,8 @@ export const scenarios: Scenario[] = [
       call('removeBookingGuest', { guestId: guest.guest?.id, confirmedRefundAmount: 20, refundMethod: 'card' })
     )
   }),
+  // W70c (Q63), a named difference: the £10 of Bea's cash seat that went back as store credit comes off the store credit
+  // part, so the figures of the refused press read £20 and £20 of cash (they read £30 and £10).
   booked('remove-guest-credit-fails-partway-then-retried', publicMostlyStoreCredit, async ({ bookingId, call, db, add }) => {
     const guest = await add(bea, cash(20))
     await call('removeBookingGuest', { guestId: guest.guest?.id })

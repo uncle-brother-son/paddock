@@ -1,5 +1,5 @@
 {
-  "scenario": "w48-gb2-plan-price-old-stripe-price-archived-then-the-new-one-fails",
+  "scenario": "w48-gb2-plan-price-the-new-stripe-price-refused",
   "results": [
     {
       "thrown": "Stripe refused the new price, so the plan's price was not changed (its other details were saved): Stripe refused this change."

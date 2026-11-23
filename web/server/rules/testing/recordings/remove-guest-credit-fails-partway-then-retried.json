@@ -67,12 +67,12 @@
           "parts": {
             "card": 0,
             "giftCard": 0,
-            "storeCredit": 30,
-            "cash": 10
+            "storeCredit": 20,
+            "cash": 20
           },
-          "cashLeft": 10,
-          "paidLine": "Left to refund: £30.00 gift card / store credit and £10.00 cash.",
-          "paidWords": "Paid £30.00 by gift card / store credit and £10.00 in cash."
+          "cashLeft": 20,
+          "paidLine": "Left to refund: £20.00 gift card / store credit and £20.00 cash.",
+          "paidWords": "Paid £20.00 by gift card / store credit and £20.00 in cash."
         }
       }
     },
@@ -256,15 +256,15 @@
                   "left": 40,
                   "parts": {
                     "card": 0,
-                    "cash": 10,
+                    "cash": 20,
                     "giftCard": 0,
-                    "storeCredit": 30
+                    "storeCredit": 20
                   },
                   "status": "confirmed",
                   "cardLeft": 0,
-                  "cashLeft": 10,
-                  "paidLine": "Left to refund: £30.00 gift card / store credit and £10.00 cash.",
-                  "paidWords": "Paid £30.00 by gift card / store credit and £10.00 in cash.",
+                  "cashLeft": 20,
+                  "paidLine": "Left to refund: £20.00 gift card / store credit and £20.00 cash.",
+                  "paidWords": "Paid £20.00 by gift card / store credit and £20.00 in cash.",
                   "pricePaid": 40,
                   "customerId": "10000000-0000-4000-8000-000000000005",
                   "refundOwed": 0

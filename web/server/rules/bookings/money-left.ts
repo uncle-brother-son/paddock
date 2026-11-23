@@ -204,6 +204,14 @@ export interface BookingMoneyLeft {
  * read. `addons_off_order` is what paid add-ons took of the money with no order: a saved-card or reader Add Guest's
  * order holds only its card money, which covers its add-ons first, so what its add-ons cost above that came from the
  * gift card or store credit.
+ *
+ * W70c (Wayne's Q63): and `given`, the seat money that has gone back as store credit, from the Worker's own refund
+ * records (as CASH_SQL reads the cash handed back): the store credit of each finished Part refund, Remove Guest and
+ * cheaper Move (`seats`), and of each Refund the rest (`owed`). Refund the rest can also give what was owed for a removed
+ * add-on, which is not seat money: `addon_lines` is the store credit the removed add-on lines say they got, and `addons`
+ * what Remove add-on itself gave, so the difference is the add-ons' share of `owed`. A cancel's refund isn't read, nor
+ * what came after a cancel: a cancelled booking keeps its price paid, so none of it came off that. Every other figure
+ * here is what was paid; `given` is what loadBookingMoneyLeft takes off it.
  */
 const BOOKING_MONEY_LEFT_SQL = `
 WITH lines AS (
@@ -232,8 +240,21 @@ SELECT b.status, b.customer_id, b.price_paid::text AS price_paid, b.refund_owed_
                        FROM addon_order_lines aol
                        WHERE aol.booking_id = $1::uuid AND aol.redemption_source IS DISTINCT FROM 'membership_credit'
                        GROUP BY aol.order_id) addon
-                 JOIN orders o ON o.id = addon.order_id), 0)::text AS addons_off_order
-FROM bookings b WHERE b.id = $1::uuid`
+                 JOIN orders o ON o.id = addon.order_id), 0)::text AS addons_off_order,
+       given.seats::text AS credit_given_seats, given.owed::text AS credit_given_owed, given.addons::text AS credit_given_addons,
+       COALESCE((SELECT SUM(aol.refunded_amount - aol.card_refunded_amount)
+                 FROM addon_order_lines aol
+                 WHERE aol.booking_id = $1::uuid AND aol.removed_at < COALESCE(b.cancelled_at, 'infinity'::timestamptz)), 0)::text AS credit_on_addon_lines
+FROM bookings b
+CROSS JOIN LATERAL (
+  SELECT COALESCE(SUM((f.details->>'storeCreditRefunded')::numeric) FILTER (WHERE c.details->>'kind' IN ('part_refund', 'remove_guest', 'move')), 0) AS seats,
+         COALESCE(SUM((f.details->>'storeCreditRefunded')::numeric) FILTER (WHERE c.details->>'kind' = 'refund_owed' AND f.at < COALESCE(b.cancelled_at, 'infinity'::timestamptz)), 0) AS owed,
+         COALESCE(SUM((f.details->>'storeCreditRefunded')::numeric) FILTER (WHERE c.details->>'kind' = 'remove_addon'), 0) AS addons
+  FROM audit_log c
+  JOIN audit_log f ON f.action = 'booking.refund_finished' AND f.entity_type = 'booking' AND f.entity_id = c.entity_id AND f.details->>'claimId' = c.id::text
+  WHERE c.action = 'booking.refund_claimed' AND c.entity_type = 'booking' AND c.entity_id = b.id::text
+) given
+WHERE b.id = $1::uuid`
 
 interface MoneyLeftRow {
   status: string
@@ -245,6 +266,10 @@ interface MoneyLeftRow {
   gift_card_no_order: string
   store_credit_no_order: string
   addons_off_order: string
+  credit_given_seats: string
+  credit_given_owed: string
+  credit_given_addons: string
+  credit_on_addon_lines: string
 }
 
 /**
@@ -257,6 +282,12 @@ interface MoneyLeftRow {
  * seat lines. Example (the QA run's): two seats £40 and an add-on £5 on one £45 order, all store credit, and a guest's
  * £20 in cash. Until W70b the £45 counted whole: "£45 store credit and £15 cash", so a Part refund could hand back £15
  * of the £20. Now £40 and £20.
+ *
+ * W70c (Wayne's Q63): seat money given back as store credit comes off the store credit part first, then the gift card's,
+ * so the cash paid stays available to hand back as cash. Examples: that booking with £20 part refunded to store credit
+ * is £20 store credit and £20 cash (it read £40 store credit, no cash); seats £40 in cash and a guest's £20 on store
+ * credit, the guest removed to store credit, is £40 cash (it read £20 and £20). The card's part is as before, and
+ * cashLeftOn still never hands back more cash than was paid in cash (Q26, Q42).
  */
 export async function loadBookingMoneyLeft(db: Queryable, bookingId: string): Promise<BookingMoneyLeft | null> {
   // W58b (W50 "For later" 4): one statement, where it was four reads one after another (and one more per order).
@@ -296,6 +327,13 @@ export async function loadBookingMoneyLeft(db: Queryable, bookingId: string): Pr
     giftCardPaid = round2(giftCardPaid + giftCardOnSeats)
     storeCreditPaid = round2(storeCreditPaid + storeCreditOnSeats)
   }
+
+  // W70c (Q63): less what has gone back as store credit, the store credit first and then the gift card.
+  const addonsShareOfOwed = Math.max(0, round2(amount(booking.credit_on_addon_lines) - amount(booking.credit_given_addons)))
+  const givenBack = round2(amount(booking.credit_given_seats) + Math.max(0, round2(amount(booking.credit_given_owed) - addonsShareOfOwed)))
+  const offStoreCredit = Math.min(givenBack, storeCreditPaid)
+  storeCreditPaid = round2(storeCreditPaid - offStoreCredit)
+  giftCardPaid = Math.max(0, round2(giftCardPaid - round2(givenBack - offStoreCredit)))
 
   const pricePaid = round2(amount(booking.price_paid))
   const refundOwed = round2(amount(booking.refund_owed_amount))

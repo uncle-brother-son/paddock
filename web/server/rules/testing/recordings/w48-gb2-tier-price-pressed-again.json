@@ -1,5 +1,5 @@
 {
-  "scenario": "w48-gb2-tier-price-pressed-again-makes-a-second-stripe-price",
+  "scenario": "w48-gb2-tier-price-pressed-again",
   "results": [
     {
       "success": true,
