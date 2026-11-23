@@ -1,7 +1,10 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "paddock",
-  "compatibility_date": "2024-11-21",
+  // W69: the newest date the workerd in our own tools runs (wrangler 4.157.0's workerd is 2026-11-03), and two weeks
+  // short of 2026-11-17, whose flags change how modules load and how a closed request is seen. Every flag between the
+  // old date (2024-11-21) and this one was gone through first: server/rules/README.md, "Next.js and the runtime date".
+  "compatibility_date": "2026-11-03",
   // W12: the custom worker (custom-worker.ts) wraps OpenNext's generated .open-next/worker.js, unchanged
   // for every request, and adds the scheduled handler that runs reconcile (server/scheduled.ts).
   "main": "custom-worker.ts",
@@ -24,7 +27,10 @@
       "service": "paddock"
     }
   ],
-  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  // W69: `disable_nodejs_process_v2` keeps `process` as it was before 2025-09-15. With the fuller one, Next's own
+  // `unhandledRejection` listener really listens, and logs an error line for each database connection closed (the
+  // Postgres driver's socket, closed after the answer while a read waits; it has always ended so, unlogged).
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public", "disable_nodejs_process_v2"],
   "kv_namespaces": [
     {
       "binding": "NEXT_INC_CACHE_KV",

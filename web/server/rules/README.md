@@ -2961,3 +2961,28 @@ create, on/off, the T2 hook); `catalog/plans-postgres.test.ts` (7 races on real 
   before and after. A Worker revert to before W68 needs the column back first (the file's ROLLBACK). **Never run 028's
   Down after 034** (the hourly job would call the dropped function).
 - **`/api/test`** is deleted (H6), and held by `testing/removed-code.test.ts`.
+
+## Next.js and the runtime date (W69, step H)
+
+- **`middleware.ts` keeps its name (Wayne, 23 Nov 2026).** Next 16 calls the file `proxy.ts`, and prints a deprecation
+  warning on every build. A `proxy.ts` can only run on the Node runtime, and OpenNext 1.20.12 builds that for Cloudflare
+  as "experimental in cloudflare, and not officially maintained by OpenNext maintainers"; Next's own upgrade guide says to
+  keep `middleware` for the Edge runtime. **Rename it when OpenNext supports `proxy.ts` on Cloudflare** (its build then
+  prints no such warning): `git mv`, the export `proxy`, the two file lists that name it (`refunds/claim-writers.test.ts`,
+  `testing/removed-code.test.ts`), `web/CLAUDE.md`, and `lib/supabase/middleware.test.ts`, which holds that there is none.
+- **What it does, held by `lib/supabase/middleware.test.ts`:** it runs on every path but Next's static files, the image
+  route, the favicon and pictures, so on **every API route, the staff API too**. Without a Supabase cookie (the staff app
+  never sends one) it makes no call and sets nothing. With one, it reads the user; an expired session is refreshed once,
+  for the browser and for the page.
+- **`compatibility_date` 2026-11-03** (was 2024-11-21), in `wrangler.jsonc`: the newest date our own `workerd` runs, so the
+  built Worker was run at it locally, one action of each kind, against the old date. The flags in between, one by one, are
+  in the staff app repo's `briefs/W69-report.md`. Not taken: 2026-11-17 (`new_module_registry`, `enable_request_signal`,
+  `pipe_to_backward_propagation`, `cache_option_preserves_cache_control`) and later. Raise it only with a brief: the runtime
+  changes under every route. `server/scheduled.test.ts` pins the date and the flags.
+- **One old behaviour kept by its flag: `disable_nodejs_process_v2`.** postgres.js ends a request's connection by closing
+  the socket while its read waits, and the read's rejection has no listener. It harms nothing and has always happened, but
+  with the fuller `process` (default from 2025-09-15) Next's `unhandledRejection` listener hears it: an error line in the
+  Worker's logs for each connection closed, one or more for every request that used the database. Drop the flag when postgres.js ends its sockets quietly.
+- **`@react-email/ui` carries its own `next` (16.4.1), left as it is (lead call L-H13).** `npm ls next` lists it beside our
+  16.4.5. It is a development dependency only (the email preview tool): nothing of `react-email` is in OpenNext's output or
+  the Worker's bundle. `npm audit` names it; it goes when `@react-email/ui` next moves.

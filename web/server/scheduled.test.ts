@@ -270,6 +270,9 @@ describe('the wiring', () => {
   it("wrangler.jsonc: main is the custom worker, the cron is every 5 minutes, server-only is aliased, Hyperdrive keeps its localConnectionString (W01)", () => {
     const config = read('wrangler.jsonc')
     expect(config).toMatch(/"main": "custom-worker\.ts"/)
+    // W69: a later date turns on flags nobody has gone through (2026-11-17 changes the module registry): raised on purpose only.
+    expect(config).toMatch(/"compatibility_date": "2026-11-03"/)
+    expect(config).toMatch(/"compatibility_flags": \["nodejs_compat", "global_fetch_strictly_public", "disable_nodejs_process_v2"\]/)
     expect(config).toMatch(/"crons": \["\*\/5 \* \* \* \*"\]/)
     expect(config).toMatch(/"server-only": "\.\/node_modules\/next\/dist\/compiled\/server-only\/empty\.js"/)
     expect(config).toMatch(/"localConnectionString": "postgres:\/\/postgres:postgres@127\.0\.0\.1:54322\/postgres"/)
