@@ -38,7 +38,7 @@
 import 'server-only'
 import type Stripe from 'stripe'
 import { audit, type AuditEntry } from '@/server/audit'
-import type { Db, Queryable, Tx } from '@/server/db'
+import { inOpenTransaction, isDeadlock, type Db, type Queryable, type Tx } from '@/server/db'
 import { stripeIdempotencyKey } from '@/server/http/idempotency'
 import { CHECK_AFTER_MINUTES, leaveStepReplacing, membershipHasEnded, newestOf, openSteps, recordStepDone, ENDED_HERE_DETAIL, trySendStep, type LeftStep, type StepBy } from '@/server/rules/memberships/left'
 import { PROCESSING_MINUTES } from '@/server/rules/orders/pending-order'
@@ -567,12 +567,22 @@ export interface Applied {
  * a changed price (each under its membership's lock, step F's machinery), a `membership.price_moved` row for each, a
  * plan step to archive each old price, and the record `done`. Null when the change was closed meanwhile (another D2,
  * or reconcile failed it): nothing is written twice.
+ *
+ * W70b (W70a "Noticed" 1): the members are locked BEFORE the plan's price is written, and the whole is run once more
+ * after a deadlock, as the undo is (orders/undo-order.ts). The plan's price ids are UNIQUE, so writing one takes the
+ * plan's row FOR UPDATE, which a payment date change writing its order line (its foreign key to the plan) waits for,
+ * while it holds the member's row. Written first, the price change then waited for that member: each held what the
+ * other needed, and Postgres ended one. Locked in this order, the price change waits with only the plan's FOR NO KEY
+ * UPDATE, which the foreign key doesn't wait for. The second run starts again from the closed check, with everything
+ * of the first rolled back, and nothing outside the database is called.
  */
 export async function applyPriceChange(db: Db, change: PriceChange, made: Made, by: By): Promise<Applied | null> {
-  return db.transaction(async (tx) => {
+  const opensItsOwn = !inOpenTransaction(db)
+  const work = async (tx: Tx): Promise<Applied | null> => {
     await tx.query(LOCK_PLAN_SQL, [change.planId])
     if ((await tx.query(CHANGE_CLOSED_SQL, [change.planId, change.changeId])).length > 0) return null
     const changed = FREQUENCIES.filter((frequency) => change.prices[frequency] !== undefined)
+    const live = await tx.query<{ id: string; stripe_subscription_id: string; frequency: Frequency }>(LIVE_ON_PLAN_SQL, [change.planId, changed])
     const sets: string[] = []
     const values: unknown[] = []
     for (const frequency of changed) {
@@ -590,7 +600,6 @@ export async function applyPriceChange(db: Db, change: PriceChange, made: Made, 
     const updated = await tx.query(`UPDATE membership_plans SET ${sets.join(', ')}, updated_at = now() WHERE id = $${values.length}::uuid RETURNING id`, values as never[])
     if (updated.length !== 1) throw new Error('The plan was held but its price not written.')
 
-    const live = await tx.query<{ id: string; stripe_subscription_id: string; frequency: Frequency }>(LIVE_ON_PLAN_SQL, [change.planId, changed])
     const open = await openSteps(tx)
     const moveSteps: LeftStep[] = []
     const moved: AuditEntry[] = []
@@ -619,7 +628,13 @@ export async function applyPriceChange(db: Db, change: PriceChange, made: Made, 
       changeEndEntry(by, change, 'done', { productId: made.productId, priceIds: made.priceIds, members: moveSteps.length, stepIds: moveSteps.map((step) => step.id) }),
     ])
     return { moveSteps, archiveSteps }
-  })
+  }
+  try {
+    return await db.transaction(work)
+  } catch (err) {
+    if (!opensItsOwn || !isDeadlock(err)) throw err
+    return db.transaction(work)
+  }
 }
 
 /**

@@ -194,8 +194,16 @@ export interface BookingMoneyLeft {
 /**
  * W58b (W50 "For later" 4): everything loadBookingMoneyLeft works from, in one statement: the booking; its booking
  * lines (BOOKING_LINES_SQL's figures, newest first); each of their orders' card figures (ORDER_PORTION_COLUMNS); and
- * what gift cards and store credit put in, on those orders or on the booking with no order (W05l later 1). The same
- * subqueries as the four reads it replaces, so the same figures. No row when the booking doesn't exist. Fixed text.
+ * what gift cards and store credit put in, on each of those orders, and on the booking with no order (W05l later 1).
+ * No row when the booking doesn't exist. Fixed text.
+ *
+ * W70b (QA1): until then the gift cards and store credit of all its orders were one sum, so what an order's add-ons or
+ * products took was counted as seat money. Each order's is its own now (cardPortionOf's `gift_card_used`, and
+ * `store_credit_net`: its redemptions less any put back), shared over its seat lines by loadBookingMoneyLeft. A row of
+ * the booking's with an order that has no booking line (add-ons bought on their own) paid for no seat, so it isn't
+ * read. `addons_off_order` is what paid add-ons took of the money with no order: a saved-card or reader Add Guest's
+ * order holds only its card money, which covers its add-ons first, so what its add-ons cost above that came from the
+ * gift card or store credit.
  */
 const BOOKING_MONEY_LEFT_SQL = `
 WITH lines AS (
@@ -210,12 +218,21 @@ order_ids AS (SELECT DISTINCT order_id FROM lines)
 SELECT b.status, b.customer_id, b.price_paid::text AS price_paid, b.refund_owed_amount::text AS refund_owed_amount,
        (SELECT json_agg(json_build_object('id', l.id, 'order_id', l.order_id, 'net_remaining', l.net_remaining, 'no_seat_money', l.no_seat_money)
                         ORDER BY l.created_at DESC, l.id DESC) FROM lines l) AS lines,
-       (SELECT json_agg(p) FROM (SELECT o.id AS order_id, ${ORDER_PORTION_COLUMNS} FROM orders o WHERE o.id IN (SELECT order_id FROM order_ids)) p) AS portions,
+       (SELECT json_agg(p) FROM (SELECT o.id AS order_id, ${ORDER_PORTION_COLUMNS},
+                                        COALESCE((SELECT -SUM(sct.amount) FROM store_credit_transactions sct
+                                                  WHERE sct.order_id = o.id AND sct.reason IN ('redemption', 'redemption_reversal')), 0)::text AS store_credit_net
+                                 FROM orders o WHERE o.id IN (SELECT order_id FROM order_ids)) p) AS portions,
        COALESCE((SELECT SUM(gcr.amount_used) FROM gift_card_redemptions gcr
-                 WHERE gcr.order_id IN (SELECT order_id FROM order_ids) OR (gcr.booking_id = $1::uuid AND gcr.order_id IS NULL)), 0)::text AS gift_card,
+                 WHERE gcr.booking_id = $1::uuid AND gcr.order_id IS NULL), 0)::text AS gift_card_no_order,
        GREATEST(COALESCE((SELECT -SUM(sct.amount) FROM store_credit_transactions sct
                           WHERE sct.reason IN ('redemption', 'redemption_reversal')
-                            AND (sct.order_id IN (SELECT order_id FROM order_ids) OR sct.booking_id = $1::uuid)), 0), 0)::text AS store_credit
+                            AND sct.booking_id = $1::uuid AND sct.order_id IS NULL), 0), 0)::text AS store_credit_no_order,
+       COALESCE((SELECT SUM(GREATEST(addon.paid - o.order_total, 0))
+                 FROM (SELECT aol.order_id, SUM(aol.price_at_purchase * aol.quantity) AS paid
+                       FROM addon_order_lines aol
+                       WHERE aol.booking_id = $1::uuid AND aol.redemption_source IS DISTINCT FROM 'membership_credit'
+                       GROUP BY aol.order_id) addon
+                 JOIN orders o ON o.id = addon.order_id), 0)::text AS addons_off_order
 FROM bookings b WHERE b.id = $1::uuid`
 
 interface MoneyLeftRow {
@@ -224,15 +241,22 @@ interface MoneyLeftRow {
   price_paid: string | null
   refund_owed_amount: string
   lines: Array<{ id: string; order_id: string; net_remaining: string; no_seat_money: boolean }> | null
-  portions: Array<OrderPortionRow & { order_id: string }> | null
-  gift_card: string
-  store_credit: string
+  portions: Array<OrderPortionRow & { order_id: string; store_credit_net: string }> | null
+  gift_card_no_order: string
+  store_credit_no_order: string
+  addons_off_order: string
 }
 
 /**
  * What is left on a booking to refund, and where it came from, as loadBookingMoneyLeft worked it out: card money
  * line by line (newest first, each order's card portion used once), then gift card and store credit up to what each
  * put in, the rest as cash. Null when the booking doesn't exist.
+ *
+ * W70b (QA1, QA4): what a gift card and store credit put in is what they paid of this booking's SEAT lines, order by
+ * order, as the card's is: an order's card, then its gift card, then its store credit, each up to what is left of its
+ * seat lines. Example (the QA run's): two seats £40 and an add-on £5 on one £45 order, all store credit, and a guest's
+ * £20 in cash. Until W70b the £45 counted whole: "£45 store credit and £15 cash", so a Part refund could hand back £15
+ * of the £20. Now £40 and £20.
  */
 export async function loadBookingMoneyLeft(db: Queryable, bookingId: string): Promise<BookingMoneyLeft | null> {
   // W58b (W50 "For later" 4): one statement, where it was four reads one after another (and one more per order).
@@ -243,6 +267,8 @@ export async function loadBookingMoneyLeft(db: Queryable, bookingId: string): Pr
 
   // Two lines can share an order, and its card money can only go back once.
   const portionLeft = new Map<string, number>()
+  // W70b: the seat money on each order's lines that its card didn't pay.
+  const seatLeft = new Map<string, number>()
   let cardLeft = 0
   for (const line of lines) {
     let portion = portionLeft.get(line.orderId)
@@ -253,17 +279,31 @@ export async function loadBookingMoneyLeft(db: Queryable, bookingId: string): Pr
     const take = round2(Math.min(portion, line.netRemaining))
     portionLeft.set(line.orderId, round2(portion - Math.max(take, 0)))
     if (take > 0) cardLeft = round2(cardLeft + take)
+    seatLeft.set(line.orderId, round2((seatLeft.get(line.orderId) ?? 0) + line.netRemaining - Math.max(take, 0)))
   }
 
-  const paidOtherWays = { gift_card: booking.gift_card, store_credit: booking.store_credit }
+  // W70b (QA1): with no order behind it (Move, Settle, a card Add Guest), less what that Add Guest's add-ons took of it
+  // (the gift card's first: store credit comes before a gift card, and the seat is paid before the add-ons)...
+  const giftCardNoOrder = round2(amount(booking.gift_card_no_order))
+  const addonsOffOrder = round2(amount(booking.addons_off_order))
+  let giftCardPaid = Math.max(0, round2(giftCardNoOrder - addonsOffOrder))
+  let storeCreditPaid = Math.max(0, round2(amount(booking.store_credit_no_order) - Math.max(0, round2(addonsOffOrder - giftCardNoOrder))))
+  // ...and on each order, what its gift card and then its store credit paid of the seat lines.
+  for (const portion of booking.portions ?? []) {
+    const seat = seatLeft.get(portion.order_id) ?? 0
+    const giftCardOnSeats = Math.min(seat, round2(amount(portion.gift_card_used)))
+    const storeCreditOnSeats = Math.min(round2(seat - giftCardOnSeats), Math.max(0, round2(amount(portion.store_credit_net))))
+    giftCardPaid = round2(giftCardPaid + giftCardOnSeats)
+    storeCreditPaid = round2(storeCreditPaid + storeCreditOnSeats)
+  }
 
   const pricePaid = round2(amount(booking.price_paid))
   const refundOwed = round2(amount(booking.refund_owed_amount))
   const left = Math.max(round2(pricePaid - refundOwed), 0)
   const card = Math.min(cardLeft, left)
   const notCard = round2(left - card)
-  const giftCard = Math.min(notCard, round2(amount(paidOtherWays?.gift_card)))
-  const storeCredit = Math.min(round2(notCard - giftCard), round2(amount(paidOtherWays?.store_credit)))
+  const giftCard = Math.min(notCard, giftCardPaid)
+  const storeCredit = Math.min(round2(notCard - giftCard), storeCreditPaid)
   return {
     status: booking.status,
     customerId: booking.customer_id,

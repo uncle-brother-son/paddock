@@ -3008,3 +3008,19 @@ create, on/off, the T2 hook); `catalog/plans-postgres.test.ts` (7 races on real 
   any order and leave the switch as the test set it (`testing/sweep/switch-held.test.ts`).
 - **Rule tests for rules only a recording, or nothing, held (S1):** a to i, and the decisions W64's table left out because
   the old code and the Worker agreed; the table is in the staff app repo's `briefs/W70a-report.md`.
+
+## The step H QA run's fixes (W70b, step H)
+
+- **Where a booking's money came from (QA1, QA4), `bookings/money-left.ts`:** a gift card and store credit count for what
+  they paid of the booking's SEAT lines, order by order, as the card's does: an order's card first, then its gift card,
+  then its store credit, each up to what is left of its seat lines; what they paid for an add-on or a product is not seat
+  money. Money with no order (Move, Settle, a card or reader Add Guest) counts whole, less what that Add Guest's add-ons
+  cost above its order's card money. The parts still add up to what is left, so Q26's cash is what was paid in cash.
+  Example: seats £40 and an add-on £5 on one £45 order, all store credit, and a guest's £20 in cash: £40 and £20 (it read
+  £45 and £15, and £5 of the cash could not be handed back). Nothing else reads the parts' gift card and store credit. A
+  refund to store credit is still not told apart by where its money came from (Q31: only the card figure is exact).
+  Rule tests: `bookings/w05-rules.test.ts`, "W70b".
+- **A plan price change's D2 and a payment date change never deadlock (W70a noticed 1), `catalog/plan-stripe.ts`:** D2
+  locks the plan, then the live members, and only then writes the plan's new price id (UNIQUE, so it takes the plan's row
+  FOR UPDATE, which an order line naming the plan waits for); and it runs once more after a deadlock, as the undo does.
+  `catalog/plans-postgres.test.ts`, both ways round.

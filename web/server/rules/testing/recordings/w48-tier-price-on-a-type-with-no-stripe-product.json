@@ -1,5 +1,5 @@
 {
-  "scenario": "w48-tier-price-refused-service-type-has-no-stripe-product",
+  "scenario": "w48-tier-price-on-a-type-with-no-stripe-product",
   "results": [
     {
       "success": true,

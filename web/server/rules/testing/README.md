@@ -67,8 +67,9 @@ every other warning still prints. Proof: `quiet-pglite-timer.test.ts`.
 
 - `routes.ts`: step B's read routes by path. `admin-routes.ts`: how a step G test presses a real route (the shared key,
   the signed-in email, a press key, the path's parameters). Importing either needs `@/server/db/connection` mocked.
-- `webhook.ts`: Stripe's webhook on a test database (the Supabase client's `rpc` and `from`, on the test's own
-  Postgres), so a test hands a real event to the real handlers.
+- `webhook.ts`: Stripe's webhook on a test database (the Worker's own store and database functions,
+  `app/api/stripe/webhook/database.ts`, on the test's own Postgres, with each function called recorded), so a test
+  hands a real event to the real handlers.
 - `staff-app-dir.ts`: finds the staff app's checkout (`RETOOL_APP_DIR`, or beside this repo). A missing folder fails
   the suite: skipping would leave a green run that proved nothing.
 

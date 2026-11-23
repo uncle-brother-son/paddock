@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import type { Db, Tx } from '@/server/db'
+import { DbTimeoutError, type Db, type Tx } from '@/server/db'
 import { lockCustomerForCardSteps, followSavedCard } from '@/server/rules/customers/card-steps'
 import { cancelMembership } from '@/server/rules/memberships/cancel'
 import { changePaymentDate, londonDateOfSeconds, paymentDateQuote } from '@/server/rules/memberships/payment-date'
 import { holdingAfter, outcomeOf, pressBy, sessionBlockedBy } from '@/server/rules/testing/admin-race'
 import { fixtures, insert } from '@/server/rules/testing/database'
-import { waitingOn } from '@/server/rules/testing/race'
+import { deferred, waitingOn } from '@/server/rules/testing/race'
 import { startRealPostgres, type RealPostgres } from '@/server/rules/testing/real-postgres'
 import { FakeStripe } from '@/server/stripe/fake'
 import { applyPriceChange, changeStartedEntry, followPlanPrice, makeChangePrices, PLAN_PRICES_FOR_SHARE_SQL, type PlanPrices, type PriceChange } from './plan-stripe'
@@ -18,6 +18,7 @@ import { audit } from '@/server/audit'
 //  - a plan price change's D2 against a member's cancel, a payment date change and a card move: they take turns on
 //    the membership's row, in LOCK_ORDER (the plan, then the membership; the customer, then the membership), with
 //    no deadlock, and each change's own Stripe step is left;
+//  - W70b: D2 against a payment date change writing its order line (which names the plan), both ways round;
 //  - two price presses on one plan at once: the second waits on the plan's row, then is refused while the first is open;
 //  - an order's T2 against D2: T2 waits on the plan's row (FOR SHARE), then reads the new price and leaves its own move;
 //    and (W57a, L6) T2 first: D2 waits on the plan, then finds the new member live and leaves their move;
@@ -141,6 +142,166 @@ describe("a plan price change's D2 takes turns with step F's actions on the same
     expect((await move)?.steps).toHaveLength(1)
     expect(await d2).not.toBeNull()
     expect(await stepKinds(m.membership)).toEqual(['payment_method', 'price'])
+  })
+})
+
+// Brief W70b item 3 (W70a "Noticed" 1): writing a plan's new price id (UNIQUE) takes the plan's row FOR UPDATE, which a
+// payment date change's order line (its foreign key to the plan) waits for while it holds the member. With the plan
+// written before the members were locked, each held what the other needed, and Postgres ended one.
+describe("a plan price change's D2 and a payment date change finishing (its £21.94 taken), on one member: no deadlock, and both finish", () => {
+  /** A client that counts its transactions: a deadlocked D2 would be run a second time. */
+  function counting(db: Db): { db: Db; opened(): number } {
+    let transactions = 0
+    const counted = new Proxy(db, {
+      get(inner, property, receiver) {
+        if (property !== 'transaction') return Reflect.get(inner, property, receiver) as unknown
+        return <R>(fn: (tx: Tx) => Promise<R>) => {
+          transactions += 1
+          return inner.transaction(fn)
+        }
+      },
+    })
+    return { db: counted, opened: () => transactions }
+  }
+  async function dateChangeReady(stripe: FakeStripe) {
+    const m = await member(stripe)
+    const renews = (await first.query<{ d: string }>('SELECT next_renewal_date::text AS d FROM customer_memberships WHERE id = $1', [m.membership]))[0]?.d as string
+    const newDate = (await first.query<{ d: string }>('SELECT ($1::date + 10)::text AS d', [renews]))[0]?.d as string
+    const quote = await paymentDateQuote(first, m.membership, newDate)
+    expect(quote.amount).toBeGreaterThan(0)
+    const press = (db: Db) =>
+      outcomeOf(changePaymentDate(db, m.membership, { newRenewalDate: newDate, confirmed: { amount: quote.amount as number } }, { actor: { type: 'staff', id: staffId, canIssueRefunds: true }, requestId: crypto.randomUUID(), startedAt: Date.now(), stripe: () => stripe }))
+    return { m, newDate, press }
+  }
+  /** Both stand: the date moved on one charge with its order line on the plan; the plan on its new price with the member's move left. */
+  async function bothStand(stripe: FakeStripe, m: { membership: string }, newDate: string, newPrice: string | undefined) {
+    expect(stripe.calls.filter((call) => call.method === 'paymentIntents.create')).toHaveLength(1)
+    expect(await first.query('SELECT status, order_id IS NOT NULL AS has_order FROM membership_payment_date_changes WHERE membership_id = $1', [m.membership])).toEqual([{ status: 'done', has_order: true }])
+    expect((await first.query<{ d: string }>('SELECT next_renewal_date::text AS d FROM customer_memberships WHERE id = $1', [m.membership]))[0]?.d).toBe(newDate)
+    expect(await first.query("SELECT count(*)::int AS n FROM order_line_items WHERE membership_plan_id = $1 AND item_type = 'membership'", [plan])).toEqual([{ n: 1 }])
+    expect(await first.query('SELECT price_monthly::text AS p, stripe_price_id AS id FROM membership_plans WHERE id = $1', [plan])).toEqual([{ p: '45.00', id: newPrice }])
+    expect(await stepKinds(m.membership)).toContain('price')
+  }
+
+  it('the date change first: it holds the member with its order line still to write; D2 waits on the member, holding no lock the line needs; neither is run again', async () => {
+    const stripe = new FakeStripe({ idTag: 'r8' })
+    const { m, newDate, press } = await dateChangeReady(stripe)
+    const { change, made } = await changeMade(stripe)
+    const held = holdingAfter(first, (sql) => sql.startsWith('INSERT INTO orders'))
+    const dateChange = press(held.db)
+    const holder = await held.holding
+    const d2Db = counting(second)
+    const d2 = applyPriceChange(d2Db.db, change, made, by())
+    // Awaited below, after the date change: ended as a deadlock before then, it is still this test's failure.
+    d2.catch(() => undefined)
+    expect(await waitingOn(pg, await sessionBlockedBy(pg, holder))).toEqual(['customer_memberships'])
+    held.release()
+    expect('answered' in (await dateChange)).toBe(true)
+    expect(await d2).not.toBeNull()
+    expect(d2Db.opened()).toBe(1)
+    await bothStand(stripe, m, newDate, made.priceIds.monthly)
+  })
+
+  it('D2 first: it holds the member with the price still to write; the date change waits on the member, then writes its line', async () => {
+    const stripe = new FakeStripe({ idTag: 'r9' })
+    const { m, newDate, press } = await dateChangeReady(stripe)
+    const { change, made } = await changeMade(stripe)
+    // The date change stopped before its finish, by Stripe's charge: D2 takes the member there.
+    const held = holdingAfter(second, (sql) => sql.startsWith('SELECT id::text AS id, stripe_subscription_id'))
+    const charged = deferred()
+    const charge = stripe.paymentIntents.create
+    Object.assign(stripe.paymentIntents, {
+      create: async (...args: Parameters<typeof charge>) => {
+        const answer = await charge(...args)
+        charged.resolve()
+        await held.holding
+        return answer
+      },
+    })
+    const dateChange = press(first)
+    await charged.promise
+    const d2 = applyPriceChange(held.db, change, made, by())
+    const holder = await held.holding
+    expect(await waitingOn(pg, await sessionBlockedBy(pg, holder))).toEqual(['customer_memberships'])
+    held.release()
+    expect(await d2).not.toBeNull()
+    expect('answered' in (await dateChange)).toBe(true)
+    await bothStand(stripe, m, newDate, made.priceIds.monthly)
+  })
+
+  it('a deadlock all the same (another press, in another order): D2 is run once more and done; a second one is thrown, and nothing is written', async () => {
+    const stripe = new FakeStripe({ idTag: 'r10' })
+    const m = await member(stripe)
+    /** A client whose first `times` transactions end as a deadlock does (rolled back, 40P01), after everything in them ran. */
+    const deadlocking = (times: number) => {
+      let left = times
+      return counting(
+        new Proxy(second, {
+          get(inner, property, receiver) {
+            if (property !== 'transaction') return Reflect.get(inner, property, receiver) as unknown
+            return <R>(fn: (tx: Tx) => Promise<R>) =>
+              inner.transaction(async (tx) => {
+                const answer = await fn(tx)
+                if (left > 0) {
+                  left -= 1
+                  throw new DbTimeoutError('The database took too long to respond.', '40P01: deadlock detected')
+                }
+                return answer
+              })
+          },
+        })
+      )
+    }
+    const { change, made } = await changeMade(stripe)
+    const twice = deadlocking(2)
+    await expect(applyPriceChange(twice.db, change, made, by())).rejects.toThrow('took too long')
+    expect(twice.opened()).toBe(2)
+    expect(await first.query('SELECT price_monthly::text AS p FROM membership_plans WHERE id = $1', [plan])).toEqual([{ p: '40.00' }])
+    expect(await stepKinds(m.membership)).toEqual([])
+
+    const once = deadlocking(1)
+    expect((await applyPriceChange(once.db, change, made, by()))?.moveSteps).toHaveLength(1)
+    expect(once.opened()).toBe(2)
+    expect(await first.query('SELECT price_monthly::text AS p FROM membership_plans WHERE id = $1', [plan])).toEqual([{ p: '45.00' }])
+    // Each member moved once, though it ran twice.
+    expect(await stepKinds(m.membership)).toEqual(['price'])
+  })
+
+  it('anything but a deadlock is not run again, nor is a deadlock inside a transaction that belongs to the caller', async () => {
+    const stripe = new FakeStripe({ idTag: 'r11' })
+    await member(stripe)
+    const { change, made } = await changeMade(stripe)
+    let runs = 0
+    const failing = (code: string) =>
+      new Proxy(second, {
+        get(inner, property, receiver) {
+          if (property !== 'transaction') return Reflect.get(inner, property, receiver) as unknown
+          return () => {
+            runs += 1
+            return Promise.reject(new DbTimeoutError('The database took too long to respond.', `${code}: ended`))
+          }
+        },
+      })
+    await expect(applyPriceChange(failing('57014'), change, made, by())).rejects.toThrow('took too long')
+    expect(runs).toBe(1)
+    // Joined to the caller's transaction: the deadlock has ended that one, so there is nothing left to run again in.
+    let joined = 0
+    const d2 = second.transaction(async () => {
+      const own = second.transaction.bind(second)
+      Object.assign(second, {
+        transaction: () => {
+          joined += 1
+          return Promise.reject(new DbTimeoutError('The database took too long to respond.', '40P01: deadlock detected'))
+        },
+      })
+      try {
+        return await applyPriceChange(second, change, made, by())
+      } finally {
+        Object.assign(second, { transaction: own })
+      }
+    })
+    await expect(d2).rejects.toThrow('took too long')
+    expect(joined).toBe(1)
   })
 })
 

@@ -5503,13 +5503,92 @@ describe('staff app helpers', () => {
       // W47 item 9, named differences: the same read is made for a cancelled booking too (for why it lapsed), so the
       // payment line is set only for the booking it is shown on, and the effect follows both conditions.
       expect(detail).toContain('setPaidWords(showsPaidWords && figures && figures.left > 0 && figures.paidWords ? figures.paidWords : null)')
-      expect(detail).toContain('}, [data, bookingId, showsPaidWords, mayHaveLapsed])')
+      // W70b (QA4), a named difference: and the price paid, so a new price reads them again.
+      expect(detail).toContain('}, [data, bookingId, showsPaidWords, mayHaveLapsed, booking.price_paid])')
       expect(detail).toMatch(/\{paidWords\s+\? `\$\{paidWords\} Card money goes back to the card, the rest to store credit\.`\s+: 'Paid — eligible for refund: card money goes back to the card, the rest to store credit\.'\}/)
       const types = readFileSync(path.join(appDir, 'frontend/types/paddock.ts'), 'utf8')
       expect(types).toContain('paidWords?: string')
       const contracts = readFileSync(path.join(shared, 'workerContracts.ts'), 'utf8')
       // W46: for a lapsed booking the route's answer also carries `lapse` (why it lapsed), after the words.
       expect(contracts).toMatch(/export type BookingRefundFiguresRouteOutput = \{[^\n]*paidLine: string; paidWords: string; lapse\?: \{[^\n]*words: string; \} \| undefined; \}/)
+    })
+  })
+
+  // Brief W70b (the step H QA run): what the booking window shows after a press.
+  describe('W70b: the booking window after a Move, a refund and a cancel', () => {
+    const component = (name: string) => readFileSync(path.join(appDir, 'frontend/components', name), 'utf8')
+    const page = (name: string) => readFileSync(path.join(appDir, 'frontend/pages', name), 'utf8')
+    /** The body of a function declared in a component, to the next declaration at its own indent. */
+    const body = (source: string, name: string) => {
+      const from = source.indexOf(`  function ${name}(`)
+      expect(from, name).toBeGreaterThan(-1)
+      return source.slice(from, source.indexOf('\n  }\n', from))
+    }
+
+    it('QA2: the window stays open after a Move and shows the new date and time, from the booking read again, in each of the four places it opens', () => {
+      // The header is the booking row it is given, nothing kept from before.
+      expect(component('BookingDetailDialog.tsx')).toContain('{formatSessionDate(booking.start_time)} · {formatSessionTime(booking.start_time)}–{formatSessionTime(booking.end_time)} ·')
+
+      // The Bookings page: the list is never the hook's cached copy; the open booking is read on its own too, and shown
+      // when the list no longer holds it (moved to another day) or holds an older one.
+      const bookings = page('BookingsPage.tsx')
+      expect(body(bookings, 'runCalendarQuery')).toMatch(/trigger\(\{[^]*?\}, \{ skipCache: true \}\)\.result\.then\(\(result: BookingListRow\[\]\)/)
+      expect(body(bookings, 'handleMoved')).toMatch(/\n    refetchAfterMutation\(\)$/)
+      const refetch = body(bookings, 'refetchAfterMutation')
+      for (const step of ['setDetailRefreshToken((t) => t + 1)', 'runCalendarQuery(granularity, referenceDate)', 'readOpenBooking(known)']) expect(refetch, step).toContain(step)
+      const read = body(bookings, 'readOpenBooking')
+      expect(read).toContain('const shown = shownBooking.current')
+      expect(read).toContain('setOpenBookingRow({ ...shown, ...known })')
+      expect(read).toContain('loadBookingById({ bookingId: shown.id }, { skipCache: true })')
+      expect(read).toContain('if (openBookingRequest.current === requestId && row) setOpenBookingRow(row)')
+      expect(bookings).toContain('const readBooking = openBookingRow && openBookingRow.id === selectedBookingId ? openBookingRow : null')
+      expect(bookings).toContain('const selectedBooking = listedBooking && readBooking ? (readBooking.updated_at > listedBooking.updated_at ? readBooking : listedBooking) : (listedBooking ?? readBooking)')
+      expect(bookings).toContain('shownBooking.current = selectedBooking')
+      expect(bookings).toMatch(/<BookingDetailDialog\s+booking=\{selectedBooking\}[^]*?if \(!open\) closeBooking\(\)[^]*?onMoved=\{handleMoved\}/)
+      const close = body(bookings, 'closeBooking')
+      for (const step of ['openBookingRequest.current += 1', 'setSelectedBookingId(null)', 'setOpenBookingRow(null)']) expect(close, step).toContain(step)
+
+      // Overview: the row is read again by id, and never taken away first (the window then said "Booking not found").
+      const overview = page('OverviewPage.tsx')
+      expect(body(overview, 'handleMoved')).toMatch(/\{\n    refreshDetailAndLists\(\)$/)
+      expect(body(overview, 'refreshDetailAndLists')).toContain('setDetailRefreshToken((t) => t + 1)')
+      expect(overview).toContain('}, [selectedBookingId, detailRefreshToken])')
+      expect(overview).toContain('onMoved={handleMoved}')
+
+      // A customer's Booking History, and Money still to refund.
+      expect(component('BookingByIdDialog.tsx')).toContain('onMoved={refresh}')
+      const owed = component('MoneyOwedSection.tsx')
+      expect(owed).toContain('onMoved={changed}')
+      expect(body(owed, 'changed')).toContain('setDetailToken((token) => token + 1)')
+      expect(owed).toContain('}, [bookingId, detailToken])')
+      // The window's own Move button tells whichever place opened it.
+      expect(component('BookingDetailContent.tsx')).toContain('onMoved={() => onMoved?.(booking.id)}')
+    })
+
+    it('QA3: a cancelled booking lists a refunded add-on as Removed with nothing to press; until the detail has been read since the cancel, no add-on on it shows Remove', () => {
+      const detail = component('BookingDetailContent.tsx')
+      // The status the detail was asked for, taken with each read; a status that changes reads it again.
+      expect(detail).toMatch(/askedStatus\.current = booking\.status\s+trigger\(\{ bookingId \}, \{ skipCache: true \}\)\s+\}, \[bookingId, refreshToken, booking\.status\]\)/)
+      expect(detail).toMatch(/setDetail\(data\)\s+setDetailStatus\(askedStatus\.current\)\s+\}, \[data\]\)/)
+      expect(detail).toContain("const readBeforeCancel = isCancelled && detailStatus !== 'cancelled'")
+      // A removed line is a row of words: no Remove, no Mark Prepared, whatever the booking's status.
+      const lines = detail.slice(detail.indexOf('{detail.addonLines.map((line) =>'))
+      const removed = lines.slice(lines.indexOf('line.removed_at ? ('), lines.indexOf(') : ('))
+      expect(removed).toContain('{removedAddonText(line)}')
+      expect(removed).not.toMatch(/RemoveBookingAddonDialog|Button|handleTogglePrepared/)
+      // The other rows: Remove only before the session, and never from a detail read before the cancel; prepared only on a live booking.
+      const live = lines.slice(lines.indexOf(') : ('))
+      expect(live).toMatch(/\{sessionStarted \|\| readBeforeCancel \? null : \(\s*(\/\/[^\n]*\n\s*)+<RemoveBookingAddonDialog/)
+      expect(detail.split('<RemoveBookingAddonDialog')).toHaveLength(2)
+      expect(live).toMatch(/\{isCancelled \? \(\s*\/\/[^\n]*\n\s*line\.prepared \? <Badge/)
+    })
+
+    it('QA4: the paid line is shown only beside the price it was worked out from, and a removed guest reads the booking again', () => {
+      const detail = component('BookingDetailContent.tsx')
+      expect(detail).toContain('const paidWords = paidWordsFor !== null && Math.abs(paidWordsFor - Number.parseFloat(booking.price_paid)) < 0.005 ? paidWordsRead : null')
+      expect(detail).toContain('setPaidWordsFor(figures?.pricePaid ?? null)')
+      expect(detail).toMatch(/setPaidWords\(null\)\s+setPaidWordsFor\(null\)/)
+      expect(body(detail, 'handleGuestRemoved')).toMatch(/trigger\(\{ bookingId \}, \{ skipCache: true \}\)\s+onBookingsChanged\?\.\(\)/)
     })
   })
 

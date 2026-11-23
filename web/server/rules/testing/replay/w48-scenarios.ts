@@ -299,7 +299,8 @@ function serviceTypeScenarios(): Scenario[] {
     g('service-type-active-with-an-old-stripe-product', async ({ attempt }) => {
       await attempt('setServiceTypeActive', { serviceTypeId: ID.serviceType, active: false })
     }, saunaSynced),
-    // Stripe's product is switched first, then the row. The row's write failing leaves Stripe off and the row on.
+    // The row's write fails: nothing is switched. W70b: no Stripe call is made (W55, L2), so the type's old Stripe product
+    // is not touched either, whatever this scenario's name says.
     g('service-type-active-stripe-went-then-the-write-fails', async ({ attempt, db }) => {
       await whileFailing(db, { table: 'service_types', event: 'UPDATE', when: 'true' }, () => attempt('setServiceTypeActive', { serviceTypeId: ID.serviceType, active: false }))
     }, saunaSynced),
@@ -359,7 +360,9 @@ function serviceTypeScenarios(): Scenario[] {
       privateSynced,
       tierPriced
     ),
-    g('tier-price-refused-service-type-has-no-stripe-product', each('updateTierPrice', { tierId: ID.privateTier, price: 120 })),
+    // W70b: renamed from `tier-price-refused-service-type-has-no-stripe-product`: since W56 (L2) a tier's price doesn't
+    // need the type to have a Stripe product, so it is done.
+    g('tier-price-on-a-type-with-no-stripe-product', each('updateTierPrice', { tierId: ID.privateTier, price: 120 })),
     // The old Stripe price is archived, a new one made, then the row written.
     g('tier-price-set', async ({ call }) => {
       await call('updateTierPrice', { tierId: ID.privateTier, price: 120 })
@@ -370,7 +373,8 @@ function serviceTypeScenarios(): Scenario[] {
     }, privateSynced, sql('INSERT INTO service_type_price_tiers (id, service_type_id, band_id, min_people, max_people) VALUES ($1, $2, $3, 1, 10)', [W48_ID.tierPeak, ID.privateType, ID.peakBand])),
     // W66 item 0: `gb2-tier-price-old-stripe-price-archived-then-the-new-one-fails` went: since W56 (L2) a tier's price
     // makes no Stripe price, so its fault never acted and it was tier-price-set's press.
-    // GB2: the new price is made in Stripe, then the row's write fails: Stripe has a live price nothing points at.
+    // GB2: the row's write fails: the tier keeps its price. W70b: no Stripe price is made (W56, L2), so nothing is left
+    // in Stripe, whatever this scenario's name says.
     g('gb2-tier-price-made-in-stripe-then-the-write-fails', async ({ attempt, db }) => {
       await whileFailing(db, { table: 'service_type_price_tiers', event: 'UPDATE', when: 'true' }, () => attempt('updateTierPrice', { tierId: ID.privateTier, price: 120 }))
     }, privateSynced, tierPriced),
@@ -727,7 +731,8 @@ function passAndGiftCardScenarios(): Scenario[] {
     g('gift-card-preset-price-set', async ({ call }) => {
       await call('updateGiftCardPresetPrice', { presetId: ID.giftCardPreset, amount: 75 })
     }, giftTypeSynced, presetPriced),
-    // GB2, for a preset: the new Stripe price is made, then the preset's write fails: the preset keeps its archived price.
+    // GB2, for a preset: its write fails: the preset keeps its amount. W70b: no Stripe price is made or archived (W56, L2),
+    // whatever this scenario's name says.
     g('gb2-preset-price-made-in-stripe-then-the-write-fails', async ({ attempt, db }) => {
       await whileFailing(db, { table: 'gift_card_presets', event: 'UPDATE', when: 'true' }, () => attempt('updateGiftCardPresetPrice', { presetId: ID.giftCardPreset, amount: 75 }))
     }, giftTypeSynced, presetPriced),
