@@ -30,9 +30,12 @@ export const Curve: Story = {
         <path d="M 0 100 L 100 0" fill="none" stroke="currentColor" strokeWidth="0.5" strokeDasharray="2 2" opacity="0.4" />
         <path d={`M 0 100 C ${x1 * 100} ${100 - y1 * 100}, ${x2 * 100} ${100 - y2 * 100}, 100 0`} fill="none" stroke="currentColor" strokeWidth="1.5" />
       </svg>
-      <figcaption className="text-copy-12">
+      {/* The text styles are trimmed to their capitals (W71a), so two lines stacked need a gap of their own. */}
+      <figcaption className="flex flex-col gap-6">
         <span className="block text-bold-14">ease-smooth</span>
-        Motion: {EASE_SMOOTH_CSS} · CSS --ease-smooth: <VariableValue name="--ease-smooth" />
+        <span className="block text-copy-12">
+          Motion: {EASE_SMOOTH_CSS} · CSS --ease-smooth: <VariableValue name="--ease-smooth" />
+        </span>
       </figcaption>
     </figure>
   ),

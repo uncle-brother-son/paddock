@@ -40,9 +40,12 @@ export const Corners: Story = {
       {corners.map((name) => (
         <li key={name} className="flex flex-col gap-8">
           <span aria-hidden="true" className="block size-80 bg-surface-secondary" style={{ borderRadius: `var(${radiusVariable(name)})` }} />
-          <span className="text-copy-12">
+          {/* The text styles are trimmed to their capitals (W71a), so two lines stacked need a gap of their own. */}
+          <span className="flex flex-col gap-6">
             <span className="block text-bold-14">{name}</span>
-            {radiusVariable(name)} · <VariableValue name={radiusVariable(name)} />
+            <span className="block text-copy-12">
+              {radiusVariable(name)} · <VariableValue name={radiusVariable(name)} />
+            </span>
           </span>
         </li>
       ))}

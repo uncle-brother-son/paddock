@@ -280,6 +280,11 @@ body {
  * Text styles, one utility per Figma text style, each with that style's family, weight, size, line height, letter
  * spacing and case (and the underline, for the two Link styles). Figma's "auto" line height is the font's own:
  * `normal`. Colour is not part of a text style.
+ *
+ * Vertical trim (Figma "Vertical trim: Cap height to baseline"): every style but H3 has it. `text-box` takes off
+ * the space above the capitals of the first line and below the baseline of the last, so a one-line box is as tall
+ * as a capital letter, and descenders hang below it, as in Figma. Lines in between keep the style's line height. A
+ * browser without `text-box` shows the untrimmed box; there is no fallback.
  */
 @utility text-hero-caps {
   font-family: var(--font-primary);
@@ -288,6 +293,7 @@ body {
   line-height: normal;
   letter-spacing: var(--tracking-headers);
   text-transform: uppercase;
+  text-box: trim-both cap alphabetic;
 }
 
 @utility text-h1 {
@@ -297,6 +303,7 @@ body {
   line-height: normal;
   letter-spacing: var(--tracking-headers);
   text-transform: none;
+  text-box: trim-both cap alphabetic;
 }
 
 @utility text-h2 {
@@ -306,6 +313,7 @@ body {
   line-height: normal;
   letter-spacing: 0;
   text-transform: none;
+  text-box: trim-both cap alphabetic;
 }
 
 @utility text-h3 {
@@ -324,6 +332,7 @@ body {
   line-height: 1.4;
   letter-spacing: 0;
   text-transform: none;
+  text-box: trim-both cap alphabetic;
 }
 
 @utility text-copy-14 {
@@ -333,6 +342,7 @@ body {
   line-height: 1.4;
   letter-spacing: 0;
   text-transform: none;
+  text-box: trim-both cap alphabetic;
 }
 
 @utility text-copy-12 {
@@ -342,6 +352,7 @@ body {
   line-height: 1.4;
   letter-spacing: 0;
   text-transform: none;
+  text-box: trim-both cap alphabetic;
 }
 
 @utility text-bold-14 {
@@ -351,6 +362,7 @@ body {
   line-height: 1.4;
   letter-spacing: 0;
   text-transform: none;
+  text-box: trim-both cap alphabetic;
 }
 
 @utility text-link-14 {
@@ -361,6 +373,7 @@ body {
   letter-spacing: 0;
   text-transform: none;
   text-decoration-line: underline;
+  text-box: trim-both cap alphabetic;
 }
 
 @utility text-link-12 {
@@ -371,6 +384,7 @@ body {
   letter-spacing: 0;
   text-transform: none;
   text-decoration-line: underline;
+  text-box: trim-both cap alphabetic;
 }
 
 @utility text-label-12 {
@@ -380,6 +394,7 @@ body {
   line-height: normal;
   letter-spacing: var(--tracking-label);
   text-transform: uppercase;
+  text-box: trim-both cap alphabetic;
 }
 
 @utility text-label-10 {
@@ -389,6 +404,7 @@ body {
   line-height: normal;
   letter-spacing: var(--tracking-label);
   text-transform: uppercase;
+  text-box: trim-both cap alphabetic;
 }
 
 /*

@@ -1,30 +1,43 @@
 import { Meta, Story } from '@storybook/addon-docs/blocks'
 
+import * as OverlayStories from '../layout/GridOverlay.stories'
 import * as GridStories from './Grid.stories'
 
 <Meta of={GridStories} />
 
 # Grid
 
-Every module sits on the same grid, Figma's "Spacing/Grid": the Mobile grid below 768px wide and the Desktop grid
-from 768px. The columns stretch with the window; at the two frame widths they are exactly Figma's.
+This is the real grid, drawn from one edge of this window to the other. Resize the window and it follows: the
+number of columns and the measured column width are printed above it.
+
+<Story of={GridStories.FullWidth} />
+
+Every module sits on this grid, Figma's "Spacing/Grid": the Mobile grid below 768px wide and the Desktop grid from
+768px. The columns stretch with the window; at the two frame widths they are exactly Figma's.
 
 `<Grid>` (`components/layout/Grid.tsx`) is the grid. What sits inside places itself with Tailwind's column
 utilities: `col-span-6 md:col-span-12` (the whole width on a phone, half on a desktop), `md:col-start-13` (start at
 the thirteenth column).
 
-Each frame below is drawn at its real width, so on a narrower window it scrolls sideways.
+## Figma frame check (1440 / 390)
 
-## Desktop frame
+Each frame is drawn at its real width whatever the window's width, so on a narrower window it scrolls sideways. The
+column in each caption is measured, and must be Figma's: 51px at 1440, 53px at 390.
 
 <Story of={GridStories.DesktopFrame} />
 
-## Mobile frame
-
 <Story of={GridStories.MobileFrame} />
 
-## Placing modules
+## How a module places itself
 
 This one follows the window: narrow it past 768px and the grid changes.
 
 <Story of={GridStories.Live} />
+
+## The grid over a page
+
+On a test copy of the site (never on the live domain) **Ctrl + G** draws these columns over the page, and Ctrl + G
+again takes them away. On a phone, add `?grid=1` to the address (`?grid=0` switches it off). The tab remembers it.
+It takes no clicks and screen readers don't hear it.
+
+<Story of={OverlayStories.OverSamplePage} inline={false} height="560px" />

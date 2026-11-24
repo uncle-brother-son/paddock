@@ -117,9 +117,14 @@ describe('type: sizes, weights, letter spacing and the twelve text styles are Fi
     expect(`${theme['--tracking-label']} letter spacing`).toBe(measurements['Font/Leading/Label'])
   })
 
-  it.each(tokens.textStyles)('$name has Figma\'s family, weight, size, line height, letter spacing, case and underline', (style) => {
-    const figma = style as { name: string; family: string; weight: number; size: string; lineHeight: string; letterSpacing?: string; case?: string; decoration?: string }
+  it.each(tokens.textStyles)('$name has Figma\'s family, weight, size, line height, letter spacing, case, underline and vertical trim', (style) => {
+    const figma = style as { name: string; family: string; weight: number; size: string; lineHeight: string; letterSpacing?: string; case?: string; decoration?: string; verticalTrim: string }
     const declared = ruleNamed(css, `@utility ${textStyleClass(figma.name)}`).declarations
+    // W71a, item 1. Figma's "Vertical trim: Cap height to baseline" is `text-box: trim-both cap alphabetic`; a style
+    // without it has no text-box at all.
+    expect(['cap-height', 'none'], `${figma.name}'s verticalTrim in figma-tokens.json`).toContain(figma.verticalTrim)
+    const trimmed = figma.verticalTrim === 'cap-height'
+    expect(declared['text-box'], `${figma.name}: vertical trim ${figma.verticalTrim}`).toBe(trimmed ? 'trim-both cap alphabetic' : undefined)
 
     expect(declared['font-family']).toBe(figma.family === 'Primary' ? 'var(--font-primary)' : 'var(--font-secondary)')
     expect(Number(resolveValue(declared['font-weight']!, theme))).toBe(figma.weight)
@@ -130,8 +135,27 @@ describe('type: sizes, weights, letter spacing and the twelve text styles are Fi
     expect(declared['text-transform']).toBe(figma.case ?? 'none')
     expect(declared['text-decoration-line']).toBe(figma.decoration)
     expect(Object.keys(declared).sort()).toEqual(
-      ['font-family', 'font-size', 'font-weight', 'letter-spacing', 'line-height', 'text-transform', ...(figma.decoration ? ['text-decoration-line'] : [])].sort(),
+      [
+        'font-family',
+        'font-size',
+        'font-weight',
+        'letter-spacing',
+        'line-height',
+        'text-transform',
+        ...(figma.decoration ? ['text-decoration-line'] : []),
+        ...(trimmed ? ['text-box'] : []),
+      ].sort(),
     )
+  })
+
+  it('every text style has the vertical trim but H3, and nothing else in the stylesheet trims a text box (W71a, item 1)', () => {
+    // The lead's read of Figma, 24 Nov 2026: "Vertical trim: Cap height to baseline" on every text style except H3.
+    const untrimmed = tokens.textStyles.filter((style) => style.verticalTrim !== 'cap-height').map((style) => style.name)
+    expect(untrimmed).toEqual(['H3'])
+    expect(tokens.textStyles.find((style) => style.name === 'H3')?.verticalTrim).toBe('none')
+    // A rule outside the text styles (say `h3 { text-box-trim: ... }`) would trim a style the JSON says is untrimmed.
+    const source = readFileSync(path.join(WEB, 'app/globals.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    expect(source.match(/text-box[\w-]*\s*:/g)).toHaveLength(tokens.textStyles.length - untrimmed.length)
   })
 
   it('there is one utility per Figma text style and no other', () => {

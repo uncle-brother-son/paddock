@@ -52,20 +52,21 @@
     "Spacing/Grid/Column":  {"Desktop": 51,   "Mobile": 53}
   },
   "textStyles": [
-    {"name": "Hero Caps", "family": "Primary",   "weight": 400, "size": "Font/Size/24", "lineHeight": "auto", "letterSpacing": "0.6px", "case": "uppercase"},
-    {"name": "H1",        "family": "Primary",   "weight": 400, "size": "Font/Size/28", "lineHeight": "auto", "letterSpacing": "0.6px"},
-    {"name": "H2",        "family": "Primary",   "weight": 400, "size": "Font/Size/24", "lineHeight": "auto", "letterSpacing": "0"},
-    {"name": "H3",        "family": "Secondary", "weight": 400, "size": "Font/Size/18", "lineHeight": "auto", "letterSpacing": "0"},
-    {"name": "Copy 16",   "family": "Secondary", "weight": 400, "size": "Font/Size/16", "lineHeight": "140%"},
-    {"name": "Copy 14",   "family": "Secondary", "weight": 400, "size": "Font/Size/14", "lineHeight": "140%"},
-    {"name": "Copy 12",   "family": "Secondary", "weight": 400, "size": "Font/Size/12", "lineHeight": "140%"},
-    {"name": "Bold 14",   "family": "Secondary", "weight": 500, "size": "Font/Size/14", "lineHeight": "140%"},
-    {"name": "Link 14",   "family": "Secondary", "weight": 400, "size": "Font/Size/14", "lineHeight": "140%", "decoration": "underline"},
-    {"name": "Link 12",   "family": "Secondary", "weight": 400, "size": "Font/Size/12", "lineHeight": "140%", "decoration": "underline"},
-    {"name": "Label 12",  "family": "Secondary", "weight": 500, "size": "Font/Size/12", "lineHeight": "auto", "letterSpacing": "0.3px", "case": "uppercase"},
-    {"name": "Label 10",  "family": "Secondary", "weight": 500, "size": "Font/Size/10", "lineHeight": "auto", "letterSpacing": "0.3px", "case": "uppercase"}
+    {"name": "Hero Caps", "family": "Primary",   "weight": 400, "size": "Font/Size/24", "lineHeight": "auto", "letterSpacing": "0.6px", "case": "uppercase", "verticalTrim": "cap-height"},
+    {"name": "H1",        "family": "Primary",   "weight": 400, "size": "Font/Size/28", "lineHeight": "auto", "letterSpacing": "0.6px", "verticalTrim": "cap-height"},
+    {"name": "H2",        "family": "Primary",   "weight": 400, "size": "Font/Size/24", "lineHeight": "auto", "letterSpacing": "0", "verticalTrim": "cap-height"},
+    {"name": "H3",        "family": "Secondary", "weight": 400, "size": "Font/Size/18", "lineHeight": "auto", "letterSpacing": "0", "verticalTrim": "none"},
+    {"name": "Copy 16",   "family": "Secondary", "weight": 400, "size": "Font/Size/16", "lineHeight": "140%", "verticalTrim": "cap-height"},
+    {"name": "Copy 14",   "family": "Secondary", "weight": 400, "size": "Font/Size/14", "lineHeight": "140%", "verticalTrim": "cap-height"},
+    {"name": "Copy 12",   "family": "Secondary", "weight": 400, "size": "Font/Size/12", "lineHeight": "140%", "verticalTrim": "cap-height"},
+    {"name": "Bold 14",   "family": "Secondary", "weight": 500, "size": "Font/Size/14", "lineHeight": "140%", "verticalTrim": "cap-height"},
+    {"name": "Link 14",   "family": "Secondary", "weight": 400, "size": "Font/Size/14", "lineHeight": "140%", "decoration": "underline", "verticalTrim": "cap-height"},
+    {"name": "Link 12",   "family": "Secondary", "weight": 400, "size": "Font/Size/12", "lineHeight": "140%", "decoration": "underline", "verticalTrim": "cap-height"},
+    {"name": "Label 12",  "family": "Secondary", "weight": 500, "size": "Font/Size/12", "lineHeight": "auto", "letterSpacing": "0.3px", "case": "uppercase", "verticalTrim": "cap-height"},
+    {"name": "Label 10",  "family": "Secondary", "weight": 500, "size": "Font/Size/10", "lineHeight": "auto", "letterSpacing": "0.3px", "case": "uppercase", "verticalTrim": "cap-height"}
   ],
   "lineHeightNote": "Figma 'auto' line height = the font's own line height. In CSS use 'normal' with the self-hosted GT fonts, then compare against Figma in Storybook; report any visible difference for Wayne rather than picking a number.",
+  "verticalTrimNote": "Figma 'Vertical trim: Cap height to baseline' (read by the lead, 24 Nov 2026): every text style has it except H3. In CSS: text-box: trim-both cap alphabetic. A one-line box is as tall as a capital letter; lines in between keep the line height.",
   "fonts": {
     "GT America Standard Regular": "web/public/fonts/GT-America-Standard-Regular.woff2 (400)",
     "GT America Standard Medium": "web/public/fonts/GT-America-Standard-Medium.woff2 (500)",

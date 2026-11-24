@@ -17,7 +17,8 @@ function Swatch({ figmaName, variable, pointsTo }: { figmaName: string; variable
   return (
     <li className="flex items-center gap-12">
       <span aria-hidden="true" className="block size-40 shrink-0 rounded-s border border-object-dark-shade" style={{ backgroundColor: `var(${variable})` }} />
-      <span className="min-w-0">
+      {/* The text styles are trimmed to their capitals (W71a), so two lines stacked need a gap of their own. */}
+      <span className="flex min-w-0 flex-col gap-6">
         <span className="block text-bold-14">{figmaName}</span>
         <span className="block text-copy-12">
           {variable}

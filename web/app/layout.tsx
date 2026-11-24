@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 
+import { GridOverlay } from "@/components/layout/GridOverlay";
 import { MotionProviders } from "@/components/providers/MotionProviders";
 import { SITE_NAME, SITE_URL } from "@/lib/site";
 
@@ -33,6 +34,8 @@ export default function RootLayout({
           <html> and <body> to `height: auto` while it runs, which would undo a height passed down from <html>. */}
       <body className="flex min-h-dvh flex-col">
         <MotionProviders>{children}</MotionProviders>
+        {/* Test copies only: Ctrl + G draws the grid over the page. On the live domain it renders and loads nothing. */}
+        <GridOverlay />
       </body>
     </html>
   );

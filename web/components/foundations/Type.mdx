@@ -9,7 +9,13 @@ import * as TypeStories from './Type.stories'
 One utility class per Figma text style, each carrying that style's family, weight, size, line height, letter
 spacing and case (and the underline, for the two Link styles). Colour is not part of a text style.
 
-Under each line: the Figma name, the class, the family, and what this browser renders, read from the page. Where
+Each style is shown on one line and over two, with **its text box outlined**, to hold against Figma's box round the
+same text. Every style but H3 has Figma's "Vertical trim: Cap height to baseline": the box starts at the top of the
+capitals and ends on the baseline, so a one-line box is as tall as a capital letter and the tails of letters like
+"g" and "y" hang below it. A second line adds one whole line height. H3 is not trimmed, so its box is the full line.
+A browser without `text-box` shows every box untrimmed.
+
+Under each pair: the Figma name, the class, the family, and what this browser renders, read from the page. Where
 Figma's line height is "auto" the font's own line height is used, and the height it comes to here is shown so it
 can be checked against Figma.
 
