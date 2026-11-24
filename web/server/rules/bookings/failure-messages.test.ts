@@ -272,6 +272,8 @@ describe('W58: the words items for bookings', () => {
   })
 
   it('no cash to hand back says so, not "only store credit" (W35 row 24)', () => {
-    expect(words.NO_CASH_LEFT_MESSAGE).toBe("No cash recorded on this booking's orders can be handed back, so it can't be handed back in cash.")
+    // W70e (Q26 amended): "on this booking", where it said "on this booking's orders" (a Move's cash has no order).
+    expect(words.NO_CASH_LEFT_MESSAGE).toBe("No cash recorded on this booking can be handed back, so it can't be handed back in cash.")
+    expect(words.onlyCashLeftMessage(40)).toBe('Only £40.00 of cash recorded on this booking can be handed back. Check the amount and confirm again.')
   })
 })

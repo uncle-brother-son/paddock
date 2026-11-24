@@ -472,11 +472,15 @@ export const putBackBlockedNotRecordedMessage = (detail: string): string =>
 export const OWED_ON_CANCELLED_STORE_CREDIT_ONLY_MESSAGE =
   'This booking is cancelled, so what is still to refund can only go to store credit. Choose store credit and confirm again.'
 
-/** Q26: more cash than the booking's orders recorded, or none to hand back. */
+/**
+ * Q26: more cash than can be handed back, or none to hand back. W70e (Q26 amended): the cash counted is no longer only
+ * the orders' (a dearer Move's cash has no order, and cash handed over for money owed comes off it), so the words say
+ * "on this booking" where they said "on this booking's orders".
+ */
 export const onlyCashLeftMessage = (limit: number): string =>
-  `Only ${money(limit)} of cash recorded on this booking's orders can be handed back. Check the amount and confirm again.`
+  `Only ${money(limit)} of cash recorded on this booking can be handed back. Check the amount and confirm again.`
 /** W58 (W35 row 24, W31 review L3): a booking with card money can still refund to the card, so not "only store credit". */
-export const NO_CASH_LEFT_MESSAGE = "No cash recorded on this booking's orders can be handed back, so it can't be handed back in cash."
+export const NO_CASH_LEFT_MESSAGE = "No cash recorded on this booking can be handed back, so it can't be handed back in cash."
 /**
  * W21a (W21 review L6): a later card part the press had no time left to send. Stripe never refused it, so it stays
  * owed on the booking for Refund the rest to send to the card. W26b: on a cancelled booking it is owed too (it used

@@ -639,13 +639,35 @@ describe('W47: money still to refund, Resolve now with nothing listed, the banne
     expect(owedCardSplit({ refundOwed: 10.1, cardLeft: 10.05 })).toEqual({ card: 10.05, storeCredit: 0.05, payment: 'order', cardLeft: 10.05 })
   })
 
-  it('W47 item 8 (Wayne, 19 Nov): the words of the choice It already arrived asks for', async () => {
-    const { ARRIVED_ON_WORDS } = await moneyOwedHelpers()
-    expect(ARRIVED_ON_WORDS).toEqual({
+  // W70f item 2 (Wayne, 24 Nov), a named difference: until W70f an order's window asked two things in its own words ("On
+  // their card (you have seen the refund in Stripe)", "Another way (store credit on their balance, cash, a bank
+  // transfer)"). It asks the booking's three now, in the booking's words; the line under In cash names the order.
+  it("W47 item 8 (Wayne, 19 Nov): the words of the choice It already arrived asks for", async () => {
+    const helpers = await moneyOwedHelpers()
+    expect(helpers.ORDER_ARRIVED_ON_WORDS).toEqual({
       question: 'Where did it reach the customer?',
-      card: 'On their card (you have seen the refund in Stripe)',
-      other: 'Another way (store credit on their balance, cash, a bank transfer)',
+      card: 'On the card',
+      cash: 'In cash',
+      other: 'Another way',
       cardNote: 'Recorded as card money given back, so later card refunds know what the card has left.',
+      cashNote: 'Counted as cash handed back, so that much less cash can be handed back on this order.',
+      otherNote: 'Only taken off what is owed: nothing is recorded as card money.',
+    })
+    // The old two-choice words are gone, not left beside the new ones.
+    expect(helpers).not.toHaveProperty('ARRIVED_ON_WORDS')
+    // The same words as the booking's but for that one line.
+    expect({ ...helpers.ORDER_ARRIVED_ON_WORDS, cashNote: helpers.BOOKING_ARRIVED_ON_WORDS.cashNote }).toEqual(helpers.BOOKING_ARRIVED_ON_WORDS)
+  })
+
+  it("W70e item 2 (Wayne, 24 Nov): a booking's It already arrived asks On the card / In cash / Another way", async () => {
+    const { BOOKING_ARRIVED_ON_WORDS } = await moneyOwedHelpers()
+    expect(BOOKING_ARRIVED_ON_WORDS).toEqual({
+      question: 'Where did it reach the customer?',
+      card: 'On the card',
+      cash: 'In cash',
+      other: 'Another way',
+      cardNote: 'Recorded as card money given back, so later card refunds know what the card has left.',
+      cashNote: 'Counted as cash handed back, so that much less cash can be handed back on this booking.',
       otherNote: 'Only taken off what is owed: nothing is recorded as card money.',
     })
   })

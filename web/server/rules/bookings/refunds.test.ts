@@ -639,10 +639,16 @@ describe("a booking line's refundable seat money leaves out its promo (W70a, the
             await db.query("UPDATE bookings SET status = 'payment_needed', payment_due_by = now() + interval '1 day' WHERE id = $1", [bookingId])
             await context.call('settleLapsedBooking', { bookingId, payment: CASH(20) })
             expect(await booking(bookingId)).toMatchObject({ price_paid: '38.00' })
-            // Q36: the Settle's £20 is on no order, so only the £18 can be handed back as cash (the rest as store credit).
-            expect((await figures(bookingId)).body.data).toMatchObject({ left: 38, cashLeft: 18, parts: { card: 0, cash: 38 } })
-            expect((await refund('part', bookingId, { amount: 20, refundMethod: 'cash', reason: 'Goodwill' })).body.ok).toBe(false)
+            // Q36: the Settle's £20 is on no order. W70f (Wayne, 24 Nov), a named difference: it is cash paid on the
+            // booking all the same (the Settle's own row says so), so with the guest's £18 all £38 can be handed back as
+            // cash. Until W70f only the £18 could (the Settle's £20 only as store credit). Never the guest's £20 seat: £38.01
+            // is refused.
+            expect((await figures(bookingId)).body.data).toMatchObject({ left: 38, cashLeft: 38, parts: { card: 0, cash: 38 } })
+            expect((await refund('part', bookingId, { amount: 38.01, refundMethod: 'cash', reason: 'Goodwill' })).body.ok).toBe(false)
+            expect((await refund('part', bookingId, { amount: 20, refundMethod: 'cash', reason: 'Goodwill' })).body.ok).toBe(true)
+            expect((await figures(bookingId)).body.data).toMatchObject({ left: 18, cashLeft: 18 })
             expect((await refund('part', bookingId, { amount: 18, refundMethod: 'cash', reason: 'Goodwill' })).body.ok).toBe(true)
+            expect((await figures(bookingId)).body.data).toMatchObject({ left: 0, cashLeft: 0 })
           } finally {
             replayStripe.current = null
           }

@@ -2045,10 +2045,15 @@ export async function owedArrived(db: Db, bookingId: string, input: OwedArrivedI
       // Within half a penny of all that is owed clears it exactly.
       const arrived = round2(Math.min(amount, figures.refundOwed))
       // W47 (Wayne, 19 Nov): staff say where they saw the money. On the card (`arrivedOn: 'card'`): it goes on the
-      // lines as card money, before the money owed comes off. Another way (store credit on their balance, cash), or no
+      // lines as card money, before the money owed comes off. Another way (store credit on their balance), or no
       // choice sent (a staff app from before W47): nothing on the lines and the row as it was before W47. Money found
       // on their balance is already in the store credit rows: recorded as card money too it would be counted twice.
+      // W70e (Wayne, 24 Nov): in cash (`arrivedOn: 'cash'`): handed over the counter. Nothing on the lines, as another
+      // way; the row says `cash`, and money-left.ts counts it as cash handed back (CASH_SQL), so that much less cash
+      // can be handed back by a Part refund. It is a record of what happened, so it is never refused for being more
+      // than the cash paid: the cash left then reads nothing.
       const onCard = input.arrivedOn === 'card'
+      const inCash = input.arrivedOn === 'cash'
       const stamped = onCard ? await stampArrivedCard(tx, bookingId, arrived) : { card: 0, lines: [] as ArrivedLine[] }
       await tx.query(cancelled ? OWED_OFF_SQL.cancelled : OWED_OFF_SQL.live, [arrived, bookingId])
       await audit.recordAll(tx, [
@@ -2059,7 +2064,7 @@ export async function owedArrived(db: Db, bookingId: string, input: OwedArrivedI
           entityType: 'booking',
           entityId: bookingId,
           requestId: options.requestId,
-          details: { amount: arrived, reason, ...(onCard ? { arrivedOn: 'card', card: stamped.card, lines: stamped.lines } : {}) },
+          details: { amount: arrived, reason, ...(onCard ? { arrivedOn: 'card', card: stamped.card, lines: stamped.lines } : inCash ? { arrivedOn: 'cash' } : {}) },
         },
       ])
       // W46: on a cancelled booking, once nothing is owed any more, its lines are stamped if all of their seat money is

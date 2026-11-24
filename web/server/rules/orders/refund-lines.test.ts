@@ -633,6 +633,40 @@ describe('the card: refused, undone, blocked, unclear', () => {
     })
   })
 
+  it("W70f item 2 (Wayne, 24 Nov): It already arrived on an order, in cash: the row says cash, nothing is recorded on a line, and it counts as cash handed back on the order (Q42); another way, no choice and on the card are not cash; handed over for more than the cash left it is recorded all the same, and the cash left reads nothing", async () => {
+    await onAnOrder({ products: [soap, mug], payment: cash(39) }, async ({ orderId, lines, call, db: database }) => {
+      const [soapLine, mugLine] = await lines('product')
+      // Another cash order of the customer's: what is handed over for this one is never taken off that one.
+      const otherOrder = String(((await call('createOrder', { customerId: ID.customer, products: [mug], payment: cash(15) })) as Record<string, unknown>)['orderId'])
+      // Test data standing in for money an old screen left owed on a cash order (today it comes from a card refund).
+      await database.query('UPDATE orders SET refund_owed_amount = 60 WHERE id = $1', [orderId])
+      expect((await figures(orderId)).body.data).toMatchObject({ cashLeft: 39, refundOwed: 60 })
+      // Not cash: another way, a row with no choice (as written before W70f), and on the card (none to record it against).
+      await post('refunds/owed-arrived', orderId, { amount: 3, reason: 'Found on their balance', arrivedOn: 'other' })
+      await post('refunds/owed-arrived', orderId, { amount: 3, reason: 'Found on their balance' })
+      await post('refunds/owed-arrived', orderId, { amount: 4, reason: 'Seen in Stripe', arrivedOn: 'card' })
+      expect((await figures(orderId)).body.data).toMatchObject({ cashLeft: 39, refundOwed: 50 })
+      const inCash = await post('refunds/owed-arrived', orderId, { amount: 10, reason: 'Handed over at the desk', arrivedOn: 'cash' })
+      expect(inCash.body.data).toEqual({ cardRefundedAmount: 0, storeCreditRefundedAmount: 0, refundOwed: 40 })
+      expect((await auditRows('order.owed_arrived')).map((row) => row.details).filter((details) => details['arrivedOn'] === 'cash')).toEqual([
+        { amount: 10, reason: 'Handed over at the desk', owedBefore: 50, owedAfter: 40, arrivedOn: 'cash' },
+      ])
+      expect((await lineRows(orderId)).map((line) => line.card)).toEqual(['0.00', '0.00'])
+      // £39 paid in cash, £10 handed back: £29. The £24 soap goes back in cash, and £5 is left for the £15 mug.
+      expect((await figures(orderId)).body.data).toMatchObject({ cashLeft: 29, refundOwed: 40 })
+      expect((await figures(otherOrder)).body.data).toMatchObject({ cashLeft: 15 })
+      expect((await refund(orderId, [soapLine as string], 'cash')).body.data).toMatchObject({ cashRefundedAmount: 24 })
+      expect((await figures(orderId)).body.data).toMatchObject({ cashLeft: 5 })
+      // It records what happened, so more than the cash left is never refused; then there is none for the mug.
+      const more = await post('refunds/owed-arrived', orderId, { amount: 40, reason: 'Handed over at the desk', arrivedOn: 'cash' })
+      expect(more.body.data).toEqual({ cardRefundedAmount: 0, storeCreditRefundedAmount: 0, refundOwed: 0 })
+      expect((await figures(orderId)).body.data).toMatchObject({ cashLeft: 0, refundOwed: 0 })
+      const none = await refund(orderId, [mugLine as string], 'cash')
+      expect(none.status).toBe(409)
+      expect(none.body.error?.details).toMatchObject({ reason: 'no_cash_left', message: NEW_WORDS.noCashLeft })
+    })
+  })
+
   it('Refund the rest to store credit gives exactly what is owed, with its own note, and clears it', async () => {
     await onAnOrder({ products: [soap], payment: card }, async ({ orderId, lines, stripe, db: database }) => {
       const ids = await lines('product')
@@ -955,9 +989,10 @@ describe('cash back (Q42): only up to the cash paid on the order', () => {
         })
         return ((await response.json()) as Answer['body']).data?.['cashLeft']
       }
-      // £44 order (a £20 seat and £24 of soap): £10 on a gift card, £34 in cash. The booking counts the gift card
-      // against its seat first, so £10 of the seat can go back in cash; the order has £34 of cash in all.
-      expect(await bookingCash()).toBe(10)
+      // £44 order (a £20 seat and £24 of soap): £10 on a gift card, £34 in cash. The order has £34 of cash in all.
+      // W70e (Q26 amended), a named difference: all £20 of the seat can go back in cash (it read £10: the booking's
+      // parts count the gift card against its seat first, and the cap was held to that cash part).
+      expect(await bookingCash()).toBe(20)
       expect((await figures(orderId)).body.data).toMatchObject({ cashLeft: 34 })
       const partRefund = await withSwitch(BOOKING_KINDS_ON, async () => {
         const response = await (bookingRefundRoute as Handler)(
@@ -975,10 +1010,67 @@ describe('cash back (Q42): only up to the cash paid on the order', () => {
       expect((await figures(orderId)).body.data).toMatchObject({ cashLeft: 24 })
       expect((await refund(orderId, await lines('product'), 'cash')).body.data).toMatchObject({ cashRefundedAmount: 24 })
       expect((await figures(orderId)).body.data).toMatchObject({ cashLeft: 0 })
+      // W70e: £10 of the seat is still left on the booking, but the order's cash has all gone: none for the booking.
       expect(await bookingCash()).toBe(0)
       // £34 was paid in cash, and £34 has been handed back: never more.
       const handed = await db.query<{ cash: string }>("SELECT COALESCE(SUM((details->'plan'->>'cash')::numeric), 0)::text AS cash FROM audit_log WHERE action IN ('order.refund_claimed', 'booking.refund_claimed')")
       expect(Number(handed[0]?.cash)).toBe(34)
+    })
+  })
+
+  // Brief W70e (Q26 amended): the booking's cash is no longer held to the cash part of what is left on it, so the cash its
+  // order has already handed back for its other lines comes off the booking's side too, whichever is pressed first.
+  describe("W70e: a booking's cash and its order's cash are one pot, whichever refund comes first", () => {
+    const seatAndSoap = { products: [soap], booking: paidSeat(), payment: { ...cash(34), giftCard: { giftCardId: ID.giftCard, amount: 10 } } }
+    const bookingFigures = async (bookingId: string) => {
+      const response = await (bookingFiguresRoute as Handler)(new Request(`https://worker.test/api/v1/staff/bookings/${bookingId}/refund-figures`, { headers: { authorization: `Bearer ${KEY}`, 'x-staff-email': REPLAY_USER.email } }), {
+        params: Promise.resolve({ bookingId }),
+      })
+      return ((await response.json()) as Answer['body']).data as { left: number; cashLeft: number }
+    }
+    const cashPartRefund = (bookingId: string, amount: number) =>
+      withSwitch(BOOKING_KINDS_ON, async () => {
+        const response = await (bookingRefundRoute as Handler)(
+          new Request(`https://worker.test/api/v1/staff/bookings/${bookingId}/refunds`, {
+            method: 'POST',
+            headers: { authorization: `Bearer ${KEY}`, 'x-staff-email': REPLAY_USER.email, 'idempotency-key': crypto.randomUUID(), 'content-type': 'application/json' },
+            body: JSON.stringify({ amount, refundMethod: 'cash', reason: 'Goodwill' }),
+          }),
+          { params: Promise.resolve({ bookingId }) }
+        )
+        return (await response.json()) as Answer['body']
+      })
+    const cashOut = async () =>
+      Number((await db.query<{ cash: string }>("SELECT COALESCE(SUM((details->'plan'->>'cash')::numeric), 0)::text AS cash FROM audit_log WHERE action IN ('order.refund_claimed', 'booking.refund_claimed')"))[0]?.cash)
+
+    it("the order's soap refunded in cash first (£24 of the £34): £10 of cash is left for the £20 seat, £10.01 is refused, £10 goes, and no more: £34 out, never more", async () => {
+      await onAnOrder(seatAndSoap, async ({ orderId, placed, lines }) => {
+        const bookingId = String(placed['bookingId'])
+        expect(await bookingFigures(bookingId)).toMatchObject({ left: 20, cashLeft: 20 })
+        expect((await refund(orderId, await lines('product'), 'cash')).body.data).toMatchObject({ cashRefundedAmount: 24 })
+        expect((await figures(orderId)).body.data).toMatchObject({ cashLeft: 10 })
+        expect(await bookingFigures(bookingId)).toMatchObject({ left: 20, cashLeft: 10 })
+        const over = await cashPartRefund(bookingId, 10.01)
+        expect(over.error?.details).toMatchObject({ reason: 'more_than_cash_left', message: 'Only £10.00 of cash recorded on this booking can be handed back. Check the amount and confirm again.' })
+        expect((await cashPartRefund(bookingId, 10)).data).toMatchObject({ cashRefundedAmount: 10 })
+        expect(await bookingFigures(bookingId)).toMatchObject({ left: 10, cashLeft: 0 })
+        expect((await cashPartRefund(bookingId, 0.01)).error?.details).toMatchObject({ reason: 'more_than_cash_left' })
+        expect((await figures(orderId)).body.data).toMatchObject({ cashLeft: 0 })
+        expect(await cashOut()).toBe(34)
+      })
+    })
+
+    it("the seat's £20 handed back in cash first: £14 of cash is left on the order, so the £24 soap gets £14 in cash and £10 as store credit: £34 out, never more", async () => {
+      await onAnOrder(seatAndSoap, async ({ orderId, placed, lines }) => {
+        const bookingId = String(placed['bookingId'])
+        expect((await cashPartRefund(bookingId, 20.01)).error?.details).toMatchObject({ reason: 'more_than_left' })
+        expect((await cashPartRefund(bookingId, 20)).data).toMatchObject({ cashRefundedAmount: 20 })
+        expect(await bookingFigures(bookingId)).toMatchObject({ left: 0, cashLeft: 0 })
+        expect((await figures(orderId)).body.data).toMatchObject({ cashLeft: 14 })
+        expect((await refund(orderId, await lines('product'), 'cash')).body.data).toMatchObject({ refundedAmount: 24, cashRefundedAmount: 14, storeCreditRefundedAmount: 10 })
+        expect((await figures(orderId)).body.data).toMatchObject({ cashLeft: 0 })
+        expect(await cashOut()).toBe(34)
+      })
     })
   })
 })

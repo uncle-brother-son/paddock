@@ -5780,23 +5780,100 @@ describe('staff app helpers', () => {
 
     it('item 8 (Wayne, 19 Nov): both It already arrived windows ask where the money arrived, send it, and keep the button off until staff have said', () => {
       const choice = component('ArrivedOnChoice.tsx')
-      expect(choice).toContain('<RadioGroup value={value ?? \'\'} onValueChange={(next) => onChange(next as ArrivedOn)}>')
+      // W70f, a named difference: one choice of three for both windows (W70e gave the booking's a third, In cash; W70f
+      // the order's too), and `on` says whose window it is.
+      expect(choice).toContain("<RadioGroup value={value ?? ''} onValueChange={(next) => onChange(next as ArrivedOn)}>")
       expect(choice).toContain('<RadioGroupItem value="card"')
       expect(choice).toContain('<RadioGroupItem value="other"')
       const bar = component('OrderOwedBar.tsx')
       expect(bar).toContain('const [arrivedOn, setArrivedOn] = useState<ArrivedOn | null>(null)')
-      expect(bar).toContain('<ArrivedOnChoice value={arrivedOn} onChange={setArrivedOn} idPrefix="order-owed" />')
+      expect(bar).toContain('<ArrivedOnChoice on="order" value={arrivedOn} onChange={setArrivedOn} idPrefix="order-owed" />')
       expect(bar).toContain('if (inFlight.current || !figures || !arrivedValid || !reasonValid || !arrivedOn) return')
       expect(bar).toContain("disabled={submitting || owed <= 0 || !arrivedValid || !reasonValid || !arrivedOn || figures?.blocked?.reason === 'refund_open'}>")
       const booking = component('RefundTheRestDialog.tsx')
       expect(booking).toContain('const [arrivedOn, setArrivedOn] = useState<ArrivedOn | null>(null)')
-      expect(booking).toContain('<ArrivedOnChoice value={arrivedOn} onChange={setArrivedOn} idPrefix="refund-rest" />')
+      expect(booking).toContain('<ArrivedOnChoice on="booking" value={arrivedOn} onChange={setArrivedOn} idPrefix="refund-rest" />')
       expect(booking).toContain('if (inFlight.current || !figures || !arrivedValid || !arrivedOn) return')
       expect(booking).toContain("{ bookingId, refundMethod: 'credit', amount: Math.round(arrived * 100) / 100, owedArrived: true, reason: reason.trim(), arrivedOn, idempotencyKey: pressKey.current },")
       expect(booking).toContain('disabled={submitting || owed <= 0 || !reasonValid || !arrivedValid || !arrivedOn}>')
       // Closing either window forgets the choice.
       expect(bar.match(/setArrivedOn\(null\)/g)).toHaveLength(1)
       expect(booking.match(/setArrivedOn\(null\)/g)).toHaveLength(1)
+    })
+
+    // W70f, a named difference: this test's name said "an order's keeps its two choices"; the order's has the three too now.
+    it("W70e item 2 (Wayne, 24 Nov): a booking's It already arrived offers card / cash / another way, nothing chosen first; the wrapper sends 'cash' to the Worker", async () => {
+      const choice = component('ArrivedOnChoice.tsx')
+      // The cash radio is between the card and another way.
+      expect(choice).toMatch(/<RadioGroupItem value="cash" id=\{`\$\{idPrefix\}-arrived-cash`\} \/>[\s\S]{0,400}\{words\.cash\}/)
+      expect(choice.indexOf('value="card"')).toBeLessThan(choice.indexOf('value="cash"'))
+      expect(choice.indexOf('value="cash"')).toBeLessThan(choice.indexOf('value="other"'))
+      expect(choice).toContain("const words = on === 'order' ? ORDER_ARRIVED_ON_WORDS : BOOKING_ARRIVED_ON_WORDS")
+      expect(choice).toContain("const note = value === 'card' ? words.cardNote : value === 'cash' ? words.cashNote : value === 'other' ? words.otherNote : null")
+      // Nothing chosen to begin with, on the booking as on the order, and the button waits for a choice (item 8's pins).
+      const booking = component('RefundTheRestDialog.tsx')
+      expect(booking).toContain('const [arrivedOn, setArrivedOn] = useState<ArrivedOn | null>(null)')
+      const wrapper = readFileSync(path.join(appDir, 'backend/paddock/refundBooking.ts'), 'utf8')
+      expect(wrapper).toContain("arrivedOn?: 'card' | 'cash' | 'other'")
+      const rawRequest = vi.fn().mockResolvedValue({ data: { ok: true, data: { cardRefundedAmount: 0, storeCreditRefundedAmount: 0, pricePaid: 60 }, requestId: 'r' } })
+      vi.stubGlobal('paddockWorkerV1', { rawRequest })
+      try {
+        const press = (await import(/* @vite-ignore */ path.join(appDir, 'backend/paddock/refundBooking'))).default as (req: { params: object; user: object }) => Promise<unknown>
+        await press({ params: { bookingId: 'b1', refundMethod: 'credit', amount: 20, owedArrived: true, reason: 'Handed over at the desk', arrivedOn: 'cash' }, user: { email: 'jo@example.com' } })
+        const sent = rawRequest.mock.calls[0]?.[0] as { path: string; body: unknown }
+        expect(sent.path.endsWith('/bookings/b1/refunds/owed-arrived')).toBe(true)
+        expect(sent.body).toEqual({ amount: 20, reason: 'Handed over at the desk', arrivedOn: 'cash' })
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
+
+    it("W70f item 2 (Wayne, 24 Nov): an order's It already arrived offers the same three choices as a booking's, nothing chosen first, in the same words; its wrapper sends 'cash' to the Worker", async () => {
+      const choice = component('ArrivedOnChoice.tsx')
+      // One choice for both windows: the three radios are drawn whichever it is (no `cash` switch any more).
+      expect(choice).not.toContain('props.cash')
+      expect(choice.match(/<RadioGroupItem value="/g)).toHaveLength(3)
+      expect(choice).toContain("on: 'booking' | 'order'")
+      const bar = component('OrderOwedBar.tsx')
+      expect(bar).toContain('const [arrivedOn, setArrivedOn] = useState<ArrivedOn | null>(null)')
+      expect(bar).toContain('<ArrivedOnChoice on="order" value={arrivedOn} onChange={setArrivedOn} idPrefix="order-owed" />')
+      expect(bar).toContain("const response = await refundOrderOwed({ orderId, amount, arrived: true, reason: reason.trim(), arrivedOn, idempotencyKey: pressKey.current }, { skipCache: true })")
+      expect(component('RefundTheRestDialog.tsx')).toContain('<ArrivedOnChoice on="booking" value={arrivedOn} onChange={setArrivedOn} idPrefix="refund-rest" />')
+      expect(readFileSync(path.join(appDir, 'backend/paddock/refundOrderOwed.ts'), 'utf8')).toContain("arrivedOn?: 'card' | 'cash' | 'other'")
+      const rawRequest = vi.fn().mockResolvedValue({ data: { ok: true, data: { cardRefundedAmount: 0, storeCreditRefundedAmount: 0, refundOwed: 4 }, requestId: 'r' } })
+      vi.stubGlobal('paddockWorkerV1', { rawRequest })
+      try {
+        const press = (await import(/* @vite-ignore */ path.join(appDir, 'backend/paddock/refundOrderOwed'))).default as (req: { params: object; user: object }) => Promise<unknown>
+        expect(await press({ params: { orderId: 'o1', amount: 20, arrived: true, reason: 'Handed over at the desk', arrivedOn: 'cash' }, user: { email: 'jo@example.com' } })).toMatchObject({ refundOwed: 4 })
+        const sent = rawRequest.mock.calls[0]?.[0] as { path: string; body: unknown }
+        expect(sent.path.endsWith('/orders/o1/refunds/owed-arrived')).toBe(true)
+        expect(sent.body).toEqual({ amount: 20, reason: 'Handed over at the desk', arrivedOn: 'cash' })
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
+
+    it('W70f item 4: both It already arrived hints say the money may have been handed over: "…once you\'ve seen it in Stripe, on their balance, or handed it over yourself."', () => {
+      const flat = (source: string) => source.replace(/\s+/g, ' ')
+      const booking = flat(component('RefundTheRestDialog.tsx'))
+      expect(booking).toContain("This takes it off the booking and moves no money. Only do this once you've seen it in Stripe, on their balance, or handed it over yourself. If only part of it arrived, enter that part: the rest stays still to refund.")
+      const bar = flat(component('OrderOwedBar.tsx'))
+      expect(bar).toContain("This takes it off the order and moves no money. Only do this once you've seen it in Stripe, on their balance, or handed it over yourself. If only part of it arrived, enter that part: the rest stays still to refund.")
+      for (const source of [booking, bar]) expect(source).not.toContain('seen it in Stripe or their balance')
+    })
+
+    // W70f item 1, a named difference: the note's last sentence ("Cash taken on a settle isn't counted: it goes back as
+    // store credit.") is gone, now a Settle's cash counts; this test's name said only the Move's.
+    it("W70e item 4: the Part refund window's words about cash still read right: the cash option and its limit are the Worker's figure, and the note no longer says a move's cash can't be handed back", () => {
+      const dialog = component('PartRefundDialog.tsx')
+      expect(dialog).toContain('const cashLeft = figures?.cashLeft ?? 0')
+      expect(dialog).toContain("const limit = figures ? (refundMethod === 'card' ? figures.parts.card : refundMethod === 'cash' ? cashLeft : figures.left) : 0")
+      expect(dialog).toContain('{`Cash, handed over now (up to ${formatCurrency(cashLeft.toFixed(2))})`}')
+      expect(dialog).toContain('? `No more than the ${formatCurrency(limit.toFixed(2))} of cash that can be handed back.`')
+      expect(dialog).toMatch(/\{figures\.parts\.cash > cashLeft \+ 0\.005 \? \(\s+<div className="text-xs text-muted-foreground mt-1\.5">\s+Only cash recorded on this booking, less cash already handed back, can be handed back here\.\s+<\/div>/)
+      expect(dialog).not.toContain('on a settle or a move')
+      expect(dialog).not.toContain("isn't counted")
+      expect(dialog).not.toContain('goes back as store credit')
     })
 
     it("item 9: the booking detail shows why a booking lapsed, in the Worker's words, from the figures read it already makes", () => {

@@ -316,7 +316,8 @@ interface MoneyLeftRow {
  * so the cash paid stays available to hand back as cash. Examples: that booking with £20 part refunded to store credit
  * is £20 store credit and £20 cash (it read £40 store credit, no cash); seats £40 in cash and a guest's £20 on store
  * credit, the guest removed to store credit, is £40 cash (it read £20 and £20). The card's part is as before, and
- * cashLeftOn still never hands back more cash than was paid in cash (Q26, Q42).
+ * cashLeftOn still never hands back more cash than was paid in cash (Q26, Q42; W70e: by Q26 as amended, no longer
+ * by the cash part here).
  *
  * W70d (W70c noticed 1): seat money that is owed (a card refund that never arrived, not yet given or found) comes off
  * the same way while it is owed, so the cash that can be handed back doesn't read low until it is settled. Example:
@@ -396,9 +397,37 @@ export async function loadBookingMoneyLeft(db: Queryable, bookingId: string): Pr
  * W21 (Q26, Wayne 6 Nov; lead call L2): the cash recorded for the booking that can be handed back. Per order with a
  * booking line for it and no Stripe payment, paid in cash (or `split`: a gift card with cash), the smaller of the
  * order's cash part (its total less promo, gift card and store credit) and the seat money its lines hold for this
- * booking; less what Worker refunds have already handed back in cash. Settle's and Move's cash has no order (Q36: keep
- * today's way), so it can't be found reliably and is left out: that money can still go back as store credit. Fixed
- * text: ADDONS_INSIDE_LINE is a constant; the booking comes in as $1 and $2.
+ * booking; less what Worker refunds have already handed back in cash. Settle's cash has no order (Q36: keep today's
+ * way); until W70f it was left out (below). Fixed text: ADDONS_INSIDE_LINE is a constant; the booking comes in as $1
+ * and $2.
+ *
+ * W70e (Wayne, 24 Nov; W70d noticed 4 and 1): two more figures.
+ * - `moved`: the cash a dearer Move took. It has no order either, but the Move's own row says it (`booking.move`,
+ *   move.ts's BOOKING_MOVED: `method` 'cash' and `toCollect`, what was left to take after any store credit and gift
+ *   card), written in the Move's one transaction, so it is cash paid on the booking. A card or reader Move's row names
+ *   its own method and isn't read; a cheaper Move's has no method.
+ * - `arrived_in_cash`: what It already arrived recorded as handed over in cash (`arrivedOn` 'cash' on its
+ *   `booking.refund_owed_arrived` row). A row with no `arrivedOn` (another way, or written before W70e) and a card row
+ *   are not cash.
+ * And each order's cash part is first less the cash that order has already handed back some other way (`elsewhere`):
+ * by its own refund (a product or another line on the same cash order, Q42), by an event booking it paid for, or by
+ * another booking with a line on it: the same claims orders/refund-lines.ts's CASH_LEFT_SQL counts, but for this
+ * booking's own, which come off below. Until W70e the cash part of what is left kept that cash from going out twice
+ * (the gift card and store credit were counted against the seat first, so the seat's cash part was never more than the
+ * order's cash less its other lines); without that bound the order's own cash refunds have to be counted here. Example:
+ * a £20 seat and £24 of soap on one order, £10 gift card and £34 cash. The soap refunded in cash (£24) leaves £10 of
+ * cash for the seat, not £20; and £20 handed back for the seat first leaves £14 of cash for the soap (the order's side,
+ * which takes the booking's cash off its own).
+ *
+ * W70f (Wayne, 24 Nov; W70e unsure 1 and noticed 1): two more.
+ * - `settled`: the cash Take Payment (Settle) took, exactly as the Move's: the Settle's own row (`booking.settle`,
+ *   settle.ts: `method` 'cash' and `toCollect`, what was left of seat 1's stored price after any store credit and gift
+ *   card), written in the Settle's one transaction. A Settle takes seat 1's price and nothing else (its input has no
+ *   add-ons, and an add-on is never part of a seat's stored price), so all of `toCollect` is seat money paid in cash. A
+ *   card or reader Settle's row names its own method and isn't read.
+ * - `elsewhere` also counts money owed on the order that its It already arrived recorded as handed over in cash
+ *   (`order.owed_arrived` with `arrivedOn` 'cash', orders/refund-lines.ts): that cash came out of the order's cash too,
+ *   so it is one pot whichever is pressed first. A row with no `arrivedOn`, and a card row, are not cash.
  */
 const CASH_SQL = `
 WITH seat AS (
@@ -410,18 +439,41 @@ WITH seat AS (
   GROUP BY oli.order_id
 ),
 recorded AS (
-  SELECT COALESCE(SUM(LEAST(seat.money, GREATEST(
+  SELECT COALESCE(SUM(GREATEST(LEAST(seat.money, GREATEST(
            o.order_total - COALESCE(o.discount_amount, 0)
            - COALESCE((SELECT SUM(gcr.amount_used) FROM gift_card_redemptions gcr WHERE gcr.order_id = o.id), 0)
            - COALESCE((SELECT -SUM(sct.amount) FROM store_credit_transactions sct
                        WHERE sct.order_id = o.id AND sct.amount < 0 AND sct.reason IN ('redemption', 'redemption_reversal')), 0),
-           0))), 0) AS cash
+           0) - elsewhere.cash), 0)), 0) AS cash
   FROM seat JOIN orders o ON o.id = seat.order_id
+  CROSS JOIN LATERAL (
+    SELECT COALESCE((SELECT SUM((c.details->'plan'->>'cash')::numeric)
+                     FROM audit_log c
+                     WHERE c.details->>'worker' = 'true'
+                       AND ((c.action = 'order.refund_claimed' AND c.entity_type = 'order' AND c.entity_id = o.id::text)
+                         OR (c.action = 'event_booking.refund_claimed' AND c.entity_type = 'event_booking' AND c.details->>'orderId' = o.id::text)
+                         OR (c.action = 'booking.refund_claimed' AND c.entity_type = 'booking' AND c.entity_id <> $2::text
+                             AND c.entity_id IN (SELECT x.booking_id::text FROM order_line_items x
+                                                 WHERE x.order_id = o.id AND x.item_type = 'booking' AND x.booking_id IS NOT NULL)))), 0)
+         + COALESCE((SELECT SUM((a.details->>'amount')::numeric)
+                     FROM audit_log a
+                     WHERE a.action = 'order.owed_arrived' AND a.entity_type = 'order' AND a.entity_id = o.id::text
+                       AND a.details->>'arrivedOn' = 'cash'), 0) AS cash
+  ) elsewhere
 )
 SELECT recorded.cash::text AS recorded,
+       COALESCE((SELECT SUM((m.details->>'toCollect')::numeric) FROM audit_log m
+                 WHERE m.action = 'booking.move' AND m.entity_type = 'booking' AND m.entity_id = $2::text
+                   AND m.details->>'method' = 'cash' AND jsonb_typeof(m.details->'toCollect') = 'number'), 0)::text AS moved,
+       COALESCE((SELECT SUM((s.details->>'toCollect')::numeric) FROM audit_log s
+                 WHERE s.action = 'booking.settle' AND s.entity_type = 'booking' AND s.entity_id = $2::text
+                   AND s.details->>'method' = 'cash' AND jsonb_typeof(s.details->'toCollect') = 'number'), 0)::text AS settled,
        COALESCE((SELECT SUM((c.details->>'amount')::numeric) FROM audit_log c
                  WHERE c.action = 'booking.refund_claimed' AND c.entity_type = 'booking' AND c.entity_id = $2::text
-                   AND c.details->>'method' = 'cash'), 0)::text AS handed_back
+                   AND c.details->>'method' = 'cash'), 0)::text AS handed_back,
+       COALESCE((SELECT SUM((a.details->>'amount')::numeric) FROM audit_log a
+                 WHERE a.action = 'booking.refund_owed_arrived' AND a.entity_type = 'booking' AND a.entity_id = $2::text
+                   AND a.details->>'arrivedOn' = 'cash'), 0)::text AS arrived_in_cash
 FROM recorded`
 
 /**
@@ -434,11 +486,28 @@ export interface RefundFigures extends BookingMoneyLeft {
   paidWords: string
 }
 
-/** The cash a Part refund can hand back (Q26): see CASH_SQL. Never more than the figures' cash part. */
+/**
+ * The cash a Part refund can hand back (Q26): see CASH_SQL.
+ *
+ * W70e (Wayne's Q26 amended, 24 Nov): the lower of (a) what is left on the booking and (b) the cash paid on the booking
+ * (on its orders, and on a dearer Move) less the cash already handed back (cash Part refunds, and money owed that It
+ * already arrived says was handed over in cash). Never below nothing, and never more cash out than cash in. Until W70e
+ * it was also held to the figures' cash part, which reads low whenever money that isn't cash has gone back or is owed
+ * with no store credit or gift card part to take it off. Examples: seats £40 in cash and a card guest's £20 removed to
+ * the card, the refund never arriving (£20 owed): £20 card and £20 cash are left, and all £40 of the cash can be handed
+ * back (it read £20), while owed and after Refund the rest gives the £20 as store credit. W70c's example (seats £40
+ * cash, a guest's £20 store credit, a card guest's £20 owed) with the £20 handed over in cash: £20 (£40 paid less £20
+ * handed back); settled another way or on the card: £40. The parts are as they were, and still add up to what is left.
+ *
+ * W70f (Wayne, 24 Nov): cash collected with Take Payment (Settle) is cash paid on the booking too, as a Move's.
+ * Example: a member's seat on a credit and a guest's £20 in cash; the membership lapses and the member's £20 is taken in
+ * cash: £40 can be handed back (it read £20, the Settle's £20 only as store credit).
+ */
 export async function cashLeftOn(db: Queryable, bookingId: string, figures: BookingMoneyLeft): Promise<number> {
-  const row = (await db.query<{ recorded: string; handed_back: string }>(CASH_SQL, [bookingId, bookingId]))[0]
-  const recorded = round2(amount(row?.recorded) - amount(row?.handed_back))
-  return Math.max(0, round2(Math.min(figures.parts.cash, recorded)))
+  const row = (await db.query<{ recorded: string; moved: string; settled: string; handed_back: string; arrived_in_cash: string }>(CASH_SQL, [bookingId, bookingId]))[0]
+  const paid = round2(amount(row?.recorded) + amount(row?.moved) + amount(row?.settled))
+  const handedBack = round2(amount(row?.handed_back) + amount(row?.arrived_in_cash))
+  return Math.max(0, round2(Math.min(figures.left, paid - handedBack)))
 }
 
 /** getBookingRefundFigures on the Worker (W21): loadBookingMoneyLeft, field for field, plus `cashLeft` and `paidLine`. */

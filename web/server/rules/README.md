@@ -3056,3 +3056,87 @@ create, on/off, the T2 hook); `catalog/plans-postgres.test.ts` (7 races on real 
   calendar takes the new bookings and its new read of the sessions together, so a session window never shows a new
   bookings list beside the session's old count; and Add Guest can't be pressed while the customer's credits and member
   prices are still being read.
+
+## The cash cap's last low cases: Q26 amended (W70e)
+
+Wayne, 24 Nov 2026 (`briefs/W03-decisions.md`, "W70e"; W70d noticed 1, 2 and 4).
+
+- **Q26 amended,** `bookings/money-left.ts` `cashLeftOn` and `CASH_SQL`: the cash a booking refund may hand back is the
+  lower of (a) what is left on the booking (`left`) and (b) the cash paid on the booking less the cash already handed
+  back. It is no longer held to the cash part of what is left (`parts.cash`), which reads low whenever money that isn't
+  cash has gone back or is owed and there is no store credit or gift card part to take it off. The parts are as they were
+  and still add up to what is left, so `cashLeft` can be more than `parts.cash`. Never below nothing; never more cash out
+  than cash in. Q42 (an order's cash, `orders/refund-lines.ts`) is unchanged.
+  - Cash paid: the cash on the booking's own orders, as before (per order paid in cash or split with no Stripe payment,
+    the smaller of its cash part and the seat money its lines hold), **and the cash a dearer Move took** (W70d noticed 4).
+    A Move's cash has no order (Q36), but the Move's own row says it (`booking.move`: `method` 'cash' and `toCollect`),
+    written in the Move's one transaction. A card or reader Move's row is not read. Settle's cash is still left out.
+  - Cash handed back: the cash Part refunds, as before, **and money owed that It already arrived recorded as handed over
+    in cash** (below).
+  - **A booking's cash and its order's cash are one pot.** Each order's cash part is first less the cash that order has
+    already handed back some other way (`elsewhere` in `CASH_SQL`): by its own refund (a product on the same cash
+    order, Q42), by an event booking it paid for, or by another booking with a line on it. Until W70e the cash part of
+    what is left did this by arithmetic (the gift card and store credit were counted against the seat first); without
+    that bound the same cash could go out twice. Example: a £20 seat and £24 of soap on one order, £10 gift card and
+    £34 cash. The soap refunded in cash first leaves £10 of cash for the seat (not £20); the seat's £20 handed back
+    first leaves £14 of cash for the soap, the rest of it to store credit. £34 out either way. Rule tests:
+    `orders/refund-lines.test.ts`, "W70e".
+  - Example (W70d noticed 2): seats £40 in cash, a card guest's £20 removed to the card, the refund never arriving (£20
+    owed), no store credit or gift card: £20 card and £20 cash are left, and all £40 can be handed back in cash (it read
+    £20), while owed and after Refund the rest gives the £20 as store credit.
+- **Where the cap is read.** Only Part refund hands cash back on a booking (`refunds.ts` `partR1`: the limit for `cash` is
+  `cashLeft`), and the figures route shows it. Refund the rest, Cancel & Refund, Cancel & return credit, Remove Guest,
+  Remove add-on, a cheaper Move and the club's cancel take `card` or `credit` only, so none of them reads it.
+- **It already arrived asks card / cash / another way** (`contracts/bookings.ts` `owedArrivedInputSchema`; `refunds.ts`
+  `owedArrived`). `cash`: the money owed was handed over the counter. Nothing is recorded on a line, as another way; the
+  `booking.refund_owed_arrived` row says `arrivedOn: 'cash'`, and it counts as cash handed back. It records what
+  happened, so it is never refused for being more than the cash paid: the cash left then reads nothing, and stays
+  nothing until more cash than that has been paid. A row with no `arrivedOn` (another way, or written before W70e) and a
+  card row are not cash. W70c's example (seats £40 cash, a guest's £20 store credit, a card guest's £20 owed) settled in
+  cash: £20 to hand back (£40 paid less £20 handed back); another way: £40 (it read £20, W70d noticed 1); on the card:
+  £40, unchanged. An order's It already arrived keeps its two choices.
+- **The words** (`bookings/failure-messages.ts`): "Only £X of cash recorded on this booking can be handed back…" and "No
+  cash recorded on this booking can be handed back…", where they said "on this booking's orders" (a Move's cash has no
+  order).
+- Rule tests: `bookings/w05-rules.test.ts`, "W70e"; the staff app's choice and words, `server/staff-app-helpers.test.ts`
+  and `server/staff-app-orders-page.test.ts`, "W70e".
+
+## Cash back follows one rule everywhere (W70f)
+
+Wayne, 24 Nov 2026 (`briefs/W03-decisions.md`, "W70f"; W70e unsure 1, noticed 1 to 3). Released with W70e.
+
+- **A Settle's cash is cash paid on the booking,** as a Move's (`bookings/money-left.ts` `CASH_SQL`, `settled`): the
+  Settle's own row (`booking.settle`: `method` 'cash' and `toCollect`), written in the Settle's one transaction. Until
+  W70f it could only go back as store credit. A Settle takes seat 1's stored price and nothing else (its input has no
+  add-ons, and an add-on is never part of a seat's stored price), so all of `toCollect` is seat money paid in cash; with
+  a store credit or gift card part, `toCollect` is what was left after them. A card or reader Settle's row names its own
+  method and is not read. Example: a member's seat on a credit and a guest's £20 in cash; the membership lapses and the
+  member's £20 is taken in cash: £40 can be handed back (it read £20).
+- **An order's It already arrived asks card / cash / another way too** (`contracts/refunds.ts`
+  `orderOwedArrivedInputSchema`; `orders/refund-lines.ts` `orderOwedArrived`). `cash`: nothing on a line, the
+  `order.owed_arrived` row says `arrivedOn: 'cash'`, and it counts as cash handed back on that order (Q42:
+  `CASH_LEFT_SQL`). As on a booking it records what happened, so it is never refused for being more than the cash paid:
+  the cash left then reads nothing. A row with no `arrivedOn` (another way, or written before W70f) and a card row are
+  not cash. Money owed on an order comes from a card refund that never arrived, so an order paid in cash has none today
+  and the choice changes a figure only on an order that somehow has both (the rule tests set the money owed by hand).
+- **One pot, whichever is pressed first.** The order's side (`CASH_LEFT_SQL`) counts a booking's money owed handed over
+  in cash (`booking.refund_owed_arrived`, W70e) beside its cash Part refunds, for each booking the order has a line for.
+  The booking's side (`CASH_SQL`, `elsewhere`) counts the order's `order.owed_arrived` cash rows beside the order's cash
+  refunds. Example: a £20 seat and £24 of soap on one
+  order, £10 gift card and £34 cash, and a card guest's £20 owed on the booking. The £20 handed over in cash first leaves
+  £14 of cash on the order: the soap gets £14 in cash and £10 as store credit (until W70f all £24: £44 out for £34 in).
+  The soap first leaves £10 of cash for the seat.
+- **An order takes off a booking's cash only up to that booking's cash that came through the order** (W70e noticed 2;
+  `CASH_LEFT_SQL`, `seat`): the seat money the booking's lines on the order hold, as `CASH_SQL` counts it, add-ons left
+  out (where that is more than the order's cash, the cash left reads nothing either way). A Move's and a Settle's cash
+  have no order, so a booking can hand back more cash than came
+  through its order; until W70f all of it came off the order and the order's other lines read low. The booking's cash
+  counts against its order first, so cash out never passes cash in. Example: seats £40 and a £12 soap on one £52 cash
+  order, moved for £11 more in cash, all £51 handed back: the soap can still go back as £12 of cash (it read £1).
+- **Words.** No refusal sentence changed: the booking's two say "cash recorded on this booking" (W70e), which a Settle's
+  cash is; the order's and the event's say "cash paid on this order", which reads right with cash handed over for money
+  owed counted as handed back.
+- Rule tests: `bookings/w05-rules.test.ts`, "W70f" (the Settle; the one pot in both press orders; the Move's and the
+  Settle's cash not taken off the order); `orders/refund-lines.test.ts`, "W70f item 2" (the order's route and row); the
+  staff app's choice, words and hint, `server/staff-app-helpers.test.ts` and `server/staff-app-orders-page.test.ts`,
+  "W70f".

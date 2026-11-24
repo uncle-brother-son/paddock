@@ -46,7 +46,7 @@ import { ApiError } from '@/server/http/errors'
 import type { StripeClient } from '@/server/stripe/client'
 import { stripeTiming, type StripeTiming } from '@/server/stripe/deadline'
 import { inC1 } from '@/server/rules/bookings/money-in'
-import { loadOrderCardPortion, recordOrderPaymentStatus } from '@/server/rules/bookings/money-left'
+import { ADDONS_INSIDE_LINE, loadOrderCardPortion, recordOrderPaymentStatus } from '@/server/rules/bookings/money-left'
 import {
   markStepEClaimRefused,
   openClaimHolding,
@@ -338,23 +338,56 @@ async function lineBlock(db: Queryable, order: Pick<OrderRow, 'date_change'>, li
  * card payment whose method is cash, or split (a gift card or store credit with cash): its total less its promo, gift
  * card and store credit. Less the cash already handed back for it: by its own refunds, by an event booking it paid for
  * (W30), and by Part refunds of the bookings it has a line for (step D's Q26, which hand back the same order's cash).
+ *
+ * W70f (Wayne, 24 Nov; W70e noticed 1 and 2):
+ * - Money owed that It already arrived recorded as handed over in cash counts as cash handed back: the order's own
+ *   (`order.owed_arrived` with `arrivedOn` 'cash'), and a booking's (`booking.refund_owed_arrived`, W70e) for each
+ *   booking the order has a line for. A row with no `arrivedOn` (another way, or written before W70f) and a card row
+ *   are not cash. bookings/money-left.ts's CASH_SQL counts the order's rows on the booking's side: one pot.
+ * - A booking's cash (its cash Part refunds and its money owed handed over in cash) comes off this order's cash only
+ *   up to that booking's cash that came through this order (`seat`): the seat money its lines here hold, as CASH_SQL
+ *   counts it, add-ons left out. (Where that is more than the order's cash, the cash left reads nothing either way.) A
+ *   booking can hand back more cash than that: a dearer Move's cash and a Settle's have no order. Until W70f all of it
+ *   came off, so the order's other lines read low. The booking's cash counts against its order first, so cash out
+ *   never passes cash in. Example: seats £40 and a £12 soap on one £52 cash order, the booking moved for £11 more in
+ *   cash, and all £51 handed back: the soap can still go back as £12 of cash (it read £1).
+ * Fixed text: ADDONS_INSIDE_LINE is a constant, and the order comes in as $1.
  */
 const CASH_LEFT_SQL = `
-SELECT CASE WHEN o.stripe_payment_intent_id IS NULL AND o.payment_method IN ('cash', 'split') THEN
-         GREATEST(o.order_total - COALESCE(o.discount_amount, 0)
-           - COALESCE((SELECT SUM(gcr.amount_used) FROM gift_card_redemptions gcr WHERE gcr.order_id = o.id), 0)
-           - COALESCE((SELECT -SUM(sct.amount) FROM store_credit_transactions sct
-                       WHERE sct.order_id = o.id AND sct.amount < 0 AND sct.reason IN ('redemption', 'redemption_reversal')), 0), 0)
-       ELSE 0 END::text AS paid,
+WITH paid AS (
+  SELECT ord.id,
+         CASE WHEN ord.stripe_payment_intent_id IS NULL AND ord.payment_method IN ('cash', 'split') THEN
+           GREATEST(ord.order_total - COALESCE(ord.discount_amount, 0)
+             - COALESCE((SELECT SUM(gcr.amount_used) FROM gift_card_redemptions gcr WHERE gcr.order_id = ord.id), 0)
+             - COALESCE((SELECT -SUM(sct.amount) FROM store_credit_transactions sct
+                         WHERE sct.order_id = ord.id AND sct.amount < 0 AND sct.reason IN ('redemption', 'redemption_reversal')), 0), 0)
+         ELSE 0 END AS cash
+  FROM orders ord WHERE ord.id = $1::uuid
+),
+seat AS (
+  SELECT oli.booking_id, SUM(GREATEST(oli.line_total - COALESCE(oli.discount_amount, 0) - inside.addons, 0)) AS money
+  FROM order_line_items oli
+  ${ADDONS_INSIDE_LINE}
+  WHERE oli.order_id = $1::uuid AND oli.item_type = 'booking' AND oli.booking_id IS NOT NULL
+  GROUP BY oli.booking_id
+)
+SELECT paid.cash::text AS paid,
        (COALESCE((SELECT SUM((c.details->'plan'->>'cash')::numeric) FROM audit_log c
                   WHERE c.details->>'worker' = 'true'
-                    AND ((c.action = 'order.refund_claimed' AND c.entity_type = 'order' AND c.entity_id = o.id::text)
-                      OR (c.action = 'event_booking.refund_claimed' AND c.entity_type = 'event_booking' AND c.details->>'orderId' = o.id::text))), 0)
-        + COALESCE((SELECT SUM((c.details->'plan'->>'cash')::numeric) FROM audit_log c
-                    WHERE c.action = 'booking.refund_claimed' AND c.entity_type = 'booking' AND c.details->>'worker' = 'true'
-                      AND c.entity_id IN (SELECT oli.booking_id::text FROM order_line_items oli
-                                          WHERE oli.order_id = o.id AND oli.item_type = 'booking' AND oli.booking_id IS NOT NULL)), 0))::text AS handed_back
-FROM orders o WHERE o.id = $1::uuid`
+                    AND ((c.action = 'order.refund_claimed' AND c.entity_type = 'order' AND c.entity_id = paid.id::text)
+                      OR (c.action = 'event_booking.refund_claimed' AND c.entity_type = 'event_booking' AND c.details->>'orderId' = paid.id::text))), 0)
+        + COALESCE((SELECT SUM((a.details->>'amount')::numeric) FROM audit_log a
+                    WHERE a.action = '${ORDER_OWED_ARRIVED}' AND a.entity_type = 'order' AND a.entity_id = paid.id::text
+                      AND a.details->>'arrivedOn' = 'cash'), 0)
+        + COALESCE((SELECT SUM(LEAST(seat.money,
+                      COALESCE((SELECT SUM((c.details->'plan'->>'cash')::numeric) FROM audit_log c
+                                WHERE c.action = 'booking.refund_claimed' AND c.entity_type = 'booking' AND c.details->>'worker' = 'true'
+                                  AND c.entity_id = seat.booking_id::text), 0)
+                      + COALESCE((SELECT SUM((a.details->>'amount')::numeric) FROM audit_log a
+                                  WHERE a.action = 'booking.refund_owed_arrived' AND a.entity_type = 'booking'
+                                    AND a.entity_id = seat.booking_id::text AND a.details->>'arrivedOn' = 'cash'), 0)))
+                    FROM seat), 0))::text AS handed_back
+FROM paid`
 
 export async function orderCashLeft(db: Queryable, orderId: string): Promise<number> {
   const row = (await db.query<{ paid: string; handed_back: string }>(CASH_LEFT_SQL, [orderId]))[0]
@@ -1290,10 +1323,15 @@ export async function orderOwedArrived(db: Db, orderId: string, input: OrderOwed
       // Refund the rest to the card would record it (the payment it would use, capped at what that payment can still
       // take; owedCardLines). Until W47 nothing was recorded, so the order's card money left read too high by it, and a
       // later Card refund asked Stripe for money the payment no longer had. What the payment can't account for is on
-      // no line (`card` on the row is then less than `amount`). Another way (store credit on their balance, cash), or
+      // no line (`card` on the row is then less than `amount`). Another way (store credit on their balance), or
       // no choice sent (a staff app from before W47): nothing on the lines and the row as it was. Recording store
       // credit they already have as card money too would count it twice. No money moves here either way.
+      // W70f (Wayne, 24 Nov), as a booking's (W70e): in cash (`arrivedOn: 'cash'`), handed over the counter. Nothing on
+      // the lines, as another way; the row says `cash`, and it counts as cash handed back on this order (CASH_LEFT_SQL,
+      // and CASH_SQL for its bookings). It records what happened, so it is never refused for being more than the cash
+      // paid: the cash left then reads nothing.
       const onCard = input.arrivedOn === 'card'
+      const inCash = input.arrivedOn === 'cash'
       const owedOn = onCard ? await owedPayment(tx, orderId) : null
       const card = owedOn?.card.paymentIntentId ? round2(Math.min(take, owedOn.card.left)) : 0
       const lines = card > 0 ? await owedCardLines(tx, orderId, card, owedOn?.membershipLines ?? null) : []
@@ -1307,7 +1345,7 @@ export async function orderOwedArrived(db: Db, orderId: string, input: OrderOwed
       // reads what its lines say.
       await recordOrderPaymentStatus(tx, orderId)
       await audit.recordAll(tx, [
-        { actorType: 'staff', actorId: options.actor.id, action: ORDER_OWED_ARRIVED, entityType: 'order', entityId: orderId, requestId: options.requestId, details: { amount: take, reason, owedBefore: owed, owedAfter: lowered.owed, ...(onCard ? { arrivedOn: 'card', card, lines } : {}) } },
+        { actorType: 'staff', actorId: options.actor.id, action: ORDER_OWED_ARRIVED, entityType: 'order', entityId: orderId, requestId: options.requestId, details: { amount: take, reason, owedBefore: owed, owedAfter: lowered.owed, ...(onCard ? { arrivedOn: 'card', card, lines } : inCash ? { arrivedOn: 'cash' } : {}) } },
       ])
       // W47a (W47 review L2): less than what arrived could be recorded as card money (the payment had less left, or
       // the order has no card payment). The cap stands; the answer now says so, with both figures, so staff who chose

@@ -71,7 +71,11 @@ export const orderRefundFiguresSchema = z.object({
   lines: z.array(orderRefundLineFiguresSchema),
   /** The order's card money still refundable: a Card refund is capped here, the rest goes to store credit. */
   cardLeft: z.number(),
-  /** The cash paid on the order less cash already handed back (Q26). */
+  /**
+   * The cash paid on the order less cash already handed back (Q26). W70f: cash handed back includes money owed that It
+   * already arrived recorded as handed over in cash (on the order, or on a booking it has a line for), and a booking's
+   * cash counts only up to the seat money its lines on this order hold (a Move's or a Settle's cash has no order).
+   */
   cashLeft: z.number(),
   /** Money still to refund on the order (Q39): Refund the rest and It already arrived act on it. */
   refundOwed: z.number(),
@@ -151,8 +155,12 @@ export const orderRefundOwedRouteInputSchema = orderRefundOwedInputSchema.extend
 export const orderOwedArrivedInputSchema = z.object({
   amount: pounds,
   reason: looseText,
-  /** W47 (Wayne, 19 Nov): where staff saw it. `card`: recorded on the lines as card money back. `other`, or nothing: as before W47. */
-  arrivedOn: z.enum(['card', 'other']).optional(),
+  /**
+   * W47 (Wayne, 19 Nov): where staff saw it. `card`: recorded on the lines as card money back. `other`, or nothing: as before W47.
+   * W70f (Wayne, 24 Nov), as a booking's: and `cash`, handed over the counter. Nothing is recorded on the lines, but the
+   * row says `cash` and it counts as cash handed back on the order (`cashLeft`).
+   */
+  arrivedOn: z.enum(['card', 'cash', 'other']).optional(),
 })
 export type OrderOwedArrivedInput = z.infer<typeof orderOwedArrivedInputSchema>
 export const orderOwedArrivedRouteInputSchema = orderOwedArrivedInputSchema.extend(orderInPath)

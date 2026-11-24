@@ -192,9 +192,12 @@ export const bookingRefundFiguresSchema = z.object({
   parts: z.object({ card: z.number(), giftCard: z.number(), storeCredit: z.number(), cash: z.number() }),
   /**
    * W21 (Q26): the cash that can be handed back: the cash recorded on the booking's own orders (an order paid in cash
-   * or split with no Stripe payment), less cash already handed back, never more than the cash part above. Cash taken
-   * with no order (Settle, Move: Q36) isn't counted, so it can only go back as store credit. The figures route always
-   * sends it; the old figures had none.
+   * or split with no Stripe payment), less cash already handed back. Cash taken on a Settle (no order: Q36) isn't
+   * counted, so it can only go back as store credit. The figures route always sends it; the old figures had none.
+   * W70e (Q26 amended, 24 Nov): the lower of what is left (`left`) and the cash paid (on the orders, and on a dearer
+   * Move) less the cash handed back (cash Part refunds, and money owed that It already arrived recorded as cash). No
+   * longer held to the cash part above, so it can be more than `parts.cash`.
+   * W70f (Wayne, 24 Nov): cash taken on a Settle is counted too, as a Move's.
    */
   cashLeft: z.number().optional(),
   /**
@@ -223,10 +226,12 @@ export type RefundOwedInput = z.infer<typeof refundOwedInputSchema>
  * It already arrived: what is owed reached the customer after all; no money moves.
  * W47 (Wayne, 19 Nov): `arrivedOn` says where staff saw it. `card`: on the customer's card (the refund is in Stripe),
  * so it is recorded on the lines as card money given back and the card money left reads right. `other`, or nothing
- * (a staff app from before W47): another way (store credit on their balance, cash), and nothing is recorded on the
+ * (a staff app from before W47): another way (store credit on their balance), and nothing is recorded on the
  * lines, exactly as before W47.
+ * W70e (Wayne, 24 Nov): and `cash`: handed over the counter. Nothing is recorded on the lines either, but the row says
+ * `cash`, and it counts as cash handed back: it lowers the cash a Part refund can still hand back (`cashLeft`).
  */
-export const owedArrivedInputSchema = z.object({ amount: pounds, reason: looseText, arrivedOn: z.enum(['card', 'other']).optional() })
+export const owedArrivedInputSchema = z.object({ amount: pounds, reason: looseText, arrivedOn: z.enum(['card', 'cash', 'other']).optional() })
 export type OwedArrivedInput = z.infer<typeof owedArrivedInputSchema>
 
 // --- Cancel & Refund, Cancel & return credit, Remove add-on
