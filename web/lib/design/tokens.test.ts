@@ -46,9 +46,16 @@ describe('colours: the palette and the four theme modes are Figma\'s (W71, item 
     expect(themeVariable('Object/Dark Dark Shade')).toBe('--color-object-dark-dark-shade')
   })
 
-  it('no colour exists that Figma doesn\'t have, and the starter colours are gone', () => {
+  // WQ36 (Wayne, 24 Nov): selected text takes the opposite theme. Its two colours are the site's own (Figma has no
+  // variable for a selection), each a palette colour, set per mode beside the theme colours.
+  const SELECTION: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+    '--color-selection-surface': { Light: '--color-moss', Dark: '--color-sand-light', Fjord: '--color-sand-light', Mud: '--color-sand-light' },
+    '--color-selection-text': { Light: '--color-sand-light', Dark: '--color-black', Fjord: '--color-black', Mud: '--color-black' },
+  }
+
+  it('no colour exists that Figma doesn\'t have (but the two of selected text, WQ36), and the starter colours are gone', () => {
     const colours = Object.keys(theme).filter((name) => name.startsWith('--color-') && name !== '--color-*')
-    expect(colours.sort()).toEqual([...Object.keys(palette).map(paletteVariable), ...themeNames.map(themeVariable)].sort())
+    expect(colours.sort()).toEqual([...Object.keys(palette).map(paletteVariable), ...themeNames.map(themeVariable), ...Object.keys(SELECTION)].sort())
     expect(theme['--color-*']).toBe('initial')
     expect(readFileSync(path.join(WEB, 'app/globals.css'), 'utf8')).not.toMatch(/--color-(background|foreground)/)
   })
@@ -67,7 +74,32 @@ describe('colours: the palette and the four theme modes are Figma\'s (W71, item 
     for (const [name, byMode] of Object.entries(tokens.theme)) {
       expect(declared[themeVariable(name)], `${name} in ${mode}`).toBe(`var(${paletteVariable((byMode as Record<string, string>)[mode]!)})`)
     }
-    expect(Object.keys(declared).sort()).toEqual(themeNames.map(themeVariable).sort())
+    expect(Object.keys(declared).sort()).toEqual([...themeNames.map(themeVariable), ...Object.keys(SELECTION)].sort())
+  })
+
+  it.each(tokens.themeModes)('WQ36, %s: selected text is the opposite theme, in colours the palette already has', (mode) => {
+    const declared = ruleNamed(css, themeSelector(mode.toLowerCase())).declarations
+    for (const [name, byMode] of Object.entries(SELECTION)) {
+      expect(declared[name], `${name} in ${mode}`).toBe(`var(${byMode[mode]})`)
+      // No new colour: each is one of the palette's.
+      expect(Object.keys(palette).map(paletteVariable)).toContain(byMode[mode])
+    }
+    // Light: Moss with Sand Light words. Every other mode: Sand Light with Black words.
+    const pair = [declared['--color-selection-surface'], declared['--color-selection-text']]
+    expect(pair).toEqual(mode === 'Light' ? ['var(--color-moss)', 'var(--color-sand-light)'] : ['var(--color-sand-light)', 'var(--color-black)'])
+  })
+
+  it('WQ36: with no mode set they are Light\'s, and one ::selection rule uses them, so it follows the mode the words are in (the header too)', () => {
+    const light = ruleNamed(css, '[data-theme="light"]').declarations
+    for (const name of Object.keys(SELECTION)) expect(theme[name], name).toBe(light[name])
+    // The surface at 99%: Safari rewrites a fully opaque selection background (Moss to black at 80%, Sand Light to a
+    // 60% wash) and leaves one that is not quite opaque as it is.
+    expect(ruleNamed(css, '::selection').declarations).toEqual({
+      'background-color': 'color-mix(in srgb, var(--color-selection-surface) 99%, transparent)',
+      color: 'var(--color-selection-text)',
+    })
+    // The one rule: no component sets a selection colour of its own.
+    expect(readFileSync(path.join(WEB, 'app/globals.css'), 'utf8').match(/::selection \{/g)).toHaveLength(1)
   })
 
   it('W73 (WQ12): the focus ring is 2px of Text/Primary with a 2px gap, for the keyboard only', () => {

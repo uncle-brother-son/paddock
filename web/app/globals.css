@@ -75,6 +75,14 @@
   --color-object-product-bg: var(--color-sand);
 
   /*
+   * Selected text (WQ36, Wayne): the opposite theme. Light: Moss with Sand Light words; Dark, Fjord and Mud: Sand
+   * Light with Black words. These two are the site's own (Figma has no variable for a selection), made from the
+   * palette above, and set per mode with the theme colours below. The `::selection` rule uses them.
+   */
+  --color-selection-surface: var(--color-moss);
+  --color-selection-text: var(--color-sand-light);
+
+  /*
    * Font sizes (Figma "Font/Size/28" is --text-28, in rem: 16px = 1rem). 28 and 24 take the Mobile value here and
    * the Desktop value from 768px (below, with the grid).
    */
@@ -196,6 +204,8 @@
   --color-object-dark-dark-shade: var(--color-black-65);
   --color-object-light-shade: var(--color-white-4);
   --color-object-product-bg: var(--color-sand);
+  --color-selection-surface: var(--color-moss);
+  --color-selection-text: var(--color-sand-light);
 }
 
 [data-theme="dark"],
@@ -216,6 +226,8 @@
   --color-object-dark-dark-shade: var(--color-black-65);
   --color-object-light-shade: var(--color-white-4);
   --color-object-product-bg: var(--color-sand);
+  --color-selection-surface: var(--color-sand-light);
+  --color-selection-text: var(--color-black);
 }
 
 [data-theme="fjord"],
@@ -236,6 +248,8 @@
   --color-object-dark-dark-shade: var(--color-black-65);
   --color-object-light-shade: var(--color-white-4);
   --color-object-product-bg: var(--color-sand);
+  --color-selection-surface: var(--color-sand-light);
+  --color-selection-text: var(--color-black);
 }
 
 [data-theme="mud"],
@@ -256,11 +270,27 @@
   --color-object-dark-dark-shade: var(--color-black-65);
   --color-object-light-shade: var(--color-white-4);
   --color-object-product-bg: var(--color-sand);
+  --color-selection-surface: var(--color-sand-light);
+  --color-selection-text: var(--color-black);
 }
 
 /* Text takes its colour from the nearest mode, so words inside a section that switches mode switch with it. */
 [data-theme] {
   color: var(--color-text-primary);
+}
+
+/*
+ * Selected text takes the opposite theme (WQ36, Wayne): the two selection colours of the mode the words are in.
+ * One rule for the whole site: a section that sets a mode sets them, and so does the header, which carries the mode
+ * of the section beneath it.
+ *
+ * The surface is drawn at 99%, not whole. Safari rewrites a fully opaque selection background by itself (measured in
+ * WebKit: Moss came out as black at 80%, Sand Light as a 60% wash) and leaves alone one that is not quite opaque. At
+ * 99% every browser paints the token's colour to within 3 of 255.
+ */
+::selection {
+  background-color: color-mix(in srgb, var(--color-selection-surface) 99%, transparent);
+  color: var(--color-selection-text);
 }
 
 body {
