@@ -3,6 +3,7 @@ import type { Metadata, Viewport } from "next";
 import { Frame } from "@/components/frame/Frame";
 import { GridOverlay } from "@/components/layout/GridOverlay";
 import { MotionProviders } from "@/components/providers/MotionProviders";
+import { OverlayTexture } from "@/components/ui/Overlay";
 import { SITE_NAME, SITE_URL } from "@/lib/site";
 
 import { fontVariables } from "./fonts";
@@ -38,6 +39,8 @@ export default function RootLayout({
         <MotionProviders>
           <Frame>{children}</Frame>
         </MotionProviders>
+        {/* The Overlay's texture filter, once for the whole page: every popup's shade points at it (Chromium only). */}
+        <OverlayTexture />
         {/* Test copies only: Ctrl + G draws the grid over the page. On the live domain it renders and loads nothing. */}
         <GridOverlay />
       </body>

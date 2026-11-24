@@ -78,6 +78,27 @@ describe('colours: the palette and the four theme modes are Figma\'s (W71, item 
     expect(readFileSync(path.join(WEB, 'app/globals.css'), 'utf8')).not.toMatch(/:focus(?!-visible)/)
   })
 
+  it('W73 (Wayne): every button, and everything with the role of one, shows the hand', () => {
+    expect(ruleNamed(css, ':where(button, [role="button"])').declarations).toEqual({ cursor: 'pointer' })
+  })
+
+  it("W73: the Overlay is Object/Light Shade over a 12px blur (Figma's 24), with the texture filter where Chromium can run it", () => {
+    const supports = '@supports (backdrop-filter: blur(12px) url(#overlay-texture)) and (-webkit-app-region: drag)'
+    const shade = ruleNamed(css, '@utility overlay-shade')
+    expect(shade.declarations).toEqual({
+      'background-color': 'var(--color-object-light-shade)',
+      '-webkit-backdrop-filter': 'blur(12px)',
+      'backdrop-filter': 'blur(12px)',
+    })
+    expect(childNamed(shade, supports).declarations).toEqual({ 'backdrop-filter': 'blur(12px) url(#overlay-texture)' })
+    // Everywhere else: fine grain, blended so it adds no colour, taking no clicks; never both at once.
+    const grain = ruleNamed(css, '@utility overlay-grain')
+    expect(grain.declarations['mix-blend-mode']).toBe('overlay')
+    expect(grain.declarations['pointer-events']).toBe('none')
+    expect(grain.declarations['background-image']).toMatch(/^url\("data:image\/svg\+xml,.*fractalNoise.*baseFrequency='0\.5'.* 0\.05'.*"\)$/)
+    expect(childNamed(grain, supports).declarations).toEqual({ display: 'none' })
+  })
+
   it('with no mode set, the theme colours are Light', () => {
     const light = ruleNamed(css, '[data-theme="light"]').declarations
     for (const name of themeNames) expect(theme[themeVariable(name)], name).toBe(light[themeVariable(name)])

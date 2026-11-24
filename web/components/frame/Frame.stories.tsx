@@ -1,6 +1,8 @@
 import type { Meta, StoryObj } from '@storybook/nextjs-vite'
 import { expect, userEvent, waitFor } from 'storybook/test'
 
+import { OverlayTexture } from '@/components/ui/Overlay'
+
 import { FrameShell } from './FrameShell'
 import { EMPTY_FRAME, SAMPLE_FRAME, SamplePage } from './sample-content'
 
@@ -9,6 +11,15 @@ const meta = {
   component: FrameShell,
   parameters: { padded: false, layout: 'fullscreen', nextjs: { appDirectory: true } },
   args: { variant: 'global', content: SAMPLE_FRAME, children: <SamplePage /> },
+  // As the root layout does: the Overlay's texture filter, once for the page.
+  decorators: [
+    (Story) => (
+      <>
+        <OverlayTexture />
+        <Story />
+      </>
+    ),
+  ],
 } satisfies Meta<typeof FrameShell>
 
 export default meta

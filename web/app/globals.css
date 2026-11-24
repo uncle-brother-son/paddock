@@ -279,6 +279,11 @@ body {
   outline-offset: var(--spacing-2);
 }
 
+/* Everything that is pressed shows the hand, site-wide (W73, Wayne): a button as a link does. */
+:where(button, [role="button"]) {
+  cursor: pointer;
+}
+
 }
 
 /*
@@ -434,6 +439,36 @@ body {
   grid-template-columns: repeat(var(--grid-columns), minmax(0, 1fr));
   column-gap: var(--grid-gutter);
   padding-inline: var(--grid-margin);
+}
+
+/*
+ * Wayne's Overlay (Figma "Overlay", 136:1054: Object/Light Shade, a 24 background blur, the Texture effect with
+ * noise size 2 and radius 8). components/ui/Overlay.tsx puts these two on its two layers. Figma's blur radius is
+ * twice CSS's, so 24 is blur(12px); the noise and its 8px of push are in the SVG filter there (#overlay-texture).
+ *
+ * Only Chromium can run an SVG filter on what lies behind an element, and only Chromium has -webkit-app-region:
+ * Safari says yes to the first test alone and then draws no texture, so both are asked. Everything else keeps the
+ * blur and the fill and shows the grain layer: fine noise at 5%, blended as an overlay so it adds no colour of its
+ * own (measured against Figma's picture of Menu Open: the same average colour, the same grain).
+ */
+@utility overlay-shade {
+  background-color: var(--color-object-light-shade);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+
+  @supports (backdrop-filter: blur(12px) url(#overlay-texture)) and (-webkit-app-region: drag) {
+    backdrop-filter: blur(12px) url(#overlay-texture);
+  }
+}
+
+@utility overlay-grain {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='256' height='256'%3E%3Cfilter id='n' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.5' numOctaves='1' seed='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 0 0 0 0 0.05'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  mix-blend-mode: overlay;
+  pointer-events: none;
+
+  @supports (backdrop-filter: blur(12px) url(#overlay-texture)) and (-webkit-app-region: drag) {
+    display: none;
+  }
 }
 
 /* The two durations as utilities, for a CSS transition: `transition-opacity duration-short ease-smooth`. */

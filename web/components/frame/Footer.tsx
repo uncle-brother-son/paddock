@@ -14,12 +14,14 @@ type FooterProps = {
 }
 
 /**
- * A footer link in Label 12. The style is trimmed to its capitals, so the link is 9px tall: its tap area reaches
- * 8px above and below (unseen), half the 16px gap to the next link.
+ * A footer link in Label 12: Text/Primary, turning Text/Muted Primary on hover and on keyboard focus over the short
+ * duration with the smooth curve (Wayne, 24 Nov). The style is trimmed to its capitals, so the link is 9px tall:
+ * its tap area reaches 8px above and below (unseen), half the 16px gap to the next link.
  */
 function FooterLink({ link }: { link: FrameLink }) {
   return (
-    <SiteLink href={link.href} className="relative block text-label-12 text-text-primary after:absolute after:inset-x-0 after:-inset-y-8">
+    <SiteLink href={link.href} className="relative block text-label-12 text-text-primary transition-colors duration-short ease-smooth after:absolute after:inset-x-0 after:-inset-y-8 hover:text-text-muted-primary focus-visible:text-text-muted-primary"
+    >
       {link.label}
     </SiteLink>
   )

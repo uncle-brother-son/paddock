@@ -1,5 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/nextjs-vite'
-import { expect, within } from 'storybook/test'
+import { expect, userEvent, waitFor, within } from 'storybook/test'
+
+import { DURATION_SHORT } from '@/lib/motion/tokens'
 
 import { Footer } from './Footer'
 import { EMPTY_FRAME, SAMPLE_FRAME } from './sample-content'
@@ -34,6 +36,37 @@ export const Global: Story = {
     await expect([left(newsletter), Math.round(newsletter.getBoundingClientRect().width)]).toEqual([488, 464])
     await expect(canvas.getByText('©2026 The Paddock Wellness Club')).toBeVisible()
     await expect(canvas.queryByText('Manage Cookies')).toBeNull()
+  },
+}
+
+/**
+ * A footer link is Text/Primary and turns Text/Muted Primary on hover and on keyboard focus, over the short duration
+ * with the smooth curve (Wayne, 24 Nov). Hover one, or Tab to it.
+ */
+export const LinkHoverAndFocus: Story = {
+  name: 'Link hover and focus',
+  globals: { viewport: { value: 'desktop', isRotated: false } },
+  play: async ({ canvas }) => {
+    const [first, second] = within(canvas.getByRole('navigation', { name: 'Footer' })).getAllByRole('link') as [HTMLElement, HTMLElement]
+    const primary = getComputedStyle(second).color
+    const muted = getComputedStyle(canvas.getByText('©2026 The Paddock Wellness Club')).color
+    await expect(getComputedStyle(first).color).toBe(primary)
+    await expect([getComputedStyle(first).transitionProperty.includes('color'), getComputedStyle(first).transitionDuration]).toEqual([true, `${DURATION_SHORT}s`])
+
+    // The keyboard: Text/Muted Primary (the copyright line's colour), with the focus ring; the others stay as they were.
+    // Tab goes through the newsletter field and its arrow first.
+    for (let presses = 0; presses < 5 && document.activeElement !== first; presses += 1) await userEvent.tab()
+    await expect(first).toHaveFocus()
+    await waitFor(() => expect(getComputedStyle(first).color).toBe(muted))
+    await expect(getComputedStyle(first).outlineStyle).toBe('solid')
+    await expect(getComputedStyle(second).color).toBe(primary)
+    await userEvent.tab()
+    await waitFor(() => expect(getComputedStyle(first).color).toBe(primary))
+
+    // A test's pointer is not a real one, so the stylesheet is asked instead: hovering sets the same colour as focus.
+    const rules = [...document.styleSheets].flatMap((sheet) => [...sheet.cssRules]).map((rule) => rule.cssText)
+    const sets = (state: string) => rules.some((text) => text.includes(`text-text-muted-primary:${state}`) && text.includes('color: var(--color-text-muted-primary)'))
+    await expect([first.className.includes('hover:text-text-muted-primary'), sets('hover'), sets('focus-visible')]).toEqual([true, true, true])
   },
 }
 

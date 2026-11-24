@@ -7,7 +7,7 @@ import { Icon } from '@/components/brand/Icon'
 import { Grid } from '@/components/layout/Grid'
 import type { FrameMenuLink } from '@/lib/frame/content'
 
-import { FrameButton, FrameButtonLabel } from './FrameButton'
+import { FrameButton, FrameButtonLabel, FrameLink } from './FrameButton'
 import { Menu } from './Menu'
 import { useFramePanels } from './useFramePanels'
 
@@ -33,7 +33,8 @@ type HeaderProps = {
  * The site's header (W73; Figma "Header", 287:5420). It is see-through and lies over the top of the page. Scrolling
  * down takes it away and any scroll up, anywhere on the page, slides it back in (Wayne, 24 Nov), over the short
  * duration and the smooth curve; with reduced motion on it is just there or not. Its words take the mode of the
- * section beneath it. Book, Bag and Account go to useFramePanels, which does nothing until the buying stage.
+ * section beneath it. Book and Account are links, to /book and /account. A click on Book (and on Bag) goes to
+ * useFramePanels first: when the booking panel exists it opens over the page; until then the link is followed.
  */
 export function Header({ variant = 'global', logo, menuLinks }: HeaderProps) {
   const header = useRef<HTMLElement>(null)
@@ -111,13 +112,19 @@ export function Header({ variant = 'global', logo, menuLinks }: HeaderProps) {
                 <FrameButtonLabel>Menu</FrameButtonLabel>
               </FrameButton>
               <div className="flex items-center gap-8">
-                <FrameButton onClick={() => panels.open('book')}>
+                <FrameLink
+                  href="/book"
+                  onClick={(event) => {
+                    // The panel when there is one; the link when there isn't.
+                    if (panels.open('book')) event.preventDefault()
+                  }}
+                >
                   <FrameButtonLabel>Book</FrameButtonLabel>
-                </FrameButton>
+                </FrameLink>
                 {/* On a phone Account is in the menu. */}
-                <FrameButton className="hidden md:flex" onClick={() => panels.open('account')}>
+                <FrameLink href="/account" className="hidden md:flex">
                   <FrameButtonLabel>Account</FrameButtonLabel>
-                </FrameButton>
+                </FrameLink>
                 {bag}
               </div>
             </div>
@@ -125,7 +132,7 @@ export function Header({ variant = 'global', logo, menuLinks }: HeaderProps) {
         </Grid>
       </header>
       {variant === 'global' ? (
-        <Menu id={menuId} open={menuOpen} links={menuLinks} onClose={() => setMenuOpenOn(null)} returnFocusTo={burger} onAccount={() => panels.open('account')} />
+        <Menu id={menuId} open={menuOpen} links={menuLinks} onClose={() => setMenuOpenOn(null)} returnFocusTo={burger} />
       ) : null}
     </>
   )

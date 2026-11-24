@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react'
 
 import { Icon } from '@/components/brand/Icon'
 import { Grid } from '@/components/layout/Grid'
+import { Overlay } from '@/components/ui/Overlay'
 import { SiteLink } from '@/components/ui/SiteLink'
 import type { FrameMenuLink } from '@/lib/frame/content'
 
@@ -17,8 +18,6 @@ type MenuProps = {
   onClose: () => void
   /** The button that opened it: focus goes back there when it closes. */
   returnFocusTo: RefObject<HTMLButtonElement | null>
-  /** A phone has no Account button in its header: the menu holds it. */
-  onAccount: () => void
 }
 
 /**
@@ -33,7 +32,7 @@ type MenuProps = {
  * Desktop: while a link is hovered or has keyboard focus the other links fade to Text/Muted Primary and that link's
  * page thumbnail opens out from its middle on the left. A phone has neither: its links stay dark (Wayne, 24 Nov).
  */
-export function Menu({ id, open, links, onClose, returnFocusTo, onAccount }: MenuProps) {
+export function Menu({ id, open, links, onClose, returnFocusTo }: MenuProps) {
   const close = useRef<HTMLButtonElement>(null)
   const wasOpen = useRef(false)
   const lenis = useLenis()
@@ -73,13 +72,8 @@ export function Menu({ id, open, links, onClose, returnFocusTo, onAccount }: Men
 
   return (
     <>
-      {/* The shade over the page (Figma "Overlay": Object/Light Shade). A click on it closes the menu. */}
-      <div
-        aria-hidden="true"
-        data-frame-popup=""
-        onClick={shutAndForget}
-        className={`fixed inset-0 z-20 bg-object-light-shade duration-short ease-smooth ${open ? 'visible opacity-100 transition-opacity' : 'invisible opacity-0 transition-[opacity,visibility]'}`}
-      />
+      {/* The shade over the page (Wayne's Overlay: blurred, textured). A click on it closes the menu. */}
+      <Overlay open={open} onClick={shutAndForget} />
       <div
         id={id}
         role="dialog"
@@ -136,9 +130,10 @@ export function Menu({ id, open, links, onClose, returnFocusTo, onAccount }: Men
             </ul>
             <ul className="flex flex-col items-start gap-12 md:hidden">
               <li>
-                <button type="button" onClick={onAccount} className="relative block text-label-12 text-text-primary after:absolute after:-inset-8">
+                {/* A phone has no Account in its header: the menu holds the link. */}
+                <SiteLink href="/account" onClick={shutAndForget} className="relative block text-label-12 text-text-primary after:absolute after:-inset-8">
                   Account
-                </button>
+                </SiteLink>
               </li>
             </ul>
           </nav>

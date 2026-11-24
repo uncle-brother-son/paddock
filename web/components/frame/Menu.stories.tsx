@@ -1,6 +1,8 @@
 import type { Meta, StoryObj } from '@storybook/nextjs-vite'
 import { expect, userEvent, waitFor, within } from 'storybook/test'
 
+import { OverlayTexture } from '@/components/ui/Overlay'
+
 import { Header } from './Header'
 import { HeaderLogo } from './HeaderLogo'
 import { EMPTY_FRAME, SAMPLE_FRAME, SamplePage } from './sample-content'
@@ -12,6 +14,7 @@ const meta = {
   args: { variant: 'global', logo: <HeaderLogo animated />, menuLinks: SAMPLE_FRAME.menuLinks },
   render: (args) => (
     <>
+      <OverlayTexture />
       <Header {...args} />
       <main id="main" data-behind-popups="">
         <SamplePage />
@@ -36,8 +39,9 @@ const openMenu: Play = async ({ canvas, canvasElement }) => {
 }
 
 /**
- * Figma "Menu Open": press Menu and the Light panel opens down from the top over the shaded page, with Close at
- * the top right. The links are Navigation's menu links from Sanity.
+ * Figma "Menu Open": press Menu and the Light panel opens down from the top, with Close at the top right, over
+ * Wayne's Overlay: the page behind blurred and textured (UI / Overlay). The links are Navigation's menu links from
+ * Sanity.
  */
 export const Open: Story = {
   globals: { viewport: { value: 'desktop', isRotated: false } },
@@ -54,6 +58,11 @@ export const Open: Story = {
     await expect((canvasElement.querySelector('#main') as HTMLElement).inert).toBe(true)
     await expect((canvasElement.querySelector('header') as HTMLElement).inert).toBe(true)
     await expect(document.documentElement.classList.contains('overflow-hidden')).toBe(true)
+    // The shade is the shared Overlay, the whole window, faded in.
+    const shade = canvasElement.querySelector('[data-overlay="shade"]') as HTMLElement
+    await waitFor(() => expect(getComputedStyle(shade).opacity).toBe('1'))
+    await expect(getComputedStyle(shade).backdropFilter).toContain('blur(12px)')
+    await expect(Math.round(shade.getBoundingClientRect().height)).toBe(window.innerHeight)
     await expect(menu.getAllByRole('link').map((link) => link.textContent)).toEqual(SAMPLE_FRAME.menuLinks.map((link) => link.label))
     // Figma: the panel is 565px tall on a desktop (120 above, the picture's 285, 160 below) and the links start at column 10.
     await expect(Math.round(dialog.getBoundingClientRect().height)).toBe(565)
@@ -115,14 +124,14 @@ export const ClosedWithCloseAndShade: Story = {
 
     await openMenu(context)
     // Below the panel, where only the shade is.
-    await userEvent.pointer({ keys: '[MouseLeft]', target: canvasElement.querySelector('[data-frame-popup][aria-hidden]') as HTMLElement, coords: { clientX: 700, clientY: 700 } })
+    await userEvent.pointer({ keys: '[MouseLeft]', target: canvasElement.querySelector('[data-overlay="shade"]') as HTMLElement, coords: { clientX: 700, clientY: 700 } })
     await waitFor(() => expect(dialogIn(canvasElement)).not.toBeVisible())
   },
 }
 
 /**
- * Figma "Menu Open (mobile)": the links in the phone's Hero Caps size with Account beneath, and no picture. The
- * links stay dark: there is no hover on a phone (Wayne, 24 Nov).
+ * Figma "Menu Open (mobile)": the links in the phone's Hero Caps size with Account (a link to /account) beneath,
+ * and no picture. The links stay dark: there is no hover on a phone (Wayne, 24 Nov).
  */
 export const OpenOnAPhone: Story = {
   name: 'Open, on a phone',
@@ -131,8 +140,8 @@ export const OpenOnAPhone: Story = {
     await openMenu(context)
     const dialog = dialogIn(context.canvasElement)
     const menu = within(dialog)
-    await expect(menu.getByRole('button', { name: 'Account' })).toBeVisible()
-    const links = menu.getAllByRole('link')
+    await expect(menu.getByRole('link', { name: 'Account' }).getAttribute('href')).toBe('/account')
+    const links = menu.getAllByRole('link').filter((link) => link.textContent !== 'Account')
     links[0]!.focus()
     await expect(links[0]).toHaveFocus()
     await expect(new Set(links.map((link) => getComputedStyle(link).color)).size).toBe(1)

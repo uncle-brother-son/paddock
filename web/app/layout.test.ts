@@ -28,6 +28,15 @@ describe('the root layout (W71, item 7)', () => {
     expect(readFileSync(path.resolve(__dirname, '../components/frame/FrameShell.tsx'), 'utf8')).toMatch(/<main id="main" tabIndex=\{-1\}/)
   })
 
+  it("W73: the Overlay's texture filter is drawn once, by the layout", () => {
+    expect(layout.match(/<OverlayTexture \/>/g)).toHaveLength(1)
+    const overlay = readFileSync(path.resolve(__dirname, '../components/ui/Overlay.tsx'), 'utf8')
+    expect(overlay).toMatch(/export const OVERLAY_TEXTURE_ID = 'overlay-texture'/)
+    expect(overlay).toMatch(/<svg aria-hidden="true" focusable="false" width="0" height="0"/)
+    // The stylesheet points at the same id.
+    expect(readFileSync(path.resolve(__dirname, 'globals.css'), 'utf8')).toMatch(/backdrop-filter: blur\(12px\) url\(#overlay-texture\);/)
+  })
+
   it('the page\'s height does not hang on <html>: Lenis sets <html> and <body> to height: auto while it runs', () => {
     // With `h-full` on <html> and `min-h-full` on <body>, the page lost its full height the moment Lenis started,
     // and kept it for a visitor with reduced motion on: two layouts, and a jump after loading.
