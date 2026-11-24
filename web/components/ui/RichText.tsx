@@ -41,15 +41,19 @@ function grouped(blocks: RichTextBlocks): Array<{ key: string; list: boolean; bl
  * Sanity's one rich text (W72: paragraphs, bullets, bold and links) in Copy 14, with Link 14 for its links. Every
  * text style is trimmed to its capitals, so the room between paragraphs is a gap from the spacing scale. Drawn on
  * the server: the words are in the page's HTML.
+ *
+ * W74: `spacing="panel"` is the Product Info Panel's, as Figma draws rich text there (1402:53320): 32px between a
+ * paragraph and a list, and 4px between a bullet and its words.
  */
-export function RichText({ blocks, className }: { blocks: RichTextBlocks; className?: string }) {
+export function RichText({ blocks, className, spacing = 'page' }: { blocks: RichTextBlocks; className?: string; spacing?: 'page' | 'panel' }) {
+  const panel = spacing === 'panel'
   return (
-    <div className={`flex flex-col gap-16 ${className ?? ''}`}>
+    <div className={`flex flex-col ${panel ? 'gap-32' : 'gap-16'} ${className ?? ''}`}>
       {grouped(blocks).map((group) =>
         group.list ? (
           <ul key={group.key} className="flex flex-col gap-12">
             {group.blocks.map((block) => (
-              <li key={block._key} className="flex items-start gap-8">
+              <li key={block._key} className={`flex items-start ${panel ? 'gap-4' : 'gap-8'}`}>
                 <Icon name="bullet" />
                 <p className="text-copy-14">
                   <Spans block={block} />

@@ -1,0 +1,235 @@
+import type { Meta, StoryObj } from '@storybook/nextjs-vite'
+import { expect, userEvent, waitFor, within } from 'storybook/test'
+
+import { OverlayTexture } from '@/components/ui/Overlay'
+import type { ShopAvailabilityRouteOutput } from '@/contracts/shop'
+
+import { ProductPageView } from './ProductPageView'
+import { SAMPLE_PRODUCT, SAMPLE_PRODUCT_ON_SALE, SAMPLE_PRODUCT_ONE_LEFT, SAMPLE_PRODUCT_SOLD_OUT, SAMPLE_SIMILAR, SAMPLE_SIZES } from './sample-shop'
+
+const meta = {
+  title: 'Shop/Product',
+  component: ProductPageView,
+  parameters: { padded: false, layout: 'fullscreen', nextjs: { appDirectory: true } },
+  // A story asks no route for its sizes: it shows what it was given.
+  args: { view: SAMPLE_PRODUCT, similar: SAMPLE_SIMILAR, readSizes: null, reducedMotion: true },
+  render: (args) => (
+    <>
+      <OverlayTexture />
+      <ProductPageView {...args} />
+    </>
+  ),
+} satisfies Meta<typeof ProductPageView>
+
+export default meta
+type Story = StoryObj<typeof meta>
+
+const box = (element: Element) => element.getBoundingClientRect()
+const part = (canvasElement: HTMLElement, name: string) => canvasElement.querySelector(`[data-shop="${name}"]`) as HTMLElement
+
+/**
+ * Figma "Product" (1684:41920). The gallery fills the window's left half to the end of the grid's 12th column, its
+ * pictures stacked, each 4 by 5; the details (Figma "PIC", Type=product) are columns 15 to 21, 240px down, and stick
+ * to the window's top while the gallery scrolls past. Then Similar Merch. The states of its button (Figma "CTA",
+ * Type=product) are the stories below.
+ */
+export const Desktop: Story = {
+  globals: { viewport: { value: 'desktop', isRotated: false } },
+  play: async ({ canvas, canvasElement }) => {
+    const gallery = part(canvasElement, 'gallery')
+    await expect([Math.round(box(gallery).left), Math.round(box(gallery).width)]).toEqual([0, 716])
+    const pictures = [...gallery.querySelectorAll('[data-gallery-item]')]
+    await expect(pictures.map((picture) => [Math.round(box(picture).width), Math.round(box(picture).height)])).toEqual([[716, 895], [716, 895], [716, 895]])
+    await expect(Math.round(box(pictures[1]!).top - box(pictures[0]!).top)).toBe(895)
+    // Only the first picture loads ahead of the rest.
+    await expect([...gallery.querySelectorAll('img')].map((image) => image.loading)).toEqual(['eager', 'lazy', 'lazy'])
+    const details = part(canvasElement, 'details')
+    await expect([Math.round(box(details).left), Math.round(box(details).width)]).toEqual([842, 405])
+    await expect(getComputedStyle(details).position).toBe('sticky')
+    const name = canvas.getByRole('heading', { level: 1, name: 'The Paddock T-Shirt' })
+    await expect(Math.round(box(name).top)).toBe(240)
+    await expect(getComputedStyle(name).fontSize).toBe('24px')
+    // The price line: £45 (Member from £40), 24px under the name.
+    const price = within(details).getByText('£45')
+    await expect(price).toBeVisible()
+    await expect(canvas.getByText('(Member from £40)')).toBeVisible()
+    await expect(Math.round(box(price).top - box(name).bottom)).toBe(24)
+    // Colour: its name, and a swatch for each colour of its family, a sixth of the width each, this one marked.
+    await expect(canvas.getByText('Brown')).toBeVisible()
+    const colours = within(canvas.getByRole('list', { name: 'Colours' }))
+    const [brown, white] = colours.getAllByRole('link')
+    await expect([brown!.getAttribute('aria-current'), white!.getAttribute('aria-current'), white!.getAttribute('href')]).toEqual(['page', null, '/shop/tee-white'])
+    await expect(Math.round(box(brown!).width)).toBe(64)
+    await expect(Math.round(box(white!).left - box(brown!).right)).toBe(4)
+    // Size: a chip for each (SizeSelect, Big: Copy 14, 16px above and below), 4px apart, across the details' width.
+    const sizes = within(canvas.getByRole('radiogroup', { name: 'Size' })).getAllByRole('radio')
+    await expect(sizes.map((size) => size.getAttribute('aria-label'))).toEqual(['S', 'M', 'L', 'XL'])
+    const chips = sizes.map((size) => size.parentElement!)
+    await expect([Math.round(box(chips[0]!).left), Math.round(box(chips[3]!).right), Math.round(box(chips[1]!).left - box(chips[0]!).right)]).toEqual([842, 1247, 4])
+    await expect(canvas.getByRole('button', { name: 'Size guide' })).toBeVisible()
+    // The button, the whole width, and the line under it.
+    const button = canvas.getByRole('button', { name: 'Add to bag' })
+    await expect([Math.round(box(button).width), Math.round(box(button).height)]).toEqual([405, 40])
+    await expect(canvas.getByText('Delivery or collection from the Paddock.')).toBeVisible()
+    // The links that open the Product Info Panel, in Label 12, 64px under the rest.
+    await expect(['Description', 'Materials & care', 'Shipping & returns'].map((label) => canvas.getByRole('button', { name: label }).getAttribute('aria-haspopup'))).toEqual(['dialog', 'dialog', 'dialog'])
+    // Similar Merch: its heading and "Shop all" to /shop, and four cards of 7 columns each, 8px apart.
+    const similar = within(part(canvasElement, 'similar'))
+    await expect(similar.getByRole('heading', { level: 2, name: 'Similar Merch' })).toBeVisible()
+    await expect(similar.getByRole('link', { name: 'Shop all' }).getAttribute('href')).toBe('/shop')
+    const cards = [...part(canvasElement, 'similar').querySelectorAll('article')]
+    await expect(cards.map((card) => Math.round(box(card).left))).toEqual([16, 429, 842, 1255])
+    await expect(Math.round(box(cards[0]!).width)).toBe(405)
+  },
+}
+
+/**
+ * Figma "Product (mobile)" (1684:41990): the gallery is the window's whole width, a row to swipe, with the slider
+ * beneath it (one part for each picture, the one on show in Surface/Secondary); the details follow, 24px under.
+ */
+export const Mobile: Story = {
+  globals: { viewport: { value: 'mobile', isRotated: false } },
+  play: async ({ canvas, canvasElement }) => {
+    const gallery = part(canvasElement, 'gallery')
+    const pictures = [...gallery.querySelectorAll('[data-gallery-item]')]
+    await expect(pictures.slice(0, 2).map((picture) => [Math.round(box(picture).left), Math.round(box(picture).width), Math.round(box(picture).height)])).toEqual([[0, 390, 488], [390, 390, 488]])
+    const slider = gallery.querySelector('[data-gallery-slider]') as HTMLElement
+    const parts = [...slider.children] as HTMLElement[]
+    await expect(parts).toHaveLength(3)
+    await expect(Math.round(box(slider).top - box(pictures[0]!).bottom)).toBe(4)
+    await expect(getComputedStyle(parts[0]!).backgroundColor).not.toBe(getComputedStyle(parts[1]!).backgroundColor)
+    // Swiping to the second picture moves the slider on.
+    const row = canvas.getByRole('group', { name: 'Product pictures' })
+    const first = getComputedStyle(parts[0]!).backgroundColor
+    row.scrollTo({ left: 390, behavior: 'instant' })
+    await waitFor(() => expect(getComputedStyle(parts[1]!).backgroundColor).toBe(first))
+    // The page itself never scrolls sideways.
+    await expect(document.documentElement.scrollWidth).toBe(390)
+    const name = canvas.getByRole('heading', { level: 1 })
+    await expect([Math.round(box(name).left), Math.round(box(name).top - box(gallery).bottom)]).toEqual([16, 24])
+    // Similar Merch: two cards to the window, the third begun.
+    const cards = [...part(canvasElement, 'similar').querySelectorAll('article')]
+    await expect(cards.slice(0, 3).map((card) => Math.round(box(card).left))).toEqual([16, 199, 382])
+    await expect(Math.round(box(cards[0]!).width)).toBe(175)
+  },
+}
+
+/**
+ * CTA, State=select size (1684:39453): pressing "Add to bag" with no size picked says "Please select a size" in
+ * Text/Error under the sizes. Picking one clears it and fills the chip (Surface/Secondary); pressing again goes to
+ * the bag, which does nothing yet.
+ */
+export const SelectSize: Story = {
+  name: 'Select size',
+  globals: { viewport: { value: 'desktop', isRotated: false } },
+  play: async ({ canvas }) => {
+    const button = canvas.getByRole('button', { name: 'Add to bag' })
+    await userEvent.click(button)
+    const wrong = await canvas.findByRole('alert')
+    await expect(wrong.textContent).toBe('Please select a size')
+    await expect(getComputedStyle(wrong).fontSize).toBe('12px')
+    const medium = canvas.getByRole('radio', { name: 'M' })
+    await expect(medium.getAttribute('aria-describedby')).toBe(wrong.id)
+    await userEvent.click(medium)
+    await expect(medium).toBeChecked()
+    await expect(canvas.queryByRole('alert')).toBeNull()
+    const chip = medium.parentElement!
+    await waitFor(() => expect(getComputedStyle(chip).backgroundColor).toBe(getComputedStyle(button).backgroundColor))
+    // The arrow keys move between the sizes, as on any group of radio buttons.
+    await userEvent.keyboard('{ArrowRight}')
+    await expect(canvas.getByRole('radio', { name: 'L' })).toBeChecked()
+    await userEvent.click(button)
+    await expect(canvas.queryByRole('alert')).toBeNull()
+  },
+}
+
+/** On sale: the price before the sale struck through beside the price, as CTA's member state draws a struck price. */
+export const Sale: Story = {
+  globals: { viewport: { value: 'desktop', isRotated: false } },
+  args: { view: SAMPLE_PRODUCT_ON_SALE },
+  play: async ({ canvas, canvasElement }) => {
+    const details = within(part(canvasElement, 'details'))
+    const before = details.getByText('£45')
+    await expect(getComputedStyle(before).textDecorationLine).toBe('line-through')
+    await expect(details.getByText('£40.50')).toBeVisible()
+    await expect(canvas.getByText('(Member from £40)')).toBeVisible()
+  },
+}
+
+/**
+ * CTA, State=sold out (1684:39402): every size in its sold-out state (Surface/Card Disabled, muted, struck through)
+ * and the button disabled, reading "Sold out".
+ */
+export const SoldOut: Story = {
+  name: 'Sold out',
+  globals: { viewport: { value: 'desktop', isRotated: false } },
+  args: { view: SAMPLE_PRODUCT_SOLD_OUT },
+  play: async ({ canvas }) => {
+    const button = canvas.getByRole('button', { name: 'Sold out' })
+    await expect(button).toBeDisabled()
+    for (const size of ['S', 'M', 'L', 'XL']) await expect(canvas.getByRole('radio', { name: `${size}, sold out` })).toBeDisabled()
+    await userEvent.click(button)
+    await expect(canvas.queryByRole('alert')).toBeNull()
+  },
+}
+
+/** One size left: the others are struck through and can't be picked, and read "S, sold out". */
+export const OneSizeLeft: Story = {
+  name: 'One size left',
+  globals: { viewport: { value: 'desktop', isRotated: false } },
+  args: { view: SAMPLE_PRODUCT_ONE_LEFT },
+  play: async ({ canvas }) => {
+    await expect(canvas.getByRole('radio', { name: 'L' })).toBeEnabled()
+    for (const size of ['S', 'M', 'XL']) await expect(canvas.getByRole('radio', { name: `${size}, sold out` })).toBeDisabled()
+    await expect(canvas.getByRole('button', { name: 'Add to bag' })).toBeEnabled()
+  },
+}
+
+/**
+ * The page's HTML can be up to a minute old, so once it has loaded it asks the availability route for its sizes
+ * again. Here the route says M has gone since: it is struck through as soon as the answer is in.
+ */
+export const SizesAskedAgain: Story = {
+  name: 'Sizes asked again after load',
+  globals: { viewport: { value: 'desktop', isRotated: false } },
+  args: {
+    readSizes: async (product: string): Promise<ShopAvailabilityRouteOutput> => ({ product, soldOut: false, sizes: SAMPLE_SIZES.map((size) => ({ ...size, available: size.size !== 'M' })) }),
+  },
+  play: async ({ canvas }) => {
+    await expect(await canvas.findByRole('radio', { name: 'M, sold out' })).toBeDisabled()
+    await expect(canvas.getByRole('radio', { name: 'S' })).toBeEnabled()
+  },
+}
+
+/** A product with no family has no swatches: its colour's name alone. */
+export const NoFamily: Story = {
+  name: 'No family',
+  globals: { viewport: { value: 'desktop', isRotated: false } },
+  args: { view: { ...SAMPLE_PRODUCT, colours: [] } },
+  play: async ({ canvas }) => {
+    await expect(canvas.getByText('Brown')).toBeVisible()
+    await expect(canvas.queryByRole('list', { name: 'Colours' })).toBeNull()
+  },
+}
+
+/** A product with no size guide has no "Size guide" link (WQ39), and its panel no Size Guide tab. */
+export const NoSizeGuide: Story = {
+  name: 'No size guide',
+  globals: { viewport: { value: 'desktop', isRotated: false } },
+  args: { view: { ...SAMPLE_PRODUCT, sizeGuide: null } },
+  play: async ({ canvas }) => {
+    await expect(canvas.queryByRole('button', { name: 'Size guide' })).toBeNull()
+    await expect(canvas.queryByRole('tab', { name: 'Size guide', hidden: true })).toBeNull()
+    await expect(canvas.getAllByRole('tab', { hidden: true })).toHaveLength(3)
+  },
+}
+
+/** With nothing similar on sale the Similar Merch row is not drawn. */
+export const NothingSimilar: Story = {
+  name: 'Nothing similar',
+  globals: { viewport: { value: 'desktop', isRotated: false } },
+  args: { similar: [] },
+  play: async ({ canvasElement }) => {
+    await expect(part(canvasElement, 'similar')).toBeNull()
+  },
+}

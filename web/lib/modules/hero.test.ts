@@ -89,7 +89,8 @@ describe('WQ35: a video is one film, with a file for desktops and, when it has o
     // An image keeps its own alt text ("" when it is decorative).
     expect([heroContent(byKey('h2'))!.picture.alt, heroContent(byKey('h1'))!.picture.alt]).toEqual(['Picture hero', ''])
     const hero = readFileSync(path.resolve(__dirname, '../../components/modules/Hero.tsx'), 'utf8')
-    expect(hero).toContain("<HeroImage picture={picture} alt={started ? '' : picture.alt} priority={priority} />")
+    // W74: the same line with one more thing passed on (how wide a product's gallery draws it); what is read out is unchanged.
+    expect(hero).toContain("<HeroImage picture={picture} alt={started ? '' : picture.alt} priority={priority} {...(desktopSizes ? { desktopSizes } : {})} />")
     expect(hero).toContain("{...(started ? { 'aria-label': video.description } : { 'aria-hidden': true })}")
   })
 

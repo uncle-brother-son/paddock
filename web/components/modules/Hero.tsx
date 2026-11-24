@@ -17,10 +17,10 @@ const clamp = (value: number, least: number, most: number): number => Math.min(M
  * poster). The first hero of a page is its largest picture, so it loads at once and ahead of the rest (`priority`);
  * any other waits until it is near.
  */
-function HeroImage({ picture, alt, priority }: { picture: HeroPicture; alt: string; priority: boolean }) {
+function HeroImage({ picture, alt, priority, desktopSizes = '100vw' }: { picture: HeroPicture; alt: string; priority: boolean; desktopSizes?: string }) {
   return (
     <picture>
-      <source media="(width >= 48rem)" srcSet={picture.desktop.srcSet} sizes="100vw" width={picture.desktop.width} height={picture.desktop.height} />
+      <source media="(width >= 48rem)" srcSet={picture.desktop.srcSet} sizes={desktopSizes} width={picture.desktop.width} height={picture.desktop.height} />
       {/* A plain <img>: Next's image optimiser does not run on Workers. The address is Sanity's CDN, sized in lib/sanity/image.ts. */}
       <img
         src={picture.mobile.src}
@@ -146,15 +146,30 @@ function HeroVideoPlayer({ url, video, screens, reducedMotion, onStarted }: { ur
  * The hero's media: its picture, and over it its video when it is one. A film with a file for phones (WQ35) has
  * two players, one for each width of screen, each hidden on the other and so never fetched there; they share the
  * film's description, captions and sound. A film with one file has one player for every screen.
+ *
+ * W74: a product's gallery draws its pictures and videos with this too (components/shop/ProductGallery.tsx), in a
+ * box of its own shape. `desktopSizes`: how wide the picture is drawn from 768px, where it is not the whole window.
  */
-function HeroMedia({ picture, video, priority, reducedMotion }: { picture: HeroPicture; video: ScreenVideo | null; priority: boolean; reducedMotion: boolean }) {
+export function HeroMedia({
+  picture,
+  video,
+  priority,
+  reducedMotion,
+  desktopSizes,
+}: {
+  picture: HeroPicture
+  video: ScreenVideo | null
+  priority: boolean
+  reducedMotion: boolean
+  desktopSizes?: string
+}) {
   // Once the video shows, it is the video that is described to a screen reader, not the picture beneath it.
   const [started, setStarted] = useState(false)
   const player = (url: string, screens: Screens) =>
     video ? <HeroVideoPlayer url={url} video={video} screens={screens} reducedMotion={reducedMotion} onStarted={() => setStarted(true)} /> : null
   return (
     <>
-      <HeroImage picture={picture} alt={started ? '' : picture.alt} priority={priority} />
+      <HeroImage picture={picture} alt={started ? '' : picture.alt} priority={priority} {...(desktopSizes ? { desktopSizes } : {})} />
       {video?.phoneUrl ? (
         <>
           {player(video.phoneUrl, 'mobile')}

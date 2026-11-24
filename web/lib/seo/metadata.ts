@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 
 import { sizedImage } from '@/lib/sanity/image'
-import type { Seo, SiteSettings } from '@/lib/sanity/schemas'
+import type { Picture, Seo, SiteSettings } from '@/lib/sanity/schemas'
 import { SITE_NAME } from '@/lib/site'
 
 // A page's title, description, canonical address and link preview (W73b; docs/build-standards.md, sections 2 and 3):
@@ -20,6 +20,10 @@ type PageSeo = {
   title: string | null
   seo: Seo | null
   settings: SiteSettings | null
+  /** W74: a description made from the page (a product's first words, the Shop's intro), used when its SEO section has none. */
+  description?: string | null
+  /** W74: a picture made from the page (a product's first picture), used when its SEO section has no share picture. */
+  picture?: Picture | null
 }
 
 const filled = (text: string | null | undefined): string | null => text?.trim() || null
@@ -29,12 +33,12 @@ const filled = (text: string | null | undefined): string | null => text?.trim() 
  * the home page Site settings' title, then the site's name. Its description and share picture are the page's own or
  * Site settings'. The addresses are made whole by the root layout's `metadataBase` (the live domain).
  */
-export function pageMetadata({ path, title, seo, settings }: PageSeo): Metadata {
+export function pageMetadata({ path, title, seo, settings, description: made, picture: madePicture }: PageSeo): Metadata {
   const defaults = settings?.defaultSeo ?? null
   const siteName = settings?.siteName ?? SITE_NAME
   const wholeTitle = filled(seo?.title) ?? (title ? titleWithSite(title) : (filled(defaults?.title) ?? siteName))
-  const description = filled(seo?.description) ?? filled(defaults?.description)
-  const picture = seo?.shareImage ?? defaults?.shareImage ?? null
+  const description = filled(seo?.description) ?? filled(made) ?? filled(defaults?.description)
+  const picture = seo?.shareImage ?? madePicture ?? defaults?.shareImage ?? null
   const images = picture
     ? [{ url: sizedImage(picture, SHARE_IMAGE.width / SHARE_IMAGE.height, [SHARE_IMAGE.width]).src, ...SHARE_IMAGE, alt: picture.alt }]
     : null

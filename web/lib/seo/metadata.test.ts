@@ -75,4 +75,19 @@ describe('the rest of a page\'s metadata', () => {
     expect((metadata.openGraph as { images: Array<{ url: string; alt: string }> }).images[0]).toMatchObject({ url: expect.stringContaining('own-2000x1000.jpg'), alt: 'Mine' })
     expect(pageMetadata({ path: '/a', title: 'A', seo: noSeo, settings: null }).openGraph).not.toHaveProperty('images')
   })
+
+  it("W74: what is made from the page (a product's first words and first picture, the Shop's intro) comes after its SEO section and before Site settings'", () => {
+    const first = { ref: 'image-first-800x1000-jpg', width: 800, height: 1000, alt: 'The front', crop: null, hotspot: null }
+    const own = { ref: 'image-own-2000x1000-jpg', width: 2000, height: 1000, alt: 'Mine', crop: null, hotspot: null }
+    const made = pageMetadata({ path: '/shop/tee', title: 'Tee - Brown', seo: noSeo, settings, description: 'Soft and warm.', picture: first })
+    expect(made.description).toBe('Soft and warm.')
+    expect((made.openGraph as { images: Array<{ url: string; alt: string }> }).images[0]).toMatchObject({ url: expect.stringContaining('first-800x1000.jpg'), alt: 'The front' })
+    const edited = pageMetadata({ path: '/shop/tee', title: 'Tee - Brown', seo: { title: null, description: 'Mine', shareImage: own }, settings, description: 'Soft and warm.', picture: first })
+    expect(edited.description).toBe('Mine')
+    expect((edited.openGraph as { images: Array<{ url: string }> }).images[0]!.url).toContain('own-2000x1000.jpg')
+    // With nothing made, as before: Site settings'.
+    expect(pageMetadata({ path: '/shop', title: 'Shop', seo: null, settings, description: ' ', picture: null }).description).toBe('D')
+    // The Shop's address is /shop whatever its query says.
+    expect(pageMetadata({ path: '/shop', title: 'Shop', seo: null, settings }).alternates).toEqual({ canonical: '/shop' })
+  })
 })
