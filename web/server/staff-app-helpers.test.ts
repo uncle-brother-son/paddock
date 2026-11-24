@@ -5720,8 +5720,11 @@ describe('staff app helpers', () => {
       // With nothing to show: a quiet line and the button, which runs the same press.
       expect(banner).toMatch(/if \(!stuckAnythingToShow\(data\) && !data\?\.workerProblem\) \{\s+return \(\s+<div className="flex items-center justify-between gap-3 flex-wrap mb-4 text-sm text-muted-foreground">\s+<span>\{reconcileSaid \?\? NOTHING_STUCK_LINE\}<\/span>\s+<Button size="sm" variant="outline" onClick=\{resolveNow\} disabled=\{running\}>/)
       expect(banner.match(/onClick=\{resolveNow\}/g)).toHaveLength(2)
-      // After every run that answered the page reads its lists again (a run can leave money owed).
-      expect(banner).toContain('if (answer?.ok) onSwept()')
+      // After every press the page reads its lists again (a run can leave money owed), beside the banner's own list.
+      // A named difference (Level 3 fix, 24 Nov, the W70e + W70f preview): until then only after a run that answered
+      // (`if (answer?.ok) onSwept()`), so a press with no answer refreshed the banner and not "Money still to refund".
+      expect(banner).not.toContain('if (answer?.ok) onSwept()')
+      expect(banner).toMatch(/\} finally \{\s+runInFlight\.current = false\s+setRunning\(false\)\s+refresh\(\)\s+(\/\/[^\n]*\n\s*)*onSwept\(\)\s+\}/)
     })
 
     it("item 3: the banner's first line counts by kind, and Stripe's notices have a line of their own in the Worker's words", () => {
