@@ -86,7 +86,9 @@ const modeOfWindow = (): Measurements => (window.innerWidth >= 768 ? 'Desktop' :
 
 /** The overlay is on the page and is the window's own grid: the right number of columns, over the whole window. */
 async function overlayIsTheGrid(canvasElement: HTMLElement, mode: Measurements = modeOfWindow()) {
-  await waitFor(() => expect(overlayIn(canvasElement)).not.toBeNull())
+  // The overlay's code loads only once it is switched on: in a full run of every story that can take more than the
+  // usual second (W73: it failed in two of four full runs and passed alone), so this first look has five.
+  await waitFor(() => expect(overlayIn(canvasElement)).not.toBeNull(), { timeout: 5000 })
   const overlay = overlayIn(canvasElement) as HTMLElement
   await waitFor(() => expect(overlay.querySelectorAll('[data-grid-overlay-column]')).toHaveLength(gridValue('Columns', mode)))
 

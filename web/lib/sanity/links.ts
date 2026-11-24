@@ -1,10 +1,15 @@
 import type { Link } from './schemas'
 
+/** The gift card's page (WQ19): the site's own address, with no slug to pick. */
+export const GIFT_CARD_ADDRESS = '/shop/gift-card'
+
 /** The address a link goes to, or null for a link the site hides: its page or event isn't published (WQ24). */
 export function linkHref(link: Link): string | null {
   switch (link.destination) {
     case 'shop':
       return '/shop'
+    case 'giftCard':
+      return GIFT_CARD_ADDRESS
     case 'external':
       return link.url
     case 'page':

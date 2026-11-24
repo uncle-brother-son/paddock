@@ -25,7 +25,7 @@ export const navLink = defineType({
   preview: {
     select: { title: 'label', destination: 'link.destination', page: 'link.page.title', event: 'link.event.name', url: 'link.url' },
     prepare({ title, destination, page, event, url }) {
-      const goesTo: Record<string, string | undefined> = { page, event, shop: 'Shop', external: url }
+      const goesTo: Record<string, string | undefined> = { page, event, shop: 'Shop', giftCard: 'The gift card', external: url }
       return { title, subtitle: goesTo[destination ?? ''] }
     },
   },

@@ -57,7 +57,7 @@ Written 23 Nov 2026 for Claude Code and reviewers. Every page, component and mod
 - Each video needs a poster image (with alt text) and a short description for screen readers.
 - Videos in galleries and modules play muted, looped and inline (`muted loop playsinline autoplay`), start only when on screen, and stop when scrolled away.
 - With reduced motion on, the poster image shows and the video doesn't play.
-- A video that plays for more than 5 seconds gets a pause control (needs a design: open question for Wayne when the first video module is built).
+- A video that plays for more than 5 seconds gets a pause control. Designed (W73b, the Hero module): Figma's IconButton, Style=image, two of them at the bottom right of the picture, sound and Pause; each shows what a press will do.
 - A video with speech needs captions (a WebVTT file uploaded next to it).
 - File size: Sanity serves one file to everyone, so editors keep videos short and compressed (guide: under 10 MB, 1080 px wide, H.264). Sanity's file field shows the limit; the site never preloads a video below the fold.
 

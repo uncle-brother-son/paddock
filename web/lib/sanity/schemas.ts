@@ -37,9 +37,9 @@ const linkedDocumentSchema = z.object({
   thumbnail: pictureSchema.nullable(),
 })
 
-/** Where a link goes. `linkHref` (./links.ts) makes the address, or null for a link to hide. */
+/** Where a link goes. `linkHref` (./links.ts) makes the address, or null for a link to hide. W73b: `giftCard` is /shop/gift-card. */
 export const linkSchema = z.object({
-  destination: z.enum(['page', 'event', 'shop', 'external']),
+  destination: z.enum(['page', 'event', 'shop', 'giftCard', 'external']),
   document: linkedDocumentSchema.nullable(),
   url: text,
 })
@@ -89,8 +89,23 @@ export const navigationSchema = z.object({
 })
 export type Navigation = z.infer<typeof navigationSchema>
 
+/**
+ * The Hero module (W73b; WQ24): a picture or a video across the window, null until an editor adds one, and its
+ * button, null when it is switched off or has no words. A button with no link opens the booking panel.
+ */
+export const heroModuleSchema = z.object({
+  type: z.literal('hero'),
+  key: z.string(),
+  media: mediaSchema.nullable(),
+  button: z.object({ text: z.string(), link: linkSchema.nullable() }).nullable(),
+})
+export type HeroModule = z.infer<typeof heroModuleSchema>
+
+const upcomingEventsModuleSchema = z.object({ type: z.literal('upcomingEvents'), key: z.string(), heading: text })
+
 /** One module of a page. Each kind of module is one more member here. */
-export const moduleSchema = z.discriminatedUnion('type', [z.object({ type: z.literal('upcomingEvents'), key: z.string(), heading: text })])
+export const moduleSchema = z.discriminatedUnion('type', [heroModuleSchema, upcomingEventsModuleSchema])
+export type PageModule = z.infer<typeof moduleSchema>
 
 export const contentPageSchema = z.object({
   id: z.string(),
@@ -98,7 +113,6 @@ export const contentPageSchema = z.object({
   slug: z.string(),
   isHome: z.boolean(),
   thumbnail: pictureSchema.nullable(),
-  hero: z.object({ media: mediaSchema.nullable(), button: z.object({ text: z.string(), link: linkSchema.nullable() }).nullable() }).nullable(),
   modules: z.array(moduleSchema),
   seo: seoSchema.nullable(),
 })

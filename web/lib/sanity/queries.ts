@@ -81,23 +81,35 @@ export const NAVIGATION_QUERY = `*[_id == "navigation"][0]{
   "footerGroups": coalesce(footerGroups[]{"key": _key, "links": coalesce(links[defined(link.destination)]${NAV_LINKS}, [])}, [])
 }`
 
+/**
+ * W73b: a page's modules, top to bottom, each with the fields of its own kind. A kind the site doesn't know is left
+ * out. The Hero is one of them (Wayne, 24 Nov), no longer a field of the page: its picture or video (null until an
+ * editor adds one) and its button, which is there only when it is switched on and has words. A button with no link
+ * opens the booking panel.
+ */
+const MODULES = `coalesce(modules[_type in ["hero", "upcomingEvents"]]{
+  "type": _type,
+  "key": _key,
+  _type == "hero" => {
+    "media": select(defined(media) => media{"item": ${MEDIA}}.item, null),
+    "button": select(
+      showButton == true && defined(buttonText) => {
+        "text": buttonText,
+        "link": select(defined(buttonLink.destination) => buttonLink${LINK}, null)
+      },
+      null
+    )
+  },
+  _type == "upcomingEvents" => {heading}
+}, [])`
+
 const CONTENT_PAGE = `{
   "id": _id,
   title,
   "slug": slug.current,
   "isHome": ${IS_HOME},
   "thumbnail": ${pictureAt('thumbnail')},
-  "hero": select(defined(hero) => {
-    "media": select(defined(hero.media) => hero.media{"item": ${MEDIA}}.item, null),
-    "button": select(
-      hero.showButton == true && defined(hero.buttonText) => {
-        "text": hero.buttonText,
-        "link": select(defined(hero.buttonLink.destination) => hero.buttonLink${LINK}, null)
-      },
-      null
-    )
-  }, null),
-  "modules": coalesce(modules[_type == "upcomingEvents"]{"type": _type, "key": _key, heading}, []),
+  "modules": ${MODULES},
   "seo": ${seoAt('seo')}
 }`
 

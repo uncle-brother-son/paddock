@@ -4,7 +4,7 @@ import { expect, userEvent, waitFor } from 'storybook/test'
 
 import { DURATION_SHORT } from '@/lib/motion/tokens'
 
-import { Overlay, OVERLAY_TEXTURE_ID, OverlayTexture } from './Overlay'
+import { Overlay, OVERLAY_TEXTURE_ID, OVERLAY_TEXTURE_SCALE, OverlayTexture } from './Overlay'
 
 /** Something to blur: words and blocks of the palette, with a button above the shade to open and close it. */
 function OverSomething({ startOpen }: { startOpen: boolean }) {
@@ -67,7 +67,9 @@ export const Open: Story = {
     await expect(filters).toHaveLength(1)
     await expect(filters[0]!.closest('svg')?.getAttribute('aria-hidden')).toBe('true')
     await expect(filters[0]!.querySelector('feTurbulence')?.getAttribute('baseFrequency')).toBe('0.5')
-    await expect(filters[0]!.querySelector('feDisplacementMap')?.getAttribute('scale')).toBe('16')
+    // W73b: the scale measured against Figma's Menu Open.
+    await expect(OVERLAY_TEXTURE_SCALE).toBe(20)
+    await expect(filters[0]!.querySelector('feDisplacementMap')?.getAttribute('scale')).toBe(String(OVERLAY_TEXTURE_SCALE))
   },
 }
 

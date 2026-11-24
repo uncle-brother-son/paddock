@@ -16,9 +16,18 @@ import { useFramePanels } from './useFramePanels'
  * not the header itself or a popup. The header is see-through, so its words take that mode's Text/Primary.
  */
 function themeBeneath(header: HTMLElement): string {
-  const under = document.elementsFromPoint(window.innerWidth / 2, header.offsetHeight / 2)
-  const first = under.find((element) => !header.contains(element) && !element.closest('[data-frame-popup]'))
-  return first?.closest<HTMLElement>('[data-theme]')?.dataset.theme ?? 'light'
+  const height = header.offsetHeight / 2
+  // W73b: while a page transition runs, the pages can't be found by where they are on screen (the browser shows
+  // pictures of them, not the pages themselves). Then it is the section of the page at that height, by its place.
+  const inTransition = Boolean((document as Document & { activeViewTransition?: object | null }).activeViewTransition)
+  const under = inTransition ? [] : document.elementsFromPoint(window.innerWidth / 2, height)
+  const page = [document.documentElement, document.body]
+  const first = under.find((element) => !header.contains(element) && !element.closest('[data-frame-popup]') && !page.includes(element as HTMLElement))
+  const beneath = first ?? [...document.querySelectorAll<HTMLElement>('#main > *, #main ~ footer')].find((section) => {
+    const box = section.getBoundingClientRect()
+    return box.top <= height && box.bottom > height
+  })
+  return beneath?.closest<HTMLElement>('[data-theme]')?.dataset.theme ?? 'light'
 }
 
 type HeaderProps = {
@@ -96,7 +105,8 @@ export function Header({ variant = 'global', logo, menuLinks }: HeaderProps) {
         {...(theme ? { 'data-theme': theme } : { 'data-header-theme': 'page' })}
         // Keyboard focus landing on it brings it back, so what has focus is never out of sight.
         onFocusCapture={() => setAway(false)}
-        className={`fixed inset-x-0 top-0 z-10 text-text-primary transition-transform duration-short ease-smooth ${away && !menuOpen ? '-translate-y-full' : ''}`}
+        // W73b: it stays where it is while one page gives way to the next (`frame-fixed-header` in app/globals.css).
+        className={`frame-fixed-header fixed inset-x-0 top-0 z-10 text-text-primary transition-transform duration-short ease-smooth ${away && !menuOpen ? '-translate-y-full' : ''}`}
       >
         <Grid className="items-center py-16 md:py-24">
           {/* The logo is taller than the row of buttons, which sets the header's height: it sits centred on the row and overlaps it above and below, as drawn. */}

@@ -79,3 +79,5 @@ Which account sections show is in backend log 25.
 | /account/... when signed out | sign in, then back to the page asked for | |
 | /checkout with an empty bag | / | The bag shows an empty message and checkout can't be opened from it; a direct checkout link goes to the homepage |
 | an old product or event slug | its current slug (301) | Sanity keeps previous slugs (build standards) |
+| an old page or info page slug | its current address (308) | W73b: /[slug] and /info/[slug], the same list of previous slugs |
+| /home (the home page's own slug) | / (308) | W73b: the page Site settings picks as home lives at / only |

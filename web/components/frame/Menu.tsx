@@ -83,7 +83,8 @@ export function Menu({ id, open, links, onClose, returnFocusTo }: MenuProps) {
         data-frame-popup=""
         data-lenis-prevent=""
         // Shown at once on opening, so Close can take focus straight away; hidden only when the closing has finished.
-        className={`fixed inset-x-0 top-0 z-30 max-h-dvh overflow-y-auto bg-surface-primary duration-short ease-smooth ${open ? 'visible transition-[clip-path] [clip-path:inset(0)]' : 'invisible transition-[clip-path,visibility] [clip-path:inset(0_0_100%_0)]'}`}
+        // W73b: a link pressed here shuts the menu as the page changes: it goes on shutting over the page transition (`frame-fixed-menu`).
+        className={`frame-fixed-menu fixed inset-x-0 top-0 z-30 max-h-dvh overflow-y-auto bg-surface-primary duration-short ease-smooth ${open ? 'visible transition-[clip-path] [clip-path:inset(0)]' : 'invisible transition-[clip-path,visibility] [clip-path:inset(0_0_100%_0)]'}`}
       >
         <button ref={close} type="button" onClick={shutAndForget} className={`absolute top-16 right-16 md:top-24 ${FRAME_BUTTON}`}>
           <Icon name="close" />

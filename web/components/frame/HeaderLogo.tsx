@@ -1,6 +1,5 @@
-import Link from 'next/link'
-
 import { Logo, LogoHover } from '@/components/brand/Logo'
+import { SiteLink } from '@/components/ui/SiteLink'
 
 /**
  * The header's logo and its link home, drawn on the server so the logos' paths are in the page and not in its
@@ -9,7 +8,7 @@ import { Logo, LogoHover } from '@/components/brand/Logo'
  */
 export function HeaderLogo({ animated }: { animated: boolean }) {
   return (
-    <Link href="/" className="group block">
+    <SiteLink href="/" className="group block">
       {animated ? (
         <>
           <Logo variant="hover-static" className="block md:hidden" />
@@ -18,6 +17,6 @@ export function HeaderLogo({ animated }: { animated: boolean }) {
       ) : (
         <Logo variant="hover-static" className="block" />
       )}
-    </Link>
+    </SiteLink>
   )
 }

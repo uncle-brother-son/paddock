@@ -84,13 +84,14 @@ describe('W72a: galleries and categories', () => {
   const kinds = (gallery: Array<{ kind: string }>) => gallery.map((item) => item.kind)
 
   // sample-queries.json: the query each of these samples was made from. A query changed since has a stale sample:
-  // make it again with the real engine (briefs/W72a-logs/tools, in the staff app repo), and read what changes.
+  // make it again with the real engine (briefs/W72a-logs/tools and briefs/W73b-logs/tools, in the staff app repo),
+  // and read what changes.
   it.each(Object.keys(madeFrom) as Array<keyof typeof madeFrom>)('%s: its sample was made by the query the site sends', (name) => {
     expect(madeFrom[name]).toBe(reads[name].query)
   })
 
-  it('every read W72a changed has its query on record', () => {
-    expect(Object.keys(madeFrom).sort()).toEqual(['event', 'eventCards', 'giftCard', 'movedSlug', 'product', 'productCards'])
+  it('every read W72a and W73b changed has its query on record', () => {
+    expect(Object.keys(madeFrom).sort()).toEqual(['contentPage', 'event', 'eventCards', 'giftCard', 'homePage', 'movedSlug', 'product', 'productCards'])
   })
 
   it("a gallery keeps its order, videos among the pictures; an item with no file is left out", () => {
@@ -143,6 +144,64 @@ describe('W73: the footer groups', () => {
     expect(footerGroups).toHaveLength(3)
     expect(reads.navigation.schema.safeParse({ ...rest, footerLinks }).success).toBe(false)
     expect(reads.navigation.query).not.toContain('footerLinks')
+  })
+})
+
+// W73b (Wayne, 24 Nov): the Hero is a module of a page, not a field of every page. The two page samples were made
+// again by the real engine (briefs/W73b-logs/tools/gen-samples.mjs) over a home page with one Hero (a video, a button
+// with no link) and a page with five Heroes in every state among its other modules.
+describe('W73b: the Hero module', () => {
+  type SampleModule = { type: string; key: string; media?: { kind: string } | null; button?: { text: string; link: Link | null } | null; heading?: string | null }
+  const homeModules = answers.homePage.modules as SampleModule[]
+  const modules = answers.contentPage.modules as SampleModule[]
+
+  it("a page's modules keep their order, each with the fields of its own kind; a kind the site does not know is left out", () => {
+    expect(modules.map((module) => [module.key, module.type])).toEqual([
+      ['h1', 'hero'],
+      ['m', 'upcomingEvents'],
+      ['h2', 'hero'],
+      ['h3', 'hero'],
+      ['h4', 'hero'],
+      ['h5', 'hero'],
+      ['m2', 'upcomingEvents'],
+    ])
+    for (const one of modules) expect(Object.keys(one).sort(), one.key).toEqual(one.type === 'hero' ? ['button', 'key', 'media', 'type'] : ['heading', 'key', 'type'])
+    expect(modules.filter((module) => module.type === 'upcomingEvents').map((module) => module.heading)).toEqual(['Upcoming', null])
+  })
+
+  it('a Hero has its picture or its video; one with no file, or a video with no poster, has none', () => {
+    expect(homeModules.map((module) => module.media?.kind)).toEqual(['video'])
+    expect(homeModules[0]!.media).toMatchObject({ url: 'https://cdn.sanity.io/files/p/d/vid.mp4', description: 'Steam', poster: { alt: 'Picture hero' } })
+    expect(modules.filter((module) => module.type === 'hero').map((module) => module.media?.kind ?? null)).toEqual(['image', 'image', null, null, null])
+    // A decorative picture's alt is "".
+    expect(modules[0]!.media).toMatchObject({ kind: 'image', image: { alt: '' } })
+  })
+
+  it('its button is there only when it is switched on and has words; with no link it opens the booking panel', () => {
+    expect(homeModules[0]!.button).toEqual({ text: 'Book Your Experience', link: null })
+    expect(modules.filter((module) => module.type === 'hero').map((module) => module.button?.text ?? null)).toEqual(['Shop', 'Gift Cards', null, 'Not yet', null])
+  })
+
+  it('a button can go to the gift card: /shop/gift-card; one to a page that is not published is hidden', () => {
+    const hrefs = modules.filter((module) => module.button).map((module) => [module.button!.text, module.button!.link ? linkHref(module.button!.link) : 'the booking panel'])
+    expect(hrefs).toEqual([
+      ['Shop', '/shop'],
+      ['Gift Cards', '/shop/gift-card'],
+      ['Not yet', null],
+    ])
+  })
+
+  it('a page no longer has a `hero` of its own: the old field is not asked for, and an unknown destination is refused', () => {
+    expect(Object.keys(answers.contentPage)).not.toContain('hero')
+    expect(Object.keys(answers.homePage)).not.toContain('hero')
+    for (const query of [reads.homePage.query, reads.contentPage.query]) {
+      expect(query).not.toContain('"hero":')
+      expect(query).not.toContain('hero.media')
+      expect(query).toContain('modules[_type in ["hero", "upcomingEvents"]]')
+    }
+    const withLink = (destination: string) => ({ ...answers.contentPage, modules: [{ ...modules[0], button: { text: 'Go', link: { destination, document: null, url: null } } }] })
+    expect(reads.contentPage.schema.safeParse(withLink('giftCard')).success).toBe(true)
+    expect(reads.contentPage.schema.safeParse(withLink('somewhere')).success).toBe(false)
   })
 })
 

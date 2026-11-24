@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 
 import { Frame } from "@/components/frame/Frame";
+import { Intro } from "@/components/frame/Intro";
 import { GridOverlay } from "@/components/layout/GridOverlay";
 import { MotionProviders } from "@/components/providers/MotionProviders";
 import { OverlayTexture } from "@/components/ui/Overlay";
@@ -35,6 +36,8 @@ export default function RootLayout({
       {/* The page is at least the window's height by the body's own minimum, not by a height on <html>: Lenis sets
           <html> and <body> to `height: auto` while it runs, which would undo a height passed down from <html>. */}
       <body className="flex min-h-dvh flex-col">
+        {/* W73b: the intro, first in the page so that it is decided before the first paint. Once a session; decoration only. */}
+        <Intro />
         {/* W73: every page sits in the frame: "Skip to content", the header and its menu, the main element and the footer. */}
         <MotionProviders>
           <Frame>{children}</Frame>

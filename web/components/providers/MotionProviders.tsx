@@ -3,29 +3,10 @@
 import { MotionConfig } from 'framer-motion'
 import { ReactLenis } from 'lenis/react'
 import 'lenis/dist/lenis.css'
-import { useSyncExternalStore, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 
+import { usePrefersReducedMotion } from '@/lib/motion/reduced-motion'
 import { DURATION_SHORT, EASE_SMOOTH } from '@/lib/motion/tokens'
-
-const REDUCED_MOTION = '(prefers-reduced-motion: reduce)'
-
-function subscribeToReducedMotion(onChange: () => void): () => void {
-  const query = window.matchMedia(REDUCED_MOTION)
-  query.addEventListener('change', onChange)
-  return () => query.removeEventListener('change', onChange)
-}
-
-/**
- * The visitor's reduced-motion setting, followed live. On the server and for the first paint it answers "reduced",
- * so the scroll effect never starts and then stops for a visitor who has it on.
- */
-function usePrefersReducedMotion(): boolean {
-  return useSyncExternalStore(
-    subscribeToReducedMotion,
-    () => window.matchMedia(REDUCED_MOTION).matches,
-    () => true,
-  )
-}
 
 /**
  * Smooth scroll and animation defaults for the whole site, set once in the root layout so every module inherits

@@ -2,8 +2,17 @@
 export const OVERLAY_TEXTURE_ID = 'overlay-texture'
 
 /**
+ * How far the texture pushes the blurred page about (the filter's displacement scale). Figma's radius of 8 would be
+ * 16 here, but this noise keeps nearer its middle than Figma's does and 16 came out finer than the design. W73b:
+ * tuned by measurement against Figma's Menu Open (833:13153), in the strip below the menu over Figma's own Homepage
+ * picture, by the average step between neighbouring pixels (out of 255): Figma 0.89; 16 gave 0.73, 19 gave 0.86,
+ * 20 gives 0.90 and 21 gave 0.94.
+ */
+export const OVERLAY_TEXTURE_SCALE = 20
+
+/**
  * The Overlay's texture as an SVG filter (Figma's Texture effect: noise size 2, radius 8): fine noise that pushes
- * each pixel of the blurred page up to 8px about. Drawn once, by the root layout; it takes no room and a screen
+ * each pixel of the blurred page a few pixels about. Drawn once, by the root layout; it takes no room and a screen
  * reader never meets it. Only Chromium can use a filter like this on what lies behind an element; other browsers
  * get the grain layer below instead.
  */
@@ -12,7 +21,7 @@ export function OverlayTexture() {
     <svg aria-hidden="true" focusable="false" width="0" height="0" className="absolute">
       <filter id={OVERLAY_TEXTURE_ID} x="0" y="0" width="100%" height="100%">
         <feTurbulence type="fractalNoise" baseFrequency="0.5" numOctaves="1" seed="2" result="noise" />
-        <feDisplacementMap in="SourceGraphic" in2="noise" scale="16" xChannelSelector="R" yChannelSelector="G" />
+        <feDisplacementMap in="SourceGraphic" in2="noise" scale={OVERLAY_TEXTURE_SCALE} xChannelSelector="R" yChannelSelector="G" />
       </filter>
     </svg>
   )

@@ -1,0 +1,111 @@
+'use client'
+
+import { useLenis } from 'lenis/react'
+import { usePathname } from 'next/navigation'
+import * as React from 'react'
+import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react'
+
+import { PAGE_IN, PAGE_OUT, PAGE_TRANSITION } from '@/lib/motion/page-transition'
+
+/**
+ * React's <ViewTransition>. It is in the React that Next's App Router runs the site on ("View transitions work in
+ * the App Router with no configuration"), and not yet in the released React that Storybook and the unit tests load:
+ * there a page is swapped at once, and the Storybook page plays the same CSS through the browser's own API.
+ */
+const ViewTransition = (React as { ViewTransition?: typeof React.ViewTransition }).ViewTransition
+
+const ENTER = { [PAGE_TRANSITION]: PAGE_IN, default: 'none' }
+const EXIT = { [PAGE_TRANSITION]: PAGE_OUT, default: 'none' }
+
+type RunningTransition = { ready: Promise<unknown>; skipTransition: () => void }
+
+/**
+ * What happens on arriving at a page by a navigation inside the site (never on the first load):
+ * - a link: the new page starts at its top, with Lenis told so (it would otherwise glide on towards where it was
+ *   heading on the old page). Back and Forward keep the place the browser puts them, and only stop a glide;
+ * - focus moves to the new page's h1 (or to main when it has none), without scrolling, so a keyboard or a screen
+ *   reader starts from the new page. Next's own announcer reads the new page's title out;
+ * - a press during a page transition ends it at once: what is pressed is then the page as it now is, so a second
+ *   click made mid-way goes to its own page.
+ */
+function usePageArrival(page: string) {
+  const lenis = useLenis()
+  const arrived = useRef(page)
+  const byHistory = useRef(false)
+
+  useEffect(() => {
+    let endedByPress = false
+    const noteHistory = () => {
+      byHistory.current = true
+    }
+    const endTransition = () => {
+      const running = (document as Document & { activeViewTransition?: RunningTransition | null }).activeViewTransition
+      endedByPress = Boolean(running)
+      // Only once it is animating: ending it earlier would be an error to React, which is still putting the page in.
+      running?.ready.then(() => running.skipTransition()).catch(() => undefined)
+    }
+    // While a transition runs the browser shows pictures of the pages, so the press that ended it began on the
+    // document itself and its click comes here addressed to the document. It is handed on to what is under the
+    // pointer now that the page is there: a link pressed mid-way is followed.
+    const handOn = (event: MouseEvent) => {
+      if (!endedByPress) return
+      endedByPress = false
+      if (event.target !== document.documentElement) return
+      const under = document.elementFromPoint(event.clientX, event.clientY)
+      if (under instanceof HTMLElement && under !== document.documentElement && under !== document.body) under.click()
+    }
+    window.addEventListener('popstate', noteHistory)
+    window.addEventListener('pointerdown', endTransition, true)
+    window.addEventListener('click', handOn, true)
+    return () => {
+      window.removeEventListener('popstate', noteHistory)
+      window.removeEventListener('pointerdown', endTransition, true)
+      window.removeEventListener('click', handOn, true)
+    }
+  }, [])
+
+  useLayoutEffect(() => {
+    if (arrived.current === page) return
+    arrived.current = page
+    const top = byHistory.current ? window.scrollY : 0
+    byHistory.current = false
+    if (lenis) lenis.scrollTo(top, { immediate: true, force: true })
+    else if (top === 0) window.scrollTo(0, 0)
+
+    const main = document.getElementById('main')
+    const heading = main?.querySelector('h1') ?? null
+    if (heading && !heading.hasAttribute('tabindex')) {
+      // Focus by script only, never in the Tab order; a heading shows no ring (it is not a control).
+      heading.tabIndex = -1
+      heading.style.outline = 'none'
+    }
+    ;(heading ?? main)?.focus({ preventScroll: true })
+  }, [page, lenis])
+}
+
+/**
+ * One page of the site as the page transition sees it (W73b; WQ20, WQ22): everything that changes from page to
+ * page, which is main and the footer; the header stays where it is. `page` names the page shown: when it changes,
+ * the old page leaves and the new one comes in, and a navigation that carries the page transition's type (every link
+ * inside the site: components/ui/SiteLink.tsx) is animated by the `page-out` and `page-in` rules in app/globals.css,
+ * over the long duration with the smooth curve. Reduced motion, Back and Forward: the page is swapped at once.
+ */
+export function PageTransitionView({ page, children }: { page: string; children: ReactNode }) {
+  usePageArrival(page)
+  const content = (
+    <div key={page} data-page-transition="" className="flex flex-1 flex-col">
+      {children}
+    </div>
+  )
+  if (!ViewTransition) return content
+  return (
+    <ViewTransition key={page} enter={ENTER} exit={EXIT} default="none">
+      {content}
+    </ViewTransition>
+  )
+}
+
+/** The page transition on the site: the page is the address's path, so a change of query alone moves nothing. */
+export function PageTransition({ children }: { children: ReactNode }) {
+  return <PageTransitionView page={usePathname()}>{children}</PageTransitionView>
+}

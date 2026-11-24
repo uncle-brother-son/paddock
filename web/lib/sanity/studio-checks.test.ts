@@ -74,6 +74,48 @@ describe('links and buttons', () => {
     expect(checkButtonText('Book', true)).toBe(true)
     expect(checkButtonText(undefined, false)).toBe(true)
   })
+
+  it('W73b: a link can go to the gift card, which has nothing to pick', () => {
+    const source = studioFile('schemaTypes/objects/linkTo.ts')
+    // The destinations, in the order an editor sees them.
+    expect([...source.matchAll(/\{ title: '([^']+)', value: '([^']+)' \}/g)].map((match) => [match[1], match[2]])).toEqual([
+      ['A page', 'page'],
+      ['An event', 'event'],
+      ['The shop', 'shop'],
+      ['The gift card', 'giftCard'],
+      ['An outside address', 'external'],
+    ])
+    expect(checkLinkSet({ destination: 'giftCard' })).toBe(true)
+    for (const part of ['page', 'event', 'external'] as const) expect(checkLinkPart(part, undefined, { destination: 'giftCard' })).toBe(true)
+    // The menu's list of links names where a gift card link goes.
+    expect(studioFile('schemaTypes/objects/navLink.ts')).toContain("giftCard: 'The gift card'")
+  })
+})
+
+describe('W73b: the Hero is a module of a page', () => {
+  it('a page has no `hero` field of its own; Hero is the first kind of module, beside Upcoming Events', () => {
+    const page = studioFile('schemaTypes/contentPage.ts')
+    expect(page).not.toMatch(/name: 'hero'/)
+    expect(page).toContain("of: [defineArrayMember({ type: 'hero' }), defineArrayMember({ type: 'upcomingEvents' })],")
+    expect(studioFile('schemaTypes/infoPage.ts')).not.toMatch(/hero/)
+  })
+
+  it('the module is media (an image or an MP4) and the optional button: a show switch, its words, its link', () => {
+    const hero = studioFile('schemaTypes/objects/hero.ts')
+    expect(hero).toContain("name: 'hero'")
+    expect(hero).toContain("type: 'object'")
+    // The type itself, then its fields in order.
+    expect([...hero.matchAll(/name: '(\w+)', title: '[^']+', type: '(\w+)'|name: '(\w+)',\s+title: '[^']+',\s+type: '(\w+)'/g)].map((match) => [match[1] ?? match[3], match[2] ?? match[4]])).toEqual([
+      ['hero', 'object'],
+      ['media', 'media'],
+      ['showButton', 'boolean'],
+      ['buttonText', 'string'],
+      ['buttonLink', 'linkTo'],
+    ])
+    // In a list of modules it says what it is.
+    expect(hero).toContain("return { title: 'Hero'")
+    expect(studioFile('schemaTypes/index.ts')).toMatch(/\n {2}hero,\n/)
+  })
 })
 
 describe('the rest', () => {

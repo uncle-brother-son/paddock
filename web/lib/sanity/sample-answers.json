@@ -179,27 +179,30 @@
     "slug": "home",
     "isHome": true,
     "thumbnail": null,
-    "hero": {
-      "media": {
-        "kind": "video",
-        "url": "https://cdn.sanity.io/files/p/d/vid.mp4",
-        "poster": {
-          "ref": "image-hero-1600x900-jpg",
-          "width": 1600,
-          "height": 900,
-          "alt": "Picture hero",
-          "crop": null,
-          "hotspot": null
+    "modules": [
+      {
+        "type": "hero",
+        "key": "h1",
+        "media": {
+          "kind": "video",
+          "url": "https://cdn.sanity.io/files/p/d/vid.mp4",
+          "poster": {
+            "ref": "image-hero-1600x900-jpg",
+            "width": 1600,
+            "height": 900,
+            "alt": "Picture hero",
+            "crop": null,
+            "hotspot": null
+          },
+          "description": "Steam",
+          "captionsUrl": "https://cdn.sanity.io/files/p/d/cap.vtt"
         },
-        "description": "Steam",
-        "captionsUrl": "https://cdn.sanity.io/files/p/d/cap.vtt"
-      },
-      "button": {
-        "text": "Book",
-        "link": null
+        "button": {
+          "text": "Book Your Experience",
+          "link": null
+        }
       }
-    },
-    "modules": [],
+    ],
     "seo": null
   },
   "contentPage": {
@@ -225,32 +228,87 @@
         "height": 1
       }
     },
-    "hero": {
-      "media": {
-        "kind": "image",
-        "image": {
-          "ref": "image-hero-1600x900-jpg",
-          "width": 1600,
-          "height": 900,
-          "alt": "",
-          "crop": null,
-          "hotspot": null
+    "modules": [
+      {
+        "type": "hero",
+        "key": "h1",
+        "media": {
+          "kind": "image",
+          "image": {
+            "ref": "image-hero-1600x900-jpg",
+            "width": 1600,
+            "height": 900,
+            "alt": "",
+            "crop": null,
+            "hotspot": null
+          }
+        },
+        "button": {
+          "text": "Shop",
+          "link": {
+            "destination": "shop",
+            "document": null,
+            "url": null
+          }
         }
       },
-      "button": {
-        "text": "Shop",
-        "link": {
-          "destination": "shop",
-          "document": null,
-          "url": null
-        }
-      }
-    },
-    "modules": [
       {
         "type": "upcomingEvents",
         "key": "m",
         "heading": "Upcoming"
+      },
+      {
+        "type": "hero",
+        "key": "h2",
+        "media": {
+          "kind": "image",
+          "image": {
+            "ref": "image-hero-1600x900-jpg",
+            "width": 1600,
+            "height": 900,
+            "alt": "Picture hero",
+            "crop": null,
+            "hotspot": null
+          }
+        },
+        "button": {
+          "text": "Gift Cards",
+          "link": {
+            "destination": "giftCard",
+            "document": null,
+            "url": null
+          }
+        }
+      },
+      {
+        "type": "hero",
+        "key": "h3",
+        "media": null,
+        "button": null
+      },
+      {
+        "type": "hero",
+        "key": "h4",
+        "media": null,
+        "button": {
+          "text": "Not yet",
+          "link": {
+            "destination": "page",
+            "document": null,
+            "url": null
+          }
+        }
+      },
+      {
+        "type": "hero",
+        "key": "h5",
+        "media": null,
+        "button": null
+      },
+      {
+        "type": "upcomingEvents",
+        "key": "m2",
+        "heading": null
       }
     ],
     "seo": {
