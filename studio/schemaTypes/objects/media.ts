@@ -7,6 +7,8 @@ type Picture = Parameters<typeof checkPoster>[0]
 const kindOf = (parent: unknown): string | undefined => (parent as { kind?: string } | undefined)?.kind
 const isVideo = ({ parent }: { parent?: unknown }) => kindOf(parent) === 'video'
 const isNotVideo = ({ parent }: { parent?: unknown }) => kindOf(parent) !== 'video'
+/** For a fieldset: Sanity hands its rule the block itself as `value` (a field's rule gets the block as `parent`). */
+const blockIsNotVideo = ({ value }: { value?: unknown }) => kindOf(value) !== 'video'
 
 /**
  * An image or an MP4 file, for every gallery and hero (WQ15, WQ18). The video's other fields: docs/build-standards.md,
@@ -19,6 +21,8 @@ export const media = defineType({
   title: 'Image or Video',
   type: 'object',
   icon: ImagesIcon,
+  // A video's two posters sit together in one group, open by default. Layout only: the fields are as they were.
+  fieldsets: [{ name: 'poster', title: 'Poster', options: { collapsible: true, collapsed: false }, hidden: blockIsNotVideo }],
   fields: [
     defineField({
       name: 'kind',
@@ -64,6 +68,7 @@ export const media = defineType({
       name: 'poster',
       title: 'Poster Image',
       type: 'picture',
+      fieldset: 'poster',
       description: 'Shown before the video plays, and instead of it for people who have motion turned off',
       hidden: isNotVideo,
       validation: (rule) => rule.custom((value, context) => checkPoster(value as Picture, kindOf(context.parent))),
@@ -72,6 +77,7 @@ export const media = defineType({
       name: 'mobilePoster',
       title: 'Poster for Phones',
       type: 'image',
+      fieldset: 'poster',
       options: { hotspot: true },
       description: 'Optional. Leave empty to use the poster above on phones, cropped round its hotspot. It is described by the alt text of the poster above',
       hidden: isNotVideo,

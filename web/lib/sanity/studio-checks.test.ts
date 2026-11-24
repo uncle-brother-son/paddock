@@ -118,7 +118,13 @@ describe('links and buttons', () => {
     ])
     // Both new fields are for a video only, and neither is required: a film may have one file.
     expect(media).toMatch(/name: 'mobileVideo',[\s\S]*?options: \{ accept: 'video\/mp4' \},[\s\S]*?hidden: isNotVideo,\s+validation: \(rule\) => rule\.custom\(\(value\) => checkPhoneVideo\(value\)\),/)
-    expect(media).toMatch(/name: 'mobilePoster',\s+title: 'Poster for Phones',\s+type: 'image',\s+options: \{ hotspot: true \},\s+description: '[^']+',\s+hidden: isNotVideo,\s+\}\),/)
+    expect(media).toMatch(/name: 'mobilePoster',\s+title: 'Poster for Phones',\s+type: 'image',\s+fieldset: 'poster',\s+options: \{ hotspot: true \},\s+description: '[^']+',\s+hidden: isNotVideo,\s+\}\),/)
+    // Level 3 (Wayne): the two posters sit in one group in the Studio, open by default and there for a video only.
+    // Layout only: the main poster is still the picture block, required for a video.
+    expect(media).toContain("fieldsets: [{ name: 'poster', title: 'Poster', options: { collapsible: true, collapsed: false }, hidden: blockIsNotVideo }],")
+    expect(media).toContain("const blockIsNotVideo = ({ value }: { value?: unknown }) => kindOf(value) !== 'video'")
+    expect(media).toMatch(/name: 'poster',\s+title: 'Poster Image',\s+type: 'picture',\s+fieldset: 'poster',\s+description: '[^']+',\s+hidden: isNotVideo,\s+validation: \(rule\) => rule\.custom\(\(value, context\) => checkPoster\(value as Picture, kindOf\(context\.parent\)\)\),/)
+    expect(media.match(/fieldset: 'poster',/g)).toHaveLength(2)
     expect(checkPhoneVideo(undefined)).toBe(true)
     expect(checkPhoneVideo({})).toBe(true)
     expect(checkPhoneVideo({ asset: { _ref: 'file-a-mp4' } })).toBe(true)
