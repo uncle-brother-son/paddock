@@ -123,8 +123,31 @@ describe('W72a: galleries and categories', () => {
   })
 })
 
+// W73 (Wayne, 24 Nov): the footer's columns are groups of links an editor fills. The navigation sample was made again
+// by the real engine (the same sample documents; its menu links came out as W72's), with three groups: one holding a
+// link with no destination yet, one of an outside address, one made and not filled.
+/** The sample's footer links in one list. The JSON's own type is a different shape for each group, so it is said here. */
+const footerLinks = (answers.navigation.footerGroups as Array<{ links: Array<{ key: string; label: string; link: unknown }> }>).flatMap((group) => group.links)
+
+describe('W73: the footer groups', () => {
+  it('each group keeps its place and its links; a link with no destination is left out; an empty group is an empty list', () => {
+    expect(answers.navigation.footerGroups.map((group) => [group.key, group.links.map((link) => link.label)])).toEqual([
+      ['g1', ['Terms']],
+      ['g2', ['Outside']],
+      ['g3', []],
+    ])
+  })
+
+  it('the old single list of footer links is refused', () => {
+    const { footerGroups, ...rest } = answers.navigation
+    expect(footerGroups).toHaveLength(3)
+    expect(reads.navigation.schema.safeParse({ ...rest, footerLinks }).success).toBe(false)
+    expect(reads.navigation.query).not.toContain('footerLinks')
+  })
+})
+
 describe('linkHref', () => {
-  const links = [...answers.navigation.menuLinks, ...answers.navigation.footerLinks].map(({ label, link }) => [label, linkHref(link as Link)])
+  const links = [...answers.navigation.menuLinks, ...footerLinks].map(({ label, link }) => [label, linkHref(link as Link)])
 
   it('each kind of link, and a link to a page that is not published is hidden', () => {
     expect(links).toEqual([

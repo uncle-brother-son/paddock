@@ -174,6 +174,10 @@
  * Theme modes. `data-theme` on any element sets the theme colours for everything inside it, so a section switches
  * mode by attribute; <html> carries "light". Fjord and Mud are for content sections only, never forms or error
  * messages (Wayne, 24 Nov).
+ *
+ * W73: the header is see-through and lies over the top of the page, so it takes the mode of the section beneath
+ * it. Before the page's script has run, that is the page's first section (`#main`'s first child): the second
+ * selector of each mode below. After that components/frame/Header.tsx puts `data-theme` on the header itself.
  */
 [data-theme="light"] {
   --color-surface-primary: var(--color-sand-light);
@@ -194,7 +198,8 @@
   --color-object-product-bg: var(--color-sand);
 }
 
-[data-theme="dark"] {
+[data-theme="dark"],
+:root:has(#main > [data-theme="dark"]:first-child) [data-header-theme="page"] {
   --color-surface-primary: var(--color-moss);
   --color-surface-secondary: var(--color-sand-light);
   --color-surface-panel: var(--color-moss);
@@ -213,7 +218,8 @@
   --color-object-product-bg: var(--color-sand);
 }
 
-[data-theme="fjord"] {
+[data-theme="fjord"],
+:root:has(#main > [data-theme="fjord"]:first-child) [data-header-theme="page"] {
   --color-surface-primary: var(--color-fjord);
   --color-surface-secondary: var(--color-black);
   --color-surface-panel: var(--color-white);
@@ -232,7 +238,8 @@
   --color-object-product-bg: var(--color-sand);
 }
 
-[data-theme="mud"] {
+[data-theme="mud"],
+:root:has(#main > [data-theme="mud"]:first-child) [data-header-theme="page"] {
   --color-surface-primary: var(--color-mud);
   --color-surface-secondary: var(--color-sand-light);
   --color-surface-panel: var(--color-mud);
@@ -260,6 +267,16 @@ body {
   background-color: var(--color-surface-primary);
   color: var(--color-text-primary);
   font-family: var(--font-secondary);
+}
+
+/*
+ * The keyboard focus ring (WQ12): 2px in Text/Primary with a 2px gap, on every link, button and other control,
+ * for the keyboard only (`:focus-visible`); a mouse or a finger never shows it. `:where` keeps it weightless, so a
+ * component can still set its own. A field shows its designed focus state instead.
+ */
+:where(a, button, summary, [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: var(--spacing-2) solid var(--color-text-primary);
+  outline-offset: var(--spacing-2);
 }
 
 }

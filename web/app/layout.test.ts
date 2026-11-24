@@ -17,8 +17,15 @@ describe('the root layout (W71, item 7)', () => {
     expect(layout).not.toMatch(/maximumScale|minimumScale|userScalable/)
   })
 
-  it('the smooth scroll and Motion defaults wrap every page', () => {
-    expect(layout).toMatch(/<MotionProviders>\{children\}<\/MotionProviders>/)
+  it('the smooth scroll and Motion defaults wrap every page, inside the frame (W73)', () => {
+    expect(layout).toMatch(/<MotionProviders>\s*<Frame>\{children\}<\/Frame>\s*<\/MotionProviders>/)
+  })
+
+  it('W73: the grid overlay comes after the frame, and the frame is the only thing that draws <main>', () => {
+    expect(layout.indexOf('<GridOverlay />')).toBeGreaterThan(layout.indexOf('</MotionProviders>'))
+    expect(layout).not.toMatch(/<main/)
+    expect(readFileSync(path.resolve(__dirname, 'page.tsx'), 'utf8')).not.toMatch(/<main/)
+    expect(readFileSync(path.resolve(__dirname, '../components/frame/FrameShell.tsx'), 'utf8')).toMatch(/<main id="main" tabIndex=\{-1\}/)
   })
 
   it('the page\'s height does not hang on <html>: Lenis sets <html> and <body> to height: auto while it runs', () => {

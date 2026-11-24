@@ -39,7 +39,8 @@ function remember(on: boolean): void {
  * Loaded only by GridOverlay, in the browser, and only on a host that isn't the live domain: it is never rendered
  * on the server, so it can read the address and sessionStorage as it starts.
  *
- * It sits over the page's content (z-40) and takes no clicks. Popups (the menu, the panels, dialogs) go above it.
+ * It sits over everything (z-40) and takes no clicks: the header is z-10, a popup's shade z-20, and the popups
+ * themselves (the menu, the panels, dialogs) and "Skip to content" z-30 (W73).
  */
 export default function GridOverlayColumns() {
   const [on, setOn] = useState(() => gridOverlayFromAddress(window.location.search) ?? remembered())

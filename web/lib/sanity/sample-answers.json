@@ -126,36 +126,50 @@
         }
       }
     ],
-    "footerLinks": [
+    "footerGroups": [
       {
-        "key": "7",
-        "label": "Terms",
-        "link": {
-          "destination": "page",
-          "document": {
-            "type": "infoPage",
-            "slug": "terms",
-            "isHome": false,
-            "thumbnail": {
-              "ref": "image-thumb-600x400-jpg",
-              "width": 600,
-              "height": 400,
-              "alt": "Picture thumb",
-              "crop": null,
-              "hotspot": null
+        "key": "g1",
+        "links": [
+          {
+            "key": "7",
+            "label": "Terms",
+            "link": {
+              "destination": "page",
+              "document": {
+                "type": "infoPage",
+                "slug": "terms",
+                "isHome": false,
+                "thumbnail": {
+                  "ref": "image-thumb-600x400-jpg",
+                  "width": 600,
+                  "height": 400,
+                  "alt": "Picture thumb",
+                  "crop": null,
+                  "hotspot": null
+                }
+              },
+              "url": null
             }
-          },
-          "url": null
-        }
+          }
+        ]
       },
       {
-        "key": "8",
-        "label": "Outside",
-        "link": {
-          "destination": "external",
-          "document": null,
-          "url": "https://example.com"
-        }
+        "key": "g2",
+        "links": [
+          {
+            "key": "8",
+            "label": "Outside",
+            "link": {
+              "destination": "external",
+              "document": null,
+              "url": "https://example.com"
+            }
+          }
+        ]
+      },
+      {
+        "key": "g3",
+        "links": []
       }
     ]
   },

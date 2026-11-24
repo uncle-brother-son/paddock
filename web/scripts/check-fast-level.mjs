@@ -1,5 +1,5 @@
-// Which test level a set of changed files needs (WQ29), and what that level checks. No side effects: check-fast.mjs
-// reads git and runs the commands; check-fast-level.test.ts holds the rules.
+// Which test level a set of changed files needs (WQ29, WQ30), and what that level checks. No side effects:
+// check-fast.mjs reads git and runs the commands; check-fast-level.test.ts holds the rules.
 import path from 'node:path'
 import ts from 'typescript'
 
@@ -13,6 +13,38 @@ export const LEVEL_1_PATHS = [
   'web/wrangler.jsonc',
   'web/package-lock.json',
 ]
+
+/**
+ * W73 (WQ30), Level 1b: the backend that does not touch money. The Sanity webhook and what it writes (names, pictures,
+ * categories: content only, never a price, stock or what is on sale).
+ */
+export const LEVEL_1B_PATHS = ['web/app/api/sanity/', 'web/server/rules/catalog/sanity-sync.ts']
+
+/**
+ * Words that mean money, a booking or a membership. A migration or a read-only route that names one (in its path or
+ * its text) stays Level 1. It errs towards Level 1 on purpose: "pass" and "order" catch more than they need to.
+ */
+export const MONEY_WORDS =
+  /stripe|refund|payment|\bpay\b|paid|charge|invoice|pric(e|ing)|credit|order|booking|membership|subscription|gift.?card|\bpass(es)?\b|session.?pass|balance|promo|discount|checkout|money|amount/i
+
+const WRITES = /\b(POST|PUT|PATCH|DELETE)\b/
+
+/**
+ * Why a changed backend file is Level 1b and not Level 1 (WQ30), or null when it is Level 1: the Sanity webhook and
+ * its sync; a migration that names no money; a route under /api/v1 that only reads and names no money. Both the text
+ * before and the text after count, so a file can't leave Level 1 by losing the word. With no text to read, Level 1.
+ */
+export function backendWithoutMoney({ file, before, after }) {
+  if (LEVEL_1B_PATHS.some((place) => (place.endsWith('/') ? file.startsWith(place) : file === place))) return 'the Sanity webhook and its sync: content only'
+  const texts = [before, after].filter((text) => text !== null)
+  if (texts.length === 0) return null
+  const namesMoney = MONEY_WORDS.test(file) || texts.some((text) => MONEY_WORDS.test(text))
+  if (/^supabase\/migrations\/[^/]+\.sql$/.test(file)) return namesMoney ? null : 'a migration that names no money, booking or membership'
+  if (/^web\/app\/api\/v1\/.+\/route(\.test)?\.ts$/.test(file)) {
+    return namesMoney || texts.some((text) => WRITES.test(text)) ? null : 'a route that only reads, and names no money, booking or membership'
+  }
+  return null
+}
 
 /**
  * W72a: the blocks a gallery is made of (studio/schemaTypes/objects/). The check compares a field's own code, not the
@@ -114,14 +146,18 @@ function dependenciesChanged(before, after) {
 
 /**
  * The level, and why. `changes`: each changed file's path from the repo's root, with its text before and after (null
- * when it isn't there). Level 2 covers Level 3 (a small visual fix has the same checks; WQ29).
+ * when it isn't there). Level 1 (money) wins over Level '1b' (backend with no money; WQ30), which wins over Level 2;
+ * the reasons are those of the level picked. Level 2 covers Level 3 (a small visual fix has the same checks; WQ29).
  */
 export function pickLevel(changes) {
   const reasons = []
+  const reasons1b = []
   for (const { file, before, after } of changes) {
     const level1 = LEVEL_1_PATHS.find((place) => (place.endsWith('/') ? file.startsWith(place) : file === place))
     if (level1) {
-      reasons.push(`${file} (${level1} is backend or money code)`)
+      const noMoney = backendWithoutMoney({ file, before, after })
+      if (noMoney) reasons1b.push(`${file} (${noMoney})`)
+      else reasons.push(`${file} (${level1} is backend or money code)`)
     } else if (file === 'web/package.json' && dependenciesChanged(before, after)) {
       reasons.push(`${file} (the packages changed)`)
     } else if (file.startsWith(SCHEMA_FOLDER) && isScript(file)) {
@@ -132,7 +168,9 @@ export function pickLevel(changes) {
     }
   }
   if (changes.length === 0) return { level: 0, reasons }
-  return { level: reasons.length > 0 ? 1 : 2, reasons }
+  if (reasons.length > 0) return { level: 1, reasons }
+  if (reasons1b.length > 0) return { level: '1b', reasons: reasons1b }
+  return { level: 2, reasons }
 }
 
 /** Files every story loads (.storybook/preview.tsx): a change to one is a change to them all. */

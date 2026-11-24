@@ -81,7 +81,12 @@ export const siteSettingsSchema = z.object({
 export type SiteSettings = z.infer<typeof siteSettingsSchema>
 
 const navLinkSchema = z.object({ key: z.string(), label: z.string(), link: linkSchema })
-export const navigationSchema = z.object({ menuLinks: z.array(navLinkSchema), footerLinks: z.array(navLinkSchema) })
+export type NavLink = z.infer<typeof navLinkSchema>
+/** `footerGroups`: the footer's columns of links, left to right (W73). */
+export const navigationSchema = z.object({
+  menuLinks: z.array(navLinkSchema),
+  footerGroups: z.array(z.object({ key: z.string(), links: z.array(navLinkSchema) })),
+})
 export type Navigation = z.infer<typeof navigationSchema>
 
 /** One module of a page. Each kind of module is one more member here. */

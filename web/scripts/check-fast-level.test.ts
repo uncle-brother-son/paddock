@@ -2,9 +2,9 @@ import { readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-import { changedWebhookFields, filesToLint, pickLevel, storiesFor, unitTestsToRun, WEBHOOK_BLOCKS, WEBHOOK_FIELDS, webhookFieldsIn } from './check-fast-level.mjs'
+import { backendWithoutMoney, changedWebhookFields, filesToLint, MONEY_WORDS, pickLevel, storiesFor, unitTestsToRun, WEBHOOK_BLOCKS, WEBHOOK_FIELDS, webhookFieldsIn } from './check-fast-level.mjs'
 
-// Brief W72, item 1 (WQ29): how `npm run check:fast` picks the test level.
+// Brief W72, item 1 (WQ29): how `npm run check:fast` picks the test level. W73, item 8 (WQ30): Level 1b.
 
 const WEB = path.resolve(__dirname, '..')
 const SCHEMAS = path.resolve(WEB, '../studio/schemaTypes')
@@ -22,9 +22,10 @@ describe('the level', () => {
     'web/server/rules/pricing/seats.test.ts',
     'web/server/rules/README.md',
     'web/contracts/admin.ts',
-    'supabase/migrations/035_x.sql',
-    'web/app/api/sanity/webhook/route.ts',
+    'supabase/migrations/033_money_columns_numeric_10_2.sql',
+    'supabase/README.md',
     'web/app/api/v1/staff/orders/route.ts',
+    'web/app/api/stripe/webhook/route.ts',
     'web/custom-worker.ts',
     'web/wrangler.jsonc',
     'web/package-lock.json',
@@ -34,6 +35,78 @@ describe('the level', () => {
     expect(level).toBe(1)
     expect(reasons).toHaveLength(1)
     expect(reasons[0]).toContain(file)
+  })
+
+  // W73, item 8 (WQ30): backend that does not touch money has a level of its own, between the two.
+  describe('Level 1b: backend that does not touch money (WQ30)', () => {
+    const reads = "export const GET = defineRoute({ access: 'public' }, async () => listCategories())\n"
+    const migration = 'create table product_categories (id text primary key, title text not null);\n'
+
+    it.each([
+      ['the Sanity webhook', changed('web/app/api/sanity/webhook/route.ts')],
+      ["the webhook's test", changed('web/app/api/sanity/webhook/route.test.ts')],
+      ['what the webhook writes', changed('web/server/rules/catalog/sanity-sync.ts')],
+      ['a migration that names no money', changed('supabase/migrations/035_product_categories.sql', null, migration)],
+      ['a route that only reads', changed('web/app/api/v1/public/categories/route.ts', null, reads)],
+      ["a read-only route's test", changed('web/app/api/v1/public/categories/route.test.ts', null, "it('lists them', async () => { await GET(request()) })\n")],
+    ])('%s is Level 1b, alone or among website files', (_what, change) => {
+      expect(levelOf(change)).toBe('1b')
+      const { level, reasons } = pickLevel([changed('web/components/Header.tsx'), change, changed('studio/structure.ts')])
+      expect(level).toBe('1b')
+      expect(reasons).toHaveLength(1)
+      expect(reasons[0]).toContain(change.file)
+    })
+
+    it('money beside it makes the whole change Level 1, and only the money files are the reasons', () => {
+      const { level, reasons } = pickLevel([changed('web/app/api/sanity/webhook/route.ts'), changed('web/server/rules/refunds/claims.ts'), changed('web/components/Header.tsx')])
+      expect(level).toBe(1)
+      expect(reasons).toEqual(['web/server/rules/refunds/claims.ts (web/server/ is backend or money code)'])
+    })
+
+    it.each([
+      ['a price column', 'alter table products add column sale_price numeric(10,2);'],
+      ['an order', 'create index on orders (customer_id);'],
+      ['a booking', 'alter table bookings add column note text;'],
+      ['a membership', "update memberships set status = 'ended' where id = $1;"],
+      ['store credit', 'select store_credit_balance from customers;'],
+      ['a gift card', 'alter table gift_cards add column sent_at timestamptz;'],
+      ['a session pass', 'alter table session_pass_types add column level text;'],
+      ['Stripe', '-- the stripe_customer_id column'],
+    ])('a migration that names %s is Level 1', (_what, sql) => {
+      expect(levelOf(changed('supabase/migrations/036_x.sql', null, `${migration}${sql}\n`))).toBe(1)
+    })
+
+    it('a migration cannot leave Level 1 by losing the word, and one that cannot be read is Level 1', () => {
+      expect(levelOf(changed('supabase/migrations/036_x.sql', 'alter table orders add column note text;', migration))).toBe(1)
+      expect(levelOf(changed('supabase/migrations/036_x.sql', migration, null))).toBe('1b')
+      expect(levelOf(changed('supabase/migrations/036_x.sql', null, null))).toBe(1)
+      // Money in its name counts too.
+      expect(levelOf(changed('supabase/migrations/036_refund_owed.sql', null, migration))).toBe(1)
+    })
+
+    it.each([
+      ['it writes', 'web/app/api/v1/staff/categories/route.ts', `${reads}export const POST = defineRoute({ access: 'staff' }, async () => addCategory())\n`],
+      ['it names a price', 'web/app/api/v1/public/products/route.ts', "export const GET = defineRoute({ access: 'public' }, async () => productsWithPrices())\n"],
+      ['its address is about orders', 'web/app/api/v1/staff/orders/stuck/route.ts', reads],
+      ['its address is about bookings', 'web/app/api/v1/customer/bookings/route.ts', reads],
+    ])('a route is Level 1 when %s', (_what, file, source) => {
+      expect(levelOf(changed(file, null, source))).toBe(1)
+      expect(levelOf(changed(file, source, reads))).toBe(1)
+    })
+
+    it('only those three kinds of file: any other backend file is Level 1 whatever it says', () => {
+      for (const file of ['web/server/rules/catalog/items.ts', 'web/server/scheduled.ts', 'web/contracts/categories.ts', 'web/app/api/v1/define-route.ts', 'supabase/config.toml', 'web/custom-worker.ts']) {
+        expect(backendWithoutMoney(changed(file, null, 'export const a = 1\n')), file).toBeNull()
+        expect(levelOf(changed(file, null, 'export const a = 1\n')), file).toBe(1)
+      }
+    })
+
+    it('the money words catch the money tables and leave content alone', () => {
+      for (const word of ['orders', 'order_items', 'bookings', 'event_bookings', 'memberships', 'refund_owed_amount', 'store_credit_balance', 'gift_cards', 'session_pass_types', 'base_price', 'stripe_payment_intent_id', 'promo_codes']) {
+        expect(MONEY_WORDS.test(word), word).toBe(true)
+      }
+      for (const word of ['product_categories', 'title', 'sanity_id', 'images', 'password', 'compass', 'slug']) expect(MONEY_WORDS.test(word), word).toBe(false)
+    })
   })
 
   it('a removed or a new backend file is Level 1 too', () => {

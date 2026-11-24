@@ -53,16 +53,29 @@ describe('colours: the palette and the four theme modes are Figma\'s (W71, item 
     expect(readFileSync(path.join(WEB, 'app/globals.css'), 'utf8')).not.toMatch(/--color-(background|foreground)/)
   })
 
+  // W73: every mode but Light is also what the see-through header takes while the page's first section has it
+  // (before the page's script has run; components/frame/Header.tsx). Light needs none: it is <html>'s own.
+  const themeSelector = (mode: string): string =>
+    mode === 'light' ? '[data-theme="light"]' : `[data-theme="${mode}"], :root:has(#main > [data-theme="${mode}"]:first-child) [data-header-theme="page"]`
+
   it('the modes are Light, Dark, Fjord and Mud', () => {
     expect(tokens.themeModes.map((mode) => mode.toLowerCase())).toEqual([...THEME_MODES])
   })
 
   it.each(tokens.themeModes)('%s: every theme colour points at the palette colour Figma gives it', (mode) => {
-    const declared = ruleNamed(css, `[data-theme="${mode.toLowerCase()}"]`).declarations
+    const declared = ruleNamed(css, themeSelector(mode.toLowerCase())).declarations
     for (const [name, byMode] of Object.entries(tokens.theme)) {
       expect(declared[themeVariable(name)], `${name} in ${mode}`).toBe(`var(${paletteVariable((byMode as Record<string, string>)[mode]!)})`)
     }
     expect(Object.keys(declared).sort()).toEqual(themeNames.map(themeVariable).sort())
+  })
+
+  it('W73 (WQ12): the focus ring is 2px of Text/Primary with a 2px gap, for the keyboard only', () => {
+    const ring = ruleNamed(css, ':where(a, button, summary, [tabindex]:not([tabindex="-1"])):focus-visible').declarations
+    expect(ring).toEqual({ outline: 'var(--spacing-2) solid var(--color-text-primary)', 'outline-offset': 'var(--spacing-2)' })
+    expect(theme['--spacing-2']).toBe('2px')
+    // No ring for a mouse or a finger: nothing styles plain `:focus`.
+    expect(readFileSync(path.join(WEB, 'app/globals.css'), 'utf8')).not.toMatch(/:focus(?!-visible)/)
   })
 
   it('with no mode set, the theme colours are Light', () => {

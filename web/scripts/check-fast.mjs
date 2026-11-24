@@ -1,5 +1,7 @@
-// npm run check:fast (WQ29): reads what changed (against origin/main, committed or not), prints the test level and runs
-// that level's checks. Level 1 is never run from here: it says so and exits 2. The rules: check-fast-level.mjs.
+// npm run check:fast (WQ29, WQ30): reads what changed (against origin/main, committed or not), prints the test level and
+// runs that level's checks. Level 1 is never run from here: it says so and exits 2. Level 1b runs the quick checks
+// (the changed tests among them) and then says one full Worker run is still owed, exiting 2 when they passed. The
+// rules: check-fast-level.mjs.
 import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, globSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
@@ -18,8 +20,8 @@ const changedFiles = [
   ...new Set([...names(git('diff', '--name-only', '--no-renames', '-z', base)), ...names(git('ls-files', '--others', '--exclude-standard', '-z'))]),
 ].sort()
 
-/** Only a script's or package.json's text is compared; a picture or a font is there or it isn't. */
-const isText = (file) => /\.(ts|tsx|mts|mjs|js|jsx|json)$/.test(file)
+/** Only a script's, package.json's or a migration's text is compared; a picture or a font is there or it isn't. */
+const isText = (file) => /\.(ts|tsx|mts|mjs|js|jsx|json|sql)$/.test(file)
 const textBefore = (file) => {
   try {
     return git('show', `${base}:${file}`)
@@ -48,7 +50,13 @@ if (level === 1) {
   process.exit(2)
 }
 
-console.log('\nLEVEL 2 (website and Sanity; a Level 3 fix has the same checks).')
+if (level === '1b') {
+  console.log('\nLEVEL 1b (backend that does not touch money), because of:')
+  for (const reason of reasons) console.log(`  - ${reason}`)
+  console.log('Its checks: the quick ones below (the changed tests among them), then one full Worker run. No planted bugs.')
+} else {
+  console.log('\nLEVEL 2 (website and Sanity; a Level 3 fix has the same checks).')
+}
 const results = []
 const run = (label, cwd, command, args) => {
   console.log(`\n--- ${label}`)
@@ -75,6 +83,11 @@ const storyFiles = storiesFor(changedFiles, stories)
 if (storyFiles.length > 0) run(`Storybook: ${storyFiles.join(', ')}`, WEB, 'npx', ['vitest', 'run', '--config', 'vitest.config.ts', ...storyFiles])
 else console.log('\n--- Storybook: no changed component has a story')
 
-console.log('\ncheck:fast, Level 2:')
+console.log(`\ncheck:fast, Level ${level}:`)
 for (const { label, passed } of results) console.log(`  ${passed ? 'passed' : 'FAILED'}  ${label}`)
-process.exit(results.every(({ passed }) => passed) ? 0 : 1)
+if (!results.every(({ passed }) => passed)) process.exit(1)
+if (level === '1b') {
+  console.log('\nStill owed for Level 1b: one full Worker run, once (web/CLAUDE.md, "Test levels"): caffeinate -i npm run test:unit')
+  process.exit(2)
+}
+process.exit(0)

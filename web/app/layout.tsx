@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 
+import { Frame } from "@/components/frame/Frame";
 import { GridOverlay } from "@/components/layout/GridOverlay";
 import { MotionProviders } from "@/components/providers/MotionProviders";
 import { SITE_NAME, SITE_URL } from "@/lib/site";
@@ -33,7 +34,10 @@ export default function RootLayout({
       {/* The page is at least the window's height by the body's own minimum, not by a height on <html>: Lenis sets
           <html> and <body> to `height: auto` while it runs, which would undo a height passed down from <html>. */}
       <body className="flex min-h-dvh flex-col">
-        <MotionProviders>{children}</MotionProviders>
+        {/* W73: every page sits in the frame: "Skip to content", the header and its menu, the main element and the footer. */}
+        <MotionProviders>
+          <Frame>{children}</Frame>
+        </MotionProviders>
         {/* Test copies only: Ctrl + G draws the grid over the page. On the live domain it renders and loads nothing. */}
         <GridOverlay />
       </body>
