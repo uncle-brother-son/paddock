@@ -10,7 +10,7 @@ Follow `docs/build-standards.md` for every website task (accessibility, SEO, met
 - `web/` is one Next.js 16 app deployed to Cloudflare Workers with OpenNext (worker name `paddock`, currently https://paddock.paddock-55d.workers.dev). It serves:
   - the **customer website** (being built; the pages under `app/` are still the starter);
   - **API routes** under `app/api/v1/*`, used by the Retool staff app, and the Stripe and Sanity webhooks. These are live. Do not change their contracts without agreeing it, because the staff app depends on them.
-- `studio/` is Sanity Studio (v5). Project `qx4gqx7t`, dataset `production`. Content types: `page`, `blogPost`, `galleryImage` (website only), plus `serviceType`, `product`, `addon`, `membershipPlan`, `sessionPassType`, `giftCardType` (mirrored into Supabase).
+- `studio/` is Sanity Studio (v5). Project `qx4gqx7t`, dataset `production`. Content types: `contentPage`, `infoPage`, `blogPost`, `productFamily`, `sizeGuide` and the single documents `siteSettings`, `navigation`, `shopSettings`, `eventsSettings` (website only), plus `serviceType`, `product`, `addon`, `membershipPlan`, `sessionPassType`, `giftCardType`, `event` (mirrored into Supabase). Shared blocks: `picture`, `media`, `richText`, `seo`, `linkTo` (`studio/schemaTypes/objects/`). The site reads them through `lib/sanity/read.ts` only. Words a page can't have as its address: `lib/routes/reserved-slugs.ts`, the one list both sides read.
 - `supabase/` holds the migrations. Supabase project `paddock` holds bookings, customers, orders, memberships, credits and all live data.
 - `project info/` holds the original scope, user flows and data model notes. What the rules should be is the Notion "Paddock Build Specification"; what they are is `web/server/rules/` and its tests.
 - The staff tool is a Retool React app (`~/Documents/Code/paddock-retool-app`). It is not in this repo, and it holds screens only: the rules are here, in `web/server/rules/`.
@@ -19,10 +19,17 @@ Follow `docs/build-standards.md` for every website task (accessibility, SEO, met
 - `npm run dev`: local dev (run by Wayne on his Mac).
 - `npx tsc --noEmit`: type check (Claude runs this).
 - `npm run test:unit`: every test. One file: `npx vitest run --config vitest.unit.config.ts <file>`.
+- `npm run check:fast`: what a website change needs (see "Test levels").
 - `npm run schema:test -- --check` and `npm run check:contracts`: the two generated files are up to date (without `--check`, the first rewrites its file).
 - `npm run storybook`: Storybook on port 6006. `npx vitest run --config vitest.config.ts`: every story, with the accessibility check (it needs Playwright's browser: `npx playwright install chromium`, with Wayne's yes).
 - Deploying: pushing to `main` on GitHub (uncle-brother-son/paddock) triggers a Cloudflare build and deploy automatically. No manual `npm run deploy` needed.
 - Wayne commits and pushes. Claude never commits, pushes, deploys, installs packages or deletes files without his yes.
+
+## Test levels (WQ29)
+`npm run check:fast` reads the changed files (against `origin/main`, committed or not), prints the level and runs that level's checks.
+- **Level 1, money and backend:** anything in `web/server/`, `web/contracts/`, `web/app/api/`, `supabase/`, `custom-worker.ts`, `wrangler.jsonc`; a package change; a website file that uses Stripe or server code; a Studio field the Worker's Sanity webhook reads (`WEBHOOK_FIELDS` in `scripts/check-fast-level.mjs`). The full process: the full Worker run once, planted bugs, an independent review, a full report. `check:fast` runs nothing: it names the files and exits 2.
+- **Level 2, website and Sanity:** lint and `tsc`, the changed `*.test.ts` files, and only the changed components' Storybook tests (accessibility included). No full Worker run, no OpenNext build, no planted bugs, no screenshots unless asked. Wayne's look in Storybook or on the preview is the check. Half-page report.
+- **Level 3, a small visual fix:** no brief; Wayne says it directly. Edit, lint, that component's story test (`check:fast` runs the same as Level 2).
 
 ## Design
 - **Figma file:** "Website" (UBS workspace).
@@ -33,12 +40,14 @@ Follow `docs/build-standards.md` for every website task (accessibility, SEO, met
   - Never edit Wayne's existing frames.
 - **Concept:** old-meets-new. Old print newspaper layout, spacing and type, with modern interactive moments. Style references: Belmond, oddritualgolf.com, malvah.co.
 - **Build order (WQ5):** the frame first (W71 foundations: tokens, grid, fonts, motion, Storybook; W72 the Sanity schema for the frame and products; W73 header, footer, menu, hero, intro, page transitions), then products (the list and the product page, signed off first as the pattern), then the other purchasable pages (events, memberships, passes, gift cards), then buying all at once (bag, sign-in, checkout, payment, confirmation, account, emails), then end-to-end testing. Sign-off: Storybook for design, the preview for flows and motion, a full review for money. Desktop first in Figma, then mobile.
-- **Fonts:** GT Sectra Fine (Figma "Primary", 400) and GT America Standard (Figma "Secondary", 400 and 500), the licensed woff2 files in `public/fonts`, loaded in `app/fonts.ts` with `next/font/local` as `--font-primary` and `--font-secondary`. Use Wayne's existing text styles; never invent new ones without asking.
+- **Fonts:** GT Sectra Fine (Figma "Primary", 400) and GT America Standard (Figma "Secondary", 400 and 500), the licensed woff2 files in `app/fonts`, loaded in `app/fonts.ts` with `next/font/local` as `--font-primary` and `--font-secondary`. Use Wayne's existing text styles; never invent new ones without asking.
 - **Tokens:** `app/globals.css` holds the Figma variables and text styles; `lib/design/figma-tokens.json` is the lead's read of the Figma file, and `lib/design/tokens.test.ts` fails when the two differ. Tailwind's own colour, type, spacing and radius scales are switched off, so only these exist:
   - colours: the theme colours (`bg-surface-primary`, `text-text-muted-primary`, `text-text-error`), set per mode by `data-theme` (`light` on `<html>`; `dark`, `fjord` or `mud` on a section; Fjord and Mud never for forms or error messages). The palette (`bg-sand-light`, `bg-black-65`) is there too;
   - text: one class per Figma text style (`text-hero-caps`, `text-h1` ... `text-label-10`);
   - spacing: Figma's scale, named by its pixel value (`p-16` is 16px, `gap-8` is 8px); corners `rounded-s` and `rounded-m`;
   - the grid: `<Grid>` (`components/layout/Grid.tsx`), 6 columns below 768px and 24 from 768px, with `col-span-*` / `md:col-span-*` inside it.
+  - trim: every text style but H3 is trimmed to its capitals (`text-box`), so the space between two blocks of text is always a gap or padding from the spacing scale, never the line height. Put a text style on the element that holds the text; a trimmed one-line link or button needs padding for its tap area and focus ring;
+  - the grid overlay: Ctrl + G (or `?grid=1`, off with `?grid=0`) draws the grid on any test copy, never on the live domain.
   Storybook's Foundations pages (`components/foundations/`) show them all, in each mode.
 - **Motion (WQ20-WQ23):** one curve and two durations for every animation, from one source: `lib/motion/tokens.ts` for Motion (`EASE_SMOOTH`, `DURATION_SHORT` for hovers and panels, `DURATION_LONG` for page transitions and the intro) and the same in CSS (`--ease-smooth`, `--duration-short`, `--duration-long`; the classes `ease-smooth`, `duration-short`, `duration-long`). Never type in a curve, an ease keyword, a spring or a duration: `lib/motion/typed-in-motion.test.ts` fails on one. Lenis (smooth scroll, off with reduced motion) and Motion's defaults are set once in `components/providers/MotionProviders.tsx`; a panel that scrolls by itself carries `data-lenis-prevent`. Use the installed `lenis` and `framer-motion`; GSAP or any other package only with Wayne's yes.
 

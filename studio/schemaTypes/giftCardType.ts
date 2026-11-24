@@ -1,5 +1,6 @@
 import { defineType, defineField } from 'sanity'
 import { Gift } from 'lucide-react'
+import { checkValidityPlaceholder } from '../lib/checks'
 
 export const giftCardType = defineType({
   name: 'giftCardType',
@@ -17,8 +18,7 @@ export const giftCardType = defineType({
     defineField({
       name: 'description',
       title: 'Description',
-      type: 'text',
-      rows: 4,
+      type: 'richText',
       description: 'Marketing copy explaining what the gift card can be used for',
     }),
     defineField({
@@ -43,6 +43,14 @@ export const giftCardType = defineType({
       ],
       description: 'First image will be used as thumbnail in Supabase',
     }),
+    defineField({
+      name: 'terms',
+      title: 'Gift Card Terms',
+      type: 'richText',
+      description: 'Write {validity} where the validity goes: the site fills it in from the staff app',
+      validation: (rule) => rule.custom((blocks) => checkValidityPlaceholder(blocks as Parameters<typeof checkValidityPlaceholder>[0])).warning(),
+    }),
+    defineField({ name: 'seo', title: 'SEO', type: 'seo' }),
   ],
   preview: {
     select: {

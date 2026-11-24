@@ -6,7 +6,7 @@ import localFont from 'next/font/local'
 
 /** Figma "Font/Family/Primary": GT Sectra Fine, Regular 400. */
 export const fontPrimary = localFont({
-  src: [{ path: '../public/fonts/GT-Sectra-Fine-Regular.woff2', weight: '400', style: 'normal' }],
+  src: [{ path: './fonts/GT-Sectra-Fine-Regular.woff2', weight: '400', style: 'normal' }],
   variable: '--font-primary',
   display: 'swap',
   preload: true,
@@ -17,8 +17,8 @@ export const fontPrimary = localFont({
 /** Figma "Font/Family/Secondary": GT America Standard, Regular 400 and Medium 500. */
 export const fontSecondary = localFont({
   src: [
-    { path: '../public/fonts/GT-America-Standard-Regular.woff2', weight: '400', style: 'normal' },
-    { path: '../public/fonts/GT-America-Standard-Medium.woff2', weight: '500', style: 'normal' },
+    { path: './fonts/GT-America-Standard-Regular.woff2', weight: '400', style: 'normal' },
+    { path: './fonts/GT-America-Standard-Medium.woff2', weight: '500', style: 'normal' },
   ],
   variable: '--font-secondary',
   display: 'swap',

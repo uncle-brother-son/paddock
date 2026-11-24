@@ -19,7 +19,7 @@ Sanity owns the content. Prices, stock and whether an item is on sale are set in
 | `giftCardType` | `gift_card_types` | name, thumbnail |
 | `event` | `events` | name, thumbnail, whether it has an extra waiver and that waiver's version |
 
-Page, blog post and gallery image documents stay in Sanity: the webhook answers 200 and writes nothing.
+Every other document (pages, info pages, blog posts, families, size guides, settings) stays in Sanity: the webhook answers 200 and writes nothing.
 
 **What happens on each delivery**
 - **Published for the first time:** the row is made **off sale** (Q57). Staff set its price and put it on sale in the

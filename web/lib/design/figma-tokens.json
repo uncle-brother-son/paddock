@@ -68,9 +68,9 @@
   "lineHeightNote": "Figma 'auto' line height = the font's own line height. In CSS use 'normal' with the self-hosted GT fonts, then compare against Figma in Storybook; report any visible difference for Wayne rather than picking a number.",
   "verticalTrimNote": "Figma 'Vertical trim: Cap height to baseline' (read by the lead, 24 Nov 2026): every text style has it except H3. In CSS: text-box: trim-both cap alphabetic. A one-line box is as tall as a capital letter; lines in between keep the line height.",
   "fonts": {
-    "GT America Standard Regular": "web/public/fonts/GT-America-Standard-Regular.woff2 (400)",
-    "GT America Standard Medium": "web/public/fonts/GT-America-Standard-Medium.woff2 (500)",
-    "GT Sectra Fine Regular": "web/public/fonts/GT-Sectra-Fine-Regular.woff2 (400)",
+    "GT America Standard Regular": "web/app/fonts/GT-America-Standard-Regular.woff2 (400)",
+    "GT America Standard Medium": "web/app/fonts/GT-America-Standard-Medium.woff2 (500)",
+    "GT Sectra Fine Regular": "web/app/fonts/GT-Sectra-Fine-Regular.woff2 (400)",
     "licence": "web-licensed (Wayne, 24 Nov); committed 12a257c"
   },
   "motion": {

@@ -1,6 +1,23 @@
-import type {StructureResolver} from 'sanity/structure'
+import type {StructureBuilder, StructureResolver} from 'sanity/structure'
 import {createElement, type ComponentProps} from 'react'
-import {CalendarDays, CupSoda, Gift, House, IdCard, Info, Newspaper, ShoppingBag, Ticket, Waves} from 'lucide-react'
+import {
+  CalendarDays,
+  CupSoda,
+  FileText,
+  Gift,
+  IdCard,
+  Info,
+  Menu,
+  Newspaper,
+  Ruler,
+  Settings,
+  Shirt,
+  ShoppingBag,
+  SlidersHorizontal,
+  Tags,
+  Ticket,
+  Waves,
+} from 'lucide-react'
 
 const VerticalWaves = (props: ComponentProps<typeof Waves>) =>
   createElement(Waves, {
@@ -8,10 +25,77 @@ const VerticalWaves = (props: ComponentProps<typeof Waves>) =>
     style: {...props.style, transform: 'rotate(90deg)'},
   })
 
+/** The single documents: one of each, whose id is its type's name. */
+const SINGLETONS = ['siteSettings', 'navigation', 'shopSettings', 'eventsSettings']
+
+export const isSingleton = (type: string): boolean => SINGLETONS.includes(type)
+
+const single = (S: StructureBuilder, type: string, title: string, icon: typeof Settings) =>
+  S.listItem()
+    .id(type)
+    .title(title)
+    .icon(icon)
+    .child(S.document().schemaType(type).documentId(type).title(title))
+
 export const structure: StructureResolver = (S) =>
   S.list()
     .title('Paddock')
     .items([
+      S.listItem()
+        .title('Pages')
+        .icon(FileText)
+        .child(S.documentTypeList('contentPage').title('Pages')),
+      S.listItem()
+        .title('Info Pages')
+        .icon(Info)
+        .child(
+          S.documentTypeList('infoPage')
+            .title('Info Pages')
+            .defaultOrdering([{field: 'menuOrder', direction: 'asc'}]),
+        ),
+      S.listItem()
+        .title('Shop')
+        .icon(ShoppingBag)
+        .child(
+          S.list()
+            .title('Shop')
+            .items([
+              S.listItem()
+                .title('Products')
+                .icon(Shirt)
+                .child(S.documentTypeList('product').title('Products')),
+              S.listItem()
+                .title('Product Families')
+                .icon(Tags)
+                .child(S.documentTypeList('productFamily').title('Product Families')),
+              S.listItem()
+                .title('Size Guides')
+                .icon(Ruler)
+                .child(S.documentTypeList('sizeGuide').title('Size Guides')),
+              S.listItem()
+                .title('Gift Card')
+                .icon(Gift)
+                .child(S.documentTypeList('giftCardType').title('Gift Card')),
+            ]),
+        ),
+      S.listItem()
+        .title('Events')
+        .icon(CalendarDays)
+        .child(S.documentTypeList('event').title('Events')),
+      S.listItem()
+        .title('Settings')
+        .icon(Settings)
+        .child(
+          S.list()
+            .title('Settings')
+            .items([
+              single(S, 'siteSettings', 'Site Settings', SlidersHorizontal),
+              single(S, 'navigation', 'Navigation', Menu),
+              single(S, 'shopSettings', 'Shop Settings', ShoppingBag),
+              single(S, 'eventsSettings', 'Events Settings', CalendarDays),
+            ]),
+        ),
+      S.divider(),
       S.listItem()
         .title('Session Types')
         .icon(VerticalWaves)
@@ -29,41 +113,7 @@ export const structure: StructureResolver = (S) =>
         .icon(CupSoda)
         .child(S.documentTypeList('addon').title('Add-ons')),
       S.listItem()
-        .title('Products')
-        .icon(ShoppingBag)
-        .child(S.documentTypeList('product').title('Products')),
-      S.listItem()
-        .title('Gift Cards')
-        .icon(Gift)
-        .child(S.documentTypeList('giftCardType').title('Gift Cards')),
-      S.listItem()
-        .title('Events')
-        .icon(CalendarDays)
-        .child(S.documentTypeList('event').title('Events')),
-      S.divider(),
-      S.listItem()
-        .title('Website')
-        .icon(House)
-        .child(
-          S.list()
-            .title('Website')
-            .items([
-              S.listItem()
-                .title('Homepage')
-                .icon(House)
-                .child(S.document().schemaType('page').documentId('homepage').title('Homepage')),
-              S.listItem()
-                .title('Blog')
-                .icon(Newspaper)
-                .child(S.documentTypeList('blogPost').title('Blog')),
-              S.listItem()
-                .title('Info')
-                .icon(Info)
-                .child(
-                  S.documentTypeList('page')
-                    .title('Info')
-                    .filter('_type == "page" && !(_id in ["homepage", "drafts.homepage"])'),
-                ),
-            ]),
-        ),
+        .title('Blog')
+        .icon(Newspaper)
+        .child(S.documentTypeList('blogPost').title('Blog')),
     ])

@@ -1,5 +1,6 @@
 import { defineType, defineField } from 'sanity'
 import { CalendarIcon } from '@sanity/icons'
+import { checkSlug } from '../lib/checks'
 
 // Event content. Syncs name, first image, and whether there is an extra waiver (plus a version
 // fingerprint of its text) to the booking system via the webhook. Date and time, capacity, who can
@@ -20,14 +21,14 @@ export const event = defineType({
       name: 'slug',
       title: 'Slug',
       type: 'slug',
-      options: { source: 'name', maxLength: 96 },
-      validation: (rule) => rule.required(),
+      description: "The event's address, after /events/. Each date is its own event, so each needs its own",
+      options: { maxLength: 96 },
+      validation: (rule) => rule.required().custom((slug) => checkSlug(slug?.current, 'page')),
     }),
     defineField({
       name: 'description',
       title: 'Description',
-      type: 'text',
-      rows: 6,
+      type: 'richText',
       description: 'What the event is, who it is for, what to bring',
     }),
     defineField({
@@ -58,6 +59,7 @@ export const event = defineType({
       description:
         'Optional. Extra terms every attendee must accept for this event, on top of the standard waiver. Leave empty if none. Changing it after people have booked creates a new waiver version.',
     }),
+    defineField({ name: 'seo', title: 'SEO', type: 'seo' }),
   ],
   preview: {
     select: {

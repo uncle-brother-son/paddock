@@ -25,13 +25,13 @@ it's the source of truth for price, stock, and transactional state.
 - Description
 - Product info (composition / made-in / etc.)
 - Images (full array — no fixed limit)
-- `productGroup` — a shared text value (e.g. slug like `"classic-tee"`) linking colour variants
+- `family` — a shared Product Family document, picked from a list, linking colour variants
   of the same underlying product together for frontend display only (e.g. showing a "also
   available in black" swatch on the white tee's page). Colour variants are separate Products in
   Postgres/Stripe with independent stock, price, and Stripe IDs — this field is purely a content/
   navigation relationship, read directly by the frontend, and never touches Postgres. Preferred
   over manual pairwise references between products because adding a new colour later only
-  requires setting the same group value on the new product, rather than editing every existing
+  requires picking the same family on the new product, rather than editing every existing
   variant's reference list.
 
 **Supabase — mirrored from Sanity** (Sanity is the source of truth; webhook overwrites these on
@@ -70,7 +70,7 @@ live here rather than on the Product record. Every Product has at least one Vari
 there's no visible size choice on the frontend (e.g. a tote bag gets a single "default"
 Variant), so SKU/stock always come from exactly one consistent place with no special case to
 remember. Colour is *not* a Variant attribute — colour options are handled as separate linked
-Products via `productGroup` (see above), not as a variant of one product. Price override was
+Products via `family` (see above), not as a variant of one product. Price override was
 removed from Variant entirely — it predated and became inconsistent with the base/sale/member
 three-tier pricing model; Variants always share the parent Product's tiers.
 - Variant ID, linked Product ID

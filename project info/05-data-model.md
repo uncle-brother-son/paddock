@@ -354,7 +354,7 @@ full stock/variant tracking since these are physical, shippable goods.
 - Description — Sanity only
 - Product info — composition/made-in/etc. (HH: yes) — Sanity only
 - Images — no fixed limit — Sanity only
-- `productGroup` — links colour variants of the same product together for frontend display
+- `family` — a Product Family document picked on the product; links colour variants of the same product together for frontend display
   only (e.g. "also available in black" on the white tee's page); colour variants are separate
   Products, not a Variant attribute — Sanity only
 - Base price, member price, **sale price** — three independently priced tiers, each with its
@@ -381,7 +381,7 @@ Every Product has at least one Variant, even where there's no visible size choic
 bag gets a single "default" Variant), so SKU/stock/price always come from one consistent place.
 
 - Variant ID, linked product ID
-- Size *(colour removed — handled via `productGroup` on the Product, not as a Variant
+- Size *(colour removed — handled via `family` on the Product, not as a Variant
   attribute)*
 - SKU
 - Stock quantity — **derived from the Stock Adjustment ledger below, not directly editable**

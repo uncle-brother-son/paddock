@@ -66,8 +66,8 @@ Which account sections show is in backend log 25.
 | URL | Page | Type | Access | Stage | Notes |
 |---|---|---|---|---|---|
 | /health-and-safety (L1) | Health & Safety | Page | Public | 2 | |
-| /terms (L2) | Terms & Conditions | Page | Public | 2 | Footer and email links hidden until this exists |
-| /privacy (L3) | Privacy | Page | Public | 2 | Footer and email links hidden until this exists |
+| /info/terms (L2) | Terms & Conditions | Page | Public | 2 | Footer and email links hidden until this exists |
+| /info/privacy (L3) | Privacy | Page | Public | 2 | Footer and email links hidden until this exists |
 | /shipping-and-returns (L4) | Shipping & Returns | Page | Public | 2 | Sanity content; footer link hidden until published. The product page's Shipping & Returns link opens the info panel on that tab, not this page |
 | /lost-and-found (L5) | Lost & Found Policy | Page | Public | 2 | Sanity content; footer legal link hidden until published |
 | (no URL) | Manage cookies | Popup | Public | 2 | |

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
@@ -214,15 +214,18 @@ describe('spacing, corners and the grid are Figma\'s (W71, item 3)', () => {
 describe('fonts: the three licensed woff2 files, swapped in over a size-matched fallback (W71, item 4)', () => {
   const source = readFileSync(path.join(WEB, 'app/fonts.ts'), 'utf8')
   const files = Object.values(tokens.fonts)
-    .map((value) => /^web\/(public\/fonts\/\S+\.woff2) /.exec(value)?.[1])
+    .map((value) => /^web\/app\/(fonts\/\S+\.woff2) /.exec(value)?.[1])
     .filter((file): file is string => Boolean(file))
 
-  it('each face Figma uses is loaded from public/fonts, and nothing else is', () => {
+  it('each face Figma uses is loaded from app/fonts, and nothing else is there or in public/fonts', () => {
     expect(files).toHaveLength(3)
     for (const file of files) {
-      expect(existsSync(path.join(WEB, file)), file).toBe(true)
-      expect(source).toContain(`'../${file}'`)
+      expect(existsSync(path.join(WEB, 'app', file)), file).toBe(true)
+      expect(source).toContain(`'./${file}'`)
     }
+    // W72 (WQ27): beside the code that loads them, so no second copy is served from public/; the unused .woff are gone.
+    expect(readdirSync(path.join(WEB, 'app/fonts')).filter((name) => !name.startsWith('.')).sort()).toEqual(files.map((file) => path.basename(file)).sort())
+    expect(existsSync(path.join(WEB, 'public/fonts'))).toBe(false)
     expect(source.match(/path: '[^']+'/g)).toHaveLength(3)
     expect(source).not.toMatch(/\.woff'/)
   })

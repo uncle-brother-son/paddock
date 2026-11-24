@@ -161,7 +161,7 @@ only case where deletion is actually safe, since there's nothing downstream to p
 
 | Entity | Managed in Sanity | Managed in Retool |
 |---|---|---|
-| Product | Name, description, product info, images, `productGroup`, category | Base/member/sale price, active flag, fulfillment method |
+| Product | Name, description, product info, images, `family`, category | Base/member/sale price, active flag, fulfillment method |
 | Product Variant | — (no Sanity equivalent) | SKU, stock quantity (via Stock Adjustment ledger, never a raw edit) |
 | Add-on | Name, description, images, category | SKU, base/member/sale price, active flag |
 | Service Type | Name, description, images | Duration, capacity, booking type (public/private), price (public only), active flag |

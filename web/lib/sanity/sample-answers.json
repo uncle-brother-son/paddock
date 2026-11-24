@@ -1,0 +1,1055 @@
+{
+  "siteSettings": {
+    "siteName": "The Paddock Wellness Club",
+    "defaultSeo": {
+      "title": "T",
+      "description": "D",
+      "shareImage": {
+        "ref": "image-share-1200x630-jpg",
+        "width": 1200,
+        "height": 630,
+        "alt": "Picture share",
+        "crop": null,
+        "hotspot": null
+      }
+    },
+    "termsPage": {
+      "title": "Terms",
+      "slug": "terms"
+    },
+    "privacyPage": null,
+    "shippingReturnsPage": null,
+    "address": {
+      "line1": "1 Road",
+      "line2": null,
+      "town": "Hebden Bridge",
+      "county": null,
+      "postcode": "HX7 1AA"
+    },
+    "phone": "01422 000000",
+    "openingHours": [
+      {
+        "days": [
+          "Monday",
+          "Tuesday"
+        ],
+        "opens": "07:00",
+        "closes": "21:00"
+      }
+    ],
+    "socialLinks": {
+      "tiktok": null,
+      "instagram": "https://instagram.com/x",
+      "facebook": null
+    },
+    "newsletterHeading": "News",
+    "newsletterText": "Join",
+    "copyrightName": "The Paddock"
+  },
+  "navigation": {
+    "menuLinks": [
+      {
+        "key": "1",
+        "label": "Home",
+        "link": {
+          "destination": "page",
+          "document": {
+            "type": "contentPage",
+            "slug": "home",
+            "isHome": true,
+            "thumbnail": null
+          },
+          "url": null
+        }
+      },
+      {
+        "key": "2",
+        "label": "Exclusive Hire",
+        "link": {
+          "destination": "page",
+          "document": {
+            "type": "contentPage",
+            "slug": "exclusive-hire",
+            "isHome": false,
+            "thumbnail": {
+              "ref": "image-thumb-600x400-jpg",
+              "width": 600,
+              "height": 400,
+              "alt": "Picture thumb",
+              "crop": {
+                "top": 0,
+                "bottom": 0,
+                "left": 0.1,
+                "right": 0
+              },
+              "hotspot": {
+                "x": 0.5,
+                "y": 0.5,
+                "width": 1,
+                "height": 1
+              }
+            }
+          },
+          "url": null
+        }
+      },
+      {
+        "key": "3",
+        "label": "Shop",
+        "link": {
+          "destination": "shop",
+          "document": null,
+          "url": null
+        }
+      },
+      {
+        "key": "4",
+        "label": "Solstice",
+        "link": {
+          "destination": "event",
+          "document": {
+            "type": "event",
+            "slug": "solstice-2026",
+            "isHome": false,
+            "thumbnail": null
+          },
+          "url": null
+        }
+      },
+      {
+        "key": "5",
+        "label": "Not published",
+        "link": {
+          "destination": "page",
+          "document": null,
+          "url": null
+        }
+      }
+    ],
+    "footerLinks": [
+      {
+        "key": "7",
+        "label": "Terms",
+        "link": {
+          "destination": "page",
+          "document": {
+            "type": "infoPage",
+            "slug": "terms",
+            "isHome": false,
+            "thumbnail": {
+              "ref": "image-thumb-600x400-jpg",
+              "width": 600,
+              "height": 400,
+              "alt": "Picture thumb",
+              "crop": null,
+              "hotspot": null
+            }
+          },
+          "url": null
+        }
+      },
+      {
+        "key": "8",
+        "label": "Outside",
+        "link": {
+          "destination": "external",
+          "document": null,
+          "url": "https://example.com"
+        }
+      }
+    ]
+  },
+  "homePage": {
+    "id": "page-home",
+    "title": "Home",
+    "slug": "home",
+    "isHome": true,
+    "thumbnail": null,
+    "hero": {
+      "media": {
+        "kind": "video",
+        "url": "https://cdn.sanity.io/files/p/d/vid.mp4",
+        "poster": {
+          "ref": "image-hero-1600x900-jpg",
+          "width": 1600,
+          "height": 900,
+          "alt": "Picture hero",
+          "crop": null,
+          "hotspot": null
+        },
+        "description": "Steam",
+        "captionsUrl": "https://cdn.sanity.io/files/p/d/cap.vtt"
+      },
+      "button": {
+        "text": "Book",
+        "link": null
+      }
+    },
+    "modules": [],
+    "seo": null
+  },
+  "contentPage": {
+    "id": "page-hire",
+    "title": "Exclusive Hire",
+    "slug": "exclusive-hire",
+    "isHome": false,
+    "thumbnail": {
+      "ref": "image-thumb-600x400-jpg",
+      "width": 600,
+      "height": 400,
+      "alt": "Picture thumb",
+      "crop": {
+        "top": 0,
+        "bottom": 0,
+        "left": 0.1,
+        "right": 0
+      },
+      "hotspot": {
+        "x": 0.5,
+        "y": 0.5,
+        "width": 1,
+        "height": 1
+      }
+    },
+    "hero": {
+      "media": {
+        "kind": "image",
+        "image": {
+          "ref": "image-hero-1600x900-jpg",
+          "width": 1600,
+          "height": 900,
+          "alt": "",
+          "crop": null,
+          "hotspot": null
+        }
+      },
+      "button": {
+        "text": "Shop",
+        "link": {
+          "destination": "shop",
+          "document": null,
+          "url": null
+        }
+      }
+    },
+    "modules": [
+      {
+        "type": "upcomingEvents",
+        "key": "m",
+        "heading": "Upcoming"
+      }
+    ],
+    "seo": {
+      "title": "Hire the sauna",
+      "description": null,
+      "shareImage": null
+    }
+  },
+  "infoPage": {
+    "id": "info-terms",
+    "title": "Terms",
+    "slug": "terms",
+    "thumbnail": {
+      "ref": "image-thumb-600x400-jpg",
+      "width": 600,
+      "height": 400,
+      "alt": "Picture thumb",
+      "crop": null,
+      "hotspot": null
+    },
+    "body": [
+      {
+        "_type": "block",
+        "_key": "a",
+        "style": "normal",
+        "listItem": null,
+        "level": null,
+        "children": [
+          {
+            "_type": "span",
+            "_key": "a1",
+            "text": "Soft and ",
+            "marks": []
+          },
+          {
+            "_type": "span",
+            "_key": "a2",
+            "text": "warm",
+            "marks": [
+              "strong"
+            ]
+          },
+          {
+            "_type": "span",
+            "_key": "a3",
+            "text": ". See the ",
+            "marks": []
+          },
+          {
+            "_type": "span",
+            "_key": "a4",
+            "text": "terms",
+            "marks": [
+              "l1"
+            ]
+          },
+          {
+            "_type": "span",
+            "_key": "a5",
+            "text": " or ",
+            "marks": []
+          },
+          {
+            "_type": "span",
+            "_key": "a6",
+            "text": "a page not published",
+            "marks": [
+              "l2"
+            ]
+          }
+        ],
+        "markDefs": [
+          {
+            "_key": "l1",
+            "_type": "link",
+            "link": {
+              "destination": "page",
+              "document": {
+                "type": "infoPage",
+                "slug": "terms",
+                "isHome": false,
+                "thumbnail": {
+                  "ref": "image-thumb-600x400-jpg",
+                  "width": 600,
+                  "height": 400,
+                  "alt": "Picture thumb",
+                  "crop": null,
+                  "hotspot": null
+                }
+              },
+              "url": null
+            }
+          },
+          {
+            "_key": "l2",
+            "_type": "link",
+            "link": {
+              "destination": "page",
+              "document": null,
+              "url": null
+            }
+          }
+        ]
+      },
+      {
+        "_type": "block",
+        "_key": "b",
+        "style": "normal",
+        "listItem": "bullet",
+        "level": 1,
+        "children": [
+          {
+            "_type": "span",
+            "_key": "b1",
+            "text": "A bullet",
+            "marks": []
+          }
+        ],
+        "markDefs": []
+      }
+    ],
+    "seo": null
+  },
+  "infoMenu": [
+    {
+      "title": "Health & Safety",
+      "slug": "health-and-safety"
+    },
+    {
+      "title": "Terms",
+      "slug": "terms"
+    }
+  ],
+  "productCards": [
+    {
+      "id": "prod-2",
+      "name": "Herd Hoodie",
+      "colourName": "Sand",
+      "slug": "herd-hoodie-sand",
+      "category": "apparel",
+      "family": "fam",
+      "newInUntil": null,
+      "images": [
+        {
+          "ref": "image-prod-800x600-jpg",
+          "width": 800,
+          "height": 600,
+          "alt": "A hoodie",
+          "crop": null,
+          "hotspot": null
+        }
+      ]
+    },
+    {
+      "id": "prod-1",
+      "name": "Herd Hoodie",
+      "colourName": "Moss",
+      "slug": "herd-hoodie-moss",
+      "category": "apparel",
+      "family": "fam",
+      "newInUntil": "2026-12-31",
+      "images": [
+        {
+          "ref": "image-prod-800x600-jpg",
+          "width": 800,
+          "height": 600,
+          "alt": "A hoodie",
+          "crop": null,
+          "hotspot": null
+        }
+      ]
+    }
+  ],
+  "product": {
+    "id": "prod-1",
+    "name": "Herd Hoodie",
+    "colourName": "Moss",
+    "slug": "herd-hoodie-moss",
+    "category": "apparel",
+    "family": "fam",
+    "newInUntil": "2026-12-31",
+    "images": [
+      {
+        "ref": "image-prod-800x600-jpg",
+        "width": 800,
+        "height": 600,
+        "alt": "A hoodie",
+        "crop": null,
+        "hotspot": null
+      }
+    ],
+    "description": [
+      {
+        "_type": "block",
+        "_key": "a",
+        "style": "normal",
+        "listItem": null,
+        "level": null,
+        "children": [
+          {
+            "_type": "span",
+            "_key": "a1",
+            "text": "Soft and ",
+            "marks": []
+          },
+          {
+            "_type": "span",
+            "_key": "a2",
+            "text": "warm",
+            "marks": [
+              "strong"
+            ]
+          },
+          {
+            "_type": "span",
+            "_key": "a3",
+            "text": ". See the ",
+            "marks": []
+          },
+          {
+            "_type": "span",
+            "_key": "a4",
+            "text": "terms",
+            "marks": [
+              "l1"
+            ]
+          },
+          {
+            "_type": "span",
+            "_key": "a5",
+            "text": " or ",
+            "marks": []
+          },
+          {
+            "_type": "span",
+            "_key": "a6",
+            "text": "a page not published",
+            "marks": [
+              "l2"
+            ]
+          }
+        ],
+        "markDefs": [
+          {
+            "_key": "l1",
+            "_type": "link",
+            "link": {
+              "destination": "page",
+              "document": {
+                "type": "infoPage",
+                "slug": "terms",
+                "isHome": false,
+                "thumbnail": {
+                  "ref": "image-thumb-600x400-jpg",
+                  "width": 600,
+                  "height": 400,
+                  "alt": "Picture thumb",
+                  "crop": null,
+                  "hotspot": null
+                }
+              },
+              "url": null
+            }
+          },
+          {
+            "_key": "l2",
+            "_type": "link",
+            "link": {
+              "destination": "page",
+              "document": null,
+              "url": null
+            }
+          }
+        ]
+      },
+      {
+        "_type": "block",
+        "_key": "b",
+        "style": "normal",
+        "listItem": "bullet",
+        "level": 1,
+        "children": [
+          {
+            "_type": "span",
+            "_key": "b1",
+            "text": "A bullet",
+            "marks": []
+          }
+        ],
+        "markDefs": []
+      }
+    ],
+    "info": {
+      "composition": "Cotton",
+      "madeIn": null,
+      "careInstructions": null
+    },
+    "colours": [
+      {
+        "id": "prod-2",
+        "name": "Herd Hoodie",
+        "colourName": "Sand",
+        "slug": "herd-hoodie-sand",
+        "images": [
+          {
+            "ref": "image-prod-800x600-jpg",
+            "width": 800,
+            "height": 600,
+            "alt": "A hoodie",
+            "crop": null,
+            "hotspot": null
+          }
+        ]
+      }
+    ],
+    "sizeGuide": {
+      "title": "Hoodies",
+      "columns": [
+        "Size",
+        "Chest"
+      ],
+      "rows": [
+        [
+          "S",
+          "100"
+        ],
+        [
+          "M",
+          "104"
+        ]
+      ],
+      "notes": [
+        {
+          "_type": "block",
+          "_key": "a",
+          "style": "normal",
+          "listItem": null,
+          "level": null,
+          "children": [
+            {
+              "_type": "span",
+              "_key": "a1",
+              "text": "Soft and ",
+              "marks": []
+            },
+            {
+              "_type": "span",
+              "_key": "a2",
+              "text": "warm",
+              "marks": [
+                "strong"
+              ]
+            },
+            {
+              "_type": "span",
+              "_key": "a3",
+              "text": ". See the ",
+              "marks": []
+            },
+            {
+              "_type": "span",
+              "_key": "a4",
+              "text": "terms",
+              "marks": [
+                "l1"
+              ]
+            },
+            {
+              "_type": "span",
+              "_key": "a5",
+              "text": " or ",
+              "marks": []
+            },
+            {
+              "_type": "span",
+              "_key": "a6",
+              "text": "a page not published",
+              "marks": [
+                "l2"
+              ]
+            }
+          ],
+          "markDefs": [
+            {
+              "_key": "l1",
+              "_type": "link",
+              "link": {
+                "destination": "page",
+                "document": {
+                  "type": "infoPage",
+                  "slug": "terms",
+                  "isHome": false,
+                  "thumbnail": {
+                    "ref": "image-thumb-600x400-jpg",
+                    "width": 600,
+                    "height": 400,
+                    "alt": "Picture thumb",
+                    "crop": null,
+                    "hotspot": null
+                  }
+                },
+                "url": null
+              }
+            },
+            {
+              "_key": "l2",
+              "_type": "link",
+              "link": {
+                "destination": "page",
+                "document": null,
+                "url": null
+              }
+            }
+          ]
+        },
+        {
+          "_type": "block",
+          "_key": "b",
+          "style": "normal",
+          "listItem": "bullet",
+          "level": 1,
+          "children": [
+            {
+              "_type": "span",
+              "_key": "b1",
+              "text": "A bullet",
+              "marks": []
+            }
+          ],
+          "markDefs": []
+        }
+      ]
+    },
+    "similarIds": [
+      "prod-2"
+    ],
+    "seo": {
+      "title": null,
+      "description": "d",
+      "shareImage": null
+    }
+  },
+  "shopSettings": {
+    "title": "Shop",
+    "intro": "Hello",
+    "featuredIds": [
+      "gift",
+      "prod-1"
+    ],
+    "shippingReturnsSummary": [
+      {
+        "_type": "block",
+        "_key": "a",
+        "style": "normal",
+        "listItem": null,
+        "level": null,
+        "children": [
+          {
+            "_type": "span",
+            "_key": "a1",
+            "text": "Soft and ",
+            "marks": []
+          },
+          {
+            "_type": "span",
+            "_key": "a2",
+            "text": "warm",
+            "marks": [
+              "strong"
+            ]
+          },
+          {
+            "_type": "span",
+            "_key": "a3",
+            "text": ". See the ",
+            "marks": []
+          },
+          {
+            "_type": "span",
+            "_key": "a4",
+            "text": "terms",
+            "marks": [
+              "l1"
+            ]
+          },
+          {
+            "_type": "span",
+            "_key": "a5",
+            "text": " or ",
+            "marks": []
+          },
+          {
+            "_type": "span",
+            "_key": "a6",
+            "text": "a page not published",
+            "marks": [
+              "l2"
+            ]
+          }
+        ],
+        "markDefs": [
+          {
+            "_key": "l1",
+            "_type": "link",
+            "link": {
+              "destination": "page",
+              "document": {
+                "type": "infoPage",
+                "slug": "terms",
+                "isHome": false,
+                "thumbnail": {
+                  "ref": "image-thumb-600x400-jpg",
+                  "width": 600,
+                  "height": 400,
+                  "alt": "Picture thumb",
+                  "crop": null,
+                  "hotspot": null
+                }
+              },
+              "url": null
+            }
+          },
+          {
+            "_key": "l2",
+            "_type": "link",
+            "link": {
+              "destination": "page",
+              "document": null,
+              "url": null
+            }
+          }
+        ]
+      },
+      {
+        "_type": "block",
+        "_key": "b",
+        "style": "normal",
+        "listItem": "bullet",
+        "level": 1,
+        "children": [
+          {
+            "_type": "span",
+            "_key": "b1",
+            "text": "A bullet",
+            "marks": []
+          }
+        ],
+        "markDefs": []
+      }
+    ],
+    "seo": null
+  },
+  "eventCards": [
+    {
+      "id": "event-1",
+      "name": "Solstice",
+      "slug": "solstice-2026",
+      "images": [
+        {
+          "ref": "image-prod-800x600-jpg",
+          "width": 800,
+          "height": 600,
+          "alt": "A hoodie",
+          "crop": null,
+          "hotspot": null
+        }
+      ]
+    }
+  ],
+  "event": {
+    "id": "event-1",
+    "name": "Solstice",
+    "slug": "solstice-2026",
+    "images": [
+      {
+        "ref": "image-prod-800x600-jpg",
+        "width": 800,
+        "height": 600,
+        "alt": "A hoodie",
+        "crop": null,
+        "hotspot": null
+      }
+    ],
+    "description": [
+      {
+        "_type": "block",
+        "_key": "a",
+        "style": "normal",
+        "listItem": null,
+        "level": null,
+        "children": [
+          {
+            "_type": "span",
+            "_key": "a1",
+            "text": "Soft and ",
+            "marks": []
+          },
+          {
+            "_type": "span",
+            "_key": "a2",
+            "text": "warm",
+            "marks": [
+              "strong"
+            ]
+          },
+          {
+            "_type": "span",
+            "_key": "a3",
+            "text": ". See the ",
+            "marks": []
+          },
+          {
+            "_type": "span",
+            "_key": "a4",
+            "text": "terms",
+            "marks": [
+              "l1"
+            ]
+          },
+          {
+            "_type": "span",
+            "_key": "a5",
+            "text": " or ",
+            "marks": []
+          },
+          {
+            "_type": "span",
+            "_key": "a6",
+            "text": "a page not published",
+            "marks": [
+              "l2"
+            ]
+          }
+        ],
+        "markDefs": [
+          {
+            "_key": "l1",
+            "_type": "link",
+            "link": {
+              "destination": "page",
+              "document": {
+                "type": "infoPage",
+                "slug": "terms",
+                "isHome": false,
+                "thumbnail": {
+                  "ref": "image-thumb-600x400-jpg",
+                  "width": 600,
+                  "height": 400,
+                  "alt": "Picture thumb",
+                  "crop": null,
+                  "hotspot": null
+                }
+              },
+              "url": null
+            }
+          },
+          {
+            "_key": "l2",
+            "_type": "link",
+            "link": {
+              "destination": "page",
+              "document": null,
+              "url": null
+            }
+          }
+        ]
+      },
+      {
+        "_type": "block",
+        "_key": "b",
+        "style": "normal",
+        "listItem": "bullet",
+        "level": 1,
+        "children": [
+          {
+            "_type": "span",
+            "_key": "b1",
+            "text": "A bullet",
+            "marks": []
+          }
+        ],
+        "markDefs": []
+      }
+    ],
+    "extraWaiver": "Extra",
+    "seo": null
+  },
+  "eventsSettings": {
+    "termsSummary": [
+      {
+        "_type": "block",
+        "_key": "a",
+        "style": "normal",
+        "listItem": null,
+        "level": null,
+        "children": [
+          {
+            "_type": "span",
+            "_key": "a1",
+            "text": "Soft and ",
+            "marks": []
+          },
+          {
+            "_type": "span",
+            "_key": "a2",
+            "text": "warm",
+            "marks": [
+              "strong"
+            ]
+          },
+          {
+            "_type": "span",
+            "_key": "a3",
+            "text": ". See the ",
+            "marks": []
+          },
+          {
+            "_type": "span",
+            "_key": "a4",
+            "text": "terms",
+            "marks": [
+              "l1"
+            ]
+          },
+          {
+            "_type": "span",
+            "_key": "a5",
+            "text": " or ",
+            "marks": []
+          },
+          {
+            "_type": "span",
+            "_key": "a6",
+            "text": "a page not published",
+            "marks": [
+              "l2"
+            ]
+          }
+        ],
+        "markDefs": [
+          {
+            "_key": "l1",
+            "_type": "link",
+            "link": {
+              "destination": "page",
+              "document": {
+                "type": "infoPage",
+                "slug": "terms",
+                "isHome": false,
+                "thumbnail": {
+                  "ref": "image-thumb-600x400-jpg",
+                  "width": 600,
+                  "height": 400,
+                  "alt": "Picture thumb",
+                  "crop": null,
+                  "hotspot": null
+                }
+              },
+              "url": null
+            }
+          },
+          {
+            "_key": "l2",
+            "_type": "link",
+            "link": {
+              "destination": "page",
+              "document": null,
+              "url": null
+            }
+          }
+        ]
+      },
+      {
+        "_type": "block",
+        "_key": "b",
+        "style": "normal",
+        "listItem": "bullet",
+        "level": 1,
+        "children": [
+          {
+            "_type": "span",
+            "_key": "b1",
+            "text": "A bullet",
+            "marks": []
+          }
+        ],
+        "markDefs": []
+      }
+    ]
+  },
+  "giftCard": {
+    "id": "gift",
+    "name": "Gift Card",
+    "images": [],
+    "description": [],
+    "terms": [
+      {
+        "_type": "block",
+        "_key": "t",
+        "style": "normal",
+        "listItem": null,
+        "level": null,
+        "children": [
+          {
+            "_type": "span",
+            "_key": "t1",
+            "text": "Valid for {validity}.",
+            "marks": []
+          }
+        ],
+        "markDefs": []
+      }
+    ],
+    "seo": null
+  }
+}

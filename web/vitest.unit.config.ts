@@ -16,7 +16,7 @@ export default defineConfig({
   test: {
     name: 'unit',
     environment: 'node',
-    include: ['app/**/*.test.ts', 'lib/**/*.test.ts', 'server/**/*.test.ts', 'contracts/**/*.test.ts'],
+    include: ['app/**/*.test.ts', 'lib/**/*.test.ts', 'server/**/*.test.ts', 'contracts/**/*.test.ts', 'scripts/**/*.test.ts'],
     // Brief W11 (W10a O1): any request to a Stripe host is refused before it is sent, and the test that
     // made it fails ("a test reached real Stripe"). Proof: server/rules/testing/no-real-stripe.test.ts.
     // W59 (W45 audit row 56): PGlite's own timer warning (about 3,000 lines a run) kept out of the logs; nothing else.

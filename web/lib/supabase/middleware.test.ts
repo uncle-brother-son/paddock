@@ -60,12 +60,15 @@ afterEach(() => {
 const run = (pathname: string, headers: Record<string, string> = {}) => middleware(new NextRequest(`https://paddock.test${pathname}`, { headers }))
 
 describe('the paths middleware.ts runs on (W69)', () => {
-  it('its matcher is the one it has always had', () => {
-    expect(config).toStrictEqual({ matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)'] })
+  it('its matcher is the one it has always had, with robots.txt and sitemap.xml left out since W72', () => {
+    expect(config).toStrictEqual({ matcher: ['/((?!_next/static|_next/image|favicon.ico|robots\\.txt$|sitemap\\.xml$|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)'] })
   })
 
   it.each([
     '/',
+    // Only the two files themselves are left out, not an address that starts like one.
+    '/robots.txt-notes',
+    '/info/sitemap.xml',
     '/book',
     '/account/bookings',
     '/api/stripe/webhook',
@@ -78,7 +81,7 @@ describe('the paths middleware.ts runs on (W69)', () => {
     expect(unstable_doesMiddlewareMatch({ config, nextConfig: {}, url })).toBe(true)
   })
 
-  it.each(['/_next/static/chunks/main.js', '/_next/image?url=%2Fa.png&w=64&q=75', '/favicon.ico', '/logo.svg', '/a/b.png', '/a.jpg', '/a.jpeg', '/a.gif', '/a.webp'])('does not run on %s', (url) => {
+  it.each(['/_next/static/chunks/main.js', '/_next/image?url=%2Fa.png&w=64&q=75', '/favicon.ico', '/robots.txt', '/sitemap.xml', '/logo.svg', '/a/b.png', '/a.jpg', '/a.jpeg', '/a.gif', '/a.webp'])('does not run on %s', (url) => {
     expect(unstable_doesMiddlewareMatch({ config, nextConfig: {}, url })).toBe(false)
   })
 

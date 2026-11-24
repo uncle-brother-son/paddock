@@ -45,7 +45,7 @@ supabase db push
 
 This schema implements the **Sanity/Supabase field split** documented in `/project info/06-sanity-supabase-field-split.md`:
 
-- **Sanity** = Marketing content (descriptions, full image arrays, productGroup links, etc.)
+- **Sanity** = Marketing content (descriptions, full image arrays, product family links, etc.)
 - **Supabase** = Operational data (prices, stock, Stripe IDs, booking state, customer data)
 - **Mirror fields** = Small subset synced from Sanity to Supabase (name, thumbnail_url, category) for Retool UX
 
@@ -62,7 +62,7 @@ This schema implements the **Sanity/Supabase field split** documented in `/proje
 7. **addons** - Catalog of add-ons (refactored with three-tier pricing)
 8. **addon_order_lines** - Add-ons purchased with bookings (added price/SKU snapshots)
 9. **products** - Merchandise catalog (refactored with three-tier pricing, Sanity mirrors)
-10. **product_variants** - Size variants with stock tracking (color removed - handled via productGroup in Sanity)
+10. **product_variants** - Size variants with stock tracking (color removed - handled via the product's family in Sanity)
 11. **membership_plans** - Monthly subscription plans (refactored with Sanity mirrors)
 12. **customer_memberships** - Active membership instances (added bonus credit fields)
 13. **membership_credit_adjustments** - Audit trail for promotional credits *(new)*

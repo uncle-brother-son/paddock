@@ -134,7 +134,7 @@ Helps Google show prices, stock, dates and opening times. Values must match what
 
 - Targets (Core Web Vitals, 75th percentile, mobile): LCP 2.5 s or less, INP 200 ms or less, CLS 0.1 or less.
 - **Images:** from the Sanity image CDN with `auto=format` (AVIF/WebP), widths matched to the `sizes` attribute, width and height (or aspect ratio) always set so nothing jumps. Only the first visible image (the hero or the first product picture) loads with priority; everything else is lazy.
-- **Fonts:** self-hosted woff2 in `web/public/fonts` (web licence), loaded with `next/font/local`, `font-display: swap`, only the weights used, the one or two above-the-fold faces preloaded, with a size-matched fallback so text doesn't jump.
+- **Fonts:** self-hosted woff2 in `web/app/fonts` (web licence), loaded with `next/font/local`, `font-display: swap`, only the weights used, the one or two above-the-fold faces preloaded, with a size-matched fallback so text doesn't jump.
 - **JavaScript:** pages are server components by default; client code only where something is interactive. The animation library is loaded only by the parts that use it.
 - **Caching:** Sanity content is cached and refreshed by the Sanity webhook. Prices, stock and session times are always read live from the Worker. Never `dynamicParams = false` on Sanity routes (it caused permanent 404s on epitomeplus with this OpenNext set-up).
 - Lighthouse and the Web Vitals report run on the preview at each sign-off.
