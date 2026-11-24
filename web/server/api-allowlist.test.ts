@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
@@ -12,6 +12,8 @@ const APP = path.join(WEB, 'app')
 
 /** The only route files outside `app/api/v1/`, relative to web/. */
 const WEBHOOKS: readonly string[] = ['app/api/sanity/webhook/route.ts', 'app/api/stripe/webhook/route.ts']
+/** W74a: the only `app/api/v1/` routes that ask for no sign-in (`auth: 'public'`), each a read of what the site shows anyone. */
+const PUBLIC_ROUTES: readonly string[] = ['app/api/v1/shop/availability/route.ts']
 /** A file Next answers requests with, whatever its extension. */
 const ROUTE_FILE = /^route\.(ts|tsx|js|jsx|mjs|cjs|mts|cts)$/
 
@@ -26,8 +28,22 @@ function filesUnder(dir: string): string[] {
 const notAllowed = (files: readonly string[]): string[] =>
   files.filter((file) => ROUTE_FILE.test(path.posix.basename(file)) && !file.startsWith('app/api/v1/') && !WEBHOOKS.includes(file))
 
+/** Whether a route file's text asks for no sign-in. */
+const asksNoSignIn = (source: string): boolean => /\bauth\s*:\s*(?:'public'|"public"|`public`)/.test(source)
+
 describe('the only routes are app/api/v1 and the two webhooks (W70a, L4)', () => {
   const files = filesUnder(APP)
+
+  it('W74a: every v1 route is staff or customer, but the public ones listed here, which only read', () => {
+    const routes = files.filter((file) => file.startsWith('app/api/v1/') && ROUTE_FILE.test(path.posix.basename(file)))
+    const sourceOf = (file: string) => readFileSync(path.join(WEB, file), 'utf8')
+    expect(routes.filter((file) => !/^app\/api\/v1\/(staff|customer)\//.test(file))).toEqual(PUBLIC_ROUTES)
+    expect(routes.filter((file) => asksNoSignIn(sourceOf(file)))).toEqual(PUBLIC_ROUTES)
+    for (const file of PUBLIC_ROUTES) expect(sourceOf(file).match(/export const [A-Z]+/g), file).toEqual(['export const GET'])
+    // Every route says who it answers as a literal in its own file, so the check above can't be stepped round.
+    expect(routes.filter((file) => !/\bauth\s*:\s*'(staff|staff_sign_in|customer|public)'/.test(sourceOf(file)))).toEqual([])
+    expect(['{ auth: "public" }', "{ auth : 'public', input }", "{ auth: 'staff' }"].map(asksNoSignIn)).toEqual([true, true, false])
+  })
 
   it('no other route file, anywhere in app/; both webhooks and the v1 routes are there', () => {
     expect(notAllowed(files)).toEqual([])

@@ -3201,3 +3201,27 @@ held to its contract (tests, `next dev`; never live) the two reads answered 500 
 and New Order's pickers fell back to £0.00 until one is set. Nothing unpriced can be put on sale (Q61) or sold, as
 before. Rule test: `catalog/admin.test.ts`, "W72b"; the webhook's own tests read such products with no price given
 (`app/api/sanity/webhook/route.test.ts`, the categories' order).
+
+## The shop's reads (W74a)
+
+Wayne's WQ37, WQ40 and WQ41; lead call L13's customer channel gets its first reader. Reads only (`shop/`): nothing here
+writes, and no price is decided here.
+
+- **What the site is told** (`shop/reads.ts`). `readShop()` for a page (its own connection, no HTTP): the products on
+  sale, the categories with one, the gift card types on sale. Each is joined to its Sanity document by its Sanity id; a
+  row with none is left out. Rows are built field by field: never a stock number, never a Stripe id.
+- **Prices for display** (`shop/display-prices.ts`) are all `variantPriceFor`'s. A product's is the lowest across its
+  sizes, with `from` when they differ; the member price only when the product has one. The price before the sale is the
+  same rule with the sale price taken away, given only when it is more: a size at its own override isn't reduced by the
+  product's sale. Example: base £30, sale £20: £20, was £30, 33% off. A product shows a reduction only when every size
+  at the price shown is reduced. Money is the database's text ("28.00").
+- **Sizes** (`shop/size-order.ts`, `inShopOrder`): XXS to XXXL, then numbers ascending, then anything else in the order
+  created. `available` is stock above 0; a product is sold out when no size is (WQ40), one with no sizes included, and
+  it stays listed. The staff app's own order is unchanged (New Order preselects a product's first variant).
+- **The gift card** (WQ41): the lowest preset on sale, null when none is. Custom amounts don't count.
+- **The customer channel** (`catalog/items.ts`) now carries each variant's price override, its variants in the order
+  they were made, and its products by the category's own place (W72a's "Noticed" 4). The staff channel is unchanged.
+- **`GET /api/v1/shop/availability?product=`**: one product's sizes now, no sign-in, `no-store`; 400 for anything but a
+  well-formed Sanity id (before any read), 404 for an unknown or off-sale product in the same words. The only public
+  route (`server/api-allowlist.test.ts` lists it). There is no rate limit on it: the app has none.
+- Rule tests: `shop/size-order.test.ts`, `shop/shop.test.ts`.

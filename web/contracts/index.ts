@@ -26,3 +26,5 @@ export * from './catalog-admin'
 export * from './plans-admin'
 // W72a: the product categories read's answer, last, for the same reason.
 export * from './catalog-categories'
+// W74a: the website's shop, last, for the same reason.
+export * from './shop'

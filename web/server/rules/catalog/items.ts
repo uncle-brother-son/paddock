@@ -285,11 +285,17 @@ const variantStampSql = (alias: string): string => fieldsStampSql(alias, VARIANT
 const PRODUCTS_SQL = `SELECT ${itemColumnsSql('product', 'p')} FROM products p LEFT JOIN product_categories c ON c.sanity_category_id = p.category
   ORDER BY c.sort_order NULLS LAST, c.title NULLS LAST, p.category, p.name`
 const VARIANTS_SQL = `SELECT ${variantColumnsSql('v')}, ${variantStampSql('v')} AS stamp FROM product_variants v ORDER BY v.size`
-/** The shop's columns (G-plan 4.8): what a customer may see, on-sale products only, no Stripe ids. */
+/**
+ * The shop's columns (G-plan 4.8): what a customer may see, on-sale products only, no Stripe ids. W74a: products by the
+ * category's own place, as the staff's are; each variant with its own price override (variantPriceFor needs it), in the
+ * order they were made (the shop puts them in size order: shop/size-order.ts).
+ */
 const CUSTOMER_PRODUCTS_SQL = `SELECT p.id, p.sanity_product_id, p.name, p.thumbnail_url, p.category, p.base_price::text AS base_price, p.member_price::text AS member_price,
        p.sale_price::text AS sale_price, p.fulfillment_method
-  FROM products p WHERE p.active = true ORDER BY p.category, p.name`
-const CUSTOMER_VARIANTS_SQL = `SELECT v.id, v.product_id, v.size, v.stock_quantity FROM product_variants v JOIN products p ON p.id = v.product_id WHERE p.active = true ORDER BY v.size`
+  FROM products p LEFT JOIN product_categories c ON c.sanity_category_id = p.category
+  WHERE p.active = true ORDER BY c.sort_order NULLS LAST, c.title NULLS LAST, p.category, p.name`
+const CUSTOMER_VARIANTS_SQL = `SELECT v.id, v.product_id, v.size, v.stock_quantity, v.price_override::text AS price_override
+  FROM product_variants v JOIN products p ON p.id = v.product_id WHERE p.active = true ORDER BY v.created_at, v.id`
 
 /**
  * getProducts (`GET catalog/products`): every product with its variants, for Catalog → Products and New Order's
