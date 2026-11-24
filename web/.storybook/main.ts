@@ -1,7 +1,8 @@
 import type { StorybookConfig } from '@storybook/nextjs-vite';
 
 const config: StorybookConfig = {
-  // Stories sit next to the components they document (see ubs-frontend-standards).
+  // Stories sit next to the components they document. Each is checked for accessibility errors
+  // (docs/build-standards.md, section 1: Checks).
   stories: [
     '../components/**/*.mdx',
     '../components/**/*.stories.@(ts|tsx)',

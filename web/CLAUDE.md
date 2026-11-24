@@ -1,6 +1,8 @@
 # The Paddock Wellness Club: website and Worker
 
-Agency standards: follow the `ubs-frontend-standards` skill for every website task. This file holds the Paddock-specific facts; where it is more specific, it wins.
+Follow `docs/build-standards.md` for every website task (accessibility, SEO, metadata, AI tools, video, motion, performance); the routes are in `docs/url-map.md`. This file holds the Paddock-specific facts; where it is more specific, it wins.
+
+**Hard rule (Wayne, WQ8): the Figma designs are the source of truth for how everything looks. Build nothing that changes a design; if a standard seems to need a visual change, stop and list it for the lead.**
 
 @AGENTS.md
 
@@ -18,7 +20,7 @@ Agency standards: follow the `ubs-frontend-standards` skill for every website ta
 - `npx tsc --noEmit`: type check (Claude runs this).
 - `npm run test:unit`: every test. One file: `npx vitest run --config vitest.unit.config.ts <file>`.
 - `npm run schema:test -- --check` and `npm run check:contracts`: the two generated files are up to date (without `--check`, the first rewrites its file).
-- `npm run storybook`: Storybook on port 6006.
+- `npm run storybook`: Storybook on port 6006. `npx vitest run --config vitest.config.ts`: every story, with the accessibility check (it needs Playwright's browser: `npx playwright install chromium`, with Wayne's yes).
 - Deploying: pushing to `main` on GitHub (uncle-brother-son/paddock) triggers a Cloudflare build and deploy automatically. No manual `npm run deploy` needed.
 - Wayne commits and pushes. Claude never commits, pushes, deploys, installs packages or deletes files without his yes.
 
@@ -30,9 +32,15 @@ Agency standards: follow the `ubs-frontend-standards` skill for every website ta
   - `02 Booking flow`: the Book pop-up and checkout.
   - Never edit Wayne's existing frames.
 - **Concept:** old-meets-new. Old print newspaper layout, spacing and type, with modern interactive moments. Style references: Belmond, oddritualgolf.com, malvah.co.
-- **Build order:** booking and checkout flow first, then pages in sitemap order. Desktop first in Figma, then mobile.
-- **Fonts:** GT typefaces from Wayne's Figma text styles, self-hosted WOFF2 via `next/font/local`. The licensed web files still need adding. Use his existing text styles; never invent new ones without asking.
-- **Tokens:** to be taken from the Figma variables and text styles into `app/globals.css` `@theme` at the start of the build.
+- **Build order (WQ5):** the frame first (W71 foundations: tokens, grid, fonts, motion, Storybook; W72 the Sanity schema for the frame and products; W73 header, footer, menu, hero, intro, page transitions), then products (the list and the product page, signed off first as the pattern), then the other purchasable pages (events, memberships, passes, gift cards), then buying all at once (bag, sign-in, checkout, payment, confirmation, account, emails), then end-to-end testing. Sign-off: Storybook for design, the preview for flows and motion, a full review for money. Desktop first in Figma, then mobile.
+- **Fonts:** GT Sectra Fine (Figma "Primary", 400) and GT America Standard (Figma "Secondary", 400 and 500), the licensed woff2 files in `public/fonts`, loaded in `app/fonts.ts` with `next/font/local` as `--font-primary` and `--font-secondary`. Use Wayne's existing text styles; never invent new ones without asking.
+- **Tokens:** `app/globals.css` holds the Figma variables and text styles; `lib/design/figma-tokens.json` is the lead's read of the Figma file, and `lib/design/tokens.test.ts` fails when the two differ. Tailwind's own colour, type, spacing and radius scales are switched off, so only these exist:
+  - colours: the theme colours (`bg-surface-primary`, `text-text-muted-primary`, `text-text-error`), set per mode by `data-theme` (`light` on `<html>`; `dark`, `fjord` or `mud` on a section; Fjord and Mud never for forms or error messages). The palette (`bg-sand-light`, `bg-black-65`) is there too;
+  - text: one class per Figma text style (`text-hero-caps`, `text-h1` ... `text-label-10`);
+  - spacing: Figma's scale, named by its pixel value (`p-16` is 16px, `gap-8` is 8px); corners `rounded-s` and `rounded-m`;
+  - the grid: `<Grid>` (`components/layout/Grid.tsx`), 6 columns below 768px and 24 from 768px, with `col-span-*` / `md:col-span-*` inside it.
+  Storybook's Foundations pages (`components/foundations/`) show them all, in each mode.
+- **Motion (WQ20-WQ23):** one curve and two durations for every animation, from one source: `lib/motion/tokens.ts` for Motion (`EASE_SMOOTH`, `DURATION_SHORT` for hovers and panels, `DURATION_LONG` for page transitions and the intro) and the same in CSS (`--ease-smooth`, `--duration-short`, `--duration-long`; the classes `ease-smooth`, `duration-short`, `duration-long`). Never type in a curve, an ease keyword, a spring or a duration: `lib/motion/typed-in-motion.test.ts` fails on one. Lenis (smooth scroll, off with reduced motion) and Motion's defaults are set once in `components/providers/MotionProviders.tsx`; a panel that scrolls by itself carries `data-lenis-prevent`. Use the installed `lenis` and `framer-motion`; GSAP or any other package only with Wayne's yes.
 
 ## Architecture (agreed at the start; the move finished at step G, the tests' move at step H, Nov 2026)
 - This Worker is the ONE backend for both the website and the Retool staff app. Every booking, pricing, credit, order, payment, refund and admin action runs here; only this Worker talks to Stripe and the database. The staff app is screens only, calling `/api/v1/staff/...` through one Retool resource ("Paddock Worker v1"); the website calls `/api/v1/customer/...` and `/api/v1/public/...`.
@@ -71,3 +79,4 @@ These are enforced server-side in this Worker; the front end never computes them
 - Node 22 (`.nvmrc`).
 - Next's image optimiser does not run on Workers; use the Sanity CDN loader.
 - `middleware.ts` refreshes the Supabase session on every request. Keep it light.
+- Test copies stay out of search: every host but `thepaddockwellness.co.uk` answers `X-Robots-Tag: noindex, nofollow` (`next.config.ts` for what the Worker answers, `public/_headers` for the static files Cloudflare answers itself) and a robots.txt that disallows everything (`app/robots.ts`). `lib/seo/noindex.test.ts` holds all three.

@@ -1,0 +1,81 @@
+{
+  "source": "Figma file 'Website' (u3xnF8mwPKzqEbpo1fyTqw), local variables and text styles, read by the lead on 24 Nov 2026 after Wayne's WQ9/WQ10 changes. Values are exact; do not round or invent.",
+  "breakpointsNote": "Figma has two Measurements modes: Desktop (frame 1440) and Mobile (frame 390). Build: below 768px = Mobile values; 768px and up = Desktop values. Tablet is not drawn; layouts flex between the two (lead decision from the 4 Nov review).",
+  "palette": {
+    "100/Black": "#222222", "100/White": "#ffffff", "100/Mud": "#6e6258", "100/Sand": "#d6d2c2",
+    "100/Sand Light": "#f1eee3", "100/Moss": "#193028", "100/Fjord": "#a7bbc8", "100/Mustard": "#bd9b5d",
+    "100/Mustard dark": "#7f6434",
+    "65/Black": "#222222a6", "65/White": "#ffffffa6", "65/Moss": "#193028a6", "65/Sand Light": "#f1eee3a6", "65/Mustard": "#bd9b5da6",
+    "40/Black": "#22222266", "40/White": "#ffffff66", "40/Moss": "#19302866",
+    "20/Black": "#22222233",
+    "8/Black": "#22222214", "8/White": "#ffffff14", "8/Mud": "#6e625814", "8/Sand Light": "#f1eee314", "8/Mustard": "#bd9b5d14",
+    "4/Black": "#2222220a", "4/White": "#ffffff0a", "4/Sand Light": "#f1eee30a",
+    "2/Sand light": "#f1eee305", "2/Black": "#22222205"
+  },
+  "themeModes": ["Light", "Dark", "Fjord", "Mud"],
+  "themeNote": "Fjord and Mud are used for content sections only, never for forms or error messages (Wayne, 24 Nov).",
+  "theme": {
+    "Surface/Primary":       {"Light": "100/Sand Light", "Dark": "100/Moss",       "Fjord": "100/Fjord",  "Mud": "100/Mud"},
+    "Surface/Secondary":     {"Light": "100/Moss",       "Dark": "100/Sand Light", "Fjord": "100/Black",  "Mud": "100/Sand Light"},
+    "Surface/Panel":         {"Light": "100/Sand Light", "Dark": "100/Moss",       "Fjord": "100/White",  "Mud": "100/Mud"},
+    "Surface/Card":          {"Light": "4/Black",        "Dark": "4/Sand Light",   "Fjord": "4/Black",    "Mud": "4/Sand Light"},
+    "Surface/Card Selected": {"Light": "8/Black",        "Dark": "8/Sand Light",   "Fjord": "8/Black",    "Mud": "8/Sand Light"},
+    "Surface/Card Disabled": {"Light": "2/Black",        "Dark": "2/Sand light",   "Fjord": "2/Black",    "Mud": "2/Sand light"},
+    "Surface/Card Error":    {"Light": "8/Mustard",      "Dark": "8/Mustard",      "Fjord": "8/Mustard",  "Mud": "8/Mustard"},
+    "Text/Primary":          {"Light": "100/Black",      "Dark": "100/Sand Light", "Fjord": "100/Black",  "Mud": "100/White"},
+    "Text/Secondary":        {"Light": "100/Sand Light", "Dark": "100/Black",      "Fjord": "100/White",  "Mud": "100/Black"},
+    "Text/Muted Primary":    {"Light": "65/Black",       "Dark": "65/Sand Light",  "Fjord": "65/Black",   "Mud": "65/White"},
+    "Text/Muted Secondary":  {"Light": "65/Sand Light",  "Dark": "65/Black",       "Fjord": "65/White",   "Mud": "65/Black"},
+    "Text/Error":            {"Light": "100/Mustard dark","Dark": "100/Mustard",   "Fjord": "100/Mustard","Mud": "100/Mustard"},
+    "Object/Dark Shade":     {"Light": "20/Black",       "Dark": "20/Black",       "Fjord": "20/Black",   "Mud": "20/Black"},
+    "Object/Dark Dark Shade":{"Light": "65/Black",       "Dark": "65/Black",       "Fjord": "65/Black",   "Mud": "65/Black"},
+    "Object/Light Shade":    {"Light": "4/White",        "Dark": "4/White",        "Fjord": "4/White",    "Mud": "4/White"},
+    "Object/Product Bg":     {"Light": "100/Sand",       "Dark": "100/Sand",       "Fjord": "100/Sand",   "Mud": "100/Sand"}
+  },
+  "measurements": {
+    "Font/Family/Primary": "GT Sectra Fine",
+    "Font/Family/Secondary": "GT America",
+    "Font/Weight/Regular": "Regular (400)",
+    "Font/Weight/Medium": "Medium (500)",
+    "Font/Size/28": {"Desktop": 28, "Mobile": 24},
+    "Font/Size/24": {"Desktop": 24, "Mobile": 22},
+    "Font/Size/18": 18, "Font/Size/16": 16, "Font/Size/14": 14, "Font/Size/12": 12, "Font/Size/10": 10,
+    "Font/Leading/Headers": "0.6px letter spacing",
+    "Font/Leading/Label": "0.3px letter spacing",
+    "Spacing/General": [2, 4, 6, 8, 12, 16, 20, 24, 32, 40, 64, 80, 120, 160, 240, 320],
+    "Spacing/Corners/S": 4,
+    "Spacing/Corners/M": 8,
+    "Spacing/Grid/Width":   {"Desktop": 1440, "Mobile": 390},
+    "Spacing/Grid/Columns": {"Desktop": 24,   "Mobile": 6},
+    "Spacing/Grid/Margin":  {"Desktop": 16,   "Mobile": 16},
+    "Spacing/Grid/Gutter":  {"Desktop": 8,    "Mobile": 8},
+    "Spacing/Grid/Column":  {"Desktop": 51,   "Mobile": 53}
+  },
+  "textStyles": [
+    {"name": "Hero Caps", "family": "Primary",   "weight": 400, "size": "Font/Size/24", "lineHeight": "auto", "letterSpacing": "0.6px", "case": "uppercase"},
+    {"name": "H1",        "family": "Primary",   "weight": 400, "size": "Font/Size/28", "lineHeight": "auto", "letterSpacing": "0.6px"},
+    {"name": "H2",        "family": "Primary",   "weight": 400, "size": "Font/Size/24", "lineHeight": "auto", "letterSpacing": "0"},
+    {"name": "H3",        "family": "Secondary", "weight": 400, "size": "Font/Size/18", "lineHeight": "auto", "letterSpacing": "0"},
+    {"name": "Copy 16",   "family": "Secondary", "weight": 400, "size": "Font/Size/16", "lineHeight": "140%"},
+    {"name": "Copy 14",   "family": "Secondary", "weight": 400, "size": "Font/Size/14", "lineHeight": "140%"},
+    {"name": "Copy 12",   "family": "Secondary", "weight": 400, "size": "Font/Size/12", "lineHeight": "140%"},
+    {"name": "Bold 14",   "family": "Secondary", "weight": 500, "size": "Font/Size/14", "lineHeight": "140%"},
+    {"name": "Link 14",   "family": "Secondary", "weight": 400, "size": "Font/Size/14", "lineHeight": "140%", "decoration": "underline"},
+    {"name": "Link 12",   "family": "Secondary", "weight": 400, "size": "Font/Size/12", "lineHeight": "140%", "decoration": "underline"},
+    {"name": "Label 12",  "family": "Secondary", "weight": 500, "size": "Font/Size/12", "lineHeight": "auto", "letterSpacing": "0.3px", "case": "uppercase"},
+    {"name": "Label 10",  "family": "Secondary", "weight": 500, "size": "Font/Size/10", "lineHeight": "auto", "letterSpacing": "0.3px", "case": "uppercase"}
+  ],
+  "lineHeightNote": "Figma 'auto' line height = the font's own line height. In CSS use 'normal' with the self-hosted GT fonts, then compare against Figma in Storybook; report any visible difference for Wayne rather than picking a number.",
+  "fonts": {
+    "GT America Standard Regular": "web/public/fonts/GT-America-Standard-Regular.woff2 (400)",
+    "GT America Standard Medium": "web/public/fonts/GT-America-Standard-Medium.woff2 (500)",
+    "GT Sectra Fine Regular": "web/public/fonts/GT-Sectra-Fine-Regular.woff2 (400)",
+    "licence": "web-licensed (Wayne, 24 Nov); committed 12a257c"
+  },
+  "motion": {
+    "ease-smooth": "cubic-bezier(0, 0, 0.2, 1)",
+    "duration-short": "320ms (hovers; Menu, Book, Bag, Sign in panels)",
+    "duration-long": "640ms (page transitions; each of the intro's 3 transitions, back to back, no pauses)",
+    "decisions": "WQ20-WQ23 in briefs/W03-decisions.md"
+  }
+}

@@ -1,0 +1,27 @@
+import { Meta, Story } from '@storybook/addon-docs/blocks'
+
+import * as ColourStories from './Colours.stories'
+
+<Meta of={ColourStories} />
+
+# Colours
+
+The colours are the variables in the Figma "Website" file, under their Figma names. Each block is filled with the
+token itself, and the value beside it is read from this page, so what you see is what the site uses.
+
+- **Palette**: the fixed colours. `100/Sand Light` is `bg-sand-light`; a see-through one carries its opacity:
+  `65/Black` is `bg-black-65`.
+- **Theme colours**: what components use (`bg-surface-primary`, `text-text-muted-primary`). Each points at a palette
+  colour, and which one depends on the mode. A section switches mode with `data-theme="dark"` (or `light`, `fjord`,
+  `mud`); the page itself is Light.
+- Fjord and Mud are for content sections only, never forms or error messages.
+
+Use the Theme switch in the toolbar to see any story on another mode.
+
+## Palette
+
+<Story of={ColourStories.Palette} />
+
+## Theme colours, in each mode
+
+<Story of={ColourStories.Theme} />

@@ -1,0 +1,37 @@
+import { Meta, Story } from '@storybook/addon-docs/blocks'
+
+import * as MotionStories from './Motion.stories'
+
+<Meta of={MotionStories} />
+
+# Motion
+
+One curve and two durations for the whole site, kept in one place: `lib/motion/tokens.ts` for Motion
+(`EASE_SMOOTH`, `DURATION_SHORT`, `DURATION_LONG`) and the same three as CSS variables in `app/globals.css`
+(`--ease-smooth`, `--duration-short`, `--duration-long`; the utilities `ease-smooth`, `duration-short`,
+`duration-long`). A test fails if the two ever differ, and another if a component types in a curve or a duration of
+its own.
+
+- **Short**: hovers, and the panels (Menu, Book, Bag, Sign in).
+- **Long**: page transitions, and each of the intro's three transitions.
+
+Smooth scroll is Lenis, started once for the whole site. A panel that scrolls by itself (the menu, the bag, the
+booking panel) carries `data-lenis-prevent`, or Lenis takes its scrolling for the page behind it.
+
+## The curve
+
+<Story of={MotionStories.Curve} />
+
+## The two durations
+
+In each pair the top box is moved by Motion and the lower one by a CSS transition.
+
+<Story of={MotionStories.Durations} />
+
+## With reduced motion on
+
+What a visitor who has asked for reduced motion gets from Motion: the top box goes straight to its place and only
+the fade is left. For that visitor the site also never starts the smooth scroll, and CSS transitions are switched
+off (the lower box here still follows this computer's own setting).
+
+<Story of={MotionStories.ReducedMotion} />

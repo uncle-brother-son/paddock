@@ -1,0 +1,21 @@
+import { Meta, Story } from '@storybook/addon-docs/blocks'
+
+import * as SpacingStories from './Spacing.stories'
+
+<Meta of={SpacingStories} />
+
+# Spacing and corners
+
+Figma's "Spacing/General" scale and its two corner radii. The number in a utility is the Figma pixel value:
+`p-16` is 16px of padding, `gap-8` an 8px gap, `mt-120` a 120px top margin. A value that isn't on the scale makes
+no utility, so a spacing that isn't in the designs can't be used by accident.
+
+## Spacing scale
+
+<Story of={SpacingStories.Scale} />
+
+## Corners
+
+`rounded-s` and `rounded-m`.
+
+<Story of={SpacingStories.Corners} />

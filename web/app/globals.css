@@ -1,18 +1,417 @@
 @import "tailwindcss";
 
 /*
- * Design tokens. Taken from the Figma "Website" file's variables and text styles at the start
- * of the website build. Components use these tokens only, never raw hex, px or ms values
- * (see ubs-frontend-standards). Light theme only.
+ * Design tokens, from the Figma "Website" file's variables and text styles. lib/design/figma-tokens.json is the
+ * lead's read of that file, and lib/design/tokens.test.ts fails when a value here differs from it. Components use
+ * these tokens only, never a raw hex, px or ms value (docs/build-standards.md, section 1: "Colour and size" and
+ * "Motion").
+ *
+ * `static` writes every token into the page as a CSS variable, used or not, so a `[data-theme]` block, an inline
+ * style and Storybook's foundation pages can all read them.
  */
-@theme {
-  --color-background: #ffffff;
-  --color-foreground: #171717;
+@theme static {
+  /* Tailwind's own scales are switched off: only the Figma values below make utilities. */
+  --color-*: initial;
+  --font-*: initial;
+  --text-*: initial;
+  --font-weight-*: initial;
+  --tracking-*: initial;
+  --leading-*: initial;
+  --radius-*: initial;
+  --spacing-*: initial;
+  --spacing: initial;
+  --ease-*: initial;
+  --animate-*: initial;
+
+  /* Palette. Figma "100/Sand Light" is --color-sand-light; "65/Black" (65% opacity) is --color-black-65. */
+  --color-black: #222222;
+  --color-white: #ffffff;
+  --color-mud: #6e6258;
+  --color-sand: #d6d2c2;
+  --color-sand-light: #f1eee3;
+  --color-moss: #193028;
+  --color-fjord: #a7bbc8;
+  --color-mustard: #bd9b5d;
+  --color-mustard-dark: #7f6434;
+  --color-black-65: #222222a6;
+  --color-white-65: #ffffffa6;
+  --color-moss-65: #193028a6;
+  --color-sand-light-65: #f1eee3a6;
+  --color-mustard-65: #bd9b5da6;
+  --color-black-40: #22222266;
+  --color-white-40: #ffffff66;
+  --color-moss-40: #19302866;
+  --color-black-20: #22222233;
+  --color-black-8: #22222214;
+  --color-white-8: #ffffff14;
+  --color-mud-8: #6e625814;
+  --color-sand-light-8: #f1eee314;
+  --color-mustard-8: #bd9b5d14;
+  --color-black-4: #2222220a;
+  --color-white-4: #ffffff0a;
+  --color-sand-light-4: #f1eee30a;
+  --color-sand-light-2: #f1eee305;
+  --color-black-2: #22222205;
+
+  /*
+   * Theme colours (Figma "Surface/Primary" is --color-surface-primary, used as bg-surface-primary). The values here
+   * are the Light mode; the [data-theme] blocks below set each mode.
+   */
+  --color-surface-primary: var(--color-sand-light);
+  --color-surface-secondary: var(--color-moss);
+  --color-surface-panel: var(--color-sand-light);
+  --color-surface-card: var(--color-black-4);
+  --color-surface-card-selected: var(--color-black-8);
+  --color-surface-card-disabled: var(--color-black-2);
+  --color-surface-card-error: var(--color-mustard-8);
+  --color-text-primary: var(--color-black);
+  --color-text-secondary: var(--color-sand-light);
+  --color-text-muted-primary: var(--color-black-65);
+  --color-text-muted-secondary: var(--color-sand-light-65);
+  --color-text-error: var(--color-mustard-dark);
+  --color-object-dark-shade: var(--color-black-20);
+  --color-object-dark-dark-shade: var(--color-black-65);
+  --color-object-light-shade: var(--color-white-4);
+  --color-object-product-bg: var(--color-sand);
+
+  /*
+   * Font sizes (Figma "Font/Size/28" is --text-28, in rem: 16px = 1rem). 28 and 24 take the Mobile value here and
+   * the Desktop value from 768px (below, with the grid).
+   */
+  --text-28: var(--font-size-28-mobile);
+  --text-24: var(--font-size-24-mobile);
+  --text-18: 1.125rem;
+  --text-16: 1rem;
+  --text-14: 0.875rem;
+  --text-12: 0.75rem;
+  --text-10: 0.625rem;
+
+  /* Figma "Font/Weight/Regular" and "Font/Weight/Medium". */
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+
+  /* Letter spacing. Figma calls these "Font/Leading/Headers" and "Font/Leading/Label". */
+  --tracking-headers: 0.6px;
+  --tracking-label: 0.3px;
+
+  /*
+   * Spacing (Figma "Spacing/General"). The number in a utility is the Figma pixel value: p-16 is 16px, gap-8 is 8px.
+   * Tailwind's own multiplier is off, so a value outside the scale makes no utility.
+   */
+  --spacing-0: 0px;
+  --spacing-2: 2px;
+  --spacing-4: 4px;
+  --spacing-6: 6px;
+  --spacing-8: 8px;
+  --spacing-12: 12px;
+  --spacing-16: 16px;
+  --spacing-20: 20px;
+  --spacing-24: 24px;
+  --spacing-32: 32px;
+  --spacing-40: 40px;
+  --spacing-64: 64px;
+  --spacing-80: 80px;
+  --spacing-120: 120px;
+  --spacing-160: 160px;
+  --spacing-240: 240px;
+  --spacing-320: 320px;
+
+  /* Corners (Figma "Spacing/Corners/S" and "/M"): rounded-s, rounded-m. */
+  --radius-s: 4px;
+  --radius-m: 8px;
+
+  /*
+   * Motion (WQ20-WQ23): one curve and two durations for the whole site. lib/motion/tokens.ts holds the same three
+   * values for Motion, and lib/motion/tokens.test.ts fails when the two differ.
+   */
+  --ease-smooth: cubic-bezier(0, 0, 0.2, 1);
+  --duration-short: 320ms;
+  --duration-long: 640ms;
+  --default-transition-duration: var(--duration-short);
+  --default-transition-timing-function: var(--ease-smooth);
+}
+
+/*
+ * Everything from here to the end of this block sits in Tailwind's `base` layer: after the tokens above, so a mode
+ * can set them again, and before the utilities, so a class on an element still wins.
+ */
+@layer base {
+
+/*
+ * Figma's two Measurements modes (Mobile: the 390 frame; Desktop: the 1440 frame), each as its own variable so one
+ * can be read without the other. Below 768px the Mobile values are in use; from 768px the Desktop ones.
+ */
+:root {
+  --font-size-28-mobile: 1.5rem;
+  --font-size-28-desktop: 1.75rem;
+  --font-size-24-mobile: 1.375rem;
+  --font-size-24-desktop: 1.5rem;
+
+  --grid-columns-mobile: 6;
+  --grid-columns-desktop: 24;
+  --grid-margin-mobile: 16px;
+  --grid-margin-desktop: 16px;
+  --grid-gutter-mobile: 8px;
+  --grid-gutter-desktop: 8px;
+
+  --grid-columns: var(--grid-columns-mobile);
+  --grid-margin: var(--grid-margin-mobile);
+  --grid-gutter: var(--grid-gutter-mobile);
+}
+
+@media (width >= 48rem) {
+  :root {
+    --text-28: var(--font-size-28-desktop);
+    --text-24: var(--font-size-24-desktop);
+
+    --grid-columns: var(--grid-columns-desktop);
+    --grid-margin: var(--grid-margin-desktop);
+    --grid-gutter: var(--grid-gutter-desktop);
+  }
+}
+
+/*
+ * Theme modes. `data-theme` on any element sets the theme colours for everything inside it, so a section switches
+ * mode by attribute; <html> carries "light". Fjord and Mud are for content sections only, never forms or error
+ * messages (Wayne, 24 Nov).
+ */
+[data-theme="light"] {
+  --color-surface-primary: var(--color-sand-light);
+  --color-surface-secondary: var(--color-moss);
+  --color-surface-panel: var(--color-sand-light);
+  --color-surface-card: var(--color-black-4);
+  --color-surface-card-selected: var(--color-black-8);
+  --color-surface-card-disabled: var(--color-black-2);
+  --color-surface-card-error: var(--color-mustard-8);
+  --color-text-primary: var(--color-black);
+  --color-text-secondary: var(--color-sand-light);
+  --color-text-muted-primary: var(--color-black-65);
+  --color-text-muted-secondary: var(--color-sand-light-65);
+  --color-text-error: var(--color-mustard-dark);
+  --color-object-dark-shade: var(--color-black-20);
+  --color-object-dark-dark-shade: var(--color-black-65);
+  --color-object-light-shade: var(--color-white-4);
+  --color-object-product-bg: var(--color-sand);
+}
+
+[data-theme="dark"] {
+  --color-surface-primary: var(--color-moss);
+  --color-surface-secondary: var(--color-sand-light);
+  --color-surface-panel: var(--color-moss);
+  --color-surface-card: var(--color-sand-light-4);
+  --color-surface-card-selected: var(--color-sand-light-8);
+  --color-surface-card-disabled: var(--color-sand-light-2);
+  --color-surface-card-error: var(--color-mustard-8);
+  --color-text-primary: var(--color-sand-light);
+  --color-text-secondary: var(--color-black);
+  --color-text-muted-primary: var(--color-sand-light-65);
+  --color-text-muted-secondary: var(--color-black-65);
+  --color-text-error: var(--color-mustard);
+  --color-object-dark-shade: var(--color-black-20);
+  --color-object-dark-dark-shade: var(--color-black-65);
+  --color-object-light-shade: var(--color-white-4);
+  --color-object-product-bg: var(--color-sand);
+}
+
+[data-theme="fjord"] {
+  --color-surface-primary: var(--color-fjord);
+  --color-surface-secondary: var(--color-black);
+  --color-surface-panel: var(--color-white);
+  --color-surface-card: var(--color-black-4);
+  --color-surface-card-selected: var(--color-black-8);
+  --color-surface-card-disabled: var(--color-black-2);
+  --color-surface-card-error: var(--color-mustard-8);
+  --color-text-primary: var(--color-black);
+  --color-text-secondary: var(--color-white);
+  --color-text-muted-primary: var(--color-black-65);
+  --color-text-muted-secondary: var(--color-white-65);
+  --color-text-error: var(--color-mustard);
+  --color-object-dark-shade: var(--color-black-20);
+  --color-object-dark-dark-shade: var(--color-black-65);
+  --color-object-light-shade: var(--color-white-4);
+  --color-object-product-bg: var(--color-sand);
+}
+
+[data-theme="mud"] {
+  --color-surface-primary: var(--color-mud);
+  --color-surface-secondary: var(--color-sand-light);
+  --color-surface-panel: var(--color-mud);
+  --color-surface-card: var(--color-sand-light-4);
+  --color-surface-card-selected: var(--color-sand-light-8);
+  --color-surface-card-disabled: var(--color-sand-light-2);
+  --color-surface-card-error: var(--color-mustard-8);
+  --color-text-primary: var(--color-white);
+  --color-text-secondary: var(--color-black);
+  --color-text-muted-primary: var(--color-white-65);
+  --color-text-muted-secondary: var(--color-black-65);
+  --color-text-error: var(--color-mustard);
+  --color-object-dark-shade: var(--color-black-20);
+  --color-object-dark-dark-shade: var(--color-black-65);
+  --color-object-light-shade: var(--color-white-4);
+  --color-object-product-bg: var(--color-sand);
+}
+
+/* Text takes its colour from the nearest mode, so words inside a section that switches mode switch with it. */
+[data-theme] {
+  color: var(--color-text-primary);
 }
 
 body {
-  background: var(--color-background);
-  color: var(--color-foreground);
+  background-color: var(--color-surface-primary);
+  color: var(--color-text-primary);
+  font-family: var(--font-secondary);
+}
+
+}
+
+/*
+ * Font families. next/font (app/fonts.ts) sets --font-primary (GT Sectra Fine) and --font-secondary (GT America) on
+ * <html>, each with its size-matched fallback.
+ */
+@utility font-primary {
+  font-family: var(--font-primary);
+}
+
+@utility font-secondary {
+  font-family: var(--font-secondary);
+}
+
+/*
+ * Text styles, one utility per Figma text style, each with that style's family, weight, size, line height, letter
+ * spacing and case (and the underline, for the two Link styles). Figma's "auto" line height is the font's own:
+ * `normal`. Colour is not part of a text style.
+ */
+@utility text-hero-caps {
+  font-family: var(--font-primary);
+  font-weight: var(--font-weight-regular);
+  font-size: var(--text-24);
+  line-height: normal;
+  letter-spacing: var(--tracking-headers);
+  text-transform: uppercase;
+}
+
+@utility text-h1 {
+  font-family: var(--font-primary);
+  font-weight: var(--font-weight-regular);
+  font-size: var(--text-28);
+  line-height: normal;
+  letter-spacing: var(--tracking-headers);
+  text-transform: none;
+}
+
+@utility text-h2 {
+  font-family: var(--font-primary);
+  font-weight: var(--font-weight-regular);
+  font-size: var(--text-24);
+  line-height: normal;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+@utility text-h3 {
+  font-family: var(--font-secondary);
+  font-weight: var(--font-weight-regular);
+  font-size: var(--text-18);
+  line-height: normal;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+@utility text-copy-16 {
+  font-family: var(--font-secondary);
+  font-weight: var(--font-weight-regular);
+  font-size: var(--text-16);
+  line-height: 1.4;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+@utility text-copy-14 {
+  font-family: var(--font-secondary);
+  font-weight: var(--font-weight-regular);
+  font-size: var(--text-14);
+  line-height: 1.4;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+@utility text-copy-12 {
+  font-family: var(--font-secondary);
+  font-weight: var(--font-weight-regular);
+  font-size: var(--text-12);
+  line-height: 1.4;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+@utility text-bold-14 {
+  font-family: var(--font-secondary);
+  font-weight: var(--font-weight-medium);
+  font-size: var(--text-14);
+  line-height: 1.4;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+@utility text-link-14 {
+  font-family: var(--font-secondary);
+  font-weight: var(--font-weight-regular);
+  font-size: var(--text-14);
+  line-height: 1.4;
+  letter-spacing: 0;
+  text-transform: none;
+  text-decoration-line: underline;
+}
+
+@utility text-link-12 {
+  font-family: var(--font-secondary);
+  font-weight: var(--font-weight-regular);
+  font-size: var(--text-12);
+  line-height: 1.4;
+  letter-spacing: 0;
+  text-transform: none;
+  text-decoration-line: underline;
+}
+
+@utility text-label-12 {
+  font-family: var(--font-secondary);
+  font-weight: var(--font-weight-medium);
+  font-size: var(--text-12);
+  line-height: normal;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+@utility text-label-10 {
+  font-family: var(--font-secondary);
+  font-weight: var(--font-weight-medium);
+  font-size: var(--text-10);
+  line-height: normal;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+/*
+ * The page grid (Figma "Spacing/Grid"): 6 columns below 768px and 24 from 768px, a 16px margin each side and an 8px
+ * gutter. components/layout/Grid.tsx puts this on an element; what sits inside places itself with Tailwind's
+ * col-span-* and col-start-* (md:col-span-* from 768px).
+ */
+@utility page-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--grid-columns), minmax(0, 1fr));
+  column-gap: var(--grid-gutter);
+  padding-inline: var(--grid-margin);
+}
+
+/* The two durations as utilities, for a CSS transition: `transition-opacity duration-short ease-smooth`. */
+@utility duration-short {
+  --tw-duration: var(--duration-short);
+  transition-duration: var(--duration-short);
+}
+
+@utility duration-long {
+  --tw-duration: var(--duration-long);
+  transition-duration: var(--duration-long);
 }
 
 @media (prefers-reduced-motion: reduce) {

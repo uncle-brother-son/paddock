@@ -1,0 +1,30 @@
+import { Meta, Story } from '@storybook/addon-docs/blocks'
+
+import * as GridStories from './Grid.stories'
+
+<Meta of={GridStories} />
+
+# Grid
+
+Every module sits on the same grid, Figma's "Spacing/Grid": the Mobile grid below 768px wide and the Desktop grid
+from 768px. The columns stretch with the window; at the two frame widths they are exactly Figma's.
+
+`<Grid>` (`components/layout/Grid.tsx`) is the grid. What sits inside places itself with Tailwind's column
+utilities: `col-span-6 md:col-span-12` (the whole width on a phone, half on a desktop), `md:col-start-13` (start at
+the thirteenth column).
+
+Each frame below is drawn at its real width, so on a narrower window it scrolls sideways.
+
+## Desktop frame
+
+<Story of={GridStories.DesktopFrame} />
+
+## Mobile frame
+
+<Story of={GridStories.MobileFrame} />
+
+## Placing modules
+
+This one follows the window: narrow it past 768px and the grid changes.
+
+<Story of={GridStories.Live} />

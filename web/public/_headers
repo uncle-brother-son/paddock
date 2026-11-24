@@ -1,0 +1,10 @@
+# Test copies stay out of search (docs/build-standards.md, section 2). Cloudflare answers the files in this folder,
+# and Next's built files, before the Worker is reached, so next.config.ts's header never gets onto them: this file
+# puts it there. Every file is noindex on every host, and the live domain alone takes the header off again.
+# lib/seo/noindex.test.ts holds this file and next.config.ts to the same rule.
+
+/*
+  X-Robots-Tag: noindex, nofollow
+
+https://thepaddockwellness.co.uk/*
+  ! X-Robots-Tag

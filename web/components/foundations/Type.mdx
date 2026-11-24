@@ -1,0 +1,25 @@
+import { Meta, Story } from '@storybook/addon-docs/blocks'
+
+import * as TypeStories from './Type.stories'
+
+<Meta of={TypeStories} />
+
+# Type
+
+One utility class per Figma text style, each carrying that style's family, weight, size, line height, letter
+spacing and case (and the underline, for the two Link styles). Colour is not part of a text style.
+
+Under each line: the Figma name, the class, the family, and what this browser renders, read from the page. Where
+Figma's line height is "auto" the font's own line height is used, and the height it comes to here is shown so it
+can be checked against Figma.
+
+The sizes are Figma's Desktop values from 768px wide and its Mobile values below that. Only H1, H2 and Hero Caps
+differ between the two.
+
+## Desktop sizes
+
+<Story of={TypeStories.Desktop} />
+
+## Mobile sizes
+
+<Story of={TypeStories.Mobile} />
