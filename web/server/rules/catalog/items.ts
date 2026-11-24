@@ -277,7 +277,13 @@ const variantColumnsSql = (alias: string): string => namedColumns(alias, VARIANT
 export const VARIANT_DETAILS_COLUMNS = ['size', 'sku'] as const
 const variantStampSql = (alias: string): string => fieldsStampSql(alias, VARIANT_DETAILS_COLUMNS)
 
-const PRODUCTS_SQL = `SELECT ${itemColumnsSql('product', 'p')} FROM products p ORDER BY p.category, p.name`
+/**
+ * W72a: `category` is the category's Sanity id, so "by category" is by the category's own place (its Order, then its
+ * title), read from its row. A product whose category has no row (none, a word from before W72a, or a row still to
+ * arrive) comes after the others, by what it holds and then by name, as before.
+ */
+const PRODUCTS_SQL = `SELECT ${itemColumnsSql('product', 'p')} FROM products p LEFT JOIN product_categories c ON c.sanity_category_id = p.category
+  ORDER BY c.sort_order NULLS LAST, c.title NULLS LAST, p.category, p.name`
 const VARIANTS_SQL = `SELECT ${variantColumnsSql('v')}, ${variantStampSql('v')} AS stamp FROM product_variants v ORDER BY v.size`
 /** The shop's columns (G-plan 4.8): what a customer may see, on-sale products only, no Stripe ids. */
 const CUSTOMER_PRODUCTS_SQL = `SELECT p.id, p.sanity_product_id, p.name, p.thumbnail_url, p.category, p.base_price::text AS base_price, p.member_price::text AS member_price,
@@ -297,6 +303,27 @@ export async function listProducts(db: Queryable, reader: CatalogReader): Promis
   const products = await run('catalog.products', read ? PRODUCTS_SQL : CUSTOMER_PRODUCTS_SQL)
   const variants = await run('catalog.variants', read ? VARIANTS_SQL : CUSTOMER_VARIANTS_SQL)
   return products.map((product) => ({ ...product, variants: variants.filter((variant) => variant['product_id'] === product['id']) }))
+}
+
+/**
+ * W72a (WQ7): the product categories, as Sanity's webhook keeps them (sanity-sync.ts, `product_categories`), in their
+ * Order then by title. `sanity_category_id` is what a product row's `category` holds.
+ */
+const PRODUCT_CATEGORIES_SQL = `SELECT c.sanity_category_id, c.title, c.sort_order FROM product_categories c ORDER BY c.sort_order NULLS LAST, c.title, c.sanity_category_id`
+
+export interface ProductCategoryRow extends Record<string, unknown> {
+  sanity_category_id: string
+  title: string
+  sort_order: number | null
+}
+
+/**
+ * getProductCategories (`GET catalog/product-categories`): every category, for Catalog → Products' filter and its
+ * Category column, which show a category by its title here. Read on each page load, so a category renamed in Sanity
+ * shows its new name on every product at once. Any active staff member.
+ */
+export function listProductCategories(db: Queryable, reader: { actor: AdminActor }): Promise<ProductCategoryRow[]> {
+  return adminRead<ProductCategoryRow>(db, { name: 'catalog.product_categories', needs: 'staff', sql: PRODUCT_CATEGORIES_SQL }, { actor: reader.actor })
 }
 
 /** The add-ons' rows; on the customer channel, on sale only with the shop's columns. */

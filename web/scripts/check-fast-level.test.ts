@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-import { changedWebhookFields, filesToLint, pickLevel, storiesFor, unitTestsToRun, WEBHOOK_FIELDS, webhookFieldsIn } from './check-fast-level.mjs'
+import { changedWebhookFields, filesToLint, pickLevel, storiesFor, unitTestsToRun, WEBHOOK_BLOCKS, WEBHOOK_FIELDS, webhookFieldsIn } from './check-fast-level.mjs'
 
 // Brief W72, item 1 (WQ29): how `npm run check:fast` picks the test level.
 
@@ -78,22 +78,25 @@ describe('the level', () => {
 describe("the Studio fields the Worker's Sanity webhook reads", () => {
   const schema = (fields: string, type = 'product') => `import { defineType, defineField } from 'sanity'\nexport const x = defineType({ name: '${type}', type: 'document', fields: [${fields}] })\n`
   const name = "defineField({ name: 'name', type: 'string' })"
-  const images = "defineField({ name: 'images', type: 'array', of: [{ type: 'image' }] })"
-  const category = "defineField({ name: 'category', type: 'string' })"
+  // W72a: a product's pictures are its gallery (of the media block), and its category a reference.
+  const images = "defineField({ name: 'gallery', type: 'array', of: [{ type: 'media' }] })"
+  const category = "defineField({ name: 'category', type: 'reference', to: [{ type: 'productCategory' }] })"
   const product = schema(`${name}, ${category}, ${images}`)
 
   it('another field added, changed or moved about is Level 2', () => {
-    const after = schema(`defineField({ name: 'slug', type: 'slug' }), // a note\n ${name},\n\n ${category}, /* why */ ${images}, defineField({ name: 'seo', type: 'seo' })`)
+    const after = schema(`defineField({ name: 'slug', type: 'slug' }), // a note\n ${name},\n\n ${category}, /* why */ ${images}, previousSlugs, defineField({ name: 'images', type: 'array' }), defineField({ name: 'seo', type: 'seo' })`)
     expect(changedWebhookFields(product, after)).toEqual([])
     expect(levelOf(changed('studio/schemaTypes/product.ts', product, after))).toBe(2)
   })
 
   it.each([
-    ['its type', schema(`${name}, ${category}, defineField({ name: 'images', type: 'array', of: [{ type: 'media' }] })`), ['product.images']],
+    ['its type', schema(`${name}, ${category}, defineField({ name: 'gallery', type: 'array', of: [{ type: 'image' }] })`), ['product.gallery']],
     ['its name', schema(`${name}, defineField({ name: 'categories', type: 'string' }), ${images}`), ['product.category']],
+    ['a reference made a word', schema(`${name}, defineField({ name: 'category', type: 'string' }), ${images}`), ['product.category']],
     ['taken out', schema(`${category}, ${images}`), ['product.name']],
     ['made elsewhere', schema(`${name}, category, ${images}`), ['product.category']],
-    ["the document's own name", schema(`${name}, ${category}, ${images}`, 'shopProduct'), ['product', 'product.category', 'product.images', 'product.name']],
+    ["the document's own name", schema(`${name}, ${category}, ${images}`, 'shopProduct'), ['product', 'product.category', 'product.gallery', 'product.name']],
+    ['the document made another kind of thing', schema(`${name}, ${category}, ${images}`).replace("type: 'document'", "type: 'object'"), ['product']],
   ])('a webhook field changed (%s) is Level 1', (_what, after, fields) => {
     expect(changedWebhookFields(product, after)).toEqual(fields)
     expect(levelOf(changed('studio/schemaTypes/product.ts', product, after))).toBe(1)
@@ -106,17 +109,60 @@ describe("the Studio fields the Worker's Sanity webhook reads", () => {
     expect(levelOf(changed('studio/schemaTypes/page.ts', schema(name, 'page'), null))).toBe(2)
   })
 
+  // W72a (W72's report, "For the lead" 1): the check compares a field's own code, so the blocks a gallery is made of
+  // are held too: a gallery's item (its kind and its picture) and the picture (an image, with its file).
+  describe('the blocks a gallery is made of', () => {
+    const block = (name: string, own: string, fields: string) => `import { defineType, defineField } from 'sanity'\nexport const x = defineType({ name: '${name}', ${own}, fields: [${fields}] })\n`
+    const kind = "defineField({ name: 'kind', type: 'string', options: { list: ['image', 'video'] } })"
+    const image = "defineField({ name: 'image', type: 'picture' })"
+    const poster = "defineField({ name: 'poster', type: 'picture' })"
+    const media = block('media', "type: 'object'", `${kind}, ${image}, ${poster}`)
+    const alt = "defineField({ name: 'alt', type: 'string' })"
+    const picture = block('picture', "type: 'image', options: { hotspot: true }", alt)
+
+    it("a gallery's item: its kind or its picture changed is Level 1; its poster, or a new field, is Level 2", () => {
+      const file = 'studio/schemaTypes/objects/media.ts'
+      expect(levelOf(changed(file, media, block('media', "type: 'object'", `${kind}, ${image}, defineField({ name: 'poster', type: 'image' }), defineField({ name: 'captions', type: 'file' })`)))).toBe(2)
+      expect(changedWebhookFields(media, block('media', "type: 'object'", `${kind.replace("'video'", "'film'")}, ${image}, ${poster}`))).toEqual(['media.kind'])
+      expect(levelOf(changed(file, media, block('media', "type: 'object'", `${kind.replace("'video'", "'film'")}, ${image}, ${poster}`)))).toBe(1)
+      expect(changedWebhookFields(media, block('media', "type: 'object'", `${kind}, defineField({ name: 'image', type: 'image' }), ${poster}`))).toEqual(['media.image'])
+      expect(changedWebhookFields(media, block('media', "type: 'object'", `${kind}, ${poster}`))).toEqual(['media.image'])
+      expect(levelOf(changed(file, media, null))).toBe(1)
+    })
+
+    it('a picture: its alt text rules are Level 2; no longer an image, or its hotspot gone, is Level 1', () => {
+      const file = 'studio/schemaTypes/objects/picture.ts'
+      expect(levelOf(changed(file, picture, block('picture', "type: 'image', options: { hotspot: true }", `${alt.replace("'string'", "'text'")}, defineField({ name: 'decorative', type: 'boolean' })`)))).toBe(2)
+      expect(changedWebhookFields(picture, block('picture', "type: 'file', options: { hotspot: true }", alt))).toEqual(['picture'])
+      expect(levelOf(changed(file, picture, block('picture', "type: 'file', options: { hotspot: true }", alt)))).toBe(1)
+      expect(changedWebhookFields(picture, block('picture', "type: 'image'", alt))).toEqual(['picture'])
+      expect(levelOf(changed(file, picture, null))).toBe(1)
+    })
+
+    it('another block is Level 2', () => {
+      expect(levelOf(changed('studio/schemaTypes/objects/seo.ts', block('seo', "type: 'object'", alt), block('seo', "type: 'object'", `${alt}, ${poster}`)))).toBe(2)
+    })
+  })
+
   it('the list is what the webhook reads: its types, and no field it does not name', () => {
     const route = readFileSync(path.join(WEB, 'app/api/sanity/webhook/route.ts'), 'utf8')
-    const types = /CATALOG_TYPES[^[]*\[([^\]]+)\]/.exec(route)?.[1]?.match(/\w+/g)
-    expect(types?.sort()).toEqual(Object.keys(WEBHOOK_FIELDS).sort())
-    const document = /interface SanityDocument \{([^}]+)\}/.exec(route)?.[1] ?? ''
-    const read = [...document.matchAll(/^\s+(\w+)\??:/gm)].map(([, field]) => field!).filter((field) => !field.startsWith('_'))
-    expect(read.sort()).toEqual([...new Set(Object.values(WEBHOOK_FIELDS).flat())].sort())
+    // W72a: the seven item types, the category's own type, and the two blocks a gallery is read through.
+    const items = /CATALOG_TYPES[^[]*\[([^\]]+)\]/.exec(route)?.[1]?.match(/\w+/g) ?? []
+    const category = /const CATEGORY_TYPE = '(\w+)'/.exec(route)?.[1]
+    expect(items).toHaveLength(7)
+    expect([...items, category, ...Object.keys(WEBHOOK_BLOCKS)].sort()).toEqual(Object.keys(WEBHOOK_FIELDS).sort())
+    const fieldsOf = (name: string) => [...(new RegExp(`interface ${name} \\{([^}]+)\\}`).exec(route)?.[1] ?? '').matchAll(/^\s+(\w+)\??:/gm)].map(([, field]) => field!).filter((field) => !field.startsWith('_'))
+    const documents = Object.entries(WEBHOOK_FIELDS).filter(([type]) => !Object.hasOwn(WEBHOOK_BLOCKS, type)).flatMap(([, fields]) => fields)
+    expect(fieldsOf('SanityDocument').sort()).toEqual([...new Set(documents)].sort())
+    expect(fieldsOf('SanityMedia').sort()).toEqual([...WEBHOOK_BLOCKS.media].sort())
+    // A picture is read for its file alone, which is what makes it an image.
+    expect(fieldsOf('SanityImage')).toEqual(['asset'])
+    expect(WEBHOOK_BLOCKS.picture).toEqual([])
   })
 
   it("every one of them is found in the Studio's own files", () => {
-    const found = new Set(readdirSync(SCHEMAS).filter((file) => file.endsWith('.ts')).flatMap((file) => [...webhookFieldsIn(readFileSync(path.join(SCHEMAS, file), 'utf8')).keys()]))
+    const files = [...readdirSync(SCHEMAS).map((file) => path.join(SCHEMAS, file)), ...readdirSync(path.join(SCHEMAS, 'objects')).map((file) => path.join(SCHEMAS, 'objects', file))].filter((file) => file.endsWith('.ts'))
+    const found = new Set(files.flatMap((file) => [...webhookFieldsIn(readFileSync(file, 'utf8')).keys()]))
     const wanted = Object.entries(WEBHOOK_FIELDS).flatMap(([type, fields]) => [type, ...fields.map((field) => `${type}.${field}`)])
     expect([...found].sort()).toEqual(wanted.sort())
   })

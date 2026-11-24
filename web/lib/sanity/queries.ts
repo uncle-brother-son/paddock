@@ -18,8 +18,6 @@ const PICTURE = `{
 
 const pictureAt = (field: string): string => `select(defined(${field}.asset._ref) => ${field}${PICTURE}, null)`
 
-const IMAGES = `"images": coalesce(images[defined(asset._ref)]${PICTURE}, [])`
-
 const MEDIA = `select(
   kind == "video" && defined(video.asset._ref) && defined(poster.asset._ref) => {
     "kind": "video",
@@ -31,6 +29,12 @@ const MEDIA = `select(
   kind != "video" && defined(image.asset._ref) => {"kind": "image", "image": image${PICTURE}},
   null
 )`
+
+/** A gallery (W72a; WQ15): its pictures and videos in order. An item with no file is left out. */
+const galleryAt = (field: string): string => `coalesce(${field}[]{"item": ${MEDIA}}[defined(item)].item, [])`
+
+/** A product's (or the gift card's) category (W72a; WQ7): null when it has none, or its category isn't published. */
+const CATEGORY = `"category": category->{"id": _id, title, "slug": slug.current, order}`
 
 const LINK = `{
   destination,
@@ -109,7 +113,7 @@ export const INFO_PAGE_QUERY = `*[_type == "infoPage" && ${PUBLISHED} && slug.cu
 
 export const INFO_MENU_QUERY = `*[_type == "infoPage" && ${PUBLISHED} && defined(slug.current)] | order(menuOrder asc, title asc)${INFO_PAGE_LINK}`
 
-const PRODUCT_CARD = `"id": _id, name, colourName, "slug": slug.current, category, "family": family._ref, newInUntil, ${IMAGES}`
+const PRODUCT_CARD = `"id": _id, name, colourName, "slug": slug.current, ${CATEGORY}, "family": family._ref, newInUntil, "gallery": ${galleryAt('gallery')}`
 
 /** Every product with an address. Which are on sale, their prices and stock come from the Worker. */
 export const PRODUCT_CARDS_QUERY = `*[_type == "product" && ${PUBLISHED} && defined(slug.current)] | order(_createdAt desc){${PRODUCT_CARD}}`
@@ -121,7 +125,7 @@ export const PRODUCT_QUERY = `*[_type == "product" && ${PUBLISHED} && slug.curre
   "info": productInfo{composition, madeIn, careInstructions},
   "colours": select(
     defined(family._ref) => *[_type == "product" && ${PUBLISHED} && defined(slug.current) && family._ref == ^.family._ref && _id != ^._id]
-      | order(colourName asc){"id": _id, name, colourName, "slug": slug.current, ${IMAGES}},
+      | order(colourName asc){"id": _id, name, colourName, "slug": slug.current, "gallery": ${galleryAt('gallery')}},
     []
   ),
   "sizeGuide": sizeGuide->{
@@ -142,7 +146,7 @@ export const SHOP_SETTINGS_QUERY = `*[_id == "shopSettings"][0]{
   "seo": ${seoAt('seo')}
 }`
 
-const EVENT_CARD = `"id": _id, name, "slug": slug.current, ${IMAGES}`
+const EVENT_CARD = `"id": _id, name, "slug": slug.current, "gallery": ${galleryAt('gallery')}`
 
 /** Every event with an address. Their dates, prices and spaces, and which are on sale, come from the Worker. */
 export const EVENT_CARDS_QUERY = `*[_type == "event" && ${PUBLISHED} && defined(slug.current)] | order(_createdAt desc){${EVENT_CARD}}`
@@ -154,7 +158,18 @@ export const EVENT_QUERY = `*[_type == "event" && ${PUBLISHED} && slug.current =
 
 export const EVENTS_SETTINGS_QUERY = `*[_id == "eventsSettings"][0]{"termsSummary": ${richTextAt('termsSummary')}}`
 
-/** The one gift card (WQ19): the first made, should there ever be two. */
+/** The one gift card (WQ19): the first made, should there ever be two. Its two galleries, swapped by the page's switch. */
 export const GIFT_CARD_QUERY = `*[_type == "giftCardType" && ${PUBLISHED}] | order(_createdAt asc)[0]{
-  "id": _id, name, ${IMAGES}, "description": ${richTextAt('description')}, "terms": ${richTextAt('terms')}, "seo": ${seoAt('seo')}
+  "id": _id, name, ${CATEGORY},
+  "physicalGallery": ${galleryAt('physicalGallery')},
+  "digitalGallery": ${galleryAt('digitalGallery')},
+  "description": ${richTextAt('description')}, "terms": ${richTextAt('terms')}, "seo": ${seoAt('seo')}
 }`
+
+/**
+ * W72a: the document of one type ($type) that had this slug ($slug) before and has another now: where an old
+ * address has moved to (./redirects.ts). Never the document that has the slug now, so an address can't be sent to
+ * itself. The Studio lets one document of a type hold an old slug; should two, the one changed last.
+ */
+export const MOVED_SLUG_QUERY = `*[_type == $type && ${PUBLISHED} && $slug in previousSlugs && defined(slug.current) && slug.current != $slug]
+  | order(_updatedAt desc)[0]{"slug": slug.current, "isHome": ${IS_HOME}}`

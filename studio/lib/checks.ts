@@ -12,6 +12,28 @@ export function checkSlug(slug: string | undefined, place: SlugPlace): Verdict {
   return slugProblem(slug, place) ?? true
 }
 
+/**
+ * W72a: a document's old slugs after a publish. The slug being replaced (the published one) joins the list, once;
+ * the slug the document now has leaves it, so a slug that goes back to an old value never points at itself.
+ */
+export function previousSlugsAfter(previous: readonly string[] | undefined, published: string | undefined, next: string | undefined): string[] {
+  const kept = [...new Set(previous ?? [])].filter((slug) => slug !== next)
+  if (published && published !== next && !kept.includes(published)) kept.push(published)
+  return kept
+}
+
+/** Whether two lists of old slugs are the same, in order: a publish that changes none writes none. */
+export function sameSlugs(before: readonly string[], after: readonly string[]): boolean {
+  return before.length === after.length && before.every((slug, index) => slug === after[index])
+}
+
+/**
+ * W72a: whether a slug is free for a document: true when no other document of its type (`$type`) has it now or had
+ * it before (in its `previousSlugs`). `$published` is the document's own published id: none of its versions (its
+ * draft, one in a release) counts as another document. Run by lib/slugs.ts over every version of every document.
+ */
+export const SLUG_FREE_QUERY = '!defined(*[_type == $type && !sanity::versionOf($published) && (slug.current == $slug || $slug in previousSlugs)][0]._id)'
+
 /** Alt text: required once there is a picture, unless it is marked decorative. */
 export function checkAlt(alt: string | undefined, picture: (Asset & { decorative?: boolean }) | undefined): Verdict {
   if (!hasAsset(picture) || picture?.decorative) return true

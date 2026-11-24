@@ -1,0 +1,277 @@
+{
+  "movedSlug": {
+    "query": "*[_type == $type && !(_id in path(\"drafts.**\")) && $slug in previousSlugs && defined(slug.current) && slug.current != $slug]\n  | order(_updatedAt desc)[0]{\"slug\": slug.current, \"isHome\": _id == *[_id == \"siteSettings\"][0].homePage._ref}",
+    "cases": [
+      {
+        "type": "contentPage",
+        "slug": "private-hire",
+        "answer": {
+          "slug": "exclusive-hire",
+          "isHome": false
+        }
+      },
+      {
+        "type": "contentPage",
+        "slug": "hire",
+        "answer": {
+          "slug": "exclusive-hire",
+          "isHome": false
+        }
+      },
+      {
+        "type": "contentPage",
+        "slug": "welcome",
+        "answer": {
+          "slug": "home",
+          "isHome": true
+        }
+      },
+      {
+        "type": "contentPage",
+        "slug": "exclusive-hire",
+        "answer": null
+      },
+      {
+        "type": "contentPage",
+        "slug": "never-was",
+        "answer": null
+      },
+      {
+        "type": "infoPage",
+        "slug": "terms-and-conditions",
+        "answer": {
+          "slug": "terms",
+          "isHome": false
+        }
+      },
+      {
+        "type": "infoPage",
+        "slug": "private-hire",
+        "answer": null
+      },
+      {
+        "type": "product",
+        "slug": "hoodie-moss",
+        "answer": {
+          "slug": "herd-hoodie-moss",
+          "isHome": false
+        }
+      },
+      {
+        "type": "product",
+        "slug": "solstice",
+        "answer": {
+          "slug": "herd-hoodie-moss",
+          "isHome": false
+        }
+      },
+      {
+        "type": "event",
+        "slug": "solstice",
+        "answer": {
+          "slug": "solstice-2026",
+          "isHome": false
+        }
+      },
+      {
+        "type": "event",
+        "slug": "hoodie-moss",
+        "answer": null
+      },
+      {
+        "type": "event",
+        "slug": "full-moon",
+        "answer": null
+      },
+      {
+        "type": "event",
+        "slug": "moonrise",
+        "answer": {
+          "slug": "full-moon",
+          "isHome": false
+        }
+      },
+      {
+        "type": "event",
+        "slug": "draft-old",
+        "answer": null
+      },
+      {
+        "type": "event",
+        "slug": "lost",
+        "answer": null
+      },
+      {
+        "type": "event",
+        "slug": "shared-old",
+        "answer": {
+          "slug": "b-new",
+          "isHome": false
+        }
+      },
+      {
+        "type": "event",
+        "slug": "winter-dip",
+        "answer": {
+          "slug": "winter-swim",
+          "isHome": false
+        }
+      },
+      {
+        "type": "event",
+        "slug": "winter-swim",
+        "answer": null
+      },
+      {
+        "type": "contentPage",
+        "slug": "home",
+        "answer": null
+      },
+      {
+        "type": "infoPage",
+        "slug": "terms",
+        "answer": null
+      },
+      {
+        "type": "product",
+        "slug": "herd-hoodie-moss",
+        "answer": null
+      },
+      {
+        "type": "event",
+        "slug": "solstice-2026",
+        "answer": null
+      },
+      {
+        "type": "event",
+        "slug": "b-new",
+        "answer": null
+      }
+    ]
+  },
+  "slugFree": {
+    "query": "!defined(*[_type == $type && !sanity::versionOf($published) && (slug.current == $slug || $slug in previousSlugs)][0]._id)",
+    "cases": [
+      {
+        "type": "product",
+        "published": "prod-new",
+        "slug": "herd-hoodie-moss",
+        "answer": false
+      },
+      {
+        "type": "product",
+        "published": "prod-new",
+        "slug": "hoodie-moss",
+        "answer": false
+      },
+      {
+        "type": "product",
+        "published": "prod-new",
+        "slug": "solstice",
+        "answer": false
+      },
+      {
+        "type": "product",
+        "published": "prod-new",
+        "slug": "solstice-2026",
+        "answer": true
+      },
+      {
+        "type": "product",
+        "published": "prod-new",
+        "slug": "brand-new",
+        "answer": true
+      },
+      {
+        "type": "product",
+        "published": "prod-1",
+        "slug": "herd-hoodie-moss",
+        "answer": true
+      },
+      {
+        "type": "product",
+        "published": "prod-1",
+        "slug": "hoodie-moss",
+        "answer": true
+      },
+      {
+        "type": "product",
+        "published": "prod-2",
+        "slug": "herd-hoodie-moss",
+        "answer": false
+      },
+      {
+        "type": "product",
+        "published": "prod-2",
+        "slug": "hoodie-moss",
+        "answer": false
+      },
+      {
+        "type": "product",
+        "published": "prod-new",
+        "slug": "draft-product",
+        "answer": false
+      },
+      {
+        "type": "event",
+        "published": "event-new",
+        "slug": "solstice",
+        "answer": false
+      },
+      {
+        "type": "event",
+        "published": "event-new",
+        "slug": "hoodie-moss",
+        "answer": true
+      },
+      {
+        "type": "event",
+        "published": "event-new",
+        "slug": "draft-new",
+        "answer": false
+      },
+      {
+        "type": "event",
+        "published": "event-new",
+        "slug": "draft-old",
+        "answer": false
+      },
+      {
+        "type": "event",
+        "published": "event-3",
+        "slug": "draft-new",
+        "answer": true
+      },
+      {
+        "type": "event",
+        "published": "event-3",
+        "slug": "draft-old",
+        "answer": true
+      },
+      {
+        "type": "event",
+        "published": "event-7",
+        "slug": "winter-dip",
+        "answer": true
+      },
+      {
+        "type": "event",
+        "published": "event-1",
+        "slug": "winter-dip",
+        "answer": false
+      },
+      {
+        "type": "contentPage",
+        "published": "page-new",
+        "slug": "private-hire",
+        "answer": false
+      },
+      {
+        "type": "infoPage",
+        "published": "info-new",
+        "slug": "private-hire",
+        "answer": true
+      }
+    ]
+  }
+}

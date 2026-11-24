@@ -3116,6 +3116,43 @@
    ]
   },
   {
+   "name": "product_categories",
+   "columns": [
+    {
+     "name": "sanity_category_id",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "title",
+     "type": "text",
+     "notNull": true,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "sort_order",
+     "type": "integer",
+     "notNull": false,
+     "default": null,
+     "generated": "",
+     "identity": ""
+    },
+    {
+     "name": "updated_at",
+     "type": "timestamp with time zone",
+     "notNull": true,
+     "default": "now()",
+     "generated": "",
+     "identity": ""
+    }
+   ]
+  },
+  {
    "name": "product_variants",
    "columns": [
     {
@@ -5475,6 +5512,12 @@
    "name": "postage_settings_pkey",
    "type": "p",
    "definition": "PRIMARY KEY (id)"
+  },
+  {
+   "table": "product_categories",
+   "name": "product_categories_pkey",
+   "type": "p",
+   "definition": "PRIMARY KEY (sanity_category_id)"
   },
   {
    "table": "product_variants",

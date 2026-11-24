@@ -1,6 +1,8 @@
 import { defineArrayMember, defineField, defineType } from 'sanity'
 import { DocumentIcon } from '@sanity/icons'
 import { checkSlug } from '../lib/checks'
+import { isSlugFree } from '../lib/slugs'
+import { previousSlugs } from './fields/previousSlugs'
 
 // A page built from modules, at /[slug] (WQ26). The home page is the one chosen in Site settings.
 export const contentPage = defineType({
@@ -20,9 +22,10 @@ export const contentPage = defineType({
       title: 'Slug',
       type: 'slug',
       description: "The page's address. The home page's is not used: it is always the site's first page",
-      options: { source: 'title', maxLength: 96 },
+      options: { source: 'title', maxLength: 96, isUnique: isSlugFree },
       validation: (rule) => rule.required().custom((slug) => checkSlug(slug?.current, 'page')),
     }),
+    previousSlugs,
     defineField({
       name: 'thumbnail',
       title: 'Thumbnail',

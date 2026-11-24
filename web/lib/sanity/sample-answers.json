@@ -376,17 +376,20 @@
       "name": "Herd Hoodie",
       "colourName": "Sand",
       "slug": "herd-hoodie-sand",
-      "category": "apparel",
+      "category": null,
       "family": "fam",
       "newInUntil": null,
-      "images": [
+      "gallery": [
         {
-          "ref": "image-prod-800x600-jpg",
-          "width": 800,
-          "height": 600,
-          "alt": "A hoodie",
-          "crop": null,
-          "hotspot": null
+          "kind": "image",
+          "image": {
+            "ref": "image-prod-800x600-jpg",
+            "width": 800,
+            "height": 600,
+            "alt": "A hoodie",
+            "crop": null,
+            "hotspot": null
+          }
         }
       ]
     },
@@ -395,17 +398,50 @@
       "name": "Herd Hoodie",
       "colourName": "Moss",
       "slug": "herd-hoodie-moss",
-      "category": "apparel",
+      "category": {
+        "id": "cat-apparel",
+        "title": "Apparel",
+        "slug": "apparel",
+        "order": 1
+      },
       "family": "fam",
       "newInUntil": "2026-12-31",
-      "images": [
+      "gallery": [
         {
-          "ref": "image-prod-800x600-jpg",
-          "width": 800,
-          "height": 600,
-          "alt": "A hoodie",
-          "crop": null,
-          "hotspot": null
+          "kind": "video",
+          "url": "https://cdn.sanity.io/files/p/d/vid.mp4",
+          "poster": {
+            "ref": "image-hero-1600x900-jpg",
+            "width": 1600,
+            "height": 900,
+            "alt": "Picture hero",
+            "crop": null,
+            "hotspot": null
+          },
+          "description": "Steam",
+          "captionsUrl": "https://cdn.sanity.io/files/p/d/cap.vtt"
+        },
+        {
+          "kind": "image",
+          "image": {
+            "ref": "image-prod-800x600-jpg",
+            "width": 800,
+            "height": 600,
+            "alt": "A hoodie",
+            "crop": null,
+            "hotspot": null
+          }
+        },
+        {
+          "kind": "image",
+          "image": {
+            "ref": "image-thumb-600x400-jpg",
+            "width": 600,
+            "height": 400,
+            "alt": "",
+            "crop": null,
+            "hotspot": null
+          }
         }
       ]
     }
@@ -415,17 +451,50 @@
     "name": "Herd Hoodie",
     "colourName": "Moss",
     "slug": "herd-hoodie-moss",
-    "category": "apparel",
+    "category": {
+      "id": "cat-apparel",
+      "title": "Apparel",
+      "slug": "apparel",
+      "order": 1
+    },
     "family": "fam",
     "newInUntil": "2026-12-31",
-    "images": [
+    "gallery": [
       {
-        "ref": "image-prod-800x600-jpg",
-        "width": 800,
-        "height": 600,
-        "alt": "A hoodie",
-        "crop": null,
-        "hotspot": null
+        "kind": "video",
+        "url": "https://cdn.sanity.io/files/p/d/vid.mp4",
+        "poster": {
+          "ref": "image-hero-1600x900-jpg",
+          "width": 1600,
+          "height": 900,
+          "alt": "Picture hero",
+          "crop": null,
+          "hotspot": null
+        },
+        "description": "Steam",
+        "captionsUrl": "https://cdn.sanity.io/files/p/d/cap.vtt"
+      },
+      {
+        "kind": "image",
+        "image": {
+          "ref": "image-prod-800x600-jpg",
+          "width": 800,
+          "height": 600,
+          "alt": "A hoodie",
+          "crop": null,
+          "hotspot": null
+        }
+      },
+      {
+        "kind": "image",
+        "image": {
+          "ref": "image-thumb-600x400-jpg",
+          "width": 600,
+          "height": 400,
+          "alt": "",
+          "crop": null,
+          "hotspot": null
+        }
       }
     ],
     "description": [
@@ -540,14 +609,17 @@
         "name": "Herd Hoodie",
         "colourName": "Sand",
         "slug": "herd-hoodie-sand",
-        "images": [
+        "gallery": [
           {
-            "ref": "image-prod-800x600-jpg",
-            "width": 800,
-            "height": 600,
-            "alt": "A hoodie",
-            "crop": null,
-            "hotspot": null
+            "kind": "image",
+            "image": {
+              "ref": "image-prod-800x600-jpg",
+              "width": 800,
+              "height": 600,
+              "alt": "A hoodie",
+              "crop": null,
+              "hotspot": null
+            }
           }
         ]
       }
@@ -794,14 +866,17 @@
       "id": "event-1",
       "name": "Solstice",
       "slug": "solstice-2026",
-      "images": [
+      "gallery": [
         {
-          "ref": "image-prod-800x600-jpg",
-          "width": 800,
-          "height": 600,
-          "alt": "A hoodie",
-          "crop": null,
-          "hotspot": null
+          "kind": "image",
+          "image": {
+            "ref": "image-prod-800x600-jpg",
+            "width": 800,
+            "height": 600,
+            "alt": "A hoodie",
+            "crop": null,
+            "hotspot": null
+          }
         }
       ]
     }
@@ -810,14 +885,17 @@
     "id": "event-1",
     "name": "Solstice",
     "slug": "solstice-2026",
-    "images": [
+    "gallery": [
       {
-        "ref": "image-prod-800x600-jpg",
-        "width": 800,
-        "height": 600,
-        "alt": "A hoodie",
-        "crop": null,
-        "hotspot": null
+        "kind": "image",
+        "image": {
+          "ref": "image-prod-800x600-jpg",
+          "width": 800,
+          "height": 600,
+          "alt": "A hoodie",
+          "crop": null,
+          "hotspot": null
+        }
       }
     ],
     "description": [
@@ -1030,7 +1108,41 @@
   "giftCard": {
     "id": "gift",
     "name": "Gift Card",
-    "images": [],
+    "category": {
+      "id": "cat-apparel",
+      "title": "Apparel",
+      "slug": "apparel",
+      "order": 1
+    },
+    "physicalGallery": [
+      {
+        "kind": "image",
+        "image": {
+          "ref": "image-prod-800x600-jpg",
+          "width": 800,
+          "height": 600,
+          "alt": "A hoodie",
+          "crop": null,
+          "hotspot": null
+        }
+      }
+    ],
+    "digitalGallery": [
+      {
+        "kind": "video",
+        "url": "https://cdn.sanity.io/files/p/d/vid.mp4",
+        "poster": {
+          "ref": "image-hero-1600x900-jpg",
+          "width": 1600,
+          "height": 900,
+          "alt": "Picture hero",
+          "crop": null,
+          "hotspot": null
+        },
+        "description": "Steam",
+        "captionsUrl": "https://cdn.sanity.io/files/p/d/cap.vtt"
+      }
+    ],
     "description": [],
     "terms": [
       {
@@ -1051,5 +1163,9 @@
       }
     ],
     "seo": null
+  },
+  "movedSlug": {
+    "slug": "exclusive-hire",
+    "isHome": false
   }
 }

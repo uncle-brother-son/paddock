@@ -9,6 +9,7 @@ import {
   HOME_PAGE_QUERY,
   INFO_MENU_QUERY,
   INFO_PAGE_QUERY,
+  MOVED_SLUG_QUERY,
   NAVIGATION_QUERY,
   PRODUCT_CARDS_QUERY,
   PRODUCT_QUERY,
@@ -23,6 +24,7 @@ import {
   giftCardSchema,
   infoMenuSchema,
   infoPageSchema,
+  movedSlugSchema,
   navigationSchema,
   productCardsSchema,
   productSchema,
@@ -51,6 +53,7 @@ export const reads = {
   event: read(EVENT_QUERY, eventSchema.nullable()),
   eventsSettings: read(EVENTS_SETTINGS_QUERY, eventsSettingsSchema.nullable()),
   giftCard: read(GIFT_CARD_QUERY, giftCardSchema.nullable()),
+  movedSlug: read(MOVED_SLUG_QUERY, movedSlugSchema.nullable()),
 } as const
 
 type Reads = typeof reads
@@ -58,10 +61,16 @@ type Reads = typeof reads
 /** The reads of one document by its address, which take its slug. */
 type BySlug = 'contentPage' | 'infoPage' | 'product' | 'event'
 
-/** Reads one of them, published documents only. The client is made here, not at load: a build may have no settings. */
+/** W72a: the read of where an old slug went takes the slug and the document type it was a slug of. */
+type ByOldSlug = 'movedSlug'
+
+/**
+ * Reads one of them, published documents only. The client is made here, not at load: a build may have no settings.
+ * It reads through Sanity's CDN (`useCdn`), which keeps each query's answer until the dataset next changes.
+ */
 export async function readSanity<Name extends keyof Reads>(
   name: Name,
-  ...[slug]: Name extends BySlug ? [slug: string] : []
+  ...[slug, type]: Name extends BySlug ? [slug: string] : Name extends ByOldSlug ? [slug: string, type: string] : []
 ): Promise<z.output<Reads[Name]['schema']>> {
   const client = createClient({
     projectId: process.env.NEXT_PUBLIC_SANITY_PROJECT_ID!,
@@ -71,6 +80,9 @@ export async function readSanity<Name extends keyof Reads>(
     perspective: 'published',
   })
   const { query, schema } = reads[name]
-  const answer: unknown = await client.fetch(query, slug === undefined ? {} : { slug })
+  const params: Record<string, string> = {}
+  if (slug !== undefined) params.slug = slug
+  if (type !== undefined) params.type = type
+  const answer: unknown = await client.fetch(query, params)
   return schema.parse(answer) as z.output<Reads[Name]['schema']>
 }

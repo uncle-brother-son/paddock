@@ -3140,3 +3140,52 @@ Wayne, 24 Nov 2026 (`briefs/W03-decisions.md`, "W70f"; W70e unsure 1, noticed 1 
   Settle's cash not taken off the order); `orders/refund-lines.test.ts`, "W70f item 2" (the order's route and row); the
   staff app's choice, words and hint, `server/staff-app-helpers.test.ts` and `server/staff-app-orders-page.test.ts`,
   "W70f".
+
+## Product categories as rows, galleries of pictures and videos (W72a)
+
+Wayne's WQ7, WQ15, WQ18 and WQ19 (item 3); the lead's design, 24 Nov 2026 (`briefs/W03-decisions.md`, "W72a"). Nothing
+here touches a price, stock or a sale. The Studio's side and the site's reads are in `studio/` and `web/lib/sanity/`.
+
+- **A product category is a document in Sanity with a row of its own** (`product_categories`, migration 035: the
+  document's id, its title, its order). Its publish makes the row or brings it up to date
+  (`catalog/sanity-sync.ts` `syncSanityCategory`), in one statement on the document's id, so two deliveries make one
+  row. No Stripe call and no audit row: a category's row is a copy of Sanity's content, as an item's name is.
+- **A product's row holds its category's id, never a word or a title** (`products.category`, still text; the route's
+  `categoryIdOf`). The webhook's projection is empty, so the document carries the reference's `_ref` and nothing else.
+  A value that isn't a reference (the word `apparel` on a document from before W72a, published before its content
+  move) is not written: the row's category is left as it is. The field there and empty clears it; the field not there
+  leaves it, as before. So a renamed category is one row's change, and every product in it reads the new name on the
+  next read. Example: "Apparel" renamed "Clothing": one `product_categories` row changes; no product row is written.
+- **No foreign key.** Sanity's deliveries come in any order, so a product can arrive before its category. Such a
+  product, one with none, and one still holding an old word are all "No category" to the staff app.
+- **A category deleted in Sanity** has its row deleted, under the row's lock, unless a product row still names it
+  (on sale or off). Then nothing is written, the delivery answers 200 with `kept: 'category_in_use'` and the number
+  of products, and the log says what to do. Sanity itself refuses to delete a category a published product points to
+  (the reference is a strong one), so this is a delete that reached here out of order, or a product row behind its
+  document.
+- **The staff app's reads** (`catalog/items.ts`). `GET catalog/product-categories` (`listProductCategories`; any active
+  staff member): every category in its order, then by title, those with no order last. `GET catalog/products`
+  answers the same columns as before, now by the category's own place (its order, then its title), then name; a
+  product whose category has no row comes after the others. The customer channel's products read is unchanged (it
+  answers the id; the site reads a category's title from Sanity).
+- **The picture is the first PICTURE of a gallery** (`app/api/sanity/webhook/route.ts`, `firstPicture`, `thumbnailOf`).
+  A product's and an event's pictures are a `gallery` of the Studio's `media` block (a picture, or an MP4 with its
+  poster); the gift card has a Physical and a Digital gallery. The row's `thumbnail_url` is the first item that is not
+  a video and has a picture file: a video is skipped whatever else it carries (the Studio keeps the picture of an item
+  someone switched from Image to Video), and its poster is never used. The gift card: the Physical gallery's first
+  picture, else the Digital one's. A gallery with no picture (empty, videos only, missing, or not a list) gives no
+  thumbnail and is never an error. The other four types (service type, add-on, membership plan, session pass) keep
+  `images`, read as before. The old `images` of a product, an event or the gift card is no longer read.
+- **Not changed:** an add-on's category (one of its three words); what a new item arrives as (off sale, Q57); what a
+  delete of an item does; the signature check.
+- Rule tests: `app/api/sanity/webhook/route.test.ts`, the two "W72a" groups (a video-first gallery, a gallery of
+  videos only, an empty one, the gift card's two galleries; a renamed category, a category deleted while used, a word
+  or a title never stored, the order of both reads, the staff app's own function through the real route);
+  `testing/migration-035.test.ts`; the staff app's page, `server/staff-app-product-categories.test.ts`.
+
+### Migration 035 (written, not applied)
+
+`supabase/migrations/035_product_categories.sql`: the table, row level security on, the Worker's role's rights, and a
+comment on `products.category`. No product row is written. The saved schema carries it already (as 032's was), so the
+lead applies it BEFORE the W72a Worker is pushed: the products read, the categories read and the webhook all name the
+table.

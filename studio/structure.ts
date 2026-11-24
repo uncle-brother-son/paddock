@@ -7,6 +7,7 @@ import {
   Gift,
   IdCard,
   Info,
+  ListFilter,
   Menu,
   Newspaper,
   Ruler,
@@ -64,6 +65,14 @@ export const structure: StructureResolver = (S) =>
                 .title('Products')
                 .icon(Shirt)
                 .child(S.documentTypeList('product').title('Products')),
+              S.listItem()
+                .title('Categories')
+                .icon(ListFilter)
+                .child(
+                  S.documentTypeList('productCategory')
+                    .title('Categories')
+                    .defaultOrdering([{field: 'order', direction: 'asc'}]),
+                ),
               S.listItem()
                 .title('Product Families')
                 .icon(Tags)

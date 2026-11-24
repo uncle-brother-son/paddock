@@ -61,6 +61,8 @@ const STAFF_ROUTES: Record<string, () => Promise<unknown>> = {
   '/api/v1/staff/catalog/service-types': () => import('@/app/api/v1/staff/catalog/service-types/route'),
   '/api/v1/staff/catalog/session-pass-types': () => import('@/app/api/v1/staff/catalog/session-pass-types/route'),
   '/api/v1/staff/catalog/gift-card-types': () => import('@/app/api/v1/staff/catalog/gift-card-types/route'),
+  // W72a: the staff app's thin getProductCategories.
+  '/api/v1/staff/catalog/product-categories': () => import('@/app/api/v1/staff/catalog/product-categories/route'),
   '/api/v1/staff/catalog/tier-groups/range': () => import('@/app/api/v1/staff/catalog/tier-groups/range/route'),
   // W57: the staff app's thin getMembershipPlans and createMembershipPlan (one path, GET and POST), getMembershipSettings
   // and setMembershipSettings (likewise), and getMembershipSettingsQuote.

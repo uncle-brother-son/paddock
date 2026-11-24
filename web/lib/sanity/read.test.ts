@@ -2,11 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { linkHref } from './links'
 import { reads, readSanity } from './read'
 import answers from './sample-answers.json'
+import madeFrom from './sample-queries.json'
 import type { Link } from './schemas'
 
 // Brief W72, item 11. sample-answers.json is what ./queries.ts answered, run by Sanity's own GROQ engine (groq-js, from
 // the Studio's packages) over sample documents of every type: one published, one a draft, one link to a page that isn't
 // published, a video, a decorative picture, an image with no file, a product with no address.
+// W72a: the product's, the event's and the gift card's samples were made again the same way, with galleries of pictures
+// and videos (a video first, a picture with no file, a video with no poster), a product in a category, one whose
+// category is not published, and a page with old slugs.
 
 const fetched = vi.hoisted(() => vi.fn())
 const created = vi.hoisted(() => vi.fn())
@@ -67,6 +71,55 @@ describe('readSanity', () => {
   it('an answer that does not fit throws', async () => {
     fetched.mockResolvedValue({ menuLinks: 'no' })
     await expect(readSanity('navigation')).rejects.toThrow()
+  })
+
+  it('W72a: where an old slug went takes the slug and the type, both as parameters', async () => {
+    fetched.mockResolvedValue(answers.movedSlug)
+    expect(await readSanity('movedSlug', 'private-hire', 'contentPage')).toEqual({ slug: 'exclusive-hire', isHome: false })
+    expect(fetched).toHaveBeenCalledWith(reads.movedSlug.query, { slug: 'private-hire', type: 'contentPage' })
+  })
+})
+
+describe('W72a: galleries and categories', () => {
+  const kinds = (gallery: Array<{ kind: string }>) => gallery.map((item) => item.kind)
+
+  // sample-queries.json: the query each of these samples was made from. A query changed since has a stale sample:
+  // make it again with the real engine (briefs/W72a-logs/tools, in the staff app repo), and read what changes.
+  it.each(Object.keys(madeFrom) as Array<keyof typeof madeFrom>)('%s: its sample was made by the query the site sends', (name) => {
+    expect(madeFrom[name]).toBe(reads[name].query)
+  })
+
+  it('every read W72a changed has its query on record', () => {
+    expect(Object.keys(madeFrom).sort()).toEqual(['event', 'eventCards', 'giftCard', 'movedSlug', 'product', 'productCards'])
+  })
+
+  it("a gallery keeps its order, videos among the pictures; an item with no file is left out", () => {
+    // The sample product's gallery: a video, a picture, a picture with no file, a decorative picture, a video with no poster.
+    expect(kinds(answers.product.gallery)).toEqual(['video', 'image', 'image'])
+    expect(answers.product.gallery[0]).toMatchObject({ kind: 'video', url: 'https://cdn.sanity.io/files/p/d/vid.mp4', description: 'Steam', poster: { alt: 'Picture hero' } })
+    expect(answers.product.gallery[2]).toMatchObject({ kind: 'image', image: { alt: '' } })
+    expect(answers.productCards.map((card) => kinds(card.gallery))).toEqual([['image'], ['video', 'image', 'image']])
+    expect(kinds(answers.product.colours[0]!.gallery)).toEqual(['image'])
+    expect(kinds(answers.event.gallery)).toEqual(['image'])
+  })
+
+  it('the gift card has its two galleries, each its own', () => {
+    expect(kinds(answers.giftCard.physicalGallery)).toEqual(['image'])
+    expect(kinds(answers.giftCard.digitalGallery)).toEqual(['video'])
+  })
+
+  it("a product carries its category's id, title, slug and order; one whose category is not published has none", () => {
+    expect(answers.product.category).toEqual({ id: 'cat-apparel', title: 'Apparel', slug: 'apparel', order: 1 })
+    expect(answers.giftCard.category).toEqual({ id: 'cat-apparel', title: 'Apparel', slug: 'apparel', order: 1 })
+    expect(answers.productCards.map((card) => card.category?.title ?? null)).toEqual([null, 'Apparel'])
+  })
+
+  it('the old `images` and the category as a word are refused', () => {
+    const { gallery, ...noGallery } = answers.product
+    expect(reads.product.schema.safeParse({ ...noGallery, images: gallery }).success).toBe(false)
+    expect(reads.product.schema.safeParse({ ...answers.product, category: 'apparel' }).success).toBe(false)
+    expect(reads.giftCard.schema.safeParse({ ...answers.giftCard, physicalGallery: undefined }).success).toBe(false)
+    for (const query of [reads.productCards.query, reads.product.query, reads.eventCards.query, reads.event.query, reads.giftCard.query]) expect(query).not.toContain('images')
   })
 })
 

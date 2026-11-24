@@ -1,8 +1,11 @@
 import nodeCrypto, { createHash, createHmac } from 'node:crypto'
+import path from 'node:path'
 import { NextRequest } from 'next/server'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { GET as productCategoriesRoute } from '@/app/api/v1/staff/catalog/product-categories/route'
+import { GET as productsRoute } from '@/app/api/v1/staff/catalog/products/route'
 import { POST as closeRoute } from '@/app/api/v1/staff/orders/stuck/close/route'
-import { stuckCloseKindSchema, stuckListOutputSchema } from '@/contracts'
+import { catalogProductCategoriesRouteOutputSchema, stuckCloseKindSchema, stuckListOutputSchema } from '@/contracts'
 import type { Db } from '@/server/db'
 import { PLAN_STUCK_WORDS } from '@/server/rules/catalog/plan-failure-messages'
 import { sanityDeletesListed, SANITY_DELETE_REFUSED_ACTION, sortSanityDelete } from '@/server/rules/catalog/sanity-sync'
@@ -10,6 +13,8 @@ import { LEFT_STEP_WORDS } from '@/server/rules/memberships/failure-messages'
 import { stuckList } from '@/server/rules/orders/stuck-list'
 import { ADMIN_TEST_KEY, pressRoute } from '@/server/rules/testing/admin-routes'
 import { insert, startTestDatabase, type TestDatabase } from '@/server/rules/testing/database'
+import { staffAppDir } from '@/server/rules/testing/staff-app-dir'
+import { bindStaffRoutes } from '@/server/rules/testing/sweep/staff-routes'
 import { FakeStripe } from '@/server/stripe/fake'
 import { POST } from './route'
 
@@ -26,6 +31,9 @@ import { POST } from './route'
 // writes nothing; a signature older than 5 minutes is refused.
 // W70a (the W70 audit's L1, L2): a delete acts on the signed body's document alone; a plan a price change kept on sale
 // is a line on the Orders page's list, until it is off sale or marked sorted.
+// W72a (WQ7, WQ15, WQ19; the lead's design): a product's, an event's and the gift card's picture is the first PICTURE of
+// its gallery (videos skipped; none is no picture, never an error); a product category has a row of its own, a
+// product's row holds its id, a rename is that one row's, and a category a product row still names is never deleted.
 
 vi.setConfig({ testTimeout: 60_000 })
 
@@ -84,6 +92,30 @@ const published = (document: Record<string, unknown>) => deliver(document, { 'sa
 const deleted = (documentId: string) => deliver({ _id: documentId }, { 'sanity-operation': 'delete', 'sanity-document-id': documentId })
 
 const IMAGE = { asset: { _ref: 'image-abc123-800x600-jpg' } }
+/** W72a: a gallery's items, as the Studio's `media` block saves them: a picture, and a video with its poster. */
+const pictureItem = (name = 'abc123') => ({ _type: 'media', _key: `k-${name}`, kind: 'image', image: { _type: 'picture', asset: { _type: 'reference', _ref: `image-${name}-800x600-jpg` }, alt: 'A sauna' } })
+const videoItem = (name = 'film1', extra: Record<string, unknown> = {}) => ({
+  _type: 'media',
+  _key: `k-${name}`,
+  kind: 'video',
+  video: { _type: 'file', asset: { _type: 'reference', _ref: `file-${name}-mp4` } },
+  poster: { _type: 'picture', asset: { _type: 'reference', _ref: `image-poster${name}-800x600-jpg` }, alt: 'Steam' },
+  videoDescription: 'Steam rising',
+  ...extra,
+})
+/** The staff app's picture of a Sanity image, as the route makes it. */
+const thumbnailOf = (name = 'abc123') => `https://cdn.sanity.io/images/w66test/production/${name}-800x600.jpg?w=80`
+/**
+ * W72a: a document's picture, in the field its type keeps it in: a gallery on a product and an event, the physical
+ * gallery on the gift card, `images` on the other four.
+ */
+const pictured = (type: string): Record<string, unknown> => {
+  if (type === 'product' || type === 'event') return { gallery: [pictureItem()] }
+  if (type === 'giftCardType') return { physicalGallery: [pictureItem()] }
+  return { images: [IMAGE] }
+}
+/** W72a: a product's category as its document holds it: a reference to the category's document. */
+const categoryRef = (id: string) => ({ _type: 'reference', _ref: id })
 /** The route's fingerprint of an extra waiver: the first 12 hex characters of its trimmed text's SHA-256. */
 const createHashOf = (text: string): string => createHash('sha256').update(text).digest('hex').slice(0, 12)
 
@@ -106,8 +138,11 @@ const NON_PLAN = TYPES.filter((t) => t.type !== 'membershipPlan')
 const PUBLISHED_AGAIN = TYPES.flatMap((info): Array<{ path: string; info: TypeInfo; extra: Record<string, unknown>; sanitysOwn: Record<string, unknown> }> => {
   const plain = { path: info.type, info, extra: {}, sanitysOwn: {} }
   if (info.type === 'product' || info.type === 'addon') {
+    // W72a: a product's category is a reference, and its row holds the category's id; an add-on's is a word, as before.
+    const category = info.type === 'product' ? categoryRef('w72a-cat-wellbeing') : 'Wellbeing'
+    const stored = info.type === 'product' ? 'w72a-cat-wellbeing' : 'Wellbeing'
     return [
-      { path: `${info.type} with its category, as every live one is sent`, info, extra: { category: 'Wellbeing' }, sanitysOwn: { category: 'Wellbeing' } },
+      { path: `${info.type} with its category, as every live one is sent`, info, extra: { category }, sanitysOwn: { category: stored } },
       { ...plain, path: `${info.type} without a category` },
     ]
   }
@@ -150,7 +185,7 @@ async function onSale(info: TypeInfo, documentId: string): Promise<string> {
 describe("Sanity's webhook on the Worker's connection (W66)", () => {
   it.each(TYPES)('$type: a new document makes its row OFF sale (Q57), with its name and picture', async (info) => {
     const documentId = `w66-new-${info.type}-${crypto.randomUUID()}`
-    expect(await published({ _type: info.type, _id: documentId, name: 'New thing', images: [IMAGE] })).toEqual({ status: 200, body: { success: true } })
+    expect(await published({ _type: info.type, _id: documentId, name: 'New thing', ...pictured(info.type) })).toEqual({ status: 200, body: { success: true } })
     const rows = await rowOf(info, documentId)
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({ name: 'New thing', active: false })
@@ -175,7 +210,7 @@ describe("Sanity's webhook on the Worker's connection (W66)", () => {
     const id = await onSale(info, documentId)
     const productBefore = (await rowOf(info, documentId))[0]?.stripe_product_id
     stripe.calls.length = 0
-    expect(await published({ _type: info.type, _id: documentId, name: 'After', images: [IMAGE] })).toEqual({ status: 200, body: { success: true } })
+    expect(await published({ _type: info.type, _id: documentId, name: 'After', ...pictured(info.type) })).toEqual({ status: 200, body: { success: true } })
     const [row] = await rowOf(info, documentId)
     expect(row).toMatchObject({ id, name: 'After', active: true })
     if (info.type === 'membershipPlan') {
@@ -197,7 +232,7 @@ describe("Sanity's webhook on the Worker's connection (W66)", () => {
       const id = await onSale(info, documentId)
       await database.pg.exec(`RESET ROLE; UPDATE ${info.table} SET ${STAFF_SET[info.type]}, active = ${String(active)} WHERE id = '${id}'; SET ROLE paddock_worker;`)
       const [before] = await rowOf(info, documentId)
-      expect(await published({ _type: info.type, _id: documentId, name: 'After', images: [IMAGE], ...extra })).toEqual({ status: 200, body: { success: true } })
+      expect(await published({ _type: info.type, _id: documentId, name: 'After', ...pictured(info.type), ...extra })).toEqual({ status: 200, body: { success: true } })
       const [after] = await rowOf(info, documentId)
       const { updated_at: changedAt, ...rest } = after as unknown as Record<string, unknown>
       const { updated_at: wasAt, ...was } = before as unknown as Record<string, unknown>
@@ -310,14 +345,16 @@ describe("Sanity's webhook on the Worker's connection (W66)", () => {
     expect(made).toEqual([expect.objectContaining({ id: row?.stripe_product_id, name: 'Core', images: [row?.thumbnail_url] })])
   })
 
-  it('product and add-on: the category is set when the document has the field, and left as it is when it has none; a new one with a category arrives off sale too', async () => {
+  it('product and add-on: the category is set when the document has the field, and left as it is when it has none; a new one with a category arrives off sale too (W72a: a product\'s is its category document\'s id, an add-on\'s its word as before)', async () => {
     for (const info of TYPES.filter((t) => t.type === 'product' || t.type === 'addon')) {
       const documentId = `w66-cat-${info.type}-${crypto.randomUUID()}`
-      await published({ _type: info.type, _id: documentId, name: 'Soap', category: 'Wellbeing' })
+      const category = info.type === 'product' ? categoryRef('w72a-cat-wellbeing') : 'Wellbeing'
+      const stored = info.type === 'product' ? 'w72a-cat-wellbeing' : 'Wellbeing'
+      await published({ _type: info.type, _id: documentId, name: 'Soap', category })
       // The row made by the statement that carries the category (the per-type test above makes it without one): off sale (Q57).
-      expect((await rowOf(info, documentId))[0]).toMatchObject({ category: 'Wellbeing', active: false })
+      expect((await rowOf(info, documentId))[0]).toMatchObject({ category: stored, active: false })
       await published({ _type: info.type, _id: documentId, name: 'Soap bar' })
-      expect((await rowOf(info, documentId))[0]).toMatchObject({ name: 'Soap bar', category: 'Wellbeing' })
+      expect((await rowOf(info, documentId))[0]).toMatchObject({ name: 'Soap bar', category: stored })
       await published({ _type: info.type, _id: documentId, name: 'Soap bar', category: null })
       expect((await rowOf(info, documentId))[0]).toMatchObject({ category: null })
     }
@@ -643,5 +680,286 @@ describe("W70a (the W70 audit's L2; H-plan 4.3): a plan deleted in Sanity that a
     ).rejects.toThrow('the close row failed')
     expect((await refusals(id)).filter((one) => one.details['state'] === 'sorted')).toEqual([])
     expect((await sanityDeletesListed(database.db)).map((one) => one.refusalId)).toContain(lineId)
+  })
+})
+
+describe('W72a (WQ15, WQ19): the staff app\'s picture is the first PICTURE of a gallery of pictures and videos', () => {
+  const OK = { status: 200, body: { success: true } }
+  const PRODUCT = TYPES.find((t) => t.type === 'product') as TypeInfo
+  const EVENT = TYPES.find((t) => t.type === 'event') as TypeInfo
+  const GIFT_CARD = TYPES.find((t) => t.type === 'giftCardType') as TypeInfo
+  const picture = async (info: TypeInfo, documentId: string) => (await rowOf(info, documentId))[0]?.thumbnail_url ?? null
+
+  it.each([PRODUCT, EVENT])('$type: a gallery that starts with a video: the picture is the first picture after it, never the video\'s poster, nor a picture the video item still carries', async (info) => {
+    const documentId = `w72a-video-first-${info.type}-${crypto.randomUUID()}`
+    expect(await published({ _type: info.type, _id: documentId, name: 'Film first', gallery: [videoItem('film1'), pictureItem('second2'), pictureItem('third3')] })).toEqual(OK)
+    expect(await picture(info, documentId)).toBe(thumbnailOf('second2'))
+    // The Studio keeps the picture of an item someone switched from Image to Video: it is still a video.
+    expect(await published({ _type: info.type, _id: documentId, name: 'Film first', gallery: [videoItem('film1', { image: pictureItem('stale9').image }), videoItem('film2'), pictureItem('third3')] })).toEqual(OK)
+    expect(await picture(info, documentId)).toBe(thumbnailOf('third3'))
+    // A picture first is the picture, as before.
+    expect(await published({ _type: info.type, _id: documentId, name: 'Film first', gallery: [pictureItem('first1'), videoItem('film1')] })).toEqual(OK)
+    expect(await picture(info, documentId)).toBe(thumbnailOf('first1'))
+  })
+
+  it.each([PRODUCT, EVENT])('$type: a gallery of videos only has no picture: answered 200, the row brought up to date with none', async (info) => {
+    const documentId = `w72a-videos-only-${info.type}-${crypto.randomUUID()}`
+    expect(await published({ _type: info.type, _id: documentId, name: 'Before', gallery: [pictureItem()] })).toEqual(OK)
+    expect(await picture(info, documentId)).toBe(thumbnailOf())
+    expect(await published({ _type: info.type, _id: documentId, name: 'Films', gallery: [videoItem('film1'), videoItem('film2', { image: pictureItem('stale9').image })] })).toEqual(OK)
+    expect((await rowOf(info, documentId))[0]).toMatchObject({ name: 'Films', thumbnail_url: null })
+  })
+
+  it.each([PRODUCT, EVENT])('$type: an empty gallery, none at all, or one that is not a list of items has no picture and is never an error; the old `images` field is not read', async (info) => {
+    const documentId = `w72a-empty-${info.type}-${crypto.randomUUID()}`
+    const odd: unknown[] = [[], undefined, null, 'gallery', 7, {}, [null], ['x', 3], [{}], [{ kind: 'image' }], [{ kind: 'image', image: {} }], [{ kind: 'image', image: { asset: {} } }], [{ kind: 'image', image: { asset: { _ref: '' } } }]]
+    for (const gallery of odd) {
+      // A picture first each time, so "none" is this delivery's doing.
+      expect(await published({ _type: info.type, _id: documentId, name: 'Pictured', gallery: [pictureItem()] })).toEqual(OK)
+      expect(await picture(info, documentId)).toBe(thumbnailOf())
+      expect(await published({ _type: info.type, _id: documentId, name: 'Bare', ...(gallery === undefined ? {} : { gallery }) }), JSON.stringify(gallery)).toEqual(OK)
+      expect((await rowOf(info, documentId))[0], JSON.stringify(gallery)).toMatchObject({ name: 'Bare', thumbnail_url: null })
+    }
+    // Odd items are passed over on the way to a real picture; an item with no kind is a picture (the Studio's first choice).
+    expect(await published({ _type: info.type, _id: documentId, name: 'Mixed', gallery: [null, { kind: 'image' }, { image: pictureItem('nokind4').image }, pictureItem('later5')] })).toEqual(OK)
+    expect(await picture(info, documentId)).toBe(thumbnailOf('nokind4'))
+    // `images`, as these three types had it before W72a, gives no picture.
+    expect(await published({ _type: info.type, _id: documentId, name: 'Old field', images: [IMAGE] })).toEqual(OK)
+    expect(await picture(info, documentId)).toBeNull()
+  })
+
+  it("the gift card's two galleries: the physical gallery's first picture; else the digital one's; none in either is no picture", async () => {
+    const documentId = `w72a-gift-${crypto.randomUUID()}`
+    const publish = (galleries: Record<string, unknown>) => published({ _type: 'giftCardType', _id: documentId, name: 'The Paddock Gift Card', ...galleries })
+    expect(await publish({ physicalGallery: [pictureItem('card1')], digitalGallery: [pictureItem('email2')] })).toEqual(OK)
+    expect(await picture(GIFT_CARD, documentId)).toBe(thumbnailOf('card1'))
+    // The physical gallery's first picture, wherever it is in that gallery, before any of the digital one's.
+    expect(await publish({ physicalGallery: [videoItem('film1'), pictureItem('card3')], digitalGallery: [pictureItem('email2')] })).toEqual(OK)
+    expect(await picture(GIFT_CARD, documentId)).toBe(thumbnailOf('card3'))
+    // No picture in the physical gallery (videos only, empty, or no such gallery): the digital one's first picture.
+    for (const physical of [{ physicalGallery: [videoItem('film1', { image: pictureItem('stale9').image })] }, { physicalGallery: [] }, {}]) {
+      expect(await publish({ ...physical, digitalGallery: [videoItem('film2'), pictureItem('email2'), pictureItem('email6')] })).toEqual(OK)
+      expect(await picture(GIFT_CARD, documentId), JSON.stringify(Object.keys(physical))).toBe(thumbnailOf('email2'))
+    }
+    // The digital gallery alone is not passed over for being second.
+    expect(await publish({ digitalGallery: [pictureItem('email7')] })).toEqual(OK)
+    expect(await picture(GIFT_CARD, documentId)).toBe(thumbnailOf('email7'))
+    // None in either, or neither there: no picture, never an error. A product's `gallery` is not a gift card's field.
+    for (const galleries of [{ physicalGallery: [videoItem('film1')], digitalGallery: [videoItem('film2')] }, { physicalGallery: [], digitalGallery: [] }, {}, { gallery: [pictureItem()] }, { images: [IMAGE] }]) {
+      expect(await publish({ physicalGallery: [pictureItem('card1')] })).toEqual(OK)
+      expect(await publish(galleries), JSON.stringify(Object.keys(galleries))).toEqual(OK)
+      expect(await picture(GIFT_CARD, documentId), JSON.stringify(Object.keys(galleries))).toBeNull()
+    }
+    expect(stripe.calls).toEqual([])
+  })
+
+  it.each(TYPES.filter((t) => ['serviceType', 'addon', 'membershipPlan', 'sessionPassType'].includes(t.type)))('$type keeps `images`: its first image, as before; a gallery on it is not read', async (info) => {
+    const documentId = `w72a-images-${info.type}-${crypto.randomUUID()}`
+    expect(await published({ _type: info.type, _id: documentId, name: 'Kept', images: [IMAGE], gallery: [pictureItem('other8')] })).toEqual(OK)
+    expect(await picture(info, documentId)).toBe(thumbnailOf())
+    expect(await published({ _type: info.type, _id: documentId, name: 'Kept', gallery: [pictureItem('other8')] })).toEqual(OK)
+    expect(await picture(info, documentId)).toBeNull()
+  })
+})
+
+describe('W72a (WQ7): a product category is a document with a row of its own; a product\'s row holds its id', () => {
+  const OK = { status: 200, body: { success: true } }
+  const PRODUCT = TYPES.find((t) => t.type === 'product') as TypeInfo
+  const INA = 'ina.sanity@example.com'
+  type CategoryRow = { sanity_category_id: string; title: string; sort_order: number | null; updated_at: string }
+  const category = (id: string, fields: Record<string, unknown>) => published({ _type: 'productCategory', _id: id, ...fields })
+  const categoryRow = async (id: string): Promise<CategoryRow | undefined> =>
+    (await database.db.query<CategoryRow>('SELECT sanity_category_id, title, sort_order, updated_at FROM product_categories WHERE sanity_category_id = $1', [id]))[0]
+  const product = (id: string, fields: Record<string, unknown>) => published({ _type: 'product', _id: id, name: 'Paddock T-Shirt', ...fields })
+  const auditCount = async () => (await database.db.query<{ n: number }>('SELECT count(*)::int AS n FROM audit_log'))[0]?.n
+  /** The staff app's two reads, as an active staff member, cut down to this test's own rows (the file shares one database). */
+  const listed = async (ids: readonly string[]) => {
+    const answer = await pressRoute<Array<{ sanity_category_id: string; title: string; sort_order: number | null }>>(productCategoriesRoute, 'GET', { email: JO })
+    expect(answer.status).toBe(200)
+    expect(catalogProductCategoriesRouteOutputSchema.parse(answer.data)).toEqual(answer.data)
+    return (answer.data ?? []).filter((row) => ids.includes(row.sanity_category_id))
+  }
+  const productsListed = async (ids: readonly string[]) => {
+    // The products read's contract wants a base price, and a product new from Sanity has none until staff set it
+    // (noticed in W72a's report; the check is off in production). Each is given one first, as staff would.
+    await database.db.query('UPDATE products SET base_price = 10.00 WHERE base_price IS NULL')
+    const answer = await pressRoute<Array<{ sanity_product_id: string | null; name: string; category: string | null }>>(productsRoute, 'GET', { email: JO })
+    expect(answer.status).toBe(200)
+    return (answer.data ?? []).filter((row) => ids.includes(row.sanity_product_id ?? '')).map((row) => [row.name, row.category])
+  }
+
+  beforeAll(async () => {
+    await insert(database.db, 'staff', { role: 'staff', first_name: 'Ina', last_name: 'Gone', email: INA, active: false })
+  })
+
+  it("a renamed category: its one row changes, no product row is written, and the staff app's read gives the new title for the id each product holds", async () => {
+    const id = `w72a-cat-${crypto.randomUUID()}`
+    const productId = `w72a-tee-${crypto.randomUUID()}`
+    const audited = await auditCount()
+    expect(await category(id, { title: 'Apparel', slug: { _type: 'slug', current: 'apparel' }, order: 2 })).toEqual(OK)
+    expect(await categoryRow(id)).toMatchObject({ sanity_category_id: id, title: 'Apparel', sort_order: 2 })
+    expect(await product(productId, { category: categoryRef(id), gallery: [pictureItem()] })).toEqual(OK)
+    const [before] = await rowOf(PRODUCT, productId)
+    expect(before).toMatchObject({ category: id, active: false })
+    expect(await listed([id])).toEqual([{ sanity_category_id: id, title: 'Apparel', sort_order: 2 }])
+
+    expect(await category(id, { title: 'Clothing', slug: { _type: 'slug', current: 'apparel' }, order: 2 })).toEqual(OK)
+    expect(await categoryRow(id)).toMatchObject({ sanity_category_id: id, title: 'Clothing', sort_order: 2 })
+    // The product's row, whole: its category is still the id, and nothing on it was written (its updated_at too).
+    expect((await rowOf(PRODUCT, productId))[0]).toEqual(before)
+    expect(await listed([id])).toEqual([{ sanity_category_id: id, title: 'Clothing', sort_order: 2 }])
+    expect(await productsListed([productId])).toEqual([['Paddock T-Shirt', id]])
+    // A copy of Sanity's content: nothing sent to Stripe, no audit row.
+    expect(stripe.calls).toEqual([])
+    expect(await auditCount()).toBe(audited)
+  })
+
+  it("a product's category is its category document's id: a word (as before W72a) or a title is never stored where an id belongs, and leaves the row's as it is", async () => {
+    const [first, second] = [`w72a-cat-${crypto.randomUUID()}`, `w72a-cat-${crypto.randomUUID()}`]
+    const productId = `w72a-id-${crypto.randomUUID()}`
+    const held = async () => (await rowOf(PRODUCT, productId))[0]?.category ?? null
+    // A document from before W72a, published before its content move: its word is not written.
+    expect(await product(productId, { category: 'apparel' })).toEqual(OK)
+    expect(await held()).toBeNull()
+    expect(await product(productId, { category: categoryRef(first) })).toEqual(OK)
+    expect(await held()).toBe(first)
+    for (const notAnId of ['Apparel', 'apparel', '', 7, true, [], {}, { _ref: '' }, { _ref: 7 }, { title: 'Apparel' }, [categoryRef(second)]]) {
+      expect(await product(productId, { category: notAnId }), JSON.stringify(notAnId)).toEqual(OK)
+      expect(await held(), JSON.stringify(notAnId)).toBe(first)
+    }
+    // Whatever else comes with a reference, only its id is kept.
+    expect(await product(productId, { category: { ...categoryRef(second), title: 'Apparel', slug: { current: 'apparel' } } })).toEqual(OK)
+    expect(await held()).toBe(second)
+    // The field there and empty: none. The field not there: left as it is (as before).
+    expect(await product(productId, {})).toEqual(OK)
+    expect(await held()).toBe(second)
+    expect(await product(productId, { category: null })).toEqual(OK)
+    expect(await held()).toBeNull()
+  })
+
+  it('a category deleted in Sanity while a product row still names it keeps its row: nothing is written and the answer says why; once no product names it the delete goes through, and again does nothing', async () => {
+    const [id, other] = [`w72a-cat-${crypto.randomUUID()}`, `w72a-cat-${crypto.randomUUID()}`]
+    const [tee, cap] = [`w72a-tee-${crypto.randomUUID()}`, `w72a-cap-${crypto.randomUUID()}`]
+    expect(await category(id, { title: 'Apparel', order: 1 })).toEqual(OK)
+    expect(await category(other, { title: 'Accessories', order: 2 })).toEqual(OK)
+    expect(await product(tee, { category: categoryRef(id) })).toEqual(OK)
+    expect(await product(cap, { category: categoryRef(id) })).toEqual(OK)
+    const audited = await auditCount()
+    const [row, teeRow] = [await categoryRow(id), (await rowOf(PRODUCT, tee))[0]]
+
+    // Two product rows name it (both off sale: a row names its category whether or not it is on sale).
+    expect(await deleted(id)).toEqual({ status: 200, body: { success: true, kept: 'category_in_use', products: 2 } })
+    expect(await categoryRow(id)).toEqual(row)
+    expect((await rowOf(PRODUCT, tee))[0]).toEqual(teeRow)
+    expect(await listed([id, other])).toEqual([
+      { sanity_category_id: id, title: 'Apparel', sort_order: 1 },
+      { sanity_category_id: other, title: 'Accessories', sort_order: 2 },
+    ])
+    // One moved to another category: the other still names it.
+    expect(await product(tee, { category: categoryRef(other) })).toEqual(OK)
+    expect(await deleted(id)).toEqual({ status: 200, body: { success: true, kept: 'category_in_use', products: 1 } })
+    expect(await categoryRow(id)).toEqual(row)
+    // None names it: the row goes, and only that row.
+    expect(await product(cap, { category: null })).toEqual(OK)
+    expect(await deleted(id)).toEqual(OK)
+    expect(await categoryRow(id)).toBeUndefined()
+    expect(await categoryRow(other)).toMatchObject({ title: 'Accessories' })
+    expect((await rowOf(PRODUCT, tee))[0]).toMatchObject({ category: other, active: false })
+    expect(await listed([id, other])).toEqual([{ sanity_category_id: other, title: 'Accessories', sort_order: 2 }])
+    // Delivered again: nothing to do.
+    expect(await deleted(id)).toEqual(OK)
+    expect(await auditCount()).toBe(audited)
+    expect(stripe.calls).toEqual([])
+  })
+
+  it('the same new category delivered twice makes one row; a draft writes nothing; one with no title is refused by the database (500, nothing written)', async () => {
+    const id = `w72a-cat-${crypto.randomUUID()}`
+    expect(await category(id, { title: 'Books', order: 3 })).toEqual(OK)
+    expect(await category(id, { title: 'Books', order: 3 })).toEqual(OK)
+    expect(await database.db.query('SELECT title FROM product_categories WHERE sanity_category_id = $1', [id])).toEqual([{ title: 'Books' }])
+    const draft = `w72a-cat-${crypto.randomUUID()}`
+    expect(await category(`drafts.${draft}`, { title: 'Draft', order: 1 })).toEqual({ status: 200, body: { message: 'Draft ignored' } })
+    expect(await categoryRow(draft)).toBeUndefined()
+    expect(await categoryRow(`drafts.${draft}`)).toBeUndefined()
+    expect(await deleted(`drafts.${id}`)).toEqual({ status: 200, body: { message: 'Draft delete ignored' } })
+    expect(await categoryRow(id)).toMatchObject({ title: 'Books' })
+    const untitled = `w72a-cat-${crypto.randomUUID()}`
+    expect(await category(untitled, { order: 1 })).toEqual({ status: 500, body: { error: 'Internal server error' } })
+    expect(await categoryRow(untitled)).toBeUndefined()
+    // A bad signature writes no category either.
+    const body = JSON.stringify({ _type: 'productCategory', _id: untitled, title: 'Forged' })
+    expect(await deliver({ _type: 'productCategory', _id: untitled, title: 'Forged' }, { 'sanity-operation': 'create' }, signed(body, 'not-the-secret'))).toEqual({ status: 401, body: { error: 'Invalid signature' } })
+    expect(await categoryRow(untitled)).toBeUndefined()
+  })
+
+  it("a category's order is a whole number, or none; the staff app's list is in that order then by title, those with none last, and the products read follows it (a product with no category's row comes last)", async () => {
+    const id = `w72a-cat-${crypto.randomUUID()}`
+    for (const order of [undefined, null, 1.5, '4', Number.NaN, 3_000_000_000, -3_000_000_000, {}]) {
+      expect(await category(id, { title: 'Order', order: 5 })).toEqual(OK)
+      expect(await category(id, { title: 'Order', ...(order === undefined ? {} : { order }) }), String(order)).toEqual(OK)
+      expect((await categoryRow(id))?.sort_order, String(order)).toBeNull()
+    }
+    for (const order of [0, -2, 12]) {
+      expect(await category(id, { title: 'Order', order })).toEqual(OK)
+      expect((await categoryRow(id))?.sort_order).toBe(order)
+    }
+
+    const tag = crypto.randomUUID()
+    const [beta, alpha, second, last, lastToo] = ['beta', 'alpha', 'second', 'last', 'last-too'].map((name) => `w72a-order-${name}-${tag}`) as [string, string, string, string, string]
+    expect(await category(beta, { title: 'Beta', order: 1 })).toEqual(OK)
+    expect(await category(second, { title: 'Aardvark', order: 2 })).toEqual(OK)
+    expect(await category(last, { title: 'Aaa no order' })).toEqual(OK)
+    expect(await category(lastToo, { title: 'Aab no order', order: null })).toEqual(OK)
+    expect(await category(alpha, { title: 'Alpha', order: 1 })).toEqual(OK)
+    expect((await listed([beta, alpha, second, last, lastToo])).map((row) => row.title)).toEqual(['Alpha', 'Beta', 'Aardvark', 'Aaa no order', 'Aab no order'])
+
+    const names = ['in-second-a', 'in-alpha-z', 'in-alpha-b', 'none', 'word', 'not-arrived', 'in-last'] as const
+    const ids = Object.fromEntries(names.map((name) => [name, `w72a-product-${name}-${tag}`])) as Record<(typeof names)[number], string>
+    const notArrived = `w72a-order-not-arrived-${tag}`
+    await published({ _type: 'product', _id: ids['in-second-a'], name: 'A in the second category', category: categoryRef(second) })
+    await published({ _type: 'product', _id: ids['in-alpha-z'], name: 'Z in Alpha', category: categoryRef(alpha) })
+    await published({ _type: 'product', _id: ids['in-alpha-b'], name: 'B in Alpha', category: categoryRef(alpha) })
+    await published({ _type: 'product', _id: ids['none'], name: 'AA with no category' })
+    await published({ _type: 'product', _id: ids['word'], name: 'AB with a word from before' })
+    await database.db.query("UPDATE products SET category = 'apparel' WHERE sanity_product_id = $1", [ids['word']])
+    await published({ _type: 'product', _id: ids['not-arrived'], name: 'AC whose category has not arrived', category: categoryRef(notArrived) })
+    await published({ _type: 'product', _id: ids['in-last'], name: 'AD in a category with no order', category: categoryRef(last) })
+    expect(await productsListed(Object.values(ids))).toEqual([
+      ['B in Alpha', alpha],
+      ['Z in Alpha', alpha],
+      ['A in the second category', second],
+      ['AD in a category with no order', last],
+      ['AB with a word from before', 'apparel'],
+      ['AC whose category has not arrived', notArrived],
+      ['AA with no category', null],
+    ])
+  })
+
+  it("the staff app's own getProductCategories, through the real route: after a rename it answers the new title, for the id the product's row still holds", async () => {
+    const id = `w72a-cat-${crypto.randomUUID()}`
+    const productId = `w72a-tee-${crypto.randomUUID()}`
+    expect(await category(id, { title: 'Apparel', order: 1 })).toEqual(OK)
+    expect(await product(productId, { category: categoryRef(id) })).toEqual(OK)
+    expect(await category(id, { title: 'Clothing', order: 1 })).toEqual(OK)
+    vi.stubGlobal('paddockWorkerV1', { rawRequest: bindStaffRoutes(database.db) })
+    try {
+      const getProductCategories = (await import(/* @vite-ignore */ path.join(staffAppDir(), 'backend/paddock/getProductCategories.ts'))).default as (req: { user: { email: string } }) => Promise<Array<{ sanity_category_id: string; title: string; sort_order: number | null }>>
+      const rows = await getProductCategories({ user: { email: JO } })
+      expect(rows.filter((row) => row.sanity_category_id === id)).toEqual([{ sanity_category_id: id, title: 'Clothing', sort_order: 1 }])
+      expect((await rowOf(PRODUCT, productId))[0]?.category).toBe(id)
+      // An inactive account is refused in the Worker's words, as every catalogue read refuses it.
+      await expect(getProductCategories({ user: { email: INA } })).rejects.toThrow('This staff account is inactive. Ask an admin to reactivate it.')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('the categories read: any active staff member; an inactive account and a sign-in with no staff row are refused', async () => {
+    expect((await pressRoute(productCategoriesRoute, 'GET', { email: FRAN })).ok).toBe(true)
+    const inactive = await pressRoute(productCategoriesRoute, 'GET', { email: INA })
+    expect([inactive.ok, inactive.data, inactive.error?.code]).toEqual([false, undefined, 'FORBIDDEN'])
+    const nobody = await pressRoute(productCategoriesRoute, 'GET', { email: 'nobody.sanity@example.com' })
+    expect([nobody.ok, nobody.data, nobody.error?.code]).toEqual([false, undefined, 'UNAUTHORISED'])
+    expect((await pressRoute(productCategoriesRoute, 'GET', { email: JO, bearer: 'not-the-key' })).ok).toBe(false)
   })
 })

@@ -24,3 +24,5 @@ export * from './admin'
 export * from './catalog-admin'
 // W57: membership plans' and settings' routes' own inputs and answers, last, for the same reason.
 export * from './plans-admin'
+// W72a: the product categories read's answer, last, for the same reason.
+export * from './catalog-categories'

@@ -1,7 +1,11 @@
-import { defineType, defineField } from 'sanity'
+import { defineArrayMember, defineType, defineField } from 'sanity'
 import { TagIcon } from '@sanity/icons'
 import { checkSlug } from '../lib/checks'
+import { isSlugFree } from '../lib/slugs'
+import { previousSlugs } from './fields/previousSlugs'
 
+// The Worker's Sanity webhook keeps a row for each product: its name, its category's id and the first image of its
+// gallery (web/app/api/sanity/webhook/route.ts). Prices, sizes, stock and fulfilment are set in the staff app.
 export const product = defineType({
   name: 'product',
   title: 'Product',
@@ -17,15 +21,9 @@ export const product = defineType({
     defineField({
       name: 'category',
       title: 'Category',
-      type: 'string',
-      options: {
-        list: [
-          { title: 'Apparel', value: 'apparel' },
-          { title: 'Accessories', value: 'accessories' },
-          { title: 'Equipment', value: 'equipment' },
-        ],
-      },
-      description: 'Mirrored to Supabase for Retool filtering',
+      type: 'reference',
+      to: [{ type: 'productCategory' }],
+      description: "Shown in the shop's filter and in the staff app. Add or rename categories under Shop, Categories",
       validation: (rule) => rule.required(),
     }),
     defineField({
@@ -49,9 +47,11 @@ export const product = defineType({
       options: {
         source: (document) => [document.name, document.colourName].filter(Boolean).join(' '),
         maxLength: 96,
+        isUnique: isSlugFree,
       },
       validation: (rule) => rule.required().custom((slug) => checkSlug(slug?.current, 'product')),
     }),
+    previousSlugs,
     defineField({
       name: 'description',
       title: 'Description',
@@ -97,26 +97,11 @@ export const product = defineType({
       ],
     }),
     defineField({
-      name: 'images',
-      title: 'Images',
+      name: 'gallery',
+      title: 'Gallery',
       type: 'array',
-      of: [
-        {
-          type: 'image',
-          options: {
-            hotspot: true,
-          },
-          fields: [
-            defineField({
-              name: 'alt',
-              type: 'string',
-              title: 'Alt Text',
-              validation: (rule) => rule.required(),
-            }),
-          ],
-        },
-      ],
-      description: 'First image will be used as thumbnail in Supabase',
+      of: [defineArrayMember({ type: 'media' })],
+      description: 'Images and videos, in the order the site shows them. The first image is the picture in the staff app',
       validation: (rule) => rule.required().min(1),
     }),
     defineField({
@@ -146,7 +131,10 @@ export const product = defineType({
     select: {
       title: 'name',
       subtitle: 'colourName',
-      media: 'images.0',
+      kind: 'gallery.0.kind',
+      image: 'gallery.0.image',
+      poster: 'gallery.0.poster',
     },
+    prepare: ({ title, subtitle, kind, image, poster }) => ({ title, subtitle, media: kind === 'video' ? poster : image }),
   },
 })

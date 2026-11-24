@@ -11,10 +11,13 @@ export function isReservedSlug(slug: string): boolean {
 /** The one word a product can't use: /shop/gift-card is the gift card's own page (WQ19). */
 export const RESERVED_PRODUCT_SLUGS = ['gift-card'] as const
 
-export type SlugPlace = 'page' | 'info' | 'product'
+export type SlugPlace = 'page' | 'info' | 'product' | 'category'
 
-/** The words taken where the slug goes. An info page has its own folder and nothing else in it. */
-const TAKEN: Record<SlugPlace, readonly string[]> = { page: RESERVED_SLUGS, info: [], product: RESERVED_PRODUCT_SLUGS }
+/**
+ * The words taken where the slug goes. An info page has its own folder and nothing else in it; a product category's
+ * slug (W72a) is no page's address, so only its shape is checked.
+ */
+const TAKEN: Record<SlugPlace, readonly string[]> = { page: RESERVED_SLUGS, info: [], product: RESERVED_PRODUCT_SLUGS, category: [] }
 
 /** Lowercase letters and numbers, words joined with single hyphens (docs/url-map.md, Conventions). */
 const SLUG_SHAPE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/

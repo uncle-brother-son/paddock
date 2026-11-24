@@ -15,17 +15,31 @@ export const LEVEL_1_PATHS = [
 ]
 
 /**
+ * W72a: the blocks a gallery is made of (studio/schemaTypes/objects/). The check compares a field's own code, not the
+ * block it uses, so the blocks the webhook reads through are listed too: of a gallery's item its kind and its picture,
+ * and of a picture only what kind of thing it is (an image, with its file), which `webhookFieldsIn` holds for every
+ * type here.
+ */
+export const WEBHOOK_BLOCKS = {
+  media: ['kind', 'image'],
+  picture: [],
+}
+
+/**
  * The fields the Worker's Sanity webhook reads (web/app/api/sanity/webhook/route.ts), by Studio type. A change to one is
  * Level 1. The test beside this file fails when the webhook reads a field, or a type, that isn't here.
  */
 export const WEBHOOK_FIELDS = {
   serviceType: ['name', 'images'],
-  product: ['name', 'category', 'images'],
+  product: ['name', 'category', 'gallery'],
   addon: ['name', 'category', 'images'],
   membershipPlan: ['name', 'images'],
   sessionPassType: ['name', 'images'],
-  giftCardType: ['name', 'images'],
-  event: ['name', 'images', 'extraWaiver'],
+  giftCardType: ['name', 'physicalGallery', 'digitalGallery'],
+  event: ['name', 'gallery', 'extraWaiver'],
+  // W72a: a product category has a row of its own.
+  productCategory: ['title', 'order'],
+  ...WEBHOOK_BLOCKS,
 }
 
 const SCHEMA_FOLDER = 'studio/schemaTypes/'
@@ -46,7 +60,9 @@ const objectOf = (node) => {
 
 /**
  * Each webhook field in a schema file, as "type.field" to its code (comments and layout don't count). "type" alone says
- * the type is there. A field the file doesn't spell out is missing, which reads as changed.
+ * the type is there, and what kind of thing it is (its own `type` and `options`: a document, an object, an image with a
+ * hotspot), so a block turned into another kind reads as changed. A field the file doesn't spell out is missing, which
+ * reads as changed.
  */
 export function webhookFieldsIn(source) {
   const found = new Map()
@@ -58,7 +74,8 @@ export function webhookFieldsIn(source) {
     const nameNode = object && propertyOf(object, 'name')
     const type = nameNode && ts.isStringLiteralLike(nameNode) ? nameNode.text : undefined
     if (object && type && Object.hasOwn(WEBHOOK_FIELDS, type)) {
-      found.set(type, 'present')
+      const kind = ['type', 'options'].map((part) => `${part}: ${propertyOf(object, part)?.getText().replace(/\s+/g, ' ') ?? 'none'}`).join('; ')
+      found.set(type, kind)
       const fields = propertyOf(object, 'fields')
       for (const element of fields && ts.isArrayLiteralExpression(fields) ? fields.elements : []) {
         const field = objectOf(element)

@@ -113,15 +113,23 @@ export type InfoPage = z.infer<typeof infoPageSchema>
 export const infoMenuSchema = z.array(infoPageLinkSchema)
 export type InfoMenu = z.infer<typeof infoMenuSchema>
 
+/**
+ * A product category (W72a; WQ7), as a product or the gift card carries it. `id` is what the Worker's product row
+ * holds as its `category`; `order` is its place in the shop's filter, lowest first.
+ */
+export const categorySchema = z.object({ id: z.string(), title: z.string(), slug: text, order: z.number().nullable() })
+export type Category = z.infer<typeof categorySchema>
+
+/** `gallery`: pictures and videos in order (WQ15); the card's picture is its first picture. */
 const productCardSchema = z.object({
   id: z.string(),
   name: z.string(),
   colourName: text,
   slug: z.string(),
-  category: text,
+  category: categorySchema.nullable(),
   family: text,
   newInUntil: text,
-  images: z.array(pictureSchema),
+  gallery: z.array(mediaSchema),
 })
 export type ProductCard = z.infer<typeof productCardSchema>
 
@@ -139,7 +147,7 @@ export type SizeGuide = z.infer<typeof sizeGuideSchema>
 export const productSchema = productCardSchema.extend({
   description: richTextSchema,
   info: z.object({ composition: text, madeIn: text, careInstructions: text }).nullable(),
-  colours: z.array(z.object({ id: z.string(), name: z.string(), colourName: text, slug: z.string(), images: z.array(pictureSchema) })),
+  colours: z.array(z.object({ id: z.string(), name: z.string(), colourName: text, slug: z.string(), gallery: z.array(mediaSchema) })),
   sizeGuide: sizeGuideSchema.nullable(),
   similarIds: z.array(z.string()),
   seo: seoSchema.nullable(),
@@ -156,7 +164,7 @@ export const shopSettingsSchema = z.object({
 })
 export type ShopSettings = z.infer<typeof shopSettingsSchema>
 
-const eventCardSchema = z.object({ id: z.string(), name: z.string(), slug: z.string(), images: z.array(pictureSchema) })
+const eventCardSchema = z.object({ id: z.string(), name: z.string(), slug: z.string(), gallery: z.array(mediaSchema) })
 export type EventCard = z.infer<typeof eventCardSchema>
 
 export const eventCardsSchema = z.array(eventCardSchema)
@@ -167,13 +175,22 @@ export type Event = z.infer<typeof eventSchema>
 export const eventsSettingsSchema = z.object({ termsSummary: richTextSchema })
 export type EventsSettings = z.infer<typeof eventsSettingsSchema>
 
-/** `terms` still holds its {validity} placeholder: the page fills it from the staff app's expiry setting. */
+/**
+ * `terms` still holds its {validity} placeholder: the page fills it from the staff app's expiry setting. The two
+ * galleries are the Physical and the Digital card's (WQ19).
+ */
 export const giftCardSchema = z.object({
   id: z.string(),
   name: z.string(),
-  images: z.array(pictureSchema),
+  category: categorySchema.nullable(),
+  physicalGallery: z.array(mediaSchema),
+  digitalGallery: z.array(mediaSchema),
   description: richTextSchema,
   terms: richTextSchema,
   seo: seoSchema.nullable(),
 })
 export type GiftCard = z.infer<typeof giftCardSchema>
+
+/** Where an old slug's document is now (W72a): its current slug, and whether it is the page Site settings picks as home. */
+export const movedSlugSchema = z.object({ slug: z.string(), isHome: z.boolean() })
+export type MovedSlug = z.infer<typeof movedSlugSchema>

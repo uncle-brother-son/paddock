@@ -27,6 +27,13 @@
 //   W70a (the W70 audit's L2; H-plan 4.3): that refusal is a line on the Orders page's list (sanityDeletesListed, read
 //   by stuck-list.ts), one a plan, until the plan is taken off sale or a person presses Mark sorted (sortSanityDelete,
 //   the manual close's `sanity_delete`).
+// W72a (Wayne's WQ7; the lead's design, 24 Nov 2026): product categories are documents in Sanity (`productCategory`),
+// and each has a row here (`product_categories`, migration 035), made and brought up to date by its publish
+// (syncSanityCategory). A product's row holds its category's Sanity id, never a word or a title, so a renamed category
+// is one row's change. A category deleted in Sanity has its row deleted, unless a product row still names it: then the
+// row is left and the delivery says why (Sanity itself refuses to delete a category a published product points to, so
+// this is a delete that reached here out of order, or a product row behind its document). No audit row for either: a
+// category row is a copy of Sanity's content, as an item's name is, and nothing staff set is lost with it.
 import 'server-only'
 import Stripe from 'stripe'
 import { audit, type AuditEntry } from '@/server/audit'
@@ -49,7 +56,11 @@ export type SanityKind = 'serviceType' | 'product' | 'addon' | 'membershipPlan' 
 export interface SanityMirror {
   name: string
   thumbnailUrl: string | null
-  /** Products and add-ons only. Absent: the row's category is left as it is (as the client's update left it). */
+  /**
+   * Products and add-ons only. Absent: the row's category is left as it is (as the client's update left it). A
+   * product's is its category document's Sanity id (W72a: `product_categories.sanity_category_id`); an add-on's is one
+   * of its three words, as before.
+   */
   category?: string | null
   /** Events only. */
   hasExtraWaiver?: boolean
@@ -92,6 +103,36 @@ const UPSERT_EVENT_SQL = `INSERT INTO events (sanity_event_id, name, thumbnail_u
     ON CONFLICT (sanity_event_id) DO UPDATE SET name = EXCLUDED.name, thumbnail_url = EXCLUDED.thumbnail_url, has_extra_waiver = EXCLUDED.has_extra_waiver,
       extra_waiver_version = EXCLUDED.extra_waiver_version, updated_at = now()
     RETURNING id, (xmax = 0) AS created, NULL::text AS stripe_product_id`
+
+// --- Product categories (W72a)
+
+/** What a deleted category's answer and the route's log call it. */
+export const CATEGORY_ENTITY = 'product_category'
+
+/** A `productCategory` document's fields, as its row has them. `sortOrder`: the document's Order, or null when it has none. */
+export interface SanityCategory {
+  title: string
+  sortOrder: number | null
+}
+
+/** Make or bring up to date, by the document's id (the table's key, so two deliveries of one new category make one row). */
+const UPSERT_CATEGORY_SQL = `INSERT INTO product_categories (sanity_category_id, title, sort_order) VALUES ($1, $2, $3::integer)
+    ON CONFLICT (sanity_category_id) DO UPDATE SET title = EXCLUDED.title, sort_order = EXCLUDED.sort_order, updated_at = now()
+    RETURNING (xmax = 0) AS created`
+const FIND_CATEGORY_SQL = 'SELECT sanity_category_id FROM product_categories WHERE sanity_category_id = $1 FOR UPDATE'
+const PRODUCTS_IN_CATEGORY_SQL = 'SELECT count(*)::int AS products FROM products WHERE category = $1'
+const DELETE_CATEGORY_SQL = 'DELETE FROM product_categories WHERE sanity_category_id = $1'
+
+/**
+ * A published category: its row made or brought up to date, in one statement. No product row is written: each holds
+ * the category's id, so a new title shows wherever the category is read. Throws when the database refuses it (a
+ * category with no title), so the route answers 500 and Sanity sends it again.
+ */
+export async function syncSanityCategory(db: Db, documentId: string, category: SanityCategory): Promise<{ created: boolean }> {
+  const [row] = await db.transaction((tx) => tx.query<{ created: boolean }>(UPSERT_CATEGORY_SQL, [documentId, category.title, category.sortOrder]))
+  if (!row) throw new Error(`The category row for Sanity document ${documentId} was neither made nor updated.`)
+  return { created: row.created === true }
+}
 
 /** The plan's product, written only while the row still has none (a staff press may have set one meanwhile). */
 const SET_PLAN_PRODUCT_SQL = 'UPDATE membership_plans SET stripe_product_id = $1 WHERE id = $2::uuid AND stripe_product_id IS NULL'
@@ -204,6 +245,9 @@ export type SanityDeleted =
   | { found: false }
   | { found: true; entity: string; id: string; wasActive: boolean }
   | { found: true; entity: typeof PLAN_ENTITY; id: string; refused: 'price_change_open'; message: string }
+  /** W72a: a category. `deleted`: its row is gone. `in_use`: `products` product rows still name it, so it is left. */
+  | { found: true; entity: typeof CATEGORY_ENTITY; id: string; category: 'deleted' }
+  | { found: true; entity: typeof CATEGORY_ENTITY; id: string; category: 'in_use'; products: number }
 
 /**
  * A deleted (or unpublished) document: its row taken off sale, whichever table holds it, with an audit row by the
@@ -211,6 +255,8 @@ export type SanityDeleted =
  * first) is answered as found, with nothing written. A plan through the plan rule's switch (takePlanOffSale), which
  * keeps it on sale while a price change is open: that refusal is recorded for the lead and answered, never thrown. Any
  * other failure throws, so the route answers 500 and Sanity sends it again.
+ * W72a: a category (looked for last; a delete carries no type) has its row deleted, under the row's lock, unless a
+ * product row still names it: then nothing is written and the answer says how many do.
  */
 export async function takeSanityDocumentOffSale(db: Db, documentId: string, options: SanityOptions): Promise<SanityDeleted> {
   const by: StepBy = { actor: { ...SANITY_ACTOR }, requestId: options.requestId }
@@ -232,7 +278,13 @@ export async function takeSanityDocumentOffSale(db: Db, documentId: string, opti
       })
       return { found: true, entity: where.entity, id: row.id, wasActive: true }
     }
-    return { found: false }
+    const [category] = await tx.query<{ sanity_category_id: string }>(FIND_CATEGORY_SQL, [documentId])
+    if (!category) return { found: false }
+    const [named] = await tx.query<{ products: number }>(PRODUCTS_IN_CATEGORY_SQL, [documentId])
+    const products = Number(named?.products ?? 0)
+    if (products > 0) return { found: true, entity: CATEGORY_ENTITY, id: documentId, category: 'in_use', products }
+    await tx.query(DELETE_CATEGORY_SQL, [documentId])
+    return { found: true, entity: CATEGORY_ENTITY, id: documentId, category: 'deleted' }
   })
   if (!('plan' in found)) return found
   const planId = found.plan

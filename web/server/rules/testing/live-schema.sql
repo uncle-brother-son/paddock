@@ -459,6 +459,13 @@ CREATE TABLE public.postage_settings (
   updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
+CREATE TABLE public.product_categories (
+  sanity_category_id text NOT NULL,
+  title text NOT NULL,
+  sort_order integer,
+  updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
 CREATE TABLE public.product_variants (
   id uuid DEFAULT uuid_generate_v4() NOT NULL,
   product_id uuid NOT NULL,
@@ -1511,6 +1518,7 @@ ALTER TABLE public.pending_reader_payments ADD CONSTRAINT pending_reader_payment
 ALTER TABLE public.pending_reader_payments ADD CONSTRAINT pending_reader_payments_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'finalised'::text, 'cancelled'::text])));
 ALTER TABLE public.postage_settings ADD CONSTRAINT postage_settings_id_check CHECK (id);
 ALTER TABLE public.postage_settings ADD CONSTRAINT postage_settings_pkey PRIMARY KEY (id);
+ALTER TABLE public.product_categories ADD CONSTRAINT product_categories_pkey PRIMARY KEY (sanity_category_id);
 ALTER TABLE public.product_variants ADD CONSTRAINT product_variants_pkey PRIMARY KEY (id);
 ALTER TABLE public.product_variants ADD CONSTRAINT product_variants_sku_key UNIQUE (sku);
 ALTER TABLE public.product_variants ADD CONSTRAINT product_variants_stripe_price_id_key UNIQUE (stripe_price_id);

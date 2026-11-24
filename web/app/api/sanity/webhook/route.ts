@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import crypto from 'crypto'
 import { createImageUrlBuilder } from '@sanity/image-url'
 import { closeRequestDb, openRequestDb } from '@/server/db/connection'
-import { syncSanityDocument, takeSanityDocumentOffSale, type SanityKind, type SanityMirror, type SanityOptions } from '@/server/rules/catalog/sanity-sync'
+import { syncSanityCategory, syncSanityDocument, takeSanityDocumentOffSale, type SanityKind, type SanityMirror, type SanityOptions } from '@/server/rules/catalog/sanity-sync'
 import { createStripeClient } from '@/server/stripe/client'
 
 // W66 (H-plan 4.3, H7; Q57): every write on the Worker's own database connection (server/rules/catalog/sanity-sync.ts),
@@ -13,23 +13,40 @@ import { createStripeClient } from '@/server/stripe/client'
 // sent again later, and it is compared in constant time.
 // W70a (the W70 audit's L1): a delete acts on the signed body's `_id` alone. Sanity's headers aren't signed, so a
 // `sanity-document-id` that names another document is refused (400), and so is a delete whose body names none.
+// W72a (WQ7, WQ15, WQ19; the lead's design, 24 Nov 2026): a product category is a document of its own with a row of its
+// own, and a product's row holds its category's id (the reference's `_ref`: the projection is empty, so no title ever
+// comes with it). A product's, an event's and the gift card's pictures are galleries of the Studio's `media` block (a
+// picture, or a video): the staff app's picture is the first PICTURE in the gallery, videos skipped; a gallery with
+// none gives no picture, never an error. The gift card has two galleries: the physical one's first picture, else the
+// digital one's. The other four types keep `images`, as before.
 
 /** W59 (W45 audit row 3): an image field as this route reads it (the builder takes its asset reference). */
 interface SanityImage {
   asset?: { _ref?: string }
 }
+/** W72a: a gallery's item as this route reads it (the Studio's `media` block). A video's poster and file are never read. */
+interface SanityMedia {
+  kind?: string
+  image?: SanityImage
+}
 /**
  * W59 (W45 audit row 3): the fields of a Sanity document this route reads (no generated Sanity types here). Each
- * handler destructures these; anything else on the document is never read.
+ * handler destructures these; anything else on the document is never read. W72a: `category` is a word on an add-on
+ * and a reference on a product; `title` and `order` are a category's own.
  */
 interface SanityDocument {
   _id: string
   _type?: string
   _rev?: string
   name: string
-  category?: string | null
+  category?: unknown
   images?: SanityImage[]
+  gallery?: unknown
+  digitalGallery?: unknown
+  physicalGallery?: unknown
   extraWaiver?: unknown
+  title: string
+  order?: unknown
 }
 
 const imageBuilder = createImageUrlBuilder({
@@ -111,8 +128,51 @@ function getThumbnailUrl(image: SanityImage | null | undefined): string | null {
   return imageBuilder.image(image).width(80).url()
 }
 
-/** The Sanity document types with a row here; any other (page, blogPost, galleryImage) is ignored. */
+/**
+ * The Sanity document types with an item's row here. A product category (below) has a row of another kind; any other
+ * type (a content page, an info page, a blog post, a family, a size guide, the settings) is ignored.
+ */
 const CATALOG_TYPES: ReadonlySet<string> = new Set<SanityKind>(['serviceType', 'product', 'addon', 'membershipPlan', 'sessionPassType', 'giftCardType', 'event'])
+/** W72a: the document type of a product category (its row: product_categories). */
+const CATEGORY_TYPE = 'productCategory'
+
+/**
+ * W72a: the first picture in a gallery, or null. A video is skipped whatever else it carries (the Studio keeps a
+ * picture someone added before switching the item to a video), and so is an item with no picture file. Anything that
+ * isn't a gallery (the field missing, or not a list) has no picture: never an error.
+ */
+function firstPicture(gallery: unknown): SanityImage | null {
+  if (!Array.isArray(gallery)) return null
+  for (const item of gallery as Array<SanityMedia | null>) {
+    if (item === null || typeof item !== 'object' || item.kind === 'video') continue
+    if (item.image?.asset?._ref) return item.image
+  }
+  return null
+}
+
+/** The picture the staff app shows for a document, as the row's `thumbnail_url`. */
+function thumbnailOf(kind: SanityKind, payload: SanityDocument): string | null {
+  if (kind === 'product' || kind === 'event') return getThumbnailUrl(firstPicture(payload.gallery))
+  if (kind === 'giftCardType') return getThumbnailUrl(firstPicture(payload.physicalGallery) ?? firstPicture(payload.digitalGallery))
+  return payload.images?.[0] ? getThumbnailUrl(payload.images[0]) : null
+}
+
+/**
+ * W72a: the id of the category a product points to (its reference's `_ref`), or null when the field is there and
+ * empty. Undefined for anything else, which is then not written: a word from before categories were documents
+ * (`"apparel"`) leaves the row's category as it is, so a word or a title is never stored where an id belongs.
+ */
+function categoryIdOf(category: unknown): string | null | undefined {
+  if (category === null) return null
+  if (typeof category !== 'object') return undefined
+  const ref = (category as { _ref?: unknown })._ref
+  return typeof ref === 'string' && ref !== '' ? ref : undefined
+}
+
+/** A category's Order as its row holds it: a whole number an integer column takes, or none. */
+function sortOrderOf(order: unknown): number | null {
+  return typeof order === 'number' && Number.isInteger(order) && Math.abs(order) <= 2_147_483_647 ? order : null
+}
 
 /**
  * The row's fields from the document. A product's or add-on's category only when the document has the field, so a
@@ -121,9 +181,12 @@ const CATALOG_TYPES: ReadonlySet<string> = new Set<SanityKind>(['serviceType', '
  * accept it later.
  */
 function mirrorOf(kind: SanityKind, payload: SanityDocument): SanityMirror {
-  const thumbnailUrl = payload.images?.[0] ? getThumbnailUrl(payload.images[0]) : null
-  const mirror: SanityMirror = { name: payload.name, thumbnailUrl }
-  if ((kind === 'product' || kind === 'addon') && 'category' in payload) mirror.category = payload.category ?? null
+  const mirror: SanityMirror = { name: payload.name, thumbnailUrl: thumbnailOf(kind, payload) }
+  if (kind === 'addon' && 'category' in payload) mirror.category = typeof payload.category === 'string' ? payload.category : null
+  if (kind === 'product' && 'category' in payload) {
+    const categoryId = categoryIdOf(payload.category)
+    if (categoryId !== undefined) mirror.category = categoryId
+  }
   if (kind === 'event') {
     const waiverText = typeof payload.extraWaiver === 'string' ? payload.extraWaiver.trim() : ''
     mirror.hasExtraWaiver = waiverText.length > 0
@@ -183,7 +246,14 @@ export async function POST(request: NextRequest) {
         const deleted = await takeSanityDocumentOffSale(db, documentId, options)
         if (!deleted.found) console.log(`No matching catalog row found for deleted Sanity document: ${documentId}`)
         else if ('refused' in deleted) return NextResponse.json({ success: true, kept: deleted.refused })
-        else console.log(`Took ${deleted.entity} ${deleted.id} off sale for deleted Sanity document: ${documentId}`)
+        else if ('category' in deleted) {
+          // W72a: a category some product row still names keeps its row, and the delivery's answer and the log say why.
+          if (deleted.category === 'in_use') {
+            console.error(`Sanity deleted product category ${documentId}, but its row is kept: ${deleted.products} product row(s) still name it. Publish those products again in Sanity (with their new category), then delete the category again.`)
+            return NextResponse.json({ success: true, kept: 'category_in_use', products: deleted.products })
+          }
+          console.log(`Deleted the row of product category ${documentId}: its Sanity document was deleted and no product names it`)
+        } else console.log(`Took ${deleted.entity} ${deleted.id} off sale for deleted Sanity document: ${documentId}`)
       } finally {
         await closeRequestDb(db)
       }
@@ -198,8 +268,21 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: 'Draft ignored' })
     }
 
+    if (_type === CATEGORY_TYPE) {
+      // W72a: a product category's own row. No product row is written: each holds the category's id.
+      console.log(`Processing ${_type} webhook for ${_id}`)
+      const db = openRequestDb()
+      try {
+        const synced = await syncSanityCategory(db, _id, { title: payload.title, sortOrder: sortOrderOf(payload.order) })
+        console.log(`${synced.created ? 'Created' : 'Updated'} product category: ${_id}`)
+      } finally {
+        await closeRequestDb(db)
+      }
+      return NextResponse.json({ success: true })
+    }
+
     if (!_type || !CATALOG_TYPES.has(_type)) {
-      // Ignore non-catalog types (page, blogPost, galleryImage)
+      // Ignore the types with no row here (pages, blog posts, families, size guides, settings)
       return NextResponse.json({ message: 'Non-catalog type ignored' })
     }
     const kind = _type as SanityKind

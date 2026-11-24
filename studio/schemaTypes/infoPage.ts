@@ -1,6 +1,8 @@
 import { defineField, defineType } from 'sanity'
 import { InfoOutlineIcon } from '@sanity/icons'
 import { checkSlug } from '../lib/checks'
+import { isSlugFree } from '../lib/slugs'
+import { previousSlugs } from './fields/previousSlugs'
 
 // Terms, Privacy, Health & Safety and the like, at /info/[slug] (WQ26).
 export const infoPage = defineType({
@@ -20,9 +22,10 @@ export const infoPage = defineType({
       title: 'Slug',
       type: 'slug',
       description: "The page's address, after /info/",
-      options: { maxLength: 96 },
+      options: { maxLength: 96, isUnique: isSlugFree },
       validation: (rule) => rule.required().custom((slug) => checkSlug(slug?.current, 'info')),
     }),
+    previousSlugs,
     defineField({
       name: 'thumbnail',
       title: 'Thumbnail',

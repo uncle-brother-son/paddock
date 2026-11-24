@@ -5,6 +5,7 @@ import { membershipPlan } from './membershipPlan'
 import { sessionPassType } from './sessionPassType'
 import { giftCardType } from './giftCardType'
 import { event } from './event'
+import { productCategory } from './productCategory'
 import { productFamily } from './productFamily'
 import { sizeGuide } from './sizeGuide'
 import { contentPage } from './contentPage'
@@ -32,6 +33,8 @@ export const schemaTypes = [
   sessionPassType,
   giftCardType,
   event,
+  // A product's category: a row of its own through the webhook (W72a)
+  productCategory,
 
   // Content types (Sanity-only)
   contentPage,
