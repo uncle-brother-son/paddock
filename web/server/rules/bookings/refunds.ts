@@ -94,7 +94,7 @@ import { claimWatchEntries, refundSeen, refundsForRow, type RefundSeen } from '@
 import { lockAndLoadBooking, paymentOpen, type LoadedBooking } from './load-booking'
 import { lockForBooking } from './locks'
 import { inC1, paymentOpenRefusal } from './money-in'
-import { ADDONS_INSIDE_LINE, loadBookingLines, loadOrderCardPortion, recordBookingOrdersPaymentStatus, recordOrderPaymentStatus, withCashAndLine, type RefundFigures } from './money-left'
+import { ADDONS_INSIDE_LINE, loadBookingLines, loadOrderCardPortion, OWED_ADDON_LINES_SQL, recordBookingOrdersPaymentStatus, recordOrderPaymentStatus, withCashAndLine, type RefundFigures } from './money-left'
 import { overHalfPenny } from '@/server/rules/orders/amounts'
 
 // W27: lifted to the shared core, and still exported from here under their old names.
@@ -1367,26 +1367,8 @@ export async function stampLinesIfSeatMoneyAllBack(tx: Tx, bookingId: string): P
 // A booking whose money was kept (a lapse inside 24 hours) is not stamped by settling what was owed on it: the test is
 // all of the seat money, not what was owed. The stamps are written once: a line already stamped keeps its time.
 
-/**
- * W46: the booking's (`$1`) removed add-on lines that a finished refund claim planned to send to a card (one that was
- * not put back), and that are not stamped with all of their money: their refund is part of what is, or was, owed. A
- * cancel's card part marks its add-on lines (`addon`); a removed add-on's own claim holds add-on lines only.
- */
-const OWED_ADDON_LINES_SQL = `
-SELECT DISTINCT aol.id, aol.order_id, aol.price_at_purchase * aol.quantity AS amount, aol.refunded_amount
-FROM audit_log c
-CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(c.details->'plan'->'card') = 'array' THEN c.details->'plan'->'card' ELSE '[]'::jsonb END) part
-CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(part->'lines') = 'array' THEN part->'lines' ELSE '[]'::jsonb END) line
-JOIN addon_order_lines aol ON aol.id::text = line->>'lineId' AND aol.booking_id = $1::uuid
-WHERE c.action = '${REFUND_CLAIMED}' AND c.entity_type = 'booking' AND c.entity_id = $1::text
-  AND ((line->>'addon') = 'true' OR c.details->>'kind' = 'remove_addon')
-  AND EXISTS (
-    SELECT 1 FROM audit_log f
-    WHERE f.action = '${REFUND_FINISHED}' AND f.entity_type = 'booking' AND f.entity_id = c.entity_id
-      AND f.details->>'claimId' = c.id::text AND f.details->>'outcome' IS DISTINCT FROM 'put_back'
-  )
-  AND aol.removed_at IS NOT NULL
-  AND aol.refunded_amount < aol.price_at_purchase * aol.quantity`
+// W70d: OWED_ADDON_LINES_SQL (W46: the booking's removed add-on lines whose card refund is part of what is, or was,
+// owed) is in money-left.ts now, which counts what they are short of; it is read here as before.
 
 /** W47: the same lines in a fixed order (by id), for It already arrived to record card money on (stampArrivedCard). */
 const OWED_ADDON_LINES_IN_ORDER_SQL = `${OWED_ADDON_LINES_SQL}

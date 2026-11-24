@@ -176,6 +176,30 @@ function cardPortionOf(orderId: string, row: OrderPortionRow): OrderCardPortion 
   }
 }
 
+/**
+ * W46: the booking's (`$1`) removed add-on lines that a finished refund claim planned to send to a card (one that was
+ * not put back), and that are not stamped with all of their money: their refund is part of what is, or was, owed. A
+ * cancel's card part marks its add-on lines (`addon`); a removed add-on's own claim holds add-on lines only.
+ * W70d: here, where it was in refunds.ts (which reads it as before), so loadBookingMoneyLeft can count what those lines
+ * are short of: the add-ons' share of the money owed. Fixed text; the action names are refunds.ts's REFUND_CLAIMED and
+ * REFUND_FINISHED.
+ */
+export const OWED_ADDON_LINES_SQL = `
+SELECT DISTINCT aol.id, aol.order_id, aol.price_at_purchase * aol.quantity AS amount, aol.refunded_amount
+FROM audit_log c
+CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(c.details->'plan'->'card') = 'array' THEN c.details->'plan'->'card' ELSE '[]'::jsonb END) part
+CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(part->'lines') = 'array' THEN part->'lines' ELSE '[]'::jsonb END) line
+JOIN addon_order_lines aol ON aol.id::text = line->>'lineId' AND aol.booking_id = $1::uuid
+WHERE c.action = 'booking.refund_claimed' AND c.entity_type = 'booking' AND c.entity_id = $1::text
+  AND ((line->>'addon') = 'true' OR c.details->>'kind' = 'remove_addon')
+  AND EXISTS (
+    SELECT 1 FROM audit_log f
+    WHERE f.action = 'booking.refund_finished' AND f.entity_type = 'booking' AND f.entity_id = c.entity_id
+      AND f.details->>'claimId' = c.id::text AND f.details->>'outcome' IS DISTINCT FROM 'put_back'
+  )
+  AND aol.removed_at IS NOT NULL
+  AND aol.refunded_amount < aol.price_at_purchase * aol.quantity`
+
 /** What getBookingRefundFigures answers (the old BookingMoneyLeft), field for field. */
 export interface BookingMoneyLeft {
   status: string
@@ -212,6 +236,9 @@ export interface BookingMoneyLeft {
  * what Remove add-on itself gave, so the difference is the add-ons' share of `owed`. A cancel's refund isn't read, nor
  * what came after a cancel: a cancelled booking keeps its price paid, so none of it came off that. Every other figure
  * here is what was paid; `given` is what loadBookingMoneyLeft takes off it.
+ *
+ * W70d (W70c noticed 1): and `addons_owed`, the add-ons' share of the money owed now: what the removed add-on lines
+ * whose card refund never arrived are still short of (OWED_ADDON_LINES_SQL). The rest of what is owed is seat money.
  */
 const BOOKING_MONEY_LEFT_SQL = `
 WITH lines AS (
@@ -244,7 +271,8 @@ SELECT b.status, b.customer_id, b.price_paid::text AS price_paid, b.refund_owed_
        given.seats::text AS credit_given_seats, given.owed::text AS credit_given_owed, given.addons::text AS credit_given_addons,
        COALESCE((SELECT SUM(aol.refunded_amount - aol.card_refunded_amount)
                  FROM addon_order_lines aol
-                 WHERE aol.booking_id = $1::uuid AND aol.removed_at < COALESCE(b.cancelled_at, 'infinity'::timestamptz)), 0)::text AS credit_on_addon_lines
+                 WHERE aol.booking_id = $1::uuid AND aol.removed_at < COALESCE(b.cancelled_at, 'infinity'::timestamptz)), 0)::text AS credit_on_addon_lines,
+       COALESCE((SELECT SUM(owed.amount - owed.refunded_amount) FROM (${OWED_ADDON_LINES_SQL}) owed), 0)::text AS addons_owed
 FROM bookings b
 CROSS JOIN LATERAL (
   SELECT COALESCE(SUM((f.details->>'storeCreditRefunded')::numeric) FILTER (WHERE c.details->>'kind' IN ('part_refund', 'remove_guest', 'move')), 0) AS seats,
@@ -270,6 +298,7 @@ interface MoneyLeftRow {
   credit_given_owed: string
   credit_given_addons: string
   credit_on_addon_lines: string
+  addons_owed: string
 }
 
 /**
@@ -288,6 +317,13 @@ interface MoneyLeftRow {
  * is £20 store credit and £20 cash (it read £40 store credit, no cash); seats £40 in cash and a guest's £20 on store
  * credit, the guest removed to store credit, is £40 cash (it read £20 and £20). The card's part is as before, and
  * cashLeftOn still never hands back more cash than was paid in cash (Q26, Q42).
+ *
+ * W70d (W70c noticed 1): seat money that is owed (a card refund that never arrived, not yet given or found) comes off
+ * the same way while it is owed, so the cash that can be handed back doesn't read low until it is settled. Example:
+ * seats £40 in cash, a guest's £20 on store credit and a guest's £20 on a card; the card guest is removed to the card
+ * and the refund never arrives, so £20 is owed. It read £20 card, £20 store credit and £20 cash, and only £20 of the
+ * £40 cash could be handed back; now £20 card and £40 cash, as it reads once Refund the rest has given the £20. The
+ * add-ons' share of what is owed is not seat money and is left out.
  */
 export async function loadBookingMoneyLeft(db: Queryable, bookingId: string): Promise<BookingMoneyLeft | null> {
   // W58b (W50 "For later" 4): one statement, where it was four reads one after another (and one more per order).
@@ -328,15 +364,18 @@ export async function loadBookingMoneyLeft(db: Queryable, bookingId: string): Pr
     storeCreditPaid = round2(storeCreditPaid + storeCreditOnSeats)
   }
 
-  // W70c (Q63): less what has gone back as store credit, the store credit first and then the gift card.
+  // W70c (Q63): less what has gone back as store credit, the store credit first and then the gift card...
   const addonsShareOfOwed = Math.max(0, round2(amount(booking.credit_on_addon_lines) - amount(booking.credit_given_addons)))
-  const givenBack = round2(amount(booking.credit_given_seats) + Math.max(0, round2(amount(booking.credit_given_owed) - addonsShareOfOwed)))
+  // W70d (W70c noticed 1): and the seat money owed now (what is owed, less what the owed add-on lines are short of),
+  // the same way: it is already out of `left`, and would otherwise come out of the cash.
+  const refundOwed = round2(amount(booking.refund_owed_amount))
+  const seatsOwed = Math.max(0, round2(refundOwed - amount(booking.addons_owed)))
+  const givenBack = round2(amount(booking.credit_given_seats) + Math.max(0, round2(amount(booking.credit_given_owed) - addonsShareOfOwed)) + seatsOwed)
   const offStoreCredit = Math.min(givenBack, storeCreditPaid)
   storeCreditPaid = round2(storeCreditPaid - offStoreCredit)
   giftCardPaid = Math.max(0, round2(giftCardPaid - round2(givenBack - offStoreCredit)))
 
   const pricePaid = round2(amount(booking.price_paid))
-  const refundOwed = round2(amount(booking.refund_owed_amount))
   const left = Math.max(round2(pricePaid - refundOwed), 0)
   const card = Math.min(cardLeft, left)
   const notCard = round2(left - card)

@@ -3037,3 +3037,22 @@ create, on/off, the T2 hook); `catalog/plans-postgres.test.ts` (7 races on real 
 - **A payment date change's finish runs once more after a deadlock (W70b noticed 4),** `memberships/payment-date.ts`
   `finishPaymentDateChange`, as a plan price change's D2 does: never inside a caller's transaction; a second one is held
   for reconcile. `memberships/payment-date-postgres.test.ts`, with a real deadlock.
+
+## Step H's last QA findings (W70d, step H)
+
+- **Seat money that is owed comes off the store credit part first too (W70c noticed 1),** `bookings/money-left.ts`
+  `loadBookingMoneyLeft`: while a card refund is owed (it never arrived, and has not yet been given by Refund the rest or
+  found by It already arrived), what is owed for seats is taken off the store credit part, then the gift card's, exactly as
+  Q63 takes what was given back as store credit. It is already out of `left`, so until W70d it came out of the cash part
+  and the cash a Part refund could hand back read low until the money was settled. The add-ons' share of what is owed is
+  not seat money and is left out: it is what the removed add-on lines whose card refund never arrived are still short of
+  (`OWED_ADDON_LINES_SQL`, moved here from `refunds.ts`, which reads it as before). Example: seats £40 in cash, a guest's
+  £20 on store credit, a guest's £20 on a card; the card guest removed to the card and the refund never arrives: £20 card
+  and £40 cash, £40 of it to hand back (it read £20 card, £20 store credit, £20 cash, and £20 to hand back), and the same
+  once Refund the rest has given the £20. A cancelled booking with money owed reads the same way (no Part refund there:
+  only its words change). Cash out never passes cash in (Q26, Q42, `cashLeftOn`). Rule tests:
+  `bookings/w05-rules.test.ts`, "W70d".
+- **The staff app's two screen fixes (QA5, QA6)** are held in `server/staff-app-helpers.test.ts`, "W70d": the Bookings
+  calendar takes the new bookings and its new read of the sessions together, so a session window never shows a new
+  bookings list beside the session's old count; and Add Guest can't be pressed while the customer's credits and member
+  prices are still being read.

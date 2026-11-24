@@ -5486,8 +5486,9 @@ describe('staff app helpers', () => {
           expect(found, view).toHaveLength(1)
           expect(found[0], view).toContain('listCancelled={listCancelled}')
         }
-        expect(component('BookingSessionAgendaView.tsx')).toContain('buildDaySlotCards(sessions, bookings, showPrivateSessions, listCancelled)')
-        expect(component('BookingWeekView.tsx')).toContain('buildCardsByDate(sessions, bookings, showPrivateSessions, listCancelled)')
+        // W70d (QA6), a named difference: from the lists the view shows (both read since the last change), not each as it arrives.
+        expect(component('BookingSessionAgendaView.tsx')).toContain('buildDaySlotCards(lists.sessions, lists.bookings, showPrivateSessions, listCancelled)')
+        expect(component('BookingWeekView.tsx')).toContain('buildCardsByDate(lists.sessions, lists.bookings, showPrivateSessions, listCancelled)')
         expect(component('BookingMonthView.tsx')).toContain('buildCardsByDate(sessions, bookings, false, listCancelled)')
         // The card's row opens the booking and says it is cancelled (W50: in the window's own "Cancelled" list).
         const card = component('SessionDetailDialog.tsx')
@@ -5603,6 +5604,105 @@ describe('staff app helpers', () => {
       expect(detail).toContain('setPaidWordsFor(figures?.pricePaid ?? null)')
       expect(detail).toMatch(/setPaidWords\(null\)\s+setPaidWordsFor\(null\)/)
       expect(body(detail, 'handleGuestRemoved')).toMatch(/trigger\(\{ bookingId \}, \{ skipCache: true \}\)\s+onBookingsChanged\?\.\(\)/)
+    })
+
+    // Brief W70d item 2 (QA6): after a cancel the Bookings calendar's session window read "2/6 · Open" over "No bookings
+    // for this slot" (the database had 0). The cards are built from two lists read separately: the bookings (the page) and
+    // the sessions (the view). The page marked the booking cancelled at once, beside the session as it was read before.
+    it('W70d (QA6): the session cards and the session window take the new bookings and the new read of the sessions together, after a cancel or a move, never one new list beside one old', async () => {
+      const { listsToShow, buildDaySlotCards } = await import(/* @vite-ignore */ path.join(appDir, 'frontend/utils/dayViewSlots.ts'))
+      type Lists = { key: string; sessions: Array<Record<string, unknown>>; bookings: Array<Record<string, unknown>> }
+      const session = (booked: number) => ({ id: 's1', booking_type: 'public', status: 'open', capacity: 6, total_booked: booked, start_time: '2026-11-28T14:00:00', end_time: '2026-11-28T15:15:00' })
+      const booking = (status: string) => ({ id: 'b1', session_id: 's1', status, party_size: 2, start_time: '2026-11-28T14:00:00' })
+      const lists = (booked: number, status: string, key = '2026-11-28'): Lists => ({ key, sessions: [session(booked)], bookings: [booking(status)] })
+      /** The window's header and list: the card's state, the session's count, and its live bookings. */
+      const shown = (from: Lists) => {
+        const [card] = buildDaySlotCards(from.sessions, from.bookings) as Array<{ visualState: string; session: { total_booked: number }; bookings: unknown[] }>
+        return [card?.visualState, card?.session.total_booked, card?.bookings.length]
+      }
+      const before = lists(2, 'confirmed')
+      // What it showed: the booking cancelled in the page's list, the session's count not yet read again.
+      const bookingsFirst = lists(2, 'cancelled')
+      expect(shown(bookingsFirst)).toEqual(['empty', 2, 0])
+      // Now the lists on screen stay as they were until both reads have answered, whichever answers first...
+      expect(listsToShow(before, bookingsFirst, false)).toBe(before)
+      expect(shown(listsToShow(before, bookingsFirst, false))).toEqual(['public_booked', 2, 1])
+      const sessionsFirst = lists(0, 'confirmed')
+      expect(listsToShow(before, sessionsFirst, false)).toBe(before)
+      // ...and then both are taken together: "0/6 · Open" and "No bookings for this slot".
+      const after = lists(0, 'cancelled')
+      expect(listsToShow(before, after, true)).toBe(after)
+      expect(shown(listsToShow(before, after, true))).toEqual(['empty', 0, 0])
+      // Lists held for another day (or week) are never kept, and the first lists are shown as they come.
+      const nextDay = lists(1, 'confirmed', '2026-11-29')
+      expect(listsToShow(before, nextDay, false)).toBe(nextDay)
+      expect(listsToShow(null, bookingsFirst, false)).toBe(bookingsFirst)
+
+      // The page says while its read of the bookings is on its way: from the ask to the latest ask's answer, or its failure.
+      const bookings = page('BookingsPage.tsx')
+      const query = body(bookings, 'runCalendarQuery')
+      expect(query).toMatch(/const requestId = \+\+bookingsRequestRef\.current\s+setBookingsLoading\(true\)/)
+      expect(query).toMatch(/if \(bookingsRequestRef\.current !== requestId\) return\s+setRows\(result \?\? \[\]\)\s+setRowsStatus\(status\)\s+setBookingsLoading\(false\)/)
+      expect(query).toMatch(/\.catch\(\(\) => \{\s+\/\/[^\n]*\n\s+if \(bookingsRequestRef\.current === requestId\) setBookingsLoading\(false\)/)
+      expect(bookings.match(/setBookingsLoading\(/g)).toHaveLength(3)
+      const uses = (tag: string) => bookings.split(`<${tag}`).slice(1).map((rest) => rest.slice(0, rest.indexOf('/>')))
+      for (const view of ['BookingSessionAgendaView', 'BookingWeekView']) {
+        expect(uses(view), view).toHaveLength(1)
+        expect(uses(view)[0], view).toContain('bookingsLoading={bookingsLoading}')
+        expect(uses(view)[0], view).toContain('refreshToken={slotsRefreshToken}')
+      }
+      // Every change still asks for both again: a cancel (and Cancel & Refund), a Move, and everything else the window does.
+      const refetch = body(bookings, 'refetchAfterMutation')
+      for (const step of ['setSlotsRefreshToken((t) => t + 1)', 'runCalendarQuery(granularity, referenceDate)']) expect(refetch, step).toContain(step)
+      expect(body(bookings, 'handleRefunded')).toContain("refetchAfterMutation({ status: 'cancelled' })")
+      expect(body(bookings, 'handleMoved')).toMatch(/\n    refetchAfterMutation\(\)$/)
+      expect(bookings).toContain('onBookingsChanged={() => refetchAfterMutation()}')
+
+      // The Day and Week views: the sessions on hand are "read for" the page's refresh once their own read made after it
+      // has answered (or failed); none while one is on its way. Only the latest read's answer is kept, in the Week view too.
+      const agenda = component('BookingSessionAgendaView.tsx')
+      const week = component('BookingWeekView.tsx')
+      for (const [name, view] of [['Day', agenda], ['Week', week]] as const) {
+        expect(view, name).toContain('const refresh = refreshToken ?? 0')
+        expect(view, name).toContain('const [sessionsReadFor, setSessionsReadFor] = useState<number | null>(null)')
+        expect(view, name).toMatch(/const requestId = \+\+requestRef\.current\s+setSessionsReadFor\(null\)\s+trigger\(\{[^\n]*\}, \{ skipCache: true \}\)/)
+        expect(view.match(/setSessionsReadFor\(refresh\)/g), name).toHaveLength(2)
+        expect(view.match(/setSessionsReadFor\(/g), name).toHaveLength(3)
+        expect(view, name).toMatch(/const lists = listsToShow\(shownLists\.current, \{ key: (dateKey|start), sessions, bookings \}, sessionsReadFor === refresh && !bookingsLoading\)\s+shownLists\.current = lists/)
+        expect(view, name).toContain('bookingsLoading = false,')
+      }
+      expect(agenda).toContain('{ key: dateKey, sessions, bookings }')
+      expect(week).toContain('{ key: start, sessions, bookings }')
+      expect(agenda).toMatch(/if \(requestRef\.current !== requestId\) return\s+setSessions\(answer\?\.sessions \?\? \[\]\)[^]*?setSessionsDateKey\(forDateKey\)\s+setSessionsReadFor\(refresh\)/)
+      expect(week).toMatch(/\.result\.then\(\(data: \{ sessions: SessionSlotRow\[\]; closedDates\?: ClosedDateRow\[\] \} \| null\) => \{\s+if \(requestRef\.current !== requestId\) return\s+if \(data\) \{\s+setSessions\(data\.sessions\)\s+setClosedDates\(data\.closedDates \?\? \[\]\)\s+\}\s+setSessionsReadFor\(refresh\)/)
+      expect(week).toMatch(/if \(requestRef\.current === requestId\) setSessionsReadFor\(refresh\)/)
+      // The Week view asks through the one function, for a new week, a refresh, and a change made in the session window.
+      expect(week.match(/trigger\(/g)).toHaveLength(1)
+      expect(week).toMatch(/useEffect\(\(\) => \{\s+reloadSessions\(\)\s+\/\/[^\n]*\n\s+\}, \[start, end, refreshToken\]\)/)
+      // The cards, and the open session window's card, are built from the lists shown.
+      expect(agenda).toMatch(/const cards = buildDaySlotCards\(lists\.sessions, lists\.bookings, showPrivateSessions, listCancelled\)\s+const selectedCard = selectedSessionId \? cards\.find/)
+      expect(week).toMatch(/const cardsByDate = buildCardsByDate\(lists\.sessions, lists\.bookings, showPrivateSessions, listCancelled\)[^]*?cardsByDate\.get\(selectedDateKey\)\?\.find\(\(c\) => c\.session\.id === selectedSessionId\)/)
+      for (const view of [agenda, week]) expect(view).toMatch(/<SessionDetailDialog\s+card=\{selectedCard\}/)
+    })
+
+    // Brief W70d item 3 (QA5): the Add Guest dialog twice ignored its first press with the name filled and the box ticked.
+    // The dialog asks for the customer's credits and member prices as it opens; a press before they arrived was only told
+    // to wait, in a line that cleared itself when they did, so nothing on screen said the press had not gone through.
+    it("W70d (QA5): Add Guest can't be pressed while the customer's credits and member prices are still being read, and the button says so; the press's own check stays", () => {
+      const dialog = component('AddGuestDialog.tsx')
+      expect(dialog).toContain("<Button onClick={handleInitialSubmit} disabled={submitting || creditStatus === 'loading'}>")
+      expect(dialog).toContain("{submitting ? 'Checking...' : creditStatus === 'loading' ? 'Getting prices…' : addonsOnly ? 'Add add-ons' : 'Add Guest'}")
+      // The one button that makes the first call (the function, and its one use).
+      expect(dialog.match(/\bhandleInitialSubmit\b/g)).toHaveLength(2)
+      // The read is on its way from the moment the dialog opens, and again during a retry after it failed.
+      expect(dialog).toContain("const [creditStatus, setCreditStatus] = useState<LoadStatus>('loading')")
+      expect(body(dialog, 'loadCredits')).toMatch(/setCreditStatus\('loading'\)\s+loadCreditOptions\(\{ customerId \}, \{ skipCache: true \}\)/)
+      expect(dialog).toMatch(/useEffect\(\(\) => \{\s+if \(!open\) return\s+loadAddons\(\)\s+loadCredits\(\)/)
+      // What lost the press, still there behind the button: told to wait, and the line cleared when the read finished.
+      const start = dialog.indexOf('async function handleInitialSubmit')
+      expect(dialog.slice(start, dialog.indexOf('await addGuest(', start))).toMatch(/const creditProblem = creditLoadProblem\(creditStatus\)\s+if \(creditProblem\) \{\s+setErrorMessage\(creditProblem\)\s+if \(creditStatus === 'failed'\) loadCredits\(\)\s+return\s+\}/)
+      // A failed read leaves the button pressable: the press tries the read again.
+      expect(dialog).not.toContain("creditStatus !== 'ready'}>")
     })
   })
 
