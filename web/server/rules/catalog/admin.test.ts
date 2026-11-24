@@ -29,6 +29,7 @@ import { POST as tierPriceRoute } from '@/app/api/v1/staff/catalog/tiers/[tierId
 import { POST as variantDetailsRoute } from '@/app/api/v1/staff/catalog/variants/[variantId]/details/route'
 import { GET as historyRoute } from '@/app/api/v1/staff/catalog/variants/[variantId]/stock-adjustments/route'
 import { POST as stockRoute } from '@/app/api/v1/staff/catalog/variants/[variantId]/stock/route'
+import { catalogAddonsRouteOutputSchema, catalogProductsRouteOutputSchema } from '@/contracts'
 import type { Db } from '@/server/db'
 import { CHANGED_SINCE_WORDS } from '@/server/rules/admin/stamp'
 import { STAFF_ADMIN_WORDS } from '@/server/rules/staff/failure-messages'
@@ -199,6 +200,66 @@ describe('Manage pricing on each write, and the staff check on every route', () 
     expect((await read(handler, values, INA)).error?.message).toBe(INACTIVE)
     expect((await read(handler, values, NOBODY)).error?.message).toBe(NO_STAFF_ROW)
     expect((await read(handler, values, TIA)).ok).toBe(true)
+  })
+
+  // W72b (W72a's report, "Noticed" 1): an item new from Sanity arrives off sale with no price (Q57) and has none until
+  // staff set it. The two reads' contracts said `base_price` was always text, so under test (and `next dev`, where an
+  // answer is held to its contract) the Products and Add-ons pages' reads answered 500 with such a row in the table.
+  it('W72b: a product and an add-on with no price yet are read with a null base price, beside the priced ones; the contract still refuses a price that is not text', async () => {
+    const bare = await insert(db, 'products', { name: 'New from Sanity', sanity_product_id: 'w72b-product', active: false })
+    const bareVariant = await insert(db, 'product_variants', { product_id: bare, size: 'S', sku: 'W72B-S', stock_quantity: 0 })
+    const bareAddon = await insert(db, 'addons', { name: 'New add-on from Sanity', sanity_addon_id: 'w72b-addon', active: false })
+    type Row = { id: string; base_price: string | null; member_price: string | null; sale_price: string | null; active: boolean | null; variants?: Array<{ id: string }> }
+
+    const products = await read<Row[]>(productsRoute, {}, TIA)
+    expect([products.status, products.ok]).toEqual([200, true])
+    expect(products.data?.map((row) => [row.id, row.base_price, row.member_price, row.sale_price, row.active, row.variants?.map((one) => one.id)])).toEqual([
+      [product, '20.00', null, null, true, [variant]],
+      [bare, null, null, null, false, [bareVariant]],
+    ])
+    expect(catalogProductsRouteOutputSchema.parse(products.data)).toEqual(products.data)
+
+    const addons = await read<Row[]>(addonsRoute, {}, TIA)
+    expect([addons.status, addons.ok]).toEqual([200, true])
+    expect(addons.data?.map((row) => [row.id, row.base_price, row.member_price, row.sale_price, row.active])).toEqual([
+      [addon, '5.00', null, null, true],
+      [bareAddon, null, null, null, false],
+    ])
+    expect(catalogAddonsRouteOutputSchema.parse(addons.data)).toEqual(addons.data)
+
+    // Null and text, nothing else: a number, or the field left out, is still not what the screens are promised.
+    const [first] = products.data as Row[]
+    const [firstAddon] = addons.data as Row[]
+    for (const wrong of [20, undefined, true]) {
+      expect(catalogProductsRouteOutputSchema.safeParse([{ ...first, base_price: wrong }]).success, String(wrong)).toBe(false)
+      expect(catalogAddonsRouteOutputSchema.safeParse([{ ...firstAddon, base_price: wrong }]).success, String(wrong)).toBe(false)
+    }
+
+    // Once staff set its price the product reads as any other does (the price route, Manage pricing).
+    expect((await press(productPriceRoute, { productId: bare }, { basePrice: 18 })).ok).toBe(true)
+    expect((await read<Row[]>(productsRoute, {}, TIA)).data?.find((row) => row.id === bare)?.base_price).toBe('18.00')
+  })
+
+  it("W72b: the staff app's own types say the same: a product's and an add-on's base price is text or null", async () => {
+    const { readFileSync } = await import('node:fs')
+    const file = (name: string) => readFileSync(path.join(staffAppDir(), name), 'utf8')
+    for (const name of ['backend/paddock/getProducts.ts', 'backend/paddock/getAddons.ts']) {
+      expect(file(name), name).toContain('  base_price: string | null\n')
+      expect(file(name), name).not.toContain('  base_price: string\n')
+    }
+    const types = file('frontend/types/paddock.ts')
+    for (const row of ['ProductRow', 'AddonRow']) {
+      const body = new RegExp(`export interface ${row} \\{[^}]+\\}`).exec(types)?.[0] ?? ''
+      expect(body, row).toContain('  base_price: string | null\n')
+    }
+    const generated = file('backend/paddock/shared/workerContracts.ts')
+    for (const type of ['CatalogProductsRouteOutput', 'CatalogAddonsRouteOutput']) {
+      const line = generated.split('\n').find((one) => one.startsWith(`export type ${type} = `)) ?? ''
+      expect(line, type).toContain('base_price: string | null;')
+    }
+    // The screens that work a price out from it fall back when there is none, as they did for an empty price.
+    expect(file('frontend/components/checkout/ProductLineEditor.tsx')).toContain('return price ? Number.parseFloat(price) : 0')
+    expect(file('frontend/components/checkout/AddonLineEditor.tsx')).toContain('return price ? Number.parseFloat(price) : 0')
   })
 })
 

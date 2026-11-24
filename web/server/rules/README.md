@@ -3189,3 +3189,15 @@ here touches a price, stock or a sale. The Studio's side and the site's reads ar
 comment on `products.category`. No product row is written. The saved schema carries it already (as 032's was), so the
 lead applies it BEFORE the W72a Worker is pushed: the products read, the categories read and the webhook all name the
 table.
+
+### W72b: a product or an add-on with no price yet is read (24 Nov 2026)
+
+W72a's report, "Noticed" 1 (Wayne's yes). An item new from Sanity arrives off sale with no price (Q57), and has none
+until staff set it. The contracts of `GET catalog/products` and `GET catalog/addons` said `base_price` was always
+text (`contracts/admin.ts`, `adminGetProductsOutputSchema`, `adminGetAddonsOutputSchema`), so wherever an answer is
+held to its contract (tests, `next dev`; never live) the two reads answered 500 with such a row in the table. Now
+`base_price` is text or null, as the member and sale prices already were, and the staff app's `ProductRow` and
+`AddonRow` say the same. No rule, statement or screen changed: the pages already showed a dash for an empty price,
+and New Order's pickers fell back to £0.00 until one is set. Nothing unpriced can be put on sale (Q61) or sold, as
+before. Rule test: `catalog/admin.test.ts`, "W72b"; the webhook's own tests read such products with no price given
+(`app/api/sanity/webhook/route.test.ts`, the categories' order).

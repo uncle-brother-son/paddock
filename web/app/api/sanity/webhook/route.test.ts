@@ -780,9 +780,7 @@ describe('W72a (WQ7): a product category is a document with a row of its own; a 
     return (answer.data ?? []).filter((row) => ids.includes(row.sanity_category_id))
   }
   const productsListed = async (ids: readonly string[]) => {
-    // The products read's contract wants a base price, and a product new from Sanity has none until staff set it
-    // (noticed in W72a's report; the check is off in production). Each is given one first, as staff would.
-    await database.db.query('UPDATE products SET base_price = 10.00 WHERE base_price IS NULL')
+    // W72b: these products are new from Sanity and have no price yet; the read answers them with a null base price.
     const answer = await pressRoute<Array<{ sanity_product_id: string | null; name: string; category: string | null }>>(productsRoute, 'GET', { email: JO })
     expect(answer.status).toBe(200)
     return (answer.data ?? []).filter((row) => ids.includes(row.sanity_product_id ?? '')).map((row) => [row.name, row.category])

@@ -108,10 +108,13 @@ export type AdminDeleteServiceTypeScheduleSlotInput = z.infer<typeof adminDelete
 export const adminDeleteServiceTypeScheduleSlotOutputSchema = z.object({ deleted: z.boolean() })
 export type AdminDeleteServiceTypeScheduleSlotOutput = z.infer<typeof adminDeleteServiceTypeScheduleSlotOutputSchema>
 
-/** getProducts: GET catalog/products. Level Read; W55. */
+/**
+ * getProducts: GET catalog/products. Level Read; W55. W72b: `base_price` may be null: a product new from Sanity
+ * arrives off sale with no price (Q57), and has none until staff set it.
+ */
 export const adminGetProductsInputSchema = z.object({})
 export type AdminGetProductsInput = z.infer<typeof adminGetProductsInputSchema>
-export const adminGetProductsOutputSchema = z.array(z.object({ variants: z.array(z.object({ id: z.string(), product_id: z.string(), sku: z.string().nullable(), size: z.string().nullable(), stock_quantity: z.number(), price_override: z.string().nullable(), stripe_price_id: z.string().nullable(), created_at: z.string(), updated_at: z.string() })), id: z.string(), sanity_product_id: z.string().nullable(), name: z.string(), thumbnail_url: z.string().nullable(), category: z.string().nullable(), base_price: z.string(), member_price: z.string().nullable(), sale_price: z.string().nullable(), fulfillment_method: z.string().nullable(), stripe_product_id: z.string().nullable(), stripe_price_id_base: z.string().nullable(), stripe_price_id_member: z.string().nullable(), stripe_price_id_sale: z.string().nullable(), active: z.boolean().nullable(), created_at: z.string(), updated_at: z.string() }))
+export const adminGetProductsOutputSchema = z.array(z.object({ variants: z.array(z.object({ id: z.string(), product_id: z.string(), sku: z.string().nullable(), size: z.string().nullable(), stock_quantity: z.number(), price_override: z.string().nullable(), stripe_price_id: z.string().nullable(), created_at: z.string(), updated_at: z.string() })), id: z.string(), sanity_product_id: z.string().nullable(), name: z.string(), thumbnail_url: z.string().nullable(), category: z.string().nullable(), base_price: z.string().nullable(), member_price: z.string().nullable(), sale_price: z.string().nullable(), fulfillment_method: z.string().nullable(), stripe_product_id: z.string().nullable(), stripe_price_id_base: z.string().nullable(), stripe_price_id_member: z.string().nullable(), stripe_price_id_sale: z.string().nullable(), active: z.boolean().nullable(), created_at: z.string(), updated_at: z.string() }))
 export type AdminGetProductsOutput = z.infer<typeof adminGetProductsOutputSchema>
 
 /** setProductActive: POST catalog/products/:productId/active. Level B; W55. */
@@ -156,10 +159,10 @@ export type AdminUpdateCatalogItemPriceInput = z.infer<typeof adminUpdateCatalog
 export const adminUpdateCatalogItemPriceOutputSchema = z.object({ success: z.boolean(), item: z.object({ id: z.string(), price: z.string().optional(), base_price: z.string().optional(), member_price: z.string().nullable().optional(), sale_price: z.string().nullable().optional() }).catchall(z.unknown()), pricesUpdated: z.record(z.string(), z.unknown()), subscriptionMigration: z.object({ migrated: z.number(), alreadyCurrent: z.number(), skipped: z.number(), failed: z.array(z.object({ membershipId: z.string(), subscriptionId: z.string(), error: z.string() })) }).optional() })
 export type AdminUpdateCatalogItemPriceOutput = z.infer<typeof adminUpdateCatalogItemPriceOutputSchema>
 
-/** getAddons: GET catalog/addons. Level Read; W55. */
+/** getAddons: GET catalog/addons. Level Read; W55. W72b: `base_price` may be null, as a product's (an add-on new from Sanity has no price yet). */
 export const adminGetAddonsInputSchema = z.object({})
 export type AdminGetAddonsInput = z.infer<typeof adminGetAddonsInputSchema>
-export const adminGetAddonsOutputSchema = z.array(z.object({ id: z.string(), sanity_addon_id: z.string().nullable(), name: z.string(), thumbnail_url: z.string().nullable(), category: z.string().nullable(), sku: z.string().nullable(), base_price: z.string(), member_price: z.string().nullable(), sale_price: z.string().nullable(), stripe_product_id: z.string().nullable(), stripe_price_id_base: z.string().nullable(), stripe_price_id_member: z.string().nullable(), stripe_price_id_sale: z.string().nullable(), active: z.boolean().nullable(), created_at: z.string(), updated_at: z.string() }))
+export const adminGetAddonsOutputSchema = z.array(z.object({ id: z.string(), sanity_addon_id: z.string().nullable(), name: z.string(), thumbnail_url: z.string().nullable(), category: z.string().nullable(), sku: z.string().nullable(), base_price: z.string().nullable(), member_price: z.string().nullable(), sale_price: z.string().nullable(), stripe_product_id: z.string().nullable(), stripe_price_id_base: z.string().nullable(), stripe_price_id_member: z.string().nullable(), stripe_price_id_sale: z.string().nullable(), active: z.boolean().nullable(), created_at: z.string(), updated_at: z.string() }))
 export type AdminGetAddonsOutput = z.infer<typeof adminGetAddonsOutputSchema>
 
 /** setAddonActive: POST catalog/addons/:addonId/active. Level B; W55. */
