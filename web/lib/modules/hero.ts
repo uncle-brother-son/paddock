@@ -13,7 +13,8 @@ const WIDTHS = { desktop: [960, 1440, 1920, 2880], mobile: [390, 780, 1170] } as
 
 /**
  * The hero's picture (for a video, its poster) cut for each screen round the editor's hotspot: wide from 768px,
- * tall below. A video with a poster of its own for phones (WQ35) has that one for the tall cut. One alt for both.
+ * tall below. A video with a poster of its own for phones (WQ35) has that one for the tall cut. One alt for both:
+ * a picture's own Alt Text, or for a video its Video Description (WQ42: a poster has no alt text of its own).
  */
 export type HeroPicture = { desktop: SizedImage; mobile: SizedImage; alt: string }
 

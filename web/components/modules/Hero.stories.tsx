@@ -39,7 +39,8 @@ function SampleHero({ button, reducedMotion, touch, video, hasSound, phone }: St
 
   // One film: its two files share the description and the sound switch.
   const film: ScreenVideo | null = made.main ? { url: made.main, phoneUrl: made.phone, description: 'A sample video', captionsUrl: null, hasSound } : null
-  const picture = film && phone !== 'same' ? SAMPLE_PICTURE_WITH_PHONE_POSTER : SAMPLE_PICTURE
+  // A film's posters have no alt text of their own (WQ42): the film's description describes them.
+  const picture = film ? { ...(phone === 'same' ? SAMPLE_PICTURE : SAMPLE_PICTURE_WITH_PHONE_POSTER), alt: film.description } : SAMPLE_PICTURE
   return <Hero picture={picture} video={film} button={button} reducedMotion={reducedMotion} touch={touch} priority />
 }
 
@@ -198,7 +199,9 @@ export const Video: Story = {
     await expect(canvasElement.querySelectorAll('video')).toHaveLength(1)
     const hero = heroIn(canvasElement)
     await expect([video.muted, video.loop, video.playsInline, video.paused]).toEqual([true, true, true, false])
+    // Once it plays, the video carries the description, and the poster beneath it is no longer read out as well.
     await expect(video.getAttribute('aria-label')).toBe('A sample video')
+    await expect(pictureIn(canvasElement).alt).toBe('')
     const sound = canvas.getByRole('button', { name: 'Unmute video' })
     // Figma: two 28px buttons, 8px apart, 16px from the right and the bottom.
     const [soundBox, pauseBox, heroBox] = [sound, pause, hero].map((element) => element.getBoundingClientRect()) as [DOMRect, DOMRect, DOMRect]
@@ -284,7 +287,10 @@ export const ReducedMotion: Story = {
     const video = canvasElement.querySelector('video') as HTMLVideoElement
     await expect(video.paused).toBe(true)
     await expect(getComputedStyle(video).visibility).toBe('hidden')
-    await expect(canvas.getByRole('img', { name: 'A sample picture' })).toBeVisible()
+    // WQ42: the poster has no alt text of its own. Its alt is the video's description, and the video is not read out too.
+    await expect(canvas.getByRole('img', { name: 'A sample video' })).toBeVisible()
+    await expect(pictureIn(canvasElement).alt).toBe('A sample video')
+    await expect([video.getAttribute('aria-hidden'), video.hasAttribute('aria-label')]).toEqual(['true', false])
     const hero = heroIn(canvasElement)
     const button = buttonIn(canvasElement)
     const link = canvas.getByRole('link', { name: 'Book Your Experience' })
@@ -386,7 +392,7 @@ export const PosterForPhonesOnly: Story = {
 /** A hero whose film is at two addresses (which lead nowhere), so that what the browser asks for can be counted. */
 function HeroAtAddresses({ named }: { named: string }) {
   const film: ScreenVideo = { url: `/sample-hero-${named}-for-desktop.mp4`, phoneUrl: `/sample-hero-${named}-for-phone.mp4`, description: 'A sample video', captionsUrl: null, hasSound: false }
-  return <Hero picture={SAMPLE_PICTURE_WITH_PHONE_POSTER} video={film} button={null} reducedMotion={false} priority />
+  return <Hero picture={{ ...SAMPLE_PICTURE_WITH_PHONE_POSTER, alt: film.description }} video={film} button={null} reducedMotion={false} priority />
 }
 
 /** Tests only: a phone asks for the phones' file and never for the desktop's ("only the one the screen needs is ever fetched"). */

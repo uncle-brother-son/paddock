@@ -97,7 +97,8 @@ describe('W72a: galleries and categories', () => {
   it("a gallery keeps its order, videos among the pictures; an item with no file is left out", () => {
     // The sample product's gallery: a video, a picture, a picture with no file, a decorative picture, a video with no poster.
     expect(kinds(answers.product.gallery)).toEqual(['video', 'image', 'image'])
-    expect(answers.product.gallery[0]).toMatchObject({ kind: 'video', url: 'https://cdn.sanity.io/files/p/d/vid.mp4', description: 'Steam', poster: { alt: 'Picture hero' } })
+    // W73c (WQ42): a video's poster has no alt of its own; its description ("Steam") is what describes it.
+    expect(answers.product.gallery[0]).toMatchObject({ kind: 'video', url: 'https://cdn.sanity.io/files/p/d/vid.mp4', description: 'Steam', poster: { ref: 'image-hero-1600x900-jpg', alt: '' } })
     expect(answers.product.gallery[2]).toMatchObject({ kind: 'image', image: { alt: '' } })
     expect(answers.productCards.map((card) => kinds(card.gallery))).toEqual([['image'], ['video', 'image', 'image']])
     expect(kinds(answers.product.colours[0]!.gallery)).toEqual(['image'])
@@ -179,7 +180,7 @@ describe('W73b: the Hero module', () => {
 
   it('a Hero has its picture or its video; one with no file, or a video with no poster, has none', () => {
     expect(homeModules.map((module) => module.media?.kind)).toEqual(['video'])
-    expect(homeModules[0]!.media).toMatchObject({ url: 'https://cdn.sanity.io/files/p/d/vid.mp4', description: 'Steam', poster: { alt: 'Picture hero' } })
+    expect(homeModules[0]!.media).toMatchObject({ url: 'https://cdn.sanity.io/files/p/d/vid.mp4', description: 'Steam', poster: { ref: 'image-hero-1600x900-jpg' } })
     // h5: a video with no main poster is no video, whatever it has for phones.
     expect(modules.filter((module) => module.type === 'hero').map((module) => module.media?.kind ?? null)).toEqual(['image', 'image', null, null, null, 'video', 'video'])
     // A decorative picture's alt is "".
@@ -194,9 +195,13 @@ describe('W73b: the Hero module', () => {
     expect(forPhones(byKey('h6'))).toEqual(['tall.mp4', null])
     expect(forPhones(byKey('h7'))).toEqual([null, 'image-tall-900x1600-jpg'])
     for (const media of [homeModules[0]!.media!, byKey('h6'), byKey('h7')]) expect([media.url, media.poster?.ref]).toEqual(['https://cdn.sanity.io/files/p/d/vid.mp4', 'image-hero-1600x900-jpg'])
-    // The poster for phones keeps its hotspot and has no alt of its own: the main poster's describes the film.
+    // The poster for phones keeps its hotspot. W73c (WQ42): neither poster has an alt of its own: the description
+    // describes the film and its posters. The sample home hero's document still holds an alt and the decorative
+    // switch under its poster (as the live Home did): neither is in the answer.
     expect(homeModules[0]!.media!.mobilePoster).toMatchObject({ alt: '', hotspot: { x: 0.5, y: 0.4 } })
-    expect(homeModules[0]!.media!.poster!.alt).toBe('Picture hero')
+    expect(homeModules[0]!.media!.poster!.alt).toBe('')
+    expect(JSON.stringify(answers.homePage)).not.toMatch(/An old alt of its own|decorative/)
+    for (const query of [reads.homePage.query, reads.product.query]) expect(query).toMatch(/"poster": poster\{[^}]*"alt": "",/)
     // One description, one captions file and one sound switch: nothing of them is said twice.
     expect(Object.keys(homeModules[0]!.media!).sort()).toEqual(['captionsUrl', 'description', 'hasSound', 'kind', 'mobilePoster', 'mobileUrl', 'poster', 'url'])
     // The galleries' videos have neither yet.

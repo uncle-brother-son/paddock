@@ -88,6 +88,17 @@ export function checkButtonText(text: string | undefined, shown: boolean | undef
   return !shown || text?.trim() ? true : 'Type the words on the button, or switch it off.'
 }
 
+/** WQ42: a hero's button that shows has somewhere to go ("The booking panel" is one of the places). */
+export function checkButtonLink(link: LinkTo | undefined, shown: boolean | undefined): Verdict {
+  return !shown || link?.destination ? true : 'Choose where the button goes, or switch the button off.'
+}
+
+/** WQ42: whether a video has anything of its own for phones (a file or a poster): its "For phones" group then starts open. */
+export function hasPhoneVersion(media: unknown): boolean {
+  const { mobileVideo, mobilePoster } = (media ?? {}) as { mobileVideo?: Asset; mobilePoster?: Asset }
+  return hasAsset(mobileVideo) || hasAsset(mobilePoster)
+}
+
 /** A size guide's row has one cell per column. */
 export function checkRowCells(cells: readonly unknown[] | undefined, columns: readonly unknown[] | undefined): Verdict {
   const want = columns?.length ?? 0

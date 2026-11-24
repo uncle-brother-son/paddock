@@ -21,7 +21,8 @@ export type Picture = z.infer<typeof pictureSchema>
  * A picture or a video. `hasSound` (W73b): the editor says the video has sound, so a visitor gets a button to turn
  * it on. WQ35: a video is one film: `url` and `poster` for screens from 768px, and for narrower ones `mobileUrl`
  * and `mobilePoster` when an editor added them (null: the main file, and the main poster cropped round its
- * hotspot). A poster for phones has no alt of its own ("" here): it is described by the main poster's.
+ * hotspot). WQ42: neither poster has alt text of its own (`alt` is "" on both): `description`, the editor's Video
+ * Description, describes the film and its posters (lib/sanity/media.ts).
  */
 export const mediaSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('image'), image: pictureSchema }),

@@ -19,6 +19,19 @@ const PICTURE = `{
 const pictureAt = (field: string): string => `select(defined(${field}.asset._ref) => ${field}${PICTURE}, null)`
 
 /**
+ * A video's poster (WQ42): a plain image with a hotspot. It has no alt text of its own, so its `alt` is always ""
+ * here, whatever an older document still holds under it: the video's description describes the film and its posters.
+ */
+const POSTER = `{
+  "ref": asset._ref,
+  "width": asset->metadata.dimensions.width,
+  "height": asset->metadata.dimensions.height,
+  "alt": "",
+  "crop": crop{top, bottom, left, right},
+  "hotspot": hotspot{x, y, width, height}
+}`
+
+/**
  * A picture or a video. W73b: `hasSound` is the editor's "Has Sound" switch, off unless it was switched on.
  * WQ35: a video is one film with a file for desktops and, when an editor adds them, a file and a poster for phones
  * (`mobileUrl`, `mobilePoster`: each null without one); its description, captions and sound are shared by both.
@@ -28,8 +41,8 @@ const MEDIA = `select(
     "kind": "video",
     "url": video.asset->url,
     "mobileUrl": mobileVideo.asset->url,
-    "poster": poster${PICTURE},
-    "mobilePoster": ${pictureAt('mobilePoster')},
+    "poster": poster${POSTER},
+    "mobilePoster": select(defined(mobilePoster.asset._ref) => mobilePoster${POSTER}, null),
     "description": coalesce(videoDescription, ""),
     "captionsUrl": captions.asset->url,
     "hasSound": coalesce(hasSound, false)

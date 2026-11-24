@@ -191,7 +191,7 @@
             "ref": "image-hero-1600x900-jpg",
             "width": 1600,
             "height": 900,
-            "alt": "Picture hero",
+            "alt": "",
             "crop": null,
             "hotspot": null
           },
@@ -331,7 +331,7 @@
             "ref": "image-hero-1600x900-jpg",
             "width": 1600,
             "height": 900,
-            "alt": "Picture hero",
+            "alt": "",
             "crop": null,
             "hotspot": null
           },
@@ -360,7 +360,7 @@
             "ref": "image-hero-1600x900-jpg",
             "width": 1600,
             "height": 900,
-            "alt": "Picture hero",
+            "alt": "",
             "crop": null,
             "hotspot": null
           },
@@ -565,7 +565,7 @@
             "ref": "image-hero-1600x900-jpg",
             "width": 1600,
             "height": 900,
-            "alt": "Picture hero",
+            "alt": "",
             "crop": null,
             "hotspot": null
           },
@@ -621,7 +621,7 @@
           "ref": "image-hero-1600x900-jpg",
           "width": 1600,
           "height": 900,
-          "alt": "Picture hero",
+          "alt": "",
           "crop": null,
           "hotspot": null
         },
@@ -1292,7 +1292,7 @@
           "ref": "image-hero-1600x900-jpg",
           "width": 1600,
           "height": 900,
-          "alt": "Picture hero",
+          "alt": "",
           "crop": null,
           "hotspot": null
         },

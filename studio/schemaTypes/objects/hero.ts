@@ -1,12 +1,13 @@
 import { defineField, defineType } from 'sanity'
 import { ImageIcon } from '@sanity/icons'
-import { checkButtonText } from '../../lib/checks'
+import { checkButtonLink, checkButtonText, type LinkTo } from '../../lib/checks'
 
 const shown = (parent: unknown): boolean => Boolean((parent as { showButton?: boolean } | undefined)?.showButton)
 
 /**
  * A page module: the Hero (WQ24; W73b, Wayne: a module any page can use, not a part of every page). An image or a
  * video across the whole window, and an optional button. A video's file for phones is the media block's own (WQ35).
+ * WQ42: the button's words and link show only while "Show a Button" is on, and both are then required.
  */
 export const hero = defineType({
   name: 'hero',
@@ -27,8 +28,11 @@ export const hero = defineType({
       name: 'buttonLink',
       title: 'Button Link',
       type: 'linkTo',
-      description: 'Leave empty for a button that opens the booking panel, as on the home page',
+      description: 'Where the button goes. Choose "The booking panel" for a button that opens booking',
       hidden: ({ parent }) => !shown(parent),
+      // WQ42: a button that shows has a link. A hero saved before this with none still works: the site sends it to
+      // the booking panel.
+      validation: (rule) => rule.custom((value, context) => checkButtonLink(value as LinkTo | undefined, shown(context.parent))),
     }),
   ],
   preview: {

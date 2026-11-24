@@ -3,6 +3,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   checkAlt,
+  checkButtonLink,
   checkButtonText,
   checkLinkPart,
   checkLinkSet,
@@ -14,6 +15,7 @@ import {
   checkSlug,
   checkTime,
   checkValidityPlaceholder,
+  hasPhoneVersion,
   checkVideoDescription,
   previousSlugsAfter,
   sameSlugs,
@@ -97,42 +99,123 @@ describe('links and buttons', () => {
 
   it('W73b Level 3: a video has a "Has Sound" switch, off until an editor turns it on, and shown for a video only', () => {
     const media = studioFile('schemaTypes/objects/media.ts')
-    expect(media).toMatch(/name: 'hasSound',\s+title: 'Has Sound',\s+type: 'boolean',\s+description: '[^']+',\s+initialValue: false,\s+hidden: isNotVideo,/)
+    expect(media).toMatch(/name: 'hasSound',\s+title: 'Has Sound',\s+type: 'boolean',\s+fieldset: 'details',\s+description: '[^']+',\s+initialValue: false,\s+hidden: isNotVideo,/)
   })
 
   // WQ35 (Wayne, 24 Nov): every video is one film with a desktop file and an optional file for phones, sharing its text.
   it('WQ35: a video takes an optional file and an optional poster for phones; its description, captions and sound stay single', () => {
     const media = studioFile('schemaTypes/objects/media.ts')
-    // A video's fields, in the order an editor meets them.
-    const fields = [...media.matchAll(/defineField\(\{\s+name: '(\w+)',\s+title: '([^']+)',\s+type: '(\w+)',/g)].map((match) => [match[1], match[2], match[3]])
-    expect(fields).toEqual([
-      ['kind', 'Kind', 'string'],
-      ['image', 'Image', 'picture'],
-      ['video', 'Video (MP4)', 'file'],
-      ['mobileVideo', 'Video for Phones (MP4)', 'file'],
-      ['poster', 'Poster Image', 'picture'],
-      ['mobilePoster', 'Poster for Phones', 'image'],
-      ['videoDescription', 'Video Description', 'string'],
-      ['hasSound', 'Has Sound', 'boolean'],
-      ['captions', 'Captions (WebVTT)', 'file'],
-    ])
-    // Both new fields are for a video only, and neither is required: a film may have one file.
+    // The field names are as WQ35 made them (W73c only groups them): the site's query asks for these.
+    for (const name of ['video', 'mobileVideo', 'poster', 'mobilePoster', 'videoDescription', 'captions', 'hasSound']) expect(media).toContain(`name: '${name}',`)
+    // Both fields for phones are for a video only, and neither is required: a film may have one file.
     expect(media).toMatch(/name: 'mobileVideo',[\s\S]*?options: \{ accept: 'video\/mp4' \},[\s\S]*?hidden: isNotVideo,\s+validation: \(rule\) => rule\.custom\(\(value\) => checkPhoneVideo\(value\)\),/)
-    expect(media).toMatch(/name: 'mobilePoster',\s+title: 'Poster for Phones',\s+type: 'image',\s+fieldset: 'poster',\s+options: \{ hotspot: true \},\s+description: '[^']+',\s+hidden: isNotVideo,\s+\}\),/)
-    // Level 3 (Wayne): the two posters sit in one group in the Studio, open by default and there for a video only.
-    // Layout only: the main poster is still the picture block, required for a video.
-    expect(media).toContain("fieldsets: [{ name: 'poster', title: 'Poster', options: { collapsible: true, collapsed: false }, hidden: blockIsNotVideo }],")
-    expect(media).toContain("const blockIsNotVideo = ({ value }: { value?: unknown }) => kindOf(value) !== 'video'")
-    expect(media).toMatch(/name: 'poster',\s+title: 'Poster Image',\s+type: 'picture',\s+fieldset: 'poster',\s+description: '[^']+',\s+hidden: isNotVideo,\s+validation: \(rule\) => rule\.custom\(\(value, context\) => checkPoster\(value as Picture, kindOf\(context\.parent\)\)\),/)
-    expect(media.match(/fieldset: 'poster',/g)).toHaveLength(2)
+    expect(media).toMatch(/name: 'mobilePoster',\s+title: 'Poster for Phones',\s+type: 'image',\s+fieldset: PHONES_GROUP,\s+options: \{ hotspot: true \},\s+description: '[^']+',\s+hidden: isNotVideo,\s+\}\),/)
     expect(checkPhoneVideo(undefined)).toBe(true)
     expect(checkPhoneVideo({})).toBe(true)
     expect(checkPhoneVideo({ asset: { _ref: 'file-a-mp4' } })).toBe(true)
     expect(checkPhoneVideo({ asset: { _ref: 'file-a-mov' } })).toContain('not an MP4')
   })
 
+  // W73c (WQ42, Wayne 24 Nov): clearer video fields. Fieldsets, not new objects, so every field keeps its name.
+  describe('W73c: a video\'s fields in three groups', () => {
+    const media = studioFile('schemaTypes/objects/media.ts')
+    /** Every field of the block, in the order an editor meets it: its name, title, type and group. */
+    const fields = [...media.matchAll(/defineField\(\{\s+name: '(\w+)',\s+title: '([^']+)',\s+type: '(\w+)',(?:\s+fieldset: ('\w+'|PHONES_GROUP),)?/g)].map((match) => [match[1], match[2], match[3], match[4]?.replace(/'/g, '') ?? null])
+
+    it('Video (its file, its poster), For phones (the two for phones), Description & sound (description, captions, Has Sound), in that order', () => {
+      expect(fields).toEqual([
+        ['kind', 'Kind', 'string', null],
+        ['image', 'Image', 'picture', null],
+        ['video', 'Video (MP4)', 'file', 'video'],
+        ['poster', 'Poster', 'image', 'video'],
+        ['mobileVideo', 'Video for Phones (MP4)', 'file', 'PHONES_GROUP'],
+        ['mobilePoster', 'Poster for Phones', 'image', 'PHONES_GROUP'],
+        ['videoDescription', 'Video Description', 'string', 'details'],
+        ['captions', 'Captions (WebVTT)', 'file', 'details'],
+        ['hasSound', 'Has Sound', 'boolean', 'details'],
+      ])
+      expect(studioFile('components/MediaInput.ts')).toContain("export const PHONES_GROUP = 'phones'")
+    })
+
+    it('each group is there for a video only; Video and Description & sound are open, For phones can be closed and starts closed', () => {
+      expect(media).toContain("{ name: 'video', title: 'Video', hidden: blockIsNotVideo },")
+      expect(media).toContain("{ name: PHONES_GROUP, title: 'For phones (optional)', options: { collapsible: true, collapsed: true }, hidden: blockIsNotVideo },")
+      expect(media).toContain("{ name: 'details', title: 'Description & sound', hidden: blockIsNotVideo },")
+      // A fieldset's rule is handed the block itself as `value` (a field's rule gets it as `parent`).
+      expect(media).toContain("const blockIsNotVideo = ({ value }: { value?: unknown }) => kindOf(value) !== 'video'")
+    })
+
+    it('For phones opens by itself when the video already has a file or a poster for phones, and only then', () => {
+      const file = { asset: { _ref: 'file-a-mp4' } }
+      const image = { asset: { _ref: 'image-a-1x1-jpg' } }
+      expect(hasPhoneVersion({ kind: 'video', mobileVideo: file })).toBe(true)
+      expect(hasPhoneVersion({ kind: 'video', mobilePoster: image })).toBe(true)
+      expect(hasPhoneVersion({ kind: 'video', video: file, poster: image })).toBe(false)
+      // A field cleared in the Studio can leave an empty object behind: that is not a file.
+      expect(hasPhoneVersion({ kind: 'video', mobileVideo: {}, mobilePoster: { asset: {} } })).toBe(false)
+      expect(hasPhoneVersion(undefined)).toBe(false)
+      const input = studioFile('components/MediaInput.ts')
+      expect(input).toContain('const hasPhones = hasPhoneVersion(value)')
+      expect(input).toMatch(/useEffect\(\(\) => \{\s+if \(hasPhones\) expand\.current\(PHONES_GROUP\)\s+\}, \[hasPhones\]\)/)
+      expect(media).toContain('components: { input: MediaInput },')
+    })
+
+    it('a poster is a plain image with a hotspot: no Alt Text, no Decorative switch; the Video Description says it is used for the posters', () => {
+      expect(media).toMatch(/name: 'poster',\s+title: 'Poster',\s+type: 'image',\s+fieldset: 'video',\s+options: \{ hotspot: true \},\s+description: '[^']+',\s+hidden: isNotVideo,\s+validation: \(rule\) => rule\.custom\(\(value, context\) => checkPoster\(value as Picture, kindOf\(context\.parent\)\)\),/)
+      expect(media).toContain(`description: "What the video shows, for people who can't see it. Also used for the posters",`)
+      // An image (Kind = Image) is still the picture block, with its Alt Text and its Decorative switch.
+      expect(fields[1]).toEqual(['image', 'Image', 'picture', null])
+      const picture = studioFile('schemaTypes/objects/picture.ts')
+      expect(picture).toContain("name: 'alt'")
+      expect(picture).toContain("name: 'decorative'")
+    })
+
+    it('a video still needs its file, its poster and its description', () => {
+      expect(media).toContain('checkMediaVideo(value, kindOf(context.parent))')
+      expect(media).toContain('checkPoster(value as Picture, kindOf(context.parent))')
+      expect(media).toContain('checkVideoDescription(value, kindOf(context.parent))')
+      expect(checkMediaVideo(undefined, 'video')).toBe('Upload an MP4 file.')
+      expect(checkPoster(undefined, 'video')).toContain('before the video plays')
+      expect(checkVideoDescription('', 'video')).toContain('what the video shows')
+    })
+
+    it('every description is one line', () => {
+      // A field's description, on a line of its own (the preview's `description` is another thing).
+      const descriptions = [...media.matchAll(/^\s+description: (?:'([^']+)'|"([^"]+)"),$/gm)].map((match) => match[1] ?? match[2] ?? '')
+      expect(descriptions).toHaveLength(7)
+      for (const description of descriptions) expect(description.length, description).toBeLessThanOrEqual(90)
+    })
+  })
+
+  describe("W73c: the Hero's button", () => {
+    const hero = studioFile('schemaTypes/objects/hero.ts')
+
+    it('Show a Button comes first; its words and its link show only while it is on', () => {
+      const order = ['showButton', 'buttonText', 'buttonLink'].map((name) => hero.indexOf(`name: '${name}'`))
+      expect(order.every((at) => at > 0)).toBe(true)
+      expect([...order].sort((one, other) => one - other)).toEqual(order)
+      expect(hero.match(/hidden: \(\{ parent \}\) => !shown\(parent\),/g)).toHaveLength(2)
+    })
+
+    it('the link is required while the button shows, and its hint no longer says to leave it empty', () => {
+      expect(hero).toContain('validation: (rule) => rule.custom((value, context) => checkButtonLink(value as LinkTo | undefined, shown(context.parent))),')
+      expect(checkButtonLink(undefined, true)).toContain('Choose where the button goes')
+      expect(checkButtonLink({}, true)).toContain('Choose where the button goes')
+      expect(checkButtonLink({ destination: 'book' }, true)).toBe(true)
+      expect(checkButtonLink({ destination: 'page' }, true)).toBe(true)
+      // Switched off, nothing is asked of it.
+      expect(checkButtonLink(undefined, false)).toBe(true)
+      expect(checkButtonLink(undefined, undefined)).toBe(true)
+      expect(hero).not.toMatch(/[Ll]eave empty/)
+      expect(hero).toContain(`description: 'Where the button goes. Choose "The booking panel" for a button that opens booking',`)
+    })
+  })
+
   it("WQ35: the Sanity webhook reads none of it: a gallery's picture for the staff app is still its first image", () => {
     const webhook = readFileSync(path.resolve(__dirname, '../../app/api/sanity/webhook/route.ts'), 'utf8')
+    // W73c: nor a poster, but in the comment that says so.
+    expect(webhook.match(/poster/gi)).toHaveLength(1)
+    expect(webhook).toContain("A video's poster and file are never read.")
     expect(webhook).not.toMatch(/mobileVideo|mobilePoster|hasSound|videoDescription/)
     expect(webhook).toContain("if (item === null || typeof item !== 'object' || item.kind === 'video') continue")
     // What check:fast holds the webhook to reading of a media block: its kind and its image.

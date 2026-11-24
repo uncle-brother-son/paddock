@@ -69,12 +69,28 @@ describe('WQ35: a video is one film, with a file for desktops and, when it has o
     expect(picture.mobile.src).toMatch(/fp-x=0\.5&fp-y=0\.4|rect=/)
   })
 
-  it('its description, captions and sound are said once and shared; the poster for phones is described by the main poster', () => {
-    const { picture, video } = heroContent(home[0]!)!
+  it('its description, captions and sound are said once and shared', () => {
+    const { video } = heroContent(home[0]!)!
     expect(Object.keys(video!).sort()).toEqual(['captionsUrl', 'description', 'hasSound', 'phoneUrl', 'url'])
-    expect(picture.alt).toBe('Picture hero')
+  })
+
+  // W73c (WQ42): a poster is a plain image with no alt text of its own.
+  it("WQ42: the Video Description is the alt text of the film's posters, the phones' too; a poster's own alt is never read", () => {
     const media = home[0]!.media!
-    expect(media.kind === 'video' && media.mobilePoster?.alt).toBe('')
+    if (media.kind !== 'video') throw new Error('The sample home hero is a video.')
+    // The sample home hero's document still holds an alt under its poster, as the live Home did before W73c.
+    expect([media.poster.alt, media.mobilePoster?.alt, media.description]).toEqual(['', '', 'Steam'])
+    expect(heroContent(home[0]!)!.picture.alt).toBe('Steam')
+    expect(stillOf(media).alt).toBe('Steam')
+    // The film is described the same once it plays: the video's own name is that description too.
+    expect(heroContent(home[0]!)!.video?.description).toBe('Steam')
+    // A film with no description yet has posters with nothing to read out, as a decorative picture has.
+    expect(stillOf({ ...media, description: '' }).alt).toBe('')
+    // An image keeps its own alt text ("" when it is decorative).
+    expect([heroContent(byKey('h2'))!.picture.alt, heroContent(byKey('h1'))!.picture.alt]).toEqual(['Picture hero', ''])
+    const hero = readFileSync(path.resolve(__dirname, '../../components/modules/Hero.tsx'), 'utf8')
+    expect(hero).toContain("<HeroImage picture={picture} alt={started ? '' : picture.alt} priority={priority} />")
+    expect(hero).toContain("{...(started ? { 'aria-label': video.description } : { 'aria-hidden': true })}")
   })
 
   it('a file for phones with no poster for them: the main poster, cut tall', () => {
@@ -95,7 +111,7 @@ describe('WQ35: a video is one film, with a file for desktops and, when it has o
     const [video, picture] = productSchema.parse(answers.product).gallery
     expect(videoOf(video!)).toEqual({ url: 'https://cdn.sanity.io/files/p/d/vid.mp4', phoneUrl: null, ...film, hasSound: false })
     const still = stillOf(video!)
-    expect([still.wide.ref, still.phone.ref, still.alt]).toEqual(['image-hero-1600x900-jpg', 'image-hero-1600x900-jpg', 'Picture hero'])
+    expect([still.wide.ref, still.phone.ref, still.alt]).toEqual(['image-hero-1600x900-jpg', 'image-hero-1600x900-jpg', 'Steam'])
     expect(videoOf(picture!)).toBeNull()
     expect(stillOf(picture!).wide).toBe(stillOf(picture!).phone)
   })

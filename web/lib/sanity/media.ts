@@ -8,13 +8,14 @@ import type { Media, Picture } from './schemas'
 /**
  * The still picture of a media block for each screen: the image itself, or a video's posters. `phone` is the
  * poster for phones when there is one, and otherwise the same picture as `wide` (cropped by whoever draws it).
- * `alt` describes both: a poster for phones has no alt of its own.
+ * `alt` describes both. An image's is its own Alt Text ("" when it is decorative). A video's is its Video
+ * Description (WQ42): a poster has no alt text of its own.
  */
 export type ScreenStill = { wide: Picture; phone: Picture; alt: string }
 
 export function stillOf(media: Media): ScreenStill {
   if (media.kind === 'image') return { wide: media.image, phone: media.image, alt: media.image.alt }
-  return { wide: media.poster, phone: media.mobilePoster ?? media.poster, alt: media.poster.alt }
+  return { wide: media.poster, phone: media.mobilePoster ?? media.poster, alt: media.description }
 }
 
 /**
