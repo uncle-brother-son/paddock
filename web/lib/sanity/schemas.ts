@@ -17,13 +17,20 @@ export const pictureSchema = z.object({
 })
 export type Picture = z.infer<typeof pictureSchema>
 
-/** A picture or a video. `hasSound` (W73b): the editor says the video has sound, so a visitor gets a button to turn it on. */
+/**
+ * A picture or a video. `hasSound` (W73b): the editor says the video has sound, so a visitor gets a button to turn
+ * it on. WQ35: a video is one film: `url` and `poster` for screens from 768px, and for narrower ones `mobileUrl`
+ * and `mobilePoster` when an editor added them (null: the main file, and the main poster cropped round its
+ * hotspot). A poster for phones has no alt of its own ("" here): it is described by the main poster's.
+ */
 export const mediaSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('image'), image: pictureSchema }),
   z.object({
     kind: z.literal('video'),
     url: z.string(),
+    mobileUrl: text,
     poster: pictureSchema,
+    mobilePoster: pictureSchema.nullable(),
     description: z.string(),
     captionsUrl: text,
     hasSound: z.boolean(),
@@ -97,13 +104,11 @@ export type Navigation = z.infer<typeof navigationSchema>
 /**
  * The Hero module (W73b; WQ24): a picture or a video across the window, null until an editor adds one, and its
  * button, null when it is switched off or has no words. A button with no link opens the booking panel.
- * `mobileMedia`: the picture or video for screens narrower than 768px; null when `media` serves phones too.
  */
 export const heroModuleSchema = z.object({
   type: z.literal('hero'),
   key: z.string(),
   media: mediaSchema.nullable(),
-  mobileMedia: mediaSchema.nullable(),
   button: z.object({ text: z.string(), link: linkSchema.nullable() }).nullable(),
 })
 export type HeroModule = z.infer<typeof heroModuleSchema>

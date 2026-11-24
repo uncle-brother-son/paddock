@@ -18,12 +18,18 @@ const PICTURE = `{
 
 const pictureAt = (field: string): string => `select(defined(${field}.asset._ref) => ${field}${PICTURE}, null)`
 
-/** A picture or a video. W73b: `hasSound` is the editor's "Has Sound" switch, off unless it was switched on. */
+/**
+ * A picture or a video. W73b: `hasSound` is the editor's "Has Sound" switch, off unless it was switched on.
+ * WQ35: a video is one film with a file for desktops and, when an editor adds them, a file and a poster for phones
+ * (`mobileUrl`, `mobilePoster`: each null without one); its description, captions and sound are shared by both.
+ */
 const MEDIA = `select(
   kind == "video" && defined(video.asset._ref) && defined(poster.asset._ref) => {
     "kind": "video",
     "url": video.asset->url,
+    "mobileUrl": mobileVideo.asset->url,
     "poster": poster${PICTURE},
+    "mobilePoster": ${pictureAt('mobilePoster')},
     "description": coalesce(videoDescription, ""),
     "captionsUrl": captions.asset->url,
     "hasSound": coalesce(hasSound, false)
@@ -86,15 +92,14 @@ export const NAVIGATION_QUERY = `*[_id == "navigation"][0]{
 /**
  * W73b: a page's modules, top to bottom, each with the fields of its own kind. A kind the site doesn't know is left
  * out. The Hero is one of them (Wayne, 24 Nov), no longer a field of the page: its picture or video (null until an
- * editor adds one), the one for phones (null when the same one serves both) and its button, which is there only
- * when it is switched on and has words. A button with no link opens the booking panel.
+ * editor adds one) and its button, which is there only when it is switched on and has words. A button with no link
+ * opens the booking panel.
  */
 const MODULES = `coalesce(modules[_type in ["hero", "upcomingEvents"]]{
   "type": _type,
   "key": _key,
   _type == "hero" => {
     "media": select(defined(media) => media{"item": ${MEDIA}}.item, null),
-    "mobileMedia": select(defined(mobileMedia) => mobileMedia{"item": ${MEDIA}}.item, null),
     "button": select(
       showButton == true && defined(buttonText) => {
         "text": buttonText,

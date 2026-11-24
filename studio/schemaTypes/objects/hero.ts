@@ -6,7 +6,7 @@ const shown = (parent: unknown): boolean => Boolean((parent as { showButton?: bo
 
 /**
  * A page module: the Hero (WQ24; W73b, Wayne: a module any page can use, not a part of every page). An image or a
- * video across the whole window, another for phones when the same one won't do, and an optional button.
+ * video across the whole window, and an optional button. A video's file for phones is the media block's own (WQ35).
  */
 export const hero = defineType({
   name: 'hero',
@@ -15,12 +15,6 @@ export const hero = defineType({
   icon: ImageIcon,
   fields: [
     defineField({ name: 'media', title: 'Image or Video', type: 'media' }),
-    defineField({
-      name: 'mobileMedia',
-      title: 'Image or Video for Phones',
-      type: 'media',
-      description: 'Optional. Shown on screens narrower than 768 px, where the hero is tall. Leave empty to use the one above on phones too',
-    }),
     defineField({ name: 'showButton', title: 'Show a Button', type: 'boolean', initialValue: false }),
     defineField({
       name: 'buttonText',

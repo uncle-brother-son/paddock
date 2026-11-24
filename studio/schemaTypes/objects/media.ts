@@ -1,6 +1,6 @@
 import { defineField, defineType } from 'sanity'
 import { ImagesIcon } from '@sanity/icons'
-import { checkMediaPicture, checkMediaVideo, checkPoster, checkVideoDescription } from '../../lib/checks'
+import { checkMediaPicture, checkMediaVideo, checkPhoneVideo, checkPoster, checkVideoDescription } from '../../lib/checks'
 
 type Picture = Parameters<typeof checkPoster>[0]
 
@@ -8,7 +8,12 @@ const kindOf = (parent: unknown): string | undefined => (parent as { kind?: stri
 const isVideo = ({ parent }: { parent?: unknown }) => kindOf(parent) === 'video'
 const isNotVideo = ({ parent }: { parent?: unknown }) => kindOf(parent) !== 'video'
 
-/** An image or an MP4 file, for every gallery and hero (WQ15, WQ18). The video's other fields: docs/build-standards.md, Video. */
+/**
+ * An image or an MP4 file, for every gallery and hero (WQ15, WQ18). The video's other fields: docs/build-standards.md,
+ * Video. WQ35 (Wayne, 24 Nov): a video is one film in a desktop file and, when an editor adds it, a file for phones,
+ * each with its poster; its description, captions and "Has Sound" are said once and shared by both. An image stays
+ * one file, cropped for each screen round its hotspot.
+ */
 export const media = defineType({
   name: 'media',
   title: 'Image or Video',
@@ -47,12 +52,29 @@ export const media = defineType({
       validation: (rule) => rule.custom((value, context) => checkMediaVideo(value, kindOf(context.parent))),
     }),
     defineField({
+      name: 'mobileVideo',
+      title: 'Video for Phones (MP4)',
+      type: 'file',
+      options: { accept: 'video/mp4' },
+      description: 'Optional: the same film cut for a tall screen, shown on screens narrower than 768 px. Leave empty to show the video above on phones too',
+      hidden: isNotVideo,
+      validation: (rule) => rule.custom((value) => checkPhoneVideo(value)),
+    }),
+    defineField({
       name: 'poster',
       title: 'Poster Image',
       type: 'picture',
       description: 'Shown before the video plays, and instead of it for people who have motion turned off',
       hidden: isNotVideo,
       validation: (rule) => rule.custom((value, context) => checkPoster(value as Picture, kindOf(context.parent))),
+    }),
+    defineField({
+      name: 'mobilePoster',
+      title: 'Poster for Phones',
+      type: 'image',
+      options: { hotspot: true },
+      description: 'Optional. Leave empty to use the poster above on phones, cropped round its hotspot. It is described by the alt text of the poster above',
+      hidden: isNotVideo,
     }),
     defineField({
       name: 'videoDescription',
@@ -66,7 +88,7 @@ export const media = defineType({
       name: 'hasSound',
       title: 'Has Sound',
       type: 'boolean',
-      description: 'Switch on when the video has sound: visitors then get a button to turn it on. A video always starts silent',
+      description: 'Switch on when the video has sound (the one for phones too): visitors then get a button to turn it on. A video always starts silent',
       initialValue: false,
       hidden: isNotVideo,
     }),

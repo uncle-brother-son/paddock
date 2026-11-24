@@ -1,6 +1,7 @@
 import { sizedImage, type SizedImage } from '@/lib/sanity/image'
 import { BOOK_ADDRESS, linkHref } from '@/lib/sanity/links'
-import type { HeroModule, Media } from '@/lib/sanity/schemas'
+import { stillOf, videoOf, type ScreenVideo } from '@/lib/sanity/media'
+import type { HeroModule } from '@/lib/sanity/schemas'
 
 // What the Hero module shows (W73b), made from Sanity's answer. Nothing here reads Sanity.
 
@@ -10,34 +11,17 @@ export const HERO_RATIO = { desktop: 1600 / 900, mobile: 900 / 1600 } as const
 /** The window's width on Figma's two frames, and wider and sharper screens. The first is the plain `src`. */
 const WIDTHS = { desktop: [960, 1440, 1920, 2880], mobile: [390, 780, 1170] } as const
 
-/** A hero's video. `hasSound`: the editor says it has sound, so the visitor gets the button that turns it on. */
-export type HeroVideo = { url: string; description: string; captionsUrl: string | null; hasSound: boolean }
-
 /**
- * What one width of screen shows: `desktop` from 768px, `mobile` below. Its picture, cut to that screen's shape
- * round the editor's hotspot (for a video, its poster), and its video when it is one.
+ * The hero's picture (for a video, its poster) cut for each screen round the editor's hotspot: wide from 768px,
+ * tall below. A video with a poster of its own for phones (WQ35) has that one for the tall cut. One alt for both.
  */
-export type HeroSide = { image: SizedImage; alt: string; video: HeroVideo | null }
+export type HeroPicture = { desktop: SizedImage; mobile: SizedImage; alt: string }
 
 /** The hero's button: its words and where it goes. One with no link of its own goes to the booking panel. */
 export type HeroButton = { text: string; href: string }
 
-export type HeroContent = {
-  desktop: HeroSide
-  mobile: HeroSide
-  /** No media of its own for phones in Sanity: the one picture or video serves both, cut both ways. */
-  shared: boolean
-  button: HeroButton | null
-}
-
-const side = (media: Media, screen: keyof typeof HERO_RATIO): HeroSide => {
-  const picture = media.kind === 'image' ? media.image : media.poster
-  return {
-    image: sizedImage(picture, HERO_RATIO[screen], WIDTHS[screen]),
-    alt: picture.alt,
-    video: media.kind === 'video' ? { url: media.url, description: media.description, captionsUrl: media.captionsUrl, hasSound: media.hasSound } : null,
-  }
-}
+/** `video`: the hero's video, with its file for phones when it has one (lib/sanity/media.ts); null for a picture. */
+export type HeroContent = { picture: HeroPicture; video: ScreenVideo | null; button: HeroButton | null }
 
 function heroButton(button: HeroModule['button']): HeroButton | null {
   if (!button) return null
@@ -47,17 +31,17 @@ function heroButton(button: HeroModule['button']): HeroButton | null {
   return href ? { text: button.text, href } : null
 }
 
-/**
- * A Hero module as the site draws it, or null for one with no picture or video yet: it takes no room. With media
- * for phones (W73b, Wayne), screens narrower than 768px show that and wider ones the main media; with none, the
- * main media is on phones too.
- */
+/** A Hero module as the site draws it, or null for one with no picture or video yet: it takes no room. */
 export function heroContent(hero: HeroModule): HeroContent | null {
   if (!hero.media) return null
+  const still = stillOf(hero.media)
   return {
-    desktop: side(hero.media, 'desktop'),
-    mobile: side(hero.mobileMedia ?? hero.media, 'mobile'),
-    shared: hero.mobileMedia === null,
+    picture: {
+      desktop: sizedImage(still.wide, HERO_RATIO.desktop, WIDTHS.desktop),
+      mobile: sizedImage(still.phone, HERO_RATIO.mobile, WIDTHS.mobile),
+      alt: still.alt,
+    },
+    video: videoOf(hero.media),
     button: heroButton(hero.button),
   }
 }

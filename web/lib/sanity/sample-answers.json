@@ -186,6 +186,7 @@
         "media": {
           "kind": "video",
           "url": "https://cdn.sanity.io/files/p/d/vid.mp4",
+          "mobileUrl": "https://cdn.sanity.io/files/p/d/tall.mp4",
           "poster": {
             "ref": "image-hero-1600x900-jpg",
             "width": 1600,
@@ -194,24 +195,22 @@
             "crop": null,
             "hotspot": null
           },
-          "description": "Steam",
-          "captionsUrl": "https://cdn.sanity.io/files/p/d/cap.vtt",
-          "hasSound": true
-        },
-        "mobileMedia": {
-          "kind": "video",
-          "url": "https://cdn.sanity.io/files/p/d/tall.mp4",
-          "poster": {
+          "mobilePoster": {
             "ref": "image-tall-900x1600-jpg",
             "width": 900,
             "height": 1600,
-            "alt": "Picture tall",
+            "alt": "",
             "crop": null,
-            "hotspot": null
+            "hotspot": {
+              "x": 0.5,
+              "y": 0.4,
+              "width": 0.6,
+              "height": 0.6
+            }
           },
-          "description": "Steam, tall",
-          "captionsUrl": null,
-          "hasSound": false
+          "description": "Steam",
+          "captionsUrl": "https://cdn.sanity.io/files/p/d/cap.vtt",
+          "hasSound": true
         },
         "button": {
           "text": "Book Your Experience",
@@ -259,7 +258,6 @@
             "hotspot": null
           }
         },
-        "mobileMedia": null,
         "button": {
           "text": "Shop",
           "link": {
@@ -288,17 +286,6 @@
             "hotspot": null
           }
         },
-        "mobileMedia": {
-          "kind": "image",
-          "image": {
-            "ref": "image-tall-900x1600-jpg",
-            "width": 900,
-            "height": 1600,
-            "alt": "Picture tall",
-            "crop": null,
-            "hotspot": null
-          }
-        },
         "button": {
           "text": "Gift Cards",
           "link": {
@@ -312,24 +299,12 @@
         "type": "hero",
         "key": "h3",
         "media": null,
-        "mobileMedia": null,
         "button": null
       },
       {
         "type": "hero",
         "key": "h4",
         "media": null,
-        "mobileMedia": {
-          "kind": "image",
-          "image": {
-            "ref": "image-tall-900x1600-jpg",
-            "width": 900,
-            "height": 1600,
-            "alt": "Picture tall",
-            "crop": null,
-            "hotspot": null
-          }
-        },
         "button": {
           "text": "Not yet",
           "link": {
@@ -343,7 +318,6 @@
         "type": "hero",
         "key": "h5",
         "media": null,
-        "mobileMedia": null,
         "button": null
       },
       {
@@ -352,6 +326,7 @@
         "media": {
           "kind": "video",
           "url": "https://cdn.sanity.io/files/p/d/vid.mp4",
+          "mobileUrl": "https://cdn.sanity.io/files/p/d/tall.mp4",
           "poster": {
             "ref": "image-hero-1600x900-jpg",
             "width": 1600,
@@ -360,11 +335,11 @@
             "crop": null,
             "hotspot": null
           },
+          "mobilePoster": null,
           "description": "Steam",
           "captionsUrl": "https://cdn.sanity.io/files/p/d/cap.vtt",
           "hasSound": false
         },
-        "mobileMedia": null,
         "button": {
           "text": "Book",
           "link": {
@@ -373,6 +348,40 @@
             "url": null
           }
         }
+      },
+      {
+        "type": "hero",
+        "key": "h7",
+        "media": {
+          "kind": "video",
+          "url": "https://cdn.sanity.io/files/p/d/vid.mp4",
+          "mobileUrl": null,
+          "poster": {
+            "ref": "image-hero-1600x900-jpg",
+            "width": 1600,
+            "height": 900,
+            "alt": "Picture hero",
+            "crop": null,
+            "hotspot": null
+          },
+          "mobilePoster": {
+            "ref": "image-tall-900x1600-jpg",
+            "width": 900,
+            "height": 1600,
+            "alt": "",
+            "crop": null,
+            "hotspot": {
+              "x": 0.5,
+              "y": 0.4,
+              "width": 0.6,
+              "height": 0.6
+            }
+          },
+          "description": "Steam",
+          "captionsUrl": "https://cdn.sanity.io/files/p/d/cap.vtt",
+          "hasSound": false
+        },
+        "button": null
       },
       {
         "type": "upcomingEvents",
@@ -551,6 +560,7 @@
         {
           "kind": "video",
           "url": "https://cdn.sanity.io/files/p/d/vid.mp4",
+          "mobileUrl": null,
           "poster": {
             "ref": "image-hero-1600x900-jpg",
             "width": 1600,
@@ -559,6 +569,7 @@
             "crop": null,
             "hotspot": null
           },
+          "mobilePoster": null,
           "description": "Steam",
           "captionsUrl": "https://cdn.sanity.io/files/p/d/cap.vtt",
           "hasSound": false
@@ -605,6 +616,7 @@
       {
         "kind": "video",
         "url": "https://cdn.sanity.io/files/p/d/vid.mp4",
+        "mobileUrl": null,
         "poster": {
           "ref": "image-hero-1600x900-jpg",
           "width": 1600,
@@ -613,6 +625,7 @@
           "crop": null,
           "hotspot": null
         },
+        "mobilePoster": null,
         "description": "Steam",
         "captionsUrl": "https://cdn.sanity.io/files/p/d/cap.vtt",
         "hasSound": false
@@ -1274,6 +1287,7 @@
       {
         "kind": "video",
         "url": "https://cdn.sanity.io/files/p/d/vid.mp4",
+        "mobileUrl": null,
         "poster": {
           "ref": "image-hero-1600x900-jpg",
           "width": 1600,
@@ -1282,6 +1296,7 @@
           "crop": null,
           "hotspot": null
         },
+        "mobilePoster": null,
         "description": "Steam",
         "captionsUrl": "https://cdn.sanity.io/files/p/d/cap.vtt",
         "hasSound": false

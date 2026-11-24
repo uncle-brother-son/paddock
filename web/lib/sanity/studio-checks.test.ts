@@ -8,6 +8,7 @@ import {
   checkLinkSet,
   checkMediaPicture,
   checkMediaVideo,
+  checkPhoneVideo,
   checkPoster,
   checkRowCells,
   checkSlug,
@@ -98,6 +99,40 @@ describe('links and buttons', () => {
     const media = studioFile('schemaTypes/objects/media.ts')
     expect(media).toMatch(/name: 'hasSound',\s+title: 'Has Sound',\s+type: 'boolean',\s+description: '[^']+',\s+initialValue: false,\s+hidden: isNotVideo,/)
   })
+
+  // WQ35 (Wayne, 24 Nov): every video is one film with a desktop file and an optional file for phones, sharing its text.
+  it('WQ35: a video takes an optional file and an optional poster for phones; its description, captions and sound stay single', () => {
+    const media = studioFile('schemaTypes/objects/media.ts')
+    // A video's fields, in the order an editor meets them.
+    const fields = [...media.matchAll(/defineField\(\{\s+name: '(\w+)',\s+title: '([^']+)',\s+type: '(\w+)',/g)].map((match) => [match[1], match[2], match[3]])
+    expect(fields).toEqual([
+      ['kind', 'Kind', 'string'],
+      ['image', 'Image', 'picture'],
+      ['video', 'Video (MP4)', 'file'],
+      ['mobileVideo', 'Video for Phones (MP4)', 'file'],
+      ['poster', 'Poster Image', 'picture'],
+      ['mobilePoster', 'Poster for Phones', 'image'],
+      ['videoDescription', 'Video Description', 'string'],
+      ['hasSound', 'Has Sound', 'boolean'],
+      ['captions', 'Captions (WebVTT)', 'file'],
+    ])
+    // Both new fields are for a video only, and neither is required: a film may have one file.
+    expect(media).toMatch(/name: 'mobileVideo',[\s\S]*?options: \{ accept: 'video\/mp4' \},[\s\S]*?hidden: isNotVideo,\s+validation: \(rule\) => rule\.custom\(\(value\) => checkPhoneVideo\(value\)\),/)
+    expect(media).toMatch(/name: 'mobilePoster',\s+title: 'Poster for Phones',\s+type: 'image',\s+options: \{ hotspot: true \},\s+description: '[^']+',\s+hidden: isNotVideo,\s+\}\),/)
+    expect(checkPhoneVideo(undefined)).toBe(true)
+    expect(checkPhoneVideo({})).toBe(true)
+    expect(checkPhoneVideo({ asset: { _ref: 'file-a-mp4' } })).toBe(true)
+    expect(checkPhoneVideo({ asset: { _ref: 'file-a-mov' } })).toContain('not an MP4')
+  })
+
+  it("WQ35: the Sanity webhook reads none of it: a gallery's picture for the staff app is still its first image", () => {
+    const webhook = readFileSync(path.resolve(__dirname, '../../app/api/sanity/webhook/route.ts'), 'utf8')
+    expect(webhook).not.toMatch(/mobileVideo|mobilePoster|hasSound|videoDescription/)
+    expect(webhook).toContain("if (item === null || typeof item !== 'object' || item.kind === 'video') continue")
+    // What check:fast holds the webhook to reading of a media block: its kind and its image.
+    const levels = readFileSync(path.resolve(__dirname, '../../scripts/check-fast-level.mjs'), 'utf8')
+    expect(levels).toMatch(/export const WEBHOOK_BLOCKS = \{\s+media: \['kind', 'image'\],\s+picture: \[\],\s+\}/)
+  })
 })
 
 describe('W73b: the Hero is a module of a page', () => {
@@ -108,7 +143,7 @@ describe('W73b: the Hero is a module of a page', () => {
     expect(studioFile('schemaTypes/infoPage.ts')).not.toMatch(/hero/)
   })
 
-  it('the module is media (an image or an MP4), optional media for phones (the same block), and the optional button: a show switch, its words, its link', () => {
+  it('the module is media (an image or an MP4) and the optional button: a show switch, its words, its link; it has no media for phones of its own (WQ35)', () => {
     const hero = studioFile('schemaTypes/objects/hero.ts')
     expect(hero).toContain("name: 'hero'")
     expect(hero).toContain("type: 'object'")
@@ -116,7 +151,6 @@ describe('W73b: the Hero is a module of a page', () => {
     expect([...hero.matchAll(/name: '(\w+)', title: '[^']+', type: '(\w+)'|name: '(\w+)',\s+title: '[^']+',\s+type: '(\w+)'/g)].map((match) => [match[1] ?? match[3], match[2] ?? match[4]])).toEqual([
       ['hero', 'object'],
       ['media', 'media'],
-      ['mobileMedia', 'media'],
       ['showButton', 'boolean'],
       ['buttonText', 'string'],
       ['buttonLink', 'linkTo'],

@@ -53,6 +53,12 @@ export function checkMediaVideo(video: Asset, kind: string | undefined): Verdict
   return /-mp4$/i.test(video?.asset?._ref ?? '') ? true : 'This is not an MP4 file. Upload an MP4.'
 }
 
+/** WQ35: a video's file for phones is optional; when there is one, it is an MP4 as the main one is. */
+export function checkPhoneVideo(video: Asset): Verdict {
+  if (!hasAsset(video)) return true
+  return /-mp4$/i.test(video?.asset?._ref ?? '') ? true : 'This is not an MP4 file. Upload an MP4.'
+}
+
 export function checkPoster(poster: Asset, kind: string | undefined): Verdict {
   return kind !== 'video' || hasAsset(poster) ? true : 'Add the picture shown before the video plays.'
 }

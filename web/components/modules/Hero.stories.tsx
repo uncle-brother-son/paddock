@@ -2,10 +2,11 @@ import type { Meta, StoryObj } from '@storybook/nextjs-vite'
 import { useEffect, useState } from 'react'
 import { expect, fireEvent, userEvent, waitFor } from 'storybook/test'
 
-import type { HeroButton, HeroSide, HeroVideo } from '@/lib/modules/hero'
+import type { HeroButton } from '@/lib/modules/hero'
+import type { ScreenVideo } from '@/lib/sanity/media'
 
 import { Hero } from './Hero'
-import { recordSampleVideo, SAMPLE_PHONE_PICTURE, SAMPLE_PICTURE } from './sample-media'
+import { recordSampleVideo, SAMPLE_PICTURE, SAMPLE_PICTURE_WITH_PHONE_POSTER } from './sample-media'
 
 const BOOK: HeroButton = { text: 'Book Your Experience', href: '/book' }
 
@@ -18,18 +19,16 @@ type StoryArgs = {
   video: boolean
   /** The editor's "Has Sound" switch on that video. */
   hasSound: boolean
-  /** What phones show: the same media, a picture of their own, or a video of their own. */
-  phone: 'same' | 'picture' | 'video'
+  /** What the film has for phones (WQ35): nothing of its own, a poster, or a file and a poster. */
+  phone: 'same' | 'poster' | 'video'
 }
-
-const videoOf = (url: string, description: string, hasSound: boolean): HeroVideo => ({ url, description, captionsUrl: null, hasSound })
 
 /** The hero the story asks for, once any sample video it needs has been made (a second or so each). */
 function SampleHero({ button, reducedMotion, touch, video, hasSound, phone }: StoryArgs) {
   const [made, setMade] = useState<{ main: string | null; phone: string | null } | null>(null)
   useEffect(() => {
     let wanted = true
-    void Promise.all([video ? recordSampleVideo() : null, phone === 'video' ? recordSampleVideo('#a7bbc8') : null]).then(([main, forPhones]) => {
+    void Promise.all([video ? recordSampleVideo() : null, video && phone === 'video' ? recordSampleVideo('#a7bbc8') : null]).then(([main, forPhones]) => {
       if (wanted) setMade({ main, phone: forPhones })
     })
     return () => {
@@ -38,11 +37,10 @@ function SampleHero({ button, reducedMotion, touch, video, hasSound, phone }: St
   }, [video, phone])
   if (!made) return <p className="p-16 text-copy-14">Making a sample video…</p>
 
-  const mainVideo = made.main ? videoOf(made.main, 'A sample video', hasSound) : null
-  const desktop: HeroSide = { ...SAMPLE_PICTURE.desktop, video: mainVideo }
-  const mobile: HeroSide =
-    phone === 'same' ? { ...SAMPLE_PICTURE.mobile, video: mainVideo } : { ...SAMPLE_PHONE_PICTURE, video: made.phone ? videoOf(made.phone, 'A sample video for phones', hasSound) : null }
-  return <Hero desktop={desktop} mobile={mobile} shared={phone === 'same'} button={button} reducedMotion={reducedMotion} touch={touch} priority />
+  // One film: its two files share the description and the sound switch.
+  const film: ScreenVideo | null = made.main ? { url: made.main, phoneUrl: made.phone, description: 'A sample video', captionsUrl: null, hasSound } : null
+  const picture = film && phone !== 'same' ? SAMPLE_PICTURE_WITH_PHONE_POSTER : SAMPLE_PICTURE
+  return <Hero picture={picture} video={film} button={button} reducedMotion={reducedMotion} touch={touch} priority />
 }
 
 const meta = {
@@ -57,7 +55,11 @@ type Story = StoryObj<typeof meta>
 
 const heroIn = (canvasElement: HTMLElement) => canvasElement.querySelector('[data-module="hero"]') as HTMLElement
 const buttonIn = (canvasElement: HTMLElement) => canvasElement.querySelector('[data-hero-button]') as HTMLElement
-const layerIn = (canvasElement: HTMLElement, shown: 'both' | 'mobile' | 'desktop') => canvasElement.querySelector(`[data-hero-media="${shown}"]`) as HTMLElement
+const pictureIn = (canvasElement: HTMLElement) => heroIn(canvasElement).querySelector('img') as HTMLImageElement
+
+/** The player of one of a film's files, by the widths of screen it is for. */
+const playerIn = (canvasElement: HTMLElement, screens: 'both' | 'mobile' | 'desktop') => canvasElement.querySelector(`[data-hero-video="${screens}"]`) as HTMLElement
+const videoOf = (player: HTMLElement) => player.querySelector('video') as HTMLVideoElement
 
 const middle = (element: HTMLElement) => {
   const box = element.getBoundingClientRect()
@@ -82,6 +84,12 @@ const isUnseen = (button: HTMLElement) => getComputedStyle(button).opacity === '
 /** These stories are run on a device whose pointer is a mouse: there the button hides until it is wanted. */
 const hasAMouse = () => window.matchMedia('(hover: hover) and (pointer: fine)').matches
 
+/** Which of the sample pictures the browser took: the wide cut or the tall one, the film's own or its poster for phones. */
+const pictureTaken = (picture: HTMLImageElement) => {
+  const file = decodeURIComponent(picture.currentSrc)
+  return `${file.includes('viewBox="0 0 90 160"') ? 'tall' : 'wide'}, ${file.includes('#a7bbc8') ? 'the poster for phones' : 'the main picture'}`
+}
+
 /**
  * Figma Hero, Device=desktop: the picture across the whole window, 16 by 9 (810px tall on the 1440 frame), in the
  * Dark mode so the header over it has light words. A picture alone has no buttons.
@@ -95,10 +103,12 @@ export const Image: Story = {
     await expect(hero.dataset.theme).toBe('dark')
     const picture = canvas.getByRole('img', { name: 'A sample picture' })
     await expect(Math.round(picture.getBoundingClientRect().height)).toBe(810)
+    await expect(pictureTaken(pictureIn(canvasElement))).toBe('wide, the main picture')
     // The page's first picture loads at once, ahead of the rest.
     await expect([picture.getAttribute('loading'), picture.getAttribute('fetchpriority')]).toEqual(['eager', 'high'])
     await expect(canvas.queryByRole('button')).toBeNull()
     await expect(canvas.queryByRole('link')).toBeNull()
+    await expect(canvasElement.querySelector('video')).toBeNull()
   },
 }
 
@@ -183,7 +193,9 @@ export const Video: Story = {
   globals: { viewport: { value: 'desktop', isRotated: false } },
   play: async ({ canvas, canvasElement }) => {
     const pause = await canvas.findByRole('button', { name: 'Pause video' }, { timeout: 10_000 })
-    const video = canvasElement.querySelector('video') as HTMLVideoElement
+    // One file for every screen: one player.
+    const video = videoOf(playerIn(canvasElement, 'both'))
+    await expect(canvasElement.querySelectorAll('video')).toHaveLength(1)
     const hero = heroIn(canvasElement)
     await expect([video.muted, video.loop, video.playsInline, video.paused]).toEqual([true, true, true, false])
     await expect(video.getAttribute('aria-label')).toBe('A sample video')
@@ -233,8 +245,8 @@ export const VideoWithNoSound: Story = {
 }
 
 /**
- * Figma Hero, Device=mobile: 9 by 16 (693px tall on the 390 frame). On a touch screen the button is always there,
- * at its resting place: a finger moves nothing.
+ * Figma Hero, Device=mobile: 9 by 16 (693px tall on the 390 frame), the one picture cut tall round its hotspot. On
+ * a touch screen the button is always there, at its resting place: a finger moves nothing.
  */
 export const OnAPhone: Story = {
   name: 'On a phone',
@@ -244,6 +256,7 @@ export const OnAPhone: Story = {
     const hero = heroIn(canvasElement)
     const box = hero.getBoundingClientRect()
     await expect([Math.round(box.width), Math.round(box.height)]).toEqual([390, 693])
+    await expect(pictureTaken(pictureIn(canvasElement))).toBe('tall, the main picture')
     const button = buttonIn(canvasElement)
     await expect(isSeen(button)).toBe(true)
     await expect(middle(button)).toEqual(restOf(button))
@@ -298,11 +311,8 @@ export const ReducedMotion: Story = {
   },
 }
 
-/** Which file a hero picture took for this width of screen: its own, or the one-pixel nothing. */
-const fileOf = (layer: HTMLElement) => ((layer.querySelector('img') as HTMLImageElement).currentSrc.startsWith('data:image/gif') ? 'nothing' : 'its picture')
-
 /**
- * A video for the other width of screen: in the page, told to load nothing until it is played, and never played.
+ * A file for the other width of screen: in the page, told to load nothing until it is played, and never played.
  * (That nothing of it is fetched is shown by "Fetched only for its own screen" below: these samples are made in the
  * browser's memory, where there is nothing to fetch.)
  */
@@ -316,81 +326,82 @@ const askedFor = (...names: string[]) =>
     .filter((path) => names.some((name) => path.endsWith(name)))
 
 /**
- * A hero with media of its own for phones (Wayne, 24 Nov), on a phone: a video made for the tall shape. The
- * desktop's video is in the page but never on screen, so it is never played and nothing of it is fetched, and its
- * poster's file is a one-pixel nothing.
+ * A film with a file and a poster for phones (WQ35; Wayne, 24 Nov), on a phone: the phones' file plays over the
+ * phones' poster. The desktop's file is in the page but never on screen, so it is never played and nothing of it is
+ * fetched. The film's description and its sound switch are said once, for both.
  */
-export const OwnMediaOnAPhone: Story = {
-  name: 'Its own media, on a phone',
-  args: { video: true, phone: 'video', button: BOOK, touch: true },
+export const FilmForPhonesOnAPhone: Story = {
+  name: 'A film with a file for phones, on a phone',
+  args: { video: true, phone: 'video', hasSound: true, button: BOOK, touch: true },
   globals: { viewport: { value: 'mobile', isRotated: false } },
   play: async ({ canvas, canvasElement }) => {
     await canvas.findByRole('button', { name: 'Pause video' }, { timeout: 10_000 })
-    const [phone, desktop] = [layerIn(canvasElement, 'mobile'), layerIn(canvasElement, 'desktop')]
+    const [phone, desktop] = [playerIn(canvasElement, 'mobile'), playerIn(canvasElement, 'desktop')]
     await expect([getComputedStyle(phone).display, getComputedStyle(desktop).display]).toEqual(['block', 'none'])
-    const phoneVideo = phone.querySelector('video') as HTMLVideoElement
-    const desktopVideo = desktop.querySelector('video') as HTMLVideoElement
-    await expect(phoneVideo.paused).toBe(false)
-    await expect(phoneVideo.getAttribute('aria-label')).toBe('A sample video for phones')
-    await expect(neverPlayed(desktopVideo)).toBe(true)
-    await expect([fileOf(phone), fileOf(desktop)]).toEqual(['its picture', 'nothing'])
-    // One Pause button to press: the desktop's is not shown.
-    await expect(canvas.getAllByRole('button')).toHaveLength(1)
+    await expect(playerIn(canvasElement, 'both')).toBeNull()
+    await expect(videoOf(phone).paused).toBe(false)
+    await expect(neverPlayed(videoOf(desktop))).toBe(true)
+    await expect(videoOf(phone).src).not.toBe(videoOf(desktop).src)
+    // One description for the film, whichever file shows.
+    await expect(videoOf(phone).getAttribute('aria-label')).toBe('A sample video')
+    // One picture in the page, and the browser took the phones' poster.
+    await expect(canvasElement.querySelectorAll('img')).toHaveLength(1)
+    await expect(pictureTaken(pictureIn(canvasElement))).toBe('tall, the poster for phones')
+    // The sound switch is the film's: this screen's player has both buttons, and only its own are there to press.
+    await expect(canvas.getAllByRole('button').map((one) => one.getAttribute('aria-label'))).toEqual(['Unmute video', 'Pause video'])
   },
 }
 
-/** The same hero on a desktop: the main video plays, and nothing of the phones' video or its poster is fetched. */
-export const OwnMediaOnADesktop: Story = {
-  name: 'Its own media for phones, on a desktop',
-  args: { video: true, phone: 'video', button: BOOK },
+/** The same film on a desktop: the main file plays over the main poster, and nothing of the phones' is fetched. */
+export const FilmForPhonesOnADesktop: Story = {
+  name: 'A film with a file for phones, on a desktop',
+  args: { video: true, phone: 'video', hasSound: true, button: BOOK },
   globals: { viewport: { value: 'desktop', isRotated: false } },
   play: async ({ canvas, canvasElement }) => {
     await canvas.findByRole('button', { name: 'Pause video' }, { timeout: 10_000 })
-    const [phone, desktop] = [layerIn(canvasElement, 'mobile'), layerIn(canvasElement, 'desktop')]
+    const [phone, desktop] = [playerIn(canvasElement, 'mobile'), playerIn(canvasElement, 'desktop')]
     await expect([getComputedStyle(phone).display, getComputedStyle(desktop).display]).toEqual(['none', 'block'])
-    await expect((desktop.querySelector('video') as HTMLVideoElement).paused).toBe(false)
-    await expect((desktop.querySelector('video') as HTMLVideoElement).getAttribute('aria-label')).toBe('A sample video')
-    await expect(neverPlayed(phone.querySelector('video') as HTMLVideoElement)).toBe(true)
-    await expect([fileOf(phone), fileOf(desktop)]).toEqual(['nothing', 'its picture'])
-    await expect(canvas.getAllByRole('button')).toHaveLength(1)
+    await expect(videoOf(desktop).paused).toBe(false)
+    await expect(videoOf(desktop).getAttribute('aria-label')).toBe('A sample video')
+    await expect(neverPlayed(videoOf(phone))).toBe(true)
+    await expect(pictureTaken(pictureIn(canvasElement))).toBe('wide, the main picture')
+    await expect(canvas.getAllByRole('button').map((one) => one.getAttribute('aria-label'))).toEqual(['Unmute video', 'Pause video'])
   },
 }
 
-/** Tests only: a picture of its own for phones under a main video. A phone shows the picture and has no video buttons. */
-export const OwnPictureOnAPhone: Story = {
-  name: 'Its own picture, on a phone',
+/** Tests only: a poster for phones and no file for them. One player for every screen; a phone has the phones' poster under it. */
+export const PosterForPhonesOnly: Story = {
+  name: 'A poster for phones only, on a phone',
   tags: ['!dev'],
-  args: { video: true, phone: 'picture', touch: true },
+  args: { video: true, phone: 'poster', touch: true },
   globals: { viewport: { value: 'mobile', isRotated: false } },
   play: async ({ canvas, canvasElement }) => {
-    await waitFor(() => expect(layerIn(canvasElement, 'mobile')).not.toBeNull(), { timeout: 10_000 })
-    const [phone, desktop] = [layerIn(canvasElement, 'mobile'), layerIn(canvasElement, 'desktop')]
-    await expect(canvas.getByRole('img', { name: 'A sample picture for phones' })).toBeVisible()
-    await expect(phone.querySelector('video')).toBeNull()
-    await expect(canvas.queryByRole('button')).toBeNull()
-    await expect(neverPlayed(desktop.querySelector('video') as HTMLVideoElement)).toBe(true)
-    await expect([fileOf(phone), fileOf(desktop)]).toEqual(['its picture', 'nothing'])
+    await canvas.findByRole('button', { name: 'Pause video' }, { timeout: 10_000 })
+    await expect(canvasElement.querySelectorAll('video')).toHaveLength(1)
+    await expect(playerIn(canvasElement, 'both')).not.toBeNull()
+    await expect(pictureTaken(pictureIn(canvasElement))).toBe('tall, the poster for phones')
   },
 }
 
-/** A hero whose two videos are at addresses (which lead nowhere), so that what the browser asks for can be counted. */
+/** A hero whose film is at two addresses (which lead nowhere), so that what the browser asks for can be counted. */
 function HeroAtAddresses({ named }: { named: string }) {
-  const video = (screen: string): HeroVideo => videoOf(`/sample-hero-${named}-for-${screen}.mp4`, `A sample video for a ${screen}`, false)
-  return <Hero desktop={{ ...SAMPLE_PICTURE.desktop, video: video('desktop') }} mobile={{ ...SAMPLE_PHONE_PICTURE, video: video('phone') }} shared={false} button={null} reducedMotion={false} priority />
+  const film: ScreenVideo = { url: `/sample-hero-${named}-for-desktop.mp4`, phoneUrl: `/sample-hero-${named}-for-phone.mp4`, description: 'A sample video', captionsUrl: null, hasSound: false }
+  return <Hero picture={SAMPLE_PICTURE_WITH_PHONE_POSTER} video={film} button={null} reducedMotion={false} priority />
 }
 
-/** Tests only: a phone asks for the phones' video and never for the desktop's ("a phone never downloads the desktop video"). */
+/** Tests only: a phone asks for the phones' file and never for the desktop's ("only the one the screen needs is ever fetched"). */
 export const FetchedOnlyForItsOwnScreenPhone: Story = {
   name: 'Fetched only for its own screen: a phone',
   tags: ['!dev'],
   globals: { viewport: { value: 'mobile', isRotated: false } },
   render: () => <HeroAtAddresses named="on-a-phone" />,
   play: async ({ canvasElement }) => {
-    await expect(getComputedStyle(layerIn(canvasElement, 'desktop')).display).toBe('none')
+    await expect(getComputedStyle(playerIn(canvasElement, 'desktop')).display).toBe('none')
     await waitFor(() => expect(askedFor('on-a-phone-for-phone.mp4')).toHaveLength(1), { timeout: 5000 })
     // Long enough for the other to have been asked for, had anything wanted it.
     await new Promise((resolve) => setTimeout(resolve, 500))
     await expect(askedFor('on-a-phone-for-desktop.mp4')).toEqual([])
+    await expect(pictureTaken(pictureIn(canvasElement))).toBe('tall, the poster for phones')
   },
 }
 
@@ -401,24 +412,10 @@ export const FetchedOnlyForItsOwnScreenDesktop: Story = {
   globals: { viewport: { value: 'desktop', isRotated: false } },
   render: () => <HeroAtAddresses named="on-a-desktop" />,
   play: async ({ canvasElement }) => {
-    await expect(getComputedStyle(layerIn(canvasElement, 'mobile')).display).toBe('none')
+    await expect(getComputedStyle(playerIn(canvasElement, 'mobile')).display).toBe('none')
     await waitFor(() => expect(askedFor('on-a-desktop-for-desktop.mp4')).toHaveLength(1), { timeout: 5000 })
     await new Promise((resolve) => setTimeout(resolve, 500))
     await expect(askedFor('on-a-desktop-for-phone.mp4')).toEqual([])
-  },
-}
-
-/** Tests only: with no media of its own for phones, the one picture serves both, cut tall on a phone. */
-export const SameMediaOnAPhone: Story = {
-  name: 'The same media, on a phone',
-  tags: ['!dev'],
-  args: { touch: true },
-  globals: { viewport: { value: 'mobile', isRotated: false } },
-  play: async ({ canvasElement }) => {
-    const layer = layerIn(canvasElement, 'both')
-    await expect(canvasElement.querySelectorAll('[data-hero-media]')).toHaveLength(1)
-    const picture = layer.querySelector('img') as HTMLImageElement
-    // The tall cut (90 by 160 in the sample), not the wide one.
-    await expect(decodeURIComponent(picture.currentSrc)).toContain('viewBox="0 0 90 160"')
+    await expect(pictureTaken(pictureIn(canvasElement))).toBe('wide, the main picture')
   },
 }

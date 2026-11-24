@@ -4,12 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import answers from '@/lib/sanity/sample-answers.json'
 import { BOOK_ADDRESS } from '@/lib/sanity/links'
-import { contentPageSchema, type HeroModule } from '@/lib/sanity/schemas'
+import { stillOf, videoOf } from '@/lib/sanity/media'
+import { contentPageSchema, productSchema, type HeroModule } from '@/lib/sanity/schemas'
 
 import { HERO_RATIO, heroContent } from './hero'
 
-// Brief W73b, items 1 and 2, and its Level 3 fixes (Wayne, 24 Nov): what the Hero module shows, from Sanity's answer
-// (the samples lib/sanity/read.test.ts holds, made by Sanity's own query engine).
+// Brief W73b, items 1 and 2, its Level 3 fixes and WQ35 (Wayne, 24 Nov): what the Hero module shows, from Sanity's
+// answer (the samples lib/sanity/read.test.ts holds, made by Sanity's own query engine).
 
 const heroesOf = (page: unknown): HeroModule[] => contentPageSchema.parse(page).modules.filter((module): module is HeroModule => module.type === 'hero')
 const home = heroesOf(answers.homePage)
@@ -23,76 +24,98 @@ beforeEach(() => {
 })
 afterEach(() => vi.unstubAllEnvs())
 
-describe('a hero with one media for every screen', () => {
-  it("a picture is cut both ways from Sanity's CDN: 16 by 9 for a desktop, 9 by 16 for a phone", () => {
-    const { desktop, mobile, shared } = heroContent(byKey('h1'))!
-    expect(shared).toBe(true)
-    expect([desktop.video, mobile.video]).toEqual([null, null])
-    expect([desktop.image.width, desktop.image.height, mobile.image.width, mobile.image.height]).toEqual([960, 540, 390, 693])
-    expect(desktop.image.width / desktop.image.height).toBeCloseTo(HERO_RATIO.desktop, 2)
-    expect(mobile.image.width / mobile.image.height).toBeCloseTo(HERO_RATIO.mobile, 2)
+describe("the hero's picture", () => {
+  it("is one file, cut both ways from Sanity's CDN: 16 by 9 for a desktop, 9 by 16 for a phone", () => {
+    const { picture, video } = heroContent(byKey('h1'))!
+    expect(video).toBeNull()
+    const { desktop, mobile } = picture
+    expect([desktop.width, desktop.height, mobile.width, mobile.height]).toEqual([960, 540, 390, 693])
+    expect(desktop.width / desktop.height).toBeCloseTo(HERO_RATIO.desktop, 2)
+    expect(mobile.width / mobile.height).toBeCloseTo(HERO_RATIO.mobile, 2)
     // The same picture at each width, each cropped to its shape and in the browser's best format.
-    expect(widthsOf(desktop.image.srcSet)).toEqual(['960w', '1440w', '1920w', '2880w'])
-    expect(widthsOf(mobile.image.srcSet)).toEqual(['390w', '780w', '1170w'])
-    for (const address of [desktop.image.src, mobile.image.src]) {
+    expect(widthsOf(desktop.srcSet)).toEqual(['960w', '1440w', '1920w', '2880w'])
+    expect(widthsOf(mobile.srcSet)).toEqual(['390w', '780w', '1170w'])
+    for (const address of [desktop.src, mobile.src]) {
       expect(address).toContain('https://cdn.sanity.io/images/project/production/hero-1600x900.jpg')
       expect(address).toContain('fit=crop')
       expect(address).toContain('auto=format')
     }
-    expect(desktop.image.src).toContain('w=960&h=540')
-    expect(mobile.image.src).toContain('w=390&h=693')
+    expect(desktop.src).toContain('w=960&h=540')
+    expect(mobile.src).toContain('w=390&h=693')
     // A decorative picture has no alt text to read out.
-    expect([desktop.alt, mobile.alt]).toEqual(['', ''])
+    expect(picture.alt).toBe('')
+    expect(heroContent(byKey('h2'))!.picture.alt).toBe('Picture hero')
   })
 
-  it('a video is the same video on both, over its poster cut both ways; the media for phones with no poster counts as none', () => {
-    // The sample hero h6: a video, and for phones a video with no poster (so nothing of their own).
-    const { desktop, mobile, shared } = heroContent(byKey('h6'))!
-    expect(shared).toBe(true)
-    const video = { url: 'https://cdn.sanity.io/files/p/d/vid.mp4', description: 'Steam', captionsUrl: 'https://cdn.sanity.io/files/p/d/cap.vtt', hasSound: false }
-    expect([desktop.video, mobile.video]).toEqual([video, video])
-    expect([desktop.alt, mobile.alt]).toEqual(['Picture hero', 'Picture hero'])
-    expect([desktop.image.height, mobile.image.height]).toEqual([540, 693])
-  })
-
-  it('a hero with no picture or video yet is not drawn at all, whatever phones have', () => {
+  it('a hero with no picture or video yet is not drawn at all', () => {
     for (const key of ['h3', 'h4', 'h5']) expect(heroContent(byKey(key)), key).toBeNull()
-    expect(byKey('h4').mobileMedia).not.toBeNull()
   })
 })
 
-describe('W73b Level 3: a hero with media of its own for phones', () => {
-  it('a picture for phones: the desktop has the main picture, wide; phones their own, tall; each its own alt', () => {
-    const { desktop, mobile, shared } = heroContent(byKey('h2'))!
-    expect(shared).toBe(false)
-    expect(desktop.image.src).toContain('hero-1600x900.jpg')
-    expect(desktop.image.src).toContain('w=960&h=540')
-    expect(mobile.image.src).toContain('tall-900x1600.jpg')
-    expect(mobile.image.src).toContain('w=390&h=693')
-    expect([desktop.alt, mobile.alt]).toEqual(['Picture hero', 'Picture tall'])
-    // Neither is cut the other way: a phone is never offered the desktop's picture, nor the reverse.
-    expect(widthsOf(desktop.image.srcSet)).toEqual(['960w', '1440w', '1920w', '2880w'])
-    expect(widthsOf(mobile.image.srcSet)).toEqual(['390w', '780w', '1170w'])
-    expect(mobile.image.srcSet).not.toContain('hero-1600x900')
-    expect(desktop.image.srcSet).not.toContain('tall-900x1600')
+describe('WQ35: a video is one film, with a file for desktops and, when it has one, a file for phones', () => {
+  const film = { description: 'Steam', captionsUrl: 'https://cdn.sanity.io/files/p/d/cap.vtt' }
+
+  it('a film with a file and a poster for phones: each screen has its own file and its own poster', () => {
+    const { picture, video } = heroContent(home[0]!)!
+    expect(video).toEqual({ url: 'https://cdn.sanity.io/files/p/d/vid.mp4', phoneUrl: 'https://cdn.sanity.io/files/p/d/tall.mp4', ...film, hasSound: true })
+    expect(picture.desktop.src).toContain('hero-1600x900.jpg')
+    expect(picture.desktop.src).toContain('w=960&h=540')
+    expect(picture.mobile.src).toContain('tall-900x1600.jpg')
+    expect(picture.mobile.src).toContain('w=390&h=693')
+    // A phone is never offered the desktop's poster, nor the reverse.
+    expect(picture.mobile.srcSet).not.toContain('hero-1600x900')
+    expect(picture.desktop.srcSet).not.toContain('tall-900x1600')
+    // The poster for phones is cropped round its own hotspot (a focal point, in the address).
+    expect(picture.mobile.src).toMatch(/fp-x=0\.5&fp-y=0\.4|rect=/)
   })
 
-  it('a video for phones: each screen has its own video, poster, description and captions', () => {
-    const { desktop, mobile, shared } = heroContent(home[0]!)!
-    expect(shared).toBe(false)
-    expect(desktop.video).toEqual({ url: 'https://cdn.sanity.io/files/p/d/vid.mp4', description: 'Steam', captionsUrl: 'https://cdn.sanity.io/files/p/d/cap.vtt', hasSound: true })
-    expect(mobile.video).toEqual({ url: 'https://cdn.sanity.io/files/p/d/tall.mp4', description: 'Steam, tall', captionsUrl: null, hasSound: false })
-    expect(desktop.image.src).toContain('hero-1600x900.jpg')
-    expect(mobile.image.src).toContain('tall-900x1600.jpg')
-    expect([desktop.alt, mobile.alt]).toEqual(['Picture hero', 'Picture tall'])
+  it('its description, captions and sound are said once and shared; the poster for phones is described by the main poster', () => {
+    const { picture, video } = heroContent(home[0]!)!
+    expect(Object.keys(video!).sort()).toEqual(['captionsUrl', 'description', 'hasSound', 'phoneUrl', 'url'])
+    expect(picture.alt).toBe('Picture hero')
+    const media = home[0]!.media!
+    expect(media.kind === 'video' && media.mobilePoster?.alt).toBe('')
+  })
+
+  it('a file for phones with no poster for them: the main poster, cut tall', () => {
+    const { picture, video } = heroContent(byKey('h6'))!
+    expect(video).toEqual({ url: 'https://cdn.sanity.io/files/p/d/vid.mp4', phoneUrl: 'https://cdn.sanity.io/files/p/d/tall.mp4', ...film, hasSound: false })
+    expect(picture.mobile.src).toContain('hero-1600x900.jpg')
+    expect(picture.mobile.src).toContain('w=390&h=693')
+  })
+
+  it('a poster for phones with no file for them: the one file on every screen, over each screen\'s poster', () => {
+    const { picture, video } = heroContent(byKey('h7'))!
+    expect(video).toEqual({ url: 'https://cdn.sanity.io/files/p/d/vid.mp4', phoneUrl: null, ...film, hasSound: false })
+    expect(picture.desktop.src).toContain('hero-1600x900.jpg')
+    expect(picture.mobile.src).toContain('tall-900x1600.jpg')
+  })
+
+  it('wherever media is drawn: the same two answers for a gallery\'s video and picture (lib/sanity/media.ts)', () => {
+    const [video, picture] = productSchema.parse(answers.product).gallery
+    expect(videoOf(video!)).toEqual({ url: 'https://cdn.sanity.io/files/p/d/vid.mp4', phoneUrl: null, ...film, hasSound: false })
+    const still = stillOf(video!)
+    expect([still.wide.ref, still.phone.ref, still.alt]).toEqual(['image-hero-1600x900-jpg', 'image-hero-1600x900-jpg', 'Picture hero'])
+    expect(videoOf(picture!)).toBeNull()
+    expect(stillOf(picture!).wide).toBe(stillOf(picture!).phone)
+  })
+
+  it('the Hero draws one picture, and one player for each file: each hidden, and so never fetched, on the other width of screen', () => {
+    const hero = readFileSync(path.resolve(__dirname, '../../components/modules/Hero.tsx'), 'utf8')
+    expect(hero).toContain("const ON_SCREENS: Record<Screens, string> = { both: '', mobile: 'md:hidden', desktop: 'hidden md:block' }")
+    expect(hero).toMatch(/\{video\?\.phoneUrl \? \(\s*<>\s*\{player\(video\.phoneUrl, 'mobile'\)\}\s*\{player\(video\.url, 'desktop'\)\}\s*<\/>\s*\) : video \? \(\s*player\(video\.url, 'both'\)\s*\) : null\}/)
+    // A file loads nothing until it is played, and is played only while it is on screen.
+    expect(hero).toContain('preload="none"')
+    expect(hero).toMatch(/if \(onScreen\) element\.play\(\)\.catch\(\(\) => undefined\)\s+else element\.pause\(\)/)
+    // The picture: the browser picks the cut before it fetches.
+    expect(hero).toContain('<source media="(width >= 48rem)" srcSet={picture.desktop.srcSet}')
   })
 })
 
-describe('W73b Level 3: a video\'s sound', () => {
-  it('"Has Sound" is the editor\'s switch on each video: off unless it was switched on', () => {
-    const { desktop, mobile } = heroContent(home[0]!)!
-    expect([desktop.video?.hasSound, mobile.video?.hasSound]).toEqual([true, false])
-    expect(heroContent(byKey('h6'))!.desktop.video?.hasSound).toBe(false)
+describe("W73b Level 3: a video's sound", () => {
+  it('"Has Sound" is the editor\'s switch on the film: off unless it was switched on', () => {
+    expect(heroContent(home[0]!)!.video?.hasSound).toBe(true)
+    expect(heroContent(byKey('h6'))!.video?.hasSound).toBe(false)
   })
 
   it('the sound button is drawn only for a video that has sound; Pause always', () => {
@@ -120,6 +143,7 @@ describe("the hero's button", () => {
     expect(unpublished.button?.text).toBe('Not yet')
     expect(heroContent(unpublished)!.button).toBeNull()
     expect(heroContent({ ...byKey('h2'), button: null })!.button).toBeNull()
+    expect(heroContent(byKey('h7'))!.button).toBeNull()
   })
 })
 

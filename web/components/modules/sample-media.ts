@@ -1,4 +1,4 @@
-import type { HeroSide } from '@/lib/modules/hero'
+import type { HeroPicture } from '@/lib/modules/hero'
 import type { SizedImage } from '@/lib/sanity/image'
 
 // For the Modules stories only: pictures and a video made on the spot, so a story fetches nothing. The site's own
@@ -17,13 +17,10 @@ const MAIN: Colours = { above: '#193028', below: '#6e6258', ring: '#bd9b5d' }
 const FOR_PHONES: Colours = { above: '#a7bbc8', below: '#193028', ring: '#f1eee3' }
 
 /** A hero's picture in its two cuts: 16 by 9 for a desktop, 9 by 16 for a phone. */
-export const SAMPLE_PICTURE: { desktop: HeroSide; mobile: HeroSide } = {
-  desktop: { image: drawn(160, 90, MAIN), alt: 'A sample picture', video: null },
-  mobile: { image: drawn(90, 160, MAIN), alt: 'A sample picture', video: null },
-}
+export const SAMPLE_PICTURE: HeroPicture = { desktop: drawn(160, 90, MAIN), mobile: drawn(90, 160, MAIN), alt: 'A sample picture' }
 
-/** Another picture, as an editor's own choice for phones: 9 by 16. */
-export const SAMPLE_PHONE_PICTURE: HeroSide = { image: drawn(90, 160, FOR_PHONES), alt: 'A sample picture for phones', video: null }
+/** A video's posters when it has one of its own for phones (WQ35): another picture for the tall cut, the same alt. */
+export const SAMPLE_PICTURE_WITH_PHONE_POSTER: HeroPicture = { ...SAMPLE_PICTURE, mobile: drawn(90, 160, FOR_PHONES) }
 
 const VIDEO = { width: 320, height: 180, milliseconds: 1200 }
 

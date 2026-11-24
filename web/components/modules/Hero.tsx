@@ -5,45 +5,29 @@ import { useEffect, useRef, useState, type FocusEvent, type PointerEvent, type R
 import { Icon, type IconName } from '@/components/brand/Icon'
 import { ButtonLabel } from '@/components/ui/Button'
 import { SiteLink } from '@/components/ui/SiteLink'
-import type { HeroButton, HeroContent, HeroSide, HeroVideo } from '@/lib/modules/hero'
+import type { HeroButton, HeroContent, HeroPicture } from '@/lib/modules/hero'
 import { usePrefersReducedMotion } from '@/lib/motion/reduced-motion'
-import type { SizedImage } from '@/lib/sanity/image'
+import type { ScreenVideo } from '@/lib/sanity/media'
 
 const clamp = (value: number, least: number, most: number): number => Math.min(Math.max(value, least), most)
 
-/** The two widths of screen the hero is drawn for: Figma's phone frame below 768px, its desktop frame from there. */
-const FROM_DESKTOP = '(width >= 48rem)'
-const BELOW_DESKTOP = '(width < 48rem)'
-
-/** A picture one pixel big, with nothing in it: what a picture's file is on the width of screen it is not shown on. */
-const NO_PICTURE = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=='
-
 /**
- * What a hero's picture is on the other width of screen: the same picture cut the other way, or nothing at all
- * when that screen has media of its own. The browser picks before it fetches, so only the file the screen needs
- * is downloaded.
+ * The hero's picture, across the whole hero: the tall cut on a phone, the wide one from 768px. The browser picks
+ * before it fetches, so a screen downloads only its own cut (for a video with a poster for phones, only its own
+ * poster). The first hero of a page is its largest picture, so it loads at once and ahead of the rest (`priority`);
+ * any other waits until it is near.
  */
-type Elsewhere = { media: string; image: SizedImage | null }
-
-/**
- * A hero's picture, across the whole hero. The first hero of a page is its largest picture, so it loads at once
- * and ahead of the rest (`priority`); any other waits until it is near.
- */
-function HeroImage({ image, alt, elsewhere, priority }: { image: SizedImage; alt: string; elsewhere: Elsewhere; priority: boolean }) {
+function HeroImage({ picture, alt, priority }: { picture: HeroPicture; alt: string; priority: boolean }) {
   return (
     <picture>
-      {elsewhere.image ? (
-        <source media={elsewhere.media} srcSet={elsewhere.image.srcSet} sizes="100vw" width={elsewhere.image.width} height={elsewhere.image.height} />
-      ) : (
-        <source media={elsewhere.media} srcSet={NO_PICTURE} />
-      )}
+      <source media="(width >= 48rem)" srcSet={picture.desktop.srcSet} sizes="100vw" width={picture.desktop.width} height={picture.desktop.height} />
       {/* A plain <img>: Next's image optimiser does not run on Workers. The address is Sanity's CDN, sized in lib/sanity/image.ts. */}
       <img
-        src={image.src}
-        srcSet={image.srcSet}
+        src={picture.mobile.src}
+        srcSet={picture.mobile.srcSet}
         sizes="100vw"
-        width={image.width}
-        height={image.height}
+        width={picture.mobile.width}
+        height={picture.mobile.height}
         alt={alt}
         loading={priority ? 'eager' : 'lazy'}
         fetchPriority={priority ? 'high' : 'auto'}
@@ -71,19 +55,21 @@ function HeroIconButton({ label, icon, onClick }: { label: string; icon: IconNam
   )
 }
 
-type Still = { image: SizedImage; alt: string; elsewhere: Elsewhere }
+/** The widths of screen one of a video's files is for: every width, or one of the two when the film has a file for phones. */
+type Screens = 'both' | 'mobile' | 'desktop'
+const ON_SCREENS: Record<Screens, string> = { both: '', mobile: 'md:hidden', desktop: 'hidden md:block' }
 
 /**
- * A hero's video (WQ15, WQ18; docs/build-standards.md, Video): muted, looped and inline. Its poster is the picture
- * in the page from the start, and the video takes its place once it shows a frame. It plays only while it is on
- * screen, and loads nothing until then: a video for the other width of screen is never on screen, so it is never
- * fetched. With reduced motion on it never starts by itself: the poster stays, with Play.
+ * One file of a hero's video, with its buttons (WQ15, WQ18; docs/build-standards.md, Video): muted, looped and
+ * inline, over the poster that is in the page from the start, and seen once it shows a frame. It plays only while
+ * it is on screen, and loads nothing until then: a file for the other width of screen is never on screen, so it is
+ * never fetched (WQ35). With reduced motion on it never starts by itself: the poster stays, with Play.
  *
  * Pause is always there. The sound button is there only when the editor says the video has sound (W73b, Wayne).
  * Both show what a press will do, as Figma draws them for a video that is playing with its sound off: the speaker
  * and Pause.
  */
-function HeroVideoPlayer({ video, still, priority, reducedMotion }: { video: HeroVideo; still: Still; priority: boolean; reducedMotion: boolean }) {
+function HeroVideoPlayer({ url, video, screens, reducedMotion, onStarted }: { url: string; video: ScreenVideo; screens: Screens; reducedMotion: boolean; onStarted: () => void }) {
   const player = useRef<HTMLVideoElement>(null)
   const [playing, setPlaying] = useState(false)
   const [started, setStarted] = useState(false)
@@ -126,12 +112,10 @@ function HeroVideoPlayer({ video, still, priority, reducedMotion }: { video: Her
   }
 
   return (
-    <>
-      {/* Once the video shows, it is the video that is described to a screen reader, not the picture beneath it. */}
-      <HeroImage image={still.image} alt={started ? '' : still.alt} elsewhere={still.elsewhere} priority={priority} />
+    <div data-hero-video={screens} className={`absolute inset-0 ${ON_SCREENS[screens]}`}>
       <video
         ref={player}
-        src={video.url}
+        src={url}
         muted={muted}
         loop
         playsInline
@@ -141,6 +125,7 @@ function HeroVideoPlayer({ video, still, priority, reducedMotion }: { video: Her
         onPlaying={() => {
           setPlaying(true)
           setStarted(true)
+          onStarted()
         }}
         onPause={() => setPlaying(false)}
         className={`absolute inset-0 size-full object-cover ${started ? '' : 'invisible'}`}
@@ -153,25 +138,32 @@ function HeroVideoPlayer({ video, still, priority, reducedMotion }: { video: Her
         ) : null}
         <HeroIconButton label={playing ? 'Pause video' : 'Play video'} icon={playing ? 'pause' : 'play'} onClick={togglePlay} />
       </div>
-    </>
+    </div>
   )
 }
 
 /**
- * What one width of screen shows, across the whole hero: its picture, or its video over its poster. `shown` is
- * the widths it is there for: both (the one media serves both), or one of the two (the hero has media for phones).
+ * The hero's media: its picture, and over it its video when it is one. A film with a file for phones (WQ35) has
+ * two players, one for each width of screen, each hidden on the other and so never fetched there; they share the
+ * film's description, captions and sound. A film with one file has one player for every screen.
  */
-function HeroLayer({ side, elsewhere, shown, priority, reducedMotion }: { side: HeroSide; elsewhere: Elsewhere; shown: 'both' | 'mobile' | 'desktop'; priority: boolean; reducedMotion: boolean }) {
-  const still: Still = { image: side.image, alt: side.alt, elsewhere }
-  const widths = { both: '', mobile: 'md:hidden', desktop: 'hidden md:block' }[shown]
+function HeroMedia({ picture, video, priority, reducedMotion }: { picture: HeroPicture; video: ScreenVideo | null; priority: boolean; reducedMotion: boolean }) {
+  // Once the video shows, it is the video that is described to a screen reader, not the picture beneath it.
+  const [started, setStarted] = useState(false)
+  const player = (url: string, screens: Screens) =>
+    video ? <HeroVideoPlayer url={url} video={video} screens={screens} reducedMotion={reducedMotion} onStarted={() => setStarted(true)} /> : null
   return (
-    <div data-hero-media={shown} className={`absolute inset-0 ${widths}`}>
-      {side.video ? (
-        <HeroVideoPlayer video={side.video} still={still} priority={priority} reducedMotion={reducedMotion} />
-      ) : (
-        <HeroImage image={still.image} alt={still.alt} elsewhere={still.elsewhere} priority={priority} />
-      )}
-    </div>
+    <>
+      <HeroImage picture={picture} alt={started ? '' : picture.alt} priority={priority} />
+      {video?.phoneUrl ? (
+        <>
+          {player(video.phoneUrl, 'mobile')}
+          {player(video.url, 'desktop')}
+        </>
+      ) : video ? (
+        player(video.url, 'both')
+      ) : null}
+    </>
   )
 }
 
@@ -198,8 +190,9 @@ type HeroProps = HeroContent & {
 
 /**
  * The Hero module (W73b; Figma "Hero", 1213:29172): a picture or a video across the whole window, 16 by 9 on a
- * desktop and 9 by 16 on a phone, in the Dark mode, so the header over it has light words. With media of its own
- * for phones, screens narrower than 768px show that and fetch nothing of the other; wider screens the reverse.
+ * desktop and 9 by 16 on a phone, in the Dark mode, so the header over it has light words. A picture is one file,
+ * cut for each screen round its hotspot. A video is one film (WQ35): screens narrower than 768px show its file and
+ * poster for phones when it has them, and fetch nothing of the desktop's; wider screens the reverse.
  *
  * The button (WQ24; Wayne, 24 Nov). Its resting place is towards the bottom, centred.
  * - With a mouse (a device whose main pointer is fine and can hover: the `hero-button` utility in app/globals.css)
@@ -212,7 +205,7 @@ type HeroProps = HeroContent & {
  * - Reduced motion: it follows nothing. It fades in at its resting place while the pointer is over the hero or it
  *   has focus.
  */
-export function Hero({ desktop, mobile, shared, button, priority = false, reducedMotion: reducedMotionSet, touch = false, children }: HeroProps) {
+export function Hero({ picture, video, button, priority = false, reducedMotion: reducedMotionSet, touch = false, children }: HeroProps) {
   const visitorReducedMotion = usePrefersReducedMotion()
   const reducedMotion = reducedMotionSet ?? visitorReducedMotion
   const mover = useRef<HTMLSpanElement>(null)
@@ -270,16 +263,6 @@ export function Hero({ desktop, mobile, shared, button, priority = false, reduce
     if (reducedMotion && mover.current) mover.current.style.translate = ''
   }, [reducedMotion])
 
-  // The one media for both widths of screen: on the other width the same picture, cut the other way.
-  const layers = shared ? (
-    <HeroLayer side={mobile} elsewhere={{ media: FROM_DESKTOP, image: desktop.image }} shown="both" priority={priority} reducedMotion={reducedMotion} />
-  ) : (
-    <>
-      <HeroLayer side={mobile} elsewhere={{ media: FROM_DESKTOP, image: null }} shown="mobile" priority={priority} reducedMotion={reducedMotion} />
-      <HeroLayer side={desktop} elsewhere={{ media: BELOW_DESKTOP, image: null }} shown="desktop" priority={priority} reducedMotion={reducedMotion} />
-    </>
-  )
-
   return (
     <section
       data-theme="dark"
@@ -290,7 +273,7 @@ export function Hero({ desktop, mobile, shared, button, priority = false, reduce
       className="relative aspect-9/16 w-full overflow-clip bg-object-product-bg md:aspect-16/9"
     >
       {children}
-      {layers}
+      <HeroMedia picture={picture} video={video} priority={priority} reducedMotion={reducedMotion} />
       {button ? (
         <div className="pointer-events-none absolute inset-x-0 bottom-120 z-10 flex justify-center">
           <span ref={mover} data-hero-button="" {...(touch ? { 'data-shown': '' } : {})} className="hero-button pointer-events-auto flex">
