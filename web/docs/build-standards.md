@@ -48,7 +48,7 @@ Written 23 Nov 2026 for Claude Code and reviewers. Every page, component and mod
 **Motion**
 - Libraries: Lenis for smooth scroll, Motion for every animation (WQ20). GSAP only if a later module needs it, flagged to Wayne first.
 - One shared motion tokens file holds the easing and durations, read by both the CSS (as variables) and Motion (as constants), so a change there changes the whole site (WQ21, WQ23): `ease-smooth` cubic-bezier(0, 0, 0.2, 1) for every animation, and only two durations: `duration-short` 320 ms (hovers; panels: Menu, Book, Bag, Sign in) and `duration-long` 640 ms (page transitions; each of the intro's 3 transitions, run back to back with no pauses: the waits in the Figma prototype are only a Figma limitation). No animation uses its own curve or a typed-in duration.
-- Intro: Wayne's Figma intro, once per browser session on the first page landed on. Page transitions: oddritualgolf.com's movement (old page dims, new page slides up over it) on every page-to-page click.
+- Intro: Wayne's Figma intro, once per browser session on the first page landed on. Page transitions: oddritualgolf.com's movement on every page-to-page click, as that site's own code moves (Wayne, 24 Nov, W73b): the page being left drifts down a fifth of the window and fades to 40%, and the new page is uncovered from the top edge downwards, settling into place. Back and Forward swap the page at once.
 - The scroll effect and page transitions respect `prefers-reduced-motion`: with it on, transitions become a short fade or none, and the scroll effect is switched off. Built once in the site shell so every module inherits it.
 - Anything that moves for more than 5 seconds by itself can be paused. No autoplaying sound.
 
