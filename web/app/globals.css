@@ -533,6 +533,35 @@ body {
 }
 
 /*
+ * The Hero's button (W73b; WQ24; Wayne, 24 Nov). components/modules/Hero.tsx puts this on it, and `data-shown` when
+ * it is to be seen. Its fade and its glide after the pointer take the short duration with the smooth curve.
+ *
+ * On a device whose main pointer is a mouse (fine, and able to hover) it is hidden, and can't be pressed, until it
+ * is shown: while the pointer is over the hero, or while it has keyboard focus. On every other device (a phone, a
+ * tablet) nothing hides it: it is always there, at its resting place.
+ *
+ * Reduced motion: the site's rule at the foot of this file makes every transition instant. A fade is not movement
+ * (docs/build-standards.md: "a short fade or none"), and the button moves nowhere with reduced motion on, so its
+ * fade is kept.
+ */
+@utility hero-button {
+  transition-property: opacity, translate;
+  transition-duration: var(--duration-short);
+  transition-timing-function: var(--ease-smooth);
+
+  @media (hover: hover) and (pointer: fine) {
+    &:not([data-shown]) {
+      opacity: 0;
+      pointer-events: none;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    transition-duration: var(--duration-short) !important;
+  }
+}
+
+/*
  * The page transition (W73b; WQ20, WQ22), on every link from page to page inside the site. It copies
  * oddritualgolf.com's, read from that site's own code: the page being left drifts down a fifth of the window and
  * fades to 40% over the page's background, while the new page is uncovered from the top edge of the window

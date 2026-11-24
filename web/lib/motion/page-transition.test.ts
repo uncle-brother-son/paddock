@@ -2,6 +2,8 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
+import { BOOK_ADDRESS, isBookAddress, linkHref } from '@/lib/sanity/links'
+
 import { PAGE_IN, PAGE_OUT, PAGE_TRANSITION, PAGE_TRANSITION_TYPES } from './page-transition'
 
 // Brief W73b, item 5 (WQ20, WQ22): the page transition is on every link from page to page inside the site, takes the
@@ -31,8 +33,24 @@ describe('every link inside the site carries the page transition', () => {
   it("SiteLink is the one place that uses Next's <Link>, and it passes the transition's type", () => {
     expect(files.length).toBeGreaterThan(20)
     expect(files.filter((file) => /from ['"]next\/link['"]/.test(read(file)))).toEqual(['components/ui/SiteLink.tsx'])
-    expect(read('components/ui/SiteLink.tsx')).toContain('<Link href={href} transitionTypes={PAGE_TRANSITION_TYPES} {...tab} {...rest}>')
+    expect(read('components/ui/SiteLink.tsx')).toContain('<Link href={href} transitionTypes={PAGE_TRANSITION_TYPES} onClick={click} {...tab} {...rest}>')
     expect(PAGE_TRANSITION_TYPES).toEqual([PAGE_TRANSITION])
+  })
+
+  // W73b Level 3 (Wayne, 24 Nov): a link can go to the booking panel. The panel opens over the page the visitor is
+  // on, so every link to it asks useFramePanels first, in the one place links are made; the link is followed only
+  // while there is no panel to open.
+  it('SiteLink is also the one place a link to the booking panel (/book) asks for the panel first', () => {
+    expect(BOOK_ADDRESS).toBe('/book')
+    expect([isBookAddress('/book'), isBookAddress('/book?date=2026-12-01&type=public'), isBookAddress('/booking'), isBookAddress('/shop'), isBookAddress('/')]).toEqual([true, true, false, false, false])
+    const link = read('components/ui/SiteLink.tsx')
+    // The caller's own click first (the menu shuts), then the panel; a click meant for a new tab is the browser's.
+    expect(link).toMatch(/onClick\?\.\(event\)\s+if \(event\.defaultPrevented \|\| newTab \|\| !isBookAddress\(href\) \|\| !isPlainClick\(event\)\) return\s+if \(panels\.open\('book'\)\) event\.preventDefault\(\)/)
+    // Nothing else asks for the booking panel by itself: the header's Book and a hero's button are plain links to it.
+    const asking = files.filter((file) => /open\('book'\)/.test(read(file)))
+    expect(asking).toEqual(['components/ui/SiteLink.tsx'])
+    expect(read('components/frame/Header.tsx')).toContain('<FrameLink href={BOOK_ADDRESS}>')
+    expect(linkHref({ destination: 'book', document: null, url: null })).toBe(BOOK_ADDRESS)
   })
 
   it('nothing moves a visitor to another page by script without it', () => {

@@ -63,6 +63,14 @@ export const media = defineType({
       validation: (rule) => rule.custom((value, context) => checkVideoDescription(value, kindOf(context.parent))),
     }),
     defineField({
+      name: 'hasSound',
+      title: 'Has Sound',
+      type: 'boolean',
+      description: 'Switch on when the video has sound: visitors then get a button to turn it on. A video always starts silent',
+      initialValue: false,
+      hidden: isNotVideo,
+    }),
+    defineField({
       name: 'captions',
       title: 'Captions (WebVTT)',
       type: 'file',

@@ -5,9 +5,10 @@ import { checkLinkPart, type LinkTo } from '../../lib/checks'
 const linkOf = (parent: unknown): LinkTo | undefined => parent as LinkTo | undefined
 
 /**
- * Where a link goes: a page, an event, the shop, the gift card or an outside address. The references are weak, so a
- * page that isn't published yet can be linked (the site hides the link until it is) and a linked page can still be
- * unpublished. The gift card's address is the site's own (/shop/gift-card, WQ19), so it has nothing to pick (W73b).
+ * Where a link goes: a page, an event, the shop, the gift card, the booking panel or an outside address. The
+ * references are weak, so a page that isn't published yet can be linked (the site hides the link until it is) and a
+ * linked page can still be unpublished. The gift card's address is the site's own (/shop/gift-card, WQ19), and the
+ * booking panel opens over whatever page the visitor is on (its link is /book), so neither has anything to pick (W73b).
  */
 export const linkTo = defineType({
   name: 'linkTo',
@@ -25,6 +26,7 @@ export const linkTo = defineType({
           { title: 'An event', value: 'event' },
           { title: 'The shop', value: 'shop' },
           { title: 'The gift card', value: 'giftCard' },
+          { title: 'The booking panel', value: 'book' },
           { title: 'An outside address', value: 'external' },
         ],
         layout: 'radio',

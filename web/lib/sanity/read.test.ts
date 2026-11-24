@@ -149,9 +149,13 @@ describe('W73: the footer groups', () => {
 
 // W73b (Wayne, 24 Nov): the Hero is a module of a page, not a field of every page. The two page samples were made
 // again by the real engine (briefs/W73b-logs/tools/gen-samples.mjs) over a home page with one Hero (a video, a button
-// with no link) and a page with five Heroes in every state among its other modules.
+// with no link) and a page with six Heroes in every state among its other modules.
+// W73b Level 3 (Wayne, 24 Nov): made again for a video's "Has Sound" switch, a Hero's media for phones and a link to
+// the booking panel. The media query is the galleries' too, so their samples were made again with it (each video
+// gained `hasSound`, nothing else changed).
 describe('W73b: the Hero module', () => {
-  type SampleModule = { type: string; key: string; media?: { kind: string } | null; button?: { text: string; link: Link | null } | null; heading?: string | null }
+  type SampleMedia = { kind: string; hasSound?: boolean; url?: string }
+  type SampleModule = { type: string; key: string; media?: SampleMedia | null; mobileMedia?: SampleMedia | null; button?: { text: string; link: Link | null } | null; heading?: string | null }
   const homeModules = answers.homePage.modules as SampleModule[]
   const modules = answers.contentPage.modules as SampleModule[]
 
@@ -163,32 +167,55 @@ describe('W73b: the Hero module', () => {
       ['h3', 'hero'],
       ['h4', 'hero'],
       ['h5', 'hero'],
+      ['h6', 'hero'],
       ['m2', 'upcomingEvents'],
     ])
-    for (const one of modules) expect(Object.keys(one).sort(), one.key).toEqual(one.type === 'hero' ? ['button', 'key', 'media', 'type'] : ['heading', 'key', 'type'])
+    for (const one of modules) expect(Object.keys(one).sort(), one.key).toEqual(one.type === 'hero' ? ['button', 'key', 'media', 'mobileMedia', 'type'] : ['heading', 'key', 'type'])
     expect(modules.filter((module) => module.type === 'upcomingEvents').map((module) => module.heading)).toEqual(['Upcoming', null])
   })
 
   it('a Hero has its picture or its video; one with no file, or a video with no poster, has none', () => {
     expect(homeModules.map((module) => module.media?.kind)).toEqual(['video'])
     expect(homeModules[0]!.media).toMatchObject({ url: 'https://cdn.sanity.io/files/p/d/vid.mp4', description: 'Steam', poster: { alt: 'Picture hero' } })
-    expect(modules.filter((module) => module.type === 'hero').map((module) => module.media?.kind ?? null)).toEqual(['image', 'image', null, null, null])
+    expect(modules.filter((module) => module.type === 'hero').map((module) => module.media?.kind ?? null)).toEqual(['image', 'image', null, null, null, 'video'])
     // A decorative picture's alt is "".
     expect(modules[0]!.media).toMatchObject({ kind: 'image', image: { alt: '' } })
   })
 
-  it('its button is there only when it is switched on and has words; with no link it opens the booking panel', () => {
-    expect(homeModules[0]!.button).toEqual({ text: 'Book Your Experience', link: null })
-    expect(modules.filter((module) => module.type === 'hero').map((module) => module.button?.text ?? null)).toEqual(['Shop', 'Gift Cards', null, 'Not yet', null])
+  it('W73b Level 3: a Hero can have a picture or a video of its own for phones; with none, or one with no file or no poster, it has none', () => {
+    expect(homeModules[0]!.mobileMedia).toMatchObject({ kind: 'video', url: 'https://cdn.sanity.io/files/p/d/tall.mp4', description: 'Steam, tall', captionsUrl: null, poster: { alt: 'Picture tall' } })
+    // h1 none; h2 a picture; h3 none; h4 a picture (though it has no main picture); h5 none; h6 a video with no poster.
+    expect(modules.filter((module) => module.type === 'hero').map((module) => module.mobileMedia?.kind ?? null)).toEqual([null, 'image', null, 'image', null, null])
+    expect(modules[2]!.mobileMedia).toMatchObject({ kind: 'image', image: { ref: 'image-tall-900x1600-jpg', alt: 'Picture tall' } })
   })
 
-  it('a button can go to the gift card: /shop/gift-card; one to a page that is not published is hidden', () => {
+  it('W73b Level 3: every video says whether it has sound: only one whose switch was turned on does', () => {
+    expect([homeModules[0]!.media?.hasSound, homeModules[0]!.mobileMedia?.hasSound]).toEqual([true, false])
+    expect(modules.find((module) => module.key === 'h6')!.media?.hasSound).toBe(false)
+    // The galleries' videos too: the switch has never been touched there.
+    const videos = [...answers.product.gallery, ...answers.giftCard.digitalGallery].filter((item) => item.kind === 'video') as SampleMedia[]
+    expect(videos.map((item) => item.hasSound)).toEqual([false, false])
+    const { hasSound, ...oldVideo } = homeModules[0]!.media as SampleMedia
+    expect(hasSound).toBe(true)
+    expect(reads.homePage.schema.safeParse({ ...answers.homePage, modules: [{ ...homeModules[0], media: oldVideo }] }).success).toBe(false)
+    // Images have no such switch.
+    expect(Object.keys(modules[0]!.media!)).toEqual(['kind', 'image'])
+  })
+
+  it('its button is there only when it is switched on and has words; with no link it opens the booking panel', () => {
+    expect(homeModules[0]!.button).toEqual({ text: 'Book Your Experience', link: null })
+    expect(modules.filter((module) => module.type === 'hero').map((module) => module.button?.text ?? null)).toEqual(['Shop', 'Gift Cards', null, 'Not yet', null, 'Book'])
+  })
+
+  it('a button can go to the gift card (/shop/gift-card) or the booking panel (/book); one to a page that is not published is hidden', () => {
     const hrefs = modules.filter((module) => module.button).map((module) => [module.button!.text, module.button!.link ? linkHref(module.button!.link) : 'the booking panel'])
     expect(hrefs).toEqual([
       ['Shop', '/shop'],
       ['Gift Cards', '/shop/gift-card'],
       ['Not yet', null],
+      ['Book', '/book'],
     ])
+    expect(modules.find((module) => module.key === 'h6')!.button!.link).toEqual({ destination: 'book', document: null, url: null })
   })
 
   it('a page no longer has a `hero` of its own: the old field is not asked for, and an unknown destination is refused', () => {

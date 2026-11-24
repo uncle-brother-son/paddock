@@ -18,13 +18,15 @@ const PICTURE = `{
 
 const pictureAt = (field: string): string => `select(defined(${field}.asset._ref) => ${field}${PICTURE}, null)`
 
+/** A picture or a video. W73b: `hasSound` is the editor's "Has Sound" switch, off unless it was switched on. */
 const MEDIA = `select(
   kind == "video" && defined(video.asset._ref) && defined(poster.asset._ref) => {
     "kind": "video",
     "url": video.asset->url,
     "poster": poster${PICTURE},
     "description": coalesce(videoDescription, ""),
-    "captionsUrl": captions.asset->url
+    "captionsUrl": captions.asset->url,
+    "hasSound": coalesce(hasSound, false)
   },
   kind != "video" && defined(image.asset._ref) => {"kind": "image", "image": image${PICTURE}},
   null
@@ -84,14 +86,15 @@ export const NAVIGATION_QUERY = `*[_id == "navigation"][0]{
 /**
  * W73b: a page's modules, top to bottom, each with the fields of its own kind. A kind the site doesn't know is left
  * out. The Hero is one of them (Wayne, 24 Nov), no longer a field of the page: its picture or video (null until an
- * editor adds one) and its button, which is there only when it is switched on and has words. A button with no link
- * opens the booking panel.
+ * editor adds one), the one for phones (null when the same one serves both) and its button, which is there only
+ * when it is switched on and has words. A button with no link opens the booking panel.
  */
 const MODULES = `coalesce(modules[_type in ["hero", "upcomingEvents"]]{
   "type": _type,
   "key": _key,
   _type == "hero" => {
     "media": select(defined(media) => media{"item": ${MEDIA}}.item, null),
+    "mobileMedia": select(defined(mobileMedia) => mobileMedia{"item": ${MEDIA}}.item, null),
     "button": select(
       showButton == true && defined(buttonText) => {
         "text": buttonText,

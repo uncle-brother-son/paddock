@@ -6,6 +6,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { Icon } from '@/components/brand/Icon'
 import { Grid } from '@/components/layout/Grid'
 import type { FrameMenuLink } from '@/lib/frame/content'
+import { BOOK_ADDRESS } from '@/lib/sanity/links'
 
 import { FrameButton, FrameButtonLabel, FrameLink } from './FrameButton'
 import { Menu } from './Menu'
@@ -42,8 +43,9 @@ type HeaderProps = {
  * The site's header (W73; Figma "Header", 287:5420). It is see-through and lies over the top of the page. Scrolling
  * down takes it away and any scroll up, anywhere on the page, slides it back in (Wayne, 24 Nov), over the short
  * duration and the smooth curve; with reduced motion on it is just there or not. Its words take the mode of the
- * section beneath it. Book and Account are links, to /book and /account. A click on Book (and on Bag) goes to
- * useFramePanels first: when the booking panel exists it opens over the page; until then the link is followed.
+ * section beneath it. Book and Account are links, to /book and /account. A click on Book goes to useFramePanels
+ * first, as every link to /book does (components/ui/SiteLink.tsx): when the booking panel exists it opens over the
+ * page; until then the link is followed. Bag asks useFramePanels too.
  */
 export function Header({ variant = 'global', logo, menuLinks }: HeaderProps) {
   const header = useRef<HTMLElement>(null)
@@ -122,13 +124,8 @@ export function Header({ variant = 'global', logo, menuLinks }: HeaderProps) {
                 <FrameButtonLabel>Menu</FrameButtonLabel>
               </FrameButton>
               <div className="flex items-center gap-8">
-                <FrameLink
-                  href="/book"
-                  onClick={(event) => {
-                    // The panel when there is one; the link when there isn't.
-                    if (panels.open('book')) event.preventDefault()
-                  }}
-                >
+                {/* The panel when there is one; the link when there isn't: every link to /book asks first (SiteLink). */}
+                <FrameLink href={BOOK_ADDRESS}>
                   <FrameButtonLabel>Book</FrameButtonLabel>
                 </FrameLink>
                 {/* On a phone Account is in the menu. */}

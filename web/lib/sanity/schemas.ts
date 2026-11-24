@@ -17,6 +17,7 @@ export const pictureSchema = z.object({
 })
 export type Picture = z.infer<typeof pictureSchema>
 
+/** A picture or a video. `hasSound` (W73b): the editor says the video has sound, so a visitor gets a button to turn it on. */
 export const mediaSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('image'), image: pictureSchema }),
   z.object({
@@ -25,6 +26,7 @@ export const mediaSchema = z.discriminatedUnion('kind', [
     poster: pictureSchema,
     description: z.string(),
     captionsUrl: text,
+    hasSound: z.boolean(),
   }),
 ])
 export type Media = z.infer<typeof mediaSchema>
@@ -37,9 +39,12 @@ const linkedDocumentSchema = z.object({
   thumbnail: pictureSchema.nullable(),
 })
 
-/** Where a link goes. `linkHref` (./links.ts) makes the address, or null for a link to hide. W73b: `giftCard` is /shop/gift-card. */
+/**
+ * Where a link goes. `linkHref` (./links.ts) makes the address, or null for a link to hide. W73b: `giftCard` is
+ * /shop/gift-card, and `book` is the booking panel, whose link is /book.
+ */
 export const linkSchema = z.object({
-  destination: z.enum(['page', 'event', 'shop', 'giftCard', 'external']),
+  destination: z.enum(['page', 'event', 'shop', 'giftCard', 'book', 'external']),
   document: linkedDocumentSchema.nullable(),
   url: text,
 })
@@ -92,11 +97,13 @@ export type Navigation = z.infer<typeof navigationSchema>
 /**
  * The Hero module (W73b; WQ24): a picture or a video across the window, null until an editor adds one, and its
  * button, null when it is switched off or has no words. A button with no link opens the booking panel.
+ * `mobileMedia`: the picture or video for screens narrower than 768px; null when `media` serves phones too.
  */
 export const heroModuleSchema = z.object({
   type: z.literal('hero'),
   key: z.string(),
   media: mediaSchema.nullable(),
+  mobileMedia: mediaSchema.nullable(),
   button: z.object({ text: z.string(), link: linkSchema.nullable() }).nullable(),
 })
 export type HeroModule = z.infer<typeof heroModuleSchema>
