@@ -12,8 +12,14 @@ const APP = path.join(WEB, 'app')
 
 /** The only route files outside `app/api/v1/`, relative to web/. */
 const WEBHOOKS: readonly string[] = ['app/api/sanity/webhook/route.ts', 'app/api/stripe/webhook/route.ts']
-/** W74a, W75a: the only `app/api/v1/` routes that ask for no sign-in (`auth: 'public'`), each a read of what the site shows anyone. */
-const PUBLIC_ROUTES: readonly string[] = ['app/api/v1/shop/availability/route.ts', 'app/api/v1/shop/event-availability/route.ts']
+/** W74a, W75a, W77a: the only `app/api/v1/` routes that ask for no sign-in (`auth: 'public'`), each a read of what the site shows anyone. */
+const PUBLIC_ROUTES: readonly string[] = [
+  'app/api/v1/shop/availability/route.ts',
+  'app/api/v1/shop/booking-days/route.ts',
+  'app/api/v1/shop/booking-quote/route.ts',
+  'app/api/v1/shop/event-availability/route.ts',
+  'app/api/v1/shop/sessions/route.ts',
+]
 /** A file Next answers requests with, whatever its extension. */
 const ROUTE_FILE = /^route\.(ts|tsx|js|jsx|mjs|cjs|mts|cts)$/
 

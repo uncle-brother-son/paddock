@@ -8,7 +8,7 @@ import { variantPriceFor, type VariantPrices } from '@/server/rules/orders/catal
 export type DisplayPrices = Pick<ShopSize, 'price' | 'memberPrice' | 'priceBeforeSale' | 'percentOff'>
 
 /** Money text ("28.00") as whole pence, to compare: text order would put "100.00" before "28.00". */
-const pence = (money: string): number => Math.round(Number(money) * 100)
+export const pence = (money: string): number => Math.round(Number(money) * 100)
 
 /** The lowest of some prices, as its own text. Null when there is none. */
 export const lowest = (prices: readonly (string | null)[]): string | null =>

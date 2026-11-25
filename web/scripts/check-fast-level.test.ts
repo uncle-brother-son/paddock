@@ -130,10 +130,12 @@ describe('the level', () => {
   describe("the shop's reads (WQ45)", () => {
     const REPO = path.resolve(WEB, '..')
     const asItIs = (file: string) => changed(file, null, readFileSync(path.join(REPO, file), 'utf8'))
+    /** W74a; W75a; W77a, the booking panel's three. */
+    const SHOP_ROUTES = ['availability', 'booking-days', 'booking-quote', 'event-availability', 'sessions']
     const rule = 'export const sizePrices = (variant) => ({ price: variantPriceFor(variant, false) })\n'
 
     it('the list is the rules, their contract, the public routes and the test that lists the public routes', () => {
-      expect(SHOP_READ_PATHS).toEqual(['web/server/rules/shop/', 'web/contracts/shop.ts', 'web/app/api/v1/shop/availability/', 'web/app/api/v1/shop/event-availability/', 'web/server/api-allowlist.test.ts'])
+      expect(SHOP_READ_PATHS).toEqual(['web/server/rules/shop/', 'web/contracts/shop.ts', ...SHOP_ROUTES.map((route) => `web/app/api/v1/shop/${route}/`), 'web/server/api-allowlist.test.ts'])
       expect(SHOP_READER).toBe('web/lib/shop/read.ts')
     })
 
@@ -146,6 +148,10 @@ describe('the level', () => {
       ['the availability route', changed('web/app/api/v1/shop/availability/route.ts', null, "export const GET = defineRoute({ auth: 'public' }, async ({ input }) => shopAvailability(db, input.product))\n")],
       ["the events' read (W75a)", changed('web/server/rules/shop/events.ts', null, "const SQL = 'SELECT q.unit_price FROM quote_event(e.id, NULL, 1, false, NULL) q'\n")],
       ["the events' route (W75a)", changed('web/app/api/v1/shop/event-availability/route.ts', null, "export const GET = defineRoute({ auth: 'public' }, async ({ input }) => shopEventAvailability(db, input.event))\n")],
+      ["the booking panel's rule and reads (W77a)", changed('web/server/rules/shop/booking.ts', null, "const SQL = 'SELECT s.id FROM sessions s WHERE NOT EXISTS (SELECT 1 FROM bookings b WHERE b.session_id <> s.id)'\n")],
+      ["its days' route (W77a)", changed('web/app/api/v1/shop/booking-days/route.ts', null, "export const GET = defineRoute({ auth: 'public' }, async ({ input }) => shopBookingDays(db, input.month))\n")],
+      ["its sessions' route (W77a)", changed('web/app/api/v1/shop/sessions/route.ts', null, "export const GET = defineRoute({ auth: 'public' }, async ({ input }) => shopSessions(db, input.date))\n")],
+      ["its quote's route (W77a)", changed('web/app/api/v1/shop/booking-quote/route.ts', null, "export const GET = defineRoute({ auth: 'public' }, async ({ input }) => shopBookingQuote(db, input.session, 1))\n")],
       ["the route's test", changed('web/app/api/v1/shop/availability/route.test.ts', null, "it('refuses a POST', async () => {})\n")],
       ['the test that lists the public routes', changed('web/server/api-allowlist.test.ts')],
     ])('%s is Level 1b, alone or among website files', (_what, change) => {
@@ -158,8 +164,7 @@ describe('the level', () => {
     it("every file of the shop's reads in the repo today is Level 1b as it is", () => {
       const files = [
         ...readdirSync(path.join(WEB, 'server/rules/shop')).map((name) => `web/server/rules/shop/${name}`),
-        ...readdirSync(path.join(WEB, 'app/api/v1/shop/availability')).map((name) => `web/app/api/v1/shop/availability/${name}`),
-        ...readdirSync(path.join(WEB, 'app/api/v1/shop/event-availability')).map((name) => `web/app/api/v1/shop/event-availability/${name}`),
+        ...SHOP_ROUTES.flatMap((route) => readdirSync(path.join(WEB, 'app/api/v1/shop', route)).map((name) => `web/app/api/v1/shop/${route}/${name}`)),
         'web/contracts/shop.ts',
         'web/server/api-allowlist.test.ts',
       ]
@@ -175,7 +180,7 @@ describe('the level', () => {
       expect(levelOf(changed('web/server/rules/shop/reads.ts', insert, rule))).toBe(1)
       // Each route takes GET alone.
       const post = "export const POST = defineRoute({ auth: 'public' }, async () => addToBag())\n"
-      for (const route of ['web/app/api/v1/shop/availability/route.ts', 'web/app/api/v1/shop/event-availability/route.ts']) {
+      for (const route of SHOP_ROUTES.map((name) => `web/app/api/v1/shop/${name}/route.ts`)) {
         expect(levelOf(changed(route, null, post)), route).toBe(1)
         expect(levelOf(changed(route, post, 'export const GET = 1\n')), route).toBe(1)
       }

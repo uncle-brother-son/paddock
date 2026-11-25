@@ -6,10 +6,11 @@ const wholePounds = (money: string): string => `£${Number(money).toLocaleString
 /** WQ19's words, for both ends. */
 const outsideLimits = ({ lowest, highest }: { lowest: string; highest: string }): string => `Enter an amount between ${wholePounds(lowest)} and ${wholePounds(highest)}`
 
-/** The first two: what the shop's public routes say (W74a; W75a, events). Unknown and off sale read the same. */
+/** The first three: what the shop's public routes say (W74a; W75a, events; W77a, sessions). Unknown and off sale read the same. */
 export const SHOP_WORDS = {
   notOnSale: "This product isn't on sale.",
   eventNotOnSale: "This event isn't on sale.",
+  sessionNotFound: "This session isn't available.",
   /** W76a: a gift card's Other amount (WQ63), by the reason it fails for. Field errors, so no full stop (as WQ19 has it). */
   otherAmount: {
     not_whole_pounds: () => 'Enter an amount in whole pounds',

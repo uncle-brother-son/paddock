@@ -48,7 +48,7 @@ interface EventRow extends Record<string, unknown> {
 }
 
 /** Event times are kept as London wall-clock digits labelled UTC. This is the real moment, as ISO with London's offset then. */
-const londonIso = (column: string): string => {
+export const londonIso = (column: string): string => {
   const wall = `(${column} AT TIME ZONE 'UTC')`
   return `to_char(${wall}, 'YYYY-MM-DD"T"HH24:MI:SS') || '+' || to_char(${wall} - ((${wall} AT TIME ZONE 'Europe/London') AT TIME ZONE 'UTC'), 'HH24:MI')`
 }

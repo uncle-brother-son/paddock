@@ -22,13 +22,22 @@ export const LEVEL_1B_PATHS = ['web/app/api/sanity/', 'web/server/rules/catalog/
 
 /**
  * W74a, WQ45 (Wayne, 24 Nov): the shop's reads are Level 1b too, by name: the rules that read the shop for the
- * website's pages, their contract, the public routes (GET /api/v1/shop/availability and, W75a, the events'
- * /api/v1/shop/event-availability) and the test that lists the public routes. They show prices and never set, charge
+ * website's pages, their contract, the public routes (GET /api/v1/shop/availability; W75a, the events'
+ * /api/v1/shop/event-availability; W77a, the booking panel's booking-days, sessions and booking-quote) and the test that lists the public routes. They show prices and never set, charge
  * or move one, so the money words can't be asked of them. What can: one of them that starts to write (a statement that
  * changes a row, or a route that takes more than GET) is no longer a read, and is Level 1. A test sets its own rows up,
  * so a test is not asked.
  */
-export const SHOP_READ_PATHS = ['web/server/rules/shop/', 'web/contracts/shop.ts', 'web/app/api/v1/shop/availability/', 'web/app/api/v1/shop/event-availability/', 'web/server/api-allowlist.test.ts']
+export const SHOP_READ_PATHS = [
+  'web/server/rules/shop/',
+  'web/contracts/shop.ts',
+  'web/app/api/v1/shop/availability/',
+  'web/app/api/v1/shop/booking-days/',
+  'web/app/api/v1/shop/booking-quote/',
+  'web/app/api/v1/shop/event-availability/',
+  'web/app/api/v1/shop/sessions/',
+  'web/server/api-allowlist.test.ts',
+]
 
 /**
  * WQ45: the one website file that reads the shop from the Worker's rules (W74: `readShop()`, kept for a minute). Its
