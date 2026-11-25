@@ -1,3 +1,5 @@
+import { BOOK_ADDRESS } from '@/lib/sanity/links'
+
 // The page transition's names (W73b; WQ20, WQ22, WQ57), shared by what starts one (a link) and what draws it
 // (components/frame/PageTransition.tsx, and the `page-out` and `page-in` rules in app/globals.css).
 
@@ -7,6 +9,13 @@
  * second animation, and the scroll position it restores would be fought over).
  */
 export const PAGE_TRANSITION = 'page'
+
+/**
+ * W77 (WQ64): the page an address's path shows, which is what the page transition is keyed by. /book is the home page
+ * with the Book panel open over it, so it is the home page's own: closing the panel there changes the address to /
+ * where the page stands, and the page is neither swapped nor drawn again.
+ */
+export const pageOf = (path: string): string => (path === BOOK_ADDRESS ? '/' : path)
 
 /** As Next's <Link transitionTypes> and router.push take it. */
 export const PAGE_TRANSITION_TYPES = [PAGE_TRANSITION]

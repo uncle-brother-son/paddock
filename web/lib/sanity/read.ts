@@ -1,6 +1,7 @@
 import { createClient } from '@sanity/client'
 import { z } from 'zod'
 import {
+  ADDONS_QUERY,
   CONTENT_PAGE_QUERY,
   EVENT_CARDS_QUERY,
   EVENT_QUERY,
@@ -18,6 +19,7 @@ import {
   SITE_SETTINGS_QUERY,
 } from './queries'
 import {
+  addonsSchema,
   contentPageSchema,
   eventCardsSchema,
   eventSchema,
@@ -56,6 +58,7 @@ export const reads = {
   eventsSettings: read(EVENTS_SETTINGS_QUERY, eventsSettingsSchema.nullable()),
   eventsListPage: read(EVENTS_LIST_PAGE_QUERY, eventsListPageSchema.nullable()),
   giftCard: read(GIFT_CARD_QUERY, giftCardSchema.nullable()),
+  addons: read(ADDONS_QUERY, addonsSchema),
   movedSlug: read(MOVED_SLUG_QUERY, movedSlugSchema.nullable()),
 } as const
 

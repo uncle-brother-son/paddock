@@ -24,6 +24,8 @@ vi.mock('react', async (original) => ({ ...(await original<typeof import('react'
 vi.mock('next/cache', () => ({ unstable_cache: <T>(read: T): T => read }))
 vi.mock('@/server/rules/shop/reads', () => ({ readShop: vi.fn(), readShopGiftCard: vi.fn() }))
 vi.mock('@/server/rules/shop/events', () => ({ readShopEvents, readShopEvent }))
+// W77: lib/shop/read.ts reads the Book panel's add-ons too; the events' pages never ask for them.
+vi.mock('@/server/rules/shop/booking', () => ({ readShopAddons: vi.fn() }))
 
 const { findEventPage, readEventsListAddress, readUpcomingEventCards } = await import('./pages')
 

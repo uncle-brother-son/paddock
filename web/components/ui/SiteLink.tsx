@@ -32,11 +32,11 @@ export const isPlainClick = (event: MouseEvent): boolean => event.button === 0 &
  * W73b: this is the one place the site uses Next's <Link>, so every link from page to page inside the site carries
  * the page transition's type and is animated (components/frame/PageTransition.tsx). It is also the one place a link
  * to the booking panel (/book: the header's Book, a hero's button, a link an editor made in Sanity) asks
- * useFramePanels for the panel first: when the panel opens the visitor stays on the page; until it exists the link
- * is followed.
+ * useFramePanels for the panel first: when the panel opens the visitor stays on the page (W77: inside the frame it
+ * always does); with no panel to open the link is followed, to /book, which is the home page with the panel open.
  *
- * Next fetches each link it can see ahead of a press. A page that is not built yet (lib/routes/not-built.ts: /book,
- * /account) is never fetched ahead, on sight or on hover; a press still follows the link.
+ * Next fetches each link it can see ahead of a press. A page that is not built yet (lib/routes/not-built.ts: /account,
+ * /checkout) is never fetched ahead, on sight or on hover; a press still follows the link.
  */
 export function SiteLink({ href, newTab = false, transition = true, onClick, children, ...rest }: SiteLinkProps) {
   const panels = useFramePanels()

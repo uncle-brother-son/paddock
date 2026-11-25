@@ -12,8 +12,11 @@ type QuantityStepperProps = {
   className?: string
 }
 
-/** Figma "IconButton" inside the stepper: 12px round a 9px icon. Figma draws no disabled look, so at its end it looks the same and does nothing. */
-const STEP = 'flex items-center justify-center self-stretch rounded-s p-12 text-text-primary disabled:cursor-default'
+/**
+ * Figma "IconButton" inside the stepper: 12px round a 9px icon. W77: at its end it does nothing and its icon is
+ * Text/Muted Primary, as Figma's stepper draws its minus at the least (996:15488, Switch=no).
+ */
+const STEP = 'flex items-center justify-center self-stretch rounded-s p-12 text-text-primary disabled:cursor-default disabled:text-text-muted-primary'
 
 /**
  * Figma "QuantityStepper" (03 UI, 996:15488; on the Event page 1684:41502): Surface/Card with 4px corners, the minus
@@ -21,6 +24,9 @@ const STEP = 'flex items-center justify-center self-stretch rounded-s p-12 text-
  *
  * Minus is disabled at the least and plus at the most (WQ61: an event's goes from 1 to the spaces left). The number
  * is said to a screen reader as it changes. Each press is a button with its own name; the group has the count's name.
+ *
+ * It is as wide as its parts unless it is given a width (W77: the whole width of a session's row on a phone, and of
+ * an add-on's card), where the number takes the room between the two icons.
  */
 export function QuantityStepper({ value, min = 1, max, onChange, label = 'Quantity', className }: QuantityStepperProps) {
   return (
@@ -28,7 +34,7 @@ export function QuantityStepper({ value, min = 1, max, onChange, label = 'Quanti
       <button type="button" aria-label="One fewer" disabled={value <= min} onClick={() => onChange(value - 1)} className={STEP}>
         <Icon name="minus" />
       </button>
-      <output aria-live="polite" className="flex items-center justify-center px-8">
+      <output aria-live="polite" className="flex flex-1 items-center justify-center px-8">
         <span className="w-20 text-center text-label-12 text-text-primary">{value}</span>
       </output>
       <button type="button" aria-label="One more" disabled={value >= max} onClick={() => onChange(value + 1)} className={STEP}>

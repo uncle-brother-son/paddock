@@ -5,8 +5,9 @@ export const GIFT_CARD_ADDRESS = '/shop/gift-card'
 
 /**
  * The booking panel's link (docs/url-map.md: /book?date=&type=). The panel opens over whatever page the visitor is
- * on; until it is built the link is followed. Every link to it inside the site asks for the panel first
- * (components/ui/SiteLink.tsx).
+ * on: every link to it inside the site asks for the panel first (components/ui/SiteLink.tsx). Followed (a new tab, a
+ * link from outside), it is the home page with the panel open (W77: app/book/page.tsx). The address's ?date= and ?type=
+ * are not read yet: the panel opens on the first day with a session to book, in the Public view.
  */
 export const BOOK_ADDRESS = '/book'
 

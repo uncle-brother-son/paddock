@@ -1,8 +1,10 @@
 import type { ReactNode } from 'react'
 
+import type { BookAddOn } from '@/lib/book/book'
 import type { FrameContent } from '@/lib/frame/content'
 
 import { Footer } from './Footer'
+import { FramePanelsHost } from './FramePanelsHost'
 import { Header } from './Header'
 import { HeaderLogo } from './HeaderLogo'
 import { PageTransition } from './PageTransition'
@@ -17,10 +19,13 @@ export type FrameVariant = 'global' | 'checkout'
  *
  * W73b: main and the footer are what changes from page to page, so the two together are what the page transition
  * moves; the header stays where it is.
+ *
+ * W77: round them all is FramePanelsHost, which draws the Book panel over the page and gives every link to /book the
+ * way to open it. `bookAddOns` are the panel's add-ons, read with the frame's own content (lib/book/read.ts).
  */
-export function FrameShell({ variant = 'global', content, children }: { variant?: FrameVariant; content: FrameContent; children: ReactNode }) {
+export function FrameShell({ variant = 'global', content, bookAddOns = [], children }: { variant?: FrameVariant; content: FrameContent; bookAddOns?: readonly BookAddOn[]; children: ReactNode }) {
   return (
-    <>
+    <FramePanelsHost bookAddOns={bookAddOns}>
       <SkipLink />
       <Header variant={variant} logo={<HeaderLogo animated={variant === 'global'} />} menuLinks={content.menuLinks} />
       <PageTransition>
@@ -29,6 +34,6 @@ export function FrameShell({ variant = 'global', content, children }: { variant?
         </main>
         <Footer variant={variant} content={content.footer} />
       </PageTransition>
-    </>
+    </FramePanelsHost>
   )
 }

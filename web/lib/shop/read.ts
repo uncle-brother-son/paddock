@@ -4,6 +4,7 @@ import { unstable_cache } from 'next/cache'
 import { connection } from 'next/server'
 import { cache } from 'react'
 
+import { readShopAddons, type ShopAddon } from '@/server/rules/shop/booking'
 import { readShopEvent, readShopEvents, type ShopEvent } from '@/server/rules/shop/events'
 import { readShop, readShopGiftCard, type Shop, type ShopGiftCardPage } from '@/server/rules/shop/reads'
 
@@ -12,7 +13,10 @@ import { readShop, readShopGiftCard, type Shop, type ShopGiftCardPage } from '@/
 // works a price out. The pages and components take these types from here, so this is the only import of server code.
 // W75: the events' reads too (W75a: `readShopEvents()`, `readShopEvent()`): an event's date, spaces, state and prices.
 // W76: the gift card's read (W76a: `readShopGiftCard()`): its amounts on sale, the Other limits, how long a card lasts.
+// W77: the Book panel's add-ons (W77a: `readShopAddons()`): each one on sale with what a visitor pays. The panel's
+// days, sessions and group prices come from W77a's three public routes, asked by the browser (lib/book/api.ts).
 
+export type { ShopAddon } from '@/server/rules/shop/booking'
 export type { ShopEvent, ShopEventAccess } from '@/server/rules/shop/events'
 export type { Shop, ShopCategory, ShopGiftCard, ShopGiftCardPage, ShopProduct } from '@/server/rules/shop/reads'
 
@@ -67,4 +71,13 @@ const keptGiftCard = unstable_cache(async (sanityId: string): Promise<ShopGiftCa
 export const readShopGiftCardKept = cache(async (sanityId: string): Promise<ShopGiftCardPage | null> => {
   await connection()
   return keptGiftCard(sanityId)
+})
+
+/** W77: the add-ons on sale with a price for a visitor (W77a), in the catalogue's own order, kept as the shop is. */
+const keptAddons = unstable_cache(async (): Promise<ShopAddon[]> => readShopAddons(), ['shop-addons'], { revalidate: SHOP_KEPT_SECONDS })
+
+/** The add-ons for the Book panel, once for a request. A read that fails throws; the frame decides what to do without them (lib/book/read.ts). */
+export const readShopAddonsKept = cache(async (): Promise<ShopAddon[]> => {
+  await connection()
+  return keptAddons()
 })

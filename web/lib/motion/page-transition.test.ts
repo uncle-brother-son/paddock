@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import { BOOK_ADDRESS, isBookAddress, linkHref } from '@/lib/sanity/links'
 
-import { hashId, keepFocusOnArrival, PAGE_IN, PAGE_LEAVING, PAGE_OUT, PAGE_OUT_SURFACES, PAGE_SURFACE, PAGE_TRANSITION, PAGE_TRANSITION_TYPES, takeFocusOnArrival } from './page-transition'
+import { hashId, keepFocusOnArrival, PAGE_IN, PAGE_LEAVING, PAGE_OUT, PAGE_OUT_SURFACES, PAGE_SURFACE, PAGE_TRANSITION, PAGE_TRANSITION_TYPES, pageOf, takeFocusOnArrival } from './page-transition'
 
 // Brief W73b, item 5 (WQ20, WQ22): the page transition is on every link from page to page inside the site, takes the
 // long duration with the smooth curve, and is an instant swap for reduced motion, Back and Forward. The movement
@@ -61,7 +61,7 @@ describe('every link inside the site carries the page transition', () => {
 
   // W73b Level 3 (Wayne, 24 Nov): a link can go to the booking panel. The panel opens over the page the visitor is
   // on, so every link to it asks useFramePanels first, in the one place links are made; the link is followed only
-  // while there is no panel to open.
+  // while there is no panel to open (W77: outside the frame, as in a story of one component).
   it('SiteLink is also the one place a link to the booking panel (/book) asks for the panel first', () => {
     expect(BOOK_ADDRESS).toBe('/book')
     expect([isBookAddress('/book'), isBookAddress('/book?date=2026-12-01&type=public'), isBookAddress('/booking'), isBookAddress('/shop'), isBookAddress('/')]).toEqual([true, true, false, false, false])
@@ -91,8 +91,16 @@ describe('what is animated, and when', () => {
   })
 
   it('the page is keyed by the address\'s path, so a new path is one page leaving and another coming', () => {
-    expect(component).toContain('<PageTransitionView page={usePathname()}>')
+    expect(component).toContain('<PageTransitionView page={pageOf(usePathname())}>')
     expect(component).toContain('<ViewTransition key={page} enter={ENTER} exit={EXIT} default="none">')
+  })
+
+  // W77 (WQ64): /book is the home page with the Book panel open over it. Closing the panel there changes the address
+  // to / where the page stands: the same page, so nothing leaves, nothing comes and the page is not drawn again.
+  it('/book counts as the home page\'s own path; every other path is its own page', () => {
+    expect([pageOf('/book'), pageOf('/'), pageOf('/shop'), pageOf('/booking'), pageOf('/book/x')]).toEqual(['/', '/', '/shop', '/booking', '/book/x'])
+    // Back from the panel's own history step stays on the page: it is not noted as an arrival by history.
+    expect(component).toContain('byHistory.current = pageOf(window.location.pathname) !== arrived.current')
   })
 
   it('only a navigation with the type is animated: Back, Forward and anything else swap at once', () => {

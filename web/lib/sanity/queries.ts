@@ -208,6 +208,14 @@ export const GIFT_CARD_QUERY = `*[_type == "giftCardType" && ${PUBLISHED}] | ord
 }`
 
 /**
+ * W77: every add-on's picture, for the Book panel's add-on cards: its first image (the one the staff app shows), null
+ * with none or one that has no file. An add-on's `images` is a list of plain images each with its own alt text, older
+ * than the `media` block (WQ43) and read by the Worker's Sanity webhook, so it is read as it is. Which add-ons are on
+ * sale, their names and their prices come from the Worker.
+ */
+export const ADDONS_QUERY = `*[_type == "addon" && ${PUBLISHED}] | order(_createdAt asc){"id": _id, "picture": ${pictureAt('images[0]')}}`
+
+/**
  * W72a: the document of one type ($type) that had this slug ($slug) before and has another now: where an old
  * address has moved to (./redirects.ts). Never the document that has the slug now, so an address can't be sent to
  * itself. The Studio lets one document of a type hold an old slug; should two, the one changed last.

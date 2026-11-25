@@ -4,9 +4,10 @@
 // ahead of a press: Next fetches every link it can see in the background, and a page that is not there is a wasted
 // request for each one, on every page of the site. When a page is built, take its address out:
 // lib/routes/not-built.test.ts fails until this list and the folders in app/ agree. W76: /shop/gift-card is built, so
-// the Shop's gift card card and the menu's Gift Cards link are fetched ahead as any other.
+// the Shop's gift card card and the menu's Gift Cards link are fetched ahead as any other. W77: /book is built (the
+// home page with the Book panel open; a link to it inside the site opens the panel where the visitor is).
 
-export const NOT_BUILT_ADDRESSES = ['/account', '/auth', '/blog', '/book', '/checkout', '/events', '/waiver'] as const
+export const NOT_BUILT_ADDRESSES = ['/account', '/auth', '/blog', '/checkout', '/events', '/waiver'] as const
 
 /**
  * W75: a not-built address whose pages beneath it are built. An event's page (/events/<slug>) is there and is fetched

@@ -6,13 +6,15 @@ type ToggleProps<Value extends string> = {
   /** The radio group's name: one group for the two. */
   name: string
   value: Value
-  options: readonly [ToggleOption<Value>, ToggleOption<Value>]
+  /** The choices, left to right: two as drawn. W77: a day's private lengths may be one, or more than two. */
+  options: readonly [ToggleOption<Value>, ...ToggleOption<Value>[]]
   onChange: (value: Value) => void
   className?: string
 }
 
 /**
- * Figma "Toggle" (03 UI, 597:5432; on the Gift Card page as Digital and Physical): two choices side by side on
+ * Figma "Toggle" (03 UI, 597:5432; on the Gift Card page as Digital and Physical, and in the Book panel as Public and
+ * Private and as a private session's 60 and 120 min): two choices side by side on
  * Surface/Card with 4px corners, each 32px each side and 12px above and below with its words in Label 12. The one
  * chosen is Surface/Secondary with Text/Secondary; the other has no fill and Text/Primary. It is as wide as its words.
  *

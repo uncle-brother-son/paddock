@@ -1,4 +1,4 @@
-import type { ComponentPropsWithoutRef } from 'react'
+import type { ComponentPropsWithoutRef, ComponentPropsWithRef } from 'react'
 
 /**
  * Figma "Button", Type=primary, Big=No (03 UI, node 329:8563): Surface/Secondary with its label in Label 12 and
@@ -52,7 +52,23 @@ export function BigButton({ className, children, hoverLabel, type = 'button', ..
   )
 }
 
-export function Button({ className, children, type = 'button', ...rest }: ComponentPropsWithoutRef<'button'>) {
+/**
+ * W77. Figma "Button", Type=secondary, Big=No (in the Book panel: "Log in", an add-on's "Add", a full session's
+ * "Full"): the small button on Surface/Card with its label in Text/Primary. Disabled (State=disabled, 1180:19887's
+ * "Full"), it is Surface/Card Disabled with its label in Text/Muted Primary.
+ */
+export const SMALL_SECONDARY_BUTTON =
+  'inline-flex items-center justify-center rounded-s bg-surface-card px-32 py-12 text-text-primary disabled:cursor-default disabled:bg-surface-card-disabled disabled:text-text-muted-primary'
+
+export function SecondaryButton({ className, children, type = 'button', ...rest }: ComponentPropsWithRef<'button'>) {
+  return (
+    <button type={type} className={`${SMALL_SECONDARY_BUTTON} ${className ?? ''}`} {...rest}>
+      <ButtonLabel>{children}</ButtonLabel>
+    </button>
+  )
+}
+
+export function Button({ className, children, type = 'button', ...rest }: ComponentPropsWithRef<'button'>) {
   return (
     <button type={type} className={`${SMALL_PRIMARY_BUTTON} ${className ?? ''}`} {...rest}>
       <ButtonLabel>{children}</ButtonLabel>

@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation'
 import * as React from 'react'
 import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react'
 
-import { hashId, leavePage, PAGE_IN, PAGE_OUT, PAGE_TRANSITION, takeFocusOnArrival } from '@/lib/motion/page-transition'
+import { hashId, leavePage, PAGE_IN, PAGE_OUT, PAGE_TRANSITION, pageOf, takeFocusOnArrival } from '@/lib/motion/page-transition'
 import { DURATION_LONG, EASE_SMOOTH } from '@/lib/motion/tokens'
 
 /**
@@ -59,8 +59,10 @@ function usePageArrival(page: string) {
 
   useEffect(() => {
     let endedByPress = false
+    // W77: Back from the Book panel's own history step stays on the page (WQ64): no page arrives, so nothing is noted
+    // for the next one that does.
     const noteHistory = () => {
-      byHistory.current = true
+      byHistory.current = pageOf(window.location.pathname) !== arrived.current
     }
     const endTransition = () => {
       const running = runningTransition()
@@ -174,7 +176,10 @@ export function PageTransitionView({ page, children }: { page: string; children:
   )
 }
 
-/** The page transition on the site: the page is the address's path, so a change of query alone moves nothing. */
+/**
+ * The page transition on the site: the page is the address's path, so a change of query alone moves nothing. W77:
+ * /book is the home page with the Book panel over it, so it counts as the home page's own path (`pageOf`).
+ */
 export function PageTransition({ children }: { children: ReactNode }) {
-  return <PageTransitionView page={usePathname()}>{children}</PageTransitionView>
+  return <PageTransitionView page={pageOf(usePathname())}>{children}</PageTransitionView>
 }

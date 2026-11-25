@@ -91,7 +91,23 @@ describe('W72a: galleries and categories', () => {
   })
 
   it('every read W72a and W73b changed has its query on record', () => {
-    expect(Object.keys(madeFrom).sort()).toEqual(['contentPage', 'event', 'eventCards', 'eventsListPage', 'giftCard', 'homePage', 'movedSlug', 'product', 'productCards'])
+    expect(Object.keys(madeFrom).sort()).toEqual(['addons', 'contentPage', 'event', 'eventCards', 'eventsListPage', 'giftCard', 'homePage', 'movedSlug', 'product', 'productCards'])
+  })
+
+  // W77: each add-on's first picture, for the Book panel's cards. Its sample was made by the real engine
+  // (briefs/W77-logs/tools/gen-samples.mjs, in the staff app repo) over six documents: an add-on with two pictures, one
+  // whose picture has no alt text written, one with no pictures, one whose first picture has no file yet, a draft,
+  // and a service type with a picture.
+  it('W77: an add-on has its first picture, or none; drafts and other types are not read', () => {
+    expect(answers.addons.map((addon) => [addon.id, addon.picture?.ref ?? null, addon.picture?.alt ?? null])).toEqual([
+      ['addon-knoll', 'image-knoll-1200x1500-jpg', 'A bottle of High Brown Knoll'],
+      ['addon-towel', 'image-towel-800x800-jpg', ''],
+      ['addon-robe', null, null],
+      ['addon-tea', null, null],
+    ])
+    expect(answers.addons[0]!.picture).toMatchObject({ width: 1200, height: 1500, crop: { top: 0.1, right: 0.05 }, hotspot: { x: 0.5, y: 0.4 } })
+    expect(reads.addons.query).toContain('_type == "addon" && !(_id in path("drafts.**"))')
+    expect(reads.addons.query).toContain('images[0]')
   })
 
   // W75 (WQ60): the page that holds the Upcoming Events list, found by its module. Its sample was made by the real

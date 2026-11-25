@@ -227,6 +227,10 @@ export const giftCardSchema = z.object({
 })
 export type GiftCard = z.infer<typeof giftCardSchema>
 
+/** W77: each add-on's first picture, by the add-on's document id; null when it has none (its card's picture area stays empty). */
+export const addonsSchema = z.array(z.object({ id: z.string(), picture: pictureSchema.nullable() }))
+export type AddonPictures = z.infer<typeof addonsSchema>
+
 /** Where an old slug's document is now (W72a): its current slug, and whether it is the page Site settings picks as home. */
 export const movedSlugSchema = z.object({ slug: z.string(), isHome: z.boolean() })
 export type MovedSlug = z.infer<typeof movedSlugSchema>

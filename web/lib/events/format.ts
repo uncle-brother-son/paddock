@@ -3,13 +3,14 @@
 // time zone is. The names of the days and months are written here, not taken from the runtime's own lists, so the
 // server and every browser write the same words ("Sep", never "Sept").
 
-const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'] as const
-const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'] as const
+// W77: the Book panel writes its days and times with the same names and the same clock (lib/book/book.ts).
+export const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'] as const
+export const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'] as const
 
 type LondonTime = { time: string; weekday: string; day: number; month: string; year: number }
 
 /** The moment as a clock and a calendar in London show it; null for something that is no moment. */
-function inLondon(moment: string): LondonTime | null {
+export function inLondon(moment: string): LondonTime | null {
   const at = new Date(moment)
   if (Number.isNaN(at.getTime())) return null
   const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(at)

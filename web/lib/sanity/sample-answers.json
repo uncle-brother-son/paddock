@@ -1330,5 +1330,47 @@
   "eventsListPage": {
     "slug": "exclusive-hire",
     "isHome": false
-  }
+  },
+  "addons": [
+    {
+      "id": "addon-knoll",
+      "picture": {
+        "ref": "image-knoll-1200x1500-jpg",
+        "width": 1200,
+        "height": 1500,
+        "alt": "A bottle of High Brown Knoll",
+        "crop": {
+          "top": 0.1,
+          "bottom": 0,
+          "left": 0,
+          "right": 0.05
+        },
+        "hotspot": {
+          "x": 0.5,
+          "y": 0.4,
+          "width": 0.6,
+          "height": 0.6
+        }
+      }
+    },
+    {
+      "id": "addon-towel",
+      "picture": {
+        "ref": "image-towel-800x800-jpg",
+        "width": 800,
+        "height": 800,
+        "alt": "",
+        "crop": null,
+        "hotspot": null
+      }
+    },
+    {
+      "id": "addon-robe",
+      "picture": null
+    },
+    {
+      "id": "addon-tea",
+      "picture": null
+    }
+  ]
 }

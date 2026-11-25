@@ -43,10 +43,19 @@ describe('the list of pages not built yet', () => {
     expect(existsSync(inApp('/shop/gift-card', 'page.tsx'))).toBe(true)
     expect((NOT_BUILT_ADDRESSES as readonly string[]).includes('/shop/gift-card')).toBe(false)
   })
+
+  // W77 (WQ64): /book is the home page with the Book panel open over it: the home page's own component and metadata.
+  it('/book has its page, which is the home page itself, and is not on the list', () => {
+    expect((NOT_BUILT_ADDRESSES as readonly string[]).includes('/book')).toBe(false)
+    const page = readFileSync(inApp('/book', 'page.tsx'), 'utf8')
+    expect(page).toContain("import Home, { generateMetadata as homeMetadata } from '../page'")
+    expect(page).toContain('export const generateMetadata = homeMetadata')
+    expect(page).toContain('export default Home')
+  })
 })
 
 describe('whether an address has a page to open', () => {
-  it.each(['/book', '/book?date=2026-12-01&type=public', '/account', '/account/orders/12', '/events', '/events?month=12', '/events#list', '/checkout'])(
+  it.each(['/account', '/account/orders/12', '/events', '/events?month=12', '/events#list', '/checkout'])(
     '%s: not yet',
     (href) => expect(isBuiltAddress(href)).toBe(false),
   )
@@ -68,6 +77,9 @@ describe('whether an address has a page to open', () => {
     // W76: the gift card's page, in either format.
     '/shop/gift-card',
     '/shop/gift-card?format=physical',
+    // W77: the home page with the Book panel open.
+    '/book',
+    '/book?date=2026-12-01&type=public',
   ])(
     '%s: yes (or a page of Sanity, which only Sanity knows)',
     (href) => expect(isBuiltAddress(href)).toBe(true),
