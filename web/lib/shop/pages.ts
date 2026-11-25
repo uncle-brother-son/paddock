@@ -4,11 +4,12 @@ import { cache } from 'react'
 import type { Found } from '@/lib/pages/read'
 import { readSanity } from '@/lib/sanity/read'
 import { movedAddress } from '@/lib/sanity/redirects'
-import type { Product, ShopSettings } from '@/lib/sanity/schemas'
+import type { GiftCard, Product, ShopSettings } from '@/lib/sanity/schemas'
 
 import { londonToday, shopCategories, shopItems, type ShopCard, type ShopCategoryOption, type ShopItem } from './cards'
+import { giftCardView, type GiftCardView } from './gift-card'
 import { productView, similarCards, type ProductView } from './product'
-import { readShopKept } from './read'
+import { readShopGiftCardKept, readShopKept } from './read'
 
 // W74: what the Shop at /shop and a product at /shop/[slug] are made of. Names, words and pictures are Sanity's;
 // prices, sizes and whether any is left are the Worker's (lib/shop/read.ts, at most a minute old). A product shows
@@ -62,4 +63,27 @@ export const findProductPage = cache(async (slug: string): Promise<Found<Product
   const items = shopItems({ products, giftCard, shop, today: londonToday() })
   const view = productView({ product, onSale, settings, onSaleIds: new Set(shop.products.map((one) => one.sanityId)) })
   return { page: { product, view, similar: similarCards({ product, products, items }), settings }, movedTo: null }
+})
+
+export type GiftCardPage = {
+  /** Sanity's gift card: its name, and its SEO section. */
+  giftCard: GiftCard
+  view: GiftCardView
+  /** Shop settings: its SEO stands in where the gift card's own says nothing. */
+  settings: ShopSettings | null
+}
+
+/**
+ * W76: the gift card at /shop/gift-card (WQ19: the one gift card type), or null (a 404). It shows when the type is
+ * published in Sanity and on sale in the database (W76a's read by its Sanity id): not published, off sale or unknown
+ * is nothing, and the database is not asked for a type Sanity doesn't publish. The address has no slug, so nothing
+ * here moves.
+ */
+export const findGiftCardPage = cache(async (): Promise<GiftCardPage | null> => {
+  await connection()
+  const giftCard = await readSanity('giftCard')
+  if (!giftCard) return null
+  const [onSale, settings] = await Promise.all([readShopGiftCardKept(giftCard.id), readShopSettings()])
+  if (!onSale) return null
+  return { giftCard, view: giftCardView({ giftCard, onSale, settings }), settings }
 })

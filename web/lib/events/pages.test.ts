@@ -22,7 +22,7 @@ vi.mock('next/server', () => ({ connection: async () => undefined }))
 vi.mock('react', async (original) => ({ ...(await original<typeof import('react')>()), cache: <T>(read: T) => read }))
 // Next's data cache: here it keeps nothing.
 vi.mock('next/cache', () => ({ unstable_cache: <T>(read: T): T => read }))
-vi.mock('@/server/rules/shop/reads', () => ({ readShop: vi.fn() }))
+vi.mock('@/server/rules/shop/reads', () => ({ readShop: vi.fn(), readShopGiftCard: vi.fn() }))
 vi.mock('@/server/rules/shop/events', () => ({ readShopEvents, readShopEvent }))
 
 const { findEventPage, readEventsListAddress, readUpcomingEventCards } = await import('./pages')

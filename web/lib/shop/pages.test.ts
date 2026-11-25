@@ -5,16 +5,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { reads } from '@/lib/sanity/read'
 import answers from '@/lib/sanity/sample-answers.json'
 
-import type { Shop, ShopProduct } from './read'
+import type { Shop, ShopGiftCardPage, ShopProduct } from './read'
 
 // Brief W74, item 5: what /shop and /shop/[slug] answer. A product shows only when it is published in Sanity and on
 // sale in the database; an old slug is a permanent redirect (W72a), anything else a 404. Sanity is stood in for by
 // the samples its own engine made (lib/sanity/sample-answers.json: the Herd Hoodie in Moss and in Sand, the gift
-// card, Shop settings), the Worker's read by a shop made here.
+// card, Shop settings), the Worker's read by a shop made here. Brief W76, item 6: what /shop/gift-card answers.
 
 const fetched = vi.hoisted(() => vi.fn())
 const readShop = vi.hoisted(() => vi.fn())
-const kept = vi.hoisted(() => ({ calls: [] as Array<{ keys: unknown; options: unknown }> }))
+const readShopGiftCard = vi.hoisted(() => vi.fn())
+const kept =vi.hoisted(() => ({ calls: [] as Array<{ keys: unknown; options: unknown }> }))
 vi.mock('@sanity/client', () => ({ createClient: () => ({ fetch: fetched }) }))
 // Outside a request there is nothing to wait for.
 vi.mock('next/server', () => ({ connection: async () => undefined }))
@@ -27,11 +28,11 @@ vi.mock('next/cache', () => ({
     return read
   },
 }))
-vi.mock('@/server/rules/shop/reads', () => ({ readShop }))
+vi.mock('@/server/rules/shop/reads', () => ({ readShop, readShopGiftCard }))
 // W75: lib/shop/read.ts reads the events too; the shop's pages never ask for them.
 vi.mock('@/server/rules/shop/events', () => ({ readShopEvents: vi.fn(), readShopEvent: vi.fn() }))
 
-const { findProductPage, readShopCatalogue } = await import('./pages')
+const { findGiftCardPage, findProductPage, readShopCatalogue } = await import('./pages')
 const { SHOP_KEPT_SECONDS } = await import('./read')
 
 const size = (name: string, available = true) => ({ size: name, available, price: '60.00', memberPrice: '54.00', priceBeforeSale: null, percentOff: null })
@@ -55,13 +56,22 @@ const shopOf = (over: Partial<Shop> = {}): Shop => ({
   ...over,
 })
 
-/** Sanity, answering by the query it is sent. */
-const sanity = (products: Record<string, unknown>, moved: Record<string, { slug: string; isHome: boolean }> = {}) => {
+/** W76a's read of the gift card type, as it is live: five presets, Other from £1 to £1,000, six months. */
+const giftCardOnSale = (over: Partial<ShopGiftCardPage> = {}): ShopGiftCardPage => ({
+  sanityId: 'gift',
+  amounts: ['15.00', '30.00', '60.00', '90.00', '150.00'],
+  other: { lowest: '1.00', highest: '1000.00' },
+  expiryMonths: 6,
+  ...over,
+})
+
+/** Sanity, answering by the query it is sent. `giftCard`: what it publishes of the gift card (null: nothing). */
+const sanity = (products: Record<string, unknown>, moved: Record<string, { slug: string; isHome: boolean }> = {}, giftCard: unknown = answers.giftCard) => {
   fetched.mockImplementation(async (query: string, params: { slug?: string; type?: string }) => {
     if (query === reads.movedSlug.query) return moved[`${params.type} ${params.slug}`] ?? null
     if (query === reads.product.query) return products[params.slug ?? ''] ?? null
     if (query === reads.productCards.query) return answers.productCards
-    if (query === reads.giftCard.query) return answers.giftCard
+    if (query === reads.giftCard.query) return giftCard
     if (query === reads.shopSettings.query) return answers.shopSettings
     throw new Error(`A read the shop's pages should not make: ${query.slice(0, 60)}`)
   })
@@ -71,11 +81,13 @@ beforeEach(() => {
   vi.stubEnv('NEXT_PUBLIC_SANITY_PROJECT_ID', 'project')
   vi.stubEnv('NEXT_PUBLIC_SANITY_DATASET', 'production')
   readShop.mockResolvedValue(shopOf())
+  readShopGiftCard.mockResolvedValue(giftCardOnSale())
 })
 afterEach(() => {
   vi.unstubAllEnvs()
   fetched.mockReset()
   readShop.mockReset()
+  readShopGiftCard.mockReset()
 })
 
 describe('the Shop, at /shop', () => {
@@ -147,13 +159,57 @@ describe('a product, at /shop/[slug]', () => {
   })
 })
 
+describe('the gift card, at /shop/gift-card (W76)', () => {
+  it("published in Sanity and on sale in the database: its page, with W76a's amounts and limits, its two galleries and its terms filled", async () => {
+    sanity({})
+    const page = await findGiftCardPage()
+    expect(readShopGiftCard).toHaveBeenCalledWith('gift')
+    expect([page?.giftCard.id, page?.view.id, page?.view.name]).toEqual(['gift', 'gift', 'Gift Card'])
+    expect(page?.view.amounts).toEqual([
+      { amount: '15.00', label: '£15' },
+      { amount: '30.00', label: '£30' },
+      { amount: '60.00', label: '£60' },
+      { amount: '90.00', label: '£90' },
+      { amount: '150.00', label: '£150' },
+    ])
+    expect(page?.view.other).toEqual({ lowest: '1.00', highest: '1000.00' })
+    // The sample's Digital gallery is a video and its Physical one a picture.
+    expect([page?.view.galleries.digital.map((item) => item.video !== null), page?.view.galleries.physical.map((item) => item.video !== null)]).toEqual([[true], [false]])
+    // Sanity's "Valid for {validity}." with the staff app's six months.
+    expect(page?.view.terms.map((block) => block.children.map((span) => span.text).join(''))).toEqual(['Valid for 6 months.'])
+    expect(page?.view.shipping.length).toBeGreaterThan(0)
+    expect(page?.settings?.title).toBe('Shop')
+  })
+  it('published in Sanity but off sale in the database (or unknown there): nothing (a 404)', async () => {
+    sanity({})
+    readShopGiftCard.mockResolvedValue(null)
+    expect(await findGiftCardPage()).toBeNull()
+  })
+  it('not published in Sanity: nothing (a 404), and the database is not asked', async () => {
+    sanity({}, {}, null)
+    expect(await findGiftCardPage()).toBeNull()
+    expect(readShopGiftCard).not.toHaveBeenCalled()
+  })
+  it('a type with Other switched off has no limits, so the page draws no Other', async () => {
+    sanity({})
+    readShopGiftCard.mockResolvedValue(giftCardOnSale({ other: null }))
+    expect((await findGiftCardPage())?.view.other).toBeNull()
+  })
+  it('a gift card that could not be read is an error, never a 404', async () => {
+    sanity({})
+    readShopGiftCard.mockRejectedValue(new Error('The database connection is not set up'))
+    await expect(findGiftCardPage()).rejects.toThrow('The database connection is not set up')
+  })
+})
+
 describe("the Worker's read of the shop", () => {
-  it('is kept for at most 60 seconds, under one key; W75: the events list and each event under their own', () => {
+  it('is kept for at most 60 seconds, under one key; W75: the events list and each event under their own; W76: the gift card under its own', () => {
     expect(SHOP_KEPT_SECONDS).toBe(60)
     expect(kept.calls).toEqual([
       { keys: ['shop'], options: { revalidate: 60 } },
       { keys: ['shop-events'], options: { revalidate: 60 } },
       { keys: ['shop-event'], options: { revalidate: 60 } },
+      { keys: ['shop-gift-card'], options: { revalidate: 60 } },
     ])
   })
 

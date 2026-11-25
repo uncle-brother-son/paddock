@@ -6,7 +6,8 @@ import { BUILT_BENEATH, isBuiltAddress, NOT_BUILT_ADDRESSES } from './not-built'
 import { RESERVED_PRODUCT_SLUGS, RESERVED_SLUGS } from './reserved-slugs'
 
 // Level 3, 25 Nov 2026: no background request to a page that isn't built. Loading /shop asked for /book, /account
-// and /shop/gift-card ahead of any press, each more than once, and none of them exists yet.
+// and /shop/gift-card ahead of any press, each more than once, and none of them existed yet. W76: /shop/gift-card
+// is built, and off the list.
 
 const WEB = path.resolve(__dirname, '../..')
 const inApp = (address: string, ...more: string[]) => path.join(WEB, 'app', ...address.split('/').filter(Boolean), ...more)
@@ -36,10 +37,16 @@ describe('the list of pages not built yet', () => {
   it("holds only the site's own addresses", () => {
     expect(NOT_BUILT_ADDRESSES.filter((address) => !OWN_ADDRESSES.includes(address))).toEqual([])
   })
+
+  // W76: the gift card's page is a folder of its own beside the products' [slug], which a product can never be given.
+  it('the gift card has its page, and is not on the list', () => {
+    expect(existsSync(inApp('/shop/gift-card', 'page.tsx'))).toBe(true)
+    expect((NOT_BUILT_ADDRESSES as readonly string[]).includes('/shop/gift-card')).toBe(false)
+  })
 })
 
 describe('whether an address has a page to open', () => {
-  it.each(['/book', '/book?date=2026-12-01&type=public', '/account', '/account/orders/12', '/shop/gift-card', '/shop/gift-card#amount', '/events', '/events?month=12', '/events#list', '/checkout'])(
+  it.each(['/book', '/book?date=2026-12-01&type=public', '/account', '/account/orders/12', '/events', '/events?month=12', '/events#list', '/checkout'])(
     '%s: not yet',
     (href) => expect(isBuiltAddress(href)).toBe(false),
   )
@@ -58,6 +65,9 @@ describe('whether an address has a page to open', () => {
     '/events/winter-solstice',
     '/events/winter-solstice?from=email',
     '/exclusive-hire#events',
+    // W76: the gift card's page, in either format.
+    '/shop/gift-card',
+    '/shop/gift-card?format=physical',
   ])(
     '%s: yes (or a page of Sanity, which only Sanity knows)',
     (href) => expect(isBuiltAddress(href)).toBe(true),

@@ -5,15 +5,16 @@ import { connection } from 'next/server'
 import { cache } from 'react'
 
 import { readShopEvent, readShopEvents, type ShopEvent } from '@/server/rules/shop/events'
-import { readShop, type Shop } from '@/server/rules/shop/reads'
+import { readShop, readShopGiftCard, type Shop, type ShopGiftCardPage } from '@/server/rules/shop/reads'
 
 // W74: the one file of the website that reads the shop from the Worker's rules (W74a: `readShop()`, no HTTP). Every
 // price, size and "is any left" on the Shop and Product pages comes from here; nothing on the site reads a table or
 // works a price out. The pages and components take these types from here, so this is the only import of server code.
 // W75: the events' reads too (W75a: `readShopEvents()`, `readShopEvent()`): an event's date, spaces, state and prices.
+// W76: the gift card's read (W76a: `readShopGiftCard()`): its amounts on sale, the Other limits, how long a card lasts.
 
 export type { ShopEvent, ShopEventAccess } from '@/server/rules/shop/events'
-export type { Shop, ShopCategory, ShopGiftCard, ShopProduct } from '@/server/rules/shop/reads'
+export type { Shop, ShopCategory, ShopGiftCard, ShopGiftCardPage, ShopProduct } from '@/server/rules/shop/reads'
 
 /** How long the shop's read may be kept: a page's prices and sizes are at most this old (the brief's "at most 60 seconds"). */
 export const SHOP_KEPT_SECONDS = 60
@@ -54,4 +55,16 @@ export const readShopEventsKept = cache(async (): Promise<ShopEvent[]> => {
 export const readShopEventKept = cache(async (sanityId: string): Promise<ShopEvent | null> => {
   await connection()
   return keptEvent(sanityId)
+})
+
+/**
+ * W76: one gift card type by its Sanity id (W76a), kept as the shop is and apart for each type. Null: off sale or
+ * unknown, so no page.
+ */
+const keptGiftCard = unstable_cache(async (sanityId: string): Promise<ShopGiftCardPage | null> => readShopGiftCard(sanityId), ['shop-gift-card'], { revalidate: SHOP_KEPT_SECONDS })
+
+/** The gift card for its own page, once for a request. A read that fails throws: never a "not found". */
+export const readShopGiftCardKept = cache(async (sanityId: string): Promise<ShopGiftCardPage | null> => {
+  await connection()
+  return keptGiftCard(sanityId)
 })

@@ -36,7 +36,7 @@ export const isPlainClick = (event: MouseEvent): boolean => event.button === 0 &
  * is followed.
  *
  * Next fetches each link it can see ahead of a press. A page that is not built yet (lib/routes/not-built.ts: /book,
- * /account, /shop/gift-card) is never fetched ahead, on sight or on hover; a press still follows the link.
+ * /account) is never fetched ahead, on sight or on hover; a press still follows the link.
  */
 export function SiteLink({ href, newTab = false, transition = true, onClick, children, ...rest }: SiteLinkProps) {
   const panels = useFramePanels()

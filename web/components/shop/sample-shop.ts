@@ -2,6 +2,7 @@ import type { ShopSize } from '@/contracts/shop'
 import type { SizedImage } from '@/lib/sanity/image'
 import type { RichText } from '@/lib/sanity/schemas'
 import type { ShopCard, ShopCategoryOption, ShopItem } from '@/lib/shop/cards'
+import type { GiftCardView } from '@/lib/shop/gift-card'
 import { inPence, pounds } from '@/lib/shop/money'
 import { priceLine, productSizes, type GalleryItem, type ProductView } from '@/lib/shop/product'
 
@@ -176,6 +177,37 @@ export const SAMPLE_PRODUCT_SOLD_OUT: ProductView = { ...SAMPLE_PRODUCT, soldOut
 
 /** One size left. */
 export const SAMPLE_PRODUCT_ONE_LEFT: ProductView = { ...SAMPLE_PRODUCT, sizes: productSizes(SIZES.map((name) => size(name, name === 'L'))) }
+
+/** A drawn stand-in for a gift card's photograph, 4 by 5 on Object/Product BG: the card itself (physical), or the card on a phone's screen (digital). */
+const card = (digital: boolean, turned = false): SizedImage => {
+  const drawn = digital
+    ? `<rect x="120" y="90" width="160" height="320" rx="18" fill="#222222"/><rect x="132" y="${turned ? 150 : 190}" width="136" height="88" rx="6" fill="#193028"/><rect x="144" y="${turned ? 214 : 254}" width="48" height="5" fill="#f1eee3"/>`
+    : `<rect x="90" y="180" width="220" height="140" rx="8" fill="#193028" ${turned ? 'transform="rotate(-8 200 250)"' : ''}/><rect x="110" y="286" width="80" height="6" fill="#f1eee3" ${turned ? 'transform="rotate(-8 200 250)"' : ''}/>`
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 500"><rect width="400" height="500" fill="#d6d2c2"/>${drawn}</svg>`
+  const src = `data:image/svg+xml,${encodeURIComponent(svg)}`
+  return { src, srcSet: `${src} 400w`, width: 400, height: 500 }
+}
+
+const cardItem = (key: string, digital: boolean, turned: boolean, alt: string): GalleryItem => ({ key, picture: { desktop: card(digital, turned), mobile: card(digital, turned), alt }, video: null })
+
+/**
+ * Figma's Gift card (1684:41964 digital, 1684:41977 physical): "Gift Card", the presets £15 to £150 with Other, two
+ * pictures in each gallery. The amounts and limits are as W76a reads the live type: Other from £1 to £1,000, and a
+ * card lasts 6 months (the terms' {validity}, already filled).
+ */
+export const SAMPLE_GIFT_CARD: GiftCardView = {
+  id: 'gift',
+  name: 'Gift Card',
+  galleries: {
+    digital: [cardItem('d1', true, false, 'The Paddock gift card on a phone'), cardItem('d2', true, true, 'The gift card email, opened')],
+    physical: [cardItem('p1', false, false, 'The Paddock gift card'), cardItem('p2', false, true, 'The gift card, turned')],
+  },
+  amounts: ['15.00', '30.00', '60.00', '90.00', '150.00'].map((amount) => ({ amount, label: pounds(amount) })),
+  other: { lowest: '1.00', highest: '1000.00' },
+  description: [block('gd1', 'A gift card for the Paddock: sauna and contrast therapy in Hebden Bridge. It can be spent on sessions, events and anything in the shop.')],
+  terms: [block('gt1', 'Valid for 6 months from the day it is bought.'), block('gt2', 'It can be spent in one go or a little at a time', true), block('gt3', 'It can’t be exchanged for cash', true)],
+  shipping: SAMPLE_SHIPPING,
+}
 
 /** Similar Merch, as drawn: two New In, a plain one and one on sale. */
 export const SAMPLE_SIMILAR: ShopCard[] = [SAMPLE_CARDS.newIn, sampleCard('tee-navy-2', { colour: 'navy', tag: 'New In' }), SAMPLE_CARDS.plain, SAMPLE_CARDS.sale]

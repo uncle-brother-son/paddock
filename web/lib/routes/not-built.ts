@@ -1,11 +1,12 @@
 // The site's own addresses whose pages are not built yet (Level 3, 25 Nov 2026).
 //
-// A link to one is drawn and followed as any other (the header's Book and Account, the menu's and the Shop's gift
-// card), but SiteLink never asks for it ahead of a press: Next fetches every link it can see in the background, and a
-// page that is not there is a wasted request for each one, on every page of the site. When a page is built, take its
-// address out: lib/routes/not-built.test.ts fails until this list and the folders in app/ agree.
+// A link to one is drawn and followed as any other (the header's Book and Account), but SiteLink never asks for it
+// ahead of a press: Next fetches every link it can see in the background, and a page that is not there is a wasted
+// request for each one, on every page of the site. When a page is built, take its address out:
+// lib/routes/not-built.test.ts fails until this list and the folders in app/ agree. W76: /shop/gift-card is built, so
+// the Shop's gift card card and the menu's Gift Cards link are fetched ahead as any other.
 
-export const NOT_BUILT_ADDRESSES = ['/account', '/auth', '/blog', '/book', '/checkout', '/events', '/waiver', '/shop/gift-card'] as const
+export const NOT_BUILT_ADDRESSES = ['/account', '/auth', '/blog', '/book', '/checkout', '/events', '/waiver'] as const
 
 /**
  * W75: a not-built address whose pages beneath it are built. An event's page (/events/<slug>) is there and is fetched
