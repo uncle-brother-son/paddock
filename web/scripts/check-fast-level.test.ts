@@ -130,8 +130,8 @@ describe('the level', () => {
     const asItIs = (file: string) => changed(file, null, readFileSync(path.join(REPO, file), 'utf8'))
     const rule = 'export const sizePrices = (variant) => ({ price: variantPriceFor(variant, false) })\n'
 
-    it('the list is the rules, their contract, the one public route and the test that lists the public routes', () => {
-      expect(SHOP_READ_PATHS).toEqual(['web/server/rules/shop/', 'web/contracts/shop.ts', 'web/app/api/v1/shop/availability/', 'web/server/api-allowlist.test.ts'])
+    it('the list is the rules, their contract, the public routes and the test that lists the public routes', () => {
+      expect(SHOP_READ_PATHS).toEqual(['web/server/rules/shop/', 'web/contracts/shop.ts', 'web/app/api/v1/shop/availability/', 'web/app/api/v1/shop/event-availability/', 'web/server/api-allowlist.test.ts'])
       expect(SHOP_READER).toBe('web/lib/shop/read.ts')
     })
 
@@ -142,23 +142,26 @@ describe('the level', () => {
       ['its words', changed('web/server/rules/shop/failure-messages.ts')],
       ['its contract', changed('web/contracts/shop.ts', null, 'export const shopSizeSchema = z.strictObject({ price: money })\n')],
       ['the availability route', changed('web/app/api/v1/shop/availability/route.ts', null, "export const GET = defineRoute({ auth: 'public' }, async ({ input }) => shopAvailability(db, input.product))\n")],
+      ["the events' read (W75a)", changed('web/server/rules/shop/events.ts', null, "const SQL = 'SELECT q.unit_price FROM quote_event(e.id, NULL, 1, false, NULL) q'\n")],
+      ["the events' route (W75a)", changed('web/app/api/v1/shop/event-availability/route.ts', null, "export const GET = defineRoute({ auth: 'public' }, async ({ input }) => shopEventAvailability(db, input.event))\n")],
       ["the route's test", changed('web/app/api/v1/shop/availability/route.test.ts', null, "it('refuses a POST', async () => {})\n")],
       ['the test that lists the public routes', changed('web/server/api-allowlist.test.ts')],
     ])('%s is Level 1b, alone or among website files', (_what, change) => {
       expect(levelOf(change)).toBe('1b')
       const { level, reasons } = pickLevel([changed('web/components/shop/ProductCard.tsx'), change, changed('studio/structure.ts')])
       expect(level).toBe('1b')
-      expect(reasons).toEqual([`${change.file} (the shop's reads: they show prices and sizes, and never write or move money)`])
+      expect(reasons).toEqual([`${change.file} (the shop's reads: they show prices, sizes and spaces, and never write or move money)`])
     })
 
     it("every file of the shop's reads in the repo today is Level 1b as it is", () => {
       const files = [
         ...readdirSync(path.join(WEB, 'server/rules/shop')).map((name) => `web/server/rules/shop/${name}`),
         ...readdirSync(path.join(WEB, 'app/api/v1/shop/availability')).map((name) => `web/app/api/v1/shop/availability/${name}`),
+        ...readdirSync(path.join(WEB, 'app/api/v1/shop/event-availability')).map((name) => `web/app/api/v1/shop/event-availability/${name}`),
         'web/contracts/shop.ts',
         'web/server/api-allowlist.test.ts',
       ]
-      expect(files.length).toBeGreaterThanOrEqual(9)
+      expect(files.length).toBeGreaterThanOrEqual(12)
       for (const file of files) expect(levelOf(asItIs(file)), file).toBe('1b')
     })
 
@@ -168,10 +171,12 @@ describe('the level', () => {
         expect(levelOf(changed('web/server/rules/shop/reads.ts', rule, sql)), sql).toBe(1)
       }
       expect(levelOf(changed('web/server/rules/shop/reads.ts', insert, rule))).toBe(1)
-      // The route takes GET alone.
+      // Each route takes GET alone.
       const post = "export const POST = defineRoute({ auth: 'public' }, async () => addToBag())\n"
-      expect(levelOf(changed('web/app/api/v1/shop/availability/route.ts', null, post))).toBe(1)
-      expect(levelOf(changed('web/app/api/v1/shop/availability/route.ts', post, 'export const GET = 1\n'))).toBe(1)
+      for (const route of ['web/app/api/v1/shop/availability/route.ts', 'web/app/api/v1/shop/event-availability/route.ts']) {
+        expect(levelOf(changed(route, null, post)), route).toBe(1)
+        expect(levelOf(changed(route, post, 'export const GET = 1\n')), route).toBe(1)
+      }
     })
 
     it('money stays Level 1: the rules beside them, the other contracts, any other shop route, and money beside a read', () => {

@@ -22,12 +22,13 @@ export const LEVEL_1B_PATHS = ['web/app/api/sanity/', 'web/server/rules/catalog/
 
 /**
  * W74a, WQ45 (Wayne, 24 Nov): the shop's reads are Level 1b too, by name: the rules that read the shop for the
- * website's pages, their contract, the one public route (GET /api/v1/shop/availability) and the test that lists the
- * public routes. They show prices and never set, charge or move one, so the money words can't be asked of them. What
- * can: one of them that starts to write (a statement that changes a row, or a route that takes more than GET) is no
- * longer a read, and is Level 1. A test sets its own rows up, so a test is not asked.
+ * website's pages, their contract, the public routes (GET /api/v1/shop/availability and, W75a, the events'
+ * /api/v1/shop/event-availability) and the test that lists the public routes. They show prices and never set, charge
+ * or move one, so the money words can't be asked of them. What can: one of them that starts to write (a statement that
+ * changes a row, or a route that takes more than GET) is no longer a read, and is Level 1. A test sets its own rows up,
+ * so a test is not asked.
  */
-export const SHOP_READ_PATHS = ['web/server/rules/shop/', 'web/contracts/shop.ts', 'web/app/api/v1/shop/availability/', 'web/server/api-allowlist.test.ts']
+export const SHOP_READ_PATHS = ['web/server/rules/shop/', 'web/contracts/shop.ts', 'web/app/api/v1/shop/availability/', 'web/app/api/v1/shop/event-availability/', 'web/server/api-allowlist.test.ts']
 
 /**
  * WQ45: the one website file that reads the shop from the Worker's rules (W74: `readShop()`, kept for a minute). Its
@@ -63,7 +64,7 @@ export function backendWithoutMoney({ file, before, after }) {
   if (inPlaces(SHOP_READ_PATHS, file)) {
     const route = /\/route\.ts$/.test(file)
     const writes = !isTest(file) && texts.some((text) => SQL_WRITES.test(text) || (route && WRITES.test(text)))
-    return writes ? null : "the shop's reads: they show prices and sizes, and never write or move money"
+    return writes ? null : "the shop's reads: they show prices, sizes and spaces, and never write or move money"
   }
   if (texts.length === 0) return null
   const namesMoney = MONEY_WORDS.test(file) || texts.some((text) => MONEY_WORDS.test(text))
