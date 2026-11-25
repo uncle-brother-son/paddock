@@ -94,6 +94,52 @@ export const Choosing: Story = {
   },
 }
 
+/**
+ * WQ12 (Wayne, 25 Nov): the focus ring is for the keyboard only. Choosing from ALL or SORT with the mouse leaves no
+ * ring on it, though a browser counts a clicked list as keyboard focus; tabbing to it shows the ring. The same for
+ * every control: what was last used, a key or a pointer, decides (components/frame/InputKind.tsx).
+ */
+export const FocusRing: Story = {
+  name: 'Focus ring: the keyboard only',
+  globals: { viewport: { value: 'desktop', isRotated: false } },
+  play: async ({ canvas, canvasElement }) => {
+    const sort = canvas.getByRole('combobox', { name: 'Sort by' })
+    const category = canvas.getByRole('combobox', { name: 'Category' })
+    // The ring is drawn round what is seen: the control the list lies over.
+    const ring = (list: HTMLElement) => {
+      const style = getComputedStyle(list.parentElement!)
+      return style.outlineStyle === 'none' ? 'none' : `${style.outlineWidth} ${style.outlineStyle} ${style.outlineOffset}`
+    }
+    // The mouse: a press on SORT and a choice from its list. It has focus, and no ring.
+    await userEvent.click(sort)
+    await userEvent.selectOptions(sort, 'price-desc')
+    await expect(sort).toHaveFocus()
+    await expect(document.documentElement.dataset.input).toBe('pointer')
+    await expect([ring(sort), ring(category)]).toEqual(['none', 'none'])
+    // The keyboard: Shift + Tab to ALL shows the ring there, Tab back to SORT shows it there.
+    await userEvent.tab({ shift: true })
+    await expect(category).toHaveFocus()
+    await expect(document.documentElement.dataset.input).toBe('key')
+    await expect([ring(category), ring(sort)]).toEqual(['2px solid 2px', 'none'])
+    await userEvent.tab()
+    await expect([ring(category), ring(sort)]).toEqual(['none', '2px solid 2px'])
+    // The mouse again, on the same control: the ring goes.
+    await userEvent.click(sort)
+    await expect(sort).toHaveFocus()
+    await expect(ring(sort)).toBe('none')
+    // Every control, not only these two: a link shows the ring when tabbed to, and none when focus is put on it
+    // after a press of the mouse (as when a popup hands focus back to what opened it).
+    const link = canvasElement.querySelector('article a') as HTMLElement
+    await userEvent.tab()
+    await expect(link).toHaveFocus()
+    await expect([getComputedStyle(link).outlineStyle, getComputedStyle(link).outlineWidth, getComputedStyle(link).outlineOffset]).toEqual(['solid', '2px', '2px'])
+    await userEvent.pointer({ keys: '[MouseLeft]', target: canvas.getByRole('heading', { level: 1 }) })
+    link.focus()
+    await expect(link).toHaveFocus()
+    await expect(getComputedStyle(link).outlineStyle).toBe('none')
+  },
+}
+
 /** /shop?category=hoodies: only the Hoodies, counted, with the category's name on the control; one page, so no pages are drawn. */
 export const Filtered: Story = {
   globals: { viewport: { value: 'desktop', isRotated: false } },

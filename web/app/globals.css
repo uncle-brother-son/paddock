@@ -129,12 +129,19 @@
   --radius-m: 8px;
 
   /*
-   * Motion (WQ20-WQ23): one curve and two durations for the whole site. lib/motion/tokens.ts holds the same three
-   * values for Motion, and lib/motion/tokens.test.ts fails when the two differ.
+   * Motion (WQ20-WQ23): one curve and two durations for the whole site. lib/motion/tokens.ts holds the same values
+   * for Motion, and lib/motion/tokens.test.ts fails when the two differ.
+   *
+   * The curve (WQ55) is Figma's "Slow" spring (mass 1, stiffness 80, damping 20: no bounce), its shape fitted to the
+   * duration of whatever it animates. CSS has no spring, so it is written as straight pieces between points on the
+   * spring. Never edit the --ease-smooth line by hand: scripts/build-ease.mjs writes it (npm run ease:build).
+   *
+   * --intro-pause (WQ53) is the intro's two holds: a wait between two animations, never an animation's duration.
    */
-  --ease-smooth: cubic-bezier(0, 0, 0.2, 1);
+  --ease-smooth: linear(0, 0.0033 0.7%, 0.014 1.5%, 0.0358 2.5%, 0.0677 3.6%, 0.1164 5%, 0.2025 7.2%, 0.3552 11%, 0.4444 13.4%, 0.5186 15.6%, 0.582 17.7%, 0.6407 19.9%, 0.6921 22.1%, 0.7404 24.5%, 0.7846 27.1%, 0.8242 29.9%, 0.8599 33%, 0.8917 36.5%, 0.9188 40.4%, 0.942 44.9%, 0.9616 50.4%, 0.9771 57.2%, 0.9888 66.3%, 0.9966 80.1%, 1);
   --duration-short: 320ms;
   --duration-long: 640ms;
+  --intro-pause: 480ms;
   --default-transition-duration: var(--duration-short);
   --default-transition-timing-function: var(--ease-smooth);
 }
@@ -301,12 +308,26 @@ body {
 
 /*
  * The keyboard focus ring (WQ12): 2px in Text/Primary with a 2px gap, on every link, button and other control,
- * for the keyboard only (`:focus-visible`); a mouse or a finger never shows it. `:where` keeps it weightless, so a
- * component can still set its own. A field shows its designed focus state instead.
+ * for the keyboard only; a mouse or a finger never shows it. `:where` keeps it weightless, so a component can still
+ * set its own. A field shows its designed focus state instead.
+ *
+ * `:focus-visible` alone is not enough (W74c; Wayne, 25 Nov): a browser counts a <select> as keyboard focus even
+ * when it is clicked, and focus moved by script (into a popup, back to what opened it) can count too. So
+ * components/frame/InputKind.tsx notes on <html> what the visitor last used, a key or a pointer, and the ring is
+ * drawn only when that was not a pointer. Before that script runs, and with no script, it is `:focus-visible` as the
+ * browser has it. A component that draws the ring on something else (round a hidden <select> or radio) uses the
+ * `has-keyboard-focus:` variant below, which follows the same rule.
+ *
+ * After a pointer the same controls show no ring at all: without the second rule the browser would draw its own
+ * there (where it still counts the focus as the keyboard's), in place of the one above.
  */
-:where(a, button, summary, [tabindex]:not([tabindex="-1"])):focus-visible {
+:root:not([data-input="pointer"]) :where(a, button, summary, [tabindex]:not([tabindex="-1"])):focus-visible {
   outline: var(--spacing-2) solid var(--color-text-primary);
   outline-offset: var(--spacing-2);
+}
+
+:root[data-input="pointer"] :where(a, button, summary, [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline-style: none;
 }
 
 /* Everything that is pressed shows the hand, site-wide (W73, Wayne): a button as a link does. */
@@ -315,6 +336,12 @@ body {
 }
 
 }
+
+/*
+ * `has-keyboard-focus:` (W74c): for the wrapper of a control that is there but not seen (the Shop's <select>, a
+ * size's radio), which draws the focus ring in its place. As the ring above: only when the visitor last used a key.
+ */
+@custom-variant has-keyboard-focus (:root:not([data-input="pointer"]) &:has(:focus-visible));
 
 /*
  * Font families. next/font (app/fonts.ts) sets --font-primary (GT Sectra Fine) and --font-secondary (GT America) on
@@ -472,8 +499,8 @@ body {
 }
 
 /*
- * Wayne's Overlay (Figma "Overlay", 136:1054: Object/Light Shade, a 24 background blur, the Texture effect with
- * noise size 2 and radius 8). components/ui/Overlay.tsx puts these two on its two layers. Figma's blur radius is
+ * Wayne's Overlay (Figma "Overlay", 136:1054: Object/Dark Shade since WQ48, a 24 background blur, the Texture effect
+ * with noise size 2 and radius 8). components/ui/Overlay.tsx puts these two on its two layers. Figma's blur radius is
  * twice CSS's, so 24 is blur(12px); the noise and how far it pushes are in the SVG filter there (#overlay-texture).
  *
  * Only Chromium can run an SVG filter on what lies behind an element, and only Chromium has -webkit-app-region:
@@ -482,7 +509,7 @@ body {
  * own (measured against Figma's picture of Menu Open: the same average colour, the same grain).
  */
 @utility overlay-shade {
-  background-color: var(--color-object-light-shade);
+  background-color: var(--color-object-dark-shade);
   -webkit-backdrop-filter: blur(12px);
   backdrop-filter: blur(12px);
 
@@ -504,10 +531,12 @@ body {
 /*
  * The intro (W73b; WQ20, WQ23 as amended; Figma 04 Animations, Intro 1, 2 and 3). components/frame/Intro.tsx puts
  * these on its panel and what is in it. The panel is not there at all until lib/frame/intro.ts sets
- * `data-intro="play"` on it: with no script (a search engine) or reduced motion it never shows. Then three
- * transitions run back to back, each the long duration with the smooth curve, with no pause between them:
+ * `data-intro="play"` on it: with no script (a search engine) or reduced motion it never shows. Then, with its two
+ * pauses back (WQ53; 2,880 ms in all), each transition the long duration with the smooth curve:
+ *   - a pause on the full panel;
  *   1. the logo fades in, at the middle of the window;
  *   2. the logo slides up as the location fades in beneath it, so the two together sit at the middle;
+ *   - a pause, the logo and the location held;
  *   3. the panel is masked away to the top, and the page is there beneath it.
  * The slide is half of what joins the logo: the 40px gap and the location's height, which is its capitals' (1cap,
  * as every label is trimmed to them).
@@ -517,13 +546,13 @@ body {
 
   &[data-intro="play"] {
     display: flex;
-    animation: intro-mask var(--duration-long) var(--ease-smooth) calc(var(--duration-long) * 2) both;
+    animation: intro-mask var(--duration-long) var(--ease-smooth) calc(var(--intro-pause) * 2 + var(--duration-long) * 2) both;
   }
 }
 
 @utility intro-logo {
   [data-intro="play"] & {
-    animation: intro-fade var(--duration-long) var(--ease-smooth) both;
+    animation: intro-fade var(--duration-long) var(--ease-smooth) var(--intro-pause) both;
   }
 }
 
@@ -531,13 +560,13 @@ body {
   --intro-rise: calc((var(--spacing-40) + 1cap) / 2);
 
   [data-intro="play"] & {
-    animation: intro-rise var(--duration-long) var(--ease-smooth) var(--duration-long) both;
+    animation: intro-rise var(--duration-long) var(--ease-smooth) calc(var(--intro-pause) + var(--duration-long)) both;
   }
 }
 
 @utility intro-place {
   [data-intro="play"] & {
-    animation: intro-fade var(--duration-long) var(--ease-smooth) var(--duration-long) both;
+    animation: intro-fade var(--duration-long) var(--ease-smooth) calc(var(--intro-pause) + var(--duration-long)) both;
   }
 }
 
@@ -592,11 +621,40 @@ body {
 }
 
 /*
- * The page transition (W73b; WQ20, WQ22), on every link from page to page inside the site. It copies
- * oddritualgolf.com's, read from that site's own code: the page being left drifts down a fifth of the window and
- * fades to 40% over the page's background, while the new page is uncovered from the top edge of the window
- * downwards, itself settling down a fifth of the window into its place. Here it takes the long duration with the
- * smooth curve.
+ * A button whose label gives way to another while the pointer is over it (W74c; WQ51: the Product page's "Add to
+ * bag" with no size chosen, which becomes "Select size"). components/ui/Button.tsx puts this on the button and marks
+ * its two labels: the one at rest slides up out of the button as the other slides in from beneath, each travelling
+ * the button's own height, over the short duration with the smooth curve; leaving reverses it. The button clips them.
+ *
+ * Only for a mouse (a pointer that is fine and can hover), and never with reduced motion: on a touch screen, for the
+ * keyboard and with reduced motion on, the label at rest just stays.
+ */
+@utility label-swap {
+  & > [data-label] {
+    transition: translate var(--duration-short) var(--ease-smooth);
+  }
+
+  & > [data-label="hover"] {
+    translate: 0 100%;
+  }
+
+  @media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+    &:hover > [data-label="rest"] {
+      translate: 0 -100%;
+    }
+
+    &:hover > [data-label="hover"] {
+      translate: 0 0;
+    }
+  }
+}
+
+/*
+ * The page transition (W73b; WQ20, WQ22, WQ54), on every link from page to page inside the site. It follows
+ * oddritualgolf.com's, read from that site's own code: the page being left drifts down a fifth of the window, while
+ * the new page is uncovered over it from the top edge of the window downwards, itself settling down a fifth of the
+ * window into its place. Here it takes the long duration with the smooth curve. The page being left does not fade
+ * (WQ54): while it faded, the two pages were seen one through the other, which read as a stray overlay.
  *
  * It is drawn by the browser's view transitions, which React starts when a navigation that carries the page
  * transition's type lands (components/frame/PageTransition.tsx gives the two pages these classes). A browser without
@@ -612,7 +670,6 @@ body {
 
 @keyframes page-out {
   to {
-    opacity: 0.4;
     translate: 0 20vh;
   }
 }
@@ -654,6 +711,16 @@ body {
 ::view-transition-new(frame-header),
 ::view-transition-new(frame-menu) {
   animation: none;
+}
+
+/*
+ * The window itself (the root) is never a picture in a view transition (W74c, for WQ52): only the two pages, the
+ * header and the menu are. Left in, the browser kept a picture of the whole page being left on every navigation and
+ * faded it out over the new page by its own clock, a quarter of a second, even when nothing was to be animated. Now
+ * a navigation that carries no page transition (Back, Forward, a product's colour swatch) swaps the page at once.
+ */
+:root {
+  view-transition-name: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -3,6 +3,7 @@ import { expect, userEvent, waitFor, within } from 'storybook/test'
 
 import { OverlayTexture } from '@/components/ui/Overlay'
 import type { ShopAvailabilityRouteOutput } from '@/contracts/shop'
+import { DURATION_SHORT, EASE_SMOOTH_CSS, linearEasingPoints } from '@/lib/motion/tokens'
 
 import { ProductPageView } from './ProductPageView'
 import { SAMPLE_PRODUCT, SAMPLE_PRODUCT_ON_SALE, SAMPLE_PRODUCT_ONE_LEFT, SAMPLE_PRODUCT_SOLD_OUT, SAMPLE_SIMILAR, SAMPLE_SIZES } from './sample-shop'
@@ -59,6 +60,8 @@ export const Desktop: Story = {
     const colours = within(canvas.getByRole('list', { name: 'Colours' }))
     const [brown, white] = colours.getAllByRole('link')
     await expect([brown!.getAttribute('aria-current'), white!.getAttribute('aria-current'), white!.getAttribute('href')]).toEqual(['page', null, '/shop/tee-white'])
+    // WQ52: the swatch of the colour on show is the one a page arriving by a swatch gives focus to.
+    await expect(canvasElement.querySelector('[data-shop="swatch"][aria-current="page"]')).toBe(brown)
     await expect(Math.round(box(brown!).width)).toBe(64)
     await expect(Math.round(box(white!).left - box(brown!).right)).toBe(4)
     // Size: a chip for each (SizeSelect, Big: Copy 14, 16px above and below), 4px apart, across the details' width.
@@ -140,6 +143,49 @@ export const SelectSize: Story = {
     await expect(canvas.getByRole('radio', { name: 'L' })).toBeChecked()
     await userEvent.click(button)
     await expect(canvas.queryByRole('alert')).toBeNull()
+  },
+}
+
+/**
+ * WQ51: with no size chosen, a mouse over the button slides "Add to bag" up out of it and "Select size" in from
+ * beneath, over the short duration with the smooth curve; leaving reverses it. Only a mouse does it (never a touch
+ * screen, the keyboard or reduced motion: `label-swap` in app/globals.css, held by lib/design/tokens.test.ts), and
+ * the button's name stays "Add to bag". Once a size is picked there is no second label. Hover it to see.
+ */
+export const SelectSizeOnHover: Story = {
+  name: 'Select size, on hover',
+  globals: { viewport: { value: 'desktop', isRotated: false } },
+  play: async ({ canvas }) => {
+    const button = canvas.getByRole('button', { name: 'Add to bag' })
+    const [rest, onHover] = [button.querySelector('[data-label="rest"]') as HTMLElement, button.querySelector('[data-label="hover"]') as HTMLElement]
+    // Its name is its own label alone: the second is for the eye only.
+    await expect([rest.textContent, onHover.textContent, onHover.getAttribute('aria-hidden')]).toEqual(['Add to bag', 'Select size', 'true'])
+    await expect(button).toHaveAccessibleName('Add to bag')
+    // The button as it was: the whole width, 40 tall, its label in the middle.
+    await expect([Math.round(box(button).width), Math.round(box(button).height)]).toEqual([405, 40])
+    const label = rest.firstElementChild as HTMLElement
+    await expect(Math.abs(box(label).top + box(label).height / 2 - (box(button).top + 20))).toBeLessThan(1)
+    await expect(Math.abs(box(label).left + box(label).width / 2 - (box(button).left + box(button).width / 2))).toBeLessThan(1)
+    // At rest "Select size" waits one button's height beneath, where the button clips it.
+    await expect([Math.round(box(onHover).top - box(button).bottom), getComputedStyle(button).overflow]).toEqual([0, 'clip'])
+    // Each travels over the short duration with the smooth curve, and nothing but its place changes.
+    for (const one of [rest, onHover]) {
+      const style = getComputedStyle(one)
+      await expect([style.transitionProperty, style.transitionDuration]).toEqual(['translate', `${DURATION_SHORT}s`])
+      await expect(linearEasingPoints(style.transitionTimingFunction)).toEqual(linearEasingPoints(EASE_SMOOTH_CSS))
+    }
+    // Keyboard focus changes nothing: the label stays.
+    button.focus()
+    await expect([getComputedStyle(rest).translate, Math.round(box(onHover).top - box(button).bottom)]).toEqual(['none', 0])
+    // A press with no size still shows the error, exactly as before.
+    await userEvent.click(button)
+    await expect((await canvas.findByRole('alert')).textContent).toBe('Please select a size')
+    await expect(button.querySelector('[data-label="hover"]')).not.toBeNull()
+    // With a size picked there is nothing to say on hover: one label, "Add to bag".
+    await userEvent.click(canvas.getByRole('radio', { name: 'M' }))
+    await waitFor(() => expect(button.querySelector('[data-label]')).toBeNull())
+    await expect(button.textContent).toBe('Add to bag')
+    await expect(canvas.getByRole('button', { name: 'Add to bag' })).toBe(button)
   },
 }
 

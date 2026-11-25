@@ -56,7 +56,7 @@ export function SizeOption({ name, size, available, selected, onSelect, describe
       : 'cursor-pointer bg-surface-card text-text-primary hover:bg-surface-card-selected'
   return (
     <label
-      className={`relative flex min-w-0 flex-1 items-center justify-center rounded-s py-16 transition-colors duration-short ease-smooth has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-text-primary ${look}`}
+      className={`relative flex min-w-0 flex-1 items-center justify-center rounded-s py-16 transition-colors duration-short ease-smooth has-keyboard-focus:outline-2 has-keyboard-focus:outline-offset-2 has-keyboard-focus:outline-text-primary ${look}`}
     >
       <input
         type="radio"

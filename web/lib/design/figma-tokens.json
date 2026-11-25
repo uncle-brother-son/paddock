@@ -74,9 +74,11 @@
     "licence": "web-licensed (Wayne, 24 Nov); committed 12a257c"
   },
   "motion": {
-    "ease-smooth": "cubic-bezier(0, 0, 0.2, 1)",
-    "duration-short": "320ms (hovers; Menu, Book, Bag, Sign in panels)",
-    "duration-long": "640ms (page transitions; each of the intro's 3 transitions, back to back, no pauses)",
-    "decisions": "WQ20-WQ23 in briefs/W03-decisions.md"
+    "ease-smooth": "Figma's spring preset Slow (stored as SLOW), its shape fitted to the animation's duration; in CSS a linear() curve made by scripts/build-ease.mjs (WQ55)",
+    "ease-smooth-spring": { "preset": "SLOW", "mass": 1, "stiffness": 80, "damping": 20 },
+    "duration-short": "320ms (hovers; the menu)",
+    "duration-long": "640ms (page transitions; each of the intro's 3 transitions; the Product Info Panel's slide, as the Bag is prototyped)",
+    "intro-pause": "480ms (the intro's two holds: on the full panel before the logo, and before the mask; WQ53)",
+    "decisions": "WQ20-WQ23, WQ49, WQ53, WQ55 in briefs/W03-decisions.md"
   }
 }

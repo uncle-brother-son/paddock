@@ -2,10 +2,13 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
+import { EASE_SMOOTH_CSS } from './tokens'
+
 // Brief W71, item 5 (WQ21, WQ23): every animation and transition uses the one smooth curve and one of the two
 // durations, from the tokens (lib/motion/tokens.ts for Motion; --ease-smooth, --duration-short and --duration-long
-// in app/globals.css for CSS). This reads every source file under app/, components/ and features/ and fails on a
-// curve or a duration typed in by hand: a cubic-bezier, an ease keyword, a spring, a time in ms or seconds.
+// in app/globals.css for CSS; W74c adds the intro's --intro-pause). This reads every source file under app/,
+// components/ and features/ and fails on a curve or a duration typed in by hand: a cubic-bezier, a linear() or
+// steps() curve, an ease keyword, a spring, a time in ms or seconds.
 
 const WEB = path.resolve(__dirname, '../..')
 const FOLDERS = ['app', 'components', 'features']
@@ -18,8 +21,9 @@ const SOURCE_FILE = /\.(ts|tsx|js|jsx|mjs|css|mdx)$/
  */
 const TOKEN_LINES: Readonly<Record<string, readonly RegExp[]>> = {
   'app/globals.css': [
-    /^--ease-smooth: cubic-bezier\([^)]*\);$/,
+    /^--ease-smooth: linear\([^)]*\);$/,
     /^--duration-(short|long): \d+ms;$/,
+    /^--intro-pause: \d+ms;$/,
     /^(animation|transition)-duration: 0\.01ms !important;$/,
   ],
 }
@@ -32,6 +36,8 @@ const AFTER = '(?![A-Za-z0-9-])'
 
 const CHECKS: readonly Check[] = [
   { name: 'a typed-in curve (cubic-bezier)', pattern: /cubic-bezier\s*\(/ },
+  // linear(0, 0.5 20%, 1), steps(4): a curve written out. Not `linear-gradient(` nor `bg-linear-to-b`.
+  { name: 'a typed-in curve (linear or steps)', pattern: new RegExp(`${BEFORE}(linear|steps)\\(`) },
   // ease-in, ease-out, ease-in-out, ease-linear, ease-[...]: everything but ease-smooth.
   { name: 'an ease keyword', pattern: new RegExp(`${BEFORE}ease-(?!smooth${AFTER})[A-Za-z[(]`) },
   { name: "one of Motion's named curves", pattern: /\b(easeIn|easeOut|easeInOut|circIn|circOut|circInOut|backIn|backOut|backInOut|anticipate)\b/ },
@@ -92,18 +98,20 @@ describe('no animation has a curve or a duration of its own (W71, WQ21 and WQ23)
 
   it('the stylesheet does hold the token lines, and they are the only lines let through', () => {
     const css = readFileSync(path.join(WEB, 'app/globals.css'), 'utf8')
-    // Read as any other file, the stylesheet's own token lines are findings: the three tokens, and the two
+    // Read as any other file, the stylesheet's own token lines are findings: the four tokens, and the two
     // reduced-motion lines.
     expect([...new Set(typedInMotion('components/Somewhere.css', css).map((finding) => finding.text))]).toEqual([
-      '--ease-smooth: cubic-bezier(0, 0, 0.2, 1);',
+      `--ease-smooth: ${EASE_SMOOTH_CSS};`,
       '--duration-short: 320ms;',
       '--duration-long: 640ms;',
+      '--intro-pause: 480ms;',
       'animation-duration: 0.01ms !important;',
       'transition-duration: 0.01ms !important;',
     ])
-    // A token line is let through only as written: a fourth duration, or a curve under another name, is not.
+    // A token line is let through only as written: a third duration, or a curve under another name, is not.
     expect(found('app/globals.css', '  --duration-medium: 480ms;')).toEqual(['a duration in milliseconds'])
     expect(found('app/globals.css', '  --ease-snappy: cubic-bezier(0.4, 0, 0.2, 1);')).toEqual(['a typed-in curve (cubic-bezier)'])
+    expect(found('app/globals.css', '  --ease-snappy: linear(0, 0.8 20%, 1);')).toEqual(['a typed-in curve (linear or steps)', 'an ease keyword'])
     expect(found('app/globals.css', '  transition: opacity 320ms;')).toEqual(['a duration in milliseconds'])
   })
 
@@ -125,7 +133,10 @@ describe('no animation has a curve or a duration of its own (W71, WQ21 and WQ23)
     ['CSS in seconds, with a keyword', 'app/shop/shop.css', '  transition: opacity .3s ease;', ['a duration in seconds', 'an ease keyword']],
     ['CSS over two lines', 'app/shop/shop.css', '    opacity 0.3s linear;', ['a duration in seconds', 'an ease keyword']],
     ['a curve in CSS', 'app/shop/shop.css', '  animation-timing-function: cubic-bezier(0.2, 0, 0, 1);', ['a typed-in curve (cubic-bezier)']],
-    ['a curve put together by hand', 'components/ui/Menu.tsx', "const curve = `cubic-bezier(${EASE_SMOOTH.join(', ')})`", ['a typed-in curve (cubic-bezier)']],
+    ['a curve put together by hand', 'components/ui/Menu.tsx', "const curve = `cubic-bezier(${numbers.join(', ')})`", ['a typed-in curve (cubic-bezier)']],
+    ['a curve of straight pieces', 'components/ui/Menu.tsx', "style={{ transitionTimingFunction: 'linear(0, 0.8 20%, 1)' }}", ['a typed-in curve (linear or steps)', 'an ease keyword']],
+    ['a curve of straight pieces with no word about motion beside it', 'components/ui/Menu.tsx', "const curve = 'linear(0, 0.8 20%, 1)'", ['a typed-in curve (linear or steps)']],
+    ['steps', 'app/shop/shop.css', '  animation-timing-function: steps(4);', ['a typed-in curve (linear or steps)']],
   ])('it finds %s', (_what, file, text, expected) => {
     expect(found(file, text)).toEqual(expected)
   })

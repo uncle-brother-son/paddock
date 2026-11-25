@@ -3,6 +3,7 @@ import { useEffect, type ReactNode } from 'react'
 
 import { fontVariables } from '../app/fonts'
 import '../app/globals.css'
+import { InputKind } from '../components/frame/InputKind'
 import { MotionProviders } from '../components/providers/MotionProviders'
 import tokens from '../lib/design/figma-tokens.json'
 import { THEME_MODES, type ThemeMode } from '../lib/design/token-names'
@@ -29,6 +30,8 @@ function ThemeFrame({ theme, wholePage, padded, children }: { theme: ThemeMode; 
 
   return (
     <MotionProviders smoothScroll={false}>
+      {/* As app/layout.tsx: the focus ring follows what was last used, a key or a pointer. */}
+      <InputKind />
       <div key={theme} data-theme={theme} className={`bg-surface-primary ${padded ? 'p-16' : ''} ${wholePage ? 'min-h-screen' : ''}`}>
         {children}
       </div>

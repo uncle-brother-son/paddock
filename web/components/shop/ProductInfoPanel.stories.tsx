@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from '@storybook/nextjs-vite'
 import { expect, userEvent, waitFor, within } from 'storybook/test'
 
 import { OverlayTexture } from '@/components/ui/Overlay'
-import { DURATION_SHORT } from '@/lib/motion/tokens'
+import { DURATION_LONG, EASE_SMOOTH_CSS, linearEasingPoints } from '@/lib/motion/tokens'
 
 import { ProductPageView } from './ProductPageView'
 import { SAMPLE_PRODUCT, SAMPLE_SIMILAR } from './sample-shop'
@@ -29,28 +29,31 @@ type Play = NonNullable<Story['play']>
 const box = (element: Element) => element.getBoundingClientRect()
 const dialogIn = (canvasElement: HTMLElement) => canvasElement.querySelector('[role="dialog"]') as HTMLElement
 
-/** Opens the panel by one of the page's own buttons, and waits until it has faded in. */
+/** How far the panel's right edge is from the window's: 12 once it is in its place, less than nothing while it is away. */
+const fromRight = (dialog: HTMLElement) => Math.round(window.innerWidth - box(dialog).right)
+
+/** Opens the panel by one of the page's own buttons, and waits until it has slid into its place. */
 const open = async (context: Parameters<Play>[0], opener: string) => {
   const dialog = dialogIn(context.canvasElement)
   await expect(dialog).not.toBeVisible()
   await userEvent.click(context.canvas.getByRole('button', { name: opener }))
   await waitFor(() => expect(dialog).toBeVisible())
-  await waitFor(() => expect(getComputedStyle(dialog).opacity).toBe('1'))
+  await waitFor(() => expect(fromRight(dialog)).toBe(12), { timeout: 3000 })
   return { dialog, panel: within(dialog) }
 }
 
 /**
  * Figma "Product Info Panel" (1684:41935; the panel 1402:53320): a Light panel 12px inside the window's top, right
  * and bottom, over Wayne's Overlay, with its tabs in Label 12, 24px apart (the one on show dark, the others muted)
- * 64px down, what the tab holds 64px beneath in Copy 14, and Close at its top right. Description is the product's
- * rich text: a paragraph, then its bullets.
+ * 64px down, what the tab holds 64px beneath in Copy 14, and Close with its label at its top right (WQ50).
+ * Description is the product's rich text: a paragraph, then its bullets.
  */
 export const Description: Story = {
   globals: { viewport: { value: 'desktop', isRotated: false } },
   play: async (context) => {
     const { dialog, panel } = await open(context, 'Description')
     const { canvasElement } = context
-    await expect([dialog.getAttribute('aria-modal'), dialog.dataset.theme, getComputedStyle(dialog).transitionDuration]).toEqual(['true', 'light', `${DURATION_SHORT}s`])
+    await expect([dialog.getAttribute('aria-modal'), dialog.dataset.theme]).toEqual(['true', 'light'])
     // 12px inside the window's top, right and bottom; 9 columns of the grid wide (Figma draws 519).
     await expect([Math.round(box(dialog).top), Math.round(window.innerWidth - box(dialog).right), Math.round(window.innerHeight - box(dialog).bottom), Math.round(box(dialog).width)]).toEqual([12, 12, 12, 523])
     await expect(getComputedStyle(dialog).borderRadius).toBe('4px')
@@ -70,13 +73,71 @@ export const Description: Story = {
     await expect(bullets).toHaveLength(5)
     await expect(Math.round(box(bullets[0]!).top - box(paragraph).bottom)).toBe(32)
     await expect(Math.round(box(bullets[1]!).top - box(bullets[0]!).bottom)).toBe(12)
-    // Close, 12px inside the panel's top right.
+    // Close, 12px inside the panel's top right. WQ50: Figma's MenuButton with its label shown, as drawn on the page
+    // (1684:41949): the close icon, 8px, "Close" in Label 12, 8px all round. Its words are its name.
     const close = panel.getByRole('button', { name: 'Close' })
     await expect([Math.round(box(dialog).right - box(close).right), Math.round(box(close).top - box(dialog).top)]).toEqual([12, 12])
+    await expect([close.hasAttribute('aria-label'), close.textContent]).toEqual([false, 'Close'])
+    const closeIcon = close.querySelector('svg') as SVGElement
+    const closeLabel = within(close).getByText('Close')
+    await expect([getComputedStyle(closeLabel).fontSize, getComputedStyle(closeLabel).textTransform, getComputedStyle(closeLabel).fontWeight]).toEqual(['12px', 'uppercase', '500'])
+    await expect([Math.round(box(closeIcon).width), Math.round(box(closeIcon).height)]).toEqual([9, 9])
+    await expect([
+      Math.round(box(closeIcon).left - box(close).left),
+      Math.round(box(closeLabel).left - box(closeIcon).right),
+      Math.round(box(close).right - box(closeLabel).right),
+      Math.round(box(close).height),
+    ]).toEqual([8, 8, 8, 25])
     // The page behind can't be reached or scrolled; the shade is over it.
     await expect([...canvasElement.querySelectorAll<HTMLElement>('[data-shop="details"], [data-shop="similar"]')].map((behind) => behind.inert)).toEqual([true, true])
     await expect(document.documentElement.classList.contains('overflow-hidden')).toBe(true)
-    await expect(getComputedStyle(canvasElement.querySelector('[data-overlay="shade"]') as HTMLElement).opacity).toBe('1')
+    // (The shade's fade ends with the panel's slide; the last of it is too slight to see, so it is waited for.)
+    await waitFor(() => expect(getComputedStyle(canvasElement.querySelector('[data-overlay="shade"]') as HTMLElement).opacity).toBe('1'), { timeout: 3000 })
+  },
+}
+
+/**
+ * WQ49: it slides in from the right as the Bag does in Wayne's prototype (Figma 04 Animations, 1569:62058): from just
+ * beyond the window's right edge to its place over the long duration with the smooth curve, never fading, while the
+ * shade fades in behind it over the same time. Closing is the same backwards, and only then is it hidden.
+ */
+export const SlidesIn: Story = {
+  name: 'Slides in from the right',
+  globals: { viewport: { value: 'desktop', isRotated: false } },
+  play: async ({ canvas, canvasElement }) => {
+    const dialog = dialogIn(canvasElement)
+    const shade = canvasElement.querySelector('[data-overlay="shade"]') as HTMLElement
+    const smooth = linearEasingPoints(EASE_SMOOTH_CSS)
+    // Shut: hidden, and wholly beyond the window's right edge, taking no room (the page is no wider for it).
+    await expect(dialog).not.toBeVisible()
+    await expect(Math.round(box(dialog).left)).toBe(window.innerWidth)
+    await expect(document.documentElement.scrollWidth).toBe(window.innerWidth)
+    await userEvent.click(canvas.getByRole('button', { name: 'Description' }))
+    // On its way: there to be seen at once, as solid as it will be, still short of its place.
+    await waitFor(() => expect(dialog).toBeVisible())
+    const moving = dialog.getAnimations().map((animation) => {
+      const timing = animation.effect!.getComputedTiming()
+      return [(animation as CSSTransition).transitionProperty, timing.duration]
+    })
+    await expect(moving).toEqual([['translate', DURATION_LONG * 1000]])
+    await expect(linearEasingPoints(getComputedStyle(dialog).transitionTimingFunction)).toEqual(smooth)
+    await expect(getComputedStyle(dialog).opacity).toBe('1')
+    await expect(fromRight(dialog)).toBeLessThan(12)
+    // The shade fades in behind it over the same time.
+    await expect([getComputedStyle(shade).transitionDuration, getComputedStyle(shade).transitionProperty]).toEqual([`${DURATION_LONG}s`, 'opacity'])
+    await expect(Number(getComputedStyle(shade).opacity)).toBeLessThan(1)
+    // In its place: 12px from the window's right edge, the shade whole, the window scrolled nowhere.
+    await waitFor(() => expect(fromRight(dialog)).toBe(12), { timeout: 3000 })
+    await waitFor(() => expect([getComputedStyle(dialog).opacity, getComputedStyle(shade).opacity]).toEqual(['1', '1']), { timeout: 3000 })
+    await expect([window.scrollX, document.documentElement.scrollWidth]).toEqual([0, window.innerWidth])
+    // Closing: back the way it came, still to be seen and solid while it goes, and hidden once it has gone.
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Close' }))
+    await waitFor(() => expect(fromRight(dialog)).toBeLessThan(12))
+    await expect([getComputedStyle(dialog).visibility, getComputedStyle(dialog).opacity]).toEqual(['visible', '1'])
+    await expect(dialog.getAnimations().map((animation) => (animation as CSSTransition).transitionProperty).sort()).toEqual(['translate', 'visibility'])
+    await waitFor(() => expect(dialog).not.toBeVisible(), { timeout: 3000 })
+    await expect(Math.round(box(dialog).left)).toBe(window.innerWidth)
+    await waitFor(() => expect(shade).not.toBeVisible(), { timeout: 3000 })
   },
 }
 
@@ -158,14 +219,14 @@ export const KeyboardAndClosing: Story = {
     await expect(panel.getByRole('button', { name: 'Close' })).toHaveFocus()
 
     await userEvent.keyboard('{Escape}')
-    await waitFor(() => expect(dialog).not.toBeVisible())
+    await waitFor(() => expect(dialog).not.toBeVisible(), { timeout: 3000 })
     await expect(canvas.getByRole('button', { name: 'Materials & care' })).toHaveFocus()
     await expect((canvasElement.querySelector('[data-shop="details"]') as HTMLElement).inert).toBe(false)
     await expect(document.documentElement.classList.contains('overflow-hidden')).toBe(false)
     // A press on the shade closes it too.
     await open(context, 'Description')
     await userEvent.click(canvasElement.querySelector('[data-overlay="shade"]') as HTMLElement)
-    await waitFor(() => expect(dialog).not.toBeVisible())
+    await waitFor(() => expect(dialog).not.toBeVisible(), { timeout: 3000 })
     await expect(canvas.getByRole('button', { name: 'Description' })).toHaveFocus()
   },
 }
@@ -177,8 +238,12 @@ export const KeyboardAndClosing: Story = {
 export const Mobile: Story = {
   globals: { viewport: { value: 'mobile', isRotated: false } },
   play: async (context) => {
+    // Shut, it waits beyond the right edge and the page is no wider for it.
+    await expect([Math.round(box(dialogIn(context.canvasElement)).left), document.documentElement.scrollWidth]).toEqual([390, 390])
     const { dialog, panel } = await open(context, 'Description')
     await expect([Math.round(box(dialog).left), Math.round(box(dialog).top), Math.round(box(dialog).width), Math.round(window.innerHeight - box(dialog).bottom)]).toEqual([12, 12, 366, 12])
+    // Close with its label, as on the desktop (Figma 1684:42017).
+    await expect(panel.getByRole('button', { name: 'Close' }).textContent).toBe('Close')
     const tabs = panel.getByRole('tablist')
     await expect(tabs.scrollWidth).toBeGreaterThan(tabs.clientWidth)
     await expect(document.documentElement.scrollWidth).toBe(390)

@@ -103,22 +103,57 @@ describe('colours: the palette and the four theme modes are Figma\'s (W71, item 
   })
 
   it('W73 (WQ12): the focus ring is 2px of Text/Primary with a 2px gap, for the keyboard only', () => {
-    const ring = ruleNamed(css, ':where(a, button, summary, [tabindex]:not([tabindex="-1"])):focus-visible').declarations
+    // W74c (Wayne, 25 Nov): never after a pointer, whatever the browser makes of the focus (a clicked <select> counts
+    // as keyboard focus to it). components/frame/InputKind.tsx notes the last input on <html>.
+    const ring = ruleNamed(css, ':root:not([data-input="pointer"]) :where(a, button, summary, [tabindex]:not([tabindex="-1"])):focus-visible').declarations
     expect(ring).toEqual({ outline: 'var(--spacing-2) solid var(--color-text-primary)', 'outline-offset': 'var(--spacing-2)' })
     expect(theme['--spacing-2']).toBe('2px')
+    // After a pointer the same controls have no ring, the browser's own included.
+    expect(ruleNamed(css, ':root[data-input="pointer"] :where(a, button, summary, [tabindex]:not([tabindex="-1"])):focus-visible').declarations).toEqual({ 'outline-style': 'none' })
+    const stylesheet = readFileSync(path.join(WEB, 'app/globals.css'), 'utf8')
     // No ring for a mouse or a finger: nothing styles plain `:focus`.
-    expect(readFileSync(path.join(WEB, 'app/globals.css'), 'utf8')).not.toMatch(/:focus(?!-visible)/)
+    expect(stylesheet).not.toMatch(/:focus(?!-visible)/)
+    // A ring drawn round a control that is not seen follows the same rule, through the one variant.
+    expect(stylesheet).toContain('@custom-variant has-keyboard-focus (:root:not([data-input="pointer"]) &:has(:focus-visible));')
+    const read = (file: string) => readFileSync(path.join(WEB, file), 'utf8')
+    for (const file of ['components/shop/ShopSelect.tsx', 'components/shop/SizeSelect.tsx']) {
+      expect(read(file), file).toContain('has-keyboard-focus:outline-2 has-keyboard-focus:outline-offset-2 has-keyboard-focus:outline-text-primary')
+      expect(read(file), file).not.toMatch(/has-\[:focus-visible\]:outline/)
+    }
+    // The note is made for every page (the root layout) and for every story.
+    expect(read('app/layout.tsx')).toContain('<InputKind />')
+    expect(read('.storybook/preview.tsx')).toContain('<InputKind />')
+    const noter = read('components/frame/InputKind.tsx')
+    expect(noter).toContain("window.addEventListener('keydown', key, true)")
+    expect(noter).toContain("window.addEventListener('pointerdown', pointer, true)")
+  })
+
+  it('W74c (WQ51): a button label gives way to another only under a mouse, never for touch, the keyboard or reduced motion', () => {
+    const swap = ruleNamed(css, '@utility label-swap')
+    expect(childNamed(swap, '& > [data-label]').declarations).toEqual({ transition: 'translate var(--duration-short) var(--ease-smooth)' })
+    // At rest the second label waits one button's height beneath, whoever is looking.
+    expect(childNamed(swap, '& > [data-label="hover"]').declarations).toEqual({ translate: '0 100%' })
+    const mouse = childNamed(swap, '@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference)')
+    expect(childNamed(mouse, '&:hover > [data-label="rest"]').declarations).toEqual({ translate: '0 -100%' })
+    expect(childNamed(mouse, '&:hover > [data-label="hover"]').declarations).toEqual({ translate: '0 0' })
+    // Nothing but that hover moves a label: no rule for focus, and none outside the mouse's media query.
+    const stylesheet = readFileSync(path.join(WEB, 'app/globals.css'), 'utf8')
+    expect(stylesheet.match(/\[data-label="rest"\]/g)).toHaveLength(1)
+    expect(stylesheet.match(/\[data-label="hover"\]/g)).toHaveLength(2)
+    const button = readFileSync(path.join(WEB, 'components/ui/Button.tsx'), 'utf8')
+    expect(button).toContain('<span data-label="hover" aria-hidden="true" className="absolute inset-0 flex items-center justify-center">')
+    expect(readFileSync(path.join(WEB, 'components/shop/ProductBuy.tsx'), 'utf8')).toContain("{...(needsSize && !soldOut ? { hoverLabel: 'Select size' } : {})}")
   })
 
   it('W73 (Wayne): every button, and everything with the role of one, shows the hand', () => {
     expect(ruleNamed(css, ':where(button, [role="button"])').declarations).toEqual({ cursor: 'pointer' })
   })
 
-  it("W73: the Overlay is Object/Light Shade over a 12px blur (Figma's 24), with the texture filter where Chromium can run it", () => {
+  it("W73, WQ48: the Overlay is Object/Dark Shade over a 12px blur (Figma's 24), with the texture filter where Chromium can run it", () => {
     const supports = '@supports (backdrop-filter: blur(12px) url(#overlay-texture)) and (-webkit-app-region: drag)'
     const shade = ruleNamed(css, '@utility overlay-shade')
     expect(shade.declarations).toEqual({
-      'background-color': 'var(--color-object-light-shade)',
+      'background-color': 'var(--color-object-dark-shade)',
       '-webkit-backdrop-filter': 'blur(12px)',
       'backdrop-filter': 'blur(12px)',
     })

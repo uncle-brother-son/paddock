@@ -44,7 +44,7 @@ type Story = StoryObj<typeof meta>
 const layer = (canvasElement: HTMLElement, name: 'shade' | 'grain') => canvasElement.querySelector(`[data-overlay="${name}"]`) as HTMLElement
 
 /**
- * Wayne's Overlay (Figma 136:1054): Object/Light Shade over the page, blurred and textured, the whole window. In
+ * Wayne's Overlay (Figma 136:1054): Object/Dark Shade (WQ48) over the page, blurred and textured, the whole window. In
  * Chrome and Edge the texture is a real displacement of the blurred page, as in Figma; in Safari and Firefox it is
  * the blur with fine grain over it. Click the shade (or the button) to see it fade out.
  */
@@ -55,8 +55,9 @@ export const Open: Story = {
     await expect(shade).toBeVisible()
     await expect([shade.getBoundingClientRect().width, shade.getBoundingClientRect().height]).toEqual([window.innerWidth, window.innerHeight])
     await expect(style.borderRadius).toBe('0px')
-    // Object/Light Shade: white at 4%.
-    await expect(style.backgroundColor).toMatch(/^(rgba\(255, 255, 255, 0\.04\)|color\(srgb 1 1 1 \/ 0\.04\))$/)
+    // Object/Dark Shade (WQ48): Black (#222222) at 20%.
+    await expect(style.backgroundColor).toBe('rgba(34, 34, 34, 0.2)')
+    // Behind the menu, the short duration; behind a panel that slides in over the long one, the long (WQ49).
     await expect(style.transitionDuration).toBe(`${DURATION_SHORT}s`)
     await expect(shade.getAttribute('aria-hidden')).toBe('true')
     // This test runs in Chromium: the blur, then the texture filter, and no grain layer.

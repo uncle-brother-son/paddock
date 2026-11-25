@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { InlineScript } from '@/components/ui/InlineScript'
-import { DURATION_LONG } from '@/lib/motion/tokens'
+import { DURATION_LONG, INTRO_PAUSE } from '@/lib/motion/tokens'
 
 import { INTRO_SCRIPT, INTRO_SEEN_KEY, startIntro } from './intro'
 
@@ -237,14 +237,27 @@ describe('the intro in the page and the stylesheet', () => {
     expect(css).toMatch(/@utility intro \{\s*display: none;\s*&\[data-intro="play"\] \{\s*display: flex;/)
   })
 
-  it('three transitions, each the long duration with the smooth curve, back to back: the logo, the rise and the location, the mask', () => {
+  it('three transitions, each the long duration with the smooth curve, with its two pauses (WQ53): a pause, the logo, the rise and the location, a pause, the mask', () => {
     const css = read('app/globals.css')
     const long = 'var(--duration-long)'
-    expect(css).toContain(`animation: intro-fade ${long} var(--ease-smooth) both;`)
-    expect(css).toContain(`animation: intro-rise ${long} var(--ease-smooth) ${long} both;`)
-    expect(css).toContain(`animation: intro-fade ${long} var(--ease-smooth) ${long} both;`)
-    expect(css).toContain(`animation: intro-mask ${long} var(--ease-smooth) calc(${long} * 2) both;`)
-    // 640 ms each: 1,920 ms in all.
-    expect(DURATION_LONG * 3).toBeCloseTo(1.92)
+    const pause = 'var(--intro-pause)'
+    // The logo waits out the first pause; the rise and the location follow the logo at once.
+    expect(css).toContain(`animation: intro-fade ${long} var(--ease-smooth) ${pause} both;`)
+    expect(css).toContain(`animation: intro-rise ${long} var(--ease-smooth) calc(${pause} + ${long}) both;`)
+    expect(css).toContain(`animation: intro-fade ${long} var(--ease-smooth) calc(${pause} + ${long}) both;`)
+    // The mask waits out both pauses and the two transitions before it.
+    expect(css).toContain(`animation: intro-mask ${long} var(--ease-smooth) calc(${pause} * 2 + ${long} * 2) both;`)
+    // 480 + 640 + 640 + 480 + 640: 2,880 ms in all.
+    expect([INTRO_PAUSE, DURATION_LONG]).toEqual([0.48, 0.64])
+    expect(INTRO_PAUSE * 2 + DURATION_LONG * 3).toBeCloseTo(2.88)
+  })
+
+  it('the pauses hold nothing up: the page is whole beneath the panel, and a key or a click still ends it at once', () => {
+    // The panel is its own fixed layer over the page (never a wrapper round it), started by attribute alone.
+    expect(read('components/frame/Intro.tsx')).toContain('className="intro fixed inset-0 z-30 ')
+    expect(INTRO_SCRIPT).toContain("window.addEventListener('keydown',end,true)")
+    expect(INTRO_SCRIPT).toContain("window.addEventListener('pointerdown',end,true)")
+    // No timer anywhere in the start: the pauses are the animations' own delays, so nothing waits on script.
+    expect(INTRO_SCRIPT).not.toMatch(/setTimeout|setInterval|requestAnimationFrame/)
   })
 })

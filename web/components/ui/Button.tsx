@@ -22,7 +22,29 @@ export function ButtonLabel({ children }: { children: React.ReactNode }) {
 export const BIG_PRIMARY_BUTTON =
   'flex h-40 w-full items-center justify-center rounded-s bg-surface-secondary px-32 py-12 text-text-secondary disabled:cursor-default disabled:bg-surface-card-disabled disabled:text-text-muted-primary'
 
-export function BigButton({ className, children, type = 'button', ...rest }: ComponentPropsWithoutRef<'button'>) {
+type BigButtonProps = ComponentPropsWithoutRef<'button'> & {
+  /**
+   * W74c (WQ51): a second label that takes the first one's place while a mouse is over the button (the `label-swap`
+   * utility in app/globals.css). It is for the eye only: the button's name stays its own label, which is what a
+   * screen reader, the keyboard, a touch screen and reduced motion all get.
+   */
+  hoverLabel?: string
+}
+
+export function BigButton({ className, children, hoverLabel, type = 'button', ...rest }: BigButtonProps) {
+  if (hoverLabel !== undefined) {
+    // Each label fills the button, so each travels the button's whole height and is clipped at its edge.
+    return (
+      <button type={type} className={`${BIG_PRIMARY_BUTTON} label-swap relative overflow-clip ${className ?? ''}`} {...rest}>
+        <span data-label="rest" className="absolute inset-0 flex items-center justify-center">
+          <ButtonLabel>{children}</ButtonLabel>
+        </span>
+        <span data-label="hover" aria-hidden="true" className="absolute inset-0 flex items-center justify-center">
+          <ButtonLabel>{hoverLabel}</ButtonLabel>
+        </span>
+      </button>
+    )
+  }
   return (
     <button type={type} className={`${BIG_PRIMARY_BUTTON} ${className ?? ''}`} {...rest}>
       <ButtonLabel>{children}</ButtonLabel>

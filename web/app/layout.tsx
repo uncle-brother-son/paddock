@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 
 import { Frame } from "@/components/frame/Frame";
+import { InputKind } from "@/components/frame/InputKind";
 import { Intro } from "@/components/frame/Intro";
 import { GridOverlay } from "@/components/layout/GridOverlay";
 import { MotionProviders } from "@/components/providers/MotionProviders";
@@ -42,6 +43,8 @@ export default function RootLayout({
         <MotionProviders>
           <Frame>{children}</Frame>
         </MotionProviders>
+        {/* W74c: notes whether the visitor last used a key or a pointer, so the focus ring shows for the keyboard only. */}
+        <InputKind />
         {/* The Overlay's texture filter, once for the whole page: every popup's shade points at it (Chromium only). */}
         <OverlayTexture />
         {/* Test copies only: Ctrl + G draws the grid over the page. On the live domain it renders and loads nothing. */}

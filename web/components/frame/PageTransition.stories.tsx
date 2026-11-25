@@ -4,7 +4,7 @@ import { flushSync } from 'react-dom'
 import { expect, userEvent, waitFor } from 'storybook/test'
 
 import { PAGE_IN, PAGE_OUT } from '@/lib/motion/page-transition'
-import { DURATION_LONG, EASE_SMOOTH_CSS } from '@/lib/motion/tokens'
+import { DURATION_LONG, EASE_SMOOTH_CSS, linearEasingPoints } from '@/lib/motion/tokens'
 
 import { Header } from './Header'
 import { HeaderLogo } from './HeaderLogo'
@@ -104,9 +104,9 @@ const animationsOf = (name: string) =>
 const LONG = DURATION_LONG * 1000
 
 /**
- * Press a button (scroll down first to see the page being left where it was). As on oddritualgolf.com: the page
- * being left drifts down and fades, and the new page is uncovered from the top of the window downwards, settling
- * into place; the long duration, the smooth curve. The new page starts at its top, with focus on its heading. With
+ * Press a button (scroll down first to see the page being left where it was). The page being left drifts down
+ * without fading (WQ54), and the new page is uncovered over it from the top of the window downwards, settling into
+ * place; the long duration, the smooth curve. The new page starts at its top, with focus on its heading. With
  * reduced motion on, the page is swapped at once.
  */
 export const TwoSamplePages: Story = {
@@ -119,17 +119,24 @@ export const TwoSamplePages: Story = {
     window.scrollTo(0, 400)
     await waitFor(() => expect(Math.round(window.scrollY)).toBe(400))
     await userEvent.click(canvas.getAllByRole('button', { name: 'Go to page two' })[1]!)
-    // The page going: it fades to 40% and drifts down a fifth of the window. The page coming: uncovered from the top.
+    // The page going: it drifts down a fifth of the window, as solid as it was. The page coming: uncovered over it from the top.
     await waitFor(() => expect(animationsOf(NAMES.out).length + animationsOf(NAMES.in).length).toBe(2))
     const [out] = animationsOf(NAMES.out) as [CSSAnimation]
     const [into] = animationsOf(NAMES.in) as [CSSAnimation]
     await expect([out.animationName, out.effect!.getComputedTiming().duration]).toEqual([PAGE_OUT, LONG])
     await expect([into.animationName, into.effect!.getComputedTiming().duration]).toEqual([PAGE_IN, LONG])
     const fifth = `${window.innerHeight / 5}px`
+    const smooth = linearEasingPoints(EASE_SMOOTH_CSS)
     const outFrames = (out.effect as KeyframeEffect).getKeyframes()
-    await expect([outFrames[0]!.easing, outFrames.at(-1)!.opacity, outFrames.at(-1)!.translate]).toEqual([EASE_SMOOTH_CSS, '0.4', `0px ${fifth}`])
+    await expect(linearEasingPoints(outFrames[0]!.easing)).toEqual(smooth)
+    await expect(outFrames.at(-1)!.translate).toBe(`0px ${fifth}`)
+    // WQ54: it does not fade. No keyframe of it names an opacity, and it is as solid mid-way as at rest.
+    await expect(outFrames.some((frame) => 'opacity' in frame)).toBe(false)
+    await expect(getComputedStyle(document.documentElement, `::view-transition-old(${NAMES.out})`).opacity).toBe('1')
     const inFrames = (into.effect as KeyframeEffect).getKeyframes()
-    await expect([inFrames[0]!.easing, inFrames[0]!.translate, inFrames[0]!.clipPath]).toEqual([EASE_SMOOTH_CSS, `0px -${fifth}`, 'polygon(0px 0px, 100% 0px, 100% 0px, 0px 0px)'])
+    await expect(linearEasingPoints(inFrames[0]!.easing)).toEqual(smooth)
+    await expect([inFrames[0]!.translate, inFrames[0]!.clipPath]).toEqual([`0px -${fifth}`, 'polygon(0px 0px, 100% 0px, 100% 0px, 0px 0px)'])
+    await expect(inFrames.some((frame) => 'opacity' in frame)).toBe(false)
     await expect(inFrames.at(-1)!.clipPath).toBe(`polygon(0px 0px, 100% 0px, 100% ${window.innerHeight}px, 0px ${window.innerHeight}px)`)
     // The header is a layer of its own above the two pages, and takes the new page's mode while they are still
     // moving: nothing on the page can be found by its place on screen then, so it goes by the page's sections.

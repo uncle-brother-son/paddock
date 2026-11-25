@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation'
 import * as React from 'react'
 import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react'
 
-import { PAGE_IN, PAGE_OUT, PAGE_TRANSITION } from '@/lib/motion/page-transition'
+import { PAGE_IN, PAGE_OUT, PAGE_TRANSITION, takeFocusOnArrival } from '@/lib/motion/page-transition'
 
 /**
  * React's <ViewTransition>. It is in the React that Next's App Router runs the site on ("View transitions work in
@@ -24,7 +24,8 @@ type RunningTransition = { ready: Promise<unknown>; skipTransition: () => void }
  * - a link: the new page starts at its top, with Lenis told so (it would otherwise glide on towards where it was
  *   heading on the old page). Back and Forward keep the place the browser puts them, and only stop a glide;
  * - focus moves to the new page's h1 (or to main when it has none), without scrolling, so a keyboard or a screen
- *   reader starts from the new page. Next's own announcer reads the new page's title out;
+ *   reader starts from the new page. Next's own announcer reads the new page's title out. A link that changed the
+ *   page where it stood (WQ52: a product's colour swatch) keeps focus on what it asked for instead;
  * - a press during a page transition ends it at once: what is pressed is then the page as it now is, so a second
  *   click made mid-way goes to its own page.
  */
@@ -73,6 +74,13 @@ function usePageArrival(page: string) {
     else if (top === 0) window.scrollTo(0, 0)
 
     const main = document.getElementById('main')
+    // WQ52: a link that changed the page where it stood (a colour swatch) keeps focus on its like in the new page.
+    const kept = takeFocusOnArrival(page)
+    const keeper = kept ? (main?.querySelector<HTMLElement>(kept) ?? null) : null
+    if (keeper) {
+      keeper.focus({ preventScroll: true })
+      return
+    }
     const heading = main?.querySelector('h1') ?? null
     if (heading && !heading.hasAttribute('tabindex')) {
       // Focus by script only, never in the Tab order; a heading shows no ring (it is not a control).

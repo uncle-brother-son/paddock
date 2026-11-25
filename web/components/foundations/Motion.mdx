@@ -12,8 +12,14 @@ One curve and two durations for the whole site, kept in one place: `lib/motion/t
 `duration-long`). A test fails if the two ever differ, and another if a component types in a curve or a duration of
 its own.
 
-- **Short**: hovers, and the panels (Menu, Book, Bag, Sign in).
-- **Long**: page transitions, and each of the intro's three transitions.
+The curve is Figma's "Slow" spring (mass 1, stiffness 80, damping 20: no bounce), the one Wayne's prototypes use,
+with its shape fitted to the duration of whatever it animates (WQ55). `npm run ease:build` makes it from the spring.
+
+- **Short**: hovers, and the menu.
+- **Long**: page transitions, each of the intro's three transitions, and the Product Info Panel's slide.
+
+The intro also has two pauses of 480 ms (`--intro-pause`, `INTRO_PAUSE`): waits between its transitions, not a
+third duration.
 
 Smooth scroll is Lenis, started once for the whole site. A panel that scrolls by itself (the menu, the bag, the
 booking panel) carries `data-lenis-prevent`, or Lenis takes its scrolling for the page behind it.

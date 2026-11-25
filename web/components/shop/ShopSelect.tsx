@@ -27,7 +27,9 @@ type ShopSelectProps = {
 export function ShopSelect({ name, shown, value, options }: ShopSelectProps) {
   const router = useRouter()
   return (
-    <div className={`relative ${FRAME_BUTTON} has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-text-primary`}>
+    // The ring is drawn here, round what is seen, and only for the keyboard: a browser counts a clicked <select> as
+    // keyboard focus, so it follows what the visitor last used (`has-keyboard-focus`, app/globals.css).
+    <div className={`relative ${FRAME_BUTTON} has-keyboard-focus:outline-2 has-keyboard-focus:outline-offset-2 has-keyboard-focus:outline-text-primary`}>
       <FrameButtonLabel>{shown}</FrameButtonLabel>
       <Icon name="chevron" />
       <select

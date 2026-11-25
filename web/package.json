@@ -16,6 +16,7 @@
     "test:unit": "vitest run --config vitest.unit.config.ts",
     "check:fast": "node scripts/check-fast.mjs",
     "brand:build": "node scripts/build-brand.mjs",
+    "ease:build": "node scripts/build-ease.mjs",
     "schema:test": "node scripts/generate-test-schema.mjs",
     "export:contracts": "node scripts/export-contracts.mjs",
     "check:contracts": "node scripts/export-contracts.mjs --check"

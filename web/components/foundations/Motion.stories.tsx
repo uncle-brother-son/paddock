@@ -2,7 +2,8 @@ import type { Meta, StoryObj } from '@storybook/nextjs-vite'
 import { motion, MotionConfig } from 'framer-motion'
 import { useState } from 'react'
 
-import { DURATION_LONG, DURATION_SHORT, EASE_SMOOTH, EASE_SMOOTH_CSS } from '@/lib/motion/tokens'
+import { EASE_SMOOTH_POINTS, EASE_SMOOTH_SPRING } from '@/lib/motion/ease-smooth'
+import { DURATION_LONG, DURATION_SHORT, EASE_SMOOTH } from '@/lib/motion/tokens'
 
 import { VariableValue } from './measured'
 
@@ -13,7 +14,8 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
-const [x1, y1, x2, y2] = EASE_SMOOTH
+/** The curve's points on the plot: time left to right, progress bottom to top, each out of 100. */
+const plotted = EASE_SMOOTH_POINTS.map(([progress, value]) => `${Number((progress * 100).toFixed(2))},${Number((100 - value * 100).toFixed(2))}`).join(' ')
 
 /** The two durations, as Motion has them (seconds) and under the names the stylesheet gives them. */
 const durations = [
@@ -21,20 +23,32 @@ const durations = [
   { name: 'Long', seconds: DURATION_LONG, variable: '--duration-long', utility: 'duration-long' },
 ] as const
 
-/** The smooth curve, plotted: time runs left to right, progress bottom to top. */
+/**
+ * The smooth curve, plotted: time runs left to right, progress bottom to top. It is Figma's "Slow" spring (WQ55),
+ * fitted to the animation's duration: off quickly, then a long, soft settling, with no bounce.
+ */
 export const Curve: Story = {
   render: () => (
     <figure className="flex flex-col gap-12">
-      <svg viewBox="-4 -4 108 108" role="img" aria-label={`The smooth curve, ${EASE_SMOOTH_CSS}`} className="size-240 text-text-primary">
+      <svg
+        viewBox="-4 -4 108 108"
+        role="img"
+        aria-label={`The smooth curve: Figma's Slow spring, mass ${EASE_SMOOTH_SPRING.mass}, stiffness ${EASE_SMOOTH_SPRING.stiffness}, damping ${EASE_SMOOTH_SPRING.damping}`}
+        className="size-240 text-text-primary"
+      >
         <path d="M 0 0 V 100 H 100" fill="none" stroke="currentColor" strokeWidth="0.5" opacity="0.4" />
         <path d="M 0 100 L 100 0" fill="none" stroke="currentColor" strokeWidth="0.5" strokeDasharray="2 2" opacity="0.4" />
-        <path d={`M 0 100 C ${x1 * 100} ${100 - y1 * 100}, ${x2 * 100} ${100 - y2 * 100}, 100 0`} fill="none" stroke="currentColor" strokeWidth="1.5" />
+        <polyline points={plotted} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
       </svg>
       {/* The text styles are trimmed to their capitals (W71a), so two lines stacked need a gap of their own. */}
       <figcaption className="flex flex-col gap-6">
         <span className="block text-bold-14">ease-smooth</span>
         <span className="block text-copy-12">
-          Motion: {EASE_SMOOTH_CSS} · CSS --ease-smooth: <VariableValue name="--ease-smooth" />
+          Figma&apos;s Slow spring: mass {EASE_SMOOTH_SPRING.mass}, stiffness {EASE_SMOOTH_SPRING.stiffness}, damping {EASE_SMOOTH_SPRING.damping}; {EASE_SMOOTH_POINTS.length} points, the same for
+          Motion and for CSS
+        </span>
+        <span className="block text-copy-12 break-all">
+          CSS --ease-smooth: <VariableValue name="--ease-smooth" />
         </span>
       </figcaption>
     </figure>

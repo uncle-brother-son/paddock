@@ -3,8 +3,9 @@
 import { useEffect, useId, useState } from 'react'
 
 import { BigButton } from '@/components/ui/Button'
-import { SiteLink } from '@/components/ui/SiteLink'
+import { isPlainClick, SiteLink } from '@/components/ui/SiteLink'
 import type { ShopAvailabilityRouteOutput } from '@/contracts/shop'
+import { keepFocusOnArrival } from '@/lib/motion/page-transition'
 import { readAvailability } from '@/lib/shop/availability'
 import { addToBag } from '@/lib/shop/bag'
 import { productSizes, SIZE_GUIDE_TAB, type PriceLine, type ProductView } from '@/lib/shop/product'
@@ -14,6 +15,9 @@ import { SizeOption } from './SizeSelect'
 
 /** The swatches are a sixth of the details' width each, as drawn. */
 const SWATCH_SIZES = '(min-width: 768px) 5vw, 15vw'
+
+/** The swatch of the colour a product's page is showing: the one a visitor chose, once its page is there. */
+const CHOSEN_SWATCH = '[data-shop="swatch"][aria-current="page"]'
 
 /** PIC's price line: the price before a sale struck through, the price ("From" while the sizes differ), and the member's. */
 function Price({ price }: { price: PriceLine }) {
@@ -53,7 +57,8 @@ type ProductBuyProps = {
  * CTA's states, as drawn: non-member ("Add to bag"); select size ("Please select a size" in Text/Error under the
  * sizes, when the button is pressed with none picked); sold out (every size struck through, the button disabled and
  * reading "Sold out"). The member's state waits for accounts. A press with a size picked goes to the one
- * `addToBag()` seam (lib/shop/bag.ts), which does nothing until the bag is built.
+ * `addToBag()` seam (lib/shop/bag.ts), which does nothing until the bag is built. While a size is still to pick, a
+ * mouse over the button slides its label up and "Select size" in from beneath (WQ51); the button's name stays.
  *
  * The sizes it is sent with may be up to a minute old, so once it has loaded it asks the availability route and
  * shows what that says: a size that sold out in between is struck through, and no longer the one picked.
@@ -112,8 +117,15 @@ export function ProductBuy({ product, tabs, readSizes = readAvailability, classN
               <ul aria-label="Colours" className="grid grid-cols-6 gap-4">
                 {product.colours.map((colour) => (
                   <li key={colour.id}>
+                    {/* WQ52: another colour is another product's page, swapped in where this one stands: no page
+                        transition, the new page from its top at once, and focus on the swatch that was chosen. */}
                     <SiteLink
                       href={colour.href}
+                      transition={false}
+                      onClick={(event) => {
+                        if (isPlainClick(event)) keepFocusOnArrival(colour.href, CHOSEN_SWATCH)
+                      }}
+                      data-shop="swatch"
                       aria-label={colour.name}
                       {...(colour.current ? { 'aria-current': 'page' as const } : {})}
                       className={`relative block aspect-4/5 overflow-clip rounded-s border bg-object-product-bg ${colour.current ? 'border-text-primary' : 'border-text-secondary'}`}
@@ -178,7 +190,8 @@ export function ProductBuy({ product, tabs, readSizes = readAvailability, classN
         ) : null}
 
         <div className="flex flex-col gap-24">
-          <BigButton disabled={soldOut} onClick={add}>
+          {/* WQ51: with a size still to pick, a mouse over the button slides "Select size" in over its label. */}
+          <BigButton disabled={soldOut} onClick={add} {...(needsSize && !soldOut ? { hoverLabel: 'Select size' } : {})}>
             {soldOut ? 'Sold out' : 'Add to bag'}
           </BigButton>
           {product.fulfilment ? <p className="text-copy-12 text-text-primary">{product.fulfilment}</p> : null}
