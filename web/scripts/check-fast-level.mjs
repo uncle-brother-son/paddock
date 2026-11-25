@@ -38,6 +38,14 @@ export const SHOP_READ_PATHS = ['web/server/rules/shop/', 'web/contracts/shop.ts
 export const SHOP_READER = 'web/lib/shop/read.ts'
 const SHOP_READS_IMPORT = '@/server/rules/shop/'
 
+/**
+ * W76a (Wayne, 25 Nov): the gift card's Other rule runs in the browser too (the page asks it as the customer types), and
+ * SHOP_READER is server-only. So this one website file may import that one rule, and nothing else from server code.
+ * The rule itself stays where it is, Level 1b.
+ */
+export const SHOP_AMOUNT_FILE = 'web/lib/shop/gift-card-amount.ts'
+export const SHOP_AMOUNT_RULE = '@/server/rules/shop/gift-card-amount'
+
 const inPlaces = (places, file) => places.some((place) => (place.endsWith('/') ? file.startsWith(place) : file === place))
 const isTest = (file) => /\.test\.[a-z]+$/.test(file)
 
@@ -164,10 +172,12 @@ const MONEY_IMPORT = /(?:from|import|require)\s*\(?\s*['"](stripe|@stripe\/[^'"]
 
 /**
  * Stripe, or server code, used by a file outside the Level 1 folders. A type-only import counts too. WQ45: the shop's
- * reads, imported by the one file that reads the shop (SHOP_READER), do not count; there and nowhere else.
+ * reads, imported by the one file that reads the shop (SHOP_READER), do not count; there and nowhere else. Nor does the
+ * Other rule, imported by SHOP_AMOUNT_FILE (W76a).
  */
 const usesMoneyCode = (file, source) =>
-  source !== null && [...source.matchAll(MONEY_IMPORT)].some(([, name]) => !(file === SHOP_READER && name.startsWith(SHOP_READS_IMPORT)))
+  source !== null &&
+  [...source.matchAll(MONEY_IMPORT)].some(([, name]) => !(file === SHOP_READER && name.startsWith(SHOP_READS_IMPORT)) && !(file === SHOP_AMOUNT_FILE && name === SHOP_AMOUNT_RULE))
 
 const DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies', 'overrides']
 

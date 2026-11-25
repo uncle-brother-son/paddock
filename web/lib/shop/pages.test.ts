@@ -164,9 +164,9 @@ describe("the Worker's read of the shop", () => {
       return statSync(path.join(web, file)).isDirectory() ? filesIn(file) : /\.(ts|tsx)$/.test(name) && !/\.(test|stories)\./.test(name) ? [file] : []
     })
 
-  it('lib/shop/read.ts is the one file of the shop that uses server code: no page or component reads a table or works a price out', () => {
+  it('lib/shop/read.ts is the one file of the shop that reads through server code, and gift-card-amount.ts brings the Other rule (W76a): no page or component reads a table or works a price out', () => {
     const users = ['app/shop', 'components/shop', 'lib/shop'].flatMap(filesIn).filter((file) => /['"](@\/server|(\.\.\/)+server)[/'"]/.test(readFileSync(path.join(web, file), 'utf8')))
-    expect(users).toEqual(['lib/shop/read.ts'])
+    expect(users).toEqual(['lib/shop/gift-card-amount.ts', 'lib/shop/read.ts'])
   })
   it('and nothing in the shop writes a price by arithmetic: every figure shown is one of W74a\'s, through pounds()', () => {
     const source = (file: string) => readFileSync(path.join(web, file), 'utf8')

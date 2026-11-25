@@ -15,6 +15,7 @@ import { listGiftCardTypes } from '@/server/rules/catalog/passes-gift-cards'
 import type { CatalogPrices, VariantPrices } from '@/server/rules/orders/catalog-price'
 import { lowest, productPrices, sizePrices, type ProductPrices } from './display-prices'
 import { SHOP_WORDS } from './failure-messages'
+import { otherAmountLimits, type OtherAmountLimits } from './gift-card-amount'
 import { inShopOrder } from './size-order'
 
 /** The customer channel's columns used here (catalog/items.ts). */
@@ -75,10 +76,43 @@ export interface ShopGiftCard {
   lowestAmount: string | null
 }
 
+/** The customer channel's columns used here (catalog/passes-gift-cards.ts); the presets lowest first. */
+type GiftCardTypeRow = {
+  sanity_gift_card_type_id: string | null
+  custom_amount_enabled: boolean
+  custom_amount_min: string | null
+  custom_amount_max: string | null
+  expiry_months: number
+  presets: Array<{ amount: string }>
+}
+const giftCardTypesOnSale = async (db: Queryable): Promise<GiftCardTypeRow[]> => (await listGiftCardTypes(db, { channel: 'customer' })) as unknown as GiftCardTypeRow[]
+
 /** Each gift card type on sale. */
 export async function listShopGiftCards(db: Queryable): Promise<ShopGiftCard[]> {
-  const rows = (await listGiftCardTypes(db, { channel: 'customer' })) as unknown as Array<{ sanity_gift_card_type_id: string | null; presets: Array<{ amount: string }> }>
-  return rows.flatMap((row) => (row.sanity_gift_card_type_id === null ? [] : [{ sanityId: row.sanity_gift_card_type_id, lowestAmount: lowest(row.presets.map((preset) => preset.amount)) }]))
+  return (await giftCardTypesOnSale(db)).flatMap((row) => (row.sanity_gift_card_type_id === null ? [] : [{ sanityId: row.sanity_gift_card_type_id, lowestAmount: lowest(row.presets.map((preset) => preset.amount)) }]))
+}
+
+/** W76a: a gift card type for its own page. */
+export interface ShopGiftCardPage {
+  sanityId: string
+  /** The presets on sale, lowest first. */
+  amounts: string[]
+  /** The Other amounts it takes, both included (WQ63: whole pounds); null when Other isn't allowed. */
+  other: OtherAmountLimits | null
+  /** How long a card lasts from the day it is bought: the terms' `{validity}`. */
+  expiryMonths: number
+}
+
+/** One gift card type on sale, by its Sanity id. Null when it is unknown or off sale: no page. */
+export async function shopGiftCard(db: Queryable, sanityGiftCardTypeId: string): Promise<ShopGiftCardPage | null> {
+  const row = (await giftCardTypesOnSale(db)).find((one) => one.sanity_gift_card_type_id === sanityGiftCardTypeId)
+  if (!row) return null
+  return {
+    sanityId: sanityGiftCardTypeId,
+    amounts: row.presets.map((preset) => preset.amount),
+    other: otherAmountLimits(row.custom_amount_enabled, row.custom_amount_min, row.custom_amount_max),
+    expiryMonths: row.expiry_months,
+  }
 }
 
 /** One product's sizes now (`GET /api/v1/shop/availability`). One that is unknown or off sale is refused, in the same words. */
@@ -99,6 +133,16 @@ export async function readShop(): Promise<Shop> {
   const db = openRequestDb()
   try {
     return { products: await listShopProducts(db), categories: await listShopCategories(db), giftCards: await listShopGiftCards(db) }
+  } finally {
+    await closeRequestDb(db)
+  }
+}
+
+/** W76a: one gift card type for its own page, on a connection of its own (no HTTP). Null: no page. */
+export async function readShopGiftCard(sanityGiftCardTypeId: string): Promise<ShopGiftCardPage | null> {
+  const db = openRequestDb()
+  try {
+    return await shopGiftCard(db, sanityGiftCardTypeId)
   } finally {
     await closeRequestDb(db)
   }

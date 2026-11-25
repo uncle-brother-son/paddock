@@ -8,6 +8,8 @@ import {
   filesToLint,
   MONEY_WORDS,
   pickLevel,
+  SHOP_AMOUNT_FILE,
+  SHOP_AMOUNT_RULE,
   SHOP_READ_PATHS,
   SHOP_READER,
   storiesFor,
@@ -214,6 +216,28 @@ describe('the level', () => {
       for (const line of ["import { variantPriceFor } from '@/server/rules/orders/catalog-price'", "import { openRequestDb } from '@/server/db/connection'", "import { shop } from '@/server/rules/shop'", "import Stripe from 'stripe'", "import { readShop } from '../../server/rules/shop/reads'"]) {
         expect(levelOf(changed(SHOP_READER, reads, `${reads}${line}\n`)), line).toBe(1)
         expect(levelOf(changed(SHOP_READER, `${reads}${line}\n`, reads)), line).toBe(1)
+      }
+    })
+
+    // W76a (Wayne, 25 Nov): the Other rule runs in the browser, so one more file may import it, and only it.
+    it('the file that brings the Other rule to the page is Level 2, as it is today', () => {
+      expect([SHOP_AMOUNT_FILE, SHOP_AMOUNT_RULE]).toEqual(['web/lib/shop/gift-card-amount.ts', '@/server/rules/shop/gift-card-amount'])
+      const own = readFileSync(path.join(REPO, SHOP_AMOUNT_FILE), 'utf8')
+      expect([...own.matchAll(/from '([^']+)'/g)].map(([, name]) => name)).toEqual([SHOP_AMOUNT_RULE])
+      expect(levelOf(asItIs(SHOP_AMOUNT_FILE))).toBe(2)
+      expect(pickLevel([asItIs(SHOP_AMOUNT_FILE), changed('web/components/shop/GiftCardBuy.tsx', null, "import { checkOtherAmount } from '@/lib/shop/gift-card-amount'\n")])).toEqual({ level: 2, reasons: [] })
+      // The rule itself stays Level 1b.
+      expect(levelOf(changed('web/server/rules/shop/gift-card-amount.ts'))).toBe('1b')
+    })
+
+    it('anything else that file imports from server code, or Stripe, is Level 1, gained or lost; and no other file may import the rule', () => {
+      const own = `export { checkOtherAmount } from '${SHOP_AMOUNT_RULE}'\n`
+      for (const name of ['@/server/rules/shop/reads', '@/server/rules/shop/gift-card-amounts', '@/server/rules/shop/gift-card-amount/x', '@/server/rules/shop/failure-messages', '@/server/rules/orders/price-basket', '@/server/db', '../../server/rules/shop/gift-card-amount', 'stripe']) {
+        expect(levelOf(changed(SHOP_AMOUNT_FILE, own, `${own}import { x } from '${name}'\n`)), name).toBe(1)
+        expect(levelOf(changed(SHOP_AMOUNT_FILE, `${own}import { x } from '${name}'\n`, own)), name).toBe(1)
+      }
+      for (const file of ['web/components/shop/GiftCardBuy.tsx', 'web/app/shop/gift-card/page.tsx', 'web/lib/shop/gift-card-amount.tsx', 'web/lib/shop/pages.ts']) {
+        expect(pickLevel([changed(file, null, own)]), file).toEqual({ level: 1, reasons: [`${file} (it uses Stripe or server code)`] })
       }
     })
 
