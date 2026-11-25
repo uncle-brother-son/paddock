@@ -1,4 +1,5 @@
 import { Logo } from '@/components/brand/Logo'
+import { InlineScript } from '@/components/ui/InlineScript'
 import { INTRO_SCRIPT } from '@/lib/frame/intro'
 
 /**
@@ -34,13 +35,15 @@ export function IntroPanel() {
 /**
  * The intro (W73b; WQ20, WQ23): once in a browser session, on whichever page is landed on first; never with reduced
  * motion on. The root layout draws it first in the page, so its panel and the script that starts it arrive before
- * anything else and the choice is made before the first paint.
+ * anything else and the choice is made before the first paint. The script is an InlineScript: it runs only from the
+ * server's HTML, so on a page the browser draws whole (a 404, a page that failed) there is no intro, and the session
+ * is not told it was seen: it plays on the next page loaded from the server.
  */
 export function Intro() {
   return (
     <>
       <IntroPanel />
-      <script dangerouslySetInnerHTML={{ __html: INTRO_SCRIPT }} />
+      <InlineScript html={INTRO_SCRIPT} />
     </>
   )
 }

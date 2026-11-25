@@ -1,8 +1,11 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { transformSync } from 'esbuild'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { InlineScript } from '@/components/ui/InlineScript'
 import { DURATION_LONG } from '@/lib/motion/tokens'
 
 import { INTRO_SCRIPT, INTRO_SEEN_KEY, startIntro } from './intro'
@@ -182,13 +185,49 @@ describe("the script after Cloudflare's build", () => {
   })
 })
 
+// Level 3, 25 Nov 2026: with `npm run dev`, React said "Encountered a script tag while rendering React component" at
+// the intro's <script>. It says so whenever it makes a script that would run in the browser itself: on a 404, on a
+// page that failed, after a failed hydration. InlineScript is Next 16's own answer (its guide "How to prevent flash
+// before hydration"): JavaScript from the server, plain text from the browser.
+describe('the script tag itself (InlineScript)', () => {
+  const drawn = () => renderToStaticMarkup(createElement(InlineScript, { html: INTRO_SCRIPT }))
+
+  it('from the server it is JavaScript, with the script whole and unescaped, so the browser runs it as it reads the page', () => {
+    expect(typeof window).toBe('undefined')
+    expect(drawn()).toBe(`<script type="text/javascript">${INTRO_SCRIPT}</script>`)
+  })
+
+  it('drawn in the browser it is plain text, which no browser runs and React does not warn about', () => {
+    vi.stubGlobal('window', {})
+    expect(drawn()).toBe(`<script type="text/plain">${INTRO_SCRIPT}</script>`)
+  })
+
+  it("is the browser's to decide too (a client component), and React leaves the server's type alone when it takes over", () => {
+    const source = readFileSync(path.resolve(__dirname, '../../components/ui/InlineScript.tsx'), 'utf8')
+    expect(source.startsWith("'use client'\n")).toBe(true)
+    expect(source).toContain("<script type={typeof window === 'undefined' ? 'text/javascript' : 'text/plain'} suppressHydrationWarning dangerouslySetInnerHTML={{ __html: html }} />")
+  })
+
+  it('is the one place the site writes a <script>: no component draws one of its own, and none uses next/script', () => {
+    const web = path.resolve(__dirname, '../..')
+    const files = ['app', 'components', 'features'].flatMap((folder) =>
+      existsSync(path.join(web, folder)) ? readdirSync(path.join(web, folder), { recursive: true, encoding: 'utf8' }).map((file) => path.join(folder, file)) : [],
+    )
+    const sources = files.filter((file) => /\.tsx?$/.test(file) && !/\.test\.ts$/.test(file))
+    expect(sources.length).toBeGreaterThan(40)
+    const text = (file: string) => readFileSync(path.join(web, file), 'utf8')
+    expect(sources.filter((file) => /<script[\s>]/.test(text(file)))).toEqual(['components/ui/InlineScript.tsx'])
+    expect(sources.filter((file) => /from ['"]next\/script['"]/.test(text(file)))).toEqual([])
+  })
+})
+
 describe('the intro in the page and the stylesheet', () => {
   const read = (file: string) => readFileSync(path.resolve(__dirname, '../..', file), 'utf8')
 
   it('the layout draws it first in the page, the panel straight before its script', () => {
     const layout = read('app/layout.tsx')
     expect(layout).toMatch(/<body className="flex min-h-dvh flex-col">\s*\{\/\*[^*]*\*\/\}\s*<Intro \/>/)
-    expect(read('components/frame/Intro.tsx')).toMatch(/<IntroPanel \/>\s*<script dangerouslySetInnerHTML=\{\{ __html: INTRO_SCRIPT \}\} \/>/)
+    expect(read('components/frame/Intro.tsx')).toMatch(/<IntroPanel \/>\s*<InlineScript html=\{INTRO_SCRIPT\} \/>/)
   })
 
   it('it is decoration: hidden from screen readers, and not there at all until it is started', () => {
