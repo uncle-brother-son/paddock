@@ -1,7 +1,8 @@
 import { SecondaryButton } from '@/components/ui/Button'
 import { Toggle } from '@/components/ui/Toggle'
 import type { DaySessions, PrivateSession, PublicSession } from '@/lib/book/api'
-import { dayHeading, lengthLabel, NO_SESSIONS, SESSIONS_NOT_READ, viewNote, type BookView } from '@/lib/book/book'
+import { lengthLabel, NO_SESSIONS, SESSIONS_NOT_READ, viewNote, type BookView } from '@/lib/book/book'
+import { dayLine } from '@/lib/dates'
 import { signIn } from '@/lib/frame/sign-in'
 
 import { Calendar } from './Calendar'
@@ -95,7 +96,7 @@ export function BookSessions(props: BookSessionsProps) {
         <div className="flex flex-wrap items-center justify-between gap-y-16">
           {/* The heading names the day once one is chosen (WQ65: the first with a session to book), and its place is held until then. */}
           {day ? (
-            <h2 className="text-label-12 whitespace-nowrap text-text-primary">{dayHeading(day)}</h2>
+            <h2 className="text-label-12 whitespace-nowrap text-text-primary">{dayLine(day)}</h2>
           ) : (
             <p aria-hidden="true" className="text-label-12">
               {HELD}

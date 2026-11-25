@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from '@storybook/nextjs-vite'
 import { expect, userEvent, waitFor, within } from 'storybook/test'
 
 import { OverlayTexture } from '@/components/ui/Overlay'
-import { DURATION_LONG, EASE_SMOOTH_CSS, linearEasingPoints } from '@/lib/motion/tokens'
+import { DURATION_SHORT, EASE_SMOOTH_CSS, linearEasingPoints } from '@/lib/motion/tokens'
 
 import { ProductPageView } from './ProductPageView'
 import { SAMPLE_PRODUCT, SAMPLE_SIMILAR } from './sample-shop'
@@ -98,8 +98,9 @@ export const Description: Story = {
 
 /**
  * WQ49: it slides in from the right as the Bag does in Wayne's prototype (Figma 04 Animations, 1569:62058): from just
- * beyond the window's right edge to its place over the long duration with the smooth curve, never fading, while the
- * shade fades in behind it over the same time. Closing is the same backwards, and only then is it hidden.
+ * beyond the window's right edge to its place over the short duration with the smooth curve (W78a; Wayne, 25 Nov:
+ * the panels take 320 ms), never fading, while the shade fades in behind it over the same time. Closing is the same
+ * backwards, and only then is it hidden.
  */
 export const SlidesIn: Story = {
   name: 'Slides in from the right',
@@ -119,12 +120,12 @@ export const SlidesIn: Story = {
       const timing = animation.effect!.getComputedTiming()
       return [(animation as CSSTransition).transitionProperty, timing.duration]
     })
-    await expect(moving).toEqual([['translate', DURATION_LONG * 1000]])
+    await expect(moving).toEqual([['translate', DURATION_SHORT * 1000]])
     await expect(linearEasingPoints(getComputedStyle(dialog).transitionTimingFunction)).toEqual(smooth)
     await expect(getComputedStyle(dialog).opacity).toBe('1')
     await expect(fromRight(dialog)).toBeLessThan(12)
     // The shade fades in behind it over the same time.
-    await expect([getComputedStyle(shade).transitionDuration, getComputedStyle(shade).transitionProperty]).toEqual([`${DURATION_LONG}s`, 'opacity'])
+    await expect([getComputedStyle(shade).transitionDuration, getComputedStyle(shade).transitionProperty]).toEqual([`${DURATION_SHORT}s`, 'opacity'])
     await expect(Number(getComputedStyle(shade).opacity)).toBeLessThan(1)
     // In its place: 12px from the window's right edge, the shade whole, the window scrolled nowhere.
     await waitFor(() => expect(fromRight(dialog)).toBe(12), { timeout: 3000 })

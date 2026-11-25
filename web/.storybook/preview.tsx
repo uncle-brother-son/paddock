@@ -1,5 +1,5 @@
 import type { Decorator, Preview } from '@storybook/nextjs-vite'
-import { useEffect, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, type ReactNode } from 'react'
 
 import { fontVariables } from '../app/fonts'
 import '../app/globals.css'
@@ -7,6 +7,7 @@ import { InputKind } from '../components/frame/InputKind'
 import { MotionProviders } from '../components/providers/MotionProviders'
 import tokens from '../lib/design/figma-tokens.json'
 import { THEME_MODES, type ThemeMode } from '../lib/design/token-names'
+import { forcePseudoStates, PSEUDO_ATTRIBUTE, PSEUDO_STATES, type PseudoState } from './pseudo-states'
 
 // What app/layout.tsx puts on <html>: the font variables, the language and the Light mode.
 if (typeof document !== 'undefined') {
@@ -19,20 +20,30 @@ const frame = tokens.measurements['Spacing/Grid/Width']
 
 const isThemeMode = (value: unknown): value is ThemeMode => THEME_MODES.includes(value as ThemeMode)
 
+const isPseudoState = (value: unknown): value is PseudoState => PSEUDO_STATES.includes(value as PseudoState)
+
 /**
  * A story sits in the mode picked in the toolbar, on that mode's Surface/Primary, inside the site's Motion
  * defaults. On a story's own page the mode fills the whole frame; on a docs page it stays inside the story.
+ *
+ * W78a (WQ71): with the toolbar's State on Hover (or in a story of one of Figma's hover variants) everything in the
+ * story is drawn as it is under a mouse, so a hover can be looked at without one (.storybook/pseudo-states.ts).
  */
-function ThemeFrame({ theme, wholePage, padded, children }: { theme: ThemeMode; wholePage: boolean; padded: boolean; children: ReactNode }) {
+function ThemeFrame({ theme, pseudo, wholePage, padded, children }: { theme: ThemeMode; pseudo: PseudoState; wholePage: boolean; padded: boolean; children: ReactNode }) {
   useEffect(() => {
     if (wholePage) document.documentElement.dataset.theme = theme
   }, [theme, wholePage])
+
+  // Before the story is painted, and before its play function runs.
+  useLayoutEffect(() => {
+    if (pseudo !== 'none') forcePseudoStates()
+  }, [pseudo])
 
   return (
     <MotionProviders smoothScroll={false}>
       {/* As app/layout.tsx: the focus ring follows what was last used, a key or a pointer. */}
       <InputKind />
-      <div key={theme} data-theme={theme} className={`bg-surface-primary ${padded ? 'p-16' : ''} ${wholePage ? 'min-h-screen' : ''}`}>
+      <div key={theme} data-theme={theme} {...(pseudo === 'none' ? {} : { [PSEUDO_ATTRIBUTE]: pseudo })} className={`bg-surface-primary ${padded ? 'p-16' : ''} ${wholePage ? 'min-h-screen' : ''}`}>
         {children}
       </div>
     </MotionProviders>
@@ -41,8 +52,9 @@ function ThemeFrame({ theme, wholePage, padded, children }: { theme: ThemeMode; 
 
 const withTheme: Decorator = (Story, context) => {
   const theme = isThemeMode(context.globals.theme) ? context.globals.theme : 'light'
+  const pseudo = isPseudoState(context.globals.pseudo) ? context.globals.pseudo : 'none'
   return (
-    <ThemeFrame theme={theme} wholePage={context.viewMode === 'story'} padded={context.parameters.padded !== false}>
+    <ThemeFrame theme={theme} pseudo={pseudo} wholePage={context.viewMode === 'story'} padded={context.parameters.padded !== false}>
       <Story />
     </ThemeFrame>
   )
@@ -61,10 +73,24 @@ const preview: Preview = {
         dynamicTitle: true,
       },
     },
+    // W78a (WQ71): Figma's State=hover, without a mouse.
+    pseudo: {
+      description: 'State (Figma: hover), drawn without a mouse',
+      toolbar: {
+        title: 'State',
+        icon: 'pointerhand',
+        items: [
+          { value: 'none', title: 'State: as it is' },
+          { value: 'hover', title: 'State: hover' },
+        ],
+        dynamicTitle: true,
+      },
+    },
   },
 
   initialGlobals: {
     theme: 'light',
+    pseudo: 'none',
   },
 
   parameters: {

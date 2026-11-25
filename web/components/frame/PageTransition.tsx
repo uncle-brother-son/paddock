@@ -5,7 +5,8 @@ import { usePathname } from 'next/navigation'
 import * as React from 'react'
 import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react'
 
-import { hashId, leavePage, PAGE_IN, PAGE_OUT, PAGE_TRANSITION, pageOf, takeFocusOnArrival } from '@/lib/motion/page-transition'
+import { animatesHistoryStep, hashId, leavePage, PAGE_AT_ONCE, PAGE_IN, PAGE_IN_ABOVE, PAGE_OUT, PAGE_TRANSITION, pageOf, takeFocusOnArrival, type HistoryStepEvent } from '@/lib/motion/page-transition'
+import { REDUCED_MOTION } from '@/lib/motion/reduced-motion'
 import { DURATION_LONG, EASE_SMOOTH } from '@/lib/motion/tokens'
 
 /**
@@ -15,10 +16,15 @@ import { DURATION_LONG, EASE_SMOOTH } from '@/lib/motion/tokens'
  */
 const ViewTransition = (React as { ViewTransition?: typeof React.ViewTransition }).ViewTransition
 
-const ENTER = { [PAGE_TRANSITION]: PAGE_IN, default: 'none' }
-const EXIT = { [PAGE_TRANSITION]: PAGE_OUT, default: 'none' }
+// W78a (WQ68): a link carries the page transition's type; Back and Forward carry none and are animated the same
+// (`default`). Only a navigation that says "at once" swaps the page with no animation (WQ52: a colour swatch).
+const ENTER = { [PAGE_TRANSITION]: PAGE_IN, [PAGE_AT_ONCE]: 'none', default: PAGE_IN }
+const EXIT = { [PAGE_TRANSITION]: PAGE_OUT, [PAGE_AT_ONCE]: 'none', default: PAGE_OUT }
 
 type RunningTransition = { ready: Promise<unknown>; finished: Promise<unknown>; skipTransition: () => void }
+
+/** A Back or Forward step the site is animating: the browser's own restoring of the scroll, and the end of the step. */
+type HeldStep = { scroll: () => void; release: () => void }
 
 const runningTransition = (): RunningTransition | null => (document as Document & { activeViewTransition?: RunningTransition | null }).activeViewTransition ?? null
 
@@ -43,7 +49,8 @@ function scrollToPlace(place: HTMLElement, lenis: ReturnType<typeof useLenis>) {
 /**
  * What happens on arriving at a page by a navigation inside the site (never on the first load):
  * - a link: the new page starts at its top, with Lenis told so (it would otherwise glide on towards where it was
- *   heading on the old page). Back and Forward keep the place the browser puts them, and only stop a glide;
+ *   heading on the old page). Back and Forward arrive where the browser puts them (W78a: for a step the site
+ *   animates, the browser is asked to put the window there as the new page comes in), and only stop a glide;
  * - a link to a place on the page (its address ends in #events): the page starts at its top all the same, and
  *   scrolls to that place once the page transition has ended (W75; WQ60);
  * - focus moves to the new page's h1 (or to main when it has none), without scrolling, so a keyboard or a screen
@@ -56,6 +63,8 @@ function usePageArrival(page: string) {
   const lenis = useLenis()
   const arrived = useRef(page)
   const byHistory = useRef(false)
+  // W78a (WQ68): the Back or Forward step now under way that the site animates itself, until its page has arrived.
+  const step = useRef<HeldStep | null>(null)
 
   useEffect(() => {
     let endedByPress = false
@@ -64,6 +73,38 @@ function usePageArrival(page: string) {
     const noteHistory = () => {
       byHistory.current = pageOf(window.location.pathname) !== arrived.current
     }
+    // W78a (WQ68): Back and Forward to another page are animated (lib/motion/page-transition.ts says how and when).
+    // The step is intercepted with its scrolling kept back, and stays under way until its page has arrived.
+    const holdStep = (event: Event) => {
+      const stepEvent = event as Event & HistoryStepEvent
+      // Next writes its own note on the entry it has arrived at (a `replace` of the same address): not a new step.
+      if (stepEvent.navigationType === 'replace') return
+      step.current?.release()
+      step.current = null
+      if (!animatesHistoryStep(stepEvent, arrived.current, window.matchMedia(REDUCED_MOTION).matches)) return
+      let release = () => {}
+      const arrival = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      stepEvent.intercept({ scroll: 'manual', focusReset: 'manual', handler: () => arrival })
+      step.current = { scroll: () => stepEvent.scroll(), release }
+    }
+    // Its `popstate` is kept from Next and given to it again in a task of its own: outside the browser's event React
+    // treats the step as it does a link's navigation, and animates it. Next reads only the event's state.
+    const again = new WeakSet<Event>()
+    const holdPopstate = (event: PopStateEvent) => {
+      if (!step.current || again.has(event)) return
+      event.stopImmediatePropagation()
+      const { state } = event
+      setTimeout(() => {
+        const replay = new PopStateEvent('popstate', { state })
+        again.add(replay)
+        window.dispatchEvent(replay)
+      })
+    }
+    const navigation = (window as Window & { navigation?: EventTarget }).navigation
+    navigation?.addEventListener('navigate', holdStep)
+    if (navigation) window.addEventListener('popstate', holdPopstate, true)
     const endTransition = () => {
       const running = runningTransition()
       endedByPress = Boolean(running)
@@ -84,6 +125,8 @@ function usePageArrival(page: string) {
     window.addEventListener('pointerdown', endTransition, true)
     window.addEventListener('click', handOn, true)
     return () => {
+      navigation?.removeEventListener('navigate', holdStep)
+      window.removeEventListener('popstate', holdPopstate, true)
       window.removeEventListener('popstate', noteHistory)
       window.removeEventListener('pointerdown', endTransition, true)
       window.removeEventListener('click', handOn, true)
@@ -93,7 +136,20 @@ function usePageArrival(page: string) {
   useLayoutEffect(() => {
     if (arrived.current === page) return
     arrived.current = page
+    // W78a (WQ68): the new page is in, and the browser has not pictured it yet: the browser now puts the window
+    // where this entry was left (its own restoring, kept back until here), and the step is over.
+    const held = step.current
+    step.current = null
+    if (held && byHistory.current) {
+      try {
+        held.scroll()
+      } catch {
+        // The step was overtaken by another, or the browser has already scrolled: there is nothing to restore.
+      }
+    }
+    held?.release()
     const top = byHistory.current ? window.scrollY : 0
+    document.documentElement.style.setProperty(PAGE_IN_ABOVE, `${top}px`)
     // W75 (WQ60): a link that names a place on the new page. Back and Forward keep the place the browser puts them.
     const placeId = byHistory.current ? null : hashId(window.location.hash)
     byHistory.current = false
@@ -150,11 +206,12 @@ class PageStage extends React.Component<{ page: string; children: ReactNode }> {
 }
 
 /**
- * One page of the site as the page transition sees it (W73b; WQ20, WQ22, WQ57): everything that changes from page
- * to page, which is main and the footer; the header stays where it is. `page` names the page shown: when it changes,
- * the old page leaves and the new one comes in, and a navigation that carries the page transition's type (every link
- * inside the site: components/ui/SiteLink.tsx) is animated by the `page-out` and `page-in` rules in app/globals.css,
- * over the long duration with the smooth curve. Reduced motion, Back and Forward: the page is swapped at once.
+ * One page of the site as the page transition sees it (W73b; WQ20, WQ57; W78a: WQ67, WQ68): everything that changes
+ * from page to page, which is main and the footer; the header stays where it is. `page` names the page shown: when it
+ * changes, the old page leaves and the new one comes in, animated by the `page-out` and `page-in` rules in
+ * app/globals.css over the long duration with the smooth curve: for every link inside the site
+ * (components/ui/SiteLink.tsx), and for the browser's Back and Forward. Reduced motion, and a link that asks for no
+ * transition (WQ52: a colour swatch): the page is swapped at once.
  *
  * The page has a solid background of its own (Surface/Primary, the colour of the window behind it), so the page
  * coming in covers the one being left wherever it has come in.

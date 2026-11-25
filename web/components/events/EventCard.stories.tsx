@@ -35,7 +35,7 @@ export const Default: Story = {
     const frame = (canvasElement.querySelector('img') as HTMLElement).parentElement as HTMLElement
     await expect([Math.round(box(frame).width), Math.round(box(frame).height)]).toEqual([458, 573])
     await expect(getComputedStyle(frame).borderRadius).toBe('4px')
-    const when = canvas.getByText('16:00 — 27th Oct 2026')
+    const when = canvas.getByText('16:00 - Tuesday 27 October')
     await expect([when.tagName, when.getAttribute('datetime')]).toEqual(['TIME', '2026-10-27T16:00:00+00:00'])
     const spaces = canvas.getByText('6 Spaces Left')
     const name = canvas.getByText('Aufguss Session with Henry')
@@ -54,7 +54,7 @@ export const OneSpaceLeft: Story = {
   args: { card: SAMPLE_EVENT_CARDS.oneSpaceLeft },
   play: async ({ canvas }) => {
     await expect(canvas.getByText('1 Space Left')).toBeVisible()
-    await expect(canvas.getByText('16:00 — 3rd Nov 2026')).toBeVisible()
+    await expect(canvas.getByText('16:00 - Tuesday 3 November')).toBeVisible()
   },
 }
 
@@ -77,7 +77,7 @@ export const SummerTime: Story = {
   name: 'In summer time',
   args: { card: SAMPLE_EVENT_CARDS.summer },
   play: async ({ canvas }) => {
-    await expect(canvas.getByText('18:00 — 22nd Jun 2027')).toBeVisible()
+    await expect(canvas.getByText('18:00 - Tuesday 22 June')).toBeVisible()
   },
 }
 
@@ -99,7 +99,7 @@ export const Mobile: Story = {
   play: async ({ canvas, canvasElement }) => {
     const frame = (canvasElement.querySelector('img') as HTMLElement).parentElement as HTMLElement
     await expect([Math.round(box(frame).width), Math.round(box(frame).height)]).toEqual([358, 448])
-    const when = canvas.getByText('16:00 — 27th Oct 2026')
+    const when = canvas.getByText('16:00 - Tuesday 27 October')
     const spaces = canvas.getByText('6 Spaces Left')
     await expect(Math.abs(box(when).top - box(spaces).top)).toBeLessThan(1)
     await expect(Math.round(box(frame).right - box(spaces).right)).toBe(8)

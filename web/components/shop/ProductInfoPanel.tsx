@@ -39,9 +39,9 @@ type ProductInfoPanelProps = {
  *
  * It slides in from the right as the Bag does in Wayne's prototype (WQ49; Figma 04 Animations, Bag 1569:62058 and
  * 1576:62771): from just beyond the window's right edge to its place, with no fade of its own, while the shade fades
- * in behind it; closing is the same backwards. The prototype plays it on the Slow spring over 667 ms: here that is
- * the smooth curve over the long duration (640 ms), for the panel and the shade alike. With reduced motion on it is
- * just there or not.
+ * in behind it; closing is the same backwards. It opens and closes over the short duration with the smooth curve
+ * (W78a; Wayne, 25 Nov: the panels take 320 ms, where the prototype's spring ran 667), the panel and the shade
+ * alike. With reduced motion on it is just there or not.
  */
 export function ProductInfoPanel({ open, tabs, tab, onTab, onClose, label = 'Product information' }: ProductInfoPanelProps) {
   const panel = useRef<HTMLDivElement>(null)
@@ -63,7 +63,7 @@ export function ProductInfoPanel({ open, tabs, tab, onTab, onClose, label = 'Pro
 
   return (
     <>
-      <Overlay open={open} onClick={onClose} duration="long" />
+      <Overlay open={open} onClick={onClose} />
       <div
         ref={panel}
         role="dialog"
@@ -73,7 +73,7 @@ export function ProductInfoPanel({ open, tabs, tab, onTab, onClose, label = 'Pro
         data-shop="info-panel"
         // Shut, it waits just beyond the window's right edge: its own width and the 12px it keeps from the edge.
         // Shown at once on opening, so the tab can take focus straight away; hidden only when the slide out has finished.
-        className={`fixed inset-12 z-30 flex flex-col gap-64 overflow-clip rounded-s bg-surface-primary px-16 pt-64 pb-24 duration-long ease-smooth md:left-auto md:w-[calc((100vw_-_var(--grid-margin)_*_2_-_var(--grid-gutter)_*_23)_/_24_*_9_+_var(--grid-gutter)_*_8)] ${open ? 'visible translate-x-0 transition-[translate]' : 'invisible translate-x-[calc(100%_+_var(--spacing-12))] transition-[translate,visibility]'}`}
+        className={`fixed inset-12 z-30 flex flex-col gap-64 overflow-clip rounded-s bg-surface-primary px-16 pt-64 pb-24 duration-short ease-smooth md:left-auto md:w-[calc((100vw_-_var(--grid-margin)_*_2_-_var(--grid-gutter)_*_23)_/_24_*_9_+_var(--grid-gutter)_*_8)] ${open ? 'visible translate-x-0 transition-[translate]' : 'invisible translate-x-[calc(100%_+_var(--spacing-12))] transition-[translate,visibility]'}`}
       >
         {/* The row reaches the panel's edges, and has room above and below, so a tab's focus ring is never cut off. */}
         <div role="tablist" aria-label={label} onKeyDown={move} className="-mx-16 -my-12 flex shrink-0 gap-24 overflow-x-auto px-16 py-12 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">

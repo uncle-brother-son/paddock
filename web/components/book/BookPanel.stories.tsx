@@ -89,7 +89,7 @@ export const Public: Story = {
     await expect(within(account).getByRole('button', { name: 'Log in' })).toBeVisible()
 
     // The day's heading with the toggle at its right; 12px beneath, the line; 32px beneath that, the sessions.
-    const heading = panel.getByRole('heading', { name: 'Thursday 12th November 2026' })
+    const heading = panel.getByRole('heading', { name: 'Thursday 12 November' })
     const toggle = panel.getByRole('radiogroup', { name: 'Kind of session' })
     await expect(Math.round(box(sessions).right - box(toggle).right)).toBe(0)
     await expect(within(toggle).getByRole('radio', { name: 'Public' })).toBeChecked()
@@ -161,7 +161,7 @@ export const Loading: Story = {
   args: { day: 'loading' },
   play: async (context) => {
     const { dialog, panel } = await opened(context, 0)
-    await waitFor(() => expect(panel.getByRole('heading', { name: 'Thursday 12th November 2026' })).toBeVisible())
+    await waitFor(() => expect(panel.getByRole('heading', { name: 'Thursday 12 November' })).toBeVisible())
     const rows = rowsIn(dialog)
     await expect(rows.map((row) => [row.dataset.sessionState, row.getAttribute('aria-hidden')])).toEqual(Array.from({ length: 5 }, () => ['loading', 'true']))
     await expect(round(box(rows[0]!).height, box(rows[1]!).top - box(rows[0]!).bottom)).toEqual([65, 12])
@@ -238,7 +238,7 @@ export const AddOns: Story = {
 
     const words = (root: HTMLElement) => [...root.querySelectorAll('dt, dd')].map((one) => one.textContent)
     await expect(within(summary).getByText('Contrast Therapy')).toBeVisible()
-    await expect(within(summary).getByText('08:00 Thursday 12 November 2026')).toBeVisible()
+    await expect(within(summary).getByText('08:00 - Thursday 12 November')).toBeVisible()
     await expect(within(summary).getByText('60 min - Public - Off-Peak')).toBeVisible()
     await expect(words(summary)).toEqual(['2 People', '£30.00', 'Total to pay', '£30.00'])
 
@@ -285,7 +285,7 @@ export const Mobile: Story = {
     const sessions = part(dialog, 'sessions')
     await expect(round(box(calendar).left - box(dialog).left, box(dialog).right - box(calendar).right, box(calendar).top - box(dialog).top)).toEqual([16, 16, 64])
     await expect(round(box(account).top - box(calendar).bottom, box(sessions).top - box(account).bottom)).toEqual([12, 32])
-    const heading = panel.getByRole('heading', { name: 'Thursday 12th November 2026' })
+    const heading = panel.getByRole('heading', { name: 'Thursday 12 November' })
     const toggle = panel.getByRole('radiogroup', { name: 'Kind of session' })
     await expect(round(box(toggle).top - box(heading).bottom, box(toggle).left - box(heading).left)).toEqual([16, 0])
     const note = part(dialog, 'note')

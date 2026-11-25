@@ -137,7 +137,7 @@ describe("W73b Level 3: a video's sound", () => {
 
   it('the sound button is drawn only for a video that has sound; Pause always', () => {
     const hero = readFileSync(path.resolve(__dirname, '../../components/modules/Hero.tsx'), 'utf8')
-    expect(hero).toMatch(/\{video\.hasSound \? \(\s*<HeroIconButton label=\{muted \? 'Unmute video' : 'Mute video'\}[^\n]*\n\s*\) : null\}\s*<HeroIconButton label=\{playing \? 'Pause video' : 'Play video'\}/)
+    expect(hero).toMatch(/\{video\.hasSound \? \(\s*<IconButton look="image" label=\{muted \? 'Unmute video' : 'Mute video'\}[^\n]*\n\s*\) : null\}\s*<IconButton look="image" label=\{playing \? 'Pause video' : 'Play video'\}/)
   })
 })
 

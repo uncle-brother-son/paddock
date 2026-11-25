@@ -10,7 +10,6 @@ import {
   addMonths,
   bookingSummary,
   chosenSession,
-  dayHeading,
   dayName,
   groupFor,
   groupLine,
@@ -125,10 +124,9 @@ describe('days and months', () => {
     expect(monthWeeks('2026-08')[5]![0]).toBe('2026-08-31')
   })
 
-  it('writes a month and a day as the designs do', () => {
+  // W78a (WQ69): the heading over a day's sessions is the site's one formatter's (lib/dates.ts, tested there).
+  it('writes a month as the designs do, and names a calendar day for a screen reader with its year', () => {
     expect(monthTitle('2026-11')).toBe('November 2026')
-    expect(dayHeading('2026-11-12')).toBe('Thursday 12th November 2026')
-    expect([dayHeading('2026-12-01'), dayHeading('2026-12-22'), dayHeading('2027-01-03'), dayHeading('2026-12-11')]).toEqual(['Tuesday 1st December 2026', 'Tuesday 22nd December 2026', 'Sunday 3rd January 2027', 'Friday 11th December 2026'])
     expect(dayName('2026-11-12')).toBe('Thursday 12 November 2026')
   })
 })
@@ -232,7 +230,7 @@ describe('"Your booking"', () => {
     const one = bookingSummary(chosenSession('public', PUBLIC, 1, { ...QUOTE, people: 1, total: '15.00', lines: [QUOTE.lines[0]!] })!, ADD_ONS, {})
     expect(one).toEqual({
       service: 'Contrast Therapy',
-      when: '07:00 Thursday 26 November 2026',
+      when: '07:00 - Thursday 26 November',
       startsAt: '2026-11-26T07:00:00+00:00',
       detail: '60 min - Public - Off-Peak',
       people: { key: 'people', label: '1 Person', value: '£15.00' },

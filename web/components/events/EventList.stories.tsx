@@ -42,13 +42,13 @@ export const Desktop: Story = {
     await expect(Math.round(box(section).bottom - box(cards[6]!).bottom)).toBe(120)
     // Soonest first, as it was given; the sold-out one is among them.
     await expect(cards.map((card) => card.querySelector('time')?.textContent)).toEqual([
-      '16:00 — 27th Oct 2026',
-      '16:00 — 3rd Nov 2026',
-      '10:00 — 14th Nov 2026',
-      '16:00 — 17th Nov 2026',
-      '19:30 — 21st Dec 2026',
-      '11:00 — 1st Jan 2027',
-      '18:00 — 22nd Jun 2027',
+      '16:00 - Tuesday 27 October',
+      '16:00 - Tuesday 3 November',
+      '10:00 - Saturday 14 November',
+      '16:00 - Tuesday 17 November',
+      '19:30 - Monday 21 December',
+      '11:00 - Friday 1 January',
+      '18:00 - Tuesday 22 June',
     ])
     await expect(canvas.getByText('Sold out')).toBeVisible()
     // Only the first row's pictures load ahead of the rest.

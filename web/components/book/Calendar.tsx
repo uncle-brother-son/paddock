@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
 
-import { Icon } from '@/components/brand/Icon'
+import { IconButton } from '@/components/ui/IconButton'
 import { addDays, addMonths, CALENDAR_DAYS, dayName, monthOf, monthTitle, monthWeeks } from '@/lib/book/book'
 
 /**
@@ -10,10 +10,6 @@ import { addDays, addMonths, CALENDAR_DAYS, dayName, monthOf, monthTitle, monthW
  * (Figma draws 33: 12, the 9 of the capitals, 12). The number is wider than the room left for it and sits centred.
  */
 const SQUARE = 'flex size-[calc(1cap_+_var(--spacing-24))] shrink-0 items-center justify-center text-label-12'
-
-/** Figma "IconButton", Style=page: 8px round the chevron, Surface/Card Selected on hover; disabled, its icon is Text/Muted Primary. */
-const ARROW =
-  'flex items-center justify-center rounded-s p-8 text-text-primary transition-colors duration-short ease-smooth hover:bg-surface-card-selected disabled:cursor-default disabled:bg-transparent disabled:text-text-muted-primary'
 
 type CalendarDayProps = {
   /** The day: "2026-11-26". */
@@ -142,12 +138,9 @@ export function Calendar({ month, today, bookable, chosen, firstMonth, lastMonth
           {monthTitle(month)}
         </h2>
         <div className="flex items-center gap-8">
-          <button type="button" aria-label="Previous month" disabled={month <= firstMonth} onClick={() => onMonth(addMonths(month, -1))} className={ARROW}>
-            <Icon name="chevron" className="rotate-90" />
-          </button>
-          <button type="button" aria-label="Next month" disabled={month >= lastMonth} onClick={() => onMonth(addMonths(month, 1))} className={ARROW}>
-            <Icon name="chevron" className="-rotate-90" />
-          </button>
+          {/* Figma "IconButton", Style=page: Surface/Card Selected under a mouse; at the first and last month, disabled. */}
+          <IconButton icon="chevron" iconClassName="rotate-90" label="Previous month" disabled={month <= firstMonth} onClick={() => onMonth(addMonths(month, -1))} />
+          <IconButton icon="chevron" iconClassName="-rotate-90" label="Next month" disabled={month >= lastMonth} onClick={() => onMonth(addMonths(month, 1))} />
         </div>
       </div>
       <div ref={grid} role="grid" aria-labelledby={titleId} onKeyDown={onKey} className="flex flex-col gap-4">

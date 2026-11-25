@@ -51,7 +51,7 @@ export const OneSession: Story = {
     const heading = canvas.getByRole('heading', { name: 'Your Booking' })
     const service = canvas.getByText('Contrast Therapy')
     await expect(round(box(service).top - box(heading).bottom)).toEqual([24])
-    const when = canvas.getByText('08:00 Thursday 12 November 2026')
+    const when = canvas.getByText('08:00 - Thursday 12 November')
     await expect(when.getAttribute('datetime')).toBe(PUBLIC.startsAt)
     await expect(canvas.getByText('60 min - Public - Off-Peak')).toBeVisible()
     await expect(lines(canvasElement)).toEqual(['1 Person', '£15.00', 'Total to pay', '£15.00'])

@@ -53,7 +53,7 @@ export const Open: Story = {
     await expect(Math.round(box(member).left - box(price).right)).toBe(8)
     await expect(getComputedStyle(member).color).not.toBe(getComputedStyle(price).color)
     // The date and time, 24px under the price, in Copy 14.
-    const when = within(details).getByText('16:00 Tuesday 27 October 2026')
+    const when = within(details).getByText('16:00 - Tuesday 27 October')
     await expect([when.tagName, when.getAttribute('datetime'), getComputedStyle(when.parentElement!).fontSize]).toEqual(['TIME', '2026-10-27T16:00:00+00:00', '14px'])
     await expect(Math.round(box(when.parentElement!).top - box(price).bottom)).toBe(24)
     // The stepper (minus, 1, plus: 33 + 36 + 33) and "Add to bag" beside it, 4px apart, across the details' width.
@@ -197,7 +197,7 @@ export const Started: Story = {
     await expect(stepperOf(canvasElement)).toBeNull()
     await expect(canvas.queryByText(/spaces? left/)).toBeNull()
     await expect(canvas.queryByText('This event has been cancelled')).toBeNull()
-    await expect(canvas.getByText('16:00 Tuesday 27 October 2026')).toBeVisible()
+    await expect(canvas.getByText('16:00 - Tuesday 27 October')).toBeVisible()
   },
 }
 

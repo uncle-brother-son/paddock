@@ -652,10 +652,10 @@ body {
 }
 
 /*
- * The page transition (W73b; WQ20, WQ22, WQ57), on every link from page to page inside the site. It follows
- * oddritualgolf.com's, read from that site's own code: the content of the page being left drifts down a fifth of the
- * window and fades to 40%, while the new page is uncovered over it from the top edge of the window downwards, itself
- * settling down a fifth of the window into its place. Here it takes the long duration with the smooth curve.
+ * The page transition (W73b; WQ20, WQ57, and W78a: WQ67, WQ68), on every arrival at a new page inside the site: a
+ * link, and the browser's Back and Forward. What went down now goes up (WQ67): the content of the page being left
+ * drifts up a fifth of the window and fades to 40%, while the new page slides up from below the window into its
+ * place, covering the page being left as it rises. It moves; nothing masks it. The long duration, the smooth curve.
  *
  * Each page's background stays solid and still, and only its content moves (WQ57):
  *   - the page coming in has a solid background of its own (Surface/Primary on the page's element, and each
@@ -666,16 +666,23 @@ body {
  *     (--page-out-surfaces, written by leavePage in lib/motion/page-transition.ts just before the page is left).
  *     So its words and pictures drift and fade over a background that does neither.
  *
- * It is drawn by the browser's view transitions, which React starts when a navigation that carries the page
- * transition's type lands (components/frame/PageTransition.tsx gives the two pages these classes). A browser without
- * them swaps the page at once, and so does reduced motion (below).
+ * It is drawn by the browser's view transitions, which React starts when a navigation to a new page lands
+ * (components/frame/PageTransition.tsx gives the two pages these classes; a colour swatch's navigation asks for
+ * none: WQ52). A browser without them swaps the page at once, and so does reduced motion (below).
  */
 ::view-transition-old(.page-out) {
   animation: page-out var(--duration-long) var(--ease-smooth) both;
 }
 
+/*
+ * The browser's picture of the page coming in is the whole page, and it starts a window's height down. After Back or
+ * Forward the page arrives where it was left, so some of it lies above the window (--page-in-above, written by
+ * components/frame/PageTransition.tsx as the page arrives; 0 for a link): that part is not drawn while the page
+ * moves, as it is not once it rests. Nothing else of the page is cut, and the cut does not move: it is no mask.
+ */
 ::view-transition-new(.page-in) {
   animation: page-in var(--duration-long) var(--ease-smooth) both;
+  clip-path: inset(var(--page-in-above, 0px) 0 0 0);
 }
 
 /* The still background of the page being left: as large as the page was and where it was, behind its picture. */
@@ -702,18 +709,17 @@ body {
 @keyframes page-out {
   to {
     opacity: 0.4;
-    translate: 0 20vh;
+    translate: 0 -20vh;
   }
 }
 
+/* The whole page moves, from just below the window: nothing masks it. */
 @keyframes page-in {
   from {
-    translate: 0 -20vh;
-    clip-path: polygon(0 0, 100% 0, 100% 0vh, 0 0vh);
+    translate: 0 100vh;
   }
   to {
     translate: 0 0;
-    clip-path: polygon(0 0, 100% 0, 100% 100vh, 0 100vh);
   }
 }
 

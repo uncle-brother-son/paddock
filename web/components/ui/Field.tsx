@@ -5,7 +5,8 @@ import { useId, type ComponentPropsWithoutRef, type Ref } from 'react'
 // Figma "Input" (03 UI, 948:9227) and "TextField" (1389:39131): a field on Surface/Card with 4px corners, 16px to
 // its left, its words in Copy 14. Its states, as drawn: empty (the prompt in Text/Muted Primary), focus
 // (Surface/Card Selected), full (the words in Text/Primary) and error (Surface/Card Error, with the message beneath
-// in Copy 12 and Text/Error). A note (a counter) and the message sit 8px under the field, 16px in, with 4px beneath.
+// in Copy 12 and Text/Error) and, an Input only, disabled. A note (a counter) and the message sit 8px under the
+// field, 16px in, with 4px beneath.
 //
 // By the build standards (docs/build-standards.md, section 1: Forms) the prompt inside the field is also its hidden
 // label, the message is tied to the field (`aria-describedby`, `aria-invalid`) and read out when it appears, and a
@@ -15,6 +16,12 @@ import { useId, type ComponentPropsWithoutRef, type Ref } from 'react'
 const FIELD = 'block w-full rounded-s pr-6 pl-16 text-copy-14 [text-box-trim:none] text-text-primary outline-none transition-colors duration-short ease-smooth placeholder:text-text-muted-primary'
 
 const fill = (wrong: boolean): string => (wrong ? 'bg-surface-card-error' : 'bg-surface-card focus:bg-surface-card-selected')
+
+/**
+ * Figma "Input", State=disabled (956:17481): Surface/Card Disabled with its words in Text/Muted Primary. A browser
+ * dims a disabled field's words by itself (Safari, by their fill colour): here they are the token's colour, whole.
+ */
+const DISABLED = 'disabled:bg-surface-card-disabled disabled:text-text-muted-primary disabled:opacity-100 disabled:[-webkit-text-fill-color:currentColor]'
 
 type Shared = {
   /** The prompt inside the field while it is empty, and its name for a screen reader. */
@@ -75,7 +82,7 @@ export function TextInput({ label, value, onValue, error = null, note = null, cl
         placeholder={label}
         aria-invalid={error !== null}
         {...described(note, `${id}-note`, error, `${id}-error`)}
-        className={`${FIELD} h-[calc(1cap_+_var(--spacing-32))] ${fill(error !== null)}`}
+        className={`${FIELD} h-[calc(1cap_+_var(--spacing-32))] ${fill(error !== null)} ${DISABLED}`}
         {...rest}
       />
       <Beneath note={note} noteId={`${id}-note`} error={error} errorId={`${id}-error`} />

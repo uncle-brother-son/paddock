@@ -12,8 +12,8 @@ type EventCardProps = {
 
 /**
  * Figma "EventCard" (04 Components, 329:7588), as the Event and Exclusive Hire frames use it at every width: the
- * picture, 4 by 5 with 4px corners on Object/Product BG; beneath it, 8px apart, the date and time in the card's short
- * form at the left and the spaces left at the right, both Copy 12, and the name in Copy 14. A sold-out event keeps
+ * picture, 4 by 5 with 4px corners on Object/Product BG; beneath it, 8px apart, the date and time (WQ69: the site's
+ * one form, "16:00 - Tuesday 27 October") at the left and the spaces left at the right, both Copy 12, and the name in Copy 14. A sold-out event keeps
  * its card, with "Sold out" where the spaces were (WQ17).
  *
  * The whole card is one link to the event's page: it has no buttons of its own (WQ17).

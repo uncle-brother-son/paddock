@@ -1,4 +1,4 @@
-import { eventDateLine, inLondon, MONTHS, ordinal, WEEKDAYS } from '@/lib/events/format'
+import { inLondon, MONTHS, WEEKDAYS, whenLine } from '@/lib/dates'
 import type { SizedImage } from '@/lib/sanity/image'
 import { inPence, pounds, poundsAndPence } from '@/lib/shop/money'
 
@@ -88,13 +88,12 @@ const dayParts = (day: string): { weekday: string; date: number; month: string; 
   return { weekday: WEEKDAYS[at.getUTCDay()] ?? '', date: at.getUTCDate(), month: MONTHS[at.getUTCMonth()] ?? '', year: at.getUTCFullYear() }
 }
 
-/** The heading over a day's sessions (Figma "SessionsHeader"): "Thursday 12th November 2026". */
-export function dayHeading(day: string): string {
-  const { weekday, date, month, year } = dayParts(day)
-  return `${weekday} ${ordinal(date)} ${month} ${year}`
-}
+// The heading over a day's sessions is `dayLine` (lib/dates.ts; WQ69: "Thursday 12 November").
 
-/** A day's name for a screen reader on its calendar button: "Thursday 12 November 2026". */
+/**
+ * A day's name for a screen reader on its calendar button: "Thursday 12 November 2026". It is the calendar's own
+ * (never drawn), and keeps its year: the calendar goes from one year into the next.
+ */
 export function dayName(day: string): string {
   const { weekday, date, month, year } = dayParts(day)
   return `${weekday} ${date} ${month} ${year}`
@@ -212,7 +211,7 @@ export function bookingSummary(chosen: ChosenSession, addOns: readonly BookAddOn
   const total = picked.reduce((sum, line) => sum + line.pence, inPence(chosen.total))
   return {
     service: session.service,
-    when: eventDateLine(session.startsAt),
+    when: whenLine(session.startsAt),
     startsAt: session.startsAt,
     detail: view === 'public' ? `${sessionLength(session.minutes)} - Public - ${session.band}` : `${sessionLength(session.minutes)} - Private`,
     people: { key: 'people', label: group ? `${peopleWord(people)} - ${groupWords(group)}` : peopleWord(people), value: poundsAndPence(chosen.total) },

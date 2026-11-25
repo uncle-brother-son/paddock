@@ -204,9 +204,9 @@ type BookPanelProps = {
  * booked and move states wait for sign-in, the bag and the account (see BookSessions and BookingSummary).
  *
  * It slides straight up from below the window, with no fade of its own, while the shade fades in behind it, and
- * closing is the same backwards (Figma 04 Animations, 833:13360 to 1569:60325; on a phone 1576:62740 to 1576:62766:
- * the Slow spring over 667 ms, which here is the smooth curve over the long duration, as the other panels). With
- * reduced motion on it is just there or not.
+ * closing is the same backwards (Figma 04 Animations, 833:13360 to 1569:60325; on a phone 1576:62740 to 1576:62766).
+ * It opens and closes over the short duration with the smooth curve, as the info panel does (W78a; Wayne, 25 Nov:
+ * the panels take 320 ms, where the prototype's spring ran 667). With reduced motion on it is just there or not.
  *
  * A popup by the build standards (components/ui/usePopup.ts): focus moves in, to Close; the page behind is inert
  * and does not scroll; Esc, Close and the shade close it; focus goes back to what opened it. What opens and closes
@@ -234,7 +234,7 @@ export function BookPanel({ open, onClose, addOns, reads = BOOK_READS, today }: 
 
   return (
     <>
-      <Overlay open={open} onClick={onClose} duration="long" />
+      <Overlay open={open} onClick={onClose} />
       <div
         ref={panel}
         role="dialog"
@@ -245,7 +245,7 @@ export function BookPanel({ open, onClose, addOns, reads = BOOK_READS, today }: 
         data-frame-popup=""
         // Shut, it waits just below the window: its own height and the 12px it keeps from the edge. Shown at once on
         // opening, so Close can take focus straight away; hidden only when the slide away has finished.
-        className={`fixed inset-12 z-30 flex flex-col overflow-clip rounded-s bg-surface-primary pt-64 duration-long ease-smooth md:pt-80 ${open ? 'visible translate-y-0 transition-[translate]' : 'invisible translate-y-[calc(100%_+_var(--spacing-12))] transition-[translate,visibility]'}`}
+        className={`fixed inset-12 z-30 flex flex-col overflow-clip rounded-s bg-surface-primary pt-64 duration-short ease-smooth md:pt-80 ${open ? 'visible translate-y-0 transition-[translate]' : 'invisible translate-y-[calc(100%_+_var(--spacing-12))] transition-[translate,visibility]'}`}
       >
         {visit > 0 ? <BookFlow key={visit} addOns={addOns} reads={reads} today={day} /> : null}
         {/* Its words are its name: "Close". Outside what scrolls, so it stays put. */}

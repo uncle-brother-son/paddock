@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState, type FocusEvent, type PointerEvent, type ReactNode } from 'react'
 
-import { Icon, type IconName } from '@/components/brand/Icon'
 import { ButtonLabel } from '@/components/ui/Button'
+import { IconButton } from '@/components/ui/IconButton'
 import { SiteLink } from '@/components/ui/SiteLink'
 import type { HeroButton, HeroContent, HeroPicture } from '@/lib/modules/hero'
 import { usePrefersReducedMotion } from '@/lib/motion/reduced-motion'
@@ -38,23 +38,6 @@ function HeroImage({ picture, alt, priority, desktopSizes = '100vw' }: { picture
   )
 }
 
-/** Figma "IconButton", Style=image (1456:35670, hover 1456:35672): 8px round a 12px icon, on Text/Muted Primary; Text/Primary on hover. */
-function HeroIconButton({ label, icon, onClick }: { label: string; icon: IconName; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      onClick={onClick}
-      className="flex items-center justify-center rounded-s bg-text-muted-primary p-8 text-text-secondary transition-colors duration-short ease-smooth hover:bg-text-primary"
-    >
-      {/* The icons are drawn 9px tall; on a picture Figma shows them at 12. */}
-      <span className="flex size-12 items-center justify-center">
-        <Icon name={icon} className="h-12 w-auto" />
-      </span>
-    </button>
-  )
-}
-
 /** The widths of screen one of a video's files is for: every width, or one of the two when the film has a file for phones. */
 type Screens = 'both' | 'mobile' | 'desktop'
 const ON_SCREENS: Record<Screens, string> = { both: '', mobile: 'md:hidden', desktop: 'hidden md:block' }
@@ -67,7 +50,8 @@ const ON_SCREENS: Record<Screens, string> = { both: '', mobile: 'md:hidden', des
  *
  * Pause is always there. The sound button is there only when the editor says the video has sound (W73b, Wayne).
  * Both show what a press will do, as Figma draws them for a video that is playing with its sound off: the speaker
- * and Pause.
+ * and Pause. Each is Figma's "IconButton", Style=image (components/ui/IconButton.tsx): on Text/Muted Primary, and on
+ * Text/Primary under a mouse.
  */
 function HeroVideoPlayer({ url, video, screens, reducedMotion, onStarted }: { url: string; video: ScreenVideo; screens: Screens; reducedMotion: boolean; onStarted: () => void }) {
   const player = useRef<HTMLVideoElement>(null)
@@ -134,9 +118,9 @@ function HeroVideoPlayer({ url, video, screens, reducedMotion, onStarted }: { ur
       </video>
       <div data-hero-controls="" className="absolute right-16 bottom-16 z-20 flex items-center gap-8">
         {video.hasSound ? (
-          <HeroIconButton label={muted ? 'Unmute video' : 'Mute video'} icon={muted ? 'audio-on' : 'audio-off'} onClick={() => setMuted((now) => !now)} />
+          <IconButton look="image" label={muted ? 'Unmute video' : 'Mute video'} icon={muted ? 'audio-on' : 'audio-off'} onClick={() => setMuted((now) => !now)} />
         ) : null}
-        <HeroIconButton label={playing ? 'Pause video' : 'Play video'} icon={playing ? 'pause' : 'play'} onClick={togglePlay} />
+        <IconButton look="image" label={playing ? 'Pause video' : 'Play video'} icon={playing ? 'pause' : 'play'} onClick={togglePlay} />
       </div>
     </div>
   )

@@ -4,11 +4,16 @@ import { BOOK_ADDRESS } from '@/lib/sanity/links'
 // (components/frame/PageTransition.tsx, and the `page-out` and `page-in` rules in app/globals.css).
 
 /**
- * The transition type a link's navigation carries. Only a navigation with this type is animated: Back and Forward
- * carry none, so they swap the page at once (the browser's own swipe-back picture would otherwise be followed by a
- * second animation, and the scroll position it restores would be fought over).
+ * The transition type a link's navigation carries. W78a (WQ68, amends WQ22): the browser's Back and Forward carry no
+ * type and are animated as a link is, so every arrival at a new page is, but the one that says it is not to be.
  */
 export const PAGE_TRANSITION = 'page'
+
+/**
+ * The type of a navigation that swaps the page at once (WQ52: a product's colour swatch, the only one). It has to
+ * say so: a navigation with no type is Back or Forward, which is animated.
+ */
+export const PAGE_AT_ONCE = 'page-at-once'
 
 /**
  * W77 (WQ64): the page an address's path shows, which is what the page transition is keyed by. /book is the home page
@@ -19,6 +24,7 @@ export const pageOf = (path: string): string => (path === BOOK_ADDRESS ? '/' : p
 
 /** As Next's <Link transitionTypes> and router.push take it. */
 export const PAGE_TRANSITION_TYPES = [PAGE_TRANSITION]
+export const PAGE_AT_ONCE_TYPES = [PAGE_AT_ONCE]
 
 /** The view transition classes of the page going and the page coming: `::view-transition-old(.page-out)`, `::view-transition-new(.page-in)`. */
 export const PAGE_OUT = 'page-out'
@@ -33,6 +39,14 @@ export const PAGE_IN = 'page-in'
 
 /** The CSS variable, on <html>, that holds the surfaces of the page being left: one background layer for each. */
 export const PAGE_OUT_SURFACES = '--page-out-surfaces'
+
+/**
+ * W78a (WQ67, WQ68): the CSS variable, on <html>, that says how much of the page coming in lies above the window
+ * (0 for a link, which arrives at the top; where the browser put it for Back and Forward). The browser's picture of
+ * the new page is the whole page, and it starts a window's height down: without this, what is above the window
+ * would be seen passing through it on the way up. It is not drawn while the page moves, as it is not once it rests.
+ */
+export const PAGE_IN_ABOVE = '--page-in-above'
 
 /** On the page being left, once its backgrounds are out of it; and on each section whose surface was taken out. */
 export const PAGE_LEAVING = 'data-page-leaving'
@@ -68,6 +82,41 @@ export function leavePage(page: HTMLElement): void {
   page.setAttribute(PAGE_LEAVING, '')
 }
 
+// W78a (WQ68): the browser's Back and Forward are animated as a link is. Two things stand in the way, and
+// components/frame/PageTransition.tsx gets round both with the browser's Navigation API:
+//   - React draws a history step at once, inside the browser's own `popstate` event, and starts no view transition
+//     there. So the step's `popstate` is held and given to Next a moment later, outside that event: Next restores the
+//     page as it always does, and React animates it as it does a link's;
+//   - the browser puts the window where that entry was left straight after `popstate`, which would move the page
+//     still on screen. So the step is intercepted with its scrolling kept back (`scroll: 'manual'`), and the browser
+//     is asked to do it (`NavigateEvent.scroll()`: its own restoring, to its own place) once the new page is in.
+// A browser without the Navigation API, reduced motion, and a step the browser animated itself (a phone's swipe:
+// `hasUAVisualTransition`) are left exactly as the browser and React do them: at once.
+
+/** The part of the Navigation API's `navigate` event that the page transition reads (TypeScript's own DOM types have none yet). */
+export type HistoryStepEvent = {
+  navigationType: string
+  canIntercept: boolean
+  hasUAVisualTransition?: boolean
+  destination: { url: string }
+  intercept: (options: { scroll: 'manual'; focusReset: 'manual'; handler: () => Promise<void> }) => void
+  scroll: () => void
+}
+
+/**
+ * Whether a step through history is one the site animates itself: Back or Forward to another page of this document.
+ * Not a step that stays on the page (W77: the Book panel's own step; a list's category or sort), not one the browser
+ * has already animated, and not with reduced motion.
+ */
+export function animatesHistoryStep(step: Pick<HistoryStepEvent, 'navigationType' | 'canIntercept' | 'hasUAVisualTransition' | 'destination'>, pageNow: string, reducedMotion: boolean): boolean {
+  if (reducedMotion || step.navigationType !== 'traverse' || !step.canIntercept || step.hasUAVisualTransition === true) return false
+  try {
+    return pageOf(new URL(step.destination.url).pathname) !== pageNow
+  } catch {
+    return false
+  }
+}
+
 // W75 (WQ60): a link to a place on another page ("All Events", to /exclusive-hire#events). The new page arrives at its
 // top as every page does, and once the page transition has ended it scrolls to that place.
 
@@ -82,7 +131,7 @@ export function hashId(hash: string): string | null {
   }
 }
 
-// W74c (WQ52): a link that changes the page where it stands (a product's colour swatch). It carries no transition
+// W74c (WQ52): a link that changes the page where it stands (a product's colour swatch). It carries the "at once"
 // type, so the pages swap at once, and it says here what on the new page is to have focus in place of the heading:
 // the visitor's place in the page is kept, as far as a new page can keep it.
 

@@ -1,8 +1,8 @@
 import type { ComponentPropsWithoutRef } from 'react'
 
-// Figma "SizeSelect" (04 Components, 276:6625): the chip for a size. Two sizes of chip, each with its states as drawn:
-// small (a ProductCard's hover strip: default, hover, OOS) and big (the Product page: default, hover, selected, sold
-// out). A size that is gone keeps its place, muted and struck through, and reads "M, sold out".
+// Figma "SizeSelect" (03 UI, 276:6625): the chip for a size. Two sizes of chip, each with its states as drawn: small
+// (a ProductCard's hover strip: default, hover, OOS, selected) and big (the Product page: default, hover, selected,
+// sold out). A size that is gone keeps its place, muted and struck through, and reads "M, sold out".
 
 /** The line through a size that is gone: 16px of Text/Muted Primary across its middle. */
 function StruckThrough() {
@@ -12,18 +12,25 @@ function StruckThrough() {
 /** How a size is read out: its own name, and that it is gone when it is. */
 export const sizeName = (size: string, available: boolean): string => (available ? size : `${size}, sold out`)
 
-type SizeButtonProps = Omit<ComponentPropsWithoutRef<'button'>, 'children' | 'disabled'> & { size: string; available: boolean }
+type SizeButtonProps = Omit<ComponentPropsWithoutRef<'button'>, 'children' | 'disabled'> & {
+  size: string
+  available: boolean
+  /** Figma's State=selected, Big=no (1195:108): the size chosen. Left out, the chip is a plain button (a ProductCard's adds at a press). */
+  selected?: boolean
+}
 
 /**
- * The small chip, a button (Big=No: 8px above and below, Copy 12): Surface/Card Selected on hover. Out of stock
- * (State=OOS) it can't be pressed.
+ * The small chip, a button (Big=No: 8px above and below, Copy 12): Surface/Card Selected on hover; chosen
+ * (State=selected), Surface/Secondary with Text/Secondary. Out of stock (State=OOS) it can't be pressed.
  */
-export function SizeButton({ size, available, className, ...rest }: SizeButtonProps) {
+export function SizeButton({ size, available, selected, className, ...rest }: SizeButtonProps) {
+  const look = !available ? 'cursor-default text-text-muted-primary' : selected ? 'bg-surface-secondary text-text-secondary' : 'text-text-primary hover:bg-surface-card-selected'
   return (
     <button
       type="button"
       disabled={!available}
-      className={`relative flex min-w-0 flex-1 items-center justify-center rounded-s py-8 transition-colors duration-short ease-smooth ${available ? 'text-text-primary hover:bg-surface-card-selected' : 'cursor-default text-text-muted-primary'} ${className ?? ''}`}
+      {...(selected === undefined ? {} : { 'aria-pressed': selected })}
+      className={`relative flex min-w-0 flex-1 items-center justify-center rounded-s py-8 transition-colors duration-short ease-smooth ${look} ${className ?? ''}`}
       {...rest}
     >
       <span className="text-copy-12 whitespace-nowrap">{size}</span>

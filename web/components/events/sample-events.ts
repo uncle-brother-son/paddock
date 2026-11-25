@@ -1,12 +1,13 @@
 import type { ShopEventAvailabilityRouteOutput } from '@/contracts/shop'
 import { eventLive, type EventCardView, type EventView } from '@/lib/events/event'
-import { cardSpaces, eventCardDate, eventDateLine } from '@/lib/events/format'
+import { whenLine } from '@/lib/dates'
+import { cardSpaces } from '@/lib/events/format'
 import type { SizedImage } from '@/lib/sanity/image'
 import type { RichText } from '@/lib/sanity/schemas'
 import type { GalleryItem } from '@/lib/shop/product'
 
 // For the Events stories only: an event and its cards as Figma draws them ("Aufguss Session with Henry", £25, Member
-// from £20, 16:00 Tuesday 27 October 2026, 6 spaces left), with pictures drawn on the spot so a story fetches nothing.
+// from £20, 16:00 - Tuesday 27 October, 6 spaces left), with pictures drawn on the spot so a story fetches nothing.
 // The site's own come from Sanity and the Worker.
 
 /** A drawn stand-in for an event's photograph, 4 by 5 on Object/Product BG: a sauna stove with its steam. */
@@ -65,7 +66,7 @@ export const SAMPLE_EVENT: EventView = {
   id: 'event-aufguss',
   name: 'Aufguss Session with Henry',
   gallery: [galleryItem('g1', MOSS, 3, 'The sauna stove, with steam rising'), galleryItem('g2', MUD, 2, 'The stove again, from the side')],
-  when: eventDateLine(SAMPLE_STARTS_AT),
+  when: whenLine(SAMPLE_STARTS_AT),
   startsAt: SAMPLE_STARTS_AT,
   live: eventLive(sampleAvailability()),
   description: SAMPLE_DESCRIPTION,
@@ -91,9 +92,9 @@ export const SAMPLE_EVENTS = {
 
 type CardOptions = { name?: string; startsAt?: string; spacesLeft?: number; colour?: string; steam?: number }
 
-/** A card as Figma's EventCard: "16:00 — 27th Oct 2026", "6 Spaces Left", "Aufguss Session with Henry". */
+/** A card as Figma's EventCard, its date by the site's one rule (WQ69): "16:00 - Tuesday 27 October", "6 Spaces Left", "Aufguss Session with Henry". */
 export function sampleEventCard(id: string, { name = 'Aufguss Session with Henry', startsAt = SAMPLE_STARTS_AT, spacesLeft = 6, colour = MOSS, steam = 3 }: CardOptions = {}): EventCardView {
-  return { id, href: `/events/${id}`, name, picture: { ...stove(colour, steam), alt: '' }, when: eventCardDate(startsAt), startsAt, spaces: cardSpaces(spacesLeft) }
+  return { id, href: `/events/${id}`, name, picture: { ...stove(colour, steam), alt: '' }, when: whenLine(startsAt), startsAt, spaces: cardSpaces(spacesLeft) }
 }
 
 export const SAMPLE_EVENT_CARDS = {

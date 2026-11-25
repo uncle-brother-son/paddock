@@ -74,7 +74,7 @@ describe('an event, at /events/[slug]', () => {
     expect(movedTo).toBeNull()
     expect(readShopEvent).toHaveBeenCalledWith('event-1')
     expect([page?.event.slug, page?.view.id, page?.view.name]).toEqual(['solstice-2026', 'event-1', 'Solstice'])
-    expect([page?.view.when, page?.view.startsAt]).toEqual(['19:30 Monday 21 December 2026', '2026-12-21T19:30:00+00:00'])
+    expect([page?.view.when, page?.view.startsAt]).toEqual(['19:30 - Monday 21 December', '2026-12-21T19:30:00+00:00'])
     expect(page?.view.live).toEqual({ state: 'open', spacesLeft: 6, price: { now: '£25', member: '£20', memberOnly: false } })
     expect(page?.view.gallery).toHaveLength(answers.event.gallery.length)
     // Its two tabs' words: its own description, and Events settings' terms summary with its own extra waiver.
@@ -137,7 +137,7 @@ describe('the events list (the Upcoming Events module)', () => {
   it("is the Worker's upcoming events that Sanity publishes, soonest first, a sold-out one among them", async () => {
     sanity()
     readShopEvents.mockResolvedValue([onSale({ sanityId: 'not-in-sanity', startsAt: '2026-11-01T10:00:00+00:00' }), onSale({ spacesLeft: 0, state: 'sold_out' })])
-    expect((await readUpcomingEventCards()).map((card) => [card.id, card.href, card.when, card.spaces])).toEqual([['event-1', '/events/solstice-2026', '19:30 — 21st Dec 2026', 'Sold out']])
+    expect((await readUpcomingEventCards()).map((card) => [card.id, card.href, card.when, card.spaces])).toEqual([['event-1', '/events/solstice-2026', '19:30 - Monday 21 December', 'Sold out']])
   })
 
   it('no upcoming event: an empty list, which draws nothing', async () => {

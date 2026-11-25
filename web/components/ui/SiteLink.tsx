@@ -4,7 +4,7 @@ import Link from 'next/link'
 import type { ComponentPropsWithoutRef, MouseEvent } from 'react'
 
 import { useFramePanels } from '@/components/frame/useFramePanels'
-import { PAGE_TRANSITION_TYPES } from '@/lib/motion/page-transition'
+import { PAGE_AT_ONCE_TYPES, PAGE_TRANSITION_TYPES } from '@/lib/motion/page-transition'
 import { isBuiltAddress } from '@/lib/routes/not-built'
 import { isBookAddress } from '@/lib/sanity/links'
 
@@ -15,6 +15,7 @@ type SiteLinkProps = Omit<ComponentPropsWithoutRef<'a'>, 'href' | 'target' | 're
   /**
    * W74c (WQ52): false for a link that changes the page where it stands (a product's colour swatch): it goes to the
    * new address, so Back works and the link can be shared, with no page transition. Every other link has it.
+   * W78a (WQ68): it says so with a type of its own, since a navigation with no type at all (Back, Forward) is animated.
    */
   transition?: boolean
 }
@@ -54,7 +55,7 @@ export function SiteLink({ href, newTab = false, transition = true, onClick, chi
     if (panels.open('book')) event.preventDefault()
   }
   return (
-    <Link href={href} prefetch={isBuiltAddress(href) ? 'auto' : false} {...(transition ? { transitionTypes: PAGE_TRANSITION_TYPES } : {})} onClick={click} {...tab} {...rest}>
+    <Link href={href} prefetch={isBuiltAddress(href) ? 'auto' : false} transitionTypes={transition ? PAGE_TRANSITION_TYPES : PAGE_AT_ONCE_TYPES} onClick={click} {...tab} {...rest}>
       {children}
     </Link>
   )

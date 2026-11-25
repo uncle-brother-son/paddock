@@ -57,7 +57,7 @@ export const Open: Story = {
     await expect(style.borderRadius).toBe('0px')
     // Object/Dark Shade (WQ48): Black (#222222) at 20%.
     await expect(style.backgroundColor).toBe('rgba(34, 34, 34, 0.2)')
-    // Behind the menu, the short duration; behind a panel that slides in over the long one, the long (WQ49).
+    // The short duration, as every popup it stands behind: the menu and, since W78a, the panels (Wayne, 25 Nov).
     await expect(style.transitionDuration).toBe(`${DURATION_SHORT}s`)
     await expect(shade.getAttribute('aria-hidden')).toBe('true')
     // This test runs in Chromium: the blur, then the texture filter, and no grain layer.

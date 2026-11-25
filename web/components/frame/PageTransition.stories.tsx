@@ -111,9 +111,10 @@ const CLEAR = 'rgba(0, 0, 0, 0)'
 
 /**
  * Press a button (scroll down first to see the page being left where it was). The content of the page being left
- * drifts down and fades to 40%, over its own backgrounds, which stay where they are (WQ57); the new page, solid, is
- * uncovered over it from the top of the window downwards, settling into place; the long duration, the smooth curve.
- * The new page starts at its top, with focus on its heading. With reduced motion on, the page is swapped at once.
+ * drifts up and fades to 40%, over its own backgrounds, which stay where they are (WQ57); the new page, solid, slides
+ * up from below the window into its place, covering it as it rises (W78a, WQ67: it moves, nothing masks it); the
+ * long duration, the smooth curve. The new page starts at its top, with focus on its heading. With reduced motion
+ * on, the page is swapped at once. On the site the browser's Back and Forward play the same (WQ68).
  */
 export const TwoSamplePages: Story = {
   name: 'Two sample pages',
@@ -135,7 +136,7 @@ export const TwoSamplePages: Story = {
     window.scrollTo(0, 400)
     await waitFor(() => expect(Math.round(window.scrollY)).toBe(400))
     await userEvent.click(canvas.getAllByRole('button', { name: 'Go to page two' })[1]!)
-    // The page going: its content drifts down a fifth of the window and fades to 40%. The page coming: uncovered over it from the top.
+    // The page going: its content drifts up a fifth of the window and fades to 40%. The page coming: up from below the window.
     await waitFor(() => expect(animationsOf(NAMES.out).length + animationsOf(NAMES.in).length).toBe(2))
     const [out] = animationsOf(NAMES.out) as [CSSAnimation]
     const [into] = animationsOf(NAMES.in) as [CSSAnimation]
@@ -145,7 +146,7 @@ export const TwoSamplePages: Story = {
     const smooth = linearEasingPoints(EASE_SMOOTH_CSS)
     const outFrames = (out.effect as KeyframeEffect).getKeyframes()
     await expect(linearEasingPoints(outFrames[0]!.easing)).toEqual(smooth)
-    await expect([outFrames.at(-1)!.translate, outFrames.at(-1)!.opacity]).toEqual([`0px ${fifth}`, '0.4'])
+    await expect([outFrames.at(-1)!.translate, outFrames.at(-1)!.opacity]).toEqual([`0px -${fifth}`, '0.4'])
     // WQ57: behind its picture, still, are its backgrounds: the page's own, and its dark section's where that stood
     // (the section is the page's first, so at the page's top left). Nothing animates them.
     const still = getComputedStyle(root, `::view-transition-group(${NAMES.out})`)
@@ -164,9 +165,9 @@ export const TwoSamplePages: Story = {
     await expect(getComputedStyle(canvasElement.querySelector<HTMLElement>('[data-page-stage]')!).backgroundImage).toBe('none')
     const inFrames = (into.effect as KeyframeEffect).getKeyframes()
     await expect(linearEasingPoints(inFrames[0]!.easing)).toEqual(smooth)
-    await expect([inFrames[0]!.translate, inFrames[0]!.clipPath]).toEqual([`0px -${fifth}`, 'polygon(0px 0px, 100% 0px, 100% 0px, 0px 0px)'])
-    await expect(inFrames.some((frame) => 'opacity' in frame)).toBe(false)
-    await expect(inFrames.at(-1)!.clipPath).toBe(`polygon(0px 0px, 100% 0px, 100% ${window.innerHeight}px, 0px ${window.innerHeight}px)`)
+    // WQ67: it starts a whole window down, so just below the window, and moves to its place. Nothing masks it, and it never fades.
+    await expect([inFrames[0]!.translate, inFrames.at(-1)!.translate]).toEqual([`0px ${window.innerHeight}px`, '0px'])
+    await expect(inFrames.some((frame) => 'opacity' in frame || 'clipPath' in frame)).toBe(false)
     // The header is a layer of its own above the two pages, and takes the new page's mode while they are still
     // moving: nothing on the page can be found by its place on screen then, so it goes by the page's sections.
     await expect(getComputedStyle(header).viewTransitionName).toBe('frame-header')

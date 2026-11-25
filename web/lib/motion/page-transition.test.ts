@@ -4,11 +4,12 @@ import { describe, expect, it } from 'vitest'
 
 import { BOOK_ADDRESS, isBookAddress, linkHref } from '@/lib/sanity/links'
 
-import { hashId, keepFocusOnArrival, PAGE_IN, PAGE_LEAVING, PAGE_OUT, PAGE_OUT_SURFACES, PAGE_SURFACE, PAGE_TRANSITION, PAGE_TRANSITION_TYPES, pageOf, takeFocusOnArrival } from './page-transition'
+import { animatesHistoryStep, hashId, keepFocusOnArrival, PAGE_AT_ONCE, PAGE_AT_ONCE_TYPES, PAGE_IN, PAGE_IN_ABOVE, PAGE_LEAVING, PAGE_OUT, PAGE_OUT_SURFACES, PAGE_SURFACE, PAGE_TRANSITION, PAGE_TRANSITION_TYPES, pageOf, takeFocusOnArrival } from './page-transition'
 
-// Brief W73b, item 5 (WQ20, WQ22): the page transition is on every link from page to page inside the site, takes the
-// long duration with the smooth curve, and is an instant swap for reduced motion, Back and Forward. The movement
-// itself is watched in a browser (components/frame/PageTransition.stories.tsx, and the built site for each report).
+// Brief W73b, item 5 (WQ20), and W78a (WQ67, WQ68): the page transition is on every link from page to page inside
+// the site and on the browser's Back and Forward, takes the long duration with the smooth curve, and is an instant
+// swap for reduced motion and a colour swatch. The movement itself is watched in a browser
+// (components/frame/PageTransition.stories.tsx, and the built site for each report).
 
 const WEB = path.resolve(__dirname, '../..')
 const read = (file: string) => readFileSync(path.join(WEB, file), 'utf8')
@@ -33,9 +34,12 @@ describe('every link inside the site carries the page transition', () => {
   it("SiteLink is the one place that uses Next's <Link>, and it passes the transition's type", () => {
     expect(files.length).toBeGreaterThan(20)
     expect(files.filter((file) => /from ['"]next\/link['"]/.test(read(file)))).toEqual(['components/ui/SiteLink.tsx'])
-    expect(read('components/ui/SiteLink.tsx')).toContain("<Link href={href} prefetch={isBuiltAddress(href) ? 'auto' : false} {...(transition ? { transitionTypes: PAGE_TRANSITION_TYPES } : {})} onClick={click} {...tab} {...rest}>")
+    // W78a (WQ68): every navigation a link makes says which it is. One with no type at all is Back or Forward.
+    expect(read('components/ui/SiteLink.tsx')).toContain("<Link href={href} prefetch={isBuiltAddress(href) ? 'auto' : false} transitionTypes={transition ? PAGE_TRANSITION_TYPES : PAGE_AT_ONCE_TYPES} onClick={click} {...tab} {...rest}>")
     expect(read('components/ui/SiteLink.tsx')).toContain('export function SiteLink({ href, newTab = false, transition = true, onClick, children, ...rest }: SiteLinkProps) {')
     expect(PAGE_TRANSITION_TYPES).toEqual([PAGE_TRANSITION])
+    expect(PAGE_AT_ONCE_TYPES).toEqual([PAGE_AT_ONCE])
+    expect(PAGE_AT_ONCE).not.toBe(PAGE_TRANSITION)
   })
 
   // W74c (WQ52): a product's colour swatch goes to that colour's page where this one stands. It is the one link that
@@ -103,9 +107,53 @@ describe('what is animated, and when', () => {
     expect(component).toContain('byHistory.current = pageOf(window.location.pathname) !== arrived.current')
   })
 
-  it('only a navigation with the type is animated: Back, Forward and anything else swap at once', () => {
-    expect(component).toContain("const ENTER = { [PAGE_TRANSITION]: PAGE_IN, default: 'none' }")
-    expect(component).toContain("const EXIT = { [PAGE_TRANSITION]: PAGE_OUT, default: 'none' }")
+  // W78a (WQ68, amends WQ22): Back and Forward carry no type, and are animated as a link is. Only the navigation
+  // that says "at once" (WQ52: a colour swatch) swaps the page with no animation.
+  it('a link and a navigation with no type (Back, Forward) are animated; only one that says "at once" is not', () => {
+    expect(component).toContain("const ENTER = { [PAGE_TRANSITION]: PAGE_IN, [PAGE_AT_ONCE]: 'none', default: PAGE_IN }")
+    expect(component).toContain("const EXIT = { [PAGE_TRANSITION]: PAGE_OUT, [PAGE_AT_ONCE]: 'none', default: PAGE_OUT }")
+  })
+
+  // React draws a history step at once, inside the browser's popstate event, and starts no view transition there
+  // (seen on the site: briefs/W78a-logs/back-forward-dev-chromium-1.log in the staff app's repo). So a step to
+  // another page is intercepted with the Navigation API, its popstate given to Next a task later, and the browser
+  // asked to restore the scroll once the new page is in. Watched in a browser: briefs/W78a-logs/tools/back-forward.cjs.
+  describe('WQ68: which steps through history the site animates itself', () => {
+    const step = (over: Partial<Parameters<typeof animatesHistoryStep>[0]> = {}) => ({ navigationType: 'traverse', canIntercept: true, hasUAVisualTransition: false, destination: { url: 'https://thepaddockwellness.co.uk/shop' }, ...over })
+
+    it('Back or Forward to another page of this document', () => {
+      expect(animatesHistoryStep(step(), '/', false)).toBe(true)
+      expect(animatesHistoryStep(step({ destination: { url: 'https://thepaddockwellness.co.uk/shop/t-shirt?x=1#top' } }), '/shop', false)).toBe(true)
+    })
+
+    it('never a link, a step that stays on the page, one the browser can\'t hand over, one it animated itself, or with reduced motion', () => {
+      expect(animatesHistoryStep(step({ navigationType: 'push' }), '/', false)).toBe(false)
+      expect(animatesHistoryStep(step({ navigationType: 'replace' }), '/', false)).toBe(false)
+      // The same page: a list's category or sort, and the Book panel's own step (W77: /book is the home page's).
+      expect(animatesHistoryStep(step({ destination: { url: 'https://thepaddockwellness.co.uk/shop?category=tops' } }), '/shop', false)).toBe(false)
+      expect(animatesHistoryStep(step({ destination: { url: 'https://thepaddockwellness.co.uk/book' } }), '/', false)).toBe(false)
+      // Another document (the entry is from before a reload, or another site): the browser loads it.
+      expect(animatesHistoryStep(step({ canIntercept: false }), '/', false)).toBe(false)
+      // A phone's swipe that the browser drew itself is not followed by a second animation.
+      expect(animatesHistoryStep(step({ hasUAVisualTransition: true }), '/', false)).toBe(false)
+      expect(animatesHistoryStep(step(), '/', true)).toBe(false)
+      expect(animatesHistoryStep(step({ destination: { url: 'not an address' } }), '/', false)).toBe(false)
+    })
+
+    it('the step is intercepted with its scrolling and focus kept back, and only where the browser has the Navigation API', () => {
+      expect(component).toContain("stepEvent.intercept({ scroll: 'manual', focusReset: 'manual', handler: () => arrival })")
+      expect(component).toMatch(/const navigation = \(window as Window & \{ navigation\?: EventTarget \}\)\.navigation\s+navigation\?\.addEventListener\('navigate', holdStep\)\s+if \(navigation\) window\.addEventListener\('popstate', holdPopstate, true\)/)
+      // Next's own note on the entry it arrived at is not a new step.
+      expect(component).toMatch(/if \(stepEvent\.navigationType === 'replace'\) return\s+step\.current\?\.release\(\)/)
+    })
+
+    it('its popstate is kept from Next and given to it again in a task of its own, with the same state', () => {
+      expect(component).toMatch(/if \(!step\.current \|\| again\.has\(event\)\) return\s+event\.stopImmediatePropagation\(\)\s+const \{ state \} = event\s+setTimeout\(\(\) => \{\s+const replay = new PopStateEvent\('popstate', \{ state \}\)\s+again\.add\(replay\)\s+window\.dispatchEvent\(replay\)\s+\}\)/)
+    })
+
+    it('the browser restores the scroll itself once the new page is in, before the place is read, and the step is over', () => {
+      expect(component).toMatch(/const held = step\.current\s+step\.current = null\s+if \(held && byHistory\.current\) \{\s+try \{\s+held\.scroll\(\)\s+\} catch \{[\s\S]*?\}\s+\}\s+held\?\.release\(\)\s+const top = byHistory\.current \? window\.scrollY : 0/)
+    })
   })
 
   it('on arriving: the top of the new page (Lenis told), and focus on its h1, or main', () => {
@@ -136,21 +184,31 @@ describe('the movement, in the stylesheet', () => {
 
   it('the page going and the page coming each take the long duration with the smooth curve', () => {
     expect(css).toContain(`::view-transition-old(.${PAGE_OUT}) {\n  animation: page-out var(--duration-long) var(--ease-smooth) both;\n}`)
-    expect(css).toContain(`::view-transition-new(.${PAGE_IN}) {\n  animation: page-in var(--duration-long) var(--ease-smooth) both;\n}`)
+    expect(css).toContain(`::view-transition-new(.${PAGE_IN}) {\n  animation: page-in var(--duration-long) var(--ease-smooth) both;\n  clip-path: inset(var(--page-in-above, 0px) 0 0 0);\n}`)
   })
 
   const transitionRules = css.slice(css.indexOf('::view-transition-old(.page-out)'), css.indexOf('@utility duration-short')).replace(/\/\*[\s\S]*?\*\//g, '')
 
-  it('WQ57: the content of the page going drifts down a fifth of the window and fades to 40%; the page coming is masked in from the top, and never fades', () => {
-    expect(css).toMatch(/@keyframes page-out \{\s*to \{\s*opacity: 0\.4;\s*translate: 0 20vh;\s*\}\s*\}/)
+  it('WQ67: the content of the page going drifts up a fifth of the window and fades to 40%; the page coming slides up from below the window, with no mask, and never fades', () => {
+    expect(css).toMatch(/@keyframes page-out \{\s*to \{\s*opacity: 0\.4;\s*translate: 0 -20vh;\s*\}\s*\}/)
     const pageIn = /@keyframes page-in \{[\s\S]*?\n\}/.exec(css)?.[0] ?? ''
-    expect(pageIn).toContain('clip-path: polygon(0 0, 100% 0, 100% 0vh, 0 0vh);')
-    expect(pageIn).toContain('clip-path: polygon(0 0, 100% 0, 100% 100vh, 0 100vh);')
-    expect(pageIn).not.toMatch(/opacity/)
+    expect(pageIn).toMatch(/@keyframes page-in \{\s*from \{\s*translate: 0 100vh;\s*\}\s*to \{\s*translate: 0 0;\s*\}\s*\}/)
+    expect(pageIn).not.toMatch(/opacity|clip-path|mask/)
+    // Nothing in a view transition animates a clip or a mask: the one clip there is stands still (next test).
+    expect(transitionRules.replace(/\s+/g, ' ').match(/clip-path: [^;]+;/g)).toEqual(['clip-path: inset(var(--page-in-above, 0px) 0 0 0);'])
+    expect(transitionRules).not.toMatch(/mask/)
     // The one opacity in a view transition is the page going's: nothing else there fades.
     expect(transitionRules).toContain('@keyframes page-out')
     expect(transitionRules).toContain('::view-transition-new(frame-menu)')
     expect(transitionRules.match(/opacity/g)).toHaveLength(1)
+  })
+
+  // After Back or Forward the new page arrives where it was left, so part of it lies above the window. The browser's
+  // picture is the whole page, a window's height down: that part would pass through the window on the way up.
+  it('WQ68: what of the page coming lies above the window is not drawn while it moves; a link arrives with none', () => {
+    expect(PAGE_IN_ABOVE).toBe('--page-in-above')
+    // Written once the browser has put the window where the entry was left, and before the new page is pictured.
+    expect(read('components/frame/PageTransition.tsx')).toMatch(/held\?\.release\(\)\s+const top = byHistory\.current \? window\.scrollY : 0\s+document\.documentElement\.style\.setProperty\(PAGE_IN_ABOVE, `\$\{top\}px`\)/)
   })
 
   // W74d (WQ57): each page's background stays solid and still. Watched in a browser: the Frame / Page transition
@@ -193,7 +251,7 @@ describe('the movement, in the stylesheet', () => {
   // W74c, found on the real pages: with the window itself (the root) left in, the browser kept a picture of the whole
   // old page on every navigation and faded it out over the new one in a quarter of a second of its own, even on a
   // navigation that carries no page transition. Watched in a browser: briefs/W74c-logs/tools/real-site.cjs.
-  it('the window itself is never a picture: a navigation with no page transition (Back, Forward, a colour swatch) swaps at once', () => {
+  it('the window itself is never a picture: a navigation with no page transition (a colour swatch) swaps at once', () => {
     expect(css).toMatch(/\n:root \{\s*view-transition-name: none;\s*\}/)
     // Only the two pages, the header and the menu have a place in a view transition.
     const named = [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/view-transition-name: ([a-z-]+);/g)].map(([, name]) => name).sort()

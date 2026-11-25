@@ -5,7 +5,9 @@ import { inPence, pounds } from '@/lib/shop/money'
 import { galleryItems, type GalleryItem } from '@/lib/shop/product'
 import type { ShopEvent } from '@/lib/shop/read'
 
-import { cardSpaces, eventCardDate, eventDateLine } from './format'
+import { whenLine } from '@/lib/dates'
+
+import { cardSpaces } from './format'
 
 // W75: what an Event page and an EventCard show (Figma 1684:41950, 1684:42018, 329:7588), made from Sanity's event
 // (name, words, pictures) and the Worker's (W75a: date, spaces, state, prices). Nothing here reads either, and every
@@ -47,7 +49,7 @@ export type EventView = {
   id: string
   name: string
   gallery: GalleryItem[]
-  /** "16:00 Tuesday 27 October 2026", UK time. */
+  /** "16:00 - Tuesday 27 October", UK time (WQ69). */
   when: string
   /** The moment it starts, for the page's <time>. */
   startsAt: string
@@ -66,7 +68,7 @@ export function eventView({ event, onSale, settings }: EventContent): EventView 
     id: event.id,
     name: event.name,
     gallery: galleryItems(event.gallery),
-    when: eventDateLine(onSale.startsAt),
+    when: whenLine(onSale.startsAt),
     startsAt: onSale.startsAt,
     live: eventLive(onSale),
     description: event.description,
@@ -75,7 +77,7 @@ export function eventView({ event, onSale, settings }: EventContent): EventView 
   }
 }
 
-/** An EventCard (Figma 329:7588): its picture, "16:00 — 27th Oct 2026", "6 Spaces Left" and its name; one link to the event. */
+/** An EventCard (Figma 329:7588): its picture, "16:00 - Tuesday 27 October" (WQ69), "6 Spaces Left" and its name; one link to the event. */
 export type EventCardView = {
   id: string
   href: string
@@ -97,7 +99,7 @@ export function eventCard(content: SanityEventCard, event: Pick<ShopEvent, 'star
     href: `/events/${content.slug}`,
     name: content.name,
     picture: cardPictures(content.gallery).picture,
-    when: eventCardDate(event.startsAt),
+    when: whenLine(event.startsAt),
     startsAt: event.startsAt,
     spaces: cardSpaces(event.spacesLeft),
   }

@@ -31,18 +31,15 @@ type OverlayProps = {
   open: boolean
   /** A click on the shade: a popup closes itself with it. */
   onClick?: () => void
-  /**
-   * How long its fade takes: the popup's own time, so the two move as one. Short (the menu) unless said; long
-   * behind a panel that slides in over the long duration (WQ49: the Product Info Panel, as the Bag is prototyped).
-   */
-  duration?: 'short' | 'long'
 }
 
 /**
  * Wayne's Overlay (Figma "Overlay", 136:1054 on 06 System): the shade over the page behind a popup. The menu and the
  * Product Info Panel use it, and the Book, Bag and Sign-in panels will. The whole window, no corners: Object/Dark
  * Shade (WQ48; it was Light Shade) over the page blurred (Figma's 24 background blur is CSS's 12px) and textured. It
- * fades in and out with the smooth curve, as prototyped; with reduced motion on it is just there or not.
+ * fades in and out with the smooth curve over the short duration, the time every popup takes (the menu; and since
+ * W78a the info panels and the Book panel: Wayne, 25 Nov), so the two move as one; with reduced motion on it is just
+ * there or not.
  *
  * Two layers, because the texture has two ways of being drawn (the `overlay-shade` and `overlay-grain` utilities
  * in app/globals.css). Chromium displaces the blurred page with OverlayTexture, as Figma does, and has no grain
@@ -52,14 +49,13 @@ type OverlayProps = {
  *
  * Popups sit above it (z-30); it sits above the header (z-20).
  */
-export function Overlay({ open, onClick, duration = 'short' }: OverlayProps) {
+export function Overlay({ open, onClick }: OverlayProps) {
   // Shown at once on opening; hidden only when the fade out has finished.
   const state = open ? 'visible opacity-100 transition-opacity' : 'invisible opacity-0 transition-[opacity,visibility]'
-  const time = duration === 'long' ? 'duration-long' : 'duration-short'
   return (
     <>
-      <div aria-hidden="true" data-overlay="shade" data-frame-popup="" onClick={onClick} className={`overlay-shade fixed inset-0 z-20 ${time} ease-smooth ${state}`} />
-      <div aria-hidden="true" data-overlay="grain" data-frame-popup="" className={`overlay-grain fixed inset-0 z-20 ${time} ease-smooth ${state}`} />
+      <div aria-hidden="true" data-overlay="shade" data-frame-popup="" onClick={onClick} className={`overlay-shade fixed inset-0 z-20 duration-short ease-smooth ${state}`} />
+      <div aria-hidden="true" data-overlay="grain" data-frame-popup="" className={`overlay-grain fixed inset-0 z-20 duration-short ease-smooth ${state}`} />
     </>
   )
 }

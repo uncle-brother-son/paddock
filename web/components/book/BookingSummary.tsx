@@ -31,7 +31,7 @@ type BookingSummaryProps = {
  * Figma "BookingSummary" (03 UI, 1178:20011), "Your booking" on the Book panel's add-ons step, in its non-member
  * scenarios: cards 12px apart, with no lines between them.
  * - the session: "Your Booking", then the service with "Change" at its right (Link 12, Text/Muted Primary), when it
- *   is ("08:00 Thursday 12 November 2026") and what it is ("60 min - Public - Off-Peak"; private: "60 min -
+ *   is (WQ69: "08:00 - Thursday 12 November") and what it is ("60 min - Public - Off-Peak"; private: "60 min -
  *   Private"), then the people: "2 People" with the session's price for them; a private one says whose price it is
  *   ("4 People - Group price for 1 to 6");
  * - the add-ons, only when some are chosen: "Add-Ons", then a line each ("Towel × 2" with that line's figure);
