@@ -5,7 +5,8 @@ import { usePathname } from 'next/navigation'
 import * as React from 'react'
 import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react'
 
-import { leavePage, PAGE_IN, PAGE_OUT, PAGE_TRANSITION, takeFocusOnArrival } from '@/lib/motion/page-transition'
+import { hashId, leavePage, PAGE_IN, PAGE_OUT, PAGE_TRANSITION, takeFocusOnArrival } from '@/lib/motion/page-transition'
+import { DURATION_LONG, EASE_SMOOTH } from '@/lib/motion/tokens'
 
 /**
  * React's <ViewTransition>. It is in the React that Next's App Router runs the site on ("View transitions work in
@@ -17,12 +18,34 @@ const ViewTransition = (React as { ViewTransition?: typeof React.ViewTransition 
 const ENTER = { [PAGE_TRANSITION]: PAGE_IN, default: 'none' }
 const EXIT = { [PAGE_TRANSITION]: PAGE_OUT, default: 'none' }
 
-type RunningTransition = { ready: Promise<unknown>; skipTransition: () => void }
+type RunningTransition = { ready: Promise<unknown>; finished: Promise<unknown>; skipTransition: () => void }
+
+const runningTransition = (): RunningTransition | null => (document as Document & { activeViewTransition?: RunningTransition | null }).activeViewTransition ?? null
+
+/**
+ * W75 (WQ60): scrolls the page to a place on it that a link named ("All Events", to /exclusive-hire#events), once
+ * the page transition has ended: smoothly with Lenis, over the long duration with the smooth curve; with reduced
+ * motion on (Lenis is not running) it jumps there. A frame is waited first, so a transition that is starting is seen.
+ */
+function scrollToPlace(place: HTMLElement, lenis: ReturnType<typeof useLenis>) {
+  const go = () => {
+    if (!place.isConnected) return
+    if (lenis) lenis.scrollTo(place, { duration: DURATION_LONG, easing: EASE_SMOOTH })
+    else place.scrollIntoView()
+  }
+  requestAnimationFrame(() => {
+    const running = runningTransition()
+    if (running) running.finished.then(go, go)
+    else go()
+  })
+}
 
 /**
  * What happens on arriving at a page by a navigation inside the site (never on the first load):
  * - a link: the new page starts at its top, with Lenis told so (it would otherwise glide on towards where it was
  *   heading on the old page). Back and Forward keep the place the browser puts them, and only stop a glide;
+ * - a link to a place on the page (its address ends in #events): the page starts at its top all the same, and
+ *   scrolls to that place once the page transition has ended (W75; WQ60);
  * - focus moves to the new page's h1 (or to main when it has none), without scrolling, so a keyboard or a screen
  *   reader starts from the new page. Next's own announcer reads the new page's title out. A link that changed the
  *   page where it stood (WQ52: a product's colour swatch) keeps focus on what it asked for instead;
@@ -40,7 +63,7 @@ function usePageArrival(page: string) {
       byHistory.current = true
     }
     const endTransition = () => {
-      const running = (document as Document & { activeViewTransition?: RunningTransition | null }).activeViewTransition
+      const running = runningTransition()
       endedByPress = Boolean(running)
       // Only once it is animating: ending it earlier would be an error to React, which is still putting the page in.
       running?.ready.then(() => running.skipTransition()).catch(() => undefined)
@@ -69,9 +92,13 @@ function usePageArrival(page: string) {
     if (arrived.current === page) return
     arrived.current = page
     const top = byHistory.current ? window.scrollY : 0
+    // W75 (WQ60): a link that names a place on the new page. Back and Forward keep the place the browser puts them.
+    const placeId = byHistory.current ? null : hashId(window.location.hash)
     byHistory.current = false
     if (lenis) lenis.scrollTo(top, { immediate: true, force: true })
     else if (top === 0) window.scrollTo(0, 0)
+    const place = placeId ? document.getElementById(placeId) : null
+    if (place) scrollToPlace(place, lenis)
 
     const main = document.getElementById('main')
     // WQ52: a link that changed the page where it stood (a colour swatch) keeps focus on its like in the new page.

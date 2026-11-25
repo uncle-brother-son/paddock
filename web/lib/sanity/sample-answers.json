@@ -1326,5 +1326,9 @@
   "movedSlug": {
     "slug": "exclusive-hire",
     "isHome": false
+  },
+  "eventsListPage": {
+    "slug": "exclusive-hire",
+    "isHome": false
   }
 }

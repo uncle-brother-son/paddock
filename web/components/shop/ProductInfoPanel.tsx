@@ -17,6 +17,8 @@ type ProductInfoPanelProps = {
   tab: string
   onTab: (id: string) => void
   onClose: () => void
+  /** Its name for a screen reader: "Product information" unless said (W75: an event's is "Event information"). */
+  label?: string
 }
 
 /**
@@ -41,7 +43,7 @@ type ProductInfoPanelProps = {
  * the smooth curve over the long duration (640 ms), for the panel and the shade alike. With reduced motion on it is
  * just there or not.
  */
-export function ProductInfoPanel({ open, tabs, tab, onTab, onClose }: ProductInfoPanelProps) {
+export function ProductInfoPanel({ open, tabs, tab, onTab, onClose, label = 'Product information' }: ProductInfoPanelProps) {
   const panel = useRef<HTMLDivElement>(null)
   const shownTab = useRef<HTMLButtonElement>(null)
   const id = useId()
@@ -66,7 +68,7 @@ export function ProductInfoPanel({ open, tabs, tab, onTab, onClose }: ProductInf
         ref={panel}
         role="dialog"
         aria-modal="true"
-        aria-label="Product information"
+        aria-label={label}
         data-theme="light"
         data-shop="info-panel"
         // Shut, it waits just beyond the window's right edge: its own width and the 12px it keeps from the edge.
@@ -74,7 +76,7 @@ export function ProductInfoPanel({ open, tabs, tab, onTab, onClose }: ProductInf
         className={`fixed inset-12 z-30 flex flex-col gap-64 overflow-clip rounded-s bg-surface-primary px-16 pt-64 pb-24 duration-long ease-smooth md:left-auto md:w-[calc((100vw_-_var(--grid-margin)_*_2_-_var(--grid-gutter)_*_23)_/_24_*_9_+_var(--grid-gutter)_*_8)] ${open ? 'visible translate-x-0 transition-[translate]' : 'invisible translate-x-[calc(100%_+_var(--spacing-12))] transition-[translate,visibility]'}`}
       >
         {/* The row reaches the panel's edges, and has room above and below, so a tab's focus ring is never cut off. */}
-        <div role="tablist" aria-label="Product information" onKeyDown={move} className="-mx-16 -my-12 flex shrink-0 gap-24 overflow-x-auto px-16 py-12 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <div role="tablist" aria-label={label} onKeyDown={move} className="-mx-16 -my-12 flex shrink-0 gap-24 overflow-x-auto px-16 py-12 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {tabs.map((one) => (
             <button
               key={one.id}

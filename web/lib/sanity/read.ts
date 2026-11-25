@@ -4,6 +4,7 @@ import {
   CONTENT_PAGE_QUERY,
   EVENT_CARDS_QUERY,
   EVENT_QUERY,
+  EVENTS_LIST_PAGE_QUERY,
   EVENTS_SETTINGS_QUERY,
   GIFT_CARD_QUERY,
   HOME_PAGE_QUERY,
@@ -20,6 +21,7 @@ import {
   contentPageSchema,
   eventCardsSchema,
   eventSchema,
+  eventsListPageSchema,
   eventsSettingsSchema,
   giftCardSchema,
   infoMenuSchema,
@@ -52,6 +54,7 @@ export const reads = {
   eventCards: read(EVENT_CARDS_QUERY, eventCardsSchema),
   event: read(EVENT_QUERY, eventSchema.nullable()),
   eventsSettings: read(EVENTS_SETTINGS_QUERY, eventsSettingsSchema.nullable()),
+  eventsListPage: read(EVENTS_LIST_PAGE_QUERY, eventsListPageSchema.nullable()),
   giftCard: read(GIFT_CARD_QUERY, giftCardSchema.nullable()),
   movedSlug: read(MOVED_SLUG_QUERY, movedSlugSchema.nullable()),
 } as const

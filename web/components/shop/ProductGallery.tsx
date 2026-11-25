@@ -10,6 +10,8 @@ type ProductGalleryProps = {
   items: GalleryItem[]
   /** For Storybook and tests: reduced motion on or off, whatever the visitor's own setting. */
   reducedMotion?: boolean
+  /** The row's name for a screen reader: "Product pictures" unless said (W75: an event's gallery is "Event pictures"). */
+  label?: string
 }
 
 /**
@@ -23,7 +25,7 @@ type ProductGalleryProps = {
  * and poster, it plays muted and looped only while on screen, and it has Pause, and the sound button when it has
  * sound. Only the first picture loads ahead of the rest.
  */
-export function ProductGallery({ items, reducedMotion: reducedMotionSet }: ProductGalleryProps) {
+export function ProductGallery({ items, reducedMotion: reducedMotionSet, label = 'Product pictures' }: ProductGalleryProps) {
   const visitorReducedMotion = usePrefersReducedMotion()
   const reducedMotion = reducedMotionSet ?? visitorReducedMotion
   const row = useRef<HTMLDivElement>(null)
@@ -54,7 +56,7 @@ export function ProductGallery({ items, reducedMotion: reducedMotionSet }: Produ
       <div
         ref={row}
         role="group"
-        aria-label="Product pictures"
+        aria-label={label}
         {...(swiped ? { tabIndex: 0 } : {})}
         className="flex snap-x snap-mandatory overflow-x-auto [scrollbar-width:none] md:flex-col md:overflow-x-visible [&::-webkit-scrollbar]:hidden"
       >

@@ -7,8 +7,17 @@
 
 export const NOT_BUILT_ADDRESSES = ['/account', '/auth', '/blog', '/book', '/checkout', '/events', '/waiver', '/shop/gift-card'] as const
 
-/** Whether an address of the site has a page to open: any but a not-built address, or one beneath it (/account/orders). */
+/**
+ * W75: a not-built address whose pages beneath it are built. An event's page (/events/<slug>) is there and is fetched
+ * ahead as any built page; /events itself has no page yet (the events list is on Exclusive Hire: WQ60).
+ */
+export const BUILT_BENEATH: readonly string[] = ['/events']
+
+/**
+ * Whether an address of the site has a page to open: any but a not-built address, or one beneath it
+ * (/account/orders), unless what is beneath it is built (/events/<slug>).
+ */
 export function isBuiltAddress(href: string): boolean {
   const path = href.split(/[?#]/)[0] ?? ''
-  return !NOT_BUILT_ADDRESSES.some((address) => path === address || path.startsWith(`${address}/`))
+  return !NOT_BUILT_ADDRESSES.some((address) => path === address || (path.startsWith(`${address}/`) && !BUILT_BENEATH.includes(address)))
 }

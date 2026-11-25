@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import { BOOK_ADDRESS, isBookAddress, linkHref } from '@/lib/sanity/links'
 
-import { keepFocusOnArrival, PAGE_IN, PAGE_LEAVING, PAGE_OUT, PAGE_OUT_SURFACES, PAGE_SURFACE, PAGE_TRANSITION, PAGE_TRANSITION_TYPES, takeFocusOnArrival } from './page-transition'
+import { hashId, keepFocusOnArrival, PAGE_IN, PAGE_LEAVING, PAGE_OUT, PAGE_OUT_SURFACES, PAGE_SURFACE, PAGE_TRANSITION, PAGE_TRANSITION_TYPES, takeFocusOnArrival } from './page-transition'
 
 // Brief W73b, item 5 (WQ20, WQ22): the page transition is on every link from page to page inside the site, takes the
 // long duration with the smooth curve, and is an instant swap for reduced motion, Back and Forward. The movement
@@ -108,6 +108,18 @@ describe('what is animated, and when', () => {
 
   it('WQ52: a page arrived at by a link that asked to keep focus puts it there instead, still from the top and without scrolling', () => {
     expect(component).toMatch(/lenis\.scrollTo\(top, \{ immediate: true, force: true \}\)[\s\S]*const kept = takeFocusOnArrival\(page\)[\s\S]*keeper\.focus\(\{ preventScroll: true \}\)\s+return\s+\}\s+const heading/)
+  })
+
+  // W75 (WQ60): "All Events" goes to /exclusive-hire#events. The page arrives at its top as every page does, and
+  // scrolls to the list once the page transition has ended. Watched in a browser on the built site for the report.
+  it('WQ60: a link that names a place on the new page scrolls there after the page transition, smoothly with Lenis; Back and Forward never', () => {
+    expect([hashId('#events'), hashId('events'), hashId('#caf%C3%A9'), hashId(''), hashId('#'), hashId('#%E0%A4%A')]).toEqual(['events', 'events', 'café', null, null, null])
+    // The place is read before the page is put at its top, and never for Back or Forward.
+    expect(component).toMatch(/const placeId = byHistory\.current \? null : hashId\(window\.location\.hash\)\s+byHistory\.current = false\s+if \(lenis\) lenis\.scrollTo\(top, \{ immediate: true, force: true \}\)\s+else if \(top === 0\) window\.scrollTo\(0, 0\)\s+const place = placeId \? document\.getElementById\(placeId\) : null\s+if \(place\) scrollToPlace\(place, lenis\)/)
+    // After the transition, whether it ended by itself or was cut short; with no transition, at once.
+    expect(component).toMatch(/const running = runningTransition\(\)\s+if \(running\) running\.finished\.then\(go, go\)\s+else go\(\)/)
+    // Lenis takes the long duration and the smooth curve from the tokens; with reduced motion (no Lenis) it jumps.
+    expect(component).toMatch(/if \(lenis\) lenis\.scrollTo\(place, \{ duration: DURATION_LONG, easing: EASE_SMOOTH \}\)\s+else place\.scrollIntoView\(\)/)
   })
 })
 

@@ -2,14 +2,17 @@ import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-import { isBuiltAddress, NOT_BUILT_ADDRESSES } from './not-built'
+import { BUILT_BENEATH, isBuiltAddress, NOT_BUILT_ADDRESSES } from './not-built'
 import { RESERVED_PRODUCT_SLUGS, RESERVED_SLUGS } from './reserved-slugs'
 
 // Level 3, 25 Nov 2026: no background request to a page that isn't built. Loading /shop asked for /book, /account
 // and /shop/gift-card ahead of any press, each more than once, and none of them exists yet.
 
 const WEB = path.resolve(__dirname, '../..')
-const hasFolder = (address: string) => existsSync(path.join(WEB, 'app', ...address.split('/').filter(Boolean)))
+const inApp = (address: string, ...more: string[]) => path.join(WEB, 'app', ...address.split('/').filter(Boolean), ...more)
+const hasFolder = (address: string) => existsSync(inApp(address))
+/** W75: an address whose pages beneath it are built has a folder for them, and is built itself only once it has a page of its own. */
+const isBuilt = (address: string) => (BUILT_BENEATH.includes(address) ? existsSync(inApp(address, 'page.tsx')) : hasFolder(address))
 
 /** Every address the site keeps for itself: the reserved words, and under /shop the words no product can use. */
 const OWN_ADDRESSES = [...RESERVED_SLUGS.map((slug) => `/${slug}`), ...RESERVED_PRODUCT_SLUGS.map((slug) => `/shop/${slug}`)]
@@ -18,7 +21,16 @@ describe('the list of pages not built yet', () => {
   it.each(OWN_ADDRESSES)('%s is on it exactly while app/ has no folder for it', (address) => {
     const listed = (NOT_BUILT_ADDRESSES as readonly string[]).includes(address)
     // Built since? Take it off the list in lib/routes/not-built.ts, so its links are fetched ahead again.
-    expect({ address, listed }).toEqual({ address, listed: !hasFolder(address) })
+    expect({ address, listed }).toEqual({ address, listed: !isBuilt(address) })
+  })
+
+  // W75: /events/[slug] is built and /events is not (the events list is on Exclusive Hire: WQ60).
+  it('an address that is built only beneath itself is on the list, has its folder, and has no page of its own', () => {
+    expect(BUILT_BENEATH).toEqual(['/events'])
+    for (const address of BUILT_BENEATH) {
+      expect((NOT_BUILT_ADDRESSES as readonly string[]).includes(address), address).toBe(true)
+      expect([hasFolder(address), existsSync(inApp(address, 'page.tsx')), existsSync(inApp(address, '[slug]', 'page.tsx'))], address).toEqual([true, false, true])
+    }
   })
 
   it("holds only the site's own addresses", () => {
@@ -27,12 +39,26 @@ describe('the list of pages not built yet', () => {
 })
 
 describe('whether an address has a page to open', () => {
-  it.each(['/book', '/book?date=2026-12-01&type=public', '/account', '/account/orders/12', '/shop/gift-card', '/shop/gift-card#amount', '/events/winter-solstice', '/checkout'])(
+  it.each(['/book', '/book?date=2026-12-01&type=public', '/account', '/account/orders/12', '/shop/gift-card', '/shop/gift-card#amount', '/events', '/events?month=12', '/events#list', '/checkout'])(
     '%s: not yet',
     (href) => expect(isBuiltAddress(href)).toBe(false),
   )
 
-  it.each(['/', '/shop', '/shop?sort=price-desc&page=2', '/shop/paddock-hoodie-black', '/shop/gift-card-holder', '/info/terms', '/about', '/booking-terms', '/accounts'])(
+  it.each([
+    '/',
+    '/shop',
+    '/shop?sort=price-desc&page=2',
+    '/shop/paddock-hoodie-black',
+    '/shop/gift-card-holder',
+    '/info/terms',
+    '/about',
+    '/booking-terms',
+    '/accounts',
+    // W75: an event's page, and the events list on the page that holds it.
+    '/events/winter-solstice',
+    '/events/winter-solstice?from=email',
+    '/exclusive-hire#events',
+  ])(
     '%s: yes (or a page of Sanity, which only Sanity knows)',
     (href) => expect(isBuiltAddress(href)).toBe(true),
   )

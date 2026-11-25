@@ -207,6 +207,10 @@ export type Event = z.infer<typeof eventSchema>
 export const eventsSettingsSchema = z.object({ termsSummary: richTextSchema })
 export type EventsSettings = z.infer<typeof eventsSettingsSchema>
 
+/** W75 (WQ60): the page that holds the Upcoming Events list: its slug, and whether it is the page Site settings picks as home. */
+export const eventsListPageSchema = z.object({ slug: z.string(), isHome: z.boolean() })
+export type EventsListPage = z.infer<typeof eventsListPageSchema>
+
 /**
  * `terms` still holds its {validity} placeholder: the page fills it from the staff app's expiry setting. The two
  * galleries are the Physical and the Digital card's (WQ19).

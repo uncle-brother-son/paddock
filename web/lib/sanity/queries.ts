@@ -192,6 +192,13 @@ export const EVENT_QUERY = `*[_type == "event" && ${PUBLISHED} && slug.current =
 
 export const EVENTS_SETTINGS_QUERY = `*[_id == "eventsSettings"][0]{"termsSummary": ${richTextAt('termsSummary')}}`
 
+/**
+ * W75 (WQ60): the page that holds the Upcoming Events list, which is where an Event page's "All Events" goes
+ * (/exclusive-hire#events: the slug is Sanity's, never typed into the site). The first made, should two pages hold one.
+ */
+export const EVENTS_LIST_PAGE_QUERY = `*[_type == "contentPage" && ${PUBLISHED} && defined(slug.current) && count(modules[_type == "upcomingEvents"]) > 0]
+  | order(_createdAt asc)[0]{"slug": slug.current, "isHome": ${IS_HOME}}`
+
 /** The one gift card (WQ19): the first made, should there ever be two. Its two galleries, swapped by the page's switch. */
 export const GIFT_CARD_QUERY = `*[_type == "giftCardType" && ${PUBLISHED}] | order(_createdAt asc)[0]{
   "id": _id, name, ${CATEGORY},

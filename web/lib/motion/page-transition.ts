@@ -59,6 +59,20 @@ export function leavePage(page: HTMLElement): void {
   page.setAttribute(PAGE_LEAVING, '')
 }
 
+// W75 (WQ60): a link to a place on another page ("All Events", to /exclusive-hire#events). The new page arrives at its
+// top as every page does, and once the page transition has ended it scrolls to that place.
+
+/** The id a hash names ("#events" is `events`), or null: no hash, an empty one, or one that can't be read. */
+export function hashId(hash: string): string | null {
+  const name = hash.startsWith('#') ? hash.slice(1) : hash
+  if (!name) return null
+  try {
+    return decodeURIComponent(name)
+  } catch {
+    return null
+  }
+}
+
 // W74c (WQ52): a link that changes the page where it stands (a product's colour swatch). It carries no transition
 // type, so the pages swap at once, and it says here what on the new page is to have focus in place of the heading:
 // the visitor's place in the page is kept, as far as a new page can keep it.

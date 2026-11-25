@@ -10,6 +10,7 @@ import { readAvailability } from '@/lib/shop/availability'
 import { addToBag } from '@/lib/shop/bag'
 import { productSizes, SIZE_GUIDE_TAB, type PriceLine, type ProductView } from '@/lib/shop/product'
 
+import { InfoPanelLink } from './InfoPanelLink'
 import { ProductInfoPanel, type InfoTab } from './ProductInfoPanel'
 import { SizeOption } from './SizeSelect'
 
@@ -202,15 +203,7 @@ export function ProductBuy({ product, tabs, readSizes = readAvailability, classN
         <ul className="flex flex-col items-start gap-16">
           {links.map((tab) => (
             <li key={tab.id}>
-              {/* Figma "InfoPanelLink" (1549:49650): Label 12, Text/Muted Primary on hover. The press reaches 8px above and below its capitals. */}
-              <button
-                type="button"
-                aria-haspopup="dialog"
-                onClick={() => setPanel({ open: true, tab: tab.id })}
-                className="relative block text-left text-label-12 text-text-primary transition-colors duration-short ease-smooth after:absolute after:inset-x-0 after:-inset-y-8 hover:text-text-muted-primary"
-              >
-                {tab.label}
-              </button>
+              <InfoPanelLink onClick={() => setPanel({ open: true, tab: tab.id })}>{tab.label}</InfoPanelLink>
             </li>
           ))}
         </ul>

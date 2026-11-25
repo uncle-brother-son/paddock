@@ -28,6 +28,8 @@ vi.mock('next/cache', () => ({
   },
 }))
 vi.mock('@/server/rules/shop/reads', () => ({ readShop }))
+// W75: lib/shop/read.ts reads the events too; the shop's pages never ask for them.
+vi.mock('@/server/rules/shop/events', () => ({ readShopEvents: vi.fn(), readShopEvent: vi.fn() }))
 
 const { findProductPage, readShopCatalogue } = await import('./pages')
 const { SHOP_KEPT_SECONDS } = await import('./read')
@@ -146,9 +148,13 @@ describe('a product, at /shop/[slug]', () => {
 })
 
 describe("the Worker's read of the shop", () => {
-  it('is kept for at most 60 seconds, under one key', () => {
+  it('is kept for at most 60 seconds, under one key; W75: the events list and each event under their own', () => {
     expect(SHOP_KEPT_SECONDS).toBe(60)
-    expect(kept.calls).toEqual([{ keys: ['shop'], options: { revalidate: 60 } }])
+    expect(kept.calls).toEqual([
+      { keys: ['shop'], options: { revalidate: 60 } },
+      { keys: ['shop-events'], options: { revalidate: 60 } },
+      { keys: ['shop-event'], options: { revalidate: 60 } },
+    ])
   })
 
   const web = path.resolve(__dirname, '../..')

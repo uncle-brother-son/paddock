@@ -91,7 +91,17 @@ describe('W72a: galleries and categories', () => {
   })
 
   it('every read W72a and W73b changed has its query on record', () => {
-    expect(Object.keys(madeFrom).sort()).toEqual(['contentPage', 'event', 'eventCards', 'giftCard', 'homePage', 'movedSlug', 'product', 'productCards'])
+    expect(Object.keys(madeFrom).sort()).toEqual(['contentPage', 'event', 'eventCards', 'eventsListPage', 'giftCard', 'homePage', 'movedSlug', 'product', 'productCards'])
+  })
+
+  // W75 (WQ60): the page that holds the Upcoming Events list, found by its module. Its sample was made by the real
+  // engine (briefs/W75-logs/tools/gen-samples.mjs, in the staff app repo) over five pages: the home page (no list), a
+  // draft that holds one, a page with no address that holds one, Exclusive Hire (two lists), and a newer page with one.
+  it('W75: the events list is on the first-made published page that holds the module, by its own slug', () => {
+    expect(answers.eventsListPage).toEqual({ slug: 'exclusive-hire', isHome: false })
+    expect(reads.eventsListPage.query).toContain('!(_id in path("drafts.**"))')
+    expect(reads.eventsListPage.query).toContain('defined(slug.current)')
+    expect(reads.eventsListPage.query).toContain('order(_createdAt asc)[0]')
   })
 
   it("a gallery keeps its order, videos among the pictures; an item with no file is left out", () => {
