@@ -21,6 +21,29 @@ export const LEVEL_1_PATHS = [
 export const LEVEL_1B_PATHS = ['web/app/api/sanity/', 'web/server/rules/catalog/sanity-sync.ts']
 
 /**
+ * W74a, WQ45 (Wayne, 24 Nov): the shop's reads are Level 1b too, by name: the rules that read the shop for the
+ * website's pages, their contract, the one public route (GET /api/v1/shop/availability) and the test that lists the
+ * public routes. They show prices and never set, charge or move one, so the money words can't be asked of them. What
+ * can: one of them that starts to write (a statement that changes a row, or a route that takes more than GET) is no
+ * longer a read, and is Level 1. A test sets its own rows up, so a test is not asked.
+ */
+export const SHOP_READ_PATHS = ['web/server/rules/shop/', 'web/contracts/shop.ts', 'web/app/api/v1/shop/availability/', 'web/server/api-allowlist.test.ts']
+
+/**
+ * WQ45: the one website file that reads the shop from the Worker's rules (W74: `readShop()`, kept for a minute). Its
+ * import of the shop's reads does not make it money code, so a page built on it is Level 2. Anything else it imports
+ * from server code, or Stripe, does; and so does any other website file that imports the shop's reads itself.
+ */
+export const SHOP_READER = 'web/lib/shop/read.ts'
+const SHOP_READS_IMPORT = '@/server/rules/shop/'
+
+const inPlaces = (places, file) => places.some((place) => (place.endsWith('/') ? file.startsWith(place) : file === place))
+const isTest = (file) => /\.test\.[a-z]+$/.test(file)
+
+/** A statement that changes a row. */
+const SQL_WRITES = /\b(insert\s+into|update\s+\w+\s+set|delete\s+from)\b/i
+
+/**
  * Words that mean money, a booking or a membership. A migration or a read-only route that names one (in its path or
  * its text) stays Level 1. It errs towards Level 1 on purpose: "pass" and "order" catch more than they need to.
  */
@@ -35,8 +58,13 @@ const WRITES = /\b(POST|PUT|PATCH|DELETE)\b/
  * before and the text after count, so a file can't leave Level 1 by losing the word. With no text to read, Level 1.
  */
 export function backendWithoutMoney({ file, before, after }) {
-  if (LEVEL_1B_PATHS.some((place) => (place.endsWith('/') ? file.startsWith(place) : file === place))) return 'the Sanity webhook and its sync: content only'
+  if (inPlaces(LEVEL_1B_PATHS, file)) return 'the Sanity webhook and its sync: content only'
   const texts = [before, after].filter((text) => text !== null)
+  if (inPlaces(SHOP_READ_PATHS, file)) {
+    const route = /\/route\.ts$/.test(file)
+    const writes = !isTest(file) && texts.some((text) => SQL_WRITES.test(text) || (route && WRITES.test(text)))
+    return writes ? null : "the shop's reads: they show prices and sizes, and never write or move money"
+  }
   if (texts.length === 0) return null
   const namesMoney = MONEY_WORDS.test(file) || texts.some((text) => MONEY_WORDS.test(text))
   if (/^supabase\/migrations\/[^/]+\.sql$/.test(file)) return namesMoney ? null : 'a migration that names no money, booking or membership'
@@ -131,8 +159,14 @@ export function changedWebhookFields(before, after) {
   return [...new Set([...was.keys(), ...is.keys()])].filter((key) => was.get(key) !== is.get(key)).sort()
 }
 
-/** Stripe, or server code, used by a file outside the Level 1 folders. A type-only import counts too. */
-const usesMoneyCode = (source) => source !== null && /(?:from|import|require)\s*\(?\s*['"](?:stripe|@stripe\/[^'"]+|@\/server(?:\/[^'"]*)?|(?:\.\.\/)+server(?:\/[^'"]*)?)['"]/.test(source)
+const MONEY_IMPORT = /(?:from|import|require)\s*\(?\s*['"](stripe|@stripe\/[^'"]+|@\/server(?:\/[^'"]*)?|(?:\.\.\/)+server(?:\/[^'"]*)?)['"]/g
+
+/**
+ * Stripe, or server code, used by a file outside the Level 1 folders. A type-only import counts too. WQ45: the shop's
+ * reads, imported by the one file that reads the shop (SHOP_READER), do not count; there and nowhere else.
+ */
+const usesMoneyCode = (file, source) =>
+  source !== null && [...source.matchAll(MONEY_IMPORT)].some(([, name]) => !(file === SHOP_READER && name.startsWith(SHOP_READS_IMPORT)))
 
 const DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies', 'overrides']
 
@@ -153,7 +187,7 @@ export function pickLevel(changes) {
   const reasons = []
   const reasons1b = []
   for (const { file, before, after } of changes) {
-    const level1 = LEVEL_1_PATHS.find((place) => (place.endsWith('/') ? file.startsWith(place) : file === place))
+    const level1 = LEVEL_1_PATHS.find((place) => inPlaces([place], file))
     if (level1) {
       const noMoney = backendWithoutMoney({ file, before, after })
       if (noMoney) reasons1b.push(`${file} (${noMoney})`)
@@ -163,7 +197,7 @@ export function pickLevel(changes) {
     } else if (file.startsWith(SCHEMA_FOLDER) && isScript(file)) {
       const fields = changedWebhookFields(before, after)
       if (fields.length > 0) reasons.push(`${file} (the Worker's Sanity webhook reads ${fields.join(', ')})`)
-    } else if (file.startsWith('web/') && isScript(file) && !/\.test\.[a-z]+$/.test(file) && (usesMoneyCode(before) || usesMoneyCode(after))) {
+    } else if (file.startsWith('web/') && isScript(file) && !isTest(file) && (usesMoneyCode(file, before) || usesMoneyCode(file, after))) {
       reasons.push(`${file} (it uses Stripe or server code)`)
     }
   }

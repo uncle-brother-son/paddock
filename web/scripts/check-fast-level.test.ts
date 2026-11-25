@@ -2,9 +2,23 @@ import { readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-import { backendWithoutMoney, changedWebhookFields, filesToLint, MONEY_WORDS, pickLevel, storiesFor, unitTestsToRun, WEBHOOK_BLOCKS, WEBHOOK_FIELDS, webhookFieldsIn } from './check-fast-level.mjs'
+import {
+  backendWithoutMoney,
+  changedWebhookFields,
+  filesToLint,
+  MONEY_WORDS,
+  pickLevel,
+  SHOP_READ_PATHS,
+  SHOP_READER,
+  storiesFor,
+  unitTestsToRun,
+  WEBHOOK_BLOCKS,
+  WEBHOOK_FIELDS,
+  webhookFieldsIn,
+} from './check-fast-level.mjs'
 
-// Brief W72, item 1 (WQ29): how `npm run check:fast` picks the test level. W73, item 8 (WQ30): Level 1b.
+// Brief W72, item 1 (WQ29): how `npm run check:fast` picks the test level. W73, item 8 (WQ30): Level 1b. WQ45: the
+// shop's reads are Level 1b by name, and the one website file that imports them is Level 2.
 
 const WEB = path.resolve(__dirname, '..')
 const SCHEMAS = path.resolve(WEB, '../studio/schemaTypes')
@@ -94,7 +108,7 @@ describe('the level', () => {
       expect(levelOf(changed(file, source, reads))).toBe(1)
     })
 
-    it('only those three kinds of file: any other backend file is Level 1 whatever it says', () => {
+    it("only those three kinds of file (and the shop's reads, by name: below): any other backend file is Level 1 whatever it says", () => {
       for (const file of ['web/server/rules/catalog/items.ts', 'web/server/scheduled.ts', 'web/contracts/categories.ts', 'web/app/api/v1/define-route.ts', 'supabase/config.toml', 'web/custom-worker.ts']) {
         expect(backendWithoutMoney(changed(file, null, 'export const a = 1\n')), file).toBeNull()
         expect(levelOf(changed(file, null, 'export const a = 1\n')), file).toBe(1)
@@ -106,6 +120,104 @@ describe('the level', () => {
         expect(MONEY_WORDS.test(word), word).toBe(true)
       }
       for (const word of ['product_categories', 'title', 'sanity_id', 'images', 'password', 'compass', 'slug']) expect(MONEY_WORDS.test(word), word).toBe(false)
+    })
+  })
+
+  // W74a, WQ45 (Wayne, 24 Nov): the shop's reads are Level 1b by name, and the one website file that imports them is
+  // Level 2. Money paths stay Level 1.
+  describe("the shop's reads (WQ45)", () => {
+    const REPO = path.resolve(WEB, '..')
+    const asItIs = (file: string) => changed(file, null, readFileSync(path.join(REPO, file), 'utf8'))
+    const rule = 'export const sizePrices = (variant) => ({ price: variantPriceFor(variant, false) })\n'
+
+    it('the list is the rules, their contract, the one public route and the test that lists the public routes', () => {
+      expect(SHOP_READ_PATHS).toEqual(['web/server/rules/shop/', 'web/contracts/shop.ts', 'web/app/api/v1/shop/availability/', 'web/server/api-allowlist.test.ts'])
+      expect(SHOP_READER).toBe('web/lib/shop/read.ts')
+    })
+
+    it.each([
+      ['a rule that reads the shop, though it names prices', changed('web/server/rules/shop/display-prices.ts', null, rule)],
+      ["the shop's read", changed('web/server/rules/shop/reads.ts', 'export const a = 1\n', "const SQL = 'SELECT c.title FROM product_categories c'\n")],
+      ["a rule's test, which sets its own rows up", changed('web/server/rules/shop/shop.test.ts', null, "await db.query('UPDATE product_variants SET stock_quantity = 0 WHERE product_id = $1::uuid', [id])\n")],
+      ['its words', changed('web/server/rules/shop/failure-messages.ts')],
+      ['its contract', changed('web/contracts/shop.ts', null, 'export const shopSizeSchema = z.strictObject({ price: money })\n')],
+      ['the availability route', changed('web/app/api/v1/shop/availability/route.ts', null, "export const GET = defineRoute({ auth: 'public' }, async ({ input }) => shopAvailability(db, input.product))\n")],
+      ["the route's test", changed('web/app/api/v1/shop/availability/route.test.ts', null, "it('refuses a POST', async () => {})\n")],
+      ['the test that lists the public routes', changed('web/server/api-allowlist.test.ts')],
+    ])('%s is Level 1b, alone or among website files', (_what, change) => {
+      expect(levelOf(change)).toBe('1b')
+      const { level, reasons } = pickLevel([changed('web/components/shop/ProductCard.tsx'), change, changed('studio/structure.ts')])
+      expect(level).toBe('1b')
+      expect(reasons).toEqual([`${change.file} (the shop's reads: they show prices and sizes, and never write or move money)`])
+    })
+
+    it("every file of the shop's reads in the repo today is Level 1b as it is", () => {
+      const files = [
+        ...readdirSync(path.join(WEB, 'server/rules/shop')).map((name) => `web/server/rules/shop/${name}`),
+        ...readdirSync(path.join(WEB, 'app/api/v1/shop/availability')).map((name) => `web/app/api/v1/shop/availability/${name}`),
+        'web/contracts/shop.ts',
+        'web/server/api-allowlist.test.ts',
+      ]
+      expect(files.length).toBeGreaterThanOrEqual(9)
+      for (const file of files) expect(levelOf(asItIs(file)), file).toBe('1b')
+    })
+
+    it('one of them that starts to write is no longer a read: Level 1, and it cannot leave by losing the statement', () => {
+      const insert = "await db.query('INSERT INTO shop_views (product) VALUES ($1)', [id])\n"
+      for (const sql of [insert, "await db.query('UPDATE products SET active = false WHERE id = $1', [id])\n", "await db.query('DELETE FROM product_variants WHERE id = $1', [id])\n"]) {
+        expect(levelOf(changed('web/server/rules/shop/reads.ts', rule, sql)), sql).toBe(1)
+      }
+      expect(levelOf(changed('web/server/rules/shop/reads.ts', insert, rule))).toBe(1)
+      // The route takes GET alone.
+      const post = "export const POST = defineRoute({ auth: 'public' }, async () => addToBag())\n"
+      expect(levelOf(changed('web/app/api/v1/shop/availability/route.ts', null, post))).toBe(1)
+      expect(levelOf(changed('web/app/api/v1/shop/availability/route.ts', post, 'export const GET = 1\n'))).toBe(1)
+    })
+
+    it('money stays Level 1: the rules beside them, the other contracts, any other shop route, and money beside a read', () => {
+      for (const file of [
+        'web/server/rules/orders/catalog-price.ts',
+        'web/server/rules/catalog/items.ts',
+        'web/server/rules/shopfront/reads.ts',
+        'web/server/rules/shop.ts',
+        'web/contracts/index.ts',
+        'web/contracts/shop-orders.ts',
+        'web/server/api-allowlist.ts',
+        'web/server/rules/README.md',
+      ]) {
+        expect(levelOf(changed(file, null, 'export const a = 1\n')), file).toBe(1)
+      }
+      expect(levelOf(changed('web/app/api/v1/shop/checkout/route.ts', null, "export const POST = defineRoute({ auth: 'public' }, async () => pay())\n"))).toBe(1)
+      expect(levelOf(changed('web/app/api/v1/shop/basket/route.ts', null, "export const GET = defineRoute({ auth: 'public' }, async () => basketPrices())\n"))).toBe(1)
+      const { level, reasons } = pickLevel([changed('web/server/rules/shop/reads.ts'), changed('web/server/rules/orders/catalog-price.ts'), changed('web/lib/shop/read.ts')])
+      expect(level).toBe(1)
+      expect(reasons).toEqual(['web/server/rules/orders/catalog-price.ts (web/server/ is backend or money code)'])
+    })
+
+    const reads = "import { readShop, type Shop } from '@/server/rules/shop/reads'\n"
+
+    it('the one website file that reads the shop is Level 2, as it is today and whichever of the shop\'s reads it imports', () => {
+      expect(levelOf(asItIs(SHOP_READER))).toBe(2)
+      expect(readFileSync(path.join(REPO, SHOP_READER), 'utf8')).toContain("from '@/server/rules/shop/reads'")
+      expect(levelOf(changed(SHOP_READER, null, reads))).toBe(2)
+      expect(levelOf(changed(SHOP_READER, reads, `${reads}export type { ShopSize } from '@/server/rules/shop/display-prices'\n`))).toBe(2)
+      // With the pages built on it, the whole change is Level 2.
+      expect(pickLevel([changed(SHOP_READER, null, reads), changed('web/app/shop/page.tsx'), changed('web/components/shop/ProductCard.tsx')])).toEqual({ level: 2, reasons: [] })
+    })
+
+    it('anything else it imports from server code, or Stripe, is Level 1, whether it gains it or loses it', () => {
+      for (const line of ["import { variantPriceFor } from '@/server/rules/orders/catalog-price'", "import { openRequestDb } from '@/server/db/connection'", "import { shop } from '@/server/rules/shop'", "import Stripe from 'stripe'", "import { readShop } from '../../server/rules/shop/reads'"]) {
+        expect(levelOf(changed(SHOP_READER, reads, `${reads}${line}\n`)), line).toBe(1)
+        expect(levelOf(changed(SHOP_READER, `${reads}${line}\n`, reads)), line).toBe(1)
+      }
+    })
+
+    it("no other website file may import the shop's reads: a page, a component or another file of lib/shop is Level 1", () => {
+      for (const file of ['web/app/shop/page.tsx', 'web/components/shop/ProductCard.tsx', 'web/lib/shop/pages.ts', 'web/lib/shop/read.tsx', 'web/lib/shop/read/index.ts']) {
+        const { level, reasons } = pickLevel([changed(file, null, reads)])
+        expect(level, file).toBe(1)
+        expect(reasons).toEqual([`${file} (it uses Stripe or server code)`])
+      }
     })
   })
 
