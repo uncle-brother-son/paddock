@@ -7,9 +7,11 @@ import { EASE_SMOOTH_CSS, EASE_SMOOTH_POINTS } from './ease-smooth'
 
 /**
  * The "smooth" curve: every animation uses it. It is Figma's "Slow" spring (mass 1, stiffness 80, damping 20: no
- * bounce), its shape fitted to whatever duration the animation has (WQ55). scripts/build-ease.mjs makes its points
- * from the spring (lib/motion/ease-smooth.ts); this is the curve through them, as Motion takes an ease: how far
- * along the movement is (0 to 1) at `progress` through the time (0 to 1). CSS draws the same points as `linear(...)`.
+ * bounce) in real time (WQ55, WQ56): its first 640 ms from rest, brought to end on 1, so an animation of the long
+ * duration moves as the spring does and one of the short duration plays the same shape in half the time.
+ * scripts/build-ease.mjs makes its points from the spring (lib/motion/ease-smooth.ts); this is the curve through
+ * them, as Motion takes an ease: how far along the movement is (0 to 1) at `progress` through the time (0 to 1). CSS
+ * draws the same points as `linear(...)`.
  */
 export function EASE_SMOOTH(progress: number): number {
   if (progress <= 0) return 0

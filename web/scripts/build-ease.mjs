@@ -1,13 +1,17 @@
-// npm run ease:build (W74c, WQ55): makes the site's one curve, "smooth", from the spring Wayne's prototypes use, and
-// writes it where the site reads it: lib/motion/ease-smooth.ts (for Motion and the tests) and the `--ease-smooth`
-// line of app/globals.css (for CSS). scripts/build-ease.test.ts fails when either is behind this script, and holds
-// the curve to the spring. With --check it writes nothing and exits 1 when a file is behind.
+// npm run ease:build (W74c, WQ55; W74d, WQ56): makes the site's one curve, "smooth", from the spring Wayne's
+// prototypes use, and writes it where the site reads it: lib/motion/ease-smooth.ts (for Motion and the tests) and the
+// `--ease-smooth` line of app/globals.css (for CSS). scripts/build-ease.test.ts fails when either is behind this
+// script, and holds the curve to the spring. With --check it writes nothing and exits 1 when a file is behind.
 //
 // The spring is Figma's preset "Slow" (stored as SLOW): mass 1, stiffness 80, damping 20. It is more than critically
 // damped, so it never passes its target and never bounces. Figma gives it 1.3334881067276 seconds by itself: the
-// moment it is within a thousandth of its target (read from the prototypes on 04 Animations, 25 Nov 2026). The curve
-// is that stretch of the spring, squeezed or stretched to whatever duration an animation has (320 ms, 640 ms), so the
-// durations stay and only the shape of the movement changes.
+// moment it is within a thousandth of its target (read from the prototypes on 04 Animations, 25 Nov 2026).
+//
+// A spring is physical: it takes the same real time however long the animation it is given (about half-way at
+// 200 ms). So the curve is the spring in real time (WQ56): its first 640 ms from rest, the site's long duration,
+// divided by where it has got to by then (95.3% of the way) so that it ends on 1. An animation of 640 ms moves as
+// the spring does for its whole length; one of 320 ms plays the same shape in half the time. W74c had squeezed all
+// of Figma's 1.333 s into the duration instead, which was half-way at about 100 ms of a 640 ms animation.
 //
 // CSS has no spring, so the curve is written as `linear(...)`: straight pieces between points on the spring, few
 // where it is nearly straight and more where it bends, each piece within a thousandth of the spring.
@@ -19,6 +23,13 @@ const WEB = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 /** Figma's "Slow" spring, and the time Figma gives it (seconds). */
 export const SPRING = { name: 'SLOW', mass: 1, stiffness: 80, damping: 20, seconds: 1.3334881067276 }
+
+/**
+ * The stretch of the spring the curve is (WQ56): its first 640 ms from rest, in seconds. It is the site's long
+ * duration (lib/motion/tokens.ts, DURATION_LONG; the test holds the two together), so an animation of that length
+ * moves as the spring does in real time.
+ */
+export const CURVE_SECONDS = 0.64
 
 /** How far a straight piece may stray from the spring (of the whole movement, 0 to 1). */
 export const TOLERANCE = 0.001
@@ -43,11 +54,11 @@ export function springAt(spring, seconds) {
 
 /**
  * The curve itself: how far along the movement is (0 to 1) at `progress` through the animation's time (0 to 1). It
- * is the spring over Figma's time for it, divided by where the spring has got to at the end of that time (0.999), so
- * that it ends on 1 exactly.
+ * is the spring over its first `seconds` from rest, divided by where the spring has got to at the end of them
+ * (0.953 at 640 ms), so that it ends on 1 exactly.
  */
-export function smoothAt(progress, spring = SPRING) {
-  return springAt(spring, progress * spring.seconds) / springAt(spring, spring.seconds)
+export function smoothAt(progress, spring = SPRING, seconds = CURVE_SECONDS) {
+  return springAt(spring, progress * seconds) / springAt(spring, seconds)
 }
 
 const round = (value, places) => Number(value.toFixed(places))
@@ -95,6 +106,9 @@ export function buildEase(web = WEB) {
     '',
     `/** The spring the curve is made from (WQ55), and the time Figma gives it, in seconds. */`,
     `export const EASE_SMOOTH_SPRING = { mass: ${SPRING.mass}, stiffness: ${SPRING.stiffness}, damping: ${SPRING.damping}, seconds: ${SPRING.seconds} } as const`,
+    '',
+    '/** The stretch of the spring the curve is (WQ56): its first seconds from rest, in real time. */',
+    `export const EASE_SMOOTH_SECONDS = ${CURVE_SECONDS}`,
     '',
     '/** The curve\'s points: [progress through the animation\'s time, how far along the movement], each 0 to 1. */',
     'export const EASE_SMOOTH_POINTS: readonly (readonly [number, number])[] = [',

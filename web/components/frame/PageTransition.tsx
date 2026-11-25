@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation'
 import * as React from 'react'
 import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react'
 
-import { PAGE_IN, PAGE_OUT, PAGE_TRANSITION, takeFocusOnArrival } from '@/lib/motion/page-transition'
+import { leavePage, PAGE_IN, PAGE_OUT, PAGE_TRANSITION, takeFocusOnArrival } from '@/lib/motion/page-transition'
 
 /**
  * React's <ViewTransition>. It is in the React that Next's App Router runs the site on ("View transitions work in
@@ -92,24 +92,58 @@ function usePageArrival(page: string) {
 }
 
 /**
- * One page of the site as the page transition sees it (W73b; WQ20, WQ22): everything that changes from page to
- * page, which is main and the footer; the header stays where it is. `page` names the page shown: when it changes,
+ * Where the pages stand: the one element round whichever page is shown, which stays while they change (WQ57).
+ *
+ * It is a class for `getSnapshotBeforeUpdate`, the one moment React gives before it changes the document: the page
+ * about to be left is still there, and the browser has not yet taken its picture of it for the transition. That is
+ * when `leavePage` takes the page's backgrounds out of it and writes them down as the still layer, which the
+ * stylesheet draws on this element until the page is gone, and behind the page's picture after that.
+ */
+class PageStage extends React.Component<{ page: string; children: ReactNode }> {
+  private readonly stage = React.createRef<HTMLDivElement>()
+
+  override getSnapshotBeforeUpdate(before: { page: string }): null {
+    const leaving = before.page === this.props.page ? null : this.stage.current?.querySelector<HTMLElement>(':scope > [data-page-transition]')
+    if (leaving) leavePage(leaving)
+    return null
+  }
+
+  // React asks for this beside getSnapshotBeforeUpdate; there is nothing to do once the new page is in.
+  override componentDidUpdate(): void {}
+
+  override render(): ReactNode {
+    return (
+      <div ref={this.stage} data-page-stage="" className="flex flex-1 flex-col">
+        {this.props.children}
+      </div>
+    )
+  }
+}
+
+/**
+ * One page of the site as the page transition sees it (W73b; WQ20, WQ22, WQ57): everything that changes from page
+ * to page, which is main and the footer; the header stays where it is. `page` names the page shown: when it changes,
  * the old page leaves and the new one comes in, and a navigation that carries the page transition's type (every link
  * inside the site: components/ui/SiteLink.tsx) is animated by the `page-out` and `page-in` rules in app/globals.css,
  * over the long duration with the smooth curve. Reduced motion, Back and Forward: the page is swapped at once.
+ *
+ * The page has a solid background of its own (Surface/Primary, the colour of the window behind it), so the page
+ * coming in covers the one being left wherever it has come in.
  */
 export function PageTransitionView({ page, children }: { page: string; children: ReactNode }) {
   usePageArrival(page)
   const content = (
-    <div key={page} data-page-transition="" className="flex flex-1 flex-col">
+    <div key={page} data-page-transition="" className="flex flex-1 flex-col bg-surface-primary">
       {children}
     </div>
   )
-  if (!ViewTransition) return content
+  if (!ViewTransition) return <PageStage page={page}>{content}</PageStage>
   return (
-    <ViewTransition key={page} enter={ENTER} exit={EXIT} default="none">
-      {content}
-    </ViewTransition>
+    <PageStage page={page}>
+      <ViewTransition key={page} enter={ENTER} exit={EXIT} default="none">
+        {content}
+      </ViewTransition>
+    </PageStage>
   )
 }
 

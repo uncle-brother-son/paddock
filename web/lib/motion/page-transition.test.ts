@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import { BOOK_ADDRESS, isBookAddress, linkHref } from '@/lib/sanity/links'
 
-import { keepFocusOnArrival, PAGE_IN, PAGE_OUT, PAGE_TRANSITION, PAGE_TRANSITION_TYPES, takeFocusOnArrival } from './page-transition'
+import { keepFocusOnArrival, PAGE_IN, PAGE_LEAVING, PAGE_OUT, PAGE_OUT_SURFACES, PAGE_SURFACE, PAGE_TRANSITION, PAGE_TRANSITION_TYPES, takeFocusOnArrival } from './page-transition'
 
 // Brief W73b, item 5 (WQ20, WQ22): the page transition is on every link from page to page inside the site, takes the
 // long duration with the smooth curve, and is an instant swap for reduced motion, Back and Forward. The movement
@@ -119,16 +119,48 @@ describe('the movement, in the stylesheet', () => {
     expect(css).toContain(`::view-transition-new(.${PAGE_IN}) {\n  animation: page-in var(--duration-long) var(--ease-smooth) both;\n}`)
   })
 
-  it('WQ54: the page going drifts down a fifth of the window and does not fade; the page coming is masked in from the top', () => {
-    expect(css).toMatch(/@keyframes page-out \{\s*to \{\s*translate: 0 20vh;\s*\}\s*\}/)
+  const transitionRules = css.slice(css.indexOf('::view-transition-old(.page-out)'), css.indexOf('@utility duration-short')).replace(/\/\*[\s\S]*?\*\//g, '')
+
+  it('WQ57: the content of the page going drifts down a fifth of the window and fades to 40%; the page coming is masked in from the top, and never fades', () => {
+    expect(css).toMatch(/@keyframes page-out \{\s*to \{\s*opacity: 0\.4;\s*translate: 0 20vh;\s*\}\s*\}/)
     const pageIn = /@keyframes page-in \{[\s\S]*?\n\}/.exec(css)?.[0] ?? ''
     expect(pageIn).toContain('clip-path: polygon(0 0, 100% 0, 100% 0vh, 0 0vh);')
     expect(pageIn).toContain('clip-path: polygon(0 0, 100% 0, 100% 100vh, 0 100vh);')
-    // Neither page changes its opacity, and nothing else in a view transition does.
-    const transitionRules = css.slice(css.indexOf('::view-transition-old(.page-out)'), css.indexOf('@utility duration-short')).replace(/\/\*[\s\S]*?\*\//g, '')
+    expect(pageIn).not.toMatch(/opacity/)
+    // The one opacity in a view transition is the page going's: nothing else there fades.
     expect(transitionRules).toContain('@keyframes page-out')
     expect(transitionRules).toContain('::view-transition-new(frame-menu)')
-    expect(transitionRules).not.toMatch(/opacity/)
+    expect(transitionRules.match(/opacity/g)).toHaveLength(1)
+  })
+
+  // W74d (WQ57): each page's background stays solid and still. Watched in a browser: the Frame / Page transition
+  // stories, and the built site's pixels (briefs/W74d-logs/tools/page-transition.cjs in the staff app's repo).
+  it('WQ57: the page coming has a solid background of its own, so it covers the page going where it has come in', () => {
+    const component = read('components/frame/PageTransition.tsx')
+    expect(component).toContain('<div key={page} data-page-transition="" className="flex flex-1 flex-col bg-surface-primary">')
+    // The same colour as the window behind it, so a page at rest looks as it did.
+    expect(css).toMatch(/\nbody \{\s*background-color: var\(--color-surface-primary\);/)
+  })
+
+  it('WQ57: the backgrounds of the page going are out of its picture and drawn behind it, still', () => {
+    // Behind the picture: the page's own surface, and each section's where it stood. No animation is given to it.
+    expect(transitionRules).toMatch(/::view-transition-group\(\.page-out\) \{\s*background: var\(--page-out-surfaces, none\);\s*background-color: var\(--color-surface-primary\);\s*\}/)
+    expect(PAGE_OUT_SURFACES).toBe('--page-out-surfaces')
+    // Out of the page from the moment it is about to be left, and on the element it stands in until it has gone.
+    expect([PAGE_LEAVING, PAGE_SURFACE]).toEqual(['data-page-leaving', 'data-page-surface'])
+    expect(transitionRules).toMatch(/\[data-page-leaving\],\s*\[data-page-leaving\] \[data-page-surface\] \{\s*background-color: transparent;\s*transition: none;\s*\}/)
+    expect(transitionRules).toMatch(/\[data-page-stage\]:has\(> \[data-page-leaving\]\) \{\s*background: var\(--page-out-surfaces, none\);\s*\}/)
+  })
+
+  it('WQ57: the page about to be left is told so before React changes the document, which is before the browser pictures it', () => {
+    const component = read('components/frame/PageTransition.tsx')
+    expect(component).toMatch(/override getSnapshotBeforeUpdate\(before: \{ page: string \}\): null \{\s*const leaving = before\.page === this\.props\.page \? null : this\.stage\.current\?\.querySelector<HTMLElement>\(':scope > \[data-page-transition\]'\)\s*if \(leaving\) leavePage\(leaving\)\s*return null\s*\}/)
+    expect(component).toContain('<div ref={this.stage} data-page-stage="" className="flex flex-1 flex-col">')
+    // The stage is round the page whether or not this React has <ViewTransition>.
+    expect(component).toContain('if (!ViewTransition) return <PageStage page={page}>{content}</PageStage>')
+    expect(component).toMatch(/<PageStage page=\{page\}>\s*<ViewTransition key=\{page\} enter=\{ENTER\} exit=\{EXIT\} default="none">\s*\{content\}\s*<\/ViewTransition>\s*<\/PageStage>/)
+    // leavePage reads the page once: a second call would read it with its backgrounds already out.
+    expect(read('lib/motion/page-transition.ts')).toMatch(/export function leavePage\(page: HTMLElement\): void \{\s*if \(page\.hasAttribute\(PAGE_LEAVING\)\) return/)
   })
 
   it('the header and the menu are layers of their own above the two pages, shown live', () => {

@@ -24,8 +24,8 @@ const durations = [
 ] as const
 
 /**
- * The smooth curve, plotted: time runs left to right, progress bottom to top. It is Figma's "Slow" spring (WQ55),
- * fitted to the animation's duration: off quickly, then a long, soft settling, with no bounce.
+ * The smooth curve, plotted: time runs left to right, progress bottom to top. It is Figma's "Slow" spring in real
+ * time (WQ55, WQ56), its first 640 ms: off gently, half-way at about 190 ms of 640, then a soft settling, no bounce.
  */
 export const Curve: Story = {
   render: () => (

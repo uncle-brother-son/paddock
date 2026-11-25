@@ -132,13 +132,15 @@
    * Motion (WQ20-WQ23): one curve and two durations for the whole site. lib/motion/tokens.ts holds the same values
    * for Motion, and lib/motion/tokens.test.ts fails when the two differ.
    *
-   * The curve (WQ55) is Figma's "Slow" spring (mass 1, stiffness 80, damping 20: no bounce), its shape fitted to the
-   * duration of whatever it animates. CSS has no spring, so it is written as straight pieces between points on the
-   * spring. Never edit the --ease-smooth line by hand: scripts/build-ease.mjs writes it (npm run ease:build).
+   * The curve (WQ55, WQ56) is Figma's "Slow" spring (mass 1, stiffness 80, damping 20: no bounce) in real time: its
+   * first 640 ms from rest, brought to end on 1, so an animation of the long duration moves as the spring does
+   * (half-way at about 190 ms) and one of the short duration plays the same shape in half the time. CSS has no
+   * spring, so it is written as straight pieces between points on the spring. Never edit the --ease-smooth line by
+   * hand: scripts/build-ease.mjs writes it (npm run ease:build).
    *
    * --intro-pause (WQ53) is the intro's two holds: a wait between two animations, never an animation's duration.
    */
-  --ease-smooth: linear(0, 0.0033 0.7%, 0.014 1.5%, 0.0358 2.5%, 0.0677 3.6%, 0.1164 5%, 0.2025 7.2%, 0.3552 11%, 0.4444 13.4%, 0.5186 15.6%, 0.582 17.7%, 0.6407 19.9%, 0.6921 22.1%, 0.7404 24.5%, 0.7846 27.1%, 0.8242 29.9%, 0.8599 33%, 0.8917 36.5%, 0.9188 40.4%, 0.942 44.9%, 0.9616 50.4%, 0.9771 57.2%, 0.9888 66.3%, 0.9966 80.1%, 1);
+  --ease-smooth: linear(0, 0.0041 1.6%, 0.0172 3.4%, 0.04 5.4%, 0.0758 7.8%, 0.131 10.9%, 0.2388 16.3%, 0.3777 23.2%, 0.4673 28%, 0.5436 32.5%, 0.6118 37%, 0.6721 41.5%, 0.7271 46.2%, 0.7775 51.2%, 0.8227 56.5%, 0.864 62.3%, 0.9005 68.6%, 0.9333 75.7%, 0.9617 83.7%, 0.9862 93%, 1);
   --duration-short: 320ms;
   --duration-long: 640ms;
   --intro-pause: 480ms;
@@ -650,11 +652,19 @@ body {
 }
 
 /*
- * The page transition (W73b; WQ20, WQ22, WQ54), on every link from page to page inside the site. It follows
- * oddritualgolf.com's, read from that site's own code: the page being left drifts down a fifth of the window, while
- * the new page is uncovered over it from the top edge of the window downwards, itself settling down a fifth of the
- * window into its place. Here it takes the long duration with the smooth curve. The page being left does not fade
- * (WQ54): while it faded, the two pages were seen one through the other, which read as a stray overlay.
+ * The page transition (W73b; WQ20, WQ22, WQ57), on every link from page to page inside the site. It follows
+ * oddritualgolf.com's, read from that site's own code: the content of the page being left drifts down a fifth of the
+ * window and fades to 40%, while the new page is uncovered over it from the top edge of the window downwards, itself
+ * settling down a fifth of the window into its place. Here it takes the long duration with the smooth curve.
+ *
+ * Each page's background stays solid and still, and only its content moves (WQ57):
+ *   - the page coming in has a solid background of its own (Surface/Primary on the page's element, and each
+ *     section's own surface over it), so where it has come in it covers the page being left entirely. W73b's had
+ *     none, and the two pages were seen one through the other;
+ *   - the page being left is pictured without its backgrounds, and they are drawn, still, behind that picture: the
+ *     page's own Surface/Primary and, where each stood, the surface of every section that sets a mode
+ *     (--page-out-surfaces, written by leavePage in lib/motion/page-transition.ts just before the page is left).
+ *     So its words and pictures drift and fade over a background that does neither.
  *
  * It is drawn by the browser's view transitions, which React starts when a navigation that carries the page
  * transition's type lands (components/frame/PageTransition.tsx gives the two pages these classes). A browser without
@@ -668,8 +678,30 @@ body {
   animation: page-in var(--duration-long) var(--ease-smooth) both;
 }
 
+/* The still background of the page being left: as large as the page was and where it was, behind its picture. */
+::view-transition-group(.page-out) {
+  background: var(--page-out-surfaces, none);
+  background-color: var(--color-surface-primary);
+}
+
+/*
+ * From the moment a page is about to be left until it is gone, its backgrounds are out of it (the browser's picture
+ * of it is taken then) and drawn on the element it stands in instead, so nothing is seen to change. The page's own
+ * background needs no stand-in: the window behind it is the same colour.
+ */
+[data-page-leaving],
+[data-page-leaving] [data-page-surface] {
+  background-color: transparent;
+  transition: none;
+}
+
+[data-page-stage]:has(> [data-page-leaving]) {
+  background: var(--page-out-surfaces, none);
+}
+
 @keyframes page-out {
   to {
+    opacity: 0.4;
     translate: 0 20vh;
   }
 }

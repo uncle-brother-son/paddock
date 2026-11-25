@@ -1,4 +1,4 @@
-// The page transition's names (W73b; WQ20, WQ22), shared by what starts one (a link) and what draws it
+// The page transition's names (W73b; WQ20, WQ22, WQ57), shared by what starts one (a link) and what draws it
 // (components/frame/PageTransition.tsx, and the `page-out` and `page-in` rules in app/globals.css).
 
 /**
@@ -14,6 +14,50 @@ export const PAGE_TRANSITION_TYPES = [PAGE_TRANSITION]
 /** The view transition classes of the page going and the page coming: `::view-transition-old(.page-out)`, `::view-transition-new(.page-in)`. */
 export const PAGE_OUT = 'page-out'
 export const PAGE_IN = 'page-in'
+
+// W74d (WQ57): each page's background stays solid and still, and only its content moves. A page has a background of
+// its own (Surface/Primary, on the element the transition moves), and a section that sets a mode (`data-theme`)
+// paints its own surface over it. Just before a page is left, `leavePage` takes those backgrounds out of the page,
+// so the browser's picture of it holds its content only, and writes them down as a still layer: the stylesheet
+// draws that layer behind the page while it is still there (so nothing is seen to change), and behind its picture
+// for the length of the transition (`::view-transition-group(.page-out)`), where the content drifts and fades over it.
+
+/** The CSS variable, on <html>, that holds the surfaces of the page being left: one background layer for each. */
+export const PAGE_OUT_SURFACES = '--page-out-surfaces'
+
+/** On the page being left, once its backgrounds are out of it; and on each section whose surface was taken out. */
+export const PAGE_LEAVING = 'data-page-leaving'
+export const PAGE_SURFACE = 'data-page-surface'
+
+const px = (value: number) => `${Number(value.toFixed(3))}px`
+
+/** A colour as the browser reports it that paints nothing: `transparent`, or any colour at no opacity. */
+const paintsNothing = (colour: string) => colour === 'transparent' || /^rgba\(.*,\s*0\)$/.test(colour) || /\/\s*0\)$/.test(colour)
+
+/**
+ * A page is about to be left: `page` is the element the transition moves (`[data-page-transition]`), still in the
+ * document. Call it before the browser takes its picture of the page; a second call for the same page does nothing.
+ *
+ * A surface is a section that sets a mode and has a background colour, square-cornered and part of the page's flow
+ * (a popup fixed over the page, or a rounded card, is content and moves with it). Each becomes one layer of the
+ * still background, at the place it has in the page, so it is right wherever the page is scrolled to.
+ */
+export function leavePage(page: HTMLElement): void {
+  if (page.hasAttribute(PAGE_LEAVING)) return
+  const box = page.getBoundingClientRect()
+  const layers: string[] = []
+  for (const section of page.querySelectorAll<HTMLElement>('[data-theme]')) {
+    const style = getComputedStyle(section)
+    const at = section.getBoundingClientRect()
+    if (paintsNothing(style.backgroundColor) || style.position === 'fixed' || style.visibility === 'hidden') continue
+    if (at.width === 0 || at.height === 0 || parseFloat(style.borderTopLeftRadius) > 0) continue
+    section.setAttribute(PAGE_SURFACE, '')
+    // A section inside another is drawn over it: the first layer of a CSS background is the one on top.
+    layers.unshift(`linear-gradient(${style.backgroundColor}, ${style.backgroundColor}) ${px(at.left - box.left)} ${px(at.top - box.top)} / ${px(at.width)} ${px(at.height)} no-repeat`)
+  }
+  document.documentElement.style.setProperty(PAGE_OUT_SURFACES, layers.length > 0 ? layers.join(', ') : 'none')
+  page.setAttribute(PAGE_LEAVING, '')
+}
 
 // W74c (WQ52): a link that changes the page where it stands (a product's colour swatch). It carries no transition
 // type, so the pages swap at once, and it says here what on the new page is to have focus in place of the heading:

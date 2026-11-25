@@ -3,7 +3,7 @@ import { useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { expect, userEvent, waitFor } from 'storybook/test'
 
-import { PAGE_IN, PAGE_OUT } from '@/lib/motion/page-transition'
+import { leavePage, PAGE_IN, PAGE_LEAVING, PAGE_OUT, PAGE_OUT_SURFACES, PAGE_SURFACE } from '@/lib/motion/page-transition'
 import { DURATION_LONG, EASE_SMOOTH_CSS, linearEasingPoints } from '@/lib/motion/tokens'
 
 import { Header } from './Header'
@@ -38,6 +38,9 @@ function TwoPages() {
     const leaving = pageIn(holder.current)
     if (!leaving || !document.startViewTransition) return swap()
     const root = document.documentElement
+    // WQ57: its backgrounds come out of it before the browser takes its picture, as the site does just before React
+    // changes the page.
+    leavePage(leaving)
     leaving.style.viewTransitionName = NAMES.out
     leaving.style.setProperty('view-transition-class', PAGE_OUT)
     root.style.viewTransitionName = 'none'
@@ -103,11 +106,14 @@ const animationsOf = (name: string) =>
 
 const LONG = DURATION_LONG * 1000
 
+/** A colour as the browser reports it that paints nothing. */
+const CLEAR = 'rgba(0, 0, 0, 0)'
+
 /**
- * Press a button (scroll down first to see the page being left where it was). The page being left drifts down
- * without fading (WQ54), and the new page is uncovered over it from the top of the window downwards, settling into
- * place; the long duration, the smooth curve. The new page starts at its top, with focus on its heading. With
- * reduced motion on, the page is swapped at once.
+ * Press a button (scroll down first to see the page being left where it was). The content of the page being left
+ * drifts down and fades to 40%, over its own backgrounds, which stay where they are (WQ57); the new page, solid, is
+ * uncovered over it from the top of the window downwards, settling into place; the long duration, the smooth curve.
+ * The new page starts at its top, with focus on its heading. With reduced motion on, the page is swapped at once.
  */
 export const TwoSamplePages: Story = {
   name: 'Two sample pages',
@@ -116,10 +122,20 @@ export const TwoSamplePages: Story = {
     await expect(canvas.getByRole('heading', { level: 1, name: 'Page one' })).toBeVisible()
     const header = canvasElement.querySelector('header') as HTMLElement
     await waitFor(() => expect(header.dataset.theme).toBe('dark'))
+    // At rest the page is solid: its own background is the window's, and its first section's surface is its mode's.
+    const root = document.documentElement
+    const windowColour = getComputedStyle(document.body).backgroundColor
+    const pageOne = pageIn(canvasElement)!
+    const sectionOne = pageOne.querySelector<HTMLElement>('section[data-theme="dark"]')!
+    const surfaceOne = getComputedStyle(sectionOne).backgroundColor
+    await expect(windowColour).not.toBe(CLEAR)
+    await expect(getComputedStyle(pageOne).backgroundColor).toBe(windowColour)
+    await expect([surfaceOne === CLEAR, surfaceOne === windowColour]).toEqual([false, false])
+    const placeOne = { width: sectionOne.offsetWidth, height: sectionOne.offsetHeight }
     window.scrollTo(0, 400)
     await waitFor(() => expect(Math.round(window.scrollY)).toBe(400))
     await userEvent.click(canvas.getAllByRole('button', { name: 'Go to page two' })[1]!)
-    // The page going: it drifts down a fifth of the window, as solid as it was. The page coming: uncovered over it from the top.
+    // The page going: its content drifts down a fifth of the window and fades to 40%. The page coming: uncovered over it from the top.
     await waitFor(() => expect(animationsOf(NAMES.out).length + animationsOf(NAMES.in).length).toBe(2))
     const [out] = animationsOf(NAMES.out) as [CSSAnimation]
     const [into] = animationsOf(NAMES.in) as [CSSAnimation]
@@ -129,10 +145,23 @@ export const TwoSamplePages: Story = {
     const smooth = linearEasingPoints(EASE_SMOOTH_CSS)
     const outFrames = (out.effect as KeyframeEffect).getKeyframes()
     await expect(linearEasingPoints(outFrames[0]!.easing)).toEqual(smooth)
-    await expect(outFrames.at(-1)!.translate).toBe(`0px ${fifth}`)
-    // WQ54: it does not fade. No keyframe of it names an opacity, and it is as solid mid-way as at rest.
-    await expect(outFrames.some((frame) => 'opacity' in frame)).toBe(false)
-    await expect(getComputedStyle(document.documentElement, `::view-transition-old(${NAMES.out})`).opacity).toBe('1')
+    await expect([outFrames.at(-1)!.translate, outFrames.at(-1)!.opacity]).toEqual([`0px ${fifth}`, '0.4'])
+    // WQ57: behind its picture, still, are its backgrounds: the page's own, and its dark section's where that stood
+    // (the section is the page's first, so at the page's top left). Nothing animates them.
+    const still = getComputedStyle(root, `::view-transition-group(${NAMES.out})`)
+    await expect(still.backgroundColor).toBe(windowColour)
+    await expect(root.style.getPropertyValue(PAGE_OUT_SURFACES)).toBe(`linear-gradient(${surfaceOne}, ${surfaceOne}) 0px 0px / ${placeOne.width}px ${placeOne.height}px no-repeat`)
+    await expect(still.backgroundImage).toBe(`linear-gradient(${surfaceOne}, ${surfaceOne})`)
+    await expect([still.backgroundPosition, still.backgroundSize, still.backgroundRepeat]).toEqual(['0px 0px', `${placeOne.width}px ${placeOne.height}px`, 'no-repeat'])
+    await expect(document.getAnimations().filter((animation) => ((animation.effect as KeyframeEffect | null)?.pseudoElement ?? '').startsWith('::view-transition-group'))).toEqual([])
+    // The page coming is solid: its own background, and its first section's surface, neither taken out.
+    const pageTwo = pageIn(canvasElement)!
+    const sectionTwo = pageTwo.querySelector<HTMLElement>('section[data-theme="fjord"]')!
+    await expect([pageTwo.hasAttribute(PAGE_LEAVING), sectionTwo.hasAttribute(PAGE_SURFACE)]).toEqual([false, false])
+    await expect(getComputedStyle(pageTwo).backgroundColor).toBe(windowColour)
+    await expect([getComputedStyle(sectionTwo).backgroundColor === CLEAR, getComputedStyle(sectionTwo).backgroundColor === surfaceOne]).toEqual([false, false])
+    // And the element the pages stand in draws nothing of its own once the page being left has gone.
+    await expect(getComputedStyle(canvasElement.querySelector<HTMLElement>('[data-page-stage]')!).backgroundImage).toBe('none')
     const inFrames = (into.effect as KeyframeEffect).getKeyframes()
     await expect(linearEasingPoints(inFrames[0]!.easing)).toEqual(smooth)
     await expect([inFrames[0]!.translate, inFrames[0]!.clipPath]).toEqual([`0px -${fifth}`, 'polygon(0px 0px, 100% 0px, 100% 0px, 0px 0px)'])
@@ -149,5 +178,44 @@ export const TwoSamplePages: Story = {
     await expect(heading).toHaveFocus()
     await waitFor(() => expect(animationsOf(NAMES.in)).toHaveLength(0), { timeout: 3000 })
     await expect(canvas.queryByRole('heading', { level: 1, name: 'Page one' })).toBeNull()
+  },
+}
+
+/**
+ * What happens to a page just before it is left (WQ57), with no transition played: its backgrounds are taken out of
+ * it, so that the browser's picture of it holds its content only, and are drawn in the same places on the element
+ * the pages stand in. Nothing is seen to change: this page looks as it did.
+ */
+export const BackgroundsTakenOut: Story = {
+  name: 'A page about to be left',
+  globals: { viewport: { value: 'desktop', isRotated: false } },
+  play: async ({ canvas, canvasElement }) => {
+    await expect(canvas.getByRole('heading', { level: 1, name: 'Page one' })).toBeVisible()
+    const page = pageIn(canvasElement)!
+    const stage = canvasElement.querySelector<HTMLElement>('[data-page-stage]')!
+    const dark = page.querySelector<HTMLElement>('section[data-theme="dark"]')!
+    const light = page.querySelector<HTMLElement>('section:not([data-theme])')!
+    const surface = getComputedStyle(dark).backgroundColor
+    await expect(page.parentElement).toBe(stage)
+    await expect(getComputedStyle(stage).backgroundImage).toBe('none')
+    window.scrollTo(0, 150)
+    await waitFor(() => expect(Math.round(window.scrollY)).toBe(150))
+
+    leavePage(page)
+    // Out of the page: its own background and its dark section's. A section with no mode had none to take.
+    await expect([page.hasAttribute(PAGE_LEAVING), dark.hasAttribute(PAGE_SURFACE), light.hasAttribute(PAGE_SURFACE)]).toEqual([true, true, false])
+    await expect([getComputedStyle(page).backgroundColor, getComputedStyle(dark).backgroundColor]).toEqual([CLEAR, CLEAR])
+    // And drawn where the section stands, by its place in the page (so wherever the page is scrolled to), on the
+    // element the page stands in: as wide and as tall as the section, from the page's top left.
+    const layer = `linear-gradient(${surface}, ${surface}) 0px 0px / ${dark.offsetWidth}px ${dark.offsetHeight}px no-repeat`
+    await expect(document.documentElement.style.getPropertyValue(PAGE_OUT_SURFACES)).toBe(layer)
+    const drawn = getComputedStyle(stage)
+    await expect([drawn.backgroundImage, drawn.backgroundPosition, drawn.backgroundSize, drawn.backgroundRepeat]).toEqual([`linear-gradient(${surface}, ${surface})`, '0px 0px', `${dark.offsetWidth}px ${dark.offsetHeight}px`, 'no-repeat'])
+    const [stageBox, darkBox] = [stage.getBoundingClientRect(), dark.getBoundingClientRect()]
+    await expect([darkBox.left - stageBox.left, darkBox.top - stageBox.top]).toEqual([0, 0])
+
+    // A second call (the page is already about to be left) changes nothing: it does not read the emptied page.
+    leavePage(page)
+    await expect(document.documentElement.style.getPropertyValue(PAGE_OUT_SURFACES)).toBe(layer)
   },
 }

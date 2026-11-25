@@ -2,13 +2,13 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-import { EASE_SMOOTH_CSS, EASE_SMOOTH_POINTS, EASE_SMOOTH_SPRING } from '@/lib/motion/ease-smooth'
-import { EASE_SMOOTH, linearEasingPoints } from '@/lib/motion/tokens'
+import { EASE_SMOOTH_CSS, EASE_SMOOTH_POINTS, EASE_SMOOTH_SECONDS, EASE_SMOOTH_SPRING } from '@/lib/motion/ease-smooth'
+import { DURATION_LONG, DURATION_SHORT, EASE_SMOOTH, linearEasingPoints } from '@/lib/motion/tokens'
 
-import { buildEase, linearEasing, smoothAt, smoothPoints, SPRING, springAt, TOLERANCE } from './build-ease.mjs'
+import { buildEase, CURVE_SECONDS, linearEasing, smoothAt, smoothPoints, SPRING, springAt, TOLERANCE } from './build-ease.mjs'
 
-// Brief W74c, item 1 (WQ55): the site's one curve is Figma's "Slow" spring, fitted to the duration of whatever it
-// animates, written for CSS as `linear(...)` by scripts/build-ease.mjs.
+// Brief W74c, item 1 (WQ55), and W74d, item 1 (WQ56): the site's one curve is Figma's "Slow" spring in real time,
+// its first 640 ms from rest brought to end on 1, written for CSS as `linear(...)` by scripts/build-ease.mjs.
 
 const WEB = path.resolve(__dirname, '..')
 
@@ -85,14 +85,52 @@ describe('the curve the site uses', () => {
     }
   })
 
-  it('matches the spring within 1% at every moment (it is made to stay within 0.2%)', () => {
-    // The spring as it is over Figma's time for it, which the animation's own duration stands in for.
-    const furthest = Math.max(...MOMENTS.map((moment) => Math.abs(EASE_SMOOTH(moment) - springAt(SPRING, moment * SPRING.seconds))))
+  it('WQ56: it is the spring in real time, its first 640 ms, which is the long duration', () => {
+    expect(CURVE_SECONDS).toBe(0.64)
+    expect(EASE_SMOOTH_SECONDS).toBe(CURVE_SECONDS)
+    expect(DURATION_LONG).toBe(CURVE_SECONDS)
+    // By 640 ms the spring is 95.3% of the way: the curve is the spring divided by that, so it ends on 1.
+    const reached = springAt(SPRING, CURVE_SECONDS)
+    expect(reached).toBeGreaterThan(0.952)
+    expect(reached).toBeLessThan(0.954)
+    expect(smoothAt(1)).toBe(1)
+    expect(smoothAt(0.5)).toBe(springAt(SPRING, 0.32) / reached)
+  })
+
+  it('matches the spring within 1% at every moment (it is made to stay within 0.1%)', () => {
+    // An animation of the long duration against the spring itself, millisecond for millisecond: the curve times how
+    // far the spring has got by 640 ms is where the spring is at that moment.
+    const reached = springAt(SPRING, CURVE_SECONDS)
+    const furthest = Math.max(...MOMENTS.map((moment) => Math.abs(EASE_SMOOTH(moment) * reached - springAt(SPRING, moment * DURATION_LONG))))
     expect(furthest).toBeLessThan(0.01)
-    expect(furthest).toBeLessThan(0.0022)
+    expect(furthest).toBeLessThan(0.0012)
     // And within the tolerance of the same spring brought to end on 1 exactly.
     const fromFitted = Math.max(...MOMENTS.map((moment) => Math.abs(EASE_SMOOTH(moment) - smoothAt(moment))))
     expect(fromFitted).toBeLessThanOrEqual(TOLERANCE + 0.0001)
+  })
+
+  it('WQ56: it is about half-way at 200 ms of a 640 ms animation, as the spring is in Figma', () => {
+    // The spring itself is half-way at 200 ms, whatever the length of the animation it is given.
+    expect(springAt(SPRING, 0.2)).toBeGreaterThan(0.49)
+    expect(springAt(SPRING, 0.2)).toBeLessThan(0.51)
+    // The curve at 200/640 of its time: the spring's half, over the 95.3% it ends on.
+    const at200 = EASE_SMOOTH(0.2 / DURATION_LONG)
+    expect(at200).toBeGreaterThan(0.5)
+    expect(at200).toBeLessThan(0.55)
+    // The moment it passes half-way: between 185 and 200 ms of 640 (at 320 ms, the same shape in half the time).
+    const halfWay = MOMENTS.find((moment) => EASE_SMOOTH(moment) >= 0.5)!
+    expect(halfWay * DURATION_LONG).toBeGreaterThan(0.185)
+    expect(halfWay * DURATION_LONG).toBeLessThan(0.2)
+    expect(halfWay * DURATION_SHORT).toBeGreaterThan(0.0925)
+    expect(halfWay * DURATION_SHORT).toBeLessThan(0.1)
+  })
+
+  it("the check sees W74c's curve, all of Figma's 1.333 s squeezed into the duration: half-way far too soon", () => {
+    const squeezed = (progress: number) => smoothAt(progress, SPRING, SPRING.seconds)
+    // It was half-way at about 100 ms of 640, twice as soon as the spring.
+    const halfWay = MOMENTS.find((moment) => squeezed(moment) >= 0.5)!
+    expect(halfWay * DURATION_LONG).toBeLessThan(0.1)
+    expect(Math.max(...MOMENTS.map((moment) => Math.abs(squeezed(moment) - smoothAt(moment))))).toBeGreaterThan(0.2)
   })
 
   it('has enough points to be smooth, and no more than it needs: between 20 and 40', () => {
