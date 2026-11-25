@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import { transformSync } from 'esbuild'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { DURATION_LONG } from '@/lib/motion/tokens'
@@ -134,6 +135,50 @@ describe('the script in the page', () => {
   it('uses nothing from outside itself: no import, no name of this module', () => {
     expect(INTRO_SCRIPT).not.toMatch(/\bimport\b|\brequire\b|INTRO_SEEN_KEY|__vite/)
     expect(INTRO_SCRIPT).toContain(INTRO_SEEN_KEY)
+  })
+})
+
+// Found on the deployed site, 25 Nov 2026: the intro never played and every page logged "__name is not defined".
+// Cloudflare's build (OpenNext) bundles the Worker with esbuild's keepNames, which wraps every inner function in
+// `__name(fn, "name")`, a helper the Worker's bundle has and the page does not. The script was then made from
+// `startIntro.toString()`, so it carried those calls into the page. `next build` alone does not do this, and neither
+// does this test run, so the build's step is done here by hand.
+describe("the script after Cloudflare's build", () => {
+  /** lib/frame/intro.ts as a build that keeps function names leaves it: what the module then says the script is. */
+  const afterBuild = (minify: boolean): string => {
+    const source = readFileSync(path.resolve(__dirname, 'intro.ts'), 'utf8')
+    const { code } = transformSync(source, { loader: 'ts', format: 'cjs', keepNames: true, minify })
+    const built = { exports: {} as { INTRO_SCRIPT?: string } }
+    new Function('module', 'exports', code)(built, built.exports)
+    return built.exports.INTRO_SCRIPT ?? ''
+  }
+
+  it.each([
+    ['as written', false],
+    ['made small', true],
+  ])('is the same text, letter for letter, when the build keeps function names (%s)', (_, minify) => {
+    expect(afterBuild(minify)).toBe(INTRO_SCRIPT)
+  })
+
+  it('names no helper of a build: no __name, nor any other', () => {
+    expect(INTRO_SCRIPT).not.toContain('__name')
+    expect(INTRO_SCRIPT).not.toMatch(/__\w/)
+    expect(afterBuild(false)).not.toContain('__name')
+    expect(afterBuild(true)).not.toMatch(/__\w/)
+  })
+
+  it("is written as text: never made from a function's toString()", () => {
+    const read = (file: string) => readFileSync(path.resolve(__dirname, '../..', file), 'utf8')
+    for (const file of ['lib/frame/intro.ts', 'components/frame/Intro.tsx']) expect(read(file)).not.toMatch(/\.toString\(/)
+  })
+
+  it('runs in a page that has nothing but the browser: it starts the intro there', () => {
+    for (const minify of [false, true]) {
+      const { intro, attributes } = page()
+      const fakeWindow = { ...(globalThis as unknown as { window: object }).window, matchMedia: () => ({ matches: false }), sessionStorage: null }
+      new Function('window', 'document', afterBuild(minify))(fakeWindow, { currentScript: { previousElementSibling: intro } })
+      expect(attributes.get('data-intro')).toBe('play')
+    }
   })
 })
 

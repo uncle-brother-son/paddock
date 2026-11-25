@@ -5,6 +5,7 @@ import type { ComponentPropsWithoutRef, MouseEvent } from 'react'
 
 import { useFramePanels } from '@/components/frame/useFramePanels'
 import { PAGE_TRANSITION_TYPES } from '@/lib/motion/page-transition'
+import { isBuiltAddress } from '@/lib/routes/not-built'
 import { isBookAddress } from '@/lib/sanity/links'
 
 type SiteLinkProps = Omit<ComponentPropsWithoutRef<'a'>, 'href' | 'target' | 'rel'> & {
@@ -28,6 +29,9 @@ const isPlainClick = (event: MouseEvent): boolean => event.button === 0 && !even
  * to the booking panel (/book: the header's Book, a hero's button, a link an editor made in Sanity) asks
  * useFramePanels for the panel first: when the panel opens the visitor stays on the page; until it exists the link
  * is followed.
+ *
+ * Next fetches each link it can see ahead of a press. A page that is not built yet (lib/routes/not-built.ts: /book,
+ * /account, /shop/gift-card) is never fetched ahead, on sight or on hover; a press still follows the link.
  */
 export function SiteLink({ href, newTab = false, onClick, children, ...rest }: SiteLinkProps) {
   const panels = useFramePanels()
@@ -45,7 +49,7 @@ export function SiteLink({ href, newTab = false, onClick, children, ...rest }: S
     if (panels.open('book')) event.preventDefault()
   }
   return (
-    <Link href={href} transitionTypes={PAGE_TRANSITION_TYPES} onClick={click} {...tab} {...rest}>
+    <Link href={href} prefetch={isBuiltAddress(href) ? 'auto' : false} transitionTypes={PAGE_TRANSITION_TYPES} onClick={click} {...tab} {...rest}>
       {children}
     </Link>
   )

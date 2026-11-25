@@ -33,7 +33,7 @@ describe('every link inside the site carries the page transition', () => {
   it("SiteLink is the one place that uses Next's <Link>, and it passes the transition's type", () => {
     expect(files.length).toBeGreaterThan(20)
     expect(files.filter((file) => /from ['"]next\/link['"]/.test(read(file)))).toEqual(['components/ui/SiteLink.tsx'])
-    expect(read('components/ui/SiteLink.tsx')).toContain('<Link href={href} transitionTypes={PAGE_TRANSITION_TYPES} onClick={click} {...tab} {...rest}>')
+    expect(read('components/ui/SiteLink.tsx')).toContain("<Link href={href} prefetch={isBuiltAddress(href) ? 'auto' : false} transitionTypes={PAGE_TRANSITION_TYPES} onClick={click} {...tab} {...rest}>")
     expect(PAGE_TRANSITION_TYPES).toEqual([PAGE_TRANSITION])
   })
 
