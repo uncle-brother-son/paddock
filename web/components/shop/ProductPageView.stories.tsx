@@ -47,7 +47,14 @@ export const Desktop: Story = {
     const details = part(canvasElement, 'details')
     await expect([Math.round(box(details).left), Math.round(box(details).width)]).toEqual([842, 405])
     await expect(getComputedStyle(details).position).toBe('sticky')
-    const name = canvas.getByRole('heading', { level: 1, name: 'The Paddock T-Shirt' })
+    // Wayne, 26 Nov: read aloud with its colour, which tells one colour's page from another's; nothing seen changes
+    // (the colour's words take no room in the heading: it is as tall as one line of its capitals, and no wider).
+    // (A browser may count a space between the name and the hidden words; said aloud it is the same.)
+    const name = canvas.getByRole('heading', { level: 1, name: /^The Paddock T-Shirt ?, Brown$/ })
+    await expect(name.textContent).toBe('The Paddock T-Shirt, Brown')
+    const colourAloud = name.querySelector('span') as HTMLElement
+    await expect([colourAloud.textContent, getComputedStyle(colourAloud).position, Math.round(box(colourAloud).width), Math.round(box(colourAloud).height)]).toEqual([', Brown', 'absolute', 1, 1])
+    await expect(name.firstChild?.textContent).toBe('The Paddock T-Shirt')
     await expect(Math.round(box(name).top)).toBe(240)
     await expect(getComputedStyle(name).fontSize).toBe('24px')
     // The price line: £45 (Member from £40), 24px under the name.

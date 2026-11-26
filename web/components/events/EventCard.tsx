@@ -4,7 +4,10 @@ import { CARD_MEMBERS_ONLY } from '@/lib/events/format'
 
 type EventCardProps = {
   card: EventCardView
-  /** Figma's Device: where the spaces left stand. Left out, the desktop card, as every list Figma draws uses. */
+  /**
+   * Figma's Device, to hold the card to one arrangement whatever its width (the stories of Figma's variants). Left
+   * out, as in every list, the card takes the one that fits (see below).
+   */
   device?: 'desktop' | 'mobile'
   /** The `sizes` of its picture: how wide the card is drawn. */
   sizes?: string
@@ -24,17 +27,27 @@ type EventCardProps = {
  * Its two arrangements are Figma's Device, and differ in the first line only. Device=desktop (329:7588, 1802:11329):
  * the spaces are on the name's line, at the card's right; the name has the rest of the line and goes on to a second
  * when it is longer, so nothing runs past the card's edge at any width. Device=mobile (1051:24234, 1802:11338, drawn
- * 183 wide): the spaces are 8px under the name, at the left. Every list Figma draws, a phone's too, uses the desktop
- * card (464 wide, and 358 on the 390 frame: EventList 1634:12822, UpSellRow 1402:50615), so that is what a card is
- * unless it is told `device="mobile"`: no list is, yet.
+ * 183 wide): the spaces are 8px under the name, at the left.
+ *
+ * Which one a card in a list is (Wayne, 26 Nov):
+ * - below 768px, the desktop card, as Figma's phone lists draw it (358 wide on the 390 frame: EventList 1634:12822,
+ *   UpSellRow 1402:50615): a long name goes on to another line beside the spaces;
+ * - from 768px, the desktop card while the name and the spaces fit on one line with 8px between them (as they do on
+ *   Figma's 464 card), and the mobile card when the card is too narrow for that (three to a row at a tablet's width,
+ *   240px): the spaces drop to their own line under the name. It is the line's own wrapping, so it answers to the
+ *   card's width and its words, with no script.
  *
  * The whole card is one link to the event's page: it has no buttons of its own (WQ17).
  */
-export function EventCard({ card, device = 'desktop', sizes = EVENT_CARD_SIZES, priority = false, className }: EventCardProps) {
+export function EventCard({ card, device, sizes = EVENT_CARD_SIZES, priority = false, className }: EventCardProps) {
   const { picture } = card
-  const mobile = device === 'mobile'
+  // The first line: held to one of Figma's two arrangements, or, from 768px, wrapping to the mobile one when it must.
+  const line = device === 'mobile' ? 'flex-col' : device === 'desktop' ? '' : 'md:flex-wrap'
+  // The name has what the spaces leave of the line. Where the line may wrap it asks for its own whole width first:
+  // that is what sends the spaces to a line of their own when the two don't fit.
+  const name = device === 'mobile' ? '' : device === 'desktop' ? 'min-w-0 flex-1' : 'min-w-0 flex-1 md:flex-auto'
   return (
-    <article data-event="card" data-device={device} data-type={card.membersOnly ? 'members only' : 'default'} className={className}>
+    <article data-event="card" data-device={device ?? 'by fit'} data-type={card.membersOnly ? 'members only' : 'default'} className={className}>
       <SiteLink href={card.href} className="flex flex-col gap-8">
         <div className="relative aspect-4/5 w-full overflow-clip rounded-s bg-object-product-bg">
           {picture ? (
@@ -54,9 +67,9 @@ export function EventCard({ card, device = 'desktop', sizes = EVENT_CARD_SIZES, 
         </div>
         <div className="flex flex-col gap-8">
           {/* Desktop: the name has the line but for the spaces, which keep their own width; a longer name goes on to
-              another line beside them (a word longer than the line breaks). Mobile: one under the other. */}
-          <p data-event="name-and-spaces" className={`flex items-start gap-8 ${mobile ? 'flex-col' : ''}`}>
-            <span className={`text-copy-14 [overflow-wrap:anywhere] text-text-primary ${mobile ? '' : 'min-w-0 flex-1'}`}>{card.name}</span>
+              another line beside them (a word longer than the line breaks). Mobile: one under the other, 8px apart. */}
+          <p data-event="name-and-spaces" className={`flex items-start gap-8 ${line}`}>
+            <span className={`text-copy-14 [overflow-wrap:anywhere] text-text-primary ${name}`}>{card.name}</span>
             <span className="shrink-0 text-copy-12 whitespace-nowrap text-text-muted-primary">{card.spaces}</span>
           </p>
           <p className="flex">

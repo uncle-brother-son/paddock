@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/nextjs-vite'
-import { expect } from 'storybook/test'
+import { expect, waitFor } from 'storybook/test'
 
 import { EventList } from './EventList'
 import { SAMPLE_EVENT_CARDS, SAMPLE_EVENT_LIST } from './sample-events'
@@ -75,27 +75,85 @@ export const Mobile: Story = {
   },
 }
 
+/** The longest words a card holds, Figma's own name beside two figures of spaces, a members only card and a sold-out one. */
+const LONGEST_WORDS = [SAMPLE_EVENT_CARDS.longest, { ...SAMPLE_EVENT_CARDS.plain, when: SAMPLE_EVENT_CARDS.longest.when, spaces: '10 Spaces Left' }, SAMPLE_EVENT_CARDS.membersOnly, SAMPLE_EVENT_CARDS.soldOut]
+
+const nameOf = (card: Element) => card.querySelector('[data-event="name-and-spaces"] > span:first-child') as HTMLElement
+const spacesOf = (card: Element) => card.querySelector('[data-event="name-and-spaces"] > span:last-child') as HTMLElement
+
+/** A text's width on one line, however it is wrapped now. */
+const onOneLine = (text: HTMLElement) => {
+  const copy = text.cloneNode(true) as HTMLElement
+  copy.style.cssText = 'position: absolute; visibility: hidden; white-space: nowrap; flex: none'
+  text.parentElement!.append(copy)
+  const { width } = box(copy)
+  copy.remove()
+  return width
+}
+
+/** Which of Figma's two arrangements a card is in: the spaces on the name's line at the card's right (desktop), or 8px under the name at its left (mobile). */
+const arrangementOf = (card: Element) => {
+  const [name, spaces] = [box(nameOf(card)), box(spacesOf(card))]
+  if (Math.abs(spaces.top - name.top) < 1 && Math.round(box(card).right - spaces.right) === 0) return 'desktop'
+  if (Math.round(spaces.top - name.bottom) === 8 && Math.round(spaces.left - box(card).left) === 0) return 'mobile'
+  return 'neither'
+}
+
+/** Everything wrong with where a card's words are: a line cut off by the card's edge, or one lying over another. Empty when all is well. */
+const misplacedIn = (card: Element) => {
+  const texts = [...card.querySelectorAll<HTMLElement>('[data-event="name-and-spaces"] > span, time, [data-event="price"] > span')]
+  const within = box(card)
+  const clipped = texts.filter((text) => box(text).left < within.left - 0.5 || box(text).right > within.right + 0.5 || box(text).bottom > within.bottom + 0.5).map((text) => `clipped: ${text.textContent}`)
+  const line = card.querySelector('[data-event="name-and-spaces"]') as HTMLElement
+  const cutOff = line.scrollWidth > line.clientWidth ? ['the first line is wider than the card'] : []
+  const overlapping = texts.flatMap((one, index) =>
+    texts
+      .slice(index + 1)
+      .filter((other) => box(one).left < box(other).right - 0.5 && box(other).left < box(one).right - 0.5 && box(one).top < box(other).bottom - 0.5 && box(other).top < box(one).bottom - 0.5)
+      .map((other) => `overlap: ${one.textContent} / ${other.textContent}`),
+  )
+  return [...clipped, ...cutOff, ...overlapping]
+}
+
 /**
- * W78b (WQ77): at 768px a card is 8 columns of a narrow grid (240px). With the longest words a card holds, and a
- * members only card among them, nothing reaches past a card's edge or into its neighbour, and the page is no wider
- * than the window (W78a's report, point 2: the old card's spaces ran 19px past its edge here).
+ * The list at one width of window, with the longest words (Wayne, 26 Nov): the spaces are never cut off and never
+ * lie over another line; each card is in the arrangement that fits (from 768px: the desktop card while the name and
+ * the spaces fit on one line with 8px between them, the mobile card when they don't; below: always the desktop card);
+ * and the page is no wider than the window. `expected` is each card's arrangement, in order.
  */
-export const Tablet: Story = {
-  name: 'At 768px, the longest words',
-  globals: { viewport: { value: 'tablet', isRotated: false } },
-  args: { cards: [SAMPLE_EVENT_CARDS.longest, { ...SAMPLE_EVENT_CARDS.plain, when: SAMPLE_EVENT_CARDS.longest.when, spaces: '10 Spaces Left' }, SAMPLE_EVENT_CARDS.membersOnly, SAMPLE_EVENT_CARDS.soldOut] },
+const atWidth = (viewport: string, wide: number, card: number, expected: string[]): Story => ({
+  globals: { viewport: { value: viewport, isRotated: false } },
+  args: { cards: LONGEST_WORDS },
   play: async ({ canvasElement }) => {
     await document.fonts.ready
     const cards = cardsOf(canvasElement)
-    await expect(cards.slice(0, 3).map((card) => [Math.round(box(card).left), Math.round(box(card).width)])).toEqual([[16, 240], [264, 240], [512, 240]])
-    for (const card of cards) {
-      const spilt = [...card.querySelectorAll('span, time')].filter((text) => box(text).left < box(card).left - 0.5 || box(text).right > box(card).right + 0.5)
-      await expect(spilt.map((text) => text.textContent)).toEqual([])
-    }
-    await expect(cards.map((card) => (card as HTMLElement).dataset.type)).toEqual(['members only', 'default', 'members only', 'default'])
-    await expect(document.documentElement.scrollWidth).toBe(768)
+    await waitFor(() => expect(cards.every((one) => [nameOf(one), spacesOf(one)].every((text) => document.fonts.check(getComputedStyle(text).font)))).toBe(true))
+    await expect(cards.map((one) => Math.round(box(one).width))).toEqual(cards.map(() => card))
+    await expect(cards.flatMap(misplacedIn)).toEqual([])
+    await expect(cards.map(arrangementOf)).toEqual(expected)
+    // The rule itself, from the words' own widths.
+    const fits = (one: Element) => onOneLine(nameOf(one)) + 8 + box(spacesOf(one)).width <= box(one).width + 0.5
+    await expect(cards.map(arrangementOf)).toEqual(cards.map((one) => (wide < 768 || fits(one) ? 'desktop' : 'mobile')))
+    await expect(cards.map((one) => (one as HTMLElement).dataset.type)).toEqual(['members only', 'default', 'members only', 'default'])
+    await expect(document.documentElement.scrollWidth).toBe(wide)
   },
-}
+})
+
+/**
+ * At 768px a card is 8 columns of a narrow grid, 240px: too narrow for Figma's own name beside its spaces, so those
+ * cards are the mobile card, the spaces under the name (W78a's report, point 2: the old card's spaces ran 19px past
+ * its edge here). A short name still has its spaces beside it.
+ */
+export const At768: Story = atWidth('tablet', 768, 240, ['mobile', 'mobile', 'mobile', 'desktop'])
+
+/** At 1024px a card is 325px: Figma's name and its spaces fit on one line again; only the longest name does not. */
+export const At1024: Story = atWidth('w1024', 1024, 325, ['mobile', 'desktop', 'desktop', 'desktop'])
+
+/** At 1440px, Figma's frame, a card is 464px: the desktop card, as drawn; only a name too long for the line with its spaces is the mobile card. */
+export const At1440: Story = atWidth('desktop', 1440, 464, ['desktop', 'desktop', 'desktop', 'desktop'])
+
+/** On a phone (390px) every card is the desktop card, as Figma's phone list draws it: a long name goes on to another line beside its spaces. */
+export const At390: Story = atWidth('mobile', 390, 358, ['desktop', 'desktop', 'desktop', 'desktop'])
 
 /** The module's heading is optional: without one the cards start the section, and it is still named for a screen reader. */
 export const NoHeading: Story = {

@@ -180,10 +180,8 @@ export const MobileMembersOnly: Story = {
   },
 }
 
-/** How wide a card is in the lists, by the window's width: the grid's whole width below 768px, 8 of its 24 columns from there. */
+/** How wide a card is in the lists from 768px, by the window's width: 8 of the grid's 24 columns. (Below 768px: components/events/EventList.stories.tsx.) */
 const CARD_WIDTHS = [
-  { wide: 320, card: 288 },
-  { wide: 390, card: 358 },
   { wide: 768, card: 240 },
   { wide: 1024, card: 325 },
   { wide: 1440, card: 464 },
@@ -191,15 +189,17 @@ const CARD_WIDTHS = [
 ]
 
 /**
- * W78b: at every width a list draws it, with the longest it has to hold (a long name, "10:00 - Wednesday 10
- * February", "10 Spaces Left" or "Sold out", a price with pence and "Members Only"), nothing reaches past the card's
- * edge and no line lies over another: the spaces keep their place at the right of the first line, and a name too
- * long for the rest of it goes on to another line (W78a's report, point 2: at 768px the old card's spaces ran 19px
- * past its edge). The mobile card, 183 wide, holds the same words too.
+ * W78b (Wayne, 26 Nov): from 768px a card left to itself takes the arrangement that fits. At every width a list
+ * draws it there, with the longest it has to hold (a long name, "10:00 - Wednesday 10 February", "10 Spaces Left" or
+ * "Sold out", a price with pence and "Members Only"), nothing reaches past the card's edge and no line lies over
+ * another: the spaces are at the right of the name's line while the two fit on it (Device=desktop), and on a line of
+ * their own under the name when they don't (Device=mobile), as at a tablet's 240 (W78a's report, point 2: there the
+ * old card's spaces ran 19px past its edge). The mobile card, 183 wide, holds the same words too.
  */
 export const EveryWidth: Story = {
-  name: 'Every width, the longest words',
+  name: 'From 768px: the arrangement that fits, the longest words',
   parameters: { layout: 'fullscreen' },
+  globals: { viewport: { value: 'desktop', isRotated: false } },
   render: () => (
     <div className="flex flex-col gap-32">
       {CARD_WIDTHS.flatMap(({ wide, card }) =>
@@ -219,16 +219,15 @@ export const EveryWidth: Story = {
     const cards = [...canvasElement.querySelectorAll<HTMLElement>('[data-event="card"]')]
     await expect(cards).toHaveLength(CARD_WIDTHS.length * 3 + 1)
     for (const card of cards) await expectNothingSpills(card)
-    // Every list's card is the desktop arrangement, whatever its width and however long its name.
-    for (const card of cards.slice(0, -1)) await expectDesktopArrangement(card)
+    // Each is wholly one of Figma's two arrangements: the spaces beside the name, or under it.
+    const besideTheName = (card: HTMLElement) => Math.abs(box(partsOf(card).spaces).top - box(partsOf(card).name).top) < 1
+    for (const card of cards.slice(0, -1)) await (besideTheName(card) ? expectDesktopArrangement(card) : expectMobileArrangement(card))
     await expectMobileArrangement(cards[cards.length - 1]!)
-    // Figma's own name beside the longest spaces: one line from a phone's width up, more than one only at a tablet's
-    // 240 (a line of Copy 14 is its capitals' height, about 10px; a second adds the line height).
-    const nameLines = (wide: number) => {
-      const card = canvasElement.querySelectorAll<HTMLElement>(`[data-window="${wide}"] [data-event="card"]`)[2] as HTMLElement
-      return box(partsOf(card).name).height < 14 ? 'one line' : 'more'
-    }
-    await expect([320, 390, 768, 1024, 1440, 1920].map(nameLines)).toEqual(['one line', 'one line', 'more', 'one line', 'one line', 'one line'])
+    // Figma's own name beside the longest spaces: the mobile card at a tablet's 240, the desktop card from 325 up,
+    // and its name is on one line in both (a line of Copy 14 is its capitals' height, about 10px).
+    const figmasName = (wide: number) => canvasElement.querySelectorAll<HTMLElement>(`[data-window="${wide}"] [data-event="card"]`)[2] as HTMLElement
+    await expect(CARD_WIDTHS.map(({ wide }) => (besideTheName(figmasName(wide)) ? 'desktop' : 'mobile'))).toEqual(['mobile', 'desktop', 'desktop', 'desktop'])
+    await expect(CARD_WIDTHS.map(({ wide }) => box(partsOf(figmasName(wide)).name).height < 14)).toEqual([true, true, true, true])
   },
 }
 

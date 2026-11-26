@@ -97,7 +97,13 @@ export function ProductBuy({ product, tabs, readSizes = readAvailability, classN
     <StickyColumn place={className ?? ''} data-shop="details" className="flex flex-col gap-64 pt-24 pb-120 md:pt-240 md:pb-80">
       <div className="flex flex-col gap-32">
         <div className="flex flex-col gap-24">
-          <h1 className="text-h2 text-text-primary">{product.name}</h1>
+          {/* Wayne, 26 Nov: the colours of a family share a name, so a screen reader hears the colour with it
+              ("Paddock T-Shirt, Orange": what tells one colour's page from another's when focus arrives here after
+              a swatch). Nothing seen changes: the colour is drawn in its own line below. */}
+          <h1 className="text-h2 text-text-primary">
+            {product.name}
+            {product.colourName ? <span className="sr-only">, {product.colourName}</span> : null}
+          </h1>
           <div aria-live="polite">
             <Price price={picked?.price ?? product.price} />
           </div>
