@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 
+import { StickyColumn } from '@/components/layout/StickyColumn'
 import { InfoPanelLink } from '@/components/shop/InfoPanelLink'
 import { ProductInfoPanel, type InfoTab } from '@/components/shop/ProductInfoPanel'
 import { BigButton } from '@/components/ui/Button'
@@ -34,7 +35,7 @@ type EventBuyProps = {
    * and tests give their own, or null to ask nothing.
    */
   readLive?: ((event: string) => Promise<ShopEventAvailabilityRouteOutput | null>) | null
-  /** Where the details sit on the page: their columns of the grid, and that they stick. */
+  /** Where the details sit on the page: their columns of the grid. They stick there as a StickyColumn does (components/layout/StickyColumn.tsx). */
   className?: string
 }
 
@@ -79,7 +80,7 @@ export function EventBuy({ event, tabs, readLive = readEventAvailability, classN
 
   return (
     <>
-      <div data-event="details" className={`flex flex-col gap-64 pt-24 pb-120 md:pt-240 md:pb-80 ${className ?? ''}`}>
+      <StickyColumn place={className ?? ''} data-event="details" className="flex flex-col gap-64 pt-24 pb-120 md:pt-240 md:pb-80">
         <div className="flex flex-col gap-32">
           <div className="flex flex-col gap-24">
             <h1 className="text-h2 text-text-primary">{event.name}</h1>
@@ -120,7 +121,7 @@ export function EventBuy({ event, tabs, readLive = readEventAvailability, classN
             ))}
           </ul>
         ) : null}
-      </div>
+      </StickyColumn>
       {/* Beside the details, not inside them: they stick as the gallery scrolls past, and what sticks is a layer of its own, which would hold the panel beneath the header. */}
       {tabs.length > 0 ? (
         <ProductInfoPanel

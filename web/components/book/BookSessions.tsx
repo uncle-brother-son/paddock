@@ -6,6 +6,7 @@ import { dayLine } from '@/lib/dates'
 import { signIn } from '@/lib/frame/sign-in'
 
 import { Calendar } from './Calendar'
+import { FREE_ONE, FREE_TWO, SIX_COLUMNS, THIRTEEN_COLUMNS } from './columns'
 import { SessionRow, SessionRowLoading } from './SessionRow'
 
 /** How many rows stand in for a day's sessions while they are read, as drawn (Day=loading). */
@@ -20,8 +21,6 @@ export type DayRead = 'loading' | 'failed' | DaySessions
 type BookSessionsProps = {
   today: string
   month: string
-  /** The month's days with a session to book in this view; null until they are known. */
-  bookable: readonly string[] | null
   firstMonth: string
   lastMonth: string
   onMonth: (month: string) => void
@@ -49,7 +48,11 @@ type BookSessionsProps = {
  * 1174:13247 and 120 1174:13266, Day=none 1180:20451, Day=loading 1180:20590; on a phone 1176:17691, 1180:21136,
  * 1180:21280). From 768px it is two columns of the panel's own 24: the calendar with the log-in bar beneath it (6
  * columns, from the 2nd), and the day's sessions (13 columns, from the 10th), which scroll by themselves. On a phone
- * they are one column, 32px apart, and the panel scrolls.
+ * they are one column, 32px apart, and the panel scrolls. Between those two widths the calendar and the log-in bar
+ * keep at least their phone's width and the sessions take what is left (W78b, WQ78: components/book/columns.ts),
+ * each row wrapping as the phone's does when its column is too narrow for one line (SessionRow).
+ *
+ * W78b (WQ78): any day from today on can be chosen, and one with no sessions shows the no-sessions card.
  *
  * The day's heading has the Public / Private toggle at its right (on a phone it wraps beneath). Under them: the
  * line that says what the view is, with the most people a booking may hold; for Private the day's lengths (60 min,
@@ -74,11 +77,11 @@ export function BookSessions(props: BookSessionsProps) {
 
   return (
     <>
-      <div className="col-span-6 flex flex-col gap-12 md:col-start-2">
+      <div aria-hidden="true" className={FREE_ONE} />
+      <div data-book="sidebar" className={`col-span-6 flex flex-col gap-12 ${SIX_COLUMNS}`}>
         <Calendar
           month={props.month}
           today={props.today}
-          bookable={props.bookable}
           chosen={day}
           firstMonth={props.firstMonth}
           lastMonth={props.lastMonth}
@@ -92,8 +95,10 @@ export function BookSessions(props: BookSessionsProps) {
         </div>
       </div>
 
-      <section data-book="sessions" aria-label="Sessions" className={`col-span-6 flex min-h-0 flex-col md:col-span-13 md:col-start-10 ${none ? 'gap-32' : 'gap-32 md:gap-12'}`}>
-        <div className="flex flex-wrap items-center justify-between gap-y-16">
+      <div aria-hidden="true" className={FREE_TWO} />
+      <section data-book="sessions" aria-label="Sessions" className={`col-span-6 flex min-h-0 flex-col ${THIRTEEN_COLUMNS} ${none ? 'gap-32' : 'gap-32 md:gap-12'}`}>
+        {/* The toggle goes beneath the heading wherever the two don't fit on a line (Figma's SessionsHeader wraps, 16px between its lines). */}
+        <div className="flex flex-wrap items-center justify-between gap-x-12 gap-y-16">
           {/* The heading names the day once one is chosen (WQ65: the first with a session to book), and its place is held until then. */}
           {day ? (
             <h2 className="text-label-12 whitespace-nowrap text-text-primary">{dayLine(day)}</h2>

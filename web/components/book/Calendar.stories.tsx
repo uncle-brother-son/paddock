@@ -3,16 +3,16 @@ import { useState } from 'react'
 import { expect, userEvent, waitFor } from 'storybook/test'
 
 import { Calendar } from './Calendar'
-import { SAMPLE_MONTH, SAMPLE_TODAY, sampleDays } from './sample-book'
+import { SAMPLE_MONTH, SAMPLE_TODAY } from './sample-book'
 
-/** The calendar with its month and its chosen day kept, as the panel keeps them. `known: false`: the month's days are still being read. */
-function Kept({ known = true }: { known?: boolean }) {
+/** The calendar with its month and its chosen day kept, as the panel keeps them. */
+function Kept() {
   const [month, setMonth] = useState(SAMPLE_MONTH)
   const [chosen, setChosen] = useState<string | null>(SAMPLE_TODAY)
   return (
     // The sidebar on a desktop: 6 of the panel's columns.
     <div className="max-w-[340px]">
-      <Calendar month={month} today={SAMPLE_TODAY} bookable={known ? sampleDays(month).publicDays : null} chosen={chosen} firstMonth={SAMPLE_MONTH} lastMonth="2026-12" onMonth={setMonth} onChoose={setChosen} />
+      <Calendar month={month} today={SAMPLE_TODAY} chosen={chosen} firstMonth={SAMPLE_MONTH} lastMonth="2026-12" onMonth={setMonth} onChoose={setChosen} />
     </div>
   )
 }
@@ -38,8 +38,9 @@ const NOV = (date: number) => `${['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'T
 /**
  * Figma "BookingCalendar" (1150:10981) with "CalendarDay" (577:2888): a Surface/Card card, 12px inside, 330px tall:
  * the month and its two arrows, 24px beneath the days of the week, then six weeks of 33px days, 6px apart, Monday
- * first. selected: Surface/Secondary with Text/Secondary; past (and a day with nothing to book): Text/Muted Primary;
- * default: Text/Primary, with Surface/Card Selected under the pointer.
+ * first. selected: Surface/Secondary with Text/Secondary; past (a day before today): Text/Muted Primary; default:
+ * Text/Primary, with Surface/Card Selected under the pointer. W78b (WQ78): a day ahead with no sessions (the sample
+ * month's 18th) is a day like any other, and can be chosen.
  */
 export const November: Story = {
   play: async ({ canvas, canvasElement }) => {
@@ -71,15 +72,18 @@ export const November: Story = {
     await expect(Math.abs(box(first).width - box(first).height)).toBeLessThan(0.1)
     const chosen = canvas.getByRole('button', { name: NOV(12) })
     const [past, none, open] = [canvas.getByRole('button', { name: NOV(11) }), canvas.getByRole('button', { name: NOV(18) }), canvas.getByRole('button', { name: NOV(13) })]
-    await expect([chosen, past, none, open].map((day) => [day.getAttribute('aria-pressed'), day.getAttribute('aria-disabled')])).toEqual([['true', 'false'], ['false', 'true'], ['false', 'true'], ['false', 'false']])
-    await expect(getComputedStyle(past).color).toBe(getComputedStyle(none).color)
+    await expect([chosen, past, none, open].map((day) => [day.getAttribute('aria-pressed'), day.getAttribute('aria-disabled')])).toEqual([['true', 'false'], ['false', 'true'], ['false', 'false'], ['false', 'false']])
+    // A day with no sessions is drawn as any day ahead; only the days before today are muted.
+    await expect(getComputedStyle(none).color).toBe(getComputedStyle(open).color)
     await expect(getComputedStyle(past).color).not.toBe(getComputedStyle(open).color)
     await expect(getComputedStyle(chosen).backgroundColor).not.toBe(getComputedStyle(open).backgroundColor)
-    // A press on a day with nothing to book chooses nothing; a press on one that has, chooses it.
-    await userEvent.click(none)
+    // A press on a past day chooses nothing; a press on a day ahead chooses it, with sessions or without.
+    await userEvent.click(past)
     await expect(chosen).toHaveAttribute('aria-pressed', 'true')
     await userEvent.click(open)
     await expect([open.getAttribute('aria-pressed'), chosen.getAttribute('aria-pressed')]).toEqual(['true', 'false'])
+    await userEvent.click(none)
+    await expect([none.getAttribute('aria-pressed'), open.getAttribute('aria-pressed')]).toEqual(['true', 'false'])
   },
 }
 
@@ -98,11 +102,17 @@ export const ByKeyboard: Story = {
     await userEvent.keyboard('{ArrowDown}')
     await expect(day('2026-11-20')).toHaveFocus()
     await userEvent.keyboard('{ArrowLeft}{ArrowLeft}')
-    // The 18th has nothing to book: it takes focus all the same, and says it can't be chosen.
+    // The 18th has no sessions: it can be chosen as any day ahead can (WQ78).
     await expect(day('2026-11-18')).toHaveFocus()
-    await expect(day('2026-11-18')).toHaveAttribute('aria-disabled', 'true')
+    await expect(day('2026-11-18')).toHaveAttribute('aria-disabled', 'false')
     await userEvent.keyboard('{Enter}')
-    await expect(day('2026-11-12')).toHaveAttribute('aria-pressed', 'true')
+    await expect(day('2026-11-18')).toHaveAttribute('aria-pressed', 'true')
+    // A day before today takes focus all the same, says it can't be chosen, and a press does nothing.
+    day('2026-11-11').focus()
+    await expect(day('2026-11-11')).toHaveAttribute('aria-disabled', 'true')
+    await userEvent.keyboard('{Enter}')
+    await expect(day('2026-11-18')).toHaveAttribute('aria-pressed', 'true')
+    day('2026-11-18').focus()
     await userEvent.keyboard('{Home}')
     await expect(day('2026-11-16')).toHaveFocus()
     await userEvent.keyboard('{End}')
@@ -127,14 +137,5 @@ export const ByKeyboard: Story = {
     // Before this month there is nothing: Left on the 1st stays.
     await userEvent.keyboard('{ArrowLeft}')
     await expect(day('2026-11-01')).toHaveFocus()
-  },
-}
-
-/** While a month's days are read none can be chosen: every day is muted, the chosen one still marked. */
-export const DaysNotKnown: Story = {
-  args: { known: false },
-  play: async ({ canvasElement }) => {
-    const days = [...canvasElement.querySelectorAll<HTMLElement>('[data-day]')]
-    await expect(days.filter((day) => day.getAttribute('aria-disabled') === 'false').map((day) => day.dataset.day)).toEqual(['2026-11-12'])
   },
 }

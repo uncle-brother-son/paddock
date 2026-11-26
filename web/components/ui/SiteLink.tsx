@@ -4,7 +4,7 @@ import Link from 'next/link'
 import type { ComponentPropsWithoutRef, MouseEvent } from 'react'
 
 import { useFramePanels } from '@/components/frame/useFramePanels'
-import { PAGE_AT_ONCE_TYPES, PAGE_TRANSITION_TYPES } from '@/lib/motion/page-transition'
+import { arriveInPlace, PAGE_AT_ONCE_TYPES, PAGE_TRANSITION_TYPES } from '@/lib/motion/page-transition'
 import { isBuiltAddress } from '@/lib/routes/not-built'
 import { isBookAddress } from '@/lib/sanity/links'
 
@@ -16,6 +16,8 @@ type SiteLinkProps = Omit<ComponentPropsWithoutRef<'a'>, 'href' | 'target' | 're
    * W74c (WQ52): false for a link that changes the page where it stands (a product's colour swatch): it goes to the
    * new address, so Back works and the link can be shared, with no page transition. Every other link has it.
    * W78a (WQ68): it says so with a type of its own, since a navigation with no type at all (Back, Forward) is animated.
+   * W78b (WQ52, as amended again): the window is left where it is when the new page comes (Next is told not to scroll),
+   * and a plain press says the page arrives in place: it then scrolls smoothly to its top (lib/motion/page-transition.ts).
    */
   transition?: boolean
 }
@@ -25,6 +27,9 @@ export const isOutsideAddress = (href: string): boolean => /^(https?:|mailto:|te
 
 /** A plain press of the main button, with no key held: anything else (a new tab, a new window) is left to the browser. */
 export const isPlainClick = (event: MouseEvent): boolean => event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey
+
+/** An address's path alone, without what it asks (?colour=) or the place it names (#top): what the page transition knows a page by. */
+const pathOf = (href: string): string => href.split(/[?#]/)[0] ?? href
 
 /**
  * A link with no look of its own: Next's <Link> for a page of the site (no full reload), a plain <a> for an outside
@@ -51,11 +56,13 @@ export function SiteLink({ href, newTab = false, transition = true, onClick, chi
   }
   const click = (event: MouseEvent<HTMLAnchorElement>) => {
     onClick?.(event)
-    if (event.defaultPrevented || newTab || !isBookAddress(href) || !isPlainClick(event)) return
-    if (panels.open('book')) event.preventDefault()
+    if (event.defaultPrevented || newTab || !isPlainClick(event)) return
+    // WQ52: the page this link leads to comes where this one stands, and scrolls to its top by itself.
+    if (!transition) arriveInPlace(pathOf(href))
+    if (isBookAddress(href) && panels.open('book')) event.preventDefault()
   }
   return (
-    <Link href={href} prefetch={isBuiltAddress(href) ? 'auto' : false} transitionTypes={transition ? PAGE_TRANSITION_TYPES : PAGE_AT_ONCE_TYPES} onClick={click} {...tab} {...rest}>
+    <Link href={href} prefetch={isBuiltAddress(href) ? 'auto' : false} scroll={transition} transitionTypes={transition ? PAGE_TRANSITION_TYPES : PAGE_AT_ONCE_TYPES} onClick={click} {...tab} {...rest}>
       {children}
     </Link>
   )

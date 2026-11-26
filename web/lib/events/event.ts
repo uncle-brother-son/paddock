@@ -9,7 +9,7 @@ import { whenLine } from '@/lib/dates'
 
 import { cardSpaces } from './format'
 
-// W75: what an Event page and an EventCard show (Figma 1684:41950, 1684:42018, 329:7588), made from Sanity's event
+// W75: what an Event page and an EventCard show (Figma 1684:41950, 1684:42018, 329:7587), made from Sanity's event
 // (name, words, pictures) and the Worker's (W75a: date, spaces, state, prices). Nothing here reads either, and every
 // price is one W75a's read gave: this only writes them as the designs do.
 
@@ -77,7 +77,10 @@ export function eventView({ event, onSale, settings }: EventContent): EventView 
   }
 }
 
-/** An EventCard (Figma 329:7588): its picture, "16:00 - Tuesday 27 October" (WQ69), "6 Spaces Left" and its name; one link to the event. */
+/**
+ * An EventCard (Figma 329:7587; W78b, WQ77): its picture, its name with "6 Spaces Left", "16:00 - Tuesday 27 October"
+ * (WQ69) and its price; one link to the event. Type=members only adds "Members Only" after the price.
+ */
 export type EventCardView = {
   id: string
   href: string
@@ -88,12 +91,22 @@ export type EventCardView = {
   startsAt: string
   /** "6 Spaces Left", "1 Space Left", or "Sold out". */
   spaces: string
+  /** "£25": what a visitor pays for a place, or on a members only card what a member pays; null when the Worker gives none. */
+  price: string | null
+  /** Figma's Type=members only: an event only a member can book now (members only, or members first before it opens to everyone). */
+  membersOnly: boolean
 }
 
 /** A card is a third of a desktop window (8 of the grid's 24 columns) and the whole of a phone's. */
 export const EVENT_CARD_SIZES = '(min-width: 768px) 33vw, 100vw'
 
-export function eventCard(content: SanityEventCard, event: Pick<ShopEvent, 'startsAt' | 'spacesLeft'>): EventCardView {
+/**
+ * A card from Sanity's event and the Worker's. Which card it is, and its price, are the Event page's own price line
+ * (`eventPrice`): the members only card whenever that line says "Member Only", with the member price; any other the
+ * public price alone, as the card is drawn (the card has no "Member from").
+ */
+export function eventCard(content: SanityEventCard, event: Pick<ShopEvent, 'startsAt' | 'spacesLeft' | 'state' | 'price' | 'memberPrice'>): EventCardView {
+  const price = eventPrice(event)
   return {
     id: content.id,
     href: `/events/${content.slug}`,
@@ -102,6 +115,8 @@ export function eventCard(content: SanityEventCard, event: Pick<ShopEvent, 'star
     when: whenLine(event.startsAt),
     startsAt: event.startsAt,
     spaces: cardSpaces(event.spacesLeft),
+    price: price.now,
+    membersOnly: price.memberOnly,
   }
 }
 

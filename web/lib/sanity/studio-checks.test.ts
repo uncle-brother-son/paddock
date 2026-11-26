@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
@@ -28,6 +28,10 @@ import cases from './slug-cases.json'
 
 const STUDIO = path.resolve(__dirname, '../../../studio')
 const studioFile = (file: string) => readFileSync(path.join(STUDIO, file), 'utf8')
+/** Every schema file of the Studio, its shared blocks and fields included, as its path under schemaTypes/. */
+const SCHEMA_FILES = readdirSync(path.join(STUDIO, 'schemaTypes'), { recursive: true, encoding: 'utf8' })
+  .filter((file) => file.endsWith('.ts'))
+  .sort()
 
 const picture = { asset: { _ref: 'image-a-1x1-jpg' } }
 
@@ -373,6 +377,31 @@ describe('W72a: a slug in use, or in any document\'s old slugs, cannot be taken 
     expect(config).toContain("if (action.action === 'duplicate') return duplicateWithoutPreviousSlugs(action)")
     // The gift card's address is the site's own: no slug, so nothing to keep.
     expect(studioFile('schemaTypes/giftCardType.ts')).not.toMatch(/name: 'slug'|previousSlugs|isSlugFree/)
+  })
+
+  it('W78b (Wayne, 25 Nov): every slug field has its Generate button, made from the name or title, and keeps its own checks', () => {
+    // The whole of each slug field, from its `type: 'slug'` line to the end of its options.
+    const slugFields = (file: string) => [...studioFile(`schemaTypes/${file}`).matchAll(/type: 'slug',[\s\S]*?options: \{[\s\S]*?\n {6}\},|type: 'slug',[\s\S]*?options: \{[^\n]*\},/g)].map((match) => match[0])
+    const sources = Object.fromEntries(
+      SCHEMA_FILES.flatMap((file) => {
+        const fields = slugFields(file)
+        // A file that names a slug field has exactly one, with options this test can read.
+        expect(fields.length, file).toBe(studioFile(`schemaTypes/${file}`).split("type: 'slug'").length - 1)
+        return fields.map((field) => [file, field.match(/source: ('[a-zA-Z]+'|\(document\) => [^\n]+),/)?.[1] ?? null])
+      }),
+    )
+    expect(sources).toEqual({
+      'blogPost.ts': "'title'",
+      'contentPage.ts': "'title'",
+      'event.ts': "'name'",
+      'infoPage.ts': "'title'",
+      'product.ts': "(document) => [document.name, document.colourName].filter(Boolean).join(' ')",
+      'productCategory.ts': "'title'",
+    })
+    // Each keeps the words it may not use (studio/lib/checks.ts), with Generate there or not.
+    for (const [file, kind] of [['contentPage.ts', 'page'], ['event.ts', 'page'], ['infoPage.ts', 'info'], ['product.ts', 'product'], ['productCategory.ts', 'category']]) {
+      expect(studioFile(`schemaTypes/${file}`), file).toContain(`.custom((slug) => checkSlug(slug?.current, '${kind}'))`)
+    }
   })
 })
 

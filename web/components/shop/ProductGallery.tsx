@@ -18,8 +18,11 @@ type ProductGalleryProps = {
  * A product's gallery (Figma "Gallery": desktop 1684:41922, mobile 1684:41992), its pictures and videos in the
  * editor's order, each 4 by 5 on Object/Product BG.
  * - From 768px they are stacked, one under the other, down the left half of the window.
- * - Below, they are a row to swipe through, one the whole window wide at a time, with the slider beneath: a hairline
- *   in as many parts as there are pictures, the one on show in Surface/Secondary.
+ * - Below, they are a row to swipe through, one the whole window wide at a time, with the slider 4px beneath (Figma
+ *   "Slider", 1402:48765; W78b, WQ76): one line, 1.2px, the window's whole width, in as many parts as there are
+ *   pictures, each Surface/Card, and over them one part's length in Surface/Secondary, which moves across as the row
+ *   is swiped: it follows the row's own scrolling, part-way between two pictures when the row is. A gallery of one
+ *   picture has no slider. It is decoration: the row itself is what a screen reader and the keyboard have.
  *
  * A video is drawn as the Hero draws one (WQ35; lib/sanity/media.ts): each width of screen gets only its own file
  * and poster, it plays muted and looped only while on screen, and it has Pause, and the sound button when it has
@@ -29,7 +32,7 @@ export function ProductGallery({ items, reducedMotion: reducedMotionSet, label =
   const visitorReducedMotion = usePrefersReducedMotion()
   const reducedMotion = reducedMotionSet ?? visitorReducedMotion
   const row = useRef<HTMLDivElement>(null)
-  const [onShow, setOnShow] = useState(0)
+  const filled = useRef<HTMLSpanElement>(null)
   // Only while it is a row to swipe is it a thing the keyboard needs to reach.
   const [swiped, setSwiped] = useState(false)
 
@@ -38,7 +41,10 @@ export function ProductGallery({ items, reducedMotion: reducedMotionSet, label =
     if (!element) return
     const look = () => {
       setSwiped(element.scrollWidth > element.clientWidth + 1)
-      setOnShow(element.clientWidth > 0 ? Math.round(element.scrollLeft / element.clientWidth) : 0)
+      // WQ76: how many pictures along the row is, part-pictures included, is how many of its own lengths along the
+      // filled part is (never past either end, where a phone lets the row be pulled further).
+      const along = element.clientWidth > 0 ? Math.min(Math.max(element.scrollLeft / element.clientWidth, 0), items.length - 1) : 0
+      if (filled.current) filled.current.style.translate = `${along * 100}% 0`
     }
     look()
     element.addEventListener('scroll', look, { passive: true })
@@ -67,10 +73,11 @@ export function ProductGallery({ items, reducedMotion: reducedMotionSet, label =
         ))}
       </div>
       {items.length > 1 ? (
-        <div aria-hidden="true" data-gallery-slider="" className="flex md:hidden">
-          {items.map((item, index) => (
-            <span key={item.key} className={`h-px flex-1 transition-colors duration-short ease-smooth ${index === onShow ? 'bg-surface-secondary' : 'bg-surface-card'}`} />
+        <div aria-hidden="true" data-gallery-slider="" className="relative flex h-[1.2px] overflow-clip md:hidden">
+          {items.map((item) => (
+            <span key={item.key} data-gallery-slide="" className="flex-1 bg-surface-card" />
           ))}
+          <span ref={filled} data-gallery-filled="" className="absolute inset-y-0 left-0 bg-surface-secondary" style={{ width: `${100 / items.length}%` }} />
         </div>
       ) : null}
     </div>

@@ -228,7 +228,7 @@ export const Mobile: Story = {
     const gallery = canvasElement.querySelector('[data-shop="gallery"]') as HTMLElement
     const pictures = [...gallery.querySelectorAll('[data-gallery-item]')]
     await expect(pictures.map((picture) => [Math.round(box(picture).left), Math.round(box(picture).width), Math.round(box(picture).height)])).toEqual([[0, 390, 488], [390, 390, 488]])
-    await expect([...(gallery.querySelector('[data-gallery-slider]') as HTMLElement).children]).toHaveLength(2)
+    await expect((gallery.querySelector('[data-gallery-slider]') as HTMLElement).querySelectorAll('[data-gallery-slide]')).toHaveLength(2)
     const name = canvas.getByRole('heading', { level: 1 })
     await expect([Math.round(box(name).left), Math.round(box(name).top - box(gallery).bottom)]).toEqual([16, 24])
     const stepper = stepperOf(canvasElement)

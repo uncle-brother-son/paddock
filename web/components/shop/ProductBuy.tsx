@@ -2,10 +2,10 @@
 
 import { useEffect, useId, useState } from 'react'
 
+import { StickyColumn } from '@/components/layout/StickyColumn'
 import { BigButton } from '@/components/ui/Button'
-import { isPlainClick, SiteLink } from '@/components/ui/SiteLink'
+import { SiteLink } from '@/components/ui/SiteLink'
 import type { ShopAvailabilityRouteOutput } from '@/contracts/shop'
-import { keepFocusOnArrival } from '@/lib/motion/page-transition'
 import { readAvailability } from '@/lib/shop/availability'
 import { addToBag } from '@/lib/shop/bag'
 import { productSizes, SIZE_GUIDE_TAB, type PriceLine, type ProductView } from '@/lib/shop/product'
@@ -16,9 +16,6 @@ import { SizeOption } from './SizeSelect'
 
 /** The swatches are a sixth of the details' width each, as drawn. */
 const SWATCH_SIZES = '(min-width: 768px) 5vw, 15vw'
-
-/** The swatch of the colour a product's page is showing: the one a visitor chose, once its page is there. */
-const CHOSEN_SWATCH = '[data-shop="swatch"][aria-current="page"]'
 
 /** PIC's price line: the price before a sale struck through, the price ("From" while the sizes differ), and the member's. */
 function Price({ price }: { price: PriceLine }) {
@@ -46,7 +43,7 @@ type ProductBuyProps = {
    * their own, or null to ask nothing.
    */
   readSizes?: ((product: string) => Promise<ShopAvailabilityRouteOutput | null>) | null
-  /** Where the details sit on the page: their columns of the grid, and that they stick. */
+  /** Where the details sit on the page: their columns of the grid. They stick there as a StickyColumn does (components/layout/StickyColumn.tsx). */
   className?: string
 }
 
@@ -97,7 +94,7 @@ export function ProductBuy({ product, tabs, readSizes = readAvailability, classN
 
   return (
     <>
-    <div data-shop="details" className={`flex flex-col gap-64 pt-24 pb-120 md:pt-240 md:pb-80 ${className ?? ''}`}>
+    <StickyColumn place={className ?? ''} data-shop="details" className="flex flex-col gap-64 pt-24 pb-120 md:pt-240 md:pb-80">
       <div className="flex flex-col gap-32">
         <div className="flex flex-col gap-24">
           <h1 className="text-h2 text-text-primary">{product.name}</h1>
@@ -118,14 +115,12 @@ export function ProductBuy({ product, tabs, readSizes = readAvailability, classN
               <ul aria-label="Colours" className="grid grid-cols-6 gap-4">
                 {product.colours.map((colour) => (
                   <li key={colour.id}>
-                    {/* WQ52: another colour is another product's page, swapped in where this one stands: no page
-                        transition, the new page from its top at once, and focus on the swatch that was chosen. */}
+                    {/* WQ52 (as amended again): another colour is another product's page, swapped in where this one
+                        stands with no page transition; the window then scrolls smoothly to the page's top, and focus
+                        goes to the product's name once it is there (components/frame/PageTransition.tsx). */}
                     <SiteLink
                       href={colour.href}
                       transition={false}
-                      onClick={(event) => {
-                        if (isPlainClick(event)) keepFocusOnArrival(colour.href, CHOSEN_SWATCH)
-                      }}
                       data-shop="swatch"
                       aria-label={colour.name}
                       {...(colour.current ? { 'aria-current': 'page' as const } : {})}
@@ -208,7 +203,7 @@ export function ProductBuy({ product, tabs, readSizes = readAvailability, classN
           ))}
         </ul>
       ) : null}
-    </div>
+    </StickyColumn>
     {/* Beside the details, not inside them: they stick as the gallery scrolls past, and what sticks is a layer of its own, which would hold the panel beneath the header. */}
     {tabs.length > 0 ? (
       <ProductInfoPanel open={panel.open} tabs={tabs} tab={panel.tab} onTab={(tab) => setPanel({ open: true, tab })} onClose={() => setPanel((now) => ({ ...now, open: false }))} />

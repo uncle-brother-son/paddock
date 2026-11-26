@@ -23,7 +23,8 @@ type EventPageViewProps = {
  * An event's page (Figma "Event", 1684:41950, and "Event (mobile)", 1684:42018), laid out as a product's is.
  * - From 768px: the gallery fills the window's left half, from its edge to the end of the grid's 12th column, its
  *   pictures and videos stacked (the same media blocks as a product's gallery: WQ43); the details are columns 15 to
- *   21, and stay in view (they stick to the window's top) while the gallery scrolls past.
+ *   21, and stay in view (they stick to the window's top) while the gallery scrolls past (taller than the window:
+ *   WQ73, components/layout/StickyColumn.tsx).
  * - Below: the gallery is the window's whole width, a row to swipe, with the details beneath it.
  * Then Other events. The info panel is the details' own (components/events/EventBuy.tsx).
  */
@@ -39,7 +40,7 @@ export function EventPageView({ view, others, listAddress, readLive, reducedMoti
         <EventBuy
           event={{ id, name, when, startsAt, live }}
           tabs={eventInfoTabs(view)}
-          className="col-span-full md:sticky md:top-0 md:col-span-7 md:col-start-15"
+          className="col-span-full md:col-span-7 md:col-start-15"
           {...(readLive === undefined ? {} : { readLive })}
         />
       </Grid>

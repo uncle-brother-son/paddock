@@ -70,7 +70,7 @@ export const Selected: Story = {
   },
 }
 
-/** A day gone by, or one with nothing to book: Text/Muted Primary; a press does nothing, and a mouse over it changes nothing (drawn here as under one). */
+/** A day gone by (W78b, WQ78: never a day ahead, whether or not it has sessions): Text/Muted Primary; a press does nothing, and a mouse over it changes nothing (drawn here as under one). */
 export const Past: Story = {
   name: 'State=past',
   args: { state: 'past' },

@@ -327,24 +327,39 @@ describe("a product's page", () => {
   })
 })
 
-describe('Similar Merch (WQ6)', () => {
+describe('Similar Merch (WQ6; W78b: WQ74, the row always fills)', () => {
   const all = [content('e'), content('d', { category: HOODIES }), content('c', { family: 'fam' }), content('b'), content('a'), content('self', { family: 'fam' })]
   const shop = shopOf(all.map((one) => onSale(one.id, { category: one.category!.id, soldOut: one.id === 'b' })), { giftCards: [{ sanityId: 'gift', lowestAmount: '15.00' }] })
   const items = shopItems({ products: all, giftCard: giftCard({ category: APPAREL }), shop, today: TODAY })
   const similar = (over: Partial<Product>, length?: number) => similarCards({ product: product('self', { family: 'fam', ...over }), products: all, items, ...(length ? { length } : {}) }).map((card) => card.id)
 
-  it("with no picks: others of its category, newest first, never itself, its own colours or the gift card; a sold-out one keeps its card", () => {
-    expect(similar({})).toEqual(['e', 'b', 'a'])
+  it("with no picks: others of its category, newest first, then every other product, then its own other colours; never itself or the gift card; a sold-out one keeps its card", () => {
+    expect(similar({})).toEqual(['e', 'b', 'a', 'd'])
+    expect(similar({}, 10)).toEqual(['e', 'b', 'a', 'd', 'c'])
     expect(items.find((item) => item.card.id === 'b')?.card.soldOut).toBe(true)
+    expect(items.some((item) => item.card.id === 'gift')).toBe(true)
   })
-  it("the editor's picks come first, in their order, then the category's, up to the row's length", () => {
+  it("the editor's picks come first, in their order, then the category's, up to the row's length; nothing is shown twice", () => {
     expect(similar({ similarIds: ['d', 'a', 'off-sale', 'self'] })).toEqual(['d', 'a', 'e', 'b'])
     expect(similar({ similarIds: ['d', 'a'] }, 2)).toEqual(['d', 'a'])
     // A pick may be one of its own colours: the editor chose it.
     expect(similar({ similarIds: ['c'] })).toEqual(['c', 'e', 'b', 'a'])
+    expect(similar({ similarIds: ['a', 'a', 'gift'] }, 10)).toEqual(['a', 'e', 'b', 'd', 'c'])
   })
-  it('is empty when nothing else is on sale, and the row is then hidden', () => {
-    const alone = shopItems({ products: [content('self')], giftCard: null, shop: shopOf([onSale('self')]), today: TODAY })
+  it('a product whose category holds nothing else is filled from the rest of the shop, newest first', () => {
+    const cards = similarCards({ product: product('d', { category: HOODIES }), products: all, items }).map((card) => card.id)
+    expect(cards).toEqual(['e', 'c', 'b', 'a'])
+    const noCategory = shopItems({ products: all, giftCard: null, shop: shopOf(all.map((one) => onSale(one.id, { category: null }))), today: TODAY })
+    expect(similarCards({ product: product('self', { family: 'fam' }), products: all, items: noCategory }).map((card) => card.id)).toEqual(['e', 'd', 'b', 'a'])
+  })
+  it('its own other colours fill the row when the shop has nothing else', () => {
+    const colours = [content('c', { family: 'fam' }), content('self', { family: 'fam' })]
+    const only = shopItems({ products: colours, giftCard: giftCard(), shop: shopOf(colours.map((one) => onSale(one.id)), { giftCards: [{ sanityId: 'gift', lowestAmount: '15.00' }] }), today: TODAY })
+    expect(similarCards({ product: product('self', { family: 'fam' }), products: colours, items: only }).map((card) => card.id)).toEqual(['c'])
+  })
+  it('is empty only when the shop has no other product, and the row is then hidden', () => {
+    const alone = shopItems({ products: [content('self')], giftCard: giftCard(), shop: shopOf([onSale('self')], { giftCards: [{ sanityId: 'gift', lowestAmount: '15.00' }] }), today: TODAY })
+    expect(alone.map((item) => item.card.id)).toEqual(['self', 'gift'])
     expect(similarCards({ product: product('self'), products: [content('self')], items: alone })).toEqual([])
   })
 })

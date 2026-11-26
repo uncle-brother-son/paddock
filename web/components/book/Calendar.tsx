@@ -14,7 +14,7 @@ const SQUARE = 'flex size-[calc(1cap_+_var(--spacing-24))] shrink-0 items-center
 type CalendarDayProps = {
   /** The day: "2026-11-26". */
   day: string
-  /** Figma's State: `past` is also a day ahead with nothing to book (the designs draw the two alike). */
+  /** Figma's State. `past` is a day before today, and only that (W78b, WQ78: a day ahead with no sessions is a day like any other). */
   state: 'default' | 'selected' | 'past'
   /** The one day of the month Tab stops on; the arrow keys move from it. */
   tabStop: boolean
@@ -54,10 +54,8 @@ export function CalendarDay({ day, state, tabStop, onChoose }: CalendarDayProps)
 type CalendarProps = {
   /** The month on show: "2026-11". */
   month: string
-  /** Today in London: every day before it is past. */
+  /** Today in London: every day before it is past, and can't be chosen; today and every day after it can. */
   today: string
-  /** The month's days with a session to book; null while they are not known yet (none can be chosen). */
-  bookable: readonly string[] | null
   /** The day chosen, in this month or another; null with none. */
   chosen: string | null
   /** The first and last months the arrows go to: this month, and the month of the last day sessions are made for. */
@@ -73,12 +71,16 @@ type CalendarProps = {
  * two arrows, then 24px beneath the days of the week and six weeks of days (6px apart), Monday first. A day outside
  * the month is blank. The card is always six weeks tall, as drawn, so nothing beneath it moves from month to month.
  *
+ * W78b (WQ78): every day from today on can be chosen and is drawn as a day (State=default), whether or not it has a
+ * session to book: one with none says so where its sessions would be (BookSessions, Figma's Day=none). Only the
+ * days before today are past: drawn muted, and a press does nothing.
+ *
  * The days are a grid for the keyboard (docs/build-standards.md, section 1): Tab stops on one day (the chosen one,
  * else the first that can be chosen), and from it Left and Right move a day, Up and Down a week, Home and End to the
  * week's ends, Page Up and Page Down a month. Moving past the month's end goes into the next month when there is
  * one. The arrows stop at this month and at the month of the last day sessions are made for.
  */
-export function Calendar({ month, today, bookable, chosen, firstMonth, lastMonth, onMonth, onChoose, className }: CalendarProps) {
+export function Calendar({ month, today, chosen, firstMonth, lastMonth, onMonth, onChoose, className }: CalendarProps) {
   const grid = useRef<HTMLDivElement>(null)
   const titleId = useId()
   // The day the keyboard is on, once it has moved: it keeps the Tab stop, and takes focus when its month arrives.
@@ -87,7 +89,7 @@ export function Calendar({ month, today, bookable, chosen, firstMonth, lastMonth
 
   const weeks = monthWeeks(month)
   const days = weeks.flat().filter((day): day is string => day !== null)
-  const canChoose = (day: string) => day >= today && (bookable?.includes(day) ?? false)
+  const canChoose = (day: string) => day >= today
   const tabStop = (at && monthOf(at) === month ? at : null) ?? (chosen && monthOf(chosen) === month ? chosen : null) ?? days.find(canChoose) ?? days[0] ?? null
 
   useEffect(() => {

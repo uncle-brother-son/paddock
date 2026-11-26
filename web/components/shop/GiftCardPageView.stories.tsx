@@ -158,7 +158,7 @@ export const Mobile: Story = {
     const gallery = part(canvasElement, 'gallery')
     const pictures = [...gallery.querySelectorAll('[data-gallery-item]')]
     await expect(pictures.map((picture) => [Math.round(box(picture).left), Math.round(box(picture).width), Math.round(box(picture).height)])).toEqual([[0, 390, 488], [390, 390, 488]])
-    await expect([...(gallery.querySelector('[data-gallery-slider]') as HTMLElement).children]).toHaveLength(2)
+    await expect((gallery.querySelector('[data-gallery-slider]') as HTMLElement).querySelectorAll('[data-gallery-slide]')).toHaveLength(2)
     await expect(canvas.getByRole('group', { name: 'Gift card pictures' })).toBeVisible()
     await expect(document.documentElement.scrollWidth).toBe(390)
     const name = canvas.getByRole('heading', { level: 1 })

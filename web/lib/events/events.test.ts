@@ -7,7 +7,7 @@ import type { ShopEvent } from '@/lib/shop/read'
 
 import { eventAvailabilityAddress, eventAvailabilityFrom } from './availability'
 import { EVENTS_LIST_ID, eventCard, eventLive, eventPrice, eventsListAddress, OTHER_EVENTS_LENGTH, otherEvents, upcomingCards } from './event'
-import { cardSpaces, EVENT_CANCELLED, spacesLine } from './format'
+import { CARD_MEMBERS_ONLY, cardSpaces, EVENT_CANCELLED, spacesLine } from './format'
 
 // Brief W75: what an Event page and an EventCard write. Every date is UK time whatever the server's own zone, and
 // every price is one W75a's read gave.
@@ -82,6 +82,33 @@ describe('the cards of a list', () => {
     expect([card.id, card.href, card.name, card.when, card.startsAt, card.spaces]).toEqual(['event-1', '/events/solstice-2026', 'Solstice', '16:00 - Tuesday 27 October', '2026-10-27T16:00:00+00:00', '1 Space Left'])
     expect(card.picture?.alt).toBe('A hoodie')
     expect(eventCard(second, onSale()).picture).toBeNull()
+  })
+
+  // W78b (WQ77): the card has a price, and a members only version. Both are the Event page's own price line.
+  it('a card has the public price alone: the card is drawn with no "Member from"', () => {
+    const card = eventCard(second, onSale())
+    expect([card.price, card.membersOnly]).toEqual(['£25', false])
+    expect([eventCard(second, onSale({ price: '40.50' })).price, eventCard(second, onSale({ state: 'sold_out', spacesLeft: 0 })).membersOnly]).toEqual(['£40.50', false])
+  })
+
+  it('the members only card: a members-only event, and a members-first one before it opens to everyone, with the member price', () => {
+    const membersOnly = eventCard(second, onSale({ access: 'members_only', state: 'members_only', price: null }))
+    const notReleased = eventCard(second, onSale({ access: 'members_first', state: 'not_released_yet', publicReleaseAt: '2026-10-20T09:00:00+01:00' }))
+    expect([membersOnly.price, membersOnly.membersOnly]).toEqual(['£20', true])
+    expect([notReleased.price, notReleased.membersOnly]).toEqual(['£20', true])
+    // Sold out, a members-only event has no public price still, and keeps the members only card.
+    expect(eventCard(second, onSale({ access: 'members_only', state: 'sold_out', spacesLeft: 0, price: null })).membersOnly).toBe(true)
+    // A members-first event once it has opened to everyone is any other event.
+    const released = eventCard(second, onSale({ access: 'members_first', state: 'open', publicReleaseAt: '2026-10-20T09:00:00+01:00' }))
+    expect([released.price, released.membersOnly]).toEqual(['£25', false])
+    // A card is told by the same rule as the Event page's price line, whatever the state.
+    const states: ShopEventState[] = ['open', 'sold_out', 'not_released_yet', 'members_only', 'started', 'cancelled']
+    for (const state of states) {
+      const line = eventPrice({ state, price: '25.00', memberPrice: '20.00' })
+      const card = eventCard(second, onSale({ state }))
+      expect([card.price, card.membersOnly]).toEqual([line.now, line.memberOnly])
+    }
+    expect(CARD_MEMBERS_ONLY).toBe('Members Only')
   })
 
   it("the list is the Worker's, in its order (soonest first); an event Sanity does not publish is left out", () => {

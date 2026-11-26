@@ -60,7 +60,7 @@ export const Desktop: Story = {
     const colours = within(canvas.getByRole('list', { name: 'Colours' }))
     const [brown, white] = colours.getAllByRole('link')
     await expect([brown!.getAttribute('aria-current'), white!.getAttribute('aria-current'), white!.getAttribute('href')]).toEqual(['page', null, '/shop/tee-white'])
-    // WQ52: the swatch of the colour on show is the one a page arriving by a swatch gives focus to.
+    // WQ52: the swatch of the colour on show is the one marked. (A page arriving by a swatch gives focus to the name.)
     await expect(canvasElement.querySelector('[data-shop="swatch"][aria-current="page"]')).toBe(brown)
     await expect(Math.round(box(brown!).width)).toBe(64)
     await expect(Math.round(box(white!).left - box(brown!).right)).toBe(4)
@@ -88,7 +88,8 @@ export const Desktop: Story = {
 
 /**
  * Figma "Product (mobile)" (1684:41990): the gallery is the window's whole width, a row to swipe, with the slider
- * beneath it (one part for each picture, the one on show in Surface/Secondary); the details follow, 24px under.
+ * beneath it (WQ76: one part for each picture, and one part's length filled, which follows the swipe: its own
+ * stories are Shop/Gallery); the details follow, 24px under.
  */
 export const Mobile: Story = {
   globals: { viewport: { value: 'mobile', isRotated: false } },
@@ -97,15 +98,14 @@ export const Mobile: Story = {
     const pictures = [...gallery.querySelectorAll('[data-gallery-item]')]
     await expect(pictures.slice(0, 2).map((picture) => [Math.round(box(picture).left), Math.round(box(picture).width), Math.round(box(picture).height)])).toEqual([[0, 390, 488], [390, 390, 488]])
     const slider = gallery.querySelector('[data-gallery-slider]') as HTMLElement
-    const parts = [...slider.children] as HTMLElement[]
-    await expect(parts).toHaveLength(3)
+    const filled = slider.querySelector('[data-gallery-filled]') as HTMLElement
+    await expect(slider.querySelectorAll('[data-gallery-slide]')).toHaveLength(3)
     await expect(Math.round(box(slider).top - box(pictures[0]!).bottom)).toBe(4)
-    await expect(getComputedStyle(parts[0]!).backgroundColor).not.toBe(getComputedStyle(parts[1]!).backgroundColor)
-    // Swiping to the second picture moves the slider on.
+    await expect([Math.round(box(filled).left), Math.round(box(filled).width)]).toEqual([0, 130])
+    // Swiping to the second picture moves the filled part on.
     const row = canvas.getByRole('group', { name: 'Product pictures' })
-    const first = getComputedStyle(parts[0]!).backgroundColor
     row.scrollTo({ left: 390, behavior: 'instant' })
-    await waitFor(() => expect(getComputedStyle(parts[1]!).backgroundColor).toBe(first))
+    await waitFor(() => expect(Math.round(box(filled).left)).toBe(130))
     // The page itself never scrolls sideways.
     await expect(document.documentElement.scrollWidth).toBe(390)
     const name = canvas.getByRole('heading', { level: 1 })
@@ -114,6 +114,28 @@ export const Mobile: Story = {
     const cards = [...part(canvasElement, 'similar').querySelectorAll('article')]
     await expect(cards.slice(0, 3).map((card) => Math.round(box(card).left))).toEqual([16, 199, 382])
     await expect(Math.round(box(cards[0]!).width)).toBe(175)
+  },
+}
+
+/**
+ * WQ73: in a window shorter than the details (1024 by 768) the details move with the page until their bottom is at
+ * the bottom of the window, and stay there; back up, their top stops at the top of the window. How it sticks has its
+ * own stories (Shop/Details column); this is the Product page using it.
+ */
+export const ShortWindow: Story = {
+  globals: { viewport: { value: 'w1024', isRotated: false } },
+  play: async ({ canvasElement }) => {
+    const details = part(canvasElement, 'details')
+    const height = () => document.documentElement.clientHeight
+    const over = details.offsetHeight - height()
+    await expect(over).toBeGreaterThan(0)
+    await waitFor(() => expect([getComputedStyle(details).position, details.style.top, details.style.bottom]).toEqual(['sticky', `${-over}px`, `${-over}px`]))
+    window.scrollTo({ top: Math.round(over / 2), behavior: 'instant' })
+    await waitFor(() => expect(Math.round(box(details).top)).toBe(-Math.round(over / 2)))
+    window.scrollTo({ top: over + 300, behavior: 'instant' })
+    await waitFor(() => expect(Math.round(box(details).bottom)).toBe(height()))
+    window.scrollTo({ top: 0, behavior: 'instant' })
+    await waitFor(() => expect(Math.round(box(details).top)).toBe(0))
   },
 }
 
@@ -265,7 +287,7 @@ export const NoSizeGuide: Story = {
   args: { view: { ...SAMPLE_PRODUCT, sizeGuide: null } },
   play: async ({ canvas }) => {
     await expect(canvas.queryByRole('button', { name: 'Size guide' })).toBeNull()
-    await expect(canvas.queryByRole('tab', { name: 'Size guide', hidden: true })).toBeNull()
+    await expect(canvas.queryByRole('tab', { name: 'Size Guide', hidden: true })).toBeNull()
     await expect(canvas.getAllByRole('tab', { hidden: true })).toHaveLength(3)
   },
 }

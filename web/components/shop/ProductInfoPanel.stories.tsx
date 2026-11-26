@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from '@storybook/nextjs-vite'
 import { expect, userEvent, waitFor, within } from 'storybook/test'
 
 import { OverlayTexture } from '@/components/ui/Overlay'
+import { painted } from '@/components/ui/story-kit'
 import { DURATION_SHORT, EASE_SMOOTH_CSS, linearEasingPoints } from '@/lib/motion/tokens'
 
 import { ProductPageView } from './ProductPageView'
@@ -42,6 +43,32 @@ const open = async (context: Parameters<Play>[0], opener: string) => {
   return { dialog, panel: within(dialog) }
 }
 
+/** The open panel, to look inside. */
+type Panel = Awaited<ReturnType<typeof open>>['panel']
+
+/** The tab on show is Text/Primary, every other Text/Muted Primary, all in Label 12: as each of Figma's variants draws its row. */
+const expectTabColours = async (panel: Panel) => {
+  const tabs = panel.getAllByRole('tab')
+  const [primary, muted] = [painted(tabs[0]!, 'text-text-primary', 'color'), painted(tabs[0]!, 'text-text-muted-primary', 'color')]
+  await expect(primary).not.toBe(muted)
+  // A tab's colour changes over the short duration: wait until each has reached its own.
+  await waitFor(() => expect(tabs.map((tab) => getComputedStyle(tab).color)).toEqual(tabs.map((tab) => (tab.getAttribute('aria-selected') === 'true' ? primary : muted))))
+  await expect(tabs.map((tab) => [getComputedStyle(tab).fontSize, getComputedStyle(tab).textTransform, getComputedStyle(tab).fontWeight])).toEqual(tabs.map(() => ['12px', 'uppercase', '500']))
+}
+
+/** The site's fonts are in before a line of capitals is measured. */
+const fontsIn = async (shown: HTMLElement) => {
+  await document.fonts.ready
+  await waitFor(() => expect([...shown.querySelectorAll('p, dt, span')].every((text) => document.fonts.check(getComputedStyle(text).font))).toBe(true))
+}
+
+/** A bullet as the panel draws one: the bullet icon, 9px, 4px, then its line in Copy 14. */
+const expectBullet = async (item: HTMLElement) => {
+  const icon = item.querySelector('svg') as SVGElement
+  const line = item.querySelector('p') as HTMLElement
+  await expect([Math.round(box(icon).width), Math.round(box(icon).height), Math.round(box(line).left - box(icon).right), getComputedStyle(line).fontSize]).toEqual([9, 9, 4, '14px'])
+}
+
 /**
  * Figma "Product Info Panel" (1684:41935; the panel 1402:53320): a Light panel 12px inside the window's top, right
  * and bottom, over Wayne's Overlay, with its tabs in Label 12, 24px apart (the one on show dark, the others muted)
@@ -49,6 +76,7 @@ const open = async (context: Parameters<Play>[0], opener: string) => {
  * Description is the product's rich text: a paragraph, then its bullets.
  */
 export const Description: Story = {
+  name: 'Device=desktop, Tab=description',
   globals: { viewport: { value: 'desktop', isRotated: false } },
   play: async (context) => {
     const { dialog, panel } = await open(context, 'Description')
@@ -59,10 +87,10 @@ export const Description: Story = {
     await expect(getComputedStyle(dialog).borderRadius).toBe('4px')
     // The tabs, with Description on show; focus has moved to it.
     const tabs = panel.getAllByRole('tab')
-    await expect(tabs.map((tab) => [tab.textContent, tab.getAttribute('aria-selected')])).toEqual([['Description', 'true'], ['Materials & care', 'false'], ['Shipping & returns', 'false'], ['Size guide', 'false']])
+    await expect(tabs.map((tab) => [tab.textContent, tab.getAttribute('aria-selected')])).toEqual([['Description', 'true'], ['Materials & care', 'false'], ['Shipping & returns', 'false'], ['Size Guide', 'false']])
     await expect(tabs[0]).toHaveFocus()
     await expect([Math.round(box(tabs[0]!).left - box(dialog).left), Math.round(box(tabs[0]!).top - box(dialog).top), Math.round(box(tabs[1]!).left - box(tabs[0]!).right)]).toEqual([16, 64, 24])
-    await expect(getComputedStyle(tabs[0]!).color).not.toBe(getComputedStyle(tabs[1]!).color)
+    await expectTabColours(panel)
     const shown = panel.getByRole('tabpanel')
     await expect(shown.getAttribute('aria-labelledby')).toBe(tabs[0]!.id)
     // The paragraph itself: the words are in a span of their own, whose box is the line's, not the trimmed text's.
@@ -73,6 +101,7 @@ export const Description: Story = {
     await expect(bullets).toHaveLength(5)
     await expect(Math.round(box(bullets[0]!).top - box(paragraph).bottom)).toBe(32)
     await expect(Math.round(box(bullets[1]!).top - box(bullets[0]!).bottom)).toBe(12)
+    await expectBullet(bullets[0]!)
     // Close, 12px inside the panel's top right. WQ50: Figma's MenuButton with its label shown, as drawn on the page
     // (1684:41949): the close icon, 8px, "Close" in Label 12, 8px all round. Its words are its name.
     const close = panel.getByRole('button', { name: 'Close' })
@@ -89,7 +118,8 @@ export const Description: Story = {
       Math.round(box(close).height),
     ]).toEqual([8, 8, 8, 25])
     // The page behind can't be reached or scrolled; the shade is over it.
-    await expect([...canvasElement.querySelectorAll<HTMLElement>('[data-shop="details"], [data-shop="similar"]')].map((behind) => behind.inert)).toEqual([true, true])
+    // (W78b: the details are inside their StickyColumn, which is the part made inert.)
+    await expect([...canvasElement.querySelectorAll<HTMLElement>('[data-shop="details"], [data-shop="similar"]')].map((behind) => behind.closest('[inert]') !== null)).toEqual([true, true])
     await expect(document.documentElement.classList.contains('overflow-hidden')).toBe(true)
     // (The shade's fade ends with the panel's slide; the last of it is too slight to see, so it is waited for.)
     await waitFor(() => expect(getComputedStyle(canvasElement.querySelector('[data-overlay="shade"]') as HTMLElement).opacity).toBe('1'), { timeout: 3000 })
@@ -142,45 +172,144 @@ export const SlidesIn: Story = {
   },
 }
 
-/** Materials & Care: what it is made of, where, and how to look after it, each only when an editor filled it. */
+/**
+ * What Tab=material & care holds (W78b, WQ75): three headings in Label 12, Text/Primary, each with its words 12px
+ * beneath in Copy 14, 24px between one and the next; the care lines are bullets, 12px apart, the first 12px under
+ * its heading. The first heading is 64px under the tabs.
+ */
+const expectMaterialsAndCare = async (panel: Panel) => {
+  const tab = panel.getByRole('tab', { name: 'Materials & care' })
+  await expect(tab.getAttribute('aria-selected')).toBe('true')
+  await expectTabColours(panel)
+  const shownPanel = panel.getByRole('tabpanel')
+  await fontsIn(shownPanel)
+  const shown = within(shownPanel)
+  const headings = [...shownPanel.querySelectorAll('dt')] as HTMLElement[]
+  await expect(headings.map((heading) => heading.textContent)).toEqual(['Composition:', 'Made in:', 'Care Instructions:'])
+  await expect(headings.map((heading) => [getComputedStyle(heading).fontSize, getComputedStyle(heading).textTransform, getComputedStyle(heading).fontWeight])).toEqual(headings.map(() => ['12px', 'uppercase', '500']))
+  await expect(headings.map((heading) => getComputedStyle(heading).color)).toEqual(headings.map(() => painted(shownPanel, 'text-text-primary', 'color')))
+  await expect(Math.round(box(headings[0]!).top - box(tab).bottom)).toBe(64)
+  const composition = shown.getByText('100% heavyweight organic cotton, 280gsm')
+  const madeIn = shown.getByText('Portugal')
+  await expect([getComputedStyle(composition).fontSize, getComputedStyle(madeIn).fontSize]).toEqual(['14px', '14px'])
+  // 12px from a heading to its words, 24px from them to the next heading.
+  await expect([Math.round(box(composition).top - box(headings[0]!).bottom), Math.round(box(headings[1]!).top - box(composition).bottom)]).toEqual([12, 24])
+  await expect([Math.round(box(madeIn).top - box(headings[1]!).bottom), Math.round(box(headings[2]!).top - box(madeIn).bottom)]).toEqual([12, 24])
+  // The care lines, one bullet for each line an editor typed.
+  const care = shown.getAllByRole('listitem')
+  await expect(care.map((line) => line.textContent)).toEqual(['Wash at 30 degrees, inside out.', 'Do not tumble dry.'])
+  await expect([Math.round(box(care[0]!).top - box(headings[2]!).bottom), Math.round(box(care[1]!).top - box(care[0]!).bottom)]).toEqual([12, 12])
+  for (const line of care) await expectBullet(line)
+  // Every heading and line starts at the panel's 16px.
+  const dialog = shownPanel.closest('[role="dialog"]') as HTMLElement
+  await expect([...headings, composition, madeIn, ...care].map((part) => Math.round(box(part).left - box(dialog).left))).toEqual([16, 16, 16, 16, 16, 16, 16])
+}
+
+/**
+ * Figma ProductInfoPanel, Device=desktop, Tab=material & care (1802:39277): what it is made of, where, and how to
+ * look after it, each under its own heading and only when an editor filled it.
+ */
 export const MaterialsAndCare: Story = {
-  name: 'Materials & Care',
+  name: 'Device=desktop, Tab=material & care',
   globals: { viewport: { value: 'desktop', isRotated: false } },
   play: async (context) => {
     const { panel } = await open(context, 'Materials & care')
-    await expect(panel.getByRole('tab', { name: 'Materials & care' }).getAttribute('aria-selected')).toBe('true')
-    const shown = within(panel.getByRole('tabpanel'))
-    await expect(shown.getByText('100% heavyweight organic cotton, 280gsm')).toBeVisible()
-    await expect(shown.getByText('Made in Portugal')).toBeVisible()
-    await expect(shown.getByText('Do not tumble dry.')).toBeVisible()
+    await expectMaterialsAndCare(panel)
   },
 }
 
-/** Shipping & Returns: Shop settings' summary, the same on every product. */
+/** What Tab=shipping & returns holds: Shop settings' summary as the panel draws rich text: 32px between a paragraph and a list, bullets 12px apart. */
+const expectShippingAndReturns = async (panel: Panel) => {
+  const tab = panel.getByRole('tab', { name: 'Shipping & returns' })
+  await expect(tab.getAttribute('aria-selected')).toBe('true')
+  await expectTabColours(panel)
+  const shownPanel = panel.getByRole('tabpanel')
+  await fontsIn(shownPanel)
+  const shown = within(shownPanel)
+  const paragraph = shown.getByText(/^Orders are sent by Royal Mail/).closest('p') as HTMLElement
+  await expect([Math.round(box(paragraph).top - box(tab).bottom), getComputedStyle(paragraph).fontSize]).toEqual([64, '14px'])
+  const bullets = shown.getAllByRole('listitem')
+  await expect(bullets.map((bullet) => bullet.textContent)).toEqual(['Standard delivery, free over £60', 'Returns within 30 days, unworn'])
+  await expect([Math.round(box(bullets[0]!).top - box(paragraph).bottom), Math.round(box(bullets[1]!).top - box(bullets[0]!).bottom)]).toEqual([32, 12])
+  for (const bullet of bullets) await expectBullet(bullet)
+}
+
+/** Device=desktop, Tab=shipping & returns (1802:39345): Shop settings' summary, the same on every product. */
 export const ShippingAndReturns: Story = {
-  name: 'Shipping & Returns',
+  name: 'Device=desktop, Tab=shipping & returns',
   globals: { viewport: { value: 'desktop', isRotated: false } },
   play: async (context) => {
     const { panel } = await open(context, 'Shipping & returns')
-    await expect(panel.getByRole('tab', { name: 'Shipping & returns' }).getAttribute('aria-selected')).toBe('true')
-    await expect(within(panel.getByRole('tabpanel')).getByText(/^Orders are sent by Royal Mail/)).toBeVisible()
+    await expectShippingAndReturns(panel)
   },
 }
 
 /**
- * Size Guide (WQ39): the fourth tab, only for a product with a guide, opened by "Size guide" beside the sizes: the
- * guide's table and its notes. Figma draws no size guide yet: this is the plainest table the text styles make.
+ * What Tab=size guide holds (W78b, WQ75): the guide's table, ruled in Text/Muted Primary, 1px: all round it, under
+ * every row but the last and after every column but the last. Its columns are equal; a cell has 12px all round its
+ * words, centred: headings in Label 12, the rest in Copy 14. 32px beneath it the guide's notes in Copy 14.
+ */
+const expectSizeGuide = async (panel: Panel) => {
+  const tab = panel.getByRole('tab', { name: 'Size Guide' })
+  await expect(tab.getAttribute('aria-selected')).toBe('true')
+  await expectTabColours(panel)
+  const shownPanel = panel.getByRole('tabpanel')
+  await fontsIn(shownPanel)
+  const shown = within(shownPanel)
+  const dialog = shownPanel.closest('[role="dialog"]') as HTMLElement
+  const table = shown.getByRole('table', { name: 'T-shirts' })
+  // The panel's whole width but for its 16px each side, 64px under the tabs.
+  await expect([Math.round(box(table).left - box(dialog).left), Math.round(box(dialog).right - box(table).right), Math.round(box(table).top - box(tab).bottom)]).toEqual([16, 16, 64])
+  const headings = within(table).getAllByRole('columnheader')
+  await expect(headings.map((heading) => heading.textContent)).toEqual(['Size', 'Chest (cm)', 'Length (cm)'])
+  const rows = within(table).getAllByRole('row')
+  await expect(rows).toHaveLength(5)
+  const cells = rows.map((row) => [...row.children] as HTMLElement[])
+  await expect(cells.slice(1).map((row) => row.map((cell) => cell.textContent))).toEqual([['S', '106', '70'], ['M', '112', '72'], ['L', '118', '74'], ['XL', '124', '76']])
+  // Equal columns: each a third of what is inside the table's own line.
+  const inside = box(table).width - 2
+  await expect(cells.flat().filter((cell) => Math.abs(box(cell).width - inside / 3) > 0.75).map((cell) => cell.textContent)).toEqual([])
+  // The lines: 1px all round the table; under each row but the last; after each column but the last.
+  const muted = painted(table, 'text-text-muted-primary', 'color')
+  const lines = (element: HTMLElement) => {
+    const style = getComputedStyle(element)
+    return [style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth].map((width) => parseFloat(width))
+  }
+  await expect([lines(table), getComputedStyle(table).borderTopColor, getComputedStyle(table).borderTopStyle]).toEqual([[1, 1, 1, 1], muted, 'solid'])
+  await expect(cells.map((row, rowIndex) => row.map((cell) => lines(cell).join(' ')).join(' | ') + (rowIndex === 4 ? ' (last)' : ''))).toEqual([
+    '0 1 1 0 | 0 1 1 0 | 0 0 1 0',
+    '0 1 1 0 | 0 1 1 0 | 0 0 1 0',
+    '0 1 1 0 | 0 1 1 0 | 0 0 1 0',
+    '0 1 1 0 | 0 1 1 0 | 0 0 1 0',
+    '0 1 0 0 | 0 1 0 0 | 0 0 0 0 (last)',
+  ])
+  await expect(cells.flat().filter((cell) => getComputedStyle(cell).borderBottomColor !== muted || getComputedStyle(cell).borderRightColor !== muted).length).toBe(0)
+  // Each cell: 12px all round its words, which are centred; Label 12 in the headings, Copy 14 beneath.
+  for (const [rowIndex, row] of cells.entries()) {
+    for (const [index, cell] of row.entries()) {
+      const words = cell.firstElementChild as HTMLElement
+      const [right, bottom] = lines(cell).slice(1, 3) as [number, number]
+      await expect([Math.round(box(words).top - box(cell).top), Math.round(box(cell).bottom - bottom - box(words).bottom), Math.round(box(words).left - box(cell).left), Math.round(box(cell).right - right - box(words).right)], `row ${rowIndex}, column ${index}`).toEqual([12, 12, 12, 12])
+      await expect([getComputedStyle(cell).textAlign, getComputedStyle(words).fontSize, getComputedStyle(words).textTransform]).toEqual(rowIndex === 0 ? ['center', '12px', 'uppercase'] : ['center', '14px', 'none'])
+    }
+  }
+  await expect(cells.flat().map((cell) => getComputedStyle(cell.firstElementChild as HTMLElement).color)).toEqual(cells.flat().map(() => painted(table, 'text-text-primary', 'color')))
+  // The guide's notes, 32px beneath the table.
+  const notes = shown.getByText(/^Measured flat/).closest('p') as HTMLElement
+  await expect([Math.round(box(notes).top - box(table).bottom), getComputedStyle(notes).fontSize]).toEqual([32, '14px'])
+}
+
+/**
+ * Device=desktop, Tab=size guide (1802:39413; WQ39): the fourth tab, only for a product with a guide, opened by
+ * "Size guide" beside the sizes: the guide's table and its notes.
  */
 export const SizeGuide: Story = {
+  name: 'Device=desktop, Tab=size guide',
   globals: { viewport: { value: 'desktop', isRotated: false } },
   play: async (context) => {
     const { panel } = await open(context, 'Size guide')
-    await expect(panel.getByRole('tab', { name: 'Size guide' })).toHaveFocus()
-    const shown = within(panel.getByRole('tabpanel'))
-    const table = shown.getByRole('table', { name: 'T-shirts' })
-    await expect(within(table).getAllByRole('columnheader').map((heading) => heading.textContent)).toEqual(['Size', 'Chest (cm)', 'Length (cm)'])
-    await expect(within(table).getAllByRole('row')).toHaveLength(5)
-    await expect(shown.getByText(/^Measured flat/)).toBeVisible()
+    await expect(panel.getByRole('tab', { name: 'Size Guide' })).toHaveFocus()
+    await expectSizeGuide(panel)
   },
 }
 
@@ -196,7 +325,7 @@ export const KeyboardAndClosing: Story = {
     const { canvas, canvasElement } = context
     // Before it is opened: all four tabs' words are in the page's HTML, hidden.
     await expect(canvasElement.querySelectorAll('[role="tabpanel"]')).toHaveLength(4)
-    await expect(canvasElement.textContent).toContain('Made in Portugal')
+    await expect(canvasElement.textContent).toContain('Made in:Portugal')
     await expect(canvasElement.textContent).toContain('Measured flat')
 
     const { dialog, panel } = await open(context, 'Materials & care')
@@ -206,11 +335,11 @@ export const KeyboardAndClosing: Story = {
     await expect(selected()).toHaveFocus()
     await expect(within(panel.getByRole('tabpanel')).getByText(/^Orders are sent/)).toBeVisible()
     await userEvent.keyboard('{End}')
-    await expect(selected().textContent).toBe('Size guide')
+    await expect(selected().textContent).toBe('Size Guide')
     await userEvent.keyboard('{ArrowRight}')
     await expect(selected().textContent).toBe('Description')
     await userEvent.keyboard('{ArrowLeft}')
-    await expect(selected().textContent).toBe('Size guide')
+    await expect(selected().textContent).toBe('Size Guide')
     await userEvent.keyboard('{Home}')
     await expect(selected().textContent).toBe('Description')
     // Tab goes on into the panel: what the tab holds, then Close; never out to the page behind.
@@ -233,10 +362,28 @@ export const KeyboardAndClosing: Story = {
 }
 
 /**
- * Figma "Product Info Panel (mobile)" (1684:42004): 12px inside every edge of the window. The tabs don't all fit:
- * they are a row to swipe.
+ * Where the row of tabs stands on a phone, as each of Figma's Device=mobile variants draws it for its tab: at its
+ * start, in its middle or at its end. The chosen tab is whole inside the panel's 16px either side.
+ */
+const expectTabRow = async (panel: Panel, name: string, stands: 'start' | 'middle' | 'end') => {
+  const row = panel.getByRole('tablist')
+  const room = row.scrollWidth - row.clientWidth
+  await expect(room).toBeGreaterThan(0)
+  const at = { start: 0, middle: room / 2, end: room }[stands]
+  await waitFor(() => expect(Math.abs(row.scrollLeft - at)).toBeLessThan(1))
+  const tab = panel.getByRole('tab', { name })
+  const dialog = row.closest('[role="dialog"]') as HTMLElement
+  await expect(box(tab).left).toBeGreaterThanOrEqual(box(dialog).left + 15.5)
+  await expect(box(tab).right).toBeLessThanOrEqual(box(dialog).right - 15.5)
+  await expect(document.documentElement.scrollWidth).toBe(390)
+}
+
+/**
+ * Figma ProductInfoPanel, Device=mobile, Tab=description (1402:53319; on the page 1684:42004): 12px inside every
+ * edge of the window. The tabs don't all fit: they are a row to swipe, standing at its start.
  */
 export const Mobile: Story = {
+  name: 'Device=mobile, Tab=description',
   globals: { viewport: { value: 'mobile', isRotated: false } },
   play: async (context) => {
     // Shut, it waits beyond the right edge and the page is no wider for it.
@@ -245,12 +392,91 @@ export const Mobile: Story = {
     await expect([Math.round(box(dialog).left), Math.round(box(dialog).top), Math.round(box(dialog).width), Math.round(window.innerHeight - box(dialog).bottom)]).toEqual([12, 12, 366, 12])
     // Close with its label, as on the desktop (Figma 1684:42017).
     await expect(panel.getByRole('button', { name: 'Close' }).textContent).toBe('Close')
-    const tabs = panel.getByRole('tablist')
-    await expect(tabs.scrollWidth).toBeGreaterThan(tabs.clientWidth)
-    await expect(document.documentElement.scrollWidth).toBe(390)
-    // Moving to the last tab brings it into view.
+    await expectTabRow(panel, 'Description', 'start')
+    await expectTabColours(panel)
+    const shownPanel = panel.getByRole('tabpanel')
+    const paragraph = within(shownPanel).getByText(/^Taking its namesake/).closest('p') as HTMLElement
+    const bullets = within(shownPanel).getAllByRole('listitem')
+    await expect([Math.round(box(paragraph).left - box(dialog).left), Math.round(box(dialog).right - box(paragraph).right)]).toEqual([16, 16])
+    await expect([Math.round(box(bullets[0]!).top - box(paragraph).bottom), Math.round(box(bullets[1]!).top - box(bullets[0]!).bottom)]).toEqual([32, 12])
+    await expectBullet(bullets[0]!)
+    // Moving along the tabs with the keyboard takes the row with it: the middle for the third, the end for the last.
+    await userEvent.keyboard('{ArrowRight}')
+    await expectTabRow(panel, 'Materials & care', 'start')
+    await userEvent.keyboard('{ArrowRight}')
+    await expectTabRow(panel, 'Shipping & returns', 'middle')
     await userEvent.keyboard('{End}')
-    const last = panel.getByRole('tab', { name: 'Size guide' })
-    await waitFor(() => expect(box(last).right).toBeLessThanOrEqual(box(dialog).right))
+    await expectTabRow(panel, 'Size Guide', 'end')
+    await userEvent.keyboard('{Home}')
+    await expectTabRow(panel, 'Description', 'start')
+  },
+}
+
+/** Device=mobile, Tab=material & care (1802:39253): the same headings and bullets, the panel's width; the row of tabs still at its start. */
+export const MobileMaterialsAndCare: Story = {
+  name: 'Device=mobile, Tab=material & care',
+  globals: { viewport: { value: 'mobile', isRotated: false } },
+  play: async (context) => {
+    const { panel } = await open(context, 'Materials & care')
+    await expectTabRow(panel, 'Materials & care', 'start')
+    await expectMaterialsAndCare(panel)
+  },
+}
+
+/** Device=mobile, Tab=shipping & returns (1802:39321): the row of tabs stands in its middle, where this tab is whole. */
+export const MobileShippingAndReturns: Story = {
+  name: 'Device=mobile, Tab=shipping & returns',
+  globals: { viewport: { value: 'mobile', isRotated: false } },
+  play: async (context) => {
+    const { panel } = await open(context, 'Shipping & returns')
+    await expectTabRow(panel, 'Shipping & returns', 'middle')
+    await expectShippingAndReturns(panel)
+  },
+}
+
+/**
+ * A guide with more columns than a phone has room for (Figma draws three, which fit): each cell keeps its words on
+ * one line with its 12px all round, and the table scrolls sideways by itself; the panel and the page are no wider.
+ */
+export const MobileWideSizeGuide: Story = {
+  name: 'A size guide too wide for a phone',
+  globals: { viewport: { value: 'mobile', isRotated: false } },
+  args: {
+    view: {
+      ...SAMPLE_PRODUCT,
+      sizeGuide: { title: 'Hoodies', columns: ['Size', 'Chest (cm)', 'Length (cm)', 'Sleeve (cm)', 'Shoulder (cm)'], rows: [['S', '106', '70', '62', '48'], ['M', '112', '72', '63', '50']], notes: [] },
+    },
+  },
+  play: async (context) => {
+    const { dialog, panel } = await open(context, 'Size guide')
+    const table = panel.getByRole('table', { name: 'Hoodies' })
+    const scroller = table.parentElement as HTMLElement
+    await expect(scroller.scrollWidth).toBeGreaterThan(scroller.clientWidth)
+    await expect([Math.round(box(scroller).left - box(dialog).left), Math.round(box(dialog).right - box(scroller).right)]).toEqual([16, 16])
+    // While it scrolls the keyboard reaches it, and it has a name: the arrow keys move it.
+    await waitFor(() => expect([scroller.tabIndex, scroller.getAttribute('role'), scroller.getAttribute('aria-label')]).toEqual([0, 'group', 'Size guide: Hoodies']))
+    for (const cell of table.querySelectorAll<HTMLElement>('th, td')) {
+      const words = cell.firstElementChild as HTMLElement
+      await expect(Math.round(box(words).left - box(cell).left)).toBe(12)
+      await expect(words.scrollWidth).toBeLessThanOrEqual(words.clientWidth)
+    }
+    await expect(document.documentElement.scrollWidth).toBe(390)
+  },
+}
+
+/** Device=mobile, Tab=size guide (1802:39389): opened by "Size guide" beside the sizes, the row of tabs at its end; the table's three columns fit the panel. */
+export const MobileSizeGuide: Story = {
+  name: 'Device=mobile, Tab=size guide',
+  globals: { viewport: { value: 'mobile', isRotated: false } },
+  play: async (context) => {
+    const { dialog, panel } = await open(context, 'Size guide')
+    await expectTabRow(panel, 'Size Guide', 'end')
+    await expectSizeGuide(panel)
+    const table = panel.getByRole('table', { name: 'T-shirts' })
+    await expect(Math.round(box(table).width)).toBe(334)
+    // It fits, so it scrolls nowhere and is no stop for the keyboard.
+    await expect((table.parentElement as HTMLElement).scrollWidth).toBeLessThanOrEqual((table.parentElement as HTMLElement).clientWidth)
+    await expect((table.parentElement as HTMLElement).hasAttribute('tabindex')).toBe(false)
+    await expect(box(table).right).toBeLessThanOrEqual(box(dialog).right - 15.5)
   },
 }

@@ -21,7 +21,8 @@ type ProductPageViewProps = {
  * A product's page (Figma "Product", 1684:41920, and "Product (mobile)", 1684:41990).
  * - From 768px: the gallery fills the window's left half, from its edge to the end of the grid's 12th column, its
  *   pictures stacked; the details are columns 15 to 21, and stay in view (they stick to the window's top) while the
- *   gallery scrolls past, as drawn.
+ *   gallery scrolls past, as drawn. Details taller than the window go with the page until their bottom is at the
+ *   window's bottom, and back up until their top is at its top (WQ73: components/layout/StickyColumn.tsx).
  * - Below: the gallery is the window's whole width, a row to swipe, with the details beneath it.
  * Then Similar Merch. The Product Info Panel is the details' own (components/shop/ProductBuy.tsx).
  */
@@ -37,7 +38,7 @@ export function ProductPageView({ view, similar, readSizes, reducedMotion }: Pro
         <ProductBuy
           product={{ id, name, colourName, price, sizes, soldOut, colours, fulfilment }}
           tabs={productInfoTabs(view)}
-          className="col-span-full md:sticky md:top-0 md:col-span-7 md:col-start-15"
+          className="col-span-full md:col-span-7 md:col-start-15"
           {...(readSizes === undefined ? {} : { readSizes })}
         />
       </Grid>

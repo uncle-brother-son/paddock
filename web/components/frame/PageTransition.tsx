@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation'
 import * as React from 'react'
 import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react'
 
-import { animatesHistoryStep, hashId, leavePage, PAGE_AT_ONCE, PAGE_IN, PAGE_IN_ABOVE, PAGE_OUT, PAGE_TRANSITION, pageOf, takeFocusOnArrival, type HistoryStepEvent } from '@/lib/motion/page-transition'
+import { animatesHistoryStep, hashId, leavePage, PAGE_AT_ONCE, PAGE_IN, PAGE_IN_ABOVE, PAGE_OUT, PAGE_TRANSITION, pageOf, takeArrivalInPlace, type HistoryStepEvent } from '@/lib/motion/page-transition'
 import { REDUCED_MOTION } from '@/lib/motion/reduced-motion'
 import { DURATION_LONG, EASE_SMOOTH } from '@/lib/motion/tokens'
 
@@ -46,6 +46,38 @@ function scrollToPlace(place: HTMLElement, lenis: ReturnType<typeof useLenis>) {
   })
 }
 
+const NOTHING_TO_FORGET = (): void => {}
+
+/**
+ * W78b (WQ52, as amended again): a page that arrived in place (a product's colour swatch swaps the page where it
+ * stands) scrolls to its top: smoothly with Lenis, over the long duration with the smooth curve; with reduced motion
+ * on (Lenis is not running) it jumps there. `then` is called once, when the scroll has ended: at the top, or when
+ * the visitor takes the scrolling over with a wheel or a touch (Lenis drops its own scroll there, and never says it
+ * finished). The function it gives back forgets the scroll: nothing is called after it.
+ */
+function scrollToTop(lenis: ReturnType<typeof useLenis>, then: () => void): () => void {
+  if (!lenis) {
+    window.scrollTo(0, 0)
+    then()
+    return NOTHING_TO_FORGET
+  }
+  let over = false
+  const forget = () => {
+    over = true
+    window.removeEventListener('wheel', end, true)
+    window.removeEventListener('touchmove', end, true)
+  }
+  function end() {
+    if (over) return
+    forget()
+    then()
+  }
+  window.addEventListener('wheel', end, { capture: true, passive: true })
+  window.addEventListener('touchmove', end, { capture: true, passive: true })
+  lenis.scrollTo(0, { duration: DURATION_LONG, easing: EASE_SMOOTH, force: true, onComplete: end })
+  return forget
+}
+
 /**
  * What happens on arriving at a page by a navigation inside the site (never on the first load):
  * - a link: the new page starts at its top, with Lenis told so (it would otherwise glide on towards where it was
@@ -54,8 +86,10 @@ function scrollToPlace(place: HTMLElement, lenis: ReturnType<typeof useLenis>) {
  * - a link to a place on the page (its address ends in #events): the page starts at its top all the same, and
  *   scrolls to that place once the page transition has ended (W75; WQ60);
  * - focus moves to the new page's h1 (or to main when it has none), without scrolling, so a keyboard or a screen
- *   reader starts from the new page. Next's own announcer reads the new page's title out. A link that changed the
- *   page where it stood (WQ52: a product's colour swatch) keeps focus on what it asked for instead;
+ *   reader starts from the new page. Next's own announcer reads the new page's title out;
+ * - a link that changed the page where it stood (WQ52, as amended again: a product's colour swatch): the new page
+ *   comes with the window where it was, scrolls to its top (`scrollToTop`), and focus goes to its h1, the product's
+ *   name, once the scroll has ended;
  * - a press during a page transition ends it at once: what is pressed is then the page as it now is, so a second
  *   click made mid-way goes to its own page.
  */
@@ -65,6 +99,8 @@ function usePageArrival(page: string) {
   const byHistory = useRef(false)
   // W78a (WQ68): the Back or Forward step now under way that the site animates itself, until its page has arrived.
   const step = useRef<HeldStep | null>(null)
+  // W78b (WQ52): forgets the scroll to the top of a page that arrived in place, while it is still under way.
+  const forgetScroll = useRef(NOTHING_TO_FORGET)
 
   useEffect(() => {
     let endedByPress = false
@@ -148,7 +184,11 @@ function usePageArrival(page: string) {
       }
     }
     held?.release()
-    const top = byHistory.current ? window.scrollY : 0
+    // W78b (WQ52): a page that arrives in place (a colour swatch's) stays where the window is, and goes to its top
+    // by itself afterwards. Asked for every arrival, so what a link said is never left for a later page.
+    const saidInPlace = takeArrivalInPlace(page)
+    const inPlace = saidInPlace && !byHistory.current
+    const top = byHistory.current || inPlace ? window.scrollY : 0
     document.documentElement.style.setProperty(PAGE_IN_ABOVE, `${top}px`)
     // W75 (WQ60): a link that names a place on the new page. Back and Forward keep the place the browser puts them.
     const placeId = byHistory.current ? null : hashId(window.location.hash)
@@ -159,20 +199,18 @@ function usePageArrival(page: string) {
     if (place) scrollToPlace(place, lenis)
 
     const main = document.getElementById('main')
-    // WQ52: a link that changed the page where it stood (a colour swatch) keeps focus on its like in the new page.
-    const kept = takeFocusOnArrival(page)
-    const keeper = kept ? (main?.querySelector<HTMLElement>(kept) ?? null) : null
-    if (keeper) {
-      keeper.focus({ preventScroll: true })
-      return
-    }
     const heading = main?.querySelector('h1') ?? null
     if (heading && !heading.hasAttribute('tabindex')) {
       // Focus by script only, never in the Tab order; a heading shows no ring (it is not a control).
       heading.tabIndex = -1
       heading.style.outline = 'none'
     }
-    ;(heading ?? main)?.focus({ preventScroll: true })
+    const toHeading = () => (heading ?? main)?.focus({ preventScroll: true })
+    // An earlier page's scroll to its top, still under way, is that page's: this one starts afresh.
+    forgetScroll.current()
+    // WQ52: the page that came in place scrolls to its top, and only then does focus go to its heading (the product's name).
+    forgetScroll.current = inPlace ? scrollToTop(lenis, toHeading) : NOTHING_TO_FORGET
+    if (!inPlace) toHeading()
   }, [page, lenis])
 }
 

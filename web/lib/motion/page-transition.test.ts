@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import { BOOK_ADDRESS, isBookAddress, linkHref } from '@/lib/sanity/links'
 
-import { animatesHistoryStep, hashId, keepFocusOnArrival, PAGE_AT_ONCE, PAGE_AT_ONCE_TYPES, PAGE_IN, PAGE_IN_ABOVE, PAGE_LEAVING, PAGE_OUT, PAGE_OUT_SURFACES, PAGE_SURFACE, PAGE_TRANSITION, PAGE_TRANSITION_TYPES, pageOf, takeFocusOnArrival } from './page-transition'
+import { animatesHistoryStep, arriveInPlace, hashId, PAGE_AT_ONCE, PAGE_AT_ONCE_TYPES, PAGE_IN, PAGE_IN_ABOVE, PAGE_LEAVING, PAGE_OUT, PAGE_OUT_SURFACES, PAGE_SURFACE, PAGE_TRANSITION, PAGE_TRANSITION_TYPES, pageOf, takeArrivalInPlace } from './page-transition'
 
 // Brief W73b, item 5 (WQ20), and W78a (WQ67, WQ68): the page transition is on every link from page to page inside
 // the site and on the browser's Back and Forward, takes the long duration with the smooth curve, and is an instant
@@ -35,32 +35,37 @@ describe('every link inside the site carries the page transition', () => {
     expect(files.length).toBeGreaterThan(20)
     expect(files.filter((file) => /from ['"]next\/link['"]/.test(read(file)))).toEqual(['components/ui/SiteLink.tsx'])
     // W78a (WQ68): every navigation a link makes says which it is. One with no type at all is Back or Forward.
-    expect(read('components/ui/SiteLink.tsx')).toContain("<Link href={href} prefetch={isBuiltAddress(href) ? 'auto' : false} transitionTypes={transition ? PAGE_TRANSITION_TYPES : PAGE_AT_ONCE_TYPES} onClick={click} {...tab} {...rest}>")
+    // W78b (WQ52): Next puts the window at the new page's top itself, but for the link that asks for no transition.
+    expect(read('components/ui/SiteLink.tsx')).toContain("<Link href={href} prefetch={isBuiltAddress(href) ? 'auto' : false} scroll={transition} transitionTypes={transition ? PAGE_TRANSITION_TYPES : PAGE_AT_ONCE_TYPES} onClick={click} {...tab} {...rest}>")
     expect(read('components/ui/SiteLink.tsx')).toContain('export function SiteLink({ href, newTab = false, transition = true, onClick, children, ...rest }: SiteLinkProps) {')
     expect(PAGE_TRANSITION_TYPES).toEqual([PAGE_TRANSITION])
     expect(PAGE_AT_ONCE_TYPES).toEqual([PAGE_AT_ONCE])
     expect(PAGE_AT_ONCE).not.toBe(PAGE_TRANSITION)
   })
 
-  // W74c (WQ52): a product's colour swatch goes to that colour's page where this one stands. It is the one link that
-  // asks for no transition; the new page comes from its top at once (WQ52 as amended), with focus on the swatch chosen.
-  it('only a colour swatch goes without it, and keeps focus on the swatch chosen', () => {
+  // W74c, W78b (WQ52, as amended again): a product's colour swatch goes to that colour's page where this one stands.
+  // It is the one link that asks for no transition; a plain press of it says its page arrives in place.
+  it('only a colour swatch goes without it, and its page arrives in place', () => {
     const without = files.filter((file) => /transition=\{false\}/.test(read(file)))
     expect(without).toEqual(['components/shop/ProductBuy.tsx'])
     const buy = read('components/shop/ProductBuy.tsx')
     expect(buy.match(/transition=\{false\}/g)).toHaveLength(1)
-    expect(buy).toMatch(/<SiteLink\s+href=\{colour\.href\}\s+transition=\{false\}\s+onClick=\{\(event\) => \{\s+if \(isPlainClick\(event\)\) keepFocusOnArrival\(colour\.href, CHOSEN_SWATCH\)\s+\}\}\s+data-shop="swatch"/)
-    expect(buy).toContain(`const CHOSEN_SWATCH = '[data-shop="swatch"][aria-current="page"]'`)
+    expect(buy).toMatch(/<SiteLink\s+href=\{colour\.href\}\s+transition=\{false\}\s+data-shop="swatch"/)
+    // The link itself says so, after the caller's own click, and never for a press meant for a new tab or window.
+    const link = read('components/ui/SiteLink.tsx')
+    expect(link).toMatch(/onClick\?\.\(event\)\s+if \(event\.defaultPrevented \|\| newTab \|\| !isPlainClick\(event\)\) return\s+\/\/[^\n]*\n\s+if \(!transition\) arriveInPlace\(pathOf\(href\)\)/)
+    expect(link).toContain('const pathOf = (href: string): string => href.split(/[?#]/)[0] ?? href')
   })
 
-  it('what a link asks to have focus on arrival is kept for its own page only, and once', () => {
-    keepFocusOnArrival('/shop/t-shirt-black', '[data-x]')
-    expect(takeFocusOnArrival('/shop/t-shirt-black')).toBe('[data-x]')
-    expect(takeFocusOnArrival('/shop/t-shirt-black')).toBeNull()
+  it('what a link says of the page it leads to is kept for that page only, and once', () => {
+    expect(takeArrivalInPlace('/shop/t-shirt-black')).toBe(false)
+    arriveInPlace('/shop/t-shirt-black')
+    expect(takeArrivalInPlace('/shop/t-shirt-black')).toBe(true)
+    expect(takeArrivalInPlace('/shop/t-shirt-black')).toBe(false)
     // Pressed, but another page arrived (the link was opened elsewhere, or another link was pressed since): dropped.
-    keepFocusOnArrival('/shop/t-shirt-black', '[data-x]')
-    expect(takeFocusOnArrival('/shop')).toBeNull()
-    expect(takeFocusOnArrival('/shop/t-shirt-black')).toBeNull()
+    arriveInPlace('/shop/t-shirt-black')
+    expect(takeArrivalInPlace('/shop')).toBe(false)
+    expect(takeArrivalInPlace('/shop/t-shirt-black')).toBe(false)
   })
 
   // W73b Level 3 (Wayne, 24 Nov): a link can go to the booking panel. The panel opens over the page the visitor is
@@ -71,7 +76,7 @@ describe('every link inside the site carries the page transition', () => {
     expect([isBookAddress('/book'), isBookAddress('/book?date=2026-12-01&type=public'), isBookAddress('/booking'), isBookAddress('/shop'), isBookAddress('/')]).toEqual([true, true, false, false, false])
     const link = read('components/ui/SiteLink.tsx')
     // The caller's own click first (the menu shuts), then the panel; a click meant for a new tab is the browser's.
-    expect(link).toMatch(/onClick\?\.\(event\)\s+if \(event\.defaultPrevented \|\| newTab \|\| !isBookAddress\(href\) \|\| !isPlainClick\(event\)\) return\s+if \(panels\.open\('book'\)\) event\.preventDefault\(\)/)
+    expect(link).toMatch(/onClick\?\.\(event\)\s+if \(event\.defaultPrevented \|\| newTab \|\| !isPlainClick\(event\)\) return\s+[\s\S]*?\n\s+if \(isBookAddress\(href\) && panels\.open\('book'\)\) event\.preventDefault\(\)\n  \}/)
     // Nothing else asks for the booking panel by itself: the header's Book and a hero's button are plain links to it.
     const asking = files.filter((file) => /open\('book'\)/.test(read(file)))
     expect(asking).toEqual(['components/ui/SiteLink.tsx'])
@@ -152,18 +157,29 @@ describe('what is animated, and when', () => {
     })
 
     it('the browser restores the scroll itself once the new page is in, before the place is read, and the step is over', () => {
-      expect(component).toMatch(/const held = step\.current\s+step\.current = null\s+if \(held && byHistory\.current\) \{\s+try \{\s+held\.scroll\(\)\s+\} catch \{[\s\S]*?\}\s+\}\s+held\?\.release\(\)\s+const top = byHistory\.current \? window\.scrollY : 0/)
+      expect(component).toMatch(/const held = step\.current\s+step\.current = null\s+if \(held && byHistory\.current\) \{\s+try \{\s+held\.scroll\(\)\s+\} catch \{[\s\S]*?\}\s+\}\s+held\?\.release\(\)\s+[\s\S]*?const top = byHistory\.current \|\| inPlace \? window\.scrollY : 0/)
     })
   })
 
   it('on arriving: the top of the new page (Lenis told), and focus on its h1, or main', () => {
-    expect(component).toContain('const top = byHistory.current ? window.scrollY : 0')
+    expect(component).toContain('const top = byHistory.current || inPlace ? window.scrollY : 0')
     expect(component).toContain('lenis.scrollTo(top, { immediate: true, force: true })')
-    expect(component).toContain(";(heading ?? main)?.focus({ preventScroll: true })")
+    expect(component).toContain('const toHeading = () => (heading ?? main)?.focus({ preventScroll: true })')
+    expect(component).toMatch(/if \(!inPlace\) toHeading\(\)\n  \}, \[page, lenis\]\)/)
   })
 
-  it('WQ52: a page arrived at by a link that asked to keep focus puts it there instead, still from the top and without scrolling', () => {
-    expect(component).toMatch(/lenis\.scrollTo\(top, \{ immediate: true, force: true \}\)[\s\S]*const kept = takeFocusOnArrival\(page\)[\s\S]*keeper\.focus\(\{ preventScroll: true \}\)\s+return\s+\}\s+const heading/)
+  // W78b (WQ52, as amended again; it was "from the top at once, focus on the swatch" in W74c). Watched in a browser:
+  // components/frame/PageTransition.stories.tsx (In Place), and the site for the report
+  // (briefs/W78b-logs/tools/swatch-scroll.cjs in the staff app's repo).
+  it('WQ52: a page that arrives in place stays where the window is, scrolls to its top by itself, and only then gives its heading focus', () => {
+    // Asked for every arrival, so it is never left for a later page; Back and Forward never arrive in place.
+    expect(component).toMatch(/const saidInPlace = takeArrivalInPlace\(page\)\s+const inPlace = saidInPlace && !byHistory\.current\s+const top = byHistory\.current \|\| inPlace \? window\.scrollY : 0/)
+    expect(component).toMatch(/forgetScroll\.current\(\)\s+\/\/[^\n]*\n\s+forgetScroll\.current = inPlace \? scrollToTop\(lenis, toHeading\) : NOTHING_TO_FORGET/)
+    // Lenis takes the long duration and the smooth curve from the tokens, and says when it has arrived; a wheel or a
+    // touch that takes the scroll over ends it too. With reduced motion (no Lenis) it jumps, and focus goes at once.
+    expect(component).toContain('lenis.scrollTo(0, { duration: DURATION_LONG, easing: EASE_SMOOTH, force: true, onComplete: end })')
+    expect(component).toMatch(/if \(!lenis\) \{\s+window\.scrollTo\(0, 0\)\s+then\(\)\s+return NOTHING_TO_FORGET\s+\}/)
+    expect(component).toMatch(/window\.addEventListener\('wheel', end, \{ capture: true, passive: true \}\)\s+window\.addEventListener\('touchmove', end, \{ capture: true, passive: true \}\)/)
   })
 
   // W75 (WQ60): "All Events" goes to /exclusive-hire#events. The page arrives at its top as every page does, and
@@ -208,7 +224,7 @@ describe('the movement, in the stylesheet', () => {
   it('WQ68: what of the page coming lies above the window is not drawn while it moves; a link arrives with none', () => {
     expect(PAGE_IN_ABOVE).toBe('--page-in-above')
     // Written once the browser has put the window where the entry was left, and before the new page is pictured.
-    expect(read('components/frame/PageTransition.tsx')).toMatch(/held\?\.release\(\)\s+const top = byHistory\.current \? window\.scrollY : 0\s+document\.documentElement\.style\.setProperty\(PAGE_IN_ABOVE, `\$\{top\}px`\)/)
+    expect(read('components/frame/PageTransition.tsx')).toMatch(/held\?\.release\(\)\s+[\s\S]*?const top = byHistory\.current \|\| inPlace \? window\.scrollY : 0\s+document\.documentElement\.style\.setProperty\(PAGE_IN_ABOVE, `\$\{top\}px`\)/)
   })
 
   // W74d (WQ57): each page's background stays solid and still. Watched in a browser: the Frame / Page transition

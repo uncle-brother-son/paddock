@@ -134,21 +134,30 @@ export const SIMILAR_ROW_LENGTH = 4
 type SimilarContent = { product: Product; products: SanityProduct[]; items: ShopItem[]; length?: number }
 
 /**
- * Similar Merch (WQ6): the editor's picks first, in their order, then others of the product's category, newest first,
- * up to the row's length. Only what is on sale; a sold-out one keeps its card. Never the product itself, and the
- * category's fill leaves out its own colours, which the page already shows as swatches.
+ * Similar Merch (WQ6; W78b: WQ74, the row always fills), up to the row's length, in this order:
+ * 1. the editor's picks, in their order (a pick may be one of the product's own colours: the editor chose it);
+ * 2. other products of its category, newest first;
+ * 3. every other product on sale, newest first;
+ * 4. its own other colours, which the page already shows as swatches, so they come last.
+ * Only products that are on sale (a sold-out one keeps its card), each once, never the product itself and never the
+ * gift card. So it is empty, and the row hidden, only when the shop has no other product.
  */
 export function similarCards({ product, products, items, length = SIMILAR_ROW_LENGTH }: SimilarContent): ShopCard[] {
-  const byId = new Map(items.map((item) => [item.card.id, item]))
-  const own = byId.get(product.id)
-  const family = new Set(product.family ? products.filter((one) => one.family === product.family).map((one) => one.id) : [])
-  const picks = product.similarIds.flatMap((id) => (id !== product.id && byId.has(id) ? [byId.get(id)!] : []))
-  const picked = new Set(picks.map((item) => item.card.id))
   const sanityIds = new Set(products.map((one) => one.id))
-  const others = items.filter(
-    (item) => own && own.category !== null && item.category === own.category && item.card.id !== product.id && !picked.has(item.card.id) && !family.has(item.card.id) && sanityIds.has(item.card.id),
-  )
-  return [...picks, ...others].slice(0, length).map((item) => item.card)
+  // Every other product on sale, newest first: what each step chooses from.
+  const others = items.filter((item) => item.card.id !== product.id && sanityIds.has(item.card.id))
+  const byId = new Map(others.map((item) => [item.card.id, item]))
+  const category = items.find((item) => item.card.id === product.id)?.category ?? null
+  const family = new Set(product.family ? products.filter((one) => one.family === product.family).map((one) => one.id) : [])
+  const picks = product.similarIds.flatMap((id) => byId.get(id) ?? [])
+  const notOwnColour = others.filter((item) => !family.has(item.card.id))
+  const inOrder = [
+    ...picks,
+    ...notOwnColour.filter((item) => category !== null && item.category === category),
+    ...notOwnColour,
+    ...others,
+  ]
+  return [...new Set(inOrder)].slice(0, length).map((item) => item.card)
 }
 
 /** A rich text's words, in one line. */

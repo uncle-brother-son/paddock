@@ -74,6 +74,31 @@ export const sampleSessionsWithFull = (date: string): DaySessions => {
 
 export const sampleNoSessions = (date: string): DaySessions => ({ date, mostPeople: { public: 6, private: 10 }, public: [], private: [] })
 
+/** A day as the sample month has it: its sessions, or none on a day with nothing to book (the 18th, the 25th: WQ78, they can be chosen all the same). */
+export const sampleDaySessions = (date: string): DaySessions => (sampleDays(date.slice(0, 7)).publicDays.includes(date) ? sampleSessions(date) : sampleNoSessions(date))
+
+/**
+ * W78b (WQ78): a day whose words are as long as the site's can be, for the stories that look for anything overlapping
+ * or cut off at each width: a long service name, a three-figure price, "10 Spots Left", a full session, and private
+ * sessions whose group prices run to three figures.
+ */
+export const sampleLongSessions = (date: string): DaySessions => {
+  const service = 'Contrast Therapy & Aufguss Ritual'
+  return {
+    date,
+    mostPeople: { public: 10, private: 10 },
+    public: [
+      samplePublic(date, '08:00', { service, band: 'Off-Peak', price: '165.00', spotsLeft: 10, mostPeople: 10 }),
+      samplePublic(date, '09:15', { service, band: 'Peak', price: '165.00', state: 'full', spotsLeft: 0, mostPeople: 0 }),
+      samplePublic(date, '10:30'),
+    ],
+    private: [
+      { minutes: 60, sessions: [samplePrivate(date, '08:00', 60, { service }), samplePrivate(date, '09:15', 60, { service, state: 'full', mostPeople: 0 })] },
+      { minutes: 120, sessions: [samplePrivate(date, '10:30', 120, { service })] },
+    ],
+  }
+}
+
 const money = (pence: number): string => (pence / 100).toFixed(2)
 
 /** What that many people pay for one of the sample sessions, as booking-quote answers. */
@@ -103,7 +128,7 @@ type SampleReads = {
 }
 
 /** The panel's three reads, answered here: nothing is fetched. */
-export const sampleReads = ({ sessions = sampleSessions, quote = sampleQuote }: SampleReads = {}): BookReads => ({
+export const sampleReads = ({ sessions = sampleDaySessions, quote = sampleQuote }: SampleReads = {}): BookReads => ({
   days: async (month) => sampleDays(month),
   sessions: async (date) => (sessions === 'never' ? new Promise<DaySessions | null>(() => undefined) : sessions(date)),
   quote: async (session, people) => quote(session, people),

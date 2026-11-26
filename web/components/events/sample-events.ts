@@ -90,15 +90,25 @@ export const SAMPLE_EVENTS = {
   cancelled: sampleEvent({ state: 'cancelled' }),
 }
 
-type CardOptions = { name?: string; startsAt?: string; spacesLeft?: number; colour?: string; steam?: number }
+type CardOptions = { name?: string; startsAt?: string; spacesLeft?: number; colour?: string; steam?: number; price?: string | null; membersOnly?: boolean }
 
-/** A card as Figma's EventCard, its date by the site's one rule (WQ69): "16:00 - Tuesday 27 October", "6 Spaces Left", "Aufguss Session with Henry". */
-export function sampleEventCard(id: string, { name = 'Aufguss Session with Henry', startsAt = SAMPLE_STARTS_AT, spacesLeft = 6, colour = MOSS, steam = 3 }: CardOptions = {}): EventCardView {
-  return { id, href: `/events/${id}`, name, picture: { ...stove(colour, steam), alt: '' }, when: whenLine(startsAt), startsAt, spaces: cardSpaces(spacesLeft) }
+/**
+ * A card as Figma's EventCard (329:7588), its date by the site's one rule (WQ69): "Aufguss Session with Henry",
+ * "6 Spaces Left", "16:00 - Tuesday 27 October", "£25"; and with `membersOnly` Type=members only (1802:11329).
+ */
+export function sampleEventCard(
+  id: string,
+  { name = 'Aufguss Session with Henry', startsAt = SAMPLE_STARTS_AT, spacesLeft = 6, colour = MOSS, steam = 3, price = '£25', membersOnly = false }: CardOptions = {},
+): EventCardView {
+  return { id, href: `/events/${id}`, name, picture: { ...stove(colour, steam), alt: '' }, when: whenLine(startsAt), startsAt, spaces: cardSpaces(spacesLeft), price, membersOnly }
 }
 
 export const SAMPLE_EVENT_CARDS = {
   plain: sampleEventCard('aufguss-27-oct'),
+  // Figma's Type=members only: the same card, "Members Only" after its price.
+  membersOnly: sampleEventCard('aufguss-members', { membersOnly: true }),
+  // The longest the three lines get: a long name, the longest date the year has, and two figures of spaces.
+  longest: sampleEventCard('long-table-supper', { name: 'Winter Long Table Supper with Sauna and Cold Plunge', startsAt: '2027-02-10T10:00:00+00:00', spacesLeft: 10, price: '£125.50', membersOnly: true, colour: MUD }),
   oneSpaceLeft: sampleEventCard('aufguss-3-nov', { startsAt: '2026-11-03T16:00:00+00:00', spacesLeft: 1, colour: MUD }),
   soldOut: sampleEventCard('winter-solstice', { name: 'Winter Solstice Sauna', startsAt: '2026-12-21T19:30:00+00:00', spacesLeft: 0, colour: BLACK, steam: 2 }),
   // In British Summer Time: 18:00 in London is 17:00 UTC.

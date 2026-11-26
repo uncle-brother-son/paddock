@@ -1,5 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/nextjs-vite'
-import { expect } from 'storybook/test'
+import { expect, waitFor } from 'storybook/test'
+
+import { painted } from '@/components/ui/story-kit'
 
 import { EventCard } from './EventCard'
 import { SAMPLE_EVENT_CARDS } from './sample-events'
@@ -22,29 +24,211 @@ type Story = StoryObj<typeof meta>
 
 const box = (element: Element) => element.getBoundingClientRect()
 
+/** The card's own fonts are in before anything is measured: a line of capitals is a pixel shorter in a stand-in font. */
+const fontsIn = async (canvasElement: HTMLElement) => {
+  await document.fonts.ready
+  await waitFor(() => expect([...canvasElement.querySelectorAll('[data-event="card"] span, [data-event="card"] time')].every((text) => document.fonts.check(getComputedStyle(text).font))).toBe(true))
+}
+
+/** The card's parts as Figma names them: the picture's frame, the name, the spaces, the date, the price, and "Members Only" when it is there. */
+const partsOf = (card: HTMLElement) => {
+  const [name, spaces] = [...card.querySelectorAll<HTMLElement>('[data-event="name-and-spaces"] > span')] as [HTMLElement, HTMLElement]
+  const [price, membersOnly] = [...card.querySelectorAll<HTMLElement>('[data-event="price"] > span')] as [HTMLElement, HTMLElement | undefined]
+  return { frame: card.querySelector('a > div') as HTMLElement, name, spaces, when: card.querySelector('time') as HTMLElement, price, membersOnly }
+}
+
+/** Copy 14 for the name and Copy 12 for the rest, in Text/Primary, the spaces in Text/Muted Primary: as every variant draws them. */
+const expectStyles = async (card: HTMLElement) => {
+  const { name, spaces, when, price, membersOnly } = partsOf(card)
+  const texts = [name, spaces, when, price, ...(membersOnly ? [membersOnly] : [])]
+  await expect(texts.map((text) => getComputedStyle(text).fontSize)).toEqual(['14px', '12px', '12px', '12px', ...(membersOnly ? ['12px'] : [])])
+  await expect(texts.map((text) => getComputedStyle(text).textTransform)).toEqual(texts.map(() => 'none'))
+  const primary = painted(name, 'text-text-primary', 'color')
+  const muted = painted(name, 'text-text-muted-primary', 'color')
+  await expect(primary).not.toBe(muted)
+  await expect(texts.map((text) => getComputedStyle(text).color)).toEqual([primary, muted, primary, primary, ...(membersOnly ? [primary] : [])])
+}
+
 /**
- * Figma "EventCard" (329:7588): the picture 4 by 5 with 4px corners on Object/Product BG; 8px beneath it the date
- * and time in the card's short form at the left and the spaces left at the right, both Copy 12; 8px beneath them the
- * name in Copy 14. The text keeps 8px clear of the card's right edge. The whole card is one link to the event.
+ * Device=desktop's arrangement (329:7588, 1802:11329): 8px under the picture the name at the card's left with the
+ * spaces on its line at the card's right; 8px under that line the date; 8px under the date the price.
+ */
+const expectDesktopArrangement = async (card: HTMLElement) => {
+  const { frame, name, spaces, when, price } = partsOf(card)
+  await expect([Math.round(box(name).left - box(frame).left), Math.round(box(frame).right - box(spaces).right)]).toEqual([0, 0])
+  await expect([Math.round(box(name).top - box(frame).bottom), Math.round(box(spaces).top - box(frame).bottom)]).toEqual([8, 8])
+  // The name has the line's width but for the spaces and the 8px between them.
+  await expect(Math.round(box(spaces).left - box(name).right)).toBe(8)
+  await expect([Math.round(box(when).left - box(frame).left), Math.round(box(when).top - box(name).bottom)]).toEqual([0, 8])
+  await expect([Math.round(box(price).left - box(frame).left), Math.round(box(price).top - box(when).bottom)]).toEqual([0, 8])
+}
+
+/** Device=mobile's (1051:24234, 1802:11338): the spaces 8px under the name, at the card's left; then the date and the price as before. */
+const expectMobileArrangement = async (card: HTMLElement) => {
+  const { frame, name, spaces, when, price } = partsOf(card)
+  await expect([Math.round(box(name).left - box(frame).left), Math.round(box(name).top - box(frame).bottom)]).toEqual([0, 8])
+  await expect([Math.round(box(spaces).left - box(frame).left), Math.round(box(spaces).top - box(name).bottom)]).toEqual([0, 8])
+  await expect([Math.round(box(when).left - box(frame).left), Math.round(box(when).top - box(spaces).bottom)]).toEqual([0, 8])
+  await expect([Math.round(box(price).left - box(frame).left), Math.round(box(price).top - box(when).bottom)]).toEqual([0, 8])
+}
+
+/** Nothing of the card reaches past its edges, and no line of it lies over another. */
+const expectNothingSpills = async (card: HTMLElement) => {
+  const { frame, name, spaces, when, price, membersOnly } = partsOf(card)
+  const texts = [name, spaces, when, price, ...(membersOnly ? [membersOnly] : [])]
+  const within = box(card)
+  await expect(texts.filter((text) => box(text).left < within.left - 0.5 || box(text).right > within.right + 0.5).map((text) => text.textContent)).toEqual([])
+  await expect(card.scrollWidth).toBeLessThanOrEqual(card.clientWidth)
+  // Each part starts at or below the one before it, or beside it on its line; never across it.
+  const overlapping = texts.flatMap((one, index) =>
+    texts.slice(index + 1).filter((other) => box(one).left < box(other).right - 0.5 && box(other).left < box(one).right - 0.5 && box(one).top < box(other).bottom - 0.5 && box(other).top < box(one).bottom - 0.5).map((other) => `${one.textContent} / ${other.textContent}`),
+  )
+  await expect(overlapping).toEqual([])
+  await expect(box(name).top).toBeGreaterThanOrEqual(box(frame).bottom)
+}
+
+const cardIn = (canvasElement: HTMLElement) => canvasElement.querySelector('[data-event="card"]') as HTMLElement
+
+/**
+ * Figma "EventCard", Device=desktop, Type=default (329:7588; W78b, WQ77): the picture 4 by 5 with 4px corners on
+ * Object/Product BG; 8px beneath it the name in Copy 14 with the spaces left in Copy 12, Text/Muted Primary, at the
+ * card's right; 8px beneath them the date and time in Copy 12 (WQ69's form); 8px beneath that the price in Copy 12.
+ * The text reaches the card's edges. The whole card is one link to the event.
  */
 export const Default: Story = {
+  name: 'Device=desktop, Type=default',
   play: async ({ canvas, canvasElement }) => {
+    await fontsIn(canvasElement)
     const link = canvas.getByRole('link')
     await expect(link.getAttribute('href')).toBe('/events/aufguss-27-oct')
     await expect(canvas.queryAllByRole('button')).toHaveLength(0)
-    const frame = (canvasElement.querySelector('img') as HTMLElement).parentElement as HTMLElement
+    const card = cardIn(canvasElement)
+    await expect(card.dataset.type).toBe('default')
+    const { frame, name, spaces, when, price, membersOnly } = partsOf(card)
     await expect([Math.round(box(frame).width), Math.round(box(frame).height)]).toEqual([458, 573])
     await expect(getComputedStyle(frame).borderRadius).toBe('4px')
-    const when = canvas.getByText('16:00 - Tuesday 27 October')
+    await expect([name.textContent, spaces.textContent, when.textContent, price.textContent, membersOnly]).toEqual(['Aufguss Session with Henry', '6 Spaces Left', '16:00 - Tuesday 27 October', '£25', undefined])
     await expect([when.tagName, when.getAttribute('datetime')]).toEqual(['TIME', '2026-10-27T16:00:00+00:00'])
-    const spaces = canvas.getByText('6 Spaces Left')
-    const name = canvas.getByText('Aufguss Session with Henry')
-    await expect([getComputedStyle(when).fontSize, getComputedStyle(spaces).fontSize, getComputedStyle(name).fontSize]).toEqual(['12px', '12px', '14px'])
-    // The date at the card's left, the spaces 8px inside its right, on one line 8px under the picture.
-    await expect([Math.round(box(when).left - box(frame).left), Math.round(box(frame).right - box(spaces).right)]).toEqual([0, 8])
-    await expect(Math.round(box(when).top - box(frame).bottom)).toBe(8)
-    await expect(Math.abs(box(when).top - box(spaces).top)).toBeLessThan(1)
-    await expect(Math.round(box(name).top - box(when).bottom)).toBe(8)
+    await expectStyles(card)
+    await expectDesktopArrangement(card)
+    await expectNothingSpills(card)
+  },
+}
+
+/**
+ * Device=desktop, Type=members only (1802:11329): an event only a member can book now. The same card, with
+ * "Members Only" in Copy 12, Text/Primary, 8px after the price on its line. The price is the member's.
+ */
+export const MembersOnly: Story = {
+  name: 'Device=desktop, Type=members only',
+  args: { card: SAMPLE_EVENT_CARDS.membersOnly },
+  play: async ({ canvasElement }) => {
+    await fontsIn(canvasElement)
+    const card = cardIn(canvasElement)
+    await expect(card.dataset.type).toBe('members only')
+    const { price, membersOnly } = partsOf(card)
+    await expect([price.textContent, membersOnly?.textContent]).toEqual(['£25', 'Members Only'])
+    await expect([Math.round(box(membersOnly!).left - box(price).right), Math.round(Math.abs(box(membersOnly!).top - box(price).top))]).toEqual([8, 0])
+    await expectStyles(card)
+    await expectDesktopArrangement(card)
+    await expectNothingSpills(card)
+  },
+}
+
+/**
+ * Device=mobile, Type=default (1051:24234): the card 183 wide, as Figma draws it. The spaces are 8px under the name,
+ * at the card's left; the date and the price follow, 8px apart. No list Figma draws uses it yet (a phone's lists use
+ * the desktop card at 358): it is asked for with `device="mobile"`.
+ */
+export const MobileDefault: Story = {
+  name: 'Device=mobile, Type=default',
+  args: { device: 'mobile' },
+  render: (args) => (
+    <div style={{ width: 183 }}>
+      <EventCard {...args} />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    await fontsIn(canvasElement)
+    const card = cardIn(canvasElement)
+    const { frame } = partsOf(card)
+    await expect([card.dataset.device, Math.round(box(frame).width), Math.round(box(frame).height)]).toEqual(['mobile', 183, 229])
+    await expectStyles(card)
+    await expectMobileArrangement(card)
+    await expectNothingSpills(card)
+  },
+}
+
+/** Device=mobile, Type=members only (1802:11338): the 183 card with "Members Only" 8px after the price. */
+export const MobileMembersOnly: Story = {
+  name: 'Device=mobile, Type=members only',
+  args: { card: SAMPLE_EVENT_CARDS.membersOnly, device: 'mobile' },
+  render: (args) => (
+    <div style={{ width: 183 }}>
+      <EventCard {...args} />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    await fontsIn(canvasElement)
+    const card = cardIn(canvasElement)
+    const { price, membersOnly } = partsOf(card)
+    await expect([price.textContent, membersOnly?.textContent]).toEqual(['£25', 'Members Only'])
+    await expect([Math.round(box(membersOnly!).left - box(price).right), Math.round(Math.abs(box(membersOnly!).top - box(price).top))]).toEqual([8, 0])
+    await expectStyles(card)
+    await expectMobileArrangement(card)
+    await expectNothingSpills(card)
+  },
+}
+
+/** How wide a card is in the lists, by the window's width: the grid's whole width below 768px, 8 of its 24 columns from there. */
+const CARD_WIDTHS = [
+  { wide: 320, card: 288 },
+  { wide: 390, card: 358 },
+  { wide: 768, card: 240 },
+  { wide: 1024, card: 325 },
+  { wide: 1440, card: 464 },
+  { wide: 1920, card: 624 },
+]
+
+/**
+ * W78b: at every width a list draws it, with the longest it has to hold (a long name, "10:00 - Wednesday 10
+ * February", "10 Spaces Left" or "Sold out", a price with pence and "Members Only"), nothing reaches past the card's
+ * edge and no line lies over another: the spaces keep their place at the right of the first line, and a name too
+ * long for the rest of it goes on to another line (W78a's report, point 2: at 768px the old card's spaces ran 19px
+ * past its edge). The mobile card, 183 wide, holds the same words too.
+ */
+export const EveryWidth: Story = {
+  name: 'Every width, the longest words',
+  parameters: { layout: 'fullscreen' },
+  render: () => (
+    <div className="flex flex-col gap-32">
+      {CARD_WIDTHS.flatMap(({ wide, card }) =>
+        [SAMPLE_EVENT_CARDS.longest, { ...SAMPLE_EVENT_CARDS.longest, id: 'sold', spaces: 'Sold out' }, { ...SAMPLE_EVENT_CARDS.plain, when: SAMPLE_EVENT_CARDS.longest.when, spaces: '10 Spaces Left' }].map((sample, index) => (
+          <div key={`${wide}-${index}`} data-window={wide} style={{ width: card }}>
+            <EventCard card={sample} />
+          </div>
+        )),
+      )}
+      <div data-window="mobile card" style={{ width: 183 }}>
+        <EventCard card={SAMPLE_EVENT_CARDS.longest} device="mobile" />
+      </div>
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    await fontsIn(canvasElement)
+    const cards = [...canvasElement.querySelectorAll<HTMLElement>('[data-event="card"]')]
+    await expect(cards).toHaveLength(CARD_WIDTHS.length * 3 + 1)
+    for (const card of cards) await expectNothingSpills(card)
+    // Every list's card is the desktop arrangement, whatever its width and however long its name.
+    for (const card of cards.slice(0, -1)) await expectDesktopArrangement(card)
+    await expectMobileArrangement(cards[cards.length - 1]!)
+    // Figma's own name beside the longest spaces: one line from a phone's width up, more than one only at a tablet's
+    // 240 (a line of Copy 14 is its capitals' height, about 10px; a second adds the line height).
+    const nameLines = (wide: number) => {
+      const card = canvasElement.querySelectorAll<HTMLElement>(`[data-window="${wide}"] [data-event="card"]`)[2] as HTMLElement
+      return box(partsOf(card).name).height < 14 ? 'one line' : 'more'
+    }
+    await expect([320, 390, 768, 1024, 1440, 1920].map(nameLines)).toEqual(['one line', 'one line', 'more', 'one line', 'one line', 'one line'])
   },
 }
 
@@ -92,16 +276,21 @@ export const NoPicture: Story = {
   },
 }
 
-/** On a phone the pages draw the same card the whole width of the window's grid (358 on Figma's 390 frame). */
+/**
+ * On a phone the pages draw the desktop card, Device=desktop, the whole width of the window's grid (358 on Figma's
+ * 390 frame: EventList 1634:12822, UpSellRow 1402:50615): the spaces stay on the name's line.
+ */
 export const Mobile: Story = {
+  name: 'In a phone’s list (the desktop card, 358 wide)',
   globals: { viewport: { value: 'mobile', isRotated: false } },
   render: (args) => <EventCard {...args} />,
-  play: async ({ canvas, canvasElement }) => {
-    const frame = (canvasElement.querySelector('img') as HTMLElement).parentElement as HTMLElement
+  play: async ({ canvasElement }) => {
+    await fontsIn(canvasElement)
+    const card = cardIn(canvasElement)
+    const { frame } = partsOf(card)
     await expect([Math.round(box(frame).width), Math.round(box(frame).height)]).toEqual([358, 448])
-    const when = canvas.getByText('16:00 - Tuesday 27 October')
-    const spaces = canvas.getByText('6 Spaces Left')
-    await expect(Math.abs(box(when).top - box(spaces).top)).toBeLessThan(1)
-    await expect(Math.round(box(frame).right - box(spaces).right)).toBe(8)
+    await expectStyles(card)
+    await expectDesktopArrangement(card)
+    await expectNothingSpills(card)
   },
 }

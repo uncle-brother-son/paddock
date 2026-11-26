@@ -12,6 +12,7 @@ import { addToBag, type BookingLine } from '@/lib/shop/bag'
 
 import { BookAddOns } from './BookAddOns'
 import { BookSessions, type DayRead } from './BookSessions'
+import { STEP_ROW } from './columns'
 
 type BookFlowProps = {
   addOns: readonly BookAddOn[]
@@ -29,8 +30,10 @@ function BookFlow({ addOns, reads, today }: BookFlowProps) {
   const [view, setView] = useState<BookView>('public')
   const [minutes, setMinutes] = useState<number | null>(null)
   const [month, setMonth] = useState(monthOf(today))
-  // Each month's answer, kept while the panel is open. `false`: it could not be read.
-  const [months, setMonths] = useState<Readonly<Record<string, BookingDays | false>>>({})
+  // This month's answer: the first day with a session to book, and the last day sessions are made for. Null: not read
+  // yet, or it could not be read. W78b (WQ78): which days have a session is no longer asked month by month, since
+  // every day from today on can be chosen and a day with none says so itself.
+  const [opening, setOpening] = useState<BookingDays | null>(null)
   const [day, setDay] = useState<string | null>(null)
   // The last day read. A day is read again when Book is refused and on Change (`turn`); what it showed stays until the new answer.
   const [read, setRead] = useState<{ day: string; sessions: DaySessions | null } | null>(null)
@@ -49,12 +52,11 @@ function BookFlow({ addOns, reads, today }: BookFlowProps) {
 
   // This month first: its answer says which day the panel opens on (the first with a session to book, in any month).
   const thisMonth = monthOf(today)
-  const opening = months[thisMonth]
   useEffect(() => {
     const stop = new AbortController()
     void reads.days(thisMonth, stop.signal).then((answer) => {
       if (stop.signal.aborted) return
-      setMonths((known) => ({ ...known, [thisMonth]: answer ?? false }))
+      setOpening(answer)
       // With nothing to book on any day, it opens on today, which says so.
       const first = answer?.firstDay ?? today
       setDay(first)
@@ -62,17 +64,6 @@ function BookFlow({ addOns, reads, today }: BookFlowProps) {
     })
     return () => stop.abort()
   }, [reads, thisMonth, today])
-
-  // Any other month, the first time it is shown.
-  const monthKnown = months[month] !== undefined
-  useEffect(() => {
-    if (monthKnown || month === thisMonth) return
-    const stop = new AbortController()
-    void reads.days(month, stop.signal).then((answer) => {
-      if (!stop.signal.aborted) setMonths((known) => ({ ...known, [month]: answer ?? false }))
-    })
-    return () => stop.abort()
-  }, [reads, month, monthKnown, thisMonth])
 
   // The day's sessions, each time a day is chosen and each time it is asked for again.
   useEffect(() => {
@@ -94,8 +85,6 @@ function BookFlow({ addOns, reads, today }: BookFlowProps) {
     else (content.current?.querySelector<HTMLElement>(`[data-session="${cameFrom.current ?? ''}"] button[aria-label^="Book"]`) ?? content.current?.querySelector<HTMLElement>('[data-day][tabindex="0"]'))?.focus()
   }, [step])
 
-  const shownMonth = months[month]
-  const bookable = shownMonth ? (view === 'public' ? shownMonth.publicDays : shownMonth.privateDays) : null
   // How far the calendar goes: the month of the last day sessions are made for (W77a's `lastDay`).
   const lastDay = opening ? opening.lastDay : null
   const lastMonth = lastDay && monthOf(lastDay) > thisMonth ? monthOf(lastDay) : thisMonth
@@ -135,14 +124,10 @@ function BookFlow({ addOns, reads, today }: BookFlowProps) {
   }
 
   return (
-    // From 768px the panel's own 24 columns in one row as tall as the panel, whose parts scroll by themselves; on a
-    // phone one column, 32px between its parts, that scrolls as a whole.
-    <div
-      ref={content}
-      data-book-step={step}
-      data-lenis-prevent=""
-      className="page-grid min-h-0 flex-1 content-start gap-y-32 overflow-y-auto pb-32 md:grid-rows-[minmax(0,1fr)] md:content-stretch md:overflow-visible md:pb-0"
-    >
+    // From 768px one row as tall as the panel, its parts on the panel's own 24 columns wherever those are wide enough
+    // for them (W78b, WQ78: components/book/columns.ts), each scrolling by itself; on a phone one column, 32px between
+    // its parts, that scrolls as a whole.
+    <div ref={content} data-book-step={step} data-lenis-prevent="" className={`page-grid min-h-0 flex-1 content-start gap-y-32 overflow-y-auto pb-32 ${STEP_ROW}`}>
       {step === 'add-ons' && chosen ? (
         <BookAddOns
           addOns={addOns}
@@ -163,7 +148,6 @@ function BookFlow({ addOns, reads, today }: BookFlowProps) {
         <BookSessions
           today={today}
           month={month}
-          bookable={bookable}
           firstMonth={thisMonth}
           lastMonth={lastMonth}
           onMonth={setMonth}

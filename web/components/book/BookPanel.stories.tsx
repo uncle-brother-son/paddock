@@ -76,11 +76,12 @@ export const Public: Story = {
     await expect(round(box(calendar).left - box(dialog).left, box(calendar).width, box(calendar).top - box(dialog).top)).toEqual(round(16 + column + 8, column * 6 + 40, 80))
     await expect(round(box(sessions).left - box(dialog).left, box(sessions).width, box(sessions).top - box(dialog).top)).toEqual(round(16 + (column + 8) * 9, column * 13 + 96, 80))
 
-    // The calendar: six weeks tall, the 12th chosen, the days before it and the days with nothing to book muted.
+    // The calendar: six weeks tall, the 12th chosen, the days before it muted. A day ahead with no sessions (the
+    // 18th, the 25th) is a day like any other (WQ78).
     await expect(panel.getByRole('heading', { name: 'November 2026' })).toBeVisible()
     await expect(panel.getByRole('button', { name: 'Thursday 12 November 2026' })).toHaveAttribute('aria-pressed', 'true')
-    for (const day of ['Wednesday 11 November 2026', 'Wednesday 18 November 2026', 'Wednesday 25 November 2026']) await expect(panel.getByRole('button', { name: day })).toHaveAttribute('aria-disabled', 'true')
-    await expect(panel.getByRole('button', { name: 'Friday 13 November 2026' })).toHaveAttribute('aria-disabled', 'false')
+    await expect(panel.getByRole('button', { name: 'Wednesday 11 November 2026' })).toHaveAttribute('aria-disabled', 'true')
+    for (const day of ['Friday 13 November 2026', 'Wednesday 18 November 2026', 'Wednesday 25 November 2026']) await expect(panel.getByRole('button', { name: day })).toHaveAttribute('aria-disabled', 'false')
     await expect(panel.getByRole('button', { name: 'Previous month' })).toBeDisabled()
     // The log-in bar, 12px beneath it.
     const account = part(dialog, 'account')
@@ -163,7 +164,7 @@ export const Loading: Story = {
     const { dialog, panel } = await opened(context, 0)
     await waitFor(() => expect(panel.getByRole('heading', { name: 'Thursday 12 November' })).toBeVisible())
     const rows = rowsIn(dialog)
-    await expect(rows.map((row) => [row.dataset.sessionState, row.getAttribute('aria-hidden')])).toEqual(Array.from({ length: 5 }, () => ['loading', 'true']))
+    await expect(rows.map((row) => [row.dataset.sessionState, row.closest('li')?.getAttribute('aria-hidden')])).toEqual(Array.from({ length: 5 }, () => ['loading', 'true']))
     await expect(round(box(rows[0]!).height, box(rows[1]!).top - box(rows[0]!).bottom)).toEqual([65, 12])
     await expect(panel.getByText('Loading sessions')).toBeInTheDocument()
     await expect(dialog.querySelector('[aria-busy="true"]')).not.toBeNull()
@@ -188,6 +189,41 @@ export const NoSessions: Story = {
     await expect(round(box(card).top - box(toggle).bottom, box(card).height)).toEqual([32, 25])
     await expect([getComputedStyle(card).paddingLeft, getComputedStyle(card).fontSize]).toEqual(['16px', '12px'])
     await expect(rowsIn(dialog)).toHaveLength(0)
+  },
+}
+
+/**
+ * W78b (WQ78): a day ahead with no sessions can be chosen, and says so where its sessions would be (Day=none); the
+ * days before today can't. The panel still opens on the first day with a session to book (WQ65): the 12th. Choosing
+ * the 18th, which has none, shows the card under the day's own heading; the 13th brings its sessions back; Private
+ * on a day with none says the same.
+ */
+export const DayWithNoSessions: Story = {
+  play: async (context) => {
+    const { dialog, panel } = await opened(context)
+    const day = (name: string) => panel.getByRole('button', { name })
+    await expect(day('Thursday 12 November 2026')).toHaveAttribute('aria-pressed', 'true')
+    const none = day('Wednesday 18 November 2026')
+    await expect(getComputedStyle(none).color).toBe(getComputedStyle(day('Friday 13 November 2026')).color)
+    await userEvent.click(none)
+    await expect(none).toHaveAttribute('aria-pressed', 'true')
+    await waitFor(() => expect(panel.getByRole('heading', { name: 'Wednesday 18 November' })).toBeVisible())
+    const card = await waitFor(() => panel.getByText('There are no sessions on this day. Choose another day.'))
+    await expect([card.getAttribute('role'), card.dataset.book]).toEqual(['status', 'no-sessions'])
+    await expect(rowsIn(dialog)).toHaveLength(0)
+    await expect(part(dialog, 'note')).toBeNull()
+    await userEvent.click(panel.getByRole('radio', { name: 'Private' }))
+    await expect(panel.getByText('There are no sessions on this day. Choose another day.')).toBeVisible()
+    await expect(panel.queryByRole('radiogroup', { name: 'Length of session' })).toBeNull()
+    await userEvent.click(panel.getByRole('radio', { name: 'Public' }))
+
+    // A day gone by takes no press: the 18th stays chosen.
+    await userEvent.click(day('Wednesday 11 November 2026'))
+    await expect(none).toHaveAttribute('aria-pressed', 'true')
+    // A day with sessions brings them back.
+    await userEvent.click(day('Friday 13 November 2026'))
+    await waitFor(() => expect(rowsIn(dialog)).toHaveLength(5))
+    await expect(panel.queryByText('There are no sessions on this day. Choose another day.')).toBeNull()
   },
 }
 

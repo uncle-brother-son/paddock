@@ -90,7 +90,7 @@ export const Loading: Story = {
   args: { loading: true },
   play: async ({ canvasElement }) => {
     const row = rowIn(canvasElement)
-    await expect([row.getAttribute('aria-hidden'), Math.round(box(row).height)]).toEqual(['true', 65])
+    await expect([row.closest('li')?.getAttribute('aria-hidden'), Math.round(box(row).height)]).toEqual(['true', 65])
     const bars = [...row.querySelectorAll('p')]
     await expect(bars).toHaveLength(6)
     // Each bar is as tall as its words' capitals (Figma: 9px), with 2px corners.
@@ -135,5 +135,42 @@ export const LoadingMobile: Story = {
   globals: MOBILE,
   play: async ({ canvasElement }) => {
     await expect(near(box(rowIn(canvasElement)).height, 124, 4)).toBe(true)
+  },
+}
+
+/** A row in a list of the width given, whatever the window's: what the row answers to (W78b, WQ78). */
+function InRoom({ width, session }: { width: number; session: PublicSession | PrivateSession }) {
+  const [people, setPeople] = useState(1)
+  return (
+    <ul style={{ width }}>
+      <SessionRow session={session} people={people} onPeople={setPeople} onBook={() => undefined} />
+    </ul>
+  )
+}
+
+/**
+ * W78b (WQ78): the row answers to the room it has, not to the window. In the 1440 window: at 640px it is one line
+ * (Device=desktop), every part on it and none over another; one pixel under, it is the stacked row (Device=mobile),
+ * the stepper and Book each its whole width.
+ */
+export const ByItsOwnWidth: Story = {
+  render: (args) => (
+    <div className="flex flex-col gap-16">
+      <InRoom width={640} session={args.session} />
+      <InRoom width={639} session={args.session} />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const [line, stacked] = [...canvasElement.querySelectorAll<HTMLElement>('[data-book="session"]')] as [HTMLElement, HTMLElement]
+    await expect(Math.round(box(line).height)).toBe(65)
+    const [, , service, , price] = [...line.querySelectorAll<HTMLElement>('p')] as [HTMLElement, HTMLElement, HTMLElement, HTMLElement, HTMLElement]
+    const book = within(line).getByRole('button', { name: 'Book 08:00' })
+    const stepper = within(line).getByRole('group', { name: 'Number of people, 08:00' })
+    // The service's column is what is left: 137px, and "Contrast Therapy" is on one line in it, clear of the price.
+    await expect(round(box(price).left - box(service).left, box(stepper).left - box(price).left, box(line).right - box(book).right)).toEqual([137, 160, 16])
+    await expect(Math.round(box(service).height)).toBe(9)
+    await expect(near(box(stacked).height, 165, 4)).toBe(true)
+    const wide = within(stacked).getByRole('button', { name: 'Book 08:00' })
+    await expect(Math.round(box(wide).width)).toBe(639 - 32)
   },
 }

@@ -83,11 +83,13 @@ export function BookingSummary({ summary, onChange, onAddToBag, onBookNow, headi
         <dl aria-live="polite">
           <SummaryRow line={{ label: 'Total to pay', value: summary.total }} total />
         </dl>
-        <div className="flex gap-12">
-          <Button onClick={onAddToBag} className="min-w-0 flex-1">
+        {/* Side by side, each half the card, wherever both fit with their own 32px each side; on a card too narrow for
+            that (the panel on a 320px phone) Book now goes beneath, each the card's whole width (W78b, WQ78). */}
+        <div className="flex flex-wrap gap-12">
+          <Button onClick={onAddToBag} className="min-w-max flex-1">
             Add to bag
           </Button>
-          <Button onClick={onBookNow} className="min-w-0 flex-1">
+          <Button onClick={onBookNow} className="min-w-max flex-1">
             Book now
           </Button>
         </div>

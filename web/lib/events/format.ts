@@ -18,3 +18,6 @@ export function cardSpaces(spacesLeft: number): string {
   if (spacesLeft <= 0) return 'Sold out'
   return spacesLeft === 1 ? '1 Space Left' : `${spacesLeft} Spaces Left`
 }
+
+/** After the price on Figma's EventCard, Type=members only (1802:11329, 1802:11338; W78b, WQ77), in the card's own words. */
+export const CARD_MEMBERS_ONLY = 'Members Only'

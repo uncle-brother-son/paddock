@@ -18,7 +18,8 @@ type GiftCardPageViewProps = {
  * frames, 1684:42032 and 1684:42044), laid out as a product's is.
  * - From 768px: the gallery fills the window's left half, from its edge to the end of the grid's 12th column, its
  *   pictures and videos stacked (the same media blocks as a product's gallery: WQ43); the details are columns 15 to
- *   21, and stay in view (they stick to the window's top) while the gallery scrolls past.
+ *   21, and stay in view (they stick to the window's top) while the gallery scrolls past (taller than the window:
+ *   WQ73, components/layout/StickyColumn.tsx).
  * - Below: the gallery is the window's whole width, a row to swipe, with the details beneath it.
  * No row follows it: the frames draw none. The info panel is the details' own (components/shop/GiftCardBuy.tsx).
  */

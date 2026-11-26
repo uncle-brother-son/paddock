@@ -131,23 +131,25 @@ export function hashId(hash: string): string | null {
   }
 }
 
-// W74c (WQ52): a link that changes the page where it stands (a product's colour swatch). It carries the "at once"
-// type, so the pages swap at once, and it says here what on the new page is to have focus in place of the heading:
-// the visitor's place in the page is kept, as far as a new page can keep it.
+// W74c, W78b (WQ52, as amended again): a link that changes the page where it stands (a product's colour swatch). It
+// carries the "at once" type, so the pages swap at once, with the window left where it is; and it says here that the
+// page it leads to arrives in place: the window then scrolls smoothly to the page's top, and focus goes to the page's
+// heading (the product's name) once it is there (components/frame/PageTransition.tsx).
 
-let focusOnArrival: { path: string; selector: string } | null = null
+let arrivingInPlace: string | null = null
 
-/** A link to `path` was pressed: when that page arrives, focus goes to the first element there matching `selector`. */
-export function keepFocusOnArrival(path: string, selector: string): void {
-  focusOnArrival = { path, selector }
+/** A link to `path` that changes the page where it stands was pressed: that page is to arrive in place. */
+export function arriveInPlace(path: string): void {
+  arrivingInPlace = path
 }
 
 /**
- * What the page now arriving at `path` is to focus, if the link that led here asked: once, and only for that page
- * (a link pressed and then not followed, opened in a new tab say, leaves nothing behind for a later page).
+ * Whether the page now arriving at `path` arrives in place, because the link that led here said so: asked once, and
+ * true only for that page (a link pressed and then not followed, opened in a new tab say, leaves nothing behind for
+ * a later page).
  */
-export function takeFocusOnArrival(path: string): string | null {
-  const asked = focusOnArrival
-  focusOnArrival = null
-  return asked && asked.path === path ? asked.selector : null
+export function takeArrivalInPlace(path: string): boolean {
+  const asked = arrivingInPlace
+  arrivingInPlace = null
+  return asked !== null && asked === path
 }

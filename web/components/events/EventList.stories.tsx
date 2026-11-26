@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from '@storybook/nextjs-vite'
 import { expect } from 'storybook/test'
 
 import { EventList } from './EventList'
-import { SAMPLE_EVENT_LIST } from './sample-events'
+import { SAMPLE_EVENT_CARDS, SAMPLE_EVENT_LIST } from './sample-events'
 
 const meta = {
   title: 'Events/Event list',
@@ -72,6 +72,28 @@ export const Mobile: Story = {
     await expect(Math.round(box(cards[1]!).top - box(cards[0]!).bottom)).toBe(64)
     await expect(Math.round(box(section).bottom - box(cards[6]!).bottom)).toBe(80)
     await expect(document.documentElement.scrollWidth).toBe(390)
+  },
+}
+
+/**
+ * W78b (WQ77): at 768px a card is 8 columns of a narrow grid (240px). With the longest words a card holds, and a
+ * members only card among them, nothing reaches past a card's edge or into its neighbour, and the page is no wider
+ * than the window (W78a's report, point 2: the old card's spaces ran 19px past its edge here).
+ */
+export const Tablet: Story = {
+  name: 'At 768px, the longest words',
+  globals: { viewport: { value: 'tablet', isRotated: false } },
+  args: { cards: [SAMPLE_EVENT_CARDS.longest, { ...SAMPLE_EVENT_CARDS.plain, when: SAMPLE_EVENT_CARDS.longest.when, spaces: '10 Spaces Left' }, SAMPLE_EVENT_CARDS.membersOnly, SAMPLE_EVENT_CARDS.soldOut] },
+  play: async ({ canvasElement }) => {
+    await document.fonts.ready
+    const cards = cardsOf(canvasElement)
+    await expect(cards.slice(0, 3).map((card) => [Math.round(box(card).left), Math.round(box(card).width)])).toEqual([[16, 240], [264, 240], [512, 240]])
+    for (const card of cards) {
+      const spilt = [...card.querySelectorAll('span, time')].filter((text) => box(text).left < box(card).left - 0.5 || box(text).right > box(card).right + 0.5)
+      await expect(spilt.map((text) => text.textContent)).toEqual([])
+    }
+    await expect(cards.map((card) => (card as HTMLElement).dataset.type)).toEqual(['members only', 'default', 'members only', 'default'])
+    await expect(document.documentElement.scrollWidth).toBe(768)
   },
 }
 
