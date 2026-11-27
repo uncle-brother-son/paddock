@@ -19,7 +19,7 @@ export const galleryCarousel = defineType({
       name: 'items',
       title: 'Images and Videos',
       type: 'array',
-      description: 'In the order they are shown, left to right, as many as you like. All are the same height and each keeps its own whole shape, never cut: an upright picture is narrower, a wide one or a panorama wider. Crop a picture to change its shape',
+      description: 'In the order they are shown, left to right, as many as you like. Each keeps its own whole shape, never cut: an upright or square picture is narrower, a landscape one wider, and each is as tall as its shape makes it. Crop a picture to change its shape',
       of: [defineArrayMember({ type: 'media' })],
       validation: (rule) => rule.min(1),
     }),

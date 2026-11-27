@@ -146,7 +146,7 @@ function HeroMediaVideoPlayer({ url, video, screens, reducedMotion, onStarted }:
  *
  * W74: a product's gallery draws its pictures and videos with this too (components/shop/ProductGallery.tsx), in a
  * box of its own shape. `desktopSizes`: how wide the picture is drawn from 768px, where it is not the whole window.
- * `mobileSizes`: the same below 768px (a GalleryCarousel's panorama is wider than the window there, WQ89).
+ * `mobileSizes`: the same below 768px (a GalleryCarousel's upright picture is narrower than the window there).
  */
 export function HeroMediaFill({
   picture,

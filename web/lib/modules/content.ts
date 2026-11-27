@@ -101,10 +101,10 @@ export function shapeOf(picture: Picture): number {
 }
 
 /**
- * The widths a carousel's picture is offered at: Figma's 297 to 633 across its two frames, wider and sharper screens,
- * and since WQ89 a panorama (any shape is drawn at the band's height, so a wide one is wider than the window).
+ * The widths a carousel's picture is offered at: Figma's 297 to 523 across its two frames, and wider and sharper
+ * screens (WQ89 amended: every picture is 7 or 9 columns wide again, whatever its shape, so none needs more).
  */
-const CAROUSEL_WIDTHS = [480, 360, 720, 1080, 1440, 2160, 2880] as const
+const CAROUSEL_WIDTHS = [480, 360, 720, 1080, 1440] as const
 
 /**
  * One picture or video of a GalleryCarousel (WQ82): it keeps its own shape. `shape` is width over height on each

@@ -49,12 +49,11 @@ const scrolls = async (strip: HTMLElement) => waitFor(() => expect(strip.tabInde
 const pointer = (x: number, type = 'mouse') => ({ pointerId: 1, pointerType: type, button: 0, isPrimary: true, clientX: x, clientY: 200 })
 
 /**
- * Device=desktop (1627:5519): the pictures on one line, from the grid's left margin (16) and off the right of the
- * window. WQ89: every one is the height Figma draws (its 4 by 5 upright picture, 506.25) and as wide as its own shape
- * makes it, so a 4 by 5 is 405 wide and a 5 by 4 632.81 (Figma drew it 523 by 418.4, the 9-column rule WQ89 drops),
- * with one empty column between two (67px). Each has 4px corners on Object/Product Bg. The strip is named for a
- * screen reader, takes focus (it scrolls), shows no scrollbar and the hand that grabs; a picture is not read as a
- * control.
+ * Device=desktop (1627:5519): the pictures on one line, centred on it, from the grid's left margin (16) and off the
+ * right of the window. WQ89 amended (as wild.as/about): an upright one is 7 of the grid's 24 columns (405 by 506.25),
+ * a landscape one 9 (523 by 418.4), each as tall as its shape makes it, with one empty column between two (67px).
+ * Each has 4px corners on Object/Product Bg. The strip is named for a screen reader, takes focus (it scrolls), shows
+ * no scrollbar and the hand that grabs; a picture is not read as a control.
  */
 export const Desktop: Story = {
   name: 'Device=desktop',
@@ -65,12 +64,11 @@ export const Desktop: Story = {
     await expect(canvas.getByRole('group', { name: 'Gallery' })).toBe(strip)
     await expect(placesOf(strip, items)).toEqual([
       [16, 405, 506.3, 0],
-      [488, 632.8, 506.3, 0],
-      [1187.8, 405, 506.3, 0],
-      [1659.8, 632.8, 506.3, 0],
+      [488, 523, 418.4, 43.9],
+      [1078, 405, 506.3, 0],
+      [1550, 523, 418.4, 43.9],
     ])
-    // 16 + 405 + 67 + 632.81 + 67 + 405 + 67 + 632.81 + 16.
-    await expect([near(box(strip).height), near(box(section).height), Math.abs(strip.scrollWidth - 2308.63) < 1]).toEqual([506.25, 506.25, true])
+    await expect([near(box(strip).height), near(box(section).height), strip.scrollWidth]).toEqual([506.25, 506.25, 2089])
     await expect(items.map((one) => getComputedStyle(one).borderRadius)).toEqual(['4px', '4px', '4px', '4px'])
     await expect([getComputedStyle(strip).overflowX, getComputedStyle(strip).scrollbarWidth, getComputedStyle(strip).cursor]).toEqual(['auto', 'none', 'grab'])
     await expect(canvas.getAllByRole('img').map((image) => image.getAttribute('alt'))).toEqual(['Picture one', 'Picture two', 'Picture three', 'Picture four'])
@@ -81,10 +79,7 @@ export const Desktop: Story = {
 
 export const DesktopDark: Story = { ...inDark(Desktop), name: 'Device=desktop (Dark)' }
 
-/**
- * Device=mobile (1627:5518): every picture 371.25 tall, the height Figma draws its 4 by 5 one (5 of the grid's 6
- * columns, 297 wide), and as wide as its shape makes it: a 5 by 4 is 464.06 (Figma drew it 358 by 286.4). 8px apart.
- */
+/** Device=mobile (1627:5518): an upright picture is 5 of the grid's 6 columns (297 by 371.25) and a landscape one all 6 (358 by 286.4), 8px apart. */
 export const Mobile: Story = {
   name: 'Device=mobile',
   globals: MOBILE,
@@ -93,21 +88,22 @@ export const Mobile: Story = {
     await scrolls(strip)
     await expect(placesOf(strip, items)).toEqual([
       [16, 297, 371.3, 0],
-      [321, 464.1, 371.3, 0],
-      [793.1, 297, 371.3, 0],
-      [1098.1, 464.1, 371.3, 0],
+      [321, 358, 286.4, 42.4],
+      [687, 297, 371.3, 0],
+      [992, 358, 286.4, 42.4],
     ])
-    // 16 + 297 + 8 + 464.06 + 8 + 297 + 8 + 464.06 + 16.
-    await expect([near(box(strip).height), Math.abs(strip.scrollWidth - 1578.13) < 1, document.documentElement.scrollWidth]).toEqual([371.25, true, 390])
+    await expect([near(box(strip).height), strip.scrollWidth, document.documentElement.scrollWidth]).toEqual([371.25, 1366, 390])
   },
 }
 
 export const MobileDark: Story = { ...inDark(Mobile), name: 'Device=mobile (Dark)' }
 
 /**
- * WQ89: any shape, never cropped. A panorama (3 by 1), a square, a tall photo (2 by 3) and a video (16 by 9), each
- * the height Figma draws and as wide as its own shape makes it, whatever that is: the panorama is wider than the
- * window. Every box is its picture's own shape, so the picture fills it whole.
+ * WQ89 amended (as wild.as/about): any shape, never cropped. A panorama (3 by 1), a square, a tall photo (2 by 3) and
+ * a video (16 by 9): the square and the tall photo are an upright picture's width, the panorama and the video a
+ * landscape one's, and each is as tall as its own shape makes it, so the heights vary; the tall photo is not capped
+ * and the line is as tall as it is. All are centred on the line. Every box is its picture's own shape, so the
+ * picture fills it whole.
  */
 const ANY_SHAPES = [
   item('panorama', 3000, 1000),
@@ -129,23 +125,25 @@ export const AnyShapeDesktop: Story = {
   play: async ({ canvas, canvasElement }) => {
     const { strip, items } = parts(canvasElement)
     await scrolls(strip)
+    // Panorama 523 by 174.33, square 405 by 405, tall photo 405 by 607.5, video 523 by 294.19; centred on a line 607.5 tall.
     await expect(placesOf(strip, items)).toEqual([
-      [16, 1518.8, 506.3, 0],
-      [1601.8, 506.3, 506.3, 0],
-      [2175, 337.5, 506.3, 0],
-      [2579.5, 900, 506.3, 0],
+      [16, 523, 174.3, 216.6],
+      [606, 405, 405, 101.3],
+      [1078, 405, 607.5, 0],
+      [1550, 523, 294.2, 156.7],
     ])
+    await expect([near(box(strip).height), strip.scrollWidth]).toEqual([607.5, 2089])
     await expect(shapesKept(items)).toEqual([true, true, true, true])
     // The video is drawn as HeroMedia draws one, with its own button, which a press still reaches.
     await expect(items[3]!.querySelector('video')).not.toBeNull()
     await expect(canvas.getByRole('button', { name: 'Play video' })).toBeInTheDocument()
-    // The browser is told how wide each is drawn, to fetch a sharp enough file: the band (35.16% of the window) times its shape.
-    await expect(items.map((one) => one.querySelector('source')!.getAttribute('sizes'))).toEqual(['106vw', '36vw', '24vw', '63vw'])
+    // The browser is told how wide each is drawn, to fetch a sharp enough file: 9 of 24 columns or 7.
+    await expect(items.map((one) => one.querySelector('source')!.getAttribute('sizes'))).toEqual(['38vw', '30vw', '30vw', '38vw'])
     // The keyboard still goes one picture at a time, and End reaches the video.
     strip.focus()
-    // The square's place is 1585.75 (1601.75 less the margin); the browser scrolls in whole pixels.
+    // The square's place is 590 (606 less the margin).
     await userEvent.keyboard('{ArrowRight}')
-    await expect(strip.scrollLeft).toBe(1586)
+    await expect(strip.scrollLeft).toBe(590)
     await userEvent.keyboard('{End}')
     await expect(strip.scrollLeft).toBe(strip.scrollWidth - strip.clientWidth)
     // At the end the video stands the margin in from the window's right edge (to the pixel).
@@ -160,14 +158,16 @@ export const AnyShapeMobile: Story = {
   play: async ({ canvasElement }) => {
     const { strip, items } = parts(canvasElement)
     await scrolls(strip)
+    // Panorama 358 by 119.33, square 297 by 297, tall photo 297 by 445.5, video 358 by 201.38; centred on a line 445.5 tall.
     await expect(placesOf(strip, items)).toEqual([
-      [16, 1113.8, 371.3, 0],
-      [1137.8, 371.3, 371.3, 0],
-      [1517, 247.5, 371.3, 0],
-      [1772.5, 660, 371.3, 0],
+      [16, 358, 119.3, 163.1],
+      [382, 297, 297, 74.3],
+      [687, 297, 445.5, 0],
+      [992, 358, 201.4, 122.1],
     ])
+    await expect([near(box(strip).height), strip.scrollWidth]).toEqual([445.5, 1366])
     await expect(shapesKept(items)).toEqual([true, true, true, true])
-    await expect(items.map((one) => one.querySelector('img')!.getAttribute('sizes'))).toEqual(['286vw', '96vw', '64vw', '170vw'])
+    await expect(items.map((one) => one.querySelector('img')!.getAttribute('sizes'))).toEqual(['100vw', '80vw', '80vw', '100vw'])
     await expect(document.documentElement.scrollWidth).toBe(390)
   },
 }
@@ -183,8 +183,8 @@ export const Keyboard: Story = {
     const { strip } = parts(canvasElement)
     await scrolls(strip)
     const end = strip.scrollWidth - strip.clientWidth
-    // 2309 (2308.63 laid out) less the window's 1440.
-    await expect(end).toBe(869)
+    // 2089 less the window's 1440.
+    await expect(end).toBe(649)
     await userEvent.tab()
     await expect(document.activeElement).toBe(strip)
     await expect([getComputedStyle(strip).outlineStyle, getComputedStyle(strip).outlineWidth, getComputedStyle(strip).outlineOffset]).toEqual(['solid', '2px', '-2px'])
@@ -194,12 +194,12 @@ export const Keyboard: Story = {
     }
     // The second picture's place is 472 (488 less the margin); the third's is past the end, so the strip stops there.
     await expect(await press('{ArrowRight}')).toBe(472)
-    await expect(await press('{ArrowRight}')).toBe(869)
-    await expect(await press('{ArrowRight}')).toBe(869)
+    await expect(await press('{ArrowRight}')).toBe(649)
+    await expect(await press('{ArrowRight}')).toBe(649)
     await expect(await press('{ArrowLeft}')).toBe(472)
     await expect(await press('{ArrowLeft}')).toBe(0)
     await expect(await press('{ArrowLeft}')).toBe(0)
-    await expect(await press('{End}')).toBe(869)
+    await expect(await press('{End}')).toBe(649)
     await expect(await press('{Home}')).toBe(0)
     // The page's own keys are left alone.
     await userEvent.keyboard('{ArrowDown}')

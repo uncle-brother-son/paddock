@@ -336,25 +336,28 @@ describe('the GalleryCarousel (WQ82)', () => {
   const css = readGlobalsCss()
   const base = childNamed(css, '@layer base')
 
-  it("its height is Figma's 4 by 5 upright picture in columns of the page grid: 5 of 6 below 768px, 7 of 24 with an empty column between from 768px", () => {
+  it("WQ89 amended: its pictures are columns of the page grid: Figma's 5 and 6 of 6 below 768px, 7 and 9 of 24 with an empty column between from 768px", () => {
     const root = childNamed(base, ':root').declarations
     const desktop = childNamed(childNamed(base, '@media (width >= 48rem)'), ':root').declarations
-    const columns = (declared: Record<string, string>) => ['--gallery-band-columns', '--gallery-gap-columns'].map((name) => declared[name])
-    expect(columns(root)).toEqual(['5', '0'])
-    expect(columns(desktop)).toEqual(['7', '1'])
-    // WQ89: no picture is sized in columns any more, only the band's height.
-    for (const declared of [root, desktop]) expect(Object.keys(declared).filter((name) => name.startsWith('--gallery-'))).toEqual(['--gallery-band-columns', '--gallery-gap-columns'])
+    const columns = (declared: Record<string, string>) => ['--gallery-upright-columns', '--gallery-wide-columns', '--gallery-gap-columns'].map((name) => declared[name])
+    expect(columns(root)).toEqual(['5', '6', '0'])
+    expect(columns(desktop)).toEqual(['7', '9', '1'])
+    for (const declared of [root, desktop])
+      expect(Object.keys(declared).filter((name) => name.startsWith('--gallery-'))).toEqual(['--gallery-upright-columns', '--gallery-wide-columns', '--gallery-gap-columns'])
     const strip = ruleNamed(css, '@utility gallery-strip').declarations
     expect(strip['--gallery-column']).toBe('calc((100cqw - 2 * var(--grid-margin) - (var(--grid-columns) - 1) * var(--grid-gutter)) / var(--grid-columns))')
-    expect(strip['--gallery-band']).toBe('calc((var(--gallery-band-columns) * var(--gallery-column) + (var(--gallery-band-columns) - 1) * var(--grid-gutter)) * 5 / 4)')
+    expect(strip['--gallery-upright']).toBe('calc(var(--gallery-upright-columns) * var(--gallery-column) + (var(--gallery-upright-columns) - 1) * var(--grid-gutter))')
+    expect(strip['--gallery-wide']).toBe('calc(var(--gallery-wide-columns) * var(--gallery-column) + (var(--gallery-wide-columns) - 1) * var(--grid-gutter))')
+    // ddc4907's one height for every picture is gone.
+    expect(strip['--gallery-band']).toBeUndefined()
     expect([strip['overflow-x'], strip['overscroll-behavior-x'], strip['scrollbar-width']]).toEqual(['auto', 'contain', 'none'])
   })
 
-  it('WQ89: each picture is the band tall and as wide as its own shape makes it, never cropped; they are on one line', () => {
+  it('WQ89 amended: each picture is its columns wide and as tall as its own shape makes it, never cropped or capped; they are centred on one line', () => {
     expect(ruleNamed(css, '@utility gallery-item').declarations).toEqual({
       flex: 'none',
-      height: 'var(--gallery-band)',
-      width: 'calc(var(--gallery-band) * var(--gallery-shape))',
+      width: 'var(--gallery-span)',
+      'aspect-ratio': 'var(--gallery-shape)',
     })
     expect(ruleNamed(css, '@utility gallery-row').declarations).toMatchObject({ display: 'flex', 'align-items': 'center', 'column-gap': 'var(--gallery-gap)', 'padding-inline': 'var(--grid-margin)' })
   })
