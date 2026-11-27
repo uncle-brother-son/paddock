@@ -194,7 +194,7 @@ function ProductBox({ product, readSizes = readAvailability, id, onSizeGuide }: 
  * - open, "non-member" (1684:41515): the quantity stepper, from 1 to the spaces left (WQ61), "Add to bag", and
  *   "6 spaces left" beneath. A press goes to the one `addToBag()` seam with the event and how many;
  * - members only, and members first before it opens to everyone, "member only signed out" (1709:48988): the member
- *   price with "Member Only", "Sign in" (the one `signIn()` seam, which opens nothing yet) and the spaces left;
+ *   price with "Member Only", "Sign in" (the one `signIn()` seam: W85's popup over the page) and the spaces left;
  * - full, "sold out" (1684:41643): the button disabled, reading "Sold out", and no spaces line;
  * - started, or cancelled, "closed" (1684:41716): the button disabled, reading "Closed". A cancelled event says so
  *   under it.

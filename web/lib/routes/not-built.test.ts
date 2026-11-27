@@ -55,7 +55,7 @@ describe('the list of pages not built yet', () => {
 })
 
 describe('whether an address has a page to open', () => {
-  it.each(['/account', '/account/orders/12', '/events', '/events?month=12', '/events#list', '/checkout'])(
+  it.each(['/events', '/events?month=12', '/events#list', '/checkout', '/checkout/confirmation/12', '/waiver/abc'])(
     '%s: not yet',
     (href) => expect(isBuiltAddress(href)).toBe(false),
   )
@@ -70,6 +70,10 @@ describe('whether an address has a page to open', () => {
     '/about',
     '/booking-terms',
     '/accounts',
+    // W85: the account's pages and the email link page.
+    '/account',
+    '/account/orders/12',
+    '/auth/confirm?token_hash=abc&type=email',
     // W75: an event's page, and the events list on the page that holds it.
     '/events/winter-solstice',
     '/events/winter-solstice?from=email',

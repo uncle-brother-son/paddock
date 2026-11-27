@@ -1,6 +1,8 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
+import { forThisDevice, keepsSignedIn } from './keep-signed-in'
+
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
     request,
@@ -21,8 +23,10 @@ export async function updateSession(request: NextRequest) {
           supabaseResponse = NextResponse.next({
             request,
           })
+          // W85: a sign-in for this visit only ("Keep me signed in" unticked) stays one when it is refreshed.
+          const keep = keepsSignedIn(request.cookies.getAll())
           cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options)
+            supabaseResponse.cookies.set(name, value, forThisDevice(options, keep))
           )
         },
       },

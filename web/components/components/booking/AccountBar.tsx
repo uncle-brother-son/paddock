@@ -3,8 +3,9 @@ import { signIn } from '@/lib/frame/sign-in'
 
 /**
  * Figma "AccountBar" (04 Components > Booking, 1150:11972), State=Signed out: under the booking panel's calendar,
- * "Member? Log in to use your credits." with Log in at the right, which goes to the one sign-in seam (it opens
- * nothing yet). State=Signed in ("Logged in as", with Log out) waits for sign-in (WQ64).
+ * "Member? Log in to use your credits." with Log in at the right, which goes to the one sign-in seam: since W85 the
+ * sign-in popup, over the booking panel, which is there as it was when the popup closes. State=Signed in ("Logged
+ * in as", with Log out) waits for the member's booking states (WQ64), with the bag and the checkout.
  */
 export function AccountBar() {
   return (

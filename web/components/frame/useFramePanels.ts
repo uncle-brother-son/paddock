@@ -2,7 +2,10 @@
 
 import { createContext, useContext } from 'react'
 
-/** The panels the header's buttons open. Book is built (W77); Bag and Account come with the buying stage. */
+/**
+ * The panels the header's buttons open. Book is built (W77); Account (W85) is the sign-in popup for a visitor who
+ * isn't signed in, and the link to /account for one who is; Bag comes with the buying stage.
+ */
 export type FramePanel = 'book' | 'bag' | 'account'
 
 export type FramePanels = {
@@ -23,8 +26,8 @@ export const FramePanelsContext = createContext<FramePanels>(NO_PANELS)
 
 /**
  * The one place the frame's Book and Bag meet their panels (W73). W77: the booking panel exists, so inside the frame
- * opening `book` opens it over the page and says so. Bag and Account still open nothing; the buying stage fills
- * them in and nothing in the header changes.
+ * opening `book` opens it over the page and says so. W85: `account` opens sign-in over the page while no one is signed
+ * in. Bag still opens nothing; the buying stage fills it in and nothing in the header changes.
  */
 export function useFramePanels(): FramePanels {
   return useContext(FramePanelsContext)

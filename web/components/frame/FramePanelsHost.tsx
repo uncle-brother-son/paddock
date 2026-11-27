@@ -4,9 +4,12 @@ import { usePathname } from 'next/navigation'
 import { useCallback, useMemo, useSyncExternalStore, type ReactNode } from 'react'
 
 import { BookingPanel } from '@/components/modules/booking/BookingPanel'
+import { ACCOUNT_ADDRESS } from '@/lib/account/sections'
 import type { BookAddOn } from '@/lib/book/book'
+import { signIn } from '@/lib/frame/sign-in'
 import { BOOK_ADDRESS } from '@/lib/sanity/links'
 
+import { useAccount } from './useAccount'
 import { FramePanelsContext, type FramePanel, type FramePanels } from './useFramePanels'
 
 /**
@@ -34,7 +37,8 @@ const noStep = (): boolean => false
 
 /**
  * The frame's panels (W77): gives everything inside the frame `useFramePanels()`, and draws the booking panel over the
- * page. Bag and Account still open nothing (the buying stage).
+ * page. W85: Account, while no one is signed in, opens the sign-in popup (components/frame/SignInHost.tsx, round this),
+ * going on to /account once signed in. Bag still opens nothing (the buying stage).
  *
  * The booking panel opens over the page the visitor is on, and closing it leaves them there (WQ64):
  * - opening it (every link to /book asks, in SiteLink) adds a history step for the same address and opens the panel.
@@ -49,8 +53,14 @@ export function FramePanelsHost({ bookAddOns, children }: { bookAddOns: readonly
   const stepOpen = useSyncExternalStore(watchStep, onBookStep, noStep)
   const bookOpen = stepOpen || atBook
 
+  // W85: Account, signed out, is the sign-in popup over the page, going on to /account once signed in. Signed in, or
+  // not known yet (the account's pages then ask for themselves), the link to /account is followed.
+  const accountStatus = useAccount().state.status
+  const signInFirst = accountStatus === 'signed_out' || accountStatus === 'needs_details'
+
   const open = useCallback(
     (panel: FramePanel): boolean => {
+      if (panel === 'account') return signInFirst && signIn({ next: ACCOUNT_ADDRESS })
       if (panel !== 'book') return false
       if (!bookOpen) {
         // No address given: the step is this page's own, and Next's router has nothing to follow.
@@ -59,7 +69,7 @@ export function FramePanelsHost({ bookAddOns, children }: { bookAddOns: readonly
       }
       return true
     },
-    [bookOpen],
+    [bookOpen, signInFirst],
   )
 
   const closeBook = useCallback(() => {

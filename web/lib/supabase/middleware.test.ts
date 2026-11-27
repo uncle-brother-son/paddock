@@ -139,4 +139,27 @@ describe('what it does (W69)', () => {
     expect(set[0]).toContain('Max-Age=0')
     expect(answer.headers.get('x-middleware-next')).toBe('1')
   })
+
+  // W85 (Wayne, 30 Nov): "Keep me signed in" unticked is a sign-in for this visit only, and a refresh keeps it one.
+  it('with an expired session and "Keep me signed in" unticked: refreshed with no lifetime, so it still ends with the browser', async () => {
+    const answer = await run('/account', { cookie: `${cookieFor(AN_HOUR_AGO, 'refresh-1')}; paddock-keep-signed-in=0` })
+    expect(sent).toEqual(['POST /auth/v1/token', 'GET /auth/v1/user'])
+    const set = answer.headers.getSetCookie()
+    expect(set).toHaveLength(1)
+    expect(set[0]?.startsWith(`${COOKIE}=base64-`)).toBe(true)
+    expect(set[0]).not.toMatch(/Max-Age|Expires/i)
+  })
+
+  it('and when Supabase refuses to renew it, the cookie is still cleared', async () => {
+    refresh = () => Response.json({ code: 400, error_code: 'refresh_token_not_found', msg: 'Invalid Refresh Token: Refresh Token Not Found' }, { status: 400 })
+    const answer = await run('/account', { cookie: `${cookieFor(AN_HOUR_AGO, 'refresh-1')}; paddock-keep-signed-in=0` })
+    const set = answer.headers.getSetCookie()
+    expect(set[0]?.startsWith(`${COOKIE}=;`)).toBe(true)
+    expect(set[0]).toContain('Max-Age=0')
+  })
+
+  it('ticked (the cookie not there): refreshed to last, as before', async () => {
+    const answer = await run('/account', { cookie: cookieFor(AN_HOUR_AGO, 'refresh-1') })
+    expect(answer.headers.getSetCookie()[0]).toMatch(/Max-Age=34560000/)
+  })
 })

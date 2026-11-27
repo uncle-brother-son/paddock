@@ -4,15 +4,26 @@ import { useLenis } from 'lenis/react'
 import { useEffect, useRef, type RefObject } from 'react'
 
 /**
+ * W85: the popups open now, the newest last. Sign-in can open over the booking panel (its AccountBar's Log in): Esc
+ * closes only the newest, the one beneath is inert while it is open, and the page starts to scroll again only when the
+ * last one has closed.
+ */
+const openPopups: HTMLElement[] = []
+
+/** A popup open beneath (or what holds one): inert with the rest of the page while a newer one is open. */
+const holdsAnOpenPopup = (element: HTMLElement): boolean => openPopups.some((open) => element === open || element.contains(open))
+
+/**
  * Everything on the page but a popup and what holds it: at each level from the popup up to <body>, the elements
- * beside it. The shade (and any other popup layer, marked `data-frame-popup`) is left alone, so a click on it lands.
+ * beside it. The shade (and any other popup layer, marked `data-frame-popup`) is left alone, so a click on it lands;
+ * but not a popup already open beneath this one.
  */
 function everythingElse(popup: HTMLElement): HTMLElement[] {
   const found: HTMLElement[] = []
   for (let inside: HTMLElement = popup; inside !== document.body && inside.parentElement; inside = inside.parentElement) {
     for (const beside of inside.parentElement.children) {
       if (beside === inside || !(beside instanceof HTMLElement)) continue
-      if (beside.hasAttribute('data-frame-popup') || beside.inert || ['SCRIPT', 'STYLE', 'LINK', 'TEMPLATE'].includes(beside.tagName)) continue
+      if ((beside.hasAttribute('data-frame-popup') && !holdsAnOpenPopup(beside)) || beside.inert || ['SCRIPT', 'STYLE', 'LINK', 'TEMPLATE'].includes(beside.tagName)) continue
       found.push(beside)
     }
   }
@@ -49,19 +60,25 @@ export function usePopup({ open, onClose, popup, firstFocus }: Popup): void {
     if (!open || !panel) return
     // Whatever had focus opened it: remembered before focus moves in.
     opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    // A popup already open beneath this one is made inert with the rest, and given back as it was on closing.
     const behind = everythingElse(panel)
     for (const element of behind) element.inert = true
+    openPopups.push(panel)
     document.documentElement.classList.add('overflow-hidden')
     lenis?.stop()
-    firstFocus.current?.focus()
+    // W85: without scrolling to it, so a popup still sliding in from below isn't scrolled to where it isn't yet.
+    firstFocus.current?.focus({ preventScroll: true })
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') close.current()
+      if (event.key === 'Escape' && openPopups.at(-1) === panel) close.current()
     }
     document.addEventListener('keydown', onKey)
     return () => {
       for (const element of behind) element.inert = false
-      document.documentElement.classList.remove('overflow-hidden')
-      lenis?.start()
+      openPopups.splice(openPopups.indexOf(panel), 1)
+      if (openPopups.length === 0) {
+        document.documentElement.classList.remove('overflow-hidden')
+        lenis?.start()
+      }
       document.removeEventListener('keydown', onKey)
       opener.current?.focus()
       opener.current = null

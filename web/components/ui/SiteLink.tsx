@@ -4,6 +4,7 @@ import Link from 'next/link'
 import type { ComponentPropsWithoutRef, MouseEvent } from 'react'
 
 import { useFramePanels } from '@/components/frame/useFramePanels'
+import { ACCOUNT_ADDRESS } from '@/lib/account/sections'
 import { isSectionAddress } from '@/lib/modules/section'
 import { arriveInPlace, PAGE_AT_ONCE_TYPES, PAGE_TRANSITION_TYPES } from '@/lib/motion/page-transition'
 import { isBuiltAddress } from '@/lib/routes/not-built'
@@ -47,6 +48,9 @@ const pathOf = (href: string): string => href.split(/[?#]/)[0] ?? href
  * W80 (WQ83): an address that names a section of the page it is on (`#memberships`) is a SectionLink, which scrolls
  * the page there (components/ui/SectionLink.tsx).
  *
+ * W85: a link to /account (the header's Account, the phone menu's) asks useFramePanels too: signed out, the sign-in
+ * popup opens over the page, and goes on to /account once signed in; signed in, the link is followed.
+ *
  * Next fetches each link it can see ahead of a press. A page that is not built yet (lib/routes/not-built.ts: /account,
  * /checkout) is never fetched ahead, on sight or on hover; a press still follows the link.
  */
@@ -72,6 +76,8 @@ export function SiteLink({ href, newTab = false, transition = true, onClick, chi
     if (event.defaultPrevented || newTab || !isPlainClick(event)) return
     // WQ52: the page this link leads to comes where this one stands, and scrolls to its top by itself.
     if (!transition) arriveInPlace(pathOf(href))
+    // W85: Account (the header's, the phone menu's), signed out, opens sign-in over the page, then goes on.
+    if (pathOf(href) === ACCOUNT_ADDRESS && panels.open('account')) return event.preventDefault()
     if (isBookAddress(href) && panels.open('book')) event.preventDefault()
   }
   return (
