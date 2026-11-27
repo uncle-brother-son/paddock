@@ -12,10 +12,10 @@ One curve and two durations for the whole site, kept in one place: `lib/motion/t
 `duration-long`). A test fails if the two ever differ, and another if a component types in a curve or a duration of
 its own.
 
-The curve is Figma's "Slow" spring (mass 1, stiffness 80, damping 20: no bounce), the one Wayne's prototypes use,
-in real time (WQ55, WQ56): its first 640 ms from rest, brought to end on 1. An animation of the long duration moves
-as the spring does, half-way at about 190 ms; one of the short duration plays the same shape in half the time.
-`npm run ease:build` makes it from the spring.
+The curve is one bezier (WQ88, which replaces the spring of WQ55 and WQ56): off at once and fast, then a long, soft
+settling, never past its target. An animation of the short duration plays the same shape in half the time. Its four
+numbers are written in two places only, the stylesheet's token and `lib/motion/tokens.ts`, and shown under the plot
+below.
 
 - **Short**: hovers, and the menu.
 - **Long**: page transitions, each of the intro's three transitions, and the Product Info Panel's slide.

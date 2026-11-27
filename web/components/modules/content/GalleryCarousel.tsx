@@ -18,10 +18,11 @@ const DRAG_STARTS_AT = 4
 const SPEED_OVER = 100
 
 /**
- * The part of the site's one curve a glide plays (WQ82: "momentum on release, the curve"). The curve is a spring
- * setting off from rest, and a strip let go of is already moving: so its glide starts where the spring is at its
- * fastest and plays the curve from there to its end, the same slowing to a stop, with no pause at the release.
- * `at` is that moment of the curve (0 to 1), `done` how far the spring has come by then, `speed` how fast it is
+ * The part of the site's one curve a glide plays (WQ82: "momentum on release, the curve"). A strip let go of is
+ * already moving, so its glide starts where the curve is at its fastest and plays it from there to its end, the same
+ * slowing to a stop, with no pause at the release. Since WQ88 the curve is a bezier that is fastest at its very
+ * start, so a glide is the whole of it; this still finds the place, should the curve ever change again.
+ * `at` is that moment of the curve (0 to 1), `done` how far the curve has come by then, `speed` how fast it is
  * going there (in curves per whole duration).
  */
 const GLIDE = (() => {

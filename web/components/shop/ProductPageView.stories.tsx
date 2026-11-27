@@ -3,7 +3,7 @@ import { expect, userEvent, waitFor, within } from 'storybook/test'
 
 import { OverlayTexture } from '@/components/ui/media/Overlay'
 import type { ShopAvailabilityRouteOutput } from '@/contracts/shop'
-import { DURATION_SHORT, EASE_SMOOTH_CSS, linearEasingPoints } from '@/lib/motion/tokens'
+import { DURATION_SHORT, EASE_SMOOTH_CSS } from '@/lib/motion/tokens'
 
 import { ProductPageView } from './ProductPageView'
 import { SAMPLE_PRODUCT, SAMPLE_PRODUCT_ON_SALE, SAMPLE_PRODUCT_ONE_LEFT, SAMPLE_PRODUCT_SOLD_OUT, SAMPLE_SIMILAR, SAMPLE_SIZES } from './sample-shop'
@@ -201,7 +201,7 @@ export const SelectSizeOnHover: Story = {
     for (const one of [rest, onHover]) {
       const style = getComputedStyle(one)
       await expect([style.transitionProperty, style.transitionDuration]).toEqual(['translate', `${DURATION_SHORT}s`])
-      await expect(linearEasingPoints(style.transitionTimingFunction)).toEqual(linearEasingPoints(EASE_SMOOTH_CSS))
+      await expect(style.transitionTimingFunction).toBe(EASE_SMOOTH_CSS)
     }
     // Keyboard focus changes nothing: the label stays.
     button.focus()

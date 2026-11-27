@@ -4,7 +4,7 @@ import { flushSync } from 'react-dom'
 import { expect, userEvent, waitFor } from 'storybook/test'
 
 import { leavePage, PAGE_IN, PAGE_LEAVING, PAGE_OUT, PAGE_OUT_SURFACES, PAGE_SURFACE } from '@/lib/motion/page-transition'
-import { DURATION_LONG, EASE_SMOOTH_CSS, linearEasingPoints } from '@/lib/motion/tokens'
+import { DURATION_LONG, EASE_SMOOTH_CSS } from '@/lib/motion/tokens'
 
 import { Header } from './Header'
 import { HeaderLogo } from './HeaderLogo'
@@ -143,9 +143,9 @@ export const TwoSamplePages: Story = {
     await expect([out.animationName, out.effect!.getComputedTiming().duration]).toEqual([PAGE_OUT, LONG])
     await expect([into.animationName, into.effect!.getComputedTiming().duration]).toEqual([PAGE_IN, LONG])
     const fifth = `${window.innerHeight / 5}px`
-    const smooth = linearEasingPoints(EASE_SMOOTH_CSS)
+    const smooth = EASE_SMOOTH_CSS
     const outFrames = (out.effect as KeyframeEffect).getKeyframes()
-    await expect(linearEasingPoints(outFrames[0]!.easing)).toEqual(smooth)
+    await expect(outFrames[0]!.easing).toBe(smooth)
     await expect([outFrames.at(-1)!.translate, outFrames.at(-1)!.opacity]).toEqual([`0px -${fifth}`, '0.4'])
     // WQ57: behind its picture, still, are its backgrounds: the page's own, and its dark section's where that stood
     // (the section is the page's first, so at the page's top left). Nothing animates them.
@@ -164,7 +164,7 @@ export const TwoSamplePages: Story = {
     // And the element the pages stand in draws nothing of its own once the page being left has gone.
     await expect(getComputedStyle(canvasElement.querySelector<HTMLElement>('[data-page-stage]')!).backgroundImage).toBe('none')
     const inFrames = (into.effect as KeyframeEffect).getKeyframes()
-    await expect(linearEasingPoints(inFrames[0]!.easing)).toEqual(smooth)
+    await expect(inFrames[0]!.easing).toBe(smooth)
     // WQ67: it starts a whole window down, so just below the window, and moves to its place. Nothing masks it, and it never fades.
     await expect([inFrames[0]!.translate, inFrames.at(-1)!.translate]).toEqual([`0px ${window.innerHeight}px`, '0px'])
     await expect(inFrames.some((frame) => 'opacity' in frame || 'clipPath' in frame)).toBe(false)

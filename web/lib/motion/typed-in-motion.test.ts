@@ -9,6 +9,9 @@ import { EASE_SMOOTH_CSS } from './tokens'
 // in app/globals.css for CSS; W74c adds the intro's --intro-pause). This reads every source file under app/,
 // components/ and features/ and fails on a curve or a duration typed in by hand: a cubic-bezier, a linear() or
 // steps() curve, an ease keyword, a spring, a time in ms or seconds.
+// WQ88 (Wayne, 27 Nov): the one curve is a bezier, cubic-bezier(0.22, 1, 0.36, 1). It is let through in one place,
+// the stylesheet's own token line, with those four numbers and no others; tokens.test.ts holds lib/motion/tokens.ts
+// to the same four.
 
 const WEB = path.resolve(__dirname, '../..')
 const FOLDERS = ['app', 'components', 'features']
@@ -21,7 +24,7 @@ const SOURCE_FILE = /\.(ts|tsx|js|jsx|mjs|css|mdx)$/
  */
 const TOKEN_LINES: Readonly<Record<string, readonly RegExp[]>> = {
   'app/globals.css': [
-    /^--ease-smooth: linear\([^)]*\);$/,
+    /^--ease-smooth: cubic-bezier\(0\.22, 1, 0\.36, 1\);$/,
     /^--duration-(short|long): \d+ms;$/,
     /^--intro-pause: \d+ms;$/,
     /^(animation|transition)-duration: 0\.01ms !important;$/,
@@ -111,6 +114,15 @@ describe('no animation has a curve or a duration of its own (W71, WQ21 and WQ23)
     // A token line is let through only as written: a third duration, or a curve under another name, is not.
     expect(found('app/globals.css', '  --duration-medium: 480ms;')).toEqual(['a duration in milliseconds'])
     expect(found('app/globals.css', '  --ease-snappy: cubic-bezier(0.4, 0, 0.2, 1);')).toEqual(['a typed-in curve (cubic-bezier)'])
+    // WQ88: the token is let through with its own four numbers only: another bezier under its name is not, nor is
+    // the one bezier under another name, nor the curve of straight pieces the token was before.
+    expect(EASE_SMOOTH_CSS).toBe('cubic-bezier(0.22, 1, 0.36, 1)')
+    expect(found('app/globals.css', '  --ease-smooth: cubic-bezier(0.22, 1, 0.36, 1);')).toEqual([])
+    expect(found('app/globals.css', '  --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);')).toEqual(['a typed-in curve (cubic-bezier)'])
+    expect(found('app/globals.css', '  --ease-smooth: cubic-bezier(0.22, 1, 0.36, 1.01);')).toEqual(['a typed-in curve (cubic-bezier)'])
+    expect(found('app/globals.css', '  --ease-other: cubic-bezier(0.22, 1, 0.36, 1);')).toEqual(['a typed-in curve (cubic-bezier)'])
+    expect(found('components/ui/Menu.css', '  --ease-smooth: cubic-bezier(0.22, 1, 0.36, 1);')).toEqual(['a typed-in curve (cubic-bezier)'])
+    expect(found('app/globals.css', '  --ease-smooth: linear(0, 0.8 20%, 1);')).toEqual(['a typed-in curve (linear or steps)', 'an ease keyword'])
     expect(found('app/globals.css', '  --ease-snappy: linear(0, 0.8 20%, 1);')).toEqual(['a typed-in curve (linear or steps)', 'an ease keyword'])
     expect(found('app/globals.css', '  transition: opacity 320ms;')).toEqual(['a duration in milliseconds'])
   })
@@ -134,6 +146,8 @@ describe('no animation has a curve or a duration of its own (W71, WQ21 and WQ23)
     ['CSS over two lines', 'app/shop/shop.css', '    opacity 0.3s linear;', ['a duration in seconds', 'an ease keyword']],
     ['a curve in CSS', 'app/shop/shop.css', '  animation-timing-function: cubic-bezier(0.2, 0, 0, 1);', ['a typed-in curve (cubic-bezier)']],
     ['a curve put together by hand', 'components/ui/Menu.tsx', "const curve = `cubic-bezier(${numbers.join(', ')})`", ['a typed-in curve (cubic-bezier)']],
+    ['the one curve itself, typed into a component', 'components/ui/Menu.tsx', "style={{ transitionTimingFunction: 'cubic-bezier(0.22, 1, 0.36, 1)' }}", ['a typed-in curve (cubic-bezier)']],
+    ['the one curve itself, typed in for Motion', 'components/ui/Menu.tsx', 'transition={{ ease: [0.22, 1, 0.36, 1] }}', ['an ease written out for Motion']],
     ['a curve of straight pieces', 'components/ui/Menu.tsx', "style={{ transitionTimingFunction: 'linear(0, 0.8 20%, 1)' }}", ['a typed-in curve (linear or steps)', 'an ease keyword']],
     ['a curve of straight pieces with no word about motion beside it', 'components/ui/Menu.tsx', "const curve = 'linear(0, 0.8 20%, 1)'", ['a typed-in curve (linear or steps)']],
     ['steps', 'app/shop/shop.css', '  animation-timing-function: steps(4);', ['a typed-in curve (linear or steps)']],

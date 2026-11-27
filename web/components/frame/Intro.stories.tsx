@@ -3,7 +3,7 @@ import { useRef } from 'react'
 import { expect, userEvent, waitFor } from 'storybook/test'
 
 import { INTRO_SEEN_KEY, startIntro } from '@/lib/frame/intro'
-import { DURATION_LONG, EASE_SMOOTH_CSS, INTRO_PAUSE, linearEasingPoints } from '@/lib/motion/tokens'
+import { DURATION_LONG, EASE_SMOOTH_CSS, INTRO_PAUSE } from '@/lib/motion/tokens'
 
 import { IntroPanel } from './Intro'
 import { SamplePage } from './sample-content'
@@ -110,10 +110,10 @@ export const PlayIt: Story = {
     // (Sorted as words: "1120" comes before "480".)
     await expect(timings).toEqual([`intro-fade ${AT.rise} ${LONG}`, `intro-fade ${AT.logo} ${LONG}`, `intro-mask ${AT.mask} ${LONG}`, `intro-rise ${AT.rise} ${LONG}`])
     await expect([PAUSE, LONG, AT.end]).toEqual([480, 640, 2880])
-    // Each on the smooth curve: the spring, as the stylesheet's token has it.
+    // Each on the smooth curve, as the stylesheet's token has it (WQ88).
     for (const animation of running) {
       const [first] = (animation.effect as KeyframeEffect).getKeyframes()
-      await expect(linearEasingPoints(first!.easing)).toEqual(linearEasingPoints(EASE_SMOOTH_CSS))
+      await expect(first!.easing).toBe(EASE_SMOOTH_CSS)
     }
     const windowMiddle = window.innerHeight / 2
     // The first pause: the full panel, with nothing on it yet.

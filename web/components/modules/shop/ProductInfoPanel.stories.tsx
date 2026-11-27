@@ -3,7 +3,7 @@ import { expect, userEvent, waitFor, within } from 'storybook/test'
 
 import { OverlayTexture } from '@/components/ui/media/Overlay'
 import { painted } from '@/components/ui/story-kit'
-import { DURATION_SHORT, EASE_SMOOTH_CSS, linearEasingPoints } from '@/lib/motion/tokens'
+import { DURATION_SHORT, EASE_SMOOTH_CSS } from '@/lib/motion/tokens'
 
 import { ProductPageView } from '@/components/shop/ProductPageView'
 import { SAMPLE_PRODUCT, SAMPLE_SIMILAR } from '@/components/shop/sample-shop'
@@ -138,7 +138,7 @@ export const SlidesIn: Story = {
   play: async ({ canvas, canvasElement }) => {
     const dialog = dialogIn(canvasElement)
     const shade = canvasElement.querySelector('[data-overlay="shade"]') as HTMLElement
-    const smooth = linearEasingPoints(EASE_SMOOTH_CSS)
+    const smooth = EASE_SMOOTH_CSS
     // Shut: hidden, and wholly beyond the window's right edge, taking no room (the page is no wider for it).
     await expect(dialog).not.toBeVisible()
     await expect(Math.round(box(dialog).left)).toBe(window.innerWidth)
@@ -151,7 +151,7 @@ export const SlidesIn: Story = {
       return [(animation as CSSTransition).transitionProperty, timing.duration]
     })
     await expect(moving).toEqual([['translate', DURATION_SHORT * 1000]])
-    await expect(linearEasingPoints(getComputedStyle(dialog).transitionTimingFunction)).toEqual(smooth)
+    await expect(getComputedStyle(dialog).transitionTimingFunction).toBe(smooth)
     await expect(getComputedStyle(dialog).opacity).toBe('1')
     await expect(fromRight(dialog)).toBeLessThan(12)
     // The shade fades in behind it over the same time.

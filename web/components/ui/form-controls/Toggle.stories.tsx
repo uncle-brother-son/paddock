@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from '@storybook/nextjs-vite'
 import { useId, useState } from 'react'
 import { expect, userEvent, waitFor } from 'storybook/test'
 
-import { DURATION_SHORT, EASE_SMOOTH_CSS, linearEasingPoints } from '@/lib/motion/tokens'
+import { DURATION_SHORT, EASE_SMOOTH_CSS } from '@/lib/motion/tokens'
 
 import { CLEAR, InBothModes, inEachMode, painted } from '@/components/ui/story-kit'
 import { Toggle } from './Toggle'
@@ -121,7 +121,7 @@ export const Slides: Story = {
     await expect(moving.map((one) => one.transitionProperty).filter((property) => property !== 'translate' && property !== 'width')).toEqual([])
     for (const one of moving) {
       await expect(one.effect!.getComputedTiming().duration).toBe(DURATION_SHORT * 1000)
-      await expect(linearEasingPoints(String(one.effect!.getComputedTiming().easing))).toEqual(linearEasingPoints(EASE_SMOOTH_CSS))
+      await expect(String(one.effect!.getComputedTiming().easing)).toBe(EASE_SMOOTH_CSS)
     }
     await expect(over(area(), second)).toBe(false)
     await waitFor(() => expect(over(area(), second)).toBe(true), { timeout: 2000 })

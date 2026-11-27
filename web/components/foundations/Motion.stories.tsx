@@ -2,8 +2,7 @@ import type { Meta, StoryObj } from '@storybook/nextjs-vite'
 import { motion, MotionConfig } from 'framer-motion'
 import { useState } from 'react'
 
-import { EASE_SMOOTH_POINTS, EASE_SMOOTH_SPRING } from '@/lib/motion/ease-smooth'
-import { DURATION_LONG, DURATION_SHORT, EASE_SMOOTH } from '@/lib/motion/tokens'
+import { DURATION_LONG, DURATION_SHORT, EASE_SMOOTH, EASE_SMOOTH_BEZIER } from '@/lib/motion/tokens'
 
 import { VariableValue } from './measured'
 
@@ -14,8 +13,16 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
-/** The curve's points on the plot: time left to right, progress bottom to top, each out of 100. */
-const plotted = EASE_SMOOTH_POINTS.map(([progress, value]) => `${Number((progress * 100).toFixed(2))},${Number((100 - value * 100).toFixed(2))}`).join(' ')
+/** How many moments of the curve are plotted: Motion's own function (lib/motion/tokens.ts), asked at each. */
+const PLOTTED = 100
+
+/** The curve on the plot: time left to right, progress bottom to top, each out of 100. */
+const plotted = Array.from({ length: PLOTTED + 1 }, (_, index) => index / PLOTTED)
+  .map((progress) => `${Number((progress * 100).toFixed(2))},${Number((100 - EASE_SMOOTH(progress) * 100).toFixed(2))}`)
+  .join(' ')
+
+/** The bezier's four numbers, as words: the same four the stylesheet's token holds. */
+const NUMBERS = EASE_SMOOTH_BEZIER.join(', ')
 
 /** The two durations, as Motion has them (seconds) and under the names the stylesheet gives them. */
 const durations = [
@@ -24,8 +31,8 @@ const durations = [
 ] as const
 
 /**
- * The smooth curve, plotted: time runs left to right, progress bottom to top. It is Figma's "Slow" spring in real
- * time (WQ55, WQ56), its first 640 ms: off gently, half-way at about 190 ms of 640, then a soft settling, no bounce.
+ * The smooth curve, plotted: time runs left to right, progress bottom to top. It is the one bezier Wayne chose
+ * (WQ88, which replaces the spring of WQ55 and WQ56): off at once and fast, then a long, soft settling, no bounce.
  */
 export const Curve: Story = {
   render: () => (
@@ -33,7 +40,7 @@ export const Curve: Story = {
       <svg
         viewBox="-4 -4 108 108"
         role="img"
-        aria-label={`The smooth curve: Figma's Slow spring, mass ${EASE_SMOOTH_SPRING.mass}, stiffness ${EASE_SMOOTH_SPRING.stiffness}, damping ${EASE_SMOOTH_SPRING.damping}`}
+        aria-label={`The smooth curve: a bezier with the numbers ${NUMBERS}`}
         className="size-240 text-text-primary"
       >
         <path d="M 0 0 V 100 H 100" fill="none" stroke="currentColor" strokeWidth="0.5" opacity="0.4" />
@@ -44,8 +51,7 @@ export const Curve: Story = {
       <figcaption className="flex flex-col gap-6">
         <span className="block text-bold-14">ease-smooth</span>
         <span className="block text-copy-12">
-          Figma&apos;s Slow spring: mass {EASE_SMOOTH_SPRING.mass}, stiffness {EASE_SMOOTH_SPRING.stiffness}, damping {EASE_SMOOTH_SPRING.damping}; {EASE_SMOOTH_POINTS.length} points, the same for
-          Motion and for CSS
+          One bezier, with the numbers {NUMBERS}: the same for Motion and for CSS
         </span>
         <span className="block text-copy-12 break-all">
           CSS --ease-smooth: <VariableValue name="--ease-smooth" />
