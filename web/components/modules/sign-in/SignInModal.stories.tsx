@@ -17,6 +17,9 @@ const NO_ACCOUNT: NewAccount = { firstName: '', lastName: '', mobile: '', news: 
 const base: SignInModalProps = {
   step: 'email',
   titleId: 'sign-in-title',
+  // Site settings' picks, by their own slugs (W85 Level 3).
+  termsHref: '/info/booking-terms',
+  privacyHref: '/info/privacy-notice',
   onClose: fn(),
   email: '',
   onEmail: fn(),
@@ -101,8 +104,8 @@ export const Email: Story = {
     const modal = canvasElement.querySelector('[data-sign-in="modal"]') as HTMLElement
     await expect(Math.round(box(modal).width)).toBe(462)
     await expect(canvas.getByRole('heading', { name: COPY.emailTitle })).toBeVisible()
-    await expect(canvas.getByRole('link', { name: COPY.terms })).toHaveAttribute('href', '/info/terms')
-    await expect(canvas.getByRole('link', { name: COPY.privacy })).toHaveAttribute('href', '/info/privacy')
+    await expect(canvas.getByRole('link', { name: COPY.terms })).toHaveAttribute('href', '/info/booking-terms')
+    await expect(canvas.getByRole('link', { name: COPY.privacy })).toHaveAttribute('href', '/info/privacy-notice')
     // The arrow sends the email: the field's form is submitted.
     await userEvent.type(canvas.getByRole('textbox', { name: COPY.email }), BOB)
     await userEvent.click(canvas.getByRole('button', { name: COPY.emailSubmit }))
@@ -113,6 +116,19 @@ export const Email: Story = {
 }
 
 export const EmailMobile: Story = { ...Email, name: 'Step=email, on a phone', globals: MOBILE, play: undefined }
+
+/** Site settings picks no Terms page (and a Privacy page): the Terms words are shown with no link (W85 Level 3). */
+export const EmailNoTermsPage: Story = {
+  name: 'Step=email, no Terms page set',
+  globals: DESKTOP,
+  args: { termsHref: null },
+  play: async ({ canvas, canvasElement }) => {
+    await expect(canvas.queryByRole('link', { name: COPY.terms })).toBeNull()
+    await expect(canvas.getByRole('link', { name: COPY.privacy })).toHaveAttribute('href', '/info/privacy-notice')
+    const line = canvasElement.querySelector('[data-step="email"] p.text-copy-12') as HTMLElement
+    await expect(line.textContent).toBe('By continuing, you agree to our Terms & Conditions and Privacy Policy')
+  },
+}
 
 /** Step=code (1174:12637): six boxes, "Keep me signed in" ticked at first (Wayne, 30 Nov), "Sent to" with Change and Resend code. */
 export const Code: Story = {

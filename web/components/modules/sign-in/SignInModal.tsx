@@ -25,6 +25,12 @@ export type SignInModalProps = {
   step: SignInStep
   /** The heading's id: the dialog's name (aria-labelledby). */
   titleId: string
+  /**
+   * The Terms and Privacy pages Site settings picks (their /info/ slugs; W85 Level 3, as the checkout's ticks, WQ94).
+   * Null or left out: that page isn't set, and its words are shown with no link.
+   */
+  termsHref?: string | null
+  privacyHref?: string | null
   onClose: () => void
   closeButton?: RefObject<HTMLButtonElement | null>
   /** A press is on its way (sending the email, checking the code, creating the account). */
@@ -82,7 +88,8 @@ function ErrorLine({ id, children }: { id?: string; children: ReactNode }) {
  * on Surface/Primary with 4px corners, 16px inside and 32px between its parts. ModalHeader (1150:12011): the step's
  * title in Label 12 with Close at the right (Figma's MenuButton). Its steps:
  * - email (1174:12629): InputWithSubmit "Email", then "By continuing, you agree to our Terms & Conditions and Privacy
- *   Policy" in Copy 12, muted, the two as Link 12;
+ *   Policy" in Copy 12, muted, the two as Link 12 to the pages Site settings picks (their /info/ slugs; W85 Level 3,
+ *   WQ94), or the words alone while a page isn't set;
  * - code (1174:12637): CodeInput, "Keep me signed in" (ticked at first: Wayne, 30 Nov), then "Sent to <email>" with
  *   Change and Resend code; code resent (1174:12645): "Code sent" in Resend code's place, for 6 seconds; wrong code
  *   (1174:12655): every box in its error state and Figma's words 8px beneath;
@@ -114,7 +121,18 @@ export function SignInModal(props: SignInModalProps) {
   )
 }
 
-function EmailStep({ email, onEmail, emailError = null, onSendCode, busy = false }: SignInModalProps) {
+/** A legal page's words: Link 12 to its page when Site settings picks one, else the words alone. */
+function LegalLink({ href, children }: { href: string | null; children: string }) {
+  return href ? (
+    <TextLink href={href} size={12}>
+      {children}
+    </TextLink>
+  ) : (
+    <>{children}</>
+  )
+}
+
+function EmailStep({ email, onEmail, emailError = null, onSendCode, busy = false, termsHref = null, privacyHref = null }: SignInModalProps) {
   const send = (event: FormEvent) => {
     event.preventDefault()
     if (!busy) onSendCode()
@@ -138,13 +156,9 @@ function EmailStep({ email, onEmail, emailError = null, onSendCode, busy = false
       </form>
       <p className="text-copy-12 text-text-muted-primary">
         {COPY.agreeStart}
-        <TextLink href="/info/terms" size={12}>
-          {COPY.terms}
-        </TextLink>
+        <LegalLink href={termsHref}>{COPY.terms}</LegalLink>
         {COPY.agreeAnd}
-        <TextLink href="/info/privacy" size={12}>
-          {COPY.privacy}
-        </TextLink>
+        <LegalLink href={privacyHref}>{COPY.privacy}</LegalLink>
       </p>
     </>
   )

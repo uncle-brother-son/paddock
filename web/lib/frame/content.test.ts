@@ -133,6 +133,15 @@ describe('the footer', () => {
     expect(links(null, privacy)).toEqual([['Privacy Policy', '/info/privacy']])
     expect(links(null, null)).toEqual([])
   })
+
+  // W85 Level 3 (Wayne, 30 Nov): the sign-in popup's two links follow the same picks, by their real slugs; none unpicked.
+  it("the sign-in popup's Terms and Privacy addresses are the pages Site settings picks, or none", () => {
+    const pages = (termsPage: { title: string; slug: string } | null, privacyPage: { title: string; slug: string } | null) =>
+      frameContent({ ...settings, termsPage, privacyPage }, navigation, '2026').legalPages
+    expect(pages({ title: 'Terms', slug: 'booking-terms' }, { title: 'Privacy', slug: 'privacy-notice' })).toEqual({ terms: '/info/booking-terms', privacy: '/info/privacy-notice' })
+    expect(pages(null, { title: 'Privacy', slug: 'privacy' })).toEqual({ terms: null, privacy: '/info/privacy' })
+    expect(pages(null, null)).toEqual({ terms: null, privacy: null })
+  })
 })
 
 describe('with nothing in Sanity yet', () => {
@@ -140,6 +149,7 @@ describe('with nothing in Sanity yet', () => {
     expect(frameContent(null, null, '2026')).toEqual({
       menuLinks: [],
       footer: { groups: [], newsletter: { heading: null, text: null }, legalLinks: [], copyright: '©2026 The Paddock Wellness Club' },
+      legalPages: { terms: null, privacy: null },
     })
   })
 

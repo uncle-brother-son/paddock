@@ -142,6 +142,32 @@ export function linkSignIn(db: Db, login: Login, requestId: string): Promise<Cus
 
 const trimmed = (value: string | null | undefined): string => (typeof value === 'string' ? value.trim() : '')
 
+/** Only ever turns consent on: a customer who has it already, or a box left unticked, writes nothing. */
+const CONSENT_ON_SQL = 'UPDATE customers SET marketing_consent = true WHERE id = $1::uuid AND marketing_consent IS NOT TRUE RETURNING id'
+
+/**
+ * W85 Level 3 (Wayne, 30 Nov): create found a customer instead of making one (made by staff meanwhile, or this login's
+ * own): their details are kept, but a ticked "Email me with news and offers" is not lost. It sets their consent on,
+ * never off, with a `customer.marketing_consent` audit row; a customer whose consent was on already writes nothing.
+ */
+async function answerKeepingTick(tx: Tx, row: CustomerRow, change: CustomerSignInLinked['change'], marketingConsent: boolean, requestId: string): Promise<CustomerSignInLinked> {
+  if (marketingConsent) {
+    const [turnedOn] = await tx.query<{ id: string }>(CONSENT_ON_SQL, [row.id])
+    if (turnedOn) {
+      await audit.record(tx, {
+        actorType: 'customer',
+        actorId: row.id,
+        action: 'customer.marketing_consent',
+        entityType: 'customer',
+        entityId: row.id,
+        requestId,
+        details: { channel: 'customer', marketingConsent: true, how: 'sign_up' },
+      })
+    }
+  }
+  return answer(row, change)
+}
+
 /**
  * POST /api/v1/customer/sign-in/create (backend log 9: first name, last name, phone optional; no date of birth, no
  * age check). The email is the login's. One transaction: the login's customer as link finds it (so a second call, or a
@@ -150,7 +176,8 @@ const trimmed = (value: string | null | undefined): string => (typeof value === 
  * checked (a name each, the staff form's lengths: a refusal is thrown and the transaction, which has written nothing,
  * rolls back) and the new customer is written, linked, with `customer.created` and `customer.login_linked` audit rows.
  * A customer made with this email at the same moment as the insert: the insert writes nothing and the transaction links
- * that customer instead. Never a duplicate.
+ * that customer instead. Never a duplicate. A customer found keeps their details; a ticked news and offers box turns
+ * their consent on (`answerKeepingTick`).
  */
 export function createSignInCustomer(db: Db, login: Login, input: CustomerSignInCreateInput, requestId: string): Promise<CustomerSignInLinked> {
   const firstName = trimmed(input.firstName)
@@ -161,7 +188,7 @@ export function createSignInCustomer(db: Db, login: Login, input: CustomerSignIn
 
   return inTransaction<CustomerSignInLinked>(db, async (tx) => {
     const found = await match(tx, login, requestId, 'sign_up')
-    if (found.kind === 'linked') return answer(found.row, found.change)
+    if (found.kind === 'linked') return answerKeepingTick(tx, found.row, found.change, marketingConsent, requestId)
     if (found.kind === 'elsewhere') return logElsewhere(tx, found.row, login, requestId)
 
     // Nothing has been written yet ('none' writes nothing), so a throw here leaves the database as it was.
@@ -182,7 +209,7 @@ export function createSignInCustomer(db: Db, login: Login, input: CustomerSignIn
     if (!made) {
       // Made (or this login linked) by another call while this insert waited: that customer, as link would find it.
       const raced = await match(tx, login, requestId, 'sign_up')
-      if (raced.kind === 'linked') return answer(raced.row, raced.change)
+      if (raced.kind === 'linked') return answerKeepingTick(tx, raced.row, raced.change, marketingConsent, requestId)
       if (raced.kind === 'elsewhere') return logElsewhere(tx, raced.row, login, requestId)
       throw new Error('The new customer was neither written nor found.')
     }

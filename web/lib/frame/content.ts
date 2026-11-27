@@ -35,7 +35,15 @@ export type FrameContent = {
     /** "©2026 The Paddock Wellness Club". */
     copyright: string
   }
+  /**
+   * W85 Level 3 (Wayne, 30 Nov; as the checkout's ticks will, WQ94): the addresses of the Terms and Privacy pages Site
+   * settings picks (their /info/ slugs), for the sign-in popup's "By continuing, you agree to..."; null while a page
+   * isn't picked or isn't published, and the popup then shows its words with no link.
+   */
+  legalPages: { terms: string | null; privacy: string | null }
 }
+
+const infoAddress = (page: { slug: string } | null | undefined): string | null => (page ? `/info/${page.slug}` : null)
 
 /** The menu picture's shape in Figma (Menu Hover, MenuImage: 400 by 500). */
 const MENU_THUMBNAIL_RATIO = 400 / 500
@@ -81,7 +89,7 @@ export function frameContent(settings: SiteSettings | null, navigation: Navigati
 
   const legalLinks = shown(
     [settings?.termsPage ?? null, settings?.privacyPage ?? null].map((page) =>
-      page ? { key: page.slug, label: page.title, href: `/info/${page.slug}`, outside: false } : null,
+      page ? { key: page.slug, label: page.title, href: infoAddress(page) ?? '', outside: false } : null,
     ),
   )
 
@@ -93,6 +101,7 @@ export function frameContent(settings: SiteSettings | null, navigation: Navigati
       legalLinks,
       copyright: `©${year} ${settings?.copyrightName ?? settings?.siteName ?? SITE_NAME}`,
     },
+    legalPages: { terms: infoAddress(settings?.termsPage), privacy: infoAddress(settings?.privacyPage) },
   }
 }
 

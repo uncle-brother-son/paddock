@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/nextjs-vite'
-import { expect, fireEvent, userEvent, waitFor } from 'storybook/test'
+import { expect, fireEvent, userEvent, waitFor, within } from 'storybook/test'
 
 import { BigButton } from '@/components/ui/buttons/Button'
 import { OverlayTexture } from '@/components/ui/media/Overlay'
@@ -74,6 +74,9 @@ export const OverThePage: Story = {
     const opener = canvas.getByRole('button', { name: 'Sign in' })
     const popup = await open(canvasElement, () => userEvent.click(opener))
     await expect(canvas.getByRole('dialog', { name: COPY.emailTitle })).toBe(popup)
+    // The Terms and Privacy pages Site settings picks, by their own slugs (W85 Level 3).
+    await expect(within(popup).getByRole('link', { name: COPY.terms })).toHaveAttribute('href', '/info/booking-terms')
+    await expect(within(popup).getByRole('link', { name: COPY.privacy })).toHaveAttribute('href', '/info/privacy-notice')
     await waitFor(() => expect(canvasElement.ownerDocument.activeElement).toBe(canvas.getByRole('textbox', { name: COPY.email })))
     await expect(getComputedStyle(popup).transitionDuration).toBe(`${DURATION_SHORT}s`)
     await expect(getComputedStyle(popup).transitionTimingFunction).toBe(EASE_SMOOTH_CSS)

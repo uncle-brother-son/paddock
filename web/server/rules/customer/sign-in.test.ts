@@ -233,11 +233,40 @@ describe('create on sign-up (POST /api/v1/customer/sign-in/create)', () => {
     expect(await consentOf('odd.consent@example.com')).toEqual([])
   })
 
-  it("W85: a customer found instead of made (staff made one meanwhile) keeps their own consent, as they keep their details", async () => {
-    await staffMade('consent.kept@example.com')
+  it('W85 Level 3: a customer found instead of made keeps their details, but a tick turns their consent on, with its audit row', async () => {
+    const id = await staffMade('consent.kept@example.com')
     const login = await newLogin('consent.kept@example.com')
-    expect((await create(login.token, { firstName: 'Web', lastName: 'Name', marketingConsent: true })).body.data).toMatchObject({ change: 'linked' })
-    expect(await consentOf('consent.kept@example.com')).toEqual([false])
+    expect((await create(login.token, { firstName: 'Web', lastName: 'Name', marketingConsent: true })).body.data).toMatchObject({ change: 'linked', customer: { firstName: 'Staff' } })
+    expect(await consentOf('consent.kept@example.com')).toEqual([true])
+    expect((await customersOf('consent.kept@example.com'))[0]).toMatchObject({ first_name: 'Staff', last_name: 'Made', phone: '07700 900001' })
+    expect((await auditOf(id)).map((row) => [row.action, row.details])).toEqual([
+      ['customer.login_linked', { authUserId: login.id, how: 'sign_up' }],
+      ['customer.marketing_consent', { channel: 'customer', marketingConsent: true, how: 'sign_up' }],
+    ])
+  })
+
+  it('W85 Level 3: an unticked box never turns consent off, and a tick when it is on already writes nothing', async () => {
+    await staffMade('consent.on@example.com', { marketing_consent: true })
+    const first = await newLogin('consent.on@example.com')
+    await create(first.token, { firstName: 'Web', lastName: 'Name', marketingConsent: false })
+    expect(await consentOf('consent.on@example.com')).toEqual([true])
+    // The same login again, ticked: on already, so no row.
+    await create(first.token, { firstName: 'Web', lastName: 'Name', marketingConsent: true })
+    const [row] = await customersOf('consent.on@example.com')
+    expect((await auditOf(row?.id as string)).map((audit) => audit.action)).toEqual(['customer.login_linked'])
+
+    await staffMade('consent.off@example.com')
+    const second = await newLogin('consent.off@example.com')
+    await create(second.token, { firstName: 'Web', lastName: 'Name' })
+    expect(await consentOf('consent.off@example.com')).toEqual([false])
+  })
+
+  it('W85 Level 3: a second create from a login already linked, ticked, turns consent on too', async () => {
+    const login = await newLogin('second.tick@example.com')
+    await create(login.token, { firstName: 'Sec', lastName: 'Ond' })
+    expect(await consentOf('second.tick@example.com')).toEqual([false])
+    expect((await create(login.token, { marketingConsent: true })).body.data).toMatchObject({ change: 'none' })
+    expect(await consentOf('second.tick@example.com')).toEqual([true])
   })
 
   it('no phone: stored as none', async () => {

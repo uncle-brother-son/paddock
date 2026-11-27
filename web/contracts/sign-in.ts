@@ -50,7 +50,8 @@ export type CustomerSignInLinkOutput = z.infer<typeof customerSignInLinkOutputSc
  * Backend log 9: first name, last name, a phone if they like. No date of birth and no age check here. A name left out
  * (or empty) is the rule's to refuse, with its reason (`first_name_required`, `last_name_required`), not zod's.
  * W85 (Wayne, 30 Nov): `marketingConsent`, the popup's "Email me with news and offers" tick, saved on a new customer
- * (`customers.marketing_consent`); left out is no. A customer found instead (made meanwhile) keeps their own.
+ * (`customers.marketing_consent`); left out is no. A customer found instead (made meanwhile) keeps their details, but
+ * a tick turns their consent on (never off; W85 Level 3).
  */
 export const customerSignInCreateInputSchema = z.object({
   firstName: z.string().nullish(),

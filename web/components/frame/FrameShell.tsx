@@ -29,7 +29,7 @@ export type FrameVariant = 'global' | 'checkout'
  */
 export function FrameShell({ variant = 'global', content, bookAddOns = [], children }: { variant?: FrameVariant; content: FrameContent; bookAddOns?: readonly BookAddOn[]; children: ReactNode }) {
   return (
-    <SignInHost>
+    <SignInHost legalPages={content.legalPages}>
       <FramePanelsHost bookAddOns={bookAddOns}>
         <SkipLink />
         <Header variant={variant} logo={<HeaderLogo animated={variant === 'global'} />} menuLinks={content.menuLinks} />

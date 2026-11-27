@@ -6,6 +6,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNod
 import { SignInModal, type CreateErrors, type NewAccount, type SignInStep } from '@/components/modules/sign-in/SignInModal'
 import { Overlay } from '@/components/ui/media/Overlay'
 import { usePopup } from '@/components/ui/usePopup'
+import type { FrameContent } from '@/lib/frame/content'
 import { listenForSignIn, type SignInRequest } from '@/lib/frame/sign-in'
 import { looksLikeEmail, subscribeToNewsletter } from '@/lib/frame/newsletter'
 import { PAGE_TRANSITION_TYPES } from '@/lib/motion/page-transition'
@@ -15,6 +16,10 @@ import { noteKeepSignedIn, sendCode, signedInLogin, signOutHere, verifyCode, wat
 import { SIGN_IN_COPY as COPY } from '@/lib/sign-in/words'
 
 import { AccountContext, type Account, type AccountState } from './useAccount'
+
+/** The Terms and Privacy pages' addresses (Site settings' picks: lib/frame/content.ts), or null for one not set. */
+type LegalPages = FrameContent['legalPages']
+const NO_LEGAL_PAGES: LegalPages = { terms: null, privacy: null }
 
 /** How long "Code sent" stands in Resend code's place (Figma's code resent: 6 seconds). */
 export const RESENT_FOR_MS = 6000
@@ -62,7 +67,7 @@ type Opening = { request: SignInRequest; step: SignInStep; email: string; emailE
  * gives everything inside the frame `useAccount()`, listens on the one `signIn()` seam (lib/frame/sign-in.ts), and
  * draws SignInPopup after the page and the booking panel, so it sits over both.
  */
-export function SignInHost({ children }: { children: ReactNode }) {
+export function SignInHost({ legalPages = NO_LEGAL_PAGES, children }: { legalPages?: LegalPages; children: ReactNode }) {
   const [state, setState] = useState<AccountState>({ status: 'checking' })
   const [opening, setOpening] = useState<Opening | null>(null)
   const stateRef = useRef(state)
@@ -104,7 +109,7 @@ export function SignInHost({ children }: { children: ReactNode }) {
   return (
     <AccountContext value={account}>
       {children}
-      <SignInPopup opening={opening} onDone={() => setOpening(null)} check={check} status={state.status} />
+      <SignInPopup opening={opening} onDone={() => setOpening(null)} check={check} status={state.status} legalPages={legalPages} />
     </AccountContext>
   )
 }
@@ -117,6 +122,7 @@ type SignInPopupProps = {
   check: () => Promise<AccountState>
   /** Who is signed in, marked on the popup's layer for tests (`data-account`). */
   status: AccountState['status']
+  legalPages: LegalPages
 }
 
 /**
@@ -132,7 +138,7 @@ type SignInPopupProps = {
  * the step's first field; the page (and the booking panel, when it opened over it) is inert and still; Esc, Close and
  * the shade close it; focus goes back to what opened it.
  */
-function SignInPopup({ opening, onDone, check, status }: SignInPopupProps) {
+function SignInPopup({ opening, onDone, check, status, legalPages }: SignInPopupProps) {
   const router = useRouter()
   const pathname = usePathname()
   const titleId = useId()
@@ -338,6 +344,8 @@ function SignInPopup({ opening, onDone, check, status }: SignInPopupProps) {
             <SignInModal
               step={step}
               titleId={titleId}
+              termsHref={legalPages.terms}
+              privacyHref={legalPages.privacy}
               onClose={giveUp}
               closeButton={closeButton}
               busy={busy}

@@ -39,6 +39,8 @@ export const SAMPLE_FRAME: FrameContent = {
     legalLinks: [page('terms', 'Terms & Conditions', '/info/terms'), page('privacy', 'Privacy Policy', '/info/privacy')],
     copyright: '©2026 The Paddock Wellness Club',
   },
+  // As an editor might pick them: the pages' own slugs, not /info/terms.
+  legalPages: { terms: '/info/booking-terms', privacy: '/info/privacy-notice' },
 }
 
 /**
@@ -56,6 +58,7 @@ export const SAMPLE_MENU_EVERY_THUMBNAIL: FrameMenuLink[] = [
 export const EMPTY_FRAME: FrameContent = {
   menuLinks: [],
   footer: { groups: [], newsletter: { heading: null, text: null }, legalLinks: [], copyright: '©2026 The Paddock Wellness Club' },
+  legalPages: { terms: null, privacy: null },
 }
 
 /** A stand-in page taller than the window: a dark first section, as the home hero is, then light ones. */
