@@ -8,6 +8,7 @@ import { Grid } from '@/components/layout/Grid'
 import { Overlay } from '@/components/ui/media/Overlay'
 import { SiteLink } from '@/components/ui/SiteLink'
 import type { FrameMenuLink } from '@/lib/frame/content'
+import { usePrefersReducedMotion } from '@/lib/motion/reduced-motion'
 
 import { FRAME_BUTTON, FrameButtonLabel } from './FrameButton'
 
@@ -18,6 +19,46 @@ type MenuProps = {
   onClose: () => void
   /** The button that opened it: focus goes back there when it closes. */
   returnFocusTo: RefObject<HTMLButtonElement | null>
+  /** For Storybook and tests: reduced motion on or off, whatever the visitor's own setting. */
+  reducedMotion?: boolean | undefined
+}
+
+/**
+ * W82 (WQ90): a menu thumbnail's video, over its poster: muted, looped and inline, playing only while its link is
+ * pointed at (hovered or focused) and the menu is open, paused when it is left. Nothing of it is fetched until then:
+ * it is given its address the first time it is wanted, and only where its place is shown (from 768px: a phone never
+ * fetches it). It is seen once it shows a frame, so the poster shows first. With reduced motion there is none.
+ */
+function MenuVideo({ url, playing }: { url: string; playing: boolean }) {
+  const player = useRef<HTMLVideoElement>(null)
+  const [started, setStarted] = useState(false)
+
+  useEffect(() => {
+    const element = player.current
+    if (!element) return
+    if (!playing) {
+      element.pause()
+      return
+    }
+    if (element.getClientRects().length === 0) return
+    // React leaves `muted` out of the page's HTML, so the element is told here, before it is asked to play.
+    element.muted = true
+    if (!element.getAttribute('src')) element.src = url
+    // A browser that refuses to start it (a data saver, autoplay switched off) leaves the poster.
+    element.play().catch(() => undefined)
+  }, [playing, url])
+
+  return (
+    <video
+      ref={player}
+      muted
+      loop
+      playsInline
+      preload="none"
+      onPlaying={() => setStarted(true)}
+      className={`absolute inset-0 size-full rounded-s object-cover ${started ? '' : 'invisible'}`}
+    />
+  )
 }
 
 /**
@@ -31,8 +72,12 @@ type MenuProps = {
  *
  * Desktop: while a link is hovered or has keyboard focus the other links fade to Text/Muted Primary and that link's
  * page thumbnail opens out from its middle on the left. A phone has neither: its links stay dark (Wayne, 24 Nov).
+ * W82 (WQ90): a thumbnail that is a video opens out as its poster and plays while the link is pointed at
+ * (MenuVideo); with reduced motion it is the poster only.
  */
-export function Menu({ id, open, links, onClose, returnFocusTo }: MenuProps) {
+export function Menu({ id, open, links, onClose, returnFocusTo, reducedMotion: reducedMotionSet }: MenuProps) {
+  const visitorReducedMotion = usePrefersReducedMotion()
+  const reducedMotion = reducedMotionSet ?? visitorReducedMotion
   const close = useRef<HTMLButtonElement>(null)
   const wasOpen = useRef(false)
   const lenis = useLenis()
@@ -96,18 +141,24 @@ export function Menu({ id, open, links, onClose, returnFocusTo }: MenuProps) {
             {everOpen
               ? links.map((link) =>
                   link.thumbnail ? (
-                    // eslint-disable-next-line @next/next/no-img-element -- Next's image optimiser does not run on Workers: the address is Sanity's CDN, sized in lib/sanity/image.ts.
-                    <img
+                    <div
                       key={link.key}
-                      src={link.thumbnail.src}
-                      srcSet={link.thumbnail.srcSet}
-                      sizes="(min-width: 768px) 17vw, 1px"
-                      width={link.thumbnail.width}
-                      height={link.thumbnail.height}
-                      alt=""
-                      decoding="async"
-                      className={`absolute inset-0 size-full rounded-s object-cover transition-[clip-path] duration-short ease-smooth ${active === link.key ? '[clip-path:inset(0)]' : '[clip-path:inset(50%_0)]'}`}
-                    />
+                      data-menu-thumbnail={link.thumbnail.videoUrl ? 'video' : 'image'}
+                      className={`absolute inset-0 transition-[clip-path] duration-short ease-smooth ${active === link.key ? '[clip-path:inset(0)]' : '[clip-path:inset(50%_0)]'}`}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element -- Next's image optimiser does not run on Workers: the address is Sanity's CDN, sized in lib/sanity/image.ts. */}
+                      <img
+                        src={link.thumbnail.picture.src}
+                        srcSet={link.thumbnail.picture.srcSet}
+                        sizes="(min-width: 768px) 17vw, 1px"
+                        width={link.thumbnail.picture.width}
+                        height={link.thumbnail.picture.height}
+                        alt=""
+                        decoding="async"
+                        className="absolute inset-0 size-full rounded-s object-cover"
+                      />
+                      {link.thumbnail.videoUrl && !reducedMotion ? <MenuVideo url={link.thumbnail.videoUrl} playing={open && active === link.key} /> : null}
+                    </div>
                   ) : null,
                 )
               : null}

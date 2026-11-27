@@ -44,6 +44,8 @@ type HeaderProps = {
   /** The logo with its link home, drawn on the server (components/frame/HeaderLogo.tsx). */
   logo: ReactNode
   menuLinks: FrameMenuLink[]
+  /** For Storybook and tests: reduced motion on or off for the menu's thumbnails (W82), whatever the visitor's own setting. */
+  menuReducedMotion?: boolean
 }
 
 /**
@@ -54,7 +56,7 @@ type HeaderProps = {
  * first, as every link to /book does (components/ui/SiteLink.tsx): inside the frame the booking panel opens over the
  * page (W77); with no panel to open the link is followed. Bag asks useFramePanels too, and opens nothing yet.
  */
-export function Header({ variant = 'global', logo, menuLinks }: HeaderProps) {
+export function Header({ variant = 'global', logo, menuLinks, menuReducedMotion }: HeaderProps) {
   const header = useRef<HTMLElement>(null)
   const burger = useRef<HTMLButtonElement>(null)
   const menuId = useId()
@@ -155,7 +157,7 @@ export function Header({ variant = 'global', logo, menuLinks }: HeaderProps) {
         </Grid>
       </header>
       {variant === 'global' ? (
-        <Menu id={menuId} open={menuOpen} links={menuLinks} onClose={() => setMenuOpenOn(null)} returnFocusTo={burger} />
+        <Menu id={menuId} open={menuOpen} links={menuLinks} onClose={() => setMenuOpenOn(null)} returnFocusTo={burger} reducedMotion={menuReducedMotion} />
       ) : null}
     </>
   )

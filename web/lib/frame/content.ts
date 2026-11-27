@@ -1,6 +1,7 @@
 import { sizedImage, type SizedImage } from '@/lib/sanity/image'
 import { linkHref } from '@/lib/sanity/links'
-import type { NavLink, Navigation, SiteSettings } from '@/lib/sanity/schemas'
+import { stillOf, videoOf } from '@/lib/sanity/media'
+import type { Media, NavLink, Navigation, SiteSettings } from '@/lib/sanity/schemas'
 import { SITE_NAME } from '@/lib/site'
 
 // What the header, the menu and the footer show (W73), made from Sanity's Site settings and Navigation documents.
@@ -10,8 +11,15 @@ import { SITE_NAME } from '@/lib/site'
 /** A link as the frame draws it. `outside`: an address off the site (https, mailto, tel), a plain <a>. */
 export type FrameLink = { key: string; label: string; href: string; outside: boolean }
 
-/** A menu link, with the picture the desktop menu shows while it is hovered: its page's thumbnail (WQ24). */
-export type FrameMenuLink = FrameLink & { thumbnail: SizedImage | null }
+/**
+ * What the desktop menu shows while a link is hovered: its page's thumbnail (WQ24). W82 (WQ90): a picture, or a
+ * video: `picture` is then its poster and `videoUrl` its file. The menu shows it from 768px only, so it is the
+ * film's desktop file and poster (WQ35).
+ */
+export type MenuThumbnail = { picture: SizedImage; videoUrl: string | null }
+
+/** A menu link, with its hover picture or video (null: its page has none). */
+export type FrameMenuLink = FrameLink & { thumbnail: MenuThumbnail | null }
 
 export type FrameFooterGroup = { key: string; links: FrameLink[] }
 
@@ -36,6 +44,12 @@ const MENU_THUMBNAIL_WIDTHS = [240, 480, 720] as const
 
 const isOutside = (link: NavLink['link']): boolean => link.destination === 'external'
 
+/** A page's thumbnail as the menu draws it: the picture, or the video's poster, cropped 4 by 5; and the video's file. */
+const menuThumbnail = (media: Media): MenuThumbnail => ({
+  picture: sizedImage(stillOf(media).wide, MENU_THUMBNAIL_RATIO, MENU_THUMBNAIL_WIDTHS),
+  videoUrl: videoOf(media)?.url ?? null,
+})
+
 /** A link the site shows, or null for one it hides: its page or event isn't published (WQ24), or it has no address. */
 function frameLink({ key, label, link }: NavLink): FrameLink | null {
   const href = linkHref(link)
@@ -54,7 +68,7 @@ export function frameContent(settings: SiteSettings | null, navigation: Navigati
       const link = frameLink(navLink)
       if (!link) return null
       const thumbnail = navLink.link.document?.thumbnail ?? null
-      return { ...link, thumbnail: thumbnail ? sizedImage(thumbnail, MENU_THUMBNAIL_RATIO, MENU_THUMBNAIL_WIDTHS) : null }
+      return { ...link, thumbnail: thumbnail ? menuThumbnail(thumbnail) : null }
     }),
   )
 

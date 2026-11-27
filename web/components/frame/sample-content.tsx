@@ -1,14 +1,20 @@
-import type { FrameContent } from '@/lib/frame/content'
-import type { SizedImage } from '@/lib/sanity/image'
+import type { FrameContent, FrameMenuLink, MenuThumbnail } from '@/lib/frame/content'
 
 // For the Frame stories only: the frame's content as Figma draws it (the menu's six links, the footer's four
 // groups), and a stand-in page to sit beneath the header. The site's own content comes from Sanity.
 
-/** A flat block of colour, 4 by 5, standing in for a page's thumbnail: a story fetches nothing. */
-const thumbnail = (colour: string): SizedImage => {
+/** A flat block of colour, 4 by 5, standing in for a page's thumbnail picture: a story fetches nothing. */
+const thumbnail = (colour: string): MenuThumbnail => {
   const src = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 5"><rect width="4" height="5" fill="${colour}"/></svg>`)}`
-  return { src, srcSet: `${src} 240w`, width: 240, height: 300 }
+  return { picture: { src, srcSet: `${src} 240w`, width: 240, height: 300 }, videoUrl: null }
 }
+
+/**
+ * W82 (WQ90): the menu's links with the first one's thumbnail a video (`videoUrl`, a sample made in the story), its
+ * picture the video's poster.
+ */
+export const withVideoThumbnail = (links: FrameMenuLink[], videoUrl: string): FrameMenuLink[] =>
+  links.map((link, index) => (index === 0 && link.thumbnail ? { ...link, thumbnail: { ...link.thumbnail, videoUrl } } : link))
 
 const page = (key: string, label: string, href: string) => ({ key, label, href, outside: false })
 const outside = (key: string, label: string, href: string) => ({ key, label, href, outside: true })

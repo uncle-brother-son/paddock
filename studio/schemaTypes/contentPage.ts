@@ -3,6 +3,7 @@ import { DocumentIcon } from '@sanity/icons'
 import { checkSlug } from '../lib/checks'
 import { isSlugFree } from '../lib/slugs'
 import { previousSlugs } from './fields/previousSlugs'
+import { NO_THUMBNAIL_AT_FIRST, thumbnail, THUMBNAIL_PREVIEW, thumbnailMedia } from './fields/thumbnail'
 
 // A page built from modules, at /[slug] (WQ26). The home page is the one chosen in Site settings.
 export const contentPage = defineType({
@@ -10,6 +11,7 @@ export const contentPage = defineType({
   title: 'Page',
   type: 'document',
   icon: DocumentIcon,
+  initialValue: NO_THUMBNAIL_AT_FIRST,
   fields: [
     defineField({
       name: 'title',
@@ -26,12 +28,7 @@ export const contentPage = defineType({
       validation: (rule) => rule.required().custom((slug) => checkSlug(slug?.current, 'page')),
     }),
     previousSlugs,
-    defineField({
-      name: 'thumbnail',
-      title: 'Thumbnail',
-      type: 'picture',
-      description: 'Shown in the menu when someone points at the link to this page',
-    }),
+    thumbnail,
     defineField({
       name: 'modules',
       title: 'Modules',
@@ -53,10 +50,7 @@ export const contentPage = defineType({
     defineField({ name: 'seo', title: 'SEO', type: 'seo' }),
   ],
   preview: {
-    select: {
-      title: 'title',
-      subtitle: 'slug.current',
-      media: 'thumbnail',
-    },
+    select: { title: 'title', subtitle: 'slug.current', ...THUMBNAIL_PREVIEW },
+    prepare: (selected) => ({ title: selected.title, subtitle: selected.subtitle, media: thumbnailMedia(selected) }),
   },
 })

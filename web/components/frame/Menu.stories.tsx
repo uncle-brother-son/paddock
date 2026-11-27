@@ -1,11 +1,29 @@
 import type { Meta, StoryObj } from '@storybook/nextjs-vite'
+import { useEffect, useState, type ComponentProps } from 'react'
 import { expect, userEvent, waitFor, within } from 'storybook/test'
 
+import { recordSampleVideo } from '@/components/modules/content/sample-media'
 import { OverlayTexture } from '@/components/ui/media/Overlay'
 
 import { Header } from './Header'
 import { HeaderLogo } from './HeaderLogo'
-import { EMPTY_FRAME, SAMPLE_FRAME, SamplePage } from './sample-content'
+import { EMPTY_FRAME, SAMPLE_FRAME, SamplePage, withVideoThumbnail } from './sample-content'
+
+/** W82: the header with the first menu link's thumbnail a video, once the sample video has been made (a second or so). */
+function HeaderWithAVideo(args: ComponentProps<typeof Header>) {
+  const [videoUrl, setVideoUrl] = useState<string | null>(null)
+  useEffect(() => {
+    let wanted = true
+    void recordSampleVideo().then((url) => {
+      if (wanted) setVideoUrl(url)
+    })
+    return () => {
+      wanted = false
+    }
+  }, [])
+  if (!videoUrl) return <p className="p-16 text-copy-14">Making a sample video…</p>
+  return <Header {...args} menuLinks={withVideoThumbnail(args.menuLinks, videoUrl)} />
+}
 
 const meta = {
   title: 'Frame/Menu',
@@ -81,16 +99,110 @@ export const Hover: Story = {
     const dialog = dialogIn(context.canvasElement)
     const links = within(dialog).getAllByRole('link')
     const pictures = [...dialog.querySelectorAll('img')]
+    const thumbnails = [...dialog.querySelectorAll('[data-menu-thumbnail]')]
     await expect(pictures).toHaveLength(SAMPLE_FRAME.menuLinks.filter((link) => link.thumbnail).length)
+    await expect(thumbnails).toHaveLength(pictures.length)
     const primary = getComputedStyle(links[0]!).color
 
     await userEvent.hover(links[0]!)
-    await waitFor(() => expect(getComputedStyle(pictures[0]!).clipPath).toBe('inset(0px)'))
+    await waitFor(() => expect(getComputedStyle(thumbnails[0]!).clipPath).toBe('inset(0px)'))
     await waitFor(() => expect(getComputedStyle(links[1]!).color).not.toBe(primary))
     await expect(getComputedStyle(links[0]!).color).toBe(primary)
     await expect(Math.round(pictures[0]!.getBoundingClientRect().width)).toBe(228)
     await expect(Math.round(pictures[0]!.getBoundingClientRect().height)).toBe(285)
-    await expect(getComputedStyle(pictures[1]!).clipPath).toBe('inset(50% 0px)')
+    await expect(getComputedStyle(thumbnails[1]!).clipPath).toBe('inset(50% 0px)')
+  },
+}
+
+/** The first menu link's thumbnail, and its video. */
+const videoThumbnailIn = (dialog: HTMLElement) => {
+  const thumbnail = dialog.querySelector('[data-menu-thumbnail]') as HTMLElement
+  return { thumbnail, video: thumbnail.querySelector('video') }
+}
+
+/** Opens the menu once the sample video has been made. */
+const openMenuWithAVideo: Play = async (context) => {
+  await context.canvas.findByRole('button', { name: 'Menu' }, { timeout: 10_000 })
+  await openMenu(context)
+}
+
+/**
+ * W82 (WQ90): a page's thumbnail can be a video. It opens out as its poster and plays, muted, looped and inline,
+ * while its link is pointed at; nothing of it is fetched until then. Leaving the link pauses it.
+ */
+export const HoverWithAVideo: Story = {
+  name: 'Hover, with a video',
+  render: (args) => (
+    <>
+      <OverlayTexture />
+      <HeaderWithAVideo {...args} />
+      <main id="main" data-behind-popups="">
+        <SamplePage />
+      </main>
+    </>
+  ),
+  globals: { viewport: { value: 'desktop', isRotated: false } },
+  play: async (context) => {
+    await openMenuWithAVideo(context)
+    const dialog = dialogIn(context.canvasElement)
+    const links = within(dialog).getAllByRole('link')
+    const { thumbnail, video } = videoThumbnailIn(dialog)
+    await expect(thumbnail.dataset.menuThumbnail).toBe('video')
+    // Open, and no link pointed at: the video has no address yet, so nothing of it is fetched.
+    await expect(video).not.toBeNull()
+    await expect([video!.getAttribute('src'), video!.preload, video!.loop, video!.playsInline, video!.paused]).toEqual([null, 'none', true, true, true])
+    await expect(getComputedStyle(video!).visibility).toBe('hidden')
+    // The other thumbnails are pictures.
+    await expect([...dialog.querySelectorAll('[data-menu-thumbnail]')].slice(1).map((other) => (other as HTMLElement).dataset.menuThumbnail)).toEqual(['image', 'image', 'image'])
+
+    await userEvent.hover(links[0]!)
+    await waitFor(() => expect(getComputedStyle(thumbnail).clipPath).toBe('inset(0px)'))
+    await waitFor(() => expect(video!.paused).toBe(false), { timeout: 5000 })
+    await expect([video!.muted, video!.getAttribute('src')?.startsWith('blob:')]).toEqual([true, true])
+    await waitFor(() => expect(getComputedStyle(video!).visibility).toBe('visible'))
+    await expect(Math.round(video!.getBoundingClientRect().width)).toBe(228)
+    await expect(Math.round(video!.getBoundingClientRect().height)).toBe(285)
+
+    // Another link pointed at: this one closes and its video pauses.
+    await userEvent.hover(links[1]!)
+    await waitFor(() => expect(video!.paused).toBe(true))
+    await waitFor(() => expect(getComputedStyle(thumbnail).clipPath).toBe('inset(50% 0px)'))
+  },
+}
+
+/** W82: with reduced motion a video thumbnail is its poster only: there is no video, and nothing of it is fetched. */
+export const HoverWithAVideoReducedMotion: Story = {
+  name: 'Hover, with a video, reduced motion',
+  args: { menuReducedMotion: true },
+  render: HoverWithAVideo.render,
+  globals: { viewport: { value: 'desktop', isRotated: false } },
+  play: async (context) => {
+    await openMenuWithAVideo(context)
+    const dialog = dialogIn(context.canvasElement)
+    const { thumbnail, video } = videoThumbnailIn(dialog)
+    await expect([thumbnail.dataset.menuThumbnail, video]).toEqual(['video', null])
+    await expect(dialog.querySelectorAll('video')).toHaveLength(0)
+    await userEvent.hover(within(dialog).getAllByRole('link')[0]!)
+    await waitFor(() => expect(getComputedStyle(thumbnail).clipPath).toBe('inset(0px)'))
+    await expect(thumbnail.querySelector('img')).toBeVisible()
+  },
+}
+
+/** W82: on a phone the menu has no picture, so a video thumbnail is never fetched, even when its link takes focus. */
+export const VideoOnAPhone: Story = {
+  name: 'Video, on a phone',
+  tags: ['!dev'],
+  render: HoverWithAVideo.render,
+  globals: { viewport: { value: 'mobile', isRotated: false } },
+  play: async (context) => {
+    await openMenuWithAVideo(context)
+    const dialog = dialogIn(context.canvasElement)
+    const { video } = videoThumbnailIn(dialog)
+    const link = within(dialog).getAllByRole('link')[0]!
+    link.focus()
+    await expect(link).toHaveFocus()
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    await expect([video!.getAttribute('src'), video!.paused]).toEqual([null, true])
   },
 }
 

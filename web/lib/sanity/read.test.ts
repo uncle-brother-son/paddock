@@ -92,6 +92,7 @@ describe('W72a: galleries and categories', () => {
 
   it('every read W72a and W73b changed has its query on record', () => {
     // W81: and the two reads of the Membership and Session Pass cards (briefs/W81-logs/tools/gen-page-samples.mjs).
+    // W82: and the navigation and the info page (briefs/W82-logs/tools/gen-page-samples.mjs).
     expect(Object.keys(madeFrom).sort()).toEqual([
       'addons',
       'contentPage',
@@ -100,8 +101,10 @@ describe('W72a: galleries and categories', () => {
       'eventsListPage',
       'giftCard',
       'homePage',
+      'infoPage',
       'membershipCards',
       'movedSlug',
+      'navigation',
       'product',
       'productCards',
       'sessionPassCards',
@@ -308,6 +311,35 @@ describe('W73b: HeroMedia module', () => {
   })
 })
 
+// W82 (WQ90): a content page's and an info page's thumbnail is the media block, a picture or a video. The navigation
+// and the info page samples were made by the real engine (briefs/W82-logs/tools/gen-page-samples.mjs) over Exclusive
+// Hire's thumbnail saved the old way (a plain picture), Terms' a media block picture, The Experience's a video, and
+// Manage Cookies' the empty old default the live one holds.
+describe('W82: page thumbnails', () => {
+  type Thumbnail = { kind: string; image?: { ref: string; crop: unknown }; url?: string; poster?: { ref: string }; description?: string } | null
+  const thumbnailOf = (label: string): Thumbnail =>
+    ((answers.navigation.menuLinks as Array<{ label: string; link: { document: { thumbnail: Thumbnail } | null } }>).find((link) => link.label === label)?.link.document?.thumbnail ?? null)
+
+  it('a thumbnail saved as a plain picture before W82 is read as a picture, its crop kept', () => {
+    expect(thumbnailOf('Exclusive Hire')).toMatchObject({ kind: 'image', image: { ref: 'image-thumb-600x400-jpg', crop: { left: 0.1 } } })
+    expect(answers.contentPage.thumbnail).toEqual(thumbnailOf('Exclusive Hire'))
+  })
+
+  it('a media block picture is a picture, and a video is its file, poster and description', () => {
+    expect(answers.infoPage.thumbnail).toMatchObject({ kind: 'image', image: { ref: 'image-thumb-600x400-jpg', alt: 'Picture thumb' } })
+    expect(thumbnailOf('The Experience')).toMatchObject({ kind: 'video', url: 'https://cdn.sanity.io/files/p/d/vid.mp4', poster: { ref: 'image-tall-900x1600-jpg', alt: '' }, description: 'Steam' })
+  })
+
+  it('the empty old default (no file), no thumbnail and an event are none', () => {
+    expect(['Manage Cookies', 'Home', 'Solstice'].map(thumbnailOf)).toEqual([null, null, null])
+  })
+
+  it('the old shape is read only until the tidy-up: each thumbnail read names it', () => {
+    for (const name of ['navigation', 'contentPage', 'infoPage'] as const) expect(reads[name].query).toContain('defined(thumbnail.asset._ref) => {"kind": "image", "image": thumbnail{')
+    expect(reads.contentPage.schema.safeParse({ ...answers.contentPage, thumbnail: { ref: 'image-thumb-600x400-jpg', width: 600, height: 400, alt: '', crop: null, hotspot: null } }).success).toBe(false)
+  })
+})
+
 describe('linkHref', () => {
   const links = [...answers.navigation.menuLinks, ...footerLinks].map(({ label, link }) => [label, linkHref(link as Link)])
 
@@ -318,6 +350,8 @@ describe('linkHref', () => {
       ['Shop', '/shop'],
       ['Solstice', '/events/solstice-2026'],
       ['Not published', null],
+      ['The Experience', '/the-experience'],
+      ['Manage Cookies', '/info/manage-cookies'],
       ['Terms', '/info/terms'],
       ['Outside', 'https://example.com'],
     ])

@@ -1,5 +1,5 @@
 import { defineType, defineField, defineArrayMember } from 'sanity'
-import { DocumentTextIcon } from '@sanity/icons'
+import { DocumentTextIcon, ImagesIcon } from '@sanity/icons'
 
 export const blogPost = defineType({
   name: 'blogPost',
@@ -38,21 +38,12 @@ export const blogPost = defineType({
       description: 'Short summary shown in blog listing',
       validation: (rule) => rule.required().max(200),
     }),
+    // W82 (WQ90): the featured picture and the pictures in the text are the one media block (WQ43): a picture, or a
+    // video with its poster. A picture keeps its Alt Text (or Decorative); a video's Description describes it.
     defineField({
       name: 'featuredImage',
-      title: 'Featured Image',
-      type: 'image',
-      options: {
-        hotspot: true,
-      },
-      fields: [
-        defineField({
-          name: 'alt',
-          type: 'string',
-          title: 'Alt Text',
-          validation: (rule) => rule.required(),
-        }),
-      ],
+      title: 'Featured Image or Video',
+      type: 'media',
       validation: (rule) => rule.required(),
     }),
     defineField({
@@ -64,15 +55,15 @@ export const blogPost = defineType({
           type: 'block',
         }),
         defineArrayMember({
-          type: 'image',
-          options: {
-            hotspot: true,
-          },
+          name: 'blogMedia',
+          title: 'Image or Video',
+          type: 'object',
+          icon: ImagesIcon,
           fields: [
             defineField({
-              name: 'alt',
-              type: 'string',
-              title: 'Alt Text',
+              name: 'media',
+              title: 'Image or Video',
+              type: 'media',
               validation: (rule) => rule.required(),
             }),
             defineField({
@@ -81,6 +72,14 @@ export const blogPost = defineType({
               title: 'Caption',
             }),
           ],
+          preview: {
+            select: { kind: 'media.kind', alt: 'media.image.alt', description: 'media.videoDescription', image: 'media.image', poster: 'media.poster', caption: 'caption' },
+            prepare({ kind, alt, description, image, poster, caption }) {
+              return kind === 'video'
+                ? { title: caption || description || 'Video', subtitle: 'Video', media: poster }
+                : { title: caption || alt || 'Image', subtitle: 'Image', media: image }
+            },
+          },
         }),
       ],
       validation: (rule) => rule.required(),
@@ -110,13 +109,15 @@ export const blogPost = defineType({
     select: {
       title: 'title',
       subtitle: 'publishedAt',
-      media: 'featuredImage',
+      kind: 'featuredImage.kind',
+      image: 'featuredImage.image',
+      poster: 'featuredImage.poster',
     },
-    prepare({ title, subtitle, media }) {
+    prepare({ title, subtitle, kind, image, poster }) {
       return {
         title,
         subtitle: subtitle ? new Date(subtitle).toLocaleDateString() : 'No date',
-        media,
+        media: kind === 'video' ? poster : image,
       }
     },
   },

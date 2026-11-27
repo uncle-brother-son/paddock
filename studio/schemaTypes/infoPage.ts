@@ -3,6 +3,7 @@ import { InfoOutlineIcon } from '@sanity/icons'
 import { checkSlug } from '../lib/checks'
 import { isSlugFree } from '../lib/slugs'
 import { previousSlugs } from './fields/previousSlugs'
+import { NO_THUMBNAIL_AT_FIRST, thumbnail, THUMBNAIL_PREVIEW, thumbnailMedia } from './fields/thumbnail'
 
 // Terms, Privacy, Health & Safety and the like, at /info/[slug] (WQ26).
 export const infoPage = defineType({
@@ -10,6 +11,7 @@ export const infoPage = defineType({
   title: 'Info Page',
   type: 'document',
   icon: InfoOutlineIcon,
+  initialValue: NO_THUMBNAIL_AT_FIRST,
   fields: [
     defineField({
       name: 'title',
@@ -26,12 +28,7 @@ export const infoPage = defineType({
       validation: (rule) => rule.required().custom((slug) => checkSlug(slug?.current, 'info')),
     }),
     previousSlugs,
-    defineField({
-      name: 'thumbnail',
-      title: 'Thumbnail',
-      type: 'picture',
-      description: 'Shown in the menu when someone points at the link to this page',
-    }),
+    thumbnail,
     defineField({
       name: 'body',
       title: 'Text',
@@ -49,10 +46,7 @@ export const infoPage = defineType({
   ],
   orderings: [{ title: 'Left menu', name: 'menuOrder', by: [{ field: 'menuOrder', direction: 'asc' }] }],
   preview: {
-    select: {
-      title: 'title',
-      subtitle: 'slug.current',
-      media: 'thumbnail',
-    },
+    select: { title: 'title', subtitle: 'slug.current', ...THUMBNAIL_PREVIEW },
+    prepare: (selected) => ({ title: selected.title, subtitle: selected.subtitle, media: thumbnailMedia(selected) }),
   },
 })

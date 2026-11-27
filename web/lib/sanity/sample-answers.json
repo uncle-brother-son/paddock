@@ -73,21 +73,24 @@
             "slug": "exclusive-hire",
             "isHome": false,
             "thumbnail": {
-              "ref": "image-thumb-600x400-jpg",
-              "width": 600,
-              "height": 400,
-              "alt": "Picture thumb",
-              "crop": {
-                "top": 0,
-                "bottom": 0,
-                "left": 0.1,
-                "right": 0
-              },
-              "hotspot": {
-                "x": 0.5,
-                "y": 0.5,
-                "width": 1,
-                "height": 1
+              "kind": "image",
+              "image": {
+                "ref": "image-thumb-600x400-jpg",
+                "width": 600,
+                "height": 400,
+                "alt": "Picture thumb",
+                "crop": {
+                  "top": 0,
+                  "bottom": 0,
+                  "left": 0.1,
+                  "right": 0
+                },
+                "hotspot": {
+                  "x": 0.5,
+                  "y": 0.5,
+                  "width": 1,
+                  "height": 1
+                }
               }
             }
           },
@@ -129,6 +132,57 @@
           "url": null,
           "sectionId": null
         }
+      },
+      {
+        "key": "9",
+        "label": "The Experience",
+        "link": {
+          "destination": "page",
+          "document": {
+            "type": "contentPage",
+            "slug": "the-experience",
+            "isHome": false,
+            "thumbnail": {
+              "kind": "video",
+              "url": "https://cdn.sanity.io/files/p/d/vid.mp4",
+              "mobileUrl": null,
+              "poster": {
+                "ref": "image-tall-900x1600-jpg",
+                "width": 900,
+                "height": 1600,
+                "alt": "",
+                "crop": null,
+                "hotspot": {
+                  "x": 0.5,
+                  "y": 0.4,
+                  "width": 0.6,
+                  "height": 0.6
+                }
+              },
+              "mobilePoster": null,
+              "description": "Steam",
+              "captionsUrl": "https://cdn.sanity.io/files/p/d/cap.vtt",
+              "hasSound": false
+            }
+          },
+          "url": null,
+          "sectionId": null
+        }
+      },
+      {
+        "key": "10",
+        "label": "Manage Cookies",
+        "link": {
+          "destination": "page",
+          "document": {
+            "type": "infoPage",
+            "slug": "manage-cookies",
+            "isHome": false,
+            "thumbnail": null
+          },
+          "url": null,
+          "sectionId": null
+        }
       }
     ],
     "footerGroups": [
@@ -145,12 +199,15 @@
                 "slug": "terms",
                 "isHome": false,
                 "thumbnail": {
-                  "ref": "image-thumb-600x400-jpg",
-                  "width": 600,
-                  "height": 400,
-                  "alt": "Picture thumb",
-                  "crop": null,
-                  "hotspot": null
+                  "kind": "image",
+                  "image": {
+                    "ref": "image-thumb-600x400-jpg",
+                    "width": 600,
+                    "height": 400,
+                    "alt": "Picture thumb",
+                    "crop": null,
+                    "hotspot": null
+                  }
                 }
               },
               "url": null,
@@ -235,21 +292,24 @@
     "slug": "exclusive-hire",
     "isHome": false,
     "thumbnail": {
-      "ref": "image-thumb-600x400-jpg",
-      "width": 600,
-      "height": 400,
-      "alt": "Picture thumb",
-      "crop": {
-        "top": 0,
-        "bottom": 0,
-        "left": 0.1,
-        "right": 0
-      },
-      "hotspot": {
-        "x": 0.5,
-        "y": 0.5,
-        "width": 1,
-        "height": 1
+      "kind": "image",
+      "image": {
+        "ref": "image-thumb-600x400-jpg",
+        "width": 600,
+        "height": 400,
+        "alt": "Picture thumb",
+        "crop": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0.1,
+          "right": 0
+        },
+        "hotspot": {
+          "x": 0.5,
+          "y": 0.5,
+          "width": 1,
+          "height": 1
+        }
       }
     },
     "modules": [
@@ -974,12 +1034,15 @@
     "title": "Terms",
     "slug": "terms",
     "thumbnail": {
-      "ref": "image-thumb-600x400-jpg",
-      "width": 600,
-      "height": 400,
-      "alt": "Picture thumb",
-      "crop": null,
-      "hotspot": null
+      "kind": "image",
+      "image": {
+        "ref": "image-thumb-600x400-jpg",
+        "width": 600,
+        "height": 400,
+        "alt": "Picture thumb",
+        "crop": null,
+        "hotspot": null
+      }
     },
     "body": [
       {
@@ -1043,12 +1106,15 @@
                 "slug": "terms",
                 "isHome": false,
                 "thumbnail": {
-                  "ref": "image-thumb-600x400-jpg",
-                  "width": 600,
-                  "height": 400,
-                  "alt": "Picture thumb",
-                  "crop": null,
-                  "hotspot": null
+                  "kind": "image",
+                  "image": {
+                    "ref": "image-thumb-600x400-jpg",
+                    "width": 600,
+                    "height": 400,
+                    "alt": "Picture thumb",
+                    "crop": null,
+                    "hotspot": null
+                  }
                 }
               },
               "url": null,
@@ -1291,12 +1357,15 @@
                 "slug": "terms",
                 "isHome": false,
                 "thumbnail": {
-                  "ref": "image-thumb-600x400-jpg",
-                  "width": 600,
-                  "height": 400,
-                  "alt": "Picture thumb",
-                  "crop": null,
-                  "hotspot": null
+                  "kind": "image",
+                  "image": {
+                    "ref": "image-thumb-600x400-jpg",
+                    "width": 600,
+                    "height": 400,
+                    "alt": "Picture thumb",
+                    "crop": null,
+                    "hotspot": null
+                  }
                 }
               },
               "url": null,
@@ -1436,12 +1505,15 @@
                   "slug": "terms",
                   "isHome": false,
                   "thumbnail": {
-                    "ref": "image-thumb-600x400-jpg",
-                    "width": 600,
-                    "height": 400,
-                    "alt": "Picture thumb",
-                    "crop": null,
-                    "hotspot": null
+                    "kind": "image",
+                    "image": {
+                      "ref": "image-thumb-600x400-jpg",
+                      "width": 600,
+                      "height": 400,
+                      "alt": "Picture thumb",
+                      "crop": null,
+                      "hotspot": null
+                    }
                   }
                 },
                 "url": null,
@@ -1556,12 +1628,15 @@
                 "slug": "terms",
                 "isHome": false,
                 "thumbnail": {
-                  "ref": "image-thumb-600x400-jpg",
-                  "width": 600,
-                  "height": 400,
-                  "alt": "Picture thumb",
-                  "crop": null,
-                  "hotspot": null
+                  "kind": "image",
+                  "image": {
+                    "ref": "image-thumb-600x400-jpg",
+                    "width": 600,
+                    "height": 400,
+                    "alt": "Picture thumb",
+                    "crop": null,
+                    "hotspot": null
+                  }
                 }
               },
               "url": null,
@@ -1698,12 +1773,15 @@
                 "slug": "terms",
                 "isHome": false,
                 "thumbnail": {
-                  "ref": "image-thumb-600x400-jpg",
-                  "width": 600,
-                  "height": 400,
-                  "alt": "Picture thumb",
-                  "crop": null,
-                  "hotspot": null
+                  "kind": "image",
+                  "image": {
+                    "ref": "image-thumb-600x400-jpg",
+                    "width": 600,
+                    "height": 400,
+                    "alt": "Picture thumb",
+                    "crop": null,
+                    "hotspot": null
+                  }
                 }
               },
               "url": null,
@@ -1805,12 +1883,15 @@
                 "slug": "terms",
                 "isHome": false,
                 "thumbnail": {
-                  "ref": "image-thumb-600x400-jpg",
-                  "width": 600,
-                  "height": 400,
-                  "alt": "Picture thumb",
-                  "crop": null,
-                  "hotspot": null
+                  "kind": "image",
+                  "image": {
+                    "ref": "image-thumb-600x400-jpg",
+                    "width": 600,
+                    "height": 400,
+                    "alt": "Picture thumb",
+                    "crop": null,
+                    "hotspot": null
+                  }
                 }
               },
               "url": null,

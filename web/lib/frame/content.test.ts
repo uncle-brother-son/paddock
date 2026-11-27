@@ -31,18 +31,30 @@ describe('the menu', () => {
       ['Exclusive Hire', '/exclusive-hire', false],
       ['Shop', '/shop', false],
       ['Solstice', '/events/solstice-2026', false],
+      ['The Experience', '/the-experience', false],
+      ['Manage Cookies', '/info/manage-cookies', false],
     ])
   })
 
   it("the hover picture is the linked page's thumbnail, cropped 4 by 5 from Sanity's CDN; a page with none, the shop and an event have none", () => {
-    expect(menuLinks.map((link) => link.thumbnail !== null)).toEqual([false, true, false, false])
-    const thumbnail = menuLinks[1]!.thumbnail!
+    expect(menuLinks.map((link) => link.thumbnail !== null)).toEqual([false, true, false, false, true, false])
+    expect(menuLinks[1]!.thumbnail!.videoUrl).toBeNull()
+    const thumbnail = menuLinks[1]!.thumbnail!.picture
     expect([thumbnail.width, thumbnail.height]).toEqual([240, 300])
     expect(thumbnail.src).toMatch(/^https:\/\/cdn\.sanity\.io\/images\/project\/production\/thumb-600x400\.jpg\?/)
     for (const part of ['w=240', 'h=300', 'fit=crop', 'auto=format']) expect(thumbnail.src).toContain(part)
     // The editor's crop is kept: a tenth off the left of a 600px picture.
     expect(thumbnail.src).toMatch(/rect=\d+,\d+,\d+,\d+/)
     expect(thumbnail.srcSet.split(', ').map((entry) => entry.split(' ')[1])).toEqual(['240w', '480w', '720w'])
+  })
+
+  it('W82 (WQ90): a thumbnail that is a video is its poster, cropped 4 by 5 round its hotspot, and its desktop file', () => {
+    const thumbnail = menuLinks[4]!.thumbnail!
+    expect(thumbnail.videoUrl).toBe('https://cdn.sanity.io/files/p/d/vid.mp4')
+    expect([thumbnail.picture.width, thumbnail.picture.height]).toEqual([240, 300])
+    expect(thumbnail.picture.src).toMatch(/^https:\/\/cdn\.sanity\.io\/images\/project\/production\/tall-900x1600\.jpg\?/)
+    // A 900 by 1600 poster cut 4 by 5 (900 by 1125) round its hotspot, 40% of the way down: from 78px.
+    for (const part of ['rect=0,78,900,1125', 'w=240', 'h=300', 'fit=crop', 'auto=format']) expect(thumbnail.picture.src).toContain(part)
   })
 })
 
@@ -96,7 +108,7 @@ describe('with nothing in Sanity yet', () => {
 
   it('one document without the other is fine', () => {
     expect(frameContent(settings, null, '2026').menuLinks).toEqual([])
-    expect(frameContent(null, navigation, '2026').menuLinks).toHaveLength(4)
+    expect(frameContent(null, navigation, '2026').menuLinks).toHaveLength(6)
   })
 })
 

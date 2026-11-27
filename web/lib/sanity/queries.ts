@@ -54,13 +54,25 @@ const MEDIA = `select(
 /** A gallery (W72a; WQ15): its pictures and videos in order. An item with no file is left out. */
 const galleryAt = (field: string): string => `coalesce(${field}[]{"item": ${MEDIA}}[defined(item)].item, [])`
 
+/**
+ * W82 (WQ90): a content page's or an info page's thumbnail, the media block: a picture, or a video with its poster
+ * (null with no file). A thumbnail saved before W82 is a plain picture (one live page has one until the lead turns it
+ * into a media block): it is read as a picture. A media block never has an asset of its own, so only that old shape
+ * takes the first line. Remove the first line in the tidy-up.
+ */
+const thumbnailAt = (field: string): string => `select(
+  defined(${field}.asset._ref) => {"kind": "image", "image": ${field}${PICTURE}},
+  defined(${field}) => ${field}{"item": ${MEDIA}}.item,
+  null
+)`
+
 /** A product's (or the gift card's) category (W72a; WQ7): null when it has none, or its category isn't published. */
 const CATEGORY = `"category": category->{"id": _id, title, "slug": slug.current, order}`
 
 const LINK = `{
   destination,
   "document": select(
-    destination == "page" => page->{"type": _type, "slug": slug.current, "isHome": ${IS_HOME}, "thumbnail": ${pictureAt('thumbnail')}},
+    destination == "page" => page->{"type": _type, "slug": slug.current, "isHome": ${IS_HOME}, "thumbnail": ${thumbnailAt('thumbnail')}},
     destination == "event" => event->{"type": _type, "slug": slug.current, "isHome": false, "thumbnail": null},
     null
   ),
@@ -183,7 +195,7 @@ const CONTENT_PAGE = `{
   title,
   "slug": slug.current,
   "isHome": ${IS_HOME},
-  "thumbnail": ${pictureAt('thumbnail')},
+  "thumbnail": ${thumbnailAt('thumbnail')},
   "modules": ${MODULES},
   "seo": ${seoAt('seo')}
 }`
@@ -222,7 +234,7 @@ export const SESSION_PASS_CARDS_QUERY = `*[_type == "sessionPassCard" && ${PUBLI
 
 /** The info page at /info/[slug] ($slug). */
 export const INFO_PAGE_QUERY = `*[_type == "infoPage" && ${PUBLISHED} && slug.current == $slug][0]{
-  "id": _id, title, "slug": slug.current, "thumbnail": ${pictureAt('thumbnail')}, "body": ${richTextAt('body')}, "seo": ${seoAt('seo')}
+  "id": _id, title, "slug": slug.current, "thumbnail": ${thumbnailAt('thumbnail')}, "body": ${richTextAt('body')}, "seo": ${seoAt('seo')}
 }`
 
 export const INFO_MENU_QUERY = `*[_type == "infoPage" && ${PUBLISHED} && defined(slug.current)] | order(menuOrder asc, title asc)${INFO_PAGE_LINK}`

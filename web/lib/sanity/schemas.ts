@@ -39,12 +39,15 @@ export const mediaSchema = z.discriminatedUnion('kind', [
 ])
 export type Media = z.infer<typeof mediaSchema>
 
-/** The linked document of a link: null when it isn't published. `isHome` when it is the page Site settings picks. */
+/**
+ * The linked document of a link: null when it isn't published. `isHome` when it is the page Site settings picks.
+ * `thumbnail` (W82, WQ90): a page's picture or video for the menu; an event has none.
+ */
 const linkedDocumentSchema = z.object({
   type: z.enum(['contentPage', 'infoPage', 'event']),
   slug: z.string(),
   isHome: z.boolean(),
-  thumbnail: pictureSchema.nullable(),
+  thumbnail: mediaSchema.nullable(),
 })
 
 /**
@@ -222,7 +225,7 @@ export const contentPageSchema = z.object({
   title: z.string(),
   slug: z.string(),
   isHome: z.boolean(),
-  thumbnail: pictureSchema.nullable(),
+  thumbnail: mediaSchema.nullable(),
   modules: z.array(moduleSchema),
   seo: seoSchema.nullable(),
 })
@@ -232,7 +235,7 @@ export const infoPageSchema = z.object({
   id: z.string(),
   title: z.string(),
   slug: z.string(),
-  thumbnail: pictureSchema.nullable(),
+  thumbnail: mediaSchema.nullable(),
   body: richTextSchema,
   seo: seoSchema.nullable(),
 })
