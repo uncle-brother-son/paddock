@@ -13,7 +13,7 @@ export const textMediaSticky = defineType({
   icon: SplitHorizontalIcon,
   fieldsets: [sectionFieldset],
   fields: [
-    defineField({ name: 'heading', title: 'Heading', type: 'string', description: 'In small capitals, above the text' }),
+    defineField({ name: 'heading', title: 'Heading', type: 'string', description: 'In small capitals: above the text (Small), or at the start of its first line (Big)' }),
     defineField({ name: 'text', title: 'Text', type: 'leadText' }),
     defineField({ name: 'button', title: 'Button', type: 'moduleButton', description: 'Optional. Leave both empty for no button' }),
     defineField({ name: 'media', title: 'Image or Video', type: 'media', description: 'Shown upright, 4 by 5' }),

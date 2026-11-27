@@ -25,6 +25,12 @@ const PLACE = {
   },
 } as const
 
+/**
+ * The room between a run-in heading and the first word after it: Figma's Homepage mobile (1678:6640) leaves it with
+ * spaces typed before the words, which come to about 24px there.
+ */
+const RUN_IN_GAP = 'mr-24'
+
 /** How wide the picture is drawn from 768px: 8 of the grid's 24 columns (small), or 9 (big). */
 const MEDIA_SIZES = { small: '33vw', big: '38vw' } as const
 
@@ -37,9 +43,10 @@ type TextMediaStickyProps = TextMediaStickyContent & {
  * TextMediaSticky (W80; Figma "TextMediaSticky", 1340:41787): words that stay in place while a taller picture or
  * video (4 by 5; Figma "Media") scrolls past beside them, with 120px above and below (80px below 768px).
  * - Size=small: a heading in Label 12, text in H2 and a button (Button, Type=secondary), 40px apart.
- * - Size=big: the text in H1 and, 80px under it, the button. Figma draws its heading over the first words of the
- *   text (1340:41786), which can't be meant: until it is drawn somewhere the heading is there for screen readers
- *   only (reported in W80).
+ * - Size=big: the text in H1 and, 80px under it, the button. The heading (Label 12) runs in at the start of the
+ *   text's first line and the text goes on after it, then wraps under it at the text's whole width, as Figma's
+ *   Homepage mobile draws it (1678:6640; WQ89, Wayne, 27 Nov), on every screen. It is a real run-in (LeadText's
+ *   `runIn`), never spaces typed into the words, and still the section's h2.
  * The button is optional (WQ79), and so is each other part.
  *
  * From 768px the words and the picture share a row, and the words stick: they start level with the picture's top
@@ -51,6 +58,13 @@ export function TextMediaSticky({ heading, text, button, media, size, flip, them
   const headingId = useId()
   const place = PLACE[size][flip ? 'yes' : 'no']
   const big = size === 'big'
+  // Size=big: the heading runs in at the start of the text's first line (WQ89). With no text it stands alone.
+  const runIn = big && text.length > 0
+  const headingElement = heading ? (
+    <h2 id={headingId} data-text-media="heading" className={`text-label-12 text-text-primary ${runIn ? `float-left ${RUN_IN_GAP}` : ''}`}>
+      {heading}
+    </h2>
+  ) : null
   return (
     <ModuleSection
       module="text-media-sticky"
@@ -64,12 +78,8 @@ export function TextMediaSticky({ heading, text, button, media, size, flip, them
       <Grid className="gap-y-80">
         <div className={`md:row-start-1 ${place.copy}`}>
           <div data-text-media="copy" className={`flex flex-col items-start md:sticky md:top-80 ${big ? 'gap-80' : 'gap-40'}`}>
-            {heading ? (
-              <h2 id={headingId} className={big ? 'sr-only' : 'text-label-12 text-text-primary'}>
-                {heading}
-              </h2>
-            ) : null}
-            <LeadText paragraphs={text} size={big ? 'h1' : 'h2'} />
+            {headingElement && !runIn ? headingElement : null}
+            <LeadText paragraphs={text} size={big ? 'h1' : 'h2'} {...(runIn ? { runIn: headingElement } : {})} />
             {button ? <ModuleButtonLink button={button} /> : null}
           </div>
         </div>

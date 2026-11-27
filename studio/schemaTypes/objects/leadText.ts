@@ -1,9 +1,10 @@
 import { defineArrayMember, defineType } from 'sanity'
+import { checkLinkSet, type LinkTo } from '../../lib/checks'
 
 /**
  * W80: the large text of a content module (PageHeader's intro, TextMediaSticky's and TextBlock's text), which the
- * site sets in Figma's H2 (H1 for TextMediaSticky's big size). Paragraphs only: Figma draws no bold, no bullets and
- * no link in these styles, so none is offered here until one is designed.
+ * site sets in Figma's H2 (H1 for TextMediaSticky's big size). WQ89 (Wayne, 27 Nov): paragraphs and links only, no
+ * bold and no bullets. A link is the one rich text's link (WQ6), drawn in the site's TextLink style.
  */
 export const leadText = defineType({
   name: 'leadText',
@@ -14,7 +15,17 @@ export const leadText = defineType({
       type: 'block',
       styles: [{ title: 'Paragraph', value: 'normal' }],
       lists: [],
-      marks: { decorators: [], annotations: [] },
+      marks: {
+        decorators: [],
+        annotations: [
+          {
+            name: 'link',
+            title: 'Link',
+            type: 'linkTo',
+            validation: (rule) => rule.custom((value) => checkLinkSet(value as LinkTo | undefined)),
+          },
+        ],
+      },
     }),
   ],
 })

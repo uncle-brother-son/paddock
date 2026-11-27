@@ -2,6 +2,9 @@ import type { Meta, StoryObj } from '@storybook/nextjs-vite'
 import { useEffect, useState } from 'react'
 import { expect, fireEvent, userEvent, waitFor } from 'storybook/test'
 
+import { Header } from '@/components/frame/Header'
+import { HeaderLogo } from '@/components/frame/HeaderLogo'
+import { SAMPLE_FRAME } from '@/components/frame/sample-content'
 import type { HeroMediaButton } from '@/lib/modules/hero-media'
 import type { ScreenVideo } from '@/lib/sanity/media'
 
@@ -189,6 +192,74 @@ export const ButtonFollowingThePointer: Story = {
     await expect(middle(button)).toEqual(rest)
     fireEvent.pointerOut(hero, { pointerType: 'touch' })
     await waitFor(() => expect(isSeen(button)).toBe(true))
+  },
+}
+
+/**
+ * The button and the header (Level 3, 27 Nov; Wayne: as at 7f8c710). The button shows only while the pointer is over
+ * the hero itself: over anything else, the header and its buttons included, it fades out, so it never covers them.
+ * Move the mouse up from the hero onto Book: the button follows it to the header's edge and fades out there.
+ *
+ * The pointer is moved as a browser moves it: at each step what is under it is the browser's own answer
+ * (`elementFromPoint`), and leaving one thing for another sends the out and over events between them. So the test
+ * fails if the button, under the pointer at every move, is drawn over the header and takes the pointer itself.
+ */
+export const ButtonAndTheHeader: Story = {
+  name: 'Button and the header',
+  args: { button: BOOK },
+  globals: { viewport: { value: 'desktop', isRotated: false } },
+  render: (args) => (
+    <>
+      <Header logo={<HeaderLogo animated={false} />} menuLinks={SAMPLE_FRAME.menuLinks} />
+      <main id="main" data-behind-popups="">
+        <SampleHero {...args} />
+      </main>
+    </>
+  ),
+  play: async ({ canvas, canvasElement }) => {
+    await expect(hasAMouse()).toBe(true)
+    const hero = heroIn(canvasElement)
+    const button = buttonIn(canvasElement)
+    const book = canvas.getByRole('link', { name: 'Book' })
+    // The hero is a layer of its own, under the header: its button can never be drawn over the header.
+    await expect(getComputedStyle(hero).isolation).toBe('isolate')
+    let under: Element = document.body
+    const moveTo = (x: number, y: number) => {
+      const now = document.elementFromPoint(x, y) ?? document.body
+      if (now !== under) {
+        fireEvent.pointerOut(under, { pointerType: 'mouse', relatedTarget: now, clientX: x, clientY: y })
+        fireEvent.pointerOver(now, { pointerType: 'mouse', relatedTarget: under, clientX: x, clientY: y })
+        under = now
+      }
+      fireEvent.pointerMove(now, { pointerType: 'mouse', clientX: x, clientY: y })
+    }
+
+    // Over the hero: the button is under the pointer.
+    moveTo(720, 500)
+    await expect(button.hasAttribute('data-shown')).toBe(true)
+    await waitFor(() => expect(isSeen(button)).toBe(true))
+    // Up and across onto Book, a step at a time.
+    const [toX, toY] = middle(book) as [number, number]
+    // A mouse's moves are a few pixels each, so the pointer stays over the button as it goes, as it does by hand.
+    for (let step = 1; step <= 200; step += 1) {
+      moveTo(Math.round(720 + ((toX - 720) * step) / 200), Math.round(500 + ((toY - 500) * step) / 200))
+      await nextFrame()
+    }
+    // The pointer is over Book itself, not over the hero's button: the button has faded out, and Book can be pressed.
+    await expect(book.contains(document.elementFromPoint(toX, toY))).toBe(true)
+    await expect(button.hasAttribute('data-shown')).toBe(false)
+    await waitFor(() => expect(isUnseen(button)).toBe(true))
+    // Every header button: the one under the pointer is the header's, never the hero's.
+    for (const control of [canvas.getByRole('button', { name: 'Menu' }), book, canvas.getByRole('link', { name: 'Account' }), canvas.getByRole('button', { name: 'Bag' })]) {
+      const [x, y] = middle(control) as [number, number]
+      moveTo(x, y)
+      await expect(control.contains(document.elementFromPoint(x, y))).toBe(true)
+      await expect(button.hasAttribute('data-shown')).toBe(false)
+    }
+    // Back down over the hero: the button is wanted again, where the pointer is.
+    moveTo(400, 600)
+    await expect(button.hasAttribute('data-shown')).toBe(true)
+    await expect(middle(button)).toEqual([400, 600])
   },
 }
 

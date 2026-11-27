@@ -159,6 +159,42 @@ describe('what each module shows', () => {
     expect(paragraphsOf([])).toEqual([])
   })
 
+  it('WQ89: large text keeps its links, in order with the plain words; a link to an unpublished page is plain words', () => {
+    const shop = { destination: 'shop' as const, document: null, url: null, sectionId: null }
+    const unpublished = { destination: 'page' as const, document: null, url: null, sectionId: null }
+    const span = (key: string, text: string, marks: string[] = []) => ({ _type: 'span' as const, _key: key, text, marks })
+    const block = (key: string, children: ReturnType<typeof span>[], markDefs: Array<{ _key: string; _type: 'link'; link: typeof shop | typeof unpublished }>) => ({
+      _type: 'block' as const,
+      _key: key,
+      style: 'normal' as const,
+      listItem: null,
+      level: null,
+      children,
+      markDefs,
+    })
+    expect(
+      paragraphsOf([
+        block('a', [span('a1', '  Visit '), span('a2', 'the shop', ['m1']), span('a3', ' today.  ')], [{ _key: 'm1', _type: 'link', link: shop }]),
+        block('b', [span('b1', 'Plain words.')], []),
+        block('c', [span('c1', 'See '), span('c2', 'this page', ['m2']), span('c3', '.')], [{ _key: 'm2', _type: 'link', link: unpublished }]),
+        block('d', [span('d1', ' '), span('d2', ' Linked', ['m3']), span('d3', ' ')], [{ _key: 'm3', _type: 'link', link: shop }]),
+      ]),
+    ).toEqual([
+      {
+        key: 'a',
+        text: 'Visit the shop today.',
+        parts: [
+          { key: 'a1', text: 'Visit ', href: null },
+          { key: 'a2', text: 'the shop', href: '/shop' },
+          { key: 'a3', text: ' today.', href: null },
+        ],
+      },
+      { key: 'b', text: 'Plain words.' },
+      { key: 'c', text: 'See this page.' },
+      { key: 'd', text: 'Linked', parts: [{ key: 'd2', text: 'Linked', href: '/shop' }] },
+    ])
+  })
+
   it("a button has its words and its address; one to a page that is not published is hidden, and so is none at all", () => {
     expect(moduleButton(byKey('k1', 'textBlock').button)).toEqual({ text: 'Passes', href: '#passes' })
     expect(moduleButton(byKey('t1', 'textMediaSticky').button)).toEqual({ text: 'Book', href: '/book' })
@@ -300,24 +336,25 @@ describe('the GalleryCarousel (WQ82)', () => {
   const css = readGlobalsCss()
   const base = childNamed(css, '@layer base')
 
-  it("its pictures are columns of the page grid: Figma's 5 and 6 of 6 below 768px, 7 and 9 of 24 with an empty column between from 768px", () => {
+  it("its height is Figma's 4 by 5 upright picture in columns of the page grid: 5 of 6 below 768px, 7 of 24 with an empty column between from 768px", () => {
     const root = childNamed(base, ':root').declarations
     const desktop = childNamed(childNamed(base, '@media (width >= 48rem)'), ':root').declarations
-    const columns = (declared: Record<string, string>) => ['--gallery-upright-columns', '--gallery-wide-columns', '--gallery-gap-columns'].map((name) => declared[name])
-    expect(columns(root)).toEqual(['5', '6', '0'])
-    expect(columns(desktop)).toEqual(['7', '9', '1'])
+    const columns = (declared: Record<string, string>) => ['--gallery-band-columns', '--gallery-gap-columns'].map((name) => declared[name])
+    expect(columns(root)).toEqual(['5', '0'])
+    expect(columns(desktop)).toEqual(['7', '1'])
+    // WQ89: no picture is sized in columns any more, only the band's height.
+    for (const declared of [root, desktop]) expect(Object.keys(declared).filter((name) => name.startsWith('--gallery-'))).toEqual(['--gallery-band-columns', '--gallery-gap-columns'])
     const strip = ruleNamed(css, '@utility gallery-strip').declarations
     expect(strip['--gallery-column']).toBe('calc((100cqw - 2 * var(--grid-margin) - (var(--grid-columns) - 1) * var(--grid-gutter)) / var(--grid-columns))')
-    // The band is the height of a 4 by 5 upright picture.
-    expect(strip['--gallery-band']).toBe('calc(var(--gallery-upright) * 5 / 4)')
+    expect(strip['--gallery-band']).toBe('calc((var(--gallery-band-columns) * var(--gallery-column) + (var(--gallery-band-columns) - 1) * var(--grid-gutter)) * 5 / 4)')
     expect([strip['overflow-x'], strip['overscroll-behavior-x'], strip['scrollbar-width']]).toEqual(['auto', 'contain', 'none'])
   })
 
-  it('each picture is its own shape, never taller than the band, and they are centred on one line', () => {
+  it('WQ89: each picture is the band tall and as wide as its own shape makes it, never cropped; they are on one line', () => {
     expect(ruleNamed(css, '@utility gallery-item').declarations).toEqual({
       flex: 'none',
-      width: 'min(var(--gallery-span), var(--gallery-band) * var(--gallery-shape))',
-      'aspect-ratio': 'var(--gallery-shape)',
+      height: 'var(--gallery-band)',
+      width: 'calc(var(--gallery-band) * var(--gallery-shape))',
     })
     expect(ruleNamed(css, '@utility gallery-row').declarations).toMatchObject({ display: 'flex', 'align-items': 'center', 'column-gap': 'var(--gallery-gap)', 'padding-inline': 'var(--grid-margin)' })
   })

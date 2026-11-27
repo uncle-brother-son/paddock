@@ -36,13 +36,33 @@ const parts = (canvasElement: HTMLElement) => {
 
 type Place = { left: number; width: number }
 
+/** Figma's Homepage mobile (1678:6640) leaves room for the heading with spaces: about 24px after its last letter. */
+const RUN_IN_GAP_PX = 24
+
+/** Where each line of a text starts: the box of its first letter, line by line, top to bottom. */
+const linesOf = (text: HTMLElement): DOMRect[] => {
+  const lines: DOMRect[] = []
+  const walker = document.createTreeWalker(text.querySelector('p')!, NodeFilter.SHOW_TEXT)
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    for (let at = 0; at < (node.textContent ?? '').length; at += 1) {
+      const range = document.createRange()
+      range.setStart(node, at)
+      range.setEnd(node, at + 1)
+      const letter = range.getBoundingClientRect()
+      const last = lines[lines.length - 1]
+      if (letter.width > 0 && (!last || letter.top > last.bottom - 2)) lines.push(letter)
+    }
+  }
+  return lines
+}
+
 /**
  * One variant, by Figma's own places: the words' column and the picture (always 4 by 5, on Object/Product Bg with
  * 4px corners), with `padding` above and below.
  * - From 768px they share a row, each starting at the section's padding.
  * - Below, the words come first and the picture 80px under them; with Size=big and Flip=yes the picture comes first.
  * - Size=small: the heading in Label 12, 40px under it the text in H2, 40px under that the button.
- * - Size=big: the text in H1 and, 80px under it, the button; the heading is for screen readers only (see the component).
+ * - Size=big: the text in H1 and, 80px under it, the button; the heading runs in at the start of its first line (WQ89).
  */
 const variant = (globals: typeof DESKTOP, size: 'small' | 'big', flip: boolean, copyAt: Place, mediaAt: Place): Story => ({
   globals,
@@ -65,7 +85,14 @@ const variant = (globals: typeof DESKTOP, size: 'small' | 'big', flip: boolean, 
       // Figma's Font/Size/28 with the headers' letter spacing: the H1 style (24px below 768px).
       await expect([getComputedStyle(text).fontSize, getComputedStyle(text).letterSpacing]).toEqual([desktop ? '28px' : '24px', '0.6px'])
       await expect(near(box(button).top - box(text).bottom)).toBe(80)
-      await expect(box(heading).width).toBeLessThanOrEqual(1)
+      // WQ89: the heading (Label 12) runs in at the start of the first line, its capitals level with the text's; the
+      // first word comes 24px after it, and the next line starts at the text's own left edge.
+      await expect(getComputedStyle(heading).fontSize).toBe('12px')
+      await expect(canvas.getByRole('heading', { level: 2, name: 'Header' })).toBe(heading)
+      await expect([near(box(heading).left), near(box(heading).top)]).toEqual([near(box(text).left), near(box(text).top)])
+      const lines = linesOf(text)
+      await expect(near(lines[0]!.left - box(heading).right)).toBe(RUN_IN_GAP_PX)
+      await expect(near(lines[1]!.left)).toBe(near(box(text).left))
     }
     const first = size === 'small' ? heading : text
     if (desktop) {
@@ -151,6 +178,71 @@ export const TheWordsStick: Story = {
     } finally {
       window.scrollTo(0, 0)
     }
+  },
+}
+
+/**
+ * WQ89: Figma's Homepage mobile (1678:6640) with its own words. The heading runs in where Figma's 24 typed spaces
+ * leave room for it; the words here have none.
+ */
+export const HomepageMobile: Story = {
+  name: 'Size=big, as on the Homepage (mobile)',
+  globals: MOBILE,
+  args: {
+    size: 'big',
+    heading: 'Contrast Therapy',
+    text: [{ key: 'p1', text: 'The Paddock Wellness Club was founded from a love of the outdoors, a belief in the restorative power of nature, and a desire to continue a family tradition.' }],
+    button: { text: 'Find out more', href: '/shop' },
+  },
+  play: async ({ canvas, canvasElement }) => {
+    const { heading, text } = parts(canvasElement)
+    await fontsIn(heading, text)
+    await expect(canvas.getByRole('heading', { level: 2, name: 'Contrast Therapy' })).toBe(heading)
+    await expect(text.querySelector('p')!.textContent!.startsWith('The Paddock')).toBe(true)
+    // Figma: the heading at 16 (128.5 wide in the browser, 129 in Figma), "The" at 168 (16 and 24 spaces, 152px), then
+    // five more lines from the text's left edge, "Wellness" starting the second: six lines, as drawn.
+    const lines = linesOf(text)
+    await expect(near(box(heading).left)).toBe(16)
+    await expect(Math.abs(lines[0]!.left - 168)).toBeLessThan(1)
+    await expect(lines.slice(1).map((line) => Math.round(line.left))).toEqual([16, 16, 16, 16, 16])
+    const second = document.elementFromPoint(lines[1]!.left + 2, lines[1]!.top + lines[1]!.height / 2)
+    await expect(second?.closest('p')).toBe(text.querySelector('p'))
+    const range = document.caretPositionFromPoint(lines[1]!.left + 1, lines[1]!.top + lines[1]!.height / 2)
+    await expect(range?.offsetNode.textContent?.slice(range.offset, range.offset + 8)).toBe('Wellness')
+  },
+}
+
+/**
+ * WQ89: the large text holds paragraphs and links only. A link is in the paragraph's own type (H1 here), underlined,
+ * Text/Muted Primary, and Text/Primary under a mouse.
+ */
+export const LinkInTheText: Story = {
+  name: 'A link in the large text',
+  globals: DESKTOP,
+  args: {
+    size: 'big',
+    text: [
+      {
+        key: 'p1',
+        text: 'Read about our memberships before you book.',
+        parts: [
+          { key: 's1', text: 'Read about ', href: null },
+          { key: 's2', text: 'our memberships', href: '/memberships' },
+          { key: 's3', text: ' before you book.', href: null },
+        ],
+      },
+    ],
+  },
+  play: async ({ canvas, canvasElement }) => {
+    const { section, text } = parts(canvasElement)
+    await fontsIn(text)
+    const link = canvas.getByRole('link', { name: 'our memberships' })
+    await expect(text.contains(link)).toBe(true)
+    await expect(link.getAttribute('href')).toBe('/memberships')
+    const look = getComputedStyle(link)
+    await expect([look.fontSize, look.fontFamily, look.letterSpacing]).toEqual([getComputedStyle(text).fontSize, getComputedStyle(text).fontFamily, '0.6px'])
+    await expect([look.textDecorationLine, look.color]).toEqual(['underline', painted(section, 'text-text-muted-primary', 'color')])
+    await expect(text.querySelector('p')!.textContent).toBe('Read about our memberships before you book.')
   },
 }
 

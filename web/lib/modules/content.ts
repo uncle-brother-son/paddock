@@ -33,20 +33,39 @@ export function moduleButton(button: ModuleButtonLink | null): ModuleButton | nu
   return href ? { text: button.text.trim(), href } : null
 }
 
-/** One paragraph of a module's large text. */
-export type Paragraph = { key: string; text: string }
+/** A run of a paragraph's words: plain (`href` null) or a link. */
+export type ParagraphPart = { key: string; text: string; href: string | null }
 
 /**
- * A module's large text (the Studio's Large Text: paragraphs of plain words) as paragraphs. Figma draws no bold, no
- * bullet and no link in H2, so only the words are taken; a paragraph with none is left out.
+ * One paragraph of a module's large text: its words, and, when it holds a link, its words in parts (each run of
+ * plain words or of a link's words, in order, together the same words as `text`).
+ */
+export type Paragraph = { key: string; text: string; parts?: ParagraphPart[] }
+
+/**
+ * A module's large text (the Studio's Large Text) as paragraphs. WQ89 (Wayne, 27 Nov): paragraphs and links only.
+ * A link to a page that isn't published is plain words (WQ24); a paragraph with no words is left out.
  */
 export function paragraphsOf(text: RichText): Paragraph[] {
   return text.flatMap((block) => {
-    const words = block.children
-      .map((span) => span.text)
-      .join('')
-      .trim()
-    return words ? [{ key: block._key, text: words }] : []
+    const parts = block.children.map((span): ParagraphPart => {
+      const link = span.marks.map((mark) => block.markDefs.find((definition) => definition._key === mark)?.link).find(Boolean)
+      return { key: span._key, text: span.text, href: link ? linkHref(link) : null }
+    })
+    // The paragraph's words with no space at either end, as before links: spaces are taken off the start of the first
+    // parts and the end of the last ones until words are reached, and a part left with no words goes.
+    for (const part of parts) {
+      part.text = part.text.trimStart()
+      if (part.text) break
+    }
+    for (const part of [...parts].reverse()) {
+      part.text = part.text.trimEnd()
+      if (part.text) break
+    }
+    const trimmed = parts.filter((part) => part.text !== '')
+    const words = trimmed.map((part) => part.text).join('')
+    if (!words) return []
+    return trimmed.some((part) => part.href) ? [{ key: block._key, text: words, parts: trimmed }] : [{ key: block._key, text: words }]
   })
 }
 
@@ -81,8 +100,11 @@ export function shapeOf(picture: Picture): number {
   return width > 0 && height > 0 ? width / height : 1
 }
 
-/** The widths a carousel's picture is offered at: Figma's 297 to 523 across its two frames, and wider and sharper screens. */
-const CAROUSEL_WIDTHS = [480, 360, 720, 1080, 1440] as const
+/**
+ * The widths a carousel's picture is offered at: Figma's 297 to 633 across its two frames, wider and sharper screens,
+ * and since WQ89 a panorama (any shape is drawn at the band's height, so a wide one is wider than the window).
+ */
+const CAROUSEL_WIDTHS = [480, 360, 720, 1080, 1440, 2160, 2880] as const
 
 /**
  * One picture or video of a GalleryCarousel (WQ82): it keeps its own shape. `shape` is width over height on each

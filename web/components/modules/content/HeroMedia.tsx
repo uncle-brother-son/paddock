@@ -18,7 +18,19 @@ const clamp = (value: number, least: number, most: number): number => Math.min(M
  * poster). The first hero of a page is its largest picture, so it loads at once and ahead of the rest (`priority`);
  * any other waits until it is near.
  */
-function HeroMediaImage({ picture, alt, priority, desktopSizes = '100vw' }: { picture: HeroMediaPicture; alt: string; priority: boolean; desktopSizes?: string }) {
+function HeroMediaImage({
+  picture,
+  alt,
+  priority,
+  desktopSizes = '100vw',
+  mobileSizes = '100vw',
+}: {
+  picture: HeroMediaPicture
+  alt: string
+  priority: boolean
+  desktopSizes?: string
+  mobileSizes?: string
+}) {
   return (
     <picture>
       <source media="(width >= 48rem)" srcSet={picture.desktop.srcSet} sizes={desktopSizes} width={picture.desktop.width} height={picture.desktop.height} />
@@ -26,7 +38,7 @@ function HeroMediaImage({ picture, alt, priority, desktopSizes = '100vw' }: { pi
       <img
         src={picture.mobile.src}
         srcSet={picture.mobile.srcSet}
-        sizes="100vw"
+        sizes={mobileSizes}
         width={picture.mobile.width}
         height={picture.mobile.height}
         alt={alt}
@@ -134,6 +146,7 @@ function HeroMediaVideoPlayer({ url, video, screens, reducedMotion, onStarted }:
  *
  * W74: a product's gallery draws its pictures and videos with this too (components/shop/ProductGallery.tsx), in a
  * box of its own shape. `desktopSizes`: how wide the picture is drawn from 768px, where it is not the whole window.
+ * `mobileSizes`: the same below 768px (a GalleryCarousel's panorama is wider than the window there, WQ89).
  */
 export function HeroMediaFill({
   picture,
@@ -141,12 +154,14 @@ export function HeroMediaFill({
   priority,
   reducedMotion,
   desktopSizes,
+  mobileSizes,
 }: {
   picture: HeroMediaPicture
   video: ScreenVideo | null
   priority: boolean
   reducedMotion: boolean
   desktopSizes?: string
+  mobileSizes?: string
 }) {
   // Once the video shows, it is the video that is described to a screen reader, not the picture beneath it.
   const [started, setStarted] = useState(false)
@@ -154,7 +169,7 @@ export function HeroMediaFill({
     video ? <HeroMediaVideoPlayer url={url} video={video} screens={screens} reducedMotion={reducedMotion} onStarted={() => setStarted(true)} /> : null
   return (
     <>
-      <HeroMediaImage picture={picture} alt={started ? '' : picture.alt} priority={priority} {...(desktopSizes ? { desktopSizes } : {})} />
+      <HeroMediaImage picture={picture} alt={started ? '' : picture.alt} priority={priority} {...(desktopSizes ? { desktopSizes } : {})} {...(mobileSizes ? { mobileSizes } : {})} />
       {video?.phoneUrl ? (
         <>
           {player(video.phoneUrl, 'mobile')}
@@ -208,6 +223,10 @@ type HeroMediaProps = HeroMediaContent & {
  *   hero's edges, and fades out where it is when the
  *   pointer leaves, or comes over the video's own buttons so they can be pressed. It never waits at its resting
  *   place unseen: each time it is shown it is put where it is wanted first.
+ *   The pointer over anything else (the header and its buttons included) is the pointer leaving: the hero is a layer
+ *   of its own (`isolate`), under the header. Without that the button, under the pointer at every move since WQ80
+ *   and drawn after the header at the same height, took the pointer itself and so never let it leave the hero,
+ *   and covered the header's buttons (Level 3, 27 Nov; at 7f8c710 its glide trailed the pointer, which hid this).
  * - The keyboard: when it takes focus it fades in at its resting place and stays there while it has focus.
  * - A touch screen: always there, at its resting place.
  * - Reduced motion: it follows nothing. It fades in at its resting place while the pointer is over the hero or it
@@ -271,7 +290,9 @@ export function HeroMedia({ picture, video, button, theme, sectionId, priority =
       onPointerMove={button ? pointerOver : undefined}
       onPointerDown={button ? pointerOver : undefined}
       onPointerLeave={button ? pointerGone : undefined}
-      className="relative aspect-9/16 w-full overflow-clip bg-object-product-bg md:aspect-16/9"
+      // `isolate`: the hero is a layer of its own, so its button (z-10 inside it) is always under the header, never over
+      // it (Level 3, 27 Nov).
+      className="relative isolate aspect-9/16 w-full overflow-clip bg-object-product-bg md:aspect-16/9"
     >
       {children}
       <HeroMediaFill picture={picture} video={video} priority={priority} reducedMotion={reducedMotion} />

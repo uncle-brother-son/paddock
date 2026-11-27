@@ -35,20 +35,16 @@ const GLIDE = (() => {
   return best
 })()
 
-/** A picture wider than it is tall is a wide one; any other (a square too) an upright one. */
-const kindOf = (shape: number): 'wide' | 'upright' => (shape > 1 ? 'wide' : 'upright')
-
 /** Each picture's own shape: below 768px its shape for phones, from 768px its shape for desktops (app/globals.css: `gallery-item`). */
 const SHAPE = '[--gallery-shape:var(--gallery-shape-phone)] md:[--gallery-shape:var(--gallery-shape-desktop)]'
 
-/** How wide a picture of each kind is, on each width of screen: the grid's columns for an upright one, or for a wide one. */
-const SPAN = {
-  phone: { upright: '[--gallery-span:var(--gallery-upright)]', wide: '[--gallery-span:var(--gallery-wide)]' },
-  desktop: { upright: 'md:[--gallery-span:var(--gallery-upright)]', wide: 'md:[--gallery-span:var(--gallery-wide)]' },
-} as const
-
-/** How wide each kind is drawn from 768px: 9 of the grid's 24 columns, or 7. */
-const DESKTOP_SIZES = { wide: '38vw', upright: '30vw' } as const
+/**
+ * The band's height as a share of the window's width, which the grid's columns follow: Figma's 371.25 of 390 below
+ * 768px and 506.25 of 1440 from there (app/globals.css: `gallery-strip`). A picture is drawn that tall times its shape
+ * wide, so the browser is told that width, rounded up, to fetch a sharp enough file.
+ */
+const BAND_OF_WINDOW = { phone: 371.25 / 390, desktop: 506.25 / 1440 } as const
+const sizesFor = (bandOfWindow: number, shape: number): string => `${Math.ceil(bandOfWindow * shape * 100)}vw`
 
 type Drag = { pointer: number; x: number; left: number; moved: boolean; trail: Array<{ at: number; x: number }> }
 
@@ -64,10 +60,11 @@ type GalleryCarouselProps = GalleryCarouselContent & {
  * videos on one line, each keeping its own shape, centred on that line, starting at the grid's left margin and
  * running off the right of the window. No arrows, no dots, no loop.
  *
- * Sizes (the `gallery-strip` and `gallery-item` utilities in app/globals.css): an upright picture is 7 of the grid's
- * 24 columns wide and a wide one 9, with one empty column between two pictures (below 768px: 5 and 6 of its 6
- * columns, 8px apart), and each is as tall as its own shape makes it. None is taller than Figma's 4 by 5 upright,
- * the height of the band: a taller shape is narrower instead.
+ * Sizes (the `gallery-strip` and `gallery-item` utilities in app/globals.css; WQ89, Wayne, 27 Nov): any number of
+ * pictures and videos of any shape, never cropped. Every one is the height Figma draws (its 4 by 5 upright picture:
+ * 506.25 on the 1440 frame, 371.25 on the 390 one, following the grid) and as wide as its own shape makes it: a
+ * square is as wide as it is tall, a panorama runs wide, a tall one is narrow. One empty column between two pictures
+ * from 768px, 8px below.
  *
  * It is the browser's own sideways scrolling, so a finger swipes it as it does any row, with the phone's own
  * momentum, and a trackpad's sideways swipe moves it too (Lenis leaves a sideways gesture over it alone:
@@ -245,12 +242,17 @@ export function GalleryCarousel({ items, theme, sectionId, reducedMotion: reduce
             <div
               key={item.key}
               data-gallery="item"
-              data-phone={kindOf(item.shape.phone)}
-              data-desktop={kindOf(item.shape.desktop)}
               style={{ '--gallery-shape-phone': item.shape.phone, '--gallery-shape-desktop': item.shape.desktop } as CSSProperties}
-              className={`gallery-item relative overflow-clip rounded-s bg-object-product-bg ${SHAPE} ${SPAN.phone[kindOf(item.shape.phone)]} ${SPAN.desktop[kindOf(item.shape.desktop)]}`}
+              className={`gallery-item relative overflow-clip rounded-s bg-object-product-bg ${SHAPE}`}
             >
-              <HeroMediaFill picture={item.picture} video={item.video} priority={false} reducedMotion={reducedMotion} desktopSizes={DESKTOP_SIZES[kindOf(item.shape.desktop)]} />
+              <HeroMediaFill
+                picture={item.picture}
+                video={item.video}
+                priority={false}
+                reducedMotion={reducedMotion}
+                desktopSizes={sizesFor(BAND_OF_WINDOW.desktop, item.shape.desktop)}
+                mobileSizes={sizesFor(BAND_OF_WINDOW.phone, item.shape.phone)}
+              />
             </div>
           ))}
         </div>

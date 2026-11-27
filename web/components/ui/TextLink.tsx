@@ -4,8 +4,12 @@ import { SiteLink } from './SiteLink'
 
 type TextLinkProps = {
   href: string
-  /** Figma "Link 14" or "Link 12". A link in a paragraph takes its paragraph's size: Copy 14 has Link 14, Copy 12 Link 12. */
-  size?: 14 | 12
+  /**
+   * Figma "Link 14" or "Link 12". A link in a paragraph takes its paragraph's size: Copy 14 has Link 14, Copy 12 Link 12.
+   * `text`: a link in a text style that has no link style of its own (a module's large text in H1 or H2, WQ89): it
+   * keeps its paragraph's type and is underlined, with the same colours.
+   */
+  size?: 14 | 12 | 'text'
   /** Opens in a new tab. Left out, the link opens in the same one, an outside address too. */
   newTab?: boolean
   className?: string
@@ -18,7 +22,7 @@ type TextLinkProps = {
  * the logo are links with designs of their own and do not use this.
  */
 export function TextLink({ href, size = 14, newTab = false, className, children }: TextLinkProps) {
-  const style = size === 12 ? 'text-link-12' : 'text-link-14'
+  const style = size === 'text' ? 'underline' : size === 12 ? 'text-link-12' : 'text-link-14'
   return (
     <SiteLink
       href={href}

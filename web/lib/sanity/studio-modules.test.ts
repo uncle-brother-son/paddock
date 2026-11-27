@@ -140,10 +140,15 @@ describe('the content modules', () => {
     }
   })
 
-  it("the large text is paragraphs only (Figma draws no bold, bullet or link in H2); an accordion's answer is the one rich text", () => {
+  it("the large text is paragraphs and links only (WQ89: no bold, no bullets), its link the rich text's; an accordion's answer is the one rich text", () => {
     const lead = studioFile('schemaTypes/objects/leadText.ts')
     expect(lead).toContain('lists: [],')
-    expect(lead).toContain('marks: { decorators: [], annotations: [] },')
+    expect(lead).toContain("styles: [{ title: 'Paragraph', value: 'normal' }],")
+    expect(lead).toContain('decorators: [],')
+    expect(lead.match(/name: '/g)).toHaveLength(2)
+    const link = /annotations: \[\s*\{\s*name: 'link',\s*title: 'Link',\s*type: 'linkTo',\s*validation: \(rule\) => rule\.custom\(\(value\) => checkLinkSet\(value as LinkTo \| undefined\)\),\s*\},\s*\],/
+    expect(lead).toMatch(link)
+    expect(studioFile('schemaTypes/objects/richText.ts')).toMatch(link)
     expect(studioFile('schemaTypes/objects/accordionList.ts')).toContain("defineField({ name: 'answer', title: 'Answer', type: 'richText'")
   })
 

@@ -176,12 +176,12 @@
   --grid-gutter: var(--grid-gutter-mobile);
 
   /*
-   * W80: the GalleryCarousel's pictures in columns of the grid (Figma "GalleryCarousel", 1627:5520; the
-   * `gallery-strip` utility below): how many an upright picture and a wide one are, and how many empty columns stand
-   * between two pictures. The Mobile frame's here, the Desktop frame's from 768px.
+   * W80: the GalleryCarousel's height and gaps in columns of the grid (Figma "GalleryCarousel", 1627:5520; the
+   * `gallery-strip` utility below): every picture is as tall as Figma's 4 by 5 upright one, which is this many
+   * columns wide (WQ89), and this many empty columns stand between two pictures. The Mobile frame's here, the
+   * Desktop frame's from 768px.
    */
-  --gallery-upright-columns: 5;
-  --gallery-wide-columns: 6;
+  --gallery-band-columns: 5;
   --gallery-gap-columns: 0;
 }
 
@@ -194,8 +194,7 @@
     --grid-margin: var(--grid-margin-desktop);
     --grid-gutter: var(--grid-gutter-desktop);
 
-    --gallery-upright-columns: 7;
-    --gallery-wide-columns: 9;
+    --gallery-band-columns: 7;
     --gallery-gap-columns: 1;
   }
 }
@@ -789,23 +788,21 @@ body {
  * `gallery-row` on the row inside it and `gallery-item` on each picture, with the picture's own shape (width over
  * height) as --gallery-shape-phone and --gallery-shape-desktop. The module's section is a size container, so 100cqw
  * is the section's width and a column here is a column of the page grid.
- *   - An upright picture is 5 of the grid's 6 columns wide and a wide one all 6, 8px (the gutter) apart; from 768px
- *     an upright one is 7 of its 24 columns and a wide one 9, with one empty column between two pictures.
- *   - Each is as tall as its shape makes it, and they are centred on one line. The band is the height of Figma's
- *     4 by 5 upright picture: a shape that would be taller is as tall as the band, and narrower.
+ *   - WQ89 (Wayne, 27 Nov): every picture and video is the band's height, the height Figma draws (its 4 by 5 upright
+ *     picture: 371.25 on the 390 Mobile frame, 5 of the grid's 6 columns wide; 506.25 on the 1440 Desktop frame, 7 of
+ *     its 24), and as wide as its own shape makes it, so none is ever cropped: a panorama runs wide, a tall one is
+ *     narrow. Any shape, any number. (It replaces W80's 7 and 9 columns for upright and wide pictures.)
+ *   - 8px (the gutter) between two below 768px; from 768px one empty column and its two gutters.
  *   - The row starts at the grid's left margin and ends with the same margin after its last picture.
  * The strip shows no scrollbar, and its ends do not hand a sideways swipe on to the browser (Back, Forward).
  *
- * How many columns each is (--gallery-upright-columns, --gallery-wide-columns, and --gallery-gap-columns for the empty
- * columns between two) is set with the grid, in `:root` above: the Mobile values, and the Desktop ones from 768px.
- * Which shape and which width a picture has on each width of screen (--gallery-shape, --gallery-span) is set by the
- * component, with `md:` for 768px and up.
+ * The band's columns (--gallery-band-columns) and the empty columns between two (--gallery-gap-columns) are set with
+ * the grid, in `:root` above: the Mobile values, and the Desktop ones from 768px. Which shape a picture has on each
+ * width of screen (--gallery-shape) is set by the component, with `md:` for 768px and up.
  */
 @utility gallery-strip {
   --gallery-column: calc((100cqw - 2 * var(--grid-margin) - (var(--grid-columns) - 1) * var(--grid-gutter)) / var(--grid-columns));
-  --gallery-upright: calc(var(--gallery-upright-columns) * var(--gallery-column) + (var(--gallery-upright-columns) - 1) * var(--grid-gutter));
-  --gallery-wide: calc(var(--gallery-wide-columns) * var(--gallery-column) + (var(--gallery-wide-columns) - 1) * var(--grid-gutter));
-  --gallery-band: calc(var(--gallery-upright) * 5 / 4);
+  --gallery-band: calc((var(--gallery-band-columns) * var(--gallery-column) + (var(--gallery-band-columns) - 1) * var(--grid-gutter)) * 5 / 4);
   --gallery-gap: calc(var(--gallery-gap-columns) * (var(--gallery-column) + var(--grid-gutter)) + var(--grid-gutter));
   overflow-x: auto;
   overscroll-behavior-x: contain;
@@ -826,8 +823,8 @@ body {
 
 @utility gallery-item {
   flex: none;
-  width: min(var(--gallery-span), var(--gallery-band) * var(--gallery-shape));
-  aspect-ratio: var(--gallery-shape);
+  height: var(--gallery-band);
+  width: calc(var(--gallery-band) * var(--gallery-shape));
 }
 
 /*
