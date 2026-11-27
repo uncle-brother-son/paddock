@@ -91,6 +91,7 @@ describe('links and buttons', () => {
       ['The shop', 'shop'],
       ['The gift card', 'giftCard'],
       ['The booking panel', 'book'],
+      ['A section on this page', 'section'],
       ['An outside address', 'external'],
     ])
     for (const destination of ['giftCard', 'book']) {
@@ -232,7 +233,17 @@ describe('W73b: HeroMedia is a module of a page', () => {
   it('a page has no `hero` field of its own; HeroMedia is the first kind of module, beside Upcoming Events', () => {
     const page = studioFile('schemaTypes/contentPage.ts')
     expect(page).not.toMatch(/name: 'hero'/)
-    expect(page).toContain("of: [defineArrayMember({ type: 'heroMedia' }), defineArrayMember({ type: 'upcomingEvents' })],")
+    // W80: and the content modules, in the order an editor is offered them.
+    expect([...page.matchAll(/defineArrayMember\(\{ type: '([a-zA-Z]+)' \}\)/g)].map((match) => match[1])).toEqual([
+      'heroMedia',
+      'pageHeader',
+      'galleryCarousel',
+      'textBlock',
+      'textMediaSticky',
+      'accordionList',
+      'upcomingEvents',
+      'sectionSpacer',
+    ])
     expect(studioFile('schemaTypes/infoPage.ts')).not.toMatch(/hero/)
   })
 

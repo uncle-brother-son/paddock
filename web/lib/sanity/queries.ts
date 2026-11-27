@@ -64,7 +64,8 @@ const LINK = `{
     destination == "event" => event->{"type": _type, "slug": slug.current, "isHome": false, "thumbnail": null},
     null
   ),
-  "url": select(destination == "external" => url, null)
+  "url": select(destination == "external" => url, null),
+  "sectionId": select(destination == "section" => sectionId, null)
 }`
 
 const RICH_TEXT = `{
@@ -102,6 +103,14 @@ export const NAVIGATION_QUERY = `*[_id == "navigation"][0]{
   "footerGroups": coalesce(footerGroups[]{"key": _key, "links": coalesce(links[defined(link.destination)]${NAV_LINKS}, [])}, [])
 }`
 
+/** W80: a module's button (PageHeader's, TextMediaSticky's, TextBlock's): null without both its words and its link. */
+const MODULE_BUTTON = `{text, "link": link${LINK}}`
+
+const moduleButtonAt = (field: string): string => `select(defined(${field}.text) && defined(${field}.link.destination) => ${field}${MODULE_BUTTON}, null)`
+
+/** The kinds of module the site draws. `hero` is HeroMedia's old name (W79). */
+const MODULE_TYPES = '["hero", "heroMedia", "upcomingEvents", "pageHeader", "galleryCarousel", "accordionList", "textMediaSticky", "textBlock", "sectionSpacer"]'
+
 /**
  * W73b: a page's modules, top to bottom, each with the fields of its own kind. A kind the site doesn't know is left
  * out. HeroMedia is one of them (Wayne, 24 Nov), no longer a field of the page: its picture or video (null until an
@@ -111,10 +120,45 @@ export const NAVIGATION_QUERY = `*[_id == "navigation"][0]{
  * W79 (WQ79): the module's Sanity type was `hero` until W79 and is `heroMedia` now. A module still saved as `hero`
  * (Home's, until the lead moves it after the Studio is deployed) is read as `heroMedia`, so the live site never
  * loses its hero. Remove `"hero"` from both lists and the `select` in the tidy-up.
+ *
+ * W80: the content modules (PageHeader, GalleryCarousel, AccordionList, TextMediaSticky, TextBlock, SectionSpacer),
+ * and on every module its section's theme (WQ81: null is Light, the page's own; any word but the four is null) and
+ * its Section ID (WQ83: null with none). A module's button is there only with both its words and its link; a
+ * question only with its words; a gallery's item only with its file. A choice an editor has not made is its default.
  */
-const MODULES = `coalesce(modules[_type in ["hero", "heroMedia", "upcomingEvents"]]{
+const MODULES = `coalesce(modules[_type in ${MODULE_TYPES}]{
   "type": select(_type == "hero" => "heroMedia", _type),
   "key": _key,
+  "theme": select(theme in ["light", "dark", "fjord", "mud"] => theme, null),
+  "sectionId": sectionId,
+  _type == "pageHeader" => {
+    title,
+    "intro": ${richTextAt('intro')},
+    "layout": select(layout == "stacked" => "stacked", "split"),
+    "buttons": coalesce(buttons[defined(text) && defined(link.destination)]{"key": _key, text, "link": link${LINK}}, [])
+  },
+  _type == "galleryCarousel" => {
+    "items": coalesce(items[]{"key": _key, "media": ${MEDIA}}[defined(media)], [])
+  },
+  _type == "accordionList" => {
+    heading,
+    "padding": coalesce(padding, true),
+    "items": coalesce(items[defined(question)]{"key": _key, question, "answer": ${richTextAt('answer')}}, [])
+  },
+  _type == "textMediaSticky" => {
+    heading,
+    "text": ${richTextAt('text')},
+    "button": ${moduleButtonAt('button')},
+    "media": select(defined(media) => media{"item": ${MEDIA}}.item, null),
+    "size": select(size == "big" => "big", "small"),
+    "flip": coalesce(flip, false)
+  },
+  _type == "textBlock" => {
+    heading,
+    "text": ${richTextAt('text')},
+    "button": ${moduleButtonAt('button')},
+    "align": select(alignment in ["center", "right"] => alignment, "left")
+  },
   _type in ["hero", "heroMedia"] => {
     "media": select(defined(media) => media{"item": ${MEDIA}}.item, null),
     "button": select(
@@ -199,9 +243,11 @@ export const EVENTS_SETTINGS_QUERY = `*[_id == "eventsSettings"][0]{"termsSummar
 /**
  * W75 (WQ60): the page that holds the Upcoming Events list, which is where an Event page's "All Events" goes
  * (/exclusive-hire#events: the slug is Sanity's, never typed into the site). The first made, should two pages hold one.
+ * W80 (WQ83): `sectionId` is the Section ID an editor gave that page's first list, null with none: the list is then
+ * `events`, as it always was.
  */
 export const EVENTS_LIST_PAGE_QUERY = `*[_type == "contentPage" && ${PUBLISHED} && defined(slug.current) && count(modules[_type == "upcomingEvents"]) > 0]
-  | order(_createdAt asc)[0]{"slug": slug.current, "isHome": ${IS_HOME}}`
+  | order(_createdAt asc)[0]{"slug": slug.current, "isHome": ${IS_HOME}, "sectionId": modules[_type == "upcomingEvents"][0].sectionId}`
 
 /** The one gift card (WQ19): the first made, should there ever be two. Its two galleries, swapped by the page's switch. */
 export const GIFT_CARD_QUERY = `*[_type == "giftCardType" && ${PUBLISHED}] | order(_createdAt asc)[0]{

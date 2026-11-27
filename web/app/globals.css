@@ -174,6 +174,15 @@
   --grid-columns: var(--grid-columns-mobile);
   --grid-margin: var(--grid-margin-mobile);
   --grid-gutter: var(--grid-gutter-mobile);
+
+  /*
+   * W80: the GalleryCarousel's pictures in columns of the grid (Figma "GalleryCarousel", 1627:5520; the
+   * `gallery-strip` utility below): how many an upright picture and a wide one are, and how many empty columns stand
+   * between two pictures. The Mobile frame's here, the Desktop frame's from 768px.
+   */
+  --gallery-upright-columns: 5;
+  --gallery-wide-columns: 6;
+  --gallery-gap-columns: 0;
 }
 
 @media (width >= 48rem) {
@@ -184,6 +193,10 @@
     --grid-columns: var(--grid-columns-desktop);
     --grid-margin: var(--grid-margin-desktop);
     --grid-gutter: var(--grid-gutter-desktop);
+
+    --gallery-upright-columns: 7;
+    --gallery-wide-columns: 9;
+    --gallery-gap-columns: 1;
   }
 }
 
@@ -768,6 +781,221 @@ body {
   ::view-transition-new(*) {
     animation: none !important;
   }
+}
+
+/*
+ * The GalleryCarousel (W80, WQ82; Figma "GalleryCarousel", 1627:5520: desktop 1627:5519, mobile 1627:5518).
+ * components/modules/content/GalleryCarousel.tsx puts `gallery-strip` on the strip that scrolls sideways,
+ * `gallery-row` on the row inside it and `gallery-item` on each picture, with the picture's own shape (width over
+ * height) as --gallery-shape-phone and --gallery-shape-desktop. The module's section is a size container, so 100cqw
+ * is the section's width and a column here is a column of the page grid.
+ *   - An upright picture is 5 of the grid's 6 columns wide and a wide one all 6, 8px (the gutter) apart; from 768px
+ *     an upright one is 7 of its 24 columns and a wide one 9, with one empty column between two pictures.
+ *   - Each is as tall as its shape makes it, and they are centred on one line. The band is the height of Figma's
+ *     4 by 5 upright picture: a shape that would be taller is as tall as the band, and narrower.
+ *   - The row starts at the grid's left margin and ends with the same margin after its last picture.
+ * The strip shows no scrollbar, and its ends do not hand a sideways swipe on to the browser (Back, Forward).
+ *
+ * How many columns each is (--gallery-upright-columns, --gallery-wide-columns, and --gallery-gap-columns for the empty
+ * columns between two) is set with the grid, in `:root` above: the Mobile values, and the Desktop ones from 768px.
+ * Which shape and which width a picture has on each width of screen (--gallery-shape, --gallery-span) is set by the
+ * component, with `md:` for 768px and up.
+ */
+@utility gallery-strip {
+  --gallery-column: calc((100cqw - 2 * var(--grid-margin) - (var(--grid-columns) - 1) * var(--grid-gutter)) / var(--grid-columns));
+  --gallery-upright: calc(var(--gallery-upright-columns) * var(--gallery-column) + (var(--gallery-upright-columns) - 1) * var(--grid-gutter));
+  --gallery-wide: calc(var(--gallery-wide-columns) * var(--gallery-column) + (var(--gallery-wide-columns) - 1) * var(--grid-gutter));
+  --gallery-band: calc(var(--gallery-upright) * 5 / 4);
+  --gallery-gap: calc(var(--gallery-gap-columns) * (var(--gallery-column) + var(--grid-gutter)) + var(--grid-gutter));
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@utility gallery-row {
+  display: flex;
+  align-items: center;
+  column-gap: var(--gallery-gap);
+  width: max-content;
+  padding-inline: var(--grid-margin);
+}
+
+@utility gallery-item {
+  flex: none;
+  width: min(var(--gallery-span), var(--gallery-band) * var(--gallery-shape));
+  aspect-ratio: var(--gallery-shape);
+}
+
+/*
+ * The page's theme (W80; WQ87, Wayne, 27 Nov): when a section in another theme reaches the middle of the window, the
+ * whole page (its background, its words, the header) fades to that theme over the long duration with the smooth
+ * curve, and back when the section has passed. components/modules/PageTheme.tsx watches the page and writes the
+ * theme on the page's element as `data-theme`, with `data-page-theme` beside it.
+ *
+ * A fade of a whole theme is a fade of its colours, wherever they are used. So each theme colour is registered as a
+ * colour (a browser can then move one from a value to another), and the element whose theme changes moves them all:
+ * everything inside it, whatever it paints with them, follows. A browser that can't shows the new theme at once.
+ *
+ *   - `[data-page-theme="live"]`: the page's element, from its second look on (the first puts the page in the theme
+ *     it opens on, with no fade).
+ *   - `[data-theme-fade]`: the header, while its change of theme is the page's own fade. It also slides away and
+ *     back (its `translate`), which keeps the short duration.
+ *   - `[data-page-theme] [data-page-themed]`: a module's section with a theme of its own, on a page whose theme is
+ *     watched. It follows the page's theme in place of its own, so there is one colour on screen at a time. Before
+ *     the script has run, and without it, the section stands on its own theme's colour.
+ *
+ * Reduced motion: the site's rule at the foot of this file makes the change instant.
+ */
+@property --color-surface-primary {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+
+@property --color-surface-secondary {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+
+@property --color-surface-panel {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+
+@property --color-surface-card {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+
+@property --color-surface-card-selected {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+
+@property --color-surface-card-disabled {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+
+@property --color-surface-card-error {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+
+@property --color-text-primary {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+
+@property --color-text-secondary {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+
+@property --color-text-muted-primary {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+
+@property --color-text-muted-secondary {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+
+@property --color-text-error {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+
+@property --color-object-dark-shade {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+
+@property --color-object-dark-dark-shade {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+
+@property --color-object-light-shade {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+
+@property --color-object-product-bg {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+
+@property --color-selection-surface {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+
+@property --color-selection-text {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+
+[data-page-theme="live"],
+[data-theme-fade] {
+  --theme-fade: var(--duration-long) var(--ease-smooth);
+  --theme-fade-colours:
+    --color-surface-primary var(--theme-fade), --color-surface-secondary var(--theme-fade), --color-surface-panel var(--theme-fade),
+    --color-surface-card var(--theme-fade), --color-surface-card-selected var(--theme-fade), --color-surface-card-disabled var(--theme-fade),
+    --color-surface-card-error var(--theme-fade), --color-text-primary var(--theme-fade), --color-text-secondary var(--theme-fade),
+    --color-text-muted-primary var(--theme-fade), --color-text-muted-secondary var(--theme-fade), --color-text-error var(--theme-fade),
+    --color-object-dark-shade var(--theme-fade), --color-object-dark-dark-shade var(--theme-fade), --color-object-light-shade var(--theme-fade),
+    --color-object-product-bg var(--theme-fade), --color-selection-surface var(--theme-fade), --color-selection-text var(--theme-fade);
+  transition: var(--theme-fade-colours);
+}
+
+[data-theme-fade] {
+  transition:
+    translate var(--duration-short) var(--ease-smooth),
+    var(--theme-fade-colours);
+}
+
+[data-page-theme] [data-page-themed] {
+  --color-surface-primary: inherit;
+  --color-surface-secondary: inherit;
+  --color-surface-panel: inherit;
+  --color-surface-card: inherit;
+  --color-surface-card-selected: inherit;
+  --color-surface-card-disabled: inherit;
+  --color-surface-card-error: inherit;
+  --color-text-primary: inherit;
+  --color-text-secondary: inherit;
+  --color-text-muted-primary: inherit;
+  --color-text-muted-secondary: inherit;
+  --color-text-error: inherit;
+  --color-object-dark-shade: inherit;
+  --color-object-dark-dark-shade: inherit;
+  --color-object-light-shade: inherit;
+  --color-object-product-bg: inherit;
+  --color-selection-surface: inherit;
+  --color-selection-text: inherit;
 }
 
 /* The two durations as utilities, for a CSS transition: `transition-opacity duration-short ease-smooth`. */

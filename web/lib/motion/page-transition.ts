@@ -69,7 +69,10 @@ export function leavePage(page: HTMLElement): void {
   if (page.hasAttribute(PAGE_LEAVING)) return
   const box = page.getBoundingClientRect()
   const layers: string[] = []
-  for (const section of page.querySelectorAll<HTMLElement>('[data-theme]')) {
+  // W80 (WQ87): a page whose own theme is not Light (components/modules/PageTheme.tsx) is the first surface, under
+  // every section's: the window behind it is Light, and would show as the page's background is taken out.
+  const themed = [...(page.matches('[data-theme]') ? [page] : []), ...page.querySelectorAll<HTMLElement>('[data-theme]')]
+  for (const section of themed) {
     const style = getComputedStyle(section)
     const at = section.getBoundingClientRect()
     if (paintsNothing(style.backgroundColor) || style.position === 'fixed' || style.visibility === 'hidden') continue

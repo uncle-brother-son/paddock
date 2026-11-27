@@ -151,7 +151,7 @@ describe("the hero's button", () => {
   it('with a link it is that link: the shop, the gift card, an outside address', () => {
     expect(heroMediaContent(byKey('h1'))!.button).toEqual({ text: 'Shop', href: '/shop' })
     expect(heroMediaContent(byKey('h2'))!.button).toEqual({ text: 'Gift Cards', href: '/shop/gift-card' })
-    const outside: HeroMediaModule = { ...byKey('h2'), button: { text: 'Out', link: { destination: 'external', document: null, url: 'https://example.com' } } }
+    const outside: HeroMediaModule = { ...byKey('h2'), button: { text: 'Out', link: { destination: 'external', document: null, url: 'https://example.com', sectionId: null } } }
     expect(heroMediaContent(outside)!.button).toEqual({ text: 'Out', href: 'https://example.com' })
   })
 

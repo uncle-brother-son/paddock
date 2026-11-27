@@ -1,4 +1,5 @@
 import type { ShopEventAvailabilityRouteOutput, ShopEventState } from '@/contracts/shop'
+import { sectionIdOf } from '@/lib/modules/section'
 import type { Event, EventCard as SanityEventCard, EventsSettings, RichText } from '@/lib/sanity/schemas'
 import { cardPictures, type CardPicture } from '@/lib/shop/cards'
 import { inPence, pounds } from '@/lib/shop/money'
@@ -138,5 +139,9 @@ export const OTHER_EVENTS_LENGTH = 3
 /** Other events (WQ17): the next upcoming events, soonest first, never this one, up to the row's length. */
 export const otherEvents = (cards: EventCardView[], id: string, length: number = OTHER_EVENTS_LENGTH): EventCardView[] => cards.filter((card) => card.id !== id).slice(0, length)
 
-/** Where "All Events" goes: the events list on the page that holds it (WQ60), the address made from Sanity's own slug. */
-export const eventsListAddress = (page: { slug: string; isHome: boolean }): string => `${page.isHome ? '/' : `/${page.slug}`}#${EVENTS_LIST_ID}`
+/**
+ * Where "All Events" goes: the events list on the page that holds it (WQ60), the address made from Sanity's own slug.
+ * W80 (WQ83): the list is `events` unless an editor gave it a Section ID of its own, which is then where the link goes.
+ */
+export const eventsListAddress = (page: { slug: string; isHome: boolean; sectionId?: string | null }): string =>
+  `${page.isHome ? '/' : `/${page.slug}`}#${sectionIdOf(page.sectionId) ?? EVENTS_LIST_ID}`

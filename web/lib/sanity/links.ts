@@ -1,3 +1,5 @@
+import { sectionAddress } from '@/lib/modules/section'
+
 import type { Link } from './schemas'
 
 /** The gift card's page (WQ19): the site's own address, with no slug to pick. */
@@ -14,7 +16,11 @@ export const BOOK_ADDRESS = '/book'
 /** Whether an address is the booking panel's, with or without what to open it on (?date=, ?type=). */
 export const isBookAddress = (href: string): boolean => href === BOOK_ADDRESS || href.startsWith(`${BOOK_ADDRESS}?`)
 
-/** The address a link goes to, or null for a link the site hides: its page or event isn't published (WQ24). */
+/**
+ * The address a link goes to, or null for a link the site hides: its page or event isn't published (WQ24). W80
+ * (WQ83): a link to a section of the page it is on is `#` and the section's id ("#memberships"), which
+ * components/ui/SiteLink.tsx scrolls to; one whose id is not an id is hidden.
+ */
 export function linkHref(link: Link): string | null {
   switch (link.destination) {
     case 'shop':
@@ -25,6 +31,8 @@ export function linkHref(link: Link): string | null {
       return BOOK_ADDRESS
     case 'external':
       return link.url
+    case 'section':
+      return sectionAddress(link.sectionId)
     case 'page':
     case 'event': {
       const linked = link.document

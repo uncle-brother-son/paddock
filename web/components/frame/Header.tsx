@@ -6,6 +6,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { Icon } from '@/components/brand/Icon'
 import { Grid } from '@/components/layout/Grid'
 import type { FrameMenuLink } from '@/lib/frame/content'
+import { PAGE_THEME, PAGE_THEME_EVENT, PAGE_THEMED, THEME_FADE } from '@/lib/modules/section'
 import { BOOK_ADDRESS } from '@/lib/sanity/links'
 
 import { FrameButton, FrameButtonLabel, FrameLink } from './FrameButton'
@@ -15,8 +16,11 @@ import { useFramePanels } from './useFramePanels'
 /**
  * The mode of whatever lies under the header's middle: the nearest `data-theme` above the first thing there that is
  * not the header itself or a popup. The header is see-through, so its words take that mode's Text/Primary.
+ *
+ * W80 (WQ87): while a page's theme is watched (components/modules/PageTheme.tsx), a module's section follows the
+ * page's theme in place of its own, so the mode beneath is the page's. `fromPage` says the mode is the page's own.
  */
-function themeBeneath(header: HTMLElement): string {
+function themeBeneath(header: HTMLElement): { theme: string; fromPage: boolean } {
   const height = header.offsetHeight / 2
   // W73b: while a page transition runs, the pages can't be found by where they are on screen (the browser shows
   // pictures of them, not the pages themselves). Then it is the section of the page at that height, by its place.
@@ -28,7 +32,10 @@ function themeBeneath(header: HTMLElement): string {
     const box = section.getBoundingClientRect()
     return box.top <= height && box.bottom > height
   })
-  return beneath?.closest<HTMLElement>('[data-theme]')?.dataset.theme ?? 'light'
+  const holder = beneath?.closest<HTMLElement>('[data-theme]')
+  const watched = holder?.hasAttribute(PAGE_THEMED) ? holder.closest<HTMLElement>(`[${PAGE_THEME}]`) : null
+  const from = watched ?? holder
+  return { theme: from?.dataset.theme ?? 'light', fromPage: Boolean(from?.hasAttribute(PAGE_THEME)) }
 }
 
 type HeaderProps = {
@@ -57,6 +64,9 @@ export function Header({ variant = 'global', logo, menuLinks }: HeaderProps) {
   const [away, setAway] = useState(false)
   // Until the first look at the page, the stylesheet gives the header the first section's mode (app/globals.css).
   const [theme, setTheme] = useState<string | null>(null)
+  // W80 (WQ87): a change from one of the page's themes to another is the page's own fade, and the header fades with it.
+  const [fading, setFading] = useState(false)
+  const lastFromPage = useRef(false)
   // The menu is open on the page it was opened on: going to another page closes it.
   const [menuOpenOn, setMenuOpenOn] = useState<string | null>(null)
   const menuOpen = menuOpenOn === pathname
@@ -74,7 +84,10 @@ export function Header({ variant = 'global', logo, menuLinks }: HeaderProps) {
       if (now > last && now > bar.offsetHeight) setAway(true)
       else if (now < last || now <= bar.offsetHeight) setAway(false)
       last = now
-      setTheme(themeBeneath(bar))
+      const beneath = themeBeneath(bar)
+      setTheme(beneath.theme)
+      setFading(lastFromPage.current && beneath.fromPage)
+      lastFromPage.current = beneath.fromPage
     }
     const lookSoon = () => {
       if (frame === 0) frame = requestAnimationFrame(look)
@@ -82,10 +95,12 @@ export function Header({ variant = 'global', logo, menuLinks }: HeaderProps) {
     lookSoon()
     window.addEventListener('scroll', lookSoon, { passive: true })
     window.addEventListener('resize', lookSoon)
+    window.addEventListener(PAGE_THEME_EVENT, lookSoon)
     return () => {
       cancelAnimationFrame(frame)
       window.removeEventListener('scroll', lookSoon)
       window.removeEventListener('resize', lookSoon)
+      window.removeEventListener(PAGE_THEME_EVENT, lookSoon)
     }
     // Looked at again on a new page, and when the menu closes.
   }, [pathname, menuOpen])
@@ -105,6 +120,7 @@ export function Header({ variant = 'global', logo, menuLinks }: HeaderProps) {
         ref={header}
         inert={menuOpen}
         {...(theme ? { 'data-theme': theme } : { 'data-header-theme': 'page' })}
+        {...(fading ? { [THEME_FADE]: '' } : {})}
         // Keyboard focus landing on it brings it back, so what has focus is never out of sight.
         onFocusCapture={() => setAway(false)}
         // W73b: it stays where it is while one page gives way to the next (`frame-fixed-header` in app/globals.css).

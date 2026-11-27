@@ -42,6 +42,12 @@ export const BIG_PRIMARY_BUTTON = `${BIG} ${PRIMARY} ${DISABLED}`
 /** Type=secondary, Big=No (329:8561; State=disabled 1186:47999, a full session's "Full"). */
 export const SMALL_SECONDARY_BUTTON = `${SMALL} ${SECONDARY} ${DISABLED}`
 
+/**
+ * W80: Type=secondary, Big=No as a class, for a link drawn as the button (a content module's button), with its
+ * State=hover under a mouse. A link is never disabled.
+ */
+export const SMALL_SECONDARY_LINK = `${SMALL} ${SECONDARY} transition-colors duration-short ease-smooth hover:bg-surface-card-selected`
+
 const look = (kind: ButtonType, big: boolean, loading: boolean): string => `${big ? BIG : SMALL} ${loading ? LOADING[kind] : kind === 'primary' ? PRIMARY : `${SECONDARY} ${SECONDARY_HOVER}`} ${DISABLED}`
 
 /**

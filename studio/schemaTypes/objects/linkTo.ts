@@ -1,6 +1,6 @@
 import { defineField, defineType } from 'sanity'
 import { LinkIcon } from '@sanity/icons'
-import { checkLinkPart, type LinkTo } from '../../lib/checks'
+import { checkLinkPart, checkSectionLink, type LinkTo, type PageModuleValue } from '../../lib/checks'
 
 const linkOf = (parent: unknown): LinkTo | undefined => parent as LinkTo | undefined
 
@@ -9,6 +9,8 @@ const linkOf = (parent: unknown): LinkTo | undefined => parent as LinkTo | undef
  * references are weak, so a page that isn't published yet can be linked (the site hides the link until it is) and a
  * linked page can still be unpublished. The gift card's address is the site's own (/shop/gift-card, WQ19), and the
  * booking panel opens over whatever page the visitor is on (its link is /book), so neither has anything to pick (W73b).
+ * W80 (WQ83): "A section on this page" goes to the module of the same page that has that Section ID, and the page
+ * scrolls there. It is checked against the page's own modules, so it only works for a link on a page built from them.
  */
 export const linkTo = defineType({
   name: 'linkTo',
@@ -27,6 +29,7 @@ export const linkTo = defineType({
           { title: 'The shop', value: 'shop' },
           { title: 'The gift card', value: 'giftCard' },
           { title: 'The booking panel', value: 'book' },
+          { title: 'A section on this page', value: 'section' },
           { title: 'An outside address', value: 'external' },
         ],
         layout: 'radio',
@@ -51,6 +54,21 @@ export const linkTo = defineType({
       description: 'Hidden on the site until the event is published',
       hidden: ({ parent }) => linkOf(parent)?.destination !== 'event',
       validation: (rule) => rule.custom((value, context) => checkLinkPart('event', value, linkOf(context.parent))),
+    }),
+    defineField({
+      name: 'sectionId',
+      title: 'Section ID',
+      type: 'string',
+      description: 'The Section ID of a module on this page (in its Section settings), for example memberships. The page scrolls to it',
+      hidden: ({ parent }) => linkOf(parent)?.destination !== 'section',
+      validation: (rule) =>
+        rule.custom((value, context) => {
+          const link = linkOf(context.parent)
+          const filled = checkLinkPart('section', value, link)
+          if (filled !== true) return filled
+          const page = context.document as { _type?: string; modules?: PageModuleValue[] } | undefined
+          return checkSectionLink(link, page?._type, page?.modules)
+        }),
     }),
     defineField({
       name: 'url',

@@ -2,16 +2,21 @@ import { useId } from 'react'
 
 import { Grid } from '@/components/layout/Grid'
 import type { EventCardView } from '@/lib/events/event'
+import type { SectionTheme } from '@/lib/modules/section'
 
 import { EventCard } from '@/components/components/cards/EventCard'
+
+import { ModuleSection } from './ModuleSection'
 
 type UpcomingEventsProps = {
   /** Every upcoming event, soonest first. */
   cards: EventCardView[]
   /** The module's heading, when an editor gave it one ("Upcoming Events", as drawn). */
   heading: string | null
-  /** The section's id, for a link to scroll to (`events`: WQ60). */
-  id?: string
+  /** The section's id, for a link to scroll to (`events`: WQ60; or the Section ID an editor gave it: WQ83). */
+  id?: string | null
+  /** W80 (WQ81): the section's theme, when an editor gave it one. */
+  theme?: SectionTheme | null
 }
 
 /**
@@ -22,13 +27,14 @@ type UpcomingEventsProps = {
  * - Below: one to a row, the whole width, 64px apart, with 80px above and below.
  * With no event to show it is not drawn at all: no heading on its own.
  */
-export function UpcomingEvents({ cards, heading, id }: UpcomingEventsProps) {
+export function UpcomingEvents({ cards, heading, id, theme }: UpcomingEventsProps) {
   const headingId = useId()
   if (cards.length === 0) return null
   return (
-    <section
-      {...(id ? { id } : {})}
-      data-module="upcoming-events"
+    <ModuleSection
+      module="upcoming-events"
+      theme={theme ?? null}
+      sectionId={id ?? null}
       {...(heading ? { 'aria-labelledby': headingId } : { 'aria-label': 'Upcoming events' })}
       className="flex flex-col gap-24 py-80 md:py-120"
     >
@@ -49,6 +55,6 @@ export function UpcomingEvents({ cards, heading, id }: UpcomingEventsProps) {
           </li>
         ))}
       </Grid>
-    </section>
+    </ModuleSection>
   )
 }

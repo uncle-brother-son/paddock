@@ -81,7 +81,7 @@ describe('every link inside the site carries the page transition', () => {
     const asking = files.filter((file) => /open\('book'\)/.test(read(file)))
     expect(asking).toEqual(['components/ui/SiteLink.tsx'])
     expect(read('components/frame/Header.tsx')).toContain('<FrameLink href={BOOK_ADDRESS}>')
-    expect(linkHref({ destination: 'book', document: null, url: null })).toBe(BOOK_ADDRESS)
+    expect(linkHref({ destination: 'book', document: null, url: null, sectionId: null })).toBe(BOOK_ADDRESS)
   })
 
   it('nothing moves a visitor to another page by script without it', () => {

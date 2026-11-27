@@ -61,7 +61,7 @@ describe('the footer', () => {
   })
 
   it('a group whose every page is unpublished is left out too', () => {
-    const hidden = { key: 'x', label: 'Not published', link: { destination: 'page' as const, document: null, url: null } }
+    const hidden = { key: 'x', label: 'Not published', link: { destination: 'page' as const, document: null, url: null, sectionId: null } }
     const { footer: withHidden } = frameContent(settings, { menuLinks: [], footerGroups: [{ key: 'g0', links: [hidden] }, ...navigation.footerGroups] }, '2026')
     expect(withHidden.groups.map((group) => group.key)).toEqual(['g1', 'g2'])
   })

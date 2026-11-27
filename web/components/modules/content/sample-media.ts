@@ -22,6 +22,9 @@ export const SAMPLE_PICTURE: HeroMediaPicture = { desktop: drawn(160, 90, MAIN),
 /** A video's posters when it has one of its own for phones (WQ35): another picture for the tall cut, the same alt. */
 export const SAMPLE_PICTURE_WITH_PHONE_POSTER: HeroMediaPicture = { ...SAMPLE_PICTURE, mobile: drawn(90, 160, FOR_PHONES) }
 
+/** W80: a picture of any shape (`width` by `height`), the same file for a desktop and a phone: a content module's picture. */
+export const samplePicture = (width: number, height: number, alt = 'A sample picture'): HeroMediaPicture => ({ desktop: drawn(width, height, MAIN), mobile: drawn(width, height, MAIN), alt })
+
 const VIDEO = { width: 320, height: 180, milliseconds: 1200 }
 
 /**

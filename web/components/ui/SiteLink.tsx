@@ -4,9 +4,12 @@ import Link from 'next/link'
 import type { ComponentPropsWithoutRef, MouseEvent } from 'react'
 
 import { useFramePanels } from '@/components/frame/useFramePanels'
+import { isSectionAddress } from '@/lib/modules/section'
 import { arriveInPlace, PAGE_AT_ONCE_TYPES, PAGE_TRANSITION_TYPES } from '@/lib/motion/page-transition'
 import { isBuiltAddress } from '@/lib/routes/not-built'
 import { isBookAddress } from '@/lib/sanity/links'
+
+import { SectionLink } from './SectionLink'
 
 type SiteLinkProps = Omit<ComponentPropsWithoutRef<'a'>, 'href' | 'target' | 'rel'> & {
   href: string
@@ -41,12 +44,22 @@ const pathOf = (href: string): string => href.split(/[?#]/)[0] ?? href
  * useFramePanels for the panel first: when the panel opens the visitor stays on the page (W77: inside the frame it
  * always does); with no panel to open the link is followed, to /book, which is the home page with the panel open.
  *
+ * W80 (WQ83): an address that names a section of the page it is on (`#memberships`) is a SectionLink, which scrolls
+ * the page there (components/ui/SectionLink.tsx).
+ *
  * Next fetches each link it can see ahead of a press. A page that is not built yet (lib/routes/not-built.ts: /account,
  * /checkout) is never fetched ahead, on sight or on hover; a press still follows the link.
  */
 export function SiteLink({ href, newTab = false, transition = true, onClick, children, ...rest }: SiteLinkProps) {
   const panels = useFramePanels()
   const tab = newTab ? { target: '_blank', rel: 'noopener noreferrer' } : {}
+  if (isSectionAddress(href)) {
+    return (
+      <SectionLink href={href} onClick={onClick} {...tab} {...rest}>
+        {children}
+      </SectionLink>
+    )
+  }
   if (isOutsideAddress(href)) {
     return (
       <a href={href} onClick={onClick} {...tab} {...rest}>

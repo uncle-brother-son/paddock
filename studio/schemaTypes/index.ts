@@ -15,13 +15,21 @@ import { siteSettings } from './siteSettings'
 import { navigation } from './navigation'
 import { shopSettings } from './shopSettings'
 import { eventsSettings } from './eventsSettings'
+import { accordionItem, accordionList } from './objects/accordionList'
+import { galleryCarousel } from './objects/galleryCarousel'
 import { heroMedia } from './objects/heroMedia'
+import { leadText } from './objects/leadText'
 import { linkTo } from './objects/linkTo'
 import { media } from './objects/media'
+import { moduleButton } from './objects/moduleButton'
 import { navLink } from './objects/navLink'
+import { pageHeader } from './objects/pageHeader'
 import { picture } from './objects/picture'
 import { richText } from './objects/richText'
+import { sectionSpacer } from './objects/sectionSpacer'
 import { seo } from './objects/seo'
+import { textBlock } from './objects/textBlock'
+import { textMediaSticky } from './objects/textMediaSticky'
 import { upcomingEvents } from './objects/upcomingEvents'
 
 export const schemaTypes = [
@@ -56,6 +64,17 @@ export const schemaTypes = [
   seo,
   linkTo,
   navLink,
+  leadText,
+  moduleButton,
+
+  // A page's modules (05 Modules > Content)
   heroMedia,
   upcomingEvents,
+  pageHeader,
+  galleryCarousel,
+  accordionItem,
+  accordionList,
+  textMediaSticky,
+  textBlock,
+  sectionSpacer,
 ]

@@ -114,7 +114,8 @@ describe('W72a: galleries and categories', () => {
   // engine (briefs/W75-logs/tools/gen-samples.mjs, in the staff app repo) over five pages: the home page (no list), a
   // draft that holds one, a page with no address that holds one, Exclusive Hire (two lists), and a newer page with one.
   it('W75: the events list is on the first-made published page that holds the module, by its own slug', () => {
-    expect(answers.eventsListPage).toEqual({ slug: 'exclusive-hire', isHome: false })
+    // W80 (WQ83): with the Section ID an editor gave its list, which is none here: the list is `events`.
+    expect(answers.eventsListPage).toEqual({ slug: 'exclusive-hire', isHome: false, sectionId: null })
     expect(reads.eventsListPage.query).toContain('!(_id in path("drafts.**"))')
     expect(reads.eventsListPage.query).toContain('defined(slug.current)')
     expect(reads.eventsListPage.query).toContain('order(_createdAt asc)[0]')
@@ -186,7 +187,9 @@ describe('W73b: HeroMedia module', () => {
   type SampleMedia = { kind: string; hasSound?: boolean; url?: string; mobileUrl?: string | null; poster?: SamplePicture; mobilePoster?: SamplePicture | null }
   type SampleModule = { type: string; key: string; media?: SampleMedia | null; button?: { text: string; link: Link | null } | null; heading?: string | null }
   const homeModules = answers.homePage.modules as SampleModule[]
-  const modules = answers.contentPage.modules as SampleModule[]
+  // W80: the page sample gained the content modules after these nine, which keep their keys and their places
+  // (lib/modules/content.test.ts holds the new ones).
+  const modules = (answers.contentPage.modules as unknown as SampleModule[]).slice(0, 9)
 
   it("a page's modules keep their order, each with the fields of its own kind; a kind the site does not know is left out", () => {
     expect(modules.map((module) => [module.key, module.type])).toEqual([
@@ -200,7 +203,7 @@ describe('W73b: HeroMedia module', () => {
       ['h7', 'heroMedia'],
       ['m2', 'upcomingEvents'],
     ])
-    for (const one of modules) expect(Object.keys(one).sort(), one.key).toEqual(one.type === 'heroMedia' ? ['button', 'key', 'media', 'type'] : ['heading', 'key', 'type'])
+    for (const one of modules) expect(Object.keys(one).sort(), one.key).toEqual(one.type === 'heroMedia' ? ['button', 'key', 'media', 'sectionId', 'theme', 'type'] : ['heading', 'key', 'sectionId', 'theme', 'type'])
     expect(modules.filter((module) => module.type === 'upcomingEvents').map((module) => module.heading)).toEqual(['Upcoming', null])
   })
 
@@ -270,7 +273,7 @@ describe('W73b: HeroMedia module', () => {
       ['Not yet', null],
       ['Book', '/book'],
     ])
-    expect(modules.find((module) => module.key === 'h6')!.button!.link).toEqual({ destination: 'book', document: null, url: null })
+    expect(modules.find((module) => module.key === 'h6')!.button!.link).toEqual({ destination: 'book', document: null, url: null, sectionId: null })
   })
 
   it('a page no longer has a `hero` of its own: the old field is not asked for, and an unknown destination is refused', () => {
@@ -279,11 +282,11 @@ describe('W73b: HeroMedia module', () => {
     for (const query of [reads.homePage.query, reads.contentPage.query]) {
       expect(query).not.toContain('"hero":')
       expect(query).not.toContain('hero.media')
-      expect(query).toContain('modules[_type in ["hero", "heroMedia", "upcomingEvents"]]')
+      expect(query).toContain('modules[_type in ["hero", "heroMedia", "upcomingEvents", "pageHeader", "galleryCarousel", "accordionList", "textMediaSticky", "textBlock", "sectionSpacer"]]')
       // W79 (WQ79): a module saved as `hero` before the rename is read as HeroMedia, until the lead has moved Home's.
       expect(query).toContain('"type": select(_type == "hero" => "heroMedia", _type)')
     }
-    const withLink = (destination: string) => ({ ...answers.contentPage, modules: [{ ...modules[0], button: { text: 'Go', link: { destination, document: null, url: null } } }] })
+    const withLink = (destination: string) => ({ ...answers.contentPage, modules: [{ ...modules[0], button: { text: 'Go', link: { destination, document: null, url: null, sectionId: null } } }] })
     expect(reads.contentPage.schema.safeParse(withLink('giftCard')).success).toBe(true)
     expect(reads.contentPage.schema.safeParse(withLink('somewhere')).success).toBe(false)
   })

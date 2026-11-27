@@ -49,12 +49,14 @@ const linkedDocumentSchema = z.object({
 
 /**
  * Where a link goes. `linkHref` (./links.ts) makes the address, or null for a link to hide. W73b: `giftCard` is
- * /shop/gift-card, and `book` is the booking panel, whose link is /book.
+ * /shop/gift-card, and `book` is the booking panel, whose link is /book. W80 (WQ83): `section` is a section of the
+ * page the link is on, by its Section ID (`sectionId`, null for every other destination): its link is `#` and the id.
  */
 export const linkSchema = z.object({
-  destination: z.enum(['page', 'event', 'shop', 'giftCard', 'book', 'external']),
+  destination: z.enum(['page', 'event', 'shop', 'giftCard', 'book', 'section', 'external']),
   document: linkedDocumentSchema.nullable(),
   url: text,
+  sectionId: text,
 })
 export type Link = z.infer<typeof linkSchema>
 
@@ -103,21 +105,103 @@ export const navigationSchema = z.object({
 export type Navigation = z.infer<typeof navigationSchema>
 
 /**
+ * W80 (WQ81, WQ83): what every module carries for its section. `theme`: one of the four modes, or null for Light,
+ * the page's own. `sectionId`: the id an editor gave the section, as it was typed (lib/modules/section.ts says what
+ * the site takes), or null.
+ */
+const sectionSettings = { theme: z.enum(['light', 'dark', 'fjord', 'mud']).nullable(), sectionId: text }
+
+/**
  * HeroMedia module (W73b; WQ24): a picture or a video across the window, null until an editor adds one, and its
  * button, null when it is switched off or has no words. A button with no link opens the booking panel.
  */
 export const heroMediaModuleSchema = z.object({
   type: z.literal('heroMedia'),
   key: z.string(),
+  ...sectionSettings,
   media: mediaSchema.nullable(),
   button: z.object({ text: z.string(), link: linkSchema.nullable() }).nullable(),
 })
 export type HeroMediaModule = z.infer<typeof heroMediaModuleSchema>
 
-const upcomingEventsModuleSchema = z.object({ type: z.literal('upcomingEvents'), key: z.string(), heading: text })
+const upcomingEventsModuleSchema = z.object({ type: z.literal('upcomingEvents'), key: z.string(), ...sectionSettings, heading: text })
+
+/** W80: a content module's button: its words and its link. A module has none (null) without both. */
+const moduleButtonSchema = z.object({ text: z.string(), link: linkSchema })
+export type ModuleButtonLink = z.infer<typeof moduleButtonSchema>
+
+/** PageHeader (W80): the page's title and intro, side by side or stacked, and up to two buttons (the first two are drawn). */
+const pageHeaderModuleSchema = z.object({
+  type: z.literal('pageHeader'),
+  key: z.string(),
+  ...sectionSettings,
+  title: text,
+  intro: richTextSchema,
+  layout: z.enum(['split', 'stacked']),
+  buttons: z.array(moduleButtonSchema.extend({ key: z.string() })),
+})
+export type PageHeaderModule = z.infer<typeof pageHeaderModuleSchema>
+
+/** GalleryCarousel (W80, WQ82): its pictures and videos in order; one with no file is left out. */
+const galleryCarouselModuleSchema = z.object({
+  type: z.literal('galleryCarousel'),
+  key: z.string(),
+  ...sectionSettings,
+  items: z.array(z.object({ key: z.string(), media: mediaSchema })),
+})
+export type GalleryCarouselModule = z.infer<typeof galleryCarouselModuleSchema>
+
+/** AccordionList (W80): a heading and its questions, each with its answer; `padding` is Figma's Padding=yes. */
+const accordionListModuleSchema = z.object({
+  type: z.literal('accordionList'),
+  key: z.string(),
+  ...sectionSettings,
+  heading: text,
+  padding: z.boolean(),
+  items: z.array(z.object({ key: z.string(), question: z.string(), answer: richTextSchema })),
+})
+export type AccordionListModule = z.infer<typeof accordionListModuleSchema>
+
+/** TextMediaSticky (W80): a heading, text and an optional button beside a picture or video; small or big; flipped or not. */
+const textMediaStickyModuleSchema = z.object({
+  type: z.literal('textMediaSticky'),
+  key: z.string(),
+  ...sectionSettings,
+  heading: text,
+  text: richTextSchema,
+  button: moduleButtonSchema.nullable(),
+  media: mediaSchema.nullable(),
+  size: z.enum(['small', 'big']),
+  flip: z.boolean(),
+})
+export type TextMediaStickyModule = z.infer<typeof textMediaStickyModuleSchema>
+
+/** TextBlock (W80): a heading, text and an optional button, at the left, the centre or the right. */
+const textBlockModuleSchema = z.object({
+  type: z.literal('textBlock'),
+  key: z.string(),
+  ...sectionSettings,
+  heading: text,
+  text: richTextSchema,
+  button: moduleButtonSchema.nullable(),
+  align: z.enum(['left', 'center', 'right']),
+})
+export type TextBlockModule = z.infer<typeof textBlockModuleSchema>
+
+/** SectionSpacer (W80): empty space; it has only what every module has. */
+const sectionSpacerModuleSchema = z.object({ type: z.literal('sectionSpacer'), key: z.string(), ...sectionSettings })
 
 /** One module of a page. Each kind of module is one more member here. */
-export const moduleSchema = z.discriminatedUnion('type', [heroMediaModuleSchema, upcomingEventsModuleSchema])
+export const moduleSchema = z.discriminatedUnion('type', [
+  heroMediaModuleSchema,
+  upcomingEventsModuleSchema,
+  pageHeaderModuleSchema,
+  galleryCarouselModuleSchema,
+  accordionListModuleSchema,
+  textMediaStickyModuleSchema,
+  textBlockModuleSchema,
+  sectionSpacerModuleSchema,
+])
 export type PageModule = z.infer<typeof moduleSchema>
 
 export const contentPageSchema = z.object({
@@ -207,8 +291,11 @@ export type Event = z.infer<typeof eventSchema>
 export const eventsSettingsSchema = z.object({ termsSummary: richTextSchema })
 export type EventsSettings = z.infer<typeof eventsSettingsSchema>
 
-/** W75 (WQ60): the page that holds the Upcoming Events list: its slug, and whether it is the page Site settings picks as home. */
-export const eventsListPageSchema = z.object({ slug: z.string(), isHome: z.boolean() })
+/**
+ * W75 (WQ60): the page that holds the Upcoming Events list: its slug, and whether it is the page Site settings picks as
+ * home. W80 (WQ83): `sectionId` is the Section ID an editor gave that list, or null: it is then `events`.
+ */
+export const eventsListPageSchema = z.object({ slug: z.string(), isHome: z.boolean(), sectionId: text })
 export type EventsListPage = z.infer<typeof eventsListPageSchema>
 
 /**

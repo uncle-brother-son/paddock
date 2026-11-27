@@ -6,6 +6,7 @@ import { ButtonLabel } from '@/components/ui/buttons/Button'
 import { IconButton } from '@/components/ui/buttons/IconButton'
 import { SiteLink } from '@/components/ui/SiteLink'
 import type { HeroMediaButton, HeroMediaContent, HeroMediaPicture } from '@/lib/modules/hero-media'
+import type { SectionTheme } from '@/lib/modules/section'
 import { usePrefersReducedMotion } from '@/lib/motion/reduced-motion'
 import type { ScreenVideo } from '@/lib/sanity/media'
 
@@ -177,6 +178,13 @@ function HeroMediaButtonLink({ button, onFocus, onBlur }: { button: HeroMediaBut
 }
 
 type HeroMediaProps = HeroMediaContent & {
+  /**
+   * W80 (WQ81): the mode of the hero's section, for the header over it and the buttons on it. Dark unless an editor
+   * chose another, as it is designed. It is the hero's own: the page does not fade to it (WQ87).
+   */
+  theme?: SectionTheme | null
+  /** W80 (WQ83): the section's id, when an editor gave it one. */
+  sectionId?: string | null
   /** The page's first hero: its picture is the page's largest, so it loads first. */
   priority?: boolean
   /** For Storybook and tests: reduced motion on or off, whatever the visitor's own setting. */
@@ -205,7 +213,7 @@ type HeroMediaProps = HeroMediaContent & {
  * - Reduced motion: it follows nothing. It fades in at its resting place while the pointer is over the hero or it
  *   has focus.
  */
-export function HeroMedia({ picture, video, button, priority = false, reducedMotion: reducedMotionSet, touch = false, children }: HeroMediaProps) {
+export function HeroMedia({ picture, video, button, theme, sectionId, priority = false, reducedMotion: reducedMotionSet, touch = false, children }: HeroMediaProps) {
   const visitorReducedMotion = usePrefersReducedMotion()
   const reducedMotion = reducedMotionSet ?? visitorReducedMotion
   const mover = useRef<HTMLSpanElement>(null)
@@ -257,7 +265,8 @@ export function HeroMedia({ picture, video, button, priority = false, reducedMot
 
   return (
     <section
-      data-theme="dark"
+      {...(sectionId ? { id: sectionId } : {})}
+      data-theme={theme ?? 'dark'}
       data-module="hero"
       onPointerMove={button ? pointerOver : undefined}
       onPointerDown={button ? pointerOver : undefined}

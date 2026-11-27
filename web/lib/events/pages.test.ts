@@ -154,15 +154,16 @@ describe('the events list (the Upcoming Events module)', () => {
 
   it('its page is found in Sanity by the module it holds: the address is made from that page\'s slug', async () => {
     sanity()
-    expect(answers.eventsListPage).toEqual({ slug: 'exclusive-hire', isHome: false })
+    expect(answers.eventsListPage).toEqual({ slug: 'exclusive-hire', isHome: false, sectionId: null })
     expect(await readEventsListAddress()).toBe('/exclusive-hire#events')
     expect(reads.eventsListPage.query).toContain('count(modules[_type == "upcomingEvents"]) > 0')
   })
 
   it('the module is drawn by PageModules, and the page\'s first carries the id "events"', () => {
     const modules = readFileSync(path.resolve(__dirname, '../../components/modules/PageModules.tsx'), 'utf8')
-    expect(modules).toContain("<UpcomingEventsModule key={one.key} heading={one.events.heading} {...(index === firstEvents ? { id: EVENTS_LIST_ID } : {})} />")
-    expect(modules).toContain("const firstEvents = shown.findIndex((one) => 'events' in one)")
+    // W80 (WQ83): its own Section ID when an editor gave it one; `events` for the page's first list with none.
+    expect(modules).toContain('<UpcomingEventsModule key={one.key} heading={one.events.heading} theme={one.section.theme} id={one.section.sectionId ?? (index === firstEvents ? EVENTS_LIST_ID : null)} />')
+    expect(modules).toContain("const firstEvents = shown.findIndex((one) => one.kind === 'events')")
   })
 })
 
