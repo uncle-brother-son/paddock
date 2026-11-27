@@ -361,6 +361,9 @@ behind a press key, and has no switch kind.
     (`sign-in-postgres.test.ts`). A unique refusal from the link's update runs the transaction once more.
   - `GET customer/me` (`customer` mode): first name, email and the account sections, from what the customer has ever
     had (`ACCOUNT_SECTIONS` in `contracts/sign-in.ts`).
+  - A login deleted in Supabase leaves its customer (migration 037, WQ99: `customers_auth_user_id_fkey` is ON DELETE
+    SET NULL, where it was CASCADE): the customer keeps everything, unlinked, and signing in again links them again.
+    A linked login whose email changes in Supabase is still found by its login; `customers.email` is not changed.
 - `customers/read.ts`, `GET customers` (getCustomers: the Customers page, the customer picker and New Order's payment
   step). One customer by id, or a search (every word in a name, the email or the phone, or the whole search in "first
   last"), or the newest 200. Named fields (`CUSTOMER_LIST_FIELDS`): never the Stripe ids, the website login or the

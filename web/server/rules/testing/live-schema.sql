@@ -1616,7 +1616,7 @@ ALTER TABLE public.customer_memberships ADD CONSTRAINT customer_memberships_plan
 ALTER TABLE public.customer_session_passes ADD CONSTRAINT customer_session_passes_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE;
 ALTER TABLE public.customer_session_passes ADD CONSTRAINT customer_session_passes_order_line_item_id_fkey FOREIGN KEY (order_line_item_id) REFERENCES order_line_items(id);
 ALTER TABLE public.customer_session_passes ADD CONSTRAINT customer_session_passes_pass_type_id_fkey FOREIGN KEY (pass_type_id) REFERENCES session_pass_types(id);
-ALTER TABLE public.customers ADD CONSTRAINT customers_auth_user_id_fkey FOREIGN KEY (auth_user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+ALTER TABLE public.customers ADD CONSTRAINT customers_auth_user_id_fkey FOREIGN KEY (auth_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.event_attendees ADD CONSTRAINT event_attendees_cancelled_by_fkey FOREIGN KEY (cancelled_by) REFERENCES staff(id);
 ALTER TABLE public.event_attendees ADD CONSTRAINT event_attendees_event_booking_id_fkey FOREIGN KEY (event_booking_id) REFERENCES event_bookings(id) ON DELETE CASCADE;
 ALTER TABLE public.event_bookings ADD CONSTRAINT event_bookings_cancelled_by_fkey FOREIGN KEY (cancelled_by) REFERENCES staff(id);

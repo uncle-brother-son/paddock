@@ -44,11 +44,14 @@ export type CustomerSignInLinkOutput = z.infer<typeof customerSignInLinkOutputSc
 
 // POST /api/v1/customer/sign-in/create
 
-/** Backend log 9: first name, last name, a phone if they like. No date of birth and no age check here. */
+/**
+ * Backend log 9: first name, last name, a phone if they like. No date of birth and no age check here. A name left out
+ * (or empty) is the rule's to refuse, with its reason (`first_name_required`, `last_name_required`), not zod's.
+ */
 export const customerSignInCreateInputSchema = z.object({
-  firstName: z.string(),
-  lastName: z.string(),
-  phone: z.string().nullable().optional(),
+  firstName: z.string().nullish(),
+  lastName: z.string().nullish(),
+  phone: z.string().nullish(),
 })
 export type CustomerSignInCreateInput = z.infer<typeof customerSignInCreateInputSchema>
 

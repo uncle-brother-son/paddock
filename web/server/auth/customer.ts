@@ -34,9 +34,16 @@ function supabaseClient(supabaseUrl: string, supabaseAnonKey: string, fetchImpl?
   })
 }
 
-/** Supabase's answer to a token it refused, as ours: unreachable is a fault, anything else is signed out. */
+/**
+ * Supabase's answer to a token it refused, as ours. A fault (500), never a sign-out, when Supabase couldn't answer:
+ * unreachable or a 5xx (`AuthRetryableFetchError`), too many requests (429), or an answer that wasn't its own (a
+ * proxy's HTML page: `AuthUnknownError`, no status). W85a review (a)1: the sign-in routes ask Supabase for the user on
+ * every link and create, so a 429 there must not send the customer back to sign in. Anything else (a bad, expired or
+ * revoked token, a deleted user: 400, 401, 403, 404) is signed out.
+ */
 function refusedToken(error: { name: string; status?: number | undefined; message: string }, what: string): Error {
-  if (error.name === 'AuthRetryableFetchError' || (error.status ?? 0) >= 500) {
+  const status = error.status
+  if (error.name === 'AuthRetryableFetchError' || error.name === 'AuthUnknownError' || status === undefined || status === 429 || status >= 500) {
     // Supabase being unreachable isn't the customer's fault: don't sign them out for it.
     return new Error(`Could not ${what}: ${error.message}`)
   }

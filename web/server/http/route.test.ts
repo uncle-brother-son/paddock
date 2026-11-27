@@ -267,6 +267,37 @@ describe("defineRoute: the 'customer_sign_in' mode (W85a)", () => {
     expect(logs[0]).toMatchObject({ actor: 'login:login-t1', status: 200 })
   })
 
+  it("W85a review (b)3: the verifier's refusal reaches the site as it is (403 with its reason and words), and the handler never runs", async () => {
+    const { db } = fakeDb()
+    const message = 'Please confirm your email address with the code we sent you, then try again.'
+    const { defineRoute } = testRouteFactory(db, {
+      signInVerifier: () => async () => {
+        throw new ApiError('FORBIDDEN', message, { details: { reason: 'email_not_confirmed', message } })
+      },
+    })
+    const handler = vi.fn()
+    const route = defineRoute({ auth: 'customer_sign_in', input: noInput, output }, handler)
+    const response = await route(new Request('https://worker.test/x', { method: 'POST', headers: { authorization: 'Bearer t1' } }))
+    expect(response.status).toBe(403)
+    expect(await response.json()).toMatchObject({ ok: false, error: { code: 'FORBIDDEN', message, details: { reason: 'email_not_confirmed', message } } })
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it("the login is exactly the verifier's answer, whatever else the request carries (an email in the body, the query or any header)", async () => {
+    const { db } = fakeDb()
+    const verified = { authUserId: 'login-1', email: 'sam@example.com' }
+    const { defineRoute } = testRouteFactory(db, { signInVerifier: () => async () => verified })
+    const seen: unknown[] = []
+    const route = defineRoute({ auth: 'customer_sign_in', input: noInput, output }, async (context) => {
+      seen.push(context.login)
+      return { value: 'ok' }
+    })
+    const headers = { authorization: 'Bearer t1', 'x-email': 'other@example.com', 'x-staff-email': 'other@example.com', 'x-user-email': 'other@example.com', email: 'other@example.com' }
+    const response = await route(new Request('https://worker.test/x?email=other@example.com', { method: 'POST', headers, body: JSON.stringify({ email: 'other@example.com', authUserId: 'login-2' }) }))
+    expect(response.status).toBe(200)
+    expect(seen).toEqual([verified])
+  })
+
   it('no token is refused before the handler runs; a route of this mode can never be idempotent', async () => {
     const { db } = fakeDb()
     const { defineRoute } = testRouteFactory(db)

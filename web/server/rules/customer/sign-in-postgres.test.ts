@@ -188,6 +188,46 @@ describe('create on sign-up against another writer of the same email, at the sam
     expect(await stored(email)).toEqual([{ first_name: 'Web', date_of_birth: null, auth_user_id: one.authUserId }])
   })
 
+  it('W85a review (b)4: another writer of the same address in capitals at the same moment (the lower(email) rule, not the email key, is the one hit): the website create waits, then links that row; one customer', async () => {
+    const email = fresh()
+    const login = await newLogin(email)
+    const capitals = email.toUpperCase()
+    const result = await race(
+      (db) => db.transaction((tx) => tx.query<{ id: string }>("INSERT INTO customers (first_name, last_name, email, date_of_birth) VALUES ('Cap', 'Ital', $1, '1990-01-01') RETURNING id", [capitals])),
+      (db) => webCreate(db, login)
+    )
+    expect(result.held).toMatchObject({ answered: [{ id: expect.any(String) }] })
+    expect(result.waiter).toEqual({ answered: { status: 'linked', customer: { firstName: 'Cap', email: capitals }, change: 'linked' } })
+    expect(await stored(email)).toEqual([{ first_name: 'Cap', date_of_birth: '1990-01-01', auth_user_id: login.authUserId }])
+  })
+
+  it('two logins of one email linking one existing customer at once: the second waits on the first\'s lock, then is refused as linked elsewhere; the customer has the first login (W85a Level 1)', async () => {
+    const email = fresh()
+    await staffCreate(third, email)
+    const one = await newLogin(email)
+    const two = await newLogin(email)
+    const result = await race(
+      (db) => linkSignIn(db, one, crypto.randomUUID()),
+      (db) => linkSignIn(db, two, crypto.randomUUID())
+    )
+    expect(result.held).toMatchObject({ answered: { status: 'linked', change: 'linked' } })
+    expect(result.waiter).toEqual({ refused: 'email_linked_elsewhere' })
+    expect(await stored(email)).toEqual([{ first_name: 'Staff', date_of_birth: '1985-05-05', auth_user_id: one.authUserId }])
+  })
+
+  it('one login linking twice at once (a double press): the second waits, then answers linked with nothing done', async () => {
+    const email = fresh()
+    await staffCreate(third, email)
+    const login = await newLogin(email)
+    const result = await race(
+      (db) => linkSignIn(db, login, crypto.randomUUID()),
+      (db) => linkSignIn(db, login, crypto.randomUUID())
+    )
+    expect(result.held).toMatchObject({ answered: { change: 'linked' } })
+    expect(result.waiter).toMatchObject({ answered: { status: 'linked', change: 'none' } })
+    expect(await stored(email)).toEqual([{ first_name: 'Staff', date_of_birth: '1985-05-05', auth_user_id: login.authUserId }])
+  })
+
   it('a link at the same moment as a staff create: the link waits on nothing (it finds no customer yet) and answers needs details, and nothing is linked by it', async () => {
     const email = fresh()
     const login = await newLogin(email)

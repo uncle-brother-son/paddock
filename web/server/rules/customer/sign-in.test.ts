@@ -140,6 +140,17 @@ describe('link on sign-in (POST /api/v1/customer/sign-in/link)', () => {
     expect((await auditOf(id)).map((row) => row.action)).toEqual(['customer.login_linked'])
   })
 
+  it("a linked login whose email has changed since (in Supabase) is still found by its login: link and create answer linked, and no customer is made for the new email", async () => {
+    const id = await staffMade('changed.before@example.com')
+    const login = await newLogin('changed.before@example.com')
+    expect((await link(login.token)).body.data).toMatchObject({ change: 'linked' })
+    const changed = `${login.id}|changed.after@example.com`
+    expect((await link(changed)).body.data).toEqual({ status: 'linked', customer: { firstName: 'Staff', email: 'changed.before@example.com' }, change: 'none' })
+    expect((await create(changed, { firstName: 'New', lastName: 'Email' })).body.data).toMatchObject({ change: 'none', customer: { firstName: 'Staff' } })
+    expect(await customersOf('changed.after@example.com')).toEqual([])
+    expect((await customersOf('changed.before@example.com')).map((row) => [row.id, row.auth_user_id])).toEqual([[id, login.id]])
+  })
+
   it("the customer is already linked to a different login: refused in the site's words, nothing changes, and it is logged for staff", async () => {
     const id = await staffMade('taken@example.com')
     const first = await newLogin('taken@example.com')
@@ -211,6 +222,16 @@ describe('create on sign-up (POST /api/v1/customer/sign-in/create)', () => {
     const again = await create(login.token, { firstName: 'Other', lastName: 'Name' })
     expect(again.body.data).toEqual({ status: 'linked', customer: { firstName: 'Cee', email: 'create.twice@example.com' }, change: 'none' })
     expect((await customersOf('create.twice@example.com')).map((row) => row.first_name)).toEqual(['Cee'])
+    // W85a review (a)3: a second call answers linked whatever it sends, an empty body or names too long.
+    expect((await create(login.token, {})).body.data).toMatchObject({ status: 'linked', change: 'none' })
+    expect((await create(login.token, { firstName: 'x'.repeat(500), lastName: '' })).body.data).toMatchObject({ status: 'linked', change: 'none' })
+  })
+
+  it('W85a review (a)3: a staff customer of the email and an empty body: create still ends in the link (the names are only asked for a new customer)', async () => {
+    const id = await staffMade('empty.body@example.com')
+    const login = await newLogin('empty.body@example.com')
+    expect((await create(login.token, {})).body.data).toEqual({ status: 'linked', customer: { firstName: 'Staff', email: 'empty.body@example.com' }, change: 'linked' })
+    expect((await customersOf('empty.body@example.com')).map((row) => [row.id, row.auth_user_id])).toEqual([[id, login.id]])
   })
 
   it('a customer of the email made by staff between link and create: create ends in the link, and their own details are kept', async () => {
@@ -255,7 +276,10 @@ describe('create on sign-up (POST /api/v1/customer/sign-in/create)', () => {
       refused(answer, 400, 'VALIDATION', reason, message)
       expect(answer.body.error?.field).toBe(field)
     }
-    expect((await create(login.token, { lastName: 'Last' })).body.error?.code).toBe('VALIDATION')
+    // W85a review (a)2: a name left out (or null) is the rule's refusal, with its reason, not zod's.
+    refused(await create(login.token, { lastName: 'Last' }), 400, 'VALIDATION', 'first_name_required', SIGN_IN_WORDS.firstNameRequired)
+    refused(await create(login.token, { firstName: 'First', lastName: null }), 400, 'VALIDATION', 'last_name_required', SIGN_IN_WORDS.lastNameRequired)
+    refused(await create(login.token, {}), 400, 'VALIDATION', 'first_name_required', SIGN_IN_WORDS.firstNameRequired)
     expect(await customersOf('checks@example.com')).toEqual([])
   })
 })

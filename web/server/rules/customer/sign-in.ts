@@ -143,30 +143,34 @@ const trimmed = (value: string | null | undefined): string => (typeof value === 
 
 /**
  * POST /api/v1/customer/sign-in/create (backend log 9: first name, last name, phone optional; no date of birth, no
- * age check). The email is the login's. Checked first (a name each, the staff form's lengths), then one transaction:
- * the login's customer as link finds it (so a second call, or a customer of this email made by staff a moment before,
- * ends in the link and its own details are not written over); else the new customer, linked, with `customer.created`
- * and `customer.login_linked` audit rows. A customer made with this email at the same moment as the insert: the insert
- * writes nothing and the transaction links that customer instead. Never a duplicate.
+ * age check). The email is the login's. One transaction: the login's customer as link finds it (so a second call, or a
+ * customer of this email made by staff a moment before, ends in the link and its own details are not written over,
+ * whatever this call sent: W85a review (a)3, a second call with an empty body still answers linked); else the names are
+ * checked (a name each, the staff form's lengths: a refusal is thrown and the transaction, which has written nothing,
+ * rolls back) and the new customer is written, linked, with `customer.created` and `customer.login_linked` audit rows.
+ * A customer made with this email at the same moment as the insert: the insert writes nothing and the transaction links
+ * that customer instead. Never a duplicate.
  */
 export function createSignInCustomer(db: Db, login: Login, input: CustomerSignInCreateInput, requestId: string): Promise<CustomerSignInLinked> {
   const firstName = trimmed(input.firstName)
   const lastName = trimmed(input.lastName)
   const phone = trimmed(input.phone) || null
-  if (!firstName) throw refusal('VALIDATION', 'first_name_required', SIGN_IN_WORDS.firstNameRequired, { field: 'firstName' })
-  if (!lastName) throw refusal('VALIDATION', 'last_name_required', SIGN_IN_WORDS.lastNameRequired, { field: 'lastName' })
-  for (const [value, limit, field] of [
-    [firstName, CUSTOMER_FIELD_LIMITS.name, 'firstName'],
-    [lastName, CUSTOMER_FIELD_LIMITS.name, 'lastName'],
-    [phone ?? '', CUSTOMER_FIELD_LIMITS.phone, 'phone'],
-  ] as const) {
-    if (value.length > limit) throw refusal('VALIDATION', 'too_long', SIGN_IN_WORDS.tooLong(field, limit), { field })
-  }
 
   return inTransaction<CustomerSignInLinked>(db, async (tx) => {
     const found = await match(tx, login, requestId, 'sign_up')
     if (found.kind === 'linked') return answer(found.row, found.change)
     if (found.kind === 'elsewhere') return logElsewhere(tx, found.row, login, requestId)
+
+    // Nothing has been written yet ('none' writes nothing), so a throw here leaves the database as it was.
+    if (!firstName) throw refusal('VALIDATION', 'first_name_required', SIGN_IN_WORDS.firstNameRequired, { field: 'firstName' })
+    if (!lastName) throw refusal('VALIDATION', 'last_name_required', SIGN_IN_WORDS.lastNameRequired, { field: 'lastName' })
+    for (const [value, limit, field] of [
+      [firstName, CUSTOMER_FIELD_LIMITS.name, 'firstName'],
+      [lastName, CUSTOMER_FIELD_LIMITS.name, 'lastName'],
+      [phone ?? '', CUSTOMER_FIELD_LIMITS.phone, 'phone'],
+    ] as const) {
+      if (value.length > limit) throw refusal('VALIDATION', 'too_long', SIGN_IN_WORDS.tooLong(field, limit), { field })
+    }
 
     const [made] = await tx.query<CustomerRow>(INSERT_SQL, [firstName, lastName, login.email, phone, login.authUserId])
     if (!made) {

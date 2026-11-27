@@ -144,13 +144,14 @@ describe('authenticateSignIn (W85a)', () => {
   const confirmedUser = (extra: User = {}): User => ({ id: AUTH_USER, aud: 'authenticated', email: EMAIL, email_confirmed_at: '2026-11-27T10:00:00Z', ...extra })
 
   /** getClaims against the JWKS, and getUser answered with `user` (or a status). */
-  function signInVerifier(user: User | { status: number }): { verify: ReturnType<typeof createSignInVerifier>; userCalls: () => number } {
+  function signInVerifier(user: User | { status: number; html?: true }): { verify: ReturnType<typeof createSignInVerifier>; userCalls: () => number } {
     let calls = 0
     const fakeFetch = (async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.endsWith('/.well-known/jwks.json')) return Response.json({ keys: [{ ...publicJwk, kid: KID, alg: 'ES256', use: 'sig' }] })
       if (url.endsWith('/auth/v1/user')) {
         calls += 1
+        if ('html' in user && user.html) return new Response('<html><body>Blocked by a proxy</body></html>', { status: user.status as number, headers: { 'content-type': 'text/html' } })
         if ('status' in user && typeof user.status === 'number') return Response.json({ msg: 'down', error_code: 'unexpected_failure' }, { status: user.status })
         return Response.json(user)
       }
@@ -197,6 +198,34 @@ describe('authenticateSignIn (W85a)', () => {
     expect((await failure(authenticateSignIn(bearer(await signToken(otherKey.privateKey, signInClaims())), verify))).code).toBe('UNAUTHORISED')
     expect((await failure(authenticateSignIn(bearer(await signToken(signingKey.privateKey, signInClaims({ aud: 'anon' }))), verify))).code).toBe('UNAUTHORISED')
     expect(userCalls()).toBe(0)
+  })
+
+  it('Supabase refuses the user read (the login deleted, or its session ended): signed out, never taken as a user', async () => {
+    const token = await signToken(signingKey.privateKey, signInClaims())
+    for (const status of [401, 403, 404]) {
+      const err = await failure(authenticateSignIn(bearer(token), signInVerifier({ status }).verify))
+      expect([status, err.code]).toEqual([status, 'UNAUTHORISED'])
+    }
+  })
+
+  it('W85a review (a)1: too many requests (429), or an answer that is not Supabase\'s own (a proxy\'s page), is a fault, not a sign-out', async () => {
+    const token = await signToken(signingKey.privateKey, signInClaims())
+    for (const answer of [{ status: 429 }, { status: 403, html: true as const }, { status: 400, html: true as const }]) {
+      const err = await authenticateSignIn(bearer(token), signInVerifier(answer).verify).catch((e: unknown) => e)
+      expect(err, JSON.stringify(answer)).toBeInstanceOf(Error)
+      expect(err, JSON.stringify(answer)).not.toBeInstanceOf(ApiError)
+    }
+  })
+
+  it("W85a review (b)2: the customer routes' own check (createTokenVerifier) never asks Supabase for the user", async () => {
+    const token = await signToken(signingKey.privateKey, signInClaims())
+    const urls: string[] = []
+    const fakeFetch = (async (input: RequestInfo | URL) => {
+      urls.push(String(input))
+      return Response.json({ keys: [{ ...publicJwk, kid: KID, alg: 'ES256', use: 'sig' }] })
+    }) as typeof fetch
+    expect(await createTokenVerifier(SUPABASE_URL, 'anon-key', fakeFetch)(token)).toEqual({ authUserId: AUTH_USER })
+    expect(urls.filter((url) => url.endsWith('/auth/v1/user'))).toEqual([])
   })
 
   it("Supabase unreachable for the user read is a fault, not a sign-out", async () => {
