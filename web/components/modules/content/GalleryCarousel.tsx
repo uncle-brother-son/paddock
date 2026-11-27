@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react'
 
 import type { GalleryCarouselContent } from '@/lib/modules/content'
+import { glideSeconds } from '@/lib/motion/glide'
 import { usePrefersReducedMotion } from '@/lib/motion/reduced-motion'
 import { DURATION_LONG, EASE_SMOOTH } from '@/lib/motion/tokens'
 
@@ -65,6 +66,12 @@ const placesOf = (element: HTMLElement): number[] => {
   return [...(row?.children ?? [])].map((item) => item.getBoundingClientRect().left - first)
 }
 
+/** The places the strip settles at (WQ93): each picture's place, none past the strip's end, where the last pictures stop short. */
+const stopsOf = (element: HTMLElement): number[] => {
+  const end = element.scrollWidth - element.clientWidth
+  return placesOf(element).map((place) => Math.min(place, end))
+}
+
 type GalleryCarouselProps = GalleryCarouselContent & {
   /** For Storybook and tests: reduced motion on or off, whatever the visitor's own setting. */
   reducedMotion?: boolean
@@ -92,10 +99,12 @@ type GalleryCarouselProps = GalleryCarouselContent & {
  * the last pictures stop short of the margin.
  * - A finger and a trackpad: the browser's own scroll snapping (`gallery-strip`: each picture snaps by its start, the
  *   grid's margin in from the strip's edge), so the browser eases it into line itself.
- * - A mouse drags it: press, move, let go. Let go of while moving, it glides on along the site's curve (`GLIDE`), and
- *   the glide's end is the picture nearest to where it would have stopped, so it slows straight into line; let go of
- *   while still, it eases to the nearest picture. With reduced motion on there is no glide: it goes to the nearest
- *   picture at once. While script moves it the browser's snapping is off (`data-script-moves`), or the two would fight.
+ * - A mouse drags it: press, move, let go. Let go of while moving, it always carries on to the next picture the way
+ *   it was going, never back behind where it was let go of (WQ97, as wild.as): it glides there along the site's curve
+ *   (`GLIDE`) and slows straight into line, over a time in step with how far that is, so it sets off at the hand's own
+ *   speed (`glideSeconds`: never under the short duration nor over the long one). Let go of while still, it eases to
+ *   the nearest picture. With reduced motion on there is no glide: it is at the same picture at once. While script
+ *   moves it the browser's snapping is off (`data-script-moves`), or the two would fight.
  * - The keyboard: while there is more than the window shows, the strip takes focus and the arrow keys move it one
  *   picture at a time (Home and End: its two ends), over the long duration with the smooth curve; reduced motion jumps.
  * A video is drawn as HeroMedia draws one (WQ35, WQ43), with its own buttons, which a press still reaches.
@@ -149,14 +158,23 @@ export function GalleryCarousel({ items, theme, sectionId, reducedMotion: reduce
    * strip's end, where the last pictures stop short (it is never forced past its end). The browser's own snapping
    * (a finger, a trackpad) settles at the same places.
    */
-  const nearestStop = (element: HTMLDivElement, to: number): number => {
-    const end = element.scrollWidth - element.clientWidth
-    const stops = placesOf(element).map((place) => Math.min(place, end))
-    return stops.reduce((best, place) => (Math.abs(place - to) < Math.abs(best - to) ? place : best), 0)
+  const nearestStop = (element: HTMLDivElement, to: number): number => stopsOf(element).reduce((best, place) => (Math.abs(place - to) < Math.abs(best - to) ? place : best), 0)
+
+  /**
+   * WQ97 (Wayne, 27 Nov; as wild.as): the next place the strip settles at from `from`, the way it is going: the
+   * first picture's place ahead of it, or the strip's end (its start, going back) when there is none. Never behind
+   * `from`.
+   */
+  const nextStop = (element: HTMLDivElement, from: number, onwards: boolean): number => {
+    const stops = stopsOf(element)
+    return onwards ? (stops.find((place) => place > from + 1) ?? element.scrollWidth - element.clientWidth) : ([...stops].reverse().find((place) => place < from - 1) ?? 0)
   }
 
-  /** Moves the strip to `to`, never past either end: along the whole curve, or as a glide along its slowing part. */
-  const moveTo = (to: number, glide: boolean) => {
+  /**
+   * Moves the strip to `to`, never past either end: along the whole curve, or as a glide along its slowing part,
+   * over `seconds` (the long duration, unless a glide is given its own: `glideSeconds`).
+   */
+  const moveTo = (to: number, glide: boolean, seconds: number = DURATION_LONG) => {
     const element = strip.current
     if (!element) return
     stop()
@@ -170,7 +188,7 @@ export function GalleryCarousel({ items, theme, sectionId, reducedMotion: reduce
     scriptMoves(true)
     const startsAt = glide ? GLIDE.at : 0
     const doneAtStart = glide ? GLIDE.done : 0
-    const length = DURATION_LONG * 1000 * (1 - startsAt)
+    const length = seconds * 1000 * (1 - startsAt)
     const began = performance.now()
     const step = (now: number) => {
       const through = clamp((now - began) / length, 0, 1)
@@ -242,19 +260,24 @@ export function GalleryCarousel({ items, theme, sectionId, reducedMotion: reduce
     if (element.hasPointerCapture(event.pointerId)) element.releasePointerCapture(event.pointerId)
     const first = now.trail[0]!
     const last = now.trail[now.trail.length - 1]!
-    // Held still before letting go (or the browser took the pointer away): no speed, no glide. WQ93: it eases to the
-    // nearest picture from where it is; with reduced motion it goes there at once (`moveTo`).
-    if (reducedMotion || event.type === 'pointercancel' || event.timeStamp - last.at > SPEED_OVER || last.at === first.at) {
-      moveTo(nearestStop(element, element.scrollLeft), false)
+    // Held still before letting go (or the browser took the pointer away): no speed.
+    const still = event.type === 'pointercancel' || event.timeStamp - last.at > SPEED_OVER || last.at === first.at
+    // Pixels a millisecond, the way the strip was going (the strip moves against the pointer).
+    const speed = still ? 0 : -(last.x - first.x) / (last.at - first.at)
+    const at = element.scrollLeft
+    // No speed, no glide. WQ93: it eases to the nearest picture from where it is.
+    if (speed === 0) {
+      moveTo(nearestStop(element, at), false)
       return
     }
-    // Pixels a millisecond, the way the strip was going (the strip moves against the pointer).
-    const speed = -(last.x - first.x) / (last.at - first.at)
-    // How far a glide that sets off at that speed goes, along the slowing part of the curve.
-    const distance = (speed * DURATION_LONG * 1000 * (1 - GLIDE.done)) / GLIDE.speed
-    // WQ93: the glide's end is the picture nearest to where that glide would have stopped, so it eases straight
-    // there along the same curve and stops lined up: it never stops and is then nudged.
-    moveTo(nearestStop(element, element.scrollLeft + distance), true)
+    // WQ97: let go of while moving, it always carries on to the next picture the way it was going, never back behind
+    // where it was let go of. It glides there along the slowing part of the curve and stops lined up (WQ93: it never
+    // stops and is then nudged). With reduced motion it is there at once (`moveTo`).
+    const to = nextStop(element, at, speed > 0)
+    // How far a glide that sets off at that speed goes over the long duration; its own time is in step with how far
+    // it is sent instead, so it still sets off at the hand's speed.
+    const natural = (Math.abs(speed) * DURATION_LONG * 1000 * (1 - GLIDE.done)) / GLIDE.speed
+    moveTo(to, true, glideSeconds(natural, Math.abs(to - at)))
   }
 
   /**

@@ -110,6 +110,8 @@ export const SimilarMerchSettles: Story = {
     const cards = [...list.children]
     await expect(cards.map((card) => [Math.round(box(card).left), Math.round(box(card).width)])).toEqual([[16, 175], [199, 175], [382, 175], [565, 175]])
     await expect(getComputedStyle(list).scrollSnapType).toBe('x mandatory')
+    // Lenis leaves a sideways gesture over the row to the browser, as it does over the gallery and the rows of cards.
+    await expect(list.hasAttribute('data-lenis-prevent-horizontal')).toBe(true)
     await expect(cards.map((card) => [getComputedStyle(card).scrollSnapAlign, getComputedStyle(card).scrollMarginLeft])).toEqual(cards.map(() => ['start', '16px']))
     // The cards' places: 0, 183 (a card's 175 and the 8 after it), and the row's end, 366.
     await expect(list.scrollWidth - list.clientWidth).toBe(366)

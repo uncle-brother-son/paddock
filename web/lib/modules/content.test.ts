@@ -374,9 +374,10 @@ describe('the GalleryCarousel (WQ82)', () => {
     expect(carousel).toContain('data-lenis-prevent-horizontal=""')
     expect(carousel).toContain("import { DURATION_LONG, EASE_SMOOTH } from '@/lib/motion/tokens'")
     expect(carousel).toContain('if (reducedMotion || Math.abs(end - from) < 1) {')
-    // W84 (WQ93): a release with no glide (reduced motion, a pointer taken away, held still) no longer stays where it
-    // is: it goes to the nearest picture.
-    expect(carousel).toContain("if (reducedMotion || event.type === 'pointercancel' || event.timeStamp - last.at > SPEED_OVER || last.at === first.at) {")
+    // W84 (WQ93): a release with no speed (a pointer taken away, held still) no longer stays where it is: it goes to
+    // the nearest picture.
+    expect(carousel).toContain("const still = event.type === 'pointercancel' || event.timeStamp - last.at > SPEED_OVER || last.at === first.at")
+    expect(carousel).toContain('const speed = still ? 0 : -(last.x - first.x) / (last.at - first.at)')
   })
 
   it('WQ93: it settles on a picture: the browser snaps each picture by its start at the grid margin, and never while script moves the strip', () => {
@@ -386,11 +387,25 @@ describe('the GalleryCarousel (WQ82)', () => {
     expect(childNamed(strip, '&[data-script-moves]').declarations).toEqual({ 'scroll-snap-type': 'none' })
     const carousel = read('components/modules/content/GalleryCarousel.tsx')
     expect(carousel).toContain("const SCRIPT_MOVES = 'data-script-moves'")
-    // A mouse's glide ends at the place nearest to where it would have stopped, so it slows straight into line; a
-    // release with no speed goes to the nearest from where it is. Neither place is past the strip's end.
-    expect(carousel).toContain('moveTo(nearestStop(element, element.scrollLeft + distance), true)')
-    expect(carousel).toContain('moveTo(nearestStop(element, element.scrollLeft), false)')
-    expect(carousel).toContain('const stops = placesOf(element).map((place) => Math.min(place, end))')
+    // A release with no speed goes to the nearest place from where it is. No place is past the strip's end.
+    expect(carousel).toContain('if (speed === 0) {\n      moveTo(nearestStop(element, at), false)')
+    expect(carousel).toContain('return placesOf(element).map((place) => Math.min(place, end))')
+  })
+
+  it('WQ97: let go of while moving, it always carries on to the next picture that way, over a time in step with how far that is', () => {
+    const carousel = read('components/modules/content/GalleryCarousel.tsx')
+    // The next place ahead of where it was let go of (a pixel's slack), or the strip's end; going back, the last one
+    // behind, or the start. Never the nearest, which can be behind the release.
+    expect(carousel).toContain('const to = nextStop(element, at, speed > 0)')
+    expect(carousel).toContain(
+      'return onwards ? (stops.find((place) => place > from + 1) ?? element.scrollWidth - element.clientWidth) : ([...stops].reverse().find((place) => place < from - 1) ?? 0)',
+    )
+    expect(carousel).not.toContain('nearestStop(element, element.scrollLeft + distance)')
+    // W84 noticed 2: the glide's time follows the distance it is sent (lib/motion/glide.ts, with its own test), so it
+    // sets off at the hand's speed. `natural` is how far it would have gone by itself over the long duration.
+    expect(carousel).toContain('const natural = (Math.abs(speed) * DURATION_LONG * 1000 * (1 - GLIDE.done)) / GLIDE.speed')
+    expect(carousel).toContain('moveTo(to, true, glideSeconds(natural, Math.abs(to - at)))')
+    expect(carousel).toContain('const length = seconds * 1000 * (1 - startsAt)')
   })
 
   it('WQ93 amended: the rows of Membership and Session Pass cards and Similar Merch settle the same way; the product gallery is as it was', () => {
@@ -402,7 +417,9 @@ describe('the GalleryCarousel (WQ82)', () => {
       'if (inner.left - margin < outer.left || inner.right + margin > outer.right) strip.scrollBy({ left: inner.left - margin - outer.left })',
     )
     const similar = read('components/modules/shop/UpSellRow.tsx')
-    expect(similar).toContain('<ul className="flex snap-x snap-mandatory gap-8 overflow-x-auto px-16 ')
+    // W84 noticed 4: and Lenis leaves a sideways gesture over it to the browser, as it does over the other two rows.
+    expect(similar).toContain('<ul data-lenis-prevent-horizontal="" className="flex snap-x snap-mandatory gap-8 overflow-x-auto px-16 ')
+    expect(read('components/modules/content/PlanCardRow.tsx')).toContain('data-lenis-prevent-horizontal=""')
     expect(similar).toContain('shrink-0 snap-start scroll-ml-16 ')
     expect(read('components/shop/ProductGallery.tsx')).toContain('className="flex snap-x snap-mandatory overflow-x-auto [scrollbar-width:none] md:flex-col md:overflow-x-visible [&::-webkit-scrollbar]:hidden"')
   })

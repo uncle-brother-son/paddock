@@ -212,8 +212,8 @@ const snapping = (strip: HTMLElement) => [strip.hasAttribute('data-script-moves'
 
 /**
  * A mouse drags it: press, move, let go. It follows the pointer exactly (200px to the left is 200px along), never
- * past either end, and a move of a few pixels is still a press. With reduced motion on there is no glide: let go of,
- * it is at once on the nearest picture, lined up at the grid's left margin (WQ93).
+ * past either end, and a move of a few pixels is still a press. With reduced motion on there is no glide: let go of
+ * while moving, it is at once on the next picture the way it was going, lined up at the grid's left margin (WQ93, WQ97).
  */
 export const DraggedByAMouse: Story = {
   name: 'Dragged by a mouse',
@@ -235,8 +235,8 @@ export const DraggedByAMouse: Story = {
     await expect(strip.scrollLeft).toBe(300)
     await fireEvent.pointerUp(strip, pointer(500))
     await waitFor(() => expect(strip.hasAttribute('data-dragging')).toBe(false))
-    // Reduced motion: no glide after the release. It is on the nearest picture at once: the second, whose place (472)
-    // is nearer to 300 than the first's (0), and which stands at the grid's margin. The browser has its snapping back.
+    // Reduced motion: no glide after the release. It is at once on the next picture the way it was going: the second,
+    // whose place is 472, and which stands at the grid's margin. The browser has its snapping back.
     await expect([near(strip.scrollLeft), near(box(items[1]!).left)]).toEqual([472, 16])
     await expect(snapping(strip)).toEqual([false, 'x mandatory'])
     await new Promise((resolve) => setTimeout(resolve, 200))
@@ -263,7 +263,8 @@ const dragAndHold = async (strip: HTMLElement, from: number, to: number) => {
 }
 
 /**
- * WQ93 (Wayne, 27 Nov; as wild.as/about): a drag ends lined up. Let go of between two pictures, the strip eases to the
+ * WQ93 (Wayne, 27 Nov; as wild.as/about): a drag ends lined up. Held still and let go of between two pictures (no
+ * speed: WQ97's rule for a moving release is the glide story's), the strip eases to the
  * nearest one, which comes to rest at the grid's left margin (16): on to the next when that is nearer, back when the
  * one it came from is. At the strip's end it is not forced on: the last pictures stop short of the margin, the last
  * one the margin in from the window's right edge.
@@ -314,59 +315,72 @@ export const ADragEndsLinedUp: Story = {
   },
 }
 
+/** Throws the strip with a mouse: pressed at `from`, moved through each of `through` 20 ms apart, and let go of while still moving. */
+const throwIt = async (strip: HTMLElement, from: number, through: number[]) => {
+  await fireEvent.pointerDown(strip, pointer(from))
+  for (const x of through) {
+    await wait(20)
+    await fireEvent.pointerMove(strip, pointer(x))
+  }
+  await fireEvent.pointerUp(strip, pointer(through[through.length - 1]!))
+}
+
 /**
  * Momentum (WQ82): let go of while it is moving, the strip glides on the way it was going and slows to a stop along
- * the site's curve, never backwards and never past its end. WQ93: the glide's end is a picture's place, so it slows
- * straight into line (no stop and then a nudge). A press ends a glide; let go of, the strip eases on to the nearest
- * picture.
+ * the site's curve, never backwards and never past its end. WQ97 (Wayne, 27 Nov; as wild.as): it always carries on to
+ * the next picture that way, however gently it was thrown and however near the picture behind it is, and never goes
+ * back behind where it was let go of. WQ93: the glide ends on that picture's place, so it slows straight into line
+ * (no stop and then a nudge). A press ends a glide; let go of, the strip eases on to the nearest picture.
  */
 export const GlidesOnRelease: Story = {
-  name: 'Glides on after the release',
+  name: 'Glides on after the release, to the next picture',
   globals: DESKTOP,
   args: { reducedMotion: false },
   play: async ({ canvasElement }) => {
-    const { strip } = parts(canvasElement)
+    const { strip, items } = parts(canvasElement)
     await scrolls(strip)
     // The places it can rest at: the first picture's, the second's, and the strip's end (the third's and fourth's are past it).
     const stops = [0, 472, 649]
-    await fireEvent.pointerDown(strip, pointer(900))
-    for (const x of [870, 830, 780, 720, 650]) {
-      await wait(20)
-      await fireEvent.pointerMove(strip, pointer(x))
+    /** Throws it, watches it go, and waits until it is at rest at `at`, handed back to the browser, which moves nothing. */
+    const thrownTo = async (from: number, through: number[], letGoAt: number, at: number) => {
+      const seen: number[] = []
+      await throwIt(strip, from, through)
+      await expect(near(strip.scrollLeft)).toBe(letGoAt)
+      // Script has it while it glides: the browser's snapping is off until it is at rest.
+      await expect(snapping(strip)).toEqual([true, 'none'])
+      const watch = setInterval(() => seen.push(strip.scrollLeft), 16)
+      await waitFor(() => expect(near(strip.scrollLeft)).toBe(at), { timeout: 3000 })
+      await waitFor(() => expect(snapping(strip)).toEqual([false, 'x mandatory']))
+      await wait(150)
+      clearInterval(watch)
+      await expect(near(strip.scrollLeft)).toBe(at)
+      return [letGoAt, ...seen]
     }
-    await fireEvent.pointerUp(strip, pointer(650))
-    const letGoAt = strip.scrollLeft
-    // Past half-way to the second picture (236), so whatever its speed the nearest place to its glide's end is ahead.
-    await expect(letGoAt).toBe(250)
-    // Script has it while it glides: the browser's snapping is off until it is at rest.
-    await expect(snapping(strip)).toEqual([true, 'none'])
-    // It goes on, the same way, and comes to rest further along.
-    const seen: number[] = []
-    const watch = setInterval(() => seen.push(strip.scrollLeft), 16)
-    await waitFor(() => expect(strip.scrollLeft).toBeGreaterThan(letGoAt + 20), { timeout: 3000 })
-    await wait(900)
-    clearInterval(watch)
-    const rest = strip.scrollLeft
-    await wait(150)
-    await expect(strip.scrollLeft).toBe(rest)
-    await expect(seen.every((left, index) => index === 0 || left >= seen[index - 1]!)).toBe(true)
-    await expect(rest).toBeLessThanOrEqual(strip.scrollWidth - strip.clientWidth)
-    // WQ93: where it stopped is a picture's place (or the end), and the browser, which has its snapping back, moved nothing.
-    await expect(stops).toContain(near(rest))
-    await expect(snapping(strip)).toEqual([false, 'x mandatory'])
-    // A press stops a glide where it is. (Thrown back towards the start this time.)
-    await fireEvent.pointerDown(strip, pointer(300))
-    for (const x of [340, 400, 480]) {
-      await wait(20)
-      await fireEvent.pointerMove(strip, pointer(x))
-    }
-    await fireEvent.pointerUp(strip, pointer(480))
+    const onwardsOnly = (seen: number[]) => seen.every((left, index) => index === 0 || left >= seen[index - 1]!)
+    const backOnly = (seen: number[]) => seen.every((left, index) => index === 0 || left <= seen[index - 1]!)
+
+    // A gentle throw onwards, let go of at 100. The first picture's place (0) is the nearer; it still carries on to
+    // the second's (472), never backwards, and the second picture stands at the grid's margin.
+    await expect(onwardsOnly(await thrownTo(900, [890, 875, 855, 830, 800], 100, 472))).toBe(true)
+    await expect(near(box(items[1]!).left)).toBe(16)
+    // Onwards again, let go of at 562: no picture's place is ahead, so it carries on to the strip's end and no further.
+    await expect(onwardsOnly(await thrownTo(900, [880, 850, 810], 562, 649))).toBe(true)
+    await expect(near(1440 - box(items[3]!).right)).toBe(16)
+    // Thrown back, let go of at 600. The end (649) is the nearer; it carries on back to the second picture, never onwards.
+    await expect(backOnly(await thrownTo(300, [310, 325, 349], 600, 472))).toBe(true)
+    await expect(near(box(items[1]!).left)).toBe(16)
+    // Back again, let go of at 352 (the second picture's place is the nearer): on back to the first.
+    await expect(backOnly(await thrownTo(300, [330, 370, 420], 352, 0))).toBe(true)
+    await expect(near(box(items[0]!).left)).toBe(16)
+
+    // A press stops a glide where it is.
+    await throwIt(strip, 900, [860, 800, 720])
     await wait(60)
     await fireEvent.pointerDown(strip, pointer(500))
     const held = strip.scrollLeft
     await wait(200)
     await expect(strip.scrollLeft).toBe(held)
-    // Let go of with no drag: it does not stay between two pictures, it eases on to the nearest.
+    // Let go of with no drag (no speed): it does not stay between two pictures, it eases on to the nearest.
     await fireEvent.pointerUp(strip, pointer(500))
     await waitFor(() => expect(stops).toContain(near(strip.scrollLeft)), { timeout: 3000 })
     await waitFor(() => expect(snapping(strip)).toEqual([false, 'x mandatory']))

@@ -26,7 +26,7 @@ export const SAMPLE_FRAME: FrameContent = {
     { ...page('m3', 'Exclusive Hire', '/exclusive-hire'), thumbnail: thumbnail('#a7bbc8') },
     { ...page('m4', 'Smoothies', '/smoothies'), thumbnail: null },
     { ...page('m5', 'Shop', '/shop'), thumbnail: null },
-    { ...page('m6', 'Gift Cards', '/gift-card'), thumbnail: thumbnail('#bd9b5d') },
+    { ...page('m6', 'Gift Cards', '/shop/gift-card'), thumbnail: thumbnail('#bd9b5d') },
   ],
   footer: {
     groups: [

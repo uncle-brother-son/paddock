@@ -415,6 +415,19 @@ describe('what Level 2 checks', () => {
     expect(config).toContain("include: ['app/**/*.test.ts', 'lib/**/*.test.ts', 'server/**/*.test.ts', 'contracts/**/*.test.ts', 'scripts/**/*.test.ts']")
   })
 
+  // Wayne, 27 Nov (on W84): a change to a component failed two tests in lib/modules/content.test.ts, which had not
+  // changed and so were not run.
+  it('unit tests at Level 2: every test under lib/ as well, changed or not, each once', () => {
+    const libTests = ['lib/modules/content.test.ts', 'lib/seo/noindex.test.ts']
+    const files = ['web/lib/seo/noindex.test.ts', 'web/scripts/check-fast-level.test.ts', 'web/components/modules/content/GalleryCarousel.tsx']
+    expect(unitTestsToRun(files.map((file) => changed(file)), libTests)).toEqual(['lib/modules/content.test.ts', 'lib/seo/noindex.test.ts', 'scripts/check-fast-level.test.ts'])
+    // With no test changed at all, they are still run.
+    expect(unitTestsToRun([changed('web/components/modules/content/GalleryCarousel.tsx')], libTests)).toEqual(libTests)
+    const script = readFileSync(path.join(WEB, 'scripts/check-fast.mjs'), 'utf8')
+    expect(script).toContain("const libTests = level === 2 ? globSync('lib/**/*.test.ts', { cwd: WEB }).sort() : []")
+    expect(script).toContain('const unitTests = unitTestsToRun(changes, libTests)')
+  })
+
   it('lint: the scripts that are still there, each from its own folder', () => {
     expect(
       filesToLint([changed('web/app/fonts.ts'), changed('web/app/globals.css', null, ''), changed('web/lib/gone.ts', 'x', null), changed('studio/structure.ts'), changed('supabase/README.md')]),

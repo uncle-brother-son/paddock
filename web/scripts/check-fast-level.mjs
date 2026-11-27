@@ -251,11 +251,18 @@ export function storiesFor(changedFiles, stories) {
     .map(({ file }) => file)
 }
 
-/** The changed unit tests that are still there, from web/ (the folders vitest.unit.config.ts runs). */
-export function unitTestsToRun(changes) {
-  return changes
+/**
+ * The unit tests to run, from web/ (the folders vitest.unit.config.ts runs): the changed ones that are still there.
+ * At Level 2 (Wayne, 27 Nov, on W84) every test under lib/ is run as well, changed or not: check-fast.mjs hands them
+ * in as `libTests`, and they come first. They hold the components' and the stylesheet's own lines, so a change to a
+ * component can fail one that did not change (W84: two in lib/modules/content.test.ts went unseen), and all of them
+ * take a second or two.
+ */
+export function unitTestsToRun(changes, libTests = []) {
+  const changed = changes
     .filter(({ file, after }) => after !== null && /^web\/(app|lib|server|contracts|scripts)\/.+\.test\.ts$/.test(file))
     .map(({ file }) => file.slice('web/'.length))
+  return [...new Set([...libTests, ...changed])]
 }
 
 /** The changed files to lint, in web/ and in studio/ (each with its own rules), from that folder. Gone files are left out. */

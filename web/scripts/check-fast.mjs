@@ -1,7 +1,7 @@
 // npm run check:fast (WQ29, WQ30): reads what changed (against origin/main, committed or not), prints the test level and
 // runs that level's checks. Level 1 is never run from here: it says so and exits 2. Level 1b runs the quick checks
-// (the changed tests among them) and then says one full Worker run is still owed, exiting 2 when they passed. The
-// rules: check-fast-level.mjs.
+// (the changed tests among them) and then says one full Worker run is still owed, exiting 2 when they passed. Level 2
+// runs every test under lib/ with the changed tests (Wayne, 27 Nov). The rules: check-fast-level.mjs.
 import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, globSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
@@ -72,8 +72,12 @@ if (lint.studio.length > 0) run(`lint: ${lint.studio.length} changed in studio`,
 if (changedFiles.some((file) => file.startsWith('web/'))) run('tsc: web', WEB, 'npx', ['tsc', '--noEmit'])
 if (changedFiles.some((file) => file.startsWith('studio/'))) run('tsc: studio', STUDIO, 'npx', ['tsc', '--noEmit'])
 
-const unitTests = unitTestsToRun(changes)
-if (unitTests.length > 0) run(`unit tests: ${unitTests.join(', ')}`, WEB, 'npx', ['vitest', 'run', '--config', 'vitest.unit.config.ts', ...unitTests])
+// Level 2: every test under lib/, changed or not, and the changed tests elsewhere (check-fast-level.mjs says why).
+const libTests = level === 2 ? globSync('lib/**/*.test.ts', { cwd: WEB }).sort() : []
+const unitTests = unitTestsToRun(changes, libTests)
+const elsewhere = unitTests.filter((file) => !libTests.includes(file))
+const unitLabel = libTests.length > 0 ? [`all ${libTests.length} under lib/`, ...elsewhere].join(', ') : unitTests.join(', ')
+if (unitTests.length > 0) run(`unit tests: ${unitLabel}`, WEB, 'npx', ['vitest', 'run', '--config', 'vitest.unit.config.ts', ...unitTests])
 else console.log('\n--- unit tests: no test file changed')
 
 const stories = globSync('{components,features}/**/*.stories.{ts,tsx}', { cwd: WEB })
