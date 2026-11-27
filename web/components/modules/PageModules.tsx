@@ -1,15 +1,15 @@
 import { EVENTS_LIST_ID } from '@/lib/events/event'
-import { heroContent, type HeroContent } from '@/lib/modules/hero'
+import { heroMediaContent, type HeroMediaContent } from '@/lib/modules/hero-media'
 import type { PageModule } from '@/lib/sanity/schemas'
 
-import { Hero } from './Hero'
-import { UpcomingEvents } from './UpcomingEvents'
+import { HeroMedia } from './content/HeroMedia'
+import { UpcomingEventsModule } from './UpcomingEventsModule'
 
-type Shown = { key: string; hero: HeroContent } | { key: string; events: { heading: string | null } }
+type Shown = { key: string; hero: HeroMediaContent } | { key: string; events: { heading: string | null } }
 
 /**
  * A page's modules, top to bottom, as an editor ordered them in Sanity (W73b). Each kind of module has its own
- * component here: the Hero, and the Upcoming Events list (W75). A Hero with no picture or video yet takes no room,
+ * component here: HeroMedia, and the Upcoming Events list (W75). A HeroMedia with no picture or video yet takes no room,
  * and neither does an events list with no upcoming event.
  *
  * The page's first events list carries the id `events`, which is where an Event page's "All Events" scrolls to
@@ -22,7 +22,7 @@ type Shown = { key: string; hero: HeroContent } | { key: string; events: { headi
 export function PageModules({ modules, heading }: { modules: PageModule[]; heading: string }) {
   const shown: Shown[] = modules.flatMap((module): Shown[] => {
     if (module.type === 'upcomingEvents') return [{ key: module.key, events: { heading: module.heading } }]
-    const hero = heroContent(module)
+    const hero = heroMediaContent(module)
     return hero ? [{ key: module.key, hero }] : []
   })
   const firstEvents = shown.findIndex((one) => 'events' in one)
@@ -34,11 +34,11 @@ export function PageModules({ modules, heading }: { modules: PageModule[]; headi
       {shown.map((one, index) =>
         'hero' in one ? (
           // Only the first thing on the page loads ahead of everything else: a hero further down waits until it is near.
-          <Hero key={one.key} {...one.hero} priority={index === 0}>
+          <HeroMedia key={one.key} {...one.hero} priority={index === 0}>
             {index === 0 ? h1 : null}
-          </Hero>
+          </HeroMedia>
         ) : (
-          <UpcomingEvents key={one.key} heading={one.events.heading} {...(index === firstEvents ? { id: EVENTS_LIST_ID } : {})} />
+          <UpcomingEventsModule key={one.key} heading={one.events.heading} {...(index === firstEvents ? { id: EVENTS_LIST_ID } : {})} />
         ),
       )}
     </>

@@ -17,7 +17,7 @@ export const PAGE_AT_ONCE = 'page-at-once'
 
 /**
  * W77 (WQ64): the page an address's path shows, which is what the page transition is keyed by. /book is the home page
- * with the Book panel open over it, so it is the home page's own: closing the panel there changes the address to /
+ * with the booking panel open over it, so it is the home page's own: closing the panel there changes the address to /
  * where the page stands, and the page is neither swapped nor drawn again.
  */
 export const pageOf = (path: string): string => (path === BOOK_ADDRESS ? '/' : path)
@@ -105,7 +105,7 @@ export type HistoryStepEvent = {
 
 /**
  * Whether a step through history is one the site animates itself: Back or Forward to another page of this document.
- * Not a step that stays on the page (W77: the Book panel's own step; a list's category or sort), not one the browser
+ * Not a step that stays on the page (W77: the booking panel's own step; a list's category or sort), not one the browser
  * has already animated, and not with reduced motion.
  */
 export function animatesHistoryStep(step: Pick<HistoryStepEvent, 'navigationType' | 'canIntercept' | 'hasUAVisualTransition' | 'destination'>, pageNow: string, reducedMotion: boolean): boolean {

@@ -44,7 +44,7 @@ describe('the list of pages not built yet', () => {
     expect((NOT_BUILT_ADDRESSES as readonly string[]).includes('/shop/gift-card')).toBe(false)
   })
 
-  // W77 (WQ64): /book is the home page with the Book panel open over it: the home page's own component and metadata.
+  // W77 (WQ64): /book is the home page with the booking panel open over it: the home page's own component and metadata.
   it('/book has its page, which is the home page itself, and is not on the list', () => {
     expect((NOT_BUILT_ADDRESSES as readonly string[]).includes('/book')).toBe(false)
     const page = readFileSync(inApp('/book', 'page.tsx'), 'utf8')
@@ -77,7 +77,7 @@ describe('whether an address has a page to open', () => {
     // W76: the gift card's page, in either format.
     '/shop/gift-card',
     '/shop/gift-card?format=physical',
-    // W77: the home page with the Book panel open.
+    // W77: the home page with the booking panel open.
     '/book',
     '/book?date=2026-12-01&type=public',
   ])(

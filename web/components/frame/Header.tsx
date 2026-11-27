@@ -44,7 +44,7 @@ type HeaderProps = {
  * down takes it away and any scroll up, anywhere on the page, slides it back in (Wayne, 24 Nov), over the short
  * duration and the smooth curve; with reduced motion on it is just there or not. Its words take the mode of the
  * section beneath it. Book and Account are links, to /book and /account. A click on Book goes to useFramePanels
- * first, as every link to /book does (components/ui/SiteLink.tsx): inside the frame the Book panel opens over the
+ * first, as every link to /book does (components/ui/SiteLink.tsx): inside the frame the booking panel opens over the
  * page (W77); with no panel to open the link is followed. Bag asks useFramePanels too, and opens nothing yet.
  */
 export function Header({ variant = 'global', logo, menuLinks }: HeaderProps) {

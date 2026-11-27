@@ -6,7 +6,7 @@ import { SidewaysScroll } from '@/components/ui/SidewaysScroll'
 import type { SizeGuide } from '@/lib/sanity/schemas'
 import { SIZE_GUIDE_TAB, type Materials, type ProductView } from '@/lib/shop/product'
 
-import type { InfoTab } from './ProductInfoPanel'
+import type { InfoTab } from '@/components/modules/shop/ProductInfoPanel'
 
 /** One heading of Materials & Care with what stands under it, 12px apart: the heading in Label 12, as drawn ("Composition:"). */
 function Fact({ heading, children }: { heading: string; children: ReactNode }) {

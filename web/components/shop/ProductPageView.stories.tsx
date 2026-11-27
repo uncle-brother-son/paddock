@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/nextjs-vite'
 import { expect, userEvent, waitFor, within } from 'storybook/test'
 
-import { OverlayTexture } from '@/components/ui/Overlay'
+import { OverlayTexture } from '@/components/ui/media/Overlay'
 import type { ShopAvailabilityRouteOutput } from '@/contracts/shop'
 import { DURATION_SHORT, EASE_SMOOTH_CSS, linearEasingPoints } from '@/lib/motion/tokens'
 
@@ -30,8 +30,8 @@ const part = (canvasElement: HTMLElement, name: string) => canvasElement.querySe
 
 /**
  * Figma "Product" (1684:41920). The gallery fills the window's left half to the end of the grid's 12th column, its
- * pictures stacked, each 4 by 5; the details (Figma "PIC", Type=product) are columns 15 to 21, 240px down, and stick
- * to the window's top while the gallery scrolls past. Then Similar Merch. The states of its button (Figma "CTA",
+ * pictures stacked, each 4 by 5; the details (Figma "ProductInfoContainer", Type=product) are columns 15 to 21, 240px down, and stick
+ * to the window's top while the gallery scrolls past. Then Similar Merch. The states of its button (Figma "CallToAction",
  * Type=product) are the stories below.
  */
 export const Desktop: Story = {
@@ -147,7 +147,7 @@ export const ShortWindow: Story = {
 }
 
 /**
- * CTA, State=select size (1684:39453): pressing "Add to bag" with no size picked says "Please select a size" in
+ * CallToAction, State=select size (1684:39453): pressing "Add to bag" with no size picked says "Please select a size" in
  * Text/Error under the sizes. Picking one clears it and fills the chip (Surface/Secondary); pressing again goes to
  * the bag, which does nothing yet.
  */
@@ -218,7 +218,7 @@ export const SelectSizeOnHover: Story = {
   },
 }
 
-/** On sale: the price before the sale struck through beside the price, as CTA's member state draws a struck price. */
+/** On sale: the price before the sale struck through beside the price, as CallToAction's member state draws a struck price. */
 export const Sale: Story = {
   globals: { viewport: { value: 'desktop', isRotated: false } },
   args: { view: SAMPLE_PRODUCT_ON_SALE },
@@ -232,7 +232,7 @@ export const Sale: Story = {
 }
 
 /**
- * CTA, State=sold out (1684:39402): every size in its sold-out state (Surface/Card Disabled, muted, struck through)
+ * CallToAction, State=sold out (1684:39402): every size in its sold-out state (Surface/Card Disabled, muted, struck through)
  * and the button disabled, reading "Sold out".
  */
 export const SoldOut: Story = {

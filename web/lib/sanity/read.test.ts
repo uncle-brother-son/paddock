@@ -94,7 +94,7 @@ describe('W72a: galleries and categories', () => {
     expect(Object.keys(madeFrom).sort()).toEqual(['addons', 'contentPage', 'event', 'eventCards', 'eventsListPage', 'giftCard', 'homePage', 'movedSlug', 'product', 'productCards'])
   })
 
-  // W77: each add-on's first picture, for the Book panel's cards. Its sample was made by the real engine
+  // W77: each add-on's first picture, for the booking panel's cards. Its sample was made by the real engine
   // (briefs/W77-logs/tools/gen-samples.mjs, in the staff app repo) over six documents: an add-on with two pictures, one
   // whose picture has no alt text written, one with no pictures, one whose first picture has no file yet, a draft,
   // and a service type with a picture.
@@ -174,14 +174,14 @@ describe('W73: the footer groups', () => {
   })
 })
 
-// W73b (Wayne, 24 Nov): the Hero is a module of a page, not a field of every page. The two page samples were made
-// again by the real engine (briefs/W73b-logs/tools/gen-samples.mjs) over a home page with one Hero (a video, a button
-// with no link) and a page with seven Heroes in every state among its other modules.
+// W73b (Wayne, 24 Nov): HeroMedia is a module of a page, not a field of every page. The two page samples were made
+// again by the real engine (briefs/W73b-logs/tools/gen-samples.mjs) over a home page with one HeroMedia (a video, a button
+// with no link) and a page with seven HeroMedia modules in every state among its other modules.
 // W73b Level 3 (Wayne, 24 Nov): made again for a video's "Has Sound" switch and a link to the booking panel; and for
-// WQ35: a video's file and poster for phones are in the media block itself, and the Hero's own "media for phones"
+// WQ35: a video's file and poster for phones are in the media block itself, and HeroMedia's own "media for phones"
 // is gone. The media query is the galleries' too, so their samples were made again with it (each video gained
 // `hasSound`, `mobileUrl` and `mobilePoster`, nothing else changed).
-describe('W73b: the Hero module', () => {
+describe('W73b: HeroMedia module', () => {
   type SamplePicture = { ref: string; alt: string; hotspot: { x: number; y: number } | null }
   type SampleMedia = { kind: string; hasSound?: boolean; url?: string; mobileUrl?: string | null; poster?: SamplePicture; mobilePoster?: SamplePicture | null }
   type SampleModule = { type: string; key: string; media?: SampleMedia | null; button?: { text: string; link: Link | null } | null; heading?: string | null }
@@ -190,25 +190,25 @@ describe('W73b: the Hero module', () => {
 
   it("a page's modules keep their order, each with the fields of its own kind; a kind the site does not know is left out", () => {
     expect(modules.map((module) => [module.key, module.type])).toEqual([
-      ['h1', 'hero'],
+      ['h1', 'heroMedia'],
       ['m', 'upcomingEvents'],
-      ['h2', 'hero'],
-      ['h3', 'hero'],
-      ['h4', 'hero'],
-      ['h5', 'hero'],
-      ['h6', 'hero'],
-      ['h7', 'hero'],
+      ['h2', 'heroMedia'],
+      ['h3', 'heroMedia'],
+      ['h4', 'heroMedia'],
+      ['h5', 'heroMedia'],
+      ['h6', 'heroMedia'],
+      ['h7', 'heroMedia'],
       ['m2', 'upcomingEvents'],
     ])
-    for (const one of modules) expect(Object.keys(one).sort(), one.key).toEqual(one.type === 'hero' ? ['button', 'key', 'media', 'type'] : ['heading', 'key', 'type'])
+    for (const one of modules) expect(Object.keys(one).sort(), one.key).toEqual(one.type === 'heroMedia' ? ['button', 'key', 'media', 'type'] : ['heading', 'key', 'type'])
     expect(modules.filter((module) => module.type === 'upcomingEvents').map((module) => module.heading)).toEqual(['Upcoming', null])
   })
 
-  it('a Hero has its picture or its video; one with no file, or a video with no poster, has none', () => {
+  it('a HeroMedia has its picture or its video; one with no file, or a video with no poster, has none', () => {
     expect(homeModules.map((module) => module.media?.kind)).toEqual(['video'])
     expect(homeModules[0]!.media).toMatchObject({ url: 'https://cdn.sanity.io/files/p/d/vid.mp4', description: 'Steam', poster: { ref: 'image-hero-1600x900-jpg' } })
     // h5: a video with no main poster is no video, whatever it has for phones.
-    expect(modules.filter((module) => module.type === 'hero').map((module) => module.media?.kind ?? null)).toEqual(['image', 'image', null, null, null, 'video', 'video'])
+    expect(modules.filter((module) => module.type === 'heroMedia').map((module) => module.media?.kind ?? null)).toEqual(['image', 'image', null, null, null, 'video', 'video'])
     // A decorative picture's alt is "".
     expect(modules[0]!.media).toMatchObject({ kind: 'image', image: { alt: '' } })
   })
@@ -235,7 +235,7 @@ describe('W73b: the Hero module', () => {
     expect(videos.map(forPhones)).toEqual([[null, null], [null, null]])
   })
 
-  it("WQ35: a picture is one file, whatever is left in its block; and the Hero's own old media for phones is not asked for", () => {
+  it("WQ35: a picture is one file, whatever is left in its block; and HeroMedia's own old media for phones is not asked for", () => {
     // The sample hero h2 is a picture whose document still holds a file and a poster for phones, and the module's old field.
     expect(Object.keys(modules[2]!.media!)).toEqual(['kind', 'image'])
     expect(JSON.stringify(answers.contentPage)).not.toContain('mobileMedia')
@@ -259,7 +259,7 @@ describe('W73b: the Hero module', () => {
 
   it('its button is there only when it is switched on and has words; with no link it opens the booking panel', () => {
     expect(homeModules[0]!.button).toEqual({ text: 'Book Your Experience', link: null })
-    expect(modules.filter((module) => module.type === 'hero').map((module) => module.button?.text ?? null)).toEqual(['Shop', 'Gift Cards', null, 'Not yet', null, 'Book', null])
+    expect(modules.filter((module) => module.type === 'heroMedia').map((module) => module.button?.text ?? null)).toEqual(['Shop', 'Gift Cards', null, 'Not yet', null, 'Book', null])
   })
 
   it('a button can go to the gift card (/shop/gift-card) or the booking panel (/book); one to a page that is not published is hidden', () => {
@@ -279,7 +279,9 @@ describe('W73b: the Hero module', () => {
     for (const query of [reads.homePage.query, reads.contentPage.query]) {
       expect(query).not.toContain('"hero":')
       expect(query).not.toContain('hero.media')
-      expect(query).toContain('modules[_type in ["hero", "upcomingEvents"]]')
+      expect(query).toContain('modules[_type in ["hero", "heroMedia", "upcomingEvents"]]')
+      // W79 (WQ79): a module saved as `hero` before the rename is read as HeroMedia, until the lead has moved Home's.
+      expect(query).toContain('"type": select(_type == "hero" => "heroMedia", _type)')
     }
     const withLink = (destination: string) => ({ ...answers.contentPage, modules: [{ ...modules[0], button: { text: 'Go', link: { destination, document: null, url: null } } }] })
     expect(reads.contentPage.schema.safeParse(withLink('giftCard')).success).toBe(true)

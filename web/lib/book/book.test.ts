@@ -25,7 +25,7 @@ import {
   type BookAddOn,
 } from './book'
 
-// Brief W77: the Book panel (WQ64-WQ66). What it writes, how it lays a month out, what it makes of W77a's three
+// Brief W77: the booking panel (WQ64-WQ66). What it writes, how it lays a month out, what it makes of W77a's three
 // routes' answers, the add-ons it is given, and the one sum made on the site ("Total to pay"). The panel itself is
 // watched in a browser (components/book/*.stories.tsx).
 
@@ -317,8 +317,12 @@ describe('where the panel gets things from, and where it sends them', () => {
     })
   const source = (file: string) => readFileSync(path.join(web, file), 'utf8')
 
+  const PANEL_COMPONENTS = ['components/ui/calendar', 'components/components/booking', 'components/components/cards', 'components/modules/booking']
+
   it('no page, component or rule of the panel uses server code: lib/shop/read.ts is still the one file that does', () => {
-    const users = ['app/book', 'components/book', 'lib/book'].flatMap(filesIn).filter((file) => /['"](@\/server|(\.\.\/)+server)[/'"]/.test(source(file)))
+    // W79: the panel's components are in Figma's folders since (03 UI > Calendar, 04 Components > Booking and Cards,
+    // 05 Modules > Booking).
+    const users = ['app/book', ...PANEL_COMPONENTS, 'lib/book'].flatMap(filesIn).filter((file) => /['"](@\/server|(\.\.\/)+server)[/'"]/.test(source(file)))
     expect(users).toEqual([])
     expect(source('lib/shop/read.ts')).toContain("import { readShopAddons, type ShopAddon } from '@/server/rules/shop/booking'")
     expect(source('lib/book/read.ts')).toContain("import { readShopAddonsKept, type ShopAddon } from '@/lib/shop/read'")
@@ -326,7 +330,7 @@ describe('where the panel gets things from, and where it sends them', () => {
 
   it('the one sum is in lib/book/book.ts: no component works a figure out', () => {
     // The stories' samples (sample-book.ts) are not the site.
-    for (const file of [...filesIn('components/book'), ...filesIn('app/book'), 'components/frame/FramePanelsHost.tsx'].filter((one) => !path.basename(one).startsWith('sample-'))) {
+    for (const file of [...[...PANEL_COMPONENTS, 'app/book'].flatMap(filesIn), 'components/frame/FramePanelsHost.tsx'].filter((one) => !path.basename(one).startsWith('sample-'))) {
       expect(source(file), file).not.toMatch(/toFixed|parseFloat|inPence|penceAsPounds/)
     }
     expect(filesIn('lib/book').filter((file) => /inPence/.test(source(file)))).toEqual(['lib/book/book.ts'])
@@ -334,13 +338,14 @@ describe('where the panel gets things from, and where it sends them', () => {
 
   it('the days, sessions and prices are asked of the three public routes, never cached; Add to bag, Book now and Log in go to their one seam each', () => {
     expect(source('lib/book/api.ts')).toContain("fetch(address, { cache: 'no-store', ...(signal ? { signal } : {}) })")
-    const panel = source('components/book/BookPanel.tsx')
+    const panel = source('components/modules/booking/BookingPanel.tsx')
     expect(panel).toContain("import { addToBag, type BookingLine } from '@/lib/shop/bag'")
     expect(panel).toMatch(/onAddToBag=\{toBag\}[\s\S]*onBookNow=\{toBag\}/)
     expect(panel.match(/addToBag\(/g)).toHaveLength(1)
-    const sessions = source('components/book/BookSessions.tsx')
-    expect(sessions).toContain("import { signIn } from '@/lib/frame/sign-in'")
-    expect(sessions).toContain('<SecondaryButton onClick={() => signIn()}>Log in</SecondaryButton>')
+    const accountBar = source('components/components/booking/AccountBar.tsx')
+    expect(accountBar).toContain("import { signIn } from '@/lib/frame/sign-in'")
+    expect(accountBar).toContain('<SecondaryButton onClick={() => signIn()}>Log in</SecondaryButton>')
+    expect(source('components/modules/booking/BookSessions.tsx')).toContain('<AccountBar />')
   })
 
   it('opening adds a history step for the same address, closing goes back from it, and at /book closing changes the address to / (WQ64)', () => {

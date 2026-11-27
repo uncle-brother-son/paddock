@@ -120,11 +120,11 @@ describe('WQ69: one formatter, and no other date formatting in the site', () => 
     expect(read('lib/book/book.ts').match(/['"]Wednesday['"]/g)).toHaveLength(1)
   })
 
-  it('a card, the Event page and the Book panel\'s summary all write a start with it, and the panel\'s heading a day', () => {
+  it('a card, the Event page and the booking panel\'s summary all write a start with it, and the panel\'s heading a day', () => {
     const event = read('lib/events/event.ts')
     expect(event.match(/when: whenLine\(/g)).toHaveLength(2)
     expect(read('lib/book/book.ts')).toContain('when: whenLine(session.startsAt),')
-    expect(read('components/book/BookSessions.tsx')).toContain('{dayLine(day)}</h2>')
+    expect(read('components/components/booking/SessionsHeader.tsx')).toContain('{dayLine(day)}</h2>')
     // The forms it replaces are gone: a short month, a "th", a year after a start.
     for (const file of files) expect([file, /eventDateLine|eventCardDate|dayHeading|ordinal\(/.test(read(file))]).toEqual([file, false])
   })

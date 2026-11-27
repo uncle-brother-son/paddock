@@ -146,7 +146,7 @@ describe('the page', () => {
 
   it("asks the Other rule through lib/shop/gift-card-amount.ts only: no component imports the server's rule itself", () => {
     expect(source('lib/shop/gift-card.ts')).toContain("from './gift-card-amount'")
-    for (const file of ['components/shop/GiftCardBuy.tsx', 'components/shop/OptionsAmount.tsx', 'components/shop/GiftCardDetail.tsx', 'components/shop/RecipientInfo.tsx', 'app/shop/gift-card/page.tsx']) {
+    for (const file of ['components/components/shop/CallToAction.tsx', 'components/components/shop/ProductInfoContainer.tsx', 'components/components/shop/AmountField.tsx', 'components/shop/GiftCardDetail.tsx', 'components/components/shop/SendToRecipientToggle.tsx', 'app/shop/gift-card/page.tsx']) {
       expect(source(file), file).not.toMatch(/@\/server|checkOtherAmount/)
     }
   })

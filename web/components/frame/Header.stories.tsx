@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from '@storybook/nextjs-vite'
 import { expect, userEvent, waitFor } from 'storybook/test'
 
 import { LOGO_LABEL } from '@/components/brand/Logo'
-import { OverlayTexture } from '@/components/ui/Overlay'
+import { OverlayTexture } from '@/components/ui/media/Overlay'
 
 import { Header } from './Header'
 import { HeaderLogo } from './HeaderLogo'

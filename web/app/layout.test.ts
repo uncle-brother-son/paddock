@@ -30,7 +30,7 @@ describe('the root layout (W71, item 7)', () => {
 
   it("W73: the Overlay's texture filter is drawn once, by the layout", () => {
     expect(layout.match(/<OverlayTexture \/>/g)).toHaveLength(1)
-    const overlay = readFileSync(path.resolve(__dirname, '../components/ui/Overlay.tsx'), 'utf8')
+    const overlay = readFileSync(path.resolve(__dirname, '../components/ui/media/Overlay.tsx'), 'utf8')
     expect(overlay).toMatch(/export const OVERLAY_TEXTURE_ID = 'overlay-texture'/)
     expect(overlay).toMatch(/<svg aria-hidden="true" focusable="false" width="0" height="0"/)
     // The stylesheet points at the same id.

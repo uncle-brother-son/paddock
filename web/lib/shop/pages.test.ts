@@ -31,7 +31,7 @@ vi.mock('next/cache', () => ({
 vi.mock('@/server/rules/shop/reads', () => ({ readShop, readShopGiftCard }))
 // W75: lib/shop/read.ts reads the events too; the shop's pages never ask for them.
 vi.mock('@/server/rules/shop/events', () => ({ readShopEvents: vi.fn(), readShopEvent: vi.fn() }))
-// W77: and the Book panel's add-ons, which the frame asks for (lib/book/read.ts).
+// W77: and the booking panel's add-ons, which the frame asks for (lib/book/read.ts).
 vi.mock('@/server/rules/shop/booking', () => ({ readShopAddons: vi.fn() }))
 
 const { findGiftCardPage, findProductPage, readShopCatalogue } = await import('./pages')
@@ -223,14 +223,18 @@ describe("the Worker's read of the shop", () => {
       return statSync(path.join(web, file)).isDirectory() ? filesIn(file) : /\.(ts|tsx)$/.test(name) && !/\.(test|stories)\./.test(name) ? [file] : []
     })
 
+  const SHOP_COMPONENTS = ['components/shop', 'components/components/shop', 'components/components/cards', 'components/modules/shop']
+  const SHOP_UI = ['components/ui/form-controls/SizeSelect.tsx', 'components/ui/navigation/Pagination.tsx']
   it('lib/shop/read.ts is the one file of the shop that reads through server code, and gift-card-amount.ts brings the Other rule (W76a): no page or component reads a table or works a price out', () => {
-    const users = ['app/shop', 'components/shop', 'lib/shop'].flatMap(filesIn).filter((file) => /['"](@\/server|(\.\.\/)+server)[/'"]/.test(readFileSync(path.join(web, file), 'utf8')))
+    // W79: the shop's components are in Figma's folders since (04 Components > Shop and Cards, 05 Modules > Shop), and
+    // two of 03 UI's were the shop's (SizeSelect, Pagination).
+    const users = [...['app/shop', ...SHOP_COMPONENTS, 'lib/shop'].flatMap(filesIn), ...SHOP_UI].filter((file) => /['"](@\/server|(\.\.\/)+server)[/'"]/.test(readFileSync(path.join(web, file), 'utf8')))
     expect(users).toEqual(['lib/shop/gift-card-amount.ts', 'lib/shop/read.ts'])
   })
   it('and nothing in the shop writes a price by arithmetic: every figure shown is one of W74a\'s, through pounds()', () => {
     const source = (file: string) => readFileSync(path.join(web, file), 'utf8')
     // The stories' sample shop (sample-shop.ts) is not the site.
-    for (const file of [...filesIn('components/shop'), ...filesIn('app/shop')].filter((one) => !path.basename(one).startsWith('sample-'))) {
+    for (const file of [...[...SHOP_COMPONENTS, 'app/shop'].flatMap(filesIn), ...SHOP_UI].filter((one) => !path.basename(one).startsWith('sample-'))) {
       expect(source(file), file).not.toMatch(/toFixed|parseFloat|Number\(|inPence/)
     }
   })

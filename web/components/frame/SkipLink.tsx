@@ -3,7 +3,7 @@
 import { useLenis } from 'lenis/react'
 import type { MouseEvent } from 'react'
 
-import { ButtonLabel, SMALL_PRIMARY_BUTTON } from '@/components/ui/Button'
+import { ButtonLabel, SMALL_PRIMARY_BUTTON } from '@/components/ui/buttons/Button'
 
 /**
  * "Skip to content" (WQ13): the first thing Tab reaches on every page. Hidden until then, it shows top left over the

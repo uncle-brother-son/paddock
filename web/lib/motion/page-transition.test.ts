@@ -47,10 +47,10 @@ describe('every link inside the site carries the page transition', () => {
   // It is the one link that asks for no transition; a plain press of it says its page arrives in place.
   it('only a colour swatch goes without it, and its page arrives in place', () => {
     const without = files.filter((file) => /transition=\{false\}/.test(read(file)))
-    expect(without).toEqual(['components/shop/ProductBuy.tsx'])
-    const buy = read('components/shop/ProductBuy.tsx')
-    expect(buy.match(/transition=\{false\}/g)).toHaveLength(1)
-    expect(buy).toMatch(/<SiteLink\s+href=\{colour\.href\}\s+transition=\{false\}\s+data-shop="swatch"/)
+    expect(without).toEqual(['components/components/shop/ColourField.tsx'])
+    const swatches = read('components/components/shop/ColourField.tsx')
+    expect(swatches.match(/transition=\{false\}/g)).toHaveLength(1)
+    expect(swatches).toMatch(/<SiteLink\s+href=\{colour\.href\}\s+transition=\{false\}\s+data-shop="swatch"/)
     // The link itself says so, after the caller's own click, and never for a press meant for a new tab or window.
     const link = read('components/ui/SiteLink.tsx')
     expect(link).toMatch(/onClick\?\.\(event\)\s+if \(event\.defaultPrevented \|\| newTab \|\| !isPlainClick\(event\)\) return\s+\/\/[^\n]*\n\s+if \(!transition\) arriveInPlace\(pathOf\(href\)\)/)
@@ -104,7 +104,7 @@ describe('what is animated, and when', () => {
     expect(component).toContain('<ViewTransition key={page} enter={ENTER} exit={EXIT} default="none">')
   })
 
-  // W77 (WQ64): /book is the home page with the Book panel open over it. Closing the panel there changes the address
+  // W77 (WQ64): /book is the home page with the booking panel open over it. Closing the panel there changes the address
   // to / where the page stands: the same page, so nothing leaves, nothing comes and the page is not drawn again.
   it('/book counts as the home page\'s own path; every other path is its own page', () => {
     expect([pageOf('/book'), pageOf('/'), pageOf('/shop'), pageOf('/booking'), pageOf('/book/x')]).toEqual(['/', '/', '/shop', '/booking', '/book/x'])
@@ -134,7 +134,7 @@ describe('what is animated, and when', () => {
     it('never a link, a step that stays on the page, one the browser can\'t hand over, one it animated itself, or with reduced motion', () => {
       expect(animatesHistoryStep(step({ navigationType: 'push' }), '/', false)).toBe(false)
       expect(animatesHistoryStep(step({ navigationType: 'replace' }), '/', false)).toBe(false)
-      // The same page: a list's category or sort, and the Book panel's own step (W77: /book is the home page's).
+      // The same page: a list's category or sort, and the booking panel's own step (W77: /book is the home page's).
       expect(animatesHistoryStep(step({ destination: { url: 'https://thepaddockwellness.co.uk/shop?category=tops' } }), '/shop', false)).toBe(false)
       expect(animatesHistoryStep(step({ destination: { url: 'https://thepaddockwellness.co.uk/book' } }), '/', false)).toBe(false)
       // Another document (the entry is from before a reload, or another site): the browser loads it.

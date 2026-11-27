@@ -1,5 +1,5 @@
 import type { ShopSize } from '@/contracts/shop'
-import type { HeroPicture } from '@/lib/modules/hero'
+import type { HeroMediaPicture } from '@/lib/modules/hero-media'
 import { sizedImage } from '@/lib/sanity/image'
 import { stillOf, videoOf, type ScreenVideo } from '@/lib/sanity/media'
 import type { Media, Picture, Product, ProductCard as SanityProduct, RichText, ShopSettings, SizeGuide } from '@/lib/sanity/schemas'
@@ -12,7 +12,7 @@ import type { ShopProduct } from './read'
 // Nothing here reads either, and every price is one W74a's read gave: this only writes them as the designs do.
 
 /**
- * A price line as PIC draws it: the price, "From" when the sizes differ, the price before a sale struck through,
+ * A price line as ProductInfoContainer draws it: the price, "From" when the sizes differ, the price before a sale struck through,
  * and "(Member from £X)" when the product has a member price.
  */
 export type PriceLine = { now: string | null; from: boolean; before: string | null; member: string | null }
@@ -36,7 +36,7 @@ export const productSizes = (sizes: readonly ShopSize[]): ProductSize[] => sizes
 export type ColourSwatch = { id: string; href: string; name: string; picture: CardPicture | null; current: boolean }
 
 /** A picture or a video of the gallery, cut 4 by 5 for each width of screen (WQ35: a video's own file and poster for phones). */
-export type GalleryItem = { key: string; picture: HeroPicture; video: ScreenVideo | null }
+export type GalleryItem = { key: string; picture: HeroMediaPicture; video: ScreenVideo | null }
 
 /** Figma's gallery picture: 716 by 895 on a desktop (half the window), 390 by 487.5 on a phone (the whole of it). */
 const GALLERY_WIDTHS = [780, 480, 1170, 1440, 1920] as const

@@ -15,7 +15,7 @@ import { siteSettings } from './siteSettings'
 import { navigation } from './navigation'
 import { shopSettings } from './shopSettings'
 import { eventsSettings } from './eventsSettings'
-import { hero } from './objects/hero'
+import { heroMedia } from './objects/heroMedia'
 import { linkTo } from './objects/linkTo'
 import { media } from './objects/media'
 import { navLink } from './objects/navLink'
@@ -56,6 +56,6 @@ export const schemaTypes = [
   seo,
   linkTo,
   navLink,
-  hero,
+  heroMedia,
   upcomingEvents,
 ]

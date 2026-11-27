@@ -109,7 +109,7 @@ const preview: Preview = {
         mobile: { name: `Mobile ${frame.Mobile}`, styles: { width: `${frame.Mobile}px`, height: '844px' }, type: 'mobile' },
         tablet: { name: 'Tablet 768', styles: { width: '768px', height: '1024px' }, type: 'tablet' },
         desktop: { name: `Desktop ${frame.Desktop}`, styles: { width: `${frame.Desktop}px`, height: '900px' }, type: 'desktop' },
-        // W78b (WQ78): the other widths the Book panel is looked at, from the narrowest phone to a wide desktop.
+        // W78b (WQ78): the other widths the booking panel is looked at, from the narrowest phone to a wide desktop.
         w320: { name: 'Narrow phone 320', styles: { width: '320px', height: '568px' }, type: 'mobile' },
         w1024: { name: 'Small laptop 1024', styles: { width: '1024px', height: '768px' }, type: 'tablet' },
         w1280: { name: 'Laptop 1280', styles: { width: '1280px', height: '800px' }, type: 'desktop' },

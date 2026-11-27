@@ -116,7 +116,7 @@ describe('colours: the palette and the four theme modes are Figma\'s (W71, item 
     // A ring drawn round a control that is not seen follows the same rule, through the one variant.
     expect(stylesheet).toContain('@custom-variant has-keyboard-focus (:root:not([data-input="pointer"]) &:has(:focus-visible));')
     const read = (file: string) => readFileSync(path.join(WEB, file), 'utf8')
-    for (const file of ['components/shop/ShopSelect.tsx', 'components/shop/SizeSelect.tsx']) {
+    for (const file of ['components/shop/ShopSelect.tsx', 'components/ui/form-controls/SizeSelect.tsx']) {
       expect(read(file), file).toContain('has-keyboard-focus:outline-2 has-keyboard-focus:outline-offset-2 has-keyboard-focus:outline-text-primary')
       expect(read(file), file).not.toMatch(/has-\[:focus-visible\]:outline/)
     }
@@ -140,9 +140,9 @@ describe('colours: the palette and the four theme modes are Figma\'s (W71, item 
     const stylesheet = readFileSync(path.join(WEB, 'app/globals.css'), 'utf8')
     expect(stylesheet.match(/\[data-label="rest"\]/g)).toHaveLength(1)
     expect(stylesheet.match(/\[data-label="hover"\]/g)).toHaveLength(2)
-    const button = readFileSync(path.join(WEB, 'components/ui/Button.tsx'), 'utf8')
+    const button = readFileSync(path.join(WEB, 'components/ui/buttons/Button.tsx'), 'utf8')
     expect(button).toContain('<span data-label="hover" aria-hidden="true" className="absolute inset-0 flex items-center justify-center">')
-    expect(readFileSync(path.join(WEB, 'components/shop/ProductBuy.tsx'), 'utf8')).toContain("{...(needsSize && !soldOut ? { hoverLabel: 'Select size' } : {})}")
+    expect(readFileSync(path.join(WEB, 'components/components/shop/CallToAction.tsx'), 'utf8')).toContain("{...(needsSize && !soldOut ? { hoverLabel: 'Select size' } : {})}")
   })
 
   it('W73 (Wayne): every button, and everything with the role of one, shows the hand', () => {

@@ -1,11 +1,11 @@
+import { ProductInfoContainer } from '@/components/components/shop/ProductInfoContainer'
 import { Grid } from '@/components/layout/Grid'
+import { UpSellRow } from '@/components/modules/shop/UpSellRow'
 import { ProductGallery } from '@/components/shop/ProductGallery'
 import type { ShopEventAvailabilityRouteOutput } from '@/contracts/shop'
 import type { EventCardView, EventView } from '@/lib/events/event'
 
-import { EventBuy } from './EventBuy'
 import { eventInfoTabs } from './EventInfoTabs'
-import { OtherEvents } from './OtherEvents'
 
 type EventPageViewProps = {
   view: EventView
@@ -26,7 +26,7 @@ type EventPageViewProps = {
  *   21, and stay in view (they stick to the window's top) while the gallery scrolls past (taller than the window:
  *   WQ73, components/layout/StickyColumn.tsx).
  * - Below: the gallery is the window's whole width, a row to swipe, with the details beneath it.
- * Then Other events. The info panel is the details' own (components/events/EventBuy.tsx).
+ * Then Other events. The info panel is the details' own (components/components/shop/CallToAction.tsx).
  */
 export function EventPageView({ view, others, listAddress, readLive, reducedMotion }: EventPageViewProps) {
   // Only what the details draw goes to the browser with them: the tabs' words are drawn here, on the server.
@@ -37,14 +37,15 @@ export function EventPageView({ view, others, listAddress, readLive, reducedMoti
         <div className="col-span-full -mx-16 md:col-span-12 md:mr-0">
           <ProductGallery items={view.gallery} label="Event pictures" {...(reducedMotion === undefined ? {} : { reducedMotion })} />
         </div>
-        <EventBuy
+        <ProductInfoContainer
+          type="event"
           event={{ id, name, when, startsAt, live }}
           tabs={eventInfoTabs(view)}
           className="col-span-full md:col-span-7 md:col-start-15"
           {...(readLive === undefined ? {} : { readLive })}
         />
       </Grid>
-      <OtherEvents cards={others} allHref={listAddress} />
+      <UpSellRow type="events" cards={others} allHref={listAddress} />
     </>
   )
 }

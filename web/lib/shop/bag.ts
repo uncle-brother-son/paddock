@@ -1,7 +1,7 @@
 // W74: the one place the shop's pages meet the bag. The bag is built in the buying stage (WQ5), so adding to it does
 // nothing yet and says so, as useFramePanels does for the panels: a size in a card's strip and the Product page's
 // "Add to bag" both come here, and nothing in either changes when the bag exists. W75: an Event page's "Add to bag" too.
-// W76: and the Gift Card page's. W77: and the Book panel's "Add to bag" and "Book now".
+// W76: and the Gift Card page's. W77: and the booking panel's "Add to bag" and "Book now".
 
 /**
  * W76: a gift card (its type's Sanity document id): how it is sent, its amount as money text ("25.00": a preset, or
@@ -17,7 +17,7 @@ export type GiftCardLine = {
 }
 
 /**
- * W77: a session booking from the Book panel: the session (W77a's id), how many people from 1 to the most that
+ * W77: a session booking from the booking panel: the session (W77a's id), how many people from 1 to the most that
  * session allows, and the add-ons chosen, each by its Sanity document id with how many (none: an empty list). No
  * price goes with it: the server prices the basket itself, and asks the online booking rule again (WQ66).
  */

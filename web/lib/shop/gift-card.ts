@@ -87,7 +87,7 @@ export function giftCardView({ giftCard, onSale, settings }: GiftCardContent): G
 export type AmountChoice = { kind: 'preset'; amount: string } | { kind: 'other'; typed: string } | null
 
 /**
- * What the page opens on, as drawn (OptionsAmount, State=default, and both page frames): the lowest preset, chosen.
+ * What the page opens on, as drawn (AmountField, State=default, and both page frames): the lowest preset, chosen.
  * A type with no presets opens on Other, its field ready; one with neither has nothing to choose.
  */
 export function firstChoice(view: Pick<GiftCardView, 'amounts' | 'other'>): AmountChoice {
@@ -130,7 +130,7 @@ export function priceShown(answer: AmountAnswer, amounts: GiftCardAmount[]): str
   return amounts[0]?.label ?? null
 }
 
-/** Who a digital card is sent to, when it is a gift (Figma "RecipientInfo", 1389:39585). */
+/** Who a digital card is sent to, when it is a gift (Figma "SendToRecipientToggle", 1389:39585). */
 export type Recipient = { name: string; email: string; message: string }
 
 export const NO_RECIPIENT: Recipient = { name: '', email: '', message: '' }

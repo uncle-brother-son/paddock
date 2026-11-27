@@ -2,8 +2,8 @@ import { Grid } from '@/components/layout/Grid'
 import type { ShopCategoryOption } from '@/lib/shop/cards'
 import { itemCount, shopAddress, SHOP_SORTS, type ShopListing as Listing } from '@/lib/shop/listing'
 
-import { Pagination } from './Pagination'
-import { ProductCard } from './ProductCard'
+import { Pagination } from '@/components/ui/navigation/Pagination'
+import { ProductCard } from '@/components/components/cards/ProductCard'
 import { ShopSelect } from './ShopSelect'
 
 /** The value of "All" in the category list. No category's slug can be empty. */

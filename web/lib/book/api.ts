@@ -1,6 +1,6 @@
 import type { ShopBookingDaysRouteOutput, ShopBookingQuoteRouteOutput, ShopPrivateSession, ShopPublicSession, ShopSessionsRouteOutput } from '@/contracts/shop'
 
-// W77: the Book panel's three reads, asked by the browser of W77a's public routes (no sign-in, never cached):
+// W77: the booking panel's three reads, asked by the browser of W77a's public routes (no sign-in, never cached):
 // a month's days with a session to book, a day's sessions, and what a group pays for one session. Every day, session,
 // price and limit the panel shows is one of these answers; nothing here works one out.
 

@@ -4,7 +4,7 @@ import { inPence, pounds, poundsAndPence } from '@/lib/shop/money'
 
 import type { BookingQuote, PrivateSession, PublicSession } from './api'
 
-// W77: what the Book panel shows, as the designs write it (Figma "BookingPanel", 1174:13346). Every day, session,
+// W77: what the booking panel shows, as the designs write it (Figma "BookingPanel", 1174:13346). Every day, session,
 // price and limit is W77a's (lib/book/api.ts, and the add-ons through lib/book/read.ts); this file only writes them
 // out, and lays a month out as weeks. The one sum made on the site is "Total to pay" and an add-on's line: W77a's
 // own prices added up for the eye (see `bookingSummary`). The bag and the checkout show the Worker's figures.

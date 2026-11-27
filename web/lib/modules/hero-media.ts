@@ -1,0 +1,48 @@
+import { sizedImage, type SizedImage } from '@/lib/sanity/image'
+import { BOOK_ADDRESS, linkHref } from '@/lib/sanity/links'
+import { stillOf, videoOf, type ScreenVideo } from '@/lib/sanity/media'
+import type { HeroMediaModule } from '@/lib/sanity/schemas'
+
+// What HeroMedia module shows (W73b), made from Sanity's answer. Nothing here reads Sanity.
+
+/** Figma "HeroMedia" (1213:29172): the media is 1600 by 900 on a desktop and 900 by 1600 on a phone, the whole window wide. */
+export const HERO_RATIO = { desktop: 1600 / 900, mobile: 900 / 1600 } as const
+
+/** The window's width on Figma's two frames, and wider and sharper screens. The first is the plain `src`. */
+const WIDTHS = { desktop: [960, 1440, 1920, 2880], mobile: [390, 780, 1170] } as const
+
+/**
+ * The hero's picture (for a video, its poster) cut for each screen round the editor's hotspot: wide from 768px,
+ * tall below. A video with a poster of its own for phones (WQ35) has that one for the tall cut. One alt for both:
+ * a picture's own Alt Text, or for a video its Video Description (WQ42: a poster has no alt text of its own).
+ */
+export type HeroMediaPicture = { desktop: SizedImage; mobile: SizedImage; alt: string }
+
+/** The hero's button: its words and where it goes. One with no link of its own goes to the booking panel. */
+export type HeroMediaButton = { text: string; href: string }
+
+/** `video`: the hero's video, with its file for phones when it has one (lib/sanity/media.ts); null for a picture. */
+export type HeroMediaContent = { picture: HeroMediaPicture; video: ScreenVideo | null; button: HeroMediaButton | null }
+
+function heroMediaButton(button: HeroMediaModule['button']): HeroMediaButton | null {
+  if (!button) return null
+  if (!button.link) return { text: button.text, href: BOOK_ADDRESS }
+  // A link to a page or an event that isn't published is hidden, and its button with it (WQ24).
+  const href = linkHref(button.link)
+  return href ? { text: button.text, href } : null
+}
+
+/** A HeroMedia module as the site draws it, or null for one with no picture or video yet: it takes no room. */
+export function heroMediaContent(hero: HeroMediaModule): HeroMediaContent | null {
+  if (!hero.media) return null
+  const still = stillOf(hero.media)
+  return {
+    picture: {
+      desktop: sizedImage(still.wide, HERO_RATIO.desktop, WIDTHS.desktop),
+      mobile: sizedImage(still.phone, HERO_RATIO.mobile, WIDTHS.mobile),
+      alt: still.alt,
+    },
+    video: videoOf(hero.media),
+    button: heroMediaButton(hero.button),
+  }
+}

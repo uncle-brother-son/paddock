@@ -1,6 +1,6 @@
 import type { Media, Picture } from './schemas'
 
-// WQ35 (Wayne, 24 Nov): what a media block is on each width of screen, wherever it is drawn (the Hero now, the
+// WQ35 (Wayne, 24 Nov): what a media block is on each width of screen, wherever it is drawn (HeroMedia now, the
 // galleries later). An image is one file, cropped for each screen round its hotspot. A video is one film: a file
 // for screens from 768px and, when an editor added it, a file for narrower ones, each with its poster; its
 // description, captions and sound are said once and shared. Whoever draws it gives each screen only its own file.

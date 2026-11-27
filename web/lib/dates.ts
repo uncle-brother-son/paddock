@@ -1,5 +1,5 @@
 // W78a (WQ69): the one way the site writes when a booking or an event is, everywhere it says so (a card, the Event
-// page, the Book panel's heading and summary, and later the bag, the checkout and the emails):
+// page, the booking panel's heading and summary, and later the bag, the checkout and the emails):
 //
 //   08:00 - Thursday 12 November
 //

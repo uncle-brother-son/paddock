@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react'
 
 import { Icon } from '@/components/brand/Icon'
 import { Grid } from '@/components/layout/Grid'
-import { Overlay } from '@/components/ui/Overlay'
+import { Overlay } from '@/components/ui/media/Overlay'
 import { SiteLink } from '@/components/ui/SiteLink'
 import type { FrameMenuLink } from '@/lib/frame/content'
 

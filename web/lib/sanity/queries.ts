@@ -104,14 +104,18 @@ export const NAVIGATION_QUERY = `*[_id == "navigation"][0]{
 
 /**
  * W73b: a page's modules, top to bottom, each with the fields of its own kind. A kind the site doesn't know is left
- * out. The Hero is one of them (Wayne, 24 Nov), no longer a field of the page: its picture or video (null until an
+ * out. HeroMedia is one of them (Wayne, 24 Nov), no longer a field of the page: its picture or video (null until an
  * editor adds one) and its button, which is there only when it is switched on and has words. A button with no link
  * opens the booking panel.
+ *
+ * W79 (WQ79): the module's Sanity type was `hero` until W79 and is `heroMedia` now. A module still saved as `hero`
+ * (Home's, until the lead moves it after the Studio is deployed) is read as `heroMedia`, so the live site never
+ * loses its hero. Remove `"hero"` from both lists and the `select` in the tidy-up.
  */
-const MODULES = `coalesce(modules[_type in ["hero", "upcomingEvents"]]{
-  "type": _type,
+const MODULES = `coalesce(modules[_type in ["hero", "heroMedia", "upcomingEvents"]]{
+  "type": select(_type == "hero" => "heroMedia", _type),
   "key": _key,
-  _type == "hero" => {
+  _type in ["hero", "heroMedia"] => {
     "media": select(defined(media) => media{"item": ${MEDIA}}.item, null),
     "button": select(
       showButton == true && defined(buttonText) => {
@@ -208,7 +212,7 @@ export const GIFT_CARD_QUERY = `*[_type == "giftCardType" && ${PUBLISHED}] | ord
 }`
 
 /**
- * W77: every add-on's picture, for the Book panel's add-on cards: its first image (the one the staff app shows), null
+ * W77: every add-on's picture, for the booking panel's add-on cards: its first image (the one the staff app shows), null
  * with none or one that has no file. An add-on's `images` is a list of plain images each with its own alt text, older
  * than the `media` block (WQ43) and read by the Worker's Sanity webhook, so it is read as it is. Which add-ons are on
  * sale, their names and their prices come from the Worker.

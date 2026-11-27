@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/nextjs-vite'
 import { expect, userEvent, waitFor } from 'storybook/test'
 
-import { OverlayTexture } from '@/components/ui/Overlay'
+import { OverlayTexture } from '@/components/ui/media/Overlay'
 
 import { FrameShell } from './FrameShell'
 import { EMPTY_FRAME, SAMPLE_FRAME, SamplePage } from './sample-content'

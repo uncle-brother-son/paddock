@@ -17,7 +17,7 @@ import { cardSpaces } from './format'
 export const EVENTS_LIST_ID = 'events'
 
 /**
- * An event's price line as Figma's CTA draws it (Type=event).
+ * An event's price line as Figma's CallToAction draws it (Type=event).
  * - `memberOnly` false: the public price, and "(Member from £X)" when the lowest member level pays less (WQ58).
  * - `memberOnly` true ("member only signed out", 1709:48988): the member price and "Member Only".
  */

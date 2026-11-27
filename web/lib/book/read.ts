@@ -8,7 +8,7 @@ import { readShopAddonsKept, type ShopAddon } from '@/lib/shop/read'
 
 import type { BookAddOn } from './book'
 
-// W77: the Book panel's add-ons, read with the frame because the panel opens over every page. Which are on sale,
+// W77: the booking panel's add-ons, read with the frame because the panel opens over every page. Which are on sale,
 // their names and what a visitor pays are the Worker's (W77a's `readShopAddons()`, through lib/shop/read.ts, at most a
 // minute old); each one's picture is its Sanity document's first image. The panel's days, sessions and group prices
 // are asked by the browser when it opens (lib/book/api.ts).
@@ -36,11 +36,11 @@ export const readBookAddOns = cache(async (): Promise<BookAddOn[]> => {
   await connection()
   const [onSale, pictures] = await Promise.all([
     readShopAddonsKept().catch((error: unknown) => {
-      console.error('The Book panel could not read its add-ons; it is shown without them.', error)
+      console.error('The booking panel could not read its add-ons; it is shown without them.', error)
       return [] as ShopAddon[]
     }),
     readSanity('addons').catch((error: unknown) => {
-      console.error("The Book panel could not read its add-ons' pictures from Sanity; they are shown without them.", error)
+      console.error("The booking panel could not read its add-ons' pictures from Sanity; they are shown without them.", error)
       return [] as AddonPictures
     }),
   ])

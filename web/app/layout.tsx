@@ -5,7 +5,7 @@ import { InputKind } from "@/components/frame/InputKind";
 import { Intro } from "@/components/frame/Intro";
 import { GridOverlay } from "@/components/layout/GridOverlay";
 import { MotionProviders } from "@/components/providers/MotionProviders";
-import { OverlayTexture } from "@/components/ui/Overlay";
+import { OverlayTexture } from "@/components/ui/media/Overlay";
 import { SITE_NAME, SITE_URL } from "@/lib/site";
 
 import { fontVariables } from "./fonts";

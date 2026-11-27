@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/nextjs-vite'
 import { expect, fn, userEvent, waitFor, within } from 'storybook/test'
 
-import { OverlayTexture } from '@/components/ui/Overlay'
+import { OverlayTexture } from '@/components/ui/media/Overlay'
 
 import { GiftCardPageView } from './GiftCardPageView'
 import { SAMPLE_GIFT_CARD } from './sample-shop'
@@ -32,7 +32,7 @@ const fieldError = (field: HTMLElement) => field.closest('[data-field]')?.queryS
 
 /**
  * Figma "Gift card digital" (1684:41964). The gallery fills the window's left half to the end of the grid's 12th
- * column, the Digital card's pictures stacked, each 4 by 5; the details (Figma "PIC", Type=gift card digital) are
+ * column, the Digital card's pictures stacked, each 4 by 5; the details (Figma "ProductInfoContainer", Type=gift card digital) are
  * columns 15 to 21, 240px down, and stick to the window's top. In them: the name in H2, the price line (the amount
  * chosen), the Digital / Physical switch, the amounts with the lowest chosen, "Sending to someone else?", the
  * button with "Your gift card will be sent by email" under it, and the three links that open the info panel.
@@ -183,7 +183,7 @@ export const MobilePhysical: Story = {
 }
 
 /**
- * OptionsAmount, State=other and other full (1389:39343, 1389:39685): choosing Other opens the amount field under
+ * AmountField, State=other and other full (1389:39343, 1389:39685): choosing Other opens the amount field under
  * the chips, 4px beneath and as tall as a chip, with its prompt "Enter an amount". Until an amount is typed the price
  * line stays on the lowest. What is typed shows with its pound sign, and the price line follows it.
  */
@@ -283,7 +283,7 @@ export const OtherLeftEmpty: Story = {
 }
 
 /**
- * RecipientInfo, Selected=yes (1389:39584): ticking "Sending to someone else?" shows Recipient's Name, Recipient's
+ * SendToRecipientToggle, Selected=yes (1389:39584): ticking "Sending to someone else?" shows Recipient's Name, Recipient's
  * Email and Gift message, 32px under the tick box and 8px apart, the message with "150 characters left" beneath.
  * Add to bag with the name or the email missing adds nothing: each says what it needs, and the first takes focus.
  */

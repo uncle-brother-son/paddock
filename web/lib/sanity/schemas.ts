@@ -103,21 +103,21 @@ export const navigationSchema = z.object({
 export type Navigation = z.infer<typeof navigationSchema>
 
 /**
- * The Hero module (W73b; WQ24): a picture or a video across the window, null until an editor adds one, and its
+ * HeroMedia module (W73b; WQ24): a picture or a video across the window, null until an editor adds one, and its
  * button, null when it is switched off or has no words. A button with no link opens the booking panel.
  */
-export const heroModuleSchema = z.object({
-  type: z.literal('hero'),
+export const heroMediaModuleSchema = z.object({
+  type: z.literal('heroMedia'),
   key: z.string(),
   media: mediaSchema.nullable(),
   button: z.object({ text: z.string(), link: linkSchema.nullable() }).nullable(),
 })
-export type HeroModule = z.infer<typeof heroModuleSchema>
+export type HeroMediaModule = z.infer<typeof heroMediaModuleSchema>
 
 const upcomingEventsModuleSchema = z.object({ type: z.literal('upcomingEvents'), key: z.string(), heading: text })
 
 /** One module of a page. Each kind of module is one more member here. */
-export const moduleSchema = z.discriminatedUnion('type', [heroModuleSchema, upcomingEventsModuleSchema])
+export const moduleSchema = z.discriminatedUnion('type', [heroMediaModuleSchema, upcomingEventsModuleSchema])
 export type PageModule = z.infer<typeof moduleSchema>
 
 export const contentPageSchema = z.object({

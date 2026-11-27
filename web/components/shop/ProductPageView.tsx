@@ -1,12 +1,12 @@
+import { ProductInfoContainer } from '@/components/components/shop/ProductInfoContainer'
 import { Grid } from '@/components/layout/Grid'
+import { UpSellRow } from '@/components/modules/shop/UpSellRow'
 import type { ShopAvailabilityRouteOutput } from '@/contracts/shop'
 import type { ShopCard } from '@/lib/shop/cards'
 import type { ProductView } from '@/lib/shop/product'
 
-import { ProductBuy } from './ProductBuy'
 import { ProductGallery } from './ProductGallery'
 import { productInfoTabs } from './ProductInfoTabs'
-import { SimilarMerch } from './SimilarMerch'
 
 type ProductPageViewProps = {
   view: ProductView
@@ -24,7 +24,7 @@ type ProductPageViewProps = {
  *   gallery scrolls past, as drawn. Details taller than the window go with the page until their bottom is at the
  *   window's bottom, and back up until their top is at its top (WQ73: components/layout/StickyColumn.tsx).
  * - Below: the gallery is the window's whole width, a row to swipe, with the details beneath it.
- * Then Similar Merch. The Product Info Panel is the details' own (components/shop/ProductBuy.tsx).
+ * Then Similar Merch. The Product Info Panel is the details' own (components/components/shop/ProductInfoContainer.tsx).
  */
 export function ProductPageView({ view, similar, readSizes, reducedMotion }: ProductPageViewProps) {
   // Only what the details draw goes to the browser with them: the tabs' words are drawn here, on the server.
@@ -35,14 +35,15 @@ export function ProductPageView({ view, similar, readSizes, reducedMotion }: Pro
         <div className="col-span-full -mx-16 md:col-span-12 md:mr-0">
           <ProductGallery items={view.gallery} {...(reducedMotion === undefined ? {} : { reducedMotion })} />
         </div>
-        <ProductBuy
+        <ProductInfoContainer
+          type="product"
           product={{ id, name, colourName, price, sizes, soldOut, colours, fulfilment }}
           tabs={productInfoTabs(view)}
           className="col-span-full md:col-span-7 md:col-start-15"
           {...(readSizes === undefined ? {} : { readSizes })}
         />
       </Grid>
-      <SimilarMerch cards={similar} />
+      <UpSellRow type="products" cards={similar} />
     </>
   )
 }

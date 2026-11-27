@@ -8,7 +8,7 @@ import { FrameShell, type FrameVariant } from './FrameShell'
 /**
  * The frame with its content read from Sanity (Site settings and Navigation, once for the request). With neither
  * document there it still stands: the logo, the Menu button over an empty menu, a footer with no links.
- * `variant="checkout"` is for the checkout's pages, once that route exists. W77: the Book panel's add-ons are read with
+ * `variant="checkout"` is for the checkout's pages, once that route exists. W77: the booking panel's add-ons are read with
  * it (the panel opens over every page), and without them the frame stands just the same.
  */
 export async function Frame({ variant = 'global', children }: { variant?: FrameVariant; children: ReactNode }) {

@@ -22,7 +22,7 @@ const NO_PANELS: FramePanels = { bagCount: 0, open: () => false }
 export const FramePanelsContext = createContext<FramePanels>(NO_PANELS)
 
 /**
- * The one place the frame's Book and Bag meet their panels (W73). W77: the Book panel exists, so inside the frame
+ * The one place the frame's Book and Bag meet their panels (W73). W77: the booking panel exists, so inside the frame
  * opening `book` opens it over the page and says so. Bag and Account still open nothing; the buying stage fills
  * them in and nothing in the header changes.
  */

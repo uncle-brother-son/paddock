@@ -1,10 +1,10 @@
 import { RichText } from '@/components/ui/RichText'
 import type { GiftCardView } from '@/lib/shop/gift-card'
 
-import type { InfoTab } from './ProductInfoPanel'
+import type { InfoTab } from '@/components/modules/shop/ProductInfoPanel'
 
 /**
- * The info panel's tabs for the gift card, in order, as Figma's PIC lists their links (Type=gift card): Description
+ * The info panel's tabs for the gift card, in order, as Figma's ProductInfoContainer lists their links (Type=gift card): Description
  * (the gift card's rich text), Gift Card Terms & Conditions (Sanity's terms, {validity} already filled: "6 months")
  * and Shipping & returns (Shop settings' summary, the same on every product). A tab with nothing to say is left out,
  * and its link with it. Drawn on the server, so every tab's words are in the page.

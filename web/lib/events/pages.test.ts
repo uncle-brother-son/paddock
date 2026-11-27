@@ -24,7 +24,7 @@ vi.mock('react', async (original) => ({ ...(await original<typeof import('react'
 vi.mock('next/cache', () => ({ unstable_cache: <T>(read: T): T => read }))
 vi.mock('@/server/rules/shop/reads', () => ({ readShop: vi.fn(), readShopGiftCard: vi.fn() }))
 vi.mock('@/server/rules/shop/events', () => ({ readShopEvents, readShopEvent }))
-// W77: lib/shop/read.ts reads the Book panel's add-ons too; the events' pages never ask for them.
+// W77: lib/shop/read.ts reads the booking panel's add-ons too; the events' pages never ask for them.
 vi.mock('@/server/rules/shop/booking', () => ({ readShopAddons: vi.fn() }))
 
 const { findEventPage, readEventsListAddress, readUpcomingEventCards } = await import('./pages')
@@ -161,7 +161,7 @@ describe('the events list (the Upcoming Events module)', () => {
 
   it('the module is drawn by PageModules, and the page\'s first carries the id "events"', () => {
     const modules = readFileSync(path.resolve(__dirname, '../../components/modules/PageModules.tsx'), 'utf8')
-    expect(modules).toContain("<UpcomingEvents key={one.key} heading={one.events.heading} {...(index === firstEvents ? { id: EVENTS_LIST_ID } : {})} />")
+    expect(modules).toContain("<UpcomingEventsModule key={one.key} heading={one.events.heading} {...(index === firstEvents ? { id: EVENTS_LIST_ID } : {})} />")
     expect(modules).toContain("const firstEvents = shown.findIndex((one) => 'events' in one)")
   })
 })
@@ -176,21 +176,22 @@ describe('where the events\' figures come from', () => {
   const source = (file: string) => readFileSync(path.join(web, file), 'utf8')
 
   it('no page, component or rule of the events uses server code: lib/shop/read.ts is still the one file that does', () => {
-    const users = ['app/events', 'components/events', 'components/modules', 'lib/events'].flatMap(filesIn).filter((file) => /['"](@\/server|(\.\.\/)+server)[/'"]/.test(source(file)))
+    // W79: the events' components are in Figma's folders since (04 Components, 05 Modules).
+    const users = ['app/events', 'components/events', 'components/components', 'components/modules', 'lib/events'].flatMap(filesIn).filter((file) => /['"](@\/server|(\.\.\/)+server)[/'"]/.test(source(file)))
     expect(users).toEqual([])
     expect(source('lib/shop/read.ts')).toContain("import { readShopEvent, readShopEvents, type ShopEvent } from '@/server/rules/shop/events'")
   })
 
   it('and no page or component writes a price by arithmetic: every figure shown is one of W75a\'s, through pounds()', () => {
     // The stories' sample events (sample-events.ts) are not the site.
-    for (const file of [...filesIn('components/events'), ...filesIn('app/events')].filter((one) => !path.basename(one).startsWith('sample-'))) {
+    for (const file of ['components/events', 'components/components/cards', 'components/components/shop', 'components/modules/content', 'components/modules/shop', 'app/events'].flatMap(filesIn).filter((one) => !path.basename(one).startsWith('sample-'))) {
       expect(source(file), file).not.toMatch(/toFixed|parseFloat|Number\(|inPence/)
     }
   })
 
   it('the page asks the public route again after load, and goes to the bag and to sign-in through their one seam each', () => {
-    const buy = source('components/events/EventBuy.tsx')
-    expect(buy).toContain('export function EventBuy({ event, tabs, readLive = readEventAvailability, className }: EventBuyProps) {')
+    const buy = source('components/components/shop/CallToAction.tsx')
+    expect(buy).toContain('function EventBox({ event, readLive = readEventAvailability }: EventCallToAction) {')
     expect(buy).toContain('addToBag({ event: event.id, quantity: chosen })')
     expect(buy).toContain('<BigButton onClick={() => signIn()}>Sign in</BigButton>')
     // The stepper never goes above the spaces left (WQ61).

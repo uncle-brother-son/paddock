@@ -13,7 +13,7 @@ import { readShop, readShopGiftCard, type Shop, type ShopGiftCardPage } from '@/
 // works a price out. The pages and components take these types from here, so this is the only import of server code.
 // W75: the events' reads too (W75a: `readShopEvents()`, `readShopEvent()`): an event's date, spaces, state and prices.
 // W76: the gift card's read (W76a: `readShopGiftCard()`): its amounts on sale, the Other limits, how long a card lasts.
-// W77: the Book panel's add-ons (W77a: `readShopAddons()`): each one on sale with what a visitor pays. The panel's
+// W77: the booking panel's add-ons (W77a: `readShopAddons()`): each one on sale with what a visitor pays. The panel's
 // days, sessions and group prices come from W77a's three public routes, asked by the browser (lib/book/api.ts).
 
 export type { ShopAddon } from '@/server/rules/shop/booking'
@@ -76,7 +76,7 @@ export const readShopGiftCardKept = cache(async (sanityId: string): Promise<Shop
 /** W77: the add-ons on sale with a price for a visitor (W77a), in the catalogue's own order, kept as the shop is. */
 const keptAddons = unstable_cache(async (): Promise<ShopAddon[]> => readShopAddons(), ['shop-addons'], { revalidate: SHOP_KEPT_SECONDS })
 
-/** The add-ons for the Book panel, once for a request. A read that fails throws; the frame decides what to do without them (lib/book/read.ts). */
+/** The add-ons for the booking panel, once for a request. A read that fails throws; the frame decides what to do without them (lib/book/read.ts). */
 export const readShopAddonsKept = cache(async (): Promise<ShopAddon[]> => {
   await connection()
   return keptAddons()

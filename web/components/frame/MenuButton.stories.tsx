@@ -26,7 +26,7 @@ function Sample({ selected }: { selected?: boolean }) {
 }
 
 const meta = {
-  title: 'UI/MenuButton',
+  title: 'UI/Buttons/MenuButton',
   component: Sample,
   parameters: { padded: false },
   render: (args) => (

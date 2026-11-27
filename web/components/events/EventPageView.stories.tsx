@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/nextjs-vite'
 import { expect, userEvent, waitFor, within } from 'storybook/test'
 
-import { OverlayTexture } from '@/components/ui/Overlay'
+import { OverlayTexture } from '@/components/ui/media/Overlay'
 
 import { EventPageView } from './EventPageView'
 import { SAMPLE_EVENT, SAMPLE_EVENTS, SAMPLE_LIST_ADDRESS, SAMPLE_OTHER_EVENTS, sampleAvailability } from './sample-events'
@@ -28,8 +28,8 @@ const part = (canvasElement: HTMLElement, name: string) => canvasElement.querySe
 const stepperOf = (canvasElement: HTMLElement) => canvasElement.querySelector('[data-stepper]') as HTMLElement
 
 /**
- * Figma "Event" (1684:41950), CTA State=non-member (1684:41515): the event is open. The gallery fills the window's
- * left half to the end of the grid's 12th column, its pictures stacked, each 4 by 5; the details (Figma "PIC",
+ * Figma "Event" (1684:41950), CallToAction State=non-member (1684:41515): the event is open. The gallery fills the window's
+ * left half to the end of the grid's 12th column, its pictures stacked, each 4 by 5; the details (Figma "ProductInfoContainer",
  * Type=event) are columns 15 to 21, 240px down, and stick to the window's top while the gallery scrolls past: the
  * name, "£25 (Member from £20)", the date and time in UK time, the quantity stepper beside "Add to bag",
  * "6 spaces left", and the two links that open the info panel. Then Other events.
@@ -119,7 +119,7 @@ export const OneSpaceLeft: Story = {
 }
 
 /**
- * CTA, State=sold out (1684:41643): the event is full. The button is the whole width, disabled, reading "Sold out";
+ * CallToAction, State=sold out (1684:41643): the event is full. The button is the whole width, disabled, reading "Sold out";
  * no stepper and no spaces line. The price line stays.
  */
 export const SoldOut: Story = {
@@ -139,7 +139,7 @@ export const SoldOut: Story = {
 }
 
 /**
- * CTA, State=member only signed out (1709:48988): a members-only event, for a visitor who isn't signed in. The price
+ * CallToAction, State=member only signed out (1709:48988): a members-only event, for a visitor who isn't signed in. The price
  * line is the member price and "Member Only", both in Text/Primary; the button is the whole width and reads
  * "Sign in" (the one sign-in seam, which opens nothing yet); the spaces left are beneath it.
  */
@@ -184,7 +184,7 @@ export const MembersFirst: Story = {
 }
 
 /**
- * CTA, State=closed (1684:41716): the event has started, so booking is closed and the page stays (WQ59). The button
+ * CallToAction, State=closed (1684:41716): the event has started, so booking is closed and the page stays (WQ59). The button
  * is disabled and reads "Closed"; no stepper and no spaces line.
  */
 export const Started: Story = {

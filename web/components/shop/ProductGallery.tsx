@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 
-import { HeroMedia } from '@/components/modules/Hero'
+import { HeroMediaFill } from '@/components/modules/content/HeroMedia'
 import { usePrefersReducedMotion } from '@/lib/motion/reduced-motion'
 import type { GalleryItem } from '@/lib/shop/product'
 
@@ -24,7 +24,7 @@ type ProductGalleryProps = {
  *   is swiped: it follows the row's own scrolling, part-way between two pictures when the row is. A gallery of one
  *   picture has no slider. It is decoration: the row itself is what a screen reader and the keyboard have.
  *
- * A video is drawn as the Hero draws one (WQ35; lib/sanity/media.ts): each width of screen gets only its own file
+ * A video is drawn as HeroMedia draws one (WQ35; lib/sanity/media.ts): each width of screen gets only its own file
  * and poster, it plays muted and looped only while on screen, and it has Pause, and the sound button when it has
  * sound. Only the first picture loads ahead of the rest.
  */
@@ -68,7 +68,7 @@ export function ProductGallery({ items, reducedMotion: reducedMotionSet, label =
       >
         {items.map((item, index) => (
           <div key={item.key} data-gallery-item="" className="relative aspect-4/5 w-full shrink-0 snap-start overflow-clip bg-object-product-bg">
-            <HeroMedia picture={item.picture} video={item.video} priority={index === 0} reducedMotion={reducedMotion} desktopSizes="50vw" />
+            <HeroMediaFill picture={item.picture} video={item.video} priority={index === 0} reducedMotion={reducedMotion} desktopSizes="50vw" />
           </div>
         ))}
       </div>

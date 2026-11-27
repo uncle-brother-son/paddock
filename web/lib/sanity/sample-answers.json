@@ -181,7 +181,7 @@
     "thumbnail": null,
     "modules": [
       {
-        "type": "hero",
+        "type": "heroMedia",
         "key": "h1",
         "media": {
           "kind": "video",
@@ -245,7 +245,7 @@
     },
     "modules": [
       {
-        "type": "hero",
+        "type": "heroMedia",
         "key": "h1",
         "media": {
           "kind": "image",
@@ -273,7 +273,7 @@
         "heading": "Upcoming"
       },
       {
-        "type": "hero",
+        "type": "heroMedia",
         "key": "h2",
         "media": {
           "kind": "image",
@@ -296,13 +296,13 @@
         }
       },
       {
-        "type": "hero",
+        "type": "heroMedia",
         "key": "h3",
         "media": null,
         "button": null
       },
       {
-        "type": "hero",
+        "type": "heroMedia",
         "key": "h4",
         "media": null,
         "button": {
@@ -315,13 +315,13 @@
         }
       },
       {
-        "type": "hero",
+        "type": "heroMedia",
         "key": "h5",
         "media": null,
         "button": null
       },
       {
-        "type": "hero",
+        "type": "heroMedia",
         "key": "h6",
         "media": {
           "kind": "video",
@@ -350,7 +350,7 @@
         }
       },
       {
-        "type": "hero",
+        "type": "heroMedia",
         "key": "h7",
         "media": {
           "kind": "video",

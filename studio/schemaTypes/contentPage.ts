@@ -37,7 +37,7 @@ export const contentPage = defineType({
       title: 'Modules',
       type: 'array',
       description: 'What the page shows, top to bottom',
-      of: [defineArrayMember({ type: 'hero' }), defineArrayMember({ type: 'upcomingEvents' })],
+      of: [defineArrayMember({ type: 'heroMedia' }), defineArrayMember({ type: 'upcomingEvents' })],
     }),
     defineField({ name: 'seo', title: 'SEO', type: 'seo' }),
   ],

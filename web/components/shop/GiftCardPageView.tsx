@@ -21,7 +21,7 @@ type GiftCardPageViewProps = {
  *   21, and stay in view (they stick to the window's top) while the gallery scrolls past (taller than the window:
  *   WQ73, components/layout/StickyColumn.tsx).
  * - Below: the gallery is the window's whole width, a row to swipe, with the details beneath it.
- * No row follows it: the frames draw none. The info panel is the details' own (components/shop/GiftCardBuy.tsx).
+ * No row follows it: the frames draw none. The info panel is the details' own (components/components/shop/SizeField.tsx).
  */
 export function GiftCardPageView({ view, format, showAddress, reducedMotion }: GiftCardPageViewProps) {
   // Only what the gallery and the details draw goes to the browser with them: the tabs' words are drawn here, on the server.

@@ -8,7 +8,7 @@ export function pounds(money: string): string {
   return pennies === '00' ? `£${whole}` : `£${whole}.${pennies}`
 }
 
-/** W77: a price with its pence always written, as the Book panel's "Your booking" does: "£15.00", "£4.50". */
+/** W77: a price with its pence always written, as the booking panel's "Your booking" does: "£15.00", "£4.50". */
 export function poundsAndPence(money: string): string {
   const [whole = '0', pence = ''] = money.trim().split('.')
   return `£${whole}.${pence.padEnd(2, '0').slice(0, 2)}`

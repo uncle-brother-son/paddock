@@ -1,4 +1,4 @@
-import type { InfoTab } from '@/components/shop/ProductInfoPanel'
+import type { InfoTab } from '@/components/modules/shop/ProductInfoPanel'
 import { RichText } from '@/components/ui/RichText'
 import type { EventView } from '@/lib/events/event'
 
@@ -21,7 +21,7 @@ function EventTerms({ terms, extraWaiver }: Pick<EventView, 'terms' | 'extraWaiv
 }
 
 /**
- * The info panel's tabs for an event, in order, as Figma's PIC lists their links (Type=event): Description (the
+ * The info panel's tabs for an event, in order, as Figma's ProductInfoContainer lists their links (Type=event): Description (the
  * event's rich text) and Event Terms & Conditions. A tab with nothing to say is left out, and its link with it. Drawn
  * on the server, so every tab's words are in the page.
  */

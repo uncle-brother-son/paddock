@@ -3,17 +3,17 @@
 import { usePathname } from 'next/navigation'
 import { useCallback, useMemo, useSyncExternalStore, type ReactNode } from 'react'
 
-import { BookPanel } from '@/components/book/BookPanel'
+import { BookingPanel } from '@/components/modules/booking/BookingPanel'
 import type { BookAddOn } from '@/lib/book/book'
 import { BOOK_ADDRESS } from '@/lib/sanity/links'
 
 import { FramePanelsContext, type FramePanel, type FramePanels } from './useFramePanels'
 
 /**
- * The mark on the history step that opening the Book panel adds (WQ64). The step has the address of the page the
+ * The mark on the history step that opening the booking panel adds (WQ64). The step has the address of the page the
  * visitor is on: only this mark tells it from the step before.
  */
-export const BOOK_STEP = 'paddockBookPanel'
+export const BOOK_STEP = 'paddockBookingPanel'
 
 const isBookStep = (state: unknown): boolean => typeof state === 'object' && state !== null && (state as Record<string, unknown>)[BOOK_STEP] === true
 
@@ -33,10 +33,10 @@ const onBookStep = (): boolean => isBookStep(window.history.state)
 const noStep = (): boolean => false
 
 /**
- * The frame's panels (W77): gives everything inside the frame `useFramePanels()`, and draws the Book panel over the
+ * The frame's panels (W77): gives everything inside the frame `useFramePanels()`, and draws the booking panel over the
  * page. Bag and Account still open nothing (the buying stage).
  *
- * The Book panel opens over the page the visitor is on, and closing it leaves them there (WQ64):
+ * The booking panel opens over the page the visitor is on, and closing it leaves them there (WQ64):
  * - opening it (every link to /book asks, in SiteLink) adds a history step for the same address and opens the panel.
  *   Back takes that step away, which closes the panel and leaves the page; Forward opens it again. Close, Esc and
  *   the shade go back that one step themselves, so the history is as it was before the panel opened;
@@ -74,7 +74,7 @@ export function FramePanelsHost({ bookAddOns, children }: { bookAddOns: readonly
   return (
     <FramePanelsContext value={panels}>
       {children}
-      <BookPanel open={bookOpen} onClose={closeBook} addOns={bookAddOns} />
+      <BookingPanel open={bookOpen} onClose={closeBook} addOns={bookAddOns} />
     </FramePanelsContext>
   )
 }

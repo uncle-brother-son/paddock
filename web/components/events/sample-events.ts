@@ -77,7 +77,7 @@ export const SAMPLE_EVENT: EventView = {
 /** The sample event in one of the Worker's states. */
 export const sampleEvent = (over: Partial<ShopEventAvailabilityRouteOutput>): EventView => ({ ...SAMPLE_EVENT, live: eventLive(sampleAvailability(over)) })
 
-/** CTA's states (Figma 1684:39401, Type=event), by the Worker's state for a visitor who isn't signed in. */
+/** CallToAction's states (Figma 1684:39401, Type=event), by the Worker's state for a visitor who isn't signed in. */
 export const SAMPLE_EVENTS = {
   open: SAMPLE_EVENT,
   oneSpaceLeft: sampleEvent({ spacesLeft: 1 }),

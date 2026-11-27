@@ -502,7 +502,7 @@ body {
 
 /*
  * Wayne's Overlay (Figma "Overlay", 136:1054: Object/Dark Shade since WQ48, a 24 background blur, the Texture effect
- * with noise size 2 and radius 8). components/ui/Overlay.tsx puts these two on its two layers. Figma's blur radius is
+ * with noise size 2 and radius 8). components/ui/media/Overlay.tsx puts these two on its two layers. Figma's blur radius is
  * twice CSS's, so 24 is blur(12px); the noise and how far it pushes are in the SVG filter there (#overlay-texture).
  *
  * Only Chromium can run an SVG filter on what lies behind an element, and only Chromium has -webkit-app-region:
@@ -594,7 +594,7 @@ body {
 }
 
 /*
- * The Hero's button (W73b; WQ24; Wayne, 24 Nov). components/modules/Hero.tsx puts this on it, and `data-shown` when
+ * HeroMedia's button (W73b; WQ24; Wayne, 24 Nov). components/modules/content/HeroMedia.tsx puts this on it, and `data-shown` when
  * it is to be seen. Its fade and its glide after the pointer take the short duration with the smooth curve.
  *
  * On a device whose main pointer is a mouse (fine, and able to hover) it is hidden, and can't be pressed, until it
@@ -624,7 +624,7 @@ body {
 
 /*
  * A button whose label gives way to another while the pointer is over it (W74c; WQ51: the Product page's "Add to
- * bag" with no size chosen, which becomes "Select size"). components/ui/Button.tsx puts this on the button and marks
+ * bag" with no size chosen, which becomes "Select size"). components/ui/buttons/Button.tsx puts this on the button and marks
  * its two labels: the one at rest slides up out of the button as the other slides in from beneath, each travelling
  * the button's own height, over the short duration with the smooth curve; leaving reverses it. The button clips them.
  *

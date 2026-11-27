@@ -20,7 +20,7 @@ export type FrameVariant = 'global' | 'checkout'
  * W73b: main and the footer are what changes from page to page, so the two together are what the page transition
  * moves; the header stays where it is.
  *
- * W77: round them all is FramePanelsHost, which draws the Book panel over the page and gives every link to /book the
+ * W77: round them all is FramePanelsHost, which draws the booking panel over the page and gives every link to /book the
  * way to open it. `bookAddOns` are the panel's add-ons, read with the frame's own content (lib/book/read.ts).
  */
 export function FrameShell({ variant = 'global', content, bookAddOns = [], children }: { variant?: FrameVariant; content: FrameContent; bookAddOns?: readonly BookAddOn[]; children: ReactNode }) {

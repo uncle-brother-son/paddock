@@ -44,7 +44,7 @@ describe('the home page, at /', () => {
     sanity({ '/': answers.homePage })
     const page = await readHomePage()
     expect(page?.id).toBe('page-home')
-    expect(page?.modules.map((module) => module.type)).toEqual(['hero'])
+    expect(page?.modules.map((module) => module.type)).toEqual(['heroMedia'])
     expect(asked()).toEqual([{ query: reads.homePage.query }])
   })
 

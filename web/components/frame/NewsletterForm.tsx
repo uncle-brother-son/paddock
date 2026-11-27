@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from 'react'
 
-import { InputWithSubmit } from '@/components/ui/InputWithSubmit'
+import { InputWithSubmit } from '@/components/ui/form-controls/InputWithSubmit'
 import { subscribeToNewsletter, type NewsletterResult } from '@/lib/frame/newsletter'
 
 /** The field's prompt, and the same words as its hidden label (docs/build-standards.md, section 1: Forms). */
@@ -14,7 +14,7 @@ type NewsletterFormProps = {
 }
 
 /**
- * The footer's newsletter field (W73): Figma "InputWithSubmit" (components/ui/InputWithSubmit.tsx) in its designed
+ * The footer's newsletter field (W73): Figma "InputWithSubmit" (components/ui/form-controls/InputWithSubmit.tsx) in its designed
  * states: empty, focus, filled and error, the message tied to the field and read out at once. Figma draws no success
  * state: a sign-up that works empties the field and says so to a screen reader only, until one is designed.
  */
