@@ -37,11 +37,12 @@ const LINK_SQL = 'UPDATE customers SET auth_user_id = $1::uuid WHERE id = $2::uu
  * The new customer, linked as it is made. ON CONFLICT DO NOTHING (every unique rule: the email as written, the email
  * in any case, the login): a customer of this email made at the same moment (staff, a guest checkout), or this login
  * linked meanwhile, writes nothing and raises nothing, so the transaction carries on and finds that customer. No
- * date of birth (migration 036): it is asked for only when it is needed (the checkout).
+ * date of birth (migration 036): it is asked for only when it is needed (the checkout). W85 (Wayne, 30 Nov): the
+ * popup's "Email me with news and offers" tick is `marketing_consent`.
  */
-const INSERT_SQL = `
-INSERT INTO customers (first_name, last_name, email, phone, auth_user_id)
-VALUES ($1, $2, $3, $4, $5::uuid)
+const insertSql = (marketingConsent: boolean): string => `
+INSERT INTO customers (first_name, last_name, email, phone, auth_user_id, marketing_consent)
+VALUES ($1, $2, $3, $4, $5::uuid, ${marketingConsent ? 'true' : 'false'})
 ON CONFLICT DO NOTHING
 RETURNING ${COLUMNS}`
 
@@ -155,6 +156,8 @@ export function createSignInCustomer(db: Db, login: Login, input: CustomerSignIn
   const firstName = trimmed(input.firstName)
   const lastName = trimmed(input.lastName)
   const phone = trimmed(input.phone) || null
+  // Only a tick is consent: left out, or anything but true, is none.
+  const marketingConsent = input.marketingConsent === true
 
   return inTransaction<CustomerSignInLinked>(db, async (tx) => {
     const found = await match(tx, login, requestId, 'sign_up')
@@ -172,7 +175,10 @@ export function createSignInCustomer(db: Db, login: Login, input: CustomerSignIn
       if (value.length > limit) throw refusal('VALIDATION', 'too_long', SIGN_IN_WORDS.tooLong(field, limit), { field })
     }
 
-    const [made] = await tx.query<CustomerRow>(INSERT_SQL, [firstName, lastName, login.email, phone, login.authUserId])
+    // The consent is written as a literal, never sent as a parameter: on real Postgres a boolean parameter can arrive
+    // as text and be read wrongly (the Worker's driver; PGlite hides it).
+    const insert = insertSql(marketingConsent)
+    const [made] = await tx.query<CustomerRow>(insert, [firstName, lastName, login.email, phone, login.authUserId])
     if (!made) {
       // Made (or this login linked) by another call while this insert waited: that customer, as link would find it.
       const raced = await match(tx, login, requestId, 'sign_up')
@@ -182,7 +188,7 @@ export function createSignInCustomer(db: Db, login: Login, input: CustomerSignIn
     }
     await audit.recordAll(tx, [
       // As the staff create's row on the customer channel: the new customer is who did it.
-      { actorType: 'customer', actorId: made.id, action: 'customer.created', entityType: 'customer', entityId: made.id, requestId, details: { channel: 'customer' } },
+      { actorType: 'customer', actorId: made.id, action: 'customer.created', entityType: 'customer', entityId: made.id, requestId, details: { channel: 'customer', marketingConsent } },
       { actorType: 'customer', actorId: made.id, action: 'customer.login_linked', entityType: 'customer', entityId: made.id, requestId, details: { authUserId: login.authUserId, how: 'sign_up' } },
     ])
     return answer(made, 'created')

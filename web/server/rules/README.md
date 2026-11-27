@@ -358,7 +358,9 @@ behind a press key, and has no switch kind.
   - `POST customer/sign-in/create`: first and last name, phone optional, no date of birth. One transaction: as link
     first; else the insert, `ON CONFLICT DO NOTHING` on every unique rule, so a customer of this email (or this login)
     written at the same moment makes it write nothing, and the transaction links that customer instead
-    (`sign-in-postgres.test.ts`). A unique refusal from the link's update runs the transaction once more.
+    (`sign-in-postgres.test.ts`). A unique refusal from the link's update runs the transaction once more. W85 (Wayne,
+    30 Nov): `marketingConsent` (the popup's "Email me with news and offers") is saved on the new customer
+    (`marketing_consent`, and in `customer.created`'s details); left out is no; a customer found instead keeps theirs.
   - `GET customer/me` (`customer` mode): first name, email and the account sections, from what the customer has ever
     had (`ACCOUNT_SECTIONS` in `contracts/sign-in.ts`).
     - WQ102 (Wayne, 27 Nov): the Orders section lists every order (bookings, events, shop, gift cards, memberships),

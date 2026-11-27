@@ -194,7 +194,7 @@ describe('create on sign-up (POST /api/v1/customer/sign-in/create)', () => {
     const [row] = await customersOf('new.person@example.com')
     expect(row).toMatchObject({ first_name: 'Nia', last_name: 'New', email: 'new.person@example.com', phone: '07700 900222', date_of_birth: null, auth_user_id: login.id })
     expect(await auditOf(row?.id as string)).toEqual([
-      { action: 'customer.created', actor_type: 'customer', actor_id: row?.id, details: { channel: 'customer' } },
+      { action: 'customer.created', actor_type: 'customer', actor_id: row?.id, details: { channel: 'customer', marketingConsent: false } },
       { action: 'customer.login_linked', actor_type: 'customer', actor_id: row?.id, details: { authUserId: login.id, how: 'sign_up' } },
     ])
     const who = await me(login.token)
@@ -208,6 +208,36 @@ describe('create on sign-up (POST /api/v1/customer/sign-in/create)', () => {
     const rows = await listCustomers(db, { search: 'list.nodob' })
     expect(rows.map((row) => [row.email, row.date_of_birth])).toEqual([['list.nodob@example.com', null]])
     expect(customerListOutputSchema.safeParse(rows).success).toBe(true)
+  })
+
+  // W85 (Wayne, 30 Nov): the popup's "Email me with news and offers" tick, so nobody who ticks it is lost.
+  const consentOf = async (email: string) =>
+    (await db.query<{ marketing_consent: boolean }>('SELECT marketing_consent FROM customers WHERE lower(email) = lower($1)', [email])).map((row) => row.marketing_consent)
+
+  it('W85: the news and offers tick is saved on the new customer and in its audit row; left out, or anything but true, is no', async () => {
+    const ticked = await newLogin('ticked@example.com')
+    expect((await create(ticked.token, { firstName: 'Tick', lastName: 'Ed', marketingConsent: true })).body.data).toMatchObject({ change: 'created' })
+    expect(await consentOf('ticked@example.com')).toEqual([true])
+    const [row] = await customersOf('ticked@example.com')
+    expect((await auditOf(row?.id as string))[0]?.details).toEqual({ channel: 'customer', marketingConsent: true })
+
+    const unticked = await newLogin('unticked@example.com')
+    await create(unticked.token, { firstName: 'Un', lastName: 'Ticked', marketingConsent: false })
+    expect(await consentOf('unticked@example.com')).toEqual([false])
+    const silent = await newLogin('silent@example.com')
+    await create(silent.token, { firstName: 'Sil', lastName: 'Ent' })
+    expect(await consentOf('silent@example.com')).toEqual([false])
+    // Not a boolean: refused by the contract, and nothing is made.
+    const odd = await newLogin('odd.consent@example.com')
+    expect((await create(odd.token, { firstName: 'Odd', lastName: 'One', marketingConsent: 'yes' })).status).toBe(400)
+    expect(await consentOf('odd.consent@example.com')).toEqual([])
+  })
+
+  it("W85: a customer found instead of made (staff made one meanwhile) keeps their own consent, as they keep their details", async () => {
+    await staffMade('consent.kept@example.com')
+    const login = await newLogin('consent.kept@example.com')
+    expect((await create(login.token, { firstName: 'Web', lastName: 'Name', marketingConsent: true })).body.data).toMatchObject({ change: 'linked' })
+    expect(await consentOf('consent.kept@example.com')).toEqual([false])
   })
 
   it('no phone: stored as none', async () => {
