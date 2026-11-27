@@ -14,7 +14,10 @@ export const ICON_BUTTON_PAGE = 'flex items-center justify-center rounded-s text
 /** State=hover of Style=page, for a link drawn as an IconButton (a button's own is below: never while disabled). */
 export const ICON_BUTTON_PAGE_HOVER = 'hover:bg-surface-card-selected'
 
-const PAGE = `${ICON_BUTTON_PAGE} enabled:hover:bg-surface-card-selected disabled:cursor-default disabled:text-text-muted-primary`
+/** Style=page for a button without its padding: its hover, and its disabled state (PriceStepper's up and down halves). */
+export const ICON_BUTTON_PAGE_BUTTON = `${ICON_BUTTON_PAGE} enabled:hover:bg-surface-card-selected disabled:cursor-default disabled:text-text-muted-primary`
+
+const PAGE = ICON_BUTTON_PAGE_BUTTON
 
 const IMAGE = 'flex items-center justify-center rounded-s bg-text-muted-primary p-8 text-text-secondary transition-colors duration-short ease-smooth hover:bg-text-primary'
 

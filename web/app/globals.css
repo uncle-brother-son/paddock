@@ -595,7 +595,8 @@ body {
 
 /*
  * HeroMedia's button (W73b; WQ24; Wayne, 24 Nov). components/modules/content/HeroMedia.tsx puts this on it, and `data-shown` when
- * it is to be seen. Its fade and its glide after the pointer take the short duration with the smooth curve.
+ * it is to be seen. Its fade takes the short duration with the smooth curve. Its place has no transition (WQ80): it
+ * is under the pointer at every move, with no glide behind it.
  *
  * On a device whose main pointer is a mouse (fine, and able to hover) it is hidden, and can't be pressed, until it
  * is shown: while the pointer is over the hero, or while it has keyboard focus. On every other device (a phone, a
@@ -606,7 +607,7 @@ body {
  * fade is kept.
  */
 @utility hero-button {
-  transition-property: opacity, translate;
+  transition-property: opacity;
   transition-duration: var(--duration-short);
   transition-timing-function: var(--ease-smooth);
 

@@ -71,7 +71,8 @@ export const Open: Story = {
       await expect(getComputedStyle(chevron).rotate).toBe('180deg')
       const words = held.querySelector('p')!
       await expect([getComputedStyle(words).fontSize, getComputedStyle(words).color]).toEqual(['14px', painted(accordion, 'text-text-primary', 'color')])
-      await expect([getComputedStyle(held).paddingTop, getComputedStyle(held).paddingBottom]).toEqual(['32px', '32px'])
+      const inner = held.querySelector<HTMLElement>('[data-accordion-held]')!
+      await expect([getComputedStyle(inner).paddingTop, getComputedStyle(inner).paddingBottom]).toEqual(['32px', '32px'])
       const [box, buttonBox, headingBox, wordsBox] = [accordion, button, heading, words].map((part) => part.getBoundingClientRect()) as [DOMRect, DOMRect, DOMRect, DOMRect]
       // The heading stays where it was, 16px down; the button is still only the heading's row.
       await expect([near(headingBox.top - box.top), near(buttonBox.top - box.top)]).toEqual([16, 0])
@@ -96,7 +97,60 @@ export const Keyboard: Story = {
     await waitFor(() => expect(getComputedStyle(chevron).rotate).toBe('180deg'))
     await userEvent.keyboard(' ')
     await expect(button.getAttribute('aria-expanded')).toBe('false')
-    await expect(held).not.toBeVisible()
+    // Hidden once it has finished shutting (WQ80: it is seen as it closes).
+    await waitFor(() => expect(held).not.toBeVisible())
     await waitFor(() => expect(getComputedStyle(chevron).rotate).toBe('none'))
+  },
+}
+
+/** The next frame the browser draws. */
+const nextFrame = () => new Promise<void>((done) => requestAnimationFrame(() => done()))
+
+/** A pause of so many milliseconds. */
+const pause = (ms: number) => new Promise<void>((done) => setTimeout(done, ms))
+
+/**
+ * With motion (WQ80): what it holds grows from nothing to its own height over 320 ms with the smooth curve, and back,
+ * while the chevron turns; the heading's row never moves.
+ */
+export const OpeningAndShutting: Story = {
+  name: 'Opening and shutting',
+  play: async ({ canvasElement }) => {
+    await document.fonts.ready
+    const [accordion] = accordions(canvasElement) as [HTMLElement]
+    const { button, chevron, held } = partsOf(accordion)
+    // The height moves as the chevron turns, with the same duration (the short one, read from the page's token) and
+    // the same curve (the smooth one).
+    const style = getComputedStyle(held)
+    const short = getComputedStyle(document.documentElement).getPropertyValue('--duration-short')
+    await expect(Number.parseFloat(style.transitionDuration) * 1000).toBe(Number.parseFloat(short))
+    await expect(style.transitionProperty).toBe('grid-template-rows, visibility')
+    await expect([style.transitionDuration, style.transitionTimingFunction]).toEqual([getComputedStyle(chevron).transitionDuration, getComputedStyle(chevron).transitionTimingFunction])
+    const shut = accordion.getBoundingClientRect().height
+    await expect(held.getBoundingClientRect().height).toBe(0)
+    const headingTop = button.getBoundingClientRect().top
+
+    // Opening: part of the way there after a moment, all of it at the end.
+    await userEvent.click(button)
+    await nextFrame()
+    await pause(120)
+    const partWay = held.getBoundingClientRect().height
+    await expect(partWay).toBeGreaterThan(0)
+    await waitFor(() => expect(getComputedStyle(held.children[0]!).overflow).toBe('visible'))
+    const full = held.getBoundingClientRect().height
+    await expect(full).toBeGreaterThan(64)
+    await expect(partWay).toBeLessThan(full)
+    await expect(near(accordion.getBoundingClientRect().height)).toBe(near(shut + full))
+    await expect(button.getBoundingClientRect().top).toBe(headingTop)
+
+    // Shutting: still seen, part of the way back after a moment, then nothing and hidden.
+    await userEvent.click(button)
+    await nextFrame()
+    await pause(120)
+    const partBack = held.getBoundingClientRect().height
+    await expect([partBack > 0, partBack < full, getComputedStyle(held).visibility]).toEqual([true, true, 'visible'])
+    await waitFor(() => expect(held.getBoundingClientRect().height).toBe(0))
+    await waitFor(() => expect(held).not.toBeVisible())
+    await expect(near(accordion.getBoundingClientRect().height)).toBe(near(shut))
   },
 }

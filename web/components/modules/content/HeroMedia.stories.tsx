@@ -76,6 +76,9 @@ const pointAt = (hero: HTMLElement, x: number, y: number, pointerType = 'mouse')
   fireEvent.pointerMove(hero, { clientX: box.left + x, clientY: box.top + y, pointerType })
 }
 
+/** The next frame the browser draws. */
+const nextFrame = () => new Promise<void>((done) => requestAnimationFrame(() => done()))
+
 /** The pointer leaving the hero (React hears a pointer leaving as its "out" event, to nowhere inside). */
 const pointAway = (hero: HTMLElement) => fireEvent.pointerOut(hero, { pointerType: 'mouse' })
 
@@ -115,8 +118,8 @@ export const Image: Story = {
 
 /**
  * The button with a mouse (WQ24; Wayne, 24 Nov): the small primary Button with 12px all round. It is hidden until
- * the pointer is over the hero. Move the mouse over the hero: it fades in where the pointer is and follows it,
- * eased over the short duration with the smooth curve, never past the hero's edges. Move the mouse off the hero and
+ * the pointer is over the hero. Move the mouse over the hero: it fades in where the pointer is and follows it
+ * directly, under the pointer at every move with no easing (WQ80), never past the hero's edges. Move the mouse off the hero and
  * it fades out where it is. Press Tab: it fades in at its resting place, towards the bottom, centred, and stays
  * there while it has focus.
  */
@@ -141,12 +144,18 @@ export const ButtonFollowingThePointer: Story = {
     await expect(middle(button)).toEqual([1000, 300])
     await expect(button.hasAttribute('data-shown')).toBe(true)
     await waitFor(() => expect(isSeen(button)).toBe(true))
-    // It follows the pointer...
-    pointAt(hero, 600, 400)
-    await waitFor(() => expect(middle(button)).toEqual([600, 400]))
+    // It follows the pointer directly (WQ80): only its fade has a transition, and within one frame of a move its
+    // middle is at the pointer, with no easing behind it.
+    await expect(getComputedStyle(button).transitionProperty).toBe('opacity')
+    for (const [x, y] of [[600, 400], [200, 150], [900, 600]] as const) {
+      pointAt(hero, x, y)
+      await nextFrame()
+      await expect(middle(button)).toEqual([x, y])
+    }
     // ...never past the hero's edges.
     pointAt(hero, 1438, 2)
-    await waitFor(() => expect(Math.round(button.getBoundingClientRect().right)).toBe(1440))
+    await nextFrame()
+    await expect(Math.round(button.getBoundingClientRect().right)).toBe(1440)
     await expect(Math.round(button.getBoundingClientRect().top)).toBe(0)
     // The pointer leaves: it fades out where it is.
     const left = middle(button)

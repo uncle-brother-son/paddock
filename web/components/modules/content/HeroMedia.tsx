@@ -195,8 +195,9 @@ type HeroMediaProps = HeroMediaContent & {
  *
  * The button (WQ24; Wayne, 24 Nov). Its resting place is towards the bottom, centred.
  * - With a mouse (a device whose main pointer is fine and can hover: the `hero-button` utility in app/globals.css)
- *   it is hidden until the pointer is over the hero. It fades in where the pointer is, follows it, eased over the
- *   short duration with the smooth curve and never past the hero's edges, and fades out where it is when the
+ *   it is hidden until the pointer is over the hero. It fades in where the pointer is (the short duration, the
+ *   smooth curve), follows it directly, under the pointer at every move with no easing (WQ80), never past the
+ *   hero's edges, and fades out where it is when the
  *   pointer leaves, or comes over the video's own buttons so they can be pressed. It never waits at its resting
  *   place unseen: each time it is shown it is put where it is wanted first.
  * - The keyboard: when it takes focus it fades in at its resting place and stays there while it has focus.
@@ -211,21 +212,13 @@ export function HeroMedia({ picture, video, button, priority = false, reducedMot
   const keyboardFocus = useRef(false)
 
   /**
-   * Shows the button at a place (`''` is its resting place). Already showing, it glides there. Hidden, it is put
-   * there at once, with no glide from wherever it was last, and then fades in.
+   * Shows the button at a place (`''` is its resting place), there at once: only its fade has a transition (WQ80).
+   * Hidden, it fades in where it is put.
    */
   const showAt = (translate: string) => {
     const moved = mover.current
     if (!moved) return
-    if (moved.hasAttribute('data-shown')) {
-      moved.style.translate = translate
-      return
-    }
-    moved.style.transitionProperty = 'opacity'
     moved.style.translate = translate
-    // Read once, so the browser takes the new place before the fade begins.
-    void moved.offsetWidth
-    moved.style.transitionProperty = ''
     moved.setAttribute('data-shown', '')
   }
 

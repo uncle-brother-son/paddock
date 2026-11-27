@@ -6,7 +6,7 @@ import { InBothModes, inEachMode, painted } from '@/components/ui/story-kit'
 
 import { PaymentMethodOption } from './PaymentMethodOption'
 
-// Figma "PaymentMethodOption" (03 UI, 956:16243): a story for each of Figma's two variants, under Figma's name for it.
+// Figma "PaymentMethodOption" (03 UI, 956:16243): a story for each of Figma's three variants, under Figma's name for it.
 
 /** The option holding its own state. Each stands in a form of its own, so the two modes' are not one group. */
 function Held({ selected: start, onSelect, ...rest }: ComponentProps<typeof PaymentMethodOption>) {
@@ -45,7 +45,7 @@ const options = (canvasElement: HTMLElement) => inEachMode<HTMLLabelElement>(can
 
 /** Not chosen: on Surface/Card with square corners, the Radio and its words in Copy 14 12px apart, 16px all round (52px tall). */
 export const NotSelected: Story = {
-  name: 'Selected=no',
+  name: 'State=not selected',
   play: async ({ canvasElement }) => {
     const found = options(canvasElement)
     await expect(found).toHaveLength(2)
@@ -66,9 +66,26 @@ export const NotSelected: Story = {
   },
 }
 
+/** Under a mouse (WQ80): Surface/Card Selected, the Radio still unchosen. */
+export const Hover: Story = {
+  name: 'State=hover',
+  globals: { pseudo: 'hover' },
+  play: async ({ canvasElement }) => {
+    const found = options(canvasElement)
+    await expect(found).toHaveLength(2)
+    for (const option of found) {
+      // Read before the wait: `painted` changes the document, and a wait looks again at every change.
+      const hovered = painted(option, 'bg-surface-card-selected')
+      await waitFor(() => expect(getComputedStyle(option).backgroundColor).toBe(hovered))
+      await expect(getComputedStyle(option.children[0]!).backgroundColor).toBe(painted(option, 'bg-surface-card-selected'))
+      await expect(option.querySelector('input')).not.toBeChecked()
+    }
+  },
+}
+
 /** Chosen: on Surface/Card Selected, with the Radio in its chosen state. */
 export const Selected: Story = {
-  name: 'Selected=yes',
+  name: 'State=selected',
   args: { selected: true },
   play: async ({ canvasElement }) => {
     for (const option of options(canvasElement)) {

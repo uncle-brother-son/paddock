@@ -8,9 +8,10 @@ type ToggleSimpleProps = {
 }
 
 /**
- * Figma "toggle - simple" (03 UI, 882:4637): a switch, 40 by 20 with 4px corners, and inside it, 2px in, a 16px
- * square with 4px corners. Off (On=No) it is Surface/Card Selected with the square in Text/Primary at its left; on
- * (On=Yes) it is Text/Primary with the square in Surface/Primary at its right.
+ * Figma "ToggleSimple" (03 UI, 882:4637): a switch, 40 by 20 with 4px corners, and inside it, 2px in, a 16px
+ * square with 4px corners. Off (On=No) it is Surface/Card with the square in Text/Primary at its left, and Surface/Card
+ * Selected under a mouse (State=hover, WQ80); on (On=Yes) it is Text/Primary with the square in Surface/Primary at its
+ * right, the same under a mouse, as drawn.
  *
  * A real checkbox with the switch role lies unseen over it (docs/build-standards.md, section 1: Forms): Space
  * switches it, and a screen reader says its name and whether it is on. It reaches 2px above and below the switch
@@ -23,7 +24,7 @@ export function ToggleSimple({ on, onChange, label, name, className }: ToggleSim
   return (
     <span
       data-toggle-simple=""
-      className={`relative inline-flex h-20 w-40 shrink-0 items-center rounded-s p-2 transition-colors duration-short ease-smooth has-keyboard-focus:outline-2 has-keyboard-focus:outline-offset-2 has-keyboard-focus:outline-text-primary ${on ? 'bg-text-primary' : 'bg-surface-card-selected'} ${className ?? ''}`}
+      className={`relative inline-flex h-20 w-40 shrink-0 items-center rounded-s p-2 transition-colors duration-short ease-smooth has-keyboard-focus:outline-2 has-keyboard-focus:outline-offset-2 has-keyboard-focus:outline-text-primary ${on ? 'bg-text-primary' : 'bg-surface-card hover:bg-surface-card-selected'} ${className ?? ''}`}
     >
       <span aria-hidden="true" className={`size-16 rounded-s transition-[translate,background-color] duration-short ease-smooth ${on ? 'translate-x-20 bg-surface-primary' : 'bg-text-primary'}`} />
       <input

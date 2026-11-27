@@ -168,8 +168,9 @@ describe('W73b Level 3: where the button is, in the stylesheet', () => {
   const css = readFileSync(path.resolve(__dirname, '../../app/globals.css'), 'utf8')
   const rule = /@utility hero-button \{[\s\S]*?\n\}\n/.exec(css)?.[0] ?? ''
 
-  it('its fade and its glide take the short duration with the smooth curve', () => {
-    expect(rule).toContain('transition-property: opacity, translate;')
+  it('its fade takes the short duration with the smooth curve; its place has no transition (WQ80: it follows the pointer directly)', () => {
+    expect(rule).toContain('transition-property: opacity;')
+    expect(rule).not.toMatch(/transition-property:[^;]*translate/)
     expect(rule).toContain('transition-duration: var(--duration-short);')
     expect(rule).toContain('transition-timing-function: var(--ease-smooth);')
   })

@@ -5,7 +5,7 @@ import { expect, fn, userEvent, waitFor } from 'storybook/test'
 import { InBothModes, inEachMode, painted } from '@/components/ui/story-kit'
 import { ToggleSimple } from './ToggleSimple'
 
-// Figma "toggle - simple" (03 UI, 882:4637): a story for each of Figma's two variants, under Figma's name for it.
+// Figma "ToggleSimple" (03 UI, 882:4637): a story for each of Figma's four variants, under Figma's name for it.
 
 /** The switch holding its own state. */
 function Held({ on: start, onChange, ...rest }: ComponentProps<typeof ToggleSimple>) {
@@ -40,9 +40,9 @@ type Story = StoryObj<typeof meta>
 const switches = (canvasElement: HTMLElement) => inEachMode(canvasElement, '[data-toggle-simple]')
 const squareOf = (track: HTMLElement) => track.children[0] as HTMLElement
 
-/** Off: 40 by 20 on Surface/Card Selected with 4px corners, and the 16px square in Text/Primary 2px in at its left. */
+/** Off: 40 by 20 on Surface/Card with 4px corners, and the 16px square in Text/Primary 2px in at its left. */
 export const Off: Story = {
-  name: 'On=No',
+  name: 'On=No, State=default',
   play: async ({ canvasElement }) => {
     const found = switches(canvasElement)
     await expect(found).toHaveLength(2)
@@ -52,7 +52,7 @@ export const Off: Story = {
       await expect([box.width, box.height, getComputedStyle(track).borderRadius]).toEqual([40, 20, '4px'])
       await expect([squareBox.width, squareBox.height, getComputedStyle(square).borderRadius]).toEqual([16, 16, '4px'])
       await expect([squareBox.left - box.left, squareBox.top - box.top]).toEqual([2, 2])
-      await expect(getComputedStyle(track).backgroundColor).toBe(painted(track, 'bg-surface-card-selected'))
+      await expect(getComputedStyle(track).backgroundColor).toBe(painted(track, 'bg-surface-card'))
       await expect(getComputedStyle(square).backgroundColor).toBe(painted(track, 'bg-text-primary'))
       const control = track.querySelector('input')!
       await expect(control).toHaveRole('switch')
@@ -66,7 +66,7 @@ export const Off: Story = {
 
 /** On: Text/Primary, and the square in Surface/Primary 2px in at its right. */
 export const On: Story = {
-  name: 'On=Yes',
+  name: 'On=Yes, State=default',
   args: { on: true },
   play: async ({ canvasElement }) => {
     for (const track of switches(canvasElement)) {
@@ -76,6 +76,36 @@ export const On: Story = {
       await expect(getComputedStyle(track).backgroundColor).toBe(painted(track, 'bg-text-primary'))
       await expect(getComputedStyle(square).backgroundColor).toBe(painted(track, 'bg-surface-primary'))
       await expect(track.querySelector('input')).toBeChecked()
+    }
+  },
+}
+
+/** Off under a mouse (WQ80): Surface/Card Selected, the square as at rest. */
+export const OffHover: Story = {
+  name: 'On=No, State=hover',
+  globals: { pseudo: 'hover' },
+  play: async ({ canvasElement }) => {
+    const found = switches(canvasElement)
+    await expect(found).toHaveLength(2)
+    for (const track of found) {
+      // Read before the wait: `painted` changes the document, and a wait looks again at every change.
+      const hovered = painted(track, 'bg-surface-card-selected')
+      await waitFor(() => expect(getComputedStyle(track).backgroundColor).toBe(hovered))
+      await expect(getComputedStyle(squareOf(track)).backgroundColor).toBe(painted(track, 'bg-text-primary'))
+      await expect(squareOf(track).getBoundingClientRect().left - track.getBoundingClientRect().left).toBe(2)
+    }
+  },
+}
+
+/** On under a mouse: Figma draws it the same as at rest. */
+export const OnHover: Story = {
+  name: 'On=Yes, State=hover',
+  args: { on: true },
+  globals: { pseudo: 'hover' },
+  play: async ({ canvasElement }) => {
+    for (const track of switches(canvasElement)) {
+      await expect(getComputedStyle(track).backgroundColor).toBe(painted(track, 'bg-text-primary'))
+      await expect(getComputedStyle(squareOf(track)).backgroundColor).toBe(painted(track, 'bg-surface-primary'))
     }
   },
 }
