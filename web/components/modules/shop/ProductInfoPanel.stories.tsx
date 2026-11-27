@@ -161,11 +161,18 @@ export const SlidesIn: Story = {
     await waitFor(() => expect(fromRight(dialog)).toBe(12), { timeout: 3000 })
     await waitFor(() => expect([getComputedStyle(dialog).opacity, getComputedStyle(shade).opacity]).toEqual(['1', '1']), { timeout: 3000 })
     await expect([window.scrollX, document.documentElement.scrollWidth]).toEqual([0, window.innerWidth])
-    // Closing: back the way it came, still to be seen and solid while it goes, and hidden once it has gone.
+    // Closing: back the way it came, its slide and its hiding started together, and hidden once it has gone. The
+    // transitions are recorded as they start, not looked for part-way: a loaded full run can reach a half-way check
+    // after the slide has ended (W83 noticed 1, which also dropped the half-way visibility check).
+    const started = new Set<string>()
+    const record = (event: TransitionEvent) => {
+      if (event.target === dialog) started.add(event.propertyName)
+    }
+    dialog.addEventListener('transitionrun', record)
     await userEvent.click(within(dialog).getByRole('button', { name: 'Close' }))
     await waitFor(() => expect(fromRight(dialog)).toBeLessThan(12))
-    await expect([getComputedStyle(dialog).visibility, getComputedStyle(dialog).opacity]).toEqual(['visible', '1'])
-    await expect(dialog.getAnimations().map((animation) => (animation as CSSTransition).transitionProperty).sort()).toEqual(['translate', 'visibility'])
+    await waitFor(() => expect([...started].sort()).toEqual(['translate', 'visibility']), { timeout: 3000 })
+    dialog.removeEventListener('transitionrun', record)
     await waitFor(() => expect(dialog).not.toBeVisible(), { timeout: 3000 })
     await expect(Math.round(box(dialog).left)).toBe(window.innerWidth)
     await waitFor(() => expect(shade).not.toBeVisible(), { timeout: 3000 })

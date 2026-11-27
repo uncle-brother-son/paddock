@@ -29,8 +29,8 @@ const digitsOf = (typed: string): string => typed.replace(/\D/g, '').slice(0, 6)
  * (`quantity`), 25px square. It is as wide as its parts and 25px tall, as the small QuantityStepper.
  *
  * It changes the amount (WQ80): the icon's upper half takes it up £1 and its lower half down £1, never above `max`
- * or below `min`; at either end that half does nothing and its arrow is Text/Muted Primary, as a disabled IconButton
- * is drawn. The amount can be typed too (digits only: whole pounds); it is taken on Enter or when focus leaves, put
+ * or below `min`; at either end that half is `aria-disabled`, does nothing and its arrow is Text/Muted Primary, as a
+ * disabled IconButton is drawn. The amount can be typed too (digits only: whole pounds); it is taken on Enter or when focus leaves, put
  * within the limits, and anything left empty goes back to the amount it was.
  *
  * For the keyboard and a screen reader the amount is a spin button: its name, its amount said as "£5", and the up
@@ -127,10 +127,13 @@ export function PriceStepper({ value, min, max, onChange, label, className }: Pr
             tabIndex={-1}
             aria-label={name}
             aria-controls={`${id}-amount`}
-            disabled={end}
+            // At its end a half is unavailable but not `disabled` (as QuantityStepper's): the press is ignored.
+            aria-disabled={end}
             // A press keeps focus where it was: in the amount, if it is being typed.
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => pressed(by)}
+            onClick={() => {
+              if (!end) pressed(by)
+            }}
             data-step={by > 0 ? 'up' : 'down'}
             className={`${ICON_BUTTON_PAGE_BUTTON} relative min-h-0 flex-1 overflow-hidden ${half}`}
           >

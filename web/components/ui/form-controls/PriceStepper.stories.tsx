@@ -88,7 +88,7 @@ export const Default: Story = {
         await expect([icon.width, icon.height, icon.left - upBox.left, icon.top - upBox.top]).toEqual([9, 13, 8, 6])
       }
       // At the lowest: the lower arrow is muted and does nothing; the upper can be pressed.
-      await expect([down.disabled, up.disabled]).toEqual([true, false])
+      await expect([down.getAttribute('aria-disabled'), up.getAttribute('aria-disabled'), down.disabled]).toEqual(['true', 'false', false])
       await expect(getComputedStyle(down).color).toBe(painted(stepper, 'text-text-muted-primary', 'color'))
       await expect(getComputedStyle(up).color).toBe(painted(stepper, 'text-text-primary', 'color'))
       // For a screen reader: a spin button with its name and its amount in pounds; the halves have names of their own.
@@ -111,13 +111,13 @@ export const Stepping: Story = {
     await expect(args.onChange).toHaveBeenLastCalledWith(2)
     await expect(said).toHaveTextContent('£2')
     await expect(amount.getAttribute('aria-valuetext')).toBe('£2')
-    await expect(down.disabled).toBe(false)
+    await expect(down).toHaveAttribute('aria-disabled', 'false')
     await userEvent.click(down)
     await expect([amount.value, said.textContent]).toEqual(['1', '£1'])
-    await expect(down.disabled).toBe(true)
+    await expect(down).toHaveAttribute('aria-disabled', 'true')
     // Up to the highest, £5: there the upper arrow is muted and does nothing.
     for (let press = 0; press < 4; press += 1) await userEvent.click(up)
-    await expect([amount.value, up.disabled]).toEqual(['5', true])
+    await expect([amount.value, up.getAttribute('aria-disabled')]).toEqual(['5', 'true'])
     // The colour is read before the wait: `painted` changes the document, and a wait looks again at every change.
     const muted = painted(stepper, 'text-text-muted-primary', 'color')
     await waitFor(() => expect(getComputedStyle(up).color).toBe(muted))
@@ -169,7 +169,7 @@ export const Typing: Story = {
     await expect(amount.value).toBe('20')
     await expect(args.onChange).toHaveBeenLastCalledWith(20)
     await expect(said).toHaveTextContent('£20')
-    await expect(up.disabled).toBe(true)
+    await expect(up).toHaveAttribute('aria-disabled', 'true')
     // Within the limits it is taken as it is when focus leaves.
     await userEvent.tripleClick(amount)
     await userEvent.keyboard('7')

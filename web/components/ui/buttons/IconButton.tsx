@@ -14,8 +14,12 @@ export const ICON_BUTTON_PAGE = 'flex items-center justify-center rounded-s text
 /** State=hover of Style=page, for a link drawn as an IconButton (a button's own is below: never while disabled). */
 export const ICON_BUTTON_PAGE_HOVER = 'hover:bg-surface-card-selected'
 
-/** Style=page for a button without its padding: its hover, and its disabled state (PriceStepper's up and down halves). */
-export const ICON_BUTTON_PAGE_BUTTON = `${ICON_BUTTON_PAGE} enabled:hover:bg-surface-card-selected disabled:cursor-default disabled:text-text-muted-primary`
+/**
+ * Style=page for a button without its padding: its hover, and its disabled state (PriceStepper's up and down halves).
+ * State=disabled is drawn for `disabled` and for `aria-disabled="true"` alike: a stepper at its limit uses the second,
+ * so the button keeps keyboard focus, ignores the press and is still said to be unavailable (W83 noticed 2).
+ */
+export const ICON_BUTTON_PAGE_BUTTON = `${ICON_BUTTON_PAGE} enabled:not-aria-disabled:hover:bg-surface-card-selected disabled:cursor-default disabled:text-text-muted-primary aria-disabled:cursor-default aria-disabled:text-text-muted-primary`
 
 const PAGE = ICON_BUTTON_PAGE_BUTTON
 

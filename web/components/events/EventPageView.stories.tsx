@@ -81,7 +81,7 @@ export const Open: Story = {
 }
 
 /**
- * The quantity stepper goes from 1 to the spaces left (WQ61): minus is disabled at 1 and plus at the most. Here six
+ * The quantity stepper goes from 1 to the spaces left (WQ61): minus is unavailable at 1 and plus at the most. Here six
  * are left. "Add to bag" goes to the bag with the event and how many; the bag is not built yet, so nothing changes.
  */
 export const Quantity: Story = {
@@ -90,11 +90,11 @@ export const Quantity: Story = {
   play: async ({ canvas, canvasElement }) => {
     const count = stepperOf(canvasElement).querySelector('output') as HTMLElement
     const [fewer, more] = [canvas.getByRole('button', { name: 'One fewer' }), canvas.getByRole('button', { name: 'One more' })]
-    await expect([count.textContent, fewer.hasAttribute('disabled'), more.hasAttribute('disabled')]).toEqual(['1', true, false])
+    await expect([count.textContent, fewer.getAttribute('aria-disabled'), more.getAttribute('aria-disabled')]).toEqual(['1', 'true', 'false'])
     await userEvent.click(more)
-    await expect([count.textContent, fewer.hasAttribute('disabled')]).toEqual(['2', false])
+    await expect([count.textContent, fewer.getAttribute('aria-disabled')]).toEqual(['2', 'false'])
     for (let press = 0; press < 4; press += 1) await userEvent.click(more)
-    await expect([count.textContent, more.hasAttribute('disabled')]).toEqual(['6', true])
+    await expect([count.textContent, more.getAttribute('aria-disabled')]).toEqual(['6', 'true'])
     // At the most the plus is faded, Text/Muted Primary as IconButton's disabled state (W83, Wayne 27 Nov), and the
     // minus is not.
     const muted = painted(more, 'text-text-muted-primary', 'color')
@@ -103,7 +103,7 @@ export const Quantity: Story = {
     await userEvent.click(more)
     await expect(count.textContent).toBe('6')
     await userEvent.click(fewer)
-    await expect([count.textContent, more.hasAttribute('disabled')]).toEqual(['5', false])
+    await expect([count.textContent, more.getAttribute('aria-disabled')]).toEqual(['5', 'false'])
     // The number keeps its width as it changes, so the button beside it never moves.
     await expect(Math.round(box(stepperOf(canvasElement)).width)).toBe(102)
     await userEvent.click(canvas.getByRole('button', { name: 'Add to bag' }))
@@ -118,7 +118,7 @@ export const OneSpaceLeft: Story = {
   args: { view: SAMPLE_EVENTS.oneSpaceLeft },
   play: async ({ canvas }) => {
     await expect(canvas.getByText('1 space left')).toBeVisible()
-    await expect([canvas.getByRole('button', { name: 'One fewer' }).hasAttribute('disabled'), canvas.getByRole('button', { name: 'One more' }).hasAttribute('disabled')]).toEqual([true, true])
+    await expect([canvas.getByRole('button', { name: 'One fewer' }).getAttribute('aria-disabled'), canvas.getByRole('button', { name: 'One more' }).getAttribute('aria-disabled')]).toEqual(['true', 'true'])
     await expect(canvas.getByRole('button', { name: 'Add to bag' })).toBeEnabled()
   },
 }
@@ -262,7 +262,7 @@ export const SpacesAskedAgain: Story = {
     await expect(await canvas.findByText('2 spaces left')).toBeVisible()
     const more = canvas.getByRole('button', { name: 'One more' })
     await userEvent.click(more)
-    await expect(more).toBeDisabled()
+    await expect(more).toHaveAttribute('aria-disabled', 'true')
   },
 }
 

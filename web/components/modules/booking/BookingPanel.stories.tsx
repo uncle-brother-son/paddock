@@ -135,14 +135,14 @@ export const PrivateSixty: Story = {
     // The stepper goes from 1 to the most the session allows; the price is the group's the count falls in.
     const row = within(rows[1]!)
     const more = row.getByRole('button', { name: 'One more' })
-    await expect(row.getByRole('button', { name: 'One fewer' })).toBeDisabled()
+    await expect(row.getByRole('button', { name: 'One fewer' })).toHaveAttribute('aria-disabled', 'true')
     for (let people = 2; people <= 6; people += 1) await userEvent.click(more)
     await expect(wordsOf(rows[1]!).slice(4)).toEqual(['£105', '1-6 People'])
     await userEvent.click(more)
     await expect(wordsOf(rows[1]!).slice(4)).toEqual(['£120', '7 People'])
     for (let people = 8; people <= 10; people += 1) await userEvent.click(more)
     await expect(wordsOf(rows[1]!).slice(4)).toEqual(['£165', '10 People'])
-    await expect(more).toBeDisabled()
+    await expect(more).toHaveAttribute('aria-disabled', 'true')
     // At the most the plus is faded, Text/Muted Primary as IconButton's disabled state (W83, Wayne 27 Nov).
     const muted = painted(more, 'text-text-muted-primary', 'color')
     await waitFor(() => expect(getComputedStyle(more).color).toBe(muted))

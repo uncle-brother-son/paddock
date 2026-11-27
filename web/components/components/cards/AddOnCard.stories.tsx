@@ -82,7 +82,7 @@ export const Added: Story = {
     await expect(canvas.getByRole('status')).toHaveTextContent('2')
     // At 1 the minus is live: it takes the add-on off again.
     await userEvent.click(fewer)
-    await expect(fewer).toBeEnabled()
+    await expect(fewer).toHaveAttribute('aria-disabled', 'false')
     await userEvent.click(fewer)
     await waitFor(() => expect(canvas.getByRole('button', { name: 'Add Smoothie High Brown Knoll' })).toHaveFocus())
     await expect(canvas.queryByRole('group')).toBeNull()

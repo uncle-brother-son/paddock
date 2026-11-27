@@ -23,20 +23,42 @@ type QuantityStepperProps = {
  * (components/ui/buttons/IconButton.tsx: Surface/Card Selected under a mouse). At its least the minus does nothing and its
  * icon is Text/Muted Primary (Figma's Switch=no); from there up both can be pressed (Switch=yes).
  *
- * Minus is disabled at the least and plus at the most (WQ61: an event's goes from 1 to the spaces left). The number
+ * Minus is unavailable at the least and plus at the most (WQ61: an event's goes from 1 to the spaces left). There the
+ * button is `aria-disabled` and a press is ignored, not `disabled`: a button pressed up to its limit by keyboard keeps
+ * focus (a disabled one would drop it to the page), and a screen reader still hears it is unavailable. The number
  * is said to a screen reader as it changes. Each press is a button with its own name; the group has the count's name.
  *
  * It is as wide as its parts unless it is given a width (W77: the whole width of a session's row on a phone, and of
  * an add-on's card), where the number takes the room between the two icons.
  */
 export function QuantityStepper({ value, min = 1, max, onChange, label = 'Quantity', big = true, className }: QuantityStepperProps) {
+  const atLeast = value <= min
+  const atMost = value >= max
   return (
     <div role="group" aria-label={label} data-stepper="" className={`flex shrink-0 items-center rounded-s bg-surface-card ${className ?? ''}`}>
-      <IconButton icon="minus" label="One fewer" big={big} disabled={value <= min} onClick={() => onChange(value - 1)} className="self-stretch" />
+      <IconButton
+        icon="minus"
+        label="One fewer"
+        big={big}
+        aria-disabled={atLeast}
+        onClick={() => {
+          if (!atLeast) onChange(value - 1)
+        }}
+        className="self-stretch"
+      />
       <output aria-live="polite" className="flex flex-1 items-center justify-center px-8">
         <span className="w-20 text-center text-label-12 text-text-primary">{value}</span>
       </output>
-      <IconButton icon="plus" label="One more" big={big} disabled={value >= max} onClick={() => onChange(value + 1)} className="self-stretch" />
+      <IconButton
+        icon="plus"
+        label="One more"
+        big={big}
+        aria-disabled={atMost}
+        onClick={() => {
+          if (!atMost) onChange(value + 1)
+        }}
+        className="self-stretch"
+      />
     </div>
   )
 }

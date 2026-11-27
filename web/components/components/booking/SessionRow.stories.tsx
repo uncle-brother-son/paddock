@@ -52,13 +52,13 @@ export const NonMember: Story = {
     await expect(round(box(book).left - box(stepper).right, box(stepper).height, box(book).height, box(row).right - box(book).right, box(stepper).left - box(price).left)).toEqual([8, 33, 33, 16, 160])
     // From 1 to the most the session allows (3 spots left): minus is dimmed and does nothing at 1, plus at 3.
     const [fewer, more] = [canvas.getByRole('button', { name: 'One fewer' }), canvas.getByRole('button', { name: 'One more' })]
-    await expect(fewer).toBeDisabled()
+    await expect(fewer).toHaveAttribute('aria-disabled', 'true')
     await expect(getComputedStyle(fewer).color).not.toBe(getComputedStyle(more).color)
     await userEvent.click(more)
     await userEvent.click(more)
     await expect(canvas.getByRole('status')).toHaveTextContent('3')
-    await expect(more).toBeDisabled()
-    await expect(fewer).toBeEnabled()
+    await expect(more).toHaveAttribute('aria-disabled', 'true')
+    await expect(fewer).toHaveAttribute('aria-disabled', 'false')
   },
 }
 
