@@ -75,6 +75,7 @@ export function testRouteFactory(db: Db, overrides: Partial<RouteDeps> = {}) {
     closeDb,
     staffApiKey: () => STAFF_KEY,
     tokenVerifier: () => async () => ({ authUserId: 'auth-1' }),
+    signInVerifier: () => async () => ({ authUserId: 'auth-1', email: 'sam@example.com' }),
     log: (entry) => logs.push(entry),
     now: () => 1000,
     validateOutput: true,

@@ -1,5 +1,5 @@
 import 'server-only'
-import { defaultTokenVerifier } from '@/server/auth/customer'
+import { defaultSignInVerifier, defaultTokenVerifier } from '@/server/auth/customer'
 import { closeRequestDb, openRequestDb } from '@/server/db/connection'
 import { writeRequestLog } from './log'
 import { createRouteFactory } from './route'
@@ -13,6 +13,7 @@ export const defineRoute = createRouteFactory({
   closeDb: closeRequestDb,
   staffApiKey: () => process.env.STAFF_API_KEY,
   tokenVerifier: defaultTokenVerifier,
+  signInVerifier: defaultSignInVerifier,
   log: writeRequestLog,
   now: () => Date.now(),
   validateOutput: process.env.NODE_ENV !== 'production',

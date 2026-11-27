@@ -1,7 +1,7 @@
 import { beforeAll, describe, it, expect, vi } from 'vitest'
 import type { Queryable } from '@/server/db'
 import { ApiError } from '@/server/http/errors'
-import { authenticateCustomer, createTokenVerifier, type TokenVerifier } from './customer'
+import { authenticateCustomer, authenticateSignIn, createSignInVerifier, createTokenVerifier, type TokenVerifier } from './customer'
 
 const SUPABASE_URL = 'https://test-project.supabase.co'
 const KID = 'test-key-1'
@@ -132,5 +132,77 @@ describe('authenticateCustomer', () => {
     ]
 
     await expect(authenticateCustomer(bearer(token), fakeDb(rows), verifier())).rejects.toThrow('More than one customer')
+  })
+})
+
+// W85a (backend log 9): the sign-in routes' check. The token as above, then the login as Supabase's Auth server holds
+// it (GET /auth/v1/user, answered here by the fake fetch): its email must be the token's and confirmed.
+describe('authenticateSignIn (W85a)', () => {
+  const EMAIL = 'Sam@Example.com'
+  const signInClaims = (extra: Record<string, unknown> = {}) => ({ ...validClaims(), email: EMAIL, ...extra })
+  type User = Record<string, unknown>
+  const confirmedUser = (extra: User = {}): User => ({ id: AUTH_USER, aud: 'authenticated', email: EMAIL, email_confirmed_at: '2026-11-27T10:00:00Z', ...extra })
+
+  /** getClaims against the JWKS, and getUser answered with `user` (or a status). */
+  function signInVerifier(user: User | { status: number }): { verify: ReturnType<typeof createSignInVerifier>; userCalls: () => number } {
+    let calls = 0
+    const fakeFetch = (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/.well-known/jwks.json')) return Response.json({ keys: [{ ...publicJwk, kid: KID, alg: 'ES256', use: 'sig' }] })
+      if (url.endsWith('/auth/v1/user')) {
+        calls += 1
+        if ('status' in user && typeof user.status === 'number') return Response.json({ msg: 'down', error_code: 'unexpected_failure' }, { status: user.status })
+        return Response.json(user)
+      }
+      return Response.json({ msg: 'not here' }, { status: 404 })
+    }) as typeof fetch
+    return { verify: createSignInVerifier(SUPABASE_URL, 'anon-key', fakeFetch), userCalls: () => calls }
+  }
+  const reasonOf = (err: ApiError) => (err.details as { reason?: string } | undefined)?.reason
+
+  it("gives the login's id and the token's email, lower-cased, when Supabase holds that email confirmed", async () => {
+    const token = await signToken(signingKey.privateKey, signInClaims())
+    const { verify, userCalls } = signInVerifier(confirmedUser())
+    expect(await authenticateSignIn(bearer(token), verify)).toEqual({ authUserId: AUTH_USER, email: 'sam@example.com' })
+    expect(userCalls()).toBe(1)
+  })
+
+  it('an unconfirmed email is refused, even when the token says user_metadata.email_verified (the user can write that)', async () => {
+    const token = await signToken(signingKey.privateKey, signInClaims({ user_metadata: { email_verified: true } }))
+    const err = await failure(authenticateSignIn(bearer(token), signInVerifier(confirmedUser({ email_confirmed_at: null })).verify))
+    expect([err.code, reasonOf(err), err.message]).toEqual(['FORBIDDEN', 'email_not_confirmed', 'Please confirm your email address with the code we sent you, then try again.'])
+  })
+
+  it('an anonymous login, or one with no email, is refused before Supabase is asked', async () => {
+    for (const claims of [signInClaims({ is_anonymous: true }), signInClaims({ email: '' }), { ...validClaims() }]) {
+      const token = await signToken(signingKey.privateKey, claims)
+      const { verify, userCalls } = signInVerifier(confirmedUser())
+      const err = await failure(authenticateSignIn(bearer(token), verify))
+      expect([err.code, reasonOf(err)]).toEqual(['FORBIDDEN', 'no_email'])
+      expect(userCalls()).toBe(0)
+    }
+  })
+
+  it("the login's email changed since the token was issued, or the user is another: signed out", async () => {
+    const token = await signToken(signingKey.privateKey, signInClaims())
+    for (const user of [confirmedUser({ email: 'new@example.com' }), confirmedUser({ id: '22222222-2222-4222-8222-222222222222' })]) {
+      const err = await failure(authenticateSignIn(bearer(token), signInVerifier(user).verify))
+      expect([err.code, err.message]).toEqual(['UNAUTHORISED', 'Your session has expired. Please sign in again.'])
+    }
+  })
+
+  it("a bad token is refused as the customer routes refuse it, and Supabase's user read is not reached", async () => {
+    const { verify, userCalls } = signInVerifier(confirmedUser())
+    expect((await failure(authenticateSignIn(new Headers(), verify))).code).toBe('UNAUTHORISED')
+    expect((await failure(authenticateSignIn(bearer(await signToken(otherKey.privateKey, signInClaims())), verify))).code).toBe('UNAUTHORISED')
+    expect((await failure(authenticateSignIn(bearer(await signToken(signingKey.privateKey, signInClaims({ aud: 'anon' }))), verify))).code).toBe('UNAUTHORISED')
+    expect(userCalls()).toBe(0)
+  })
+
+  it("Supabase unreachable for the user read is a fault, not a sign-out", async () => {
+    const token = await signToken(signingKey.privateKey, signInClaims())
+    const err = await authenticateSignIn(bearer(token), signInVerifier({ status: 503 }).verify).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect(err).not.toBeInstanceOf(ApiError)
   })
 })

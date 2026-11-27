@@ -303,6 +303,11 @@ export const customerListInputSchema = z.object({ search: z.string().optional(),
 export type CustomerListInput = z.infer<typeof customerListInputSchema>
 
 export const customerListRowSchema = createCustomerOutputSchema.extend({
+  /**
+   * W85a (migration 036): null for a customer who signed up on the website and hasn't needed to give one yet. Staff's
+   * New customer form still asks for it, so a customer staff make always has one.
+   */
+  date_of_birth: dateText.nullable(),
   has_saved_card: z.boolean(),
   saved_card_last4: z.string().nullable(),
   saved_card_brand: z.string().nullable(),

@@ -184,7 +184,7 @@ CREATE TABLE public.customers (
   waiver_accepted boolean DEFAULT false,
   waiver_version text,
   waiver_accepted_at timestamp with time zone,
-  date_of_birth date NOT NULL,
+  date_of_birth date,
   updated_at timestamp with time zone DEFAULT now() NOT NULL,
   saved_card_last4 text,
   saved_card_brand text,

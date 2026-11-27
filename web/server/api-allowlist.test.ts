@@ -47,7 +47,9 @@ describe('the only routes are app/api/v1 and the two webhooks (W70a, L4)', () =>
     expect(routes.filter((file) => asksNoSignIn(sourceOf(file)))).toEqual(PUBLIC_ROUTES)
     for (const file of PUBLIC_ROUTES) expect(sourceOf(file).match(/export const [A-Z]+/g), file).toEqual(['export const GET'])
     // Every route says who it answers as a literal in its own file, so the check above can't be stepped round.
-    expect(routes.filter((file) => !/\bauth\s*:\s*'(staff|staff_sign_in|customer|public)'/.test(sourceOf(file)))).toEqual([])
+    expect(routes.filter((file) => !/\bauth\s*:\s*'(staff|staff_sign_in|customer|customer_sign_in|public)'/.test(sourceOf(file)))).toEqual([])
+    // W85a: a login with no customer yet is answered only by the two sign-in routes, both under customer/.
+    expect(routes.filter((file) => /\bauth\s*:\s*'customer_sign_in'/.test(sourceOf(file)))).toEqual(['app/api/v1/customer/sign-in/create/route.ts', 'app/api/v1/customer/sign-in/link/route.ts'])
     expect(['{ auth: "public" }', "{ auth : 'public', input }", "{ auth: 'staff' }"].map(asksNoSignIn)).toEqual([true, true, false])
   })
 

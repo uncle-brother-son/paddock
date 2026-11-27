@@ -1255,7 +1255,7 @@
     {
      "name": "date_of_birth",
      "type": "date",
-     "notNull": true,
+     "notNull": false,
      "default": null,
      "generated": "",
      "identity": ""

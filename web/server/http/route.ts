@@ -1,7 +1,7 @@
 import 'server-only'
 import type { z } from 'zod'
 import type { ApiFailure, ApiSuccess, CustomerContext, StaffContext } from '@/contracts'
-import { authenticateCustomer, type TokenVerifier } from '@/server/auth/customer'
+import { authenticateCustomer, authenticateSignIn, type SignInIdentity, type SignInVerifier, type TokenVerifier } from '@/server/auth/customer'
 import { authenticateStaff, authenticateStaffSignIn, requireAdmin, requireIssueRefunds, requireManagePricing } from '@/server/auth/staff'
 import type { Db } from '@/server/db'
 import { ApiError, toApiError, validationError } from './errors'
@@ -27,8 +27,13 @@ import { resolveRequestId } from './request-id'
  * say `method: 'GET'`; anything else is thrown when the route is defined (so the build and every test that loads the
  * route fail), and the route refuses any request that isn't a GET before it reads anything, so the config can't be
  * exported under another verb either.
+ *
+ * `customer_sign_in` (W85a, backend log 9): a signed-in website login that may have no customer yet (`customer` needs
+ * one, and answers CUSTOMER_NOT_LINKED without it). The handler gets the login's id and its confirmed email, from the
+ * token (`authenticateSignIn`), never from the request. Only the sign-in routes use it (link, create): each is safe
+ * to call twice by what it does (a linked login answers as linked), so it takes no Idempotency-Key.
  */
-export type AuthMode = 'staff' | 'staff_sign_in' | 'customer' | 'public'
+export type AuthMode = 'staff' | 'staff_sign_in' | 'customer' | 'customer_sign_in' | 'public'
 export type Permission = 'admin' | 'issueRefunds' | 'managePricing'
 
 export type RouteConfig<A extends AuthMode, I extends z.ZodType, O extends z.ZodType> = {
@@ -38,10 +43,15 @@ export type RouteConfig<A extends AuthMode, I extends z.ZodType, O extends z.Zod
   /** Requires an Idempotency-Key header and runs at most once per key. Set on every write. */
   idempotent?: boolean
 } & (A extends 'staff' ? { permission?: Permission } : { permission?: never }) &
-  (A extends 'staff_sign_in' ? { idempotent?: never; method: 'GET' } : object)
+  (A extends 'staff_sign_in' ? { idempotent?: never; method: 'GET' } : object) &
+  (A extends 'customer_sign_in' ? { idempotent?: never } : object)
 
 /** W54a (F3): what a `staff_sign_in` route's config must say, checked when the route is defined. */
 function requireSignInRouteIsARead(config: { auth: AuthMode; idempotent?: unknown; method?: unknown }): void {
+  // W85a: a login with no customer has no idempotency scope; its routes are safe twice by what they do.
+  if (config.auth === 'customer_sign_in' && config.idempotent) {
+    throw new Error("A 'customer_sign_in' route can't be idempotent: it must be safe to call twice by what it does.")
+  }
   if (config.auth !== 'staff_sign_in') return
   if (config.method !== 'GET' || config.idempotent) {
     throw new Error("A 'staff_sign_in' route answers an inactive or unknown sign-in, so it can only be a read: its config must say method: 'GET' and can never be idempotent.")
@@ -54,7 +64,9 @@ type ActorFor<A extends AuthMode> = A extends 'staff'
     ? { signIn: { email: string } }
     : A extends 'customer'
       ? { customer: CustomerContext }
-      : object
+      : A extends 'customer_sign_in'
+        ? { login: SignInIdentity }
+        : object
 
 export type RouteContext<A extends AuthMode, I extends z.ZodType> = {
   input: z.output<I>
@@ -78,6 +90,8 @@ export interface RouteDeps {
   closeDb(db: Db): Promise<void> | void
   staffApiKey(): string | undefined
   tokenVerifier(): TokenVerifier
+  /** W85a: the sign-in routes' check (the token, then the login's confirmed email from Supabase). */
+  signInVerifier(): SignInVerifier
   log(entry: RequestLogEntry): void
   now(): number
   /** Output is checked in development and tests only, to keep production fast. */
@@ -175,7 +189,7 @@ export function createRouteFactory(deps: RouteDeps) {
         db = deps.openDb()
         const openDb = db
 
-        let identity: { staff: StaffContext } | { signIn: { email: string } } | { customer: CustomerContext } | object = {}
+        let identity: { staff: StaffContext } | { signIn: { email: string } } | { customer: CustomerContext } | { login: SignInIdentity } | object = {}
         let scopeActor: Pick<IdempotencyScope, 'actorType' | 'actorId'> = { actorType: 'public', actorId: 'public' }
         if (config.auth === 'staff') {
           const staff = await authenticateStaff(request.headers, openDb, deps.staffApiKey())
@@ -195,6 +209,11 @@ export function createRouteFactory(deps: RouteDeps) {
           identity = { customer }
           scopeActor = { actorType: 'customer', actorId: customer.customerId }
           actor = `customer:${customer.customerId}`
+        } else if (config.auth === 'customer_sign_in') {
+          // W85a: the login, which may have no customer yet. The log names the login, not an email.
+          const login = await authenticateSignIn(request.headers, deps.signInVerifier())
+          identity = { login }
+          actor = `login:${login.authUserId}`
         } else {
           actor = 'public'
         }

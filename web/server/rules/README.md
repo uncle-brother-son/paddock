@@ -342,10 +342,25 @@ behind a press key, and has no switch kind.
     027** (lead call L10): until it is applied, an address in capitals written outside this rule can still sit beside
     ours if the two are written at the same moment.
   - A `customer.created` audit row: who and the channel (on the customer channel, the new customer).
-  - **For the website build (not done here):** the website gives a date of birth only when the account holder
-    attends or buys a membership or pass, and `customers.date_of_birth` is NOT NULL. The customer channel will need a
-    migration that lets it be null, the rule's date checks skipped when the channel is `customer` and none is given,
-    and a check wherever a date of birth is read (an attendee's 18+ check, a membership or pass purchase).
+  - **For the website build:** the website gives a date of birth only when the account holder attends or buys a
+    membership or pass. W85a: migration 036 lets `customers.date_of_birth` be null, and the website's sign-up is its
+    own rule (`customer/sign-in.ts`, below), not this one: this rule still asks for a date of birth on both channels,
+    as staff's New customer form does. Still to do (the checkout brief): a check wherever a date of birth is needed
+    (the account holder attending a session or an event, a membership or pass purchase), asking for it then.
+- `customer/sign-in.ts` (W85a, backend log 9, 25): the website's sign-in, on routes of their own mode,
+  `customer_sign_in` (a verified login that may have no customer yet; `server/http/route.ts`). The login's email is
+  the token's `email` claim, confirmed by Supabase's own user record (`createSignInVerifier`, one `getUser` call;
+  `user_metadata.email_verified` is not trusted, as the user can write it), never the request's.
+  - `POST customer/sign-in/link`: the login's customer (by login, else by email in any case, locked); one with no login
+    is linked (`customer.login_linked`); one with another login refuses CONFLICT `email_linked_elsewhere`, with a
+    `customer.sign_in_refused` audit row on that customer (the refusal is returned out of the transaction so the row
+    commits, then thrown); none answers `needs_details`. Safe twice.
+  - `POST customer/sign-in/create`: first and last name, phone optional, no date of birth. One transaction: as link
+    first; else the insert, `ON CONFLICT DO NOTHING` on every unique rule, so a customer of this email (or this login)
+    written at the same moment makes it write nothing, and the transaction links that customer instead
+    (`sign-in-postgres.test.ts`). A unique refusal from the link's update runs the transaction once more.
+  - `GET customer/me` (`customer` mode): first name, email and the account sections, from what the customer has ever
+    had (`ACCOUNT_SECTIONS` in `contracts/sign-in.ts`).
 - `customers/read.ts`, `GET customers` (getCustomers: the Customers page, the customer picker and New Order's payment
   step). One customer by id, or a search (every word in a name, the email or the phone, or the whole search in "first
   last"), or the newest 200. Named fields (`CUSTOMER_LIST_FIELDS`): never the Stripe ids, the website login or the

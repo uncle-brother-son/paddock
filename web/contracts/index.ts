@@ -28,3 +28,5 @@ export * from './plans-admin'
 export * from './catalog-categories'
 // W74a: the website's shop, last, for the same reason.
 export * from './shop'
+// W85a: the website's sign-in (link, create, who am I), last, for the same reason.
+export * from './sign-in'

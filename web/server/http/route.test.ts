@@ -251,6 +251,34 @@ describe('defineRoute: errors', () => {
 })
 
 // W49 (lead call L10; W48 "Noticed" 4): the one mode that asks for no staff row, for `GET staff/me`.
+describe("defineRoute: the 'customer_sign_in' mode (W85a)", () => {
+  it('hands the handler the login (its id and email, from the verifier) and reads nothing itself; the log names the login', async () => {
+    const { db, query } = fakeDb()
+    const { defineRoute, logs } = testRouteFactory(db, { signInVerifier: () => async (token) => ({ authUserId: `login-${token}`, email: 'sam@example.com' }) })
+    const seen: unknown[] = []
+    const route = defineRoute({ auth: 'customer_sign_in', input: noInput, output }, async (context) => {
+      seen.push(Object.keys(context).sort())
+      return { value: `${context.login.authUserId} ${context.login.email}` }
+    })
+    const response = await route(new Request('https://worker.test/api/v1/customer/sign-in/link', { method: 'POST', headers: { authorization: 'Bearer t1' }, body: JSON.stringify({ email: 'body@example.com' }) }))
+    expect(await response.json()).toMatchObject({ ok: true, data: { value: 'login-t1 sam@example.com' } })
+    expect(seen).toEqual([['db', 'idempotencyKey', 'input', 'login', 'request', 'requestId', 'startedAt']])
+    expect(query).not.toHaveBeenCalled()
+    expect(logs[0]).toMatchObject({ actor: 'login:login-t1', status: 200 })
+  })
+
+  it('no token is refused before the handler runs; a route of this mode can never be idempotent', async () => {
+    const { db } = fakeDb()
+    const { defineRoute } = testRouteFactory(db)
+    const handler = vi.fn()
+    const route = defineRoute({ auth: 'customer_sign_in', input: noInput, output }, handler)
+    expect((await route(new Request('https://worker.test/x', { method: 'POST' }))).status).toBe(401)
+    expect(handler).not.toHaveBeenCalled()
+    const define = defineRoute as unknown as (config: Record<string, unknown>, handler: unknown) => unknown
+    expect(() => define({ auth: 'customer_sign_in', idempotent: true, input: noInput, output }, handler)).toThrow("A 'customer_sign_in' route can't be idempotent")
+  })
+})
+
 describe("defineRoute: the 'staff_sign_in' mode", () => {
   it('hands the handler the signed-in email and nothing else, whether the email has an active row, an inactive one or none: it never reads the staff table', async () => {
     for (const staff of [[staffRow], [{ ...staffRow, active: false }], []]) {
