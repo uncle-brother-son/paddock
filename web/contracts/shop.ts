@@ -12,7 +12,7 @@ const money = z.string().nullable()
 const displayPrices = {
   /** What a non-member pays (the sale price included). */
   price: money,
-  /** What a member pays, when the product has a member price; null when it has none. */
+  /** What a member pays, only when that is less than `price` (WQ46) or `price` is null (only a member can buy it); else null. */
   memberPrice: money,
   /** What a non-member paid before the sale; null when it isn't reduced by one. */
   priceBeforeSale: money,

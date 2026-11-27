@@ -17,6 +17,14 @@ export const lowest = (prices: readonly (string | null)[]): string | null =>
 const percentOff = (before: string, now: string): number => Math.round(((pence(before) - pence(now)) / pence(before)) * 100)
 
 /**
+ * WQ46 (W74b): the member price to show beside a price, which is what a member pays only when that is less than the
+ * price shown (or no price is shown: only a member can buy it). A member who pays the same as everyone has no line of
+ * their own, so the site's "Member from" is never a price that is no lower.
+ */
+const memberPriceBeside = (forMember: string | null, shown: string | null): string | null =>
+  forMember !== null && (shown === null || pence(forMember) < pence(shown)) ? forMember : null
+
+/**
  * One size's prices. The price before the sale is what the same rule answers with the sale taken away, and only when
  * that is more: a size that sells at its own override isn't reduced by the product's sale, and a "sale" price at or
  * above the base price isn't a reduction.
@@ -27,7 +35,7 @@ export function sizePrices(variant: VariantPrices): DisplayPrices {
   const before = price !== null && without !== null && pence(without) > pence(price) ? without : null
   return {
     price,
-    memberPrice: variant.member_price === null ? null : variantPriceFor(variant, true),
+    memberPrice: memberPriceBeside(variantPriceFor(variant, true), price),
     priceBeforeSale: before,
     percentOff: before !== null && price !== null ? percentOff(before, price) : null,
   }
@@ -39,9 +47,9 @@ export interface ProductPrices extends DisplayPrices {
 }
 
 /**
- * A product's prices across its sizes: the lowest a non-member pays, and the lowest a member pays. The price before the
- * sale goes with the price shown, so it is given only when every size at that price is reduced (the lowest, if they
- * were at more than one price before).
+ * A product's prices across its sizes: the lowest a non-member pays, and the lowest a member pays for any size, given
+ * only when that is less (WQ46). The price before the sale goes with the price shown, so it is given only when every
+ * size at that price is reduced (the lowest, if they were at more than one price before).
  */
 export function productPrices(variants: readonly VariantPrices[]): ProductPrices {
   const sizes = variants.map(sizePrices)
@@ -51,7 +59,7 @@ export function productPrices(variants: readonly VariantPrices[]): ProductPrices
   return {
     price,
     from: new Set(sizes.map((size) => (size.price === null ? null : pence(size.price)))).size > 1,
-    memberPrice: lowest(sizes.map((size) => size.memberPrice)),
+    memberPrice: memberPriceBeside(lowest(variants.map((variant) => variantPriceFor(variant, true))), price),
     priceBeforeSale,
     percentOff: priceBeforeSale !== null && price !== null ? percentOff(priceBeforeSale, price) : null,
   }

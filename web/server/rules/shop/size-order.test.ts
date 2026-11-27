@@ -10,6 +10,17 @@ describe('sizes in shop order (W74a)', () => {
     expect(ordered('XXXL', 'XL', 'XXS', 'L', 'XS', 'XXL', 'S', 'M')).toEqual(['XXS', 'XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL'])
   })
 
+  it('WQ47 (W74b): 2XL is where XXL is and 3XL where XXXL is, never after the numbers or with the odd sizes', () => {
+    expect(ordered('3XL', 'L', '2XL', 'XL', 'M')).toEqual(['M', 'L', 'XL', '2XL', '3XL'])
+    expect(ordered('3xl', ' 2xl ', 'S')).toEqual(['S', ' 2xl ', '3xl'])
+    // Before the numbers and the odd sizes, as XXL and XXXL are.
+    expect(ordered('Tall', '10', '3XL', '2XL', 'XL')).toEqual(['XL', '2XL', '3XL', '10', 'Tall'])
+    // Written both ways on one product: the pair keep the order they were made in, between XL and the next size up.
+    expect(ordered('XXXL', '2XL', 'XXL', '3XL', 'XL')).toEqual(['XL', '2XL', 'XXL', 'XXXL', '3XL'])
+    // Only those two: a size we have no name for stays with the odd ones.
+    expect(ordered('4XL', 'XL', '2XL')).toEqual(['XL', '2XL', '4XL'])
+  })
+
   it('then numbers ascending (as numbers, not text), then anything else in the order created', () => {
     expect(ordered('10', '8', '9.5', '100')).toEqual(['8', '9.5', '10', '100'])
     expect(ordered('Tall', '10', 'M', 'Kids', '8', 'S', null)).toEqual(['S', 'M', '8', '10', 'Tall', 'Kids', null])

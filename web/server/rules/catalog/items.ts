@@ -31,6 +31,7 @@ import { fieldsStampSql, NO_ROW_STAMP } from '@/server/rules/admin/stamp'
 import { adminWrite, WRITES_ONLY_WHAT_WAS_PRESSED, type AdminWriteOptions } from '@/server/rules/admin/write'
 import type { AdminLockTable } from '@/server/rules/admin/locks'
 import { isUuid } from '@/server/rules/admin/locks'
+import { inShopOrder } from '@/server/rules/shop/size-order'
 import { CATALOG_ADMIN_WORDS } from './failure-messages'
 import { CATALOG_ITEM_NEW_WORDS, PRICE_LIMIT_POUNDS } from './item-failure-messages'
 
@@ -284,11 +285,12 @@ const variantStampSql = (alias: string): string => fieldsStampSql(alias, VARIANT
  */
 const PRODUCTS_SQL = `SELECT ${itemColumnsSql('product', 'p')} FROM products p LEFT JOIN product_categories c ON c.sanity_category_id = p.category
   ORDER BY c.sort_order NULLS LAST, c.title NULLS LAST, p.category, p.name`
-const VARIANTS_SQL = `SELECT ${variantColumnsSql('v')}, ${variantStampSql('v')} AS stamp FROM product_variants v ORDER BY v.size`
+/** WQ47 (W74b): in the order they were made, as the customer channel's; listProducts puts both in shop order. */
+const VARIANTS_SQL = `SELECT ${variantColumnsSql('v')}, ${variantStampSql('v')} AS stamp FROM product_variants v ORDER BY v.created_at, v.id`
 /**
  * The shop's columns (G-plan 4.8): what a customer may see, on-sale products only, no Stripe ids. W74a: products by the
- * category's own place, as the staff's are; each variant with its own price override (variantPriceFor needs it), in the
- * order they were made (the shop puts them in size order: shop/size-order.ts).
+ * category's own place, as the staff's are; each variant with its own price override (variantPriceFor needs it), read
+ * in the order they were made (listProducts puts them in shop order: shop/size-order.ts).
  */
 const CUSTOMER_PRODUCTS_SQL = `SELECT p.id, p.sanity_product_id, p.name, p.thumbnail_url, p.category, p.base_price::text AS base_price, p.member_price::text AS member_price,
        p.sale_price::text AS sale_price, p.fulfillment_method
@@ -299,8 +301,12 @@ const CUSTOMER_VARIANTS_SQL = `SELECT v.id, v.product_id, v.size, v.stock_quanti
 
 /**
  * getProducts (`GET catalog/products`): every product with its variants, for Catalog → Products and New Order's
- * product picker: products by category then name, each product's variants by size, as before. Each variant carries
- * its stamp (the variant row's edit sends it back). On the customer channel: products on sale, the shop's columns.
+ * product picker: products by category then name. Each variant carries its stamp (the variant row's edit sends it
+ * back). On the customer channel: products on sale, the shop's columns.
+ *
+ * WQ47 (W74b): on both channels a product's variants are in shop order (`inShopOrder`: S, M, L, XL, never the text
+ * order L, M, S, XL), so the staff app lists sizes as the shop does and New Order, which starts a line on a product's
+ * first variant, starts on the smallest.
  */
 export async function listProducts(db: Queryable, reader: CatalogReader): Promise<Array<Record<string, unknown> & { variants: Array<Record<string, unknown>> }>> {
   const read = reader.channel === 'staff'
@@ -308,7 +314,8 @@ export async function listProducts(db: Queryable, reader: CatalogReader): Promis
   // One after the other, on the request's one connection (the old read ran the two at once on two).
   const products = await run('catalog.products', read ? PRODUCTS_SQL : CUSTOMER_PRODUCTS_SQL)
   const variants = await run('catalog.variants', read ? VARIANTS_SQL : CUSTOMER_VARIANTS_SQL)
-  return products.map((product) => ({ ...product, variants: variants.filter((variant) => variant['product_id'] === product['id']) }))
+  const sized = variants as Array<Record<string, unknown> & { size: string | null }>
+  return products.map((product) => ({ ...product, variants: inShopOrder(sized.filter((variant) => variant['product_id'] === product['id'])) }))
 }
 
 /**

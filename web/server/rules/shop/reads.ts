@@ -16,7 +16,6 @@ import type { CatalogPrices, VariantPrices } from '@/server/rules/orders/catalog
 import { lowest, productPrices, sizePrices, type ProductPrices } from './display-prices'
 import { SHOP_WORDS } from './failure-messages'
 import { otherAmountLimits, type OtherAmountLimits } from './gift-card-amount'
-import { inShopOrder } from './size-order'
 
 /** The customer channel's columns used here (catalog/items.ts). */
 type ProductRow = CatalogPrices & { sanity_product_id: string | null; category: string | null; fulfillment_method: 'shipping' | 'pickup' | 'both' | null; variants: VariantRow[] }
@@ -39,7 +38,8 @@ export async function listShopProducts(db: Queryable): Promise<ShopProduct[]> {
   return rows.flatMap((row) => {
     if (row.sanity_product_id === null) return []
     const prices = { base_price: row.base_price, member_price: row.member_price, sale_price: row.sale_price }
-    const variants = inShopOrder(row.variants).map((variant) => ({ size: variant.size, available: variant.stock_quantity > 0, prices: { ...prices, price_override: variant.price_override } satisfies VariantPrices }))
+    // In shop order already: listProducts gives both channels their variants so (W74b).
+    const variants = row.variants.map((variant) => ({ size: variant.size, available: variant.stock_quantity > 0, prices: { ...prices, price_override: variant.price_override } satisfies VariantPrices }))
     const sizes = variants.map(({ size, available, prices: own }): ShopSize => ({ size, available, ...sizePrices(own) }))
     return [
       {

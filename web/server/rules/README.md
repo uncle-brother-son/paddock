@@ -3211,13 +3211,15 @@ writes, and no price is decided here.
   sale, the categories with one, the gift card types on sale. Each is joined to its Sanity document by its Sanity id; a
   row with none is left out. Rows are built field by field: never a stock number, never a Stripe id.
 - **Prices for display** (`shop/display-prices.ts`) are all `variantPriceFor`'s. A product's is the lowest across its
-  sizes, with `from` when they differ; the member price only when the product has one. The price before the sale is the
+  sizes, with `from` when they differ; the member price only when the product has one (W74b, below: only when a member
+  pays less). The price before the sale is the
   same rule with the sale price taken away, given only when it is more: a size at its own override isn't reduced by the
   product's sale. Example: base £30, sale £20: £20, was £30, 33% off. A product shows a reduction only when every size
   at the price shown is reduced. Money is the database's text ("28.00").
 - **Sizes** (`shop/size-order.ts`, `inShopOrder`): XXS to XXXL, then numbers ascending, then anything else in the order
   created. `available` is stock above 0; a product is sold out when no size is (WQ40), one with no sizes included, and
-  it stays listed. The staff app's own order is unchanged (New Order preselects a product's first variant).
+  it stays listed. The staff app's own order is unchanged (New Order preselects a product's first variant); W74b,
+  below, gives the staff app this order too.
 - **The gift card** (WQ41): the lowest preset on sale, null when none is. Custom amounts don't count.
 - **The customer channel** (`catalog/items.ts`) now carries each variant's price override, its variants in the order
   they were made, and its products by the category's own place (W72a's "Noticed" 4). The staff channel is unchanged.
@@ -3225,3 +3227,45 @@ writes, and no price is decided here.
   well-formed Sanity id (before any read), 404 for an unknown or off-sale product in the same words. The only public
   route (`server/api-allowlist.test.ts` lists it). There is no rate limit on it: the app has none.
 - Rule tests: `shop/size-order.test.ts`, `shop/shop.test.ts`.
+
+## A member pays the lower price; sizes in shop order for staff (W74b)
+
+Wayne's WQ46 and WQ47 (24 Nov 2026), from W74a's report ("For the lead" 1 and 5).
+
+- **WQ46: a member pays the lower of the member price and what a non-member pays** (`orders/catalog-price.ts`,
+  `variantPriceFor` and `addonPriceFor`), for products and add-ons. What a non-member pays is as it was: a size's own
+  price (its override), else the sale price, else the base; an add-on's sale price, else its base. Before, a member
+  was charged the member price whenever one was set, so with base £28, sale £21 and member £24 a member paid £24
+  against a non-member's £21. Now £21. With one of the two missing it is the other; at the same price it is that price.
+  Prices are compared as pence, never as text. A sale below the member price is not a member's for a size that sells
+  at its own price (nobody pays the sale for that size): override £35, sale £9, member £20 is £20.
+- **What can't be sold is unchanged** (`variantPriceGap`, `addonPriceGap`): no price at all, or a member price only
+  for a non-member.
+- **Every caller follows from the one rule.** The staff quote and the order (`orders/price-basket.ts`: the system
+  price of a product line and of an add-on line, on its own or on a booking), Add Guest's add-ons
+  (`bookings/add-guest.ts`), the shop's display prices (`shop/display-prices.ts`) and the booking panel's add-ons
+  (`shop/booking.ts`, a visitor's price: unchanged). Nothing else works one of these prices out: no statement and no
+  database function reads `member_price` but to hand the column to this rule.
+- **A line is member-priced, for a promo code that skips member prices, only when the member price is the lower**
+  (`addonMemberPriced`, `variantMemberPriced`; Wayne, 27 Nov 2026, on this brief's review): a member's line at the
+  member price, with that below what a non-member pays, or with no price for a non-member at all. Before, any member's
+  line at the member price counted, so with the member price the same as the sale (£24 and £24) a member was refused
+  a 10% code a non-member got, and paid £24 against £21.60. Now the code comes off both. A member who pays the sale
+  price because it is lower gets the code too. A seat and an event place already counted this way (only when the
+  member's price is less).
+- **The shop shows a member price only when a member pays less** (`shop/display-prices.ts`, `memberPrice`): what a
+  member pays, given only when that is below the price beside it, or when there is no such price (only a member can
+  buy it). So "Member from £X" is never a price that is no lower: £21 with a member price of £24 shows £21 alone. A
+  product's is the lowest a member pays for any size, held to its From price the same way. The website needed no change.
+- **The staff app's screens** fill a line's Price box themselves and send it; with Manage pricing a sent price that
+  isn't the system price needs a reason. Their copy of the rule (`frontend/utils/catalogPrice.ts`, used by New Order's
+  product and add-on lines and by Add Guest, with their "Member price applied" note) is held to this one by
+  `orders/catalog-price.test.ts`, price by price.
+- **WQ47: a product's sizes in shop order for staff too** (`catalog/items.ts`, `listProducts`): both channels read a
+  product's variants in the order they were made and are given them by `inShopOrder` (S, M, L, XL; the staff read was
+  by the size's text: L, M, S, XL). 2XL has XXL's place and 3XL has XXXL's (`shop/size-order.ts`). The staff app sorts
+  nothing itself, and New Order starts a product's line on the read's first variant, so on the smallest size.
+- Rule tests: `orders/catalog-price.test.ts` (the rule; the screens' copy), `orders/price-basket.test.ts` "WQ46"
+  (the quote, a sent price, the promo code, the shop against the quote), `orders/place-order.test.ts` "WQ46",
+  `bookings/add-guest.test.ts` "WQ46", `shop/shop.test.ts` "WQ46", `shop/size-order.test.ts` "WQ47",
+  `catalog/admin.test.ts` "WQ47" (the read's order; the screens).

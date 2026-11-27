@@ -126,7 +126,8 @@ type Started = { kind: 'answer'; output: AddBookingGuestOutput } | ({ kind: 'car
 /**
  * The add-ons, priced and checked as the old function did, in its order (each line: the quantity, the add-on, on
  * sale, a sent price with Manage pricing, a credit's membership), then every credit's membership the customer's and
- * active. As New Order: the member price for a customer with an active membership, else the sale price, else the base.
+ * active. As New Order (catalog-price.ts): the sale price, else the base, and for a customer with an active membership
+ * the lower of that and the member price (WQ46, W74b).
  */
 async function priceAddons(
   tx: Queryable,

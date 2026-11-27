@@ -177,6 +177,51 @@ describe("prices for display, all from the checkout's rule", () => {
     expect(await only()).toMatchObject({ price: null, from: false, memberPrice: '24.00' })
   })
 
+  // W74b (Wayne's WQ46): a member pays the lower of the member price and what everyone pays, so the member price is
+  // shown ("Member from £X") only when it is less than the price beside it. W74a's example showed £21 (Member from £24).
+  it('WQ46: a member price is shown only when a member pays less: not when the sale price, or the base, is at or below it', async () => {
+    await product('member-lower', { base_price: '28.00', sale_price: '26.00', member_price: '24.00' })
+    await product('sale-lower', { base_price: '28.00', sale_price: '21.00', member_price: '24.00' })
+    await product('equal', { base_price: '28.00', sale_price: '24.00', member_price: '24.00' })
+    await product('base-lower', { base_price: '20.00', member_price: '24.00' })
+    await product('penny-less', { base_price: '24.01', member_price: '24.00' })
+    await product('as-money', { base_price: '100.00', member_price: '28.00' })
+    const shown = Object.fromEntries((await listShopProducts(db)).map((one) => [one.sanityId, [one.price, one.memberPrice, one.sizes[0]?.price, one.sizes[0]?.memberPrice]]))
+    expect(shown).toEqual({
+      'member-lower': ['26.00', '24.00', '26.00', '24.00'],
+      'sale-lower': ['21.00', null, '21.00', null],
+      equal: ['24.00', null, '24.00', null],
+      'base-lower': ['20.00', null, '20.00', null],
+      'penny-less': ['24.01', '24.00', '24.01', '24.00'],
+      'as-money': ['100.00', '28.00', '100.00', '28.00'],
+    })
+  })
+
+  it("WQ46: sizes at their own prices: a size cheaper than the member price shows none, and the product's is the lowest a member pays for any size, only when that is below its From price", async () => {
+    // Base £30, member £20. S sells at £15 (a member pays £15 too), M at £30 and XL at £35 (a member pays £20 for either).
+    await product('tee', { base_price: '30.00', member_price: '20.00' }, [['S', 1, '15.00'], ['M', 1], ['XL', 1, '35.00']])
+    const tee = await only()
+    expect(tee.sizes.map(({ size, price, memberPrice }) => [size, price, memberPrice])).toEqual([['S', '15.00', null], ['M', '30.00', '20.00'], ['XL', '35.00', '20.00']])
+    // From £15, and a member pays from £15 as well: no "Member from £20" beside "From £15".
+    expect(tee).toMatchObject({ price: '15.00', from: true, memberPrice: null })
+    // S at £25: From £25, and a member pays from £20.
+    await database.pg.exec("RESET ROLE; UPDATE product_variants SET price_override = '25.00' WHERE size = 'S'; SET ROLE paddock_worker;")
+    expect(await only()).toMatchObject({ price: '25.00', from: true, memberPrice: '20.00' })
+    // S at exactly the member price: the same for everyone.
+    await database.pg.exec("RESET ROLE; UPDATE product_variants SET price_override = '20.00' WHERE size = 'S'; SET ROLE paddock_worker;")
+    const level = await only()
+    expect(level).toMatchObject({ price: '20.00', from: true, memberPrice: null })
+    expect(level.sizes.map(({ size, memberPrice }) => [size, memberPrice])).toEqual([['S', null], ['M', '20.00'], ['XL', '20.00']])
+  })
+
+  it('WQ46: a size only members can buy beside one everyone can: the member price is still shown, being less', async () => {
+    // No base or sale price: S has no price of its own (members only, £20); M sells at £30.
+    await product('tee', { member_price: '20.00' }, [['S', 1], ['M', 1, '30.00']])
+    const tee = await only()
+    expect(tee.sizes.map(({ size, price, memberPrice }) => [size, price, memberPrice])).toEqual([['S', null, '20.00'], ['M', '30.00', '20.00']])
+    expect(tee).toMatchObject({ price: '30.00', memberPrice: '20.00' })
+  })
+
   it('sizes at different prices: "From" the lowest (as money, not as text); at one price, not', async () => {
     await product('differ', { base_price: '28.00' }, [['S', 1, '100.00'], ['M', 1, '9.50'], ['L', 1]])
     expect(await only()).toMatchObject({ price: '9.50', from: true })

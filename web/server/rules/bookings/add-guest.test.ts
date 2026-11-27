@@ -532,6 +532,36 @@ describe('refusals, in the old order, with nothing written', () => {
     )
   })
 
+  it("WQ46 (W74b): a member's add-on is the lower of the member price and the sale price (£3, not £4, and charged so); the member price when that is lower; a non-member the sale price", async () => {
+    const saleLower = () => db.query('UPDATE addons SET base_price = 5, sale_price = 3, member_price = 4 WHERE id = $1', [ID.addon])
+    const memberLower = () => db.query('UPDATE addons SET base_price = 5, sale_price = 4.5, member_price = 4 WHERE id = $1', [ID.addon])
+    await onABooking(
+      { booking: paidSeat([sam]), payment: { method: 'cash', confirmedCashAmount: 20 } },
+      async ({ bookingId }) => {
+        await memberLower()
+        expect((await post(bookingId, { addons: [towel(1)] })).body.data).toEqual({ added: false, priceImpact: impact(4, 0, 4) })
+        await saleLower()
+        expect((await post(bookingId, { addons: [towel(2)] })).body.data).toEqual({ added: false, priceImpact: impact(6, 0, 6) })
+        // The price a screen sends (the staff member here has Manage pricing): £3 is the system price, and the old
+        // member price sent instead is a changed price that needs a reason.
+        expect((await post(bookingId, { addons: [towel(2, { unitPrice: 3 })] })).body.data).toEqual({ added: false, priceImpact: impact(6, 0, 6) })
+        expect(refused(await post(bookingId, { addons: [towel(2, { unitPrice: 4 })] }))).toMatchObject({ status: 400, reason: 'price_override_reason_required', message: ADD_GUEST_WORDS.overrideReasonRequired })
+        // The old figure (the member price, £4 each) is no longer the amount due.
+        expect(refused(await post(bookingId, { addons: [towel(2)], payment: { method: 'cash', confirmedCashAmount: 8 }, ...figures(8, 8) }))).toMatchObject({ status: 409, priceImpact: impact(6, 0, 6) })
+        const added = await post(bookingId, { addons: [towel(2)], payment: { method: 'cash', confirmedCashAmount: 6 }, ...figures(6, 6) })
+        expect(added.body.data).toMatchObject({ added: true, guest: null })
+        expect(await addonLines(bookingId)).toEqual([expect.objectContaining({ quantity: 2, price_at_purchase: '3.00', redemption_source: 'paid' })])
+      },
+      { customerId: ID.member }
+    )
+    await onABooking(publicBooking, async ({ bookingId }) => {
+      await saleLower()
+      expect((await post(bookingId, { addons: [towel(1)] })).body.data).toEqual({ added: false, priceImpact: impact(3, 0, 3) })
+      await memberLower()
+      expect((await post(bookingId, { addons: [towel(1)] })).body.data).toEqual({ added: false, priceImpact: impact(4.5, 0, 4.5) })
+    })
+  })
+
   it('W55b: a line on an add-on credit is refused too when the add-on has no price, as New Order refuses it; the credit is not taken', async () => {
     await onABooking(
       { booking: paidSeat([sam]), payment: { method: 'cash', confirmedCashAmount: 20 } },

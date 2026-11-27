@@ -1549,6 +1549,37 @@ describe('W55b (W55a noticed 1): the order sells a member-price-only item to a m
   })
 })
 
+describe('WQ46 (W74b): the order charges a member the lower of the member price and the sale price', () => {
+  const pricedAt = (table: string, id: string, base: number, sale: number, member: number) => async (seedDb: Db) => {
+    // Test data only: the table is this block's fixed string.
+    const sql = `UPDATE ${table} SET base_price = $2, sale_price = $3, member_price = $4 WHERE id = $1`
+    await seedDb.query(sql, [id, base, sale, member])
+  }
+  const soapSaleLower = pricedAt('products', ID.product, 28, 21, 24)
+  const towelSaleLower = pricedAt('addons', ID.addon, 5, 3, 4)
+
+  it.each([
+    ['a product on sale below the member price: £21 each, not £24', { customerId: ID.member, products: [{ ...soap, unitPrice: 21 }], payment: cash(42) }, soapSaleLower, 'product', '21.00', '42.00'],
+    ['an add-on on sale below the member price: £3, not £4', { customerId: ID.member, standaloneAddons: [{ ...towel, unitPrice: 3 }], payment: cash(3) }, towelSaleLower, 'addon', '3.00', '3.00'],
+    ['a product whose member price is below the sale: the member price', { customerId: ID.member, products: [{ ...soap, unitPrice: 24 }], payment: cash(48) }, pricedAt('products', ID.product, 28, 26, 24), 'product', '24.00', '48.00'],
+    ['a non-member, the same product on sale: the sale price, as before', { customerId: ID.customer, products: [{ ...soap, unitPrice: 21 }], payment: cash(42) }, soapSaleLower, 'product', '21.00', '42.00'],
+  ] as const)('%s', async (_label, basket, prepare, itemType, unitPrice, total) => {
+    const { recording, answer } = await placeThrough(basket, prepare)
+    expect(answer.body).toMatchObject({ ok: true })
+    expect(recording.tables['order_line_items']?.added).toMatchObject([{ item_type: itemType, unit_price: unitPrice, system_unit_price: unitPrice, line_total: total }])
+    expect(recording.tables['orders']?.added).toMatchObject([{ order_total: total, payment_method: 'cash', payment_status: 'paid' }])
+  })
+
+  it.each([
+    ['a product', { customerId: ID.member, products: [{ ...soap, unitPrice: 24 }], payment: cash(48) }, soapSaleLower],
+    ['an add-on', { customerId: ID.member, standaloneAddons: [{ ...towel, unitPrice: 4 }], payment: cash(4) }, towelSaleLower],
+  ] as const)("%s: the old figure (the member price, above the sale) is not taken from a member, and nothing is kept", async (_label, basket, prepare) => {
+    const { recording, answer } = await placeThrough(basket, prepare)
+    expect(answer.body.ok).toBe(false)
+    expect(tablesTouched(recording)).toEqual(['api_idempotency'])
+  })
+})
+
 describe('W09: a claim write fails', () => {
   // The old createOrder (removed at W16) threw straight out here, keeping the store credit and the gift card
   // claimed with a pending order. T1 is one transaction: nothing is kept.

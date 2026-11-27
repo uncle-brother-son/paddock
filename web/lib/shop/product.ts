@@ -13,7 +13,7 @@ import type { ShopProduct } from './read'
 
 /**
  * A price line as ProductInfoContainer draws it: the price, "From" when the sizes differ, the price before a sale struck through,
- * and "(Member from £X)" when the product has a member price.
+ * and "(Member from £X)" when a member pays less (WQ46: the Worker's read gives a member price only then).
  */
 export type PriceLine = { now: string | null; from: boolean; before: string | null; member: string | null }
 

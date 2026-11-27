@@ -4,6 +4,8 @@ import type { Db, Queryable, SqlParam } from '@/server/db'
 import { insert } from '@/server/rules/testing/database'
 import { startReplay, type ReplayEnvironment } from '@/server/rules/testing/sweep/run'
 import { ID, lastDayIs, PROMO, seed, seedCorePass, seedExhaustedMembership, seedOverlappingBooking } from '@/server/rules/testing/replay/scenarios'
+import { listShopAddons } from '@/server/rules/shop/booking'
+import { listShopProducts } from '@/server/rules/shop/reads'
 import { FakeStripe } from '@/server/stripe/fake'
 import {
   ADDON_MEMBER_PRICE_ONLY_MESSAGE,
@@ -1108,14 +1110,202 @@ describe('W55b (W55a noticed 1): a member price only is not a free price for a n
   })
 })
 
-describe("W70a (the W70 audit's S1): rules only a recording, or nothing, held", () => {
-  // Test data only: each statement is one of these tests' own.
-  const towelAt = (base: number | null, sale: number | null, member: number | null) => () =>
-    db.query('UPDATE addons SET base_price = $1, sale_price = $2, member_price = $3 WHERE id = $4', [base, sale, member, ID.addon])
-  const soapAt = (base: number | null, sale: number | null, member: number | null, override: number | null = null) => async () => {
-    await db.query('UPDATE products SET base_price = $1, sale_price = $2, member_price = $3 WHERE id = $4', [base, sale, member, ID.product])
-    await db.query('UPDATE product_variants SET price_override = $1 WHERE id = $2', [override, ID.variant])
+// Test data only: each statement is one of these tests' own. The towel's and the soap's prices: base, sale, member,
+// and for the soap its one variant's own price.
+const towelAt = (base: number | null, sale: number | null, member: number | null) => () =>
+  db.query('UPDATE addons SET base_price = $1, sale_price = $2, member_price = $3 WHERE id = $4', [base, sale, member, ID.addon])
+const soapAt = (base: number | null, sale: number | null, member: number | null, override: number | null = null) => async () => {
+  await db.query('UPDATE products SET base_price = $1, sale_price = $2, member_price = $3 WHERE id = $4', [base, sale, member, ID.product])
+  await db.query('UPDATE product_variants SET price_override = $1 WHERE id = $2', [override, ID.variant])
+}
+
+// Brief W74b (Wayne's WQ46, 24 Nov 2026). Before it a member was charged the member price even when the sale price
+// (or the size's own price) was lower: £24 against a non-member's £21 in W74a's example.
+describe('WQ46 (W74b): a member pays the lower of the member price and what a non-member pays', () => {
+  const unit = (result: BasketQuoteOutput, kind: 'product' | 'addon') => {
+    const line = result.lines.find((one) => one.kind === kind)
+    return [line?.unitPrice, line?.systemUnitPrice]
   }
+  const everyone = [ID.customer, undefined] as const
+
+  it('a product: the sale price when it is below the member price (£21, not £24); the member price when that is lower; one price when they are the same; a non-member as before', async () => {
+    // Sale lower: base £28, sale £21, member £24.
+    const saleLower = soapAt(28, 21, 24)
+    const member = await during(saleLower, () => quote({ customerId: ID.member, products: [soap] }))
+    expect(member.problems).toEqual([])
+    expect(unit(member, 'product')).toEqual([21, 21])
+    expect(member.totals.amountDue).toBe(42)
+    for (const customerId of everyone) expect(unit(await during(saleLower, () => quote({ customerId, products: [soap] })), 'product'), String(customerId)).toEqual([21, 21])
+    // Member lower: sale £26, member £24.
+    const memberLower = soapAt(28, 26, 24)
+    expect(unit(await during(memberLower, () => quote({ customerId: ID.member, products: [soap] })), 'product')).toEqual([24, 24])
+    for (const customerId of everyone) expect(unit(await during(memberLower, () => quote({ customerId, products: [soap] })), 'product'), String(customerId)).toEqual([26, 26])
+    // Equal.
+    for (const customerId of [ID.member, ...everyone]) expect(unit(await during(soapAt(28, 24, 24), () => quote({ customerId, products: [soap] })), 'product'), String(customerId)).toEqual([24, 24])
+    // No sale, and the base below the member price: the base.
+    expect(unit(await during(soapAt(20, null, 24), () => quote({ customerId: ID.member, products: [soap] })), 'product')).toEqual([20, 20])
+    // A member price only, and no member price.
+    expect(unit(await during(soapAt(null, null, 9), () => quote({ customerId: ID.member, products: [soap] })), 'product')).toEqual([9, 9])
+    expect(unit(await during(soapAt(12, 9, null), () => quote({ customerId: ID.member, products: [soap] })), 'product')).toEqual([9, 9])
+  })
+
+  it("a size with its own price and a sale: the member pays the size's price when it is below the member price (£7, not £8), and the member price when it is above (£8, not £10); never the sale, which nobody pays for that size", async () => {
+    const below = soapAt(12, 9, 8, 7)
+    expect(unit(await during(below, () => quote({ customerId: ID.member, products: [soap] })), 'product')).toEqual([7, 7])
+    expect(unit(await during(below, () => quote({ products: [soap] })), 'product')).toEqual([7, 7])
+    const above = soapAt(12, 9, 8, 10)
+    expect(unit(await during(above, () => quote({ customerId: ID.member, products: [soap] })), 'product')).toEqual([8, 8])
+    expect(unit(await during(above, () => quote({ products: [soap] })), 'product')).toEqual([10, 10])
+    // The sale (£9) is below the member price (£20) but this size sells at £35: the member pays £20.
+    expect(unit(await during(soapAt(30, 9, 20, 35), () => quote({ customerId: ID.member, products: [soap] })), 'product')).toEqual([20, 20])
+  })
+
+  it('an add-on, on its own and on a booking: the same', async () => {
+    for (const lines of [{ standaloneAddons: [towel] }, { booking: seat({ addons: [towel] }) }]) {
+      const sold = (result: BasketQuoteOutput) => {
+        expect(result.problems, JSON.stringify(lines)).toEqual([])
+        const line = 'booking' in lines ? result.booking?.addons[0] : result.lines.find((one) => one.kind === 'addon')
+        return [line?.unitPrice, line?.systemUnitPrice]
+      }
+      // Sale lower: base £5, sale £3, member £4. Before W74b the member paid £4.
+      expect(sold(await during(towelAt(5, 3, 4), () => quote({ customerId: ID.member, ...lines }))), JSON.stringify(lines)).toEqual([3, 3])
+      expect(sold(await during(towelAt(5, 3, 4), () => quote(lines))), JSON.stringify(lines)).toEqual([3, 3])
+      // Member lower: sale £4.50, member £4.
+      expect(sold(await during(towelAt(5, 4.5, 4), () => quote({ customerId: ID.member, ...lines }))), JSON.stringify(lines)).toEqual([4, 4])
+      expect(sold(await during(towelAt(5, 4.5, 4), () => quote(lines))), JSON.stringify(lines)).toEqual([4.5, 4.5])
+      // Equal; the base below the member price; a member price only; no member price.
+      expect(sold(await during(towelAt(5, 4, 4), () => quote({ customerId: ID.member, ...lines }))), JSON.stringify(lines)).toEqual([4, 4])
+      expect(sold(await during(towelAt(5, null, 6), () => quote({ customerId: ID.member, ...lines }))), JSON.stringify(lines)).toEqual([5, 5])
+      expect(sold(await during(towelAt(null, null, 4), () => quote({ customerId: ID.member, ...lines }))), JSON.stringify(lines)).toEqual([4, 4])
+      expect(sold(await during(towelAt(5, 3, null), () => quote({ customerId: ID.member, ...lines }))), JSON.stringify(lines)).toEqual([3, 3])
+    }
+  })
+
+  it('the price a screen sends: the lower price is the system price (no reason asked for); the member price sent instead is a changed price and needs one', async () => {
+    const saleLower = soapAt(28, 21, 24)
+    const right = await during(saleLower, () => quote({ customerId: ID.member, products: [{ ...soap, unitPrice: 21 }] }, { allowPriceOverrides: true }))
+    expect(right.problems).toEqual([])
+    expect(right.lines[0]).toMatchObject({ unitPrice: 21, systemUnitPrice: 21, priceOverrideReason: null })
+    const old = await during(saleLower, () => quote({ customerId: ID.member, products: [{ ...soap, unitPrice: 24 }] }, { allowPriceOverrides: true }))
+    expect(reasons(old)).toEqual(['price_override_reason_required'])
+    // Without Manage pricing a sent price is ignored: the member is charged £21 whatever the screen showed.
+    const ignored = await during(saleLower, () => quote({ customerId: ID.member, products: [{ ...soap, unitPrice: 24 }] }))
+    expect(ignored.problems).toEqual([])
+    expect(unit(ignored, 'product')).toEqual([21, 21])
+    const towelRight = await during(towelAt(5, 3, 4), () => quote({ customerId: ID.member, standaloneAddons: [{ ...towel, unitPrice: 3 }] }, { allowPriceOverrides: true }))
+    expect(towelRight.problems).toEqual([])
+    expect(reasons(await during(towelAt(5, 3, 4), () => quote({ customerId: ID.member, standaloneAddons: [{ ...towel, unitPrice: 4 }] }, { allowPriceOverrides: true })))).toEqual(['price_override_reason_required'])
+  })
+
+  it('a code that skips member prices: a member at the sale price gets it, as a non-member does (£18.90 each); a member at the member price does not', async () => {
+    // Sale £21 below the member price £24: both pay £21, and 10% comes off both.
+    const saleLower = soapAt(28, 21, 24)
+    for (const customerId of [ID.member, ID.customer]) {
+      const result = await during(saleLower, () => quote({ customerId, products: [soap], promoCode: PROMO.percent }))
+      expect(result.problems, customerId).toEqual([])
+      expect([result.totals.promoDiscount, result.totals.amountDue], customerId).toEqual([4.2, 37.8])
+    }
+    // The member price £24 below the sale £26: the member's line is member-priced, and the code has nothing to come off.
+    const memberLower = await during(soapAt(28, 26, 24), () => quote({ customerId: ID.member, products: [soap], promoCode: PROMO.percent }))
+    expect(memberLower.problems[0]?.message).toBe(`Promo code "${PROMO.percent}" cannot be used: Nothing in this basket is eligible for that promo code.`)
+    expect(memberLower.totals.amountDue).toBe(48)
+    // The add-on the same.
+    const towelSale = await during(towelAt(5, 3, 4), () => quote({ customerId: ID.member, standaloneAddons: [towel], promoCode: PROMO.percent }))
+    expect([towelSale.problems, towelSale.totals.promoDiscount, towelSale.totals.amountDue]).toEqual([[], 0.3, 2.7])
+  })
+
+  // Wayne, 27 Nov 2026 (on W74b's review). Before, the member's line counted as member-priced at a tie, the code was
+  // refused, and the member paid £48 against a non-member's £43.20.
+  it('the member price the same as what everyone pays is not a member price: the code comes off the member\'s line as it does a non-member\'s (£43.20 each, not £48); a member-only item is still member-priced', async () => {
+    // [base, sale, member, the size's own price]: the same as the sale; as the base with no sale; as the size's own price.
+    for (const [base, sale, member, override] of [[28, 24, 24, null], [24, null, 24, null], [30, 26, 24, 24]] as const) {
+      const tie = soapAt(base, sale, member, override)
+      for (const customerId of [ID.member, ID.customer]) {
+        const result = await during(tie, () => quote({ customerId, products: [soap], promoCode: PROMO.percent }))
+        const label = JSON.stringify({ base, sale, member, override, customerId })
+        expect(result.problems, label).toEqual([])
+        expect([unit(result, 'product')[0], result.totals.promoDiscount, result.totals.amountDue], label).toEqual([24, 4.8, 43.2])
+      }
+    }
+    // An add-on: sale £4, member £4.
+    for (const customerId of [ID.member, ID.customer]) {
+      const result = await during(towelAt(5, 4, 4), () => quote({ customerId, standaloneAddons: [towel], promoCode: PROMO.percent }))
+      expect([result.problems, result.totals.promoDiscount, result.totals.amountDue], customerId).toEqual([[], 0.4, 3.6])
+    }
+    // A penny below what everyone pays is a member price again: the code has nothing to come off.
+    const pennyBelow = await during(soapAt(28, 24.01, 24), () => quote({ customerId: ID.member, products: [soap], promoCode: PROMO.percent }))
+    expect(pennyBelow.problems[0]?.message).toBe(`Promo code "${PROMO.percent}" cannot be used: Nothing in this basket is eligible for that promo code.`)
+    // Only a member can buy it (no other price): a member price.
+    const memberOnly = await during(soapAt(null, null, 9), () => quote({ customerId: ID.member, products: [soap], promoCode: PROMO.percent }))
+    expect(memberOnly.problems[0]?.message).toBe(`Promo code "${PROMO.percent}" cannot be used: Nothing in this basket is eligible for that promo code.`)
+    expect(memberOnly.totals.amountDue).toBe(18)
+    const towelOnly = await during(towelAt(null, null, 4), () => quote({ customerId: ID.member, standaloneAddons: [towel], promoCode: PROMO.percent }))
+    expect(towelOnly.problems[0]?.message).toBe(`Promo code "${PROMO.percent}" cannot be used: Nothing in this basket is eligible for that promo code.`)
+    // A code set to apply on member prices takes the member's lower price too, as before.
+    const onMemberPrices = await during(
+      async () => {
+        await soapAt(28, 26, 24)()
+        await db.query('UPDATE promo_codes SET applies_on_member_prices = true WHERE id = $1', [ID.promoPercent])
+      },
+      () => quote({ customerId: ID.member, products: [soap], promoCode: PROMO.percent })
+    )
+    expect([onMemberPrices.problems, onMemberPrices.totals.promoDiscount, onMemberPrices.totals.amountDue]).toEqual([[], 4.8, 43.2])
+  })
+
+  it('the shop shows what the quote charges: each size\'s price is a non-member\'s line, and its member price (or, with none shown, its price) a member\'s', async () => {
+    // [base, sale, member, the size's own price]: member lower, sale lower, equal, an override either side, one price only.
+    const settings: Array<[number | null, number | null, number | null, number | null]> = [
+      [28, 26, 24, null],
+      [28, 21, 24, null],
+      [28, 24, 24, null],
+      [20, null, 24, null],
+      [28, null, 24, null],
+      [12, 9, 8, 7],
+      [12, 9, 8, 10],
+      [30, 9, 20, 35],
+      [28, 21, null, null],
+      [null, null, 9, null],
+    ]
+    for (const [base, sale, member, override] of settings) {
+      const label = JSON.stringify({ base, sale, member, override })
+      const shown = await during(
+        async () => {
+          await soapAt(base, sale, member, override)()
+          await db.query("UPDATE products SET sanity_product_id = 'w74b-soap' WHERE id = $1", [ID.product])
+        },
+        async () => {
+          const product = (await listShopProducts(db)).find((one) => one.sanityId === 'w74b-soap')
+          return { product, forMember: await quote({ customerId: ID.member, products: [soap] }), forVisitor: await quote({ products: [soap] }) }
+        }
+      )
+      const size = shown.product?.sizes[0]
+      expect(size, label).toBeDefined()
+      const pounds = (money: string | null | undefined) => (money === null || money === undefined ? null : Number(money))
+      // A member's line is the member price shown, or the one price shown when a member pays no less.
+      expect(unit(shown.forMember, 'product')[0], label).toBe(pounds(size?.memberPrice ?? size?.price))
+      // A visitor's line is the price shown; with none shown (members only) the quote refuses the line.
+      if (size?.price === null) expect(reasons(shown.forVisitor), label).toEqual(['product_price_not_set'])
+      else expect(unit(shown.forVisitor, 'product')[0], label).toBe(pounds(size?.price))
+      // "Member from" is only ever less than the price beside it, on the size and on the product.
+      for (const prices of [size, shown.product]) if (prices?.memberPrice != null && prices.price !== null) expect(Number(prices.memberPrice), label).toBeLessThan(Number(prices.price))
+    }
+  })
+
+  it("the booking panel's add-on price is what a visitor's quote charges, at a sale below the member price too", async () => {
+    for (const [base, sale, member] of [[5, 3, 4], [5, 4.5, 4], [5, null, 4]] as const) {
+      const shown = await during(
+        async () => {
+          await towelAt(base, sale, member)()
+          await db.query("UPDATE addons SET sanity_addon_id = 'w74b-towel' WHERE id = $1", [ID.addon])
+        },
+        async () => ({ addon: (await listShopAddons(db)).find((one) => one.sanityId === 'w74b-towel'), forVisitor: await quote({ standaloneAddons: [towel] }) })
+      )
+      expect(Number(shown.addon?.price), JSON.stringify({ base, sale, member })).toBe(unit(shown.forVisitor, 'addon')[0])
+    }
+  })
+})
+
+describe("W70a (the W70 audit's S1): rules only a recording, or nothing, held", () => {
 
   it('S1 a: an add-on\'s sale price beats its base price (on its own and on a booking, £4 not £5); a member pays the member price, and the sale price when there is none', async () => {
     const onSale = towelAt(5, 4, 3)
@@ -1140,10 +1330,12 @@ describe("W70a (the W70 audit's S1): rules only a recording, or nothing, held", 
     expect((await during(onSale, () => quote({ customerId: ID.member, products: [soap] }))).totals.amountDue).toBe(16)
   })
 
-  it('S1 b: a variant\'s own price beats the product\'s sale price (£7 not £9) and its base; a member still pays the member price, and the override when there is none', async () => {
+  it('S1 b: a variant\'s own price beats the product\'s sale price (£7 not £9) and its base; a member pays the lower of it and the member price (WQ46, W74b: £7, not £8 as before), and the override when there is no member price', async () => {
     const all = soapAt(12, 9, 8, 7)
     expect((await during(all, () => quote({ products: [soap] }))).totals.amountDue).toBe(14)
-    expect((await during(all, () => quote({ customerId: ID.member, products: [soap] }))).totals.amountDue).toBe(16)
+    expect((await during(all, () => quote({ customerId: ID.member, products: [soap] }))).totals.amountDue).toBe(14)
+    // The variant's own price above the member price: the member price.
+    expect((await during(soapAt(12, 9, 8, 10), () => quote({ customerId: ID.member, products: [soap] }))).totals.amountDue).toBe(16)
     expect((await during(soapAt(12, 9, null, 7), () => quote({ customerId: ID.member, products: [soap] }))).totals.amountDue).toBe(14)
     expect((await during(soapAt(12, null, null, 7), () => quote({ products: [soap] }))).totals.amountDue).toBe(14)
     // Dearer than the sale price: it is still the variant's own price.

@@ -261,6 +261,67 @@ describe('Manage pricing on each write, and the staff check on every route', () 
     expect(file('frontend/components/checkout/ProductLineEditor.tsx')).toContain('return price ? Number.parseFloat(price) : 0')
     expect(file('frontend/components/checkout/AddonLineEditor.tsx')).toContain('return price ? Number.parseFloat(price) : 0')
   })
+
+  // W74b (Wayne's WQ47, 24 Nov 2026): the read gave a product's variants by the text of their size (L, M, S, XL), so
+  // the staff app listed them so and New Order started a product's line on L.
+  it("WQ47: a product's sizes come in shop order (S, M, L, XL; 2XL with XXL; then numbers, then the rest as made), not in text order or the order made, on both channels", async () => {
+    // The T-shirt has M already. Made after it, a minute apart, in this order:
+    for (const [index, size] of ['XL', 'XXL', 'L', 'S', '2XL', '10', 'Tall', '8', 'Kids'].entries()) {
+      await insert(db, 'product_variants', { product_id: product, size, sku: `TEE-${size}`, stock_quantity: 1, created_at: new Date(Date.UTC(2030, 0, 1, 0, index)).toISOString() })
+    }
+    // A second product, so each product is seen to keep its own sizes: made L then S.
+    const hoodie = await insert(db, 'products', { name: 'Hoodie', category: 'Merch', base_price: '40.00', stripe_product_id: 'prod_hoodie', stripe_price_id_base: 'price_hoodie_base' })
+    for (const [index, size] of ['L', 'S'].entries()) {
+      await insert(db, 'product_variants', { product_id: hoodie, size, sku: `HOOD-${size}`, stock_quantity: 1, created_at: new Date(Date.UTC(2030, 0, 2, 0, index)).toISOString() })
+    }
+    type Row = { id: string; variants: Array<{ id: string; size: string | null; stamp?: string }> }
+    const sizesOf = (rows: Row[] | undefined, id: string) => rows?.find((row) => row.id === id)?.variants.map((one) => one.size)
+    // XXL and 2XL share a place, and Tall and Kids have none of ours: each pair in the order made, not the text's
+    // (2XL before XXL, Kids before Tall).
+    const inShopOrder = ['S', 'M', 'L', 'XL', 'XXL', '2XL', '8', '10', 'Tall', 'Kids']
+
+    const staff = await read<Row[]>(productsRoute, {}, TIA)
+    expect(staff.ok).toBe(true)
+    expect(sizesOf(staff.data, product)).toEqual(inShopOrder)
+    expect(sizesOf(staff.data, hoodie)).toEqual(['S', 'L'])
+    // The first is the smallest: it is the one New Order starts a line on.
+    expect(staff.data?.find((row) => row.id === product)?.variants[0]?.size).toBe('S')
+    // Each row is still the staff read's own (its stamp, its contract).
+    expect(staff.data?.flatMap((row) => row.variants).every((one) => typeof one.stamp === 'string')).toBe(true)
+    expect(catalogProductsRouteOutputSchema.parse(staff.data)).toEqual(staff.data)
+
+    const shop = (await listProducts(db, { channel: 'customer' })) as unknown as Row[]
+    expect(sizesOf(shop, product)).toEqual(inShopOrder)
+    expect(sizesOf(shop, hoodie)).toEqual(['S', 'L'])
+  })
+
+  it("WQ47: New Order starts a product's line on the read's first variant, and no staff screen puts a product's sizes in an order of its own", async () => {
+    const { readFileSync, readdirSync } = await import('node:fs')
+    const file = (name: string) => readFileSync(path.join(staffAppDir(), name), 'utf8')
+    const editor = file('frontend/components/checkout/ProductLineEditor.tsx')
+    // A new line: the first product that has a variant, and that product's first variant.
+    expect(editor).toContain('  const sellableProducts = products.filter((p) => p.variants.length > 0)\n')
+    expect(editor).toContain('    const firstProduct = sellableProducts[0]\n')
+    expect(editor).toContain('    const firstVariant = firstProduct?.variants[0]\n')
+    expect(editor).toContain('        productVariantId: firstVariant.id,\n')
+    // The picker lists each product's variants as they were read.
+    expect(editor).toContain('                      {p.variants.map((v) => (\n')
+    // Catalog → Products: the variants as read, and New Order's catalogue as read.
+    expect(file('frontend/components/ProductVariantsManager.tsx')).toContain('          {localVariants.map((v) => (\n')
+    expect(file('frontend/components/CheckoutDialog.tsx')).toContain('                          products={productCatalog ?? []}\n')
+    // The function hands the Worker's answer on as it came.
+    expect(file('backend/paddock/getProducts.ts')).toContain("  return adminRead<CatalogProductsRouteOutput>(req.user, { path: '/api/v1/staff/catalog/products' })\n")
+    // No screen sorts or turns round a list of variants, or compares sizes as text.
+    const screens = ['frontend/components', 'frontend/components/checkout', 'frontend/pages', 'frontend/utils', 'frontend/hooks'].flatMap((folder) =>
+      readdirSync(path.join(staffAppDir(), folder)).filter((name) => /\.tsx?$/.test(name)).map((name) => `${folder}/${name}`)
+    )
+    expect(screens.length).toBeGreaterThan(100)
+    for (const name of screens) {
+      const source = file(name)
+      expect(source, name).not.toMatch(/[vV]ariants\b[^\n;]*\.(sort|toSorted|reverse|toReversed)\(/)
+      expect(source, name).not.toMatch(/size\b[^\n]*localeCompare|localeCompare\([^)\n]*size\b/)
+    }
+  })
 })
 
 describe('GB12: a new variant and its starting stock are one transaction', () => {

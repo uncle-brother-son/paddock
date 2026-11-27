@@ -21,7 +21,7 @@ import { applyPromoCode } from '@/server/rules/promo/promo-codes'
 import { amountLeftToPay, exceedsAmount, round2 } from './amounts'
 import { bookingProblem, GIFT_CARD_SOURCE_REMOVED_MESSAGE, priceBooking, type PricedBooking } from './basket-booking'
 import { checkEvent, eventFullProblem, eventPromoLines } from './basket-event'
-import { addonPriceFor, addonPriceGap, variantPriceFor, variantPriceGap } from './catalog-price'
+import { addonMemberPriced, addonPriceFor, addonPriceGap, variantMemberPriced, variantPriceFor, variantPriceGap } from './catalog-price'
 import {
   ADDON_MEMBER_PRICE_ONLY_MESSAGE,
   ADDON_PRICE_NOT_SET_MESSAGE,
@@ -459,13 +459,14 @@ export function priceFromFacts(input: BasketQuoteInput, facts: BasketFacts, opti
   standalone.forEach((line, i) => {
     const addon = addons.get(line.addonId)
     const unitPrice = pricedStandalone[i]?.unitPrice ?? 0
-    const memberPriced = member && addon?.member_price != null && Math.round(unitPrice * 100) === Math.round(money(addon.member_price) * 100)
+    // W74b: at the member price, and that below what a non-member pays (catalog-price.ts).
+    const memberPriced = member && addon !== undefined && addonMemberPriced(addon, unitPrice)
     promoLines.push({ key: `addon:${i}`, itemType: 'addon', amount: unitPrice * line.quantity, isMemberPriced: memberPriced })
   })
   products.forEach((line, i) => {
     const variant = variants.get(line.productVariantId)
     const unitPrice = pricedProducts[i]?.unitPrice ?? 0
-    const memberPriced = member && variant?.member_price != null && Math.round(unitPrice * 100) === Math.round(money(variant.member_price) * 100)
+    const memberPriced = member && variant !== undefined && variantMemberPriced(variant, unitPrice)
     promoLines.push({ key: `product:${i}`, itemType: 'product', amount: unitPrice * line.quantity, isMemberPriced: memberPriced })
   })
   if (passType && passPrice > 0.005) promoLines.push({ key: 'session_pass', itemType: 'session_pass', amount: passPrice, isMemberPriced: false })
