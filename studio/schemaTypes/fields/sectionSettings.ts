@@ -24,8 +24,6 @@ type SectionWords = {
   theme?: string
   /** The help under Section ID, where a module's own differs (the events list is `events` unless told). */
   sectionId?: string
-  /** The themes a module is offered, where it can't have all four (W81: one that holds a form is Light or Dark only). */
-  themes?: readonly string[]
 }
 
 export const sectionFields = (words: SectionWords = {}) => [
@@ -37,7 +35,7 @@ export const sectionFields = (words: SectionWords = {}) => [
     description:
       words.theme ??
       'The colours of this section. Leave empty for Light. Give the same theme to the modules next to it and they sit on one colour; when a section in another theme reaches the middle of the screen, the whole page fades to it',
-    options: { list: words.themes ? THEMES.filter((theme) => words.themes?.includes(theme.value)) : THEMES, layout: 'radio', direction: 'horizontal' },
+    options: { list: THEMES, layout: 'radio', direction: 'horizontal' },
   }),
   defineField({
     name: 'sectionId',

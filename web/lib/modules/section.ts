@@ -6,16 +6,6 @@
 export const SECTION_THEMES = ['light', 'dark', 'fjord', 'mud'] as const
 export type SectionTheme = (typeof SECTION_THEMES)[number]
 
-/**
- * The modes a section that holds a form can have. docs/build-standards.md: Fjord and Mud are never used for forms
- * (their muted words are too faint to read there). W81: the Memberships and SessionPasses modules, whose cards are
- * radio groups, are Light or Dark only; the Studio offers them those two, and the site takes any other as none.
- */
-export const FORM_SECTION_THEMES = ['light', 'dark'] as const
-
-/** The theme of a section that holds a form: Light or Dark as given, and none for anything else. */
-export const formThemeOf = (theme: SectionTheme | null | undefined): SectionTheme | null => (theme === 'light' || theme === 'dark' ? theme : null)
-
 /** A Section ID: lowercase letters, numbers and hyphens, with no hyphen at either end and no two together. */
 export const SECTION_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 

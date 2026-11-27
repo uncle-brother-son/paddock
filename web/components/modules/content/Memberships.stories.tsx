@@ -325,8 +325,7 @@ export const Laptop: Story = {
 }
 
 /**
- * A theme of its own (WQ81): the section carries it, and every colour follows. Light or Dark only: the cards are
- * forms, and Fjord and Mud are never used for forms (docs/build-standards.md).
+ * A theme of its own (WQ81): the section carries it, and every colour follows. Every theme, as W80's modules (WQ91).
  */
 export const ThemeDark: Story = {
   name: 'Theme=Dark, on a Light page',
@@ -335,6 +334,33 @@ export const ThemeDark: Story = {
   play: async ({ canvasElement }) => {
     const { section, cards } = parts(canvasElement)
     await expect([section.dataset.theme, getComputedStyle(section).backgroundColor]).toEqual(['dark', painted(section.firstElementChild!, 'bg-surface-primary')])
+    await expect(getComputedStyle(cards[0]!).backgroundColor).toBe(painted(cards[0]!, 'bg-surface-card-selected'))
+  },
+}
+
+export const ThemeFjord: Story = {
+  name: 'Theme=Fjord, on a Light page',
+  globals: DESKTOP,
+  args: { theme: 'fjord' },
+  // WQ91: the muted words on Fjord fail the same way as on Mud (3.64:1), so the rule is off here too, and only here.
+  parameters: { a11y: { config: { rules: [{ id: 'color-contrast', enabled: false }] } } },
+  play: async ({ canvasElement }) => {
+    const { section, cards } = parts(canvasElement)
+    await expect([section.dataset.theme, getComputedStyle(section).backgroundColor]).toEqual(['fjord', painted(section.firstElementChild!, 'bg-surface-primary')])
+    await expect(getComputedStyle(cards[0]!).backgroundColor).toBe(painted(cards[0]!, 'bg-surface-card-selected'))
+  },
+}
+
+export const ThemeMud: Story = {
+  name: 'Theme=Mud, on a Light page',
+  globals: DESKTOP,
+  args: { theme: 'mud' },
+  // WQ91 (Wayne, 27 Nov): the muted words on Mud are 3.55:1, where small text needs 4.5:1, and Wayne accepts them as
+  // drawn. The rule is off for this one story only, so the rest of its accessibility check still runs.
+  parameters: { a11y: { config: { rules: [{ id: 'color-contrast', enabled: false }] } } },
+  play: async ({ canvasElement }) => {
+    const { section, cards } = parts(canvasElement)
+    await expect([section.dataset.theme, getComputedStyle(section).backgroundColor]).toEqual(['mud', painted(section.firstElementChild!, 'bg-surface-primary')])
     await expect(getComputedStyle(cards[0]!).backgroundColor).toBe(painted(cards[0]!, 'bg-surface-card-selected'))
   },
 }

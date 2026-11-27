@@ -41,6 +41,7 @@ Written 23 Nov 2026 for Claude Code and reviewers. Every page, component and mod
   - Text/Muted Primary: 65% in every mode (was 60%); Light 4.7:1 on the page, 4.55:1 in a field (WQ10).
   - Unticked checkboxes and radios stay as designed, accepting 1.1:1 (WQ11).
   - Fjord and Mud are never used for forms or error messages.
+  - Except the Memberships and SessionPasses modules: every theme, as drawn; Wayne accepts their muted words on Mud at 3.55:1, and on Fjord at 3.64:1 the same way (WQ91).
 - The designs already pair colour with something else (error messages in words, the sold-out styling, the selected size's fill); keep it that way.
 - Touch targets: the designed sizes stay. Where a control is small (25 px icon buttons and size buttons, the stepper buttons, the 20 px checkbox), the tappable area is extended invisibly around it to at least 24 by 24 px (44 where there's room), with no change to how it looks.
 - The site works at 200% zoom and at 320 px wide with no sideways scroll. Zoom is never disabled.

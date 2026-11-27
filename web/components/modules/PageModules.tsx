@@ -15,7 +15,7 @@ import {
   type TextMediaStickyContent,
 } from '@/lib/modules/content'
 import { heroMediaContent, type HeroMediaContent } from '@/lib/modules/hero-media'
-import { DEFAULT_SECTION_IDS, formThemeOf, themeOf, type SectionSettings } from '@/lib/modules/section'
+import { DEFAULT_SECTION_IDS, themeOf, type SectionSettings } from '@/lib/modules/section'
 import type { PageModule, RichText } from '@/lib/sanity/schemas'
 
 import { AccordionList } from './content/AccordionList'
@@ -76,10 +76,10 @@ function shownOf(module: PageModule): Shown[] {
     case 'sectionSpacer':
       return [{ key, kind: 'spacer', section: sectionSettings(module) }]
     case 'memberships':
-      // Their cards are forms: Light or Dark only (docs/build-standards.md: Fjord and Mud are never used for forms).
-      return [{ key, kind: 'memberships', heading: module.heading, note: module.note, section: { ...sectionSettings(module), theme: formThemeOf(module.theme) } }]
+      // Every theme, as drawn (WQ91: Wayne accepts the muted words on Mud at 3.55:1).
+      return [{ key, kind: 'memberships', heading: module.heading, note: module.note, section: sectionSettings(module) }]
     case 'sessionPasses':
-      return [{ key, kind: 'passes', heading: module.heading, section: { ...sectionSettings(module), theme: formThemeOf(module.theme) } }]
+      return [{ key, kind: 'passes', heading: module.heading, section: sectionSettings(module) }]
   }
 }
 

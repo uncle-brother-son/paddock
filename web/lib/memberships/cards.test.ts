@@ -3,7 +3,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import { childNamed, readGlobalsCss, ruleNamed } from '@/lib/design/read-stylesheet'
-import { DEFAULT_SECTION_IDS, FORM_SECTION_THEMES, formThemeOf } from '@/lib/modules/section'
+import { DEFAULT_SECTION_IDS } from '@/lib/modules/section'
 import { reads } from '@/lib/sanity/read'
 import answers from '@/lib/sanity/sample-answers.json'
 import { contentPageSchema, type MembershipCard, type SessionPassCard } from '@/lib/sanity/schemas'
@@ -263,13 +263,13 @@ describe('the modules on a page', () => {
     expect(modules).toContain("const firstPasses = shown.findIndex((one) => one.kind === 'passes')")
   })
 
-  it('their cards are forms, so a theme is Light or Dark only: Fjord and Mud are never used for forms', () => {
-    expect([...FORM_SECTION_THEMES]).toEqual(['light', 'dark'])
-    expect([formThemeOf('light'), formThemeOf('dark'), formThemeOf('fjord'), formThemeOf('mud'), formThemeOf(null), formThemeOf(undefined)]).toEqual(['light', 'dark', null, null, null, null])
+  it('WQ91: every theme, as W80\'s modules: the site takes the section as given and the Studio offers all four', () => {
     const modules = source('components/modules/PageModules.tsx')
-    expect(modules.match(/section: \{ \.\.\.sectionSettings\(module\), theme: formThemeOf\(module\.theme\) \}/g)).toHaveLength(2)
-    for (const name of ['memberships', 'sessionPasses']) expect(studioFile(`schemaTypes/objects/${name}.ts`), name).toContain('themes: FORM_SECTION_THEMES,')
-    expect(source('../web/docs/build-standards.md')).toContain('Fjord and Mud are never used for forms or error messages.')
+    expect(modules).toContain("return [{ key, kind: 'memberships', heading: module.heading, note: module.note, section: sectionSettings(module) }]")
+    expect(modules).toContain("return [{ key, kind: 'passes', heading: module.heading, section: sectionSettings(module) }]")
+    for (const name of ['memberships', 'sessionPasses']) expect(studioFile(`schemaTypes/objects/${name}.ts`), name).not.toMatch(/themes:|theme:/)
+    expect(studioFile('schemaTypes/fields/sectionSettings.ts')).toContain("options: { list: THEMES, layout: 'radio', direction: 'horizontal' },")
+    expect(source('../web/docs/build-standards.md')).toContain('Except the Memberships and SessionPasses modules: every theme, as drawn; Wayne accepts their muted words on Mud at 3.55:1, and on Fjord at 3.64:1 the same way (WQ91).')
   })
 
   it('the Studio knows those ids: a second section cannot take one, and a link can go to one', () => {
