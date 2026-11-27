@@ -9,6 +9,8 @@ export const SIGN_IN_WORDS = {
   emailNotConfirmed: 'Please confirm your email address with the code we sent you, then try again.',
   /** The login has no email (an anonymous or phone-only sign-in): the club's accounts are by email. */
   noEmail: 'Please sign in with your email address.',
+  /** WQ101: a login by another provider (Google, Apple): only the emailed code is taken for now. */
+  emailLoginOnly: 'Please sign in with the code we email you.',
   firstNameRequired: 'Please enter your first name.',
   lastNameRequired: 'Please enter your last name.',
   tooLong: (field: 'firstName' | 'lastName' | 'phone', limit: number): string =>
@@ -20,6 +22,7 @@ export const SIGN_IN_REASONS = [
   'email_linked_elsewhere',
   'email_not_confirmed',
   'no_email',
+  'email_login_only',
   'first_name_required',
   'last_name_required',
   'too_long',

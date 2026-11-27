@@ -361,6 +361,13 @@ behind a press key, and has no switch kind.
     (`sign-in-postgres.test.ts`). A unique refusal from the link's update runs the transaction once more.
   - `GET customer/me` (`customer` mode): first name, email and the account sections, from what the customer has ever
     had (`ACCOUNT_SECTIONS` in `contracts/sign-in.ts`).
+    - WQ102 (Wayne, 27 Nov): the Orders section lists every order (bookings, events, shop, gift cards, memberships),
+      so it unlocks on any order, as built.
+    - **WQ103 (Wayne, 27 Nov), not built yet:** a section unlocks only on a paid or confirmed row, never on an unpaid
+      or abandoned checkout. Today `readMe` counts any row (a pending order, a cancelled booking, a membership row
+      written before Stripe confirms). To be built with the website's checkout, where "paid" is defined.
+  - WQ101 (Wayne, 27 Nov): only an email-code login is taken (`app_metadata.provider` `email`, read from Supabase's
+    user record, not the token), until another provider is reviewed; any other refuses FORBIDDEN `email_login_only`.
   - A login deleted in Supabase leaves its customer (migration 037, WQ99: `customers_auth_user_id_fkey` is ON DELETE
     SET NULL, where it was CASCADE): the customer keeps everything, unlinked, and signing in again links them again.
     A linked login whose email changes in Supabase is still found by its login; `customers.email` is not changed.

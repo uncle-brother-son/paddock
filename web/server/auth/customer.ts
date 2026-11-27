@@ -81,7 +81,8 @@ export function createTokenVerifier(
  * checked as above, then Supabase's Auth server is asked for the login itself (`getUser`, one call, on sign-in only),
  * and its `email_confirmed_at` must be set and its email the token's. `user_metadata.email_verified` in the token is
  * NOT trusted: a signed-in user can write their own user_metadata (`updateUser({ data })`), so it proves nothing.
- * An anonymous login, or one with no email, is refused. The email is lower-cased, as every customer's is stored.
+ * An anonymous login, or one with no email, is refused, and so is any login that isn't an email-code login (WQ101:
+ * Supabase's `app_metadata.provider` must be `email`). The email is lower-cased, as every customer's is stored.
  */
 export interface SignInIdentity {
   authUserId: string
@@ -106,6 +107,12 @@ export function createSignInVerifier(supabaseUrl: string, supabaseAnonKey: strin
     // token was issued means the token is out of date).
     if (user.id !== claims.sub || (user.email ?? '').trim().toLowerCase() !== claimed) {
       throw new ApiError('UNAUTHORISED', SESSION_ENDED, { logDetail: 'The token no longer matches its login.' })
+    }
+    // WQ101 (Wayne, 27 Nov): an email-code login only, until another provider is reviewed. Another provider (Google,
+    // Apple) vouches for its own email, which proves nothing to us. Read from Supabase's user record: app_metadata is
+    // written by Supabase only, never by the user. A login with no provider is refused as well.
+    if (user.app_metadata?.provider !== 'email') {
+      throw signInRefusal('email_login_only', SIGN_IN_WORDS.emailLoginOnly)
     }
     if (!user.email_confirmed_at) throw signInRefusal('email_not_confirmed', SIGN_IN_WORDS.emailNotConfirmed)
     return { authUserId: claims.sub, email: claimed }

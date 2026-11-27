@@ -13,9 +13,11 @@ import { z } from 'zod'
  * (server/rules/customer/sign-in-words.ts; the test beside the rule holds the two lists together).
  *  - `email_linked_elsewhere` (CONFLICT): a customer has this email and another login; logged for staff.
  *  - `email_not_confirmed`, `no_email` (FORBIDDEN): the login can't be matched by email.
+ *  - `email_login_only` (FORBIDDEN; WQ101): the login isn't an email-code login (Google, Apple, none): refused until
+ *    another provider is reviewed.
  *  - `first_name_required`, `last_name_required`, `too_long` (VALIDATION, with `field`): create's own checks.
  */
-export const CUSTOMER_SIGN_IN_REASONS = ['email_linked_elsewhere', 'email_not_confirmed', 'no_email', 'first_name_required', 'last_name_required', 'too_long'] as const
+export const CUSTOMER_SIGN_IN_REASONS = ['email_linked_elsewhere', 'email_not_confirmed', 'no_email', 'email_login_only', 'first_name_required', 'last_name_required', 'too_long'] as const
 export const customerSignInRefusalDetailsSchema = z.object({ reason: z.enum(CUSTOMER_SIGN_IN_REASONS), message: z.string() })
 export type CustomerSignInRefusalDetails = z.infer<typeof customerSignInRefusalDetailsSchema>
 

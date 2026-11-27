@@ -141,7 +141,14 @@ describe('authenticateSignIn (W85a)', () => {
   const EMAIL = 'Sam@Example.com'
   const signInClaims = (extra: Record<string, unknown> = {}) => ({ ...validClaims(), email: EMAIL, ...extra })
   type User = Record<string, unknown>
-  const confirmedUser = (extra: User = {}): User => ({ id: AUTH_USER, aud: 'authenticated', email: EMAIL, email_confirmed_at: '2026-11-27T10:00:00Z', ...extra })
+  const confirmedUser = (extra: User = {}): User => ({
+    id: AUTH_USER,
+    aud: 'authenticated',
+    email: EMAIL,
+    email_confirmed_at: '2026-11-27T10:00:00Z',
+    app_metadata: { provider: 'email', providers: ['email'] },
+    ...extra,
+  })
 
   /** getClaims against the JWKS, and getUser answered with `user` (or a status). */
   function signInVerifier(user: User | { status: number; html?: true }): { verify: ReturnType<typeof createSignInVerifier>; userCalls: () => number } {
@@ -166,6 +173,22 @@ describe('authenticateSignIn (W85a)', () => {
     const { verify, userCalls } = signInVerifier(confirmedUser())
     expect(await authenticateSignIn(bearer(token), verify)).toEqual({ authUserId: AUTH_USER, email: 'sam@example.com' })
     expect(userCalls()).toBe(1)
+  })
+
+  it('WQ101: an email-code login is taken; a Google login, a login with no provider and one with no app_metadata are refused with their own reason, even with a confirmed email', async () => {
+    const token = await signToken(signingKey.privateKey, signInClaims())
+    expect(await authenticateSignIn(bearer(token), signInVerifier(confirmedUser()).verify)).toEqual({ authUserId: AUTH_USER, email: 'sam@example.com' })
+    const google = { provider: 'google', providers: ['google'] }
+    // A Google login that also has an email identity: the provider it is signed in with is still Google's.
+    const googleFirst = { provider: 'google', providers: ['google', 'email'] }
+    for (const appMetadata of [google, googleFirst, { providers: ['email'] }, {}, undefined]) {
+      const err = await failure(authenticateSignIn(bearer(token), signInVerifier(confirmedUser({ app_metadata: appMetadata })).verify))
+      expect([JSON.stringify(appMetadata), err.code, reasonOf(err), err.message]).toEqual([JSON.stringify(appMetadata), 'FORBIDDEN', 'email_login_only', 'Please sign in with the code we email you.'])
+      expect(err.details).toEqual({ reason: 'email_login_only', message: 'Please sign in with the code we email you.' })
+    }
+    // The token's own app_metadata says email, but Supabase's record says Google: the record is what counts.
+    const claimsSayEmail = await signToken(signingKey.privateKey, signInClaims({ app_metadata: { provider: 'email' } }))
+    expect(reasonOf(await failure(authenticateSignIn(bearer(claimsSayEmail), signInVerifier(confirmedUser({ app_metadata: google })).verify)))).toBe('email_login_only')
   })
 
   it('an unconfirmed email is refused, even when the token says user_metadata.email_verified (the user can write that)', async () => {
